@@ -135,8 +135,11 @@ class FuseDriver:
         if reply.get("wedge"):
             data["wedge"] = True
         rendered = f"{wire} {req['path']}" + (f" -> {req['to']}" if "to" in req else "")
-        return Result(classify_errno(e), detail=reply.get("error", "")[:200], code=e, data=data, rendered=rendered,
-                      bytes_sha256=reply.get("sha256"), t0_ns=t0, t1_ns=time.time_ns())
+        body = base64.b64decode(reply["data_b64"]) if wire == "read" and reply.get("data_b64") else None
+        res = Result(classify_errno(e), detail=reply.get("error", "")[:200], code=e, data=data, rendered=rendered,
+                     bytes_sha256=reply.get("sha256"), t0_ns=t0, t1_ns=time.time_ns())
+        res.body = body   # memory only (never serialized): the canary and integrity judges read it
+        return res
 
     async def close(self) -> None:
         if self.proc is None or self.proc.returncode is not None:
