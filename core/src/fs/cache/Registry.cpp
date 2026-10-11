@@ -405,7 +405,7 @@ void Registry::cacheEntry(const std::shared_ptr<Entry>& entry, const bool isFirs
         pathToEntry_[e->fuse_path] = e;
         inodeToId_[*e->inode] = e->id;
         idToEntry_[e->id] = e;
-        if (e->parent_id) childToParent_[e->id] = *e->parent_id;
+        linkChild(e->id, e->parent_id);
     };
 
     insert(entry);
@@ -485,7 +485,7 @@ void Registry::evictIno(fuse_ino_t ino) {
         const auto id = idIt->second;
         inodeToId_.erase(idIt);
         idToEntry_.erase(id);
-        childToParent_.erase(id);
+        unlinkChild(id);
     }
 
     // Update used bytes (bounded)
@@ -560,7 +560,7 @@ void Registry::evictId(const unsigned int id) {
     }
 
     idToEntry_.erase(id);
-    childToParent_.erase(id);
+    unlinkChild(id);
 
     const uint64_t curUsed = stats_->snapshot().used_bytes;
     stats_->set_used(subClamp(curUsed, removedSize));
@@ -624,13 +624,39 @@ void Registry::evictVault(const unsigned int vaultId, const std::filesystem::pat
     std::erase_if(inodeToEntry_, [&](const auto& kv) { return inodes.contains(kv.first); });
     std::erase_if(inodeToId_, [&](const auto& kv) { return inodes.contains(kv.first) || ids.contains(kv.second); });
     std::erase_if(idToEntry_, [&](const auto& kv) { return ids.contains(kv.first); });
-    std::erase_if(childToParent_, [&](const auto& kv) { return ids.contains(kv.first); });
+    for (const auto id : ids) unlinkChild(id);
 
     stats_->set_used(subClamp(stats_->snapshot().used_bytes, removedSize));
     stats_->record_invalidation();
 
     log::Registry::fs()->debug("[FSCache] Evicted {} entries and {} inodes of vault {} ({})",
                                ids.size(), inodes.size(), vaultId, fuseRoot.string());
+}
+
+void Registry::linkChild(const unsigned int id, const std::optional<unsigned int>& parentId) {
+    if (!parentId) {
+        unlinkChild(id);
+        return;
+    }
+    const auto [it, inserted] = childToParent_.try_emplace(id, *parentId);
+    if (!inserted && it->second != *parentId) {
+        if (const auto old = parentToChildren_.find(it->second); old != parentToChildren_.end()) {
+            old->second.erase(id);
+            if (old->second.empty()) parentToChildren_.erase(old);
+        }
+        it->second = *parentId;
+    }
+    parentToChildren_[*parentId].insert(id);
+}
+
+void Registry::unlinkChild(const unsigned int id) {
+    const auto it = childToParent_.find(id);
+    if (it == childToParent_.end()) return;
+    if (const auto siblings = parentToChildren_.find(it->second); siblings != parentToChildren_.end()) {
+        siblings->second.erase(id);
+        if (siblings->second.empty()) parentToChildren_.erase(siblings);
+    }
+    childToParent_.erase(it);
 }
 
 bool Registry::refreshDirStats(const unsigned int dirId) {
@@ -651,31 +677,22 @@ bool Registry::refreshDirStats(const unsigned int dirId) {
 }
 
 std::vector<std::shared_ptr<Entry>> Registry::listDir(const unsigned int parentId, const bool recursive) const {
-    const auto parent = db::query::fs::Entry::getFSEntryById(parentId);
-    if (!parent) throw std::runtime_error("Parent ID does not exist");
-    if (!parent->isDirectory()) throw std::runtime_error("Parent ID is not a directory");
-
-    const auto parentDir = std::static_pointer_cast<Directory>(parent);
-
-    unsigned int numEntries = parentDir->file_count + parentDir->subdirectory_count;
-    if (!recursive) {
-        for (const auto& subdir : db::query::fs::Directory::listDirectoriesInDir(parentId))
-            numEntries -= subdir->file_count + subdir->subdirectory_count;
-    }
+    // How many entries the database holds there (one statement): the cached children are served only when they
+    // account for all of them, otherwise the listing comes from the database.
+    const auto shape = db::query::fs::Directory::listingShape(parentId);
+    if (!shape) throw std::runtime_error("Parent ID does not exist or is not a directory");
+    const auto numEntries = recursive ? shape->subtree : shape->direct;
 
     std::vector<std::shared_ptr<Entry>> entries;
     // The maps are mutated by concurrent FUSE/ws callers; read them under the lock (released before the DB fallback).
     std::shared_lock lock(mutex_);
-    entries.reserve(childToParent_.size()); // cheap upper bound
+    entries.reserve(numEntries);
 
     auto append_children = [&](const unsigned int pid) {
-        for (const auto& [childId, pId] : childToParent_) {
-            if (pId == pid) {
-                if (const auto it = idToEntry_.find(childId); it != idToEntry_.end()) {
-                    entries.push_back(it->second);
-                }
-            }
-        }
+        const auto children = parentToChildren_.find(pid);
+        if (children == parentToChildren_.end()) return;
+        for (const auto childId : children->second)
+            if (const auto it = idToEntry_.find(childId); it != idToEntry_.end()) entries.push_back(it->second);
     };
 
     append_children(parentId);

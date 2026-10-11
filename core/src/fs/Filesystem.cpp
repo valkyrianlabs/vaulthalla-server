@@ -121,7 +121,7 @@ std::string mimeTypeFromSourceFile(
 static void updateFile(pqxx::work& txn, const std::shared_ptr<File>& file) {
     const auto exists = txn.exec(pqxx::prepped{"fs_entry_exists_by_inode"}, file->inode).one_field_ref().as<bool>();
     const auto sizeRes = txn.exec(pqxx::prepped{"get_file_size_by_inode"}, file->inode);
-    const auto existingSize = sizeRes.empty() ? 0 : sizeRes.one_field_ref().as<unsigned int>();
+    const auto existingSize = sizeRes.empty() ? 0 : sizeRes.one_field_ref().as<int64_t>();
 
     pqxx::params p;
     p.append(file->id);
@@ -135,14 +135,10 @@ static void updateFile(pqxx::work& txn, const std::shared_ptr<File>& file) {
     file->updated_at = std::time(nullptr);
     txn.exec(pqxx::prepped{"update_file_only"}, p);
 
-    std::optional<unsigned int> parentId = file->parent_id;
-    while (parentId) {
-        pqxx::params stats_params{parentId, file->size_bytes - existingSize, exists ? 0 : 1, 0}; // Increment size_bytes and file_count
-        txn.exec(pqxx::prepped{"update_dir_stats"}, stats_params);
-        const auto res = txn.exec(pqxx::prepped{"get_fs_entry_parent_id"}, parentId);
-        if (res.empty()) break;
-        parentId = res.one_field_ref().as<std::optional<unsigned int>>();
-    }
+    // Signed: a shrinking file used to wrap the unsigned difference into a huge positive delta.
+    vh::db::query::fs::Directory::addToAncestorStats(txn, file->parent_id,
+                                                     static_cast<int64_t>(file->size_bytes) - existingSize,
+                                                     exists ? 0 : 1, 0);
 }
 
 static void updateFSEntry(pqxx::work& txn, const std::shared_ptr<Entry>& entry) {
@@ -952,6 +948,8 @@ std::shared_ptr<File> Filesystem::createFile(const NewFileContext& ctx) {
         f->content_hash = staged->content_hash;
         f->last_modified_by = staged->last_modified_by;
         f->updated_at = staged->updated_at;
+        // The size difference reached every ancestor's row; the cached directories (fs.dir.list) follow.
+        if (f->parent_id) runtime::Deps::get().fsCache->refreshDirStats(*f->parent_id);
 
         // The new IV is a new source generation: earlier thumbnails no longer match it and are regenerated.
         if (f->size_bytes > 0 && f->mime_type && isPreviewable(*f->mime_type))

@@ -38,6 +38,14 @@ public:
 
     [[nodiscard]] static pqxx::result collectParentStats(unsigned int parentId);
 
+    // What a cached listing of `dirId` must hold to be complete: its direct children and its whole subtree
+    // (subtree totals, #158). One statement; nullopt when `dirId` is not a directory.
+    struct ListingShape {
+        uint64_t direct = 0;
+        uint64_t subtree = 0;
+    };
+    [[nodiscard]] static std::optional<ListingShape> listingShape(unsigned int dirId);
+
     // rmdir(2): deletes directory `id` only while nothing is under it (false otherwise, nothing changed), taking it off
     // every ancestor's subdirectory count. It used to drop a non-empty directory with everything under it (cascade)
     // and only decrement its parent.
@@ -57,6 +65,10 @@ public:
     [[nodiscard]] static std::optional<SubtreeTotals> subtreeTotalsOf(pqxx::work& txn, unsigned int id);
 
     [[nodiscard]] static std::optional<unsigned int> parentIdOf(pqxx::work& txn, unsigned int id);
+
+    // Adds the deltas to directory `dirId` and every directory above it (one statement). No-op without a dirId.
+    static void addToAncestorStats(pqxx::work& txn, std::optional<unsigned int> dirId,
+                                   int64_t sizeBytes, int64_t files, int64_t subdirs);
 
     // The ids of entry `id`'s ancestors, nearest first.
     [[nodiscard]] static std::vector<unsigned int> ancestorsOf(unsigned int id);

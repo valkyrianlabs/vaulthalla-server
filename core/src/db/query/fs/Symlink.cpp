@@ -2,6 +2,7 @@
 
 #include "db/Transactions.hpp"
 #include "db/encoding/u8.hpp"
+#include "db/query/fs/Directory.hpp"
 #include "db/query/fs/File.hpp"
 #include "fs/model/Symlink.hpp"
 
@@ -35,19 +36,7 @@ unsigned int Symlink::upsertSymlink(const SymlinkPtr& symlink) {
 
         const auto id = txn.exec(pqxx::prepped{"insert_symlink_full"}, p).one_field_ref().as<unsigned int>();
 
-        std::optional<unsigned int> parentId = symlink->parent_id;
-        while (parentId) {
-            pqxx::params stats_params{
-                parentId,
-                static_cast<long long>(symlink->target.size()),
-                1,
-                0
-            };
-            txn.exec(pqxx::prepped{"update_dir_stats"}, stats_params);
-            const auto res = txn.exec(pqxx::prepped{"get_fs_entry_parent_id"}, parentId);
-            if (res.empty()) break;
-            parentId = res.one_field_ref().as<std::optional<unsigned int>>();
-        }
+        Directory::addToAncestorStats(txn, symlink->parent_id, static_cast<int64_t>(symlink->target.size()), 1, 0);
 
         return id;
     });

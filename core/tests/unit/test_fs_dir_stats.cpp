@@ -4,6 +4,7 @@
 
 #include "db/Transactions.hpp"
 #include "db/query/fs/Directory.hpp"
+#include "db/query/fs/Entry.hpp"
 #include "db/query/fs/File.hpp"
 #include "db/query/identities/User.hpp"
 #include "fs/Filesystem.hpp"
@@ -24,6 +25,7 @@
 #include <gtest/gtest.h>
 #include <paths.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -355,6 +357,65 @@ TEST_F(FsDirStatsDbTest, SyncAndGatewayDeletesKeepFolders) {
     EXPECT_TRUE(std::filesystem::is_directory(one->backing_path.parent_path()));
     EXPECT_EQ(stats("/m"), (DirStats{0, 0, 1}));
     expectConsistent({"/", "/m", "/m/n"});
+}
+
+// The ancestor walk is one statement now; an overwrite that shrinks a file must still take the (signed) difference
+// off every level, not just the parent.
+TEST_F(FsDirStatsDbTest, ShrinkingOverwriteTakesTheDifferenceOffEveryAncestor) {
+    mkdir("/s1");
+    mkdir("/s1/s2");
+    mkdir("/s1/s2/s3");
+    write("/s1/s2/s3/f.bin", 100);
+    const auto rootBefore = stats("/");
+    ASSERT_EQ(stats("/s1"), (DirStats{100, 1, 2}));
+
+    ASSERT_TRUE(fs::Filesystem::createFile({.path = "/s1/s2/s3/f.bin",
+                                            .fuse_path = engine->vaultPathToFusePath("/s1/s2/s3/f.bin"),
+                                            .buffer = std::vector<uint8_t>(30, 's'),
+                                            .engine = engine,
+                                            .user = superUser,
+                                            .overwrite = true}));
+    EXPECT_EQ(stats("/s1/s2/s3"), (DirStats{30, 1, 0}));
+    EXPECT_EQ(stats("/s1/s2"), (DirStats{30, 1, 1}));
+    EXPECT_EQ(stats("/s1"), (DirStats{30, 1, 2}));
+    EXPECT_EQ(stats("/") - rootBefore, (DirStats{-70, 0, 0}));
+    expectConsistent({"/", "/s1", "/s1/s2", "/s1/s2/s3"});
+}
+
+// readdir serves a directory from the fs cache's parent->children index when it accounts for every entry the
+// database holds there; after a move each side lists exactly what the database does.
+TEST_F(FsDirStatsDbTest, CachedListingMatchesTheDatabaseAcrossMoves) {
+    mkdir("/l1");
+    mkdir("/l2");
+    mkdir("/l1/sub");
+    write("/l1/a.txt", 3);
+    write("/l1/b.txt", 4);
+    write("/l1/sub/c.txt", 5);
+
+    const auto cache = runtime::Deps::get().fsCache;
+    const auto idsOf = [](const std::vector<std::shared_ptr<fs::model::Entry>>& entries) {
+        std::vector<unsigned int> ids;
+        for (const auto& e : entries) ids.push_back(e->id);
+        std::ranges::sort(ids);
+        return ids;
+    };
+    const auto check = [&](const std::string& path) {
+        const auto dirId = db::query::fs::Directory::getDirectoryIdByPath(engine->vault->id, path);
+        ASSERT_TRUE(dirId) << path;
+        EXPECT_EQ(idsOf(cache->listDir(*dirId)), idsOf(db::query::fs::Entry::listDir(*dirId, false))) << path;
+        EXPECT_EQ(idsOf(cache->listDir(*dirId, true)), idsOf(db::query::fs::Entry::listSubtree(*dirId))) << path << " (recursive)";
+    };
+
+    check("/l1");
+    check("/l2");
+    engine->move("/l1/a.txt", "/l2/a.txt", superUser);
+    check("/l1");
+    check("/l2");
+    engine->rename("/l1/sub", "/l2/sub", superUser);
+    check("/l1");
+    check("/l2");
+    EXPECT_THROW((void)cache->listDir(db::query::fs::File::getFileByPath(engine->vault->id, "/l1/b.txt")->id),
+                 std::runtime_error) << "a file is not a directory";
 }
 
 }
