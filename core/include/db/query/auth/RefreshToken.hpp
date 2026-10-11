@@ -28,7 +28,6 @@ struct RefreshToken {
     static void purgeOldRevoked();
     static void revokeAndPurge(unsigned int userId);
 
-    [[nodiscard]] static std::optional<unsigned int> getUserIdByJti(const std::string& jti);
 };
 
 }

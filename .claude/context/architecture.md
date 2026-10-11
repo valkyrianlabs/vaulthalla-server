@@ -156,7 +156,10 @@ string written before #171; `auth::session::Validator::verifyStoredRefreshTokenH
 and the HTTP `validateRawRefreshToken` path) rewrites a legacy row to the digest after a successful verify
 (conditional `UPDATE`, a failed rewrite only logs). (Argon2 used to cost ~0.57 s per check on every page load and
 every HTTP preview/download.) User passwords still use `crypto::hash::password()` (Argon2). No migration: the column
-is `TEXT`. Guard: `RefreshTokenDigest*` unit tests.
+is `TEXT`. Guard: `RefreshTokenDigest*` unit tests. A cookie-authenticated HTTP request without a live ws session
+rehydrates from the stored row on every request (one `Transactions::read`, so revocation is immediate); the owner is
+`refresh_tokens.user_id` resolved through `identities::Manager` (a deleted account is a non-authorizing tombstone),
+and the JWT secret is cached in `crypto::secrets::Manager` (written only through it, which republishes).
 
 **Identities (`identities::Manager`, `core/{include,src}/identities/`).** One canonical `User`/`Group` object per id,
 handed out as the same `shared_ptr` everywhere (sessions, engines, FUSE, HTTP, S3). Each holds an immutable
@@ -290,7 +293,9 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   `main` and test suites), rendered by PDFium straight into the packed RGB raster (24bpp + `FPDF_REVERSE_BYTE_ORDER`); output edges ≤ 2048, never upscaled. One decode
   per source generation and page at a time (single flight, shared by on-demand renders and thumbnail tasks); a decode
   emits every missing `caching.thumbnails.sizes` entry (16-2048) at or below the size it renders, resizing down a
-  chain. Two render gates of `clamp(cores/4,1,4)` slots each (interactive renders, background thumbnailing), so
+  chain. An on-demand render returns once its requested size is stored; the smaller sizes are finished on the
+  thumbnail pool from the same raster while the task holds the flight (`OutputTail`), so a thumbnail request
+  meanwhile waits instead of decoding again (`render::waitForFlightsForTesting` for tests). Two render gates of `clamp(cores/4,1,4)` slots each (interactive renders, background thumbnailing), so
   imports never hold the slots a viewer needs (`render::Busy` → 503 + Retry-After). Thumbnail-sized outputs (≤ 512)
   use the fast IDCT and 4:2:0 chroma; images with alpha are composited over white (generator version 3). Uploads hand their in-memory plaintext to thumbnailing. A derived-cache outage
   degrades to uncached renders. Preview plans (`preview::classify`, file JSON `"preview"`, see `web-client.md`) decide

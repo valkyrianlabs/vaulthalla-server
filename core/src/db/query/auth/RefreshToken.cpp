@@ -36,9 +36,10 @@ namespace vh::db::query::auth {
     }
 
     std::shared_ptr<vh::auth::model::RefreshToken> RefreshToken::get(const std::string& jti) {
-        return Transactions::exec(
+        // Checked on every cookie-authenticated HTTP request (revocation is immediate), so it is one round trip.
+        return Transactions::read(
             "RefreshToken::getRefreshToken",
-            [&](pqxx::work& txn) -> std::shared_ptr<vh::auth::model::RefreshToken> {
+            [&](pqxx::transaction_base& txn) -> std::shared_ptr<vh::auth::model::RefreshToken> {
                 const auto res = txn.exec(pqxx::prepped{"get_refresh_token_by_jti"}, pqxx::params{jti});
 
                 if (res.empty()) {
@@ -106,15 +107,5 @@ namespace vh::db::query::auth {
             txn.exec(pqxx::prepped{"revoke_all_refresh_tokens_for_user"}, pqxx::params{userId});
             txn.exec(pqxx::prepped{"delete_expired_refresh_tokens_for_user"}, pqxx::params{userId});
         });
-    }
-
-    std::optional<unsigned int> RefreshToken::getUserIdByJti(const std::string& jti) {
-        return Transactions::exec(
-            "RefreshToken::getUserIdByJti",
-            [&](pqxx::work& txn) -> std::optional<unsigned int> {
-                const auto res = txn.exec(pqxx::prepped{"get_user_by_refresh_token_jti"}, pqxx::params{jti});
-                if (res.empty()) return std::nullopt;
-                return res.one_row_ref()["id"].as<unsigned int>();
-            });
     }
 }

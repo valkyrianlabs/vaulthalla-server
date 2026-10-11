@@ -12,6 +12,35 @@ void vh::db::Connection::initPreparedDirectories() const {
                    ") "
                    "SELECT file_count FROM updated_stats");
 
+    // Adds ($2 bytes, $3 files, $4 subdirectories) to directory $1 and every directory above it in one statement.
+    // Rows are locked nearest-first (the order the per-level walk it replaces used), so concurrent writers under a
+    // shared ancestor queue the same way; `seen` stops on a corrupt (cyclic) tree.
+    conn_->prepare("add_to_ancestor_dir_stats",
+                   "WITH RECURSIVE chain AS ("
+                   "  SELECT id, parent_id, 0 AS depth, ARRAY[id] AS seen FROM fs_entry WHERE id = $1 "
+                   "  UNION ALL "
+                   "  SELECT f.id, f.parent_id, c.depth + 1, c.seen || f.id "
+                   "  FROM fs_entry f JOIN chain c ON f.id = c.parent_id WHERE f.id <> ALL(c.seen)"
+                   "), locked AS ("
+                   "  SELECT d.fs_entry_id FROM directories d JOIN chain c ON c.id = d.fs_entry_id "
+                   "  ORDER BY c.depth FOR UPDATE OF d"
+                   "), updated AS ("
+                   "  UPDATE directories d "
+                   "  SET size_bytes = size_bytes + $2, file_count = file_count + $3, subdirectory_count = subdirectory_count + $4 "
+                   "  FROM locked l WHERE d.fs_entry_id = l.fs_entry_id RETURNING d.fs_entry_id"
+                   ") "
+                   "UPDATE fs_entry SET updated_at = NOW() WHERE id IN (SELECT fs_entry_id FROM updated)");
+
+    // Entry $1's ancestors, nearest first.
+    conn_->prepare("collect_ancestor_ids",
+                   "WITH RECURSIVE chain AS ("
+                   "  SELECT parent_id AS id, 1 AS depth, ARRAY[id] AS seen FROM fs_entry WHERE id = $1 "
+                   "  UNION ALL "
+                   "  SELECT f.parent_id, c.depth + 1, c.seen || f.id "
+                   "  FROM fs_entry f JOIN chain c ON f.id = c.id WHERE f.id <> ALL(c.seen)"
+                   ") "
+                   "SELECT id FROM chain WHERE id IS NOT NULL ORDER BY depth");
+
     conn_->prepare("get_dir_file_count", "SELECT file_count FROM directories WHERE fs_entry_id = $1");
 
     conn_->prepare("is_dir_empty",

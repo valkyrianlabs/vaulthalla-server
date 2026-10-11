@@ -4,6 +4,7 @@
 #include "storage/Fwd.hpp"
 #include "storage/PlaintextReader.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -60,6 +61,8 @@ enum class ThumbnailState { Ready, Missing, Failed };
 
 // Source decodes performed so far (tests: single flight, shared decodes).
 [[nodiscard]] uint64_t decodesForTesting();
+// Waits (bounded) until no decode or deferred output is in flight; false on timeout.
+[[nodiscard]] bool waitForFlightsForTesting(std::chrono::milliseconds timeout = std::chrono::seconds(10));
 
 // Renders every missing configured thumbnail size from ONE decode, downscaling along a chain (largest first).
 // `plaintext`, when the caller already holds the bytes (an upload), avoids re-reading the file. Runs on the

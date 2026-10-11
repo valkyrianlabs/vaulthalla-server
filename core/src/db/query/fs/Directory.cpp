@@ -41,16 +41,7 @@ unsigned int Directory::upsertDirectory(const DirPtr& directory) {
 
         const auto id = txn.exec(pqxx::prepped{"upsert_directory"}, p).one_field_ref().as<unsigned int>();
 
-        if (directory->parent_id) {
-            std::optional<unsigned int> parentId = directory->parent_id;
-            while (parentId) {
-                pqxx::params stats_params{parentId, 0, 0, exists ? 0 : 1}; // Increment subdir count
-                txn.exec(pqxx::prepped{"update_dir_stats"}, stats_params);
-                const auto res = txn.exec(pqxx::prepped{"get_fs_entry_parent_id"}, parentId);
-                if (res.empty()) break;
-                parentId = res.one_field_ref().as<std::optional<unsigned int>>();
-            }
-        }
+        addToAncestorStats(txn, directory->parent_id, 0, 0, exists ? 0 : 1); // a new subdirectory
 
         return id;
     });
@@ -142,15 +133,20 @@ std::optional<unsigned int> Directory::parentIdOf(pqxx::work& txn, const unsigne
     return res.one_field_ref().as<std::optional<unsigned int>>();
 }
 
+void Directory::addToAncestorStats(pqxx::work& txn, const std::optional<unsigned int> dirId,
+                                   const int64_t sizeBytes, const int64_t files, const int64_t subdirs) {
+    if (!dirId) return;
+    txn.exec(pqxx::prepped{"add_to_ancestor_dir_stats"}, pqxx::params{*dirId, sizeBytes, files, subdirs});
+}
+
 namespace {
 
-std::vector<unsigned int> ancestorChain(pqxx::work& txn, std::optional<unsigned int> id) {
-    std::vector<unsigned int> chain;
-    while (id) {
-        if (std::ranges::find(chain, *id) != chain.end()) break; // defensive: never loop on a corrupt tree
-        chain.push_back(*id);
-        id = Directory::parentIdOf(txn, *id);
-    }
+// `id` and every directory above it, nearest first (one statement).
+std::vector<unsigned int> ancestorChain(pqxx::work& txn, const std::optional<unsigned int> id) {
+    if (!id) return {};
+    std::vector<unsigned int> chain{*id};
+    for (const auto& row : txn.exec(pqxx::prepped{"collect_ancestor_ids"}, pqxx::params{*id}))
+        chain.push_back(row[0].as<unsigned int>());
     return chain;
 }
 
@@ -182,7 +178,7 @@ void Directory::deleteDirectoryTree(const unsigned int id) {
     Transactions::exec("Directory::deleteDirectoryTree", [&](pqxx::work& txn) {
         const auto totals = subtreeTotalsOf(txn, id);
         if (!totals) return;
-        for (const auto ancestor : ancestorChain(txn, parentIdOf(txn, id))) addToDirStats(txn, ancestor, *totals, -1);
+        addToAncestorStats(txn, parentIdOf(txn, id), -totals->size_bytes, -totals->files, -totals->subdirs);
         txn.exec(pqxx::prepped{"delete_fs_entry"}, pqxx::params{id}); // children cascade
     });
 }
@@ -192,7 +188,7 @@ bool Directory::deleteEmptyDirectory(const unsigned int id) {
         if (!txn.exec(pqxx::prepped{"is_dir_empty"}, pqxx::params{id}).one_field_ref().as<bool>()) return false;
         const auto totals = subtreeTotalsOf(txn, id);
         if (!totals) return true;  // already gone
-        for (const auto ancestor : ancestorChain(txn, parentIdOf(txn, id))) addToDirStats(txn, ancestor, *totals, -1);
+        addToAncestorStats(txn, parentIdOf(txn, id), -totals->size_bytes, -totals->files, -totals->subdirs);
         txn.exec(pqxx::prepped{"delete_fs_entry"}, pqxx::params{id});
         return true;
     });
@@ -241,6 +237,19 @@ std::vector<Directory::DirPtr> Directory::listDirectoriesInDir(const unsigned in
             : txn.exec(pqxx::prepped{"list_dirs_in_dir_by_parent_id"}, parentId);
 
         return vh::fs::model::directories_from_pq_res(res);
+    });
+}
+
+std::optional<Directory::ListingShape> Directory::listingShape(const unsigned int dirId) {
+    return Transactions::read("Directory::listingShape", [&](pqxx::transaction_base& txn) -> std::optional<ListingShape> {
+        const auto res = txn.exec(
+            "SELECT (SELECT count(*) FROM fs_entry c WHERE c.parent_id = d.fs_entry_id AND c.id != 1) AS direct, "
+            "       d.file_count + d.subdirectory_count AS subtree "
+            "FROM directories d WHERE d.fs_entry_id = $1",
+            pqxx::params{dirId});
+        if (res.empty()) return std::nullopt;
+        const auto row = res.one_row_ref();
+        return ListingShape{.direct = row["direct"].as<uint64_t>(), .subtree = row["subtree"].as<uint64_t>()};
     });
 }
 

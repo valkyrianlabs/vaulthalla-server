@@ -3,6 +3,7 @@
 #define FUSE_USE_VERSION 35
 
 #include <unordered_map>
+#include <unordered_set>
 #include <memory>
 #include <shared_mutex>
 #include <filesystem>
@@ -64,6 +65,11 @@ private:
     std::unordered_map<fuse_ino_t, unsigned int> inodeToId_;
     std::unordered_map<unsigned int, std::shared_ptr<fs::model::Entry>> idToEntry_;
     std::unordered_map<unsigned int, unsigned int> childToParent_;
+    std::unordered_map<unsigned int, std::unordered_set<unsigned int>> parentToChildren_;  // inverse of childToParent_
+
+    // Keep childToParent_ and parentToChildren_ in step (callers hold mutex_ exclusively).
+    void linkChild(unsigned int id, const std::optional<unsigned int>& parentId);
+    void unlinkChild(unsigned int id);
 
     void initRoot();
     void restoreCache();

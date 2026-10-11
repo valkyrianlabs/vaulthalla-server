@@ -1,4 +1,5 @@
 #include "db/query/fs/File.hpp"
+#include "db/query/fs/Directory.hpp"
 #include "db/Rows.hpp"
 #include "db/Transactions.hpp"
 #include "fs/model/File.hpp"
@@ -61,15 +62,9 @@ unsigned int File::upsertFile(const FilePtr& file) {
             }
         );
 
-        std::optional<unsigned int> parentId = file->parent_id;
-        while (parentId) {
-            int64_t size_delta = static_cast<int64_t>(file->size_bytes) - static_cast<int64_t>(existingSize);
-            pqxx::params stats_params{parentId, size_delta, exists ? 0 : 1, 0}; // Increment size_bytes and file_count
-            txn.exec(pqxx::prepped{"update_dir_stats"}, stats_params);
-            const auto res = txn.exec(pqxx::prepped{"get_fs_entry_parent_id"}, parentId);
-            if (res.empty()) break;
-            parentId = res.one_field_ref().as<std::optional<unsigned int>>();
-        }
+        Directory::addToAncestorStats(txn, file->parent_id,
+                                      static_cast<int64_t>(file->size_bytes) - static_cast<int64_t>(existingSize),
+                                      exists ? 0 : 1, 0);
 
         return fileId;
     });
@@ -101,15 +96,9 @@ void File::updateFile(const FilePtr& file) {
             pqxx::params{file->id, file->last_modified_by, "modified"}
         );
 
-        std::optional<unsigned int> parentId = file->parent_id;
-        while (parentId) {
-            int64_t size_delta = static_cast<int64_t>(file->size_bytes) - static_cast<int64_t>(existingSize);
-            pqxx::params stats_params{parentId, size_delta, exists ? 0 : 1, 0}; // Increment size_bytes and file_count
-            txn.exec(pqxx::prepped{"update_dir_stats"}, stats_params);
-            const auto res = txn.exec(pqxx::prepped{"get_fs_entry_parent_id"}, parentId);
-            if (res.empty()) break;
-            parentId = res.one_field_ref().as<std::optional<unsigned int>>();
-        }
+        Directory::addToAncestorStats(txn, file->parent_id,
+                                      static_cast<int64_t>(file->size_bytes) - static_cast<int64_t>(existingSize),
+                                      exists ? 0 : 1, 0);
     });
 }
 
@@ -315,13 +304,7 @@ void File::markRemoteFileAsTrashed(
 // A removed file (or symlink) comes off the subtree totals of every ancestor. Folders are never removed with it: a
 // folder the delete leaves without files stays, in the database and on disk, like in any file manager (#168).
 void File::updateParentStats(pqxx::work& txn, std::optional<unsigned int> parentId, const std::uint64_t sizeBytes) {
-    while (parentId) {
-        txn.exec(pqxx::prepped{"update_dir_stats"},
-                 pqxx::params{*parentId, -static_cast<long long>(sizeBytes), -1, 0});
-        const auto parentRes = txn.exec(pqxx::prepped{"get_fs_entry_parent_id"}, *parentId);
-        if (parentRes.empty()) break;
-        parentId = parentRes.one_field_ref().as<std::optional<unsigned int>>();
-    }
+    Directory::addToAncestorStats(txn, parentId, -static_cast<int64_t>(sizeBytes), -1, 0);
 }
 
 std::optional<std::pair<std::string, unsigned int>>  File::getEncryptionIVAndVersion(const unsigned int vaultId, const std::filesystem::path& relPath) {
