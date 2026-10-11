@@ -141,8 +141,8 @@ void Validator::rehydrateFromStoredRefreshToken(const std::shared_ptr<Session>& 
 
     verifyStoredRefreshTokenHash(rawToken, storedToken);
 
-    const auto userId = db::query::auth::RefreshToken::getUserIdByJti(claims->jti);
-    const auto user = userId ? vh::identities::manager().user(*userId) : nullptr;
+    // The stored row names its owner; a deleted account is a non-authorizing tombstone in the Manager.
+    const auto user = vh::identities::manager().user(storedToken->userId);
     if (!user) {
         runtime::Deps::get().sessionManager->invalidate(session);
         log::Registry::auth()->debug(
@@ -158,20 +158,9 @@ void Validator::rehydrateFromStoredRefreshToken(const std::shared_ptr<Session>& 
         throw std::runtime_error("System-only users cannot use human refresh tokens");
     }
 
-    if (!user->isActive()) {
+    if (!user->authorizing()) {
         runtime::Deps::get().sessionManager->invalidate(session);
         throw std::runtime_error("Deactivated users cannot use refresh tokens");
-    }
-
-    if (storedToken->userId != user->id) {
-        runtime::Deps::get().sessionManager->invalidate(session);
-        log::Registry::auth()->debug(
-            "[session::Validator] User ID mismatch for JTI: {}, token user ID: {}, expected user ID: {}",
-            claims->jti,
-            storedToken->userId,
-            user->id
-        );
-        throw std::runtime_error("User ID mismatch for refresh token");
     }
 
     storedToken->rawToken = rawToken;

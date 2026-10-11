@@ -2,6 +2,7 @@
 
 #include "crypto/secrets/TPMKeyProvider.hpp"
 
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -26,6 +27,10 @@ private:
     explicit Manager(std::unordered_map<std::string, std::string> testSecrets);
 
     mutable std::mutex mutex_;
+    // The JWT secret signs and verifies every session token; it is read and unsealed once, then served from
+    // memory. Every write goes through setJWTSecret()/getOrInitSecret() in this process, which republish it.
+    mutable std::mutex jwtMutex_;
+    mutable std::atomic<std::shared_ptr<const std::string>> jwtSecret_;
     std::unique_ptr<TPMKeyProvider> tpmKeyProvider_;
     mutable std::optional<std::unordered_map<std::string, std::string>> testSecrets_;
 

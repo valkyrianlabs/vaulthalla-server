@@ -296,4 +296,32 @@ TEST_F(RefreshTokenDigestDb, StoredTokenVerifiesAreFast) {
     EXPECT_LT(elapsed, std::chrono::seconds(5));
 }
 
+// The owner comes from the stored row and the canonical account (no join against users per request): a
+// deactivated account stops rehydrating at once, a reactivated one resumes, and a deleted one never comes back.
+TEST_F(RefreshTokenDigestDb, AccountStateDecidesRehydrationFromTheCanonicalUser) {
+    const auto role = vh::db::query::rbac::role::Admin::get("unprivileged");
+    const auto account = vh::test::identities::createUser("refresh_revoked_user", role, "refresh_revoked_user@vaulthalla.test",
+                                                          hash::password("refresh-revoked-user-pass"), std::nullopt);
+    auto session = baseSession();
+    session->user = account;
+    Issuer::refreshToken(session);
+    const auto token = session->tokens->refreshToken;
+    vh::db::query::auth::RefreshToken::set(token);
+
+    ASSERT_NO_THROW((void)validateRaw(token->rawToken));
+
+    (void)vh::identities::manager().updateUser(account->id, [](vh::identities::UserState& s) { s.meta.is_active = false; });
+    EXPECT_ANY_THROW((void)validateRaw(token->rawToken)) << "a deactivated account must not rehydrate over HTTP";
+    EXPECT_ANY_THROW((void)validateViaSocket(token->rawToken)) << "nor over a socket";
+
+    (void)vh::identities::manager().updateUser(account->id, [](vh::identities::UserState& s) { s.meta.is_active = true; });
+    const auto back = validateRaw(token->rawToken);
+    ASSERT_TRUE(back && back->user);
+    EXPECT_EQ(account.get(), back->user.get()) << "rehydration hands out the canonical account";
+
+    vh::identities::manager().deleteUser(account->id);
+    EXPECT_ANY_THROW((void)validateRaw(token->rawToken));
+    EXPECT_ANY_THROW((void)validateViaSocket(token->rawToken));
+}
+
 }

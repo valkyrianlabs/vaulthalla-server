@@ -26,11 +26,18 @@ std::shared_ptr<Manager> Manager::createForTesting(std::unordered_map<std::strin
 }
 
 std::string Manager::jwtSecret() const {
-    return getOrInitSecret("jwt_secret");
+    if (const auto cached = jwtSecret_.load()) return *cached;
+    std::scoped_lock lock(jwtMutex_);
+    if (const auto cached = jwtSecret_.load()) return *cached;
+    auto secret = std::make_shared<const std::string>(getOrInitSecret("jwt_secret"));
+    jwtSecret_.store(secret);
+    return *secret;
 }
 
 void Manager::setJWTSecret(const std::string& secret) const {
-    return setEncryptedValue("jwt_secret", secret);
+    std::scoped_lock lock(jwtMutex_);
+    setEncryptedValue("jwt_secret", secret);
+    jwtSecret_.store(std::make_shared<const std::string>(secret));
 }
 
 std::optional<std::string> Manager::getSecret(const std::string& key) const {

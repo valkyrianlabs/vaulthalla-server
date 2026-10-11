@@ -64,13 +64,12 @@ namespace {
 
     Validator::verifyStoredRefreshTokenHash(rawToken, storedToken);
 
-    const auto userId = db::query::auth::RefreshToken::getUserIdByJti(claims.jti);
-    const auto user = userId ? vh::identities::manager().user(*userId) : nullptr;
+    // The stored row names its owner; the canonical account answers whether it may still sign in (a deleted
+    // account is a non-authorizing tombstone, so no join against users is needed).
+    const auto user = vh::identities::manager().user(storedToken->userId);
     if (!user) throw std::runtime_error("No user found for refresh token");
     if (user->systemOnly()) throw std::runtime_error("System-only users cannot rehydrate human sessions");
-    if (!user->isActive()) throw std::runtime_error("Deactivated users cannot rehydrate sessions");
-    if (storedToken->userId != user->id)
-        throw std::runtime_error("User ID mismatch for refresh token");
+    if (!user->authorizing()) throw std::runtime_error("Deactivated users cannot rehydrate sessions");
 
     storedToken->rawToken = rawToken;
 
