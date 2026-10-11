@@ -2,6 +2,7 @@ import type { WebSocketCommandMap } from '@/util/webSocketCommands'
 import { getWebsocketUrl } from '@/util/getUrl'
 import { WsError, wsErrorFromMessage } from '@/lib/ws/errors'
 import { randomId } from '@/lib/randomId'
+import { WS_CONTRACT_TIMEOUTS } from '@/util/generated/wsContract'
 
 export type Command = keyof WebSocketCommandMap
 export type Payload<C extends Command> = WebSocketCommandMap[C]['payload']
@@ -30,6 +31,8 @@ interface WsClientOptions {
   onToken?: (token: string) => void
   // Called once per UNAUTHORIZED rejection; resolve true to retry the command once (the server never ran it).
   onUnauthorized?: (command: Command) => Promise<boolean>
+  // Called each time a socket opens (first connect and every reconnect).
+  onOpen?: () => void
   // Commands that must never trigger the unauthorized retry (they are the session lifecycle itself).
   lifecycle?: ReadonlySet<Command>
 }
@@ -40,21 +43,13 @@ const BACKOFF_BASE_MS = 500
 const BACKOFF_MAX_MS = 15_000
 
 // Commands whose server-side work can legitimately take longer than the default. A timeout on these means "no
-// answer yet", not "failed": callers surface it as such and must not blindly resend.
+// answer yet", not "failed": callers surface it as such and must not blindly resend. Commands in the server-owned
+// contract take the timeout the server declares (core/usage); the rest are listed here.
 const COMMAND_TIMEOUTS: Partial<Record<Command, number>> = {
-  'auth.login': 20_000,
-  'fs.dir.list': 30_000,
-  'fs.list': 30_000,
-  'fs.entry.copy': 180_000,
-  'fs.entry.move': 180_000,
-  'fs.entry.delete': 180_000,
-  'fs.entry.rename': 60_000,
-  'fs.upload.start': 30_000,
-  'fs.upload.finish': 180_000,
+  ...WS_CONTRACT_TIMEOUTS,
   'share.upload.start': 30_000,
   'share.upload.finish': 180_000,
   'share.preview.get': 30_000,
-  'storage.vault.add': 60_000,
   'storage.vault.update': 60_000,
   'storage.apiKey.add': 60_000,
   'storage.apiKey.update': 60_000,
@@ -214,6 +209,7 @@ export class WsClient {
       this.attempt = 0
       this.setStatus('open')
       for (const waiter of [...this.openWaiters]) waiter()
+      this.options.onOpen?.()
     }
 
     socket.onclose = () => {

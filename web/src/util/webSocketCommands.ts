@@ -15,8 +15,9 @@ import { VaultSyncHealth } from '@/models/stats/vaultSyncHealth'
 import { APIKey, S3APIKey } from '@/models/apiKey'
 import type { GroupRecord, UserRecord } from '@/features/access/types'
 import { Permission } from '@/models/role'
+import type { WsContract } from '@/util/generated/wsContract'
 import { ServerPolicy, Settings, SettingsSection } from '@/models/settings'
-import { File, IFileUpload } from '@/models/file'
+import { File } from '@/models/file'
 import { Directory } from '@/models/directory'
 import {
   DashboardPreference,
@@ -138,9 +139,15 @@ export interface RoleUpdatePayload {
   permissions?: RolePermissionValue[]
 }
 
+// Commands covered by the server-owned contract (core/usage, generated into util/generated/wsContract.ts) are
+// type-checked against it by util/wsContractCheck.ts; plain ones take the contract's type directly.
 export interface WebSocketCommandMap {
+  // The daemon's contract identity; the console compares ws_hash with WS_CONTRACT_HASH after connecting.
+  'meta.contract.get': WsContract['meta.contract.get']
+
   // Auth
-  'auth.login': { payload: { name: string; password: string }; response: { token: string; user: UserRecord } }
+  // The access token arrives in the response envelope (`token`), not in data.
+  'auth.login': { payload: { name: string; password: string }; response: { user: UserRecord } }
 
   'auth.register': {
     // role: an admin role name or id. The password is required here (only the CLI can generate one).
@@ -160,11 +167,12 @@ export interface WebSocketCommandMap {
     response: { user: UserRecord }
   }
 
-  'auth.isAuthenticated': { payload: { token: string }; response: { isAuthenticated: boolean; user?: UserRecord } }
+  // Validates the envelope token; the payload is not read.
+  'auth.isAuthenticated': { payload: null; response: { isAuthenticated: boolean; user?: UserRecord } }
 
-  'auth.refresh': { payload: null; response: { token: string; user: UserRecord } }
+  'auth.refresh': { payload: null; response: { user: UserRecord } }
 
-  'auth.logout': { payload: null; response: { success: boolean } }
+  'auth.logout': WsContract['auth.logout']
 
   // May carry slim users (admin_role without permissions): use only the role's id and name from it.
   'auth.users.list': { payload: null; response: { users: UserRecord[] } }
@@ -626,18 +634,14 @@ export interface WebSocketCommandMap {
 
   'fs.download.cancel': { payload: { transfer_id: string }; response: ShareDownloadCancelResponse }
 
-  'fs.upload.start': {
-    payload:
-      | IFileUpload
-      | { path?: string; filename?: string; size_bytes?: number; size?: number; mime_type?: string | null; duplicate_policy?: 'reject' }
-    response: { upload_id: string; transfer_id?: string; path?: string; filename?: string; size_bytes?: number; chunk_size?: number; duplicate_policy?: string }
-  }
+  // Native ws transfers (the console uploads over HTTP); console and share-session forms.
+  'fs.upload.start': WsContract['fs.upload.start']
 
-  'fs.upload.finish': { payload: Partial<IFileUpload> | { upload_id: string }; response: { path?: string } | ShareUploadFinishResponse }
+  'fs.upload.finish': WsContract['fs.upload.finish']
 
-  'fs.upload.cancel': { payload: { upload_id?: string }; response: { cancelled: boolean; upload_id?: string } }
+  'fs.upload.cancel': WsContract['fs.upload.cancel']
 
-  'fs.entry.delete': { payload: { vault_id: number; path: string }; response: null }
+  'fs.entry.delete': { payload: { vault_id: number; path: string }; response: { path: string } }
 
   'fs.entry.move': { payload: { vault_id: number; from: string; to: string }; response: { from: string; to: string } }
 

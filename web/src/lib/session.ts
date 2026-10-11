@@ -3,6 +3,7 @@
 import { create } from 'zustand'
 import { WsClient, type Command } from '@/lib/ws/client'
 import { WsError, isWsError } from '@/lib/ws/errors'
+import { checkServerContract } from '@/lib/ws/contract'
 import type { IUser } from '@/models/user'
 
 export type SessionStatus = 'unknown' | 'authenticated' | 'unauthenticated'
@@ -18,7 +19,13 @@ export const useSession = create<SessionState>(() => ({ status: 'unknown', user:
 
 // Session-lifecycle commands work without (or with an expired) access token. Mirrors core's
 // isSessionLifecycleCommand (protocols/ws/Router.cpp).
-const LIFECYCLE: ReadonlySet<Command> = new Set<Command>(['auth.login', 'auth.logout', 'auth.refresh', 'auth.isAuthenticated'])
+const LIFECYCLE: ReadonlySet<Command> = new Set<Command>([
+  'auth.login',
+  'auth.logout',
+  'auth.refresh',
+  'auth.isAuthenticated',
+  'meta.contract.get',
+])
 
 let refreshing: Promise<boolean> | null = null
 
@@ -28,6 +35,7 @@ export const api = new WsClient({
   token: () => useSession.getState().token ?? '',
   onToken: token => useSession.setState({ token }),
   onUnauthorized: () => refreshSession(),
+  onOpen: () => void checkServerContract(api),
 })
 
 // Single-flight refresh. Resolves false (and marks the session unauthenticated) when the server definitively refuses.
