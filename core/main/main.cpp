@@ -3,6 +3,7 @@
 #include "../include/protocols/ProtocolService.hpp"
 #include "runtime/Manager.hpp"
 #include "runtime/Deps.hpp"
+#include "runtime/TestInstance.hpp"
 
 // Database
 #include "db/Transactions.hpp"
@@ -26,7 +27,9 @@
 #include "config/Registry.hpp"
 #include <cerrno>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <paths.h>
 #include "concurrency/ThreadPoolManager.hpp"
 #include "log/Registry.hpp"
 
@@ -221,10 +224,28 @@ void shutdownVaulthalla() {
 
     log->info("[✓] Vaulthalla services shut down cleanly.");
 }
+
+// VH_TEST_MODE=1: a private instance for the integration engine (tools/harness). Refuses to start unless every
+// path, the CLI socket and the database are private; never falls back to a real install's state.
+constexpr int kExitConfig = 78;  // EX_CONFIG
+
+bool enterTestInstanceMode() {
+    const auto env = [](const char* key) { return std::getenv(key); };
+    if (!vh::runtime::test_instance::requested(env)) return true;
+    if (const auto why = vh::runtime::test_instance::refusal(env)) {
+        std::fprintf(stderr, "[-] Refusing to start a test instance: %s\n", why->c_str());
+        return false;
+    }
+    vh::paths::enableTestMode();
+    std::fprintf(stderr, "[*] Test instance: config %s, CLI socket %s\n", vh::paths::getConfigPath().c_str(),
+                 vh::paths::getCliSocketPath().c_str());
+    return true;
+}
 }
 
 int main() {
     installCrashGuard();
+    if (!enterTestInstanceMode()) return kExitConfig;
 
     try {
         Registry::init();

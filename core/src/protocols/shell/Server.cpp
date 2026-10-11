@@ -89,7 +89,7 @@ gid_t lookupCliAdminGid() {
 Server::Server()
     : AsyncService("vaulthalla-cli"),
       router_(std::make_shared<shell::Router>()),
-      socketPath_("/run/vaulthalla/cli.sock"),
+      socketPath_(paths::getCliSocketPath().string()),
       adminGid_(lookupCliAdminGid()),
       adminUIDSet_(false) {
 
