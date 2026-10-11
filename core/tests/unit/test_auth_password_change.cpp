@@ -1,8 +1,10 @@
+#include "../helpers/identities.hpp"
 #include "auth/Manager.hpp"
 #include "crypto/util/hash.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/identities/User.hpp"
 #include "db/query/rbac/role/Admin.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "ops/Roles.hpp"
 #include "ops/Users.hpp"
@@ -93,15 +95,10 @@ protected:
         const std::string& password,
         const std::string& roleName = "unprivileged"
     ) {
-        auto user = std::make_shared<vh::identities::User>();
-        user->name = name;
-        user->email = name + "@vaulthalla.test";
-        user->setPasswordHash(vh::crypto::hash::password(password));
-        user->roles.admin = vh::db::query::rbac::role::Admin::get(roleName);
-        if (!user->roles.admin) throw std::runtime_error("Missing admin role: " + roleName);
-
-        user->id = vh::db::query::identities::User::createUser(user);
-        return vh::db::query::identities::User::getUserById(user->id);
+        auto role = vh::db::query::rbac::role::Admin::get(roleName);
+        if (!role) throw std::runtime_error("Missing admin role: " + roleName);
+        return vh::test::identities::createUser(name, role, name + "@vaulthalla.test",
+                                                vh::crypto::hash::password(password));
     }
 
     static std::shared_ptr<vh::identities::User> createSystemOnlyUser(
@@ -131,7 +128,7 @@ protected:
             return userId;
         });
 
-        return vh::db::query::identities::User::getUserById(id);
+        return vh::identities::manager().user(id);
     }
 };
 // #163: password_changed_at had no column, so it was null after every reload.
@@ -190,8 +187,8 @@ TEST_F(AuthPasswordChangeTest, SelfPasswordChangePersistsToDatabase) {
     );
 
     EXPECT_EQ(response.at("user").at("id").get<unsigned int>(), user->id);
-    EXPECT_FALSE(authenticate(user->name, "old-password"));
-    EXPECT_TRUE(authenticate(user->name, "new-password"));
+    EXPECT_FALSE(authenticate(user->name(), "old-password"));
+    EXPECT_TRUE(authenticate(user->name(), "new-password"));
 }
 
 TEST_F(AuthPasswordChangeTest, SelfPasswordChangeRequiresOldPassword) {
@@ -209,8 +206,8 @@ TEST_F(AuthPasswordChangeTest, SelfPasswordChangeRequiresOldPassword) {
         std::runtime_error
     );
 
-    EXPECT_TRUE(authenticate(user->name, "old-password"));
-    EXPECT_FALSE(authenticate(user->name, "new-password"));
+    EXPECT_TRUE(authenticate(user->name(), "old-password"));
+    EXPECT_FALSE(authenticate(user->name(), "new-password"));
 }
 
 TEST_F(AuthPasswordChangeTest, AdminResetPersistsWithoutOldPasswordWhenPermissionIsGranted) {
@@ -227,8 +224,8 @@ TEST_F(AuthPasswordChangeTest, AdminResetPersistsWithoutOldPasswordWhenPermissio
     );
 
     EXPECT_EQ(response.at("user").at("id").get<unsigned int>(), target->id);
-    EXPECT_FALSE(authenticate(target->name, "old-password"));
-    EXPECT_TRUE(authenticate(target->name, "new-password"));
+    EXPECT_FALSE(authenticate(target->name(), "old-password"));
+    EXPECT_TRUE(authenticate(target->name(), "new-password"));
 }
 
 TEST_F(AuthPasswordChangeTest, AdminResetIsDeniedWithoutResetPermission) {
@@ -247,8 +244,8 @@ TEST_F(AuthPasswordChangeTest, AdminResetIsDeniedWithoutResetPermission) {
         std::runtime_error
     );
 
-    EXPECT_TRUE(authenticate(target->name, "old-password"));
-    EXPECT_FALSE(authenticate(target->name, "new-password"));
+    EXPECT_TRUE(authenticate(target->name(), "old-password"));
+    EXPECT_FALSE(authenticate(target->name(), "new-password"));
 }
 
 TEST_F(AuthPasswordChangeTest, AdminResetUsesAdminScopeForAdminTargets) {
@@ -259,14 +256,14 @@ TEST_F(AuthPasswordChangeTest, AdminResetUsesAdminScopeForAdminTargets) {
     // from the admin role: the escalation SuperAdminPasswordCannotBeResetByOthers now refuses.)
     const auto actor = createUser("admin_password_reset_actor", "actor-password", "admin");
     const auto target = createUser("admin_password_reset_target", "old-password", "auditor");
-    ASSERT_TRUE(vh::ops::users::isAdminIdentity(*target->roles.admin));
-    ASSERT_TRUE(vh::ops::roles::permissionsBeyondActor(actor, *target->roles.admin).empty());
+    ASSERT_TRUE(vh::ops::users::isAdminIdentity(*target->state()->roles.admin));
+    ASSERT_TRUE(vh::ops::roles::permissionsBeyondActor(actor, *target->state()->roles.admin).empty());
 
     // The users scope is not enough for an admin-class account.
     const auto usersOnly = createUser("admin_password_reset_users_only", "actor-password", "identity_admin");
     EXPECT_THROW((void)vh::protocols::ws::handler::Auth::changePassword(
         json{{"id", target->id}, {"new_password", "new-password"}}, sessionFor(usersOnly)), std::runtime_error);
-    EXPECT_TRUE(authenticate(target->name, "old-password"));
+    EXPECT_TRUE(authenticate(target->name(), "old-password"));
 
     const auto session = sessionFor(actor);
 
@@ -276,8 +273,8 @@ TEST_F(AuthPasswordChangeTest, AdminResetUsesAdminScopeForAdminTargets) {
     );
 
     EXPECT_EQ(response.at("user").at("id").get<unsigned int>(), target->id);
-    EXPECT_FALSE(authenticate(target->name, "old-password"));
-    EXPECT_TRUE(authenticate(target->name, "new-password"));
+    EXPECT_FALSE(authenticate(target->name(), "old-password"));
+    EXPECT_TRUE(authenticate(target->name(), "new-password"));
 }
 
 TEST_F(AuthPasswordChangeTest, SuperAdminPasswordCannotBeResetByOthers) {
@@ -289,7 +286,7 @@ TEST_F(AuthPasswordChangeTest, SuperAdminPasswordCannotBeResetByOthers) {
 
     EXPECT_THROW((void)vh::protocols::ws::handler::Auth::changePassword(
         json{{"id", target->id}, {"new_password", "new-password"}}, sessionFor(actor)), std::runtime_error);
-    EXPECT_TRUE(authenticate(target->name, "old-password"));
+    EXPECT_TRUE(authenticate(target->name(), "old-password"));
 }
 
 TEST_F(AuthPasswordChangeTest, PasswordResetRejectsSystemOnlyTarget) {
@@ -324,7 +321,7 @@ TEST_F(AuthPasswordChangeTest, ChangePasswordRejectsMissingSessionUser) {
         std::runtime_error
     );
 
-    EXPECT_TRUE(authenticate(target->name, "old-password"));
+    EXPECT_TRUE(authenticate(target->name(), "old-password"));
 }
 
 // Regression (#126): the web "Edit User" form sends auth.user.update with the target's id; the handler used to
@@ -337,15 +334,15 @@ TEST_F(AuthPasswordChangeTest, UpdateUserTargetsPayloadIdNotCaller) {
 
     const auto response = vh::protocols::ws::handler::Auth::updateUser(
         json{{"id", target->id}, {"name", "upd_plain_renamed"}, {"email", "renamed@vaulthalla.test"},
-             {"is_active", false}, {"role", target->roles.admin->name}, {"password", ""}},
+             {"is_active", false}, {"role", target->state()->roles.admin->name}, {"password", ""}},
         sessionFor(admin));
 
-    const auto reloadedTarget = vh::db::query::identities::User::getUserById(target->id);
-    const auto reloadedAdmin = vh::db::query::identities::User::getUserById(admin->id);
-    EXPECT_EQ(reloadedTarget->name, "upd_plain_renamed");
-    EXPECT_FALSE(reloadedTarget->meta.is_active);
-    EXPECT_EQ(reloadedAdmin->name, "upd_admin_target");
-    EXPECT_TRUE(reloadedAdmin->meta.is_active);
+    const auto reloadedTarget = vh::identities::manager().user(target->id);
+    const auto reloadedAdmin = vh::identities::manager().user(admin->id);
+    EXPECT_EQ(reloadedTarget->name(), "upd_plain_renamed");
+    EXPECT_FALSE(reloadedTarget->state()->meta.is_active);
+    EXPECT_EQ(reloadedAdmin->name(), "upd_admin_target");
+    EXPECT_TRUE(reloadedAdmin->state()->meta.is_active);
     EXPECT_EQ(response.at("user").at("id").get<unsigned int>(), target->id);
 }
 
@@ -362,10 +359,10 @@ TEST_F(AuthPasswordChangeTest, UpdateUserRefusesSelfPrivilegeAndIdentityChanges)
     EXPECT_THROW(Auth::updateUser(json{{"id", admin->id}, {"is_active", false}}, session), std::runtime_error);
     EXPECT_THROW(Auth::updateUser(json{{"id", admin->id}, {"updated_by", 1}}, session), std::runtime_error);
 
-    const auto reloaded = vh::db::query::identities::User::getUserById(admin->id);
-    EXPECT_EQ(reloaded->roles.admin->name, "admin");
-    EXPECT_FALSE(reloaded->meta.linux_uid.has_value());
-    EXPECT_TRUE(reloaded->meta.is_active);
+    const auto reloaded = vh::identities::manager().user(admin->id);
+    EXPECT_EQ(reloaded->state()->roles.admin->name, "admin");
+    EXPECT_FALSE(reloaded->state()->meta.linux_uid.has_value());
+    EXPECT_TRUE(reloaded->state()->meta.is_active);
 }
 
 TEST_F(AuthPasswordChangeTest, UpdateUserRequiresEditPermissionForOthers) {
@@ -376,13 +373,13 @@ TEST_F(AuthPasswordChangeTest, UpdateUserRequiresEditPermissionForOthers) {
 
     EXPECT_THROW(vh::protocols::ws::handler::Auth::updateUser(
         json{{"id", other->id}, {"name", "upd_hijacked"}}, sessionFor(plain)), std::runtime_error);
-    EXPECT_EQ(vh::db::query::identities::User::getUserById(other->id)->name, "upd_plain_victim");
+    EXPECT_EQ(vh::identities::manager().user(other->id)->name(), "upd_plain_victim");
 }
 
 TEST_F(AuthPasswordChangeTest, NewAccountsRecordWhenTheirPasswordWasSet) {
     const auto user = createUser("pwd_changed_new", "first-password");
     EXPECT_TRUE(justNow(passwordChangedSecondsAgo(user->id)));
-    ASSERT_TRUE(user->meta.password_changed_at) << "loaded with the user";
+    ASSERT_TRUE(user->state()->meta.password_changed_at) << "loaded with the user";
 }
 
 TEST_F(AuthPasswordChangeTest, SelfChangeAndAdminResetPersistPasswordChangedAt) {
@@ -398,8 +395,8 @@ TEST_F(AuthPasswordChangeTest, SelfChangeAndAdminResetPersistPasswordChangedAt) 
         sessionFor(user));
     EXPECT_TRUE(justNow(passwordChangedSecondsAgo(user->id)));
     EXPECT_FALSE(response.at("user").at("password_changed_at").is_null());
-    const auto reloaded = vh::db::query::identities::User::getUserById(user->id);
-    ASSERT_TRUE(reloaded->meta.password_changed_at) << "survives a reload (and so a restart)";
+    const auto reloaded = vh::identities::manager().user(user->id);
+    ASSERT_TRUE(reloaded->state()->meta.password_changed_at) << "survives a reload (and so a restart)";
 
     const auto actor = createUser("pwd_changed_actor", "actor-password", "admin");
     const auto target = createUser("pwd_changed_target", "old-password");
@@ -413,9 +410,9 @@ TEST_F(AuthPasswordChangeTest, UpdatesThatKeepThePasswordKeepPasswordChangedAt) 
     const auto user = createUser("pwd_changed_keep", "same-password");
     backdatePasswordChange(user->id);
 
-    auto reloaded = vh::db::query::identities::User::getUserById(user->id);
-    reloaded->email = "pwd_changed_keep_new@vaulthalla.test";
-    vh::db::query::identities::User::updateUser(reloaded);
+    (void)vh::identities::manager().updateUser(user->id, [](vh::identities::UserState& s) {
+        s.email = "pwd_changed_keep_new@vaulthalla.test";
+    });
 
     const auto ago = passwordChangedSecondsAgo(user->id);
     ASSERT_TRUE(ago);

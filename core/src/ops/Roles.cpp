@@ -11,6 +11,7 @@
 #include "db/query/rbac/role/vault/Assignments.hpp"
 #include "db/query/vault/Vault.hpp"
 #include "identities/Group.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "notifications/SecurityAlertProducer.hpp"
 #include "rbac/fs/glob/Tokenizer.hpp"
@@ -47,6 +48,20 @@ using AdminRoleQuery = db::query::rbac::role::Admin;
 using VaultRoleQuery = db::query::rbac::role::Vault;
 using VaultAssignments = db::query::rbac::role::vault::Assignments;
 using RolePerm = rbac::permission::vault::RolePermissions;
+
+// The actor's admin role as a mutable copy for the permission resolvers (none unless the actor is authorizing).
+std::shared_ptr<rbac::role::Admin> actorAdminRole(const Actor& actor) {
+    const auto state = actor->state();
+    if (!state->authorizing() || !state->roles.admin) return nullptr;
+    return std::make_shared<rbac::role::Admin>(*state->roles.admin);
+}
+
+// Which identity an assignment or override write republishes.
+identities::Touched touchedBy(const Subject& subject) {
+    if (subject.type == "user") return {.users = {subject.id}};
+    if (subject.type == "group") return {.groups = {subject.id}};
+    return {};
+}
 
 std::string describeRef(const Ref& ref) {
     if (const auto* id = std::get_if<unsigned int>(&ref)) return std::to_string(*id);
@@ -94,7 +109,7 @@ void requireName(const std::string& name, const std::string_view kind) {
 // The escalation ceiling: `staged` may not grant an admin permission that the actor lacks, unless `baseline`
 // (the role as it was) already granted it. Revoking is always allowed.
 void requireWithinCeiling(const Actor& actor, const rbac::role::Admin& staged, const rbac::role::Admin* baseline) {
-    const auto actorRole = actor->roles.admin;
+    const auto actorRole = actorAdminRole(actor);
     const auto stagedPtr = std::make_shared<rbac::role::Admin>(staged);
     const auto basePtr = baseline ? std::make_shared<rbac::role::Admin>(*baseline) : nullptr;
     std::vector<std::string> beyond;
@@ -110,15 +125,16 @@ void requireWithinCeiling(const Actor& actor, const rbac::role::Admin& staged, c
 }
 
 bool isOwnRole(const Actor& actor, const rbac::role::Admin& role) {
-    return actor->roles.admin && actor->roles.admin->name == role.name;
+    const auto state = actor->state();
+    return state->roles.admin && state->roles.admin->name == role.name;
 }
 
 void requireSubjectExists(const Subject& subject) {
     if (subject.type == "user") {
-        if (!db::query::identities::User::getUserById(subject.id))
+        if (!vh::identities::manager().user(subject.id))
             throw NotFound("user not found: " + std::to_string(subject.id));
     } else if (subject.type == "group") {
-        if (!db::query::identities::Group::getGroup(subject.id))
+        if (!vh::identities::manager().group(subject.id))
             throw NotFound("group not found: " + std::to_string(subject.id));
     } else {
         throw Invalid("subject type must be 'user' or 'group', got '" + subject.type + "'");
@@ -153,9 +169,10 @@ VaultRolePtr requireAssignment(const VaultSubject& target) {
 std::vector<std::string> permissionsBeyondActor(const Actor& actor, const rbac::role::Admin& role) {
     requireActor(actor);
     const auto rolePtr = std::make_shared<rbac::role::Admin>(role);
+    const auto actorRole = actorAdminRole(actor);
     std::vector<std::string> beyond;
     for (const auto& perm : rolePtr->toPermissions())
-        if (AdminResolver::has(rolePtr, perm) && (!actor->roles.admin || !AdminResolver::has(actor->roles.admin, perm)))
+        if (AdminResolver::has(rolePtr, perm) && (!actorRole || !AdminResolver::has(actorRole, perm)))
             beyond.push_back(perm.qualified_name);
     return beyond;
 }
@@ -216,7 +233,8 @@ AdminRolePtr updateAdminRole(const Actor& actor, const UpdateRole& req, const st
     applyEdit<AdminResolver>(staged, req.permissions);
     requireWithinCeiling(actor, *staged, existing.get());
 
-    AdminRoleQuery::upsert(staged);
+    // Every holder's published state carries the role's permissions.
+    identities::manager().mutate({.everyone = true}, [&] { AdminRoleQuery::upsert(staged); });
     auto updated = AdminRoleQuery::get(existing->id);
     if (!updated) throw std::runtime_error("admin role " + std::to_string(existing->id) + " could not be read back");
     notifications::enqueueAdminRoleUpdated(updated, notifications::actorFromUser(std::string(auditSource), actor));
@@ -299,7 +317,7 @@ VaultRolePtr updateVaultRole(const Actor& actor, const UpdateRole& req) {
     if (req.description) staged->description = *req.description;
     applyEdit<VaultResolver>(staged, req.permissions);
 
-    VaultRoleQuery::upsert(staged);
+    identities::manager().mutate({.everyone = true}, [&] { VaultRoleQuery::upsert(staged); });
     auto updated = VaultRoleQuery::get(existing->id);
     if (!updated) throw std::runtime_error("vault role " + std::to_string(existing->id) + " could not be read back");
     return updated;
@@ -341,7 +359,9 @@ VaultRolePtr assignVaultRole(const Actor& actor, const AssignVaultRole& req) {
     requireSubjectExists(req.target.subject);
     const auto role = requireVaultRole(req.role);
 
-    VaultAssignments::assign(req.target.vault_id, req.target.subject.type, req.target.subject.id, role->id);
+    identities::manager().mutate(touchedBy(req.target.subject), [&] {
+        VaultAssignments::assign(req.target.vault_id, req.target.subject.type, req.target.subject.id, role->id);
+    });
     auto assignment = VaultAssignments::get(req.target.vault_id, req.target.subject.type, req.target.subject.id);
     if (!assignment) throw std::runtime_error("vault role assignment could not be read back");
     return assignment;
@@ -353,7 +373,9 @@ VaultRolePtr unassignVaultRole(const Actor& actor, const VaultSubject& target) {
     requireVaultRolePermission(actor, target, RolePerm::Revoke,
                                "you do not have permission to remove vault roles from this subject on this vault");
     auto assignment = requireAssignment(target);
-    VaultAssignments::unassign(target.vault_id, target.subject.type, target.subject.id);
+    identities::manager().mutate(touchedBy(target.subject), [&] {
+        VaultAssignments::unassign(target.vault_id, target.subject.type, target.subject.id);
+    });
     return assignment;
 }
 
@@ -409,10 +431,12 @@ std::vector<rbac::permission::Override> addVaultRoleOverrides(const Actor& actor
     throwProblems("invalid overrides", problems);
 
     std::vector<rbac::permission::Override> created;
-    for (const auto& ov : staged) {
-        ov->id = db::query::rbac::permission::Override::add(ov);
-        created.push_back(*ov);
-    }
+    identities::manager().mutate(touchedBy(req.target.subject), [&] {
+        for (const auto& ov : staged) {
+            ov->id = db::query::rbac::permission::Override::add(ov);
+            created.push_back(*ov);
+        }
+    });
     return created;
 }
 
@@ -432,7 +456,8 @@ rbac::permission::Override updateVaultRoleOverride(const Actor& actor, const Upd
         ov->pattern = rbac::fs::glob::model::Pattern::make(*req.pattern);
     }
     if (req.enabled) ov->enabled = *req.enabled;
-    db::query::rbac::permission::Override::update(ov);
+    identities::manager().mutate(touchedBy(req.target.subject),
+                                 [&] { db::query::rbac::permission::Override::update(ov); });
     return *db::query::rbac::permission::Override::get(req.override_id);
 }
 
@@ -445,7 +470,8 @@ void removeVaultRoleOverride(const Actor& actor, const VaultSubject& target, con
     const auto ov = db::query::rbac::permission::Override::get(overrideId);
     if (!ov || ov->assignment_id != assignment->assignment_id)
         throw NotFound("override " + std::to_string(overrideId) + " not found on this assignment");
-    db::query::rbac::permission::Override::remove(overrideId);
+    identities::manager().mutate(touchedBy(target.subject),
+                                 [&] { db::query::rbac::permission::Override::remove(overrideId); });
 }
 
 std::vector<rbac::permission::Override> listVaultRoleOverrides(const Actor& actor, const VaultSubject& target) {

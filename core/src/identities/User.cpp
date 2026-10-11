@@ -1,5 +1,7 @@
 #include "identities/User.hpp"
 
+#include "identities/Group.hpp"
+#include "identities/Manager.hpp"
 #include "rbac/role/Admin.hpp"
 #include "rbac/role/Vault.hpp"
 #include "rbac/role/vault/Global.hpp"
@@ -8,13 +10,13 @@
 #include "db/encoding/timestamp.hpp"
 #include "protocols/shell/util/lineHelpers.hpp"
 #include "protocols/shell/Table.hpp"
-#include "log/Registry.hpp"
 
 #include <nlohmann/json.hpp>
 #include <pqxx/row>
 #include <pqxx/result>
 
 #include <stdexcept>
+#include <thread>
 #include <utility>
 
 using namespace vh::protocols::shell;
@@ -63,206 +65,203 @@ namespace {
         }
     }
 
-    bool hasNonNullField(const nlohmann::json &j, const char *field) {
-        return j.contains(field) && !j.at(field).is_null();
+    bool superAdminShape(const vh::rbac::role::Admin &role) {
+        return role.identities.admins.canDelete()
+               && role.vaults.admin.canRemove()
+               && role.keys.encryptionKeys.canRotate()
+               && role.name == "super_admin";
+    }
+
+    bool adminShape(const vh::rbac::role::Admin &role) {
+        return role.identities.admins.canDelete() && role.vaults.admin.canRemove();
+    }
+
+    // The admin role of an authorizing state; null otherwise (every permission accessor then answers "no").
+    const vh::rbac::role::Admin *authorizingAdmin(const vh::identities::UserState &s) {
+        return s.authorizing() && s.roles.admin ? s.roles.admin.get() : nullptr;
     }
 } // namespace
 
 namespace vh::identities {
-    User::User() = default;
+    bool UserState::hasSuperAdminRole() const { return roles.admin && superAdminShape(*roles.admin); }
 
-    User::User(std::string name, std::string email, const bool isActive)
-        : name(std::move(name)) {
-        meta.created_at = std::time(nullptr);
-        meta.updated_at = meta.created_at;
-        meta.is_active = isActive;
+    bool UserState::hasAdminRole() const { return roles.admin && adminShape(*roles.admin); }
 
-        if (!email.empty()) this->email = std::move(email);
+    const rbac::permission::admin::VaultGlobals *AuthzView::vaultGlobals() const {
+        if (!authorizing() || !user->roles.admin) return nullptr;
+        return &user->roles.admin->vGlobals;
     }
 
-    User::User(pqxx::row_ref row)
-        : id(try_as_optional<uint32_t>(row, "id").value_or(0)),
-          name(try_as_optional_string(row, "name").value_or("")),
-          password_hash(try_as_optional_string(row, "password_hash").value_or("")) {
-        email = try_as_optional_string(row, "email");
-        isProtected = try_as_optional<bool>(row, "protected").value_or(false);
-        systemOnly = try_as_optional<bool>(row, "system_only").value_or(false);
+    std::shared_ptr<const rbac::role::Vault> AuthzView::directVaultRole(const uint32_t vaultId) const {
+        if (!authorizing()) return nullptr;
+        const auto it = user->roles.vaults.find(vaultId);
+        return it == user->roles.vaults.end() ? nullptr : it->second;
+    }
 
-        meta.linux_uid = try_as_optional<uint32_t>(row, "linux_uid");
-        meta.created_by = try_as_optional<uint32_t>(row, "created_by");
+    bool AuthzView::isSuperAdmin() const { return authorizing() && user->hasSuperAdminRole(); }
+
+    bool AuthzView::isAdmin() const { return authorizing() && user->hasAdminRole(); }
+
+    User::User(const uint32_t id, std::shared_ptr<const UserState> initial, const bool detached)
+        : id(id), state_(std::move(initial)), detached_(detached) {}
+
+    std::shared_ptr<User> User::detached(const uint32_t id, UserState state) {
+        return std::shared_ptr<User>(new User(id, std::make_shared<const UserState>(std::move(state)), true));
+    }
+
+    void User::replaceDetachedState(UserState next) {
+        if (!detached_) throw std::logic_error("canonical users change only through identities::Manager");
+        publish(std::make_shared<const UserState>(std::move(next)));
+    }
+
+    AuthzView User::authz() const {
+        auto& seq = detail::publicationSeq;
+        for (unsigned spins = 0;; ++spins) {
+            const auto before = seq.load();
+            if (before & 1u) {
+                if (spins > 64) std::this_thread::yield();
+                continue;
+            }
+            AuthzView view;
+            view.user = state();
+            if (view.user->authorizing()) {
+                view.groups.reserve(view.user->groups.size());
+                for (const auto &group: view.user->groups) {
+                    if (!group) continue;
+                    if (auto gs = group->state(); gs && !gs->deleted) view.groups.push_back(std::move(gs));
+                }
+            }
+            if (seq.load() == before) return view;
+        }
+    }
+
+    std::string User::name() const { return state()->name; }
+    std::optional<std::string> User::email() const { return state()->email; }
+    std::optional<uint32_t> User::linuxUid() const { return state()->meta.linux_uid; }
+    bool User::isActive() const { return state()->meta.is_active; }
+    bool User::authorizing() const { return state()->authorizing(); }
+    bool User::isProtected() const { return state()->isProtected; }
+    bool User::systemOnly() const { return state()->systemOnly; }
+    bool User::deleted() const { return state()->deleted; }
+
+    bool User::isSuperAdmin() const {
+        const auto s = state();
+        const auto *admin = authorizingAdmin(*s);
+        return admin && superAdminShape(*admin);
+    }
+
+    bool User::isAdmin() const {
+        const auto s = state();
+        const auto *admin = authorizingAdmin(*s);
+        return admin && adminShape(*admin);
+    }
+
+    std::shared_ptr<const rbac::role::Vault> User::getDirectVaultRole(const uint32_t vaultId) const {
+        const auto s = state();
+        if (!s->authorizing()) return nullptr;
+        const auto it = s->roles.vaults.find(vaultId);
+        return it == s->roles.vaults.end() ? nullptr : it->second;
+    }
+
+    bool User::hasDirectVaultRole(const uint32_t vaultId) const { return getDirectVaultRole(vaultId) != nullptr; }
+
+#define VH_ADMIN_PERMS(method, Type, expr)                                       \
+    Type User::method() const {                                                   \
+        const auto s = state();                                                   \
+        const auto *admin = authorizingAdmin(*s);                                 \
+        return admin ? Type(admin->expr) : Type{};                                \
+    }
+
+    VH_ADMIN_PERMS(identities, rbac::permission::admin::Identities, identities)
+    VH_ADMIN_PERMS(users, rbac::permission::admin::identities::Users, identities.users)
+    VH_ADMIN_PERMS(groupPerms, rbac::permission::admin::identities::Groups, identities.groups)
+    VH_ADMIN_PERMS(admins, rbac::permission::admin::identities::Admins, identities.admins)
+    VH_ADMIN_PERMS(adminRolePerms, rbac::permission::admin::roles::Admin, roles.admin)
+    VH_ADMIN_PERMS(vaultRolePerms, rbac::permission::admin::roles::Vault, roles.vault)
+    VH_ADMIN_PERMS(settings, rbac::permission::admin::Settings, settings)
+    VH_ADMIN_PERMS(audits, rbac::permission::admin::Audits, audits)
+    VH_ADMIN_PERMS(vaultGlobals, rbac::permission::admin::VaultGlobals, vGlobals)
+    VH_ADMIN_PERMS(vaultsPerms, rbac::permission::admin::Vaults, vaults)
+    VH_ADMIN_PERMS(apiKeysPerms, rbac::permission::admin::keys::APIKeys, keys.apiKeys)
+    VH_ADMIN_PERMS(s3GatewayPerms, rbac::permission::admin::S3Gateway, s3Gateway)
+    VH_ADMIN_PERMS(statsPerms, rbac::permission::admin::Stats, stats)
+    VH_ADMIN_PERMS(encryptionKeysPerms, rbac::permission::admin::keys::EncryptionKey, keys.encryptionKeys)
+
+#undef VH_ADMIN_PERMS
+
+    UserState stateFromRow(pqxx::row_ref row) {
+        UserState s;
+        s.name = try_as_optional_string(row, "name").value_or("");
+        s.email = try_as_optional_string(row, "email");
+        s.isProtected = try_as_optional<bool>(row, "protected").value_or(false);
+        s.systemOnly = try_as_optional<bool>(row, "system_only").value_or(false);
+
+        s.meta.linux_uid = try_as_optional<uint32_t>(row, "linux_uid");
+        s.meta.created_by = try_as_optional<uint32_t>(row, "created_by");
 
         // Support either new updated_by or legacy last_modified_by while you transition.
-        meta.updated_by = try_as_optional<uint32_t>(row, "updated_by");
-        if (!meta.updated_by) meta.updated_by = try_as_optional<uint32_t>(row, "last_modified_by");
+        s.meta.updated_by = try_as_optional<uint32_t>(row, "updated_by");
+        if (!s.meta.updated_by) s.meta.updated_by = try_as_optional<uint32_t>(row, "last_modified_by");
 
-        meta.created_at = try_as_timestamp_or_now(row, "created_at");
-        meta.updated_at = try_as_timestamp_or_now(row, "updated_at");
+        s.meta.created_at = try_as_timestamp_or_now(row, "created_at");
+        s.meta.updated_at = try_as_timestamp_or_now(row, "updated_at");
 
-        meta.last_login = try_as_optional_timestamp(row, "last_login");
-        meta.password_changed_at = try_as_optional_timestamp(row, "password_changed_at");
-        meta.deactivated_at = try_as_optional_timestamp(row, "deactivated_at");
+        s.meta.last_login = try_as_optional_timestamp(row, "last_login");
+        s.meta.password_changed_at = try_as_optional_timestamp(row, "password_changed_at");
+        s.meta.deactivated_at = try_as_optional_timestamp(row, "deactivated_at");
 
-        meta.is_active = try_as_optional<bool>(row, "is_active").value_or(true);
+        s.meta.is_active = try_as_optional<bool>(row, "is_active").value_or(true);
+        return s;
     }
 
-    User::User(
-        pqxx::row_ref user,
-        pqxx::row_ref adminRole,
-        const pqxx::result &globalVaultRoles,
-        std::unordered_map<uint32_t, std::shared_ptr<rbac::role::Vault> > &&vRoles,
-        std::vector<std::shared_ptr<Group> > &&groups
-    ) : User(user) {
-        roles.admin = std::make_shared<Admin>(adminRole, globalVaultRoles);
-        roles.vaults = std::move(vRoles);
-        this->groups = std::move(groups);
-    }
+    namespace {
+        void baseJson(nlohmann::json &j, const uint32_t id, const UserState &s) {
+            j = {
+                {"id", id},
+                {"name", s.name},
+                {"email", s.email},
+                {"is_protected", s.isProtected},
+                {"system_only", s.systemOnly},
+                {"created_at", timestampToString(s.meta.created_at)},
+                {"updated_at", timestampToString(s.meta.updated_at)},
+                {"is_active", s.meta.is_active}
+            };
 
-    bool User::operator==(const User &other) const {
-        return id == other.id
-               && meta.linux_uid == other.meta.linux_uid
-               && name == other.name
-               && email == other.email;
-    }
+            j["last_login"] = s.meta.last_login
+                                  ? nlohmann::json(timestampToString(*s.meta.last_login))
+                                  : nlohmann::json(nullptr);
 
-    bool User::operator!=(const User &other) const {
-        return !(*this == other);
-    }
+            j["password_changed_at"] = s.meta.password_changed_at
+                                           ? nlohmann::json(timestampToString(*s.meta.password_changed_at))
+                                           : nlohmann::json(nullptr);
 
-    rbac::permission::admin::Identities &User::identities() const { return roles.admin->identities; }
-    rbac::permission::admin::identities::Users &User::users() const { return identities().users; }
-    rbac::permission::admin::identities::Groups &User::groupPerms() const { return identities().groups; }
-    rbac::permission::admin::identities::Admins &User::admins() const { return identities().admins; }
-    rbac::permission::admin::roles::Admin &User::adminRolePerms() const { return roles.admin->roles.admin; }
-    rbac::permission::admin::roles::Vault &User::vaultRolePerms() const { return roles.admin->roles.vault; }
-    rbac::permission::admin::Settings &User::settings() const { return roles.admin->settings; }
-    rbac::permission::admin::Audits &User::audits() const { return roles.admin->audits; }
-    rbac::permission::admin::VaultGlobals &User::vaultGlobals() const { return roles.admin->vGlobals; }
-    rbac::permission::admin::Vaults &User::vaultsPerms() const { return roles.admin->vaults; }
-    rbac::permission::admin::keys::APIKeys &User::apiKeysPerms() const { return roles.admin->keys.apiKeys; }
-    rbac::permission::admin::S3Gateway &User::s3GatewayPerms() const { return roles.admin->s3Gateway; }
-    rbac::permission::admin::Stats &User::statsPerms() const { return roles.admin->stats; }
+            j["deactivated_at"] = s.meta.deactivated_at
+                                      ? nlohmann::json(timestampToString(*s.meta.deactivated_at))
+                                      : nlohmann::json(nullptr);
 
-    rbac::permission::admin::keys::EncryptionKey &User::encryptionKeysPerms() const {
-        return roles.admin->keys.encryptionKeys;
-    }
-
-    std::shared_ptr<rbac::role::Vault> User::getDirectVaultRole(const uint32_t vaultId) const {
-        std::scoped_lock lock(mutex_);
-
-        const auto it = roles.vaults.find(vaultId);
-        if (it == roles.vaults.end()) {
-            log::Registry::auth()->debug(
-                "User {} has no direct vault role for vault {}",
-                name,
-                vaultId
-            );
-            return nullptr;
+            if (s.meta.linux_uid) j["linux_uid"] = *s.meta.linux_uid;
+            if (s.meta.created_by) j["created_by"] = *s.meta.created_by;
+            if (s.meta.updated_by) j["updated_by"] = *s.meta.updated_by;
         }
-
-        log::Registry::auth()->debug(
-            "User {} has direct vault role for vault {}",
-            name,
-            vaultId
-        );
-
-        return it->second;
-    }
-
-    bool User::hasDirectVaultRole(const uint32_t vaultId) const {
-        std::scoped_lock lock(mutex_);
-        return roles.vaults.contains(vaultId);
-    }
-
-    void User::setPasswordHash(const std::string &hash) {
-        std::scoped_lock lock(mutex_);
-        password_hash = hash;
-        meta.password_changed_at = std::time(nullptr);
-    }
-
-    void User::updateUser(const nlohmann::json &j) {
-        std::scoped_lock lock(mutex_);
-
-        if (isProtected && (
-            hasNonNullField(j, "name") ||
-            j.contains("linux_uid") ||
-            hasNonNullField(j, "is_active") ||
-            j.contains("protected") ||
-            j.contains("is_protected") ||
-            j.contains("system_only")))
-            throw std::runtime_error("Protected users cannot be mutated through normal user update paths");
-
-        if (j.contains("name") && !j.at("name").is_null())
-            name = j.at("name").get<std::string>();
-
-        if (j.contains("email")) {
-            if (j.at("email").is_null()) email = std::nullopt;
-            else {
-                const auto value = j.at("email").get<std::string>();
-                email = value.empty() ? std::nullopt : std::make_optional(value);
-            }
-        }
-
-        if (j.contains("is_active") && !j.at("is_active").is_null()) {
-            meta.is_active = j.at("is_active").get<bool>();
-            if (!meta.is_active && !meta.deactivated_at) meta.deactivated_at = std::time(nullptr);
-            if (meta.is_active) meta.deactivated_at = std::nullopt;
-        }
-
-        if (j.contains("linux_uid")) {
-            if (j.at("linux_uid").is_null()) meta.linux_uid = std::nullopt;
-            else meta.linux_uid = j.at("linux_uid").get<uint32_t>();
-        }
-
-        if (j.contains("updated_by")) {
-            if (j.at("updated_by").is_null()) meta.updated_by = std::nullopt;
-            else meta.updated_by = j.at("updated_by").get<uint32_t>();
-        }
-
-        meta.updated_at = std::time(nullptr);
     }
 
     void to_json(nlohmann::json &j, const User &u) {
-        j = {
-            {"id", u.id},
-            {"name", u.name},
-            {"email", u.email},
-            {"is_protected", u.isProtected},
-            {"system_only", u.systemOnly},
-            {"created_at", timestampToString(u.meta.created_at)},
-            {"updated_at", timestampToString(u.meta.updated_at)},
-            {"is_active", u.meta.is_active}
-        };
+        const auto s = u.state();
+        baseJson(j, u.id, *s);
 
-        j["last_login"] = u.meta.last_login
-                              ? nlohmann::json(timestampToString(*u.meta.last_login))
-                              : nlohmann::json(nullptr);
-
-        j["password_changed_at"] = u.meta.password_changed_at
-                                       ? nlohmann::json(timestampToString(*u.meta.password_changed_at))
-                                       : nlohmann::json(nullptr);
-
-        j["deactivated_at"] = u.meta.deactivated_at
-                                  ? nlohmann::json(timestampToString(*u.meta.deactivated_at))
-                                  : nlohmann::json(nullptr);
-
-        if (u.meta.linux_uid) j["linux_uid"] = *u.meta.linux_uid;
-        if (u.meta.created_by) j["created_by"] = *u.meta.created_by;
-        if (u.meta.updated_by) j["updated_by"] = *u.meta.updated_by;
-
-        {
-            std::scoped_lock lock(u.mutex_);
-
-            if (u.roles.admin) j["admin_role"] = *u.roles.admin;
-            else {
-                throw std::logic_error(
-                    "[User] admin role is null for user id=" + std::to_string(u.id) +
-                    " name=" + u.name + ". Did you mean to call to_public_json() instead?"
-                );
-            }
-
-            if (!u.roles.vaults.empty()) j["vault_roles"] = u.roles.vaults;
-            else j["vault_roles"] = nlohmann::json::object();
+        if (s->roles.admin) j["admin_role"] = *s->roles.admin;
+        else {
+            throw std::logic_error(
+                "[User] admin role is null for user id=" + std::to_string(u.id) +
+                " name=" + s->name + ". Did you mean to call to_public_json() instead?"
+            );
         }
+
+        nlohmann::json vaultRoles = nlohmann::json::array();
+        for (const auto &[_, role]: s->roles.vaults)
+            if (role) vaultRoles.push_back(*role);
+        if (!vaultRoles.empty()) j["vault_roles"] = std::move(vaultRoles);
+        else j["vault_roles"] = nlohmann::json::object();
     }
 
     nlohmann::json to_list_json(const std::vector<std::shared_ptr<User> > &users) {
@@ -281,32 +280,12 @@ namespace vh::identities {
         nlohmann::json out = nlohmann::json::array();
         for (const auto &user: users) {
             if (!user) continue;
-            const auto &u = *user;
-            nlohmann::json j = {
-                {"id", u.id},
-                {"name", u.name},
-                {"email", u.email},
-                {"is_protected", u.isProtected},
-                {"system_only", u.systemOnly},
-                {"created_at", timestampToString(u.meta.created_at)},
-                {"updated_at", timestampToString(u.meta.updated_at)},
-                {"is_active", u.meta.is_active},
-                {"last_login", u.meta.last_login ? nlohmann::json(timestampToString(*u.meta.last_login)) : nlohmann::json(nullptr)},
-                {"password_changed_at", u.meta.password_changed_at
-                                            ? nlohmann::json(timestampToString(*u.meta.password_changed_at))
-                                            : nlohmann::json(nullptr)},
-                {"deactivated_at", u.meta.deactivated_at
-                                       ? nlohmann::json(timestampToString(*u.meta.deactivated_at))
-                                       : nlohmann::json(nullptr)},
-            };
-            if (u.meta.linux_uid) j["linux_uid"] = *u.meta.linux_uid;
-            if (u.meta.created_by) j["created_by"] = *u.meta.created_by;
-            if (u.meta.updated_by) j["updated_by"] = *u.meta.updated_by;
-
-            std::scoped_lock lock(u.mutex_);
-            j["admin_role"] = u.roles.admin ? roleSummary(*u.roles.admin, "admin") : nlohmann::json(nullptr);
+            const auto s = user->state();
+            nlohmann::json j;
+            baseJson(j, user->id, *s);
+            j["admin_role"] = s->roles.admin ? roleSummary(*s->roles.admin, "admin") : nlohmann::json(nullptr);
             nlohmann::json vaultRoles = nlohmann::json::array();
-            for (const auto &[_, role]: u.roles.vaults) {
+            for (const auto &[_, role]: s->roles.vaults) {
                 if (!role) continue;
                 auto summary = roleSummary(*role, "vault");
                 if (role->assignment) summary["assignment"] = *role->assignment;
@@ -316,40 +295,6 @@ namespace vh::identities {
             out.push_back(std::move(j));
         }
         return out;
-    }
-
-    void from_json(const nlohmann::json &j, User &u) {
-        u.id = j.at("id").get<uint32_t>();
-        u.name = j.at("name").get<std::string>();
-
-        if (j.contains("email")) {
-            if (j.at("email").is_null()) u.email = std::nullopt;
-            else {
-                const auto value = j.at("email").get<std::string>();
-                u.email = value.empty() ? std::nullopt : std::make_optional(value);
-            }
-        }
-
-        if (j.contains("linux_uid")) {
-            if (j.at("linux_uid").is_null()) u.meta.linux_uid = std::nullopt;
-            else u.meta.linux_uid = j.at("linux_uid").get<uint32_t>();
-        }
-
-        if (j.contains("created_by")) {
-            if (j.at("created_by").is_null()) u.meta.created_by = std::nullopt;
-            else u.meta.created_by = j.at("created_by").get<uint32_t>();
-        }
-
-        if (j.contains("updated_by")) {
-            if (j.at("updated_by").is_null()) u.meta.updated_by = std::nullopt;
-            else u.meta.updated_by = j.at("updated_by").get<uint32_t>();
-        }
-
-        if (j.contains("is_active") && !j.at("is_active").is_null())
-            u.meta.is_active = j.at("is_active").get<bool>();
-
-        if (j.contains("admin_role") && !j.at("admin_role").is_null())
-            u.roles.admin = std::make_shared<Admin>(j.at("admin_role").get<Admin>());
     }
 
     nlohmann::json to_json(const std::vector<std::shared_ptr<User> > &users) {
@@ -366,12 +311,13 @@ namespace vh::identities {
 
     nlohmann::json to_public_json(const std::shared_ptr<User> &u) {
         if (!u) return nullptr;
+        const auto s = u->state();
 
         return {
             {"id", u->id},
-            {"name", u->name},
-            {"email", u->email},
-            {"is_active", u->meta.is_active}
+            {"name", s->name},
+            {"email", s->email},
+            {"is_active", s->meta.is_active}
         };
     }
 
@@ -382,56 +328,41 @@ namespace vh::identities {
         return j;
     }
 
-    bool User::isSuperAdmin() const {
-        std::scoped_lock lock(mutex_);
-        return roles.admin
-               && roles.admin->identities.admins.canDelete()
-               && roles.admin->vaults.admin.canRemove()
-               && roles.admin->keys.encryptionKeys.canRotate()
-               && roles.admin->name == "super_admin";
-    }
-
-    bool User::isAdmin() const {
-        std::scoped_lock lock(mutex_);
-        return roles.admin && roles.admin->identities.admins.canDelete() && roles.admin->vaults.admin.canRemove();
-    }
-
     std::string to_string(const std::shared_ptr<User> &user) {
         if (!user) return "No user found\n";
+        const auto s = user->state();
 
         std::string out;
         out += "User ID: " + std::to_string(user->id) + "\n";
-        out += "User: " + user->name + "\n";
-        out += "Email: " + user->email.value_or("N/A") + "\n";
+        out += "User: " + s->name + "\n";
+        out += "Email: " + s->email.value_or("N/A") + "\n";
 
-        if (user->meta.linux_uid) out += "Linux UID: " + std::to_string(*user->meta.linux_uid) + "\n";
+        if (s->meta.linux_uid) out += "Linux UID: " + std::to_string(*s->meta.linux_uid) + "\n";
         else out += "Linux UID: Not set\n";
 
-        if (user->meta.created_by) out += "Created By: " + std::to_string(*user->meta.created_by) + "\n";
+        if (s->meta.created_by) out += "Created By: " + std::to_string(*s->meta.created_by) + "\n";
         else out += "Created By: N/A\n";
 
-        if (user->meta.updated_by) out += "Updated By: " + std::to_string(*user->meta.updated_by) + "\n";
+        if (s->meta.updated_by) out += "Updated By: " + std::to_string(*s->meta.updated_by) + "\n";
         else out += "Updated By: N/A\n";
 
-        out += "Created At: " + timestampToString(user->meta.created_at) + "\n";
-        out += "Updated At: " + timestampToString(user->meta.updated_at) + "\n";
-        out += "Last Login: " + (user->meta.last_login ? timestampToString(*user->meta.last_login) : "Never") + "\n";
-        out += "Password Changed At: " + (user->meta.password_changed_at
-                                              ? timestampToString(*user->meta.password_changed_at)
+        out += "Created At: " + timestampToString(s->meta.created_at) + "\n";
+        out += "Updated At: " + timestampToString(s->meta.updated_at) + "\n";
+        out += "Last Login: " + (s->meta.last_login ? timestampToString(*s->meta.last_login) : "Never") + "\n";
+        out += "Password Changed At: " + (s->meta.password_changed_at
+                                              ? timestampToString(*s->meta.password_changed_at)
                                               : "Unknown") + "\n";
-        out += "Deactivated At: " + (user->meta.deactivated_at ? timestampToString(*user->meta.deactivated_at) : "N/A")
+        out += "Deactivated At: " + (s->meta.deactivated_at ? timestampToString(*s->meta.deactivated_at) : "N/A")
                 + "\n";
-        out += "Active: " + std::string(user->meta.is_active ? "Yes" : "No") + "\n"; {
-            std::scoped_lock lock(user->mutex_);
+        out += "Active: " + std::string(s->meta.is_active ? "Yes" : "No") + "\n";
 
-            out += "Admin Role: ";
-            out += user->roles.admin->toString();
+        out += "Admin Role: ";
+        out += s->roles.admin ? s->roles.admin->toString() : std::string("None\n");
 
-            out += "Direct Vault Roles:\n";
-            out += user->roles.vaults.empty() ? "  None\n" : user->roles.admin->vaults.toString(2);
+        out += "Direct Vault Roles:\n";
+        out += s->roles.vaults.empty() || !s->roles.admin ? "  None\n" : s->roles.admin->vaults.toString(2);
 
-            out += "Groups: " + std::to_string(user->groups.size()) + "\n";
-        }
+        out += "Groups: " + std::to_string(s->groups.size()) + "\n";
 
         return out;
     }
@@ -451,15 +382,16 @@ namespace vh::identities {
 
         for (const auto &user: users) {
             if (!user) continue;
+            const auto s = user->state();
 
             tbl.add_row({
                 std::to_string(user->id),
-                user->name,
-                user->email.value_or("N/A"),
-                user->roles.admin ? snake_case_to_title(user->roles.admin->name) : "No Role",
-                timestampToString(user->meta.created_at),
-                user->meta.last_login ? timestampToString(*user->meta.last_login) : "Never",
-                user->meta.is_active ? "Yes" : "No"
+                s->name,
+                s->email.value_or("N/A"),
+                s->roles.admin ? snake_case_to_title(s->roles.admin->name) : "No Role",
+                timestampToString(s->meta.created_at),
+                s->meta.last_login ? timestampToString(*s->meta.last_login) : "Never",
+                s->meta.is_active ? "Yes" : "No"
             });
         }
 

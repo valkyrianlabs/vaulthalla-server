@@ -6,6 +6,7 @@
 #include "fs/Filesystem.hpp"
 #include "fs/model/File.hpp"
 #include "fs/model/Path.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "ops/Vaults.hpp"
 #include "preview/cache/Maintenance.hpp"
@@ -80,7 +81,7 @@ protected:
         seed::seed_database();
         runtime::Deps::init();
         fs::Filesystem::init(runtime::Deps::get().storageManager);
-        admin = db::query::identities::User::getUserByName("admin");
+        admin = vh::identities::manager().userByName("admin");
     }
 
     static void TearDownTestSuite() {

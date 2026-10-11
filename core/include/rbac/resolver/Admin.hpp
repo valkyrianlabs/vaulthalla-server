@@ -5,12 +5,12 @@
 #include "admin/policy/Base.hpp"
 #include "admin/ResolvedContext.hpp"
 
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "rbac/permission/admin/VaultGlobals.hpp"
 #include "runtime/Deps.hpp"
 #include "db/query/vault/APIKey.hpp"
 #include "storage/Manager.hpp"
-#include "db/query/identities/User.hpp"
 #include "rbac/role/Admin.hpp"
 #include "vault/model/Vault.hpp"
 
@@ -100,8 +100,9 @@ namespace vh::rbac::resolver {
                     allowed = AdminResolverTraits<EnumT>::user(perms.user).has(permission);
             }
             else if constexpr (AdminResolverTraits<EnumT>::domain == Domain::Global) {
-                if (!user->roles.admin) return false;
-                allowed = AdminResolverTraits<EnumT>::direct(*user->roles.admin).has(permission);
+                const auto state = user->state();
+                if (!state->authorizing() || !state->roles.admin) return false;
+                allowed = AdminResolverTraits<EnumT>::direct(*state->roles.admin).has(permission);
             }
             else {
                 static_assert([] { return false; }(), "Unhandled AdminResolverTraits domain");
@@ -135,10 +136,11 @@ namespace vh::rbac::resolver {
 
             if constexpr (AdminResolverTraits<EnumT>::domain == Domain::APIKey) {
                 if (ctx.api_key_id)
-                    resolved.owner = db::query::vault::APIKey::getAPIKeyOwner(*ctx.api_key_id);
+                    if (const auto ownerId = db::query::vault::APIKey::getAPIKeyOwnerId(*ctx.api_key_id))
+                        resolved.owner = vh::identities::manager().user(*ownerId);
 
                 if (ctx.target_user_id && !resolved.owner)
-                    resolved.owner = db::query::identities::User::getUserById(*ctx.target_user_id);
+                    resolved.owner = vh::identities::manager().user(*ctx.target_user_id);
 
                 if (ctx.vault_id)
                     resolved.engine = runtime::Deps::get().storageManager->getEngine(*ctx.vault_id);
@@ -148,7 +150,7 @@ namespace vh::rbac::resolver {
             }
             else if constexpr (AdminResolverTraits<EnumT>::domain == Domain::Identity) {
                 if (ctx.target_user_id)
-                    resolved.owner = db::query::identities::User::getUserById(*ctx.target_user_id);
+                    resolved.owner = vh::identities::manager().user(*ctx.target_user_id);
 
                 // if/when you support real group resolution:
                 // if (ctx.group_id)
@@ -163,10 +165,12 @@ namespace vh::rbac::resolver {
                     resolved.vault = resolved.engine->vault;
 
                 if (resolved.vault)
-                    resolved.owner = db::query::identities::User::getUserById(resolved.vault->owner_id);
+                    resolved.owner = resolved.vault->owner_id == ctx.user->id
+                                         ? ctx.user
+                                         : vh::identities::manager().user(resolved.vault->owner_id);
 
                 if (ctx.target_user_id && !resolved.owner)
-                    resolved.owner = db::query::identities::User::getUserById(*ctx.target_user_id);
+                    resolved.owner = vh::identities::manager().user(*ctx.target_user_id);
             }
             else if constexpr (AdminResolverTraits<EnumT>::domain == Domain::Global) {
                 resolved.owner = ctx.user;
@@ -179,6 +183,8 @@ namespace vh::rbac::resolver {
         template<typename EnumT>
         static bool has(admin::Context<EnumT> &&ctx) {
             if (!ctx.isValid()) return false;
+            // A deactivated or deleted account (a tombstone still held somewhere) authorizes nothing.
+            if (!ctx.user->authorizing()) return false;
 
             if (ctx.user->isSuperAdmin()) return true;
 

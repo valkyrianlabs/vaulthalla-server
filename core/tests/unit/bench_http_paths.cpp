@@ -7,6 +7,7 @@
 #include "fs/Filesystem.hpp"
 #include "fs/cache/Registry.hpp"
 #include "fs/model/File.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "ops/Vaults.hpp"
 #include "preview/render/Raster.hpp"
@@ -164,7 +165,7 @@ protected:
         seed::seed_database();
         runtime::Deps::init();
         fs::Filesystem::init(runtime::Deps::get().storageManager);
-        admin = db::query::identities::User::getUserByName("admin");
+        admin = vh::identities::manager().userByName("admin");
         const auto vault = ops::vaults::create(admin, {.name = "bench_" + std::to_string(::getpid()), .type = vault::model::VaultType::Local});
         engine = runtime::Deps::get().storageManager->getEngine(vault->id);
 

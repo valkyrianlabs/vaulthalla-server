@@ -17,7 +17,7 @@ namespace {
 constexpr auto* kPrefix = "setup set-super-admin-password";
 
 std::string formatResult(const ops::users::SuperAdminPasswordSet& result) {
-    std::string out = "Super-admin web password changed for '" + result.user->name +
+    std::string out = "Super-admin web password changed for '" + result.user->name() +
                       "'. Its web sessions were ended; sign in again with the new password.\n";
     if (result.leftover_file)
         out += "WARNING: the initial plaintext password file is still on disk (" + *result.leftover_file +

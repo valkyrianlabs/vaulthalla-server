@@ -962,7 +962,7 @@ Router::Response Router::routeAuthenticated(
         std::vector<xml::Bucket> buckets;
         for (const auto& bucket : objects_.listBuckets(auth))
             buckets.push_back({.name = bucket.bucket_name, .created_at = bucket.created_at});
-        return makeResponse(request, http::status::ok, xml::listBuckets(buckets, auth.user->name));
+        return makeResponse(request, http::status::ok, xml::listBuckets(buckets, auth.user->name()));
     }
 
     if (parsed.key.empty()) {

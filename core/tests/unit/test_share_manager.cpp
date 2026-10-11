@@ -495,9 +495,9 @@ protected:
         options.challenge_max_attempts = 3;
         manager = std::make_unique<Manager>(store, authorizer, options);
 
-        user = std::make_shared<identities::User>();
-        user->id = 7;
-        user->name = "share-manager-user";
+        vh::identities::UserState userState;
+        userState.name = "share-manager-user";
+        user = vh::identities::User::detached(7, std::move(userState));
     }
 
     void TearDown() override {

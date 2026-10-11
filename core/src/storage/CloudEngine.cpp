@@ -24,6 +24,7 @@
 #include "sync/model/RemoteManifest.hpp"
 #include "sync/model/Event.hpp"
 #include "storage/s3/provider/Registry.hpp"
+#include "identities/Manager.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -315,7 +316,7 @@ std::shared_ptr<File> CloudEngine::downloadFileWithRemoteMetadata(
             ? RemoteEncryptionResolveOptions{true, true}
             : RemoteEncryptionResolveOptions{});
 
-    const auto owner = db::query::identities::User::getUserById(vault->owner_id);
+    const auto owner = vh::identities::manager().user(vault->owner_id);
     if (!owner) throw std::runtime_error("[CloudStorageEngine] Vault owner not found for file creation");
 
     const auto f = Filesystem::createFile({
@@ -335,7 +336,7 @@ std::shared_ptr<File> CloudEngine::downloadFileWithRemoteMetadata(
 std::shared_ptr<File> CloudEngine::indexAndDeleteFile(const std::shared_ptr<File>& remoteFile) {
     if (!remoteFile) throw std::invalid_argument("[CloudStorageEngine] Cannot index null remote file");
 
-    const auto owner = db::query::identities::User::getUserById(vault->owner_id);
+    const auto owner = vh::identities::manager().user(vault->owner_id);
     if (!owner) throw std::runtime_error("[CloudStorageEngine] Vault owner not found for metadata-only indexing");
 
     const auto rel_path = makeAbsolute(remoteFile->path);
@@ -755,7 +756,7 @@ std::vector<uint8_t> CloudEngine::fetchRemotePlaintext(const std::shared_ptr<Fil
 
 std::shared_ptr<File> CloudEngine::replaceLocalContent(const fs::path& rel_path, const std::vector<uint8_t>& plaintext,
                                                        const std::string& expectedSourceId) {
-    const auto owner = db::query::identities::User::getUserById(vault->owner_id);
+    const auto owner = vh::identities::manager().user(vault->owner_id);
     if (!owner) throw std::runtime_error("[CloudStorageEngine] Vault owner not found for file replacement");
     const auto path = makeAbsolute(rel_path);
     const auto f = Filesystem::createFile({

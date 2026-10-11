@@ -4,6 +4,7 @@
 //   #179 deleting a user who had shared, uploaded to someone else's vault or kept versions hit a foreign key
 //   #180 a deleted vault's FS cache entries survived into a new vault with the same FUSE name
 
+#include "../helpers/identities.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/fs/Entry.hpp"
 #include "db/query/identities/User.hpp"
@@ -12,6 +13,7 @@
 #include "fs/Filesystem.hpp"
 #include "fs/cache/Registry.hpp"
 #include "fs/model/Entry.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "protocols/shell/Router.hpp"
 #include "protocols/shell/commands/rbac.hpp"
@@ -55,13 +57,8 @@ protected:
     inline static UserPtr superUser;
 
     static UserPtr createUser(const std::string& name, const std::string& roleName) {
-        auto user = std::make_shared<identities::User>();
-        user->name = name;
-        user->email = name + "@vaulthalla.test";
-        user->setPasswordHash("x");
-        user->roles.admin = db::query::rbac::role::Admin::get(roleName);
-        user->id = db::query::identities::User::createUser(user);
-        return db::query::identities::User::getUserById(user->id);
+        auto user = vh::test::identities::createUser(name, db::query::rbac::role::Admin::get(roleName), name + "@vaulthalla.test", "x", std::nullopt);
+        return vh::identities::manager().user(user->id);
     }
 
     static void SetUpTestSuite() {
@@ -104,7 +101,7 @@ protected:
         int code = 1;
         try {
             const auto res = router->executeLine(
-                "vault role assign " + std::to_string(vaultId) + " " + role + " -u " + user->name, superUser, nullptr);
+                "vault role assign " + std::to_string(vaultId) + " " + role + " -u " + user->name(), superUser, nullptr);
             code = res.exit_code;
             out = res.stdout_text + res.stderr_text;
         } catch (const std::exception& e) {
@@ -168,7 +165,7 @@ TEST_F(VaultLifecycleRegressionTest, ShareLinkCanTargetASubfolderButNotAMismatch
 
     auto sharer = createUser("vl_sharer_" + tag(), "unprivileged");
     ASSERT_NO_FATAL_FAILURE(assignVaultRole(vault->id, "power_user", sharer));
-    sharer = db::query::identities::User::getUserById(sharer->id);
+    sharer = vh::identities::manager().user(sharer->id);
     const auto outsider = createUser("vl_outsider_" + tag(), "unprivileged");
 
     share::Manager manager;
@@ -198,7 +195,7 @@ TEST_F(VaultLifecycleRegressionTest, AVaultPathNamingAnotherVaultsFuseRootIsNotJ
 
     auto sharer = createUser("vl_cross_sharer_" + tag(), "unprivileged");
     ASSERT_NO_FATAL_FAILURE(assignVaultRole(a->id, "power_user", sharer));
-    sharer = db::query::identities::User::getUserById(sharer->id);
+    sharer = vh::identities::manager().user(sharer->id);
 
     share::Manager manager;
     EXPECT_THROW((void)manager.createLink(rbac::Actor::human(sharer),
@@ -216,7 +213,7 @@ TEST_F(VaultLifecycleRegressionTest, DeletingAUserWithShareAndUploadHistorySucce
 
     auto leaver = createUser("vl_leaver_" + tag(), "unprivileged");
     ASSERT_NO_FATAL_FAILURE(assignVaultRole(vault->id, "power_user", leaver));
-    leaver = db::query::identities::User::getUserById(leaver->id);
+    leaver = vh::identities::manager().user(leaver->id);
 
     share::Manager manager;
     const auto link = manager.createLink(rbac::Actor::human(leaver), {.link = folderLink(vault->id, drop->id, "/drop")}).link;
@@ -235,8 +232,8 @@ TEST_F(VaultLifecycleRegressionTest, DeletingAUserWithShareAndUploadHistorySucce
     };
     ASSERT_GT(auditRows(), 0);
 
-    ASSERT_NO_THROW(db::query::identities::User::deleteUser(leaver->id));
-    EXPECT_EQ(db::query::identities::User::getUserById(leaver->id), nullptr);
+    ASSERT_NO_THROW(vh::identities::manager().deleteUser(leaver->id));
+    EXPECT_EQ(vh::identities::manager().user(leaver->id), nullptr);
 
     const auto after = db::Transactions::exec("VaultLifecycleRegressionTest::after", [&](pqxx::work& txn) {
         const auto links = txn.exec("SELECT COUNT(*) FROM share_link WHERE id = $1::uuid", pqxx::params{link->id})

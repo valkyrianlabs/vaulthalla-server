@@ -25,23 +25,25 @@
 
 #include "rbac/role/Vault.hpp"
 #include "rbac/fs/glob/Tokenizer.hpp"
+#include "identities/Manager.hpp"
 
 using namespace vh;
 using namespace vh::test::integration::fuse;
-using namespace vh::identities;
+using vh::identities::User;
+using vh::identities::Group;
 
 static unsigned int id_index = 1001;
 
 Builder Builder::make(BuilderSpec&& spec) {
-    const auto admin = db::query::identities::User::getUserByName("admin");
-    if (!admin || !admin->meta.linux_uid) throw std::runtime_error("Admin user/uid not found");
+    const auto admin = vh::identities::manager().userByName("admin");
+    if (!admin || !admin->state()->meta.linux_uid) throw std::runtime_error("Admin user/uid not found");
 
     const auto engine = makeVault();
     if (!engine) throw std::runtime_error("Failed to create vault");
 
     const auto root = std::filesystem::path(engine->paths->fuseRoot / engine->vault->effectiveFuseName());
-    if (!admin->meta.linux_uid) throw std::runtime_error("Admin Linux UID not found");
-    seed_vault_tree(*admin->meta.linux_uid, root, spec.baseDir);
+    if (!admin->state()->meta.linux_uid) throw std::runtime_error("Admin Linux UID not found");
+    seed_vault_tree(*admin->state()->meta.linux_uid, root, spec.baseDir);
 
     return Builder{FuseScenarioContext{ "FUSE: " + spec.name, admin, engine, root, spec.baseDir }};
 }
@@ -50,7 +52,7 @@ std::shared_ptr<storage::Engine> Builder::makeVault() {
     auto vault = std::make_shared<vault::model::Vault>();
     vault->name = generateVaultName("vault/create");
     vault->description = "Test Vault";
-    vault->owner_id = db::query::identities::User::getUserByName("admin")->id;
+    vault->owner_id = vh::identities::manager().userByName("admin")->id;
 
     if (vault->name.empty()) throw std::runtime_error("Vault name cannot be empty");
 
@@ -80,77 +82,65 @@ void Builder::buildAssignVRole(VaultRoleSpec&& spec) {
 
     role->fs.overrides = spec.overrides;
 
+    vh::identities::Touched touched;
     switch (spec.subjectType) {
         case TargetSubject::User:
             role->assign(subject_.user->id, spec.getSubjectType(), ctx_.engine->vault->id);
             subject_.userVaultRole = role;
-            subject_.user->roles.vaults[ctx_.engine->vault->id] = role;
+            touched.users = {subject_.user->id};
             break;
         case TargetSubject::Group:
             role->assign(subject_.group->id, spec.getSubjectType(), ctx_.engine->vault->id);
             subject_.groupVaultRole = role;
-            subject_.group->roles.vaults[ctx_.engine->vault->id] = role;
+            touched.groups = {subject_.group->id};
             break;
         default:
             throw std::runtime_error("Builder::buildVaultRole(): invalid subject kind");
     }
 
-    db::query::rbac::role::vault::Assignments::assign(role);
+    // Through the identity manager, like every product write: the canonical subject (and FUSE) see it at once.
+    vh::identities::manager().mutate(std::move(touched), [&] { db::query::rbac::role::vault::Assignments::assign(role); });
 }
 
 void Builder::makeUser(UserSpec&& userSpec) {
-    const auto user = std::make_shared<User>();
-    user->name = generateName(userSpec.userNameSeed);
+    vh::identities::UserState draft;
+    draft.name = generateName(userSpec.userNameSeed);
+    draft.roles.admin = db::query::rbac::role::Admin::get(userSpec.adminRoleTemplateName);
+    if (!draft.roles.admin) throw std::runtime_error("Failed to create admin role: " + userSpec.adminRoleTemplateName);
 
-    user->roles.admin = db::query::rbac::role::Admin::get(userSpec.adminRoleTemplateName);
-    if (!user->roles.admin) throw std::runtime_error("Failed to create admin role: " + userSpec.adminRoleTemplateName);
+    draft.meta.linux_uid = id_index++;
+    subject_.uid = *draft.meta.linux_uid;
+    uids_.push_back(*draft.meta.linux_uid);
 
-    user->meta.linux_uid = id_index++;
-    subject_.uid = *user->meta.linux_uid;
-    uids_.push_back(*user->meta.linux_uid);
-
-    bool nameException = false;
-
-    do {
+    for (;;) {
         try {
-            if (nameException) {
-                user->name = generateName("user/create");
-                nameException = false;
-            }
-            user->id = db::query::identities::User::createUser(user);
+            subject_.user = vh::identities::manager().createUser(draft, "x");
+            return;
         } catch (const std::exception& e) {
-            if (std::string(e.what()).contains("Key (name)=() already exists")) nameException = true;
-            else throw std::runtime_error("Failed to create user: " + std::string(e.what()));
+            if (!std::string(e.what()).contains("Key (name)=() already exists"))
+                throw std::runtime_error("Failed to create user: " + std::string(e.what()));
+            draft.name = generateName("user/create");
         }
-    } while (nameException);
-
-    subject_.user = user;
+    }
 }
 
 void Builder::makeGroup(std::string&& nameSeed) {
-    const auto group = std::make_shared<Group>();
-    group->name = generateName(nameSeed);
+    vh::identities::GroupState draft;
+    draft.name = generateName(nameSeed);
+    draft.linux_gid = id_index++;
+    gids_.push_back(*draft.linux_gid);
+    subject_.gid = *draft.linux_gid;
 
-    group->linux_gid = id_index++;
-    gids_.push_back(*group->linux_gid);
-    subject_.gid = *group->linux_gid;
-
-    bool nameException = false;
-
-    do {
+    for (;;) {
         try {
-            if (nameException) {
-                group->name = generateName("group/create");
-                nameException = false;
-            }
-            group->id = db::query::identities::Group::createGroup(group);
+            subject_.group = vh::identities::manager().createGroup(draft);
+            return;
         } catch (const std::exception& e) {
-            if (std::string(e.what()).contains("Key (name)=() already exists")) nameException = true;
-            else throw std::runtime_error("Failed to create group: " + std::string(e.what()));
+            if (!std::string(e.what()).contains("Key (name)=() already exists"))
+                throw std::runtime_error("Failed to create group: " + std::string(e.what()));
+            draft.name = generateName("group/create");
         }
-    } while (nameException);
-
-    subject_.group = group;
+    }
 }
 
 void Builder::makeOverride(OverrideSpec &&spec) const {
@@ -173,7 +163,13 @@ void Builder::makeOverride(OverrideSpec &&spec) const {
         subject_.groupVaultRole->fs.overrides.push_back(ov);
     }
 
-    db::query::rbac::permission::Override::upsert(std::make_shared<rbac::permission::Override>(ov));
+    // Through the identity manager, like every product write: FUSE sees the override at once.
+    vh::identities::Touched touched;
+    if (spec.subjectType == TargetSubject::User) touched.users = {subject_.user->id};
+    else touched.groups = {subject_.group->id};
+    vh::identities::manager().mutate(std::move(touched), [&] {
+        db::query::rbac::permission::Override::upsert(std::make_shared<rbac::permission::Override>(ov));
+    });
 }
 
 void Builder::makeTestCase(FuseTestCaseSpec &&spec) {
@@ -190,8 +186,13 @@ test::integration::TestStage Builder::exec() const {
     const auto results = runSteps();
 
     const auto vId = ctx_.engine->vault->id;
-    if (subject_.user) db::query::rbac::role::vault::Assignments::unassign(vId, "user", subject_.user->id);
-    if (subject_.group) db::query::rbac::role::vault::Assignments::unassign(vId, "group", subject_.group->id);
+    vh::identities::Touched touched;
+    if (subject_.user) touched.users = {subject_.user->id};
+    if (subject_.group) touched.groups = {subject_.group->id};
+    vh::identities::manager().mutate(std::move(touched), [&] {
+        if (subject_.user) db::query::rbac::role::vault::Assignments::unassign(vId, "user", subject_.user->id);
+        if (subject_.group) db::query::rbac::role::vault::Assignments::unassign(vId, "group", subject_.group->id);
+    });
 
     return {
         .name = ctx_.name,
@@ -234,7 +235,6 @@ std::vector<std::shared_ptr<test::integration::TestCase>> Builder::runSteps() co
 
 void Builder::addUserToGroup() {
     if (!subject_.user || !subject_.group) throw std::runtime_error("Builder::addUserToGroup(): subject user/group not set");
-    db::query::identities::Group::addMemberToGroup(subject_.group->id, subject_.user->id);
-    subject_.group = db::query::identities::Group::getGroup(subject_.group->id);
-    subject_.user = db::query::identities::User::getUserById(subject_.user->id);
+    // The canonical user and group the builder holds see the membership as soon as this returns.
+    vh::identities::manager().addMembers(subject_.group->id, {subject_.user->id});
 }

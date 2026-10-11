@@ -1,9 +1,11 @@
 #include "cmd/Builder.hpp"
+#include "entity/Edit.hpp"
 #include "cmd/generators.hpp"
 #include "cli/Context.hpp"
 #include "CommandUsage.hpp"
 
-using namespace vh::identities;
+using vh::identities::User;
+using vh::identities::Group;
 
 namespace vh::test::integration::cmd {
     UserCommandBuilder::UserCommandBuilder(const std::shared_ptr<protocols::shell::UsageManager>& usage, const std::shared_ptr<cli::Context>& ctx)
@@ -15,25 +17,25 @@ namespace vh::test::integration::cmd {
 
         const std::string usagePath = "user/update";
         if (userAliases_.isName(field)) {
-            entity->name = generateName(usagePath);
-            return entity->name;
+            entity::edit(entity, [&](auto& s) { s.name = generateName(usagePath); });
+            return entity->name();
         }
 
         if (userAliases_.isEmail(field)) {
             std::string email = generateEmail(usagePath);
-            entity->email = std::make_optional(email);
+            entity::edit(entity, [&](auto& s) { s.email = std::make_optional(email); });
             return email;
         }
 
         if (userAliases_.isRole(field)) {
             if (ctx_->adminRoles.empty()) throw std::runtime_error("UserCommandBuilder: no user roles available to assign");
-            entity->roles.admin = ctx_->randomAdminRole();
-            return std::to_string(entity->roles.admin->id);
+            entity::edit(entity, [&](auto& s) { s.roles.admin = ctx_->randomAdminRole(); });
+            return std::to_string(entity->state()->roles.admin->id);
         }
 
         if (userAliases_.isLinuxUID(field)) {
             const auto linuxUid = randomLinuxId();
-            entity->meta.linux_uid = std::make_optional(linuxUid);
+            entity::edit(entity, [&](auto& s) { s.meta.linux_uid = std::make_optional(linuxUid); });
             return std::to_string(linuxUid);
         }
 
@@ -42,17 +44,17 @@ namespace vh::test::integration::cmd {
 
     static std::optional<std::string> resolveVar(const std::string& name, const std::shared_ptr<User>& user) {
         if (name == "id" || name == "user_id") return std::to_string(user->id);
-        if (name == "name" || name == "username") return user->name;
-        if (name == "email") return user->email;
-        if (name == "role" || name == "role_id") return std::to_string(user->roles.admin->id);
+        if (name == "name" || name == "username") return user->name();
+        if (name == "email") return user->email();
+        if (name == "role" || name == "role_id") return std::to_string(user->state()->roles.admin->id);
         throw std::runtime_error("UserCommandBuilder: unsupported user field for resolveVar: " + name);
     }
 
     static std::string randomizePrimaryPositional(const std::shared_ptr<User>& entity) {
         if (!entity) throw std::runtime_error("UserCommandBuilder: entity is null in randomizePrimaryPositional");
-        if (entity->name.empty()) throw std::runtime_error("UserCommandBuilder: entity name is empty in randomizePrimaryPositional");
+        if (entity->name().empty()) throw std::runtime_error("UserCommandBuilder: entity name is empty in randomizePrimaryPositional");
         if (coin()) return std::to_string(entity->id);
-        return entity->name;
+        return entity->name();
     }
 
     std::string UserCommandBuilder::create(const std::shared_ptr<User>& entity) {

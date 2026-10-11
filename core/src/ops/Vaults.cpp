@@ -12,6 +12,7 @@
 #include "db/query/vault/Key.hpp"
 #include "db/query/vault/Vault.hpp"
 #include "db/query/vault/Waiver.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
 #include "rbac/resolver/admin/all.hpp"
@@ -224,7 +225,7 @@ PolicyPtr currentPolicy(const unsigned int vaultId) {
 VaultPtr create(const Actor& actor, const Create& req) {
     requireActor(actor);
     const auto ownerId = req.owner_id.value_or(actor->id);
-    if (!db::query::identities::User::getUserById(ownerId)) throw NotFound("owner not found: " + std::to_string(ownerId));
+    if (!vh::identities::manager().user(ownerId)) throw NotFound("owner not found: " + std::to_string(ownerId));
     if (!canCreateFor(actor, ownerId)) throw Denied("you do not have permission to create vaults for this owner");
     if (req.name.empty()) throw Invalid("vault name is required");
     if (db::query::vault::Vault::vaultExists(req.name, ownerId)) {
@@ -363,10 +364,12 @@ VaultPtr update(const Actor& actor, const Update& req) {
 void requireTransferable(const Actor& actor, const unsigned int vaultId, const unsigned int newOwnerId) {
     requireActor(actor);
     const auto vault = requireVault(vaultId);
-    if (!actor->isSuperAdmin() && !(actor->roles.admin && ops::users::isAdminIdentity(*actor->roles.admin)))
+    const auto actorState = actor->state();
+    if (!actor->isSuperAdmin() &&
+        !(actorState->authorizing() && actorState->roles.admin && ops::users::isAdminIdentity(*actorState->roles.admin)))
         throw Denied("only administrators can transfer vault ownership");
     if (!canOnVault(actor, VaultPerm::Edit, vaultId)) throw Denied("you do not have permission to edit vault " + vault->name);
-    if (!db::query::identities::User::getUserById(newOwnerId)) throw NotFound("owner not found: " + std::to_string(newOwnerId));
+    if (!vh::identities::manager().user(newOwnerId)) throw NotFound("owner not found: " + std::to_string(newOwnerId));
     // Handing a vault to someone is creating one for them.
     if (!canCreateFor(actor, newOwnerId)) throw Denied("you do not have permission to give vaults to that owner");
     if (newOwnerId != vault->owner_id && db::query::vault::Vault::vaultExists(vault->name, newOwnerId))
@@ -407,7 +410,7 @@ DeletionPtr remove(const Actor& actor, const Remove& req) {
         requireNowConfirmed(req.confirm_now, pending->vault_name);
         if (!vault::retention::expedite(req.id, pending->isS3() ? std::optional<bool>(deleteUpstream) : std::nullopt))
             throw Conflict("vault '" + pending->vault_name + "' was purged meanwhile");
-        log::Registry::audit()->info("[ops::vaults] {} expedited the purge of deleted vault {} ('{}')", actor->name, req.id,
+        log::Registry::audit()->info("[ops::vaults] {} expedited the purge of deleted vault {} ('{}')", actor->name(), req.id,
                                      pending->vault_name);
         return db::query::vault::Deletion::get(req.id);
     }
@@ -428,7 +431,7 @@ DeletionPtr remove(const Actor& actor, const Remove& req) {
 
     try {
         auto record = vault::retention::schedule(req.id, actor->id, req.now, deleteUpstream);
-        log::Registry::audit()->info("[ops::vaults] {} deleted vault {} ('{}'){}{}", actor->name, req.id, live->name,
+        log::Registry::audit()->info("[ops::vaults] {} deleted vault {} ('{}'){}{}", actor->name(), req.id, live->name,
                                      req.now ? ", purge now" : "", deleteUpstream ? ", with its upstream data" : "");
         return record;
     } catch (const std::runtime_error& e) {
@@ -482,7 +485,7 @@ VaultPtr restore(const Actor& actor, const unsigned int vaultId) {
                        (d->state == vault::model::DeletionState::Purged ? std::string("has finished") : std::string("has started")));
     auto restored = vault::retention::restore(vaultId);
     if (!restored) throw Conflict("vault '" + d->vault_name + "' can no longer be restored: its purge has started");
-    log::Registry::audit()->info("[ops::vaults] {} restored vault {} ('{}')", actor->name, vaultId, d->vault_name);
+    log::Registry::audit()->info("[ops::vaults] {} restored vault {} ('{}')", actor->name(), vaultId, d->vault_name);
     return restored;
 }
 
@@ -502,7 +505,7 @@ Details get(const Actor& actor, const unsigned int vaultId) {
     if (!canOnVault(actor, VaultPerm::View, vaultId)) throw Denied("you do not have permission to view this vault");
     Details out{.vault = requireVault(vaultId), .sync = nullptr, .owner_name = {}};
     out.sync = currentPolicy(vaultId);
-    if (const auto owner = db::query::identities::User::getUserById(out.vault->owner_id)) out.owner_name = owner->name;
+    if (const auto owner = vh::identities::manager().user(out.vault->owner_id)) out.owner_name = owner->name();
     return out;
 }
 

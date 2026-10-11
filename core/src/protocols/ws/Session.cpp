@@ -40,7 +40,8 @@ bool isShareHandshakeTarget(const std::string_view target) {
 }
 } // namespace
 
-using namespace vh::identities;
+using vh::identities::User;
+using vh::identities::Group;
 using namespace vh::protocols;
 
 namespace vh::protocols::ws {
@@ -72,7 +73,7 @@ std::string Session::getUserAgent() const {
 
 void Session::setAuthenticatedUser(const std::shared_ptr<User>& u) {
     if (!u) throw std::invalid_argument("Cannot set null authenticated user");
-    if (u->systemOnly) throw std::runtime_error("System-only users cannot authenticate WebSocket sessions");
+    if (u->systemOnly()) throw std::runtime_error("System-only users cannot authenticate WebSocket sessions");
 
     clearShareSession();
     user = u;
@@ -215,7 +216,7 @@ void Session::hydrateFromRequest(const RequestType& req) {
     log::Registry::ws()->debug("[ws::Session] Human refresh cookie {} present", tokens->refreshToken && !tokens->refreshToken->rawToken.empty() ? "is" : "is not");
     runtime::Deps::get().sessionManager->tryRehydrate(shared_from_this());
 
-    if (user) log::Registry::ws()->debug("[ws::Session] Session hydrated with user: {} (ID: {})", user->name, user->id);
+    if (user) log::Registry::ws()->debug("[ws::Session] Session hydrated with user: {} (ID: {})", user->name(), user->id);
     else {
         // The normal state of a connection before login: a fresh refresh token, no user yet. (This was logged as
         // critical for every anonymous connection.) What must hold is that the token exists and is valid.

@@ -27,7 +27,8 @@
 #include <sys/statvfs.h>
 #include <unistd.h>
 
-using namespace vh::identities;
+using vh::identities::User;
+using vh::identities::Group;
 using namespace vh::storage;
 using namespace vh::config;
 using namespace vh::fs;
@@ -466,7 +467,7 @@ void open(const fuse_req_t req, const fuse_ino_t ino, fuse_file_info* fi) {
         .fuseReq = req,
         .ino = ino,
         .action = reads ? permission::vault::FilesystemAction::Read : permission::vault::FilesystemAction::Write,
-        .actions = also,
+        .actions = std::move(also),
         .target = resolver::Target::Entry
     });
 

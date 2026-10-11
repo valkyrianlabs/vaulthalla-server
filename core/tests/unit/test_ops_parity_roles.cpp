@@ -3,6 +3,7 @@
 // ignored, unknown keys vanished, and CLI vault-role overrides were never persisted. Every check below compares
 // stored permission state, never output text.
 
+#include "../helpers/identities.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/identities/User.hpp"
 #include "db/query/rbac/Permission.hpp"
@@ -10,6 +11,7 @@
 #include "db/query/rbac/role/Admin.hpp"
 #include "db/query/rbac/role/Vault.hpp"
 #include "db/query/rbac/role/vault/Assignments.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "ops/Error.hpp"
 #include "ops/Roles.hpp"
@@ -84,13 +86,7 @@ protected:
     inline static UserPtr superUser, orgAdmin;
 
     static UserPtr createUser(const std::string& name, const std::string& roleName) {
-        auto user = std::make_shared<identities::User>();
-        user->name = name;
-        user->email = name + "@vaulthalla.test";
-        user->setPasswordHash("x");
-        user->roles.admin = db::query::rbac::role::Admin::get(roleName);
-        user->id = db::query::identities::User::createUser(user);
-        return db::query::identities::User::getUserById(user->id);
+        return test::identities::createUser(name, db::query::rbac::role::Admin::get(roleName), name + "@vaulthalla.test");
     }
 
     static void SetUpTestSuite() {
@@ -233,7 +229,7 @@ TEST_F(RoleParityTest, UnknownFlagsAndBadSnapshotsAreRefusedNotDropped) {
 
 TEST_F(RoleParityTest, NobodyGrantsAdminPermissionsTheyDoNotHold) {
     // The built-in `admin` role can manage roles but cannot delete users; it must not mint a role that can.
-    ASSERT_FALSE(AdminResolver::has(orgAdmin->roles.admin, *[] {
+    ASSERT_FALSE(AdminResolver::has(std::make_shared<rbac::role::Admin>(*orgAdmin->state()->roles.admin), *[] {
         for (const auto& p : rbac::role::Admin::None().toPermissions())
             if (p.qualified_name == "admin.identities.users.delete") return std::make_shared<rbac::permission::Permission>(p);
         return std::shared_ptr<rbac::permission::Permission>{};
@@ -275,37 +271,37 @@ TEST_F(RoleParityTest, AssignmentsAndOverridesPersistAndUnassigningNothingFails)
     ASSERT_EQ(cli("role vault create " + roleName + " --allow-files-download", superUser).first, 0);
 
     // Removing a role nobody holds used to report success (and `vault role remove` was not even reachable).
-    const auto [rcode, rout] = cli("vault role remove " + std::to_string(vaultId) + " " + roleName + " -u " + member->name, superUser);
+    const auto [rcode, rout] = cli("vault role remove " + std::to_string(vaultId) + " " + roleName + " -u " + member->name(), superUser);
     EXPECT_NE(rcode, 0);
     EXPECT_NE(rout.find("no vault role is assigned"), std::string::npos) << rout;
 
-    const auto [code, out] = cli("vault role assign " + std::to_string(vaultId) + " " + roleName + " -u " + member->name, superUser);
+    const auto [code, out] = cli("vault role assign " + std::to_string(vaultId) + " " + roleName + " -u " + member->name(), superUser);
     ASSERT_EQ(code, 0) << out;
     const auto assignment = db::query::rbac::role::vault::Assignments::get(vaultId, "user", member->id);
     ASSERT_TRUE(assignment);
 
     // Overrides used to mutate an in-memory copy and never reach the database.
     const auto [ocode, oout] = cli("vault role override add " + std::to_string(vaultId) + " " + roleName + " -u " +
-                                   member->name + " --deny-files-download --pattern /secret/**", superUser);
+                                   member->name() + " --deny-files-download --pattern /secret/**", superUser);
     ASSERT_EQ(ocode, 0) << oout;
     const auto stored = db::query::rbac::permission::Override::listAssigned(assignment->assignment_id);
     ASSERT_EQ(stored.size(), 1u);
     EXPECT_EQ(stored.front()->effect, rbac::permission::OverrideOpt::DENY);
     EXPECT_EQ(stored.front()->glob_path(), "/secret/**");
 
-    EXPECT_NE(cli("vault role override add " + std::to_string(vaultId) + " " + roleName + " -u " + member->name +
+    EXPECT_NE(cli("vault role override add " + std::to_string(vaultId) + " " + roleName + " -u " + member->name() +
                   " --deny-files-download", superUser).first, 0) << "--pattern is required";
 
     const auto overrideId = std::to_string(stored.front()->id);
     const auto [ucode, uout] = cli("vault role override update " + std::to_string(vaultId) + " " + roleName + " " +
-                                   overrideId + " -u " + member->name + " --allow --disable", superUser);
+                                   overrideId + " -u " + member->name() + " --allow --disable", superUser);
     ASSERT_EQ(ucode, 0) << uout;
     const auto updated = db::query::rbac::permission::Override::get(stored.front()->id);
     EXPECT_EQ(updated->effect, rbac::permission::OverrideOpt::ALLOW);
     EXPECT_FALSE(updated->enabled);
 
     ASSERT_EQ(cli("vault role override remove " + std::to_string(vaultId) + " " + roleName + " " + overrideId + " -u " +
-                  member->name, superUser).first, 0);
+                  member->name(), superUser).first, 0);
     EXPECT_TRUE(db::query::rbac::permission::Override::listAssigned(assignment->assignment_id).empty());
 
     // The same lifecycle over ws (role.vault.overrides.*) lands in the same rows.

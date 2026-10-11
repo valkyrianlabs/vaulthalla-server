@@ -2,6 +2,7 @@
 
 #include "config/Registry.hpp"
 #include "db/query/identities/User.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "protocols/s3/Error.hpp"
 
@@ -49,7 +50,7 @@ AuthContext Authenticator::authenticate(const sigv4::VerificationInput& input) c
                 "Unsigned S3 gateway requests are only allowed in dev mode or on loopback listeners",
                 http::status::forbidden,
                 input.target};
-        auto user = db::query::identities::User::getUserById(1);
+        auto user = vh::identities::manager().user(1);
         if (!user) throw accessDenied("/");
         return {
             .user = std::move(user),
@@ -76,8 +77,8 @@ AuthContext Authenticator::authenticate(const sigv4::VerificationInput& input) c
     const auto result = sigv4::verify(input, secret->secret_access_key);
     if (!result.ok) throw S3Error{"SignatureDoesNotMatch", result.error, http::status::forbidden, input.target};
 
-    auto user = db::query::identities::User::getUserById(secret->credential.principal_user_id);
-    if (!user || !user->meta.is_active) throw accessDenied(input.target);
+    auto user = vh::identities::manager().user(secret->credential.principal_user_id);
+    if (!user || !user->authorizing()) throw accessDenied(input.target);
 
     credentialManager.markUsed(secret->credential.id);
     return {

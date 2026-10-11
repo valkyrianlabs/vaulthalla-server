@@ -343,9 +343,9 @@ TEST(SharePrincipalRbacTest, ShareActorDoesNotInheritHumanPrivileges) {
     EXPECT_EQ(actor.user(), nullptr);
     EXPECT_EQ(actor.sharePrincipal(), principal);
 
-    auto user = std::make_shared<vh::identities::User>();
-    user->id = 123;
-    user->name = "human";
+    vh::identities::UserState userState;
+    userState.name = "human";
+    auto user = vh::identities::User::detached(123, std::move(userState));
 
     const auto human = vh::rbac::Actor::human(user);
     EXPECT_TRUE(human.isHuman());
@@ -504,9 +504,9 @@ TEST(SharePrincipalRbacTest, RbacSharePolicyKeepsOverwriteDeferred) {
 }
 
 TEST(SharePrincipalRbacTest, RbacSharePolicyRejectsHumanActors) {
-    auto user = std::make_shared<vh::identities::User>();
-    user->id = 123;
-    user->name = "human";
+    vh::identities::UserState userState;
+    userState.name = "human";
+    auto user = vh::identities::User::detached(123, std::move(userState));
 
     const auto actor = vh::rbac::Actor::human(user);
     const auto decision = vh::rbac::fs::policy::Share::evaluate(actor, {

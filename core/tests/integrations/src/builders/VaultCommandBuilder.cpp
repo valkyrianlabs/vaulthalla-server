@@ -7,7 +7,8 @@
 #include "identities/Group.hpp"
 
 using namespace vh::vault::model;
-using namespace vh::identities;
+using vh::identities::User;
+using vh::identities::Group;
 using namespace vh::rbac;
 
 namespace vh::test::integration::cmd {
@@ -193,11 +194,11 @@ namespace vh::test::integration::cmd {
                 if (entityType == EntityType::USER) {
                     const auto user = std::static_pointer_cast<User>(entity);
                     if (coin()) oss << " --user " << user->id;
-                    else       oss << " --user " << user->name;
+                    else       oss << " --user " << user->name();
                 } else if (entityType == EntityType::GROUP) {
                     const auto group = std::static_pointer_cast<Group>(entity);
                     if (coin()) oss << " --group " << group->id;
-                    else       oss << " --group " << group->name;
+                    else       oss << " --group " << group->name();
                 } else throw std::runtime_error("VaultCommandBuilder: unsupported entity type for vault.roles.assign subject");
             } else throw std::runtime_error("VaultCommandBuilder: unsupported required option in vault.roles.assign: " + req.label);
         }

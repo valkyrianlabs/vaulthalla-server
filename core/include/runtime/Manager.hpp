@@ -1,5 +1,6 @@
 #pragma once
 
+#include "identities/Fwd.hpp"
 #include "log/Registry.hpp"
 #include "sync/Fwd.hpp"
 #include "vault/Fwd.hpp"
@@ -90,6 +91,7 @@ private:
     std::shared_ptr<protocols::ws::ConnectionLifecycleManager> connectionLifecycleManager;
     std::shared_ptr<log::RotationService> logRotationService;
     std::shared_ptr<db::Janitor> dbSweeperService;
+    std::shared_ptr<identities::RevisionWatcher> identityWatcher;
     std::shared_ptr<vault::RetentionService> vaultRetentionService;
     std::shared_ptr<stats::SnapshotService> statsSnapshotService;
     std::shared_ptr<notifications::OperatorEmailService> operatorEmailService;

@@ -129,7 +129,7 @@ model::preview::Response conflictSide(request&& req) {
         }
         if (req.method() == verb::get)
             log::Registry::audit()->info("[http] {} previewed the {} side of sync conflict {} ('{}', vault {})",
-                                         caller.session->user->name, wantsRemote ? "remote" : "local", id,
+                                         caller.session->user->name(), wantsRemote ? "remote" : "local", id,
                                          t.record.path, t.record.vault_id);
         return wantsRemote ? remote(req, t) : local(req, t);
     } catch (const std::exception& e) {

@@ -5,6 +5,7 @@
 #include "db/query/s3/Gateway.hpp"
 #include "db/query/vault/APIKey.hpp"
 #include "db/query/vault/Vault.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "ops/Error.hpp"
 #include "ops/S3Gateway.hpp"
@@ -54,11 +55,11 @@ std::uint32_t gwLimitFromPayload(const json& payload, const std::uint32_t fallba
 
 json credentialJson(const db::query::s3::GatewayCredential& credential) {
     json principalJson = nullptr;
-    if (const auto principal = db::query::identities::User::getUserById(credential.principal_user_id)) {
+    if (const auto principal = vh::identities::manager().user(credential.principal_user_id)) {
         principalJson = {
             {"id", principal->id},
-            {"name", principal->name},
-            {"email", principal->email ? json(*principal->email) : json(nullptr)}
+            {"name", principal->name()},
+            {"email", principal->email() ? json(*principal->email()) : json(nullptr)}
         };
     }
 

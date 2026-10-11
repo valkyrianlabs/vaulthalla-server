@@ -32,7 +32,7 @@ std::string jwtSecret() {
 }
 
 void rejectSystemOnlyHumanToken(const std::shared_ptr<Session>& session) {
-    if (session && session->user && session->user->systemOnly)
+    if (session && session->user && session->user->systemOnly())
         throw std::runtime_error("System-only users cannot receive normal user tokens");
 }
 }

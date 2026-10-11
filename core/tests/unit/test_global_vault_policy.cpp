@@ -7,6 +7,7 @@
 #include "db/query/identities/User.hpp"
 #include "db/query/vault/Vault.hpp"
 #include "fs/Filesystem.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "ops/Roles.hpp"
 #include "ops/Users.hpp"
@@ -97,7 +98,7 @@ protected:
         seed::seed_database();
         runtime::Deps::init();
         fs::Filesystem::init(runtime::Deps::get().storageManager);
-        superUser = db::query::identities::User::getUserByName("admin");
+        superUser = vh::identities::manager().userByName("admin");
     }
 
     void SetUp() override {
@@ -107,7 +108,7 @@ protected:
     static UserPtr create(const std::string& prefix, const std::string& role) {
         const auto created = ops::users::create(superUser, {.name = prefix + "_" + gvpTag(), .role = role,
                                                             .password = std::string("Gvp-Test-Pass-123")});
-        return db::query::identities::User::getUserById(created.user->id);
+        return vh::identities::manager().user(created.user->id);
     }
 
     static bool canOnOwnVault(const UserPtr& user, const Action action) {
@@ -141,7 +142,7 @@ TEST_F(GlobalVaultPolicyDbTest, ARoleChangeRewritesThePolicy) {
     const auto rows = policyRows(user->id);
     ASSERT_EQ(rows.size(), 3u);
     for (const auto& [scope, files] : rows) EXPECT_FALSE(allZero(files)) << scope;
-    EXPECT_TRUE(canOnOwnVault(db::query::identities::User::getUserById(user->id), Action::Read));
+    EXPECT_TRUE(canOnOwnVault(vh::identities::manager().user(user->id), Action::Read));
 }
 
 // A custom role is seeded from --from (or nothing: unprivileged) and then owns its own bitmasks. It stores no global
@@ -171,13 +172,14 @@ TEST_F(GlobalVaultPolicyDbTest, StartupRepairsAccountsWrittenTheOldWay) {
                  "sync_permissions, roles_permissions) VALUES ($1, 'self', B'0'::bit(32), B'0'::bit(32), "
                  "B'0'::bit(32), B'0'::bit(16))", pqxx::params{user->id});
     });
-    ASSERT_FALSE(canOnOwnVault(db::query::identities::User::getUserById(user->id), Action::Read));
+    (void)vh::identities::manager().reconcile();   // the revision watcher's job in the daemon
+    ASSERT_FALSE(canOnOwnVault(vh::identities::manager().user(user->id), Action::Read));
 
     seed::reconcileGlobalVaultPolicies();
     const auto rows = policyRows(user->id);
     ASSERT_EQ(rows.size(), 3u);
     for (const auto& [scope, files] : rows) EXPECT_FALSE(allZero(files)) << scope;
-    EXPECT_TRUE(canOnOwnVault(db::query::identities::User::getUserById(user->id), Action::Read));
+    EXPECT_TRUE(canOnOwnVault(vh::identities::manager().user(user->id), Action::Read));
 
     // Idempotent: a correctly written account is left alone.
     seed::reconcileGlobalVaultPolicies();

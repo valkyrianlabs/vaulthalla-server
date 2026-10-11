@@ -35,7 +35,7 @@ group_ops::UserRef memberUserRef(const json& payload) {
 }
 
 json membershipResponse(const group_ops::GroupPtr& group, const json& payload) {
-    json out{{"group", *group}, {"group_id", group->id}};
+    json out{{"group", vh::identities::to_json(group)}, {"group_id", group->id}};
     // Echo whichever member keys the caller used, so legacy {groupId, memberName|userId} clients keep their shape.
     for (const auto* key : {"user_id", "groupId", "userId", "memberName"})
         if (payload.contains(key)) out[key] = payload.at(key);
@@ -50,7 +50,7 @@ json Groups::add(const json& payload, const std::shared_ptr<Session>& session) {
         .description = payload.value("description", ""),
         .linux_gid = groupPayloadUInt(payload, "linux_gid")
     });
-    return {{"name", group->name}, {"group", *group}};
+    return {{"name", group->name()}, {"group", vh::identities::to_json(group)}};
 }
 
 json Groups::remove(const json& payload, const std::shared_ptr<Session>& session) {
@@ -69,15 +69,15 @@ json Groups::removeMember(const json& payload, const std::shared_ptr<Session>& s
 }
 
 json Groups::list(const std::shared_ptr<Session>& session) {
-    return {{"groups", group_ops::list(session->user)}};
+    return {{"groups", vh::identities::to_json(group_ops::list(session->user))}};
 }
 
 json Groups::get(const json& payload, const std::shared_ptr<Session>& session) {
-    return {{"group", *group_ops::get(session->user, payload.at("id").get<unsigned int>())}};
+    return {{"group", vh::identities::to_json(group_ops::get(session->user, payload.at("id").get<unsigned int>()))}};
 }
 
 json Groups::getByName(const json& payload, const std::shared_ptr<Session>& session) {
-    return {{"group", *group_ops::get(session->user, payload.at("name").get<std::string>())}};
+    return {{"group", vh::identities::to_json(group_ops::get(session->user, payload.at("name").get<std::string>()))}};
 }
 
 json Groups::update(const json& payload, const std::shared_ptr<Session>& session) {
@@ -87,9 +87,9 @@ json Groups::update(const json& payload, const std::shared_ptr<Session>& session
         .description = groupPayloadString(payload, "description"),
         .linux_gid = groupPayloadUInt(payload, "linux_gid")
     });
-    return {{"id", group->id}, {"name", group->name}, {"group", *group}};
+    return {{"id", group->id}, {"name", group->name()}, {"group", vh::identities::to_json(group)}};
 }
 
 json Groups::listByUser(const json& payload, const std::shared_ptr<Session>& session) {
-    return {{"groups", group_ops::listForUser(session->user, payload.at("user_id").get<unsigned int>())}};
+    return {{"groups", vh::identities::to_json(group_ops::listForUser(session->user, payload.at("user_id").get<unsigned int>()))}};
 }

@@ -11,7 +11,8 @@
 #include <stdexcept>
 
 using namespace vh::protocols::shell;
-using namespace vh::identities;
+using vh::identities::User;
+using vh::identities::Group;
 using namespace vh::rbac;
 using namespace vh::vault::model;
 

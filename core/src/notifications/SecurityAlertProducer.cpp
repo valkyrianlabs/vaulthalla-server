@@ -184,7 +184,7 @@ SecurityAlertActor actorFromUser(
 
     if (user) {
         actor.userId = user->id;
-        actor.userName = user->name;
+        actor.userName = user->name();
     }
 
     return actor;

@@ -29,7 +29,8 @@
 #include <future>
 
 using namespace vh::args;
-using namespace vh::identities;
+using vh::identities::User;
+using vh::identities::Group;
 using namespace vh::vault::model;
 using namespace vh::rbac;
 
@@ -159,8 +160,14 @@ static void harvestIdsIntoContext(
         if (!r->result.stderr_text.empty()) err << r->result.stderr_text << '\n';
 
         if (const auto id = IntegrationsTestRunner::extractId(r->result.stdout_text, idPrefix); id.has_value() && r->entity) {
-            const auto obj = std::static_pointer_cast<T>(r->entity);
-            obj->id = *id;
+            auto obj = std::static_pointer_cast<T>(r->entity);
+            if constexpr (std::is_same_v<T, identities::User> || std::is_same_v<T, identities::Group>) {
+                // Identity ids are immutable: the created spec is re-minted with its id.
+                obj = T::detached(*id, *obj->state());
+                r->entity = obj;
+            } else {
+                obj->id = *id;
+            }
             bucket.push_back(obj);
         } else {
             std::cerr << "Warning: failed to extract ID from output for " << r->name << '\n' << r->result.stdout_text << '\n';

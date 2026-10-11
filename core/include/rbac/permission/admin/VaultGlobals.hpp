@@ -15,6 +15,9 @@ namespace vh::rbac::permission::admin {
 
         explicit VaultGlobals(const pqxx::result &res);
 
+        // One user_global_vault_policy row, into the scope it names.
+        void assign(pqxx::row_ref row);
+
     public:
         static VaultGlobals None(const uint32_t userId) {
             return make(

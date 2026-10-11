@@ -5,6 +5,7 @@
 #include "db/query/identities/User.hpp"
 #include "log/Registry.hpp"
 #include "protocols/shell/SocketIO.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 
 #include <paths.h>
@@ -95,9 +96,9 @@ Server::Server()
     commands::registerAllCommands(router_);
 
     try {
-        const auto admin = db::query::identities::User::getUserByName("admin");
+        const auto admin = vh::identities::manager().userByName("admin");
         if (!admin) log::Registry::shell()->warn("[CtlServerService] No 'admin' user found in database");
-        if (admin && admin->meta.linux_uid.has_value()) adminUIDSet_.store(true);
+        if (admin && admin->linuxUid().has_value()) adminUIDSet_.store(true);
         adminStateKnown_.store(true);
     } catch (const std::exception& e) {
         // Unknown is not "unset": don't let the first connecting user claim the admin account because the DB
@@ -219,7 +220,10 @@ void Server::initAdminUid(const int cfd, const uid_t uid) {
     log::Registry::shell()->info("[CtlServerService] Adding UID {} to vaulthalla group", uid);
 
     // Assign UID to admin
-    db::query::identities::User::bootstrapSetAdminLinuxUID(uid);
+    if (const auto admin = vh::identities::manager().userByName("admin"))
+        vh::identities::manager().bindLinuxUid(admin->id, uid, std::nullopt);
+    else
+        throw std::runtime_error("admin user record not found");
     adminUIDSet_.store(true);
 
     log::Registry::shell()->info("[CtlServerService] Assigned UID {} to 'admin' user", uid);
@@ -307,22 +311,23 @@ void Server::handleClient(const int cfd) {
         std::shared_ptr<identities::User> user;
         if (cliCommandRunsWithoutUserLookup(cmd)) {
             // Read-only health/version output must not depend on the DB it reports on.
-            user = std::make_shared<identities::User>();
-            user->name = p.uid == 0 ? "root" : "uid:" + std::to_string(p.uid);
+            identities::UserState synthetic;
+            synthetic.name = p.uid == 0 ? "root" : "uid:" + std::to_string(p.uid);
+            user = identities::User::detached(0, std::move(synthetic));
         } else {
             if (!paths::testMode && p.uid != 0 && p.uid >= 1000 && !adminUIDSet_.load()) {
                 std::scoped_lock adminLock(adminInitMutex_);
                 if (!adminStateKnown_.load()) {
-                    const auto admin = db::query::identities::User::getUserByName("admin");
-                    if (admin && admin->meta.linux_uid.has_value()) adminUIDSet_.store(true);
+                    const auto admin = vh::identities::manager().userByName("admin");
+                    if (admin && admin->linuxUid().has_value()) adminUIDSet_.store(true);
                     adminStateKnown_.store(true);
                 }
                 if (!adminUIDSet_.load()) initAdminUid(cfd, p.uid);
             }
 
             user = p.uid == 0 ?
-                db::query::identities::User::getUserByName("root") :
-                db::query::identities::User::getUserByLinuxUID(p.uid);
+                vh::identities::manager().userByName("root") :
+                vh::identities::manager().userByLinuxUid(p.uid);
 
             if (!user) {
                 log::Registry::shell()->debug("[CtlServerService] No user found for UID {} (PID {})", p.uid, p.pid);

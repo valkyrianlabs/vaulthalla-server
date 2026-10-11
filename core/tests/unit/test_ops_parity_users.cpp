@@ -5,6 +5,7 @@
 // a deactivated account could still log in; the web could rename the super admin the daemon looks up by name;
 // and auth::Manager served logins from a cache the CLI never updated. ops::users now owns all of it.
 
+#include "../helpers/identities.hpp"
 #include "auth/Manager.hpp"
 #include "auth/session/Issuer.hpp"
 #include "auth/session/Manager.hpp"
@@ -15,6 +16,7 @@
 #include "db/query/rbac/role/Admin.hpp"
 #include "db/query/vault/Vault.hpp"
 #include "fs/Filesystem.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "auth/model/RefreshToken.hpp"
 #include "auth/model/TokenPair.hpp"
@@ -72,13 +74,9 @@ protected:
 
     // Seeded straight into the DB, as an existing account would be.
     static UserPtr seedUser(const std::string& prefix, const std::string& roleName) {
-        auto user = std::make_shared<identities::User>();
-        user->name = prefix + "_" + usersTag();
-        user->email = user->name + "@vaulthalla.test";
-        user->setPasswordHash(crypto::hash::password(PASSWORD));
-        user->roles.admin = db::query::rbac::role::Admin::get(roleName);
-        user->id = db::query::identities::User::createUser(user);
-        return db::query::identities::User::getUserById(user->id);
+        const auto name = prefix + "_" + usersTag();
+        return test::identities::createUser(name, db::query::rbac::role::Admin::get(roleName), name + "@vaulthalla.test",
+                                            crypto::hash::password(PASSWORD));
     }
 
     static std::string customRole(const std::vector<std::string>& permissions) {
@@ -154,8 +152,9 @@ protected:
     }
 
     static std::string roleOf(const unsigned int id) {
-        const auto u = db::query::identities::User::getUserById(id);
-        return u && u->roles.admin ? u->roles.admin->name : "";
+        const auto u = vh::identities::manager().user(id);
+        const auto s = u ? u->state() : nullptr;
+        return s && s->roles.admin ? s->roles.admin->name : "";
     }
 
     // A socket as the server accepts it: anonymous, with a refresh token, then logged in.
@@ -165,7 +164,7 @@ protected:
         return session;
     }
 
-    static std::shared_ptr<protocols::ws::Session> loggedIn(const UserPtr& user) { return loggedIn(user->name); }
+    static std::shared_ptr<protocols::ws::Session> loggedIn(const UserPtr& user) { return loggedIn(user->name()); }
 
     static std::shared_ptr<protocols::ws::Session> loggedIn(const std::string& name) {
         auto session = connected();
@@ -187,10 +186,10 @@ TEST_F(UserParityTest, CreateMakesTheSameAccountAndDefaultVaultOnBothSurfaces) {
     (void)protocols::ws::handler::Auth::registerUser(json{{"name", wsName}, {"email", wsName + "@x.test"},
         {"password", PASSWORD}, {"is_active", true}, {"role", "unprivileged"}}, ws(superUser));
 
-    const auto a = db::query::identities::User::getUserByName(cliName), b = db::query::identities::User::getUserByName(wsName);
+    const auto a = vh::identities::manager().userByName(cliName), b = vh::identities::manager().userByName(wsName);
     ASSERT_TRUE(a && b);
-    EXPECT_EQ(a->roles.admin->name, b->roles.admin->name);
-    EXPECT_EQ(a->meta.is_active, b->meta.is_active);
+    EXPECT_EQ(a->state()->roles.admin->name, b->state()->roles.admin->name);
+    EXPECT_EQ(a->isActive(), b->isActive());
     EXPECT_FALSE(db::query::vault::Vault::listUserVaults(a->id).empty()) << "the CLI used to skip the default vault";
     EXPECT_EQ(db::query::vault::Vault::listUserVaults(a->id).size(), db::query::vault::Vault::listUserVaults(b->id).size());
 
@@ -219,7 +218,7 @@ TEST_F(UserParityTest, NobodyMintsOrPromotesAccountsAboveThemselves) {
     }));
 
     const auto plain = seedUser("up_plain", "unprivileged");
-    EXPECT_NE(cli("user update " + plain->name + " --role admin", idAdmin).first, 0);
+    EXPECT_NE(cli("user update " + plain->name() + " --role admin", idAdmin).first, 0);
     EXPECT_FALSE(wsOk([&] {
         (void)protocols::ws::handler::Auth::updateUser(json{{"id", plain->id}, {"role", "admin"}}, ws(idAdmin));
     }));
@@ -243,14 +242,14 @@ TEST_F(UserParityTest, AccountsAboveTheActorCannotBeManaged) {
     EXPECT_FALSE(wsOk([&] {
         (void)protocols::ws::handler::Auth::changePassword(json{{"id", auditor->id}, {"new_password", "Another-Pass-77"}}, ws(mgr));
     }));
-    EXPECT_NE(cli("user delete " + auditor->name + " --yes", mgr).first, 0);
+    EXPECT_NE(cli("user delete " + auditor->name() + " --yes", mgr).first, 0);
     EXPECT_FALSE(wsOk([&] { (void)protocols::ws::handler::Auth::deleteUser(json{{"id", auditor->id}, {"confirm", true}}, ws(mgr)); }));
-    EXPECT_NE(cli("user update " + auditor->name + " --disable", mgr).first, 0);
-    EXPECT_TRUE(db::query::identities::User::getUserById(auditor->id));
+    EXPECT_NE(cli("user update " + auditor->name() + " --disable", mgr).first, 0);
+    EXPECT_TRUE(vh::identities::manager().user(auditor->id));
 
     // An admin-class account within the actor's reach is fine.
     const auto minor = seedUser("up_minor", customRole({"admin.identities.users.view"}));
-    EXPECT_EQ(cli("user update " + minor->name + " --email minor@x.test", mgr).first, 0);
+    EXPECT_EQ(cli("user update " + minor->name() + " --email minor@x.test", mgr).first, 0);
     EXPECT_TRUE(wsOk([&] { (void)protocols::ws::handler::Auth::deleteUser(json{{"id", minor->id}, {"confirm", true}}, ws(mgr)); }));
 }
 
@@ -263,7 +262,7 @@ TEST_F(UserParityTest, DeactivationAndDeletionEndSessions) {
     ASSERT_FALSE(sessions->getSessionsByUserId(victim->id).empty());
     ASSERT_TRUE(hasLiveRefreshToken(victim->id));
 
-    ASSERT_EQ(cli("user update " + victim->name + " --disable", superUser).first, 0);
+    ASSERT_EQ(cli("user update " + victim->name() + " --disable", superUser).first, 0);
     EXPECT_TRUE(sessions->getSessionsByUserId(victim->id).empty());
     EXPECT_FALSE(hasLiveRefreshToken(victim->id));
     EXPECT_FALSE(sessions->validate(session, accessToken)) << "the open socket kept working";
@@ -280,7 +279,7 @@ TEST_F(UserParityTest, DeactivationAndDeletionEndSessions) {
     // A role change ends sessions too: they carry the old role.
     const auto demoted = seedUser("up_demoted", "auditor");
     (void)loggedIn(demoted);
-    ASSERT_EQ(cli("user update " + demoted->name + " --role unprivileged", superUser).first, 0);
+    ASSERT_EQ(cli("user update " + demoted->name() + " --role unprivileged", superUser).first, 0);
     EXPECT_TRUE(sessions->getSessionsByUserId(demoted->id).empty());
 }
 
@@ -288,32 +287,34 @@ TEST_F(UserParityTest, LoginReadsTheAccountAsItIsNow) {
     // A CLI rename used to leave the old name logging in from auth::Manager's cache.
     const auto user = seedUser("up_renamed", "unprivileged");
     (void)loggedIn(user);
+    const auto oldName = user->name();
     const auto newName = "up_newname_" + usersTag();
-    ASSERT_EQ(cli("user update " + user->name + " --name " + newName, superUser).first, 0);
-    EXPECT_THROW((void)loggedIn(user->name), std::exception);
+    ASSERT_EQ(cli("user update " + oldName + " --name " + newName, superUser).first, 0);
+    EXPECT_EQ(user->name(), newName) << "the reference held across the rename sees it";
+    EXPECT_THROW((void)loggedIn(oldName), std::exception);
     EXPECT_NO_THROW((void)loggedIn(newName));
 }
 
 TEST_F(UserParityTest, SelfServiceLimitsMatch) {
     // The daemon finds the super admin by name: the web used to let it rename itself.
-    EXPECT_NE(cli("user update " + superUser->name + " --name up_renamed_super", superUser).first, 0);
+    EXPECT_NE(cli("user update " + superUser->name() + " --name up_renamed_super", superUser).first, 0);
     EXPECT_FALSE(wsOk([&] {
         (void)protocols::ws::handler::Auth::updateUser(json{{"id", superUser->id}, {"name", "up_renamed_super"}}, ws(superUser));
     }));
 
     const auto self = seedUser("up_self", "identity_admin");
-    EXPECT_NE(cli("user delete " + self->name + " --yes", self).first, 0);
+    EXPECT_NE(cli("user delete " + self->name() + " --yes", self).first, 0);
     EXPECT_FALSE(wsOk([&] { (void)protocols::ws::handler::Auth::deleteUser(json{{"id", self->id}, {"confirm", true}}, ws(self)); }));
     EXPECT_FALSE(wsOk([&] {
         (void)protocols::ws::handler::Auth::updateUser(json{{"id", self->id}, {"is_active", false}}, ws(self));
     }));
-    EXPECT_NE(cli("user update " + self->name + " --role unprivileged", self).first, 0);
+    EXPECT_NE(cli("user update " + self->name() + " --role unprivileged", self).first, 0);
 
     // The web never validated email on update.
     EXPECT_FALSE(wsOk([&] {
         (void)protocols::ws::handler::Auth::updateUser(json{{"id", self->id}, {"email", "not-an-email"}}, ws(self));
     }));
-    EXPECT_NE(cli("user update " + self->name + " --email not-an-email", self).first, 0);
+    EXPECT_NE(cli("user update " + self->name() + " --email not-an-email", self).first, 0);
     EXPECT_TRUE(wsOk([&] {
         (void)protocols::ws::handler::Auth::updateUser(json{{"id", self->id}, {"email", "fine@x.test"}}, ws(self));
     }));
@@ -328,12 +329,12 @@ TEST_F(UserParityTest, ListShowsWhatTheActorMayViewOnBothSurfaces) {
     std::set<std::string> wsNames;
     for (const auto& u : listed) {
         wsNames.insert(u.at("name").get<std::string>());
-        const auto acct = db::query::identities::User::getUserById(u.at("id").get<unsigned int>());
+        const auto acct = vh::identities::manager().user(u.at("id").get<unsigned int>());
         if (acct->id != viewer->id) {
-            EXPECT_FALSE(ops::users::isAdminIdentity(*acct->roles.admin)) << acct->name;
+            EXPECT_FALSE(ops::users::isAdminIdentity(*acct->state()->roles.admin)) << acct->name();
         }
     }
-    EXPECT_TRUE(wsNames.contains(viewer->name));
+    EXPECT_TRUE(wsNames.contains(viewer->name()));
 
     const auto [code, out] = cli("user list", viewer);
     ASSERT_EQ(code, 0) << out;
@@ -369,7 +370,7 @@ TEST_F(UserParityTest, ListShowsWhatTheActorMayViewOnBothSurfaces) {
     EXPECT_NE(cli("user list", seedUser("up_blind", "unprivileged")).first, 0);
     // And --sort is a column, not SQL.
     EXPECT_NE(cli("user list --sort \"id; DELETE FROM users\"", superUser).first, 0);
-    EXPECT_TRUE(db::query::identities::User::getUserById(viewer->id));
+    EXPECT_TRUE(vh::identities::manager().user(viewer->id));
 }
 
 // #133: deleting an account used to leave its vaults ownerless. Now it asks first, then transfers or destroys them.
@@ -395,16 +396,16 @@ TEST_F(UserParityTest, DeletingAnAccountAsksAndThenTransfersOrDestroysItsVaults)
         EXPECT_NE(text.find(ops::users::USER_DELETE_CONFIRMATION), std::string::npos) << text;
         EXPECT_NE(text.find(doomedVault->name), std::string::npos) << text;
     }
-    const auto [code, out] = cli("user delete " + doomed->name, superUser);
+    const auto [code, out] = cli("user delete " + doomed->name(), superUser);
     EXPECT_NE(code, 0);
     EXPECT_NE(out.find("--yes"), std::string::npos) << out;
     EXPECT_FALSE(wsOk([&] { (void)protocols::ws::handler::Auth::deleteUser(json{{"id", doomed->id}}, ws(superUser)); }));
-    EXPECT_TRUE(db::query::identities::User::getUserById(doomed->id));
+    EXPECT_TRUE(vh::identities::manager().user(doomed->id));
     EXPECT_EQ(ownerOf(doomedVault->id), doomed->id);
 
     // Confirmed without a transfer: the vaults go with the account.
-    ASSERT_EQ(cli("user delete " + doomed->name + " --yes", superUser).first, 0);
-    EXPECT_FALSE(db::query::identities::User::getUserById(doomed->id));
+    ASSERT_EQ(cli("user delete " + doomed->name() + " --yes", superUser).first, 0);
+    EXPECT_FALSE(vh::identities::manager().user(doomed->id));
     EXPECT_FALSE(ownerOf(doomedVault->id)) << "the vault was left behind, ownerless";
 
     // Confirmed with a transfer: the heir owns them afterwards.
@@ -414,7 +415,7 @@ TEST_F(UserParityTest, DeletingAnAccountAsksAndThenTransfersOrDestroysItsVaults)
         (void)protocols::ws::handler::Auth::deleteUser(
             json{{"id", leaving->id}, {"transfer_to", heir->id}, {"confirm", true}}, ws(superUser));
     }));
-    EXPECT_FALSE(db::query::identities::User::getUserById(leaving->id));
+    EXPECT_FALSE(vh::identities::manager().user(leaving->id));
     EXPECT_EQ(ownerOf(kept->id), heir->id);
 }
 
@@ -425,18 +426,18 @@ TEST_F(UserParityTest, VaultOwnershipTransferIsForAdministrators) {
     const auto v = ops::vaults::create(superUser, {.name = "up_v2_" + usersTag(), .type = vault::model::VaultType::Local,
                                                    .owner_id = leaving->id});
     EXPECT_THROW((void)ops::users::remove(deleter, {.id = leaving->id, .transfer_to = heir->id, .confirmed = true}), ops::Denied);
-    EXPECT_TRUE(db::query::identities::User::getUserById(leaving->id)) << "a refused transfer must change nothing";
+    EXPECT_TRUE(vh::identities::manager().user(leaving->id)) << "a refused transfer must change nothing";
     EXPECT_EQ(db::query::vault::Vault::getVault(v->id)->owner_id, leaving->id);
 
     // An owner can't hand their own vault to someone else either.
-    EXPECT_NE(cli("vault update " + std::to_string(v->id) + " --owner " + heir->name, leaving).first, 0);
+    EXPECT_NE(cli("vault update " + std::to_string(v->id) + " --owner " + heir->name(), leaving).first, 0);
     EXPECT_EQ(db::query::vault::Vault::getVault(v->id)->owner_id, leaving->id);
 
     // A clash with a vault the heir already has is refused before anything changes.
     (void)ops::vaults::create(superUser, {.name = v->name, .type = vault::model::VaultType::Local, .owner_id = heir->id});
     EXPECT_THROW((void)ops::users::remove(superUser, {.id = leaving->id, .transfer_to = heir->id, .confirmed = true}),
                  ops::Conflict);
-    EXPECT_TRUE(db::query::identities::User::getUserById(leaving->id));
+    EXPECT_TRUE(vh::identities::manager().user(leaving->id));
 }
 
 }

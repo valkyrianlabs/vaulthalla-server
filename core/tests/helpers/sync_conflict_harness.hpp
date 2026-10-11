@@ -14,6 +14,7 @@
 #include "db/query/sync/RemoteObjectIndex.hpp"
 #include "fs/Filesystem.hpp"
 #include "fs/model/File.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "ops/Conflicts.hpp"
 #include "ops/Error.hpp"
@@ -234,7 +235,7 @@ protected:
         seed::seed_database();
         runtime::Deps::init();
         fs::Filesystem::init(runtime::Deps::get().storageManager);
-        superUser = db::query::identities::User::getUserByName("admin");
+        superUser = vh::identities::manager().userByName("admin");
     }
 
     void SetUp() override {
@@ -244,7 +245,7 @@ protected:
     static UserPtr createUser(const std::string& prefix, const std::string& role) {
         const auto created = ops::users::create(superUser, {.name = prefix + "_" + tag(), .role = role,
                                                             .password = std::string("Sync-Conflict-Pass-123")});
-        return db::query::identities::User::getUserById(created.user->id);
+        return vh::identities::manager().user(created.user->id);
     }
 
     static Fixture remoteVault(const UserPtr& owner, const sync::model::RemotePolicy::ConflictPolicy policy =
@@ -376,7 +377,8 @@ protected:
             txn.exec("INSERT INTO vault_role_assignments (vault_id, subject_type, subject_id, role_id) "
                      "VALUES ($1, 'user', $2, $3)", pqxx::params{vaultId, user->id, roleId});
         });
-        return db::query::identities::User::getUserById(user->id);
+        (void)vh::identities::manager().reconcile();   // written behind the identity manager
+        return vh::identities::manager().user(user->id);
     }
 };
 

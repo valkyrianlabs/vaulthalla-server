@@ -1,4 +1,5 @@
 // Services
+#include "identities/Manager.hpp"
 #include "../include/protocols/ProtocolService.hpp"
 #include "runtime/Manager.hpp"
 #include "runtime/Deps.hpp"
@@ -148,6 +149,14 @@ void initDB() {
 
 void initDeps() {
     vh::runtime::Deps::init();
+
+    // Every account and group in one snapshot: FUSE, HTTP, S3 and session checks answer identity lookups from memory
+    // from here on. A failure is not fatal: lookups then load (and remember) what they need on first use.
+    try {
+        vh::identities::manager().preload();
+    } catch (const std::exception& e) {
+        vh::log::Registry::vaulthalla()->warn("[!] Identity preload failed, loading on demand: {}", e.what());
+    }
     vh::runtime::Deps::setSyncController(
         vh::runtime::Manager::instance().getSyncController()
     );

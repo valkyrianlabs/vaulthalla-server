@@ -3,10 +3,12 @@
 // minute and compute its badge from them, so it couldn't shrink the page without a short page hiding an older,
 // worse alert. These tests hold the summary to the list's scoping and keep it independent of `limit`.
 
+#include "../helpers/identities.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/identities/User.hpp"
 #include "db/query/rbac/role/Admin.hpp"
 #include "fs/Filesystem.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "ops/Error.hpp"
 #include "ops/Vaults.hpp"
@@ -71,13 +73,9 @@ protected:
     inline static UserPtr superUser;
 
     static UserPtr seedUser(const std::string& prefix, const std::string& roleName = "unprivileged") {
-        auto user = std::make_shared<identities::User>();
-        user->name = prefix + "_" + pnTag();
-        user->email = user->name + "@vaulthalla.test";
-        user->setPasswordHash("x");
-        user->roles.admin = db::query::rbac::role::Admin::get(roleName);
-        user->id = db::query::identities::User::createUser(user);
-        return db::query::identities::User::getUserById(user->id);
+        const auto name = prefix + "_" + pnTag();
+        auto user = vh::test::identities::createUser(name, db::query::rbac::role::Admin::get(roleName), name + "@vaulthalla.test", "x", std::nullopt);
+        return vh::identities::manager().user(user->id);
     }
 
     static uint32_t vaultFor(const UserPtr& owner) {

@@ -4,11 +4,13 @@
 // live database probe, so it could read healthy while PostgreSQL was down (S11). ops::pricing and ops::config
 // now hold those rules, and SystemHealth owns the probe.
 
+#include "../helpers/identities.hpp"
 #include "config/Registry.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/identities/User.hpp"
 #include "db/query/rbac/role/Admin.hpp"
 #include "fs/Filesystem.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "ops/Config.hpp"
 #include "ops/Error.hpp"
@@ -65,13 +67,9 @@ protected:
     inline static UserPtr superUser;
 
     static UserPtr seedUser(const std::string& prefix, const std::string& roleName = "unprivileged") {
-        auto user = std::make_shared<identities::User>();
-        user->name = prefix + "_" + pcTag();
-        user->email = user->name + "@vaulthalla.test";
-        user->setPasswordHash("x");
-        user->roles.admin = db::query::rbac::role::Admin::get(roleName);
-        user->id = db::query::identities::User::createUser(user);
-        return db::query::identities::User::getUserById(user->id);
+        const auto name = prefix + "_" + pcTag();
+        auto user = vh::test::identities::createUser(name, db::query::rbac::role::Admin::get(roleName), name + "@vaulthalla.test", "x", std::nullopt);
+        return vh::identities::manager().user(user->id);
     }
 
     static ops::vaults::VaultPtr s3VaultFor(const UserPtr& owner) {

@@ -3,11 +3,13 @@
 // the key owner's id and skipped it, and CloudEngine passed the vault owner's id, so an S3 vault using a key its
 // owner may consume but does not own could not build its engine. Authorization now lives once in ops::api_keys.
 
+#include "../helpers/identities.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/identities/User.hpp"
 #include "db/query/rbac/role/Admin.hpp"
 #include "db/query/vault/APIKey.hpp"
 #include "fs/Filesystem.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "ops/APIKeys.hpp"
 #include "ops/Error.hpp"
@@ -58,13 +60,8 @@ protected:
     inline static UserPtr superUser, alice, bob;
 
     static UserPtr createUser(const std::string& name, const std::string& roleName) {
-        auto user = std::make_shared<identities::User>();
-        user->name = name;
-        user->email = name + "@vaulthalla.test";
-        user->setPasswordHash("x");
-        user->roles.admin = db::query::rbac::role::Admin::get(roleName);
-        user->id = db::query::identities::User::createUser(user);
-        return db::query::identities::User::getUserById(user->id);
+        auto user = vh::test::identities::createUser(name, db::query::rbac::role::Admin::get(roleName), name + "@vaulthalla.test", "x", std::nullopt);
+        return vh::identities::manager().user(user->id);
     }
 
     static void SetUpTestSuite() {
@@ -272,7 +269,7 @@ TEST_F(APIKeyParityTest, RemoveRefusesWhileAVaultUsesTheKeyOnBothSurfaces) {
     const auto ownersKey = seedKey(owner);
     const auto othersVault = bindS3Vault(alice, ownersKey, "ak-owner-bucket");
     EXPECT_THROW((void)ops::users::remove(superUser, {.id = owner->id, .transfer_to = std::nullopt, .confirmed = true}), ops::Invalid);
-    EXPECT_TRUE(db::query::identities::User::getUserById(owner->id));
+    EXPECT_TRUE(vh::identities::manager().user(owner->id));
     EXPECT_EQ(boundKey(othersVault), ownersKey);
 
     // Once nothing uses it, the key goes.

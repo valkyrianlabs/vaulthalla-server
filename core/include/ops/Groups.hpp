@@ -2,17 +2,13 @@
 
 #include "ops/Actor.hpp"
 #include "db/model/ListQueryParams.hpp"
-#include "identities/Fwd.hpp"
+#include "identities/Group.hpp"
 
 #include <memory>
 #include <optional>
 #include <string>
 #include <variant>
 #include <vector>
-
-namespace vh::identities {
-struct GroupMember;
-}
 
 // Group operations shared by `vh group ...` (shell/commands/group.cpp) and the ws group.* / groups.* commands
 // (ws/handler/Groups.cpp). Authorization (the caller's admin identities.groups permissions), lookup, validation
@@ -58,6 +54,6 @@ GroupPtr remove(const Actor& actor, const Ref& group);
 // Both return the group as it is after the change.
 GroupPtr addMember(const Actor& actor, const Membership& req);
 GroupPtr removeMember(const Actor& actor, const Membership& req);
-[[nodiscard]] std::vector<std::shared_ptr<identities::GroupMember>> members(const Actor& actor, const Ref& group);
+[[nodiscard]] std::vector<identities::GroupMember> members(const Actor& actor, const Ref& group);
 
 }

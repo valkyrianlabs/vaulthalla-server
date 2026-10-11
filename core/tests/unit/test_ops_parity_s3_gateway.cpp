@@ -4,6 +4,7 @@
 // checking permission (S10), resolved vault names to the first match across owners, created remote-cache vaults
 // it could orphan, and gave budgets different defaults. ops::s3_gateway is now the one implementation.
 
+#include "../helpers/identities.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/identities/User.hpp"
 #include "db/query/rbac/role/Admin.hpp"
@@ -11,6 +12,7 @@
 #include "db/query/s3/Gateway.hpp"
 #include "db/query/vault/Vault.hpp"
 #include "fs/Filesystem.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "ops/Error.hpp"
 #include "ops/Roles.hpp"
@@ -68,13 +70,8 @@ protected:
     inline static UserPtr superUser;
 
     static UserPtr seedUser(const std::string& prefix, const std::string& roleName = "unprivileged") {
-        auto user = std::make_shared<identities::User>();
-        user->name = prefix + "_" + gwTag();
-        user->email = user->name + "@vaulthalla.test";
-        user->setPasswordHash("x");
-        user->roles.admin = db::query::rbac::role::Admin::get(roleName);
-        user->id = db::query::identities::User::createUser(user);
-        return db::query::identities::User::getUserById(user->id);
+        const auto name = prefix + "_" + gwTag();
+        return test::identities::createUser(name, db::query::rbac::role::Admin::get(roleName), name + "@vaulthalla.test");
     }
 
     static ops::vaults::VaultPtr vaultFor(const UserPtr& owner, const std::string& name = "") {
@@ -155,12 +152,14 @@ TEST_F(GatewayParityTest, RoleAdministrationIsNotGrantedByNonAdminsOnEitherSurfa
     (void)ops::roles::createAdminRole(superUser, {.name = managerRole, .permissions = {.changes = {
         {"admin.s3_gateway.manage_credentials", true}, {"admin.s3_gateway.assign_principal", true}}}}, "test");
     const auto dave = seedUser("gwp_dave");
-    auto carol = seedUser("gwp_carol", managerRole);
+    const auto carol = seedUser("gwp_carol", managerRole);
     // Vault-role authority over other users comes from the global vault policy on the admin role.
-    carol->roles.admin->vGlobals = rbac::permission::admin::VaultGlobals::Manager(carol->id);
-    db::query::identities::User::updateUser(carol);
+    (void)vh::identities::manager().updateUser(carol->id, [&](identities::UserState& s) {
+        auto role = std::make_shared<rbac::role::Admin>(*s.roles.admin);
+        role->vGlobals = rbac::permission::admin::VaultGlobals::Manager(carol->id);
+        s.roles.admin = role;
+    });
     assignVaultRole(vault->id, dave, "contributor");
-    carol = db::query::identities::User::getUserById(carol->id);   // as the next command would load them
     ASSERT_FALSE(carol->isAdmin());
     const auto credential = gw::createCredential(superUser, {.name = "gwp_cred_" + gwTag(), .principal_id = dave->id}).credential;
 
@@ -240,7 +239,7 @@ TEST_F(GatewayParityTest, VaultNamesAreNeverResolvedToTheFirstMatch) {
     }));
     ASSERT_TRUE(db::query::s3::Gateway::resolveBucket(viaWs));
     EXPECT_EQ(db::query::s3::Gateway::resolveBucket(viaWs)->vault_id, aliceVault->id);
-    ASSERT_EQ(cli("s3-gateway bucket bind " + viaCli + " --vault " + shared + " --owner " + alice->name, superUser).first, 0);
+    ASSERT_EQ(cli("s3-gateway bucket bind " + viaCli + " --vault " + shared + " --owner " + alice->name(), superUser).first, 0);
     ASSERT_TRUE(db::query::s3::Gateway::resolveBucket(viaCli));
     EXPECT_EQ(db::query::s3::Gateway::resolveBucket(viaCli)->vault_id, aliceVault->id);
 }

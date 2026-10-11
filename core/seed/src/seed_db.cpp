@@ -17,6 +17,7 @@
 #include "vault/model/S3Vault.hpp"
 #include "sync/model/RemotePolicy.hpp"
 #include "sync/model/LocalPolicy.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "identities/Group.hpp"
 #include "rbac/role/Vault.hpp"
@@ -55,7 +56,8 @@
 using namespace vh::seed;
 using namespace vh::config;
 using namespace vh::crypto;
-using namespace vh::identities;
+using vh::identities::User;
+using vh::identities::Group;
 using namespace vh::rbac;
 using namespace vh::vault::model;
 using namespace vh::crypto;
@@ -432,29 +434,31 @@ void vh::seed::initSystemUser() {
     const auto sysUid = configuredSystemUid();
 
     // 2) If a user already exists for this Linux UID, ensure it's marked as system + has super_admin
+    auto& identities = vh::identities::manager();
     try {
         if (sysUid) {
-            if (const auto existingByUid = db::query::identities::User::getUserByLinuxUID(*sysUid); existingByUid) {
-                if (existingByUid->name != "system") {
+            if (const auto existingByUid = identities.userByLinuxUid(*sysUid); existingByUid) {
+                if (const auto name = existingByUid->name(); name != "system") {
                     log::Registry::vaulthalla()->warn(
                         "[initdb] linux_uid={} belongs to '{}'; clearing it so the system principal can claim it",
                         *sysUid,
-                        existingByUid->name);
-                    existingByUid->meta.linux_uid = std::nullopt;
-                    db::query::identities::User::updateUser(existingByUid);
+                        name);
+                    (void)identities.updateUser(existingByUid->id, [](vh::identities::UserState& s) {
+                        s.meta.linux_uid = std::nullopt;
+                    });
                 } else {
                     log::Registry::vaulthalla()->info(
                         "[initdb] System user already exists for linux_uid={} (name='{}')",
-                        *sysUid, existingByUid->name
+                        *sysUid, name
                     );
 
-                    existingByUid->email = "no-reply@system";
-                    existingByUid->meta.linux_uid = sysUid;
-
-                    existingByUid->roles.admin = db::query::rbac::role::Admin::get("super_admin");
-                    existingByUid->roles.admin->user_id = existingByUid->id;
-
-                    db::query::identities::User::updateUser(existingByUid);
+                    auto role = db::query::rbac::role::Admin::get("super_admin");
+                    role->user_id = existingByUid->id;
+                    (void)identities.updateUser(existingByUid->id, [&](vh::identities::UserState& s) {
+                        s.email = "no-reply@system";
+                        s.meta.linux_uid = sysUid;
+                        s.roles.admin = role;
+                    });
                     return;
                 }
             }
@@ -465,19 +469,19 @@ void vh::seed::initSystemUser() {
 
     // 3) If a user exists by name "system" but no UID match, align it
     try {
-        if (const auto existingByName = db::query::identities::User::getUserByName("system"); existingByName) {
+        if (const auto existingByName = identities.userByName("system"); existingByName) {
             log::Registry::vaulthalla()->info(
                 "[initdb] Found existing 'system' user (id={}), updating linux_uid to {}",
                 existingByName->id, sysUid ? std::to_string(*sysUid) : "none"
             );
 
-            existingByName->meta.linux_uid = sysUid;
-            existingByName->email = "";
-
-            existingByName->roles.admin = db::query::rbac::role::Admin::get("super_admin");
-            existingByName->roles.admin->user_id = existingByName->id;
-
-            db::query::identities::User::updateUser(existingByName);
+            auto role = db::query::rbac::role::Admin::get("super_admin");
+            role->user_id = existingByName->id;
+            (void)identities.updateUser(existingByName->id, [&](vh::identities::UserState& s) {
+                s.meta.linux_uid = sysUid;
+                s.email = "";
+                s.roles.admin = role;
+            });
             return;
         }
     } catch (...) {
@@ -485,23 +489,22 @@ void vh::seed::initSystemUser() {
     }
 
     // 4) Create a fresh system user
-    const auto user = std::make_shared<User>();
-    user->name = "system";
-    user->email = "no-reply@system";
+    vh::identities::UserState user;
+    user.name = "system";
+    user.email = "no-reply@system";
+    user.meta.linux_uid = sysUid;
 
     // System account shouldn't be used for interactive login.
     // Still set a password hash to satisfy NOT NULL / validation.
     // Generate a deterministic-ish strong password seed (or truly random if you prefer).
     const auto pwSeed = id::Generator({ .namespace_token = "vaulthalla-system-user" }).generate();
-    user->setPasswordHash(hash::password(pwSeed));
 
-    user->meta.linux_uid = sysUid;
+    auto role = db::query::rbac::role::Admin::get("super_admin");
+    role->user_id = 0;
+    role->vGlobals = role::Admin::builtin("super_admin", 0)->vGlobals;
+    user.roles.admin = role;
 
-    user->roles.admin = db::query::rbac::role::Admin::get("super_admin");
-    user->roles.admin->user_id = user->id;
-    user->roles.admin->vGlobals = role::Admin::builtin("super_admin", 0)->vGlobals;
-
-    db::query::identities::User::createUser(user);
+    (void)identities.createUser(user, hash::password(pwSeed));
 
     log::Registry::vaulthalla()->info(
         "[initdb] Created system user with linux_uid={}",
@@ -553,37 +556,36 @@ static std::optional<unsigned int> loadPendingSuperAdminUid() {
 void initAdmin() {
     log::Registry::vaulthalla()->debug("[initdb] Initializing admin user...");
 
-    const auto user = std::make_shared<User>();
-    user->name = "admin";
-    user->email = "";
+    vh::identities::UserState user;
+    user.name = "admin";
+    user.email = "";
+    user.meta.linux_uid = loadPendingSuperAdminUid();
+
+    auto role = db::query::rbac::role::Admin::get("super_admin");
+    role->user_id = 0;
+    role->vGlobals = role::Admin::builtin("super_admin", 0)->vGlobals;
+    user.roles.admin = role;
+
     // No universal default: a per-install password, written once for the operator (auth/Bootstrap.hpp).
-    user->setPasswordHash(auth::bootstrap::issueInitialCredential());
-    user->meta.linux_uid = loadPendingSuperAdminUid();
-
-    user->roles.admin = db::query::rbac::role::Admin::get("super_admin");
-    user->roles.admin->user_id = user->id;
-    user->roles.admin->vGlobals = role::Admin::builtin("super_admin", 0)->vGlobals;
-
-    db::query::identities::User::createUser(user);
+    (void)vh::identities::manager().createUser(user, auth::bootstrap::issueInitialCredential());
 }
 
 }
-
 
 void vh::seed::initAdminGroup() {
     log::Registry::vaulthalla()->debug("[initdb] Initializing admin group...");
 
-    auto group = std::make_shared<Group>();
-    group->name = "admin";
-    group->description = "Core administrative group for system management";
-    group->id = db::query::identities::Group::createGroup(group);
+    auto& identities = vh::identities::manager();
+    vh::identities::GroupState draft;
+    draft.name = "admin";
+    draft.description = "Core administrative group for system management";
+    const auto group = identities.createGroup(draft);
 
-    db::query::identities::Group::addMemberToGroup(group->id, db::query::identities::User::getUserByName("admin")->id);
+    identities.addMembers(group->id, {identities.userByName("admin")->id});
 
-    group = db::query::identities::Group::getGroupByName("admin");
-    if (!group) throw std::runtime_error("Failed to create admin group");
-
-    if (group->members.front()->user->name != "admin") throw std::runtime_error("Admin user not added to admin group");
+    const auto members = identities.members(group->id);
+    if (members.empty() || members.front().user->name() != "admin")
+        throw std::runtime_error("Admin user not added to admin group");
 }
 
 void vh::seed::initAdminDefaultVault() {
@@ -727,6 +729,8 @@ void vh::seed::reconcileSystemPrincipals() {
     const auto systemHash = unusableHash("system", "vaulthalla-system-user");
     const auto adminHash = existing.contains("admin") ? std::string{} : auth::bootstrap::issueInitialCredential();
 
+    // Bootstrap-only writes (protected flags) the Manager's write API refuses; it still republishes what they touched.
+    vh::identities::manager().mutate({.everyone = true}, [&] {
     db::Transactions::exec("initdb::reconcileSystemPrincipals", [&](pqxx::work& txn) {
         txn.exec("SELECT set_config('vaulthalla.bootstrap', 'on', true)");
 
@@ -773,18 +777,19 @@ void vh::seed::reconcileSystemPrincipals() {
         assignSuperAdminRole(txn, systemId, superAdminRoleId);
         assignSuperAdminRole(txn, adminId, superAdminRoleId);
     });
+    });
 
     log::Registry::vaulthalla()->info("[initdb] Protected system principals reconciled");
 }
 
 void vh::seed::reconcileGlobalVaultPolicies() {
+    std::size_t repaired = 0;
     db::Transactions::exec("initdb::reconcileGlobalVaultPolicies", [&](pqxx::work& txn) {
         const auto rows = txn.exec(
             "SELECT u.id, r.name FROM users u "
             "JOIN admin_role_assignments a ON a.user_id = u.id JOIN admin_role r ON r.id = a.role_id "
             "WHERE NOT EXISTS (SELECT 1 FROM user_global_vault_policy p "
             "                  WHERE p.user_id = u.id AND p.scope IN ('admin', 'user'))");
-        std::size_t repaired = 0;
         for (const auto& row : rows) {
             const auto userId = row[0].as<uint32_t>();
             const auto preset = role::Admin::builtin(row[1].as<std::string>(), userId);
@@ -796,4 +801,5 @@ void vh::seed::reconcileGlobalVaultPolicies() {
         if (repaired)
             log::Registry::vaulthalla()->info("[initdb] Wrote the role's global vault policy for {} account(s)", repaired);
     });
+    if (repaired) vh::identities::manager().refresh({.everyone = true});
 }

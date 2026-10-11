@@ -1,5 +1,6 @@
 #include "protocols/ws/handler/vault/Vaults.hpp"
 #include "vault/model/APIKey.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "vault/model/Vault.hpp"
 #include "vault/model/S3Vault.hpp"
@@ -252,9 +253,9 @@ json Vaults::list(const std::shared_ptr<Session> &session) {
         const auto ownerId = row.at("owner_id").get<uint32_t>();
         auto it = owners.find(ownerId);
         if (it == owners.end()) {
-            const auto owner = vh::db::query::identities::User::getUserById(ownerId);
+            const auto owner = vh::identities::manager().user(ownerId);
             // Same as storage.vault.get: an owner that no longer resolves is "".
-            it = owners.emplace(ownerId, owner ? owner->name : std::string{}).first;
+            it = owners.emplace(ownerId, owner ? owner->name() : std::string{}).first;
         }
         row["owner"] = it->second;
     }

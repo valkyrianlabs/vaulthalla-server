@@ -13,7 +13,8 @@
 #include <algorithm>
 #include <optional>
 
-using namespace vh::identities;
+using vh::identities::User;
+using vh::identities::Group;
 
 using namespace vh::protocols::shell;
 
@@ -90,7 +91,7 @@ CommandResult Router::executeLine(const std::string& line, const std::shared_ptr
 
     const auto canonical = canonicalFor(call.name);
 
-    if (call.user->name == "system" && call.user->isSuperAdmin() && canonical != "status") {
+    if (call.user->name() == "system" && call.user->isSuperAdmin() && canonical != "status") {
         static const std::unordered_set<std::string> allowed{ "status", "setup", "teardown" };
         if (!allowed.contains(canonical))
             return invalid(call.constructFullArgs(), fmt::format("[Router] System user cannot execute command: {}", canonical));

@@ -2,6 +2,7 @@
 
 #include "db/query/identities/User.hpp"
 #include "db/query/vault/APIKey.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
 #include "rbac/resolver/admin/all.hpp"
@@ -46,8 +47,8 @@ APIKeyPtr requireKey(const Ref& ref) {
 std::shared_ptr<identities::User> requireOwner(const Actor& actor, const std::optional<Ref>& ref) {
     if (!ref) return actor;
     std::shared_ptr<identities::User> user;
-    if (const auto* id = std::get_if<unsigned int>(&*ref)) user = db::query::identities::User::getUserById(*id);
-    else user = db::query::identities::User::getUserByName(std::get<std::string>(*ref));
+    if (const auto* id = std::get_if<unsigned int>(&*ref)) user = vh::identities::manager().user(*id);
+    else user = vh::identities::manager().userByName(std::get<std::string>(*ref));
     if (!user) throw NotFound("owner not found: " + describe(*ref));
     return user;
 }

@@ -3,6 +3,7 @@
 #include "concurrency/AsyncService.hpp"
 #include "db/Janitor.hpp"
 #include "fuse/Service.hpp"
+#include "identities/Manager.hpp"
 #include "log/Registry.hpp"
 #include "log/RotationService.hpp"
 #include "notifications/OperatorEmailService.hpp"
@@ -30,6 +31,7 @@ constexpr auto kWatchdogInterval = std::chrono::seconds(2);
 
 constexpr std::array kBaseStartOrder{
     "FUSE",
+    "IdentityWatcher",
     "SyncController",
     "DBJanitor",
     "VaultRetentionService",
@@ -50,6 +52,7 @@ constexpr std::array kBaseStopOrder{
     "StatsSnapshotService",
     "VaultRetentionService",
     "DBJanitor",
+    "IdentityWatcher",
     "LogRotationService",
     "SyncController",
     "FUSE"
@@ -69,6 +72,7 @@ Manager::Manager()
       connectionLifecycleManager(std::make_shared<protocols::ws::ConnectionLifecycleManager>()),
       logRotationService(std::make_shared<log::RotationService>()),
       dbSweeperService(std::make_shared<db::Janitor>()),
+      identityWatcher(std::make_shared<identities::RevisionWatcher>()),
       vaultRetentionService(std::make_shared<vault::RetentionService>()),
       statsSnapshotService(std::make_shared<stats::SnapshotService>()),
       operatorEmailService(std::make_shared<notifications::OperatorEmailService>()) {
@@ -80,6 +84,7 @@ Manager::Manager()
     services_["ConnectionLifecycleManager"] = connectionLifecycleManager;
     services_["LogRotationService"] = logRotationService;
     services_["DBJanitor"] = dbSweeperService;
+    services_["IdentityWatcher"] = identityWatcher;
     services_["VaultRetentionService"] = vaultRetentionService;
     services_["StatsSnapshotService"] = statsSnapshotService;
     services_["OperatorEmailService"] = operatorEmailService;

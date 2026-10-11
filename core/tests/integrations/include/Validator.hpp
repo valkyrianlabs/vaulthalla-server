@@ -1,5 +1,6 @@
 #pragma once
 
+#include "identities/Manager.hpp"
 #include "types/Type.hpp"
 #include "types/AssertionResult.hpp"
 #include "db/query/identities/User.hpp"
@@ -42,8 +43,8 @@ struct Validator {
 
     static AssertionResult assert_exists(const std::shared_ptr<T>& entity) {
         if constexpr (type == EntityType::USER) {
-            if (!db::query::identities::User::userExists(entity->name))
-                return AssertionResult::Fail("User '" + entity->name + "' not found in DB");
+            if (!db::query::identities::User::userExists(entity->name()))
+                return AssertionResult::Fail("User '" + entity->name() + "' not found in DB");
             return AssertionResult::Pass();
         } else if constexpr (type == EntityType::VAULT) {
             // T is Vault here
@@ -51,8 +52,8 @@ struct Validator {
                 return AssertionResult::Fail("Vault '" + entity->name + "' not found in DB");
             return AssertionResult::Pass();
         } else if constexpr (type == EntityType::GROUP) {
-            if (!db::query::identities::Group::groupExists(entity->name))
-                return AssertionResult::Fail("Group '" + entity->name + "' not found in DB");
+            if (!db::query::identities::Group::groupExists(entity->name()))
+                return AssertionResult::Fail("Group '" + entity->name() + "' not found in DB");
             return AssertionResult::Pass();
         } else if constexpr (type == EntityType::ADMIN_ROLE) {
             if (!db::query::rbac::role::Admin::exists(entity->name))
@@ -69,16 +70,16 @@ struct Validator {
 
     static AssertionResult assert_not_exists(const std::shared_ptr<T>& entity) {
         if constexpr (type == EntityType::USER) {
-            if (db::query::identities::User::userExists(entity->name))
-                return AssertionResult::Fail("User '" + entity->name + "' unexpectedly found in DB");
+            if (db::query::identities::User::userExists(entity->name()))
+                return AssertionResult::Fail("User '" + entity->name() + "' unexpectedly found in DB");
             return AssertionResult::Pass();
         } else if constexpr (type == EntityType::VAULT) {
             if (db::query::vault::Vault::vaultExists(entity->name, entity->owner_id))
                 return AssertionResult::Fail("Vault '" + entity->name + "' unexpectedly found in DB");
             return AssertionResult::Pass();
         } else if constexpr (type == EntityType::GROUP) {
-            if (db::query::identities::Group::groupExists(entity->name))
-                return AssertionResult::Fail("Group '" + entity->name + "' unexpectedly found in DB");
+            if (db::query::identities::Group::groupExists(entity->name()))
+                return AssertionResult::Fail("Group '" + entity->name() + "' unexpectedly found in DB");
             return AssertionResult::Pass();
         } else if constexpr (type == EntityType::ADMIN_ROLE) {
             if (db::query::rbac::role::Admin::exists(entity->name))
@@ -95,7 +96,7 @@ struct Validator {
 
     static AssertionResult assert_count_at_least(unsigned int count) {
         if constexpr (type == EntityType::USER) {
-            const auto actual = db::query::identities::User::listUsers().size();
+            const auto actual = vh::identities::manager().users().size();
             if (actual < count)
                 return AssertionResult::Fail("Expected at least " + std::to_string(count) + " users, found " + std::to_string(actual));
             return AssertionResult::Pass();
@@ -105,7 +106,7 @@ struct Validator {
                 return AssertionResult::Fail("Expected at least " + std::to_string(count) + " vaults, found " + std::to_string(actual));
             return AssertionResult::Pass();
         } else if constexpr (type == EntityType::GROUP) {
-            const auto actual = db::query::identities::Group::listGroups().size();
+            const auto actual = vh::identities::manager().groups().size();
             if (actual < count)
                 return AssertionResult::Fail("Expected at least " + std::to_string(count) + " groups, found " + std::to_string(actual));
             return AssertionResult::Pass();

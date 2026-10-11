@@ -10,6 +10,7 @@
 #include "fs/cache/Registry.hpp"
 #include "fs/model/Directory.hpp"
 #include "fs/model/File.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "ops/Vaults.hpp"
 #include "protocols/s3/ObjectStore.hpp"
@@ -85,7 +86,7 @@ protected:
         seed::seed_database();
         runtime::Deps::init();
         fs::Filesystem::init(runtime::Deps::get().storageManager);
-        superUser = db::query::identities::User::getUserByName("admin");
+        superUser = vh::identities::manager().userByName("admin");
     }
 
     void SetUp() override {

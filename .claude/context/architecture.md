@@ -158,6 +158,29 @@ and the HTTP `validateRawRefreshToken` path) rewrites a legacy row to the digest
 every HTTP preview/download.) User passwords still use `crypto::hash::password()` (Argon2). No migration: the column
 is `TEXT`. Guard: `RefreshTokenDigest*` unit tests.
 
+**Identities (`identities::Manager`, `core/{include,src}/identities/`).** One canonical `User`/`Group` object per id,
+handed out as the same `shared_ptr` everywhere (sessions, engines, FUSE, HTTP, S3). Each holds an immutable
+`UserState`/`GroupState` in an `std::atomic<std::shared_ptr<const ...>>`; the Manager never replaces the object, it
+publishes a new state into it, so every holder sees a committed change on its next read. Readers take one state per
+logical check (`User::state()`, or `User::authz()` for the user plus its live groups, read under a seqlock so a
+multi-object publication is seen whole or not at all). `authorizing()` is false for deactivated accounts and for
+tombstones (deleted accounts keep their object, with no roles); every resolver, the FUSE identity step and the ws
+router check it. Group membership lives on the member's state (`groups`, `joinedAt`); a group's own state has no
+member list, so a group-level change reaches members through the canonical group. State never carries a password
+hash. Writes: `createUser/updateUser/deleteUser/setPasswordHash/recordLogin/bindLinuxUid`, group CRUD and
+membership, and `mutate(Touched, fn)` for everything else (vault role assignments, overrides, role templates in
+`ops::roles`); each runs its statements, then reloads what it touched in one REPEATABLE READ snapshot
+(`db::query::identities::Loader`, ~8 statements for any number of identities) and publishes before returning.
+Ordering: migration 108's triggers bump `identity_revision` once per writing transaction (row lock = commit order)
+and log `(rev, entity, id)` in `identity_change_log` (`last_login`/`password_hash` changes excluded); every state
+carries the revision it was read at and an older read never replaces a newer state. Out-of-band writes (psql,
+tests) are applied by `identities::RevisionWatcher` (runtime service, polls every second; the trigger also
+`NOTIFY vh_identity`s) into the existing objects; `Manager::reconcile()` does one round (tests call it after raw
+SQL). Lookups: `preload()` at startup loads everything; misses go to the database once (single-flight) and are
+remembered negatively until the next publication. The test schema reset calls `Manager::reset()`. Guard:
+`tools/contracts/test_identity_writes_contract.py` (identity row writers only in Manager.cpp, RBAC writers only
+inside `mutate`), `IdentitiesManagerDbTest`.
+
 **HTTP auth hot path.** Media seeking fires many small requests, so `session::Manager` skips the refresh-token DB
 lookup for 30 s after a successful validation of the same in-memory session (`validatedAt_` keyed by jti, dropped
 with the session's indexes on logout/invalidation/`revokeSessions`, so revocation stays immediate).
@@ -270,8 +293,9 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
 `core/src/fuse/Service.cpp` validates the mountpoint, mounts a low-level session with `allow_other,auto_unmount`
 (subtype `vaulthalla-fuse`), and dispatches to a thread pool. Mount path: `/mnt/vaulthalla` (prod/dev),
 `/tmp/vh_mount` (integration harness).
-- **FUSE ops hit the DB.** If the DB pool wedges, every FUSE op on the mount hangs, including
-  `stat`, `mountpoint`, and `df`. See P0 in `production-hardening.md`.
+- **FUSE ops still hit the DB for content and metadata writes**, but no longer for identity: the caller (by uid), its
+  groups and the vault owner come from `identities::Manager` in memory (see Identities below). If the DB pool wedges,
+  writes, opens of uncached entries and anything else that queries still hang. See P0 in `production-hardening.md`.
 - HTTP uploads stage `.upload-http-<id>-<file>.part` next to the target *through FUSE*, then rename
   from `fuse_from` to `fuse_to` (`http/upload/Coordinator.cpp`). This is intentional. Don't move staging out of
   FUSE to reduce sync churn; fix duplicate sync triggers or backing-path resolution instead.
@@ -462,7 +486,9 @@ Rules the families hold (keep them in ops, never re-add them in a handler):
   admin" test kept for S3 policy bypass and the resolvers' owner scope), picks admins.* vs users.* identity
   permissions. The ceiling applies to assignment *and* to managing an
   account above you (edit, delete, reset password). Deletion, deactivation, role change and password reset call
-  `auth::Manager::revokeSessions` (refresh tokens revoked, live sessions invalidated). `auth::Manager` has no user cache.
+  `auth::Manager::revokeSessions` (refresh tokens revoked, live sessions invalidated). Account and role writes go
+  through `identities::Manager` (below); credentials (password hashes) are never part of cached identity state:
+  login and password checks read them with `Loader::credentialsByName/ById`.
 - **API keys:** `update` edits in place (keeps the id, so `s3` rows survive; an empty secret keeps the sealed one;
   `KeyPerm::Edit`), re-validates credentials outside test mode and reloads the engines of the vaults using the key
   (`storage::Manager::reloadEngine`). `remove` refuses (`Invalid`, naming the vaults) while any `s3` row references the

@@ -15,8 +15,8 @@
 #include "auth/Manager.hpp"
 #include "auth/registration/Validator.hpp"
 #include "crypto/util/hash.hpp"
-#include "db/query/identities/User.hpp"
 #include "db/query/rbac/role/Admin.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
 #include "rbac/permission/admin/identities/Base.hpp"
@@ -28,7 +28,9 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cctype>
 #include <charconv>
+#include <tuple>
 
 namespace vh::ops::users {
 
@@ -53,9 +55,14 @@ bool can(const Actor& actor, const IdPerm perm, const AdminRolePtr& role) {
 const char* kindOf(const AdminRolePtr& role) { return roleIsAdminIdentity(role) ? "admin accounts" : "user accounts"; }
 
 std::shared_ptr<identities::User> requireUser(const uint32_t id) {
-    auto user = db::query::identities::User::getUserById(id);
+    auto user = vh::identities::manager().user(id);
     if (!user) throw NotFound("user not found: " + std::to_string(id));
     return user;
+}
+
+// The account's admin role as a mutable copy (role objects in published states are immutable).
+AdminRolePtr adminRoleOf(const identities::UserState& s) {
+    return s.roles.admin ? std::make_shared<rbac::role::Admin>(*s.roles.admin) : nullptr;
 }
 
 AdminRolePtr requireRole(const std::string& ref) {
@@ -84,14 +91,14 @@ void requireAssignable(const Actor& actor, const AdminRolePtr& role) {
 }
 
 // Managing an existing account: its class decides the permission, and an account above the actor is off limits.
-void requireManage(const Actor& actor, const std::shared_ptr<identities::User>& target, const IdPerm perm,
+void requireManage(const Actor& actor, const identities::UserState& target, const IdPerm perm,
                    const std::string& verb) {
-    if (target->isProtected) throw Denied("protected accounts cannot be " + verb + " here: " + target->name);
-    if (target->isSuperAdmin()) throw Denied("the super admin account cannot be " + verb + ": " + target->name);
-    if (!can(actor, perm, target->roles.admin))
-        throw Denied(std::string("you do not have permission to manage ") + kindOf(target->roles.admin));
-    requireWithinActor(actor, target->roles.admin,
-                       "you cannot manage an account whose role grants admin permissions you do not hold");
+    if (target.isProtected) throw Denied("protected accounts cannot be " + verb + " here: " + target.name);
+    if (target.hasSuperAdminRole()) throw Denied("the super admin account cannot be " + verb + ": " + target.name);
+    const auto role = adminRoleOf(target);
+    if (!can(actor, perm, role))
+        throw Denied(std::string("you do not have permission to manage ") + kindOf(role));
+    requireWithinActor(actor, role, "you cannot manage an account whose role grants admin permissions you do not hold");
 }
 
 void requireValidName(const std::string& name) {
@@ -107,8 +114,8 @@ void requireValidEmail(const std::optional<std::string>& email) {
 void requireBindableUid(const uint32_t uid, const std::optional<uint32_t> currentOwner) {
     if (uid == 0) throw Invalid("linux uid must be a positive integer");
     if (uid == ::getuid()) throw Invalid("the Vaulthalla service account cannot be bound to a user");
-    if (const auto holder = db::query::identities::User::getUserByLinuxUID(uid); holder && holder->id != currentOwner)
-        throw Conflict("linux uid " + std::to_string(uid) + " is already bound to " + holder->name);
+    if (const auto holder = vh::identities::manager().userByLinuxUid(uid); holder && holder->id != currentOwner)
+        throw Conflict("linux uid " + std::to_string(uid) + " is already bound to " + holder->name());
 }
 
 // The account's global vault policy (user_global_vault_policy) is seeded from its role when the role is assigned,
@@ -117,6 +124,49 @@ void requireBindableUid(const uint32_t uid, const std::optional<uint32_t> curren
 void applyRolePreset(rbac::role::Admin& role, const uint32_t userId) {
     const auto preset = rbac::role::Admin::builtin(role.name, userId);
     role.vGlobals = (preset ? *preset : rbac::role::Admin::None(userId)).vGlobals;
+}
+
+// The users list (filter on name, sort, page) over the identities::Manager index; the same semantics the SQL list had
+// (ILIKE '%filter%', ORDER BY <column> <direction> with id ascending by default, LIMIT/OFFSET with 100 per page).
+std::vector<UserPtr> listUsersPage(db::model::ListQueryParams params) {
+    auto all = vh::identities::manager().users();
+    std::vector<std::pair<UserPtr, std::shared_ptr<const identities::UserState>>> rows;
+    rows.reserve(all.size());
+    const auto lower = [](std::string v) {
+        std::ranges::transform(v, v.begin(), [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return v;
+    };
+    const auto needle = params.filter ? lower(*params.filter) : std::string{};
+    for (auto& u : all) {
+        auto s = u->state();
+        if (params.filter && lower(s->name).find(needle) == std::string::npos) continue;
+        rows.emplace_back(std::move(u), std::move(s));
+    }
+
+    const std::string column = params.sort.value_or("id");
+    const bool desc = params.sort && params.direction == db::model::SortDirection::DESC;
+    const auto key = [&](const auto& row) -> std::tuple<int64_t, std::string> {
+        const auto& [u, s] = row;
+        if (column == "id") return {u->id, {}};
+        if (column == "name") return {0, s->name};
+        if (column == "email") return {0, s->email.value_or("")};
+        if (column == "created_at") return {s->meta.created_at, {}};
+        if (column == "updated_at") return {s->meta.updated_at, {}};
+        if (column == "last_login") return {s->meta.last_login.value_or(0), {}};
+        if (column == "is_active") return {s->meta.is_active ? 1 : 0, {}};
+        if (column == "linux_uid") return {s->meta.linux_uid ? static_cast<int64_t>(*s->meta.linux_uid) : -1, {}};
+        throw Invalid("Invalid sort column: " + column);
+    };
+    std::ranges::stable_sort(rows, [&](const auto& a, const auto& b) {
+        const auto ka = key(a), kb = key(b);
+        return desc ? kb < ka : ka < kb;
+    });
+
+    const uint64_t page = std::max<uint64_t>(params.page.value_or(1), 1);
+    const uint64_t limit = params.limit.value_or(100);
+    std::vector<UserPtr> out;
+    for (uint64_t i = (page - 1) * limit; i < rows.size() && out.size() < limit; ++i) out.push_back(rows[i].first);
+    return out;
 }
 
 std::string generatePassword() {
@@ -143,65 +193,69 @@ Created create(const Actor& actor, const Create& req) {
 
     requireValidName(req.name);
     requireValidEmail(req.email);
-    if (db::query::identities::User::getUserByName(req.name)) throw Conflict("a user named '" + req.name + "' already exists");
+    if (vh::identities::manager().userByName(req.name)) throw Conflict("a user named '" + req.name + "' already exists");
     if (req.linux_uid) requireBindableUid(*req.linux_uid, std::nullopt);
 
-    auto user = std::make_shared<identities::User>(req.name, req.email.value_or(""), req.is_active);
-    if (!req.email || req.email->empty()) user->email = std::nullopt;
+    identities::UserState draft;
+    draft.name = req.name;
+    draft.email = req.email && !req.email->empty() ? req.email : std::nullopt;
+    draft.meta.is_active = req.is_active;
     applyRolePreset(*role, 0);
-    user->roles.admin = role;
-    user->meta.linux_uid = req.linux_uid;
-    user->meta.created_by = actor->id;
-    user->meta.updated_by = actor->id;
+    draft.roles.admin = role;
+    draft.meta.linux_uid = req.linux_uid;
+    draft.meta.created_by = actor->id;
+    draft.meta.updated_by = actor->id;
 
     Created out;
     if (!req.password) out.generated_password = generatePassword();
     try {
-        runtime::Deps::get().authManager->registerUser(user, req.password ? *req.password : *out.generated_password);
+        out.user = runtime::Deps::get().authManager->registerUser(draft, req.password ? *req.password : *out.generated_password);
     } catch (const std::exception& e) {
         // The registration validator refuses a weak or breached password; that is the request's fault.
         throw Invalid(e.what());
     }
-    out.user = requireUser(user->id);
-    log::Registry::audit()->info("[ops::users] {} created user {} with role {}", actor->name, req.name, role->name);
+    log::Registry::audit()->info("[ops::users] {} created user {} with role {}", actor->name(), req.name, role->name);
     return out;
 }
 
 UserPtr update(const Actor& actor, const Update& req) {
     requireActor(actor);
     const auto target = requireUser(req.id);
+    // Decisions are taken against one state; the edit below is applied to a copy of the newest one.
+    const auto current = target->state();
     const bool isSelf = target->id == actor->id;
     if (isSelf) {
-        if (target->isProtected) throw Denied("protected accounts cannot be updated here: " + target->name);
+        if (current->isProtected) throw Denied("protected accounts cannot be updated here: " + current->name);
     } else {
-        requireManage(actor, target, IdPerm::Edit, "updated");
+        requireManage(actor, *current, IdPerm::Edit, "updated");
     }
 
     bool endSessions = false;
-    if (req.name && *req.name != target->name) {
-        if (target->isSuperAdmin()) throw Denied("the super admin account cannot be renamed");
+    std::optional<std::string> name;
+    std::optional<std::optional<std::string>> email;
+    std::optional<bool> active;
+    AdminRolePtr newRole;
+    std::optional<std::optional<uint32_t>> linuxUid;
+
+    if (req.name && *req.name != current->name) {
+        if (current->hasSuperAdminRole()) throw Denied("the super admin account cannot be renamed");
         requireValidName(*req.name);
-        if (db::query::identities::User::getUserByName(*req.name))
+        if (vh::identities::manager().userByName(*req.name))
             throw Conflict("a user named '" + *req.name + "' already exists");
-        target->name = *req.name;
+        name = *req.name;
     }
     if (req.email) {
         requireValidEmail(*req.email);
-        target->email = *req.email && !(*req.email)->empty() ? *req.email : std::nullopt;
+        email = *req.email && !(*req.email)->empty() ? *req.email : std::nullopt;
     }
-    if (req.is_active && *req.is_active != target->meta.is_active) {
+    if (req.is_active && *req.is_active != current->meta.is_active) {
         if (isSelf) throw Denied("you cannot deactivate or reactivate your own account");
-        target->meta.is_active = *req.is_active;
-        if (!*req.is_active) {
-            target->meta.deactivated_at = std::time(nullptr);
-            endSessions = true;
-        } else {
-            target->meta.deactivated_at = std::nullopt;
-        }
+        active = *req.is_active;
+        if (!*req.is_active) endSessions = true;
     }
     if (req.role) {
         const auto role = requireRole(*req.role);
-        if (!target->roles.admin || role->id != target->roles.admin->id) {
+        if (!current->roles.admin || role->id != current->roles.admin->id) {
             // Role changes are privilege changes: never on your own account, and judged by the resolved role.
             if (isSelf) throw Denied("you cannot change your own role; ask another administrator");
             requireAssignable(actor, role);
@@ -209,34 +263,44 @@ UserPtr update(const Actor& actor, const Update& req) {
                 throw Denied(std::string("you do not have permission to manage ") + kindOf(role));
             role->user_id = target->id;
             applyRolePreset(*role, target->id);
-            target->roles.admin = role;
+            newRole = role;
             endSessions = true;   // live sessions carry the old role
         }
     }
-    if (req.linux_uid && req.linux_uid != target->meta.linux_uid) {
+    if (req.linux_uid && req.linux_uid != current->meta.linux_uid) {
         // The CLI authenticates by Linux UID: rebinding your own would let you take over another account's.
         if (isSelf) throw Denied("you cannot change your own Linux UID binding; ask another administrator");
         requireBindableUid(*req.linux_uid, target->id);
-        target->meta.linux_uid = req.linux_uid;
+        linuxUid = req.linux_uid;
     }
 
-    target->meta.updated_by = actor->id;
-    runtime::Deps::get().authManager->updateUser(target);
+    (void)vh::identities::manager().updateUser(target->id, [&](identities::UserState& s) {
+        if (name) s.name = *name;
+        if (email) s.email = *email;
+        if (active) {
+            s.meta.is_active = *active;
+            s.meta.deactivated_at = *active ? std::nullopt : std::make_optional(std::time(nullptr));
+        }
+        if (newRole) s.roles.admin = newRole;
+        if (linuxUid) s.meta.linux_uid = *linuxUid;
+        s.meta.updated_by = actor->id;
+    });
     if (endSessions) runtime::Deps::get().authManager->revokeSessions(target->id);
-    return requireUser(target->id);
+    return target;
 }
 
 UserPtr remove(const Actor& actor, const Remove& req) {
     requireActor(actor);
     const auto target = requireUser(req.id);
     if (target->id == actor->id) throw Denied("you cannot delete your own account; ask another administrator");
-    requireManage(actor, target, IdPerm::Delete, "deleted");
+    requireManage(actor, *target->state(), IdPerm::Delete, "deleted");
+    const auto targetName = target->name();
 
     std::shared_ptr<identities::User> heir;
     if (req.transfer_to) {
         heir = requireUser(*req.transfer_to);
         if (heir->id == target->id) throw Invalid("vaults can't be transferred to the account being deleted");
-        if (!heir->meta.is_active) throw Invalid("vaults can't be transferred to a deactivated account: " + heir->name);
+        if (!heir->isActive()) throw Invalid("vaults can't be transferred to a deactivated account: " + heir->name());
     }
 
     const auto owned = db::query::vault::Vault::listUserVaults(target->id);
@@ -251,16 +315,16 @@ UserPtr remove(const Actor& actor, const Remove& req) {
             blocked += (blocked.empty() ? "" : ", ") + vaultName + " (ID " + std::to_string(vaultId) + ", API key " +
                        key->name + ")";
     if (!blocked.empty())
-        throw Invalid(target->name + " owns API keys still used by vaults: " + blocked +
+        throw Invalid(targetName + " owns API keys still used by vaults: " + blocked +
                       ". Move those vaults to another API key, or delete them and let them be purged "
                       "(`vh vault delete <id> --now`) first.");
 
     if (!req.confirmed) {
         std::string text = USER_DELETE_CONFIRMATION;
         if (!owned.empty()) {
-            text += "\n" + target->name + " owns " + std::to_string(owned.size()) + " vault(s):";
+            text += "\n" + targetName + " owns " + std::to_string(owned.size()) + " vault(s):";
             for (const auto& v : owned) text += " " + v->name + ";";
-            if (heir) text += "\nThey will be transferred to " + heir->name + ".";
+            if (heir) text += "\nThey will be transferred to " + heir->name() + ".";
             else {
                 // Deleted like any vault (#162): restorable for the retention window, keys kept for theirs.
                 text += "\nThey will be deleted: restorable with `vh vault restore` for " +
@@ -290,25 +354,27 @@ UserPtr remove(const Actor& actor, const Remove& req) {
     }
 
     runtime::Deps::get().authManager->revokeSessions(target->id);
-    db::query::identities::User::deleteUser(target->id);
-    if (db::query::identities::User::getUserById(target->id))
+    vh::identities::manager().deleteUser(target->id);
+    // Every outstanding reference to the account now holds a non-authorizing tombstone.
+    if (!target->deleted() || vh::identities::manager().user(target->id))
         throw std::runtime_error("failed to delete user " + std::to_string(target->id));
-    log::Registry::audit()->info("[ops::users] {} deleted user {} ({} vault(s) {})", actor->name, target->name, owned.size(),
-                                 heir ? "transferred to " + heir->name : std::string("destroyed"));
+    log::Registry::audit()->info("[ops::users] {} deleted user {} ({} vault(s) {})", actor->name(), targetName, owned.size(),
+                                 heir ? "transferred to " + heir->name() : std::string("destroyed"));
     return target;
 }
 
 UserPtr get(const Actor& actor, const uint32_t id) {
     requireActor(actor);
     auto target = requireUser(id);
-    if (target->id != actor->id && !can(actor, IdPerm::View, target->roles.admin))
-        throw Denied(std::string("you do not have permission to view ") + kindOf(target->roles.admin));
+    const auto role = adminRoleOf(*target->state());
+    if (target->id != actor->id && !can(actor, IdPerm::View, role))
+        throw Denied(std::string("you do not have permission to view ") + kindOf(role));
     return target;
 }
 
 UserPtr getByName(const Actor& actor, const std::string& name) {
     requireActor(actor);
-    const auto target = db::query::identities::User::getUserByName(name);
+    const auto target = vh::identities::manager().userByName(name);
     if (!target) throw NotFound("user not found: " + name);
     return get(actor, target->id);
 }
@@ -319,23 +385,24 @@ std::vector<UserPtr> list(const Actor& actor, db::model::ListQueryParams params)
     const bool admins = rbac::resolver::Admin::has<IdPerm>({.user = actor, .permission = IdPerm::View, .identity = Entity::Admin});
     if (!users && !admins) throw Denied("you do not have permission to list users");
 
-    auto all = db::query::identities::User::listUsers(std::move(params));
+    auto all = listUsersPage(std::move(params));
     if (users && admins) return all;
     std::erase_if(all, [&](const UserPtr& u) {
-        return u->id != actor->id && roleIsAdminIdentity(u->roles.admin) != admins;
+        return u->id != actor->id && roleIsAdminIdentity(adminRoleOf(*u->state())) != admins;
     });
     return all;
 }
 
 UserPtr requireSuperAdminOperator(const Actor& actor) {
     requireActor(actor);
-    const auto admin = db::query::identities::User::getUserByName(auth::bootstrap::kSuperAdminName);
+    const auto admin = vh::identities::manager().userByName(auth::bootstrap::kSuperAdminName);
     if (!admin) throw NotFound(std::string("the '") + auth::bootstrap::kSuperAdminName + "' account does not exist");
-    if (!admin->meta.linux_uid)
+    const auto adminUid = admin->linuxUid();
+    if (!adminUid)
         throw Denied("no Linux user is bound as the Vaulthalla super admin yet; run 'vh setup assign-admin' as that user");
-    if (actor->id != admin->id || actor->meta.linux_uid != admin->meta.linux_uid)
+    if (actor->id != admin->id || actor->linuxUid() != adminUid)
         throw Denied("only the Linux user bound as the Vaulthalla super admin (UID " +
-                     std::to_string(*admin->meta.linux_uid) + ") may set this password; run it as that user, without sudo");
+                     std::to_string(*adminUid) + ") may set this password; run it as that user, without sudo");
     return admin;
 }
 
@@ -365,7 +432,7 @@ UserPtr changePassword(const Actor& actor, const uint32_t id, const std::optiona
             if (!currentPassword || currentPassword->empty()) throw Invalid("your current password is required");
             return auth->changePassword(target->id, *currentPassword, newPassword);
         }
-        requireManage(actor, target, IdPerm::ResetPassword, "reset");
+        requireManage(actor, *target->state(), IdPerm::ResetPassword, "reset");
         auto updated = auth->resetPassword(target->id, newPassword);
         auth->revokeSessions(target->id);
         return updated;

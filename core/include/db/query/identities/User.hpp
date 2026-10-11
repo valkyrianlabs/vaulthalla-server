@@ -1,38 +1,29 @@
 #pragma once
 
-#include "db/model/ListQueryParams.hpp"
 #include "identities/Fwd.hpp"
 
-#include <memory>
 #include <optional>
 #include <string>
-#include <vector>
 
 namespace vh::db::query::identities {
 
+// Row writes behind identities::Manager (the only caller: identity state changes go through the Manager so every
+// canonical object is republished). Reads are identities::Manager / db::query::identities::Loader.
 class User {
-    using U = vh::identities::User;
-    using UserPtr = std::shared_ptr<U>;
-
 public:
-    [[nodiscard]] static UserPtr getUserByName(const std::string& name);
-    [[nodiscard]] static UserPtr getUserById(unsigned int id);
-    [[nodiscard]] static UserPtr getUserByLinuxUID(unsigned int linuxUid);
+    // Inserts the account with its admin role, global vault policy and direct vault roles. Returns the new id.
+    static unsigned int createUser(const vh::identities::UserState& draft, const std::string& passwordHash);
 
-    static unsigned int createUser(const UserPtr& user);
-    static void updateUser(const UserPtr& user);
+    // Name, email, active flag, Linux uid, updated_by, admin role, global vault policy and direct vault roles. Never
+    // the password hash.
+    static void updateUser(unsigned int id, const vh::identities::UserState& next);
 
-    [[nodiscard]] static bool authenticateUser(const std::string& name, const std::string& password);
     static void updateUserPassword(unsigned int userId, const std::string& passwordHash);
-
     static void deleteUser(unsigned int userId);
-    static std::vector<UserPtr> listUsers(model::ListQueryParams&& params = {});
-
     static void updateLastLoggedInUser(unsigned int userId);
     static void bootstrapSetAdminLinuxUID(unsigned int linuxUid, std::optional<unsigned int> updatedBy = std::nullopt);
 
-    [[nodiscard]] static unsigned int getUserIdByLinuxUID(unsigned int linuxUid);
-
+    [[nodiscard]] static bool authenticateUser(const std::string& name, const std::string& password);
     [[nodiscard]] static bool userExists(const std::string& name);
     [[nodiscard]] static bool adminUserExists();
 };

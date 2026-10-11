@@ -47,9 +47,9 @@ std::shared_ptr<protocols::ws::Session> pendingShareSession() {
 }
 
 std::shared_ptr<identities::User> testUser() {
-    auto user = std::make_shared<identities::User>();
-    user->id = 17;
-    user->name = "session-refresh-human";
+    vh::identities::UserState userState;
+    userState.name = "session-refresh-human";
+    auto user = vh::identities::User::detached(17, std::move(userState));
     return user;
 }
 

@@ -15,7 +15,7 @@ void vh::db::Connection::initPreparedRefreshTokens() const {
 
     conn_->prepare(
         "get_user_by_refresh_token_jti",
-        "SELECT u.* "
+        "SELECT u.id "
         "FROM users u "
         "JOIN refresh_tokens rt ON u.id = rt.user_id "
         "WHERE rt.jti = $1"

@@ -2,6 +2,7 @@
 
 #include "rbac/role/Vault.hpp"
 #include "identities/Group.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "vault/model/Vault.hpp"
 #include "protocols/shell/Router.hpp"
@@ -41,7 +42,7 @@ public:
         const auto cmd = ctx_->getCommand(type, "create");
         if (!cmd) throw std::runtime_error("EntityRegistrar: command usage not found for creation");
 
-        const auto admin = db::query::identities::User::getUserByName("admin");
+        const auto admin = vh::identities::manager().userByName("admin");
         int fd = -1;
         const auto io = std::make_unique<protocols::shell::SocketIO>(fd);
 
@@ -94,7 +95,7 @@ public:
     [[nodiscard]] EntityResult update(const EntityType& type, const std::shared_ptr<T>& entity) const {
         const auto command = cmd::Registry::instance().buildCommand(type, CommandType::UPDATE, entity);
         std::cout << command << std::endl;
-        const auto admin = db::query::identities::User::getUserByName("admin");
+        const auto admin = vh::identities::manager().userByName("admin");
         int fd = -1;
         const auto io = std::make_unique<protocols::shell::SocketIO>(fd);
         return {router_->executeLine(command, admin, io.get()), entity};
@@ -105,7 +106,7 @@ public:
         if (!cmd) throw std::runtime_error("EntityRegistrar: command usage not found for listing");
         const auto command = cmd::Registry::instance().buildCommand(type, CommandType::LIST, nullptr);
         std::cout << command << std::endl;
-        const auto admin = db::query::identities::User::getUserByName("admin");
+        const auto admin = vh::identities::manager().userByName("admin");
         int fd = -1;
         const auto io = std::make_unique<protocols::shell::SocketIO>(fd);
         return {router_->executeLine(command, admin, io.get())};
@@ -117,7 +118,7 @@ public:
         if (!cmd) throw std::runtime_error("EntityRegistrar: command usage not found for info");
         const auto command = cmd::Registry::instance().buildCommand(type, CommandType::INFO, entity);
         std::cout << command << std::endl;
-        const auto admin = db::query::identities::User::getUserByName("admin");
+        const auto admin = vh::identities::manager().userByName("admin");
         int fd = -1;
         const auto io = std::make_unique<protocols::shell::SocketIO>(fd);
         return {router_->executeLine(command, admin, io.get())};
@@ -127,7 +128,7 @@ public:
         const auto cmd = ctx_->getCommand(type, "delete");
         if (!cmd) throw std::runtime_error("EntityRegistrar: command usage not found for deletion");
 
-        const auto admin = db::query::identities::User::getUserByName("admin");
+        const auto admin = vh::identities::manager().userByName("admin");
         int fd = -1;
         const auto io = std::make_unique<protocols::shell::SocketIO>(fd);
 
@@ -140,7 +141,7 @@ public:
         if (type != EntityType::USER && type != EntityType::VAULT)
             throw std::runtime_error("EntityRegistrar: manageGroup only supports USER and VAULT entity types");
 
-        const auto admin = db::query::identities::User::getUserByName("admin");
+        const auto admin = vh::identities::manager().userByName("admin");
         int fd = -1;
         const auto io = std::make_unique<protocols::shell::SocketIO>(fd);
 
@@ -160,7 +161,7 @@ public:
         if (cmdType != CommandType::ASSIGN && cmdType != CommandType::UNASSIGN)
             throw std::runtime_error("EntityRegistrar: manageVaultRoleAssignments only supports ASSIGN and UNASSIGN command types");
 
-        const auto admin = db::query::identities::User::getUserByName("admin");
+        const auto admin = vh::identities::manager().userByName("admin");
         int fd = -1;
         const auto io = std::make_unique<protocols::shell::SocketIO>(fd);
 

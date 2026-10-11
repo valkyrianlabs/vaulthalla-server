@@ -7,6 +7,7 @@
 #include "db/query/s3/Gateway.hpp"
 #include "db/query/vault/APIKey.hpp"
 #include "db/query/vault/Vault.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "ops/Config.hpp"
 #include "ops/S3Gateway.hpp"
@@ -343,7 +344,7 @@ CommandResult handleCredsCreate(const CommandCall& call) {
     };
     const auto created = gw::createCredential(call.user, req);
     const auto& credential = created.credential;
-    const auto principal = db::query::identities::User::getUserById(credential.principal_user_id);
+    const auto principal = vh::identities::manager().user(credential.principal_user_id);
 
     if (hasFlag(call, "json")) {
         nlohmann::json j = {
@@ -362,7 +363,7 @@ CommandResult handleCredsCreate(const CommandCall& call) {
 
     std::ostringstream out;
     out << "created S3 gateway credential\n";
-    out << "  user: " << (principal ? principal->name : "-") << " (" << credential.principal_user_id << ")\n";
+    out << "  user: " << (principal ? principal->name() : "-") << " (" << credential.principal_user_id << ")\n";
     out << "  name: " << credential.name << "\n";
     out << "  scope: " << credential.scope_mode << "\n";
     out << "  count local/cache budget usage: " << yesNo(credential.enforce_budget_for_local_requests) << "\n";
@@ -377,7 +378,7 @@ CommandResult handleCredsCreate(const CommandCall& call) {
 CommandResult handleCredsList(const CommandCall& call) {
     const auto principalId = userOption(call).value_or(call.user->id);
     const auto creds = gw::listCredentials(call.user, principalId);
-    const auto principal = db::query::identities::User::getUserById(principalId);
+    const auto principal = vh::identities::manager().user(principalId);
 
     if (hasFlag(call, "json")) {
         nlohmann::json rows = nlohmann::json::array();
@@ -402,7 +403,7 @@ CommandResult handleCredsList(const CommandCall& call) {
     }
 
     std::ostringstream out;
-    out << "s3 gateway credentials for " << (principal ? principal->name : "-") << " (" << principalId << ")\n";
+    out << "s3 gateway credentials for " << (principal ? principal->name() : "-") << " (" << principalId << ")\n";
     if (creds.empty()) out << "none\n";
     for (const auto& credential : creds) {
         out << "- " << credential.name << " " << credential.access_key

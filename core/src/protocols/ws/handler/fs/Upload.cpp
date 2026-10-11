@@ -10,7 +10,8 @@
 #include <system_error>
 
 using namespace vh::storage;
-using namespace vh::identities;
+using vh::identities::User;
+using vh::identities::Group;
 using namespace vh::fs;
 
 namespace vh::protocols::ws::handler::fs {

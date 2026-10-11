@@ -18,12 +18,12 @@ constexpr std::size_t kPassphraseLength = 20;
 constexpr unsigned short kMinPasswordStrength = 50;
 }
 
-void Validator::validateRegistration(const std::shared_ptr<identities::User>& user, const std::string& password) {
+void Validator::validateRegistration(const identities::UserState& user, const std::string& password) {
     std::vector<std::string> errors;
 
-    if (!isValidName(user->name)) errors.emplace_back("Name must be between 3 and 50 characters.");
+    if (!isValidName(user.name)) errors.emplace_back("Name must be between 3 and 50 characters.");
 
-    if (user->email && !isValidEmail(*user->email)) errors.emplace_back("Email must be valid and contain '@' and '.'.");
+    if (user.email && !isValidEmail(*user.email)) errors.emplace_back("Email must be valid and contain '@' and '.'.");
 
     if (const auto violation = passwordPolicyViolation(password)) errors.push_back(*violation);
 

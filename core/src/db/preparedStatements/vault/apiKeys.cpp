@@ -35,7 +35,7 @@ void vh::db::Connection::initPreparedAPIKeys() const {
                    "DELETE FROM api_keys WHERE id = $1");
 
     conn_->prepare("get_api_key_owner",
-                   R"(SELECT u.*
+                   R"(SELECT u.id
 FROM api_keys ak
 JOIN users u ON ak.user_id = u.id
 WHERE ak.id = $1)");

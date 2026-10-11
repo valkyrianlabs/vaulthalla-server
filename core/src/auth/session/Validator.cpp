@@ -6,6 +6,7 @@
 #include "protocols/ws/Session.hpp"
 #include "log/Registry.hpp"
 #include "crypto/util/hash.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "runtime/Deps.hpp"
 #include "db/query/auth/RefreshToken.hpp"
@@ -93,7 +94,7 @@ bool Validator::tryRehydrateFromPriorSession(const std::shared_ptr<Session>& ses
         session->tokens->refreshToken = std::make_shared<auth::model::RefreshToken>(*priorToken);
         session->tokens->refreshToken->rawToken = rawToken;
         if (priorSession->user) {
-            if (priorSession->user->systemOnly)
+            if (priorSession->user->systemOnly())
                 throw std::runtime_error("System-only users cannot rehydrate human sessions");
             session->setAuthenticatedUser(priorSession->user);
         }
@@ -140,7 +141,8 @@ void Validator::rehydrateFromStoredRefreshToken(const std::shared_ptr<Session>& 
 
     verifyStoredRefreshTokenHash(rawToken, storedToken);
 
-    const auto user = db::query::auth::RefreshToken::getUserByJti(claims->jti);
+    const auto userId = db::query::auth::RefreshToken::getUserIdByJti(claims->jti);
+    const auto user = userId ? vh::identities::manager().user(*userId) : nullptr;
     if (!user) {
         runtime::Deps::get().sessionManager->invalidate(session);
         log::Registry::auth()->debug(
@@ -151,12 +153,12 @@ void Validator::rehydrateFromStoredRefreshToken(const std::shared_ptr<Session>& 
         throw std::runtime_error("No user found for refresh token");
     }
 
-    if (user->systemOnly) {
+    if (user->systemOnly()) {
         runtime::Deps::get().sessionManager->invalidate(session);
         throw std::runtime_error("System-only users cannot use human refresh tokens");
     }
 
-    if (!user->meta.is_active) {
+    if (!user->isActive()) {
         runtime::Deps::get().sessionManager->invalidate(session);
         throw std::runtime_error("Deactivated users cannot use refresh tokens");
     }
@@ -209,7 +211,7 @@ bool Validator::softValidateActiveSession(const std::shared_ptr<Session>& sessio
         return false;
     }
 
-    if (session->user->systemOnly) {
+    if (session->user->systemOnly()) {
         log::Registry::ws()->debug("[session::Validator] System-only user cannot hold active human session");
         return false;
     }

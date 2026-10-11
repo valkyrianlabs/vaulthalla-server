@@ -3,6 +3,7 @@
 // tombstone and its expiry, the S3 key-loss gate, the bounded and resumable upstream purge (fake S3 controller), the
 // shared-bucket guard, and the path guard that keeps a purge inside the backing root.
 
+#include "../helpers/identities.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/fs/Entry.hpp"
 #include "db/query/identities/User.hpp"
@@ -13,6 +14,7 @@
 #include "fs/Filesystem.hpp"
 #include "fs/cache/Registry.hpp"
 #include "fs/model/Entry.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "ops/Error.hpp"
 #include "ops/Roles.hpp"
@@ -105,13 +107,8 @@ protected:
     inline static UserPtr superUser, bob;
 
     static UserPtr createUser(const std::string& name, const std::string& roleName) {
-        auto user = std::make_shared<identities::User>();
-        user->name = name;
-        user->email = name + "@vaulthalla.test";
-        user->setPasswordHash("x");
-        user->roles.admin = db::query::rbac::role::Admin::get(roleName);
-        user->id = db::query::identities::User::createUser(user);
-        return db::query::identities::User::getUserById(user->id);
+        auto user = vh::test::identities::createUser(name, db::query::rbac::role::Admin::get(roleName), name + "@vaulthalla.test", "x", std::nullopt);
+        return vh::identities::manager().user(user->id);
     }
 
     static void SetUpTestSuite() {

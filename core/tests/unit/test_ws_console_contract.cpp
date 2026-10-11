@@ -48,10 +48,10 @@ std::shared_ptr<protocols::ws::Session> sessionFor(const std::shared_ptr<identit
 
 // An account whose admin role grants nothing (no DB needed for the gates under test).
 std::shared_ptr<identities::User> powerlessUser() {
-    auto user = std::make_shared<identities::User>();
-    user->id = 4242;
-    user->name = "console_contract_nobody";
-    user->roles.admin = std::make_shared<rbac::role::Admin>();
+    vh::identities::UserState userState;
+    userState.name = "console_contract_nobody";
+    userState.roles.admin = std::make_shared<rbac::role::Admin>();
+    auto user = vh::identities::User::detached(4242, std::move(userState));
     return user;
 }
 
@@ -92,7 +92,11 @@ TEST(WsErrorCodes, AdminGatesRefuseWithDenied) {
 TEST(WsPricingPayloads, BareOrMissingIdIsRefusedAsInvalidNamingTheExplicitField) {
     using protocols::ws::handler::Pricing;
     auto admin = powerlessUser();
-    admin->roles.admin = std::make_shared<rbac::role::Admin>(rbac::role::Admin::SuperAdmin());
+    {
+        auto next = *admin->state();
+        next.roles.admin = std::make_shared<rbac::role::Admin>(rbac::role::Admin::SuperAdmin());
+        admin->replaceDetachedState(std::move(next));
+    }
     ASSERT_TRUE(admin->isSuperAdmin());
     const auto s = sessionFor(admin);
 

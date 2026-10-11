@@ -4,6 +4,7 @@
 #include "fs/model/Entry.hpp"
 #include "identities/Group.hpp"
 #include "identities/User.hpp"
+#include "rbac/permission/admin/VaultGlobals.hpp"
 #include "rbac/fs/glob/Matcher.hpp"
 #include "rbac/permission/Override.hpp"
 #include "rbac/permission/vault/Filesystem.hpp"
@@ -58,6 +59,15 @@ Decision Evaluator::evaluate(const Request &req) {
             .reason = Decision::Reason::MissingUser
         };
 
+    // One coherent version of the user and its groups for the whole decision. A deactivated or deleted account
+    // (a tombstone still referenced somewhere) is denied like an unknown one.
+    const auto view = user->authz();
+    if (!view.authorizing())
+        return {
+            .allowed = false,
+            .reason = Decision::Reason::MissingUser
+        };
+
     TargetContext target;
     if (const auto invalid = resolveTarget(req, target))
         return *invalid;
@@ -65,8 +75,8 @@ Decision Evaluator::evaluate(const Request &req) {
     const auto vaultId = target.engine->vault->id;
 
     // 1) Local/direct vault role: base policy + local overrides
-    if (user->roles.vaults.contains(vaultId)) {
-        if (const auto role = user->roles.vaults.at(vaultId)) {
+    if (const auto it = view.user->roles.vaults.find(vaultId); it != view.user->roles.vaults.end()) {
+        if (const auto &role = it->second) {
             const auto stage = resolveStage(role->fs, target, req.action);
             if (stage.matched && stage.allowed.has_value()) {
                 if (!*stage.allowed && req.action == permission::vault::FilesystemAction::Lookup
@@ -97,11 +107,11 @@ Decision Evaluator::evaluate(const Request &req) {
     }
 
     // 2) Group vault roles
-    for (const auto &group: user->groups) {
-        if (!group) continue;
-        if (!group->roles.vaults.contains(vaultId)) continue;
+    for (const auto &group: view.groups) {
+        const auto it = group->roles.vaults.find(vaultId);
+        if (it == group->roles.vaults.end()) continue;
 
-        const auto role = group->roles.vaults.at(vaultId);
+        const auto &role = it->second;
         if (!role) continue;
 
         const auto stage = resolveStage(role->fs, target, req.action);
@@ -133,16 +143,18 @@ Decision Evaluator::evaluate(const Request &req) {
     }
 
     // 3) Global vault filesystem policy: last resort
-    std::array vGlobals{
-        user->roles.admin->vGlobals.self,
-        user->roles.admin->vGlobals.admin,
-        user->roles.admin->vGlobals.user
-    };
-    for (const auto &global: vGlobals) {
-        const auto stage = resolveStage(global.fs, target, req.action);
+    const auto *globals = view.vaultGlobals();
+    if (!globals)
+        return {
+            .allowed = false,
+            .reason = Decision::Reason::DeniedByBasePermissions,
+            .evaluated_path = target.vaultPath
+        };
+    for (const auto *global: {&globals->self, &globals->admin, &globals->user}) {
+        const auto stage = resolveStage(global->fs, target, req.action);
         if (stage.matched && stage.allowed.has_value()) {
             if (!*stage.allowed && req.action == permission::vault::FilesystemAction::List
-                && allowsDirectoryListTraversalThrough(global.fs.overrides, target.vaultPath))
+                && allowsDirectoryListTraversalThrough(global->fs.overrides, target.vaultPath))
                 return {
                     .allowed = true,
                     .reason = Decision::Reason::LowRiskOpRequiredForOverrideTraversal,
