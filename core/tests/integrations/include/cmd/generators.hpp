@@ -3,24 +3,22 @@
 #include "ArgsGenerator.hpp"
 #include "types/Type.hpp"
 #include "permsUtil.hpp"
+#include "seed/Stream.hpp"
 
+#include <atomic>
 #include <string>
 #include <string_view>
 #include <memory>
-#include <chrono>
 #include <stdexcept>
 #include <cstdlib>
-#include <random>
 #include <cstdint>
 
 namespace vh::test::integration {
 
-static inline thread_local std::mt19937_64 rng{std::random_device{}()};
-
+// Every draw comes from the seeded stream of the test (or stage) running on this thread (seed/Stream.hpp).
 inline uint64_t generateRandomIndex(const uint64_t max) {
     if (max == 0) throw std::runtime_error("CLITestContext: cannot generate index for empty collection");
-    std::uniform_int_distribution<std::size_t> dist(0, max - 1);
-    return dist(rng);
+    return seed::current().uniform_int<uint64_t>(0, max - 1);
 }
 
 inline bool coin(const uintmax_t outOf = 10000, const uintmax_t p = 5000) { return generateRandomIndex(outOf) < p; }
@@ -28,8 +26,7 @@ inline bool coin(const uintmax_t outOf = 10000, const uintmax_t p = 5000) { retu
 inline std::string generateNow(args::Gen g,
                            const std::string_view token = "default",
                            const std::string_view usage = "example") {
-    args::Rng rng{static_cast<uint64_t>(
-        std::chrono::high_resolution_clock::now().time_since_epoch().count())};
+    args::Rng rng{seed::current().engine()()};
     const args::GenContext ctx{std::string(token), std::string(usage)};
     return args::to_string_value(g->generate(rng, ctx));
 }
@@ -124,6 +121,36 @@ inline std::string generateDescription(const std::string& usage) {
     }, ""), "description", usage);
 }
 
-inline unsigned int randomLinuxId() { return 1000 + generateRandomIndex(30000); }
+// Test Linux UIDs/GIDs come from one reserved range (VH_TEST_UID_BASE, default kDefaultLinuxIdBase) and are unique
+// within a run: never a real account's id (1000+), never the invoking admin's, never one handed out twice
+// (users.linux_uid and groups.linux_gid are UNIQUE).
+//
+// The default sits below 2^31: users.linux_uid and groups.linux_gid are signed INTEGER columns
+// (deploy/psql/010_auth.sql), so the daemon can't store a uid >= 2147483648 at all (an insert fails with "value ...
+// is out of range for type integer"). 2100000000 is above SSSD's default id range (up to 2000200000) and below
+// systemd's container range at 0x7FFE0000.
+inline constexpr uint32_t kDefaultLinuxIdBase = 2100000000u;
+inline constexpr uint32_t kLinuxIdSpan = 1000000u;
+inline constexpr uint32_t kLargestStorableLinuxId = 2147483647u;
+
+namespace detail {
+inline std::atomic<uint32_t> g_linuxIdBase{kDefaultLinuxIdBase};
+inline std::atomic<uint32_t> g_linuxIdNext{0};
+}
+
+inline void setLinuxIdBase(const uint32_t base) {
+    if (base < 65536u || base > UINT32_MAX - 2u - kLinuxIdSpan)
+        throw std::invalid_argument("VH_TEST_UID_BASE must leave room for " + std::to_string(kLinuxIdSpan) +
+                                    " ids between 65536 and 4294967293");
+    detail::g_linuxIdBase.store(base);
+}
+
+[[nodiscard]] inline uint32_t linuxIdBase() { return detail::g_linuxIdBase.load(); }
+
+[[nodiscard]] inline uint32_t allocateLinuxId() {
+    const auto n = detail::g_linuxIdNext.fetch_add(1);
+    if (n >= kLinuxIdSpan) throw std::runtime_error("integration harness: reserved Linux id range exhausted");
+    return linuxIdBase() + n;
+}
 
 }

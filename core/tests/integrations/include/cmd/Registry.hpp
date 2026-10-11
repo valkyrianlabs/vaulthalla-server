@@ -40,7 +40,6 @@ public:
         switch (entityType) {
         case EntityType::USER: switch (cmdType) {
             case CommandType::CREATE: return userBuilder->create(std::static_pointer_cast<identities::User>(entity));
-            case CommandType::UPDATE: return userBuilder->update(std::static_pointer_cast<identities::User>(entity));
             case CommandType::DELETE: return userBuilder->remove(std::static_pointer_cast<identities::User>(entity));
             case CommandType::INFO: return userBuilder->info(std::static_pointer_cast<identities::User>(entity));
             case CommandType::LIST: return userBuilder->list();
@@ -48,7 +47,6 @@ public:
             }
         case EntityType::VAULT: switch (cmdType) {
             case CommandType::CREATE: return vaultBuilder->create(std::static_pointer_cast<vault::model::Vault>(entity));
-            case CommandType::UPDATE: return vaultBuilder->update(std::static_pointer_cast<vault::model::Vault>(entity));
             case CommandType::DELETE: return vaultBuilder->remove(std::static_pointer_cast<vault::model::Vault>(entity));
             case CommandType::INFO: return vaultBuilder->info(std::static_pointer_cast<vault::model::Vault>(entity));
             case CommandType::LIST: return vaultBuilder->list();
@@ -56,7 +54,6 @@ public:
             }
         case EntityType::GROUP: switch (cmdType) {
             case CommandType::CREATE: return groupBuilder->create(std::static_pointer_cast<identities::Group>(entity));
-            case CommandType::UPDATE: return groupBuilder->update(std::static_pointer_cast<identities::Group>(entity));
             case CommandType::DELETE: return groupBuilder->remove(std::static_pointer_cast<identities::Group>(entity));
             case CommandType::INFO: return groupBuilder->info(std::static_pointer_cast<identities::Group>(entity));
             case CommandType::LIST: return groupBuilder->list();
@@ -64,7 +61,6 @@ public:
             }
         case EntityType::ADMIN_ROLE: switch (cmdType) {
             case CommandType::CREATE: return userRoleBuilder->create(std::static_pointer_cast<rbac::role::Admin>(entity));
-            case CommandType::UPDATE: return userRoleBuilder->update(std::static_pointer_cast<rbac::role::Admin>(entity));
             case CommandType::DELETE: return userRoleBuilder->remove(std::static_pointer_cast<rbac::role::Admin>(entity));
             case CommandType::INFO: return userRoleBuilder->info(std::static_pointer_cast<rbac::role::Admin>(entity));
             case CommandType::LIST: return userRoleBuilder->list();
@@ -73,8 +69,6 @@ public:
         case EntityType::VAULT_ROLE: switch (cmdType) {
             case CommandType::CREATE: return vaultRoleBuilder->create(
                     std::static_pointer_cast<rbac::role::Vault>(entity));
-            case CommandType::UPDATE: return vaultRoleBuilder->update(
-                    std::static_pointer_cast<rbac::role::Vault>(entity));
             case CommandType::DELETE: return vaultRoleBuilder->remove(
                     std::static_pointer_cast<rbac::role::Vault>(entity));
             case CommandType::INFO: return vaultRoleBuilder->info(std::static_pointer_cast<rbac::role::Vault>(entity));
@@ -82,6 +76,18 @@ public:
             default: throw std::runtime_error("CommandBuilderRegistry: unsupported command type for VAULT_ROLE");
             }
         default: throw std::runtime_error("CommandBuilderRegistry: unsupported entity type");
+        }
+    }
+
+    // Updates return the proposed model change with the command; the caller commits it once the command succeeded.
+    [[nodiscard]] BuiltCommand buildUpdate(const EntityType& entityType, const std::shared_ptr<void>& entity) const {
+        switch (entityType) {
+        case EntityType::USER: return userBuilder->update(std::static_pointer_cast<identities::User>(entity));
+        case EntityType::VAULT: return vaultBuilder->update(std::static_pointer_cast<vault::model::Vault>(entity));
+        case EntityType::GROUP: return groupBuilder->update(std::static_pointer_cast<identities::Group>(entity));
+        case EntityType::ADMIN_ROLE: return userRoleBuilder->update(std::static_pointer_cast<rbac::role::Admin>(entity));
+        case EntityType::VAULT_ROLE: return vaultRoleBuilder->update(std::static_pointer_cast<rbac::role::Vault>(entity));
+        default: throw std::runtime_error("CommandBuilderRegistry: unsupported entity type for update");
         }
     }
 

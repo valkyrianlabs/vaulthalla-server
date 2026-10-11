@@ -2,6 +2,9 @@
 
 #include "protocols/shell/types.hpp"
 
+#include <memory>
+#include <string>
+
 namespace vh::test::integration {
     enum class EntityType {
         USER,
@@ -28,14 +31,17 @@ namespace vh::test::integration {
     };
 
     struct ExecResult {
-        int exit_code = -1; // 0 on success, else (errno & 0xFF)
-        std::string stdout_text; // child stdout
+        int exit_code = -1; // 0 on success, else the errno that decided the outcome
+        std::string stdout_text; // "OK <op> ..." lines, listings, file contents
         std::string stderr_text;
+        std::string command{};   // what ran (for the report)
+        bool wedge = false;      // the per-op deadline expired (fuse/Actor.hpp)
     };
 
     struct EntityResult {
         protocols::shell::CommandResult result{};
         std::shared_ptr<void> entity{};
+        std::string command{};   // the generated `vh ...` line
     };
 
     inline std::string EntityTypeToString(const EntityType &type) {

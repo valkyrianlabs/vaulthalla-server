@@ -1,6 +1,8 @@
 #include "IntegrationsTestRunner.hpp"
 #include "TestCase.hpp"
 #include "Validator.hpp"
+#include "fuse/Actor.hpp"
+#include "seed/H64.hpp"
 
 #include <unistd.h> // isatty
 #include <cstdlib>
@@ -29,19 +31,26 @@ namespace vh::test::integration {
                 errors.push_back(stage.name + ": unexpected exit code for " + t->name);
             }
 
-            // stdout expectations by path
-            if (const auto it = expectations_by_path_.find(t->path); it != expectations_by_path_.end()) {
-                const auto& exp = it->second;
+            if (t->wedge) errors.push_back(stage.name + ": wedge in " + t->name + ": " + t->result.stderr_text);
 
-                for (const auto& needle : exp.must_have) {
-                    if (!t->result.stdout_text.contains(needle)) {
-                        errors.push_back(stage.name + ": missing expected text for " + t->name + ": " + needle);
-                    }
+            // stdout expectations by path, plus the test's own; forbidden text is looked for on stderr too, where
+            // the CLI writes its errors.
+            std::vector<std::string> mustHave = t->must_contain, mustNotHave = t->must_not_contain;
+            if (const auto it = expectations_by_path_.find(t->path); it != expectations_by_path_.end()) {
+                mustHave.insert(mustHave.end(), it->second.must_have.begin(), it->second.must_have.end());
+                mustNotHave.insert(mustNotHave.end(), it->second.must_not_have.begin(), it->second.must_not_have.end());
+            }
+            for (const auto& needle : mustHave) {
+                if (!t->result.stdout_text.contains(needle)) {
+                    errors.push_back(stage.name + ": missing expected text for " + t->name + ": " + needle);
                 }
-                for (const auto& needle : exp.must_not_have) {
-                    if (t->result.stdout_text.contains(needle)) {
-                        errors.push_back(stage.name + ": found forbidden text for " + t->name + ": " + needle);
-                    }
+            }
+            for (const auto& needle : mustNotHave) {
+                if (t->result.stdout_text.contains(needle)) {
+                    errors.push_back(stage.name + ": found forbidden text for " + t->name + ": " + needle);
+                }
+                if (t->result.stderr_text.contains(needle)) {
+                    errors.push_back(stage.name + ": found forbidden text on stderr for " + t->name + ": " + needle);
                 }
             }
 
@@ -252,7 +261,22 @@ namespace vh::test::integration {
         os << bold << "Overall: "
            << (failed ? red : green) << (total - failed) << "/" << total << " passed"
            << reset << "\n";
+        if (const auto wedges = fuse::wedgeCount(); wedges > 0)
+            os << red << "Wedges: " << wedges << " filesystem probe(s) hit their deadline" << reset << "\n";
+        if (const auto stuck = fuse::unreapedActors(); !stuck.empty())
+            os << red << "Unreaped vh_fs_actor processes: " << stuck.size() << reset << "\n";
+        if (total == 0) os << red << "No tests ran: that is a failure, not a pass." << reset << "\n";
+        if (options_.negativeControl != NegativeControl::None)
+            os << yellow << "Negative control (" << options_.negativeControlText()
+               << ") was injected: this run is expected to fail." << reset << "\n";
 
-        return failed; // non-zero on failures
+        const auto seedText = seed::fmtSeed(options_.seed);
+        os << "Seed: " << seedText << (options_.seedFromEnv ? " (VH_TEST_SEED)" : " (random)") << "  config: "
+           << options_.configName << "  stages: " << options_.stagesText() << "\n";
+        os << "Reproduce: VH_TEST_SEED=" << seedText << " VH_TEST_CONFIG=" << options_.configName
+           << " VH_TEST_STAGES=" << options_.stagesText() << " VH_TEST_SEED_THREADS=" << options_.seedThreads
+           << " bash bin/tests/run_proof.sh\n";
+
+        return failed > 0 || total == 0 ? 1 : 0;
     }
 }

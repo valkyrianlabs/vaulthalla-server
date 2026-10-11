@@ -35,6 +35,8 @@ namespace vh::test::integration {
 
             std::shared_ptr<TestCase> route(const std::shared_ptr<TestCase> &test) const;
 
+            void dispatch(const std::shared_ptr<TestCase> &test) const;
+
             std::vector<std::shared_ptr<TestCase> > route(const std::vector<std::shared_ptr<TestCase>> &tests) const;
 
         private:
