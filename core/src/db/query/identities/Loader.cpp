@@ -283,7 +283,10 @@ IdentitySnapshot Loader::load(const IdentitySelection& sel) {
 }
 
 uint64_t Loader::currentRevision() {
-    return Transactions::exec("identities::Loader::currentRevision", [](pqxx::work& txn) { return readRevision(txn); });
+    return Transactions::exec("identities::Loader::currentRevision", [](pqxx::work& txn) -> uint64_t {
+        const auto res = txn.exec("SELECT rev FROM identity_revision WHERE id = 1");
+        return res.empty() ? 0 : res.one_field().as<uint64_t>();
+    });
 }
 
 std::optional<std::vector<IdentityChange>> Loader::changesSince(const uint64_t since, uint64_t& upTo) {

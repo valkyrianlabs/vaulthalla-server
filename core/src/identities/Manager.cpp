@@ -264,11 +264,14 @@ void Manager::apply(IdentitySnapshot&& snap, const bool loadedAll) {
             if (!slot) slot = std::shared_ptr<Group>(new Group(rec.id, std::move(state), false));
             else if (slot->state()->revision <= state->revision) slot->publish(std::move(state));
         }
+        // Gone from the snapshot: tombstoned and unindexed, unless something newer than the snapshot published it
+        // meanwhile (a concurrent refresh that saw it created).
         const auto dropGroup = [&](const uint32_t id) {
             const auto it = next->groups.find(id);
             if (it == next->groups.end()) return;
-            if (const auto last = it->second->state(); last->revision <= rev && !last->deleted)
-                it->second->publish(tombstone(*last, rev));
+            const auto last = it->second->state();
+            if (last->revision > rev) return;
+            if (!last->deleted) it->second->publish(tombstone(*last, rev));
             next->groups.erase(it);
         };
         if (loadedAll) {
@@ -296,8 +299,9 @@ void Manager::apply(IdentitySnapshot&& snap, const bool loadedAll) {
         const auto dropUser = [&](const uint32_t id) {
             const auto it = next->users.find(id);
             if (it == next->users.end()) return;
-            if (const auto last = it->second->state(); last->revision <= rev && !last->deleted)
-                it->second->publish(tombstone(*last, rev));
+            const auto last = it->second->state();
+            if (last->revision > rev) return;
+            if (!last->deleted) it->second->publish(tombstone(*last, rev));
             next->users.erase(it);
         };
         if (loadedAll) {
@@ -376,6 +380,8 @@ void Manager::refreshNoThrow(const Touched& touched) noexcept {
 bool Manager::reconcile() {
     std::scoped_lock serial(reconcileMutex_);
     const auto since = seenRevision_.load();
+    // The common case (nothing changed) is one single-statement read; the change log is only read when it moved.
+    if (since != 0 && Loader::currentRevision() <= since) return false;
     uint64_t upTo = since;
     const auto changes = Loader::changesSince(since, upTo);
 
