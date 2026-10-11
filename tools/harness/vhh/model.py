@@ -1,7 +1,7 @@
 """Core value types shared by every part of the engine. Pure data: no I/O here."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, fields, asdict
 from typing import Any
 
 # Surfaces an operation can be bound to.
@@ -10,7 +10,13 @@ SURFACES = ("cli_sock", "cli_bin", "ws", "http", "share", "fuse", "admin")
 # Normalized outcome of one operation, whatever the surface. Refusal mappings (errno, ws code, HTTP status, CLI exit)
 # collapse into these so cross-surface parity can be judged.
 OUTCOMES = ("ok", "denied", "not_found", "conflict", "invalid", "needs_confirmation", "error", "timeout",
-            "disconnected", "crash")
+            "disconnected", "crash", "blocked")
+# "blocked": refused by the engine's own guardrails (budget, scope, kill switch); never sent to the daemon.
+
+# Outcomes that mean "the daemon refused" for authorization purposes (ENOENT for hidden counts as a refusal).
+REFUSALS = ("denied", "not_found")
+# Outcomes that mean the op did not complete in a healthy way (a liveness problem, not an authorization answer).
+UNHEALTHY = ("timeout", "disconnected", "crash")
 
 
 @dataclass
@@ -40,9 +46,11 @@ class Result:
     bytes_sha256: str | None = None      # content read/written, for integrity checks
     t0_ns: int = 0
     t1_ns: int = 0
+    # Raw bytes read or written, in memory only for the canary and integrity judges. Never serialized.
+    body: bytes | None = field(default=None, repr=False, compare=False)
 
     def to_json(self) -> dict:
-        return asdict(self)
+        return {f.name: getattr(self, f.name) for f in fields(self) if f.name != "body"}
 
 
 @dataclass
