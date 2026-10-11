@@ -21,7 +21,8 @@ bool containsCommand(const std::array<std::string_view, N>& commands, const std:
     return std::ranges::find(commands, command) != commands.end();
 }
 
-// Commands that establish, refresh, inspect or end a session. They must work before (or without a valid) access
+// Commands that establish, refresh, inspect or end a session, plus the daemon's contract identity
+// (meta.contract.get: read-only, no secrets, no session state). They must work before (or without a valid) access
 // token. Everything else under `auth.` (user register/update/delete/get/list, password change) is account
 // management and goes through RequireHumanAuth like any other command; a `starts_with("auth")` rule used to
 // let unauthenticated sockets reach handlers that dereference session->user.
@@ -30,7 +31,8 @@ bool isSessionLifecycleCommand(const std::string_view command) {
         std::string_view{"auth.login"},
         std::string_view{"auth.logout"},
         std::string_view{"auth.refresh"},
-        std::string_view{"auth.isAuthenticated"}
+        std::string_view{"auth.isAuthenticated"},
+        std::string_view{"meta.contract.get"}
     };
     return containsCommand(commands, command);
 }

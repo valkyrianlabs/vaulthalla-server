@@ -11,6 +11,7 @@ class Handler {
 
   private:
     static void registerAuthHandlers(const std::shared_ptr<Router>& r);
+    static void registerMetaHandlers(const std::shared_ptr<Router>& r);
     static void registerFileSystemHandlers(const std::shared_ptr<Router>& r);
     static void registerStorageHandlers(const std::shared_ptr<Router>& r);
     static void registerAPIKeyHandlers(const std::shared_ptr<Router>& r);
