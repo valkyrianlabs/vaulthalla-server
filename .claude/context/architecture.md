@@ -612,9 +612,9 @@ stage "Copy And Delete")
   (local hash/size; remote index hash, ETag, size), written on agreement (`Cloud::noteInSync`) and after every
   successful upload/download/index refresh (`sync::tasks::recordBaseline`) and resolution. `Baseline::classify`:
   LocalOnly → Upload, RemoteOnly → Download (archive tier skipped), InSync → nothing, Both or Unknown (no baseline) →
-  conflict. `keep_*` policies are unchanged (they still treat any difference as theirs to settle). Known pre-existing
-  churn (from reading the code, no test): under `keep_remote`/`keep_newest` a file downloaded from another writer's
-  object differs by hash on the next pass and is downloaded again (not changed here).
+  conflict. Every policy skips a file whose classification is InSync (#190: under `keep_remote`/`keep_newest` a file
+  downloaded from another writer's object used to differ by hash on every pass and be downloaded again). Otherwise
+  `keep_*` still treat any difference (one-sided included) as theirs to settle.
 - **Resolution** (`ConflictResolver::resolve`, trusted; `ops::conflicts::resolve` authorizes per item): the local row
   must still match the local artifact and one HEAD must still match the remote artifact (ETag, else content-hash
   metadata, else size, + 16 for GCM when encrypted), else `ConflictStale` (status `conflict`). keep_local =
@@ -625,10 +625,11 @@ stage "Copy And Delete")
   request budget (never the engine-wide budget a running pass owns), no FS/DB lock across network work, then one
   transaction closes the row and records the baseline. One in-flight decision per conflict per process.
 - **Who:** `vault.sync.action.resolve_conflicts` (sync action bit 2 = mask bit 10) **plus** filesystem Overwrite on the
-  file (Read for previews). `ops::conflicts::canResolveIn` = the vault resolver (owner self scope, admin vault globals)
-  OR a vault role on that vault (the account's or a group's). The vault resolver itself only reads vault globals for
-  sync/roles permissions, so vault-role `sync.action.trigger`/`sign_waiver` are still not honoured anywhere (gap, not
-  changed here). Lists/summary include only vaults the actor can resolve in; deleted vaults are excluded.
+  file (Read for previews). `ops::conflicts::canResolveIn` = `rbac::resolver::Vault::has`. For sync config/action
+  permissions (`VaultResolverMode<E>::vault_roles`) the resolver grants on the admin vault globals (owner self scope,
+  admin, user) OR a vault role on that vault, the account's or a group's (#189); role bits only add. Vault-role
+  `roles` permissions are deliberately still globals-only: group role assignment has no guardrails yet, so a
+  group-held role must not let its members hand out roles. Lists/summary include only vaults the actor can resolve in; deleted vaults are excluded.
 
 **Operator email** (`email/`, `notifications/`, `085_operator_notifications.sql`, `vh email …`)
 - Provider secrets are encrypted in `internal_secrets` and entered by hidden prompt. They never go in `.env` or files, and are never logged or rendered.
