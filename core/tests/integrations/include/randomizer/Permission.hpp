@@ -1,16 +1,16 @@
 #pragma once
 
+#include "seed/Stream.hpp"
+
 #include <cstdint>
 #include <limits>
-#include <random>
 #include <stdexcept>
 
 namespace vh::test::integration::randomizer {
-    inline thread_local std::mt19937_64 rng{std::random_device{}()};
-
+    // Draws from the seeded stream of the running test (seed/Stream.hpp), never from entropy.
     inline std::size_t generateRandomIndex(const std::size_t count) {
         if (count == 0) throw std::runtime_error("generateRandomIndex(): count must be > 0");
-        return std::uniform_int_distribution<std::size_t>(0, count - 1)(rng);
+        return seed::current().uniform_int<std::size_t>(0, count - 1);
     }
 
     inline bool coin(const uintmax_t outOf = 10000, const uintmax_t p = 5000) {

@@ -10,6 +10,8 @@
 	test \
 	run_test \
 	run-test \
+	proof \
+	proof-selftest \
 	clean-test \
 	deb \
 	release \
@@ -53,6 +55,14 @@ run_test:
 	./bin/tests/uninstall.sh
 	@echo "🛡️  Running integration tests install script..."
 	./bin/tests/install.sh --run
+
+## Tier A proof as a private instance: per-run DB, private /tmp paths, reports in build-proof/proof-artifacts/.
+## Leaves the dev install and the test DB alone (needs passwordless sudo).
+proof:
+	./bin/tests/run_proof.sh
+
+proof-selftest:
+	./bin/tests/run_proof_selftest.sh
 
 clean-test:
 	@echo "💣 Running integration tests uninstall script..."

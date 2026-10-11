@@ -71,8 +71,16 @@ namespace vh::test::integration::cmd {
         oss << " --" << type;
 
         // optional
-        if (!v->description.empty() && coin()) oss << " --" << randomAlias(std::vector<std::string>{"desc","d"}) << ' ' << quoted(v->description);
-        if (v->quota > 0 && coin())           oss << " --" << randomAlias(std::vector<std::string>{"quota","q"}) << ' ' << v->quotaStr();
+        // An option left out takes the server default (no description, unlimited quota), and so does the model: the
+        // Validate stage compares the two.
+        if (!v->description.empty()) {
+            if (coin()) oss << " --" << randomAlias(std::vector<std::string>{"desc","d"}) << ' ' << quoted(v->description);
+            else v->description.clear();
+        }
+        if (v->quota > 0) {
+            if (coin()) oss << " --" << randomAlias(std::vector<std::string>{"quota","q"}) << ' ' << v->quotaStr();
+            else v->quota = 0;
+        }
 
         // if (type == "local") {
         //     const auto it = std::ranges::find_if(cmd->groups, [](const auto& g){ return g.title == "Local Vault Options"; });
@@ -112,9 +120,10 @@ namespace vh::test::integration::cmd {
         return oss.str();
     }
 
-    std::string VaultCommandBuilder::update(const std::shared_ptr<Vault>& v) {
+    BuiltCommand VaultCommandBuilder::update(const std::shared_ptr<Vault>& v) {
         const auto cmd = root_->findSubcommand("update");
         if (!cmd) throw std::runtime_error("vault.update usage not found");
+        const auto proposed = std::make_shared<Vault>(*v);
 
         std::ostringstream oss;
         oss << "vh " << randomAlias(root_->aliases) << ' ' << randomAlias(cmd->aliases) << ' ';
@@ -122,7 +131,7 @@ namespace vh::test::integration::cmd {
 
         for (const auto& opt : cmd->optional) {
             if (opt.label.contains("owner")) continue; // already handled above
-            if (coin()) oss << ' ' << randomFlagAlias(opt.option_tokens) << ' ' << quoted(updateAndResolveVar(v, opt.label));
+            if (coin()) oss << ' ' << randomFlagAlias(opt.option_tokens) << ' ' << quoted(updateAndResolveVar(proposed, opt.label));
         }
 
         // s3-ish knobs (harmless on local if server ignores)
@@ -133,7 +142,7 @@ namespace vh::test::integration::cmd {
 
         // if (coin(10000, 1200)) oss << " --interactive";
 
-        return oss.str();
+        return {oss.str(), [v, proposed] { *v = *proposed; }};
     }
 
     std::string VaultCommandBuilder::remove(const std::shared_ptr<Vault>& v) {

@@ -31,7 +31,7 @@ namespace vh::test::integration::cmd {
         }
 
         if (groupAliases_.isLinuxGID(field)) {
-            const auto gid = randomLinuxId();
+            const auto gid = allocateLinuxId();
             entity::edit(entity, [&](auto& s) { s.linux_gid = std::make_optional(gid); });
             return std::to_string(gid);
         }
@@ -70,9 +70,10 @@ namespace vh::test::integration::cmd {
         return oss.str();
     }
 
-    std::string GroupCommandBuilder::update(const std::shared_ptr<Group>& entity) {
+    BuiltCommand GroupCommandBuilder::update(const std::shared_ptr<Group>& entity) {
         const auto cmd = root_->findSubcommand("update");
         if (!cmd) throw std::runtime_error("GroupCommandBuilder: 'update' command usage not found");
+        const auto proposed = Group::detached(entity->id, *entity->state());
 
         std::ostringstream oss;
         oss << "vh " << randomAlias(root_->aliases) << ' ' << randomAlias(cmd->aliases);
@@ -82,13 +83,13 @@ namespace vh::test::integration::cmd {
         for (const auto& opt : cmd->optional) {
             if (coin() || updated == 0) {
                 oss << ' ' << randomFlagAlias(opt.option_tokens);
-                if (opt.label.contains("description")) oss << ' ' << quoted(updateAndResolveVar(entity, opt.option_tokens[0]));
-                else oss << ' ' << updateAndResolveVar(entity, opt.option_tokens[0]);
+                if (opt.label.contains("description")) oss << ' ' << quoted(updateAndResolveVar(proposed, opt.option_tokens[0]));
+                else oss << ' ' << updateAndResolveVar(proposed, opt.option_tokens[0]);
                 ++updated;
             }
         }
 
-        return oss.str();
+        return {oss.str(), [entity, proposed] { entity->replaceDetachedState(*proposed->state()); }};
     }
 
     std::string GroupCommandBuilder::remove(const std::shared_ptr<Group>& entity) {

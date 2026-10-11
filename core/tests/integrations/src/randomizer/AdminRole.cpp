@@ -6,7 +6,7 @@
 #include "rbac/role/Admin.hpp"
 #include "db/query/rbac/role/Admin.hpp"
 
-#include <random>
+#include <stdexcept>
 
 using namespace vh;
 using namespace vh::rbac;
@@ -14,8 +14,8 @@ using namespace vh::test::integration::randomizer;
 
 std::shared_ptr<role::Admin> AdminRole::getRandomRole() {
     const auto roles = db::query::rbac::role::Admin::list();
-    std::uniform_int_distribution<> distrib(0, roles.size() - 1);
-    return roles[distrib(rng)];
+    if (roles.empty()) throw std::runtime_error("randomizer: no roles to pick from");
+    return roles[generateRandomIndex(roles.size())];
 }
 
 void AdminRole::assignRandomRole(const std::shared_ptr<identities::User> &user) {

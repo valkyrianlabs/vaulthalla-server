@@ -80,7 +80,9 @@ if [[ "$RUN_TEST" == true ]]; then
   printf '%s\n' "$TEST_ADMIN_UID" | sudo tee "$TEST_RUNTIME_DIR/superadmin_uid" >/dev/null
   sudo chmod 0644 "$TEST_RUNTIME_DIR/superadmin_uid"
 
-  sudo bash -c 'source "$1"; export VH_PATH_TO_CONFIG="$2"; export VH_PATH_TO_SUPERADMIN_UID="$3"; exec "$4"' \
+  # The shared /tmp/vh_* + vh_cli_test env predates private instances; the harness refuses it without this opt-in.
+  # bin/tests/run_proof.sh (make proof) runs the same binary against a per-run DB and private paths instead.
+  sudo bash -c 'source "$1"; export VH_TEST_LEGACY_SHARED_ENV=1; export VH_PATH_TO_CONFIG="$2"; export VH_PATH_TO_SUPERADMIN_UID="$3"; exec "$4"' \
     bash \
     "$REPO_ROOT/deploy/bashrc" \
     "$REPO_ROOT/deploy/config/config.yaml" \

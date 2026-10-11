@@ -38,51 +38,15 @@ public:
         protocols::shell::commands::registerAllCommands(router_);
     }
 
-        [[nodiscard]] EntityResult create(const EntityType& type) const {
+    [[nodiscard]] EntityResult create(const EntityType& type) const {
         const auto cmd = ctx_->getCommand(type, "create");
         if (!cmd) throw std::runtime_error("EntityRegistrar: command usage not found for creation");
+        if (type != EntityType::USER && type != EntityType::VAULT && type != EntityType::GROUP &&
+            type != EntityType::ADMIN_ROLE && type != EntityType::VAULT_ROLE)
+            throw std::runtime_error("EntityRegistrar: unsupported entity type for creation");
 
-        const auto admin = vh::identities::manager().userByName("admin");
-        int fd = -1;
-        const auto io = std::make_unique<protocols::shell::SocketIO>(fd);
-
-        const auto buildCommand = [&](const std::shared_ptr<void>& entity) {
-            const auto command = cmd::Registry::instance().buildCommand(type, CommandType::CREATE, entity);
-            std::cout << command << std::endl;
-            return command;
-        };
-
-        if (type == EntityType::USER) {
-            const auto user = factory_->create(EntityType::USER);
-            const auto command = buildCommand(user);
-            return { router_->executeLine(command, admin, io.get()), user };
-        }
-
-        if (type == EntityType::VAULT) {
-            const auto vault = factory_->create(EntityType::VAULT);
-            const auto command = buildCommand(vault);
-            return { router_->executeLine(command, admin, io.get()), vault };
-        }
-
-        if (type == EntityType::GROUP) {
-            const auto group = factory_->create(EntityType::GROUP);
-            const auto command = buildCommand(group);
-            return { router_->executeLine(command, admin, io.get()), group };
-        }
-
-        if (type == EntityType::ADMIN_ROLE) {
-            const auto role = factory_->create(EntityType::ADMIN_ROLE);
-            const auto command = buildCommand(role);
-            return { router_->executeLine(command, admin, io.get()), role };
-        }
-
-        if (type == EntityType::VAULT_ROLE) {
-            const auto role = factory_->create(EntityType::VAULT_ROLE);
-            const auto command = buildCommand(role);
-            return { router_->executeLine(command, admin, io.get()), role };
-        }
-
-        throw std::runtime_error("EntityRegistrar: unsupported entity type for creation");
+        const auto entity = factory_->create(type);
+        return run(cmd::Registry::instance().buildCommand(type, CommandType::CREATE, entity), entity);
     }
 
     [[nodiscard]] std::vector<EntityResult> create(const EntityType& type, const std::size_t count) const {
@@ -91,64 +55,38 @@ public:
         return results;
     }
 
+    // The model takes an update's new values only after the command succeeded (F7).
     template <typename T>
     [[nodiscard]] EntityResult update(const EntityType& type, const std::shared_ptr<T>& entity) const {
-        const auto command = cmd::Registry::instance().buildCommand(type, CommandType::UPDATE, entity);
-        std::cout << command << std::endl;
-        const auto admin = vh::identities::manager().userByName("admin");
-        int fd = -1;
-        const auto io = std::make_unique<protocols::shell::SocketIO>(fd);
-        return {router_->executeLine(command, admin, io.get()), entity};
+        auto built = cmd::Registry::instance().buildUpdate(type, entity);
+        auto res = run(built.line, entity);
+        if (res.result.exit_code == 0 && built.commit) built.commit();
+        return res;
     }
 
     [[nodiscard]] EntityResult list(const EntityType& type) const {
         const auto cmd = ctx_->getCommand(type, "list");
         if (!cmd) throw std::runtime_error("EntityRegistrar: command usage not found for listing");
-        const auto command = cmd::Registry::instance().buildCommand(type, CommandType::LIST, nullptr);
-        std::cout << command << std::endl;
-        const auto admin = vh::identities::manager().userByName("admin");
-        int fd = -1;
-        const auto io = std::make_unique<protocols::shell::SocketIO>(fd);
-        return {router_->executeLine(command, admin, io.get())};
+        return run(cmd::Registry::instance().buildCommand(type, CommandType::LIST, nullptr), nullptr);
     }
 
     template <typename T>
     [[nodiscard]] EntityResult info(const EntityType& type, const std::shared_ptr<T>& entity) const {
         const auto cmd = ctx_->getCommand(type, "info");
         if (!cmd) throw std::runtime_error("EntityRegistrar: command usage not found for info");
-        const auto command = cmd::Registry::instance().buildCommand(type, CommandType::INFO, entity);
-        std::cout << command << std::endl;
-        const auto admin = vh::identities::manager().userByName("admin");
-        int fd = -1;
-        const auto io = std::make_unique<protocols::shell::SocketIO>(fd);
-        return {router_->executeLine(command, admin, io.get())};
+        return run(cmd::Registry::instance().buildCommand(type, CommandType::INFO, entity), nullptr);
     }
 
     [[nodiscard]] EntityResult remove(const EntityType& type, const std::shared_ptr<void>& entity) const {
         const auto cmd = ctx_->getCommand(type, "delete");
         if (!cmd) throw std::runtime_error("EntityRegistrar: command usage not found for deletion");
-
-        const auto admin = vh::identities::manager().userByName("admin");
-        int fd = -1;
-        const auto io = std::make_unique<protocols::shell::SocketIO>(fd);
-
-        const auto command = cmd::Registry::instance().buildCommand(type, CommandType::DELETE, entity);
-        std::cout << command << std::endl;
-        return { router_->executeLine(command, admin, io.get()), entity };
+        return run(cmd::Registry::instance().buildCommand(type, CommandType::DELETE, entity), entity);
     }
 
     [[nodiscard]] EntityResult manageGroup(const EntityType& type, const ActionType& action, const std::shared_ptr<Group>& group, const std::shared_ptr<User>& user) const {
         if (type != EntityType::USER && type != EntityType::VAULT)
             throw std::runtime_error("EntityRegistrar: manageGroup only supports USER and VAULT entity types");
-
-        const auto admin = vh::identities::manager().userByName("admin");
-        int fd = -1;
-        const auto io = std::make_unique<protocols::shell::SocketIO>(fd);
-
-        const auto command = cmd::Registry::instance().buildCommand(EntityType::GROUP, type, action, group, user);
-
-        std::cout << command << std::endl;
-        return { router_->executeLine(command, admin, io.get()), group };
+        return run(cmd::Registry::instance().buildCommand(EntityType::GROUP, type, action, group, user), group);
     }
 
     [[nodiscard]] EntityResult manageVaultRoleAssignments(const EntityType& type, const CommandType& cmdType,
@@ -161,31 +99,31 @@ public:
         if (cmdType != CommandType::ASSIGN && cmdType != CommandType::UNASSIGN)
             throw std::runtime_error("EntityRegistrar: manageVaultRoleAssignments only supports ASSIGN and UNASSIGN command types");
 
-        const auto admin = vh::identities::manager().userByName("admin");
-        int fd = -1;
-        const auto io = std::make_unique<protocols::shell::SocketIO>(fd);
-
-        const auto command = cmd::Registry::instance().buildCommand(EntityType::VAULT, EntityType::VAULT_ROLE, type, cmdType, vault, role, entity);
-
-        std::cout << command << std::endl;
-        return { router_->executeLine(command, admin, io.get()), role };
+        return run(cmd::Registry::instance().buildCommand(EntityType::VAULT, EntityType::VAULT_ROLE, type, cmdType,
+                                                          vault, role, entity), role);
     }
 
 private:
-    static constexpr std::string_view ID_REGEX = R"(ID:\s*(\d+))";
     std::shared_ptr<Factory> factory_;
     std::shared_ptr<protocols::shell::Router> router_;
     std::shared_ptr<cli::Context> ctx_;
 
-    static std::regex toRegex(const std::string_view& pattern) {
-        return std::regex(std::string(pattern), std::regex::icase);
-    }
-
-    static unsigned int extractId(const std::string& output) {
-        std::smatch match;
-        if (std::regex_search(output, match, toRegex(ID_REGEX)) && match.size() > 1)
-            return std::stoi(match.str(1));
-        throw std::runtime_error("EntityRegistrar: failed to parse ID from output");
+    // Runs one generated line as the admin, in-process through shell::Router (no socket framing: F3). An exception
+    // that escapes executeLine becomes what the CLI server replies with (shell/Server.cpp: exit 1, the message on
+    // stderr), marked so the report shows it was not a handled error.
+    [[nodiscard]] EntityResult run(const std::string& command, const std::shared_ptr<void>& entity) const {
+        std::cout << command << std::endl;
+        const auto admin = vh::identities::manager().userByName("admin");
+        int fd = -1;
+        const auto io = std::make_unique<protocols::shell::SocketIO>(fd);
+        try {
+            return {router_->executeLine(command, admin, io.get()), entity, command};
+        } catch (const std::exception& e) {
+            protocols::shell::CommandResult r;
+            r.exit_code = 1;
+            r.stderr_text = std::string("exception escaped shell::Router::executeLine: ") + e.what();
+            return {r, entity, command};
+        }
     }
 };
 

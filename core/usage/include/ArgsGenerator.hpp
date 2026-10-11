@@ -1,7 +1,6 @@
 #pragma once
 
 #include <algorithm>
-#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <limits>
@@ -57,9 +56,9 @@ inline uint64_t stable_seed(std::string_view a, std::string_view b) {
   h ^= 0xff;  // separator
   h *= kPrime;
   mix(b);
-  // Also incorporate time to avoid totally static sequences while keeping token-based stability.
-  const auto now = std::chrono::high_resolution_clock::now().time_since_epoch().count();
-  return h ^ static_cast<uint64_t>(now);
+  // Stable by design: the same (token, usage) always seeds the same sequence. Callers that want variety derive it
+  // from a printed run seed (the integration harness does), never from the clock.
+  return h;
 }
 
 // -------------------------------------------------------------------------------------------------

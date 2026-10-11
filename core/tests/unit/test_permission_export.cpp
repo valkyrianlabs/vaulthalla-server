@@ -1,3 +1,4 @@
+#include "../helpers/identities.hpp"
 #include "rbac/role/Vault.hpp"
 #include "rbac/role/Admin.hpp"
 #include "rbac/role/vault/Global.hpp"

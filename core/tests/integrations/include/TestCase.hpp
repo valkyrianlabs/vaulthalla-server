@@ -3,6 +3,9 @@
 #include "types/Type.hpp"
 #include "types/AssertionResult.hpp"
 
+#include <cstdint>
+#include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -18,6 +21,17 @@ struct TestCase {
     std::shared_ptr<void> entity{nullptr}, target{nullptr}, subject{nullptr}; // optional entity to be used in the tes
     protocols::shell::CommandResult result{}; // filled after execution
     AssertionResult assertion{};
+    std::string command{};       // the generated command line or probe that ran
+    std::string stream{};        // seed stream label: the test's RNG is h64(root, stream, streamIndex)
+    uint64_t streamIndex{0};
+    double duration_ms{0};
+    bool wedge{false};           // a filesystem probe hit its deadline (fuse/Actor.hpp)
+
+    // Records another reason this test failed, keeping the earlier ones.
+    void fail(const std::string& why) {
+        if (assertion.ok || assertion.message.empty()) assertion = AssertionResult::Fail(why);
+        else assertion = AssertionResult::Fail(assertion.message + "\n" + why);
+    }
 
     static TestCase List(const EntityType& type, const int expect_exit = 0) {
         const auto typeStr = EntityTypeToString(type);

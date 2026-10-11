@@ -9,11 +9,20 @@
 #include "UsageManager.hpp"
 #include "protocols/shell/Fwd.hpp"
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <fmt/format.h>
 
 namespace vh::test::integration::cmd {
+
+// An update command plus the model change it proposes. The harness applies `commit` only after the command
+// succeeded, so a failed update can't leave the model out of step with the DB (and fail every later command that
+// names the entity).
+struct BuiltCommand {
+    std::string line;
+    std::function<void()> commit;
+};
 
 template <typename T = void> class Builder {
 public:
@@ -39,7 +48,7 @@ public:
 
     virtual std::string create(const std::shared_ptr<T>& entity) = 0;
 
-    virtual std::string update(const std::shared_ptr<T>& entity) = 0;
+    virtual BuiltCommand update(const std::shared_ptr<T>& entity) = 0;
 
     virtual std::string remove(const std::shared_ptr<T>& entity) = 0;
 
@@ -63,7 +72,7 @@ public:
 
     std::string create(const std::shared_ptr<identities::User>& entity) override;
 
-    std::string update(const std::shared_ptr<identities::User>& entity) override;
+    BuiltCommand update(const std::shared_ptr<identities::User>& entity) override;
 
     std::string remove(const std::shared_ptr<identities::User>& entity) override;
 
@@ -87,7 +96,7 @@ public:
 
     std::string create(const std::shared_ptr<vault::model::Vault>& v) override;
 
-    std::string update(const std::shared_ptr<vault::model::Vault>& v) override;
+    BuiltCommand update(const std::shared_ptr<vault::model::Vault>& v) override;
 
     std::string remove(const std::shared_ptr<vault::model::Vault>& v) override;
 
@@ -138,7 +147,7 @@ public:
 
     std::string create(const std::shared_ptr<identities::Group>& entity) override;
 
-    std::string update(const std::shared_ptr<identities::Group>& entity) override;
+    BuiltCommand update(const std::shared_ptr<identities::Group>& entity) override;
 
     std::string remove(const std::shared_ptr<identities::Group>& entity) override;
 
@@ -166,7 +175,7 @@ public:
 
     std::string create(const std::shared_ptr<rbac::role::Admin>& entity) override;
 
-    std::string update(const std::shared_ptr<rbac::role::Admin>& entity) override;
+    BuiltCommand update(const std::shared_ptr<rbac::role::Admin>& entity) override;
 
     std::string remove(const std::shared_ptr<rbac::role::Admin>& entity) override;
 
@@ -190,7 +199,7 @@ public:
 
     std::string create(const std::shared_ptr<rbac::role::Vault>& entity) override;
 
-    std::string update(const std::shared_ptr<rbac::role::Vault>& entity) override;
+    BuiltCommand update(const std::shared_ptr<rbac::role::Vault>& entity) override;
 
     std::string remove(const std::shared_ptr<rbac::role::Vault>& entity) override;
 

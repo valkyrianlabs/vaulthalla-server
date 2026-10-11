@@ -8,6 +8,10 @@
 #include "vault/model/Vault.hpp"
 #include "rbac/role/Admin.hpp"
 #include "rbac/role/Vault.hpp"
+#include "seed/Stream.hpp"
+
+#include <chrono>
+#include <stdexcept>
 
 using namespace vh::protocols::shell;
 using vh::identities::User;
@@ -26,7 +30,31 @@ namespace vh::test::integration::cmd {
         routes_[path] = handler;
     }
 
+    // Each test runs under its own seeded stream (h64(root, stream, index)), whatever thread runs it, and a harness
+    // exception fails that test instead of the whole run.
     std::shared_ptr<TestCase> Router::route(const std::shared_ptr<TestCase>& test) const {
+        const auto start = std::chrono::steady_clock::now();
+        try {
+            if (test->stream.empty()) throw std::logic_error("test has no seed stream label: " + test->name);
+            const seed::Scope scope(test->stream, test->streamIndex);
+            dispatch(test);
+        } catch (const std::exception& e) {
+            test->result.exit_code = -1;
+            if (!test->result.stderr_text.empty()) test->result.stderr_text += '\n';
+            test->result.stderr_text += std::string("harness exception: ") + e.what();
+            test->fail(std::string("harness exception: ") + e.what());
+        }
+        test->duration_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+        return test;
+    }
+
+    void Router::dispatch(const std::shared_ptr<TestCase>& test) const {
+        const auto apply = [&](EntityResult&& r) {
+            test->result = std::move(r.result);
+            test->entity = std::move(r.entity);
+            test->command = std::move(r.command);
+        };
+
         if (!routes_.contains(test->path)) throw std::runtime_error("cmd::Router: no route registered for path: " + test->path);
 
         if (test->subject && test->subjectType) {
@@ -34,10 +62,8 @@ namespace vh::test::integration::cmd {
                 throw std::runtime_error("cmd::Router: route does not support subject type for path: " + test->path);
 
             const auto func = std::get<tripleArgWithSubjTypeFunc>(routes_.at(test->path));
-            const auto [result, entity] = func(test->entity, test->target, *test->subjectType, test->subject);
-            test->result = result;
-            test->entity = entity;
-            return test;
+            apply(func(test->entity, test->target, *test->subjectType, test->subject));
+            return;
         }
 
         if (test->subject) {
@@ -45,10 +71,8 @@ namespace vh::test::integration::cmd {
                 throw std::runtime_error("cmd::Router: route does not support subject for path: " + test->path);
 
             const auto func = std::get<tripleArgFunc>(routes_.at(test->path));
-            const auto [result, entity] = func(test->entity, test->target, test->subject);
-            test->result = result;
-            test->entity = entity;
-            return test;
+            apply(func(test->entity, test->target, test->subject));
+            return;
         }
 
         if (test->target) {
@@ -56,20 +80,16 @@ namespace vh::test::integration::cmd {
                 throw std::runtime_error("cmd::Router: route does not support target entity for path: " + test->path);
 
             const auto func = std::get<dualArgFunc>(routes_.at(test->path));
-            const auto [result, entity] = func(test->entity, test->target);
-            test->result = result;
-            test->entity = entity;
-            return test;
+            apply(func(test->entity, test->target));
+            return;
         }
 
         if (!std::holds_alternative<singleArgFunc>(routes_.at(test->path)))
             throw std::runtime_error("cmd::Router: route requires target entity for path: " + test->path);
 
         const auto func = std::get<singleArgFunc>(routes_.at(test->path));
-        const auto [result, entity] = func(test->entity);
-        test->result = result;
-        test->entity = entity;
-        return test;
+        apply(func(test->entity));
+        return;
     }
 
     std::vector<std::shared_ptr<TestCase>> Router::route(const std::vector<std::shared_ptr<TestCase>>& tests) const {

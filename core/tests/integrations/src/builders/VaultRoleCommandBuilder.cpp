@@ -63,7 +63,12 @@ namespace vh::test::integration::cmd {
         }
 
         for (const auto& option : cmd->optional) {
-            if (coin()) {
+            // A description left off the command line is no description, in the model too (Validate compares).
+            if (option.label.contains("description") && !coin()) {
+                entity->description.clear();
+                continue;
+            }
+            if (option.label.contains("description") || coin()) {
                 if (option.option_tokens[0] == "from") {
                     if (!ctx_->vaultRoles.empty() && coin())
                         oss << ' ' << randomFlagAlias(option.option_tokens) << ' ' << std::to_string(ctx_->randomVaultRole()->id);
@@ -86,9 +91,11 @@ namespace vh::test::integration::cmd {
         return oss.str();
     }
 
-    std::string VaultRoleCommandBuilder::update(const std::shared_ptr<role::Vault>& entity) {
+    BuiltCommand VaultRoleCommandBuilder::update(const std::shared_ptr<role::Vault>& entity) {
         const auto cmd = root_->findSubcommand("update");
         if (!cmd) throw std::runtime_error("VaultRoleCommandBuilder: 'update' command usage not found");
+
+        const auto proposed = std::make_shared<role::Vault>(*entity);
 
         std::ostringstream oss;
         oss << "vh role " << randomAlias(root_->aliases) << ' ' << randomAlias(cmd->aliases);
@@ -98,12 +105,12 @@ namespace vh::test::integration::cmd {
         for (const auto& opt : cmd->optional) {
             if (coin() || numUpdated == 0) {
                 if (opt.label.contains("description")) {
-                    oss << ' ' << randomFlagAlias(opt.option_tokens) << ' ' << quoted(updateAndResolveVar(entity, opt.option_tokens[0]));
+                    oss << ' ' << randomFlagAlias(opt.option_tokens) << ' ' << quoted(updateAndResolveVar(proposed, opt.option_tokens[0]));
                     continue;
                 }
 
                 oss << ' ' << randomFlagAlias(opt.option_tokens);
-                oss << ' ' << updateAndResolveVar(entity, opt.option_tokens[0]);
+                oss << ' ' << updateAndResolveVar(proposed, opt.option_tokens[0]);
                 ++numUpdated;
             }
         }
@@ -112,13 +119,13 @@ namespace vh::test::integration::cmd {
         for (const auto& flag : cmd->optional_flags) {
             if (flag.label.contains("filter")) continue;
             if (coin() || numUpdated == 0) {
-                if (flag.label.contains("permissions")) oss << ' ' << updateAndResolveVar(entity, flag.label);
+                if (flag.label.contains("permissions")) oss << ' ' << updateAndResolveVar(proposed, flag.label);
                 else oss << ' ' << randomFlagAlias(flag.aliases);
                 ++numUpdated;
             }
         }
 
-        return oss.str();
+        return {oss.str(), [entity, proposed] { *entity = *proposed; }};
     }
 
     std::string VaultRoleCommandBuilder::info(const std::shared_ptr<role::Vault>& entity) {

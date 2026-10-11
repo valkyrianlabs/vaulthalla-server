@@ -34,7 +34,7 @@ namespace vh::test::integration::cmd {
         }
 
         if (userAliases_.isLinuxUID(field)) {
-            const auto linuxUid = randomLinuxId();
+            const auto linuxUid = allocateLinuxId();
             entity::edit(entity, [&](auto& s) { s.meta.linux_uid = std::make_optional(linuxUid); });
             return std::to_string(linuxUid);
         }
@@ -70,12 +70,20 @@ namespace vh::test::integration::cmd {
             if (auto val = resolveVar(opt.option_tokens[0], entity); val) oss << ' ' << *val;
             else throw std::runtime_error("UserCommandBuilder: unsupported user field for create: " + opt.option_tokens[0]);
         }
+
+        // The model's email goes on the command line, or the model would claim an email the DB never got.
+        for (const auto& opt : cmd->optional) {
+            const bool isEmail = std::ranges::find(opt.option_tokens, std::string("email")) != opt.option_tokens.end();
+            if (isEmail && entity->email()) oss << ' ' << randomFlagAlias(opt.option_tokens) << ' ' << *entity->email();
+        }
         return oss.str();
     }
 
-    std::string UserCommandBuilder::update(const std::shared_ptr<User>& entity) {
+    BuiltCommand UserCommandBuilder::update(const std::shared_ptr<User>& entity) {
         const auto cmd = root_->findSubcommand("update");
         if (!cmd) throw std::runtime_error("UserCommandBuilder: 'update' command usage not found");
+        // The command names the user as the model knows it now; the new values go to a proposed copy.
+        const auto proposed = User::detached(entity->id, *entity->state());
         std::ostringstream oss;
         oss << "vh " << randomAlias(root_->aliases) << ' ' << randomAlias(cmd->aliases);
         oss << ' ' << randomizePrimaryPositional(entity);
@@ -83,11 +91,11 @@ namespace vh::test::integration::cmd {
         for (const auto& field : cmd->optional) {
             if (coin() || updated == 0) {
                 oss << ' ' << randomFlagAlias(field.option_tokens);
-                oss << ' ' << updateAndResolveVar(entity, field.option_tokens[0]);
+                oss << ' ' << updateAndResolveVar(proposed, field.option_tokens[0]);
                 ++updated;
             }
         }
-        return oss.str();
+        return {oss.str(), [entity, proposed] { entity->replaceDetachedState(*proposed->state()); }};
     }
 
     std::string UserCommandBuilder::remove(const std::shared_ptr<User>& entity) {
