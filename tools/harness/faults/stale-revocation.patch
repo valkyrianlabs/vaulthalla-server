@@ -1,0 +1,16 @@
+diff --git a/core/src/ops/Roles.cpp b/core/src/ops/Roles.cpp
+index 57d2e853..1f1dc18e 100644
+--- a/core/src/ops/Roles.cpp
++++ b/core/src/ops/Roles.cpp
+@@ -373,9 +373,8 @@ VaultRolePtr unassignVaultRole(const Actor& actor, const VaultSubject& target) {
+     requireVaultRolePermission(actor, target, RolePerm::Revoke,
+                                "you do not have permission to remove vault roles from this subject on this vault");
+     auto assignment = requireAssignment(target);
+-    identities::manager().mutate(touchedBy(target.subject), [&] {
+-        VaultAssignments::unassign(target.vault_id, target.subject.type, target.subject.id);
+-    });
++    // FAULT FIXTURE (tools/harness/faults/stale-revocation.patch): the row goes, the canonical subject is not told.
++    VaultAssignments::unassign(target.vault_id, target.subject.type, target.subject.id);
+     return assignment;
+ }
+ 

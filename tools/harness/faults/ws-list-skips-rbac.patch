@@ -1,0 +1,19 @@
+diff --git a/core/src/protocols/ws/handler/fs/Storage.cpp b/core/src/protocols/ws/handler/fs/Storage.cpp
+index 431b4a61..7893fb12 100644
+--- a/core/src/protocols/ws/handler/fs/Storage.cpp
++++ b/core/src/protocols/ws/handler/fs/Storage.cpp
+@@ -536,13 +536,7 @@ json Storage::listDir(const json& payload, const std::shared_ptr<Session>& sessi
+     const auto engine = runtime::Deps::get().storageManager->getEngine(vaultId);
+     if (!engine) throw std::runtime_error("No storage engine found for vault with ID: " + std::to_string(vaultId));
+ 
+-    enforcePermission(
+-        session,
+-        engine,
+-        path,
+-        permission::vault::FilesystemAction::List,
+-        "Permission denied: User does not have list permission for this path in the vault"
+-    );
++    // FAULT FIXTURE (tools/harness/faults/ws-list-skips-rbac.patch): the console lists without the List check.
+ 
+     const auto fusePath = engine->vaultPathToFusePath(path);
+     if (!Filesystem::exists(fusePath)) throw std::runtime_error("Path does not exist: " + fusePath.string());
