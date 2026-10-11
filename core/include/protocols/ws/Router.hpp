@@ -39,6 +39,9 @@ class Router {
 
     void routeMessage(json&& msg, const SessionPtr& session);
 
+    // Whether a handler is registered for `command` (the ws contract test checks the usage book against it).
+    [[nodiscard]] bool hasHandler(const std::string& command) const { return handlers_.contains(command); }
+
     [[nodiscard]] static bool isPublicShareCommand(std::string_view command);
     [[nodiscard]] static bool isShareFilesystemCommand(std::string_view command);
     [[nodiscard]] static bool isShareDownloadCommand(std::string_view command);

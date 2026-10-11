@@ -11,23 +11,28 @@ static std::shared_ptr<CommandUsage> buildBaseUsage(const std::weak_ptr<CommandU
     return cmd;
 }
 
-static const Positional vaultPos = Positional::WithAliases("vault", "Name or ID of the vault", {"name", "id"});
+static const Positional vaultPos = Positional::WithAliases("vault", "Name or ID of the vault", {"name", "id"},
+                                                          contract::gen::ref("vault", {"id", "name"}));
 
 static const Optional localConflictOpt = Optional::Multi("local_conflict",
                                                          "Conflict resolution strategy for local vaults",
                                                          {"on-sync-conflict", "conflict"},
-                                                         {"overwrite", "keep_both", "ask"}, "overwrite");
+                                                         {"overwrite", "keep_both", "ask"}, "overwrite")
+                                         .withLiteralValues();
 static const Optional syncStrategyOpt = Optional::Multi("sync_strategy",
                                                         "Sync strategy for S3 vaults (new vaults default to "
                                                         "vaults.s3.default_remote_sync_strategy in config.yaml)",
-                                                        {"sync-strategy", "strategy"}, {"cache", "sync", "mirror"});
+                                                        {"sync-strategy", "strategy"}, {"cache", "sync", "mirror"})
+                                        .withLiteralValues();
 static const Optional s3ConflictOpt = Optional::Multi("s3_conflict",
                                                       "Conflict resolution strategy for S3 vaults (new vaults default "
                                                       "to vaults.s3.default_remote_conflict_policy in config.yaml)",
                                                       {"on-sync-conflict", "conflict"},
-                                                      {"keep_local", "keep_remote", "keep_newest", "ask"});
+                                                      {"keep_local", "keep_remote", "keep_newest", "ask"})
+                                      .withLiteralValues();
 
-static const auto intervalOpt = Optional::ManyToOne("interval", "Sync interval in seconds (default 5m)", {"interval", "sync-interval"}, "interval");
+static const auto intervalOpt = Optional::ManyToOne("interval", "Sync interval in seconds (default 5m)", {"interval", "sync-interval"}, "interval")
+                                    .withGen("interval", contract::gen::oneOf({"300", "5m", "30m", "1h"}));
 
 static const auto s3BudgetListOpt = Optional::ManyToOne("s3_budget_list",
                                                         "Maximum LIST requests per S3 sync run; use 'unlimited' to clear.",
@@ -63,26 +68,32 @@ static const auto interactiveFlag = Flag::WithAliases("interactive_mode",
                                                       {"interactive", "i"});
 
 static const auto descriptionOpt = Optional::ManyToOne("description", "Description of the vault", {"description", "desc", "d"},
-                                                       "description");
+                                                       "description")
+                                       .withGen("description", contract::gen::pattern("vault {a}{a}{a}{a}{a}"));
 
 static const auto quotaOpt = Optional::Multi(
     "quota", "Storage quota (e.g. 10G, 500M). Use 'unlimited' to remove quota.", {"quota", "q"},
-    {"size", "unlimited"});
+    {"size", "unlimited"})
+                          .withGen("size", contract::gen::oneOf({"500M", "10G", "1T"}))
+                          .withGen("unlimited", contract::gen::constant("unlimited"));
 
 static const auto vaultType = Flag::WithAliases("type", "Type of vault to create", {"local", "s3"});
 
 static const auto owner = Optional::Multi("owner", "User ID or username of the vault owner (required if using name)",
                                           {"owner", "o"},
-                                          {"id", "name"});
+                                          {"id", "name"})
+                             .withGen("id", contract::gen::ref("user", {"id"}))
+                             .withGen("name", contract::gen::ref("user", {"name"}));
 
 static const auto vaultOrAll = Positional::WithAliases(
     "vault", "Single vault: ID or name of the vault or 'all' for all vaults",
-    {"id", "name", "all"});
+    {"id", "name", "all"}, contract::gen::ref("vault", {"id", "name"}));
 
 static const auto syncNowFlag = Flag::WithAliases("sync_now", "Immediately synchronize the vault after key rotation",
                                                   {"now", "sync-now", "sync"});
 
-static const auto roleId = Positional::Alias("role_id", "ID of the role to override", "id");
+static const auto roleId = Positional::Alias("role_id", "ID of the role to override", "id",
+                                             contract::gen::ref("role.vault", {"id", "name"}));
 
 static const auto bitPosition = Positional::Same("bit_position", "Bit position of the permission override to update");
 static const auto inventoryFileOpt = Option::Single("file", "Path to a local S3 Inventory CSV file.", "file", "path");
@@ -113,15 +124,19 @@ static const auto denyEffectFlag = Flag::Alias("deny", "Make the override a deny
 
 static const auto regexPattern = Optional::Single("regex_pattern",
                                                   "Regex pattern to scope the override to specific paths", "pattern",
-                                                  "regex");
+                                                  "regex")
+                                  .withGen("regex", contract::gen::path("/{a}{a}{a}{a}/**"));
 
 static const auto localFlag = Flag::Alias("local_filter", "Show only local vaults", "local");
 static const auto s3Flag = Flag::Alias("s3_filter", "Show only S3-backed vaults", "s3");
 
 static const auto apiKeyOpt = Optional::OneToMany("s3_api_key", "Name or ID of the API key to access the S3 bucket",
-                                                  "api-key", {"name", "id"});
+                                                  "api-key", {"name", "id"})
+                                 .withGen("name", contract::gen::ref("api_key", {"name"}))
+                                 .withGen("id", contract::gen::ref("api_key", {"id"}));
 
-static const auto s3BucketOpt = Optional::Single("s3_bucket", "Name of the S3 bucket", "bucket", "name");
+static const auto s3BucketOpt = Optional::Single("s3_bucket", "Name of the S3 bucket", "bucket", "name")
+                                   .withGen("name", contract::gen::pattern("vh-test-{a}{a}{a}{9}{9}"));
 static const auto s3StorageTierOpt = Optional::ManyToOne(
     "s3_storage_tier",
     "Provider-local S3 storage tier for new uploads; use 'none' or 'default' to clear.",
@@ -158,7 +173,7 @@ static std::shared_ptr<CommandUsage> create(const std::weak_ptr<CommandUsage>& p
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"create", "new", "add", "mk"};
     cmd->description = "Create a new vault. Supports local and S3-backed vaults.";
-    cmd->positionals = {vaultPos};
+    cmd->positionals = {vaultPos.withGen(contract::gen::freshName("vault_"))};
     cmd->required_flags = {vaultType};
     cmd->optional_flags = {interactiveFlag};
     cmd->optional = {descriptionOpt, quotaOpt, intervalOpt,  owner};

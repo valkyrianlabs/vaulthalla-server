@@ -1,7 +1,8 @@
 #pragma once
 
-#include "ArgsGenerator.hpp"
+#include "FieldGen.hpp"
 
+#include <map>
 #include <string>
 #include <vector>
 #include <optional>
@@ -23,25 +24,32 @@ struct Entry {
 
 struct Positional final : Entry {
     std::vector<std::string> aliases;
-    std::shared_ptr<args::IGenerator> generator = nullptr;
+    // How a test renderer produces a value for this positional (see FieldGen.hpp); exported by vh_usage --json.
+    contract::FieldGenPtr generator = nullptr;
 
     Positional(std::string label_, std::string desc_)
         : Entry(std::move(label_), std::move(desc_)) {}
 
     Positional(std::string label_, std::string desc_, std::vector<std::string> aliases_,
-               std::shared_ptr<args::IGenerator> generator_ = nullptr)
+               contract::FieldGenPtr generator_ = nullptr)
         : Entry(std::move(label_), std::move(desc_)), aliases(std::move(aliases_)), generator(std::move(generator_)) {}
 
     Positional() = default;
 
+    [[nodiscard]] Positional withGen(contract::FieldGenPtr g) const {
+        Positional p = *this;
+        p.generator = std::move(g);
+        return p;
+    }
+
     // 🏗️ Factory Methods
 
-    static Positional Same(const std::string& label, std::string desc, std::shared_ptr<args::IGenerator> generator_ = nullptr) {
+    static Positional Same(const std::string& label, std::string desc, contract::FieldGenPtr generator_ = nullptr) {
         return {label, std::move(desc), {label}, std::move(generator_)};
     }
 
     // With aliases
-    static Positional WithAliases(std::string label, std::string desc, std::vector<std::string> aliases, std::shared_ptr<args::IGenerator> generator_ = nullptr) {
+    static Positional WithAliases(std::string label, std::string desc, std::vector<std::string> aliases, contract::FieldGenPtr generator_ = nullptr) {
         Positional p;
         p.label = std::move(label);
         p.desc = std::move(desc);
@@ -51,7 +59,7 @@ struct Positional final : Entry {
     }
 
     // Shortcut for one alias
-    static Positional Alias(std::string label, std::string desc, std::string alias, std::shared_ptr<args::IGenerator> generator_ = nullptr) {
+    static Positional Alias(std::string label, std::string desc, std::string alias, contract::FieldGenPtr generator_ = nullptr) {
         return Positional(std::move(label), std::move(desc), {std::move(alias)}, std::move(generator_));
     }
 };
@@ -101,6 +109,24 @@ struct Flag : Entry {
 
 struct Option : Entry {
     std::vector<std::string> option_tokens, value_tokens;
+    // One generator per value token (e.g. "name" -> a role name, "id" -> a role id). A value token without one is a
+    // literal choice (sync strategies, "unlimited") or not yet covered. Exported by vh_usage --json.
+    std::map<std::string, contract::FieldGenPtr> generators;
+
+    template<class Self>
+    [[nodiscard]] Self withGen(this const Self& self, std::string valueToken, contract::FieldGenPtr g) {
+        Self copy = self;
+        copy.generators[std::move(valueToken)] = std::move(g);
+        return copy;
+    }
+
+    // Every value token is itself the value (an enum-like option).
+    template<class Self>
+    [[nodiscard]] Self withLiteralValues(this const Self& self) {
+        Self copy = self;
+        for (const auto& token : copy.value_tokens) copy.generators[token] = contract::gen::constant(token);
+        return copy;
+    }
 
     Option(std::string label_, std::string desc_,
            std::vector<std::string> option_tokens_,

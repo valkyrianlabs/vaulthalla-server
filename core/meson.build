@@ -107,7 +107,8 @@ foreach f : run_command('sh', '-c', 'find "$1" -type f -name "*.cpp" | LC_ALL=C 
     sources += files(f)
 endforeach
 
-usage_inc = include_directories('usage/include')
+# The usage module's contract export uses the vendored nlohmann/json (header-only).
+usage_inc = include_directories('usage/include', 'vendor')
 usage_src = join_paths(core_root, 'usage/src')
 main_usage = files(join_paths(core_root, 'main/usage.cpp'))
 
@@ -243,6 +244,14 @@ vh_md = custom_target('vh-md',
                       build_by_default: true
 )
 
+# The server-owned contract (CLI books, ws command book, operation catalog): build/core/usage.json. The integration
+# engine reads it; web/src/util/generated/wsContract.{json,ts} are generated from it (tools/contracts/ws_contract.py).
+usage_json = custom_target('usage-json',
+                           output: 'usage.json',
+                           command: [vh_usage, '--json', '--out', '@OUTPUT@'],
+                           build_by_default: true
+)
+
 if get_option('manpage')
     man1 = custom_target('vh-man',
                          input: vh_md,
@@ -282,6 +291,15 @@ if get_option('build_unit_tests')
     # DB-backed suites make one run take several minutes (#123); 120s always timed out.
     test('vh_unit_tests', vh_unit_tests, env: unit_test_env, workdir: meson.current_build_dir(), timeout: 1800,
          depends: unit_test_helper_targets)
+endif
+
+# Drift: the committed web contract (web/src/util/generated/wsContract.{json,ts}) must be what this build's usage
+# module generates. Fix with: python3 tools/contracts/ws_contract.py --write --vh-usage <build>/core/vh_usage
+python3 = find_program('python3', required: false)
+if python3.found()
+    test('ws_contract_drift', python3,
+         args: [join_paths(repo_root, 'tools/contracts/ws_contract.py'), '--check', '--usage-json', usage_json],
+         depends: usage_json, timeout: 60)
 endif
 
 if get_option('integration_tests')
