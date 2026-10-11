@@ -290,7 +290,7 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   `main` and test suites), rendered by PDFium straight into the packed RGB raster (24bpp + `FPDF_REVERSE_BYTE_ORDER`); output edges ≤ 2048, never upscaled. One decode
   per source generation and page at a time (single flight, shared by on-demand renders and thumbnail tasks); a decode
   emits every missing `caching.thumbnails.sizes` entry (16-2048) at or below the size it renders, resizing down a
-  chain. Two render gates: interactive renders `clamp(cores/4,1,4)`, background thumbnailing `clamp(cores/8,1,2)`, so
+  chain. Two render gates of `clamp(cores/4,1,4)` slots each (interactive renders, background thumbnailing), so
   imports never hold the slots a viewer needs (`render::Busy` → 503 + Retry-After). Thumbnail-sized outputs (≤ 512)
   use the fast IDCT and 4:2:0 chroma; images with alpha are composited over white (generator version 3). Uploads hand their in-memory plaintext to thumbnailing. A derived-cache outage
   degrades to uncached renders. Preview plans (`preview::classify`, file JSON `"preview"`, see `web-client.md`) decide

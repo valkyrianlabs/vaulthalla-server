@@ -34,17 +34,19 @@ constexpr uint64_t kKeepUploadBufferBytes = 64ull * 1024 * 1024;
 constexpr uint64_t kMaxArtifactBytes = 64ull * 1024 * 1024;
 constexpr auto kGateWait = std::chrono::seconds(20);
 
-// Two budgets, so background thumbnailing (imports, sync pulls, grid fills) can never hold the slots a person
-// waiting on a preview needs: interactive renders get clamp(cores/4, 1, 4), background work clamp(cores/8, 1, 2).
+// Two budgets of clamp(cores/4, 1, 4) slots each, so background thumbnailing (imports, sync pulls, grid fills) keeps
+// its old throughput but can never hold the slots a person waiting on a preview needs.
+[[nodiscard]] std::ptrdiff_t gateSlots() {
+    return static_cast<std::ptrdiff_t>(std::clamp(std::thread::hardware_concurrency() / 4, 1u, 4u));
+}
+
 [[nodiscard]] std::counting_semaphore<>& interactiveGate() {
-    static std::counting_semaphore<> gate(
-        static_cast<std::ptrdiff_t>(std::clamp(std::thread::hardware_concurrency() / 4, 1u, 4u)));
+    static std::counting_semaphore<> gate(gateSlots());
     return gate;
 }
 
 [[nodiscard]] std::counting_semaphore<>& backgroundGate() {
-    static std::counting_semaphore<> gate(
-        static_cast<std::ptrdiff_t>(std::clamp(std::thread::hardware_concurrency() / 8, 1u, 2u)));
+    static std::counting_semaphore<> gate(gateSlots());
     return gate;
 }
 
