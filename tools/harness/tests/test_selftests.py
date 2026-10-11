@@ -77,6 +77,27 @@ class FailuresNeverBecomePasses(TempDir, unittest.TestCase):
         self.assertEqual(rig.engine.summary()["harness_errors"], 1)
         self.assertIn("harness", rig.judges_of())
 
+    def test_unexplained_product_error_fails(self):
+        # An EIO-style answer the surface couldn't type is never a pass, whatever the oracle expected.
+        from vhh.model import Result
+
+        class Eio:
+            surface = "fuse"
+
+            async def open(self): pass
+
+            async def close(self): pass
+
+            async def execute(self, op, deadline_s):
+                return Result("error", "Input/output error", code=5)
+
+        rig = Rig(pentest())
+        s = rig.session("u-alice", "fuse")
+        s.driver = Eio()
+        rig.do(s, "fs.list", vault="v-alice", path="/")
+        self.assertFalse(rig.engine.passed)
+        self.assertIn("error", rig.judges_of())
+
     def test_subprocess_that_dies_fails(self):
         engine = run_rig(Rig(pentest(), plants=Plants(crash_after=3)))
         self.assertFalse(engine.passed)

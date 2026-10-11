@@ -76,9 +76,12 @@ class Judges:
         if r.t1_ns and r.t0_ns and (r.t1_ns - r.t0_ns) / 1e9 > ob.deadline_s:
             return [Verdict("liveness", False, ob.op.seq, f"{ob.op.op} overran its {ob.deadline_s}s deadline",
                             ob.deadline_s, (r.t1_ns - r.t0_ns) / 1e9, "product")]
-        if r.outcome == "error" and fault == "harness":
-            return [Verdict("harness", False, ob.op.seq, f"{ob.op.op}: harness error: {r.detail}", None, r.outcome,
-                            "harness")]
+        if r.outcome == "error" and fault != "harness":
+            # An error the surface could not classify (EIO, an untyped failure) is never an acceptable answer: an
+            # allowed op should succeed and a refused one should refuse cleanly. Harness faults are failed by the
+            # engine itself, so they are not double-counted here.
+            return [Verdict("error", False, ob.op.seq, f"{ob.op.op} by {ob.op.principal} on {ob.op.surface}: "
+                            f"unexplained error: {r.detail}", "ok or a typed refusal", r.outcome, fault or "unknown")]
         return []
 
     # ------------------------------------------------------------------ oracle

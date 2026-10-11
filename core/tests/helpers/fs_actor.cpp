@@ -368,6 +368,13 @@ private:
 
     // cp -a, run as this actor's identity. The actor is single-threaded, so spawning from it is safe.
     static void cpTree(const std::string& from, const std::string& to, Reply& r) {
+        // The errno a caller would see doing it by hand, before cp collapses every failure to exit status 1:
+        // an unreadable/missing source, a missing or unwritable destination parent.
+        struct stat st{};
+        if (::lstat(from.c_str(), &st) != 0) return void(r.fail(errno));
+        const auto parent = std::filesystem::path(to).parent_path();
+        if (::stat(parent.c_str(), &st) != 0) return void(r.fail(errno));
+        if (::access(parent.c_str(), W_OK | X_OK) != 0) return void(r.fail(errno));
         std::string a0 = "cp", a1 = "-a";
         std::string src = from, dst = to;
         char* argv[] = {a0.data(), a1.data(), src.data(), dst.data(), nullptr};

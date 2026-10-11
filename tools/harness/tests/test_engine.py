@@ -41,9 +41,16 @@ class Reproducibility(unittest.TestCase):
     def test_counter_based_streams_are_independent(self):
         # op k's args depend only on (seed, session, k): truncating the stream keeps the prefix identical
         w = pentest()
-        full = planner.make_plan(w, Catalog(), 5, 3, 30, ("ws",)).streams["s01"]
-        short = planner.make_plan(w, Catalog(), 5, 3, 10, ("ws",)).streams["s01"]
+        full = [o for o in planner.make_plan(w, Catalog(), 5, 3, 30, ("ws",)).streams["s01"] if o.intent != "setup"]
+        short = [o for o in planner.make_plan(w, Catalog(), 5, 3, 10, ("ws",)).streams["s01"] if o.intent != "setup"]
+        self.assertEqual(len(short), 10)
         self.assertEqual([(o.op, o.args) for o in full[:10]], [(o.op, o.args) for o in short])
+
+    def test_sessions_create_their_namespace_first(self):
+        # Creates inside /<session> must never precede the namespace itself (POSIX ENOENT over FUSE).
+        plan = planner.make_plan(pentest(), Catalog(), 9, 3, 12, ("fuse",))
+        for sid, ops in plan.streams.items():
+            self.assertEqual((ops[0].op, ops[0].args["path"], ops[0].intent), ("fs.mkdir", f"/{sid}", "setup"))
 
 
 class Determinism(unittest.TestCase):

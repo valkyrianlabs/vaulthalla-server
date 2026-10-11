@@ -75,6 +75,16 @@ def _stream(world: World, catalog: Catalog, seed: int, s: SessionSpec, n: int,
     dirs: list[str] = []
     out: list[Op] = []
     vaults = [v.id for v in world.vaults]
+    # Setup: the session's namespace directory (and, for the first session, the contested directory) exists before
+    # anything is created inside it. Over FUSE a missing parent is ENOENT by POSIX; without this the oracle flagged
+    # an owner's create as a denial (found on the first launched FUSE run). Setup ops draw no randomness, so the
+    # seeded choices below don't shift.
+    if catalog.ops.get("fs.mkdir") and s.surface in catalog.get("fs.mkdir").surfaces:
+        out.append(Op(seq=-1, session=s.id, principal=s.principal, surface=s.surface, op="fs.mkdir",
+                      args={"vault": s.home_vault, "path": f"/{s.id}"}, intent="setup"))
+        if contested and contested[0][0] == s.home_vault and s.id.endswith("00"):
+            out.append(Op(seq=-1, session=s.id, principal=s.principal, surface=s.surface, op="fs.mkdir",
+                          args={"vault": s.home_vault, "path": "/contested"}, intent="setup"))
     for k in range(n):
         r = rng(seed, "op", s.id, k)
         spec = r.choices(specs, weights)[0]
