@@ -10,9 +10,9 @@ from vhh import cli, targets
 class TargetValidation(TempDir, unittest.TestCase):
     def _descriptor(self, **over):
         d = {"kind": "vhh-private-local", "run_id": "r1", "pid": os.getpid(),
-             "server": "127.0.0.1", "db_name": "vh_harness_r1", "run_dir": "/tmp/vhh/r1",
-             "mount": "/tmp/vhh/r1/mnt", "backing": "/tmp/vhh/r1/back", "cli_socket": "/tmp/vhh/r1/cli.sock",
-             "ws_port": 40001, "http_port": 40002, "artifacts": "/tmp/vhh/r1/artifacts"}
+             "server": "/usr/bin/python3", "db_name": "vh_harness_r1", "run_dir": "/tmp/vhh_r1",
+             "mount": "/tmp/vhh_r1/mnt", "backing": "/tmp/vhh_r1/backing", "cli_socket": "/tmp/vhh_r1/cli.sock",
+             "ws_port": 40001, "http_port": 40002, "artifacts": "/tmp/vhh_r1/artifacts"}
         d.update(over)
         return d
 
@@ -24,14 +24,16 @@ class TargetValidation(TempDir, unittest.TestCase):
             with self.assertRaises(targets.TargetRefused):
                 targets.resolve(spec)
 
-    def test_valid_private_descriptor_accepted(self):
+    def test_well_formed_descriptor_without_a_test_daemon_is_refused(self):
+        # Every field is shaped right, but the pid is this test process, not a VH_TEST_MODE=1 daemon serving the
+        # run's database: the real validator (vhh.instance.validate_target) refuses it. The accepted path is covered
+        # against a launched instance (test_*_live).
         p = self.tmp / "target.json"
         p.write_text(json.dumps(self._descriptor()))
-        kind, t = targets.resolve(str(p))
-        self.assertEqual(kind, "private")
-        self.assertEqual(t.run_id, "r1")
-        # a directory holding target.json works too
-        self.assertEqual(targets.resolve(str(self.tmp))[0], "private")
+        with self.assertRaises(targets.TargetRefused):
+            targets.resolve(str(p))
+        with self.assertRaises(targets.TargetRefused):
+            targets.resolve(str(self.tmp))
 
     def test_descriptor_failing_a_rule_is_refused(self):
         for bad in ({"kind": "something-else"}, {"run_dir": "/var/lib/vaulthalla"}, {"db_name": "vaulthalla"},

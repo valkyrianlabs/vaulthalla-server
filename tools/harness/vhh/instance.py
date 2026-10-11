@@ -79,7 +79,6 @@ class Target:
     """target.json: what the engine launched. Destructive commands only accept a target that validates."""
     kind: str
     run_id: str
-    nonce: str
     pid: int
     server: str
     db_name: str
@@ -90,9 +89,10 @@ class Target:
     ws_port: int
     http_port: int
     artifacts: str
-    build_dir: str
-    started_at: float
-    admin_uid: int
+    nonce: str = ""
+    build_dir: str = ""
+    started_at: float = 0.0
+    admin_uid: int = 0
     extra: dict = field(default_factory=dict)
 
     def ws_url(self) -> str:
