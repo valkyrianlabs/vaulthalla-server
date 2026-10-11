@@ -40,6 +40,10 @@ public:
     static void upsertDerivedArtifact(const RecordPtr& record);
     [[nodiscard]] static RecordPtr getDerivedArtifact(unsigned int fileId, const std::string& kind, const std::string& variant);
     static void touchDerivedArtifact(unsigned int id);
+    static void touchDerivedArtifacts(const std::vector<unsigned int>& ids);
+    // Every derived row of `fileIds` whose kind is one of `kinds` (one round trip; Store::status).
+    [[nodiscard]] static Records listDerivedArtifactsFor(const std::vector<unsigned int>& fileIds,
+                                                         const std::vector<std::string>& kinds);
     // Deletes the row only if it still describes sourceId (a concurrent regeneration wins).
     static bool deleteDerivedArtifactIfUnchanged(unsigned int id, const std::string& sourceId);
     [[nodiscard]] static Records listDerivedArtifactsByFile(unsigned int fileId);

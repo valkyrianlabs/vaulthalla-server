@@ -283,7 +283,8 @@ IdentitySnapshot Loader::load(const IdentitySelection& sel) {
 }
 
 uint64_t Loader::currentRevision() {
-    return Transactions::exec("identities::Loader::currentRevision", [](pqxx::work& txn) -> uint64_t {
+    // The revision watcher's tick: one round trip.
+    return Transactions::read("identities::Loader::currentRevision", [](pqxx::transaction_base& txn) -> uint64_t {
         const auto res = txn.exec("SELECT rev FROM identity_revision WHERE id = 1");
         return res.empty() ? 0 : res.one_field().as<uint64_t>();
     });

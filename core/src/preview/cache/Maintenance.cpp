@@ -51,6 +51,8 @@ std::size_t sweepAtStartup(const std::vector<std::shared_ptr<storage::Engine>>& 
 }
 
 uint64_t evictPeriodic() {
+    // Hits since the last round, so LRU eviction sees them.
+    Store::flushTouches();
     const auto& caching = config::Registry::get().caching;
     const auto maxBytes = static_cast<uint64_t>(caching.max_size_mb) << 20;
     std::optional<std::chrono::seconds> maxIdle;

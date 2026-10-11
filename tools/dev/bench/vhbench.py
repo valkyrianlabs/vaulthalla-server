@@ -437,8 +437,17 @@ def preview_scenarios(state: Path, results: dict, manifest: dict) -> None:
     grid = manifest["grid"]
     good = [p for p in grid if p not in manifest["corrupt"]]
 
-    # Warm grid: the batch (readiness) and the thumbnails it points at.
+    # Warm the grid first (a candidate with a new generator version starts with no valid thumbnails): poll until every
+    # good image is ready, as a browser would.
     http = Http(cookie)
+    deadline = time.monotonic() + 300
+    while time.monotonic() < deadline:
+        _, _, body = http.batch(grid)
+        if sum(1 for i in json.loads(body)["items"] if i["status"] == "ready") >= len(good):
+            break
+        time.sleep(0.5)
+
+    # Warm grid: the batch (readiness) and the thumbnails it points at.
     status, _, body = http.batch(grid)
     first = json.loads(body) if status == 200 else {}
     results["preview.batch_statuses"] = {s: sum(1 for i in first.get("items", []) if i["status"] == s)

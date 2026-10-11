@@ -23,9 +23,12 @@
 #include <cstring>
 #include <fcntl.h>
 #include <fmt/format.h>
+#include <mutex>
 #include <sys/stat.h>
 #include <system_error>
 #include <unistd.h>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace vh::preview::cache {
 
@@ -74,18 +77,51 @@ struct ParsedHeader {
     std::array<uint8_t, Store::kHeaderSize> raw{};
 };
 
-[[nodiscard]] std::optional<ParsedHeader> readHeader(const std::filesystem::path& path) {
-    const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
-    if (fd < 0) return std::nullopt;
+[[nodiscard]] std::optional<ParsedHeader> parseHeader(const std::span<const uint8_t> bytes) {
+    if (bytes.size() < Store::kHeaderSize) return std::nullopt;
     ParsedHeader h;
-    const auto n = ::pread(fd, h.raw.data(), h.raw.size(), 0);
-    ::close(fd);
-    if (n != static_cast<ssize_t>(h.raw.size())) return std::nullopt;
+    std::memcpy(h.raw.data(), bytes.data(), h.raw.size());
     if (std::memcmp(h.raw.data(), kMagic.data(), kMagic.size()) != 0) return std::nullopt;
     if ((h.raw[8] | (h.raw[9] << 8)) != kHeaderVersion) return std::nullopt;
     for (int i = 0; i < 4; ++i) h.keyVersion |= static_cast<uint32_t>(h.raw[12 + i]) << (8 * i);
     std::memcpy(h.iv.data(), h.raw.data() + 16, h.iv.size());
     return h;
+}
+
+[[nodiscard]] std::optional<ParsedHeader> readHeader(const std::filesystem::path& path) {
+    const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return std::nullopt;
+    std::array<uint8_t, Store::kHeaderSize> raw{};
+    const auto n = ::pread(fd, raw.data(), raw.size(), 0);
+    ::close(fd);
+    if (n != static_cast<ssize_t>(raw.size())) return std::nullopt;
+    return parseHeader(raw);
+}
+
+// Hits since the last flush: artifact id -> nothing (the flush stamps NOW()).
+std::mutex& touchMutex() {
+    static std::mutex m;
+    return m;
+}
+
+std::unordered_set<unsigned int>& pendingTouches() {
+    static std::unordered_set<unsigned int> s;
+    return s;
+}
+
+void noteTouch(const unsigned int id) {
+    std::scoped_lock lock(touchMutex());
+    pendingTouches().insert(id);
+}
+
+// A row that may still be served: current source and generator, and not an expired failure.
+enum class RowState { Usable, Stale, ExpiredFailure };
+
+[[nodiscard]] RowState rowState(const Record& record, const ArtifactKey& key) {
+    if (record.source_id != key.source_id || record.generator_version != key.generator_version) return RowState::Stale;
+    if (record.status == Record::Status::Failed && std::time(nullptr) - record.created_at > failureTtlSeconds.load())
+        return RowState::ExpiredFailure;
+    return RowState::Usable;
 }
 
 [[nodiscard]] std::vector<uint8_t> aadFor(const std::array<uint8_t, Store::kHeaderSize>& header, const ArtifactKey& key) {
@@ -131,19 +167,13 @@ Lookup Store::lookup(const std::shared_ptr<storage::Engine>& engine, const Artif
     const auto record = db::query::fs::Cache::getDerivedArtifact(key.file_id, key.kind, key.variant);
     if (!record) return {};
 
-    if (record->source_id != key.source_id || record->generator_version != key.generator_version) {
-        deleteRecord(engine, record);  // stale: the source changed or the generator was upgraded
+    if (rowState(*record, key) != RowState::Usable) {
+        deleteRecord(engine, record);  // stale (source changed, generator upgraded) or an expired failure
         return {};
     }
 
-    if (record->status == Record::Status::Failed) {
-        const auto age = std::time(nullptr) - record->created_at;
-        if (age > failureTtlSeconds.load()) {
-            deleteRecord(engine, record);
-            return {};
-        }
+    if (record->status == Record::Status::Failed)
         return {.status = LookupStatus::Failed, .artifact = std::nullopt, .failure = record->failure_reason};
-    }
 
     const auto path = cacheRootOf(engine) / record->path;
     const auto header = readHeader(path);
@@ -161,12 +191,110 @@ Lookup Store::lookup(const std::shared_ptr<storage::Engine>& engine, const Artif
         return {};
     }
 
-    try {
-        db::query::fs::Cache::touchDerivedArtifact(record->id);
-    } catch (const std::exception& e) {
-        log::Registry::storage()->debug("[DerivedStore] last_accessed update failed: {}", e.what());
+    noteTouch(record->id);
+    return {.status = LookupStatus::Ready, .artifact = Artifact{key, path, record->size, record->page_count}, .failure = {}};
+}
+
+ReadResult Store::read(const std::shared_ptr<storage::Engine>& engine, const ArtifactKey& key, const uint64_t maxBytes) {
+    const auto record = db::query::fs::Cache::getDerivedArtifact(key.file_id, key.kind, key.variant);
+    if (!record) return {};
+    switch (rowState(*record, key)) {
+        case RowState::Stale:
+        case RowState::ExpiredFailure:
+            deleteRecord(engine, record);
+            return {};
+        case RowState::Usable: break;
     }
-    return {.status = LookupStatus::Ready, .artifact = Artifact{key, path, record->size}, .failure = {}};
+    if (record->status == Record::Status::Failed)
+        return {.status = LookupStatus::Failed, .bytes = {}, .pageCount = std::nullopt, .failure = record->failure_reason};
+    if (record->size > maxBytes) return {};
+    if (!engine || !engine->encryptionManager) return {};
+
+    const auto path = cacheRootOf(engine) / record->path;
+    const auto drop = [&](const std::string& why) -> ReadResult {
+        log::Registry::storage()->warn("[DerivedStore] Dropping unreadable artifact {}: {}", key.canonical(), why);
+        deleteRecord(engine, record);
+        return {};
+    };
+
+    // One open, one fstat, one read of header || body || tag.
+    const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return drop("missing file");
+    struct FdGuard { int fd; ~FdGuard() { ::close(fd); } } guard{fd};
+    struct stat st{};
+    const auto expected = kHeaderSize + record->size + crypto::util::AES_TAG_SIZE;
+    if (::fstat(fd, &st) != 0 || static_cast<uint64_t>(st.st_size) != expected) return drop("size mismatch");
+    std::vector<uint8_t> sealed(static_cast<std::size_t>(expected));
+    std::size_t done = 0;
+    while (done < sealed.size()) {
+        const auto n = ::pread(fd, sealed.data() + done, sealed.size() - done, static_cast<off_t>(done));
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) return drop("short read");
+        done += static_cast<std::size_t>(n);
+    }
+
+    const auto header = parseHeader(sealed);
+    if (!header) return drop("bad header");
+    crypto::SecretKeyPtr secret;
+    try {
+        secret = engine->encryptionManager->keySnapshot(header->keyVersion);
+    } catch (const std::exception&) {
+        deleteRecord(engine, record);  // sealed under a key that rotation has retired
+        return {};
+    }
+
+    ReadResult out;
+    out.bytes.resize(static_cast<std::size_t>(record->size));
+    const auto body = std::span<const uint8_t>(sealed).subspan(kHeaderSize, out.bytes.size());
+    const auto tag = std::span<const uint8_t, crypto::util::AES_TAG_SIZE>(
+        sealed.data() + kHeaderSize + out.bytes.size(), crypto::util::AES_TAG_SIZE);
+    const auto aad = aadFor(header->raw, key);
+    if (!crypto::util::gcmDecrypt(secret->bytes(), header->iv, body, tag, out.bytes, aad)) {
+        sodium_memzero(out.bytes.data(), out.bytes.size());
+        return drop("authentication failed");
+    }
+    noteTouch(record->id);
+    out.status = LookupStatus::Ready;
+    out.pageCount = record->page_count;
+    return out;
+}
+
+std::vector<IndexStatus> Store::status(const std::vector<ArtifactKey>& keys) {
+    std::vector<IndexStatus> out(keys.size());
+    if (keys.empty()) return out;
+    std::vector<unsigned int> fileIds;
+    std::vector<std::string> kinds;
+    for (const auto& k : keys) {
+        fileIds.push_back(k.file_id);
+        if (std::ranges::find(kinds, k.kind) == kinds.end()) kinds.push_back(k.kind);
+    }
+    const auto rows = db::query::fs::Cache::listDerivedArtifactsFor(fileIds, kinds);
+    std::unordered_map<std::string, std::shared_ptr<Record>> byIdentity;
+    for (const auto& r : rows) byIdentity[std::to_string(r->file_id) + "/" + r->kind + "/" + r->variant] = r;
+    for (std::size_t i = 0; i < keys.size(); ++i) {
+        const auto& k = keys[i];
+        const auto it = byIdentity.find(std::to_string(k.file_id) + "/" + k.kind + "/" + k.variant);
+        if (it == byIdentity.end() || rowState(*it->second, k) != RowState::Usable) continue;
+        if (it->second->status == Record::Status::Failed)
+            out[i] = {.status = LookupStatus::Failed, .failure = it->second->failure_reason};
+        else out[i] = {.status = LookupStatus::Ready, .failure = {}};
+    }
+    return out;
+}
+
+void Store::flushTouches() {
+    std::vector<unsigned int> ids;
+    {
+        std::scoped_lock lock(touchMutex());
+        ids.assign(pendingTouches().begin(), pendingTouches().end());
+        pendingTouches().clear();
+    }
+    if (ids.empty()) return;
+    try {
+        db::query::fs::Cache::touchDerivedArtifacts(ids);
+    } catch (const std::exception& e) {
+        log::Registry::storage()->debug("[DerivedStore] last_accessed flush failed: {}", e.what());
+    }
 }
 
 std::unique_ptr<storage::PlaintextReader> Store::open(const std::shared_ptr<storage::Engine>& engine,
@@ -207,6 +335,8 @@ struct Store::Writer::Impl {
     std::array<uint8_t, 12> iv{};
     std::unique_ptr<crypto::util::GcmStreamEncryptor> encryptor;
     std::vector<uint8_t> scratch;
+    Durability durability{Durability::Durable};
+    std::optional<uint32_t> pageCount;
     bool done{false};
 
     ~Impl() { abort(); }
@@ -260,13 +390,17 @@ Artifact Store::Writer::commit() {
     auto& s = *impl_;
     const auto tag = s.encryptor->finish();
     s.writeAll(tag.data(), tag.size());
-    if (::fsync(s.fd) != 0) throw std::system_error(errno, std::generic_category(), "fsync derived artifact");
+    // Disposable artifacts skip both fsyncs: a crash can only lose or tear the file, which every read detects (exact
+    // size, header, GCM tag) and turns into a regeneration; the temp-file rename still keeps readers from ever seeing
+    // a partial file.
+    const bool durable = s.durability == Durability::Durable;
+    if (durable && ::fsync(s.fd) != 0) throw std::system_error(errno, std::generic_category(), "fsync derived artifact");
     ::close(s.fd);
     s.fd = -1;
     std::fill(s.scratch.begin(), s.scratch.end(), uint8_t{0});
 
     std::filesystem::rename(s.tempPath, s.finalPath);
-    fsyncDir(s.finalPath.parent_path());
+    if (durable) fsyncDir(s.finalPath.parent_path());
     s.done = true;
 
     auto record = std::make_shared<Record>();
@@ -282,6 +416,7 @@ Artifact Store::Writer::commit() {
     record->artifact_iv = crypto::util::b64_encode(std::vector<uint8_t>(s.iv.begin(), s.iv.end()));
     record->artifact_key_version = s.keyVersion;
     record->status = Record::Status::Ready;
+    record->page_count = s.pageCount;
     try {
         db::query::fs::Cache::upsertDerivedArtifact(record);
     } catch (...) {
@@ -290,7 +425,7 @@ Artifact Store::Writer::commit() {
     }
 
     if (const auto& stats = runtime::Deps::get().httpCacheStats) stats->record_insert(s.written);
-    return Artifact{s.key, s.finalPath, s.written};
+    return Artifact{s.key, s.finalPath, s.written, s.pageCount};
 }
 
 void Store::Writer::abort() noexcept {
@@ -298,7 +433,8 @@ void Store::Writer::abort() noexcept {
 }
 
 Store::Writer Store::begin(const std::shared_ptr<storage::Engine>& engine, const ArtifactKey& key,
-                           const uint64_t maxBytes) {
+                           const uint64_t maxBytes, const Durability durability,
+                           const std::optional<uint32_t> pageCount) {
     if (!engine || !engine->encryptionManager) throw std::runtime_error("Derived artifacts need the vault key");
     if (key.kind.empty() || key.variant.empty() || key.source_id.empty())
         throw std::invalid_argument("Derived artifact key is incomplete");
@@ -307,6 +443,8 @@ Store::Writer Store::begin(const std::shared_ptr<storage::Engine>& engine, const
     impl->engine = engine;
     impl->key = key;
     impl->maxBytes = maxBytes;
+    impl->durability = durability;
+    impl->pageCount = pageCount;
     impl->finalPath = cacheRootOf(engine) / relativePathFor(key);
     std::filesystem::create_directories(impl->finalPath.parent_path());
     ::chmod(impl->finalPath.parent_path().c_str(), 0700);
@@ -330,8 +468,9 @@ Store::Writer Store::begin(const std::shared_ptr<storage::Engine>& engine, const
 }
 
 Artifact Store::put(const std::shared_ptr<storage::Engine>& engine, const ArtifactKey& key,
-                    const std::span<const uint8_t> plaintext) {
-    auto writer = begin(engine, key, plaintext.size());
+                    const std::span<const uint8_t> plaintext, const Durability durability,
+                    const std::optional<uint32_t> pageCount) {
+    auto writer = begin(engine, key, plaintext.size(), durability, pageCount);
     writer.write(plaintext);
     return writer.commit();
 }
@@ -401,6 +540,9 @@ std::size_t Store::sweep(const std::shared_ptr<storage::Engine>& engine) {
     const auto derivedRoot = engine->paths->cacheRoot / "derived";
     if (!std::filesystem::exists(derivedRoot, ec)) return removed;
     const auto indexed = db::query::fs::Cache::listDerivedFileIdsByVault(engine->vault->id);
+    std::unordered_set<std::string> indexedPaths;
+    for (const auto& record : db::query::fs::Cache::listDerivedArtifactsByVault(engine->vault->id))
+        indexedPaths.insert((engine->paths->cacheRoot / record->path).lexically_normal().string());
     for (const auto& entry : std::filesystem::directory_iterator(derivedRoot, ec)) {
         const auto name = entry.path().filename().string();
         unsigned long id = 0;
@@ -414,9 +556,11 @@ std::size_t Store::sweep(const std::shared_ptr<storage::Engine>& engine) {
             removed += static_cast<std::size_t>(std::filesystem::remove_all(entry.path(), ec));
             continue;
         }
-        // Interrupted writes leave .tmp- files behind.
+        // Interrupted writes leave .tmp- files behind; a crash between rename and index write leaves an artifact no
+        // row points at (it would only be overwritten by the next write of the same key).
         for (const auto& file : std::filesystem::directory_iterator(entry.path(), ec))
-            if (file.path().filename().string().find(".tmp-") != std::string::npos) {
+            if (file.path().filename().string().find(".tmp-") != std::string::npos ||
+                !indexedPaths.contains(file.path().lexically_normal().string())) {
                 removeQuietly(file.path());
                 ++removed;
             }

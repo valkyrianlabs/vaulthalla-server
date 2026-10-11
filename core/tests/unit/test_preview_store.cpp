@@ -19,6 +19,7 @@
 #include "vault/model/Vault.hpp"
 
 #include <gtest/gtest.h>
+#include <pqxx/pqxx>
 #include <paths.h>
 
 #include <chrono>
@@ -209,4 +210,77 @@ TEST_F(PreviewStoreDbTest, PurgeFileRemovesRowsAndFiles) {
     EXPECT_TRUE(db::query::fs::Cache::listDerivedArtifactsByFile(file->id).empty());
 }
 
+// ------------------------------------------------------------------------------------------------ hot path
+
+TEST_F(PreviewStoreDbTest, ReadAuthenticatesInOneGoAndDropsWhatFailsAuthentication) {
+    const auto artifact = Store::put(engine, keyFor("render", "p0-s512"), bytesOf("rendered-page-bytes"),
+                                     Durability::Disposable, 7u);
+    const auto read = Store::read(engine, keyFor("render", "p0-s512"), 1 << 20);
+    ASSERT_EQ(read.status, LookupStatus::Ready);
+    EXPECT_EQ(read.bytes, bytesOf("rendered-page-bytes"));
+    EXPECT_EQ(read.pageCount, std::optional<uint32_t>(7u)) << "the page count rides on the row (migration 109)";
+
+    // Flip one ciphertext byte: the tag fails, the artifact is dropped (row and file), and the caller regenerates.
+    {
+        std::fstream f(artifact.path, std::ios::in | std::ios::out | std::ios::binary);
+        f.seekp(Store::kHeaderSize + 2);
+        f.put('\x5a');
+    }
+    EXPECT_EQ(Store::read(engine, keyFor("render", "p0-s512"), 1 << 20).status, LookupStatus::Missing);
+    EXPECT_FALSE(std::filesystem::exists(artifact.path));
+    EXPECT_EQ(Store::lookup(engine, keyFor("render", "p0-s512")).status, LookupStatus::Missing);
+
+    // Size cap: nothing is read past it.
+    (void)Store::put(engine, keyFor("render", "p0-s1024"), bytesOf("0123456789"));
+    EXPECT_EQ(Store::read(engine, keyFor("render", "p0-s1024"), 4).status, LookupStatus::Missing);
 }
+
+TEST_F(PreviewStoreDbTest, StatusAnswersFromTheIndexWithoutTouchingFiles) {
+    const auto ready = Store::put(engine, keyFor("thumbnail", "128"), bytesOf("t128"), Durability::Disposable);
+    Store::putFailure(engine, keyFor("render-failure", "v1"), "invalid: not an image");
+    auto stale = keyFor("thumbnail", "256");
+    (void)Store::put(engine, stale, bytesOf("t256"));
+    stale.source_id = "another-generation";
+
+    // The file of a Ready row is not opened: removing it doesn't change the answer (serving it later notices).
+    std::filesystem::remove(ready.path);
+    const auto status = Store::status({keyFor("thumbnail", "128"), keyFor("render-failure", "v1"), stale,
+                                       keyFor("thumbnail", "512")});
+    ASSERT_EQ(status.size(), 4u);
+    EXPECT_EQ(status[0].status, LookupStatus::Ready);
+    EXPECT_EQ(status[1].status, LookupStatus::Failed);
+    EXPECT_EQ(status[1].failure, "invalid: not an image");
+    EXPECT_EQ(status[2].status, LookupStatus::Missing) << "a row for another source generation is not ready";
+    EXPECT_EQ(status[3].status, LookupStatus::Missing);
+    EXPECT_EQ(Store::read(engine, keyFor("thumbnail", "128"), 1 << 20).status, LookupStatus::Missing);
+}
+
+TEST_F(PreviewStoreDbTest, HitsAreRecordedInMemoryAndFlushedInOneBatch) {
+    (void)Store::put(engine, keyFor("thumbnail", "128"), bytesOf("x"));
+    db::Transactions::exec("ps::backdate", [&](pqxx::work& txn) {
+        txn.exec("UPDATE cache_index SET last_accessed = NOW() - INTERVAL '3 days' WHERE file_id = $1",
+                 pqxx::params{file->id});
+    });
+    const auto lastAccessed = [&] {
+        return db::Transactions::exec("ps::last", [&](pqxx::work& txn) {
+            return txn.exec("SELECT EXTRACT(EPOCH FROM NOW() - last_accessed) FROM cache_index WHERE file_id = $1 "
+                            "AND kind = 'thumbnail'", pqxx::params{file->id}).one_field().as<double>();
+        });
+    };
+    ASSERT_EQ(Store::read(engine, keyFor("thumbnail", "128"), 1 << 20).status, LookupStatus::Ready);
+    EXPECT_GT(lastAccessed(), 86400.0) << "a hit no longer writes the row";
+    Store::flushTouches();
+    EXPECT_LT(lastAccessed(), 60.0);
+}
+
+TEST_F(PreviewStoreDbTest, SweepRemovesArtifactFilesNoRowPointsAt) {
+    const auto kept = Store::put(engine, keyFor("thumbnail", "128"), bytesOf("kept"));
+    const auto orphan = kept.path.parent_path() / "thumbnail.999.vhd";
+    std::ofstream(orphan) << "left behind by a crash between rename and index write";
+    (void)Store::sweep(engine);
+    EXPECT_TRUE(std::filesystem::exists(kept.path));
+    EXPECT_FALSE(std::filesystem::exists(orphan));
+}
+
+}
+

@@ -12,7 +12,10 @@
 #include "ops/Roles.hpp"
 #include "ops/Users.hpp"
 #include "ops/Vaults.hpp"
+#include "preview/cache/Store.hpp"
 #include "preview/render/Raster.hpp"
+#include "preview/render/Service.hpp"
+#include "stats/model/CacheStats.hpp"
 #include "protocols/http/Access.hpp"
 #include "protocols/http/Router.hpp"
 #include "protocols/ws/Router.hpp"
@@ -277,6 +280,76 @@ TEST_F(HttpAccessDbTest, HumanPreviewEnforcesFilesystemRbacBeforeAnyWork) {
     const auto items = nlohmann::json::parse(bodyOf(Router::route(std::move(batch)))).at("items");
     EXPECT_EQ(items.at(0).at("status"), "unsupported");
     EXPECT_FALSE(items.at(0).contains("url"));
+}
+
+// The grid's readiness check answers from the index: nothing is opened or decrypted, nothing counts as a cache hit,
+// a known-bad source is reported once as final ("failed") instead of being re-queued on every poll, one decode
+// serves every size a request and the grid need, and concurrent requests for one source decode it once.
+TEST_F(HttpAccessDbTest, PreviewBatchAnswersFromTheIndexAndDecodesOncePerSource) {
+    as(admin);
+    const auto pic = write(vaultA, "/shared.jpg", jpegOf(2400, 1800));
+    std::vector<uint8_t> broken = jpegOf(800, 600);
+    broken.resize(broken.size() / 3);
+    for (int i = 0; i < 64; ++i) broken.push_back(static_cast<uint8_t>(i * 37));
+    broken[3] = 0x00;   // a JPEG signature with an unparseable body
+    (void)write(vaultA, "/broken.jpg", broken);
+    preview::cache::Store::purgeFile(vaultA, pic->id);
+
+    const auto batchOf = [&](const std::vector<std::string>& paths) {
+        nlohmann::json items = nlohmann::json::array();
+        for (const auto& p : paths) items.push_back({{"path", p}, {"key", p}});
+        request batch{verb::post, "/preview/batch", 11};
+        batch.body() = nlohmann::json{{"vault_id", vaultA->vault->id}, {"size", 128}, {"items", items}}.dump();
+        batch.prepare_payload();
+        return nlohmann::json::parse(bodyOf(Router::route(std::move(batch)))).at("items");
+    };
+
+    // One open of the image at 1024 decodes once and leaves every thumbnail size behind.
+    const auto decodes = preview::render::decodesForTesting();
+    ASSERT_EQ(statusOf(Router::route(get(inA("/preview", "%2Fshared.jpg", "&size=1024")))), status::ok);
+    EXPECT_EQ(preview::render::decodesForTesting(), decodes + 1);
+
+    const auto& stats = runtime::Deps::get().httpCacheStats;
+    const auto before = stats->snapshot();
+    auto items = batchOf({"/shared.jpg"});
+    EXPECT_EQ(items.at(0).at("status"), "ready") << "the open already produced the grid thumbnail";
+    const auto after = stats->snapshot();
+    EXPECT_EQ(after.hits, before.hits) << "a readiness check is not a served cache hit";
+    EXPECT_EQ(after.misses, before.misses);
+    EXPECT_EQ(preview::render::decodesForTesting(), decodes + 1) << "no second decode for the thumbnail";
+
+    // Index-only: a damaged artifact still reads as ready; serving it authenticates, drops it and renders anew.
+    for (const auto& entry : std::filesystem::directory_iterator(vaultA->paths->cacheRoot / "derived" /
+                                                                 std::to_string(pic->id))) {
+        if (entry.path().filename().string().rfind("thumbnail.128.", 0) != 0) continue;
+        std::fstream f(entry.path(), std::ios::in | std::ios::out | std::ios::binary);
+        f.seekp(70);
+        f.put('\x33');
+    }
+    EXPECT_EQ(batchOf({"/shared.jpg"}).at(0).at("status"), "ready");
+    auto served = Router::route(get(inA("/preview", "%2Fshared.jpg", "&size=128")));
+    ASSERT_EQ(statusOf(served), status::ok);
+    EXPECT_EQ(header(served, "X-Vaulthalla-Cache"), "miss");
+
+    // A source that doesn't decode: refused, remembered, and reported as final by the batch.
+    EXPECT_EQ(statusOf(Router::route(get(inA("/preview", "%2Fbroken.jpg", "&size=128")))), status::unprocessable_entity);
+    const auto afterFailure = preview::render::decodesForTesting();
+    EXPECT_EQ(batchOf({"/broken.jpg"}).at(0).at("status"), "failed");
+    EXPECT_EQ(statusOf(Router::route(get(inA("/preview", "%2Fbroken.jpg", "&size=256")))), status::unprocessable_entity);
+    EXPECT_EQ(preview::render::decodesForTesting(), afterFailure) << "a known-bad source is not decoded again";
+
+    // Concurrent first requests for one source and size: one decode.
+    preview::cache::Store::purgeFile(vaultA, pic->id);
+    const auto concurrent = preview::render::decodesForTesting();
+    std::vector<std::thread> clients;
+    std::atomic<int> ok{0};
+    for (int i = 0; i < 6; ++i)
+        clients.emplace_back([&] {
+            if (statusOf(Router::route(get(inA("/preview", "%2Fshared.jpg", "&size=2048")))) == status::ok) ++ok;
+        });
+    for (auto& t : clients) t.join();
+    EXPECT_EQ(ok.load(), 6);
+    EXPECT_EQ(preview::render::decodesForTesting(), concurrent + 1) << "concurrent renders of one source decoded twice";
 }
 
 TEST_F(HttpAccessDbTest, PreviewNeverServesOriginalBytesAndContentNeedsRead) {

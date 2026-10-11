@@ -20,3 +20,15 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
 - Vault permission checks no longer load the vault owner from the database; API key listing no longer
   dereferences a missing owner.
 - Contract test: identity writes outside identities::Manager are rejected (tools/contracts).
+## Previews
+- /preview/batch: index-only readiness in one query per engine (Store::status), "failed" for known-bad sources, no
+  artifact decrypts and no cache hit/miss accounting for status checks.
+- Derived cache hits: Store::read (one round trip via Transactions::read, one open, one decrypt), in-memory hit
+  tracking flushed in batches; migration 109 adds cache_index.page_count for PDF renders.
+- Render: single flight per source generation and page; a decode emits all missing thumbnail sizes at or below the
+  rendered size; separate interactive and background render gates.
+- Disposable artifacts (thumbnails, page renders) skip fsync; the startup sweep removes artifact files without rows.
+- Generator version 3: fast IDCT and 4:2:0 for thumbnail sizes, alpha composited over white.
+- Web grid requests 256/512 px thumbnails for its tiles; the legacy ws share.preview.get renders through the cached,
+  gated pipeline and never fetches remote-only bytes.
+

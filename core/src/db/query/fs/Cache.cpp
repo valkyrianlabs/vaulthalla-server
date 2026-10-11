@@ -129,15 +129,52 @@ void Cache::upsertDerivedArtifact(const RecordPtr& r) {
         if (r->artifact_iv.empty()) p.append(); else p.append(r->artifact_key_version);
         p.append(std::string(r->status == R::Status::Failed ? "failed" : "ready"));
         if (r->failure_reason.empty()) p.append(); else p.append(r->failure_reason);
+        if (r->page_count) p.append(*r->page_count); else p.append();
         txn.exec(pqxx::prepped{"upsert_derived_artifact"}, p);
     });
 }
 
 std::shared_ptr<Record> Cache::getDerivedArtifact(const unsigned int fileId, const std::string& kind, const std::string& variant) {
-    return Transactions::exec("Cache::getDerivedArtifact", [&](pqxx::work& txn) -> std::shared_ptr<Record> {
+    // On every preview hit: one round trip, no BEGIN/COMMIT.
+    return Transactions::read("Cache::getDerivedArtifact", [&](pqxx::transaction_base& txn) -> std::shared_ptr<Record> {
         const auto res = txn.exec(pqxx::prepped{"get_derived_artifact"}, pqxx::params{fileId, kind, variant});
         if (res.empty()) return nullptr;
         return std::make_shared<Record>(res[0]);
+    });
+}
+
+void Cache::touchDerivedArtifacts(const std::vector<unsigned int>& ids) {
+    if (ids.empty()) return;
+    std::string array = "{";
+    for (std::size_t i = 0; i < ids.size(); ++i) array += (i ? "," : "") + std::to_string(ids[i]);
+    array += "}";
+    Transactions::exec("Cache::touchDerivedArtifacts", [&](pqxx::work& txn) {
+        txn.exec("UPDATE cache_index SET last_accessed = NOW() WHERE id = ANY($1::INTEGER[]) AND type = 'derived'",
+                 pqxx::params{array});
+    });
+}
+
+std::vector<std::shared_ptr<Record>> Cache::listDerivedArtifactsFor(const std::vector<unsigned int>& fileIds,
+                                                                   const std::vector<std::string>& kinds) {
+    if (fileIds.empty() || kinds.empty()) return {};
+    std::string ids = "{";
+    for (std::size_t i = 0; i < fileIds.size(); ++i) ids += (i ? "," : "") + std::to_string(fileIds[i]);
+    ids += "}";
+    std::string kindArray = "{";
+    for (std::size_t i = 0; i < kinds.size(); ++i) {
+        // Artifact kinds are code-defined identifiers ([a-z0-9-]); quote anyway.
+        kindArray += (i ? ",\"" : "\"");
+        for (const char c : kinds[i]) {
+            if (c == '"' || c == '\\') kindArray += '\\';
+            kindArray += c;
+        }
+        kindArray += '"';
+    }
+    kindArray += "}";
+    return Transactions::read("Cache::listDerivedArtifactsFor", [&](pqxx::transaction_base& txn) {
+        return db::sharedRows<Record>(txn.exec(
+            "SELECT * FROM cache_index WHERE type = 'derived' AND file_id = ANY($1::INTEGER[]) AND kind = ANY($2::TEXT[])",
+            pqxx::params{ids, kindArray}));
     });
 }
 

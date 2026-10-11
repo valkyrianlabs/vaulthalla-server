@@ -197,7 +197,8 @@ decides validity (see `web-client.md`). The daemon's HTTP `GET /auth/session` re
 Routes (nginx prefixes `/preview`, `/download`, `/upload` only; never add prefixes), all cookie-authenticated
 (`refresh`, or `share_refresh` with `?share=1`; no tokens in URLs): `GET /preview?vault_id&path&size&page`
 (RenderedImage plans only, JPEG; `size` clamped 16-2048, default 1024; `page` 0-based; `X-Vaulthalla-Page-Count`
-for PDFs; `scale` accepted and ignored), `POST /preview/batch` (≤ 200 items, per-item RBAC,
+for PDFs; `scale` accepted and ignored), `POST /preview/batch` (≤ 200 items, per-item RBAC, readiness from one index query per engine (`ready` / `queued` /
+`failed` (final: the source doesn't render) / `missing` / `unsupported`), never opening or decrypting an artifact,
 `ready|queued|missing|unsupported|error`, never fetches remote-only files), `GET|HEAD /download/content` (original
 bytes, inline by default), `GET|HEAD /download` (files stream with no size cap; directories stream a STORE ZIP,
 see "Folder ZIPs" below), `GET /preview/derived?kind=&variant=` (200 artifact | 202 queued + Retry-After |
@@ -271,8 +272,14 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   disposable cache for thumbnails (`thumbnail`/`<size>`), sheet and PDF page renders (`render`/`p<page>-s<size>`),
   posters, probes, GLB, transcodes. File: `<cacheRoot>/derived/<file_id>/<kind>.<variant>.vhd` = 64-byte header
   (`VHDERIV1`, header version, key version, IV) ‖ AES-256-GCM(vault key, fresh IV, AAD = header ‖
-  `"<vault>/<file>/<kind>/<variant>/<source_id>/<generator_version>"`) ‖ tag; 0600 temp, fsync, rename. Valid only
-  for the current source id, generator version and a resolvable key version; anything else is deleted on sight.
+  `"<vault>/<file>/<kind>/<variant>/<source_id>/<generator_version>"`) ‖ tag; 0600 temp, rename (fsync + dir fsync
+  only for `Durability::Durable` artifacts: derive-queue outputs; thumbnails and page renders are `Disposable`, a
+  crash only loses or tears one and every read detects that). Valid only for the current source id, generator
+  version and a resolvable key version; anything else is deleted on sight. Small artifacts are served by
+  `Store::read` (one index read via `Transactions::read`, one open, one authenticated decrypt); hits are recorded in
+  memory and `last_accessed` is written in batches (`Store::flushTouches`, from the periodic eviction). PDF renders
+  carry the document's page count in their row (`cache_index.page_count`, migration 109; older rows fall back to the
+  `pdf-info` artifact). `Store::status` answers readiness for many keys from the index alone (`/preview/batch`).
   Failures are negative-cached (`preview.derive.failure_ttl_hours`, or until the source changes). LRU eviction to
   `caching.max_size_mb`, idle expiry `caching.thumbnails.expiry_days`, per-file/vault purge, retired-key purge after
   rotation, startup sweep. Not charged to vault quotas (`Engine::getCacheSize` excludes `derived/`); never synced,
@@ -280,9 +287,12 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
 - **Render pipeline** (`preview::render::{Raster,Service}`). Header-checked decodes against
   `preview.max_render_pixels` and `http_preview_server.max_preview_size_mb`; TurboJPEG DCT-scaled decode, stb from
   memory otherwise; PDF pages behind one process-wide PDFium lock (`PdfiumLibrary` is the one init/teardown, held by
-  `main` and test suites), rendered by PDFium straight into the packed RGB raster (24bpp + `FPDF_REVERSE_BYTE_ORDER`); output edges ≤ 2048, never upscaled. Thumbnails
-  decode once and resize down a chain for every `caching.thumbnails.sizes` entry (16-2048). A render gate bounds CPU
-  (`render::Busy` → 503 + Retry-After). Uploads hand their in-memory plaintext to thumbnailing. A derived-cache outage
+  `main` and test suites), rendered by PDFium straight into the packed RGB raster (24bpp + `FPDF_REVERSE_BYTE_ORDER`); output edges ≤ 2048, never upscaled. One decode
+  per source generation and page at a time (single flight, shared by on-demand renders and thumbnail tasks); a decode
+  emits every missing `caching.thumbnails.sizes` entry (16-2048) at or below the size it renders, resizing down a
+  chain. Two render gates of `clamp(cores/4,1,4)` slots each (interactive renders, background thumbnailing), so
+  imports never hold the slots a viewer needs (`render::Busy` → 503 + Retry-After). Thumbnail-sized outputs (≤ 512)
+  use the fast IDCT and 4:2:0 chroma; images with alpha are composited over white (generator version 3). Uploads hand their in-memory plaintext to thumbnailing. A derived-cache outage
   degrades to uncached renders. Preview plans (`preview::classify`, file JSON `"preview"`, see `web-client.md`) decide
   which files render at all; `caching.thumbnails.formats` is no longer read.
 - **Derive queue** (`preview::derive::Queue`, HTTP `/preview/derived`): bounded (`preview.derive.max_queue`),

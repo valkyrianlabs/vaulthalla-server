@@ -35,7 +35,8 @@ public:
 };
 
 // Decodes an image whose longest edge will be fit into targetMaxDim. JPEG: TurboJPEG with DCT scaling (only the
-// pixels needed); other formats: stb_image from memory. Throws InvalidInput / LimitExceeded.
+// pixels needed; the fast IDCT for thumbnail-sized targets); other formats: stb_image from memory, with any alpha
+// composited over white. Throws InvalidInput / LimitExceeded.
 [[nodiscard]] Raster decodeImage(std::span<const uint8_t> bytes, uint32_t targetMaxDim, const Limits& limits);
 
 // Renders one PDF page so that its longest edge is targetMaxDim (never above limits.maxDimension). pageCount is
@@ -45,9 +46,18 @@ public:
 
 // Downscales to fit maxDim (never upscales; returns a copy when already small enough).
 [[nodiscard]] Raster fit(const Raster& source, uint32_t maxDim);
+// Same, without the copy when nothing has to change.
+[[nodiscard]] Raster fit(Raster&& source, uint32_t maxDim);
 
-// Baseline JPEG, 4:4:4, quality 85 (the thumbnail quality Vaulthalla has always shipped).
-[[nodiscard]] std::vector<uint8_t> encodeJpeg(const Raster& raster, int quality = 85);
+enum class Subsampling { S444, S420 };
+
+// Outputs up to this edge are thumbnails: chroma 4:2:0 (about a third smaller, no visible difference at that size)
+// and a fast inverse DCT when decoding JPEG sources for them.
+inline constexpr uint32_t kThumbnailEncodeMax = 512;
+
+// Baseline JPEG, quality 85; 4:4:4 unless asked otherwise.
+[[nodiscard]] std::vector<uint8_t> encodeJpeg(const Raster& raster, int quality = 85,
+                                              Subsampling subsampling = Subsampling::S444);
 
 // PDFium's process-wide init/teardown. Hold exactly one for as long as anything may render a PDF (the daemon's main,
 // test suites); every render serializes behind the same lock as init and destroy.
