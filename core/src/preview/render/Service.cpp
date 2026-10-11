@@ -244,6 +244,32 @@ private:
 
 std::atomic<uint64_t> decodeCount{0};
 
+// The smaller outputs of an on-demand decode (page 0's grid thumbnails), finished off the request path from the raster
+// that decode already scaled. It holds the decode's flight, so a thumbnail request arriving meanwhile waits for these
+// instead of decoding the source again.
+struct OutputTail final : concurrency::Task {
+    std::shared_ptr<storage::Engine> engine;
+    std::shared_ptr<fs::model::File> file;
+    uint32_t page = 0;
+    std::vector<uint32_t> sizes;   // descending
+    Raster raster;
+    std::optional<uint32_t> pageCount;
+    std::shared_ptr<Flight> flight;
+
+    void operator()() override {
+        try {
+            for (const auto size : sizes) {
+                raster = fit(std::move(raster), size);
+                storeQuietly(engine, keyFor(engine, *file, {.size = size, .page = page}),
+                             encodeJpeg(raster, 85, size <= kThumbnailEncodeMax ? Subsampling::S420 : Subsampling::S444),
+                             pageCount);
+            }
+        } catch (const std::exception& e) {
+            log::Registry::thumb()->debug("[Render] Deferred outputs of file {} skipped: {}", file->id, e.what());
+        }
+    }
+};
+
 // One decode of `file` page `page` at `decodeSize`, then every output size (descending) resized down a chain from it,
 // encoded and cached. Returns the encoded output of `wanted` (if it is one of `outputs`).
 std::optional<std::vector<uint8_t>> produce(const std::shared_ptr<storage::Engine>& engine,
@@ -251,7 +277,8 @@ std::optional<std::vector<uint8_t>> produce(const std::shared_ptr<storage::Engin
                                             std::vector<uint32_t> outputs, const std::optional<uint32_t> wanted,
                                             const Lane lane, const storage::RemoteFetchPolicy remote,
                                             const std::span<const uint8_t> plaintext,
-                                            std::optional<uint32_t>& pageCount) {
+                                            std::optional<uint32_t>& pageCount,
+                                            const std::shared_ptr<Flight>& deferSmallerUnder = {}) {
     std::ranges::sort(outputs, std::greater<>());
     outputs.erase(std::unique(outputs.begin(), outputs.end()), outputs.end());
     const auto limits = limitsFromConfig();
@@ -284,11 +311,29 @@ std::optional<std::vector<uint8_t>> produce(const std::shared_ptr<storage::Engin
     std::fill(owned.begin(), owned.end(), uint8_t{0});
 
     std::optional<std::vector<uint8_t>> result;
-    for (const auto size : outputs) {
+    for (std::size_t i = 0; i < outputs.size(); ++i) {
+        const auto size = outputs[i];
         current = fit(std::move(current), size);
         auto jpeg = encodeJpeg(current, 85, size <= kThumbnailEncodeMax ? Subsampling::S420 : Subsampling::S444);
         storeQuietly(engine, keyFor(engine, *file, {.size = size, .page = page}), jpeg, pageCount);
-        if (wanted && *wanted == size) result = std::move(jpeg);
+        if (wanted && *wanted == size) {
+            result = std::move(jpeg);
+            // The caller has what it waits for; whatever is smaller is finished in the background under its flight.
+            if (deferSmallerUnder && i + 1 < outputs.size()) {
+                if (const auto& pool = concurrency::ThreadPoolManager::instance().thumbPool()) {
+                    auto tail = std::make_shared<OutputTail>();
+                    tail->engine = engine;
+                    tail->file = file;
+                    tail->page = page;
+                    tail->sizes.assign(outputs.begin() + static_cast<std::ptrdiff_t>(i) + 1, outputs.end());
+                    tail->raster = std::move(current);
+                    tail->pageCount = pageCount;
+                    tail->flight = deferSmallerUnder;
+                    pool->submit(std::move(tail));
+                    return result;
+                }
+            }
+        }
     }
     return result;
 }
@@ -337,6 +382,18 @@ uint32_t normalizeSize(const uint32_t requested) {
 
 uint64_t decodesForTesting() { return decodeCount.load(); }
 
+bool waitForFlightsForTesting(const std::chrono::milliseconds timeout) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+        {
+            std::scoped_lock lock(flightMutex());
+            if (flights().empty()) return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    return false;
+}
+
 std::optional<Result> cached(const std::shared_ptr<storage::Engine>& engine,
                              const std::shared_ptr<fs::model::File>& file, Request request) {
     if (!engine || !file) return std::nullopt;
@@ -383,9 +440,9 @@ Result render(const std::shared_ptr<storage::Engine>& engine, const std::shared_
     for (int attempt = 0;; ++attempt) {
         if (auto hit = cached(engine, file, request); hit && (!isPdf(*file) || hit->pageCount)) return std::move(*hit);
 
-        Flight flight(flightKey(*file, request.page));
-        if (!flight.leader() && attempt == 0) {
-            flight.wait();   // someone is decoding this source right now: use what it produces
+        const auto flight = std::make_shared<Flight>(flightKey(*file, request.page));
+        if (!flight->leader() && attempt == 0) {
+            flight->wait();   // someone is decoding this source right now: use what it produces
             continue;
         }
 
@@ -397,7 +454,8 @@ Result render(const std::shared_ptr<storage::Engine>& engine, const std::shared_
                 if (s <= request.size) outputs.push_back(s);
 
         std::optional<uint32_t> pageCount;
-        auto jpeg = produce(engine, file, request.page, outputs, request.size, Lane::Interactive, remote, {}, pageCount);
+        auto jpeg = produce(engine, file, request.page, outputs, request.size, Lane::Interactive, remote, {}, pageCount,
+                            flight->leader() ? flight : nullptr);
         Result result{.jpeg = jpeg ? std::move(*jpeg) : std::vector<uint8_t>{}, .cacheHit = false, .pageCount = pageCount};
         if (const auto& stats = runtime::Deps::get().httpCacheStats)
             stats->record_op_us(static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(

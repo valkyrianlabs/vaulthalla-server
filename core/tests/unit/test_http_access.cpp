@@ -304,10 +304,13 @@ TEST_F(HttpAccessDbTest, PreviewBatchAnswersFromTheIndexAndDecodesOncePerSource)
         return nlohmann::json::parse(bodyOf(Router::route(std::move(batch)))).at("items");
     };
 
-    // One open of the image at 1024 decodes once and leaves every thumbnail size behind.
+    // One open of the image at 1024 decodes once and leaves every thumbnail size behind. The smaller sizes are
+    // finished after the response, under the decode's flight: a thumbnail request meanwhile waits for them.
     const auto decodes = preview::render::decodesForTesting();
     ASSERT_EQ(statusOf(Router::route(get(inA("/preview", "%2Fshared.jpg", "&size=1024")))), status::ok);
+    ASSERT_EQ(statusOf(Router::route(get(inA("/preview", "%2Fshared.jpg", "&size=128")))), status::ok);
     EXPECT_EQ(preview::render::decodesForTesting(), decodes + 1);
+    ASSERT_TRUE(preview::render::waitForFlightsForTesting());
 
     const auto& stats = runtime::Deps::get().httpCacheStats;
     const auto before = stats->snapshot();
