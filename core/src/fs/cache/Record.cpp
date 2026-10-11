@@ -28,6 +28,8 @@ Record::Record(pqxx::row_ref row)
     if (!row["generator_version"].is_null()) generator_version = row["generator_version"].as<unsigned int>();
     if (!row["artifact_key_version"].is_null()) artifact_key_version = row["artifact_key_version"].as<unsigned int>();
     status = text("status") == "failed" ? Status::Failed : Status::Ready;
+    for (const auto& field : row)
+        if (std::string_view(field.name()) == "page_count" && !field.is_null()) page_count = field.as<unsigned int>();
 }
 
 void vh::fs::cache::to_json(nlohmann::json& j, const Record& index) {

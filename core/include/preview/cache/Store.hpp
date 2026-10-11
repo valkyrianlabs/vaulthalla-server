@@ -9,6 +9,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <vector>
 
 namespace vh::storage {
     class PlaintextReader;
@@ -34,6 +35,7 @@ struct Artifact {
     ArtifactKey key;
     std::filesystem::path path;  // absolute
     uint64_t size{};              // plaintext size
+    std::optional<uint32_t> pageCount{};
 };
 
 enum class LookupStatus { Ready, Missing, Failed };
@@ -44,6 +46,25 @@ struct Lookup {
     std::string failure;
 };
 
+// What the index says about one key, without touching the artifact file (see Store::status).
+struct IndexStatus {
+    LookupStatus status{LookupStatus::Missing};
+    std::string failure;
+};
+
+// A whole small artifact, authenticated (see Store::read).
+struct ReadResult {
+    LookupStatus status{LookupStatus::Missing};
+    std::vector<uint8_t> bytes;
+    std::optional<uint32_t> pageCount;
+    std::string failure;
+};
+
+// Whether a committed artifact is fsynced. Disposable artifacts (thumbnails, page renders) are cheap to regenerate
+// and validated on every read (exact size, GCM tag), so a crash that loses or tears one only costs a regeneration;
+// durable ones (derive-queue outputs: transcodes, GLB, posters) take minutes to rebuild.
+enum class Durability { Durable, Disposable };
+
 // One encrypted, non-authoritative cache for every derived artifact (thumbnails, page renders, posters, GLB,
 // transcodes). Files live under <cacheRoot>/derived/<alias>/, are AES-256-GCM sealed with the vault key under a
 // fresh IV ("VHDERIV1" header, identity bound as AAD), indexed in cache_index (type 'derived'), replaced atomically,
@@ -53,6 +74,20 @@ public:
     static constexpr std::size_t kHeaderSize = 64;
 
     [[nodiscard]] static Lookup lookup(const std::shared_ptr<storage::Engine>& engine, const ArtifactKey& key);
+
+    // A small artifact in one go: one index read, one open and one authenticated decrypt (no streaming reader, no
+    // second header read). Anything unreadable (size, header, retired key, failed tag) is dropped and reported
+    // Missing, like lookup().
+    [[nodiscard]] static ReadResult read(const std::shared_ptr<storage::Engine>& engine, const ArtifactKey& key,
+                                         uint64_t maxBytes);
+
+    // Index-only status of many keys in one query: Ready (a current row), Failed (a live negative entry) or Missing.
+    // The artifact files are not opened: a Ready answer means "worth asking for"; read() still authenticates bytes.
+    [[nodiscard]] static std::vector<IndexStatus> status(const std::vector<ArtifactKey>& keys);
+
+    // last_accessed is recorded in memory on every hit and written in batches (by the periodic eviction): LRU only
+    // needs coarse recency, and a hit no longer costs an UPDATE round trip.
+    static void flushTouches();
 
     [[nodiscard]] static std::unique_ptr<storage::PlaintextReader> open(
         const std::shared_ptr<storage::Engine>& engine, const Artifact& artifact);
@@ -78,10 +113,12 @@ public:
     };
 
     [[nodiscard]] static Writer begin(const std::shared_ptr<storage::Engine>& engine, const ArtifactKey& key,
-                                      uint64_t maxBytes);
+                                      uint64_t maxBytes, Durability durability = Durability::Durable,
+                                      std::optional<uint32_t> pageCount = std::nullopt);
 
     static Artifact put(const std::shared_ptr<storage::Engine>& engine, const ArtifactKey& key,
-                        std::span<const uint8_t> plaintext);
+                        std::span<const uint8_t> plaintext, Durability durability = Durability::Durable,
+                        std::optional<uint32_t> pageCount = std::nullopt);
 
     // Negative cache: the generator failed for this exact key; lookups return Failed until the TTL passes or the
     // source changes.
@@ -95,7 +132,8 @@ public:
     static std::size_t purgeRetiredKeys(const std::shared_ptr<storage::Engine>& engine);
 
     // Startup/janitor sweep for one vault: deletes legacy plaintext thumbnails, artifact directories of files
-    // that no longer exist, and interrupted temp writes.
+    // that no longer exist, interrupted temp writes, and artifact files no index row points at (a crash between
+    // rename and index write).
     static std::size_t sweep(const std::shared_ptr<storage::Engine>& engine);
 
     static void setFailureTtl(std::chrono::seconds ttl);

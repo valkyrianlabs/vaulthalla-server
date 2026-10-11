@@ -48,7 +48,7 @@ import {
 } from '@/features/files/entries'
 import type { FsSource, Listing } from '@/features/files/source'
 import { FileIcon } from '@/features/files/FileIcon'
-import { useThumbnails } from '@/features/files/thumbnails'
+import { thumbnailSizeFor, useThumbnails } from '@/features/files/thumbnails'
 import { startDownload, startUpload, type PickedFile } from '@/features/files/transfers'
 import { collectDropped, collectPicked } from '@/features/files/drop'
 import dynamic from 'next/dynamic'
@@ -409,13 +409,16 @@ export function FileBrowser({ source, path, onNavigate, leading, onShare, classN
   // ---------- virtualization ----------
 
   const [gridCols, setGridCols] = useState(4)
+  const [tileWidth, setTileWidth] = useState(176)
   const [scrollMargin, setScrollMargin] = useState(0)
   useLayoutEffect(() => {
     const el = listRef.current
     if (!el) return
     const measure = () => {
       setScrollMargin(el.getBoundingClientRect().top + window.scrollY)
-      setGridCols(Math.max(2, Math.floor(el.clientWidth / 176)))
+      const cols = Math.max(2, Math.floor(el.clientWidth / 176))
+      setGridCols(cols)
+      setTileWidth(el.clientWidth / cols)
     }
     measure()
     const observer = new ResizeObserver(measure)
@@ -437,7 +440,7 @@ export function FileBrowser({ source, path, onNavigate, leading, onShare, classN
     view === 'grid' ?
       entries.slice(firstRow * gridCols, (lastRow + 1) * gridCols)
     : entries.slice(firstRow, lastRow + 1)
-  const thumb = useThumbnails(source, visibleEntries, true)
+  const thumb = useThumbnails(source, visibleEntries, true, thumbnailSizeFor(view, tileWidth))
 
   const contextEntries =
     menuTarget ?

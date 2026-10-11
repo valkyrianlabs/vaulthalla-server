@@ -56,13 +56,13 @@ void vh::db::Connection::initPreparedCache() const {
     // Derived artifacts (preview::cache::Store): identity (file_id, kind, variant), validity by source_id.
     conn_->prepare("upsert_derived_artifact",
                    "INSERT INTO cache_index (vault_id, file_id, path, type, size, kind, variant, source_id, "
-                   "  generator_version, artifact_iv, artifact_key_version, status, failure_reason) "
-                   "VALUES ($1, $2, $3, 'derived', $4, $5, $6, $7, $8, $9, $10, $11, $12) "
+                   "  generator_version, artifact_iv, artifact_key_version, status, failure_reason, page_count) "
+                   "VALUES ($1, $2, $3, 'derived', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) "
                    "ON CONFLICT (file_id, kind, variant) WHERE type = 'derived' DO UPDATE SET "
                    "  vault_id = EXCLUDED.vault_id, path = EXCLUDED.path, size = EXCLUDED.size, "
                    "  source_id = EXCLUDED.source_id, generator_version = EXCLUDED.generator_version, "
                    "  artifact_iv = EXCLUDED.artifact_iv, artifact_key_version = EXCLUDED.artifact_key_version, "
-                   "  status = EXCLUDED.status, failure_reason = EXCLUDED.failure_reason, "
+                   "  status = EXCLUDED.status, failure_reason = EXCLUDED.failure_reason, page_count = EXCLUDED.page_count, "
                    "  last_accessed = NOW(), created_at = NOW()");
 
     conn_->prepare("get_derived_artifact",

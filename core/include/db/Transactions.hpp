@@ -93,6 +93,34 @@ namespace vh::db {
                 throw;
             }
         }
+
+        // A read that needs no transaction (one statement, or statements that need not agree): runs outside
+        // BEGIN/COMMIT, so a single-statement read is one round trip instead of three. `func` takes a
+        // pqxx::transaction_base&. A session the server dropped while idle is replaced and the read retried once
+        // (reads are idempotent); any other failure is surfaced.
+        template <typename Func>
+        static decltype(auto) read(const std::string& ctx, Func&& func) {
+            const auto pool = dbPool_;
+            if (!pool) throw std::runtime_error("Transactions not initialized!");
+
+            auto conn = pool->acquire();
+            for (int attempt = 0;; ++attempt) {
+                try {
+                    pqxx::nontransaction ntx(conn->get());
+                    return func(static_cast<pqxx::transaction_base&>(ntx));
+                } catch (const pqxx::broken_connection& e) {
+                    markIfPoisoned(*conn, e);
+                    if (attempt > 0 || conn->healthy()) throw;
+                    log::Registry::db()->warn("[Transactions::read] Connection lost before read '{}' ({}); reconnecting",
+                                              ctx, e.what());
+                    pool->repair(conn);
+                } catch (const std::exception& e) {
+                    markIfPoisoned(*conn, e);
+                    log::Registry::db()->error("[Transactions::read] Read '{}' failed: {}", ctx, e.what());
+                    throw;
+                }
+            }
+        }
     };
 
 }

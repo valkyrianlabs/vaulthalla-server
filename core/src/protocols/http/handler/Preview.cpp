@@ -1,6 +1,7 @@
 #include "protocols/http/handler/Handlers.hpp"
 
 #include "config/Registry.hpp"
+#include "log/Registry.hpp"
 #include "fs/model/Entry.hpp"
 #include "fs/model/File.hpp"
 #include "preview/Plan.hpp"
@@ -15,6 +16,8 @@
 #include <charconv>
 #include <filesystem>
 #include <limits>
+#include <unordered_map>
+#include <vector>
 
 namespace vh::protocols::http::handler {
 
@@ -138,7 +141,15 @@ model::preview::Response previewBatch(request&& req) {
                                                          ? std::make_optional(body.at("vault_id").get<uint32_t>())
                                                          : std::nullopt;
 
+        // Resolve and authorize every item first, then ask the index about all of them at once (per engine): a
+        // status check opens and decrypts nothing, and never counts as a cache hit or miss.
         nlohmann::json items = nlohmann::json::array();
+        struct Pending {
+            std::size_t item;
+            std::string path;
+            access::Target target;
+        };
+        std::vector<Pending> pending;
         for (const auto& item : body.at("items")) {
             nlohmann::json out{{"size", size}};
             if (item.contains("key")) out["key"] = item.at("key");
@@ -154,19 +165,9 @@ model::preview::Response previewBatch(request&& req) {
                     out["vault_id"] = vaultId;
                     itemParams["vault_id"] = std::to_string(vaultId);
                 }
-                const auto target = access::resolve(caller, itemParams, access::Need::Preview, access::Expect::File);
-                if (!preview::classify(*target.file).thumbnail) {
-                    out["status"] = "unsupported";
-                } else if (preview::render::cached(target.engine, target.file, {.size = size, .page = 0})) {
-                    out["status"] = "ready";
-                    out["url"] = previewUrl(caller.share, target.vaultId, path, size);
-                } else if (std::error_code ec; target.file->size_bytes > 0 &&
-                                                 !std::filesystem::exists(target.file->backing_path, ec)) {
-                    out["status"] = "missing";  // remote-only: grid thumbnails never trigger a fetch
-                } else {
-                    preview::render::enqueueThumbnails(target.engine, target.file);
-                    out["status"] = "queued";
-                }
+                auto target = access::resolve(caller, itemParams, access::Need::Preview, access::Expect::File);
+                if (!preview::classify(*target.file).thumbnail) out["status"] = "unsupported";
+                else pending.push_back({items.size(), path, std::move(target)});
             } catch (const access::NotFound&) {
                 out["status"] = "missing";
             } catch (const access::Forbidden&) {
@@ -176,6 +177,42 @@ model::preview::Response previewBatch(request&& req) {
                 out["error"] = dynamic_cast<const access::BadRequest*>(&e) ? e.what() : "unavailable";
             }
             items.push_back(std::move(out));
+        }
+
+        std::unordered_map<const storage::Engine*, std::vector<std::size_t>> byEngine;
+        for (std::size_t i = 0; i < pending.size(); ++i) byEngine[pending[i].target.engine.get()].push_back(i);
+        for (const auto& [_, indexes] : byEngine) {
+            std::vector<std::shared_ptr<fs::model::File>> files;
+            files.reserve(indexes.size());
+            for (const auto i : indexes) files.push_back(pending[i].target.file);
+            std::vector<preview::render::ThumbnailState> states(indexes.size(), preview::render::ThumbnailState::Missing);
+            try {
+                states = preview::render::thumbnailStates(pending[indexes.front()].target.engine, files, size);
+            } catch (const std::exception& e) {
+                log::Registry::http()->debug("[Preview] Thumbnail status unavailable: {}", e.what());
+            }
+            for (std::size_t n = 0; n < indexes.size(); ++n) {
+                const auto& p = pending[indexes[n]];
+                auto& out = items[p.item];
+                switch (states[n]) {
+                    case preview::render::ThumbnailState::Ready:
+                        out["status"] = "ready";
+                        out["url"] = previewUrl(caller.share, p.target.vaultId, p.path, size);
+                        break;
+                    case preview::render::ThumbnailState::Failed:
+                        out["status"] = "failed";   // invalid or over a limit: asking again won't help
+                        break;
+                    case preview::render::ThumbnailState::Missing:
+                        if (std::error_code ec; p.target.file->size_bytes > 0 &&
+                                                !std::filesystem::exists(p.target.file->backing_path, ec)) {
+                            out["status"] = "missing";  // remote-only: grid thumbnails never trigger a fetch
+                        } else {
+                            preview::render::enqueueThumbnails(p.target.engine, p.target.file);
+                            out["status"] = "queued";
+                        }
+                        break;
+                }
+            }
         }
         return Router::makeJsonResponse(req, {{"items", std::move(items)}, {"size", size}});
     } catch (const nlohmann::json::exception& e) {

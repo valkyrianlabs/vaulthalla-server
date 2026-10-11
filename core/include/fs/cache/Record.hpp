@@ -28,6 +28,7 @@ struct Record {
     unsigned int artifact_key_version{};
     Status status{Status::Ready};
     std::string failure_reason{};
+    std::optional<unsigned int> page_count{};   // PDF renders/thumbnails: the document's page count (migration 109)
 
     Record() = default;
     explicit Record(pqxx::row_ref row);

@@ -3,6 +3,7 @@
 #include "fs/model/File.hpp"
 #include "preview/image.hpp"
 #include "preview/pdf.hpp"
+#include "preview/render/Service.hpp"
 #include "protocols/ws/Session.hpp"
 #include "runtime/Deps.hpp"
 #include "share/Manager.hpp"
@@ -83,6 +84,12 @@ private:
 [[nodiscard]] Preview::ReaderFactory& readerFactory() {
     static Preview::ReaderFactory factory = defaultReader;
     return factory;
+}
+
+// Tests inject a reader; production renders through preview::render (gated, cached, encrypted).
+[[nodiscard]] bool& readerOverridden() {
+    static bool overridden = false;
+    return overridden;
 }
 
 [[nodiscard]] std::shared_ptr<vh::share::Manager> manager() {
@@ -207,8 +214,19 @@ json Preview::get(const json& payload, const std::shared_ptr<Session>& session) 
         throw std::runtime_error("Unsupported share preview type: " + *file->mime_type);
 
     const auto size = preview_detail::previewSize(body);
-    const auto source = preview_detail::reader()->readFile(target);
-    const auto preview = preview_detail::renderPreview(source, *file->mime_type, size);
+    std::vector<uint8_t> preview;
+    if (preview_detail::readerOverridden()) {
+        const auto source = preview_detail::reader()->readFile(target);
+        preview = preview_detail::renderPreview(source, *file->mime_type, size);
+    } else {
+        // The same pipeline as GET /preview: the render gate bounds CPU, the encrypted derived cache serves repeats,
+        // a known-bad source is refused without decoding it again. Never fetches remote-only bytes for this legacy
+        // command (the web console uses GET /preview?share=1).
+        const auto engine = runtime::Deps::get().storageManager->getEngine(target.vault_id);
+        if (!engine) throw std::runtime_error("Share preview storage engine is unavailable");
+        preview = vh::preview::render::render(engine, file, {.size = size, .page = 0},
+                                              vh::storage::RemoteFetchPolicy::Off).jpeg;
+    }
 
     mgr->appendAccessAuditEvent(*principal, {
         .event_type = "share.preview.get",
@@ -250,10 +268,12 @@ void Preview::resetResolverFactoryForTesting() {
 void Preview::setReaderFactoryForTesting(ReaderFactory factory) {
     if (!factory) throw std::invalid_argument("Share preview reader factory is required");
     preview_detail::readerFactory() = std::move(factory);
+    preview_detail::readerOverridden() = true;
 }
 
 void Preview::resetReaderFactoryForTesting() {
     preview_detail::readerFactory() = preview_detail::defaultReader;
+    preview_detail::readerOverridden() = false;
 }
 
 }

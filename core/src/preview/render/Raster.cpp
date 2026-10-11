@@ -99,8 +99,10 @@ void checkSource(const std::span<const uint8_t> bytes, const Limits& limits) {
     r.width = static_cast<uint32_t>(outW);
     r.height = static_cast<uint32_t>(outH);
     r.rgb.resize(static_cast<std::size_t>(outW) * static_cast<std::size_t>(outH) * 3);
+    // The accurate IDCT only where its quality can still show: thumbnail-sized targets take the fast one.
+    const int flags = targetMaxDim <= kThumbnailEncodeMax ? TJFLAG_FASTDCT : TJFLAG_ACCURATEDCT;
     if (tjDecompress2(tj.get(), bytes.data(), static_cast<unsigned long>(bytes.size()), r.rgb.data(), outW, 0, outH,
-                      TJPF_RGB, TJFLAG_ACCURATEDCT) != 0 &&
+                      TJPF_RGB, flags) != 0 &&
         tjGetErrorCode(tj.get()) == TJERR_FATAL)
         throw InvalidInput(std::string("JPEG decode failed: ") + tjGetErrorStr2(tj.get()));
     return r;
@@ -113,13 +115,28 @@ void checkSource(const std::span<const uint8_t> bytes, const Limits& limits) {
         throw InvalidInput("Unsupported or invalid image");
     if (pixels(width, height) > limits.maxPixels) throw LimitExceeded("Image exceeds the pixel limit");
 
+    // Images with alpha (grey+alpha, RGBA) are composited over white like PDF pages are; dropping the alpha channel
+    // showed whatever colour sat under transparent pixels (often black).
+    const bool alpha = channels == 2 || channels == 4;
+    const int want = alpha ? 4 : 3;
     std::unique_ptr<unsigned char, decltype(&stbi_image_free)> data(
-        stbi_load_from_memory(bytes.data(), len, &width, &height, &channels, 3), &stbi_image_free);
+        stbi_load_from_memory(bytes.data(), len, &width, &height, &channels, want), &stbi_image_free);
     if (!data) throw InvalidInput(std::string("Image decode failed: ") + stbi_failure_reason());
     Raster r;
     r.width = static_cast<uint32_t>(width);
     r.height = static_cast<uint32_t>(height);
-    r.rgb.assign(data.get(), data.get() + static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 3);
+    const auto pixelCount = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
+    if (!alpha) {
+        r.rgb.assign(data.get(), data.get() + pixelCount * 3);
+        return r;
+    }
+    r.rgb.resize(pixelCount * 3);
+    const auto* src = data.get();
+    for (std::size_t i = 0; i < pixelCount; ++i, src += 4) {
+        const unsigned a = src[3];
+        for (int c = 0; c < 3; ++c)
+            r.rgb[i * 3 + c] = static_cast<uint8_t>((src[c] * a + 255u * (255u - a) + 127u) / 255u);
+    }
     return r;
 }
 
@@ -194,6 +211,12 @@ Raster renderPdfPage(const std::span<const uint8_t> bytes, const uint32_t page, 
     return r;
 }
 
+Raster fit(Raster&& source, const uint32_t maxDim) {
+    if (source.width == 0 || source.height == 0) throw InvalidInput("Empty raster");
+    if (std::max(source.width, source.height) <= maxDim) return std::move(source);
+    return fit(static_cast<const Raster&>(source), maxDim);
+}
+
 Raster fit(const Raster& source, const uint32_t maxDim) {
     if (source.width == 0 || source.height == 0) throw InvalidInput("Empty raster");
     const auto longest = std::max(source.width, source.height);
@@ -209,13 +232,14 @@ Raster fit(const Raster& source, const uint32_t maxDim) {
     return out;
 }
 
-std::vector<uint8_t> encodeJpeg(const Raster& raster, const int quality) {
+std::vector<uint8_t> encodeJpeg(const Raster& raster, const int quality, const Subsampling subsampling) {
     TjHandle tj(tjInitCompress());
     if (!tj) throw std::runtime_error("TurboJPEG unavailable");
     unsigned char* buffer = nullptr;
     unsigned long size = 0;
     if (tjCompress2(tj.get(), raster.rgb.data(), static_cast<int>(raster.width), 0, static_cast<int>(raster.height),
-                    TJPF_RGB, &buffer, &size, TJSAMP_444, quality, 0) != 0) {
+                    TJPF_RGB, &buffer, &size, subsampling == Subsampling::S420 ? TJSAMP_420 : TJSAMP_444, quality,
+                    0) != 0) {
         if (buffer) tjFree(buffer);
         throw std::runtime_error(std::string("JPEG encode failed: ") + tjGetErrorStr2(tj.get()));
     }
