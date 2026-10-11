@@ -88,11 +88,13 @@ Under `ask`, only a real two-sided change is a conflict. Each pass compares both
 
 A file that has never been synced by a version that records this (for example, files synced before an upgrade) has nothing to compare against, so a difference on it is recorded as a conflict too. Resolve it once and later changes are classified normally.
 
-The `keep_*` policies settle every content difference themselves, as before. If you switch a vault from `ask` to a `keep_*` policy, its open conflicts are settled by the next sync with that policy.
+The `keep_*` policies settle every content difference themselves, as before. A file that neither side changed since it was last synced is left alone under every policy. If you switch a vault from `ask` to a `keep_*` policy, its open conflicts are settled by the next sync with that policy.
 
 ## Resolving Conflicts
 
 Resolving a conflict needs the vault permission `vault.sync.action.resolve_conflicts` and Overwrite on the file. Built-in vault roles that can trigger a sync (contributor, editor, manager, power user) include it, and upgrades grant it to every role that already had sync trigger. Admins get it through their vault globals. The vault owner gets it through their own role's self scope.
+
+The other sync permissions work the same way: a vault role assigned to a user, or to a group the user belongs to, grants its `vault.sync.*` permissions (trigger a sync, view or edit sync settings, sign the encryption waiver) on that vault, in addition to whatever the admin vault globals grant.
 
 Each conflict has two decisions:
 

@@ -62,3 +62,9 @@ change, so those checks no longer wait on the database.
 
 - Overwriting a file from the web console or the API now updates the folder sizes the file browser shows right away;
   they could stay stale.
+- Vault roles now grant their sync permissions. A member whose vault role (their own, or a group's) allows triggering
+  a sync, editing sync settings or signing the encryption waiver can now do so on that vault; before, only admin
+  vault globals counted, so built-in roles such as contributor, editor and manager could not trigger a sync on
+  someone else's vault.
+- S3/R2 vaults using the `keep_remote` or `keep_newest` conflict policy no longer download a file again on every sync
+  after downloading it once. A file neither side changed since its last sync is left alone under every policy.

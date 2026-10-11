@@ -43,3 +43,9 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   and a parent lookup per level; ancestor chains load in one statement; signed size delta in the rename re-encrypt
   path (a shrinking file no longer wraps).
 - Web/API overwrite refreshes the cached ancestor directory totals.
+## Sync
+- rbac::resolver::Vault: sync config/action permissions also come from a vault role on the vault (the account's
+  own or a group's), unioned with the admin vault globals (#189); ops::conflicts::canResolveIn uses the resolver
+  alone. Vault-role roles permissions stay globals-only.
+- Planner: a file whose sides are unchanged since the per-file baseline is skipped under every conflict policy, so
+  keep_remote / keep_newest no longer re-download a file they downloaded (#190).

@@ -4,7 +4,9 @@
 //  - an open conflict closes itself ('converged') when both sides become equal again;
 //  - keep_local uploads the local copy, keep_remote downloads (and decrypts/re-seals) the remote one;
 //  - a decision about a side that changed since it was recorded is refused and the conflict stays open;
-//  - RBAC: no permission, permission without filesystem Overwrite, an admin through vault globals.
+//  - RBAC: no permission, permission without filesystem Overwrite, an admin through vault globals;
+//  - vault roles (the member's own or a group's) grant sync permissions through the shared resolver (#189);
+//  - keep_remote / keep_newest do not download a file again once it is in sync (#190).
 
 #include "../helpers/sync_conflict_harness.hpp"
 
@@ -13,6 +15,9 @@
 #include "protocols/http/handler/Handlers.hpp"
 #include "protocols/ws/Router.hpp"
 #include "protocols/ws/Session.hpp"
+#include "ops/Groups.hpp"
+#include "rbac/permission/vault/sync/Config.hpp"
+#include "rbac/resolver/vault/all.hpp"
 
 namespace vh::test_sync_conflicts {
 
@@ -241,6 +246,89 @@ TEST_F(SyncConflictsTest, KeepPoliciesStillResolveAutomaticallyAndCloseAnOpenCon
     const auto again = pass(f);
     EXPECT_EQ(planned(again, ActionType::Upload, "/policy.txt"), 1u);
     EXPECT_FALSE(openFor(f, "/policy.txt"));
+}
+
+// #189: the shared vault resolver honours vault-role sync bits, so every path that checks them (sync trigger, sync
+// settings, conflict resolution) agrees. A role's bits only add to what the vault globals grant.
+TEST_F(SyncConflictsTest, VaultRoleSyncPermissionsAreHonouredByTheResolver) {
+    using ActionPerm = rbac::permission::vault::sync::SyncActionPermissions;
+    using ConfigPerm = rbac::permission::vault::sync::SyncConfigPermissions;
+    const auto owner = createUser("sr_owner", "unprivileged");
+    const auto f = remoteVault(owner);
+    const auto vaultId = f.vault->id;
+    const auto can = [&](const UserPtr& u, const ActionPerm p) {
+        return rbac::resolver::Vault::has<ActionPerm>({.user = u, .permission = p, .vault_id = vaultId});
+    };
+    const auto canConfig = [&](const UserPtr& u, const ConfigPerm p) {
+        return rbac::resolver::Vault::has<ConfigPerm>({.user = u, .permission = p, .vault_id = vaultId});
+    };
+
+    // Contributor: trigger + resolve, view-only settings, no waiver.
+    const auto contributor = assign(createUser("sr_contrib", "unprivileged"), vaultId,
+                                    vaultRole("sr_contributor_" + tag(), rbac::role::vault::Base::Contributor()));
+    EXPECT_TRUE(can(contributor, ActionPerm::Trigger));
+    EXPECT_TRUE(can(contributor, ActionPerm::ResolveConflicts));
+    EXPECT_TRUE(ops::conflicts::canResolveIn(contributor, vaultId));
+    EXPECT_FALSE(can(contributor, ActionPerm::SignWaiver));
+    EXPECT_TRUE(canConfig(contributor, ConfigPerm::View));
+    EXPECT_FALSE(canConfig(contributor, ConfigPerm::Edit));
+    EXPECT_THROW((void)ops::vaults::updateSync(contributor, vaultId, {.interval = std::chrono::seconds(900)}), ops::Denied);
+
+    // A reader's role has no sync actions: no trigger, through the resolver or the operation.
+    const auto reader = assign(createUser("sr_reader", "unprivileged"), vaultId,
+                               vaultRole("sr_reader_" + tag(), rbac::role::vault::Base::Reader()));
+    EXPECT_FALSE(can(reader, ActionPerm::Trigger));
+    EXPECT_THROW((void)ops::vaults::triggerSync(reader, vaultId), ops::Denied);
+    EXPECT_FALSE(ops::conflicts::canResolveIn(reader, vaultId));
+
+    // No role on the vault at all.
+    const auto stranger = createUser("sr_stranger", "unprivileged");
+    EXPECT_FALSE(can(stranger, ActionPerm::Trigger));
+    EXPECT_THROW((void)ops::vaults::triggerSync(stranger, vaultId), ops::Denied);
+
+    // Through a group: a manager role edits sync settings for every member, and leaving the group takes it away.
+    const auto member = createUser("sr_member", "unprivileged");
+    const auto group = ops::groups::create(superUser, {.name = "sr_group_" + tag()});
+    (void)ops::groups::addMember(superUser, {.group = group->id, .user = member->id});
+    assignGroup(group->id, vaultId, vaultRole("sr_manager_" + tag(), rbac::role::vault::Base::Manager()));
+    EXPECT_TRUE(can(member, ActionPerm::Trigger));
+    EXPECT_TRUE(canConfig(member, ConfigPerm::Edit));
+    const auto policy = ops::vaults::updateSync(member, vaultId, {.interval = std::chrono::seconds(900)});
+    ASSERT_TRUE(policy);
+    EXPECT_EQ(policy->interval, std::chrono::seconds(900));
+    (void)ops::groups::removeMember(superUser, {.group = group->id, .user = member->id});
+    EXPECT_FALSE(can(member, ActionPerm::Trigger));
+    EXPECT_FALSE(canConfig(member, ConfigPerm::Edit));
+
+    // A deactivated member keeps the assignment row but authorizes nothing.
+    (void)ops::users::update(superUser, {.id = contributor->id, .is_active = false});
+    EXPECT_FALSE(can(contributor, ActionPerm::Trigger));
+}
+
+// #190: under keep_remote / keep_newest a file this vault downloaded used to be downloaded again on every pass (its
+// local hash is of the re-sealed bytes, never the object's). The per-file baseline says neither side changed.
+TEST_F(SyncConflictsTest, KeepPoliciesDoNotDownloadAnUnchangedFileAgain) {
+    for (const auto policy : {sync::model::RemotePolicy::ConflictPolicy::KeepRemote,
+                              sync::model::RemotePolicy::ConflictPolicy::KeepNewest}) {
+        SCOPED_TRACE(sync::model::to_string(policy));
+        const auto f = remoteVault(superUser, policy);
+        remoteWrite(f, "/fetched.txt", "written by another client");
+        const auto first = pass(f);
+        ASSERT_EQ(planned(first, ActionType::Download, "/fetched.txt"), 1u);
+        EXPECT_EQ(readLocal(f, "/fetched.txt"), "written by another client");
+
+        for (int i = 0; i < 2; ++i) {
+            const auto again = pass(f);
+            EXPECT_EQ(planned(again, ActionType::Download, "/fetched.txt"), 0u) << "pass " << i + 2;
+            EXPECT_EQ(planned(again, ActionType::Upload, "/fetched.txt"), 0u) << "pass " << i + 2;
+        }
+
+        // A real change still syncs: the remote object changes, the next pass fetches it once.
+        remoteWrite(f, "/fetched.txt", "changed again upstream");
+        EXPECT_EQ(planned(pass(f), ActionType::Download, "/fetched.txt"), 1u);
+        EXPECT_EQ(readLocal(f, "/fetched.txt"), "changed again upstream");
+        EXPECT_EQ(planned(pass(f), ActionType::Download, "/fetched.txt"), 0u);
+    }
 }
 
 namespace http_lane {

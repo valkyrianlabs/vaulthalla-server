@@ -69,10 +69,17 @@ std::vector<Action> Planner::build(
                 // decideForBoth below, as before.
                 ctx->noteInSync(*L, *R);
             } else {
-                // Under `ask`, only a change on both sides since they last agreed is a conflict (#187). A change on
-                // one side syncs in that direction; a file with an open conflict waits for its decision.
+                // Compared with what both sides were at their last sync (#187). Neither side changed since: nothing
+                // to transfer under any policy (#190). files.content_hash hashes the sealed bytes, so a file this
+                // vault downloaded never hash-matches the object it came from, and keep_* would fetch it every pass.
+                const auto divergence = ctx->hasOpenConflict(L->id) ? Divergence::Unknown
+                                                                    : classify(*L, *R, ctx->baselineFor(L->id));
+                if (divergence == Divergence::InSync) continue;
+
+                // Under `ask`, only a change on both sides is a conflict. A change on one side syncs in that
+                // direction; a file with an open conflict waits for its decision. keep_* settle any real difference.
                 if (policy->conflict_policy == RemotePolicy::ConflictPolicy::Ask && !ctx->hasOpenConflict(L->id)) {
-                    switch (classify(*L, *R, ctx->baselineFor(L->id))) {
+                    switch (divergence) {
                     case Divergence::InSync:
                         continue;
                     case Divergence::LocalOnly:

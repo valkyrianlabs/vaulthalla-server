@@ -380,6 +380,14 @@ protected:
         (void)vh::identities::manager().reconcile();   // written behind the identity manager
         return vh::identities::manager().user(user->id);
     }
+
+    static void assignGroup(const uint32_t groupId, const uint32_t vaultId, const uint32_t roleId) {
+        db::Transactions::exec("SyncConflictHarness::assignGroup", [&](pqxx::work& txn) {
+            txn.exec("INSERT INTO vault_role_assignments (vault_id, subject_type, subject_id, role_id) "
+                     "VALUES ($1, 'group', $2, $3)", pqxx::params{vaultId, groupId, roleId});
+        });
+        (void)vh::identities::manager().reconcile();
+    }
 };
 
 }

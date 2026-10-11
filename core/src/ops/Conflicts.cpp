@@ -4,13 +4,11 @@
 #include "db/query/fs/File.hpp"
 #include "db/query/vault/Vault.hpp"
 #include "fs/model/File.hpp"
-#include "identities/Group.hpp"
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
 #include "rbac/permission/vault/Filesystem.hpp"
 #include "rbac/permission/vault/sync/Action.hpp"
 #include "rbac/resolver/vault/all.hpp"
-#include "rbac/role/Vault.hpp"
 #include "runtime/Deps.hpp"
 #include "storage/CloudEngine.hpp"
 #include "storage/Manager.hpp"
@@ -95,20 +93,9 @@ Decision parseDecision(const std::string& value) {
 
 bool canResolveIn(const Actor& actor, const uint32_t vaultId) {
     if (!actor) return false;
-    // The owner's self scope and admins' vault globals, through the vault resolver.
-    if (rbac::resolver::Vault::has<SyncActionPerm>({
-            .user = actor, .permission = SyncActionPerm::ResolveConflicts, .vault_id = vaultId}))
-        return true;
-    // A vault role on this vault, the account's own or one of its groups'. The vault resolver only reads vault
-    // globals for sync permissions, so without this a member could never resolve conflicts in someone else's vault.
-    const auto grants = [&](const std::unordered_map<uint32_t, std::shared_ptr<const rbac::role::Vault>>& roles) {
-        const auto it = roles.find(vaultId);
-        return it != roles.end() && it->second && it->second->sync.action.canResolveConflicts();
-    };
-    const auto view = actor->authz();
-    if (!view.authorizing()) return false;
-    if (grants(view.user->roles.vaults)) return true;
-    return std::ranges::any_of(view.groups, [&](const auto& group) { return grants(group->roles.vaults); });
+    // The owner's self scope, admins' vault globals, and vault roles (the account's own or its groups').
+    return rbac::resolver::Vault::has<SyncActionPerm>({
+        .user = actor, .permission = SyncActionPerm::ResolveConflicts, .vault_id = vaultId});
 }
 
 Summary summary(const Actor& actor) {

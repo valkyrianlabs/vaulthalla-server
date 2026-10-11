@@ -8,6 +8,7 @@
 #include "rbac/resolver/vault/policy/Filesystem.hpp"
 #include "rbac/resolver/vault/policy/Roles.hpp"
 
+#include "identities/Group.hpp"
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "rbac/role/Vault.hpp"
@@ -39,21 +40,52 @@ namespace vh::rbac::resolver {
             const vault::Context<EnumT> &ctx,
             const EnumT permission
         ) {
-            // One state for the whole check (no copy of the global policy per permission).
-            const auto state = user->state();
-            if (!state->authorizing() || !state->roles.admin) return false;
-            const auto &globalPerms = state->roles.admin->vGlobals;
-            bool allowed = false;
-
-            if (user->id == resolved.vault->owner_id)
-                allowed = VaultResolverTraits<EnumT>::self(globalPerms.self).has(permission);
-            else if (resolved.owner->isAdmin())
-                allowed = VaultResolverTraits<EnumT>::admin(globalPerms.admin).has(permission);
-            else
-                allowed = VaultResolverTraits<EnumT>::user(globalPerms.user).has(permission);
+            const auto allowed = [&] {
+                if constexpr (VaultResolverMode<EnumT>::vault_roles) {
+                    // One coherent version of the user and its groups for the whole check.
+                    const auto view = user->authz();
+                    if (!view.authorizing()) return false;
+                    if (const auto *globals = view.vaultGlobals();
+                        globals && grantedByGlobals(*globals, user, resolved, permission))
+                        return true;
+                    return grantedByVaultRoles(view, resolved.vault->id, permission);
+                } else {
+                    // One state for the whole check (no copy of the global policy per permission).
+                    const auto state = user->state();
+                    if (!state->authorizing() || !state->roles.admin) return false;
+                    return grantedByGlobals(state->roles.admin->vGlobals, user, resolved, permission);
+                }
+            }();
 
             if (!allowed) return false;
             return vault::ContextPolicy<EnumT>::validate(user, resolved, permission, ctx);
+        }
+
+        // The admin vault globals, in the scope the vault falls under for this user: its own, an admin's, a user's.
+        template<typename EnumT>
+        static bool grantedByGlobals(
+            const permission::admin::VaultGlobals &globals,
+            const std::shared_ptr<identities::User> &user,
+            const vault::ResolvedContext &resolved,
+            const EnumT permission
+        ) {
+            if (user->id == resolved.vault->owner_id)
+                return VaultResolverTraits<EnumT>::self(globals.self).has(permission);
+            if (resolved.owner->isAdmin())
+                return VaultResolverTraits<EnumT>::admin(globals.admin).has(permission);
+            return VaultResolverTraits<EnumT>::user(globals.user).has(permission);
+        }
+
+        // A vault role on this vault, the account's own or one of its groups'. The bits only grant (no role denies
+        // what another role or the globals grant).
+        template<typename EnumT>
+        static bool grantedByVaultRoles(const identities::AuthzView &view, const uint32_t vaultId, const EnumT permission) {
+            const auto grants = [&](const auto &roles) {
+                const auto it = roles.find(vaultId);
+                return it != roles.end() && it->second && VaultResolverTraits<EnumT>::direct(*it->second).has(permission);
+            };
+            if (grants(view.user->roles.vaults)) return true;
+            return std::ranges::any_of(view.groups, [&](const auto &group) { return group && grants(group->roles.vaults); });
         }
 
         template<typename EnumT>
