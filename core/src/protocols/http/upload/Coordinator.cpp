@@ -924,8 +924,8 @@ nlohmann::json Coordinator::finishSession(const request& req, const std::string_
 
             if (principal->link_created_by == 0)
                 throw std::runtime_error("Share upload link creator user is missing");
-            auto creator = std::make_shared<vh::identities::User>();
-            creator->id = principal->link_created_by;
+            // Attribution only (created_by): an id-only detached user, as before.
+            const auto creator = vh::identities::User::detached(principal->link_created_by, {});
 
             for (const auto& file : files) {
                 auto currentParent = resolver->resolve(actor, {

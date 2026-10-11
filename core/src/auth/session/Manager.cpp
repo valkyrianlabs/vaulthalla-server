@@ -10,12 +10,14 @@
 #include "log/Registry.hpp"
 #include "protocols/ws/ConnectionLimit.hpp"
 #include "protocols/ws/Session.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "runtime/Deps.hpp"
 #include "protocols/ws/Router.hpp"
 
 using namespace vh::protocols::ws;
-using namespace vh::identities;
+using vh::identities::User;
+using vh::identities::Group;
 
 namespace vh::auth::session {
 
@@ -62,10 +64,11 @@ namespace {
 
     Validator::verifyStoredRefreshTokenHash(rawToken, storedToken);
 
-    const auto user = db::query::auth::RefreshToken::getUserByJti(claims.jti);
+    const auto userId = db::query::auth::RefreshToken::getUserIdByJti(claims.jti);
+    const auto user = userId ? vh::identities::manager().user(*userId) : nullptr;
     if (!user) throw std::runtime_error("No user found for refresh token");
-    if (user->systemOnly) throw std::runtime_error("System-only users cannot rehydrate human sessions");
-    if (!user->meta.is_active) throw std::runtime_error("Deactivated users cannot rehydrate sessions");
+    if (user->systemOnly()) throw std::runtime_error("System-only users cannot rehydrate human sessions");
+    if (!user->isActive()) throw std::runtime_error("Deactivated users cannot rehydrate sessions");
     if (storedToken->userId != user->id)
         throw std::runtime_error("User ID mismatch for refresh token");
 
@@ -149,7 +152,7 @@ void Manager::promote(const std::shared_ptr<Session>& session) {
         throw std::invalid_argument("Invalid session data for promotion");
     }
 
-    if (session->user->systemOnly)
+    if (session->user->systemOnly())
         throw std::runtime_error("System-only users cannot be promoted to human sessions");
 
     if (!session->tokens->refreshToken || !session->tokens->refreshToken->isValid()) {
@@ -172,7 +175,7 @@ void Manager::promote(const std::shared_ptr<Session>& session) {
     if (const auto dbToken = db::query::auth::RefreshToken::get(session->tokens->refreshToken->jti)) {
         session->tokens->refreshToken = dbToken;
         cache(session);
-        log::Registry::ws()->debug("[session::Manager] Promoted session for user: {} (existing refresh token found)", session->user->name);
+        log::Registry::ws()->debug("[session::Manager] Promoted session for user: {} (existing refresh token found)", session->user->name());
         return;
     }
 
@@ -191,7 +194,7 @@ void Manager::promote(const std::shared_ptr<Session>& session) {
 
     log::Registry::ws()->debug(
         "[session::Manager] Promoted session for user: {}",
-        session->user->name
+        session->user->name()
     );
 }
 
@@ -466,7 +469,7 @@ std::shared_ptr<Session> Manager::validateRawRefreshToken(const std::string& ref
     }
     if (!session->user || session->isShareSession())
         throw std::invalid_argument("Refresh token did not resolve to a human session");
-    if (session->user->systemOnly)
+    if (session->user->systemOnly())
         throw std::invalid_argument("System-only users cannot use human refresh tokens");
 
     return session;

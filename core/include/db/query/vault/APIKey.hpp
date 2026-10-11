@@ -5,6 +5,7 @@
 #include "vault/Fwd.hpp"
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -36,7 +37,7 @@ public:
 
     static APIKeyPtr getAPIKey(const std::string& keyName);
 
-    static std::shared_ptr<vh::identities::User> getAPIKeyOwner(unsigned int keyId);
+    [[nodiscard]] static std::optional<unsigned int> getAPIKeyOwnerId(unsigned int keyId);
 };
 
 }

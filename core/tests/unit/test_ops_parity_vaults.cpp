@@ -3,6 +3,7 @@
 // omitted fields on update; key changes needed Consume only on the CLI; owner changes needed only Edit; and sync
 // settings were gated by two different permissions. Everything now goes through ops::vaults.
 
+#include "../helpers/identities.hpp"
 #include "config/Config.hpp"
 #include "config/Registry.hpp"
 #include "db/Transactions.hpp"
@@ -13,6 +14,7 @@
 #include "db/query/vault/Deletion.hpp"
 #include "db/query/vault/Vault.hpp"
 #include "fs/Filesystem.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "ops/Error.hpp"
 #include "ops/Roles.hpp"
@@ -71,13 +73,8 @@ protected:
     inline static UserPtr superUser, alice, bob;
 
     static UserPtr createUser(const std::string& name, const std::string& roleName) {
-        auto user = std::make_shared<identities::User>();
-        user->name = name;
-        user->email = name + "@vaulthalla.test";
-        user->setPasswordHash("x");
-        user->roles.admin = db::query::rbac::role::Admin::get(roleName);
-        user->id = db::query::identities::User::createUser(user);
-        return db::query::identities::User::getUserById(user->id);
+        auto user = vh::test::identities::createUser(name, db::query::rbac::role::Admin::get(roleName), name + "@vaulthalla.test", "x", std::nullopt);
+        return vh::identities::manager().user(user->id);
     }
 
     static void SetUpTestSuite() {
@@ -201,7 +198,7 @@ TEST_F(VaultParityTest, OwnerReassignmentNeedsCreateForTheNewOwner) {
     const auto name = "vp_owner_" + vaultTag();
     const auto vault = ops::vaults::create(superUser, {.name = name, .type = vault::model::VaultType::Local, .owner_id = alice->id});
 
-    EXPECT_NE(cli("vault update " + std::to_string(vault->id) + " --owner " + bob->name, editor).first, 0);
+    EXPECT_NE(cli("vault update " + std::to_string(vault->id) + " --owner " + bob->name(), editor).first, 0);
     EXPECT_FALSE(wsOk([&] {
         (void)protocols::ws::handler::Vaults::update(json{{"id", vault->id}, {"owner_id", bob->id}}, ws(editor));
     }));
@@ -211,7 +208,7 @@ TEST_F(VaultParityTest, OwnerReassignmentNeedsCreateForTheNewOwner) {
     EXPECT_EQ(cli("vault update " + std::to_string(vault->id) + " --desc edited", editor).first, 0);
 
     // With the right to create for bob, the reassignment lands, and the engine (RBAC's source) follows.
-    ASSERT_EQ(cli("vault update " + std::to_string(vault->id) + " --owner " + bob->name, superUser).first, 0);
+    ASSERT_EQ(cli("vault update " + std::to_string(vault->id) + " --owner " + bob->name(), superUser).first, 0);
     EXPECT_EQ(runtime::Deps::get().storageManager->getEngine(vault->id)->vault->owner_id, bob->id);
 }
 

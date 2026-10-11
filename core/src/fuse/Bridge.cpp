@@ -27,7 +27,8 @@
 #include <sys/statvfs.h>
 #include <unistd.h>
 
-using namespace vh::identities;
+using vh::identities::User;
+using vh::identities::Group;
 using namespace vh::storage;
 using namespace vh::config;
 using namespace vh::fs;

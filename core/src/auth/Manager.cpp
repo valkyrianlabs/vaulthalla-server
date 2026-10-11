@@ -1,9 +1,10 @@
 #include "auth/Manager.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "auth/session/Manager.hpp"
 #include "auth/registration/Validator.hpp"
 #include "crypto/util/hash.hpp"
-#include "db/query/identities/User.hpp"
+#include "db/query/identities/Loader.hpp"
 #include "db/query/auth/RefreshToken.hpp"
 #include "storage/Manager.hpp"
 #include "protocols/ws/Session.hpp"
@@ -19,7 +20,8 @@
 
 using namespace vh::auth;
 using namespace vh::auth::model;
-using namespace vh::identities;
+using vh::identities::User;
+using vh::identities::Group;
 using namespace vh::crypto;
 using namespace vh::storage;
 using namespace vh::protocols::ws;
@@ -40,97 +42,87 @@ std::string hashNewPassword(const std::string& newPassword) {
 }
 }
 
-void Manager::registerUser(std::shared_ptr<User> user, const std::string& password) {
-    if (!user) throw std::runtime_error("Failed to create user: " + user->name);
+std::shared_ptr<User> Manager::registerUser(const identities::UserState& draft, const std::string& password) {
+    registration::Validator::validateRegistration(draft, password);
 
-    registration::Validator::validateRegistration(user, password);
-
-    user->setPasswordHash(hash::password(password));
-    db::query::identities::User::createUser(user);
-
-    user = getUser(user->name);
+    auto& identities = vh::identities::manager();
+    const auto user = identities.createUser(draft, hash::password(password));
     try {
         runtime::Deps::get().storageManager->initUserStorage(user);
     } catch (...) {
         // Don't leave a half-registered account behind an error response.
-        db::query::identities::User::deleteUser(user->id);
+        identities.deleteUser(user->id);
         throw;
     }
 
-    log::Registry::auth()->info("[AuthManager] User registered: {}", user->name);
+    log::Registry::auth()->info("[AuthManager] User registered: {}", draft.name);
+    return user;
 }
 
+// Credentials always come from the database (never from cached identity state): accounts change through the CLI and
+// the web alike, and a login or a password check against a cached copy honoured renamed, deactivated, demoted and
+// even deleted accounts.
 void Manager::loginUser(const std::string& name, const std::string& password, const std::shared_ptr<Session>& session) {
-    auto user = getUser(name);
-    if (!user) throw std::runtime_error("User not found: " + name);
-    if (user->systemOnly) throw std::runtime_error("System-only users cannot log in");
-    if (!user->meta.is_active) throw std::runtime_error("This account is deactivated");
+    const auto credentials = db::query::identities::Loader::credentialsByName(name);
+    if (!credentials) throw std::runtime_error("User not found: " + name);
+    if (credentials->systemOnly) throw std::runtime_error("System-only users cannot log in");
+    if (!credentials->active) throw std::runtime_error("This account is deactivated");
 
-    if (!hash::verifyPassword(password, user->password_hash)) throw std::runtime_error(
+    if (!hash::verifyPassword(password, credentials->passwordHash)) throw std::runtime_error(
         "Invalid password for user: " + name);
 
-    db::query::identities::User::updateLastLoggedInUser(user->id);
-    user = db::query::identities::User::getUserById(user->id);
+    auto& identities = vh::identities::manager();
+    identities.recordLogin(credentials->id);
+    const auto user = identities.user(credentials->id);
+    if (!user) throw std::runtime_error("User not found: " + name);
 
     session->setAuthenticatedUser(user);
     runtime::Deps::get().sessionManager->promote(session);
 
-    log::Registry::auth()->info("[AuthManager] User logged in: {}", user->name);
-}
-
-void Manager::updateUser(const std::shared_ptr<User>& user) {
-    if (!user) throw std::runtime_error("Cannot update null user");
-
-    db::query::identities::User::updateUser(user);
-
-    log::Registry::auth()->debug("[AuthManager] User updated: {}", user->name);
+    log::Registry::auth()->info("[AuthManager] User logged in: {}", name);
 }
 
 std::shared_ptr<User> Manager::changePassword(const uint32_t userId, const std::string& oldPassword,
                                               const std::string& newPassword) {
     const auto user = getUser(userId);
-    if (!user) throw std::runtime_error("User not found: " + std::to_string(userId));
-    if (user->systemOnly) throw std::runtime_error("System-only users cannot change passwords");
+    const auto credentials = db::query::identities::Loader::credentialsById(userId);
+    if (!credentials) throw std::runtime_error("User not found: " + std::to_string(userId));
+    if (credentials->systemOnly) throw std::runtime_error("System-only users cannot change passwords");
 
-    if (!hash::verifyPassword(oldPassword, user->password_hash)) throw std::runtime_error(
-        "Invalid old password for user: " + user->name);
+    const auto name = user->name();
+    if (!hash::verifyPassword(oldPassword, credentials->passwordHash)) throw std::runtime_error(
+        "Invalid old password for user: " + name);
 
-    db::query::identities::User::updateUserPassword(user->id, hashNewPassword(newPassword));
-    const auto updatedUser = db::query::identities::User::getUserById(user->id);
-    if (!updatedUser) throw std::runtime_error("Failed to reload user after password change: " + user->name);
+    vh::identities::manager().setPasswordHash(userId, hashNewPassword(newPassword));
 
-    log::Registry::audit()->info("[AuthManager] User {} is changing password", user->name);
-    log::Registry::auth()->info("[AuthManager] Changing password for user: {}", user->name);
-    if (updatedUser->name == bootstrap::kSuperAdminName) (void)bootstrap::onSuperAdminPasswordChanged();
+    log::Registry::audit()->info("[AuthManager] User {} is changing password", name);
+    log::Registry::auth()->info("[AuthManager] Changing password for user: {}", name);
+    if (name == bootstrap::kSuperAdminName) (void)bootstrap::onSuperAdminPasswordChanged();
 
-    return updatedUser;
+    return user;
 }
 
 std::shared_ptr<User> Manager::resetPassword(const uint32_t userId, const std::string& newPassword) {
     const auto user = getUser(userId);
-    if (!user) throw std::runtime_error("User not found: " + std::to_string(userId));
-    if (user->systemOnly) throw std::runtime_error("System-only users cannot receive normal user passwords");
+    if (user->systemOnly()) throw std::runtime_error("System-only users cannot receive normal user passwords");
 
-    db::query::identities::User::updateUserPassword(user->id, hashNewPassword(newPassword));
-    const auto updatedUser = db::query::identities::User::getUserById(user->id);
-    if (!updatedUser) throw std::runtime_error("Failed to reload user after password reset: " + user->name);
+    vh::identities::manager().setPasswordHash(userId, hashNewPassword(newPassword));
 
-    log::Registry::audit()->info("[AuthManager] Password reset for user {}", user->name);
-    log::Registry::auth()->info("[AuthManager] Reset password for user: {}", user->name);
-    if (updatedUser->name == bootstrap::kSuperAdminName) (void)bootstrap::onSuperAdminPasswordChanged();
+    const auto name = user->name();
+    log::Registry::audit()->info("[AuthManager] Password reset for user {}", name);
+    log::Registry::auth()->info("[AuthManager] Reset password for user: {}", name);
+    if (name == bootstrap::kSuperAdminName) (void)bootstrap::onSuperAdminPasswordChanged();
 
-    return updatedUser;
+    return user;
 }
 
-// Always the database: accounts change through the CLI and the web alike, and a login or a password check
-// against a cached copy honoured renamed, deactivated, demoted and even deleted accounts.
 std::shared_ptr<User> Manager::getUser(const std::string& name) {
-    if (const auto user = db::query::identities::User::getUserByName(name)) return user;
+    if (const auto user = vh::identities::manager().userByName(name)) return user;
     throw std::runtime_error("User not found: " + name);
 }
 
 std::shared_ptr<identities::User> Manager::getUser(const uint32_t id) {
-    if (const auto user = db::query::identities::User::getUserById(id)) return user;
+    if (const auto user = vh::identities::manager().user(id)) return user;
     throw std::runtime_error("User not found: " + std::to_string(id));
 }
 

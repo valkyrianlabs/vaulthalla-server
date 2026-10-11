@@ -225,9 +225,9 @@ nlohmann::json createPayload() {
 
 std::shared_ptr<Session> authenticatedSession() {
     auto session = std::make_shared<Session>(std::make_shared<Router>());
-    auto user = std::make_shared<identities::User>();
-    user->id = 9;
-    user->name = "owner";
+    vh::identities::UserState userState;
+    userState.name = "owner";
+    auto user = vh::identities::User::detached(9, std::move(userState));
     session->user = user;
     return session;
 }

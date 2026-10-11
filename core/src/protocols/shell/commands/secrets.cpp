@@ -20,7 +20,8 @@
 
 using namespace vh;
 using namespace vh::protocols::shell;
-using namespace vh::identities;
+using vh::identities::User;
+using vh::identities::Group;
 using namespace vh::fs::ops;
 
 static std::vector<uint8_t> trimSecret(const std::vector<uint8_t>& secret) {

@@ -424,9 +424,9 @@ std::shared_ptr<Session> publicSession() {
 
 std::shared_ptr<Session> humanSession() {
     auto session = publicSession();
-    auto user = std::make_shared<identities::User>();
-    user->id = 9;
-    user->name = "human";
+    vh::identities::UserState userState;
+    userState.name = "human";
+    auto user = vh::identities::User::detached(9, std::move(userState));
     session->user = user;
     return session;
 }
@@ -529,9 +529,9 @@ protected:
             return vaultId == 42 ? httpEngine : nullptr;
         });
 
-        user = std::make_shared<identities::User>();
-        user->id = 7;
-        user->name = "share-owner";
+        vh::identities::UserState userState;
+        userState.name = "share-owner";
+        user = vh::identities::User::detached(7, std::move(userState));
     }
 
     void TearDown() override {

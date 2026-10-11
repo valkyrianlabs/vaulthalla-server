@@ -62,7 +62,7 @@ protected:
     // What the role's bits say about a vault owned by a non-admin account.
     static bool oracle(const UserPtr& user) {
         if (user->isSuperAdmin()) return true;
-        const auto& g = user->roles.admin->vGlobals.user;
+        const auto& g = user->state()->roles.admin->vGlobals.user;
         return g.sync.action.canResolveConflicts() && g.fs.files.canOverwrite();
     }
 };

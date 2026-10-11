@@ -1,3 +1,4 @@
+#include "identities/Manager.hpp"
 #include "IntegrationsTestRunner.hpp"
 #include "cmd/generators.hpp"
 #include "fuse/helpers.hpp"
@@ -38,7 +39,8 @@
 
 using namespace vh::test::integration::fuse;
 using namespace vh::rbac;
-using namespace vh::identities;
+using vh::identities::User;
+using vh::identities::Group;
 
 namespace vh::test::integration {
 
@@ -115,8 +117,8 @@ namespace vh::test::integration {
             role->assign(user->id, "user", vaultId);
 
             db::query::rbac::role::Vault::upsert(role);
-            db::query::rbac::role::vault::Assignments::assign(role);
-            user->roles.vaults[vaultId] = role;
+            vh::identities::manager().mutate({.users = {user->id}},
+                                             [&] { db::query::rbac::role::vault::Assignments::assign(role); });
         }
 
         std::shared_ptr<::vh::protocols::ws::Session> wsSessionFor(const std::shared_ptr<User>& user) {
@@ -191,7 +193,7 @@ namespace vh::test::integration {
         const auto [ctx, subj] = builder.scenario();
         (void)subj;
 
-        const auto uid = *ctx.admin->meta.linux_uid;
+        const auto uid = *ctx.admin->state()->meta.linux_uid;
         const auto src = ctx.base() / "src";
         const auto copy = ctx.base() / "copy";
         const std::string vaultBase = "/" + ctx.baseDir;
@@ -307,35 +309,35 @@ namespace vh::test::integration {
             .name = "FUSE write (admin)",
             .path = "fuse/write",
             .must_contain = {"OK write"},
-            .fn = [=]{ return write_as(*ctx.admin->meta.linux_uid, ctx.hello(), "hello world!\n"); }
+            .fn = [=]{ return write_as(*ctx.admin->state()->meta.linux_uid, ctx.hello(), "hello world!\n"); }
         });
 
         builder.makeTestCase({
             .name = "FUSE chmod no-op compatibility (admin)",
             .path = "fuse/chmod",
             .must_contain = {"OK chmod"},
-            .fn = [=]{ return chmod_as(*ctx.admin->meta.linux_uid, ctx.hello(), 0600); }
+            .fn = [=]{ return chmod_as(*ctx.admin->state()->meta.linux_uid, ctx.hello(), 0600); }
         });
 
         builder.makeTestCase({
             .name = "FUSE chmod preserves Vaulthalla attrs (admin)",
             .path = "fuse/stat",
             .must_contain = {"mode=644"},
-            .fn = [=]{ return stat_mode_as(*ctx.admin->meta.linux_uid, ctx.hello(), 0644); }
+            .fn = [=]{ return stat_mode_as(*ctx.admin->state()->meta.linux_uid, ctx.hello(), 0644); }
         });
 
         builder.makeTestCase({
             .name = "FUSE cp -a tree with git metadata (admin)",
             .path = "fuse/cp",
             .must_contain = {"OK cp -a"},
-            .fn = [=]{ return cp_preserve_tree_as(*ctx.admin->meta.linux_uid, ctx.root / "copied_tree"); }
+            .fn = [=]{ return cp_preserve_tree_as(*ctx.admin->state()->meta.linux_uid, ctx.root / "copied_tree"); }
         });
 
         builder.makeTestCase({
             .name = "FUSE read copied git config (admin)",
             .path = "fuse/read",
             .must_contain = {"repositoryformatversion"},
-            .fn = [=] { return read_as(*ctx.admin->meta.linux_uid, ctx.root / "copied_tree" / ".git" / "config"); }
+            .fn = [=] { return read_as(*ctx.admin->state()->meta.linux_uid, ctx.root / "copied_tree" / ".git" / "config"); }
         });
 
         // Bytes are ciphertext on disk; reads through the mount decrypt them (#173).
@@ -343,14 +345,14 @@ namespace vh::test::integration {
             .name = "FUSE read (admin)",
             .path = "fuse/read",
             .must_contain = {"hello world!"},
-            .fn = [=] { return read_as(*ctx.admin->meta.linux_uid, ctx.hello()); }
+            .fn = [=] { return read_as(*ctx.admin->state()->meta.linux_uid, ctx.hello()); }
         });
 
         builder.makeTestCase({
             .name = "FUSE stat reports the plaintext size (admin)",
             .path = "fuse/stat",
             .must_contain = {" size=13\n"},
-            .fn = [=] { return stat_size_as(*ctx.admin->meta.linux_uid, ctx.hello()); }
+            .fn = [=] { return stat_size_as(*ctx.admin->state()->meta.linux_uid, ctx.hello()); }
         });
 
         // The kernel forgetting every inode (as under memory pressure) must not make the vault unreachable.
@@ -361,7 +363,7 @@ namespace vh::test::integration {
             .fn = [=] {
                 ::sync();
                 std::ofstream("/proc/sys/vm/drop_caches") << "2\n";
-                return read_as(*ctx.admin->meta.linux_uid, ctx.hello());
+                return read_as(*ctx.admin->state()->meta.linux_uid, ctx.hello());
             }
         });
 
@@ -369,49 +371,49 @@ namespace vh::test::integration {
             .name = "FUSE rename (admin)",
             .path = "fuse/rename",
             .must_contain = {"OK mv"},
-            .fn = [=]{ return mv_as(*ctx.admin->meta.linux_uid, ctx.hello(), ctx.base() / "hello2.txt"); }
+            .fn = [=]{ return mv_as(*ctx.admin->state()->meta.linux_uid, ctx.hello(), ctx.base() / "hello2.txt"); }
         });
 
         builder.makeTestCase({
             .name = "FUSE read after rename is still plaintext (admin)",
             .path = "fuse/read",
             .must_contain = {"hello world!"},
-            .fn = [=] { return read_as(*ctx.admin->meta.linux_uid, ctx.base() / "hello2.txt"); }
+            .fn = [=] { return read_as(*ctx.admin->state()->meta.linux_uid, ctx.base() / "hello2.txt"); }
         });
 
         builder.makeTestCase({
             .name = "FUSE overwrite with shorter content leaves no tail (admin)",
             .path = "fuse/write",
             .must_contain = {"OK write"},
-            .fn = [=]{ return write_as(*ctx.admin->meta.linux_uid, ctx.base() / "hello2.txt", "hi\n"); }
+            .fn = [=]{ return write_as(*ctx.admin->state()->meta.linux_uid, ctx.base() / "hello2.txt", "hi\n"); }
         });
 
         builder.makeTestCase({
             .name = "FUSE stat after shorter overwrite (admin)",
             .path = "fuse/stat",
             .must_contain = {" size=3\n"},
-            .fn = [=] { return stat_size_as(*ctx.admin->meta.linux_uid, ctx.base() / "hello2.txt"); }
+            .fn = [=] { return stat_size_as(*ctx.admin->state()->meta.linux_uid, ctx.base() / "hello2.txt"); }
         });
 
         builder.makeTestCase({
             .name = "FUSE truncate (admin)",
             .path = "fuse/truncate",
             .must_contain = {"OK truncate"},
-            .fn = [=] { return truncate_as(*ctx.admin->meta.linux_uid, ctx.base() / "hello2.txt", 1); }
+            .fn = [=] { return truncate_as(*ctx.admin->state()->meta.linux_uid, ctx.base() / "hello2.txt", 1); }
         });
 
         builder.makeTestCase({
             .name = "FUSE stat after truncate (admin)",
             .path = "fuse/stat",
             .must_contain = {" size=1\n"},
-            .fn = [=] { return stat_size_as(*ctx.admin->meta.linux_uid, ctx.base() / "hello2.txt"); }
+            .fn = [=] { return stat_size_as(*ctx.admin->state()->meta.linux_uid, ctx.base() / "hello2.txt"); }
         });
 
         builder.makeTestCase({
             .name = "FUSE rm -rf (admin)",
             .path = "fuse/rmrf",
             .must_contain = {"OK rm -rf"},
-            .fn = [=]{ return rmrf_as(*ctx.admin->meta.linux_uid, ctx.base()); }
+            .fn = [=]{ return rmrf_as(*ctx.admin->state()->meta.linux_uid, ctx.base()); }
         });
 
         return builder.exec();
@@ -433,7 +435,7 @@ namespace vh::test::integration {
             .name = "FUSE root ls lists all mounted vaults for super-admin",
             .path = "fuse/ls/root",
             .must_contain = mountedVaultListingNeedles(),
-            .fn = [=]{ return ls_as(*ctx.admin->meta.linux_uid, ctx.engine->paths->fuseRoot); }
+            .fn = [=]{ return ls_as(*ctx.admin->state()->meta.linux_uid, ctx.engine->paths->fuseRoot); }
         });
 
         return builder.exec();
@@ -550,7 +552,7 @@ namespace vh::test::integration {
             .path = "fuse/ls",
             .expect_exit = ENOENT,
             .fn = [=]{
-                (void)ls_as(*ctx.admin->meta.linux_uid, ctx.base());
+                (void)ls_as(*ctx.admin->state()->meta.linux_uid, ctx.base());
                 return ls_as(subj.uid, ctx.base());
             }
         });
@@ -567,7 +569,7 @@ namespace vh::test::integration {
             .path = "fuse/read",
             .expect_exit = ENOENT,
             .fn = [=]{
-                (void)read_as(*ctx.admin->meta.linux_uid, ctx.secret());
+                (void)read_as(*ctx.admin->state()->meta.linux_uid, ctx.secret());
                 return read_as(subj.uid, ctx.secret());
             }
         });
@@ -580,7 +582,7 @@ namespace vh::test::integration {
             .path = "fuse/stat",
             .expect_exit = ENOENT,
             .fn = [=]{
-                (void)stat_size_as(*ctx.admin->meta.linux_uid, ctx.secret());
+                (void)stat_size_as(*ctx.admin->state()->meta.linux_uid, ctx.secret());
                 return stat_size_as(subj.uid, ctx.secret());
             }
         });
@@ -591,7 +593,7 @@ namespace vh::test::integration {
             .expect_exit = ENOENT,
             .fn = [=]{
                 const auto fresh = ctx.docs() / "created-by-admin.txt";
-                (void)write_as(*ctx.admin->meta.linux_uid, fresh, "fresh\n");
+                (void)write_as(*ctx.admin->state()->meta.linux_uid, fresh, "fresh\n");
                 return stat_size_as(subj.uid, fresh);
             }
         });

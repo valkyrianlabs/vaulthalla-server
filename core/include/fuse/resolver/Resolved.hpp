@@ -37,7 +37,7 @@ namespace vh {
             int errnum {0};
 
             std::shared_ptr<identities::User> user{};
-            std::shared_ptr<identities::Group> group{};
+            std::shared_ptr<identities::Group> group{};  // the caller's gid, when a group maps it (new entries' group_gid)
             std::shared_ptr<fs::model::Entry> entry{};
             std::shared_ptr<fs::model::Entry> parentEntry{};
             std::optional<std::filesystem::path> path{};

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "db/Transactions.hpp"
+#include "identities/Manager.hpp"
 #include "seed/include/SqlDeployer.hpp"
 #include <paths.h>
 
@@ -60,6 +61,8 @@ END
 $$;
         )");
     });
+
+    identities::manager().reset();
 }
 
 // Hard reset: drop & recreate the entire `public` schema (tables, types,
@@ -81,6 +84,9 @@ $$;
 
     // Recreate everything
     init_tables_if_not_exists();
+
+    // Ids are reused by the new schema: forget every identity the previous one held.
+    identities::manager().reset();
 }
 
 }

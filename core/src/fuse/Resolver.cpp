@@ -2,6 +2,7 @@
 #include "fuse/resolver/Denial.hpp"
 #include "db/query/identities/User.hpp"
 #include "db/query/identities/Group.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "identities/Group.hpp"
 #include "runtime/Deps.hpp"
@@ -140,7 +141,7 @@ namespace vh::fuse {
 
         [[nodiscard]]
         bool roleOverridesMayAffectListing(
-            const std::shared_ptr<rbac::role::Vault>& role,
+            const std::shared_ptr<const rbac::role::Vault>& role,
             const std::filesystem::path& directory
         ) {
             return role && rbac::fs::policy::Evaluator::overridesMayAffectListing(role->fs, directory);
@@ -163,22 +164,24 @@ namespace vh::fuse {
 
             const auto vaultId = static_cast<std::uint32_t>(*directory->vault_id);
             const auto& vaultPath = directory->path;
+            const auto view = user->authz();
+            if (!view.authorizing()) return true;  // nothing is visible; take the filtered (denying) path
 
-            if (roleOverridesMayAffectListing(user->getDirectVaultRole(vaultId), vaultPath))
+            if (roleOverridesMayAffectListing(view.directVaultRole(vaultId), vaultPath))
                 return true;
 
-            for (const auto& group : user->groups) {
-                if (!group) continue;
+            for (const auto& group : view.groups) {
                 const auto it = group->roles.vaults.find(vaultId);
                 if (it != group->roles.vaults.end() && roleOverridesMayAffectListing(it->second, vaultPath))
                     return true;
             }
 
-            if (!user->roles.admin) return false;
+            const auto* globals = view.vaultGlobals();
+            if (!globals) return false;
 
-            return roleOverridesMayAffectListing(user->vaultGlobals().self, vaultPath) ||
-                   roleOverridesMayAffectListing(user->vaultGlobals().admin, vaultPath) ||
-                   roleOverridesMayAffectListing(user->vaultGlobals().user, vaultPath);
+            return roleOverridesMayAffectListing(globals->self, vaultPath) ||
+                   roleOverridesMayAffectListing(globals->admin, vaultPath) ||
+                   roleOverridesMayAffectListing(globals->user, vaultPath);
         }
 
         [[nodiscard]]
@@ -279,14 +282,18 @@ namespace vh::fuse {
         const uid_t uid = fctx->uid;
         const gid_t gid = fctx->gid;
 
-        out.user = db::query::identities::User::getUserByLinuxUID(uid);
-        if (!out.user) {
-            log::Registry::fuse()->debug("[{}] No user found for UID {}", req.caller, uid);
+        // Canonical identities, from memory once the identity index is warm: no database round trip per FUSE op.
+        auto& identities = vh::identities::manager();
+        out.user = identities.userByLinuxUid(uid);
+        if (!out.user || !out.user->authorizing()) {
+            log::Registry::fuse()->debug("[{}] No authorizing user for UID {}", req.caller, uid);
             out.setStatus(Status::MissingUser, EACCES);
+            out.user.reset();
             return false;
         }
 
-        out.group = db::query::identities::Group::getGroupByLinuxGID(gid);
+        // Only stamps new entries' group_gid; authorization uses the user's memberships.
+        out.group = identities.groupByLinuxGid(gid);
         return true;
     }
 
@@ -446,11 +453,11 @@ namespace vh::fuse {
             return true;
 
         if (entry)
-            log::Registry::fuse()->warn("[auth] Access denied for user {} on path {}", user->name, entry->path.string());
+            log::Registry::fuse()->warn("[auth] Access denied for user {} on path {}", user->name(), entry->path.string());
         else if (path)
-            log::Registry::fuse()->warn("[auth] Access denied for user {} on path {}", user->name, path->string());
+            log::Registry::fuse()->warn("[auth] Access denied for user {} on path {}", user->name(), path->string());
         else
-            log::Registry::fuse()->warn("[auth] Access denied for user {} with no resolved path/entry", user->name);
+            log::Registry::fuse()->warn("[auth] Access denied for user {} with no resolved path/entry", user->name());
 
         return false;
     }

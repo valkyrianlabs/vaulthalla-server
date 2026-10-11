@@ -106,7 +106,7 @@ static CommandResult export_deleted_key(const CommandCall& call, const std::shar
     auto v = std::make_shared<::vh::vault::model::Vault>();
     v->id = deletion->vault_id;
     v->name = deletion->vault_name;
-    auto out = generate_json_key_object(v, retained.key, retained.record, call.user->name);
+    auto out = generate_json_key_object(v, retained.key, retained.record, call.user->name());
     sodium_memzero(retained.key.data(), retained.key.size());
     out["deleted_vault"] = true;
     const auto result = handle_key_encrypt_and_response(call, out, usage);
@@ -123,12 +123,12 @@ static CommandResult export_one_key(const CommandCall& call, const std::shared_p
     if (!engLkp || !engLkp.ptr) return export_deleted_key(call, usage, engLkp.error);
     const auto engine = engLkp.ptr;
 
-    const auto context = fmt::format("User: {} -> {}", call.user->name, __func__);
+    const auto context = fmt::format("User: {} -> {}", call.user->name(), __func__);
     const auto& key = engine->encryptionManager->get_key(context);
     const auto vaultKey = db::query::vault::Key::getVaultKey(engine->vault->id);
     if (!vaultKey) return invalid("vault keys export: no key record found for vault ID " + std::to_string(engine->vault->id));
 
-    const auto out = generate_json_key_object(engine->vault, key, vaultKey, call.user->name);
+    const auto out = generate_json_key_object(engine->vault, key, vaultKey, call.user->name());
     const auto result = handle_key_encrypt_and_response(call, out, usage);
     if (result.exit_code == 0) db::query::vault::Key::markExported(engine->vault->id, vaultKey->version);
     return result;
@@ -141,12 +141,12 @@ static CommandResult export_all_keys(const CommandCall& call, const std::shared_
 
     nlohmann::json out = nlohmann::json::array();
 
-    const auto context = fmt::format("User: {} -> {}", call.user->name, __func__);
+    const auto context = fmt::format("User: {} -> {}", call.user->name(), __func__);
     for (const auto& engine : engines) {
         const auto& key = engine->encryptionManager->get_key(context);
         const auto vaultKey = db::query::vault::Key::getVaultKey(engine->vault->id);
         if (!vaultKey) return invalid("vault keys export: no key record found for vault ID " + std::to_string(engine->vault->id));
-        out.push_back(generate_json_key_object(engine->vault, key, vaultKey, call.user->name));
+        out.push_back(generate_json_key_object(engine->vault, key, vaultKey, call.user->name()));
     }
 
     const auto result = handle_key_encrypt_and_response(call, out, usage);
@@ -166,7 +166,7 @@ static CommandResult handle_export_vault_keys(const CommandCall& call) {
         log::Registry::audit()->warn(
             "\n[shell::handle_export_vault_keys] User {} called to export vault keys without super admin privileges\n"
             "WARNING: It is extremely dangerous to assign this permission to non super-admin users, proceed at your own risk.\n",
-            call.user->name);
+            call.user->name());
     }
 
     const auto usage = resolveUsage({"vault", "keys", "export"});
@@ -187,7 +187,7 @@ static CommandResult handle_inspect_vault_key(const CommandCall& call) {
         log::Registry::audit()->warn(
             "\n[shell::handle_inspect_vault_key] User {} called to inspect vault keys without super admin privileges\n"
             "WARNING: It is extremely dangerous to assign this permission to non super-admin users, proceed at your own risk.\n",
-            call.user->name);
+            call.user->name());
     }
 
     const auto usage = resolveUsage({"vault", "keys", "inspect"});
@@ -200,7 +200,7 @@ static CommandResult handle_inspect_vault_key(const CommandCall& call) {
     const auto vaultKey = db::query::vault::Key::getVaultKey(engine->vault->id);
     if (!vaultKey) return invalid("vault keys inspect: no key record found for vault ID " + std::to_string(engine->vault->id));
 
-    return ok(generate_json_key_info_object(engine->vault, vaultKey, call.user->name).dump(4));
+    return ok(generate_json_key_info_object(engine->vault, vaultKey, call.user->name()).dump(4));
 }
 
 
@@ -214,7 +214,7 @@ static CommandResult handle_rotate_vault_keys(const CommandCall& call) {
         log::Registry::audit()->warn(
             "\n[shell::handle_rotate_vault_keys] User {} called to rotate vault keys without super admin privileges\n"
             "WARNING: It is extremely dangerous to assign this permission to non super-admin users, proceed at your own risk.\n",
-            call.user->name);
+            call.user->name());
     }
 
     const auto usage = resolveUsage({"vault", "keys", "rotate"});

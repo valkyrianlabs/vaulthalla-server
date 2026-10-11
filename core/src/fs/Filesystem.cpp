@@ -86,13 +86,15 @@ bool targetEscapesVaultRoot(const std::filesystem::path& linkVaultPath, const st
 }
 
 std::optional<int32_t> linuxUidFor(const std::shared_ptr<vh::identities::User>& user) {
-    if (!user || !user->meta.linux_uid) return std::nullopt;
-    return static_cast<int32_t>(*user->meta.linux_uid);
+    const auto uid = user ? user->linuxUid() : std::nullopt;
+    if (!uid) return std::nullopt;
+    return static_cast<int32_t>(*uid);
 }
 
 std::optional<int32_t> linuxGidFor(const std::shared_ptr<vh::identities::Group>& group) {
-    if (!group || !group->linux_gid) return std::nullopt;
-    return static_cast<int32_t>(*group->linux_gid);
+    const auto gid = group ? group->linuxGid() : std::nullopt;
+    if (!gid) return std::nullopt;
+    return static_cast<int32_t>(*gid);
 }
 
 std::optional<int32_t> userIdFor(const std::shared_ptr<vh::identities::User>& user) {

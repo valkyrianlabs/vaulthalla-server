@@ -22,6 +22,7 @@
 #include "rbac/resolver/vault/all.hpp"
 #include "rbac/fs/glob/Tokenizer.hpp"
 #include "ops/Error.hpp"
+#include "identities/Manager.hpp"
 
 using namespace vh;
 
@@ -42,11 +43,11 @@ std::shared_ptr<identities::User> resolveOwner(const CommandCall& call, const st
         if (const auto ownerOpt = optVal(call, ownerUsage->option_tokens)) {
             if (const auto idOpt = parseUInt(*ownerOpt)) {
                 if (*idOpt <= 0) throw std::runtime_error("owner must be a positive integer");
-                const auto user = db::query::identities::User::getUserById(*idOpt);
+                const auto user = vh::identities::manager().user(*idOpt);
                 if (!user) throw std::runtime_error("owner id not found: " + *ownerOpt);
                 return user;
             }
-            const auto user = db::query::identities::User::getUserByName(*ownerOpt);
+            const auto user = vh::identities::manager().userByName(*ownerOpt);
             if (!user) throw std::runtime_error("owner not found: " + *ownerOpt);
             return user;
         }
@@ -68,11 +69,11 @@ Lookup<identities::User> resolveOwnerRequired(const CommandCall& call, const std
     }
     if (const auto idOpt = parseUInt(*ownerOpt)) {
         if (*idOpt <= 0) { out.error = errPrefix + ": --owner must be a positive integer"; return out; }
-        out.ptr = db::query::identities::User::getUserById(*idOpt);
+        out.ptr = vh::identities::manager().user(*idOpt);
         if (!out.ptr) out.error = errPrefix + ": owner id not found: " + *ownerOpt;
         return out;
     }
-    out.ptr = db::query::identities::User::getUserByName(*ownerOpt);
+    out.ptr = vh::identities::manager().userByName(*ownerOpt);
     if (!out.ptr) out.error = errPrefix + ": owner not found: " + *ownerOpt;
     return out;
 }

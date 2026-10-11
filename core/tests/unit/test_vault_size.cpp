@@ -6,6 +6,7 @@
 #include "fs/Filesystem.hpp"
 #include "fs/model/File.hpp"
 #include "fs/model/Path.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "ops/Vaults.hpp"
 #include "protocols/ws/Router.hpp"
@@ -69,7 +70,7 @@ protected:
         seed::seed_database();
         runtime::Deps::init();
         fs::Filesystem::init(runtime::Deps::get().storageManager);
-        superUser = db::query::identities::User::getUserByName("admin");
+        superUser = vh::identities::manager().userByName("admin");
     }
 
     void SetUp() override {
@@ -155,12 +156,12 @@ TEST_F(VaultSizeDbTest, VaultListRowsCarryTheOwnerName) {
     for (const auto& row : out.at("vaults")) {
         ASSERT_TRUE(row.contains("owner_id"));
         ASSERT_TRUE(row.contains("owner")) << row.dump();
-        const auto owner = db::query::identities::User::getUserById(row.at("owner_id").get<uint32_t>());
+        const auto owner = vh::identities::manager().user(row.at("owner_id").get<uint32_t>());
         ASSERT_TRUE(owner);
-        EXPECT_EQ(row.at("owner").get<std::string>(), owner->name);
+        EXPECT_EQ(row.at("owner").get<std::string>(), owner->name());
         if (row.at("id").get<uint32_t>() == engine->vault->id) {
             sawNew = true;
-            EXPECT_EQ(row.at("owner").get<std::string>(), superUser->name);
+            EXPECT_EQ(row.at("owner").get<std::string>(), superUser->name());
         }
     }
     EXPECT_TRUE(sawNew);

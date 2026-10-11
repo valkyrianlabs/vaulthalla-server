@@ -559,9 +559,9 @@ TEST_F(HttpSharePreviewTest, SharePreviewDoesNotAcceptHumanRefreshCookie) {
     auto session = std::make_shared<vh::protocols::ws::Session>(std::make_shared<vh::protocols::ws::Router>());
     session->ipAddress = "127.0.0.1";
     session->userAgent = "http-share-preview-test";
-    auto user = std::make_shared<vh::identities::User>();
-    user->id = 9;
-    user->name = "preview-human";
+    vh::identities::UserState userState;
+    userState.name = "preview-human";
+    auto user = vh::identities::User::detached(9, std::move(userState));
 
     std::string humanRefresh;
     try {

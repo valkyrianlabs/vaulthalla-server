@@ -1,10 +1,12 @@
 // ops::groups invariants that hold independently of either frontend: a missing actor is a refusal (never a
 // dereference), groups resolve the same by id or by name, and every refusal is a typed ops::Error.
 
+#include "../helpers/identities.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/identities/User.hpp"
 #include "db/query/rbac/role/Admin.hpp"
 #include "identities/Group.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "ops/Groups.hpp"
 #include "rbac/role/Admin.hpp"
@@ -39,9 +41,8 @@ TEST(OpsGroups, MissingActorIsDeniedBeforeAnyLookup) {
 
 TEST(OpsGroups, PermissionlessActorIsDeniedBeforeAnyLookup) {
     // No DB needed: the permission check runs before the group is looked up.
-    auto actor = std::make_shared<identities::User>();
-    actor->id = 4242;
-    actor->roles.admin = std::make_shared<rbac::role::Admin>(rbac::role::Admin::None());
+    const auto actor = test::identities::detachedUser(4242, "ops_permissionless",
+                                                      std::make_shared<rbac::role::Admin>(rbac::role::Admin::None()));
     EXPECT_THROW((void)groups::create(actor, {.name = "anything"}), ops::Denied);
     EXPECT_THROW((void)groups::remove(actor, std::string("nosuch")), ops::Denied);
     EXPECT_THROW((void)groups::get(actor, std::string("nosuch")), ops::Denied);
@@ -68,12 +69,9 @@ protected:
         seed::initPermissions();
         seed::initRoles();
 
-        auto user = std::make_shared<identities::User>();
-        user->name = unique("ops_super_");
-        user->email = user->name + "@vaulthalla.test";
-        user->setPasswordHash("x");
-        user->roles.admin = db::query::rbac::role::Admin::get("super_admin");
-        superAdmin = db::query::identities::User::getUserById(db::query::identities::User::createUser(user));
+        const auto name = unique("ops_super_");
+        superAdmin = test::identities::createUser(name, db::query::rbac::role::Admin::get("super_admin"),
+                                                  name + "@vaulthalla.test");
     }
 
     void SetUp() override {
@@ -88,8 +86,8 @@ protected:
 TEST_F(OpsGroupsDbTest, IdAndNameRefsResolveTheSameGroup) {
     const auto created = groups::create(superAdmin, {.name = unique("ops_ref_"), .description = "d"});
     EXPECT_EQ(groups::get(superAdmin, created->id)->id, created->id);
-    EXPECT_EQ(groups::get(superAdmin, created->name)->id, created->id);
-    EXPECT_EQ(groups::get(superAdmin, created->name)->description.value_or(""), "d");
+    EXPECT_EQ(groups::get(superAdmin, created->name())->id, created->id);
+    EXPECT_EQ(groups::get(superAdmin, created->name())->description().value_or(""), "d");
 }
 
 TEST_F(OpsGroupsDbTest, RefusalsAreTyped) {
@@ -98,7 +96,7 @@ TEST_F(OpsGroupsDbTest, RefusalsAreTyped) {
     EXPECT_THROW((void)groups::get(superAdmin, 0u), ops::Invalid);
     EXPECT_THROW((void)groups::get(superAdmin, std::string("ops-no-such-group")), ops::NotFound);
     EXPECT_THROW((void)groups::create(superAdmin, {.name = "ab"}), ops::Invalid);
-    EXPECT_THROW((void)groups::create(superAdmin, {.name = created->name}), ops::Conflict);
+    EXPECT_THROW((void)groups::create(superAdmin, {.name = created->name()}), ops::Conflict);
     EXPECT_THROW((void)groups::create(superAdmin, {.name = unique("ops_gid_"), .linux_gid = 770001u}), ops::Conflict);
     EXPECT_THROW((void)groups::create(superAdmin, {.name = unique("ops_gid0_"), .linux_gid = 0u}), ops::Invalid);
     EXPECT_THROW((void)groups::addMember(superAdmin, {.group = created->id, .user = std::string("ops-no-such-user")}),
@@ -107,14 +105,18 @@ TEST_F(OpsGroupsDbTest, RefusalsAreTyped) {
 
 TEST_F(OpsGroupsDbTest, UpdateIsAPatch) {
     const auto created = groups::create(superAdmin, {.name = unique("ops_patch_"), .description = "keep", .linux_gid = 770101u});
+    const auto originalName = created->name();
     const auto renamed = groups::update(superAdmin, {.group = created->id, .name = unique("ops_patched_")});
-    EXPECT_NE(renamed->name, created->name);
-    EXPECT_EQ(renamed->description.value_or(""), "keep");
-    ASSERT_TRUE(renamed->linux_gid.has_value());
-    EXPECT_EQ(*renamed->linux_gid, 770101u);
+    EXPECT_NE(renamed->name(), originalName);
+    // One canonical object: the reference taken before the update sees the new name too.
+    EXPECT_EQ(created.get(), renamed.get());
+    EXPECT_EQ(created->name(), renamed->name());
+    EXPECT_EQ(renamed->description().value_or(""), "keep");
+    ASSERT_TRUE(renamed->linuxGid().has_value());
+    EXPECT_EQ(*renamed->linuxGid(), 770101u);
 
     // Renaming to its own current name is not a conflict.
-    EXPECT_NO_THROW((void)groups::update(superAdmin, {.group = renamed->id, .name = renamed->name}));
+    EXPECT_NO_THROW((void)groups::update(superAdmin, {.group = renamed->id, .name = renamed->name()}));
 }
 
 }

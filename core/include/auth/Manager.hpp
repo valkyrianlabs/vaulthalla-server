@@ -13,13 +13,11 @@ namespace vh::auth {
 
 class Manager {
 public:
-    void registerUser(std::shared_ptr<identities::User> user,
-                                         const std::string& password);
+    // Creates the account (through identities::Manager) and its storage; returns the canonical user.
+    std::shared_ptr<identities::User> registerUser(const identities::UserState& draft, const std::string& password);
 
     void loginUser(const std::string& name, const std::string& password,
                                       const std::shared_ptr<protocols::ws::Session>& session);
-
-    void updateUser(const std::shared_ptr<identities::User>& user);
 
     std::shared_ptr<identities::User> changePassword(uint32_t userId, const std::string& oldPassword,
                                                      const std::string& newPassword);

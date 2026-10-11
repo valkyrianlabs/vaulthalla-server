@@ -6,6 +6,7 @@
 #include "identities/User.hpp"
 #include "vault/model/Vault.hpp"
 #include "identities/Group.hpp"
+#include "entity/Edit.hpp"
 #include "rbac/role/Admin.hpp"
 #include "rbac/role/Vault.hpp"
 #include "randomizer/AdminRole.hpp"
@@ -15,7 +16,8 @@
 #include <memory>
 #include <optional>
 
-using namespace vh::identities;
+using vh::identities::User;
+using vh::identities::Group;
 using namespace vh::rbac;
 using namespace vh::vault::model;
 
@@ -28,11 +30,11 @@ public:
     [[nodiscard]] std::shared_ptr<void> create(const EntityType& type) const {
         if (type == EntityType::USER) {
             const std::string usage = "user/create";
-            const auto user = std::make_shared<User>();
-            user->name = generateName(usage);
-            if (coin()) user->email = generateEmail(usage);
-            user->roles.admin = ctx_->randomAdminRole();
-            return user;
+            vh::identities::UserState spec;
+            spec.name = generateName(usage);
+            if (coin()) spec.email = generateEmail(usage);
+            spec.roles.admin = ctx_->randomAdminRole();
+            return User::detached(0, std::move(spec));
         }
 
         if (type == EntityType::VAULT) {
@@ -45,9 +47,9 @@ public:
         }
 
         if (type == EntityType::GROUP) {
-            const auto group = std::make_shared<Group>();
-            group->name = generateName("group/create");
-            return group;
+            vh::identities::GroupState spec;
+            spec.name = generateName("group/create");
+            return Group::detached(0, std::move(spec));
         }
 
         if (type == EntityType::ADMIN_ROLE) {

@@ -3,8 +3,6 @@
 #include "rbac/role/Admin.hpp"
 #include "rbac/role/Vault.hpp"
 #include "rbac/role/vault/Global.hpp"
-#include "rbac/role/Admin.hpp"
-#include "auth/model/RefreshToken.hpp"
 #include "crypto/util/hash.hpp"
 #include "db/Transactions.hpp"
 #include "identities/User.hpp"
@@ -12,15 +10,13 @@
 #include "db/query/identities/helpers.hpp"
 
 #include <stdexcept>
-#include <array>
 #include <optional>
 #include <pqxx/pqxx>
 
-using U = vh::identities::User;
-using UserPtr = std::shared_ptr<U>;
-
 namespace vh::db::query::identities {
     namespace {
+        using State = vh::identities::UserState;
+
         bool rowBool(pqxx::row_ref row, const char* column, const bool fallback = false) {
             try {
                 const auto field = row[column];
@@ -31,34 +27,34 @@ namespace vh::db::query::identities {
             }
         }
 
-        void guardNormalUserCreate(const UserPtr& user) {
-            if (user->isProtected || user->systemOnly)
+        void guardNormalUserCreate(const State& user) {
+            if (user.isProtected || user.systemOnly)
                 throw std::runtime_error("protected/system-only user flags are bootstrap-only");
 
-            if (user->meta.linux_uid && *user->meta.linux_uid == 0)
+            if (user.meta.linux_uid && *user.meta.linux_uid == 0)
                 throw std::runtime_error("linux_uid 0 is reserved for the root principal");
         }
 
-        void guardNormalUserUpdate(pqxx::work& txn, const UserPtr& user) {
+        void guardNormalUserUpdate(pqxx::work& txn, const unsigned int id, const State& user) {
             const auto res = txn.exec(
                 R"SQL(
                     SELECT u.id, u.protected
                     FROM users u
                     WHERE u.id = $1
                 )SQL",
-                pqxx::params{user->id}
+                pqxx::params{id}
             );
 
             if (res.empty())
-                throw std::runtime_error("User not found: " + std::to_string(user->id));
+                throw std::runtime_error("User not found: " + std::to_string(id));
 
             if (rowBool(res.one_row_ref(), "protected"))
                 throw std::runtime_error("protected users cannot be updated through normal user paths");
 
-            if (user->isProtected || user->systemOnly)
+            if (user.isProtected || user.systemOnly)
                 throw std::runtime_error("protected/system-only user flags are bootstrap-only");
 
-            if (user->meta.linux_uid && *user->meta.linux_uid == 0)
+            if (user.meta.linux_uid && *user.meta.linux_uid == 0)
                 throw std::runtime_error("linux_uid 0 is reserved for the root principal");
         }
 
@@ -82,111 +78,45 @@ namespace vh::db::query::identities {
         }
     }
 
-    UserPtr User::getUserByName(const std::string &name) {
-        return Transactions::exec("User::getUserByName", [&](pqxx::work &txn) -> UserPtr {
-            const auto res = txn.exec(
-                pqxx::prepped{"get_user_by_name"},
-                pqxx::params{name}
-            );
+    unsigned int User::createUser(const State& draft, const std::string& passwordHash) {
+        guardNormalUserCreate(draft);
 
-            if (res.empty()) {
-                log::Registry::db()->trace("[User] No user found with name: {}", name);
-                return nullptr;
-            }
+        log::Registry::db()->debug("[User] Creating user: {}", draft.name);
 
-            return hydrateUser(txn, res.one_row_ref());
-        });
-    }
-
-    UserPtr User::getUserById(const unsigned int id) {
-        return Transactions::exec("User::getUserById", [&](pqxx::work &txn) -> UserPtr {
-            const auto res = txn.exec(
-                pqxx::prepped{"get_user"},
-                pqxx::params{id}
-            );
-
-            if (res.empty()) {
-                log::Registry::db()->trace("[User] No user found with id: {}", id);
-                return nullptr;
-            }
-
-            return hydrateUser(txn, res.one_row_ref());
-        });
-    }
-
-    UserPtr User::getUserByLinuxUID(unsigned int linuxUid) {
-        return Transactions::exec("User::getUserByLinuxUID", [&](pqxx::work &txn) -> UserPtr {
-            const auto res = txn.exec(
-                pqxx::prepped{"get_user_by_linux_uid"},
-                pqxx::params{linuxUid}
-            );
-
-            if (res.empty()) {
-                log::Registry::db()->debug("[User] No user found with Linux UID: {}", linuxUid);
-                return nullptr;
-            }
-
-            return hydrateUser(txn, res.one_row_ref());
-        });
-    }
-
-    unsigned int User::getUserIdByLinuxUID(const unsigned int linuxUid) {
-        return Transactions::exec("User::getUserIdByLinuxUID", [&](pqxx::work &txn) -> unsigned int {
-            const auto res = txn.exec(
-                pqxx::prepped{"get_user_id_by_linux_uid"},
-                pqxx::params{linuxUid}
-            );
-
-            if (res.empty())
-                throw std::runtime_error("No user found with Linux UID: " + std::to_string(linuxUid));
-
-            return res.one_field_ref().as<unsigned int>();
-        });
-    }
-
-    unsigned int User::createUser(const UserPtr &user) {
-        if (!user) throw std::invalid_argument("User::createUser received null user");
-        guardNormalUserCreate(user);
-
-        log::Registry::db()->debug("[User] Creating user: {}", user->name);
-
-        if (!user->roles.admin) throw std::runtime_error("User admin role must be set before creating a user");
+        if (!draft.roles.admin) throw std::runtime_error("User admin role must be set before creating a user");
 
         return Transactions::exec("User::createUser", [&](pqxx::work &txn) -> unsigned int {
             const pqxx::params userParams{
-                user->name,
-                user->email,
-                user->password_hash,
-                user->meta.is_active,
-                user->meta.linux_uid,
-                user->meta.updated_by
+                draft.name,
+                draft.email,
+                passwordHash,
+                draft.meta.is_active,
+                draft.meta.linux_uid,
+                draft.meta.updated_by
             };
 
-            user->id = txn.exec(
+            const auto id = txn.exec(
                 pqxx::prepped{"insert_user"},
                 userParams
             ).one_row_ref()[0].as<uint32_t>();
 
-            upsertUserRoles(txn, user);
+            upsertUserRoles(txn, id, draft);
 
-            return user->id;
+            return id;
         });
     }
 
-    void User::updateUser(const UserPtr &user) {
-        if (!user) throw std::invalid_argument("User::updateUser received null user");
-
+    void User::updateUser(const unsigned int id, const State& next) {
         Transactions::exec("User::updateUser", [&](pqxx::work &txn) {
-            guardNormalUserUpdate(txn, user);
+            guardNormalUserUpdate(txn, id, next);
 
             const pqxx::params userParams{
-                user->id,
-                user->name,
-                user->email,
-                user->password_hash,
-                user->meta.is_active,
-                user->meta.linux_uid,
-                user->meta.updated_by
+                id,
+                next.name,
+                next.email,
+                next.meta.is_active,
+                next.meta.linux_uid,
+                next.meta.updated_by
             };
 
             txn.exec(pqxx::prepped{"update_user"}, userParams);
@@ -194,17 +124,17 @@ namespace vh::db::query::identities {
             // Simplest bridge shape for now: replace all global policies for user, then upsert current set.
             txn.exec(
                 pqxx::prepped{"user_global_vault_policy_delete_all_for_user"},
-                pqxx::params{user->id}
+                pqxx::params{id}
             );
 
-            upsertUserRoles(txn, user);
+            upsertUserRoles(txn, id, next);
         });
     }
 
     bool User::authenticateUser(const std::string &name, const std::string &password) {
         return Transactions::exec("User::authenticateUser", [&](pqxx::work &txn) -> bool {
             const auto res = txn.exec(
-                pqxx::prepped{"get_user_by_name"},
+                "SELECT password_hash, system_only FROM users WHERE name = $1",
                 pqxx::params{name}
             );
 
@@ -239,26 +169,6 @@ namespace vh::db::query::identities {
                 pqxx::prepped{"delete_user"},
                 pqxx::params{userId}
             );
-        });
-    }
-
-    std::vector<UserPtr> User::listUsers(model::ListQueryParams &&params) {
-        return Transactions::exec("User::listUsers", [&](pqxx::work &txn) -> std::vector<UserPtr> {
-            const auto sql = model::appendPaginationAndFilter(
-                "SELECT * FROM users",
-                params,
-                "id",
-                "name"
-            );
-
-            const auto res = txn.exec(sql);
-            std::vector<UserPtr> users;
-            users.reserve(res.size());
-
-            for (const auto &row: res)
-                users.emplace_back(hydrateUser(txn, row));
-
-            return users;
         });
     }
 

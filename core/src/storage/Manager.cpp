@@ -4,6 +4,7 @@
 #include "config/Registry.hpp"
 #include "vault/model/Vault.hpp"
 #include "vault/model/S3Vault.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "fs/model/Entry.hpp"
 #include "fs/model/Path.hpp"
@@ -25,7 +26,8 @@
 
 using namespace vh::storage;
 using namespace vh::vault::model;
-using namespace vh::identities;
+using vh::identities::User;
+using vh::identities::Group;
 using namespace vh::config;
 using namespace vh::fs::model;
 using namespace vh::crypto;
@@ -63,7 +65,7 @@ void Manager::initStorageEngines() {
     std::scoped_lock lock(mutex_);
 
     if (const auto& config = Registry::get().dev; config.enabled && config.init_r2_test_vault) {
-        if (const auto admin = db::query::identities::User::getUserByName("admin")) {
+        if (const auto admin = vh::identities::manager().userByName("admin")) {
             constexpr uintmax_t r2TestVaultQuotaBytes = 10ull * 1024ull * 1024ull * 1024ull;
             const auto existing = db::query::vault::Vault::getVault("R2 Test Vault", admin->id);
             if (!existing) {
@@ -151,14 +153,14 @@ void Manager::initUserStorage(const std::shared_ptr<User>& user) {
         // registers the engine under the manager lock. The old direct upsert had no owner or sync policy,
         // so every web-console registration failed after the user row was already written.
         auto vault = std::make_shared<Vault>();
-        vault->name = user->name + "'s Local Disk Vault";
-        vault->description = "Default local disk vault for " + user->name;
+        vault->name = user->name() + "'s Local Disk Vault";
+        vault->description = "Default local disk vault for " + user->name();
         vault->owner_id = user->id;
         vault->type = VaultType::Local;
         const auto created = addVault(vault, std::make_shared<sync::model::LocalPolicy>());
 
         log::Registry::storage()->info("[StorageManager] User storage initialized for user: {} (ID: {}, vault ID: {})",
-                                              user->name, user->id, created->id);
+                                              user->name(), user->id, created->id);
     } catch (const std::exception& e) {
         log::Registry::storage()->error("[StorageManager] Error initializing user storage: {}", e.what());
         throw;

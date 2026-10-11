@@ -3,6 +3,7 @@
 // file's deletion reset it; `vh setup set-super-admin-password` (the configured super-admin UID only) rotates it.
 // The web console only warns, for the super admin, while the generated password and its file both remain.
 
+#include "db/query/identities/Loader.hpp"
 #include "auth/Bootstrap.hpp"
 #include "auth/Manager.hpp"
 #include "auth/session/Issuer.hpp"
@@ -10,6 +11,7 @@
 #include "db/Transactions.hpp"
 #include "db/query/identities/User.hpp"
 #include "fs/Filesystem.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "ops/Error.hpp"
 #include "ops/Users.hpp"
@@ -35,6 +37,14 @@
 #include <iostream>
 #include <set>
 #include <string>
+
+namespace {
+// Credentials are never part of identity state: read the stored hash directly.
+std::string hashOf(const uint32_t userId) {
+    const auto c = vh::db::query::identities::Loader::credentialsById(userId);
+    return c ? c->passwordHash : std::string{};
+}
+}
 
 namespace vh::test_auth_bootstrap {
 
@@ -109,7 +119,7 @@ protected:
         if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
     }
 
-    static UserPtr admin() { return db::query::identities::User::getUserByName(bootstrap::kSuperAdminName); }
+    static UserPtr admin() { return vh::identities::manager().userByName(bootstrap::kSuperAdminName); }
 
     // What the daemon does on every start once 'admin' exists (main.cpp initDB).
     static void restart() {
@@ -121,12 +131,13 @@ protected:
     // Puts admin back in the "fresh install" state with a known generated password.
     static std::string freshGenerated() {
         const auto hash = bootstrap::issueInitialCredential();
-        db::query::identities::User::updateUserPassword(admin()->id, hash);
+        vh::identities::manager().setPasswordHash(admin()->id, hash);
         return readFile(bootstrap::initialPasswordFile());
     }
 
     // Protected accounts' linux_uid only changes under the bootstrap guard (as the seed does).
     static void unbindAdminUid() {
+        struct Republish { ~Republish() { (void)vh::identities::manager().reconcile(); } } republish;
         db::Transactions::exec("bootstrap::unbindUid", [](pqxx::work& txn) {
             txn.exec("SELECT set_config('vaulthalla.bootstrap', 'on', true)");
             txn.exec("UPDATE users SET linux_uid = NULL WHERE name = 'admin'");
@@ -136,7 +147,7 @@ protected:
     // As `vh setup assign-admin` does.
     static void bindAdminUid(const unsigned int uid) {
         unbindAdminUid();
-        db::query::identities::User::bootstrapSetAdminLinuxUID(uid);
+        vh::identities::manager().bindLinuxUid(admin()->id, uid, std::nullopt);
     }
 
     static std::shared_ptr<protocols::ws::Session> wsFor(const UserPtr& user) {
@@ -150,7 +161,7 @@ protected:
     static UserPtr plainUser() {
         const auto created = ops::users::create(admin(), {.name = "bs_plain_" + tag(), .role = "unprivileged",
                                                           .password = std::string("Bootstrap-Test-Pass-123")});
-        return db::query::identities::User::getUserById(created.user->id);
+        return vh::identities::manager().user(created.user->id);
     }
 };
 
@@ -164,26 +175,26 @@ TEST_F(AuthBootstrapDbTest, AFreshInstallGetsAUniqueGeneratedPasswordWrittenOnce
               std::filesystem::perms::owner_read | std::filesystem::perms::owner_write);
 
     const auto account = admin();
-    EXPECT_NE(account->password_hash, password) << "stored through the password hash, not in clear";
-    EXPECT_TRUE(crypto::hash::verifyPassword(password, account->password_hash));
-    EXPECT_FALSE(crypto::hash::verifyPassword(kRetiredDefault, account->password_hash));
+    EXPECT_NE(hashOf(account->id), password) << "stored through the password hash, not in clear";
+    EXPECT_TRUE(crypto::hash::verifyPassword(password, hashOf(account->id)));
+    EXPECT_FALSE(crypto::hash::verifyPassword(kRetiredDefault, hashOf(account->id)));
     EXPECT_TRUE(bootstrap::superAdminPasswordIsGenerated());
     EXPECT_TRUE(bootstrap::initialPasswordExposed());
 }
 
 TEST_F(AuthBootstrapDbTest, RestartsNeverResetTheCredentialOrRecreateADeletedFile) {
     const auto password = freshGenerated();
-    const auto hash = admin()->password_hash;
+    const auto hash = hashOf(admin()->id);
 
     restart();
-    EXPECT_EQ(admin()->password_hash, hash) << "a restart (or upgrade/reinstall start) re-seeded admin";
+    EXPECT_EQ(hashOf(admin()->id), hash) << "a restart (or upgrade/reinstall start) re-seeded admin";
     EXPECT_EQ(readFile(bootstrap::initialPasswordFile()), password);
 
     std::filesystem::remove(bootstrap::initialPasswordFile());
     restart();
     restart();
     EXPECT_FALSE(std::filesystem::exists(bootstrap::initialPasswordFile())) << "a deleted copy came back";
-    EXPECT_EQ(admin()->password_hash, hash) << "deleting the copy changed the password";
+    EXPECT_EQ(hashOf(admin()->id), hash) << "deleting the copy changed the password";
     EXPECT_TRUE(bootstrap::superAdminPasswordIsGenerated()) << "deleting the copy is not a rotation";
     EXPECT_FALSE(bootstrap::initialPasswordExposed());
 }
@@ -191,14 +202,14 @@ TEST_F(AuthBootstrapDbTest, RestartsNeverResetTheCredentialOrRecreateADeletedFil
 // Every daemon start runs this. Argon2 is deliberately slow (~0.3 s a hash), and the protected principals already
 // exist after the first boot, so a reconcile on an existing database hashes nothing and stays cheap.
 TEST_F(AuthBootstrapDbTest, ReconcilingExistingPrincipalsHashesNoPasswords) {
-    const auto before = admin()->password_hash;
+    const auto before = hashOf(admin()->id);
     const auto start = std::chrono::steady_clock::now();
     seed::reconcileSystemPrincipals();
     const auto elapsed = std::chrono::steady_clock::now() - start;
     EXPECT_LT(elapsed, std::chrono::milliseconds(250)) << "a password was hashed on a restart";
-    EXPECT_EQ(admin()->password_hash, before);
+    EXPECT_EQ(hashOf(admin()->id), before);
     for (const auto* name : {"root", "system"})
-        EXPECT_NE(db::query::identities::User::getUserByName(name), nullptr) << name;
+        EXPECT_NE(vh::identities::manager().userByName(name), nullptr) << name;
 
     // The legacy-default check verifies a given hash once; later starts skip the Argon2 verify until it changes.
     EXPECT_FALSE(bootstrap::retireLegacyDefaultPassword());
@@ -208,7 +219,7 @@ TEST_F(AuthBootstrapDbTest, ReconcilingExistingPrincipalsHashesNoPasswords) {
 }
 
 TEST_F(AuthBootstrapDbTest, ALegacyDefaultPasswordIsReplacedOnceAndOthersAreLeftAlone) {
-    db::query::identities::User::updateUserPassword(admin()->id, crypto::hash::password(kRetiredDefault));
+    vh::identities::manager().setPasswordHash(admin()->id, crypto::hash::password(kRetiredDefault));
     std::filesystem::remove(bootstrap::initialPasswordFile());
     db::Transactions::exec("bootstrap::legacyState", [](pqxx::work& txn) {
         txn.exec("UPDATE auth_bootstrap_state SET super_admin_password_generated = FALSE");
@@ -217,17 +228,17 @@ TEST_F(AuthBootstrapDbTest, ALegacyDefaultPasswordIsReplacedOnceAndOthersAreLeft
     EXPECT_TRUE(bootstrap::retireLegacyDefaultPassword());
     const auto password = readFile(bootstrap::initialPasswordFile());
     EXPECT_EQ(password.size(), 32u);
-    EXPECT_TRUE(crypto::hash::verifyPassword(password, admin()->password_hash));
-    EXPECT_FALSE(crypto::hash::verifyPassword(kRetiredDefault, admin()->password_hash));
+    EXPECT_TRUE(crypto::hash::verifyPassword(password, hashOf(admin()->id)));
+    EXPECT_FALSE(crypto::hash::verifyPassword(kRetiredDefault, hashOf(admin()->id)));
     EXPECT_TRUE(bootstrap::superAdminPasswordIsGenerated());
     EXPECT_FALSE(bootstrap::retireLegacyDefaultPassword()) << "it ran twice";
 
     // An operator-chosen password is never touched, and gets no file or warning.
-    db::query::identities::User::updateUserPassword(admin()->id, crypto::hash::password("Operator-Chosen-Pass-77"));
+    vh::identities::manager().setPasswordHash(admin()->id, crypto::hash::password("Operator-Chosen-Pass-77"));
     (void)bootstrap::onSuperAdminPasswordChanged();
-    const auto chosen = admin()->password_hash;
+    const auto chosen = hashOf(admin()->id);
     restart();
-    EXPECT_EQ(admin()->password_hash, chosen);
+    EXPECT_EQ(hashOf(admin()->id), chosen);
     EXPECT_FALSE(std::filesystem::exists(bootstrap::initialPasswordFile()));
     EXPECT_FALSE(bootstrap::superAdminPasswordIsGenerated());
 }
@@ -239,12 +250,12 @@ TEST_F(AuthBootstrapDbTest, OnlyTheConfiguredSuperAdminUidMaySetThePassword) {
         << "no super-admin UID is configured yet";
 
     bindAdminUid(64001);
-    const auto root = db::query::identities::User::getUserByName("root");
-    const auto system = db::query::identities::User::getUserByName("system");
+    const auto root = vh::identities::manager().userByName("root");
+    const auto system = vh::identities::manager().userByName("system");
     const auto plain = plainUser();
     for (const auto& other : {root, system, plain}) {
         ASSERT_TRUE(other);
-        EXPECT_THROW((void)ops::users::setSuperAdminPassword(other, "Rotated-Pass-1234567"), ops::Denied) << other->name;
+        EXPECT_THROW((void)ops::users::setSuperAdminPassword(other, "Rotated-Pass-1234567"), ops::Denied) << other->name();
     }
     EXPECT_TRUE(bootstrap::superAdminPasswordIsGenerated()) << "a refused attempt changed state";
 
@@ -266,8 +277,8 @@ TEST_F(AuthBootstrapDbTest, RotationTakesEffectAndRemovesTheFile) {
 
     const auto result = ops::users::setSuperAdminPassword(admin(), "Rotated-Pass-1234567");
     EXPECT_FALSE(result.leftover_file);
-    EXPECT_TRUE(crypto::hash::verifyPassword("Rotated-Pass-1234567", admin()->password_hash));
-    EXPECT_FALSE(crypto::hash::verifyPassword(generated, admin()->password_hash));
+    EXPECT_TRUE(crypto::hash::verifyPassword("Rotated-Pass-1234567", hashOf(admin()->id)));
+    EXPECT_FALSE(crypto::hash::verifyPassword(generated, hashOf(admin()->id)));
     EXPECT_FALSE(std::filesystem::exists(bootstrap::initialPasswordFile()));
     EXPECT_FALSE(bootstrap::superAdminPasswordIsGenerated());
 
@@ -285,7 +296,7 @@ TEST_F(AuthBootstrapDbTest, AFileThatCannotBeRemovedIsReportedNotRolledBack) {
 
     const auto result = ops::users::setSuperAdminPassword(admin(), "Rotated-Pass-7654321");
     EXPECT_TRUE(result.leftover_file);
-    EXPECT_TRUE(crypto::hash::verifyPassword("Rotated-Pass-7654321", admin()->password_hash))
+    EXPECT_TRUE(crypto::hash::verifyPassword("Rotated-Pass-7654321", hashOf(admin()->id)))
         << "a failed cleanup undid the password change";
     EXPECT_FALSE(bootstrap::superAdminPasswordIsGenerated());
 
@@ -319,7 +330,7 @@ TEST_F(AuthBootstrapDbTest, TheWebWarningIsForTheSuperAdminOnlyAndClearsWhenTheF
     ASSERT_FALSE(bootstrap::removeInitialPasswordFile());
     EXPECT_TRUE(protocols::ws::handler::Auth::securityStatus(session).at("initial_password_file").is_null());
     EXPECT_TRUE(bootstrap::superAdminPasswordIsGenerated());
-    EXPECT_TRUE(crypto::hash::verifyPassword(generated, admin()->password_hash));
+    EXPECT_TRUE(crypto::hash::verifyPassword(generated, hashOf(admin()->id)));
 }
 
 }

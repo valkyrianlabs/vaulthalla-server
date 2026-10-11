@@ -6,6 +6,7 @@
 //  - secrets are redacted from ws debug logs; daemon-written secret files are 0600 and absolute-path only;
 //  - (DB-backed) no CLI self-promotion, no role upsert-over-existing, no daemon crash on unknown group.
 
+#include "../helpers/identities.hpp"
 #include "auth/model/Token.hpp"
 #include "auth/model/TokenPair.hpp"
 #include "auth/session/Issuer.hpp"
@@ -17,6 +18,7 @@
 #include "db/query/identities/User.hpp"
 #include "db/query/rbac/role/Admin.hpp"
 #include "db/query/rbac/role/admin/Assignments.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
 #include "ops/Error.hpp"
@@ -403,14 +405,9 @@ protected:
     }
 
     static std::shared_ptr<identities::User> createUser(const std::string& name, const std::string& roleName) {
-        auto user = std::make_shared<identities::User>();
-        user->name = name;
-        user->email = name + "@vaulthalla.test";
-        user->setPasswordHash("x");
-        user->roles.admin = db::query::rbac::role::Admin::get(roleName);
-        if (!user->roles.admin) throw std::runtime_error("Missing admin role: " + roleName);
-        user->id = db::query::identities::User::createUser(user);
-        return db::query::identities::User::getUserById(user->id);
+        auto role = db::query::rbac::role::Admin::get(roleName);
+        if (!role) throw std::runtime_error("Missing admin role: " + roleName);
+        return test::identities::createUser(name, role, name + "@vaulthalla.test");
     }
 
     // exit code + combined output; handler exceptions are what the shell server turns into exit 1.
@@ -442,10 +439,10 @@ TEST_F(CliRbacDbTest, CannotChangeOwnRole) {
     const auto admin = createUser(unique("cli_admin_"), "admin");
     for (const auto& target : {std::string("super_admin"), std::string("unprivileged"),
                                std::to_string(db::query::rbac::role::Admin::get("super_admin")->id)}) {
-        const auto [code, out] = run("user update " + admin->name + " --role " + target, admin);
+        const auto [code, out] = run("user update " + admin->name() + " --role " + target, admin);
         EXPECT_NE(code, 0) << "self role change to " << target << " succeeded: " << out;
     }
-    EXPECT_EQ(db::query::identities::User::getUserById(admin->id)->roles.admin->name, "admin");
+    EXPECT_EQ(vh::identities::manager().user(admin->id)->state()->roles.admin->name, "admin");
 }
 
 TEST_F(CliRbacDbTest, CannotAssignSuperAdminByRoleId) {
@@ -453,16 +450,16 @@ TEST_F(CliRbacDbTest, CannotAssignSuperAdminByRoleId) {
     const auto plain = createUser(unique("cli_user_"), "unprivileged");
     const auto superId = db::query::rbac::role::Admin::get("super_admin")->id;
 
-    const auto [code, out] = run("user update " + plain->name + " --role " + std::to_string(superId), admin);
+    const auto [code, out] = run("user update " + plain->name() + " --role " + std::to_string(superId), admin);
     EXPECT_NE(code, 0) << out;
-    EXPECT_FALSE(db::query::identities::User::getUserById(plain->id)->isSuperAdmin());
+    EXPECT_FALSE(vh::identities::manager().user(plain->id)->isSuperAdmin());
 }
 
 TEST_F(CliRbacDbTest, UnknownGroupIsAnErrorNotACrash) {
     const auto superUser = createUser(unique("cli_super_"), "super_admin");
     const std::vector<std::string> lines{
         "group info nosuch_group", "group update nosuch_group --description x", "group delete nosuch_group",
-        "group user add nosuch_group " + superUser->name, "group user list nosuch_group", "group user list"};
+        "group user add nosuch_group " + superUser->name(), "group user list nosuch_group", "group user list"};
     for (const auto& line : lines) {
         const auto [code, out] = run(line, superUser);
         EXPECT_NE(code, 0) << line;
@@ -550,12 +547,10 @@ std::shared_ptr<protocols::ws::Session> closedSessionWith(const std::shared_ptr<
     return session;
 }
 
+// A logged-in human for routing checks; credentials are never consulted on this path.
 std::shared_ptr<identities::User> userWithPassword(const std::string& password) {
-    auto user = std::make_shared<identities::User>();
-    user->id = 4242;
-    user->name = "admin";
-    user->setPasswordHash(crypto::hash::password(password));
-    return user;
+    (void)password;
+    return test::identities::detachedUser(4242, "admin");
 }
 
 // Installs a session manager and a test JWT secret so routed commands can pass real access-token validation

@@ -52,51 +52,6 @@ void vh::db::Connection::initPreparedGroups() const {
     );
 
     conn_->prepare(
-        "get_group",
-        R"SQL(
-            SELECT
-                g.id,
-                g.linux_gid,
-                g.name,
-                g.description,
-                g.created_at,
-                g.updated_at
-            FROM groups g
-            WHERE g.id = $1
-        )SQL"
-    );
-
-    conn_->prepare(
-        "get_group_by_name",
-        R"SQL(
-            SELECT
-                g.id,
-                g.linux_gid,
-                g.name,
-                g.description,
-                g.created_at,
-                g.updated_at
-            FROM groups g
-            WHERE g.name = $1
-        )SQL"
-    );
-
-    conn_->prepare(
-        "list_groups",
-        R"SQL(
-            SELECT
-                g.id,
-                g.linux_gid,
-                g.name,
-                g.description,
-                g.created_at,
-                g.updated_at
-            FROM groups g
-            ORDER BY g.name ASC, g.id ASC
-        )SQL"
-    );
-
-    conn_->prepare(
         "save_group_member",
         R"SQL(
             INSERT INTO group_members (
@@ -128,50 +83,6 @@ void vh::db::Connection::initPreparedGroups() const {
     );
 
     conn_->prepare(
-        "list_group_members",
-        R"SQL(
-            SELECT
-                u.*,
-                gm.joined_at
-            FROM group_members gm
-            JOIN users u
-              ON u.id = gm.user_id
-            WHERE gm.group_id = $1
-            ORDER BY u.name ASC, u.id ASC
-        )SQL"
-    );
-
-    conn_->prepare(
-        "list_groups_for_user",
-        R"SQL(
-            SELECT
-                g.id,
-                g.linux_gid,
-                g.name,
-                g.description,
-                g.created_at,
-                g.updated_at,
-                gm.joined_at
-            FROM group_members gm
-            JOIN groups g
-              ON g.id = gm.group_id
-            WHERE gm.user_id = $1
-            ORDER BY g.name ASC, g.id ASC
-        )SQL"
-    );
-
-    conn_->prepare(
-        "group_exists_by_id",
-        R"SQL(
-            SELECT EXISTS(
-                SELECT 1
-                FROM groups g
-                WHERE g.id = $1
-            ) AS exists
-        )SQL"
-    );
-
-    conn_->prepare(
         "group_exists_by_name",
         R"SQL(
             SELECT EXISTS(
@@ -194,5 +105,4 @@ void vh::db::Connection::initPreparedGroups() const {
         )SQL"
     );
 
-    conn_->prepare("get_group_by_linux_gid", "SELECT * FROM groups WHERE linux_gid = $1");
 }

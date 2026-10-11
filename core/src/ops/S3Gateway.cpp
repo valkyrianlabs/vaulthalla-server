@@ -7,6 +7,7 @@
 #include "db/query/rbac/role/Vault.hpp"
 #include "db/query/vault/APIKey.hpp"
 #include "db/query/vault/Vault.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "protocols/s3/CredentialManager.hpp"
 #include "protocols/s3/Error.hpp"
@@ -82,7 +83,7 @@ bool canViewVault(const Actor& actor, const uint32_t vaultId) {
 }
 
 UserPtr requireUser(const uint32_t id, const char* what) {
-    auto user = db::query::identities::User::getUserById(id);
+    auto user = vh::identities::manager().user(id);
     if (!user) throw NotFound(std::string(what) + " not found: " + std::to_string(id));
     return user;
 }
@@ -147,9 +148,9 @@ void requireGrantOn(const Actor& actor, const UserPtr& principal, const uint32_t
 void requireScopeMutation(const Actor& actor, const uint32_t principalId, const std::string& mode,
                           const std::vector<VaultAccess>& access, const std::vector<uint32_t>& selectedVaultIds,
                           const std::optional<uint32_t> defaultRoleId) {
-    if (!actor->meta.is_active) throw Denied("your account is not active");
+    if (!actor->isActive()) throw Denied("your account is not active");
     const auto principal = requireUser(principalId, "principal");
-    if (!principal->meta.is_active) throw Invalid("the credential principal is not active");
+    if (!principal->isActive()) throw Invalid("the credential principal is not active");
     requireActFor(actor, principalId);
 
     if (mode == GLOBAL) {
@@ -789,7 +790,7 @@ Bucket createLocalBucket(const Actor& actor, const CreateLocalBucket& req) {
         requireBucketName(*req.bucket_name);
         requireBucketFree(*req.bucket_name);
     }
-    const auto name = req.name.value_or(req.bucket_name.value_or("S3 gateway local bucket for " + owner->name));
+    const auto name = req.name.value_or(req.bucket_name.value_or("S3 gateway local bucket for " + owner->name()));
     const auto vault = ops::vaults::create(actor, {
         .name = name,
         .type = vault::model::VaultType::Local,

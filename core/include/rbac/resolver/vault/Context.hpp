@@ -9,6 +9,7 @@
 #include <optional>
 #include <type_traits>
 #include <ostream>
+#include <sstream>
 
 namespace vh::rbac::resolver::vault {
     template<typename EnumT>
@@ -31,7 +32,7 @@ namespace vh::rbac::resolver::vault {
         [[nodiscard]] std::string dump() const {
             std::ostringstream oss;
             const std::string in(2, ' ');
-            oss << in << "User: " << user->name << "\n";
+            oss << in << "User: " << user->name() << "\n";
             oss << in << "Vault ID: " << (vault_id ? std::to_string(*vault_id) : "nullopt") << "\n";
             oss << in << "Path: " << (path ? path->string() : "nullopt") << "\n";
             oss << in << "Entry: " << (entry ? entry->name : "nullopt") << ", Entry Path: " << (entry ? entry->path : "nullopt") << "\n";

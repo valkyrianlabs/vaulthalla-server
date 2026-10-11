@@ -101,12 +101,14 @@ bool canResolveIn(const Actor& actor, const uint32_t vaultId) {
         return true;
     // A vault role on this vault, the account's own or one of its groups'. The vault resolver only reads vault
     // globals for sync permissions, so without this a member could never resolve conflicts in someone else's vault.
-    const auto grants = [&](const std::unordered_map<uint32_t, std::shared_ptr<rbac::role::Vault>>& roles) {
+    const auto grants = [&](const std::unordered_map<uint32_t, std::shared_ptr<const rbac::role::Vault>>& roles) {
         const auto it = roles.find(vaultId);
         return it != roles.end() && it->second && it->second->sync.action.canResolveConflicts();
     };
-    if (grants(actor->roles.vaults)) return true;
-    return std::ranges::any_of(actor->groups, [&](const auto& group) { return group && grants(group->roles.vaults); });
+    const auto view = actor->authz();
+    if (!view.authorizing()) return false;
+    if (grants(view.user->roles.vaults)) return true;
+    return std::ranges::any_of(view.groups, [&](const auto& group) { return grants(group->roles.vaults); });
 }
 
 Summary summary(const Actor& actor) {
@@ -183,7 +185,7 @@ ResolveResult resolve(const Actor& actor, const Decision decision, const std::ve
                 vh::sync::ConflictResolver::resolve(engine, *record, decision);
                 item = {.conflict_id = id, .ok = true, .status = "resolved", .message = std::nullopt};
                 log::Registry::audit()->info("[ops::conflicts] {} resolved sync conflict {} on '{}' in vault {}: {}",
-                                             actor->name, id, record->path, record->vault_id,
+                                             actor->name(), id, record->path, record->vault_id,
                                              vh::sync::toString(decision));
             }
         } catch (const vh::sync::ConflictStale& e) {

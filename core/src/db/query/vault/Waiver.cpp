@@ -33,8 +33,8 @@ void Waiver::addWaiver(const std::shared_ptr<vh::sync::model::Waiver>& waiver) {
             const pqxx::params p2{
                 waiver->id,
                 waiver->owner->id,
-                waiver->owner->name,
-                waiver->owner->email,
+                waiver->owner->name(),
+                waiver->owner->email(),
                 ctx.id,
                 ctx.name,
                 ctx.type

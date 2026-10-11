@@ -366,8 +366,8 @@ void requireAcceptedDuplicatePolicy(const json& payload) {
 
             if (refreshed->link_created_by == 0)
                 throw std::runtime_error("Share upload link creator user is missing");
-            auto creator = std::make_shared<vh::identities::User>();
-            creator->id = refreshed->link_created_by;
+            // Attribution only (created_by): an id-only detached user, as before.
+            const auto creator = vh::identities::User::detached(refreshed->link_created_by, {});
 
             auto file = writer->createFile(currentParent, creator, finalVaultPath, bytes);
             if (!file) throw std::runtime_error("Share upload file creation failed");

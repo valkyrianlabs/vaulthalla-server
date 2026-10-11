@@ -1,3 +1,4 @@
+#include "../helpers/identities.hpp"
 #include "auth/model/RefreshToken.hpp"
 #include "auth/model/TokenPair.hpp"
 #include "auth/session/Issuer.hpp"
@@ -8,6 +9,7 @@
 #include "db/query/auth/RefreshToken.hpp"
 #include "db/query/identities/User.hpp"
 #include "db/query/rbac/role/Admin.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "protocols/ws/Router.hpp"
 #include "protocols/ws/Session.hpp"
@@ -165,14 +167,10 @@ protected:
         vh::seed::initPermissions();
         vh::seed::initRoles();
 
-        auto u = std::make_shared<identities::User>();
-        u->name = "refresh_digest_user";
-        u->email = "refresh_digest_user@vaulthalla.test";
-        u->setPasswordHash(hash::password("refresh-digest-user-pass"));
-        u->roles.admin = vh::db::query::rbac::role::Admin::get("unprivileged");
-        if (!u->roles.admin) throw std::runtime_error("Missing unprivileged role");
-        u->id = vh::db::query::identities::User::createUser(u);
-        user = vh::db::query::identities::User::getUserById(u->id);
+        const auto uRole = vh::db::query::rbac::role::Admin::get("unprivileged");
+        if (!uRole) throw std::runtime_error("Missing unprivileged role");
+        auto u = vh::test::identities::createUser("refresh_digest_user", uRole, "refresh_digest_user@vaulthalla.test", hash::password("refresh-digest-user-pass"), std::nullopt);
+        user = vh::identities::manager().user(u->id);
     }
 
     void SetUp() override {

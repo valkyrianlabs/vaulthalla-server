@@ -13,7 +13,8 @@
 
 using namespace vh;
 using namespace vh::protocols::shell;
-using namespace vh::identities;
+using vh::identities::User;
+using vh::identities::Group;
 
 // CLI syntax only: a numeric positional names a group or user by id, anything else by name.
 static ops::groups::Ref groupCliRef(const std::string& nameOrId) {
@@ -62,7 +63,7 @@ static CommandResult handle_group_delete(const CommandCall& call) {
 
     return runOp("group delete", [&] { return ops::groups::remove(call.user, groupCliRef(call.positionals[0])); },
         [](const auto& group) {
-            return "Successfully deleted group '" + group->name + "' (ID: " + std::to_string(group->id) + ")";
+            return "Successfully deleted group '" + group->name() + "' (ID: " + std::to_string(group->id) + ")";
         });
 }
 
@@ -92,7 +93,7 @@ static CommandResult handle_group_add_user(const CommandCall& call) {
             .user = groupCliRef(call.positionals[1])
         });
     }, [&](const auto& group) {
-        return "Successfully added user '" + call.positionals[1] + "' to group '" + group->name + "'";
+        return "Successfully added user '" + call.positionals[1] + "' to group '" + group->name() + "'";
     });
 }
 
@@ -106,7 +107,7 @@ static CommandResult handle_group_remove_user(const CommandCall& call) {
             .user = groupCliRef(call.positionals[1])
         });
     }, [&](const auto& group) {
-        return "Successfully removed user '" + call.positionals[1] + "' from group '" + group->name + "'";
+        return "Successfully removed user '" + call.positionals[1] + "' from group '" + group->name() + "'";
     });
 }
 

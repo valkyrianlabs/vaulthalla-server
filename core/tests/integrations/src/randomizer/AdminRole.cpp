@@ -19,7 +19,11 @@ std::shared_ptr<role::Admin> AdminRole::getRandomRole() {
 }
 
 void AdminRole::assignRandomRole(const std::shared_ptr<identities::User> &user) {
-    user->roles.admin = getRandomRole();
+    {
+        auto next = *user->state();
+        next.roles.admin = getRandomRole();
+        user->replaceDetachedState(std::move(next));
+    }
 }
 
 void AdminRole::assignRandomPermissions(const std::shared_ptr<role::Admin>& role) {

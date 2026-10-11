@@ -6,6 +6,7 @@
 // #160: 24 h trends read the same rollups as 7 d (never more points), unknown amounts are null rather than fake
 // zeros, counts carry numeric_value, money carries numeric_value + currency, and hrefs are console routes.
 
+#include "../helpers/identities.hpp"
 #include "config/Registry.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/identities/User.hpp"
@@ -13,6 +14,7 @@
 #include "db/query/stats/MetricSamples.hpp"
 #include "db/query/stats/Snapshot.hpp"
 #include "fs/Filesystem.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "ops/Error.hpp"
 #include "ops/Stats.hpp"
@@ -65,11 +67,7 @@ std::shared_ptr<protocols::ws::Session> sessionFor(const UserPtr& user) {
 
 // A user that exists only in memory, holding `role` (the system gate needs no DB).
 UserPtr inMemoryUser(const Admin& role) {
-    auto user = std::make_shared<identities::User>();
-    user->id = 4343;
-    user->name = "stats_access_" + role.name;
-    user->roles.admin = std::make_shared<Admin>(role);
-    return user;
+    return test::identities::detachedUser(4343, "stats_access_" + role.name, std::make_shared<Admin>(role));
 }
 
 bool granted(const Admin& role, const std::string& qualified) {
@@ -167,13 +165,8 @@ protected:
     inline static uint32_t aliceVault = 0, bobVault = 0;
 
     static UserPtr createUser(const std::string& prefix, const std::string& roleName) {
-        auto user = std::make_shared<identities::User>();
-        user->name = prefix + "_" + statsTag();
-        user->email = user->name + "@vaulthalla.test";
-        user->setPasswordHash("x");
-        user->roles.admin = db::query::rbac::role::Admin::get(roleName);
-        user->id = db::query::identities::User::createUser(user);
-        return db::query::identities::User::getUserById(user->id);
+        const auto name = prefix + "_" + statsTag();
+        return test::identities::createUser(name, db::query::rbac::role::Admin::get(roleName), name + "@vaulthalla.test");
     }
 
     static uint32_t vaultFor(const UserPtr& owner) {
@@ -260,7 +253,7 @@ protected:
         };
         std::size_t passed = 0;
         for (const auto& call : calls) passed += allowed(call) ? 1 : 0;
-        EXPECT_TRUE(passed == 0 || passed == calls.size()) << user->name << ": system stats gates disagree";
+        EXPECT_TRUE(passed == 0 || passed == calls.size()) << user->name() << ": system stats gates disagree";
         return passed == calls.size();
     }
 };

@@ -73,7 +73,7 @@ CommandResult updateUser(const CommandCall& call) {
         if (hasFlag(call, "enable")) req.is_active = true;
         return ops::users::update(call.user, req);
     }, [](const ops::users::UserPtr& user) {
-        return "User updated successfully: " + user->name + "\n" + identities::to_string(user);
+        return "User updated successfully: " + user->name() + "\n" + identities::to_string(user);
     });
 }
 
@@ -89,7 +89,7 @@ CommandResult deleteUser(const CommandCall& call) {
         if (!heirId) return userNotFound("user delete --transfer-to", *heir);
         req.transfer_to = *heirId;
     }
-    const auto format = [](const ops::users::UserPtr& user) { return "User deleted successfully: " + user->name; };
+    const auto format = [](const ops::users::UserPtr& user) { return "User deleted successfully: " + user->name(); };
     try {
         return ok(format(ops::users::remove(call.user, req)));
     } catch (const ops::NeedsConfirmation& e) {

@@ -12,7 +12,8 @@
 
 using namespace vh::protocols::ws::handler;
 using namespace vh::auth;
-using namespace vh::identities;
+using vh::identities::User;
+using vh::identities::Group;
 
 namespace {
 // Account-management handlers are routed only for authenticated human sessions, but never trust that here: a null
@@ -161,7 +162,7 @@ json Auth::getUserByName(const json &payload, const std::shared_ptr<Session> &se
 json Auth::securityStatus(const std::shared_ptr<Session>& session) {
     const auto& user = requireSessionUser(session);
     json out = {{"initial_password_file", nullptr}};
-    if (user->name == auth::bootstrap::kSuperAdminName && auth::bootstrap::initialPasswordExposed())
+    if (user->name() == auth::bootstrap::kSuperAdminName && auth::bootstrap::initialPasswordExposed())
         out["initial_password_file"] = auth::bootstrap::initialPasswordFile().string();
     return out;
 }

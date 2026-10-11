@@ -6,6 +6,7 @@
 #include "db/query/identities/Group.hpp"
 #include "db/query/rbac/role/Vault.hpp"
 #include "db/query/rbac/role/Admin.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "identities/Group.hpp"
 #include "rbac/role/Vault.hpp"
@@ -17,7 +18,8 @@
 #include <algorithm>
 #include <limits>
 
-using namespace vh::identities;
+using vh::identities::User;
+using vh::identities::Group;
 using namespace vh::rbac;
 using namespace vh::db::model;
 
@@ -116,7 +118,7 @@ Lookup<Subject> parseSubject(const CommandCall& call, const std::string& errPref
                 out.ptr = std::make_shared<Subject>(Subject{"user", static_cast<unsigned int>(*idOpt)});
                 return out;
             }
-            auto user = db::query::identities::User::getUserByName(*v);
+            auto user = vh::identities::manager().userByName(*v);
             if (!user) { out.error = errPrefix + ": user not found: " + *v; return out; }
             out.ptr = std::make_shared<Subject>(Subject{"user", static_cast<unsigned int>(user->id)});
             return out;
@@ -131,7 +133,7 @@ Lookup<Subject> parseSubject(const CommandCall& call, const std::string& errPref
                 out.ptr = std::make_shared<Subject>(Subject{"group", static_cast<unsigned int>(*idOpt)});
                 return out;
             }
-            auto group = db::query::identities::Group::getGroupByName(*v);
+            auto group = vh::identities::manager().groupByName(*v);
             if (!group) { out.error = errPrefix + ": group not found: " + *v; return out; }
             out.ptr = std::make_shared<Subject>(Subject{"group", group->id});
             return out;
@@ -224,8 +226,8 @@ Lookup<User> resolveUser(const std::string& userArg, const std::string& errPrefi
             out.error = errPrefix + ": user ID must be a positive integer";
             return out;
         }
-        out.ptr = db::query::identities::User::getUserById(*idOpt);
-    } else out.ptr = db::query::identities::User::getUserByName(userArg);
+        out.ptr = vh::identities::manager().user(*idOpt);
+    } else out.ptr = vh::identities::manager().userByName(userArg);
 
     if (!out.ptr) out.error = errPrefix + ": user not found";
     return out;

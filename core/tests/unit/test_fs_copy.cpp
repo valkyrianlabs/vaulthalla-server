@@ -14,6 +14,7 @@
 #include "fs/model/Directory.hpp"
 #include "fs/model/File.hpp"
 #include "fs/model/Symlink.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "ops/Roles.hpp"
 #include "ops/Users.hpp"
@@ -113,7 +114,7 @@ protected:
         // reset) would answer for ours, and the sync controller asserts on engines of vaults that no longer exist.
         runtime::Deps::get().fsCache = std::make_shared<fs::cache::Registry>();
         runtime::Deps::get().storageManager->initStorageEngines();
-        superUser = db::query::identities::User::getUserByName("admin");
+        superUser = vh::identities::manager().userByName("admin");
 
         // The ws handler asks the sync controller for an early pass; an unstarted one just queues it.
         previousController = runtime::Deps::get().syncController;
@@ -244,7 +245,7 @@ protected:
         (void)ops::roles::assignVaultRole(superUser, {.target = {.vault_id = engine->vault->id,
                                                                  .subject = {.type = "user", .id = created.user->id}},
                                                       .role = role});
-        return db::query::identities::User::getUserById(created.user->id);
+        return vh::identities::manager().user(created.user->id);
     }
 };
 
@@ -445,7 +446,7 @@ TEST_F(FsCopyDbTest, WsCopyAuthorizesEveryEntryForTheCaller) {
         .target = {.vault_id = engine->vault->id, .subject = {.type = "user", .id = power->id}},
         .permissions = {.changes = {{"vault.fs.files.download", false}}},
         .pattern = "/proj/sub/deep/**"});
-    const auto restricted = db::query::identities::User::getUserById(power->id);
+    const auto restricted = vh::identities::manager().user(power->id);
     EXPECT_THROW((void)protocols::ws::handler::fs::Storage::copy(copyPayload("/proj", "/by_power"), wsAs(restricted)),
                  std::runtime_error);
     EXPECT_FALSE(exists("/by_power"));

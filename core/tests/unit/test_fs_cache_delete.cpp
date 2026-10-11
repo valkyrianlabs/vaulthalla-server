@@ -15,6 +15,7 @@
 #include "seed/include/init_db_tables.hpp"
 #include "storage/Engine.hpp"
 #include "vault/model/Vault.hpp"
+#include "identities/Manager.hpp"
 
 #include <gtest/gtest.h>
 #include <paths.h>
@@ -452,7 +453,7 @@ TEST_F(FsCacheDeleteTest, CreateFileOverwriteWithEmptyBufferTruncatesExistingBac
     engine->vault = vault;
     engine->paths = std::make_shared<vh::fs::model::Path>("/cache_vault", "cache_delete_vault");
 
-    const auto user = vh::db::query::identities::User::getUserById(ids.userId);
+    const auto user = vh::identities::manager().user(ids.userId);
     ASSERT_TRUE(user);
 
     const auto overwritten = vh::fs::Filesystem::createFile({

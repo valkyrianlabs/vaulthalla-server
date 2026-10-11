@@ -2,6 +2,7 @@
 #include "db/query/vault/APIKey.hpp"
 #include "db/query/identities/User.hpp"
 #include "crypto/util/encrypt.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "vault/model/APIKey.hpp"
 
@@ -33,9 +34,9 @@ void APIKeyManager::initAPIKeys() {
 unsigned int APIKeyManager::addAPIKey(std::shared_ptr<APIKey>& key) {
     std::scoped_lock lock(apiKeysMutex_);
 
-    const auto owner = db::query::identities::User::getUserById(key->user_id);
+    const auto owner = vh::identities::manager().user(key->user_id);
     if (!owner) throw std::runtime_error("API key owner not found");
-    if (owner->systemOnly) throw std::runtime_error("system-only users cannot receive normal API keys");
+    if (owner->systemOnly()) throw std::runtime_error("system-only users cannot receive normal API keys");
 
     // --- Encrypt secret_access_key before storage ---
     const auto masterKey = tpmKeyProvider_->getMasterKey();

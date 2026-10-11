@@ -4,7 +4,6 @@
 #include "db/Transactions.hpp"
 #include "db/encoding/timestamp.hpp"
 #include "log/Registry.hpp"
-#include "db/query/identities/helpers.hpp"
 
 #include <chrono>
 
@@ -109,12 +108,13 @@ namespace vh::db::query::auth {
         });
     }
 
-    std::shared_ptr<vh::identities::User> RefreshToken::getUserByJti(const std::string& jti) {
+    std::optional<unsigned int> RefreshToken::getUserIdByJti(const std::string& jti) {
         return Transactions::exec(
-            "RefreshToken::getUserByRefreshToken",
-            [&](pqxx::work& txn) -> std::shared_ptr<vh::identities::User> {
+            "RefreshToken::getUserIdByJti",
+            [&](pqxx::work& txn) -> std::optional<unsigned int> {
                 const auto res = txn.exec(pqxx::prepped{"get_user_by_refresh_token_jti"}, pqxx::params{jti});
-                return identities::hydrateUser(txn, res.one_row_ref());
+                if (res.empty()) return std::nullopt;
+                return res.one_row_ref()["id"].as<unsigned int>();
             });
     }
 }

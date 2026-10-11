@@ -4,7 +4,6 @@
 #include "vault/model/APIKey.hpp"
 #include "db/encoding/bytea.hpp"
 #include "identities/User.hpp"
-#include "db/query/identities/helpers.hpp"
 
 namespace vh::db::query::vault {
 
@@ -96,11 +95,11 @@ namespace vh::db::query::vault {
         });
     }
 
-    std::shared_ptr<vh::identities::User> APIKey::getAPIKeyOwner(unsigned int keyId) {
-        return Transactions::exec("APIKey::getAPIKeyOwner", [&](pqxx::work& txn) -> std::shared_ptr<vh::identities::User> {
+    std::optional<unsigned int> APIKey::getAPIKeyOwnerId(unsigned int keyId) {
+        return Transactions::exec("APIKey::getAPIKeyOwnerId", [&](pqxx::work& txn) -> std::optional<unsigned int> {
             const auto res = txn.exec(pqxx::prepped{"get_api_key_owner"}, keyId);
-            if (res.empty()) return nullptr;
-            return identities::hydrateUser(txn, res.one_row_ref());
+            if (res.empty()) return std::nullopt;
+            return res.one_row_ref()["id"].as<unsigned int>();
         });
     }
 }

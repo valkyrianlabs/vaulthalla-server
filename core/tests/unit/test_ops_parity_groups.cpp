@@ -14,6 +14,7 @@
 #include "db/query/identities/User.hpp"
 #include "db/query/rbac/role/Admin.hpp"
 #include "identities/Group.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "protocols/shell/Router.hpp"
 #include "protocols/shell/commands/all.hpp"
@@ -41,6 +42,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include "../helpers/identities.hpp"
 
 namespace vh::test_ops_parity_groups {
 
@@ -57,39 +59,34 @@ std::string uniqueTag() {
 }
 
 UserPtr createUser(const std::string& name, const std::shared_ptr<rbac::role::Admin>& role) {
-    auto user = std::make_shared<identities::User>();
-    user->name = name;
-    user->email = name + "@vaulthalla.test";
-    user->setPasswordHash("x");
-    user->roles.admin = role;
-    user->id = db::query::identities::User::createUser(user);
-    return db::query::identities::User::getUserById(user->id);
+    return test::identities::createUser(name, role, name + "@vaulthalla.test");
 }
 
 // Fresh objects for one run of one case. Names are short so they survive the CLI's table rendering.
 struct World {
     std::string tag;
     GroupPtr group;       // existing group, `member` already in it
+    std::string groupName; // its name when the world was made (the canonical group follows renames)
     UserPtr member;
     UserPtr outsider;     // not in the group
     std::string freeName; // a group name nobody holds
     unsigned int freeGid = 0;
 };
 
-GroupPtr groupByName(const std::string& name) { return db::query::identities::Group::getGroupByName(name); }
+GroupPtr groupByName(const std::string& name) { return vh::identities::manager().groupByName(name); }
 
 bool isMember(const GroupPtr& group, const unsigned int userId) {
-    if (!group) return false;
-    return std::ranges::any_of(group->members, [&](const auto& m) { return m && m->user && m->user->id == userId; });
+    return group && test::identities::isMember(group->id, userId);
 }
 
 json groupFacts(const GroupPtr& group) {
     if (!group) return json{{"exists", false}};
+    const auto gid = group->linuxGid();
     return json{
         {"exists", true},
-        {"description", group->description.value_or("")},
-        {"gid", group->linux_gid ? json(*group->linux_gid) : json(nullptr)},
-        {"members", group->members.size()}
+        {"description", group->description().value_or("")},
+        {"gid", gid ? json(*gid) : json(nullptr)},
+        {"members", vh::identities::manager().memberCount(group->id)}
     };
 }
 
@@ -164,12 +161,9 @@ protected:
         w.member = createUser("gpm_" + w.tag, unprivileged);
         w.outsider = createUser("gpo_" + w.tag, unprivileged);
 
-        auto group = std::make_shared<identities::Group>();
-        group->name = "gp_" + w.tag;
-        group->description = "orig";
-        const auto id = db::query::identities::Group::createGroup(group);
-        db::query::identities::Group::addMemberToGroup(id, w.member->id);
-        w.group = db::query::identities::Group::getGroup(id);
+        w.group = test::identities::createGroup("gp_" + w.tag, "orig");
+        w.groupName = w.group->name();
+        test::identities::addMember(w.group->id, w.member->id);
 
         w.freeName = "gpn_" + w.tag;
         static std::atomic<unsigned int> gid{610000 + static_cast<unsigned int>(std::rand() % 100000)};
@@ -283,11 +277,11 @@ TEST_F(GroupParityTest, CreateRejectsDuplicateName) {
     expectParity({
         .name = "create-duplicate",
         .allowed = never,
-        .cli = [](const World& w) { return "group create " + w.group->name + " --desc dup"; },
+        .cli = [](const World& w) { return "group create " + w.groupName + " --desc dup"; },
         .ws = [](const World& w, const SessionPtr& s) {
-            return protocols::ws::handler::Groups::add(json{{"name", w.group->name}, {"description", "dup"}}, s);
+            return protocols::ws::handler::Groups::add(json{{"name", w.groupName}, {"description", "dup"}}, s);
         },
-        .observe = [](const World& w) { return groupFacts(groupByName(w.group->name)); }
+        .observe = [](const World& w) { return groupFacts(groupByName(w.groupName)); }
     });
 }
 
@@ -295,13 +289,13 @@ TEST_F(GroupParityTest, UpdateRenamesAndEditsDescription) {
     expectParity({
         .name = "update",
         .allowed = [](const GroupPerms& p) { return p.canEdit(); },
-        .cli = [](const World& w) { return "group update " + w.group->name + " --name " + w.freeName + " --desc edited"; },
+        .cli = [](const World& w) { return "group update " + w.groupName + " --name " + w.freeName + " --desc edited"; },
         .ws = [](const World& w, const SessionPtr& s) {
             return protocols::ws::handler::Groups::update(
                 json{{"id", w.group->id}, {"name", w.freeName}, {"description", "edited"}}, s);
         },
         .observe = [](const World& w) {
-            return json{{"old", groupFacts(groupByName(w.group->name))}, {"new", groupFacts(groupByName(w.freeName))}};
+            return json{{"old", groupFacts(groupByName(w.groupName))}, {"new", groupFacts(groupByName(w.freeName))}};
         }
     });
 }
@@ -310,11 +304,11 @@ TEST_F(GroupParityTest, Delete) {
     expectParity({
         .name = "delete",
         .allowed = [](const GroupPerms& p) { return p.canDelete(); },
-        .cli = [](const World& w) { return "group delete " + w.group->name; },
+        .cli = [](const World& w) { return "group delete " + w.groupName; },
         .ws = [](const World& w, const SessionPtr& s) {
             return protocols::ws::handler::Groups::remove(json{{"id", w.group->id}}, s);
         },
-        .observe = [](const World& w) { return groupFacts(db::query::identities::Group::getGroup(w.group->id)); }
+        .observe = [](const World& w) { return groupFacts(vh::identities::manager().group(w.group->id)); }
     });
 }
 
@@ -326,7 +320,7 @@ TEST_F(GroupParityTest, DeleteMissingIsRejected) {
         .ws = [](const World&, const SessionPtr& s) {
             return protocols::ws::handler::Groups::remove(json{{"id", 2147483000u}}, s);
         },
-        .observe = [](const World& w) { return groupFacts(groupByName(w.group->name)); }
+        .observe = [](const World& w) { return groupFacts(groupByName(w.groupName)); }
     });
 }
 
@@ -338,10 +332,10 @@ TEST_F(GroupParityTest, Info) {
         .ws = [](const World& w, const SessionPtr& s) {
             return protocols::ws::handler::Groups::get(json{{"id", w.group->id}}, s);
         },
-        .observe = [](const World& w) { return groupFacts(groupByName(w.group->name)); },
-        .cliShown = [](const World& w, const std::string& out) { return json{{"named", out.contains(w.group->name)}}; },
+        .observe = [](const World& w) { return groupFacts(groupByName(w.groupName)); },
+        .cliShown = [](const World& w, const std::string& out) { return json{{"named", out.contains(w.groupName)}}; },
         .wsShown = [](const World& w, const json& data) {
-            return json{{"named", data.at("group").at("name") == w.group->name}};
+            return json{{"named", data.at("group").at("name") == w.groupName}};
         }
     });
 }
@@ -353,11 +347,11 @@ TEST_F(GroupParityTest, ListShowsAllGroupsOnlyToViewers) {
         .allowed = always,
         .cli = [](const World&) { return std::string("group list"); },
         .ws = [](const World&, const SessionPtr& s) { return protocols::ws::handler::Groups::list(s); },
-        .observe = [](const World& w) { return groupFacts(groupByName(w.group->name)); },
-        .cliShown = [](const World& w, const std::string& out) { return json{{"sees_group", out.contains(w.group->name)}}; },
+        .observe = [](const World& w) { return groupFacts(groupByName(w.groupName)); },
+        .cliShown = [](const World& w, const std::string& out) { return json{{"sees_group", out.contains(w.groupName)}}; },
         .wsShown = [](const World& w, const json& data) {
             return json{{"sees_group", std::ranges::any_of(data.at("groups"), [&](const json& g) {
-                return g.at("name") == w.group->name;
+                return g.at("name") == w.groupName;
             })}};
         }
     });
@@ -369,15 +363,15 @@ TEST_F(GroupParityTest, ListAlwaysShowsCallersOwnGroups) {
         .allowed = always,
         .cli = [](const World&) { return std::string("group list"); },
         .ws = [](const World&, const SessionPtr& s) { return protocols::ws::handler::Groups::list(s); },
-        .observe = [](const World& w) { return groupFacts(groupByName(w.group->name)); },
-        .cliShown = [](const World& w, const std::string& out) { return json{{"sees_group", out.contains(w.group->name)}}; },
+        .observe = [](const World& w) { return groupFacts(groupByName(w.groupName)); },
+        .cliShown = [](const World& w, const std::string& out) { return json{{"sees_group", out.contains(w.groupName)}}; },
         .wsShown = [](const World& w, const json& data) {
             return json{{"sees_group", std::ranges::any_of(data.at("groups"), [&](const json& g) {
-                return g.at("name") == w.group->name;
+                return g.at("name") == w.groupName;
             })}};
         },
         .prepare = [](World& w, const UserPtr& caller) {
-            db::query::identities::Group::addMemberToGroup(w.group->id, caller->id);
+            test::identities::addMember(w.group->id, caller->id);
         }
     });
 }
@@ -387,12 +381,12 @@ TEST_F(GroupParityTest, AddMember) {
     expectParity({
         .name = "member-add",
         .allowed = [](const GroupPerms& p) { return p.canAddMember(); },
-        .cli = [](const World& w) { return "group user add " + w.group->name + " " + w.outsider->name; },
+        .cli = [](const World& w) { return "group user add " + w.groupName + " " + w.outsider->name(); },
         .ws = [](const World& w, const SessionPtr& s) {
             return protocols::ws::handler::Groups::addMember(json{{"group_id", w.group->id}, {"user_id", w.outsider->id}}, s);
         },
         .observe = [](const World& w) {
-            const auto group = db::query::identities::Group::getGroup(w.group->id);
+            const auto group = vh::identities::manager().group(w.group->id);
             return json{{"outsider_member", isMember(group, w.outsider->id)}, {"member_member", isMember(group, w.member->id)}};
         }
     });
@@ -402,12 +396,12 @@ TEST_F(GroupParityTest, RemoveMember) {
     expectParity({
         .name = "member-remove",
         .allowed = [](const GroupPerms& p) { return p.canRemoveMember(); },
-        .cli = [](const World& w) { return "group user remove " + w.group->name + " " + w.member->name; },
+        .cli = [](const World& w) { return "group user remove " + w.groupName + " " + w.member->name(); },
         .ws = [](const World& w, const SessionPtr& s) {
             return protocols::ws::handler::Groups::removeMember(json{{"group_id", w.group->id}, {"user_id", w.member->id}}, s);
         },
         .observe = [](const World& w) {
-            return json{{"member_member", isMember(db::query::identities::Group::getGroup(w.group->id), w.member->id)}};
+            return json{{"member_member", isMember(vh::identities::manager().group(w.group->id), w.member->id)}};
         }
     });
 }
@@ -416,11 +410,11 @@ TEST_F(GroupParityTest, AddMemberToMissingGroupIsRejected) {
     expectParity({
         .name = "member-add-missing-group",
         .allowed = never,
-        .cli = [](const World& w) { return "group user add " + w.freeName + " " + w.outsider->name; },
+        .cli = [](const World& w) { return "group user add " + w.freeName + " " + w.outsider->name(); },
         .ws = [](const World& w, const SessionPtr& s) {
             return protocols::ws::handler::Groups::addMember(json{{"group_id", 2147483000u}, {"user_id", w.outsider->id}}, s);
         },
-        .observe = [](const World& w) { return json{{"groups_of_outsider", db::query::identities::Group::listGroups(w.outsider->id).size()}}; }
+        .observe = [](const World& w) { return json{{"groups_of_outsider", vh::identities::manager().groupsOf(w.outsider->id).size()}}; }
     });
 }
 
@@ -438,15 +432,15 @@ TEST_F(GroupParityTest, WsLegacyMemberPayloadsStillAccepted) {
     const auto w = makeWorld();
 
     const auto added = protocols::ws::handler::Groups::addMember(
-        json{{"groupId", w.group->id}, {"memberName", w.outsider->name}}, session);
+        json{{"groupId", w.group->id}, {"memberName", w.outsider->name()}}, session);
     EXPECT_EQ(added.at("groupId"), w.group->id);
-    EXPECT_EQ(added.at("memberName"), w.outsider->name);
-    EXPECT_TRUE(isMember(db::query::identities::Group::getGroup(w.group->id), w.outsider->id));
+    EXPECT_EQ(added.at("memberName"), w.outsider->name());
+    EXPECT_TRUE(isMember(vh::identities::manager().group(w.group->id), w.outsider->id));
 
     const auto removed = protocols::ws::handler::Groups::removeMember(
         json{{"groupId", w.group->id}, {"userId", w.outsider->id}}, session);
     EXPECT_EQ(removed.at("userId"), w.outsider->id);
-    EXPECT_FALSE(isMember(db::query::identities::Group::getGroup(w.group->id), w.outsider->id));
+    EXPECT_FALSE(isMember(vh::identities::manager().group(w.group->id), w.outsider->id));
 }
 
 }

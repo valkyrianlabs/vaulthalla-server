@@ -11,13 +11,15 @@ namespace vh::rbac::permission::admin {
     }
 
     VaultGlobals::VaultGlobals(const pqxx::result &res) : VaultGlobals() {
-        for (const auto &row: res) {
-            const auto scope = row["scope"].as<std::string>();
-            if (scope == "self") self = role::vault::Global(row);
-            else if (scope == "admin") admin = role::vault::Global(row);
-            else if (scope == "user") user = role::vault::Global(row);
-            else throw std::runtime_error("Invalid scope in VaultGlobals: " + scope);
-        }
+        for (const auto &row: res) assign(row);
+    }
+
+    void VaultGlobals::assign(const pqxx::row_ref row) {
+        const auto scope = row["scope"].as<std::string>();
+        if (scope == "self") self = role::vault::Global(row);
+        else if (scope == "admin") admin = role::vault::Global(row);
+        else if (scope == "user") user = role::vault::Global(row);
+        else throw std::runtime_error("Invalid scope in VaultGlobals: " + scope);
     }
 
     void to_json(nlohmann::json &j, const VaultGlobals &v) {

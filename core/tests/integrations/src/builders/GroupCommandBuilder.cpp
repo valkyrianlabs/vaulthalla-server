@@ -1,10 +1,12 @@
 #include "cmd/Builder.hpp"
+#include "entity/Edit.hpp"
 #include "cmd/generators.hpp"
 #include "cli/Context.hpp"
 #include "CommandUsage.hpp"
 
 using namespace vh::protocols::shell;
-using namespace vh::identities;
+using vh::identities::User;
+using vh::identities::Group;
 
 namespace vh::test::integration::cmd {
     GroupCommandBuilder::GroupCommandBuilder(const std::shared_ptr<UsageManager>& usage, const std::shared_ptr<cli::Context>& ctx)
@@ -14,23 +16,23 @@ namespace vh::test::integration::cmd {
         const std::string usagePath = "group/update";
 
         if (groupAliases_.isName(field)) {
-            entity->name = generateName(usagePath);
-            return entity->name;
+            entity::edit(entity, [&](auto& s) { s.name = generateName(usagePath); });
+            return entity->name();
         }
 
         if (groupAliases_.isDescription(field)) {
             if (coin()) {
                 const auto desc = generateDescription(usagePath);
-                entity->description = std::make_optional(desc);
+                entity::edit(entity, [&](auto& s) { s.description = std::make_optional(desc); });
                 return desc;
             }
-            entity->description = std::make_optional(std::string(""));
+            entity::edit(entity, [&](auto& s) { s.description = std::make_optional(std::string("")); });
             return "";
         }
 
         if (groupAliases_.isLinuxGID(field)) {
             const auto gid = randomLinuxId();
-            entity->linux_gid = std::make_optional(gid);
+            entity::edit(entity, [&](auto& s) { s.linux_gid = std::make_optional(gid); });
             return std::to_string(gid);
         }
 
@@ -39,19 +41,19 @@ namespace vh::test::integration::cmd {
 
     static std::optional<std::string> resolveVar(const std::string& name, const std::shared_ptr<Group>& group) {
         if (name == "id" || name == "group_id") return std::to_string(group->id);
-        if (name == "name" || name == "group_name") return group->name;
-        if (name == "description" || name == "desc") return group->description;
+        if (name == "name" || name == "group_name") return group->name();
+        if (name == "description" || name == "desc") return group->description();
         throw std::runtime_error("GroupCommandBuilder: unsupported group field for resolveVar: " + name);
     }
 
     static std::string randomizePrimaryPositional(const std::shared_ptr<Group>& entity) {
         if (coin()) return std::to_string(entity->id);
-        return entity->name;
+        return entity->name();
     }
 
     static std::string randomizeSecondaryPositional(const std::shared_ptr<User>& entity) {
         if (coin()) return std::to_string(entity->id);
-        return entity->name;
+        return entity->name();
     }
 
     std::string GroupCommandBuilder::create(const std::shared_ptr<Group>& entity) {
@@ -59,7 +61,7 @@ namespace vh::test::integration::cmd {
         if (!cmd) throw std::runtime_error("GroupCommandBuilder: 'create' command usage not found");
 
         std::ostringstream oss;
-        oss << "vh " << randomAlias(root_->aliases) << ' ' << randomAlias(cmd->aliases) << ' ' << entity->name;
+        oss << "vh " << randomAlias(root_->aliases) << ' ' << randomAlias(cmd->aliases) << ' ' << entity->name();
         for (const auto& opt : cmd->required) {
             oss << ' ' << randomAlias(opt.option_tokens);
             if (auto val = resolveVar(opt.option_tokens[0], entity); val) oss << ' ' << *val;

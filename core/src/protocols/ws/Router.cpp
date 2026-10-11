@@ -209,7 +209,8 @@ Router::CommandAuthDecision Router::classifyCommand(const std::string_view comma
     }
 
     if (session.user) {
-        if (session.user->systemOnly) return CommandAuthDecision::Deny;
+        // The session holds the canonical user: a deactivation or deletion is seen here on the very next command.
+        if (session.user->systemOnly() || !session.user->authorizing()) return CommandAuthDecision::Deny;
 
         if (isPublicShareCommand(command) ||
             isShareFilesystemCommand(command) ||

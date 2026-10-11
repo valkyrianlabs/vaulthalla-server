@@ -6,7 +6,8 @@
 #include "randomizer/AdminRole.hpp"
 
 using namespace vh::rbac;
-using namespace vh::identities;
+using vh::identities::User;
+using vh::identities::Group;
 using namespace vh::vault::model;
 
 namespace vh::test::integration::cmd {

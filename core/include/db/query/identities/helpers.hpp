@@ -7,27 +7,17 @@
 #include "identities/Fwd.hpp"
 #include "rbac/Fwd.hpp"
 
-namespace vh {
-    namespace rbac {
-        namespace permission::admin { struct VaultGlobals; }
-    }
+namespace vh::rbac::permission::admin { struct VaultGlobals; }
 
-    namespace db::query::identities {
-        std::shared_ptr<vh::identities::User> hydrateUser(pqxx::work& txn, pqxx::row_ref userRow);
+namespace vh::db::query::identities {
+    // Admin role assignment, global vault policy and direct vault roles of `state` for account `userId`.
+    void upsertUserRoles(pqxx::work& txn, uint32_t userId, const vh::identities::UserState& state);
 
-        std::shared_ptr<vh::identities::Group> hydrateGroup(pqxx::work& txn, pqxx::row_ref groupRow);
+    void upsertVaultRoles(pqxx::work& txn,
+                          const std::unordered_map<uint32_t, std::shared_ptr<const vh::rbac::role::Vault>>& vRoles,
+                          const std::string &subjectType, uint32_t subjectId);
 
-        void upsertUserRoles(pqxx::work& txn, const std::shared_ptr<vh::identities::User>& user);
+    void upsertGlobalVRoles(pqxx::work& txn, const vh::rbac::permission::admin::VaultGlobals &vGlobal, uint32_t userId);
 
-        void upsertVaultRoles(pqxx::work& txn, const std::unordered_map<uint32_t, std::shared_ptr<vh::rbac::role::Vault>>& vRoles,
-                                     const std::string &subjectType, uint32_t subjectId);
-
-        void upsertGlobalVRoles(pqxx::work& txn, const vh::rbac::permission::admin::VaultGlobals &vGlobal, uint32_t userId);
-
-        void upsertAdminRoleAssignment(pqxx::work& txn, uint32_t userId, uint32_t roleId);
-
-        std::unordered_map<uint32_t, std::shared_ptr<vh::rbac::role::Vault>> getVaultRoles(pqxx::work &txn, const std::string& subjectType, uint32_t subjectId);
-
-        std::vector<std::shared_ptr<vh::identities::Group>> getUserGroups(pqxx::work& txn, uint32_t userId);
-    }
+    void upsertAdminRoleAssignment(pqxx::work& txn, uint32_t userId, uint32_t roleId);
 }

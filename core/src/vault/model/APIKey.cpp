@@ -8,6 +8,7 @@
 #include "db/encoding/timestamp.hpp"
 #include "db/encoding/bytea.hpp"
 #include "crypto/util/encrypt.hpp"
+#include "identities/Manager.hpp"
 
 #include <unordered_map>
 #include <stdexcept>
@@ -111,9 +112,17 @@ void vh::vault::model::to_json(nlohmann::json& j, const std::vector<std::shared_
     for (const auto& key : k) j.push_back(key);
 }
 
+namespace {
+// The owner's name, or a placeholder when the account no longer resolves (it used to dereference null).
+std::string ownerName(const uint32_t userId) {
+    const auto owner = vh::identities::manager().user(userId);
+    return owner ? owner->name() : "(unknown user " + std::to_string(userId) + ")";
+}
+}
+
 std::string vh::vault::model::to_string(const std::shared_ptr<APIKey>& key) {
     std::string out = key->name + " (ID: " + std::to_string(key->id) + ")\n";
-    out += "  User: " + db::query::identities::User::getUserById(key->user_id)->name + "\n";
+    out += "  User: " + ownerName(key->user_id) + "\n";
     out += "  Created: " + timestampToString(key->created_at) + "\n";
     out += "  Provider: " + to_string(key->provider) + "\n";
     out += "  Access Key: " + key->access_key + "\n";
@@ -138,7 +147,7 @@ std::string vh::vault::model::to_string(const std::vector<std::shared_ptr<APIKey
         tbl.add_row({
             std::to_string(key->id),
             key->name,
-            db::query::identities::User::getUserById(key->user_id)->name,
+            ownerName(key->user_id),
             to_string(key->provider),
             timestampToString(key->created_at)
         });

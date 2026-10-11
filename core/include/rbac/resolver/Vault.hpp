@@ -8,6 +8,7 @@
 #include "rbac/resolver/vault/policy/Filesystem.hpp"
 #include "rbac/resolver/vault/policy/Roles.hpp"
 
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "rbac/role/Vault.hpp"
 #include "rbac/role/Admin.hpp"
@@ -16,8 +17,6 @@
 #include "runtime/Deps.hpp"
 #include "storage/Engine.hpp"
 #include "storage/Manager.hpp"
-#include "db/query/identities/User.hpp"
-#include "db/query/identities/Group.hpp"
 #include "fs/model/Entry.hpp"
 #include "fs/model/Path.hpp"
 #include "rbac/fs/policy/Evaluator.hpp"
@@ -40,7 +39,10 @@ namespace vh::rbac::resolver {
             const vault::Context<EnumT> &ctx,
             const EnumT permission
         ) {
-            const auto &globalPerms = user->vaultGlobals();
+            // One state for the whole check (no copy of the global policy per permission).
+            const auto state = user->state();
+            if (!state->authorizing() || !state->roles.admin) return false;
+            const auto &globalPerms = state->roles.admin->vGlobals;
             bool allowed = false;
 
             if (user->id == resolved.vault->owner_id)
@@ -138,7 +140,8 @@ namespace vh::rbac::resolver {
             const std::optional<std::filesystem::path> &path,
             const std::shared_ptr<::vh::fs::model::Entry> &entry,
             const std::optional<std::string> &targetSubjectType,
-            const std::optional<uint32_t> &targetSubjectId
+            const std::optional<uint32_t> &targetSubjectId,
+            const std::shared_ptr<identities::User> &actor
         ) {
             vault::ResolvedContext resolved{};
 
@@ -148,14 +151,18 @@ namespace vh::rbac::resolver {
             resolved.vault = resolved.engine->vault;
             if (!resolved.vault) return resolved;
 
-            resolved.owner = db::query::identities::User::getUserById(resolved.vault->owner_id);
+            // The owner only answers "is the vault owned by an admin": the caller when it owns the vault, else the
+            // canonical owner (memory, no database round trip on a warm index).
+            resolved.owner = actor && actor->id == resolved.vault->owner_id
+                                 ? actor
+                                 : vh::identities::manager().user(resolved.vault->owner_id);
             if (!resolved.owner) return resolved;
 
             if (targetSubjectType && targetSubjectId) {
                 if (*targetSubjectType == "user")
-                    resolved.targetUser = db::query::identities::User::getUserById(*targetSubjectId);
+                    resolved.targetUser = vh::identities::manager().user(*targetSubjectId);
                 else if (*targetSubjectType == "group")
-                    resolved.targetGroup = db::query::identities::Group::getGroup(*targetSubjectId);
+                    resolved.targetGroup = vh::identities::manager().group(*targetSubjectId);
             }
 
             return resolved;
@@ -165,6 +172,8 @@ namespace vh::rbac::resolver {
         template<typename EnumT>
         static bool has(vault::Context<EnumT> &&ctx) {
             if (!ctx.isValid()) return false;
+            // A deactivated or deleted account (a tombstone still held somewhere) authorizes nothing.
+            if (!ctx.user->authorizing()) return false;
             if (ctx.user->isSuperAdmin()) return true;
 
             const auto resolved = resolveVaultContext(
@@ -172,7 +181,8 @@ namespace vh::rbac::resolver {
                 ctx.path,
                 ctx.entry,
                 ctx.target_subject_type,
-                ctx.target_subject_id
+                ctx.target_subject_id,
+                ctx.user
             );
 
             if (!resolved.isValid()) {

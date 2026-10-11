@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 #include "auth/Fwd.hpp"
@@ -27,7 +28,7 @@ struct RefreshToken {
     static void purgeOldRevoked();
     static void revokeAndPurge(unsigned int userId);
 
-    static std::shared_ptr<vh::identities::User> getUserByJti(const std::string& jti);
+    [[nodiscard]] static std::optional<unsigned int> getUserIdByJti(const std::string& jti);
 };
 
 }

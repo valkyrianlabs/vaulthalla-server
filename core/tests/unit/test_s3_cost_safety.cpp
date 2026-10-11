@@ -14,6 +14,7 @@
 #include "fs/model/Path.hpp"
 #include "fs/model/File.hpp"
 #include "fs/model/file/Trashed.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "protocols/s3/CredentialManager.hpp"
 #include "protocols/s3/ObjectStore.hpp"
@@ -946,7 +947,7 @@ uint32_t seedDryRunS3VaultForDbTest(
     ensureSeededRuntimeReady();
     deleteIncompleteS3CostVaultFixturesForDbTest();
 
-    const auto owner = vh::db::query::identities::User::getUserByName("admin");
+    const auto owner = vh::identities::manager().userByName("admin");
     if (!owner) throw std::runtime_error("admin user not available for dry-run test");
 
     auto key = std::make_shared<vh::vault::model::APIKey>(
@@ -980,7 +981,7 @@ uint32_t seedDryRunS3VaultForDbTest(
 uint32_t seedLocalGatewayRouteVaultForDbTest(const std::string& suffix) {
     ensureSeededRuntimeReady();
 
-    const auto owner = vh::db::query::identities::User::getUserByName("admin");
+    const auto owner = vh::identities::manager().userByName("admin");
     if (!owner) throw std::runtime_error("admin user not available for local gateway route budget test");
 
     const auto vaultId = vh::db::Transactions::exec("S3CostSafetyTest::seedLocalGatewayRouteVault", [&](pqxx::work& txn) {
@@ -1008,24 +1009,19 @@ uint32_t seedLocalGatewayRouteVaultForDbTest(const std::string& suffix) {
 std::shared_ptr<vh::identities::User> dryRunActor(
     const uint32_t id,
     vh::rbac::role::Admin role) {
-    auto user = std::make_shared<vh::identities::User>();
-    user->id = id;
-    user->name = "dry-run-actor-" + std::to_string(id);
-    user->password_hash = "hash";
-    user->roles.admin = std::make_shared<vh::rbac::role::Admin>(std::move(role));
-    return user;
+    vh::identities::UserState state;
+    state.name = "dry-run-actor-" + std::to_string(id);
+    state.roles.admin = std::make_shared<vh::rbac::role::Admin>(std::move(role));
+    return vh::identities::User::detached(id, std::move(state));
 }
 
 std::shared_ptr<vh::protocols::ws::Session> superAdminWsSession() {
     auto session = std::make_shared<vh::protocols::ws::Session>(
         std::make_shared<vh::protocols::ws::Router>());
-    auto user = std::make_shared<vh::identities::User>();
-    user->id = 1;
-    user->name = "admin";
-    user->password_hash = "hash";
-    user->roles.admin = std::make_shared<vh::rbac::role::Admin>(
-        vh::rbac::role::Admin::SuperAdmin(user->id));
-    session->user = user;
+    vh::identities::UserState state;
+    state.name = "admin";
+    state.roles.admin = std::make_shared<vh::rbac::role::Admin>(vh::rbac::role::Admin::SuperAdmin(1));
+    session->user = vh::identities::User::detached(1, std::move(state));
     return session;
 }
 
@@ -1183,7 +1179,7 @@ GatewayRouteBudgetFixture setupGatewayRouteBudgetFixture(
     engine->setS3ControllerForTesting(fake);
     std::static_pointer_cast<vh::vault::model::S3Vault>(engine->vault)->encrypt_upstream = false;
 
-    const auto owner = vh::db::query::identities::User::getUserByName("admin");
+    const auto owner = vh::identities::manager().userByName("admin");
     if (!owner) throw std::runtime_error("admin user not available for S3 gateway route budget test");
 
     const auto bucketName = uniqueBucketName(label);
@@ -1235,7 +1231,7 @@ GatewayRouteBudgetFixture setupLocalGatewayRouteBudgetFixture(
 
     const auto suffix = uniqueSuffix(label);
     const auto vaultId = seedLocalGatewayRouteVaultForDbTest(suffix);
-    const auto owner = vh::db::query::identities::User::getUserByName("admin");
+    const auto owner = vh::identities::manager().userByName("admin");
     if (!owner) throw std::runtime_error("admin user not available for local S3 gateway route budget test");
 
     const auto bucketName = uniqueBucketName(label);
@@ -1583,7 +1579,7 @@ TEST(S3CostSafetyTest, WsVaultUpdateRequiresConsumeToChangeApiKey) {
     };
     const auto originalKeyId = keyIdBefore();
 
-    const auto admin = vh::db::query::identities::User::getUserByName("admin");
+    const auto admin = vh::identities::manager().userByName("admin");
     ASSERT_TRUE(admin);
     auto otherKey = std::make_shared<vh::vault::model::APIKey>(
         admin->id,
@@ -1867,7 +1863,7 @@ TEST(S3CostSafetyTest, ExplicitRemotePlaintextMetadataWinsOverLocalFileIv) {
         vh::runtime::Deps::get().storageManager->getEngine(vaultId));
     engine->setS3ControllerForTesting(fake);
 
-    const auto owner = vh::db::query::identities::User::getUserById(engine->vault->owner_id);
+    const auto owner = vh::identities::manager().user(engine->vault->owner_id);
     ASSERT_TRUE(owner);
 
     const std::filesystem::path path = "/plain-head-false.txt";
@@ -2214,7 +2210,7 @@ TEST(S3CostSafetyTest, StorageManagerRejectsDuplicateVaultNameForSameOwner) {
     if (!hasDbEnv()) GTEST_SKIP() << "Skipping db-backed duplicate vault test due to missing environment variables.";
     ensureSeededRuntimeReady();
 
-    const auto owner = vh::db::query::identities::User::getUserByName("admin");
+    const auto owner = vh::identities::manager().userByName("admin");
     ASSERT_TRUE(owner);
     const auto name = "dup-vault-" + uniqueSuffix("dup");
     const auto makeVault = [&] {
@@ -2242,16 +2238,16 @@ TEST(S3CostSafetyTest, RegisterUserCreatesOwnedDefaultVault) {
     // Regression: web-console registration always failed ("Sync cannot be null on vault creation") after
     // the user row was written, because the default vault was upserted with no owner and no sync policy.
     auto manager = std::make_shared<vh::auth::Manager>();
-    auto user = std::make_shared<vh::identities::User>();
-    user->name = "reg_" + uniqueSuffix("default_vault");
-    user->email = user->name + "@vaulthalla.test";
-    user->roles.admin = vh::db::query::rbac::role::Admin::get("unprivileged");
-    ASSERT_TRUE(user->roles.admin);
+    vh::identities::UserState draft;
+    draft.name = "reg_" + uniqueSuffix("default_vault");
+    draft.email = draft.name + "@vaulthalla.test";
+    draft.roles.admin = vh::db::query::rbac::role::Admin::get("unprivileged");
+    ASSERT_TRUE(draft.roles.admin);
 
-    ASSERT_NO_THROW(manager->registerUser(user, "Zq9#" + uniqueSuffix("pw") + "!Xw-Long"));
-    const auto stored = vh::db::query::identities::User::getUserByName(user->name);
+    ASSERT_NO_THROW((void)manager->registerUser(draft, "Zq9#" + uniqueSuffix("pw") + "!Xw-Long"));
+    const auto stored = vh::identities::manager().userByName(draft.name);
     ASSERT_TRUE(stored);
-    EXPECT_TRUE(vh::db::query::vault::Vault::vaultExists(user->name + "'s Local Disk Vault", stored->id));
+    EXPECT_TRUE(vh::db::query::vault::Vault::vaultExists(draft.name + "'s Local Disk Vault", stored->id));
 }
 
 TEST(S3CostSafetyTest, DeletingAVaultOwnerDoesNotBreakVaultLoading) {
@@ -2261,20 +2257,21 @@ TEST(S3CostSafetyTest, DeletingAVaultOwnerDoesNotBreakVaultLoading) {
     // Regression: owner_id is ON DELETE SET NULL; the next listVaults threw "Attempt to convert SQL null to
     // unsigned int" and the daemon could not start after any vault owner was deleted.
     auto manager = std::make_shared<vh::auth::Manager>();
-    auto user = std::make_shared<vh::identities::User>();
-    user->name = "orphan_" + uniqueSuffix("owner");
-    user->email = user->name + "@vaulthalla.test";
-    user->roles.admin = vh::db::query::rbac::role::Admin::get("unprivileged");
-    ASSERT_TRUE(user->roles.admin);
-    manager->registerUser(user, "Zq9#" + uniqueSuffix("pw") + "!Xw-Long");
-    const auto stored = vh::db::query::identities::User::getUserByName(user->name);
+    vh::identities::UserState draft;
+    draft.name = "orphan_" + uniqueSuffix("owner");
+    draft.email = draft.name + "@vaulthalla.test";
+    draft.roles.admin = vh::db::query::rbac::role::Admin::get("unprivileged");
+    ASSERT_TRUE(draft.roles.admin);
+    (void)manager->registerUser(draft, "Zq9#" + uniqueSuffix("pw") + "!Xw-Long");
+    const auto stored = vh::identities::manager().userByName(draft.name);
     ASSERT_TRUE(stored);
 
-    vh::db::query::identities::User::deleteUser(stored->id);
+    vh::identities::manager().deleteUser(stored->id);
+    EXPECT_TRUE(stored->deleted()) << "the reference taken before the delete holds a tombstone";
 
     std::vector<std::shared_ptr<vh::vault::model::Vault>> vaults;
     ASSERT_NO_THROW(vaults = vh::db::query::vault::Vault::listVaults());
-    const auto orphan = std::ranges::find_if(vaults, [&](const auto& v) { return v->name == user->name + "'s Local Disk Vault"; });
+    const auto orphan = std::ranges::find_if(vaults, [&](const auto& v) { return v->name == draft.name + "'s Local Disk Vault"; });
     ASSERT_NE(orphan, vaults.end());
     EXPECT_EQ((*orphan)->owner_id, 0u);
 }
@@ -2381,7 +2378,7 @@ TEST(S3CostSafetyTest, GatewayRemoteDeleteMarksTombstoneWithoutDirectUpstreamDel
         vh::runtime::Deps::get().storageManager->getEngine(vaultId));
     engine->setS3ControllerForTesting(fake);
 
-    const auto owner = vh::db::query::identities::User::getUserByName("admin");
+    const auto owner = vh::identities::manager().userByName("admin");
     ASSERT_TRUE(owner);
     ASSERT_TRUE(owner->isSuperAdmin());
 
@@ -2452,7 +2449,7 @@ TEST(S3CostSafetyTest, GatewayRemoteDeleteIgnoresDirectUpstreamFailureBecauseSyn
         vh::runtime::Deps::get().storageManager->getEngine(vaultId));
     engine->setS3ControllerForTesting(fake);
 
-    const auto owner = vh::db::query::identities::User::getUserByName("admin");
+    const auto owner = vh::identities::manager().userByName("admin");
     ASSERT_TRUE(owner);
     ASSERT_TRUE(owner->isSuperAdmin());
 
@@ -2510,7 +2507,7 @@ TEST(S3CostSafetyTest, CloudTrashPurgeDeletesRemoteIndexWithoutRemoteOnlyDownloa
         vh::runtime::Deps::get().storageManager->getEngine(vaultId));
     engine->setS3ControllerForTesting(fake);
 
-    const auto owner = vh::db::query::identities::User::getUserById(engine->vault->owner_id);
+    const auto owner = vh::identities::manager().user(engine->vault->owner_id);
     ASSERT_TRUE(owner);
 
     const std::filesystem::path dir = "/Vaulthalla-media";
@@ -4231,7 +4228,7 @@ TEST(S3CostSafetyTest, GatewayRemoteDeleteLocalFirstDoesNotCommitCredentialBudge
     EXPECT_TRUE(std::ranges::any_of(indexed, [&](const auto& file) {
         return file && file->path.generic_string() == std::string("/") + std::string(objectKey);
     }));
-    const auto actor = vh::db::query::identities::User::getUserById(fixture.secret.credential.principal_user_id);
+    const auto actor = vh::identities::manager().user(fixture.secret.credential.principal_user_id);
     ASSERT_TRUE(actor);
     const vh::protocols::s3::ObjectStore objectStore;
     const auto listed = objectStore.listObjects(objectStore.resolveBucket(fixture.bucket_name, actor), {});

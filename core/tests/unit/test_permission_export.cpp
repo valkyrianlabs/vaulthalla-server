@@ -1,6 +1,7 @@
 #include "rbac/role/Vault.hpp"
 #include "rbac/role/Admin.hpp"
 #include "rbac/role/vault/Global.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "crypto/util/hash.hpp"
 #include "db/query/identities/User.hpp"
@@ -117,70 +118,74 @@ TEST_F(PermExportTest, TestUserAdminVaultGlobalsDBRoundTripBitStrings) {
     if (skipTests)
         GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
 
-    const auto user = std::make_shared<identities::User>();
-    user->name = "test_user_vglobals_roundtrip";
-    user->email = "test_user_vglobals_roundtrip@vaulthalla.test";
-    user->password_hash = vh::crypto::hash::password("test_password");
-
     if (!db::query::rbac::role::Admin::get(rbac::role::Admin::SuperAdmin().name))
         db::query::rbac::role::Admin::upsert(std::make_shared<rbac::role::Admin>(rbac::role::Admin::SuperAdmin()));
 
-    user->roles.admin = db::query::rbac::role::Admin::get(rbac::role::Admin::SuperAdmin().name);
-    ASSERT_NE(user->roles.admin, nullptr);
+    const auto created = vh::test::identities::createUser(
+        "test_user_vglobals_roundtrip", db::query::rbac::role::Admin::get(rbac::role::Admin::SuperAdmin().name),
+        "test_user_vglobals_roundtrip@vaulthalla.test", vh::crypto::hash::password("test_password"));
+    ASSERT_NE(created, nullptr);
+    ASSERT_NE(created->id, 0u);
+    ASSERT_NE(created->state()->roles.admin, nullptr);
 
-    user->id = db::query::identities::User::createUser(user);
-    ASSERT_NE(user->id, 0u);
+    // A local copy of the account's admin role carrying the policy to write.
+    const auto userId = created->id;
+    const auto role = std::make_shared<rbac::role::Admin>(*created->state()->roles.admin);
 
-    user->roles.admin->vGlobals.self =
-            rbac::role::vault::Global::PowerUser(user->id, rbac::role::vault::Global::Scope::Self);
+    role->vGlobals.self =
+            rbac::role::vault::Global::PowerUser(userId, rbac::role::vault::Global::Scope::Self);
 
-    user->roles.admin->vGlobals.user =
-            rbac::role::vault::Global::PowerUser(user->id, rbac::role::vault::Global::Scope::User);
+    role->vGlobals.user =
+            rbac::role::vault::Global::PowerUser(userId, rbac::role::vault::Global::Scope::User);
 
-    user->roles.admin->vGlobals.admin =
-            rbac::role::vault::Global::PowerUser(user->id, rbac::role::vault::Global::Scope::Admin);
+    role->vGlobals.admin =
+            rbac::role::vault::Global::PowerUser(userId, rbac::role::vault::Global::Scope::Admin);
 
-    const auto selfRolesBefore = user->roles.admin->vGlobals.self.roles.toBitString();
-    const auto selfSyncBefore = user->roles.admin->vGlobals.self.sync.toBitString();
-    const auto selfFsFilesBefore = user->roles.admin->vGlobals.self.fs.files.toBitString();
-    const auto selfFsDirectoriesBefore = user->roles.admin->vGlobals.self.fs.directories.toBitString();
+    const auto selfRolesBefore = role->vGlobals.self.roles.toBitString();
+    const auto selfSyncBefore = role->vGlobals.self.sync.toBitString();
+    const auto selfFsFilesBefore = role->vGlobals.self.fs.files.toBitString();
+    const auto selfFsDirectoriesBefore = role->vGlobals.self.fs.directories.toBitString();
 
-    const auto userRolesBefore = user->roles.admin->vGlobals.user.roles.toBitString();
-    const auto userSyncBefore = user->roles.admin->vGlobals.user.sync.toBitString();
-    const auto userFsFilesBefore = user->roles.admin->vGlobals.user.fs.files.toBitString();
-    const auto userFsDirectoriesBefore = user->roles.admin->vGlobals.user.fs.directories.toBitString();
+    const auto userRolesBefore = role->vGlobals.user.roles.toBitString();
+    const auto userSyncBefore = role->vGlobals.user.sync.toBitString();
+    const auto userFsFilesBefore = role->vGlobals.user.fs.files.toBitString();
+    const auto userFsDirectoriesBefore = role->vGlobals.user.fs.directories.toBitString();
 
-    const auto adminRolesBefore = user->roles.admin->vGlobals.admin.roles.toBitString();
-    const auto adminSyncBefore = user->roles.admin->vGlobals.admin.sync.toBitString();
-    const auto adminFsFilesBefore = user->roles.admin->vGlobals.admin.fs.files.toBitString();
-    const auto adminFsDirectoriesBefore = user->roles.admin->vGlobals.admin.fs.directories.toBitString();
+    const auto adminRolesBefore = role->vGlobals.admin.roles.toBitString();
+    const auto adminSyncBefore = role->vGlobals.admin.sync.toBitString();
+    const auto adminFsFilesBefore = role->vGlobals.admin.fs.files.toBitString();
+    const auto adminFsDirectoriesBefore = role->vGlobals.admin.fs.directories.toBitString();
 
     db::query::rbac::role::vault::Global::upsert(
-        std::make_shared<rbac::role::vault::Global>(user->roles.admin->vGlobals.self)
+        std::make_shared<rbac::role::vault::Global>(role->vGlobals.self)
     );
     db::query::rbac::role::vault::Global::upsert(
-        std::make_shared<rbac::role::vault::Global>(user->roles.admin->vGlobals.user)
+        std::make_shared<rbac::role::vault::Global>(role->vGlobals.user)
     );
     db::query::rbac::role::vault::Global::upsert(
-        std::make_shared<rbac::role::vault::Global>(user->roles.admin->vGlobals.admin)
+        std::make_shared<rbac::role::vault::Global>(role->vGlobals.admin)
     );
 
-    const auto roundtrip = db::query::identities::User::getUserById(user->id);
+    // Written behind the Manager's back: a reload (what the revision watcher does for out-of-band writes) must
+    // publish it into the canonical object the test already holds.
+    vh::identities::manager().refresh({.users = {userId}});
+    const auto roundtrip = vh::identities::manager().user(userId);
+    ASSERT_EQ(roundtrip.get(), created.get());
     ASSERT_NE(roundtrip, nullptr);
-    ASSERT_NE(roundtrip->roles.admin, nullptr);
+    ASSERT_NE(roundtrip->state()->roles.admin, nullptr);
 
-    EXPECT_EQ(roundtrip->roles.admin->vGlobals.self.roles.toBitString(), selfRolesBefore);
-    EXPECT_EQ(roundtrip->roles.admin->vGlobals.self.sync.toBitString(), selfSyncBefore);
-    EXPECT_EQ(roundtrip->roles.admin->vGlobals.self.fs.files.toBitString(), selfFsFilesBefore);
-    EXPECT_EQ(roundtrip->roles.admin->vGlobals.self.fs.directories.toBitString(), selfFsDirectoriesBefore);
+    EXPECT_EQ(roundtrip->state()->roles.admin->vGlobals.self.roles.toBitString(), selfRolesBefore);
+    EXPECT_EQ(roundtrip->state()->roles.admin->vGlobals.self.sync.toBitString(), selfSyncBefore);
+    EXPECT_EQ(roundtrip->state()->roles.admin->vGlobals.self.fs.files.toBitString(), selfFsFilesBefore);
+    EXPECT_EQ(roundtrip->state()->roles.admin->vGlobals.self.fs.directories.toBitString(), selfFsDirectoriesBefore);
 
-    EXPECT_EQ(roundtrip->roles.admin->vGlobals.user.roles.toBitString(), userRolesBefore);
-    EXPECT_EQ(roundtrip->roles.admin->vGlobals.user.sync.toBitString(), userSyncBefore);
-    EXPECT_EQ(roundtrip->roles.admin->vGlobals.user.fs.files.toBitString(), userFsFilesBefore);
-    EXPECT_EQ(roundtrip->roles.admin->vGlobals.user.fs.directories.toBitString(), userFsDirectoriesBefore);
+    EXPECT_EQ(roundtrip->state()->roles.admin->vGlobals.user.roles.toBitString(), userRolesBefore);
+    EXPECT_EQ(roundtrip->state()->roles.admin->vGlobals.user.sync.toBitString(), userSyncBefore);
+    EXPECT_EQ(roundtrip->state()->roles.admin->vGlobals.user.fs.files.toBitString(), userFsFilesBefore);
+    EXPECT_EQ(roundtrip->state()->roles.admin->vGlobals.user.fs.directories.toBitString(), userFsDirectoriesBefore);
 
-    EXPECT_EQ(roundtrip->roles.admin->vGlobals.admin.roles.toBitString(), adminRolesBefore);
-    EXPECT_EQ(roundtrip->roles.admin->vGlobals.admin.sync.toBitString(), adminSyncBefore);
-    EXPECT_EQ(roundtrip->roles.admin->vGlobals.admin.fs.files.toBitString(), adminFsFilesBefore);
-    EXPECT_EQ(roundtrip->roles.admin->vGlobals.admin.fs.directories.toBitString(), adminFsDirectoriesBefore);
+    EXPECT_EQ(roundtrip->state()->roles.admin->vGlobals.admin.roles.toBitString(), adminRolesBefore);
+    EXPECT_EQ(roundtrip->state()->roles.admin->vGlobals.admin.sync.toBitString(), adminSyncBefore);
+    EXPECT_EQ(roundtrip->state()->roles.admin->vGlobals.admin.fs.files.toBitString(), adminFsFilesBefore);
+    EXPECT_EQ(roundtrip->state()->roles.admin->vGlobals.admin.fs.directories.toBitString(), adminFsDirectoriesBefore);
 }

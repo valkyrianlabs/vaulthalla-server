@@ -7,6 +7,7 @@
 #include "fs/cache/Registry.hpp"
 #include "fs/model/File.hpp"
 #include "fs/model/Path.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "ops/Roles.hpp"
 #include "ops/Users.hpp"
@@ -180,7 +181,7 @@ protected:
         seed::seed_database();
         runtime::Deps::init();
         fs::Filesystem::init(runtime::Deps::get().storageManager);
-        admin = db::query::identities::User::getUserByName("admin");
+        admin = vh::identities::manager().userByName("admin");
 
         const auto a = ops::vaults::create(admin, {.name = "ha_" + tag(), .type = vault::model::VaultType::Local});
         const auto b = ops::vaults::create(admin, {.name = "hb_" + tag(), .type = vault::model::VaultType::Local});
@@ -190,13 +191,13 @@ protected:
         const auto makeUser = [](const std::string& prefix) {
             const auto created = ops::users::create(admin, {.name = prefix + "_" + tag(), .role = "unprivileged",
                                                             .password = std::string("Http-Access-Pass-123")});
-            return db::query::identities::User::getUserById(created.user->id);
+            return vh::identities::manager().user(created.user->id);
         };
         reader = makeUser("reader");
         plain = makeUser("plain");
         (void)ops::roles::assignVaultRole(admin, {.target = {.vault_id = a->id, .subject = {.type = "user", .id = reader->id}},
                                                   .role = std::string("reader")});
-        reader = db::query::identities::User::getUserById(reader->id);
+        reader = vh::identities::manager().user(reader->id);
 
         write(vaultA, "/pic.jpg", jpegOf(1600, 1200));
         write(vaultA, "/doc.pdf", twoPagePdf());

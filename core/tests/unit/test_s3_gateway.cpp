@@ -8,6 +8,7 @@
 #include "config/config_yaml.hpp"
 #include "fs/Filesystem.hpp"
 #include "fs/model/Path.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "protocols/s3/CredentialManager.hpp"
 #include "ops/Error.hpp"
@@ -483,11 +484,10 @@ TEST(S3GatewayObjectStoreTest, UserAccessCredentialDoesNotAuthorizeBucketAdminWi
     using vh::protocols::s3::ObjectStore;
     using vh::protocols::s3::ResolvedBucket;
 
-    auto user = std::make_shared<vh::identities::User>();
-    user->id = 42;
-    user->name = "gateway-user-access-non-admin";
-    user->roles.admin = std::make_shared<vh::rbac::role::Admin>(
-        vh::rbac::role::Admin::None(user->id));
+    vh::identities::UserState userState;
+    userState.name = "gateway-user-access-non-admin";
+    userState.roles.admin = std::make_shared<vh::rbac::role::Admin>( vh::rbac::role::Admin::None(42));
+    auto user = vh::identities::User::detached(42, std::move(userState));
 
     ResolvedBucket bucket{
         .bucket_name = "admin-op",
@@ -507,8 +507,16 @@ TEST(S3GatewayObjectStoreTest, UserAccessCredentialDoesNotAuthorizeBucketAdminWi
 
     EXPECT_FALSE(ObjectStore::credentialAllowsAdmin(bucket));
 
-    user->roles.admin = std::make_shared<vh::rbac::role::Admin>(
+    {
+
+        auto next = *user->state();
+
+        next.roles.admin = std::make_shared<vh::rbac::role::Admin>(
         vh::rbac::role::Admin::SuperAdmin(user->id));
+
+        user->replaceDetachedState(std::move(next));
+
+    }
     EXPECT_FALSE(ObjectStore::credentialAllowsAdmin(bucket));
 }
 
@@ -1088,7 +1096,7 @@ protected:
     static std::shared_ptr<vh::protocols::ws::Session> wsSessionForUser(const uint32_t targetUserId) {
         auto session = std::make_shared<vh::protocols::ws::Session>(
             std::make_shared<vh::protocols::ws::Router>());
-        session->user = vh::db::query::identities::User::getUserById(targetUserId);
+        session->user = vh::identities::manager().user(targetUserId);
         if (!session->user) throw std::runtime_error("test user not found");
         return session;
     }
@@ -1107,6 +1115,8 @@ protected:
                 "ON CONFLICT (vault_id, subject_type, subject_id) DO UPDATE SET role_id = EXCLUDED.role_id",
                 pqxx::params{targetVaultId, targetUserId, roleId});
         });
+        // Written behind the identity manager: republish, as its revision watcher does in the daemon.
+        (void)vh::identities::manager().reconcile();
     }
 
     static vh::db::query::s3::GatewayCredential createCredential(
@@ -1255,7 +1265,7 @@ TEST_F(S3GatewayDbTest, ListObjectsTreatsPrefixWildcardCharactersLiterally) {
 }
 
 TEST_F(S3GatewayDbTest, UserAccessCredentialUsesPrincipalRbacWithoutGatewayRoleAssignment) {
-    const auto admin = vh::db::query::identities::User::getUserByName("admin");
+    const auto admin = vh::identities::manager().userByName("admin");
     ASSERT_TRUE(admin);
     ASSERT_TRUE(admin->isSuperAdmin());
     const auto credential = createCredential(admin->id, "user_access");
@@ -1277,7 +1287,7 @@ TEST_F(S3GatewayDbTest, UserAccessCredentialUsesPrincipalRbacWithoutGatewayRoleA
 }
 
 TEST_F(S3GatewayDbTest, UserAccessCredentialCannotExceedPrincipalRbac) {
-    const auto admin = vh::db::query::identities::User::getUserByName("admin");
+    const auto admin = vh::identities::manager().userByName("admin");
     ASSERT_TRUE(admin);
     const auto unownedVaultId = createLocalVault(s3GatewayUniqueSuffix("user_access_denied"), admin->id);
     vh::db::query::s3::Gateway::bindBucket({
@@ -1287,7 +1297,7 @@ TEST_F(S3GatewayDbTest, UserAccessCredentialCannotExceedPrincipalRbac) {
         .mode = "local",
         .created_by = admin->id
     });
-    const auto principal = vh::db::query::identities::User::getUserById(userId);
+    const auto principal = vh::identities::manager().user(userId);
     ASSERT_TRUE(principal);
     ASSERT_FALSE(principal->isAdmin());
     const auto credential = createCredential(principal->id, "user_access");
@@ -1305,7 +1315,7 @@ TEST_F(S3GatewayDbTest, UserAccessCredentialCannotExceedPrincipalRbac) {
 }
 
 TEST_F(S3GatewayDbTest, VaultAllowlistCredentialRequiresSelectedVaultAndDefaultRole) {
-    const auto admin = vh::db::query::identities::User::getUserByName("admin");
+    const auto admin = vh::identities::manager().userByName("admin");
     ASSERT_TRUE(admin);
     ASSERT_TRUE(admin->isSuperAdmin());
     const auto credential = createCredential(admin->id, "vault_allowlist");
@@ -1338,7 +1348,7 @@ TEST_F(S3GatewayDbTest, VaultAllowlistCredentialRequiresSelectedVaultAndDefaultR
 }
 
 TEST_F(S3GatewayDbTest, VaultAllowlistDefaultRoleRequiresPrincipalAndCredentialAllow) {
-    const auto admin = vh::db::query::identities::User::getUserByName("admin");
+    const auto admin = vh::identities::manager().userByName("admin");
     ASSERT_TRUE(admin);
     ASSERT_TRUE(admin->isSuperAdmin());
     auto credential = createCredential(admin->id, "vault_allowlist");
@@ -1366,7 +1376,7 @@ TEST_F(S3GatewayDbTest, VaultAllowlistDefaultRoleRequiresPrincipalAndCredentialA
     EXPECT_EQ(vh::rbac::s3::policy::Decision::Reason::EffectiveCredentialRoleDenied, write.reason);
 
     const auto adminOwnedVaultId = createLocalVault(s3GatewayUniqueSuffix("allowlist_principal_denied"), admin->id);
-    const auto principal = vh::db::query::identities::User::getUserById(userId);
+    const auto principal = vh::identities::manager().user(userId);
     ASSERT_TRUE(principal);
     credential = createCredential(principal->id, "vault_allowlist");
     setCredentialDefaultVaultRole(credential.id, "manager", principal->id);
@@ -1384,7 +1394,7 @@ TEST_F(S3GatewayDbTest, VaultAllowlistDefaultRoleRequiresPrincipalAndCredentialA
 }
 
 TEST_F(S3GatewayDbTest, VaultAllowlistPerVaultRoleOverridesDefaultRoleForOneVault) {
-    const auto admin = vh::db::query::identities::User::getUserByName("admin");
+    const auto admin = vh::identities::manager().userByName("admin");
     ASSERT_TRUE(admin);
     ASSERT_TRUE(admin->isSuperAdmin());
     const auto secondVaultId = createLocalVault(s3GatewayUniqueSuffix("allowlist_role_override"), admin->id);
@@ -1417,7 +1427,7 @@ TEST_F(S3GatewayDbTest, VaultAllowlistPerVaultRoleOverridesDefaultRoleForOneVaul
 }
 
 TEST_F(S3GatewayDbTest, VaultAllowlistRoleOverridesApplyToCredentialAperture) {
-    const auto admin = vh::db::query::identities::User::getUserByName("admin");
+    const auto admin = vh::identities::manager().userByName("admin");
     ASSERT_TRUE(admin);
     ASSERT_TRUE(admin->isSuperAdmin());
     const auto credential = createCredential(admin->id, "vault_allowlist");
@@ -1514,7 +1524,7 @@ TEST_F(S3GatewayDbTest, VaultAllowlistRoleOverridesApplyToCredentialAperture) {
 }
 
 TEST_F(S3GatewayDbTest, GlobalCredentialUsesPrincipalRbacAndRequiresAdminPrincipal) {
-    const auto admin = vh::db::query::identities::User::getUserByName("admin");
+    const auto admin = vh::identities::manager().userByName("admin");
     ASSERT_TRUE(admin);
     ASSERT_TRUE(admin->isSuperAdmin());
     const auto globalAdminCredential = createCredential(admin->id, "global");
@@ -1570,7 +1580,7 @@ TEST_F(S3GatewayDbTest, GlobalCredentialUsesPrincipalRbacAndRequiresAdminPrincip
     EXPECT_TRUE(adminWriteAllowedByException.allowed);
 
     assignPrincipalVaultRole(vaultId, userId, "manager");
-    const auto nonAdmin = vh::db::query::identities::User::getUserById(userId);
+    const auto nonAdmin = vh::identities::manager().user(userId);
     ASSERT_TRUE(nonAdmin);
     ASSERT_FALSE(nonAdmin->isAdmin());
     const auto globalUserCredential = createCredential(nonAdmin->id, "global");
@@ -1590,7 +1600,7 @@ TEST_F(S3GatewayDbTest, GlobalCredentialUsesPrincipalRbacAndRequiresAdminPrincip
 }
 
 TEST_F(S3GatewayDbTest, ManagementS3ActionsRequireExplicitManagementGates) {
-    const auto admin = vh::db::query::identities::User::getUserByName("admin");
+    const auto admin = vh::identities::manager().userByName("admin");
     ASSERT_TRUE(admin);
     const auto decision = evaluateS3(
         admin,
@@ -1604,11 +1614,10 @@ TEST_F(S3GatewayDbTest, ManagementS3ActionsRequireExplicitManagementGates) {
 }
 
 TEST_F(S3GatewayDbTest, VaultAllowlistScopesMirrorToGatewayVaultRoles) {
-    auto admin = std::make_shared<vh::identities::User>();
-    admin->id = userId;
-    admin->name = "admin-principal";
-    admin->roles.admin = std::make_shared<vh::rbac::role::Admin>(
-        vh::rbac::role::Admin::SuperAdmin(admin->id));
+    vh::identities::UserState adminState;
+    adminState.name = "admin-principal";
+    adminState.roles.admin = std::make_shared<vh::rbac::role::Admin>( vh::rbac::role::Admin::SuperAdmin(userId));
+    auto admin = vh::identities::User::detached(userId, std::move(adminState));
 
     vh::db::query::s3::GatewayCredential credential;
     credential.user_id = admin->id;
@@ -1697,7 +1706,7 @@ TEST_F(S3GatewayDbTest, SignedDeleteBucketUsesCanAdminWithoutCanDeleteScope) {
     cfg.s3_gateway.allow_path_style = true;
     vh::config::Registry::set(cfg);
 
-    const auto admin = vh::db::query::identities::User::getUserByName("admin");
+    const auto admin = vh::identities::manager().userByName("admin");
     ASSERT_TRUE(admin);
     ASSERT_TRUE(admin->isSuperAdmin());
 
@@ -1749,7 +1758,7 @@ TEST_F(S3GatewayDbTest, SignedDedicatedHostRootListsBuckets) {
     cfg.s3_gateway.allow_virtual_hosted_style = true;
     vh::config::Registry::set(cfg);
 
-    const auto admin = vh::db::query::identities::User::getUserByName("admin");
+    const auto admin = vh::identities::manager().userByName("admin");
     ASSERT_TRUE(admin);
 
     const vh::protocols::s3::CredentialManager manager;
@@ -1784,7 +1793,7 @@ TEST_F(S3GatewayDbTest, SignedDedicatedHostPutAndGetAuthenticateAndRoutePathStyl
     cfg.s3_gateway.allow_virtual_hosted_style = true;
     vh::config::Registry::set(cfg);
 
-    const auto admin = vh::db::query::identities::User::getUserByName("admin");
+    const auto admin = vh::identities::manager().userByName("admin");
     ASSERT_TRUE(admin);
     ASSERT_TRUE(admin->isSuperAdmin());
 
@@ -1844,7 +1853,7 @@ TEST_F(S3GatewayDbTest, SignedDedicatedHostPutAndGetAuthenticateAndRoutePathStyl
 // The scope rule moved from CredentialManager::validateScopeMutation into ops::s3_gateway, the one place both
 // surfaces authorize credential policy.
 TEST_F(S3GatewayDbTest, NonAdminScopeMutationCannotGrantGatewayAdminScope) {
-    const auto user = vh::db::query::identities::User::getUserById(userId);
+    const auto user = vh::identities::manager().user(userId);
     ASSERT_TRUE(user);
     EXPECT_THROW(
         (void)vh::ops::s3_gateway::createCredential(user, {
@@ -1865,7 +1874,7 @@ TEST_F(S3GatewayDbTest, NonAdminScopeMutationCannotNameUnownedVaultEvenWithNoAct
     const auto unownedVaultId = vh::db::Transactions::exec(
         "S3GatewayDbTest::seedUnownedScopeVault",
         [](pqxx::work& txn) {
-            const auto admin = vh::db::query::identities::User::getUserByName("admin");
+            const auto admin = vh::identities::manager().userByName("admin");
             if (!admin) throw std::runtime_error("admin user not available");
             const auto mount = s3GatewayUniqueSuffix("s3gw_unscope").substr(0, 33);
             const auto seededVaultId = txn.exec(
@@ -1879,7 +1888,7 @@ TEST_F(S3GatewayDbTest, NonAdminScopeMutationCannotNameUnownedVaultEvenWithNoAct
             return seededVaultId;
         });
 
-    const auto user = vh::db::query::identities::User::getUserById(userId);
+    const auto user = vh::identities::manager().user(userId);
     ASSERT_TRUE(user);
     EXPECT_THROW(
         (void)vh::ops::s3_gateway::createCredential(user, {
@@ -1897,7 +1906,7 @@ TEST_F(S3GatewayDbTest, NonAdminScopeMutationCannotNameUnownedVaultEvenWithNoAct
 }
 
 TEST_F(S3GatewayDbTest, UserAccessCredentialCannotCreateBucketWithoutAdminPrincipal) {
-    auto user = vh::db::query::identities::User::getUserById(userId);
+    auto user = vh::identities::manager().user(userId);
     ASSERT_TRUE(user);
     ASSERT_FALSE(user->isAdmin());
 
@@ -1917,7 +1926,7 @@ TEST_F(S3GatewayDbTest, UserAccessCredentialCannotCreateBucketWithoutAdminPrinci
 TEST_F(S3GatewayDbTest, S3GatewayWebSocketListHandlersAcceptNullPayloads) {
     auto session = std::make_shared<vh::protocols::ws::Session>(
         std::make_shared<vh::protocols::ws::Router>());
-    session->user = vh::db::query::identities::User::getUserById(userId);
+    session->user = vh::identities::manager().user(userId);
     ASSERT_TRUE(session->user);
 
     const auto credentials = vh::protocols::ws::handler::S3Gateway::credentialsList(nlohmann::json(nullptr), session);
@@ -1932,7 +1941,7 @@ TEST_F(S3GatewayDbTest, S3GatewayWebSocketListHandlersAcceptNullPayloads) {
 TEST_F(S3GatewayDbTest, S3GatewayWebSocketNormalizesCredentialScopeNames) {
     auto session = std::make_shared<vh::protocols::ws::Session>(
         std::make_shared<vh::protocols::ws::Router>());
-    session->user = vh::db::query::identities::User::getUserById(1);
+    session->user = vh::identities::manager().user(1);
     ASSERT_TRUE(session->user);
     ASSERT_TRUE(session->user->isAdmin());
 
@@ -1970,7 +1979,7 @@ TEST_F(S3GatewayDbTest, S3GatewayWebSocketNormalizesCredentialScopeNames) {
 }
 
 TEST_F(S3GatewayDbTest, S3GatewayWebSocketRoleAssignmentAndOverrideEndpointsWork) {
-    const auto admin = vh::db::query::identities::User::getUserByName("admin");
+    const auto admin = vh::identities::manager().userByName("admin");
     ASSERT_TRUE(admin);
     ASSERT_TRUE(admin->isSuperAdmin());
     const auto session = wsSessionForUser(admin->id);
@@ -2043,7 +2052,7 @@ TEST_F(S3GatewayDbTest, S3GatewayWebSocketRoleAssignmentAndOverrideEndpointsWork
 }
 
 TEST_F(S3GatewayDbTest, S3GatewayWebSocketDefaultRoleSelectedVaultAndDefaultOverrideEndpointsWork) {
-    const auto admin = vh::db::query::identities::User::getUserByName("admin");
+    const auto admin = vh::identities::manager().userByName("admin");
     ASSERT_TRUE(admin);
     ASSERT_TRUE(admin->isSuperAdmin());
     const auto session = wsSessionForUser(admin->id);
@@ -2131,7 +2140,7 @@ TEST_F(S3GatewayDbTest, S3GatewayWebSocketDefaultRoleSelectedVaultAndDefaultOver
 }
 
 TEST_F(S3GatewayDbTest, S3GatewayWebSocketDefaultPolicyMutationRequiresCredentialAndVaultAuthority) {
-    const auto admin = vh::db::query::identities::User::getUserByName("admin");
+    const auto admin = vh::identities::manager().userByName("admin");
     ASSERT_TRUE(admin);
     ASSERT_TRUE(admin->isSuperAdmin());
     const auto adminCredential = createCredential(admin->id, "vault_allowlist");
@@ -2163,7 +2172,7 @@ TEST_F(S3GatewayDbTest, S3GatewayWebSocketDefaultPolicyMutationRequiresCredentia
 }
 
 TEST_F(S3GatewayDbTest, S3GatewayWebSocketPermissionGatesUseGatewayAdminPermissions) {
-    const auto admin = vh::db::query::identities::User::getUserByName("admin");
+    const auto admin = vh::identities::manager().userByName("admin");
     ASSERT_TRUE(admin);
     const auto adminCredential = createCredential(admin->id, "user_access");
 
@@ -2254,7 +2263,7 @@ TEST_F(S3GatewayDbTest, CliScopeRevokeVaultRequiresVaultRoleRevoke) {
 
     const auto line = "s3-gateway creds scope " + std::to_string(credential.id) + " revoke-vault " + std::to_string(vaultId);
     const auto run = [&](const uint32_t callerId) {
-        const auto caller = vh::db::query::identities::User::getUserById(callerId);
+        const auto caller = vh::identities::manager().user(callerId);
         try {
             return router->executeLine(line, caller, nullptr).exit_code;
         } catch (const std::exception&) {
@@ -2271,7 +2280,7 @@ TEST_F(S3GatewayDbTest, CliScopeRevokeVaultRequiresVaultRoleRevoke) {
     EXPECT_EQ(1u, assignmentCount()) << "revoke-vault removed the role assignment without vault-role Revoke";
 
     // Positive control: a caller with vault-role authority (super_admin) still revokes through the same line.
-    const auto superAdmin = vh::db::query::identities::User::getUserByName("admin");
+    const auto superAdmin = vh::identities::manager().userByName("admin");
     ASSERT_TRUE(superAdmin);
     ASSERT_TRUE(superAdmin->isSuperAdmin());
     EXPECT_EQ(0, run(superAdmin->id));
@@ -2299,7 +2308,7 @@ TEST_F(S3GatewayDbTest, S3GatewayWebSocketAssignPrincipalPermissionAllowsRetarge
 TEST_F(S3GatewayDbTest, S3GatewayWebSocketRejectsRemoteModeForLocalVaultBinding) {
     auto session = std::make_shared<vh::protocols::ws::Session>(
         std::make_shared<vh::protocols::ws::Router>());
-    session->user = vh::db::query::identities::User::getUserByName("admin");
+    session->user = vh::identities::manager().userByName("admin");
     ASSERT_TRUE(session->user);
     ASSERT_TRUE(session->user->isSuperAdmin());
 
@@ -2324,7 +2333,7 @@ TEST_F(S3GatewayDbTest, S3GatewayWebSocketRejectsRemoteModeForLocalVaultBinding)
 TEST_F(S3GatewayDbTest, VaultSlugDefaultsAndDisplayRenameDoesNotRewriteBindings) {
     auto session = std::make_shared<vh::protocols::ws::Session>(
         std::make_shared<vh::protocols::ws::Router>());
-    session->user = vh::db::query::identities::User::getUserByName("admin");
+    session->user = vh::identities::manager().userByName("admin");
     ASSERT_TRUE(session->user);
     ASSERT_TRUE(session->user->isSuperAdmin());
 
@@ -2416,7 +2425,7 @@ TEST_F(S3GatewayDbTest, SlugAndFuseOverrideControlOnlyDefaultFuseBinding) {
 TEST_F(S3GatewayDbTest, ExplicitS3BucketBindingSurvivesVaultNameAndSlugUpdates) {
     auto session = std::make_shared<vh::protocols::ws::Session>(
         std::make_shared<vh::protocols::ws::Router>());
-    session->user = vh::db::query::identities::User::getUserByName("admin");
+    session->user = vh::identities::manager().userByName("admin");
     ASSERT_TRUE(session->user);
     ASSERT_TRUE(session->user->isSuperAdmin());
 
@@ -2595,7 +2604,7 @@ TEST_F(S3GatewayDbTest, CredentialScopeShorthandWritesFinalRbacTablesAndGatesAct
             pqxx::params{secondVaultId, userId, roleId});
     });
 
-    auto user = vh::db::query::identities::User::getUserById(userId);
+    auto user = vh::identities::manager().user(userId);
     ASSERT_TRUE(user);
     vh::protocols::s3::AuthContext auth{
         .user = user,
@@ -2619,7 +2628,7 @@ TEST_F(S3GatewayDbTest, SignedRouteScopeDeniedReturnsS3XmlAccessDenied) {
     cfg.s3_gateway.allow_path_style = true;
     vh::config::Registry::set(cfg);
 
-    const auto admin = vh::db::query::identities::User::getUserByName("admin");
+    const auto admin = vh::identities::manager().userByName("admin");
     ASSERT_TRUE(admin);
     ASSERT_TRUE(admin->isSuperAdmin());
 
@@ -2661,7 +2670,7 @@ TEST_F(S3GatewayDbTest, SignedRouteScopeDeniedReturnsS3XmlAccessDenied) {
 TEST_F(S3GatewayDbTest, MultipartUploadUsesOpaquePartDirAndCompleteKeepsRoot) {
     std::filesystem::remove_all(vh::protocols::s3::MultipartStore::partRoot());
 
-    const auto admin = vh::db::query::identities::User::getUserByName("admin");
+    const auto admin = vh::identities::manager().userByName("admin");
     ASSERT_TRUE(admin);
 
     const std::string bucketName = "multipart-complete-" + std::to_string(vaultId);
@@ -2706,7 +2715,7 @@ TEST_F(S3GatewayDbTest, MultipartUploadUsesOpaquePartDirAndCompleteKeepsRoot) {
 TEST_F(S3GatewayDbTest, AbortMultipartUploadRemovesOpaquePartDirAndKeepsRoot) {
     std::filesystem::remove_all(vh::protocols::s3::MultipartStore::partRoot());
 
-    const auto admin = vh::db::query::identities::User::getUserByName("admin");
+    const auto admin = vh::identities::manager().userByName("admin");
     ASSERT_TRUE(admin);
 
     const std::string bucketName = "multipart-abort-" + std::to_string(vaultId);
@@ -2873,7 +2882,7 @@ TEST_F(S3GatewayDbTest, RemoteBackedListDetectsStaleRemoteIndex) {
         .mode = "remote_cache",
         .api_exclusive = true,
         .engine = engine,
-        .actor = vh::db::query::identities::User::getUserById(userId),
+        .actor = vh::identities::manager().user(userId),
         .gateway_access = std::nullopt
     };
 
@@ -2950,7 +2959,7 @@ TEST_F(S3GatewayDbTest, ListObjectsDelimiterPaginatesCommonPrefixesOnce) {
 }
 
 TEST_F(S3GatewayDbTest, ObjectStoreLocalListUsesMetadataEtagsForFilesystemEntries) {
-    const auto admin = vh::db::query::identities::User::getUserByName("admin");
+    const auto admin = vh::identities::manager().userByName("admin");
     ASSERT_TRUE(admin);
     ASSERT_TRUE(admin->isSuperAdmin());
 
@@ -2988,7 +2997,7 @@ TEST_F(S3GatewayDbTest, ObjectStoreLocalListUsesMetadataEtagsForFilesystemEntrie
 }
 
 TEST_F(S3GatewayDbTest, ObjectStoreRemoteListUsesRemoteIndexWithoutGatewayRows) {
-    const auto admin = vh::db::query::identities::User::getUserByName("admin");
+    const auto admin = vh::identities::manager().userByName("admin");
     ASSERT_TRUE(admin);
     ASSERT_TRUE(admin->isSuperAdmin());
 
@@ -3023,7 +3032,7 @@ TEST_F(S3GatewayDbTest, ObjectStoreRemoteListUsesRemoteIndexWithoutGatewayRows) 
 }
 
 TEST_F(S3GatewayDbTest, DeleteBucketRejectsLocalFilesystemEntriesWithoutGatewayRows) {
-    const auto admin = vh::db::query::identities::User::getUserByName("admin");
+    const auto admin = vh::identities::manager().userByName("admin");
     ASSERT_TRUE(admin);
     ASSERT_TRUE(admin->isSuperAdmin());
 
@@ -3060,7 +3069,7 @@ TEST_F(S3GatewayDbTest, DeleteBucketRejectsLocalFilesystemEntriesWithoutGatewayR
 }
 
 TEST_F(S3GatewayDbTest, DeleteBucketRejectsRemoteIndexLiveObjects) {
-    const auto admin = vh::db::query::identities::User::getUserByName("admin");
+    const auto admin = vh::identities::manager().userByName("admin");
     ASSERT_TRUE(admin);
     ASSERT_TRUE(admin->isSuperAdmin());
 
@@ -3093,7 +3102,7 @@ TEST_F(S3GatewayDbTest, DeleteBucketRejectsRemoteIndexLiveObjects) {
 }
 
 TEST_F(S3GatewayDbTest, DeleteBucketAllowsTrulyEmptyApiExclusiveBucket) {
-    const auto admin = vh::db::query::identities::User::getUserByName("admin");
+    const auto admin = vh::identities::manager().userByName("admin");
     ASSERT_TRUE(admin);
     ASSERT_TRUE(admin->isSuperAdmin());
 
