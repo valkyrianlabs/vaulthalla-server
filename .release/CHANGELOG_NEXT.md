@@ -20,6 +20,8 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
 - Vault permission checks no longer load the vault owner from the database; API key listing no longer
   dereferences a missing owner.
 - Contract test: identity writes outside identities::Manager are rejected (tools/contracts).
+- HTTP cookie auth: refresh-token row read in one round trip (Transactions::read); the owner comes from the row and
+  the canonical account (the users JOIN per request is gone); JWT secret cached in crypto::secrets::Manager.
 ## Previews
 - /preview/batch: index-only readiness in one query per engine (Store::status), "failed" for known-bad sources, no
   artifact decrypts and no cache hit/miss accounting for status checks.
@@ -31,4 +33,13 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
 - Generator version 3: fast IDCT and 4:2:0 for thumbnail sizes, alpha composited over white.
 - Web grid requests 256/512 px thumbnails for its tiles; the legacy ws share.preview.get renders through the cached,
   gated pipeline and never fetches remote-only bytes.
-
+- Deferred outputs: an on-demand page-0 render returns the requested size, then finishes the smaller thumbnail
+  sizes from the same raster on the thumbnail pool while holding the decode's flight.
+## Filesystem
+- fs cache listDir: completeness checked with one statement (direct child count, subtree totals) instead of two
+  transactions reloading the directory and its subdirectories; parent->children index replaces a scan of every
+  cached entry per listing.
+- Directory totals: one recursive statement updates every ancestor (rows locked nearest-first) instead of an UPDATE
+  and a parent lookup per level; ancestor chains load in one statement; signed size delta in the rename re-encrypt
+  path (a shrinking file no longer wraps).
+- Web/API overwrite refreshes the cached ancestor directory totals.

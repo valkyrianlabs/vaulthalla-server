@@ -19,6 +19,13 @@ change, so those checks no longer wait on the database.
 - FUSE operations (`stat`, `ls`, `open`, reads and writes) no longer query the database to identify the caller or to
   check vault permissions.
 - Thumbnail grids, previews, downloads and S3 gateway requests no longer reload accounts per request.
+- Requests signed in by the session cookie (thumbnails, previews, downloads) check the session with one database read
+  instead of three; the session signing key stays in memory instead of being read and unsealed for every request.
+  Revoked sessions are still refused at the next request.
+- Listing a folder in the FUSE mount (`ls`) checks the database with one query instead of reloading the folder and
+  each of its subfolders, and no longer scans every cached entry to find the folder's contents.
+- Adding, overwriting or deleting a file updates the totals of every folder above it in one statement instead of
+  two per level.
 
 #### Changes take effect at once
 
@@ -39,7 +46,8 @@ change, so those checks no longer wait on the database.
 - A file that can't be previewed (corrupt or over a limit) is reported as such once; the grid used to keep asking
   for it.
 - Opening an image also leaves its grid thumbnails behind, and concurrent requests for the same file share one
-  decode instead of each decoding it.
+  decode instead of each decoding it. The image or PDF page you opened is sent as soon as it is ready; its grid
+  thumbnails are finished right after, from the same decode.
 - Background thumbnail generation (uploads, cloud sync, grid fills) has its own render budget and can no longer
   make the image viewer wait or answer "busy".
 - Serving a cached preview costs one database round trip instead of six, and PDF page previews no longer read a
@@ -50,3 +58,7 @@ change, so those checks no longer wait on the database.
 - Cached previews are no longer flushed to disk one by one (they are verified on every read and regenerated if a
   crash damaged one), which makes generating thumbnails much lighter on slow disks.
 
+#### Fixes
+
+- Overwriting a file from the web console or the API now updates the folder sizes the file browser shows right away;
+  they could stay stale.

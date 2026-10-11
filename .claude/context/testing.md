@@ -84,6 +84,11 @@ stale secrets, or port conflicts: `make uninstall` → `make test` → re-source
   a release build and the test DB env:
   `./build-o3/core/vh_unit_tests --gtest_also_run_disabled_tests --gtest_filter='DISABLED_HttpBench*'`. The same file
   compiles against the pre-rich-preview tree with `-DVH_BENCH_LEGACY` for like-for-like numbers.
+- `tools/dev/bench/vhbench.py` (`seed` / `run` / `compare`, dev VM only) measures what FUSE operations, preview grids,
+  PDF pages and imports cost the live daemon as admin and as the non-admin `bench_user`: PG transactions, per-statement
+  counts/time/buffers via `pg_stat_statements` (enabled on the dev VM's PostgreSQL 16 by
+  `/etc/postgresql/16/main/conf.d/90-pg-stat-statements.conf`, extension created in `vaulthalla`), daemon CPU and
+  latency. Swap a package-flag server into the dev install to compare against the apt build.
 - Web: `web/tests/e2e/preview.spec.ts` (Playwright) drives plans, image/PDF paging, ranged video/audio, text
   edit/412 conflict, markdown safety, 3D models, the lazy Babylon chunk and preview-only vs download share links
   against a running install behind the reverse proxy (fixtures from `tests/e2e/fixtures/preview/generate.mjs`; see

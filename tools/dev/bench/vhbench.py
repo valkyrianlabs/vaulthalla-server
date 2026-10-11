@@ -14,6 +14,12 @@ local install on the dev VM; never point it at vh-storage.
 `bench_staff` (bench_user + 30 fillers, `reader` on vault 1), a direct `contributor` role with a deny override on
 /bench/private/**, and fixtures under /bench in vault 1 (100 grid images incl. corrupt ones, multi-page PDFs).
 Generated credentials go to DIR/bench_user.password (0600) and are never printed.
+
+When pg_stat_statements is loaded (shared_preload_libraries) and the extension exists in the daemon's database, every
+scenario also records per-statement counts, execution time and buffer blocks (`sql`, `per_op.statements`,
+`per_op.sql_ms`); the stats are reset before each scenario, so run nothing else against that database meanwhile.
+Background services (stats snapshots, janitor, retention) are filtered out. Compare runs taken with an equally warm
+fs cache: the first listing of a directory after a daemon restart falls back to the database once.
 """
 from __future__ import annotations
 
@@ -95,10 +101,47 @@ def pg_sample() -> dict:
 FLUSH_WAIT = 11.5
 
 
+def pgss_available() -> bool:
+    try:
+        return psql("SELECT 1 FROM pg_extension WHERE extname = 'pg_stat_statements'").strip() == "1"
+    except RuntimeError:
+        return False
+
+
+def pgss_reset() -> None:
+    psql("SELECT pg_stat_statements_reset()")
+
+
+def pgss_sample(limit: int = 15) -> dict:
+    """Statements the daemon ran since the last reset (the profiler's own queries excluded)."""
+    rows = psql(
+        "SELECT calls, round(total_exec_time::numeric, 3), rows, shared_blks_hit + shared_blks_read, "
+        "regexp_replace(left(query, 160), '\\s+', ' ', 'g') FROM pg_stat_statements s "
+        "JOIN pg_database d ON d.oid = s.dbid WHERE d.datname = 'vaulthalla' "
+        "AND query NOT ILIKE '%pg_stat_statements%' AND query NOT ILIKE '%pg_stat_database%' "
+        "AND query NOT ILIKE '%pg_stat_user_tables%' AND query NOT ILIKE '%pg_stat_force_next_flush%' "
+        # Background services that run on their own clock (stats snapshots, janitor, retention), not the workload.
+        "AND query !~* '(stats_(metric|fuse|cache|threadpool|snapshot)|vault_deletion|files_trashed|pending_operations|"
+        "active_share_uploads|pg_stat_activity|''operation'' AS source|FROM ONLY \"public\".\"vault\" x)' "
+        "ORDER BY calls DESC").splitlines()
+    out = {"statements": 0, "exec_ms": 0.0, "blocks": 0, "top": []}
+    for line in rows:
+        calls, ms, nrows, blocks, query = line.split("|", 4)
+        out["statements"] += int(calls)
+        out["exec_ms"] += float(ms)
+        out["blocks"] += int(blocks)
+        if len(out["top"]) < limit:
+            out["top"].append({"calls": int(calls), "ms": float(ms), "rows": int(nrows), "blocks": int(blocks),
+                               "query": query})
+    out["exec_ms"] = round(out["exec_ms"], 3)
+    return out
+
+
 class Probe:
     """Deltas of PG + daemon counters around a block, corrected for the idle background rate."""
 
     idle_rate: dict | None = None
+    profile: bool = False
 
     @classmethod
     def calibrate(cls, seconds: float = 20.0) -> None:
@@ -112,12 +155,15 @@ class Probe:
     def __enter__(self):
         time.sleep(FLUSH_WAIT)
         self.pid = daemon_pid()
+        if Probe.profile:
+            pgss_reset()
         self.pg0, self.p0, self.t0 = pg_sample(), proc_sample(self.pid), time.monotonic()
         return self
 
     def __exit__(self, *exc):
         self.wall = time.monotonic() - self.t0
         self.p1 = proc_sample(self.pid)
+        self.sql = pgss_sample() if Probe.profile else None
         time.sleep(FLUSH_WAIT)
         self.pg1 = pg_sample()
         span = time.monotonic() - self.t0
@@ -133,6 +179,10 @@ class Probe:
         r = {"ops": ops, "wall_s": round(self.wall, 4), "pg": self.pg, "proc": self.proc}
         r["per_op"] = {"xact": round(self.pg["xact"] / ops, 3), "cpu_ms": round(1000 * self.proc["cpu_s"] / ops, 3),
                        "syscalls": round((self.proc["syscr"] + self.proc["syscw"]) / ops, 2)}
+        if self.sql is not None:
+            r["sql"] = self.sql
+            r["per_op"]["statements"] = round(self.sql["statements"] / ops, 3)
+            r["per_op"]["sql_ms"] = round(self.sql["exec_ms"] / ops, 4)
         r.update(extra)
         return r
 
@@ -608,6 +658,8 @@ def run(state: Path, label: str, only: set[str]) -> None:
     manifest = json.loads((state / "manifest.json").read_text())
     results: dict = {"label": label, "version": sh("dpkg-query", "-W", "-f", "${Version}", "vaulthalla").strip(),
                      "at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
+    Probe.profile = pgss_available()
+    results["pg_stat_statements"] = Probe.profile
     Probe.calibrate()
     results["idle_rate_per_s"] = {k: round(v, 3) for k, v in (Probe.idle_rate or {}).items() if v}
     if not only or "fuse" in only:
@@ -630,7 +682,8 @@ def compare(a_path: str, b_path: str) -> None:
             for p in path:
                 r = r.get(p, {}) if isinstance(r, dict) else {}
             return r if isinstance(r, (int, float)) else None
-        for metric in (("per_op", "xact"), ("per_op", "cpu_ms"), ("per_op", "syscalls"), ("wall_s",),
+        for metric in (("per_op", "xact"), ("per_op", "statements"), ("per_op", "sql_ms"), ("per_op", "cpu_ms"),
+                       ("per_op", "syscalls"), ("wall_s",),
                        ("image", "p50_ms"), ("image", "p95_ms"), ("batch", "p50_ms"), ("seconds_to_ready",)):
             va, vb = g(ra, *metric), g(rb, *metric)
             if va is None or vb is None:
