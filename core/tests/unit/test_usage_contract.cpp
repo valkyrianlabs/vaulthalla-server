@@ -294,7 +294,9 @@ TEST(UsageContract, MetaContractGetReturnsTheBuiltContractIdentity) {
     EXPECT_EQ(reply.size(), 3u) << "no other (possibly sensitive) fields: " << reply.dump();
 }
 
-TEST(UsageContract, MetaContractGetIsAllowedWhereverAuthIsAuthenticatedIs) {
+// The contract hash identifies the daemon build, so it is not handed to unauthenticated sockets (no version
+// fingerprinting before login); a signed-in human gets it like any other read.
+TEST(UsageContract, MetaContractGetNeedsASignedInHuman) {
     using Decision = protocols::ws::Router::CommandAuthDecision;
     const auto unauth = std::make_shared<protocols::ws::Session>(std::make_shared<protocols::ws::Router>());
     const auto human = std::make_shared<protocols::ws::Session>(std::make_shared<protocols::ws::Router>());
@@ -303,10 +305,8 @@ TEST(UsageContract, MetaContractGetIsAllowedWhereverAuthIsAuthenticatedIs) {
     state.roles.admin = std::make_shared<rbac::role::Admin>();
     human->user = identities::User::detached(4243, std::move(state));
 
-    for (const auto& session : {unauth, human})
-        EXPECT_EQ(protocols::ws::Router::classifyCommand("meta.contract.get", *session),
-                  protocols::ws::Router::classifyCommand("auth.isAuthenticated", *session));
-    EXPECT_EQ(protocols::ws::Router::classifyCommand("meta.contract.get", *unauth), Decision::Allow);
+    EXPECT_EQ(protocols::ws::Router::classifyCommand("meta.contract.get", *unauth), Decision::Deny);
+    EXPECT_EQ(protocols::ws::Router::classifyCommand("meta.contract.get", *human), Decision::RequireHumanAuth);
 }
 
 }

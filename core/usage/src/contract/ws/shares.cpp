@@ -78,7 +78,8 @@ std::vector<WsCommandUsage> metaCommands() {
         .command = "meta.contract.get",
         .description = "The contract this daemon was built from: contract_version, contract_hash (the whole "
                        "document vh_usage --json publishes) and ws_hash (the ws command book, what the web console "
-                       "is generated from). Read-only, no secrets; allowed wherever auth.isAuthenticated is.",
+                       "is generated from). Read-only, no secrets; needs a signed-in session (no build "
+                       "fingerprinting before login).",
         .auth = "session",
         .input = "none",
         .response = {uinteger("contract_version"), str("contract_hash"), str("ws_hash")},

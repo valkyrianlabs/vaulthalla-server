@@ -6,7 +6,7 @@
 export const WS_CONTRACT_VERSION = 1
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = 'ca326c55fac1bb9cc007880799e1b6bce72c92b1b80f4361106e4b9e1e8028a6'
+export const WS_CONTRACT_HASH = '9591041fecb6b2f8f6beeaacab2d91f0f947705db8ed70fad078862ae880c1f3'
 
 export interface WsContract {
   /**
@@ -299,7 +299,7 @@ export interface WsContract {
   /**
    * The contract this daemon was built from: contract_version, contract_hash (the whole document vh_usage
    * --json publishes) and ws_hash (the ws command book, what the web console is generated from). Read-only,
-   * no secrets; allowed wherever auth.isAuthenticated is.
+   * no secrets; needs a signed-in session (no build fingerprinting before login).
    */
   'meta.contract.get': {
     payload: null

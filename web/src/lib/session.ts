@@ -19,13 +19,7 @@ export const useSession = create<SessionState>(() => ({ status: 'unknown', user:
 
 // Session-lifecycle commands work without (or with an expired) access token. Mirrors core's
 // isSessionLifecycleCommand (protocols/ws/Router.cpp).
-const LIFECYCLE: ReadonlySet<Command> = new Set<Command>([
-  'auth.login',
-  'auth.logout',
-  'auth.refresh',
-  'auth.isAuthenticated',
-  'meta.contract.get',
-])
+const LIFECYCLE: ReadonlySet<Command> = new Set<Command>(['auth.login', 'auth.logout', 'auth.refresh', 'auth.isAuthenticated'])
 
 let refreshing: Promise<boolean> | null = null
 
@@ -35,7 +29,11 @@ export const api = new WsClient({
   token: () => useSession.getState().token ?? '',
   onToken: token => useSession.setState({ token }),
   onUnauthorized: () => refreshSession(),
-  onOpen: () => void checkServerContract(api),
+  // The contract hash needs a session (no build fingerprinting before login): checked once signed in, and again on
+  // every reconnect of a signed-in page.
+  onOpen: () => {
+    if (useSession.getState().status === 'authenticated') void checkServerContract(api)
+  },
 })
 
 // Single-flight refresh. Resolves false (and marks the session unauthenticated) when the server definitively refuses.
@@ -45,6 +43,7 @@ export const refreshSession = (): Promise<boolean> => {
     try {
       const { user } = await api.send('auth.refresh', null)
       useSession.setState({ status: 'authenticated', user: (user as unknown as IUser) ?? useSession.getState().user })
+      void checkServerContract(api)
       return true
     } catch (error) {
       // A dropped connection or timeout says nothing about the session; only a refusal ends it.
@@ -62,6 +61,7 @@ export const login = async (name: string, password: string) => {
   const { user } = await api.send('auth.login', { name, password })
   if (!useSession.getState().token) throw new WsError('error', 'The server did not issue a session token')
   useSession.setState({ status: 'authenticated', user: user as unknown as IUser })
+  void checkServerContract(api)
 }
 
 const resetHandlers = new Set<() => void>()
