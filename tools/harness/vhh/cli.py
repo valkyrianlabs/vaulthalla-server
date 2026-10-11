@@ -165,6 +165,8 @@ def _run_launched(a) -> int:
     try:
         binding = asyncio.run(provision.provision(inst.target, w, broker, red))
         catalog = load_catalog(a.catalog).restricted(real.SUPPORTED)
+        if a.weights:
+            catalog = catalog.weighted({k: float(v) for k, v in (kv.split("=", 1) for kv in a.weights.split(","))})
         res = RUN.run(w, cfg, broker, red, real.factory(inst, binding, w, broker, red), out,
                       catalog, {"kind": "launched", "run_id": inst.run_id})
         if not inst.alive():
@@ -172,17 +174,20 @@ def _run_launched(a) -> int:
             inst.capture_evidence("daemon-died")
     finally:
         report = inst.stop()
-        (out / "instance.json").write_text(json.dumps({"stop": report, "died": died}, indent=2, default=str))
+        sanitizers = inst.sanitizer_reports()
+        (out / "instance.json").write_text(json.dumps({"stop": report, "died": died, "sanitizers": sanitizers},
+                                                      indent=2, default=str))
     for v in res.engine.failures[:20]:
         print(f"  [{v.judge}/{v.classification}] seq={v.seq} {v.message}")
-    ok = res.passed and died is None and report.get("stop") == "clean"
+    ok = res.passed and died is None and report.get("stop") == "clean" and not sanitizers
     reasons = list(res.summary["reasons"]) + ([f"daemon died: {died}"] if died else []) + \
+        ([f"sanitizer report(s): {', '.join(sanitizers)}"] if sanitizers else []) + \
         ([f"daemon stop: {report.get('stop')}"] if report.get("stop") not in (None, "clean") else [])
     say("PASS" if ok else "FAIL", f"{res.summary['executed']} ops, {'; '.join(reasons) or 'clean'} "
         f"(seed {fmt_seed(seed)}, trace {res.trace_path}, artifacts {out})")
     print(f"vhh: reproduce with: sudo tools/harness/vhh.sh run --target launch --build {a.build} --world {a.world} "
           f"--seed {fmt_seed(seed)} --schedule {a.schedule} --sessions {a.sessions} --ops {a.ops} "
-          f"--surfaces {a.surfaces}")
+          f"--surfaces {a.surfaces}" + (f" --weights {a.weights}" if a.weights else ""))
     return PASS if ok else FAIL
 
 
@@ -374,6 +379,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--out")
     p.add_argument("--kill-file")
     p.add_argument("--build", help="with --target launch: meson build dir holding vaulthalla-server")
+    p.add_argument("--weights", help="override op weights, e.g. fs.write=20,fs.read=5 (pressure profiles)")
     p.set_defaults(fn=cmd_run)
 
     for name, fn in (("replay", cmd_replay), ("shrink", cmd_shrink)):

@@ -58,7 +58,8 @@ class FuseDriver:
         self.proc = await asyncio.create_subprocess_exec(
             self.actor_bin, "--uid", str(self.uid), "--gid", str(self.gid),
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
-            cwd="/", env={"PATH": "/usr/bin:/bin"})
+            cwd="/", env={"PATH": "/usr/bin:/bin"},
+            limit=8 * 1024 * 1024)   # one reply line carries up to 1 MiB of base64 file bytes
         line = await asyncio.wait_for(self.proc.stdout.readline(), timeout=10)
         ready = json.loads(line or b"{}")
         if not ready.get("ready") or ready.get("uid") != self.uid:

@@ -342,6 +342,19 @@ class Instance:
         (d / "daemon.log.tail").write_text(self.log_tail(400))
         return d
 
+    def sanitizer_reports(self) -> list[str]:
+        """Sanitizer findings of this run: ASan/UBSan/TSan log files, or reports in the daemon log. Any one fails the
+        run, even if the daemon survived (UBSan and TSan keep running by default)."""
+        found = sorted(str(p) for p in self.artifacts.glob("*san.*") if p.is_file() and p.stat().st_size > 0)
+        try:
+            text = self.log_path.read_bytes().decode("utf-8", "replace")
+        except OSError:
+            text = ""
+        for marker in ("ERROR: AddressSanitizer", "WARNING: ThreadSanitizer", "runtime error:", "ERROR: LeakSanitizer"):
+            if marker in text:
+                found.append(f"{self.log_path}: {marker}")
+        return found
+
     # ------------------------------------------------------------------ shutdown
     def stop(self, grace: float = 15) -> dict:
         """Stop the daemon (by its own pid), make sure the mount is gone, drop the run database. Idempotent."""

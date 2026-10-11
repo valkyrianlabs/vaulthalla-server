@@ -13,7 +13,8 @@ from vhh.seeds import rng
 SCHEDULES = ("lockstep", "barrier", "free")
 
 
-async def run_lockstep(engine: Engine, streams: dict[str, list[Op]], seed: int, quiesce_every: int = 0) -> None:
+async def run_lockstep(engine: Engine, streams: dict[str, list[Op]], seed: int, quiesce_every: int = 0,
+                       start: int = 0) -> None:
     queues = {sid: list(ops) for sid, ops in streams.items()}
     for step in itertools.count():
         live = sorted(sid for sid, q in queues.items() if q)
@@ -21,16 +22,16 @@ async def run_lockstep(engine: Engine, streams: dict[str, list[Op]], seed: int, 
             break
         sid = live[rng(seed, "sched", step).randrange(len(live))]
         op = queues[sid].pop(0)
-        op.seq = step
+        op.seq = start + step
         await engine.execute(engine.sessions[sid], op)
         if quiesce_every and (step + 1) % quiesce_every == 0:
             await engine.quiesce()
 
 
 async def run_barrier(engine: Engine, streams: dict[str, list[Op]], seed: int, batch: tuple[int, int] = (2, 8),
-                      quiesce_every: int = 0) -> None:
+                      quiesce_every: int = 0, start: int = 0) -> None:
     queues = {sid: list(ops) for sid, ops in streams.items()}
-    seq = 0
+    seq = start
     for b in itertools.count():
         live = sorted(sid for sid, q in queues.items() if q)
         if not live or engine.stopping:
@@ -49,9 +50,9 @@ async def run_barrier(engine: Engine, streams: dict[str, list[Op]], seed: int, b
             await engine.quiesce()
 
 
-async def run_free(engine: Engine, streams: dict[str, list[Op]], cap: int = 16) -> None:
+async def run_free(engine: Engine, streams: dict[str, list[Op]], cap: int = 16, start: int = 0) -> None:
     sem = asyncio.Semaphore(max(1, cap))
-    counter = itertools.count()
+    counter = itertools.count(start)
 
     async def session(sid: str, ops: list[Op]) -> None:
         for op in ops:
@@ -65,13 +66,14 @@ async def run_free(engine: Engine, streams: dict[str, list[Op]], cap: int = 16) 
 
 
 async def run(engine: Engine, streams: dict[str, list[Op]], seed: int, schedule: str, *,
-              batch: tuple[int, int] = (2, 8), cap: int = 16, quiesce_every: int = 0) -> None:
+              batch: tuple[int, int] = (2, 8), cap: int = 16, quiesce_every: int = 0, start: int = 0) -> None:
+    """`start`: the first sequence number to assign (a setup phase runs before the main one)."""
     if schedule == "lockstep":
-        await run_lockstep(engine, streams, seed, quiesce_every)
+        await run_lockstep(engine, streams, seed, quiesce_every, start)
     elif schedule == "barrier":
-        await run_barrier(engine, streams, seed, batch, quiesce_every)
+        await run_barrier(engine, streams, seed, batch, quiesce_every, start)
     elif schedule == "free":
-        await run_free(engine, streams, cap)
+        await run_free(engine, streams, cap, start)
     else:
         raise ValueError(f"unknown schedule {schedule!r} (want one of {SCHEDULES})")
     await engine.quiesce()

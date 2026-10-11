@@ -93,10 +93,16 @@ async def run_async(world: World, cfg: RunConfig, broker: IdentityBroker, redact
             continue
         engine.add_session(Session(s.id, s.principal, s.surface, driver))
     streams = {sid: ops for sid, ops in plan.streams.items() if sid in engine.sessions}
+    # Setup ops (namespaces, the contested directory) run first, one at a time, whatever the schedule: under
+    # barrier/free another session's write must never race the directory it writes into.
+    setup = {sid: [o for o in ops if o.intent == "setup"] for sid, ops in streams.items()}
+    streams = {sid: [o for o in ops if o.intent != "setup"] for sid, ops in streams.items()}
     try:
         await engine.open_all()
+        if any(setup.values()):
+            await scheduler.run(engine, setup, cfg.seed, "lockstep", batch=cfg.batch, cap=cfg.cap)
         await scheduler.run(engine, streams, cfg.seed, cfg.schedule, batch=cfg.batch, cap=cfg.cap,
-                            quiesce_every=cfg.quiesce_every)
+                            quiesce_every=cfg.quiesce_every, start=sum(len(v) for v in setup.values()))
     finally:
         await engine.close_all()
         summary = {"seed": fmt_seed(cfg.seed), "schedule": cfg.schedule, "world": world.name,

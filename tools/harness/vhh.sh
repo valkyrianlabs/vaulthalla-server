@@ -4,5 +4,6 @@
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PY="$HERE/.venv/bin/python"
 [[ -x "$PY" ]] || { echo "run 'sudo $HERE/bootstrap.sh' first" >&2; exit 1; }
+export PYTHONDONTWRITEBYTECODE=1  # sudo runs must not leave root-owned __pycache__ in the checkout
 export PYTHONPATH="$HERE${PYTHONPATH:+:$PYTHONPATH}"
 exec "$PY" -m vhh "$@"

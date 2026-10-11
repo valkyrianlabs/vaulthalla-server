@@ -61,14 +61,18 @@ def make_plan(world: World, catalog: Catalog, seed: int, n_sessions: int, ops_pe
         principal = actors[r.randrange(len(actors))]
         sessions.append(SessionSpec(sid, principal, surfaces[r.randrange(len(surfaces))],
                                     _home_vault(world, principal, sid)))
-    first_home = sessions[0].home_vault
-    contested = [(first_home, f"/contested/c{m}.bin") for m in range(n_contested)]
-    streams = {s.id: _stream(world, catalog, seed, s, ops_per_session, contested) for s in sessions}
+    # The contested files live in a vault one of the sessions owns, and that session creates the directory (a
+    # session without rights there would leave it missing and every contested write ENOENT).
+    owners = {v.id: v.owner for v in world.vaults}
+    keeper = next((s for s in sessions if owners.get(s.home_vault) == s.principal), None)
+    contested = ([(keeper.home_vault, f"/contested/c{m}.bin") for m in range(n_contested)] if keeper else [])
+    streams = {s.id: _stream(world, catalog, seed, s, ops_per_session, contested,
+                             creates_contested=keeper is not None and s.id == keeper.id) for s in sessions}
     return Plan(seed, sessions, streams, contested)
 
 
 def _stream(world: World, catalog: Catalog, seed: int, s: SessionSpec, n: int,
-            contested: list[tuple[str, str]]) -> list[Op]:
+            contested: list[tuple[str, str]], creates_contested: bool = False) -> list[Op]:
     specs = [o for o in catalog.for_surface(s.surface, actor_side_only=True) if o.id != "shares.revoke"]
     weights = [o.weight for o in specs]
     owned: dict[str, int] = {}          # own file path -> last planned version
@@ -82,7 +86,7 @@ def _stream(world: World, catalog: Catalog, seed: int, s: SessionSpec, n: int,
     if catalog.ops.get("fs.mkdir") and s.surface in catalog.get("fs.mkdir").surfaces:
         out.append(Op(seq=-1, session=s.id, principal=s.principal, surface=s.surface, op="fs.mkdir",
                       args={"vault": s.home_vault, "path": f"/{s.id}"}, intent="setup"))
-        if contested and contested[0][0] == s.home_vault and s.id.endswith("00"):
+        if contested and creates_contested:
             out.append(Op(seq=-1, session=s.id, principal=s.principal, surface=s.surface, op="fs.mkdir",
                           args={"vault": s.home_vault, "path": "/contested"}, intent="setup"))
     for k in range(n):

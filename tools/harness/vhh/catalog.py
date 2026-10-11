@@ -88,6 +88,14 @@ class Catalog:
     def deadline(self, op_id: str) -> float:
         return self.get(op_id).deadline_s
 
+    def weighted(self, weights: dict[str, float]) -> "Catalog":
+        """A copy with some op weights replaced (a pressure profile concentrating on writes, say)."""
+        unknown = set(weights) - set(self.ops)
+        if unknown:
+            raise KeyError(f"unknown operation(s) in weights: {', '.join(sorted(unknown))}")
+        return Catalog({k: replace(o, weight=weights.get(k, o.weight)) for k, o in self.ops.items()},
+                       self.contract_hash)
+
     def restricted(self, supported: dict[str, set[str]]) -> "Catalog":
         """A copy whose ops only list the surfaces that really bind them (surface -> op ids). Planning a real run
         against it never schedules an op a driver can't execute; ops left with no surface are dropped."""
