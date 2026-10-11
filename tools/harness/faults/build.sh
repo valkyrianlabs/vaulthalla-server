@@ -35,7 +35,7 @@ if [[ ! -d "$src" ]]; then
 fi
 git -C "$src" log -1 --format='%s' | grep -q "FAULT FIXTURE: $fault" || { echo "$src is not the $fault fixture" >&2; exit 1; }
 
-opts=(-Dbuildtype=debug -Dbuild_unit_tests=true -Dintegration_tests=false)
+opts=(-Dbuildtype=debug -Dbuild_unit_tests=true -Dintegration_tests=true)
 [[ "$sanitize" != "none" ]] && opts+=(-Db_sanitize="$sanitize")
 [[ "$sanitize" == "thread" ]] && opts+=(-Db_lundef=false)
 [[ -f "$build/build.ninja" ]] || meson setup "$build" "$src" "${opts[@]}" >/dev/null
