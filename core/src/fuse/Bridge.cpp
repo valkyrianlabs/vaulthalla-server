@@ -467,7 +467,7 @@ void open(const fuse_req_t req, const fuse_ino_t ino, fuse_file_info* fi) {
         .fuseReq = req,
         .ino = ino,
         .action = reads ? permission::vault::FilesystemAction::Read : permission::vault::FilesystemAction::Write,
-        .actions = also,
+        .actions = std::move(also),
         .target = resolver::Target::Entry
     });
 
