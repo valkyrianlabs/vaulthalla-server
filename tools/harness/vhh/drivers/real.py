@@ -113,3 +113,34 @@ class FuseSession:
 
     async def close(self) -> None:
         await self.fuse.close()
+
+
+def factory(instance, binding: Binding, world: World, broker, redactor):
+    """DriverFactory(surface, principal) for a launched, provisioned private instance."""
+    import pwd
+    from pathlib import Path
+
+    t = instance.target
+    actor_bin = Path(t.build_dir) / "core" / "vh_fs_actor"
+
+    def make(surface: str, principal: str):
+        if surface == "ws":
+            from vhh.drivers.ws import WsDriver
+            try:
+                from vhh.drivers.http import HttpLane
+                http = HttpLane(t.http_port, redactor)
+            except ImportError:
+                http = None   # fs.read / fs.write then fail as harness gaps, never as passes
+            return WsConsole(WsDriver(t.ws_port, principal, broker=broker, redactor=redactor), http, binding, world)
+        if surface == "fuse":
+            from vhh.drivers.fuse import FuseDriver
+            p = binding.principals[principal]
+            gid = p.get("gid")
+            if gid is None and p.get("account"):
+                gid = pwd.getpwnam(p["account"]).pw_gid
+            return FuseSession(FuseDriver(actor_bin, t.mount, int(p["linux_uid"]), int(gid if gid is not None else
+                                                                                      p["linux_uid"]),
+                                          supervisor=instance), binding, world)
+        raise ValueError(f"surface {surface!r} has no real binding yet")
+
+    return make

@@ -132,7 +132,62 @@ def _broker(w, kind, target, creds: str | None):
     return red, broker
 
 
+def _run_launched(a) -> int:
+    """--target launch: start a private instance from --build, provision the world into it, run, tear down."""
+    from vhh.drivers import real
+    from vhh.instance import Instance, InstanceError
+    try:
+        from vhh import provision
+    except ImportError:
+        say("FAIL", "vhh/provision.py is missing: launched runs need the provisioning module")
+        return FAIL
+    if not a.build:
+        say("REFUSED", "--target launch needs --build <meson build dir>")
+        return REFUSED
+    try:
+        w = load_world(a.world)
+    except W.WorldError as e:
+        say("FAIL", f"broken world: {e}")
+        return FAIL
+    seed = parse_seed(a.seed)
+    print(f"vhh: seed {fmt_seed(seed)} world {w.name} schedule {a.schedule} (launching {a.build})", flush=True)
+    red, broker = _broker(w, "launch", None, None)
+    out = Path(a.out) if a.out else RUN.new_run_dir()
+    cfg = RUN.RunConfig(seed=seed, profile=a.profile, schedule=a.schedule, sessions=a.sessions,
+                        ops_per_session=a.ops, surfaces=tuple(a.surfaces.split(",")), kill_file=a.kill_file)
+    try:
+        inst = Instance(Path(a.build), artifacts=out / "instance", redactor=red)
+        inst.start()
+    except InstanceError as e:
+        say("FAIL", f"instance: {e}")
+        return FAIL
+    died = None
+    try:
+        binding = provision.provision(inst.target, w, broker, red)
+        res = RUN.run(w, cfg, broker, red, real.factory(inst, binding, w, broker, red), out,
+                      load_catalog(a.catalog), {"kind": "launched", "run_id": inst.run_id})
+        if not inst.alive():
+            died = inst.health()
+            inst.capture_evidence("daemon-died")
+    finally:
+        report = inst.stop()
+        (out / "instance.json").write_text(json.dumps({"stop": report, "died": died}, indent=2, default=str))
+    for v in res.engine.failures[:20]:
+        print(f"  [{v.judge}/{v.classification}] seq={v.seq} {v.message}")
+    ok = res.passed and died is None and report.get("stop") == "clean"
+    reasons = list(res.summary["reasons"]) + ([f"daemon died: {died}"] if died else []) + \
+        ([f"daemon stop: {report.get('stop')}"] if report.get("stop") not in (None, "clean") else [])
+    say("PASS" if ok else "FAIL", f"{res.summary['executed']} ops, {'; '.join(reasons) or 'clean'} "
+        f"(seed {fmt_seed(seed)}, trace {res.trace_path}, artifacts {out})")
+    print(f"vhh: reproduce with: sudo tools/harness/vhh.sh run --target launch --build {a.build} --world {a.world} "
+          f"--seed {fmt_seed(seed)} --schedule {a.schedule} --sessions {a.sessions} --ops {a.ops} "
+          f"--surfaces {a.surfaces}")
+    return PASS if ok else FAIL
+
+
 def cmd_run(a) -> int:
+    if a.target == "launch":
+        return _run_launched(a)
     resolved = _target(a)
     if resolved is None:
         return REFUSED
@@ -294,7 +349,7 @@ def parser() -> argparse.ArgumentParser:
 
     def common(p, target=True):
         if target:
-            p.add_argument("--target", required=True, help="'sim' or a launcher-written target.json / artifacts dir")
+            p.add_argument("--target", required=True, help="'sim', 'launch' (run only; with --build), or a launcher-written target.json / artifacts dir")
             p.add_argument("--credentials", help="private credentials file (0600) for a private target")
         p.add_argument("--catalog", help="usage.json from vh_usage --json (default: built-in catalog)")
 
@@ -317,6 +372,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--surfaces", default="ws")
     p.add_argument("--out")
     p.add_argument("--kill-file")
+    p.add_argument("--build", help="with --target launch: meson build dir holding vaulthalla-server")
     p.set_defaults(fn=cmd_run)
 
     for name, fn in (("replay", cmd_replay), ("shrink", cmd_shrink)):
