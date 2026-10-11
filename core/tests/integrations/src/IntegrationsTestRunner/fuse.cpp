@@ -483,8 +483,10 @@ namespace vh::test::integration {
 
         auto stage = builder.exec();
 
-        db::query::rbac::role::vault::Assignments::unassign(userVaultA->vault->id, "user", subj.user->id);
-        db::query::rbac::role::vault::Assignments::unassign(userVaultB->vault->id, "user", subj.user->id);
+        vh::identities::manager().mutate({.users = {subj.user->id}}, [&] {
+            db::query::rbac::role::vault::Assignments::unassign(userVaultA->vault->id, "user", subj.user->id);
+            db::query::rbac::role::vault::Assignments::unassign(userVaultB->vault->id, "user", subj.user->id);
+        });
 
         return stage;
     }

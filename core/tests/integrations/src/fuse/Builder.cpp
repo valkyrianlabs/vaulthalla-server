@@ -163,7 +163,13 @@ void Builder::makeOverride(OverrideSpec &&spec) const {
         subject_.groupVaultRole->fs.overrides.push_back(ov);
     }
 
-    db::query::rbac::permission::Override::upsert(std::make_shared<rbac::permission::Override>(ov));
+    // Through the identity manager, like every product write: FUSE sees the override at once.
+    vh::identities::Touched touched;
+    if (spec.subjectType == TargetSubject::User) touched.users = {subject_.user->id};
+    else touched.groups = {subject_.group->id};
+    vh::identities::manager().mutate(std::move(touched), [&] {
+        db::query::rbac::permission::Override::upsert(std::make_shared<rbac::permission::Override>(ov));
+    });
 }
 
 void Builder::makeTestCase(FuseTestCaseSpec &&spec) {
@@ -180,8 +186,13 @@ test::integration::TestStage Builder::exec() const {
     const auto results = runSteps();
 
     const auto vId = ctx_.engine->vault->id;
-    if (subject_.user) db::query::rbac::role::vault::Assignments::unassign(vId, "user", subject_.user->id);
-    if (subject_.group) db::query::rbac::role::vault::Assignments::unassign(vId, "group", subject_.group->id);
+    vh::identities::Touched touched;
+    if (subject_.user) touched.users = {subject_.user->id};
+    if (subject_.group) touched.groups = {subject_.group->id};
+    vh::identities::manager().mutate(std::move(touched), [&] {
+        if (subject_.user) db::query::rbac::role::vault::Assignments::unassign(vId, "user", subject_.user->id);
+        if (subject_.group) db::query::rbac::role::vault::Assignments::unassign(vId, "group", subject_.group->id);
+    });
 
     return {
         .name = ctx_.name,
