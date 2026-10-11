@@ -163,9 +163,10 @@ def _run_launched(a) -> int:
         return FAIL
     died = None
     try:
-        binding = provision.provision(inst.target, w, broker, red)
+        binding = asyncio.run(provision.provision(inst.target, w, broker, red))
+        catalog = load_catalog(a.catalog).restricted(real.SUPPORTED)
         res = RUN.run(w, cfg, broker, red, real.factory(inst, binding, w, broker, red), out,
-                      load_catalog(a.catalog), {"kind": "launched", "run_id": inst.run_id})
+                      catalog, {"kind": "launched", "run_id": inst.run_id})
         if not inst.alive():
             died = inst.health()
             inst.capture_evidence("daemon-died")

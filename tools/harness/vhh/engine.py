@@ -180,7 +180,10 @@ class Engine:
         self.counts["executed"] += 1
         self.counts[f"outcome.{result.outcome}"] += 1
         if result.data.get("fault") == "harness":
+            # A driver that could not do what was asked is a harness defect: it must fail the run, never pass it.
             self.counts["harness_errors"] += 1
+            self.fail(Verdict("harness", False, op.seq, f"{op.op} on {op.surface}: harness fault: "
+                              f"{self.redactor.redact_text(result.detail)[:200]}", classification="harness"))
         self.guardrails.charge(op, len(result.body or b""))
         if result.outcome == "ok" and spec.mutating:
             self.timeline.apply(op, result)

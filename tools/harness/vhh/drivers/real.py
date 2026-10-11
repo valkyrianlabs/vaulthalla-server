@@ -52,6 +52,13 @@ def _invalid(op: Op, why: str) -> Result:
     return Result("invalid", detail=why, data={"fault": "harness"}, rendered=op.op, t0_ns=now, t1_ns=now)
 
 
+# What each real surface binds today; launched runs plan only these (Catalog.restricted).
+SUPPORTED = {
+    "ws": {"auth.login", "fs.list", "fs.stat", "fs.mkdir", "fs.rename", "fs.copy", "fs.delete", "fs.read", "fs.write"},
+    "fuse": {"fs.list", "fs.stat", "fs.mkdir", "fs.rename", "fs.copy", "fs.delete", "fs.read", "fs.write"},
+}
+
+
 class WsConsole:
     """A console session: ws for metadata ops, the HTTP lanes (same session cookie) for file bytes."""
     surface = "ws"
@@ -65,6 +72,13 @@ class WsConsole:
             self.http.attach(self.ws)
 
     async def execute(self, op: Op, deadline_s: float) -> Result:
+        if op.op == "auth.login":
+            # The session logged in when it opened; the op reports that outcome (no second login on one socket).
+            r = self.ws.login_result
+            if r is None:
+                return _invalid(op, "session has no login result")
+            return Result(r.outcome, detail=r.detail, code=r.code, rendered="auth.login", t0_ns=r.t0_ns,
+                          t1_ns=r.t1_ns)
         try:
             vault = op.args.get("vault")
             vid = self.binding.vault_id(vault) if vault else None

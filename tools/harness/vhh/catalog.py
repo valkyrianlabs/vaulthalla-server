@@ -88,6 +88,16 @@ class Catalog:
     def deadline(self, op_id: str) -> float:
         return self.get(op_id).deadline_s
 
+    def restricted(self, supported: dict[str, set[str]]) -> "Catalog":
+        """A copy whose ops only list the surfaces that really bind them (surface -> op ids). Planning a real run
+        against it never schedules an op a driver can't execute; ops left with no surface are dropped."""
+        ops = {}
+        for o in self.ops.values():
+            surfaces = tuple(s for s in o.surfaces if o.id in supported.get(s, set()))
+            if surfaces:
+                ops[o.id] = replace(o, surfaces=surfaces)
+        return Catalog(ops, self.contract_hash)
+
 
 def load(path: str | Path | None = None) -> Catalog:
     cat = Catalog()

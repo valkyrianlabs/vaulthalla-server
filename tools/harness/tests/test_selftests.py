@@ -54,6 +54,29 @@ class FailuresNeverBecomePasses(TempDir, unittest.TestCase):
         self.assertFalse(engine.passed)
         self.assertIn("harness", {v.judge for v in engine.failures})
 
+    def test_driver_reporting_a_harness_fault_fails(self):
+        # Found on the first launched run: a real adapter answered "invalid" with fault=harness (no HTTP lane) and
+        # the run still passed with harness_errors > 0. A harness fault must fail the run.
+        from vhh.model import Result
+
+        class Gap:
+            surface = "ws"
+
+            async def open(self): pass
+
+            async def close(self): pass
+
+            async def execute(self, op, deadline_s):
+                return Result("invalid", "no binding for this op", data={"fault": "harness"})
+
+        rig = Rig(pentest())
+        s = rig.session("u-alice")
+        s.driver = Gap()
+        rig.do(s, "fs.list", vault="v-alice", path="/")
+        self.assertFalse(rig.engine.passed)
+        self.assertEqual(rig.engine.summary()["harness_errors"], 1)
+        self.assertIn("harness", rig.judges_of())
+
     def test_subprocess_that_dies_fails(self):
         engine = run_rig(Rig(pentest(), plants=Plants(crash_after=3)))
         self.assertFalse(engine.passed)
