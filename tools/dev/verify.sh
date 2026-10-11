@@ -145,8 +145,9 @@ run_shell() {
 
 run_harness() {
   local py="${VERIFY_HARNESS_PYTHON:-}"
-  [[ -z "$py" && -x tools/harness/.venv/bin/python ]] && py=tools/harness/.venv/bin/python
+  [[ -z "$py" && -x tools/harness/.venv/bin/python ]] && py="$ROOT_DIR/tools/harness/.venv/bin/python"
   py="${py:-python3}"
+  [[ "$py" == */* && "$py" != /* ]] && py="$ROOT_DIR/$py"
   "$py" -c 'import websockets' 2>/dev/null || die "tools/harness needs websockets: sudo tools/harness/bootstrap.sh (or VERIFY_HARNESS_PYTHON)"
   log "integration engine tests (tools/harness/tests, $py)"
   local output rc=0 ran
