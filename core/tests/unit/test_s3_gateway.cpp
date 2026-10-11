@@ -2603,6 +2603,7 @@ TEST_F(S3GatewayDbTest, CredentialScopeShorthandWritesFinalRbacTablesAndGatesAct
             "ON CONFLICT (vault_id, subject_type, subject_id) DO UPDATE SET role_id = EXCLUDED.role_id",
             pqxx::params{secondVaultId, userId, roleId});
     });
+    (void)vh::identities::manager().reconcile();   // written behind the identity manager
 
     auto user = vh::identities::manager().user(userId);
     ASSERT_TRUE(user);

@@ -377,6 +377,7 @@ protected:
             txn.exec("INSERT INTO vault_role_assignments (vault_id, subject_type, subject_id, role_id) "
                      "VALUES ($1, 'user', $2, $3)", pqxx::params{vaultId, user->id, roleId});
         });
+        (void)vh::identities::manager().reconcile();   // written behind the identity manager
         return vh::identities::manager().user(user->id);
     }
 };

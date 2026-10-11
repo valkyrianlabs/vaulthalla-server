@@ -232,7 +232,7 @@ TEST_F(VaultLifecycleRegressionTest, DeletingAUserWithShareAndUploadHistorySucce
     };
     ASSERT_GT(auditRows(), 0);
 
-    ASSERT_NO_THROW(db::query::identities::User::deleteUser(leaver->id));
+    ASSERT_NO_THROW(vh::identities::manager().deleteUser(leaver->id));
     EXPECT_EQ(vh::identities::manager().user(leaver->id), nullptr);
 
     const auto after = db::Transactions::exec("VaultLifecycleRegressionTest::after", [&](pqxx::work& txn) {
