@@ -6,7 +6,7 @@
 export const WS_CONTRACT_VERSION = 1
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = '9591041fecb6b2f8f6beeaacab2d91f0f947705db8ed70fad078862ae880c1f3'
+export const WS_CONTRACT_HASH = '3948f821deaef4be6cc69b01b7b43c2c12e4f63f563fa4fc00799b3212d9a311'
 
 export interface WsContract {
   /**

@@ -98,8 +98,8 @@ std::vector<WsCommandUsage> fsCommands() {
         .description = "Move an entry (Move on the source).",
         .payload = fsMovePayload(),
         .response = fsMoveResponse(),
-        .refusal_codes = {"unauthorized"},
-        .untyped_refusals = fsUntypedRefusals(),
+        .refusal_codes = {"unauthorized", "not_found"},
+        .untyped_refusals = {"denied"},
         .client_timeout = 180s,
     });
 
@@ -108,8 +108,8 @@ std::vector<WsCommandUsage> fsCommands() {
         .description = "Rename an entry (Rename on the source).",
         .payload = fsMovePayload(),
         .response = fsMoveResponse(),
-        .refusal_codes = {"unauthorized"},
-        .untyped_refusals = fsUntypedRefusals(),
+        .refusal_codes = {"unauthorized", "not_found"},
+        .untyped_refusals = {"denied"},
         .operation = "fs.rename",
         .client_timeout = 60s,
     });
@@ -120,8 +120,8 @@ std::vector<WsCommandUsage> fsCommands() {
                        "(directories) at each destination, all checked before anything is written.",
         .payload = fsMovePayload(),
         .response = fsMoveResponse(),
-        .refusal_codes = {"unauthorized"},
-        .untyped_refusals = fsUntypedRefusals(),
+        .refusal_codes = {"unauthorized", "not_found"},
+        .untyped_refusals = {"denied"},
         .operation = "fs.copy",
         .client_timeout = 180s,
     });

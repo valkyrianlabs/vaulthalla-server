@@ -999,7 +999,8 @@
         }
       ],
       "refusal_codes": [
-        "unauthorized"
+        "unauthorized",
+        "not_found"
       ],
       "response": [
         {
@@ -1018,8 +1019,7 @@
         }
       ],
       "untyped_refusals": [
-        "denied",
-        "not_found"
+        "denied"
       ],
       "variants": []
     },
@@ -1130,7 +1130,8 @@
         }
       ],
       "refusal_codes": [
-        "unauthorized"
+        "unauthorized",
+        "not_found"
       ],
       "response": [
         {
@@ -1149,8 +1150,7 @@
         }
       ],
       "untyped_refusals": [
-        "denied",
-        "not_found"
+        "denied"
       ],
       "variants": []
     },
@@ -1205,7 +1205,8 @@
         }
       ],
       "refusal_codes": [
-        "unauthorized"
+        "unauthorized",
+        "not_found"
       ],
       "response": [
         {
@@ -1224,8 +1225,7 @@
         }
       ],
       "untyped_refusals": [
-        "denied",
-        "not_found"
+        "denied"
       ],
       "variants": []
     },
@@ -3458,5 +3458,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "9591041fecb6b2f8f6beeaacab2d91f0f947705db8ed70fad078862ae880c1f3"
+  "ws_hash": "3948f821deaef4be6cc69b01b7b43c2c12e4f63f563fa4fc00799b3212d9a311"
 }

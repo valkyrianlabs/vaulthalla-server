@@ -24,6 +24,7 @@
 #include "sync/model/Operation.hpp"
 #include "log/Registry.hpp"
 #include "preview/Plan.hpp"
+#include "ops/Error.hpp"
 
 #include <cstdint>
 #include <filesystem>
@@ -377,6 +378,23 @@ json Storage::mkdir(const json& payload, const std::shared_ptr<Session>& session
     return {{"path", path.string()}};
 }
 
+namespace {
+
+// A move/rename/copy whose source or destination folder is missing is a typed not_found for the console (the FUSE
+// equivalent is ENOENT), checked after the source permission so nothing is revealed to a caller without it. Before,
+// the engine threw an untyped "Failed to rename" error (found by the integration engine, tools/harness).
+void requireTransferEndpoints(const std::shared_ptr<Engine>& engine, const std::filesystem::path& from,
+                              const std::filesystem::path& to) {
+    if (!Filesystem::exists(engine->vaultPathToFusePath(from)))
+        throw vh::ops::NotFound("source does not exist: " + from.string());
+    auto parent = to.parent_path();
+    if (parent.empty()) parent = "/";
+    if (!Filesystem::exists(engine->vaultPathToFusePath(parent)))
+        throw vh::ops::NotFound("destination folder does not exist: " + parent.string());
+}
+
+}
+
 json Storage::move(const json& payload, const std::shared_ptr<Session>& session) {
     const auto vaultId = payload.at("vault_id").get<uint32_t>();
     const auto from = std::filesystem::path(payload.at("from").get<std::string>());
@@ -392,6 +410,7 @@ json Storage::move(const json& payload, const std::shared_ptr<Session>& session)
         permission::vault::FilesystemAction::Move,
         "Permission denied: User does not have move permission for the source path in the vault"
     );
+    requireTransferEndpoints(engine, from, to);
 
     auto operation = startMutationOperation(engine, from, to, session->user->id, SyncOperation::Op::Move);
     try {
@@ -424,6 +443,7 @@ json Storage::rename(const json& payload, const std::shared_ptr<Session>& sessio
         permission::vault::FilesystemAction::Rename,
         "Permission denied: User does not have rename permission for the source path in the vault"
     );
+    requireTransferEndpoints(engine, from, to);
 
     auto operation = startMutationOperation(engine, from, to, session->user->id, SyncOperation::Op::Rename);
     try {
@@ -456,6 +476,7 @@ json Storage::copy(const json& payload, const std::shared_ptr<Session>& session)
         permission::vault::FilesystemAction::Copy,
         "Permission denied: User does not have copy permission for the source path in the vault"
     );
+    requireTransferEndpoints(engine, from, to);
 
     // Every copied entry passes the checks a single one would (#167), before anything is written: Copy on the source,
     // Read on a source file (the copy is readable wherever it lands, so it must not route around a download deny),
