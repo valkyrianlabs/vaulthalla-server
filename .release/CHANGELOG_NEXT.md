@@ -26,3 +26,15 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   state oracles, JSON/JUnit reports, negative controls, vh_fs_actor instead of fork() from the test process.
 - tools/harness: Tier B integration engine (world, RBAC model, multi-surface sessions, lockstep/barrier/free
   schedules, trace, replay, shrink, regressions, fault fixtures, hang/crash scenarios); verify.sh harness profile in CI.
+- Test isolation: Makefile test (bin/tests/run_unit.sh) and itest (bin/tests/run_proof.sh) use per-run databases owned by
+  vh_harness (bin/tests/lib/itest.sh: preflight only, build-itest/ configured on change, no install); itest clones a
+  migrated template built by vh_migrate (the daemon's SqlDeployer). run_test/run-test/proof alias itest; the shared
+  bin/tests install/uninstall scripts and VH_TEST_LEGACY_SHARED_ENV are removed; bin/tests/prove_isolation.sh,
+  clean_itest.sh, retire_legacy_test_env.sh.
+- db/Connection: test mode requires all VH_TEST_DB_* from the environment (no env-file or production fallback;
+  VH_TEST_ENV_PATH removed); seed wipe/nuke helpers check test mode and a test database name; test instances refuse
+  vh-storage* hosts and the vaulthalla.service cgroup (runtime/TestInstance::hostRefusal).
+- doctor.sh masks environment file values. tools/harness runs on Python 3.14 (CI image: deadsnakes python3.14).
+- vhh: external:<descriptor> targets (env lab|production; production needs --allow-production and
+  VHH_ALLOW_PRODUCTION=1) for non-destructive verify-fixture only; destructive commands refuse them.
+

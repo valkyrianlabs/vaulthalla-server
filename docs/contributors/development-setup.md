@@ -53,8 +53,8 @@ Common targets:
 make install
 make dev
 make test
-make run_test
-make clean_test
+make itest
+make clean-test
 make clean
 ```
 
@@ -62,9 +62,13 @@ What they do at a high level:
 
 - `make install` runs the normal install guard, then `./bin/install.sh`
 - `make dev` runs `./bin/uninstall.sh`, then the install guard, then `./bin/install.sh`
-- `make test` and `make run_test` rebuild the integration-test environment through `bin/tests/*`
+- `make test` runs the DB-backed unit tests against a database created for that run, then drops it
+- `make itest` runs the integration proofs as a private daemon instance (own database, paths and FUSE mount)
+- `make clean-test` removes leftovers of interrupted test runs, nothing else
 
-Use these deliberately. They are host-mutating install workflows, not lightweight build aliases.
+`make install` and `make dev` are host-mutating install workflows. The test targets are not: they never install
+anything, never change the development install, and never touch a database they didn't create. They need a one-time
+`sudo tools/harness/bootstrap.sh` and passwordless sudo.
 
 ### Web/admin work
 
@@ -166,41 +170,33 @@ If your work needs an installed runtime rather than just a compiled binary, the 
 
 ## Integration And Runtime Test Path
 
-For Linux-only runtime validation:
+For Linux-only runtime validation, once per machine:
 
 ```bash
-./bin/tests/install.sh --run
-./bin/tests/uninstall.sh
+sudo tools/harness/bootstrap.sh
 ```
 
-What that setup path does:
+Then, as often as you like:
 
-- installs native dependencies
-- prepares users and directories
-- prepares PostgreSQL state
-- builds the core integration target
-- runs the integration binary when `--run` is provided
+```bash
+make itest     # integration proofs as a private instance
+make test      # DB-backed unit tests against a per-run database
+```
 
-This path depends on `sudo`, Linux, FUSE, PostgreSQL, and other host-level pieces. Use it when your change affects runtime behavior rather than simple docs or web copy.
+What the setup does once: a Python 3.14 venv for `tools/harness`, a dedicated PostgreSQL role (`vh_harness`) whose
+connection settings live in the root-only `/var/lib/vaulthalla-harness/db.env`, and a few nologin accounts used as
+test actors. What every run does: build what it needs in `build-itest/`, create its own database (the integration
+proofs clone a pre-migrated template), run with private `/tmp/vhh_*` paths, and drop everything afterwards.
+
+This path depends on `sudo`, Linux, FUSE and PostgreSQL. Use it when your change affects runtime behavior rather than
+simple docs or web copy. `bash bin/tests/prove_isolation.sh` checks that a run leaves the development install, its
+binaries, environment files and database untouched.
 
 ### Test database requirements
 
-For the integration test path and some DB-backed unit tests, you need the test database variables to resolve to the expected test database:
-
-```bash
-VH_TEST_DB_USER=vaulthalla_test
-VH_TEST_DB_HOST=127.0.0.1
-VH_TEST_DB_PORT=5432
-VH_TEST_DB_NAME=vh_cli_test
-```
-
-Current script behavior matters here:
-
-- the database name is hard-coded in the test setup scripts as `vh_cli_test`
-- the role is hard-coded as `vaulthalla_test`
-- `bin/tests/install_db.sh` generates `VH_TEST_DB_PASS` automatically during test-environment setup
-
-You should not assume the password is static. The current scripts generate it as part of the test setup flow.
+There is nothing to configure. Each run creates its own database owned by `vh_harness` and passes the connection
+settings only to the test process. Test code refuses to run without them, and refuses to wipe any database that
+isn't a test database.
 
 ## Local Config And Environment Notes
 

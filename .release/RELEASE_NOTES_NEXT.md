@@ -30,8 +30,13 @@ for users and operators; keep it representative of what actually ships.
 - `vaulthalla-server` can run as a fully private test instance (`VH_TEST_MODE=1`): its own database, paths, ports,
   CLI socket and FUSE mount. It refuses to start if anything would point at a real install. `vh` honours
   `VAULTHALLA_CLI_SOCKET` to talk to such an instance.
-- `make proof` runs the in-process integration proofs against a private instance, reproducibly by seed, with
-  JSON/JUnit reports; it no longer installs over or tears down the development install.
+- Tests are isolated from the development install. `make test` (DB-backed unit tests) and `make itest` (integration
+  proofs) each run against a database created for that run and dropped afterwards, with private paths and nothing
+  installed. The old `make run_test`, which installed a test build over the system binaries, rotated a shared test
+  password into the daemon's environment file and could reach the development database, is gone (`run_test` now
+  runs `make itest`). One-time setup: `sudo tools/harness/bootstrap.sh`.
+- Test mode can no longer fall back to the configured database: it needs its connection settings in the environment,
+  and the test-only wipe helpers refuse any database that isn't a test database.
 - `tools/harness` drives many independent CLI, web-console (ws), HTTP and FUSE sessions against a private instance,
   checks every result against an authorization model, canaries and cross-surface parity, records a replayable trace,
   shrinks failures and keeps them as regressions. See `.claude/context/testing.md`.

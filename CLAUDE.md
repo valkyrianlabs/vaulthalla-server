@@ -40,7 +40,7 @@ in-flight plans; promote durable facts into `.claude/context/`.
 ```bash
 meson setup build -Dbuild_unit_tests=true && meson compile -C build   # core: unity, -O0 (= PR CI; packages are -O3); `make build` is broken (conan)
 meson test -C build --print-errorlogs                                 # unit tests (DB-backed: see testing.md)
-make proof                                                            # Tier A integration proofs on a private instance (sudo; safe for the dev install)
+make test && make itest                                               # DB-backed unit tests + Tier A proofs, isolated (sudo; never touch the dev install)
 sudo tools/harness/vhh.sh run --target launch --build build           # Tier B multi-surface engine (see testing.md)
 pnpm --dir web typecheck && pnpm --dir web lint                       # web ("pnpm test" = the same two)
 vlr check && vlr version check                                        # release contract + version drift (VERSION/meson/package.json)
@@ -60,8 +60,10 @@ versions, cutting releases), `payload-markdown` + `payload-markdown-docs` (doc a
   `/proc/self/mountinfo` and fusectl counters, and use `df -x fuse.vaulthalla-fuse`.
 - **vh-storage is production.** Read-only inspection is fine. Every mutation (install, restart, dpkg,
   DB, unmount, kill) needs explicit approval in the current conversation. See `/lab`.
-- **Destructive local commands need a heads-up:** `make dev|test|run_test|uninstall|clean-full` tear down or replace
-  the live dev install and test DB on this VM. This VM is disposable, but say what you're about to wipe.
+- **Destructive local commands need a heads-up:** `make dev|uninstall|clean-full` tear down or replace
+  the live dev install on this VM. This VM is disposable, but say what you're about to wipe. Tests (`make test`,
+  `make itest`, `tools/harness`) are isolated and need no heads-up; root-only harness settings live in
+  `/var/lib/vaulthalla-harness/db.env`, never printed.
 - **Secrets on disk, never print or commit them:** repo-root `.bashrc`, `deploy/vaulthalla.env`, `deploy/bashrc`,
   `/etc/vaulthalla/vaulthalla.env`, `cloudflare.ini`, `config.yaml` at the repo root (gitignored override). Source them; don't cat them.
 - **No tags, pushes, releases, or workflow dispatches** without explicit instruction. A `v*` tag publishes to the real APT repo.

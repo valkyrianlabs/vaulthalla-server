@@ -167,8 +167,7 @@ FUSE work needs more than a compile.
 Use the Linux integration path when possible:
 
 ```bash
-./bin/tests/install.sh --run
-./bin/tests/uninstall.sh
+make itest
 ```
 
 Also capture the manual behavior you checked, for example:
@@ -187,7 +186,7 @@ If you changed CLI parsing, usage text, shell protocol behavior, or lifecycle co
 ```bash
 meson setup build --buildtype=debug -Dbuild_unit_tests=true -Dinstall_data=false
 meson compile -C build
-./bin/tests/install.sh --run
+make itest
 ```
 
 For help or manpage-related work, also inspect the affected usage definitions under `core/usage/*` and confirm the output is coherent.
@@ -219,7 +218,8 @@ Schema and DB-layer changes need more than "the SQL looked fine."
 At minimum:
 
 ```bash
-./bin/tests/install.sh --run
+make itest
+make test
 ```
 
 If packaging or release behavior is involved, also run:
@@ -269,6 +269,6 @@ Examples:
 
 - "Docs-only. Verified all commands and paths against the repo. No code paths changed."
 - "Ran `cd web && pnpm test` and manually checked the updated admin page under `pnpm dev`."
-- "Ran Meson unit-test build plus `./bin/tests/install.sh --run` on Linux. Did not validate upgrade behavior."
+- "Ran `make test` and `make itest` on Linux. Did not validate upgrade behavior."
 
 That level of honesty is enough. Hand-wavy claims are not.
