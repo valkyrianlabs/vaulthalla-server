@@ -35,8 +35,14 @@ getent group vaulthalla >/dev/null || { echo "group 'vaulthalla' missing (instal
 
 # venv (owned by the invoking user so they can pip install into it)
 OWNER="${SUDO_USER:-root}"
+# The harness targets Python 3.14 (CI image: deadsnakes python3.14 + python3.14-venv). An older venv is rebuilt.
+PY="${VHH_PYTHON:-python3.14}"
+command -v "$PY" >/dev/null || { echo "$PY not found: install python3.14 and python3.14-venv (deadsnakes PPA on Ubuntu 24.04)" >&2; exit 1; }
+if [[ -x "$SCRIPT_DIR/.venv/bin/python" ]] && ! "$SCRIPT_DIR/.venv/bin/python" -c 'import sys; sys.exit(sys.version_info < (3, 14))'; then
+    rm -rf "$SCRIPT_DIR/.venv"
+fi
 if [[ ! -x "$SCRIPT_DIR/.venv/bin/python" ]]; then
-    runuser -u "$OWNER" -- python3 -m venv "$SCRIPT_DIR/.venv"
+    runuser -u "$OWNER" -- "$PY" -m venv "$SCRIPT_DIR/.venv"
 fi
 runuser -u "$OWNER" -- "$SCRIPT_DIR/.venv/bin/pip" install -q -r "$SCRIPT_DIR/requirements.txt"
 

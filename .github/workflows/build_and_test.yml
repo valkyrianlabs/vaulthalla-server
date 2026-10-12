@@ -91,6 +91,6 @@ jobs:
       # The integration engine's unit and self tests: no daemon, no privileges (tools/harness).
       - name: Integration engine tests (tools/harness)
         run: |
-          python3 -m venv "$RUNNER_TEMP/harness-venv"
+          python3.14 -m venv "$RUNNER_TEMP/harness-venv"
           "$RUNNER_TEMP/harness-venv/bin/pip" install -q -r tools/harness/requirements.txt
           VERIFY_HARNESS_PYTHON="$RUNNER_TEMP/harness-venv/bin/python" bash tools/dev/verify.sh harness

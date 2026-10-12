@@ -56,7 +56,7 @@ jobs:
             echo "VHH_ARTIFACTS=$work/artifacts"
           } >> "$GITHUB_ENV"
           mkdir "$work/artifacts"
-          python3 -m venv "$work/python"
+          python3.14 -m venv "$work/python"
           "$work/python/bin/pip" install -r tools/harness/requirements.txt
       - name: Build daemon, CLI, FUSE actor and integration targets
         env:

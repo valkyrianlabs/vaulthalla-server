@@ -13,8 +13,8 @@
 #   lifecycle   deploy/lifecycle unit tests (minimum test count)
 #   docs        payload-markdown checker on changed docs (or all docs) + pmdocs validate
 #   shell       bash -n on changed/all bin/ and debian maintainer scripts
-#   harness     integration engine unit + self tests (tools/harness, no daemon; needs `websockets`: the
-#               tools/harness/.venv from bootstrap.sh, or VERIFY_HARNESS_PYTHON)
+#   harness     integration engine unit + self tests (tools/harness, no daemon; Python 3.14 with `websockets`:
+#               the tools/harness/.venv from bootstrap.sh, or VERIFY_HARNESS_PYTHON)
 #   integration DESTRUCTIVE: make uninstall && make clean-full && make run_test (requires VERIFY_ALLOW_DESTRUCTIVE=1)
 #   all         core web release packaging lifecycle docs shell harness
 set -euo pipefail
@@ -146,8 +146,9 @@ run_shell() {
 run_harness() {
   local py="${VERIFY_HARNESS_PYTHON:-}"
   [[ -z "$py" && -x tools/harness/.venv/bin/python ]] && py="$ROOT_DIR/tools/harness/.venv/bin/python"
-  py="${py:-python3}"
+  py="${py:-python3.14}"
   [[ "$py" == */* && "$py" != /* ]] && py="$ROOT_DIR/$py"
+  "$py" -c 'import sys; sys.exit(sys.version_info < (3, 14))' 2>/dev/null || die "tools/harness needs Python 3.14 ($py): sudo tools/harness/bootstrap.sh (or VERIFY_HARNESS_PYTHON)"
   "$py" -c 'import websockets' 2>/dev/null || die "tools/harness needs websockets: sudo tools/harness/bootstrap.sh (or VERIFY_HARNESS_PYTHON)"
   log "integration engine tests (tools/harness/tests, $py)"
   local output rc=0 ran

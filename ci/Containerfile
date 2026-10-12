@@ -6,7 +6,8 @@
 # builds all three packages, and the PR gate compiles the helpers too; tools/contracts checks the list), the
 # runtime tools of bin/setup/install_deps.sh that tests use (swtpm, tpm2-tools), g++ 14 as the default `cc`/`c++`
 # (the previous runner's compiler; meson and dh pick `c++`, which tools/dev/check_build_flags.py expects) + ccache,
-# Node (web/.nvmrc) + pnpm (web/package.json packageManager), Debian packaging tools, shellcheck, and
+# Node (web/.nvmrc) + pnpm (web/package.json packageManager), Python 3.14 + venv for tools/harness (deadsnakes PPA,
+# signing key pinned by fingerprint), Debian packaging tools, shellcheck, and
 # vl-release, pmdocs and gh. libpqxx-vh-dev and libpdfium-dev come only from apt.vaulthalla.sh.
 FROM docker.io/library/ubuntu:24.04@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55
 
@@ -30,13 +31,19 @@ RUN apt-get update \
  && curl -fsSL https://apt.vaulthalla.sh/pubkey.gpg | gpg --dearmor -o /etc/apt/keyrings/vaulthalla.gpg \
  && curl -fsSL https://apt.valkyrianlabs.com/pubkey.gpg -o /etc/apt/keyrings/valkyrianlabs.gpg \
  && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli.gpg \
+ && curl -fsSL 'https://keyserver.ubuntu.com/pks/lookup?op=get&options=mr&search=0xF23C5A6CF475977595C89F51BA6932366A755776' \
+      | gpg --dearmor -o /etc/apt/keyrings/deadsnakes.gpg \
+ && gpg --show-keys --with-colons /etc/apt/keyrings/deadsnakes.gpg \
+      | grep -q '^fpr:::::::::F23C5A6CF475977595C89F51BA6932366A755776:$' \
  && chmod 0644 /etc/apt/keyrings/*.gpg \
  && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/vaulthalla.gpg] https://apt.vaulthalla.sh stable main" > /etc/apt/sources.list.d/vaulthalla.list \
  && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/valkyrianlabs.gpg] https://apt.valkyrianlabs.com stable main" > /etc/apt/sources.list.d/valkyrianlabs.list \
  && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/githubcli.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list \
+ && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/deadsnakes.gpg] https://ppa.launchpadcontent.net/deadsnakes/ppa/ubuntu noble main" > /etc/apt/sources.list.d/deadsnakes.list \
  && apt-get update \
  && apt-get install -y --no-install-recommends \
-      sudo git jq xz-utils file make python3 python3-yaml shellcheck ccache gcc-14 g++-14 build-essential \
+      sudo git jq xz-utils file make python3 python3-yaml python3.14 python3.14-venv shellcheck ccache gcc-14 \
+      g++-14 build-essential \
       debhelper devscripts dpkg-dev fakeroot \
       meson ninja-build pkg-config pandoc \
       libfuse3-dev libsodium-dev libcurl4-openssl-dev libboost-filesystem-dev libboost-system-dev \
@@ -53,7 +60,8 @@ RUN apt-get update \
  && echo "tools: ${VALKYRIANLABS_TOOLS}" && vlr --version && pmdocs --version && gh --version | head -1 \
  && update-alternatives --install /usr/bin/cc cc /usr/bin/gcc-14 100 \
  && update-alternatives --install /usr/bin/c++ c++ /usr/bin/g++-14 100 \
- && c++ --version | head -1
+ && c++ --version | head -1 \
+ && python3.14 -c 'import sys, venv; assert sys.version_info >= (3, 14)'
 
 # Node from nodejs.org, verified against the release's SHASUMS256.txt; pnpm through corepack.
 # COREPACK_HOME stays writable so a packageManager bump on a branch still resolves in-container.
