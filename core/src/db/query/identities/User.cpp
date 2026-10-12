@@ -8,6 +8,7 @@
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
 #include "db/query/identities/helpers.hpp"
+#include "db/encoding/has.hpp"
 
 #include <stdexcept>
 #include <optional>
@@ -18,6 +19,8 @@ namespace vh::db::query::identities {
         using State = vh::identities::UserState;
 
         bool rowBool(pqxx::row_ref row, const char* column, const bool fallback = false) {
+            // libpqxx's row[name] is [[gnu::pure]]: under clang a missing column can't be caught, so check first.
+            if (!vh::db::encoding::hasColumn(row, column)) return fallback;
             try {
                 const auto field = row[column];
                 if (field.is_null()) return fallback;

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "concurrency/AtomicSharedPtr.hpp"
+
 #include <atomic>
 #include <ctime>
 #include <cstdint>
@@ -68,7 +70,7 @@ private:
 
     void publish(std::shared_ptr<const GroupState> next) noexcept { state_.store(std::move(next)); }
 
-    std::atomic<std::shared_ptr<const GroupState>> state_;
+    concurrency::AtomicSharedPtr<const GroupState> state_;
     const bool detached_;
 };
 

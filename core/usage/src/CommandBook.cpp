@@ -77,6 +77,10 @@ std::string CommandBook::renderHelp(const std::vector<std::string>& args) const 
         out << "root is at: " << root->primary() << "\n";
         return out.str();
     }
-    out << "\n" << book_theme->H() << title << book_theme->R() << "\n\n";
+    // book_theme is optional: dereferencing it unset was undefined behavior (libc++ hardening traps on it).
+    out << "\n";
+    if (book_theme) out << book_theme->H() << title << book_theme->R();
+    else out << title;
+    out << "\n\n";
     return out.str() + cmd->str();
 }

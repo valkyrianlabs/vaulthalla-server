@@ -1,5 +1,7 @@
 #pragma once
 
+#include "concurrency/AtomicSharedPtr.hpp"
+
 #include <atomic>
 #include <cstdint>
 #include <ctime>
@@ -170,7 +172,7 @@ namespace vh::identities {
         // Manager only, inside a publication (see identities::detail::Publication).
         void publish(std::shared_ptr<const UserState> next) noexcept { state_.store(std::move(next)); }
 
-        std::atomic<std::shared_ptr<const UserState>> state_;
+        concurrency::AtomicSharedPtr<const UserState> state_;
         const bool detached_;
     };
 

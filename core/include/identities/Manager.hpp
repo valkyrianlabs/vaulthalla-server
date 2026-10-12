@@ -1,6 +1,7 @@
 #pragma once
 
 #include "concurrency/AsyncService.hpp"
+#include "concurrency/AtomicSharedPtr.hpp"
 #include "db/query/identities/Loader.hpp"
 #include "identities/Group.hpp"
 #include "identities/User.hpp"
@@ -161,7 +162,7 @@ private:
     void ensureComplete();
     void apply(db::query::identities::IdentitySnapshot&& snap, bool loadedAll);
 
-    std::atomic<std::shared_ptr<const Index>> index_{std::make_shared<const Index>()};
+    concurrency::AtomicSharedPtr<const Index> index_{std::make_shared<const Index>()};
     mutable std::mutex publishMutex_;   // index and publication changes; never held across database I/O
     std::mutex loadMutex_;              // single-flight cold loads
 
