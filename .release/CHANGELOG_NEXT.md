@@ -22,4 +22,7 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
 - fix(fuse): a rename with RENAME_EXCHANGE (or any flag besides RENAME_NOREPLACE) is refused with EINVAL; it used
   to be carried out as a plain rename that overwrote the entry the caller asked to swap.
 - macOS (development, not packaged): launchd LaunchDaemons and an idempotent provisioning script for the headless
-  `_vaulthalla` system service (deploy/launchd); Linux installs exactly the same files as before.
+  `_vaulthalla` system service (deploy/launchd); Linux installs exactly the same files as before. Provisioning
+  refuses a conflicting existing account, symlinked or foreign-owned paths, and a purge into a mounted namespace.
+- vh: on macOS, the "not running", "not responding" and "permission denied" hints name launchctl, the log file and
+  dseditgroup instead of systemctl, journalctl and usermod (Linux wording unchanged).
