@@ -167,8 +167,12 @@ def _run_launched(a) -> int:
         catalog = load_catalog(a.catalog).restricted(real.SUPPORTED)
         if a.weights:
             catalog = catalog.weighted({k: float(v) for k, v in (kv.split("=", 1) for kv in a.weights.split(","))})
-        res = RUN.run(w, cfg, broker, red, real.factory(inst, binding, w, broker, red), out,
-                      catalog, {"kind": "launched", "run_id": inst.run_id})
+        hard = 120 + 30 * cfg.sessions * cfg.ops_per_session   # far beyond any per-op deadline sum
+        with inst.watchdog(hard) as dog:
+            res = RUN.run(w, cfg, broker, red, real.factory(inst, binding, w, broker, red), out,
+                          catalog, {"kind": "launched", "run_id": inst.run_id})
+        if dog.fired:
+            died = {"watchdog": f"run exceeded {hard}s; FUSE connection aborted"}
         if not inst.alive():
             died = inst.health()
             inst.capture_evidence("daemon-died")
@@ -188,6 +192,18 @@ def _run_launched(a) -> int:
     print(f"vhh: reproduce with: sudo tools/harness/vhh.sh run --target launch --build {a.build} --world {a.world} "
           f"--seed {fmt_seed(seed)} --schedule {a.schedule} --sessions {a.sessions} --ops {a.ops} "
           f"--surfaces {a.surfaces}" + (f" --weights {a.weights}" if a.weights else ""))
+    return PASS if ok else FAIL
+
+
+def cmd_scenario(a) -> int:
+    from vhh import scenarios
+    out = Path(a.out) if a.out else RUN.new_run_dir()
+    ok, report = scenarios.run(a.kind, a.build, out)
+    for k in ("outcome", "after", "wedge", "took_s", "died", "mount_gone", "db_dropped", "why"):
+        if k in report:
+            print(f"  {k}: {report[k]}")
+    say("PASS" if ok else "FAIL", f"scenario {a.kind}: {'detected and contained' if ok else 'NOT contained'} "
+        f"(artifacts {out})")
     return PASS if ok else FAIL
 
 
@@ -395,6 +411,12 @@ def parser() -> argparse.ArgumentParser:
             p.add_argument("--attempts", type=int, default=1)
             p.add_argument("--out", default="shrunk.jsonl")
         p.set_defaults(fn=fn)
+
+    p = sub.add_parser("scenario", help="daemon hang/crash during an in-flight FUSE op (needs root)")
+    p.add_argument("kind", choices=("hang", "crash"))
+    p.add_argument("--build", required=True)
+    p.add_argument("--out")
+    p.set_defaults(fn=cmd_scenario)
 
     p = sub.add_parser("verify", help="verify a finished trace offline")
     p.add_argument("--trace", required=True)

@@ -12,6 +12,7 @@ import asyncio
 import base64
 import errno as errno_mod
 import json
+import posixpath
 import time
 from pathlib import Path
 
@@ -66,11 +67,15 @@ class FuseDriver:
             raise RuntimeError(f"vh_fs_actor did not start as uid {self.uid}: {line[:200]!r}")
 
     def path(self, rel: str) -> str:
-        """Absolute path on the mount for a vault-relative path ("<vault fuse name>/a/b")."""
-        p = (self.mount / rel.lstrip("/")).resolve()
-        if p != self.mount and self.mount not in p.parents:
+        """Absolute path on the mount for a vault-relative path ("<vault fuse name>/a/b").
+
+        Purely lexical: the engine never touches the mount itself (Path.resolve() lstat()s it, which blocks forever
+        while the daemon is stopped; found by the hang scenario). Only the actor process does I/O on the mount."""
+        mount = posixpath.normpath(str(self.mount))
+        p = posixpath.normpath(posixpath.join(mount, rel.lstrip("/")))
+        if p != mount and not p.startswith(mount + "/"):
             raise ValueError(f"{rel!r} escapes the mount")
-        return str(p)
+        return p
 
     async def request(self, req: dict, deadline_s: float) -> dict:
         if self.proc is None or self.proc.returncode is not None:

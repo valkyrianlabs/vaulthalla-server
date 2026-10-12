@@ -20,6 +20,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import threading
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -341,6 +342,36 @@ class Instance:
             pass
         (d / "daemon.log.tail").write_text(self.log_tail(400))
         return d
+
+    def watchdog(self, seconds: float):
+        """Context manager: if the guarded block runs past `seconds`, capture evidence and abort this run's FUSE
+        connection from a separate thread. Anything stuck on the mount (even the engine's own thread, which asyncio
+        deadlines can't interrupt) then fails instead of blocking forever."""
+        inst = self
+
+        class _Watchdog:
+            fired = False
+
+            def __enter__(self):
+                self._done = threading.Event()
+                self._t = threading.Thread(target=self._run, name="vhh-watchdog", daemon=True)
+                self._t.start()
+                return self
+
+            def _run(self):
+                if self._done.wait(seconds):
+                    return
+                self.fired = True
+                try:
+                    inst.capture_evidence("watchdog")
+                finally:
+                    inst.abort_fuse()
+
+            def __exit__(self, *exc):
+                self._done.set()
+                return False
+
+        return _Watchdog()
 
     def sanitizer_reports(self) -> list[str]:
         """Sanitizer findings of this run: ASan/UBSan/TSan log files, or reports in the daemon log. Any one fails the
