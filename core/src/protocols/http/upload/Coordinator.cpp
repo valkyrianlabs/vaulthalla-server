@@ -337,19 +337,6 @@ std::filesystem::path stagingRoot() {
     return vh::paths::getBackingPath() / ".upload-staging";
 }
 
-std::filesystem::path uploadStagingPath(
-    const std::filesystem::path& targetAbsPath,
-    const unsigned int vaultId,
-    const std::string& name
-) {
-    if (vh::fuse::kernelBridgeBuilt()) return targetAbsPath.parent_path() / name;
-    const auto dir = stagingRoot() / std::to_string(vaultId);
-    std::filesystem::create_directories(dir);
-    for (const auto& p : {stagingRoot(), dir})
-        std::filesystem::permissions(p, std::filesystem::perms::owner_all, std::filesystem::perm_options::replace);
-    return dir / name;
-}
-
 void createEmptyTempFile(const std::filesystem::path& path) {
     std::filesystem::create_directories(path.parent_path());
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
@@ -653,6 +640,19 @@ void Coordinator::FileStream::fail(std::string reason) noexcept {
     }
 }
 
+std::filesystem::path stagingPathFor(
+    const std::filesystem::path& targetAbsPath,
+    const unsigned int vaultId,
+    const std::string& name
+) {
+    if (vh::fuse::kernelBridgeBuilt()) return targetAbsPath.parent_path() / name;
+    const auto dir = stagingRoot() / std::to_string(vaultId);
+    std::filesystem::create_directories(dir);
+    for (const auto& p : {stagingRoot(), dir})
+        std::filesystem::permissions(p, std::filesystem::perms::owner_all, std::filesystem::perm_options::replace);
+    return dir / name;
+}
+
 void sweepStagingAtStartup() {
     if (vh::fuse::kernelBridgeBuilt()) return;
     std::error_code ec;
@@ -757,7 +757,7 @@ nlohmann::json Coordinator::createSession(const request& req, const nlohmann::js
 
                 const auto vaultPath = std::filesystem::path(finalVaultPath);
                 const auto absPath = engine->paths->absPath(vaultPath, PathType::VAULT_ROOT);
-                const auto tmpPath = uploadStagingPath(absPath, parent.vault_id, ".upload-http-" + upload->id + "-" + fileId + ".part");
+                const auto tmpPath = vh::protocols::http::upload::stagingPathFor(absPath, parent.vault_id, ".upload-http-" + upload->id + "-" + fileId + ".part");
                 const auto fuseTo = engine->paths->absRelToRoot(absPath, PathType::FUSE_ROOT);
                 const auto fuseFrom = engine->paths->absRelToRoot(tmpPath, PathType::FUSE_ROOT);
 
@@ -830,7 +830,7 @@ nlohmann::json Coordinator::createSession(const request& req, const nlohmann::js
                     "Upload exceeds available vault storage");
 
                 const auto absPath = engine->paths->absPath(vaultPath, PathType::VAULT_ROOT);
-                const auto tmpPath = uploadStagingPath(absPath, vaultId, ".upload-http-" + upload->id + "-" + fileId + ".part");
+                const auto tmpPath = vh::protocols::http::upload::stagingPathFor(absPath, vaultId, ".upload-http-" + upload->id + "-" + fileId + ".part");
                 const auto fuseTo = engine->paths->absRelToRoot(absPath, PathType::FUSE_ROOT);
                 const auto fuseFrom = engine->paths->absRelToRoot(tmpPath, PathType::FUSE_ROOT);
 

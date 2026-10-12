@@ -22,6 +22,11 @@ namespace vh::protocols::http::upload {
 // what an earlier run left there; call once at startup, before the HTTP server accepts uploads. No-op with FUSE.
 void sweepStagingAtStartup();
 
+// Where the HTTP lane stages the upload named `name` for `targetAbsPath` (its final path under the vault root):
+// next to it, through the mount, when the kernel FUSE bridge is built; else <backing>/.upload-staging/<vaultId>/.
+[[nodiscard]] std::filesystem::path stagingPathFor(const std::filesystem::path& targetAbsPath, unsigned int vaultId,
+                                                   const std::string& name);
+
 struct ParsedFileTarget {
     std::string upload_id;
     std::string file_id;
