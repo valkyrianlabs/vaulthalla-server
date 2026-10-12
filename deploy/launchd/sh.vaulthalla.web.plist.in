@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The web console (the counterpart of deploy/systemd/vaulthalla-web.service.in): Next.js standalone server on loopback. -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>sh.vaulthalla.web</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>@NODE@</string>
+        <string>@WEB_DIR@/server.js</string>
+    </array>
+    <key>UserName</key>
+    <string>_vaulthalla</string>
+    <key>GroupName</key>
+    <string>_vaulthalla</string>
+    <key>Umask</key>
+    <integer>63</integer>
+    <key>WorkingDirectory</key>
+    <string>@WEB_DIR@</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <!-- Restart=always. -->
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>NODE_ENV</key>
+        <string>production</string>
+        <key>PORT</key>
+        <string>36968</string>
+        <key>HOSTNAME</key>
+        <string>127.0.0.1</string>
+        <key>VAULTHALLA_WEB_INTERNAL_ORIGIN</key>
+        <string>http://127.0.0.1:36968</string>
+        <key>VAULTHALLA_AUTH_ORIGIN</key>
+        <string>http://127.0.0.1:36970</string>
+        <key>VAULTHALLA_PREVIEW_ORIGIN</key>
+        <string>http://127.0.0.1:36970</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>@LOG_DIR@/web.log</string>
+    <key>StandardErrorPath</key>
+    <string>@LOG_DIR@/web.log</string>
+</dict>
+</plist>

@@ -24,7 +24,7 @@
 #include <cstddef>
 
 #include "platform/Fd.hpp"
-#include <paths.h>  // generated: VH_CLI_SOCKET_PATH, VH_LIFECYCLE_PATH
+#include <paths.h>  // generated: VH_CLI_SOCKET_PATH, VH_LIFECYCLE_PATH, VH_HINT_*
 
 static bool readn(const int fd, void* b, size_t n) {
     auto* p = static_cast<uint8_t*>(b);
@@ -400,12 +400,14 @@ static int connect_timeout_seconds() {
 }
 
 static int report_not_responding(const int seconds) {
+    const std::string running = std::string("Is ") + VH_HINT_SERVICE_NAME + " running?";
     fmt::print(stderr,
                "vh: the vaulthalla daemon is not responding at {} (no reply within {}s).\n"
-               "    Is vaulthalla.service running?  systemctl status vaulthalla\n"
-               "    Recent daemon log:               journalctl -u vaulthalla -n 50\n"
+               "    {}  {}\n"
+               "    {:<{}}{}\n"
                "    (Set VAULTHALLA_CLI_TIMEOUT=<seconds> to wait longer.)\n",
-               socket_path(), seconds);
+               socket_path(), seconds, running, VH_HINT_SERVICE_STATUS, "Recent daemon log:", running.size() + 3,
+               VH_HINT_SERVICE_LOG);
     return exit_code::kTempFail;
 }
 
@@ -417,16 +419,16 @@ static int report_connect_error(const int err, const int seconds) {
                        "vh: permission denied opening {}.\n"
                        "    The control socket is restricted to the 'vaulthalla' group. Either run with sudo, or add\n"
                        "    yourself to the group and start a new login session:\n"
-                       "      sudo usermod -aG vaulthalla $USER\n",
-                       socket_path());
+                       "      {}\n",
+                       socket_path(), VH_HINT_CLI_ENROLL);
             return exit_code::kNoPerm;
         case ENOENT:
         case ECONNREFUSED:
             fmt::print(stderr,
                        "vh: the vaulthalla daemon is not running (nothing is listening at {}).\n"
-                       "    Check the service:  systemctl status vaulthalla\n"
-                       "    Recent daemon log:  journalctl -u vaulthalla -n 50\n",
-                       socket_path());
+                       "    Check the service:  {}\n"
+                       "    Recent daemon log:  {}\n",
+                       socket_path(), VH_HINT_SERVICE_STATUS, VH_HINT_SERVICE_LOG);
             return exit_code::kUnavailable;
         case EAGAIN:
         case ETIMEDOUT:
@@ -553,7 +555,7 @@ int main(const int argc, char** argv) {
             // connection closed unexpectedly
             ::close(s);
             fmt::print(stderr, "vh: connection to the vaulthalla daemon closed before the command finished "
-                               "(daemon restarted or crashed? journalctl -u vaulthalla -n 50)\n");
+                               "(daemon restarted or crashed? {})\n", VH_HINT_SERVICE_LOG);
             return exit_code::kTempFail;
         }
 

@@ -44,11 +44,20 @@ if host_machine.system() == 'darwin'
     config_path = join_paths(support_dir, 'config.yaml')
     state_dir = join_paths(support_dir, 'state')
     log_dir = '/Library/Logs/Vaulthalla'
-    runtime_dir = '/var/run/vaulthalla'
+    # Not /var/run: launchd has no RuntimeDirectory and the daemon (as _vaulthalla) can't create one there at boot.
+    # A persistent, service-owned directory instead; the daemon rebinds a stale socket on start.
+    runtime_dir = join_paths(support_dir, 'run')
     # The optional service-private FUSE mount: beside the backing state, never on top of it, and not under /Volumes
     # (it is internal, not a Finder volume; #199/#204).
     mount_dir = join_paths(support_dir, 'mount')
 endif
+
+# The compiled-in locations, for the root meson.build's service files (its own state_dir/log_dir are Linux's).
+vh_state_dir = state_dir
+vh_log_dir = log_dir
+vh_runtime_dir = runtime_dir
+vh_mount_dir = mount_dir
+vh_config_path = config_path
 
 conf = configuration_data()
 conf.set_quoted('VH_MOUNT_PATH', mount_dir)
@@ -58,6 +67,17 @@ conf.set_quoted('VH_BACKING_PATH', state_dir)
 conf.set_quoted('VH_RUNTIME_PATH', runtime_dir)
 conf.set_quoted('VH_LIFECYCLE_PATH', lifecycle_path)
 conf.set_quoted('VH_CACHE_PATH', '/.cache')
+if host_machine.system() == 'darwin'
+    conf.set_quoted('VH_HINT_SERVICE_NAME', 'sh.vaulthalla.server')
+    conf.set_quoted('VH_HINT_SERVICE_STATUS', 'sudo launchctl print system/sh.vaulthalla.server')
+    conf.set_quoted('VH_HINT_SERVICE_LOG', 'sudo tail -n 50 "' + join_paths(log_dir, 'vaulthalla.log') + '"')
+    conf.set_quoted('VH_HINT_CLI_ENROLL', 'sudo dseditgroup -o edit -a $USER -t user _vaulthalla')
+else
+    conf.set_quoted('VH_HINT_SERVICE_NAME', 'vaulthalla.service')
+    conf.set_quoted('VH_HINT_SERVICE_STATUS', 'systemctl status vaulthalla')
+    conf.set_quoted('VH_HINT_SERVICE_LOG', 'journalctl -u vaulthalla -n 50')
+    conf.set_quoted('VH_HINT_CLI_ENROLL', 'sudo usermod -aG vaulthalla $USER')
+endif
 conf.set_quoted('VH_S3_GATEWAY_MULTIPART_PARTS_DIRNAME', '.8f3a9c1d6e2b4f70')
 conf.set_quoted('VH_PSQL_SCHEMAS_PATH', psql_dir)
 conf.set_quoted('VH_PSQL_TEST_SCHEMAS_PATH', join_paths(repo_root, 'deploy/psql'))

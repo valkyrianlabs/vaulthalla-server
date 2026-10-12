@@ -39,8 +39,10 @@ if get_option('install_data')
     doc_dir = get_option('datadir') / 'doc' / project_name
     libexec_dir = 'lib' / project_name
 
-    install_emptydir(state_dir)
-    install_emptydir(log_dir)
+    if host_machine.system() == 'linux'
+        install_emptydir(state_dir)
+        install_emptydir(log_dir)
+    endif
 
     # Packaged defaults live under /usr/share; postinst copies config.yaml into
     # /etc/vaulthalla only when it is missing (it is runtime-owned, not a conffile).
@@ -78,40 +80,72 @@ if get_option('install_data')
         install_mode: 'rwxr-xr-x',
     )
 
-    unit_conf = configuration_data()
-    unit_conf.set('BINDIR', get_option('prefix') / bindir)
-
-    foreach unit_template : [
-        'vaulthalla.service',
-        'vaulthalla-web.service',
-        'vaulthalla-swtpm.service',
-    ]
-        unit_input = 'deploy/systemd' / (unit_template + '.in')
-        configure_file(
-            input: unit_input,
-            output: unit_template,
-            configuration: unit_conf,
-            install: true,
-            install_dir: get_option('systemd_system_unit_dir'),
-        )
-    endforeach
-
     install_data(
         'LICENSE',
         'debian/copyright',
         install_dir: doc_dir,
     )
 
-    install_data(
-        'debian/vaulthalla.udev',
-        install_dir: get_option('udev_rules_dir'),
-        rename: '60-vaulthalla-tpm.rules',
-    )
+    # Linux: systemd units, the TPM udev rule and tmpfiles (unchanged).
+    if host_machine.system() == 'linux'
+        unit_conf = configuration_data()
+        unit_conf.set('BINDIR', get_option('prefix') / bindir)
 
-    install_data(
-        'debian/tmpfiles.d/vaulthalla.conf',
-        install_dir: get_option('tmpfiles_dir'),
-    )
+        foreach unit_template : [
+            'vaulthalla.service',
+            'vaulthalla-web.service',
+            'vaulthalla-swtpm.service',
+        ]
+            unit_input = 'deploy/systemd' / (unit_template + '.in')
+            configure_file(
+                input: unit_input,
+                output: unit_template,
+                configuration: unit_conf,
+                install: true,
+                install_dir: get_option('systemd_system_unit_dir'),
+            )
+        endforeach
+
+        install_data(
+            'debian/vaulthalla.udev',
+            install_dir: get_option('udev_rules_dir'),
+            rename: '60-vaulthalla-tpm.rules',
+        )
+
+        install_data(
+            'debian/tmpfiles.d/vaulthalla.conf',
+            install_dir: get_option('tmpfiles_dir'),
+        )
+    endif
+
+    # macOS: launchd instead of systemd/udev/tmpfiles (deploy/launchd). vaulthalla-provision creates the _vaulthalla
+    # account, the private directories and the LaunchDaemons; the paths are the ones compiled into the daemon.
+    if host_machine.system() == 'darwin'
+        install_data(
+            'deploy/launchd/sh.vaulthalla.server.plist.in',
+            'deploy/launchd/sh.vaulthalla.web.plist.in',
+            install_dir: data_dir / 'launchd',
+        )
+        provision_conf = configuration_data()
+        provision_conf.set('SUPPORT_DIR', '/Library/Application Support/Vaulthalla')
+        provision_conf.set('STATE_DIR', vh_state_dir)
+        provision_conf.set('RUN_DIR', vh_runtime_dir)
+        provision_conf.set('MOUNT_DIR', vh_mount_dir)
+        provision_conf.set('LOG_DIR', vh_log_dir)
+        provision_conf.set('CONFIG_PATH', vh_config_path)
+        provision_conf.set('SHARE_DIR', get_option('prefix') / data_dir)
+        provision_conf.set('BINDIR', get_option('prefix') / bindir)
+        provision_conf.set('WEB_DIR', get_option('prefix') / get_option('datadir') / 'vaulthalla-web')
+        provision_conf.set('NODE', get_option('prefix') / 'libexec' / 'vaulthalla' / 'node' / 'bin' / 'node')
+        configure_file(
+            input: 'deploy/launchd/vaulthalla-provision.in',
+            output: 'vaulthalla-provision',
+            configuration: provision_conf,
+            install: true,
+            install_dir: libexec_dir,
+            install_mode: 'rwxr-xr-x',
+        )
+    endif
 
     install_symlink(
         'vaulthalla',

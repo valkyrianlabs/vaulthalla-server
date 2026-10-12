@@ -1,0 +1,285 @@
+#!/bin/bash
+# vaulthalla-provision: the macOS system service's account, private directories and LaunchDaemons (the counterpart of
+# what debian/postinst does for systemd on Linux). Idempotent: running it again changes nothing that is already right.
+#
+#   vaulthalla-provision                 show what would change (default; changes nothing)
+#   vaulthalla-provision --apply         make the changes (root)
+#   vaulthalla-provision --remove        unload and remove the LaunchDaemons; account and data stay
+#   vaulthalla-provision --remove --purge   also delete the state, logs, runtime dir and the _vaulthalla account
+#
+# What it sets up:
+#   - _vaulthalla, a hidden role account (uid/gid in 450-499, no shell, no home) with the record alias "vaulthalla",
+#     so the daemon's lookups of the 'vaulthalla' user and group work as on Linux.
+#   - @SUPPORT_DIR@            root:wheel 0755
+#     .../state                _vaulthalla 0700   encrypted backing store, sealed secrets, upload staging
+#     .../run                  _vaulthalla 0750   the CLI socket (members of the vaulthalla group may connect)
+#     .../mount                _vaulthalla 0700   the optional service-private FUSE mount point
+#     @LOG_DIR@                _vaulthalla 0750
+#   - config.yaml, only if missing (never overwritten), root:_vaulthalla 0640.
+#   - /Library/LaunchDaemons/sh.vaulthalla.{server,web}.plist, bootstrapped in the system domain.
+# It never adds anyone to the vaulthalla group: enrolling a local user for `vh` is an explicit step (#202).
+set -euo pipefail
+
+SERVICE=_vaulthalla
+ALIAS=vaulthalla
+SUPPORT_DIR="@SUPPORT_DIR@"
+STATE_DIR="@STATE_DIR@"
+RUN_DIR="@RUN_DIR@"
+MOUNT_DIR="@MOUNT_DIR@"
+LOG_DIR="@LOG_DIR@"
+CONFIG_PATH="@CONFIG_PATH@"
+SHARE_DIR="@SHARE_DIR@"
+BINDIR="@BINDIR@"
+WEB_DIR="@WEB_DIR@"
+NODE="@NODE@"
+LAUNCHD_DIR=/Library/LaunchDaemons
+LABELS="sh.vaulthalla.server sh.vaulthalla.web"
+
+# Tools, overridable for tests (tools/contracts/test_macos_launchd_contract.py runs this with stubs and --root).
+DSCL=${VH_DSCL:-/usr/bin/dscl}
+LAUNCHCTL=${VH_LAUNCHCTL:-/bin/launchctl}
+INSTALL=${VH_INSTALL:-/usr/bin/install}
+PLUTIL=${VH_PLUTIL:-/usr/bin/plutil}
+MOUNT_CMD=${VH_MOUNT:-/sbin/mount}
+
+ACTION=provision
+APPLY=false
+PURGE=false
+ROOT=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --apply) APPLY=true ;;
+    --remove) ACTION=remove ;;
+    --purge) PURGE=true ;;
+    --root) ROOT="$2"; shift ;;
+    -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
+    *) echo "vaulthalla-provision: unknown argument: $1" >&2; exit 2 ;;
+  esac
+  shift
+done
+if [ "$PURGE" = true ] && [ "$ACTION" != remove ]; then
+  echo "vaulthalla-provision: --purge only goes with --remove" >&2; exit 2
+fi
+if [ "$APPLY" = true ] && [ -z "$ROOT" ] && [ "$(id -u)" != 0 ]; then
+  echo "vaulthalla-provision: --apply needs root (sudo)" >&2; exit 1
+fi
+
+changes=0
+note() { echo "[provision] $*"; }
+run() {  # every change goes through here: printed in plan mode, executed with --apply
+  changes=$((changes + 1))
+  if [ "$APPLY" = true ]; then "$@"; else printf '[provision] would run:'; printf ' %q' "$@"; echo; fi
+}
+
+die() { echo "vaulthalla-provision: $*" >&2; exit 1; }
+
+# dscl: every value of KEY on RECORD, one per line.
+values() { "$DSCL" . -read "$1" "$2" 2>/dev/null | sed -e "s/^$2:[[:space:]]*//" | tr ' ' '\n' | sed '/^$/d'; }
+exists() { "$DSCL" . -read "$1" RecordName >/dev/null 2>&1; }
+account_id() { values "/Users/$SERVICE" UniqueID | head -1; }
+
+# From the top of 450-499: Apple's own role accounts are allocated upward from 200 (past 300 on macOS 27, plus the
+# com.apple.access_* groups at 395-400 and _oahd at 441), so a third-party account low in that range risks a collision
+# with one a later macOS adds. uid and gid are the same number, free in both tables.
+free_id() {
+  local used id
+  used=$( { "$DSCL" . -list /Users UniqueID; "$DSCL" . -list /Groups PrimaryGroupID; } 2>/dev/null | awk '{print $2}')
+  for id in $(seq 499 -1 450); do
+    echo "$used" | grep -qx "$id" || { echo "$id"; return 0; }
+  done
+  return 1
+}
+
+# An existing _vaulthalla is used only if it is exactly the account this script would have created.
+validate_account() {
+  local id="$1" problems="" gid
+  case "$id" in ''|*[!0-9]*) problems="$problems; UniqueID '$id' is not a number" ;; esac
+  if [ -z "$problems" ] && { [ "$id" -lt 450 ] || [ "$id" -gt 499 ]; }; then problems="$problems; uid $id is outside 450-499"; fi
+  exists "/Groups/$SERVICE" || problems="$problems; group $SERVICE is missing"
+  gid=$(values "/Groups/$SERVICE" PrimaryGroupID | head -1)
+  [ "$(values "/Users/$SERVICE" PrimaryGroupID | head -1)" = "$gid" ] || problems="$problems; primary group is not $SERVICE"
+  [ "$gid" = "$id" ] || problems="$problems; gid $gid differs from uid $id"
+  [ "$(values "/Users/$SERVICE" UserShell | head -1)" = /usr/bin/false ] || problems="$problems; shell is not /usr/bin/false"
+  [ "$(values "/Users/$SERVICE" NFSHomeDirectory | head -1)" = /var/empty ] || problems="$problems; home is not /var/empty"
+  [ "$(values "/Users/$SERVICE" IsHidden | head -1)" = 1 ] || problems="$problems; not hidden"
+  values "/Users/$SERVICE" RecordName | grep -qx "$ALIAS" || problems="$problems; user lacks the alias $ALIAS"
+  values "/Groups/$SERVICE" RecordName | grep -qx "$ALIAS" || problems="$problems; group lacks the alias $ALIAS"
+  [ -z "$problems" ] && return 0
+  echo "${problems#; }"
+  return 1
+}
+
+ensure_account() {
+  local id problems
+  id=$(account_id || true)
+  if [ -n "$id" ]; then
+    problems=$(validate_account "$id") || die "an existing $SERVICE account doesn't match what this script creates" \
+      "(${problems}); refusing to use or change it -- inspect it with: dscl . -read /Users/$SERVICE"
+    note "account $SERVICE exists and matches (uid $id)"
+    return 0
+  fi
+  # Nothing half-made or borrowed: no stray group of that name, and the alias belongs to nobody yet.
+  exists "/Groups/$SERVICE" && die "group $SERVICE exists without the user $SERVICE; refusing to adopt it"
+  exists "/Users/$ALIAS" && die "a user named '$ALIAS' already exists; refusing to alias $SERVICE onto it"
+  exists "/Groups/$ALIAS" && die "a group named '$ALIAS' already exists; refusing to alias $SERVICE onto it"
+  id=$(free_id) || die "no free uid/gid in 450-499"
+  note "creating hidden role account $SERVICE (uid/gid $id)"
+  run "$DSCL" . -create "/Groups/$SERVICE"
+  run "$DSCL" . -create "/Groups/$SERVICE" PrimaryGroupID "$id"
+  run "$DSCL" . -create "/Groups/$SERVICE" RealName "Vaulthalla service"
+  run "$DSCL" . -create "/Groups/$SERVICE" Password '*'
+  run "$DSCL" . -append "/Groups/$SERVICE" RecordName "$ALIAS"
+  run "$DSCL" . -create "/Users/$SERVICE"
+  run "$DSCL" . -create "/Users/$SERVICE" UniqueID "$id"
+  run "$DSCL" . -create "/Users/$SERVICE" PrimaryGroupID "$id"
+  run "$DSCL" . -create "/Users/$SERVICE" RealName "Vaulthalla service"
+  run "$DSCL" . -create "/Users/$SERVICE" UserShell /usr/bin/false
+  run "$DSCL" . -create "/Users/$SERVICE" NFSHomeDirectory /var/empty
+  run "$DSCL" . -create "/Users/$SERVICE" Password '*'
+  run "$DSCL" . -create "/Users/$SERVICE" IsHidden 1
+  run "$DSCL" . -append "/Users/$SERVICE" RecordName "$ALIAS"
+}
+
+stat_mode() { case "$(uname -s)" in Darwin) stat -f '%Lp' "$1" ;; *) stat -c '%a' "$1" ;; esac; }
+stat_owner() { case "$(uname -s)" in Darwin) stat -f '%Su:%Sg' "$1" ;; *) stat -c '%U:%G' "$1" ;; esac; }
+
+# ensure_dir PATH OWNER GROUP MODE. Never follows or replaces a symlink, and never takes over a directory that
+# belongs to someone else (under --root, in tests, everything belongs to the test user: only the mode is checked).
+ensure_dir() {
+  local path="$ROOT$1" mode owner
+  [ -L "$path" ] && die "$1 is a symlink; refusing to use it"
+  if [ -e "$path" ]; then
+    [ -d "$path" ] || die "$1 exists and is not a directory; refusing to use it"
+    owner=$(stat_owner "$path")
+    if [ -z "$ROOT" ] && [ "$owner" != "$2:$3" ]; then
+      die "$1 exists, owned by $owner (expected $2:$3); refusing to take it over"
+    fi
+    mode=$(stat_mode "$path")
+    if [ "$mode" = "${4#0}" ] || [ "$mode" = "$4" ]; then note "ok $1 ($2:$3 $4)"; return 0; fi
+    run chmod "$4" "$path"
+    return 0
+  fi
+  run "$INSTALL" -d -o "$2" -g "$3" -m "$4" "$path"
+}
+
+ensure_config() {
+  [ -L "$ROOT$CONFIG_PATH" ] && die "$CONFIG_PATH is a symlink; refusing to use it"
+  if [ -e "$ROOT$CONFIG_PATH" ]; then note "keeping existing $CONFIG_PATH"; return 0; fi
+  run "$INSTALL" -o root -g "$SERVICE" -m 0640 "$ROOT$SHARE_DIR/config/config.yaml" "$ROOT$CONFIG_PATH"
+}
+
+# The daemons are bootstrapped only when what they run is actually installed.
+check_runtime() {
+  local missing=""
+  [ -x "$ROOT$BINDIR/vaulthalla-server" ] || missing="$missing $BINDIR/vaulthalla-server"
+  [ -x "$ROOT$NODE" ] || missing="$missing $NODE"
+  [ -f "$ROOT$WEB_DIR/server.js" ] || missing="$missing $WEB_DIR/server.js"
+  [ -z "$missing" ] || die "not installed:$missing; refusing to start the LaunchDaemons"
+}
+
+render_plist() {  # render_plist LABEL > file
+  # The placeholders are spelled with $at so configuring this script doesn't substitute them here as well.
+  local at=@
+  sed -e "s|${at}BINDIR${at}|$BINDIR|g" -e "s|${at}STATE_DIR${at}|$STATE_DIR|g" -e "s|${at}LOG_DIR${at}|$LOG_DIR|g" \
+      -e "s|${at}WEB_DIR${at}|$WEB_DIR|g" -e "s|${at}NODE${at}|$NODE|g" "$ROOT$SHARE_DIR/launchd/$1.plist.in"
+}
+
+loaded() { "$LAUNCHCTL" print "system/$1" >/dev/null 2>&1; }
+
+ensure_daemons() {
+  local label target tmp changed
+  for label in $LABELS; do
+    target="$ROOT$LAUNCHD_DIR/$label.plist"
+    [ -L "$target" ] && die "$LAUNCHD_DIR/$label.plist is a symlink; refusing to replace it"
+    tmp=$(mktemp)
+    render_plist "$label" > "$tmp"
+    "$PLUTIL" -lint "$tmp" >/dev/null || { rm -f "$tmp"; die "rendered $label.plist is invalid"; }
+    changed=false
+    if ! cmp -s "$tmp" "$target"; then
+      run "$INSTALL" -o root -g wheel -m 0644 "$tmp" "$target"
+      changed=true
+    else
+      note "ok $LAUNCHD_DIR/$label.plist"
+    fi
+    rm -f "$tmp"
+    if ! loaded "$label"; then
+      run "$LAUNCHCTL" bootstrap system "$LAUNCHD_DIR/$label.plist"
+    elif [ "$changed" = true ]; then
+      run "$LAUNCHCTL" bootout "system/$label"
+      run "$LAUNCHCTL" bootstrap system "$LAUNCHD_DIR/$label.plist"
+    else
+      note "ok $label loaded"
+    fi
+  done
+}
+
+remove_daemons() {
+  local label
+  for label in $LABELS; do
+    if loaded "$label"; then run "$LAUNCHCTL" bootout "system/$label"; fi
+    if [ -e "$ROOT$LAUNCHD_DIR/$label.plist" ]; then run rm -f "$ROOT$LAUNCHD_DIR/$label.plist"; fi
+  done
+}
+
+# Mount points from the mount table (never a stat into a possibly wedged file system), one per line.
+mount_points() {
+  "$MOUNT_CMD" | while IFS= read -r line; do
+    line=${line#* on }
+    printf '%s\n' "${line% (*}"
+  done
+}
+
+# purge_check PATH: refuses anything that could lead a delete outside the owned tree. Every directory is checked before
+# anything is deleted, so a refusal never leaves a half-purged installation.
+purge_check() {
+  local dir="$1" path="$ROOT$1" mp parent
+  case "$dir" in "$SUPPORT_DIR"/*|"$LOG_DIR") ;; *) die "refusing to purge $dir: outside Vaulthalla's directories" ;; esac
+  [ -L "$path" ] && die "$dir is a symlink; refusing to purge through it"
+  [ -e "$path" ] || return 0
+  [ -d "$path" ] || die "$dir is not a directory; refusing to purge it"
+  # Nothing mounted on it or under it: an unmount problem must never become a delete through a FUSE view.
+  while IFS= read -r mp; do
+    case "$mp" in "$path"|"$path"/*) die "$mp is mounted; unmount it before purging" ;; esac
+  done < <(mount_points)
+  parent=$(cd "$(dirname "$path")" && pwd -P)
+  [ "$(cd "$path" && pwd -P)" = "$parent/$(basename "$path")" ] || die "$dir resolves outside its parent"
+}
+
+purge_dir() {
+  local path="$ROOT$1"
+  [ -e "$path" ] || return 0
+  # -xdev: never crosses into another file system, whatever appears there meanwhile; -delete never follows symlinks.
+  run find "$path" -xdev -mindepth 1 -delete
+  run rmdir "$path"
+}
+
+purge() {
+  local dir id problems dirs=("$STATE_DIR" "$RUN_DIR" "$MOUNT_DIR" "$LOG_DIR")
+  for dir in "${dirs[@]}"; do purge_check "$dir"; done
+  id=$(account_id || true)
+  if [ -n "$id" ]; then
+    problems=$(validate_account "$id") || die "$SERVICE doesn't look like the account this script creates (${problems}); purging nothing"
+  fi
+  for dir in "${dirs[@]}"; do purge_dir "$dir"; done
+  if [ -n "$id" ]; then
+    run "$DSCL" . -delete "/Users/$SERVICE"
+    run "$DSCL" . -delete "/Groups/$SERVICE"
+  fi
+}
+
+if [ "$ACTION" = remove ]; then
+  remove_daemons
+  [ "$PURGE" = true ] && purge
+else
+  ensure_account
+  ensure_dir "$SUPPORT_DIR" root wheel 0755
+  ensure_dir "$STATE_DIR" "$SERVICE" "$SERVICE" 0700
+  ensure_dir "$RUN_DIR" "$SERVICE" "$SERVICE" 0750
+  ensure_dir "$MOUNT_DIR" "$SERVICE" "$SERVICE" 0700
+  ensure_dir "$LOG_DIR" "$SERVICE" "$SERVICE" 0750
+  ensure_config
+  check_runtime
+  ensure_daemons
+fi
+
+if [ "$APPLY" = true ]; then note "done ($changes change(s))"; else note "$changes change(s) to make; rerun with --apply"; fi
