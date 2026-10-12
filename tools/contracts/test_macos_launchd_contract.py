@@ -86,11 +86,16 @@ def rec(path):
     kind, name = path.strip("/").split("/", 1)
     return kind, name
 op = args[0]
+def find(kind, name):  # like Directory Services, a record is found by its name or any RecordName alias
+    if name in db[kind]: return db[kind][name]
+    return next((r for r in db[kind].values() if name in r.get("RecordName", [])), None)
 if op == "-read":
     kind, name = rec(args[1])
-    r = db[kind].get(name)
+    r = find(kind, name)
     if r is None: sys.exit(56)
-    if len(args) > 2: print(f"{args[2]}: {r.get(args[2], [''])[0]}")
+    if len(args) > 2:
+        if args[2] not in r: print(f"No such key: {args[2]}"); sys.exit(181)
+        print(f"{args[2]}: {' '.join(r[args[2]])}")
     sys.exit(0)
 if op == "-list":
     kind = args[1].strip("/"); key = args[2]
@@ -100,7 +105,7 @@ if op == "-list":
 if os.environ.get("STUB_APPLY") != "1": sys.exit(0)
 kind, name = rec(args[1])
 if op == "-create":
-    r = db[kind].setdefault(name, {})
+    r = db[kind].setdefault(name, {"RecordName": [name]})
     if len(args) > 3: r[args[2]] = [args[3]]
 elif op == "-append":
     db[kind].setdefault(name, {}).setdefault(args[2], []).append(args[3])
@@ -134,6 +139,12 @@ done
 if [ "$dir" = true ]; then mkdir -p "$1"; chmod "$mode" "$1"; else mkdir -p "$(dirname "$2")"; cp "$1" "$2"; chmod "$mode" "$2"; fi
 '''
 
+# mount(8) as macOS prints it, from a file the test writes.
+STUB_MOUNT = r'''#!/bin/sh
+[ -f "$STUB_DIR/mounts" ] && cat "$STUB_DIR/mounts"
+exit 0
+'''
+
 STUB_PLUTIL = r'''#!/usr/bin/env python3
 import plistlib, sys
 plistlib.loads(open(sys.argv[-1], "rb").read())
@@ -148,7 +159,7 @@ class Provisioning(unittest.TestCase):
         self.stubs = base / "stubs"
         self.stubs.mkdir()
         for name, body in (("dscl", STUB_DSCL), ("launchctl", STUB_LAUNCHCTL), ("install", STUB_INSTALL),
-                           ("plutil", STUB_PLUTIL)):
+                           ("plutil", STUB_PLUTIL), ("mount", STUB_MOUNT)):
             path = self.stubs / name
             path.write_text(body)
             path.chmod(0o755)
@@ -161,6 +172,13 @@ class Provisioning(unittest.TestCase):
         for name in ("sh.vaulthalla.server", "sh.vaulthalla.web"):
             (share / "launchd" / f"{name}.plist.in").write_text((LAUNCHD / f"{name}.plist.in").read_text())
         (self.root / "Library" / "LaunchDaemons").mkdir(parents=True)
+        # What the LaunchDaemons run: provisioning refuses to bootstrap them without it.
+        for exe in (PATHS["BINDIR"] + "/vaulthalla-server", PATHS["NODE"]):
+            self.path(exe).parent.mkdir(parents=True, exist_ok=True)
+            self.path(exe).write_text("#!/bin/sh\n")
+            self.path(exe).chmod(0o755)
+        self.path(PATHS["WEB_DIR"]).mkdir(parents=True)
+        self.path(PATHS["WEB_DIR"] + "/server.js").write_text("")
         self.script = base / "vaulthalla-provision"
         self.script.write_text(render((LAUNCHD / "vaulthalla-provision.in").read_text(), PATHS))
         self.script.chmod(0o755)
@@ -171,6 +189,7 @@ class Provisioning(unittest.TestCase):
     def run_provision(self, *args: str, apply: bool = False) -> subprocess.CompletedProcess:
         env = dict(os.environ, VH_DSCL=str(self.stubs / "dscl"), VH_LAUNCHCTL=str(self.stubs / "launchctl"),
                    VH_INSTALL=str(self.stubs / "install"), VH_PLUTIL=str(self.stubs / "plutil"),
+                   VH_MOUNT=str(self.stubs / "mount"),
                    STUB_LOG=str(self.log), STUB_STATE=str(self.state), STUB_DIR=self.tmp.name,
                    STUB_APPLY="1" if apply else "0")
         argv = ["bash", str(self.script), "--root", str(self.root), *args, *(["--apply"] if apply else [])]
@@ -246,6 +265,131 @@ class Provisioning(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertFalse(self.path(PATHS["STATE_DIR"]).exists())
         self.assertNotIn("_vaulthalla", json.loads(self.state.read_text())["Users"])
+
+    def dscl_db(self) -> dict:
+        return json.loads(self.state.read_text())
+
+    def write_db(self, db: dict) -> None:
+        self.state.write_text(json.dumps(db))
+
+    def test_an_existing_matching_account_is_reused(self) -> None:
+        self.assertEqual(self.run_provision(apply=True).returncode, 0)
+        r = self.run_provision(apply=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("exists and matches", r.stdout)
+
+    def test_a_conflicting_existing_account_is_refused_untouched(self) -> None:
+        for key, value in (("UserShell", "/bin/zsh"), ("NFSHomeDirectory", "/Users/_vaulthalla"),
+                           ("UniqueID", "501"), ("IsHidden", "0"), ("RecordName", "_vaulthalla")):
+            with self.subTest(key=key):
+                self.state.unlink(missing_ok=True)
+                self.assertEqual(self.run_provision(apply=True).returncode, 0)
+                db = self.dscl_db()
+                db["Users"]["_vaulthalla"][key] = [value]
+                self.write_db(db)
+                self.log.unlink()
+                r = self.run_provision(apply=True)
+                self.assertEqual(r.returncode, 1, r.stdout)
+                self.assertIn("doesn't match", r.stderr)
+                self.assertEqual(self.dscl_db(), db, "a conflicting account is never repaired")
+                self.assertNotRegex(self.calls(), r"dscl -(create|append|delete)|install |launchctl bootstrap")
+
+    def test_a_stray_group_or_taken_alias_is_refused(self) -> None:
+        for kind, name in (("Groups", "_vaulthalla"), ("Users", "vaulthalla"), ("Groups", "vaulthalla")):
+            with self.subTest(record=f"{kind}/{name}"):
+                self.write_db({"Users": {}, "Groups": {}} | {kind: {name: {"RecordName": [name],
+                                                                              "PrimaryGroupID": ["250"]}}})
+                r = self.run_provision(apply=True)
+                self.assertEqual(r.returncode, 1, r.stdout)
+                self.assertIn("refusing", r.stderr)
+                self.assertNotIn("_vaulthalla", self.dscl_db()["Users"])
+
+    def test_symlinked_or_non_directory_paths_are_refused(self) -> None:
+        elsewhere = Path(self.tmp.name) / "elsewhere"
+        elsewhere.mkdir()
+        for key in ("STATE_DIR", "RUN_DIR", "MOUNT_DIR", "LOG_DIR", "CONFIG_PATH"):
+            for kind in ("symlink", "file"):
+                with self.subTest(path=key, kind=kind):
+                    self.state.unlink(missing_ok=True)
+                    target = self.path(PATHS[key])
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    if kind == "symlink":
+                        target.symlink_to(elsewhere, target_is_directory=True)
+                    elif key == "CONFIG_PATH":
+                        target.unlink(missing_ok=True)
+                        continue  # a regular config.yaml is the operator's, and kept
+                    else:
+                        target.write_text("")
+                    r = self.run_provision(apply=True)
+                    self.assertEqual(r.returncode, 1, f"{r.stdout}\n{r.stderr}")
+                    self.assertRegex(r.stderr, "symlink|not a directory")
+                    self.assertEqual(list(elsewhere.iterdir()), [], "nothing is created through a symlink")
+                    target.unlink()
+
+    def test_daemons_need_the_installed_runtime(self) -> None:
+        for missing in (PATHS["BINDIR"] + "/vaulthalla-server", PATHS["NODE"], PATHS["WEB_DIR"] + "/server.js"):
+            with self.subTest(missing=missing):
+                saved = self.path(missing).read_bytes()
+                self.path(missing).unlink()
+                r = self.run_provision(apply=True)
+                self.assertEqual(r.returncode, 1, r.stdout)
+                self.assertIn(f"not installed: {missing}", r.stderr)
+                self.assertNotIn("launchctl bootstrap", self.calls())
+                self.path(missing).write_bytes(saved)
+                self.path(missing).chmod(0o755)
+
+    def test_purge_refuses_a_mounted_namespace(self) -> None:
+        self.assertEqual(self.run_provision(apply=True).returncode, 0)
+        canary = self.path(PATHS["STATE_DIR"]) / "canary"
+        canary.write_text("vault data")
+        for mounted in (PATHS["MOUNT_DIR"], PATHS["STATE_DIR"] + "/nested mount"):
+            with self.subTest(mounted=mounted):
+                (Path(self.tmp.name) / "mounts").write_text(
+                    f"vaulthalla@macfuse0 on {self.path(mounted)} (macfuse, nodev, nosuid, synchronous)\n")
+                r = self.run_provision("--remove", "--purge", apply=True)
+                self.assertEqual(r.returncode, 1, r.stdout)
+                self.assertIn("is mounted", r.stderr)
+                self.assertTrue(canary.exists())
+                self.assertIn("_vaulthalla", self.dscl_db()["Users"])
+
+    def test_purge_never_follows_a_symlinked_directory(self) -> None:
+        self.assertEqual(self.run_provision(apply=True).returncode, 0)
+        outside = Path(self.tmp.name) / "outside"
+        outside.mkdir()
+        (outside / "keep").write_text("not ours")
+        log = self.path(PATHS["LOG_DIR"])
+        log.rmdir()
+        log.symlink_to(outside, target_is_directory=True)
+        r = self.run_provision("--remove", "--purge", apply=True)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("symlink", r.stderr)
+        self.assertTrue((outside / "keep").exists())
+
+    def test_purge_stays_inside_the_tree(self) -> None:
+        self.assertEqual(self.run_provision(apply=True).returncode, 0)
+        outside = Path(self.tmp.name) / "outside"
+        outside.mkdir()
+        (outside / "keep").write_text("not ours")
+        state = self.path(PATHS["STATE_DIR"])
+        (state / "dir with spaces").mkdir()
+        (state / "dir with spaces" / "f").write_text("x")
+        (state / "link out").symlink_to(outside, target_is_directory=True)
+        r = self.run_provision("--remove", "--purge", apply=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(state.exists())
+        self.assertTrue((outside / "keep").exists(), "a symlink inside is removed, never followed")
+        r = self.run_provision("--remove", "--purge", apply=True)
+        self.assertEqual(r.returncode, 0, "purging again after a complete purge is a no-op")
+
+    def test_purge_refuses_an_account_this_script_did_not_create(self) -> None:
+        self.assertEqual(self.run_provision(apply=True).returncode, 0)
+        db = self.dscl_db()
+        db["Users"]["_vaulthalla"]["UserShell"] = ["/bin/zsh"]
+        self.write_db(db)
+        r = self.run_provision("--remove", "--purge", apply=True)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("_vaulthalla", self.dscl_db()["Users"])
+        self.assertTrue(self.path(PATHS["STATE_DIR"]).exists(), "refused before deleting any data")
 
     def test_purge_requires_remove(self) -> None:
         self.assertEqual(self.run_provision("--purge").returncode, 2)
