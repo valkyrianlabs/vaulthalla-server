@@ -52,8 +52,24 @@ async def run_revoke(inst) -> dict:
                                     probe(phase, "fuse", fuse, deadline=deadline))
 
     async def observe(phase, allowed):
+        # Contract (release notes, "Changes take effect at once"): a grant or revocation made through the CLI or the
+        # console applies to the very next request on every surface. Only out-of-band DB edits get the watcher's ~1s.
+        # So the first probe after the command must already show it; the loop below only measures the latency of a
+        # failure for the report.
         start = time.monotonic()
         end = start + PROPAGATION_S
+        first = await pair(phase + "-next-request", PROPAGATION_S)
+        if not all((r == "ok") if allowed else (r in REFUSALS) for r in first):
+            late = None
+            while time.monotonic() < end:
+                outcomes = await pair(phase, max(0.01, end - time.monotonic()))
+                if all((r == "ok") if allowed else (r in REFUSALS) for r in outcomes):
+                    late = time.monotonic() - start
+                    break
+                await asyncio.sleep(POLL_S)
+            raise _Failed(f"{phase}: the very next request on ws/fuse was {first}, not "
+                          f"{'allowed' if allowed else 'refused'}"
+                          + (f"; it took effect only after {late:.3f}s (stale identity/policy)" if late else ""))
         while True:
             left = end - time.monotonic()
             if left <= 0:
