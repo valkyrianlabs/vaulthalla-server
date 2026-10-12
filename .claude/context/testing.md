@@ -144,8 +144,11 @@ bash tools/dev/verify.sh harness                                   # unit + self
   daemon death, unclean stop, sanitizer report or zero executed ops fails the run.
 - Replay reproduces the op sequence and overlap, not the daemon's internal thread interleavings; use `barrier`,
   `--repeat` and a TSan build for races.
-- Fault fixtures (`tools/harness/faults/*.patch`, `build.sh <fault>` builds a throwaway worktree): libmagic race,
-  stale revocation, ws list without RBAC. The ws list fault is caught (oracle) and shrinks to one op.
+- Fault fixtures (`tools/harness/faults/*.patch`, `build.sh <fault>` builds a throwaway worktree), all caught
+  (2026-10-12): libmagic race (`scenario magic`: ASan heap-use-after-free, trace replay 8/10 on the fault build vs
+  0/10 fixed; `RACE_ACCEPTANCE.md`), stale revocation (`scenario revoke`: the next request after an unassign is still
+  allowed; the documented contract is that CLI/console changes apply to the very next request), ws list without
+  RBAC (oracle; shrinks to one op). `vhh regress` keeps all of them (`regressions/*.jsonl`, `*.scenario.json`).
 - Lessons: the engine never touches the mount itself (a `Path.resolve()` blocked it in D state under a stopped
   daemon); `Instance.watchdog()` aborts the run's own FUSE connection past a hard deadline.
 - Never point mutating commands at vh-storage: targets are validated (a live `VH_TEST_MODE=1` daemon serving a

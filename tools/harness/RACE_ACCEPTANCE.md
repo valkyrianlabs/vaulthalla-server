@@ -70,3 +70,14 @@ report to prove the recording and replay failure paths. These are plumbing tests
 reproduction of the C++ libmagic race. A small real fixed-build workload and replay are
 recorded in the implementation handoff. The full scratch fault campaign, repeat counts
 and historical-race success rate remain Opus's acceptance work.
+
+## Results (2026-10-12, dev VM, base a8116cc1, ASan+UBSan debug builds)
+
+| Build | `scenario magic --seed 0x197 --sessions 12 --rounds 30` | Trace replay (barrier, fresh instance each, predicate `sanitizer\|integrity\|liveness`) |
+|---|---|---|
+| fixed (`build`) | PASS: 721 ops, 30/30 batches with HTTP/FUSE overlap, no sanitizer report | 0/10 reproduced |
+| fault (`faults/build.sh libmagic-race`) | FAIL: daemon died; ASan heap-use-after-free | 8/10 reproduced |
+
+The ASan stack is the historical defect: an HTTP upload commit (`Coordinator::finishSession` → `Filesystem::createFile`
+→ `Magic::mime_type_buffer`) copies libmagic's result buffer while another thread's `magic_buffer` call on the same
+cookie `realloc`s it. The scenario is kept as `regressions/libmagic-shared-cookie-race.scenario.json`.

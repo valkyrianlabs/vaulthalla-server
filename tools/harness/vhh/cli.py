@@ -342,10 +342,24 @@ def cmd_regress(a) -> int:
     instance. A regression file is a header line {"kind":"regression", "world", "predicate", "finding", ...} followed
     by the shrunk ops. PASS means none of them reproduces; any reproduction, or a regression that can't run, fails."""
     files = sorted(Path(a.dir).glob("*.jsonl"))
-    if not files:
+    scen = sorted(Path(a.dir).glob("*.scenario.json"))
+    if not files and not scen:
         say("FAIL", f"no regressions in {a.dir}")
         return FAIL
     failed = 0
+    # Scenario regressions: {"kind":"scenario-regression","scenario","seed","sessions","rounds","finding"}. The
+    # scenario must pass on the build under test (a workload too large to shrink, e.g. the libmagic race).
+    from vhh import scenarios
+    for f in scen:
+        spec = json.loads(f.read_text())
+        try:
+            ok, report = scenarios.run(spec["scenario"], a.build, RUN.new_run_dir(), seed=parse_seed(spec.get("seed")),
+                                       sessions=int(spec.get("sessions", 8)), rounds=int(spec.get("rounds", 20)))
+        except Exception as e:  # noqa: BLE001 - a regression that cannot run is a failure, never a pass
+            ok, report = False, {"why": repr(e)}
+        failed += not ok
+        print(f"  {'ok' if ok else 'REPRODUCED'} {f.name}: {spec.get('finding', '')}"
+              + ("" if ok else f" ({report.get('why')})"))
     for f in files:
         lines = [json.loads(x) for x in f.read_text().splitlines() if x.strip()]
         head = lines[0] if lines and lines[0].get("kind") == "regression" else {}
@@ -364,7 +378,8 @@ def cmd_regress(a) -> int:
         failed += bad
         print(f"  {'REPRODUCED' if bad else 'ok'} {f.name}: {head.get('finding', '')} "
               f"({rep.reproduced}/{rep.repeat} reproduced, {rep.ops} op(s))")
-    say("FAIL" if failed else "PASS", f"{len(files) - failed}/{len(files)} regressions hold against {a.build}")
+    total = len(files) + len(scen)
+    say("FAIL" if failed else "PASS", f"{total - failed}/{total} regressions hold against {a.build}")
     return FAIL if failed else PASS
 
 

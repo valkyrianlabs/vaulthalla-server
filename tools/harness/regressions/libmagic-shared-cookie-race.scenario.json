@@ -1,0 +1,3 @@
+{"kind": "scenario-regression", "scenario": "magic", "seed": "0x197", "sessions": 12, "rounds": 30,
+ "finding": "concurrent HTTP upload commits and FUSE seals must not share one unlocked libmagic cookie (heap-use-after-free in Magic::mime_type_buffer; reverts d69f11ce)",
+ "found_by": "faults/libmagic-race.patch at a8116cc1: ASan heap-use-after-free, daemon died; trace replay reproduced 8/10 on the fault build"}
