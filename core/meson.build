@@ -45,7 +45,9 @@ if host_machine.system() == 'darwin'
     state_dir = join_paths(support_dir, 'state')
     log_dir = '/Library/Logs/Vaulthalla'
     runtime_dir = '/var/run/vaulthalla'
-    mount_dir = '/Volumes/Vaulthalla'
+    # The optional service-private FUSE mount: beside the backing state, never on top of it, and not under /Volumes
+    # (it is internal, not a Finder volume; #199/#204).
+    mount_dir = join_paths(support_dir, 'mount')
 endif
 
 conf = configuration_data()
@@ -104,6 +106,16 @@ deps = [
 ]
 
 if fuse_dep.found()
+    if host_os == 'darwin'
+        # macFUSE's libfuse3 defaults to its Darwin extensions (fuse_darwin_attr instead of struct stat); the vanilla
+        # libfuse API keeps the bridge identical to Linux's. Weak-linked: macFUSE is an optional, operator-installed
+        # integration, and the daemon must start and serve storage without it (platform::mount::fuseRuntimeAvailable).
+        fuse_dep = declare_dependency(
+            dependencies: fuse_dep.partial_dependency(compile_args: true, includes: true),
+            compile_args: ['-DFUSE_DARWIN_ENABLE_EXTENSIONS=0'],
+            link_args: ['-L' + fuse_dep.get_variable(pkgconfig: 'libdir'), '-Wl,-weak-lfuse3'],
+        )
+    endif
     deps += fuse_dep
 endif
 

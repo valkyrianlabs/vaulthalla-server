@@ -64,6 +64,12 @@ struct DependencyHealth {
     // authorization) or "disabled" (built without it: vaults are served over HTTP/WS/CLI only). A disabled mount is
     // not a missing FUSE session. Mount modes are roadmap #200.
     std::string fuseMount = "multiuser";
+    // What the mount actually is (fuse::MountStatus): disabled | mounted | not_mounted | unavailable | unsupported,
+    // the FUSE backend, and the isolation guarantee (enforced | unproven | not_applicable).
+    std::string mountState;
+    std::string mountBackend;
+    std::string mountIsolation;
+    std::string mountDetail;
     // The secret sealing backend (platform/Sealer.hpp): "tpm2", or "file" (macOS development backend, no hardware
     // binding).
     std::string secretsBackend;

@@ -33,8 +33,14 @@ export interface IDependencyHealth {
   shell_usage_manager: boolean
   http_cache_stats: boolean
   fuse_session: boolean
-  // "multiuser" (kernel FUSE bridge) or "disabled" (a build without it); absent from older daemons.
+  // Configured mount mode: "disabled" | "service_private" | "multiuser"; absent from older daemons.
   fuse_mount?: string
+  // What the mount actually is: "disabled" | "mounted" | "not_mounted" | "unavailable" | "unsupported".
+  mount_state?: string
+  mount_backend?: string
+  // "enforced" | "unproven" | "not_applicable".
+  mount_isolation?: string
+  mount_detail?: string | null
   // "tpm2", or "file" (macOS development backend).
   secrets_backend?: string
 }

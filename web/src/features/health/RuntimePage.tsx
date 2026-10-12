@@ -42,6 +42,18 @@ const DEP_LABELS: Record<string, string> = {
   fuse_session: 'FUSE session',
 }
 
+// Configured mode next to what the mount actually is (the backend never reports a configured mount as mounted).
+const mountSummary = (deps: Raw): string => {
+  const mode = String(deps.fuse_mount)
+  const state = typeof deps.mount_state === 'string' ? deps.mount_state : null
+  if (mode === 'disabled') return 'Disabled'
+  if (!state) return mode
+  const label = state === 'mounted' ? `${mode}: mounted` : `${mode}: ${state.replace('_', ' ')}`
+  const isolation = state === 'mounted' && typeof deps.mount_isolation === 'string' ? ` (isolation ${deps.mount_isolation})` : ''
+  const detail = state !== 'mounted' && typeof deps.mount_detail === 'string' ? ` — ${deps.mount_detail}` : ''
+  return label + isolation + detail
+}
+
 const SystemHealthBody = ({ stats }: { stats: Raw }) => {
   const summary = obj(stats.summary)
   const runtime = obj(stats.runtime)
@@ -95,7 +107,7 @@ const SystemHealthBody = ({ stats }: { stats: Raw }) => {
               ...Object.keys(DEP_LABELS)
                 .filter(k => k in deps && !(k === 'fuse_session' && deps.fuse_mount === 'disabled'))
                 .map((k): [string, boolean | null] => [DEP_LABELS[k], bool(deps[k])]),
-              ...(deps.fuse_mount === 'disabled' ? [['Filesystem mount', 'Disabled in this build'] as [string, string]] : []),
+              ...(typeof deps.fuse_mount === 'string' ? [['Filesystem mount', mountSummary(deps)] as [string, string]] : []),
               ...(typeof deps.secrets_backend === 'string' && deps.secrets_backend
                 ? [['Secrets backend', deps.secrets_backend === 'file' ? 'file (development, no hardware binding)' : deps.secrets_backend] as [string, string]]
                 : []),

@@ -866,6 +866,15 @@ struct convert<AuditConfig> {
 };
 
 template<>
+struct convert<MountConfig> {
+    static bool decode(const Node& node, MountConfig& rhs) {
+        if (!node.IsMap()) return false;
+        rhs.mode = node["mode"].as<std::string>("");
+        return true;
+    }
+};
+
+template<>
 struct convert<DevConfig> {
     static Node encode(const DevConfig& rhs) {
         Node node;

@@ -7,6 +7,7 @@
 #include "concurrency/ThreadPoolManager.hpp"
 #include "fuse/task/Request.hpp"
 #include "log/Registry.hpp"
+#include "platform/Mount.hpp"
 
 #include <cstring>
 #include <fstream>
@@ -16,8 +17,6 @@
 #include <atomic>
 #include <utility>
 #include <paths.h>
-#include <sys/mount.h>    // umount2, MNT_DETACH
-#include <sys/stat.h>     // lstat
 #include <unistd.h>       // close
 #include <chrono>
 #include <thread>
@@ -29,7 +28,54 @@ namespace vh::fuse {
 
 bool kernelBridgeBuilt() noexcept { return true; }
 
-std::shared_ptr<Service> makeService() { return std::make_shared<Service>(); }
+namespace {
+std::weak_ptr<Service> gService;  // the one makeService() created, for mountStatus()
+
+// Why the configured mode can't be mounted here, or empty when it can.
+std::string unmountableReason(const std::string& mode) {
+    if (mode == "disabled") return "";
+    if (!platform::mount::supportsMode(mode)) return "this platform does not provide mount mode '" + mode + "'";
+    if (!platform::mount::fuseRuntimeAvailable()) return "the FUSE library is not installed (macFUSE)";
+    return "";
+}
+}
+
+std::shared_ptr<Service> makeService() {
+    const auto mode = configuredMountMode();
+    if (mode == "disabled") {
+        log::Registry::fuse()->info("[FUSE] Mount disabled (mount.mode); vaults are served over HTTP/WS/CLI/S3");
+        return nullptr;
+    }
+    if (const auto why = unmountableReason(mode); !why.empty()) {
+        log::Registry::fuse()->warn("[FUSE] Not mounting: {}; vaults stay available over HTTP/WS/CLI/S3", why);
+        return nullptr;
+    }
+    auto service = std::make_shared<Service>();
+    gService = service;
+    return service;
+}
+
+MountStatus mountStatus() {
+    MountStatus status;
+    status.configuredMode = configuredMountMode();
+    status.backend = std::string(platform::mount::backend());
+    if (status.configuredMode == "disabled") {
+        status.state = "disabled";
+        status.isolation = "not_applicable";
+        return status;
+    }
+    if (const auto why = unmountableReason(status.configuredMode); !why.empty()) {
+        status.state = platform::mount::supportsMode(status.configuredMode) ? "unavailable" : "unsupported";
+        status.isolation = "not_applicable";
+        status.detail = why;
+        return status;
+    }
+    const auto service = gService.lock();
+    status.state = service && service->mounted() ? "mounted" : "not_mounted";
+    status.isolation = std::string(platform::mount::isolation(status.configuredMode));
+    if (status.state != "mounted") status.detail = "the FUSE service is not running a mounted session";
+    return status;
+}
 
 using vh::concurrency::AsyncService;
 using vh::concurrency::ThreadPoolManager;
@@ -40,32 +86,10 @@ static bool isSafeTestMountpoint(const stdfs::path& p) {
     return s.rfind("/tmp/", 0) == 0; // starts_with("/tmp/")
 }
 
-static bool isMountedOrStale(const stdfs::path& p) {
-    // If lstat returns ENOTCONN, it’s a stale FUSE endpoint => treat as mounted.
-    struct stat st{}, pst{};
-    if (::lstat(p.c_str(), &st) != 0) return (errno == ENOTCONN);
-    const auto parent = p.parent_path().empty() ? stdfs::path("/") : p.parent_path();
-
-    // If parent can't be stat'ed, be conservative.
-    if (::lstat(parent.c_str(), &pst) != 0) return true;
-
-    // Different st_dev than parent => mountpoint boundary
-    return st.st_dev != pst.st_dev;
-}
-
-static void lazyUmount(const stdfs::path& p) {
-    // 1) Try kernel lazy detach
-    if (::umount2(p.c_str(), MNT_DETACH) == 0) return;
-
-    // 2) Fallbacks (some distros prefer fusermount3), stopping at the first that works
-    for (const auto* command : {"fusermount3 -uz ", "fusermount -uz ", "umount -l "})
-        if (std::system((command + p.string() + " >/dev/null 2>&1").c_str()) == 0) return;
-}
-
 static void waitUnmounted(const stdfs::path& p, std::chrono::milliseconds timeout = std::chrono::milliseconds(1500)) {
     const auto deadline = std::chrono::steady_clock::now() + timeout;
     while (std::chrono::steady_clock::now() < deadline) {
-        if (!isMountedOrStale(p)) return;
+        if (!platform::mount::isMountedOrStale(p)) return;
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 }
@@ -95,8 +119,8 @@ static void ensureFreshMountpoint() {
 
         if (stdfs::exists(mountPath, ec)) {
             // If it’s a mountpoint (or stale), detach it first.
-            if (isMountedOrStale(mountPath)) {
-                lazyUmount(mountPath);
+            if (platform::mount::isMountedOrStale(mountPath)) {
+                platform::mount::detach(mountPath);
                 waitUnmounted(mountPath);
             }
 
@@ -111,12 +135,15 @@ static void ensureFreshMountpoint() {
         }
     }
 
+    // A mount a previous run left behind, found without touching the path (macOS; Linux handles ENOTCONN below).
+    platform::mount::detachStale(mountPath);
+
     // Create fresh directory (handle ENOTCONN paranoia: retry once after forced detach)
     stdfs::create_directories(mountPath, ec);
     if (ec) {
         if (ec.value() == ENOTCONN || ec == std::errc::not_connected) {
             // One more forceful pass if a stale endpoint just got noticed late
-            lazyUmount(mountPath);
+            platform::mount::detach(mountPath);
             waitUnmounted(mountPath);
             ec.clear();
             stdfs::remove_all(mountPath, ec); // ignore errors
@@ -162,30 +189,14 @@ void fuse_ll_init(void* userdata, fuse_conn_info* conn) {
                               conn->max_readahead, conn->max_write);
 }
 
-// The fusectl connection id of the FUSE mount at `p` (the minor of its st_dev), read from /proc/self/mountinfo
-// rather than stat(): stat'ing the mount root is a FUSE request this process would have to answer itself.
-static std::optional<std::string> fuseConnectionId(const stdfs::path& p) {
-    std::ifstream mountinfo("/proc/self/mountinfo");
-    std::string line;
-    while (std::getline(mountinfo, line)) {
-        // <id> <parent> <major>:<minor> <root> <mount point> ... - <fstype> ...
-        std::istringstream fields(line);
-        std::string id, parent, dev, root, mountPoint;
-        if (!(fields >> id >> parent >> dev >> root >> mountPoint)) continue;
-        if (mountPoint != p.string() || line.find(" - fuse.") == std::string::npos) continue;
-        if (const auto colon = dev.find(':'); colon != std::string::npos) return dev.substr(colon + 1);
-    }
-    return std::nullopt;
-}
-
 void Service::onStop() {
     const auto mountPath = paths::getMountPath();
-    const auto connection = fuseConnectionId(mountPath);
+    const auto connection = platform::mount::fuseConnection(mountPath);
     if (!loopActive_.load() && !connection) return;  // never mounted (or already gone)
 
     // New lookups fail at once; the kernel ends the connection (and fuse_session_receive_buf() returns) when the
     // last reference to the mount goes away.
-    lazyUmount(mountPath);
+    platform::mount::detach(mountPath);
     if (session_) fuse_session_exit(session_);
 
     using namespace std::chrono_literals;
@@ -195,10 +206,9 @@ void Service::onStop() {
 
     // Something (an open file, a shell's cwd) still holds the detached mount, so the receive loop would block
     // forever. Aborting the connection fails its requests and wakes the loop. The mounting user owns the file.
-    std::ofstream abort("/sys/fs/fuse/connections/" + *connection + "/abort");
-    abort << "1" << std::flush;
+    const bool aborted = platform::mount::abortConnection(*connection);
     log::Registry::fuse()->warn("[FUSE] Mount still referenced 1s after unmount; aborted FUSE connection {}{}",
-                                *connection, abort ? "" : " (failed)");
+                                *connection, aborted ? "" : " (failed or unsupported on this platform)");
 }
 
 void Service::runLoop() {
@@ -206,13 +216,9 @@ void Service::runLoop() {
 
     ensureFreshMountpoint();
 
-    const std::vector<std::string> argsStr = {
-        "vaulthalla-fuse",
-        "-f",
-        "-o", "allow_other",
-        "-o", "auto_unmount",
-        paths::getMountPath()
-    };
+    std::vector<std::string> argsStr = {"vaulthalla-fuse", "-f"};
+    for (auto& option : platform::mount::fuseOptions(configuredMountMode())) argsStr.push_back(std::move(option));
+    argsStr.push_back(paths::getMountPath());
 
     std::vector<std::unique_ptr<char[]>> ownedCStrs;
     std::vector<char*> argsCStr;

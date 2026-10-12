@@ -82,7 +82,7 @@ std::optional<Decision> decisionFlag(const CommandCall& call) {
 }
 
 // A vault by ID, or by name among the vaults with conflicts the caller can resolve (then among the caller's own).
-uint32_t vaultArg(const CommandCall& call, const std::string& value) {
+uint32_t conflictVaultArg(const CommandCall& call, const std::string& value) {
     if (const auto id = parseUInt(value)) return *id;
     const auto summary = conflicts::summary(call.user);
     std::vector<uint32_t> matches;
@@ -357,7 +357,7 @@ CommandResult handleResolve(const CommandCall& call) {
         const auto decision = decisionFlag(call);
         const auto ids = idArgs(call);
         std::optional<uint32_t> vaultId;
-        if (const auto v = optVal(call, std::vector<std::string>{"vault", "v"})) vaultId = vaultArg(call, *v);
+        if (const auto v = optVal(call, std::vector<std::string>{"vault", "v"})) vaultId = conflictVaultArg(call, *v);
         const bool all = hasFlag(call, "all");
         const bool list = hasFlag(call, std::vector<std::string>{"list", "l"});
 

@@ -133,6 +133,14 @@ Config& Config::operator=(Config&&) noexcept = default;
         if (auto node = root["operator_emails"]) YAML::convert<OperatorEmailsConfig>::decode(node, cfg.operator_emails);
         if (auto node = root["auditing"]) YAML::convert<AuditConfig>::decode(node, cfg.auditing);
         if (auto node = root["dev"]) YAML::convert<DevConfig>::decode(node, cfg.dev);
+        if (auto node = root["mount"]) {
+            YAML::convert<MountConfig>::decode(node, cfg.mount);
+            // A typo must not quietly become another mode. Whether this build can provide the mode is reported at
+            // runtime (fuse::mountStatus()), never a reason to refuse to serve storage.
+            if (const auto& m = cfg.mount.mode;
+                !m.empty() && m != "disabled" && m != "service_private" && m != "multiuser")
+                throw std::invalid_argument("mount.mode must be disabled|service_private|multiuser, got '" + m + "'");
+        }
 
         if (auto node = root["logging"]) YAML::convert<LoggingConfig>::decode(node, cfg.logging);
 

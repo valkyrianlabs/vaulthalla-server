@@ -91,9 +91,11 @@ CommandResult handleStatus(const CommandCall& call) {
 
     out << "deps sanity:\n";
     out << "  core deps: " << renderDepsCoreReady(health.summary) << "\n";
-    if (health.deps.fuseMount == "disabled")
-        out << "  fuse mount: disabled (this build has no kernel FUSE bridge; vaults are served over HTTP/WS/CLI)\n";
-    else
+    out << "  mount: " << health.deps.fuseMount << " -> " << health.deps.mountState;
+    if (health.deps.mountState == "mounted") out << " (" << health.deps.mountBackend << ", isolation " << health.deps.mountIsolation << ")";
+    if (!health.deps.mountDetail.empty()) out << " — " << health.deps.mountDetail;
+    out << "\n";
+    if (health.deps.fuseMount != "disabled")
         out << "  fuse session: " << (health.deps.fuseSession ? "present" : "missing") << "\n";
     out << "  secrets backend: " << health.deps.secretsBackend
         << (health.deps.secretsBackend == "file" ? " (development: no hardware binding)" : "") << "\n";

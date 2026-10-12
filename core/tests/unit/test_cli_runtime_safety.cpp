@@ -59,6 +59,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -93,17 +94,22 @@ void ensureUsageManager() {
 // ---------------------------------------------------------------------------------------------------------------
 // Minimal `vh` wire client
 
+// The socket path appears at bind(), before the server's listen(): a connect in between is refused. The fixture can
+// only wait for the path, so connecting retries briefly on ECONNREFUSED/ENOENT (a macOS CI runner hit that window).
 int connectTo(const fs::path& socketPath) {
-    const int fd = vh::platform::fd::socket(AF_UNIX, SOCK_STREAM, 0);
-    if (fd < 0) return -1;
     sockaddr_un addr{};
     addr.sun_family = AF_UNIX;
     std::snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", socketPath.c_str());
-    if (::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    for (;;) {
+        const int fd = vh::platform::fd::socket(AF_UNIX, SOCK_STREAM, 0);
+        if (fd < 0) return -1;
+        if (::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0) return fd;
+        const int err = errno;
         ::close(fd);
-        return -1;
+        if ((err != ECONNREFUSED && err != ENOENT) || std::chrono::steady_clock::now() >= deadline) return -1;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
-    return fd;
 }
 
 void sendRequest(const int fd, const std::string& line) {
