@@ -230,7 +230,8 @@ class PackageLayoutContractTests(unittest.TestCase):
         # reply the crashing daemon cannot send: the dump, the mount and apt hang forever. The daemon must be
         # non-dumpable from the first line of main() so a crash exits and Restart=on-failure recovers it.
         main = self._read("core/main/main.cpp")
-        self.assertIn("prctl(PR_SET_DUMPABLE, 0", main)
+        self.assertIn("vh::platform::process::disableCoreDumps()", main.split("void installCrashGuard() {", 1)[1])
+        self.assertIn("prctl(PR_SET_DUMPABLE, 0", self._read("core/src/platform/linux/Process.cpp"))
         body = main.split("int main() {", 1)[1]
         self.assertLess(body.index("installCrashGuard();"), body.index("try {"))
         unit = self._read("deploy/systemd/vaulthalla.service.in")
