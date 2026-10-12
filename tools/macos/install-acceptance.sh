@@ -68,7 +68,8 @@ wait_for() {  # wait_for SECONDS CMD...: polls every 0.5s
   until "$@"; do [ "$(date +%s)" -lt "$deadline" ] || return 1; sleep 0.5; done
 }
 not() { ! "$@"; }
-pid_of() { launchctl print "system/$1" 2>/dev/null | awk '$1 == "pid" && $2 == "=" {print $3; exit}'; }
+pid_of() { { launchctl print "system/$1" 2>/dev/null || true; } | awk '$1 == "pid" && $2 == "=" {print $3}'; }
+runs_as_service() { [ "$(ps -o uid= -p "$(pid_of "$1")" | tr -d ' ')" = "$(id -u _vaulthalla)" ]; }
 has_pid() { [ -n "$(pid_of "$1")" ]; }
 new_pid() { local p; p=$(pid_of "$1"); [ -n "$p" ] && [ "$p" != "$2" ]; }
 server_ready() { listening 36969 && listening 36970 && [ -S "$RUN/cli.sock" ]; }
@@ -206,10 +207,10 @@ phase_accept() {
 
   say "== LaunchDaemons"
   for label in $SERVER $WEB; do
-    launchctl print "system/$label" | grep -E '^\s+(state|pid|runs|last exit code|domain|username|group) = ' | sed "s/^/  $label /"
+    { launchctl print "system/$label" || true; } | grep -E '^\s+(state|pid|runs|last exit code|username|group) = ' | sed "s/^/  $label /" || true
   done
-  check "server running as _vaulthalla" test "$(ps -o user= -p "$(pid_of $SERVER)")" = _vaulthalla
-  check "web running as _vaulthalla" test "$(ps -o user= -p "$(pid_of $WEB)")" = _vaulthalla
+  check "server running as _vaulthalla" runs_as_service $SERVER
+  check "web running as _vaulthalla" runs_as_service $WEB
   check "web answers on 127.0.0.1:36968" wait_for 60 listening 36968
   out=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 http://127.0.0.1:36968/ || true)
   check "web console responds over HTTP (got $out)" test "${out:0:1}" = 2 -o "${out:0:1}" = 3
@@ -252,10 +253,11 @@ phase_accept() {
   make_test_user "$PROBE"
   make_test_user "$CLI_USER"
   dseditgroup -o edit -a "$CLI_USER" -t user _vaulthalla
+  dscacheutil -flushcache
   check "$CLI_USER is enrolled (dsmemberutil)" sh -c "dsmemberutil checkmembership -U $CLI_USER -G _vaulthalla | grep -q 'is a member'"
   check "$PROBE is not" sh -c "dsmemberutil checkmembership -U $PROBE -G _vaulthalla | grep -q 'not a member'"
   local f victim
-  victim=$(find "$STATE" -type f -size +1000k | head -1)
+  victim=$(find "$STATE" -type f -size +1000k -print -quit)
   for who in "$PROBE" "$CLIENT"; do
     for f in "$STATE" "$RUN" "$MOUNT" "$LOGS"; do
       check "$who can't list $f" not sudo -u "$who" -- /bin/ls "$f"
@@ -267,13 +269,13 @@ phase_accept() {
   done
   # vh status exits 0/1/2 for healthy/degraded/critical: any of them is an answer through the socket.
   id=0; out=$(sudo -u "$CLI_USER" -- $PREFIX/bin/vh status 2>&1) || id=$?
-  echo "$out" | sed 's/^/  /' | head -20
+  printf '%s\n' "$out" | sed -n '1,20s/^/  /p'
   check "enrolled $CLI_USER gets an answer from vh status (exit $id)" test "$id" -le 2
   out=$(sudo -u "$CLI_USER" -- $PREFIX/bin/vh vault list 2>&1) || true
   check "enrolled $CLI_USER sees the acceptance vault" grep -q install_acceptance <<<"$out"
 
   say "== logs"
-  tail -n 5 "$LOGS/server.log" 2>/dev/null | sed 's/^/  server.log: /'
+  { tail -n 5 "$LOGS/server.log" 2>/dev/null || true; } | sed 's/^/  server.log: /'
   check "no secret reached the logs or the report" no_secrets_leaked
   say "accept: $failures failure(s)"
 }
