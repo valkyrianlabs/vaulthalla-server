@@ -30,6 +30,7 @@ providers.env
 /build-check/
 /build-check-install/
 /build-install/
+/build-macos/
 /core/build/
 
 # Production artifacts (multi-project)
