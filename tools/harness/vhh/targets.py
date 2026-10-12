@@ -59,6 +59,50 @@ except ImportError:
 
 REFUSED_NAMES = {"vh-storage", "vh-local", "production", "prod"}
 
+# ------------------------------------------------------------------------------------------------ external targets
+#
+# The pentest path must be able to point at a real install, production included (its own daemon and database, over
+# its real surfaces). That is a declared, separate kind: `external:<descriptor.json>` with
+#   {"kind": "vhh-external", "name": "...", "env": "lab" | "production", "hostname": "...", "connect_ip": "...",
+#    "insecure_tls": false}
+# Only non-destructive commands accept it (EXTERNAL_COMMANDS); provisioning, reset, runs, replays, scenarios and
+# regressions never do. env "production" needs two keys: --allow-production and VHH_ALLOW_PRODUCTION=1.
+EXTERNAL_KIND = "vhh-external"
+EXTERNAL_COMMANDS = {"verify-fixture"}
+
+
+@dataclass
+class ExternalTarget:
+    name: str
+    env: str
+    hostname: str
+    connect_ip: str | None = None
+    insecure_tls: bool = False
+
+
+def resolve_external(spec: str, command: str, allow_production: bool = False) -> ExternalTarget:
+    if not spec.startswith("external:"):
+        raise TargetRefused(f"{spec!r} is not an external target (external:<descriptor.json>)")
+    if command not in EXTERNAL_COMMANDS:
+        raise TargetRefused(f"'{command}' never runs against an external target (only: "
+                            f"{', '.join(sorted(EXTERNAL_COMMANDS))}): refused")
+    p = Path(spec.split(":", 1)[1])
+    try:
+        d = json.loads(p.read_text())
+    except (OSError, ValueError) as e:
+        raise TargetRefused(f"unreadable external target descriptor {p}: {e}") from e
+    if d.get("kind") != EXTERNAL_KIND:
+        raise TargetRefused(f"{p}: kind must be {EXTERNAL_KIND!r}: refused")
+    env = d.get("env")
+    if env not in ("lab", "production"):
+        raise TargetRefused(f"{p}: env must be 'lab' or 'production': refused")
+    if not d.get("hostname") or "://" in str(d.get("hostname")) or "/" in str(d.get("hostname")):
+        raise TargetRefused(f"{p}: hostname must be a bare host name: refused")
+    if env == "production" and not (allow_production and os.environ.get("VHH_ALLOW_PRODUCTION") == "1"):
+        raise TargetRefused(f"{p}: env 'production' needs both --allow-production and VHH_ALLOW_PRODUCTION=1: refused")
+    return ExternalTarget(name=str(d.get("name") or p.stem), env=env, hostname=d["hostname"],
+                          connect_ip=d.get("connect_ip"), insecure_tls=bool(d.get("insecure_tls", False)))
+
 
 class TargetRefused(RuntimeError):
     pass
@@ -86,6 +130,9 @@ def resolve(spec: str | None) -> tuple[str, "Target | None"]:
         raise TargetRefused("no target given (use --target sim or a target.json written by the launcher)")
     if spec == "sim":
         return "sim", None
+    if spec.startswith("external:"):
+        raise TargetRefused("external targets are only accepted by non-destructive commands "
+                            f"({', '.join(sorted(EXTERNAL_COMMANDS))}): refused")
     low = spec.lower()
     if low in REFUSED_NAMES or "vh-storage" in low or "://" in spec or "@" in spec:
         raise TargetRefused(f"target {spec!r} is not a private instance launched by this engine: refused")

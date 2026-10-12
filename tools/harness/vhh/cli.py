@@ -121,6 +121,10 @@ def _sim_factory(w, broker):
 def _real_factory(target, broker):
     def make(surface, principal):
         mod = importlib.import_module(f"vhh.drivers.{surface}")
+        if not hasattr(mod, "create"):
+            # Real sessions need the world bound to real ids (vhh.drivers.real.factory with a provisioning Binding);
+            # a bare target.json carries no binding. Use `run --target launch`, which provisions and binds.
+            raise RuntimeError(f"no unbound {surface} driver for an existing target: use run --target launch")
         return mod.create(target, principal, broker)
     return make
 
@@ -434,7 +438,30 @@ def cmd_verify(a) -> int:
     return PASS if ok else FAIL
 
 
+def cmd_verify_fixture(a) -> int:
+    """The pentest fixture's authorization oracle, probed over a real install's own surfaces (tools/lab/pentest/
+    verify.py: non-destructive: uploads are cancelled, share probes revoked, deletes only as refusals). Lab or, with
+    both production keys, production. The private seed state is read by verify.py itself and never by this process."""
+    try:
+        t = targets.resolve_external(a.target, "verify-fixture", a.allow_production)
+    except targets.TargetRefused as e:
+        say("REFUSED", str(e))
+        return REFUSED
+    import subprocess
+    root = Path(__file__).resolve().parents[3]
+    cmd = [sys.executable, str(root / "tools/lab/pentest/verify.py"), "--state", a.state, "--hostname", t.hostname,
+           "--report", a.report]
+    if t.connect_ip:
+        cmd += ["--connect-ip", t.connect_ip]
+    say("TARGET", f"{t.name} ({t.env}) {t.hostname}" + (f" via {t.connect_ip}" if t.connect_ip else ""))
+    return subprocess.run(cmd, cwd=root).returncode
+
+
 def cmd_agent(a) -> int:
+    if a.target.startswith("external:"):
+        say("REFUSED", "the agent gateway is not wired to external targets yet (it needs an admin-side binding of the "
+                       "fixture's opaque ids); use tools/lab/pentest for lab/production engagements")
+        return REFUSED
     resolved = _target(a)
     if resolved is None:
         return REFUSED
@@ -545,6 +572,13 @@ def parser() -> argparse.ArgumentParser:
     p = sub.add_parser("verify", help="verify a finished trace offline")
     p.add_argument("--trace", required=True)
     p.set_defaults(fn=cmd_verify)
+
+    p = sub.add_parser("verify-fixture", help="probe the pentest fixture's oracle on an external lab/production target")
+    p.add_argument("--target", required=True, help="external:<descriptor.json> (kind vhh-external, env lab|production)")
+    p.add_argument("--allow-production", action="store_true", help="also requires VHH_ALLOW_PRODUCTION=1")
+    p.add_argument("--state", required=True, help="the admin-side private seed state (read by verify.py only)")
+    p.add_argument("--report", required=True)
+    p.set_defaults(fn=cmd_verify_fixture)
 
     p = sub.add_parser("agent", help="serve the agent tool gateway on 127.0.0.1")
     common(p)
