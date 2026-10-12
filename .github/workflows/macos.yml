@@ -1,0 +1,118 @@
+name: macOS
+# Builds core/ on Apple Silicon with Homebrew deps and runs vh_unit_tests against a disposable PostgreSQL 16 cluster
+# (tools/macos/). Independent of the Linux CI (ci/run-ci containers, self-hosted runners) and of release.yml: nothing
+# here packages or publishes. Until the macOS port of core/meson.build lands, this job is expected to fail at
+# meson setup/compile; that failure is real, never masked.
+on:
+  pull_request:
+    paths:
+      - 'core/**'
+      - 'meson*'
+      - 'tools/macos/**'
+      - '.github/workflows/macos.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'core/**'
+      - 'meson*'
+      - 'tools/macos/**'
+      - '.github/workflows/macos.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  HOMEBREW_NO_ANALYTICS: '1'
+  HOMEBREW_NO_INSTALL_CLEANUP: '1'
+  HOMEBREW_NO_ENV_HINTS: '1'
+
+jobs:
+  build-and-test:
+    name: Build and unit tests (macOS arm64)
+    # GitHub-hosted Apple Silicon. macos-26 (arm64) matches the maintainer's macOS 26 dev hosts; macos-15 is the
+    # fallback label if the 26 image misbehaves.
+    runs-on: macos-26
+    timeout-minutes: 90
+    continue-on-error: false
+    defaults:
+      run:
+        shell: bash -euo pipefail {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Outside the checkout; the runner context is not available to workflow- or job-level env.
+      - name: Deps prefix
+        run: echo "VH_MACOS_DEPS=$RUNNER_TEMP/vaulthalla-macos-deps" >> "$GITHUB_ENV"
+
+      - name: Cache Homebrew downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/Homebrew/downloads
+          key: brew-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tools/macos/Brewfile') }}
+          restore-keys: brew-${{ runner.os }}-${{ runner.arch }}-
+
+      # The prefix only holds the pinned PDFium SDK (fetch-pdfium.sh skips a matching install; the key tracks its pin) and generated .pc aliases.
+      - name: Cache PDFium prefix
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.VH_MACOS_DEPS }}
+          key: macos-deps-${{ runner.arch }}-${{ hashFiles('tools/macos/fetch-pdfium.sh') }}
+
+      - name: Bootstrap (brew bundle, PDFium, pkg-config aliases)
+        run: tools/macos/bootstrap.sh
+
+      - name: Toolchain
+        run: |
+          . tools/macos/env.sh
+          sw_vers
+          clang++ --version
+          meson --version
+          for m in openssl libcurl libpqxx-vh pdfium gtest; do printf '%-12s %s\n' "$m" "$(pkg-config --modversion "$m")"; done
+
+      - name: meson setup
+        run: |
+          . tools/macos/env.sh
+          meson setup build-macos -Dbuild_unit_tests=true -Dmanpage=true
+
+      - name: meson compile
+        run: |
+          . tools/macos/env.sh
+          meson compile -C build-macos
+
+      - name: Test database up
+        env:
+          VH_TEST_PG_DIR: ${{ runner.temp }}/vh-pg
+        run: |
+          tools/macos/test-db.sh up > "$RUNNER_TEMP/testdb.env"
+          # Disposable password, still kept out of the log.
+          echo "::add-mask::$(grep '^export VH_TEST_DB_PASS=' "$RUNNER_TEMP/testdb.env" | cut -d= -f2- | tr -d "'")"
+
+      - name: meson test
+        run: |
+          . tools/macos/env.sh
+          . "$RUNNER_TEMP/testdb.env"
+          meson test -C build-macos --print-errorlogs
+
+      # Before teardown: the cluster's server.log goes with its directory.
+      - name: Upload meson logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-meson-logs
+          path: |
+            build-macos/meson-logs/
+            ${{ runner.temp }}/vh-pg/server.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Test database down
+        if: always()
+        env:
+          VH_TEST_PG_DIR: ${{ runner.temp }}/vh-pg
+        run: tools/macos/test-db.sh down
