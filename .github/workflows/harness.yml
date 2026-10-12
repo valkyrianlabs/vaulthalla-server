@@ -1,0 +1,69 @@
+name: Integration engine (privileged)
+
+# Privileged, slower profiles of the integration engine. Manual only: they need root, FUSE, a TPM (or swtpm) and a
+# local PostgreSQL on the runner, so they run on a dedicated self-hosted runner labelled `vaulthalla-harness` that has
+# had `sudo tools/harness/bootstrap.sh` run once. Ordinary PR CI runs the unprivileged engine tests
+# (verify.sh harness) in build_and_test.yml. Never point this at vh-storage: launched runs only use private instances.
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "proof | smoke | pressure | assault | regress"
+        required: true
+        default: smoke
+      seed:
+        description: "seed (empty = random; always printed)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: harness-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  harness:
+    runs-on: [self-hosted, Linux, X64, vaulthalla-harness]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build (debug, ASan/UBSan, integration targets)
+        run: |
+          meson setup build-harness -Dbuild_unit_tests=true -Dintegration_tests=true -Db_sanitize=address,undefined
+          meson compile -C build-harness
+
+      - name: Run profile
+        env:
+          PROFILE: ${{ inputs.profile }}
+          SEED: ${{ inputs.seed }}
+        run: |
+          set -euo pipefail
+          seed_args=(); [[ -n "$SEED" ]] && seed_args=(--seed "$SEED")
+          out="$RUNNER_TEMP/harness-$PROFILE"
+          vhh=(sudo tools/harness/vhh.sh)
+          case "$PROFILE" in
+            proof)    env VH_TEST_CONFIG=default ${SEED:+VH_TEST_SEED=$SEED} bash bin/tests/run_proof.sh --build-dir build-harness ;;
+            smoke)    "${vhh[@]}" run --target launch --build build-harness "${seed_args[@]}" --sessions 4 --ops 25 \
+                        --surfaces ws,fuse --schedule lockstep --out "$out" ;;
+            pressure) "${vhh[@]}" run --target launch --build build-harness "${seed_args[@]}" --sessions 12 --ops 60 \
+                        --surfaces ws,fuse --schedule barrier --out "$out" ;;
+            assault)  "${vhh[@]}" run --target launch --build build-harness "${seed_args[@]}" --sessions 24 --ops 120 \
+                        --surfaces ws,fuse --schedule free --out "$out"
+                      "${vhh[@]}" scenario hang --build build-harness --out "$out-hang"
+                      "${vhh[@]}" scenario crash --build build-harness --out "$out-crash" ;;
+            regress)  "${vhh[@]}" regress --build build-harness ;;
+            *) echo "unknown profile $PROFILE" >&2; exit 2 ;;
+          esac
+
+      - name: Keep artifacts (traces are redacted)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: harness-${{ inputs.profile }}
+          path: |
+            ${{ runner.temp }}/harness-*/
+            build-harness/proof-artifacts/
+          if-no-files-found: ignore
