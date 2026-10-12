@@ -16,6 +16,9 @@ namespace vh::protocols::http::upload::staging {
 // "mount" or "private".
 [[nodiscard]] std::string_view mode() noexcept;
 
+// Whether staging files live inside the FUSE namespace (so the FS cache can hold an entry for one): mount only.
+[[nodiscard]] bool insideMount() noexcept;
+
 // The staging file named `name` for the upload whose final path (under the vault root) is `targetAbsPath`. Creates
 // the private directories when needed.
 [[nodiscard]] std::filesystem::path pathFor(const std::filesystem::path& targetAbsPath, unsigned int vaultId,

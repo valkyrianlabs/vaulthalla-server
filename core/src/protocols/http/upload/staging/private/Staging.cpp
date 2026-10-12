@@ -20,6 +20,8 @@ void ownerOnly(const std::filesystem::path& dir) {
 
 std::string_view mode() noexcept { return "private"; }
 
+bool insideMount() noexcept { return false; }
+
 std::filesystem::path pathFor(const std::filesystem::path&, const unsigned int vaultId, const std::string& name) {
     const auto dir = root() / std::to_string(vaultId);
     std::filesystem::create_directories(dir);

@@ -339,7 +339,7 @@ void cleanupFile(const UploadFileState& file) noexcept {
     std::filesystem::remove(file.tmp_path, ec);
     try {
         const auto& cache = vh::runtime::Deps::get().fsCache;
-        if (cache && cache->entryExists(file.fuse_from)) cache->evictPath(file.fuse_from);
+        if (cache && !file.fuse_from.empty() && cache->entryExists(file.fuse_from)) cache->evictPath(file.fuse_from);
     } catch (...) {
     }
 }
@@ -726,7 +726,10 @@ nlohmann::json Coordinator::createSession(const request& req, const nlohmann::js
                 const auto absPath = engine->paths->absPath(vaultPath, PathType::VAULT_ROOT);
                 const auto tmpPath = vh::protocols::http::upload::staging::pathFor(absPath, parent.vault_id, ".upload-http-" + upload->id + "-" + fileId + ".part");
                 const auto fuseTo = engine->paths->absRelToRoot(absPath, PathType::FUSE_ROOT);
-                const auto fuseFrom = engine->paths->absRelToRoot(tmpPath, PathType::FUSE_ROOT);
+                // The staging file's FUSE path (its FS-cache key), when staging lives in the mount at all.
+                const auto fuseFrom = vh::protocols::http::upload::staging::insideMount()
+                                          ? engine->paths->absRelToRoot(tmpPath, PathType::FUSE_ROOT)
+                                          : std::filesystem::path{};
 
                 auto started = manager->startUpload({
                     .principal = *principal,
@@ -799,13 +802,18 @@ nlohmann::json Coordinator::createSession(const request& req, const nlohmann::js
                 const auto absPath = engine->paths->absPath(vaultPath, PathType::VAULT_ROOT);
                 const auto tmpPath = vh::protocols::http::upload::staging::pathFor(absPath, vaultId, ".upload-http-" + upload->id + "-" + fileId + ".part");
                 const auto fuseTo = engine->paths->absRelToRoot(absPath, PathType::FUSE_ROOT);
-                const auto fuseFrom = engine->paths->absRelToRoot(tmpPath, PathType::FUSE_ROOT);
+                // The staging file's FUSE path (its FS-cache key), when staging lives in the mount at all.
+                const auto fuseFrom = vh::protocols::http::upload::staging::insideMount()
+                                          ? engine->paths->absRelToRoot(tmpPath, PathType::FUSE_ROOT)
+                                          : std::filesystem::path{};
 
                 if (vh::runtime::Deps::get().fsCache && vh::runtime::Deps::get().fsCache->entryExists(fuseTo))
                     throw std::runtime_error("Upload target already exists");
 
+                // The target's parent (nested uploads); the staging file's parent, which is the same directory, only
+                // when staging is in the mount.
                 if (const auto err = vh::fs::Filesystem::mkdir({
-                        .path = fuseFrom.parent_path(),
+                        .path = fuseTo.parent_path(),
                         .engine = engine,
                         .user = session->user
                     }); err)

@@ -13,6 +13,7 @@ Needs the `websockets` package. Prints one line per step; exit 0 only if every s
 from __future__ import annotations
 
 import argparse
+import json
 import asyncio
 import hashlib
 import os
@@ -115,7 +116,23 @@ def backing_files(name: str) -> list[Path]:
     return [p for p in (ROOT / "backing").rglob(name) if p.is_file()]
 
 
+def refuses_symlinked_state_root(args) -> bool:
+    # Fail closed: a state root the daemon can't make private (here: a symlink) must stop startup.
+    prepare(args.ws_port, args.http_port, args.mount_mode)
+    real = ROOT / "elsewhere"
+    real.mkdir()
+    shutil.rmtree(ROOT / "backing")
+    (ROOT / "backing").symlink_to(real)
+    proc = subprocess.run([str(REPO / args.build / "core/vaulthalla-server")], env=instance_env(),
+                          capture_output=True, text=True, timeout=60)
+    out = proc.stdout + proc.stderr
+    return step("daemon refuses to start on a symlinked state root", proc.returncode != 0 and "state directory" in out,
+                f"exit {proc.returncode}")
+
+
 async def run(args) -> bool:
+    if not refuses_symlinked_state_root(args):
+        return False
     prepare(args.ws_port, args.http_port, args.mount_mode)
     daemon = Daemon(REPO / args.build / "core/vaulthalla-server", instance_env())
     target = Target(hostname="127.0.0.1", connect_ip="127.0.0.1", ws_port=args.ws_port, http_port=args.http_port)
@@ -157,6 +174,41 @@ async def run(args) -> bool:
         plain = [p for p in backing_files("*") if p.stat().st_size == len(payload) and p.read_bytes() == payload]
         good &= step("backing bytes are ciphertext", len(sealed) == 1 and not plain,
                      f"{len(sealed)} sealed, {len(plain)} plaintext copies")
+        # Nested upload: the target's parent folders are created in the vault (the staging file lives elsewhere).
+        nested = os.urandom(64 * 1024)
+        errors = upload_files(target, cookie, vault_id, [("/a/b/c/nested.bin", nested)])
+        good &= step("nested HTTP upload creates its folders", not any(errors.values()), str(errors.get("/a/b/c/nested.bin") or ""))
+        got = download(target, cookie, vault_id, "/a/b/c/nested.bin")
+        good &= step("nested download matches", got == nested)
+
+        # Share upload: an upload-only public link into /inbox, used from a share session.
+        await ws.must("fs.dir.create", {"vault_id": vault_id, "path": "/inbox"})
+        inbox = (await ws.must("fs.metadata", {"vault_id": vault_id, "path": "/inbox"}))["entry"]
+        link = await ws.must("share.link.create", {
+            "vault_id": vault_id, "root_entry_id": inbox["id"], "root_path": "/inbox", "target_type": "directory",
+            "link_type": "upload", "access_mode": "public", "allowed_ops": ["metadata", "upload"],
+            "public_role_assignment": {"vault_role_name": "share_upload_dropbox"}, "name": "smoke-upload"})
+        dropped = os.urandom(32 * 1024)
+        async with Ws(target, path="/ws/share") as share:
+            opened = await share.send("share.session.open", {"public_token": link["public_token"]})
+            good &= step("share session opens", ok(opened), str(opened.get("status")))
+            share_cookie = share.cookie_header()
+            r = http_request(target, "POST", "/upload/session", query={"share": "1"}, cookie=share_cookie,
+                             body=json.dumps({"files": [{"file_id": "f0", "path": "/dropped.bin",
+                                                        "size_bytes": len(dropped)}]}).encode(),
+                             headers={"Content-Type": "application/json"})
+            upload_id = r.json().get("upload_id") if r.status == 200 else None
+            if upload_id:
+                put = http_request(target, "PUT", f"/upload/{upload_id}/files/f0", query={"share": "1"},
+                                   cookie=share_cookie, body=dropped, headers={"Content-Type": "application/octet-stream"})
+                fin = http_request(target, "POST", f"/upload/{upload_id}/finish", query={"share": "1"}, cookie=share_cookie)
+                good &= step("share upload completes", put.status == 200 and fin.status == 200,
+                             f"session {r.status} put {put.status} finish {fin.status}")
+            else:
+                good &= step("share upload completes", False, f"session HTTP {r.status}: {r.body[:120]!r}")
+        got = download(target, cookie, vault_id, "/inbox/dropped.bin")
+        good &= step("owner downloads the share-uploaded file intact", got == dropped)
+
         mode = (ROOT / "backing").stat().st_mode & 0o777
         good &= step("backing root is private to the daemon uid (0700)", mode == 0o700, f"mode={mode:o}")
         staged = list((ROOT / "backing/.upload-staging").rglob("*.part")) if (ROOT / "backing/.upload-staging").exists() else []
