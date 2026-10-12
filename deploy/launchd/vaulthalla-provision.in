@@ -8,7 +8,7 @@
 #   vaulthalla-provision --remove --purge   also delete the state, logs, runtime dir and the _vaulthalla account
 #
 # What it sets up:
-#   - _vaulthalla, a hidden role account (uid/gid in 200-399, no shell, no home) with the record alias "vaulthalla",
+#   - _vaulthalla, a hidden role account (uid/gid in 450-499, no shell, no home) with the record alias "vaulthalla",
 #     so the daemon's lookups of the 'vaulthalla' user and group work as on Linux.
 #   - @SUPPORT_DIR@            root:wheel 0755
 #     .../state                _vaulthalla 0700   encrypted backing store, sealed secrets, upload staging
@@ -78,10 +78,13 @@ values() { "$DSCL" . -read "$1" "$2" 2>/dev/null | sed -e "s/^$2:[[:space:]]*//"
 exists() { "$DSCL" . -read "$1" RecordName >/dev/null 2>&1; }
 account_id() { values "/Users/$SERVICE" UniqueID | head -1; }
 
+# From the top of 450-499: Apple's own role accounts are allocated upward from 200 (past 300 on macOS 27, plus the
+# com.apple.access_* groups at 395-400 and _oahd at 441), so a third-party account low in that range risks a collision
+# with one a later macOS adds. uid and gid are the same number, free in both tables.
 free_id() {
   local used id
   used=$( { "$DSCL" . -list /Users UniqueID; "$DSCL" . -list /Groups PrimaryGroupID; } 2>/dev/null | awk '{print $2}')
-  for id in $(seq 200 399); do
+  for id in $(seq 499 -1 450); do
     echo "$used" | grep -qx "$id" || { echo "$id"; return 0; }
   done
   return 1
@@ -91,7 +94,7 @@ free_id() {
 validate_account() {
   local id="$1" problems="" gid
   case "$id" in ''|*[!0-9]*) problems="$problems; UniqueID '$id' is not a number" ;; esac
-  if [ -z "$problems" ] && { [ "$id" -lt 200 ] || [ "$id" -gt 399 ]; }; then problems="$problems; uid $id is outside 200-399"; fi
+  if [ -z "$problems" ] && { [ "$id" -lt 450 ] || [ "$id" -gt 499 ]; }; then problems="$problems; uid $id is outside 450-499"; fi
   exists "/Groups/$SERVICE" || problems="$problems; group $SERVICE is missing"
   gid=$(values "/Groups/$SERVICE" PrimaryGroupID | head -1)
   [ "$(values "/Users/$SERVICE" PrimaryGroupID | head -1)" = "$gid" ] || problems="$problems; primary group is not $SERVICE"
@@ -119,7 +122,7 @@ ensure_account() {
   exists "/Groups/$SERVICE" && die "group $SERVICE exists without the user $SERVICE; refusing to adopt it"
   exists "/Users/$ALIAS" && die "a user named '$ALIAS' already exists; refusing to alias $SERVICE onto it"
   exists "/Groups/$ALIAS" && die "a group named '$ALIAS' already exists; refusing to alias $SERVICE onto it"
-  id=$(free_id) || die "no free uid/gid in 200-399"
+  id=$(free_id) || die "no free uid/gid in 450-499"
   note "creating hidden role account $SERVICE (uid/gid $id)"
   run "$DSCL" . -create "/Groups/$SERVICE"
   run "$DSCL" . -create "/Groups/$SERVICE" PrimaryGroupID "$id"

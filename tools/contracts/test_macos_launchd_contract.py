@@ -215,7 +215,8 @@ class Provisioning(unittest.TestCase):
         db = json.loads(self.state.read_text())
         user, group = db["Users"]["_vaulthalla"], db["Groups"]["_vaulthalla"]
         uid = int(user["UniqueID"][0])
-        self.assertTrue(200 <= uid <= 399)
+        self.assertTrue(450 <= uid <= 499)
+        self.assertEqual(uid, 499, "allocated from the top, away from Apple's growing role-account range")
         self.assertEqual(user["PrimaryGroupID"], group["PrimaryGroupID"])
         self.assertEqual(user["UserShell"], ["/usr/bin/false"])
         self.assertEqual(user["IsHidden"], ["1"])
