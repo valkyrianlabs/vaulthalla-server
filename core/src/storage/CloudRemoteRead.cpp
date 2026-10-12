@@ -28,6 +28,7 @@
 #include <cerrno>
 #include <fcntl.h>
 #include <system_error>
+#include <sys/stat.h>
 #include <unistd.h>
 
 namespace vh::storage {
