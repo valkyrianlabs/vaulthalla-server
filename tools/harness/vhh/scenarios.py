@@ -58,8 +58,12 @@ def run(kind: str, build: str, out: Path, deadline_s: float = 4.0) -> tuple[bool
     inst.start()
     report: dict = {"scenario": kind, "run_id": inst.run_id}
     try:
-        with inst.watchdog(deadline_s * 6 + 30) as dog:
-            report.update(asyncio.run(_in_flight(inst, kind, deadline_s)))
+        with inst.watchdog(deadline_s * 6 + 120) as dog:
+            if kind == "revoke":
+                from vhh.scenario_revoke import run_revoke   # grant + revoke on live ws and FUSE sessions
+                report.update(asyncio.run(run_revoke(inst)))
+            else:
+                report.update(asyncio.run(_in_flight(inst, kind, deadline_s)))
         if dog.fired:
             report.update(ok=False, why="engine blocked past its hard deadline; watchdog aborted the FUSE connection")
         report["evidence"] = sorted(str(p) for p in (inst.artifacts / "evidence").glob("*")) \

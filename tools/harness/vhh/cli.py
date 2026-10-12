@@ -200,7 +200,8 @@ def cmd_scenario(a) -> int:
     from vhh import scenarios
     out = Path(a.out) if a.out else RUN.new_run_dir()
     ok, report = scenarios.run(a.kind, a.build, out)
-    for k in ("outcome", "after", "wedge", "took_s", "died", "mount_gone", "db_dropped", "why"):
+    for k in ("outcome", "after", "wedge", "took_s", "grant_latency_s", "revoke_latency_s", "steps", "died",
+              "mount_gone", "db_dropped", "why"):
         if k in report:
             print(f"  {k}: {report[k]}")
     say("PASS" if ok else "FAIL", f"scenario {a.kind}: {'detected and contained' if ok else 'NOT contained'} "
@@ -488,8 +489,8 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--catalog")
     p.set_defaults(fn=cmd_regress)
 
-    p = sub.add_parser("scenario", help="daemon hang/crash during an in-flight FUSE op (needs root)")
-    p.add_argument("kind", choices=("hang", "crash"))
+    p = sub.add_parser("scenario", help="hang/crash during an in-flight FUSE op, or revoke on live sessions (root)")
+    p.add_argument("kind", choices=("hang", "crash", "revoke"))
     p.add_argument("--build", required=True)
     p.add_argument("--out")
     p.set_defaults(fn=cmd_scenario)
