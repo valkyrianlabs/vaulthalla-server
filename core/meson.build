@@ -317,7 +317,7 @@ executable('vaulthalla-server', main,
            install: true
 )
 
-executable('vaulthalla-cli', files(join_paths(core_root, 'main/cli.cpp'), src / 'platform' / platform_os_dir / 'Fd.cpp'),
+vh_cli = executable('vaulthalla-cli', files(join_paths(core_root, 'main/cli.cpp'), src / 'platform' / platform_os_dir / 'Fd.cpp'),
            include_directories: include_directories('vendor', 'include'),
            dependencies: fmt_dep,
            install: true
@@ -394,6 +394,9 @@ endif
 # module generates. Fix with: python3 tools/contracts/ws_contract.py --write --vh-usage <build>/core/vh_usage
 python3 = find_program('python3', required: false)
 if python3.found()
+    # `vh fs get|put` client against a scripted daemon (no database): atomic outputs, binary stdout, bounded frames.
+    test('cli_fs_client', python3, args: [join_paths(core_root, 'tests/cli/test_fs_client.py'), vh_cli],
+         timeout: 120)
     test('ws_contract_drift', python3,
          args: [join_paths(repo_root, 'tools/contracts/ws_contract.py'), '--check', '--usage-json', usage_json],
          depends: usage_json, timeout: 60)

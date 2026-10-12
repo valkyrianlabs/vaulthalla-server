@@ -29,3 +29,8 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
 - macOS (development, not packaged): HTTP uploads stage in a private directory under the state root when the build
   has no FUSE bridge, and the daemon refuses to start unless that state root is private to it (no symlink, no
   writable ancestor, owned by the daemon user). Linux keeps staging through the FUSE mount (`http_upload_staging=auto`).
+- feat(cli): `vh fs ls|get|put` (#229): vault file access over the CLI socket's existing length-prefixed JSON frames
+  (256 KiB base64 data frames, every frame bounded before allocation, at most 4 downloads and 2 uploads in flight);
+  authorization through the HTTP lanes' evaluator (http::access::resolveUserPath, re-checked every 8 MiB and before
+  commit); uploads staged privately and sealed by fs::Filesystem::createFile (compare-and-swap on overwrite); the
+  client keeps local files local, writes outputs atomically and caps every reply frame (64 MiB, 512 KiB in a transfer).

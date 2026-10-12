@@ -108,6 +108,21 @@ shipped. The client waits at most `VAULTHALLA_CLI_TIMEOUT` (default 10s) for the
 75 (not responding), 77 (not in the `vaulthalla` group), 76 (reply without exit status). `vh status` exits 0/1/2 for
 healthy/degraded/critical and includes a live `SELECT 1` DB probe.
 
+**File transfer (`vh fs ls|get|put`, #229).** Bytes ride the same length-prefixed JSON frames, never a second channel
+(`protocols/shell/Transfer.hpp`, header-only and shared with the client): the request carries `"transfer": {"v":1}`
+(`put_size` for put), the daemon answers `transfer`/`transfer-ready`, then `data` frames (`seq`, base64 of at most
+256 KiB) and `transfer-end`/`transfer-abort`, then the usual `result`. Limits are checked before allocation: 512 KiB
+per frame during a transfer (the server's general request limit is 1 MiB), 64 MiB for any reply on the client.
+Transfers are never interactive (they keep the 10s read timeout), at most 4 gets and 2 puts run daemon-wide, 6h max.
+Authorization is `http::access::resolveUserPath`/`requireUser` (the HTTP lanes' evaluator, taking the peer-mapped
+`User` instead of a session), re-evaluated with the user reloaded every 32 chunks of a get and before a put commits.
+A put is staged in `<backing>/.cli-staging/put-*.part` (0600 in 0700, swept at CLI-server start since it is plaintext)
+and committed by `fs::Filesystem::createFile` with `source_path` (streaming seal; overwrite is CAS on the authorized
+generation). The client reads/writes local files itself (get `-o` = temp sibling + rename only on an ok result with
+every byte; stdout via write(2), refused to a TTY without `-o -`); `planLocal` mirrors the daemon's tokenizer so both
+agree which positional is the local file. Tests: `test_cli_fs.cpp` (DB, socketpair), `core/tests/cli/test_fs_client.py`
+(meson `cli_fs_client`, real `vaulthalla-cli` against a scripted daemon).
+
 ### WebSocket flow
 
 **Connection cap (#164).** `ws::Server::onAccept` takes a `ConnectionSlot` (`protocols/ws/ConnectionLimit.hpp`)

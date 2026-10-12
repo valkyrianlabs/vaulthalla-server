@@ -192,16 +192,17 @@ void pruneLocked(const Clock::time_point now) {
         case Need::Preview: return share::Operation::Preview;
         case Need::Download: return share::Operation::Download;
         case Need::Overwrite: return share::Operation::Overwrite;
+        case Need::List: return share::Operation::List;
     }
     return share::Operation::Preview;
 }
 
-void requireHuman(const Caller& caller, const std::shared_ptr<storage::Engine>& engine,
-                  const std::filesystem::path& vaultPath, const FsAction action) {
-    if (!caller.session || !caller.session->user) throw Unauthorized("Request requires a user session");
+void requireUserAction(const std::shared_ptr<identities::User>& user, const std::shared_ptr<storage::Engine>& engine,
+                       const std::filesystem::path& vaultPath, const FsAction action) {
+    if (!user) throw Unauthorized("Request requires a user");
     if (!engine || !engine->vault) throw NotFound("Storage engine is unavailable");
     if (!rbac::resolver::Vault::has<FsAction>({
-            .user = caller.session->user,
+            .user = user,
             .permission = action,
             .vault_id = engine->vault->id,
             .path = engine->vaultPathToFusePath(vaultPath)
@@ -209,18 +210,27 @@ void requireHuman(const Caller& caller, const std::shared_ptr<storage::Engine>& 
         throw Forbidden("Permission denied");
 }
 
-void requireHumanNeed(const Caller& caller, const std::shared_ptr<storage::Engine>& engine,
-                      const std::shared_ptr<fs::model::Entry>& entry, const Need need) {
+void requireUserNeed(const std::shared_ptr<identities::User>& user, const std::shared_ptr<storage::Engine>& engine,
+                     const std::shared_ptr<fs::model::Entry>& entry, const Need need) {
     switch (need) {
         case Need::Preview:
         case Need::Download:
-            requireHuman(caller, engine, entry->path, FsAction::Read);
-            if (entry->isDirectory()) requireHuman(caller, engine, entry->path, FsAction::List);
+            requireUserAction(user, engine, entry->path, FsAction::Read);
+            if (entry->isDirectory()) requireUserAction(user, engine, entry->path, FsAction::List);
             return;
         case Need::Overwrite:
-            requireHuman(caller, engine, entry->path, FsAction::Overwrite);
+            requireUserAction(user, engine, entry->path, FsAction::Overwrite);
+            return;
+        case Need::List:
+            requireUserAction(user, engine, entry->path, FsAction::List);
             return;
     }
+}
+
+void requireHumanNeed(const Caller& caller, const std::shared_ptr<storage::Engine>& engine,
+                      const std::shared_ptr<fs::model::Entry>& entry, const Need need) {
+    if (!caller.session || !caller.session->user) throw Unauthorized("Request requires a user session");
+    requireUserNeed(caller.session->user, engine, entry, need);
 }
 
 void checkExpect(const std::shared_ptr<fs::model::Entry>& entry, const Expect expect) {
@@ -284,9 +294,8 @@ Caller authenticate(const Request& req, const Params& params) {
     return caller;
 }
 
-Target resolvePath(const Caller& caller, const uint32_t vaultId, const std::string& rawPath, const Need need,
-                   const Expect expect) {
-    if (caller.share) throw BadRequest("Share requests address paths relative to the share");
+Target resolveUserPath(const std::shared_ptr<identities::User>& user, const uint32_t vaultId, const std::string& rawPath,
+                       const Need need, const Expect expect) {
     if (!share::Scope::contains("/", rawPath)) throw BadRequest("Path escapes the vault");
     const auto vaultPath = share::Scope::normalizeVaultPath(rawPath);
 
@@ -301,12 +310,24 @@ Target resolvePath(const Caller& caller, const uint32_t vaultId, const std::stri
         std::filesystem::path ancestor = std::filesystem::path(vaultPath).parent_path();
         while (cache && ancestor != ancestor.root_path() && !cache->getEntry(engine->vaultPathToFusePath(ancestor)))
             ancestor = ancestor.parent_path();
-        requireHuman(caller, engine, ancestor.empty() ? std::filesystem::path("/") : ancestor, FsAction::Read);
+        requireUserAction(user, engine, ancestor.empty() ? std::filesystem::path("/") : ancestor, FsAction::Read);
         throw NotFound("Not found");
     }
-    requireHumanNeed(caller, engine, entry, need);
+    requireUserNeed(user, engine, entry, need);
     checkExpect(entry, expect);
     return fromEntry(engine, entry, vaultId, vaultPath);
+}
+
+void requireUser(const std::shared_ptr<identities::User>& user, const std::shared_ptr<storage::Engine>& engine,
+                 const std::filesystem::path& vaultPath, const FsAction action) {
+    if (!share::Scope::contains("/", vaultPath.string())) throw BadRequest("Path escapes the vault");
+    requireUserAction(user, engine, share::Scope::normalizeVaultPath(vaultPath.string()), action);
+}
+
+Target resolvePath(const Caller& caller, const uint32_t vaultId, const std::string& rawPath, const Need need,
+                   const Expect expect) {
+    if (caller.share) throw BadRequest("Share requests address paths relative to the share");
+    return resolveUserPath(caller.session ? caller.session->user : nullptr, vaultId, rawPath, need, expect);
 }
 
 Target resolve(const Caller& caller, const Params& params, const Need need, const Expect expect) {

@@ -1,7 +1,9 @@
 #include "protocols/shell/Server.hpp"
+#include "protocols/shell/Transfer.hpp"
 #include "protocols/shell/Router.hpp"
 #include "protocols/shell/Parser.hpp"
 #include "protocols/shell/commands/all.hpp"
+#include "protocols/shell/commands/fs.hpp"
 #include "db/query/identities/User.hpp"
 #include "log/Registry.hpp"
 #include "protocols/shell/SocketIO.hpp"
@@ -286,14 +288,29 @@ void Server::handleClient(const int cfd) {
         auto line = req["line"].get<std::string>();
         if (line.empty()) line = "help";
 
+        // `vh fs get|put`: the client says it speaks the transfer frames. A transfer is never interactive, so its
+        // reads keep the short request timeout (a stalled peer can't hold a slot for the prompt timeout).
+        std::optional<TransferPeer> peer;
+        if (req.contains("transfer")) {
+            const auto& t = req["transfer"];
+            if (!t.is_object() || t.value("v", 0) != transfer::kVersion ||
+                (t.contains("put_size") && !t["put_size"].is_number_unsigned())) {
+                sendCliError(cfd, transfer::exitcode::kDataErr, "invalid transfer request (is vh newer than the daemon?)");
+                return;
+            }
+            peer = TransferPeer{.fd = cfd, .putSize = t.contains("put_size")
+                                                              ? std::make_optional(t["put_size"].get<uint64_t>())
+                                                              : std::nullopt};
+        }
+
         std::unique_ptr<SocketIO> io;
-        if (req.value("interactive", false)) {
+        if (!peer && req.value("interactive", false)) {
             io = std::make_unique<SocketIO>(cfd);
             setCliSocketTimeout(cfd, SO_RCVTIMEO, kPromptTimeout); // a person answering prompts gets longer
         }
 
         try {
-            const auto res = router_->executeLine(line, user, io.get());
+            const auto res = router_->executeLine(line, user, io.get(), std::move(peer));
 
             json reply{
                 {"type", "result"},
@@ -321,6 +338,7 @@ void Server::handleClient(const int cfd) {
 }
 
 void Server::runLoop() {
+    commands::sweepFsStaging();
     int listenFd = bindListener();
     log::Registry::shell()->info("[CtlServerService] Listening on {}", socketPath_);
 

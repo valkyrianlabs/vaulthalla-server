@@ -223,6 +223,20 @@ vh sync resolve --vault <vault> --all --keep-local | --keep-remote [--yes]
 
 `vh resolve` takes the same arguments. Keep local uploads the local copy over the remote object; keep remote downloads the remote object over the local copy. A decision needs `vault.sync.action.resolve_conflicts` and Overwrite on the file, and is refused when either side changed since the conflict was recorded. Exit status is 2 when any conflict was not resolved; each one is reported with its reason. Without a terminal, `--all` needs `--yes`. See [Resolving Conflicts](/vaults/sync#resolving-conflicts).
 
+## Vault Files
+
+```bash
+vh fs ls <vault> <path> [--owner <user>]
+vh fs get <vault> <path> [-o <file>|-] [--owner <user>]
+vh fs put <vault> <local-file|-> <path> [--overwrite] [--owner <user>]
+```
+
+Reads and writes vault files without a mount, through the control socket. `vh` itself reads the local file (or standard input) for `put` and writes the local file for `get`; the daemon only ever sees the vault path. Permissions are the web console's: `ls` needs List, `get` needs Read, `put` needs Write on the new path (missing folders are created) and `--overwrite` needs Overwrite on the existing file. A path you can't read reports "permission denied" whether or not it exists.
+
+`get -o <file>` writes to a temporary file next to `<file>` and replaces `<file>` only when every byte arrived and the stored file passed its integrity check; anything else leaves `<file>` as it was. Without `-o`, the bytes go to standard output, and `vh` refuses to write them to a terminal unless you pass `-o -`. A `put` stores nothing unless the whole file arrives, and a replacement fails if the file changed while uploading. Removing someone's access stops their running transfer.
+
+Exit status: `0` done; `64` invalid arguments; `65` a damaged or incomplete transfer; `66` no such file (local or, where you can read, in the vault); `73` the vault path exists (no `--overwrite`) or the local output can't be written; `74` reading or writing a local file failed; `75` too many transfers in progress; `77` permission denied.
+
 ## Vault Keys
 
 ```bash

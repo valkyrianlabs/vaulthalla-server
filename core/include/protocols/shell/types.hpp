@@ -4,7 +4,9 @@
 #include "identities/Fwd.hpp"
 #include "protocols/shell/Fwd.hpp"
 
+#include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <nlohmann/json.hpp>
 #include <unordered_set>
@@ -22,6 +24,13 @@ struct FlagKV {
     }
 };
 
+// The connection a `vh fs get|put` moves bytes over (protocols/shell/Transfer.hpp), present only when the client
+// asked for a transfer in its request. Handlers that don't transfer ignore it.
+struct TransferPeer {
+    int fd = -1;
+    std::optional<uint64_t> putSize;  // put: the byte count the client declared
+};
+
 struct CommandCall {
     std::string name;
     std::vector<FlagKV> options;
@@ -29,6 +38,7 @@ struct CommandCall {
     bool rewrote = false;
     std::shared_ptr<identities::User> user;
     SocketIO* io = nullptr; // if set, command was run interactively
+    std::optional<TransferPeer> transfer;
 
     // owns any strings you create at runtime (JSON, rewrites, etc.)
     std::vector<std::string> arena;
