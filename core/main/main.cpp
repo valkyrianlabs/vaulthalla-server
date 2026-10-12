@@ -43,6 +43,7 @@
 #include <execinfo.h>
 #include <unistd.h>
 #include "platform/Process.hpp"
+#include "platform/StateDirectory.hpp"
 #include "platform/Waker.hpp"
 
 using namespace vh::config;
@@ -190,6 +191,11 @@ void startVaulthalla() {
     const auto log = vh::log::Registry::vaulthalla();
 
     ThreadPoolManager::instance().init();
+
+    // Before anything is written under it (sealed secrets, vault bytes, upload staging): only the daemon's uid may
+    // traverse the backing tree. A no-op on Linux, where the package owns its modes.
+    if (const auto problem = vh::platform::state::restrictToService(vh::paths::getBackingPath()); !problem.empty())
+        log->warn("[!] Could not make the state directory private: {}", problem);
 
     // Reader policies (preview.media.*) and the derived-artifact negative-cache TTL.
     vh::preview::cache::applyConfig();

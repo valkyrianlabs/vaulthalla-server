@@ -97,12 +97,12 @@ def prepare(ws_port: int, http_port: int, mount_mode: str | None) -> None:
     (ROOT / "config.yaml").write_text(config)
 
 
-async def login(target: Target, password: str) -> tuple[Ws, str]:
+async def login(target: Target, password: str, name: str = "admin") -> tuple[Ws, str]:
     ws = await Ws(target).__aenter__()
-    res = await ws.login("admin", password)
+    res = await ws.login(name, password)
     if not ok(res):
         await ws.__aexit__(None, None, None)
-        raise RuntimeError(f"admin login failed: {res.get('status')}")
+        raise RuntimeError(f"{name} login failed: {res.get('status')}")
     return ws, ws.cookie_header()
 
 
@@ -157,9 +157,23 @@ async def run(args) -> bool:
         plain = [p for p in backing_files("*") if p.stat().st_size == len(payload) and p.read_bytes() == payload]
         good &= step("backing bytes are ciphertext", len(sealed) == 1 and not plain,
                      f"{len(sealed)} sealed, {len(plain)} plaintext copies")
+        mode = (ROOT / "backing").stat().st_mode & 0o777
+        good &= step("backing root is private to the daemon uid (0700)", mode == 0o700, f"mode={mode:o}")
         staged = list((ROOT / "backing/.upload-staging").rglob("*.part")) if (ROOT / "backing/.upload-staging").exists() else []
         good &= step("no staged plaintext left behind", not staged, f"{len(staged)} left")
+        # RBAC over the web surface: a second, unprivileged account can't read or write the admin's vault.
+        other_pw = os.urandom(12).hex()
+        await ws.must("auth.register", {"name": "smoke_other", "password": other_pw, "role": "unprivileged"})
         await ws.__aexit__(None, None, None)
+        other, other_cookie = await login(target, other_pw, name="smoke_other")
+        good &= step("second user logs in", True)
+        denied = http_request(target, "GET", "/download/content", query={"vault_id": vault_id, "path": f"/{name}"},
+                              cookie=other_cookie)
+        good &= step("second user can't download the admin's file", denied.status in (403, 404), f"HTTP {denied.status}")
+        errs = upload_files(target, other_cookie, vault_id, [("/intruder.bin", b"x")])
+        good &= step("second user can't upload into the admin's vault", any(errs.values()),
+                     str(errs.get("/intruder.bin"))[:60])
+        await other.__aexit__(None, None, None)
 
         took = daemon.stop()
         good &= step("SIGTERM shutdown", took is not None, f"{took:.1f}s" if took is not None else "had to SIGKILL")
