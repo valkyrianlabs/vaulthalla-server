@@ -29,7 +29,52 @@ namespace vh::fuse {
 
 bool kernelBridgeBuilt() noexcept { return true; }
 
-std::shared_ptr<Service> makeService() { return std::make_shared<Service>(); }
+namespace {
+std::weak_ptr<Service> gService;  // the one makeService() created, for mountStatus()
+
+// Why the configured mode can't be mounted here, or empty when it can.
+std::string unmountableReason(const std::string& mode) {
+    if (mode == "disabled") return "";
+    if (!platform::mount::supportsMode(mode)) return "this platform does not provide mount mode '" + mode + "'";
+    if (!platform::mount::fuseRuntimeAvailable()) return "the FUSE library is not installed (macFUSE)";
+    return "";
+}
+}
+
+std::shared_ptr<Service> makeService() {
+    const auto mode = configuredMountMode();
+    if (mode == "disabled") {
+        log::Registry::fuse()->info("[FUSE] Mount disabled (mount.mode); vaults are served over HTTP/WS/CLI/S3");
+        return nullptr;
+    }
+    if (const auto why = unmountableReason(mode); !why.empty()) {
+        log::Registry::fuse()->warn("[FUSE] Not mounting: {}; vaults stay available over HTTP/WS/CLI/S3", why);
+        return nullptr;
+    }
+    auto service = std::make_shared<Service>();
+    gService = service;
+    return service;
+}
+
+MountStatus mountStatus() {
+    MountStatus status{.configuredMode = configuredMountMode(), .backend = std::string(platform::mount::backend())};
+    if (status.configuredMode == "disabled") {
+        status.state = "disabled";
+        status.isolation = "not_applicable";
+        return status;
+    }
+    if (const auto why = unmountableReason(status.configuredMode); !why.empty()) {
+        status.state = platform::mount::supportsMode(status.configuredMode) ? "unavailable" : "unsupported";
+        status.isolation = "not_applicable";
+        status.detail = why;
+        return status;
+    }
+    const auto service = gService.lock();
+    status.state = service && service->mounted() ? "mounted" : "not_mounted";
+    status.isolation = std::string(platform::mount::isolation(status.configuredMode));
+    if (status.state != "mounted") status.detail = "the FUSE service is not running a mounted session";
+    return status;
+}
 
 using vh::concurrency::AsyncService;
 using vh::concurrency::ThreadPoolManager;
@@ -181,7 +226,7 @@ void Service::runLoop() {
     ensureFreshMountpoint();
 
     std::vector<std::string> argsStr = {"vaulthalla-fuse", "-f"};
-    for (auto& option : platform::mount::fuseOptions()) argsStr.push_back(std::move(option));
+    for (auto& option : platform::mount::fuseOptions(configuredMountMode())) argsStr.push_back(std::move(option));
     argsStr.push_back(paths::getMountPath());
 
     std::vector<std::unique_ptr<char[]>> ownedCStrs;

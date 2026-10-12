@@ -19,7 +19,7 @@ Decisions awaiting the maintainer are `needs:review` issues #200–#206 on the R
   same blobs as before). macOS: a **development-only** `file` backend, reported as `file`. Production backend: #201
   (Secure Enclave spike from a user session passed; the pre-login LaunchDaemon test needs maintainer approval).
 - Paths: macOS defaults from meson (`/Library/Application Support/Vaulthalla/{config.yaml,state}`,
-  `/Library/Logs/Vaulthalla`, `/var/run/vaulthalla`, `/Volumes/Vaulthalla`), proposed in #203.
+  `/Library/Logs/Vaulthalla`, `/var/run/vaulthalla`, mount `/Library/Application Support/Vaulthalla/mount`), per #199/#216.
 
 ## FUSE on macOS (macOS 27 audit: #213)
 
@@ -29,7 +29,10 @@ Decisions awaiting the maintainer are `needs:review` issues #200–#206 on the R
 - FSKit backend: forwards euid/egid on 27 but keeps its own name/attr cache with no invalidation (macfuse#1207) and
   can't mount as root/headless (per-user extension). Not used on the server path. Kernel backend: needs Reduced
   Security on Apple Silicon; supports `novncache`/`noattrcache`; mounts without a session once approved.
-- Modes: `disabled` (default) | `service_private` (kext, no allow_other) | `multiuser` (kext, after gate K2).
+- Modes (`mount.mode` in config.yaml, read-only; default per build): `disabled` (macOS default) | `service_private`
+  (kext, no allow_other, `nobrowse`) | `multiuser` (Linux, always; macOS only after gate K2). `fuse::makeService()`
+  creates no service unless the configured mode is supported here and libfuse is present (weak-linked on macOS);
+  `fuse::mountStatus()` reports configured mode, actual state, backend and isolation to health and `vh status`.
   Proof tooling: `tools/macos/fuse-probe/`.
 - macFUSE's license forbids bundling or automated installation with commercial software without permission.
 

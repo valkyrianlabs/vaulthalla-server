@@ -177,6 +177,7 @@ SystemHealth SystemHealth::snapshot() {
         .failedRequests = s3GatewayStatus.failedRequests
     };
 
+    const auto mount = fuse::mountStatus();
     out.deps = {
         .storageManager = depsStatus.storageManager,
         .apiKeyManager = depsStatus.apiKeyManager,
@@ -188,7 +189,11 @@ SystemHealth SystemHealth::snapshot() {
         .shellUsageManager = depsStatus.shellUsageManager,
         .httpCacheStats = depsStatus.httpCacheStats,
         .fuseSession = depsStatus.fuseSession,
-        .fuseMount = fuse::kernelBridgeBuilt() ? "multiuser" : "disabled",
+        .fuseMount = mount.configuredMode,
+        .mountState = mount.state,
+        .mountBackend = mount.backend,
+        .mountIsolation = mount.isolation,
+        .mountDetail = mount.detail,
         .secretsBackend = std::string(crypto::secrets::KeyProvider::backend())
     };
 
@@ -293,6 +298,10 @@ void to_json(nlohmann::json& j, const DependencyHealth& health) {
         {"http_cache_stats", health.httpCacheStats},
         {"fuse_session", health.fuseSession},
         {"fuse_mount", health.fuseMount},
+        {"mount_state", health.mountState},
+        {"mount_backend", health.mountBackend},
+        {"mount_isolation", health.mountIsolation},
+        {"mount_detail", health.mountDetail.empty() ? nlohmann::json(nullptr) : nlohmann::json(health.mountDetail)},
         {"secrets_backend", health.secretsBackend},
     };
 }

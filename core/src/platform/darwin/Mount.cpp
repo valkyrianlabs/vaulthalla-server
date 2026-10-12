@@ -1,6 +1,7 @@
 #include "platform/Mount.hpp"
 
 #include <cstdlib>
+#include <dlfcn.h>
 #include <cstring>
 #include <string_view>
 #include <vector>
@@ -10,10 +11,23 @@
 
 namespace vh::platform::mount {
 
-std::vector<std::string> fuseOptions() {
+std::string_view defaultMode() noexcept { return "disabled"; }
+
+bool supportsMode(const std::string_view mode) noexcept { return mode == "disabled" || mode == "service_private"; }
+
+bool fuseRuntimeAvailable() noexcept {
+    // libfuse3 is weak-linked: without macFUSE installed the library isn't loaded and its symbols resolve to nothing.
+    return ::dlsym(RTLD_DEFAULT, "fuse_session_mount") != nullptr;
+}
+
+std::string_view backend() noexcept { return "macfuse-kernel"; }
+
+std::string_view isolation(std::string_view) noexcept { return "unproven"; }  // until gate K1 (#221) passes
+
+std::vector<std::string> fuseOptions(std::string_view) {
     // macFUSE kernel backend. No allow_other: the mount answers only the daemon's own uid (service-private).
     // novncache/noattrcache: every lookup and getattr reaches the daemon (entry_timeout is not honored on macOS).
-    return {"-o", "volname=Vaulthalla", "-o", "noappledouble", "-o", "noapplexattr",
+    return {"-o", "volname=Vaulthalla", "-o", "nobrowse", "-o", "noappledouble", "-o", "noapplexattr",
             "-o", "novncache", "-o", "noattrcache"};
 }
 

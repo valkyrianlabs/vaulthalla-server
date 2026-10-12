@@ -286,6 +286,12 @@ struct AuditConfig {
     FilesTrashedConfig files_trashed;
 };
 
+// The host's FUSE mount (platform/Mount.hpp, fuse/Service.hpp). A property of the installation, not a console setting:
+// read from config.yaml when present, never written back or exposed through settings.
+struct MountConfig {
+    std::string mode;  // disabled | service_private | multiuser; empty = this build's default (Linux: multiuser)
+};
+
 struct DevConfig {
     bool enabled = false;
     bool init_r2_test_vault = false;
@@ -337,6 +343,7 @@ struct Config {
     OperatorEmailsConfig operator_emails;
     AuditConfig auditing;
     DevConfig dev;
+    MountConfig mount;
 
     LoggingConfig logging; // internal only
 

@@ -7,7 +7,17 @@
 
 namespace vh::platform::mount {
 
-std::vector<std::string> fuseOptions() {
+std::string_view defaultMode() noexcept { return "multiuser"; }
+
+bool supportsMode(const std::string_view mode) noexcept { return mode == "multiuser"; }
+
+bool fuseRuntimeAvailable() noexcept { return true; }
+
+std::string_view backend() noexcept { return "linux-fuse"; }
+
+std::string_view isolation(std::string_view) noexcept { return "enforced"; }  // Tier A (make itest) proves it
+
+std::vector<std::string> fuseOptions(std::string_view) {
     return {"-o", "allow_other", "-o", "auto_unmount"};
 }
 

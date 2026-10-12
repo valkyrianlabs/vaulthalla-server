@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <memory>
+#include <string>
 
 struct fuse_session;  // libfuse's opaque session handle
 
@@ -16,7 +17,24 @@ namespace vh::fuse {
 [[nodiscard]] bool kernelBridgeBuilt() noexcept;
 
 class Service;
+// The FUSE service for the configured mount mode, or nullptr when nothing is to be mounted: the mode is disabled,
+// this build/platform can't provide it, or the FUSE library isn't installed. mountStatus() says which; nothing ever
+// mounts a different mode than the one configured.
 [[nodiscard]] std::shared_ptr<Service> makeService();
+
+// The mount mode config.yaml asks for (mount.mode), or this build's default (platform/Mount.hpp).
+[[nodiscard]] std::string configuredMountMode();
+
+// What the mount is configured to be and what it actually is right now, for health and `vh status`. A configured
+// mount that isn't mounted reports why; configuration alone never reads as "mounted".
+struct MountStatus {
+    std::string configuredMode;  // disabled | service_private | multiuser
+    std::string backend;         // the platform's FUSE implementation, or "none"
+    std::string state;           // disabled | mounted | not_mounted | unavailable | unsupported
+    std::string isolation;       // enforced | unproven | not_applicable
+    std::string detail;          // why the configured mount isn't mounted, when it isn't
+};
+[[nodiscard]] MountStatus mountStatus();
 
 class Service final : public concurrency::AsyncService {
     friend class ServiceManager;
@@ -26,6 +44,7 @@ public:
     explicit Service();
 
     [[nodiscard]] fuse_session* session() const noexcept { return session_; }
+    [[nodiscard]] bool mounted() const noexcept { return loopActive_.load(); }
 
 protected:
     void runLoop() override;
