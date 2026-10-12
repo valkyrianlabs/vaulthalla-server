@@ -81,11 +81,15 @@ class HttpLane:
         self.target = NetTarget(hostname="127.0.0.1", http_port=http_port)
         self.redactor = redactor
         self._ws = None
+        self._principal = None
+        self._session = None
         self._pending = set()
 
     def attach(self, ws_driver) -> None:
         self._ws = None
-        if (ws_driver.ws is None or ws_driver.login_result is None or ws_driver.login_result.outcome != "ok"
+        self._principal = self._session = None
+        if (not isinstance(ws_driver.principal, str) or not ws_driver.principal
+                or ws_driver.ws is None or ws_driver.login_result is None or ws_driver.login_result.outcome != "ok"
                 or ws_driver.target.hostname != "127.0.0.1"
                 or ws_driver.target.connect_ip not in (None, "127.0.0.1")):
             raise ValueError("HTTP lane requires an authenticated private websocket session")
@@ -94,6 +98,7 @@ class HttpLane:
             raise ValueError("authenticated websocket session has no HTTP cookie")
         self._register_cookie(cookie)
         self._ws = ws_driver
+        self._principal, self._session = ws_driver.principal, ws_driver.ws
 
     def _register_cookie(self, cookie):
         self.redactor.register_secret(cookie)
@@ -128,7 +133,8 @@ class HttpLane:
             return self._result("invalid", rendered, t0, detail="invalid HTTP transfer arguments")
         if deadline_s <= 0:
             return self._result("timeout", rendered, t0, detail="HTTP transfer deadline exceeded")
-        if self._ws is None:
+        if (self._ws is None or self._ws.principal != self._principal or self._ws.ws is not self._session
+                or self._ws.login_result is None or self._ws.login_result.outcome != "ok"):
             return self._result("denied", rendered, t0, detail="HTTP session is not attached")
         cookie = self._ws.cookie_header()
         if not cookie:
@@ -192,5 +198,6 @@ class HttpLane:
     async def close(self):
         """Drain any worker unwinding after its socket was interrupted; contains no authentication state."""
         self._ws = None
+        self._principal = self._session = None
         if self._pending:
             await asyncio.gather(*self._pending)

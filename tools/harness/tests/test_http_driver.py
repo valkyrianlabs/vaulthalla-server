@@ -28,7 +28,8 @@ class HttpLaneTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.redactor = Redactor()
         self.lane = HttpLane(43124, self.redactor)
-        self.ws = SimpleNamespace(ws=object(), login_result=Result("ok"), target=Target("127.0.0.1", ws_port=43123),
+        self.ws = SimpleNamespace(principal="u-alice", ws=object(), login_result=Result("ok"),
+                                  target=Target("127.0.0.1", ws_port=43123),
                                   cookie_header=Mock(return_value=COOKIE))
         self.lane.attach(self.ws)
         self.addAsyncCleanup(self.lane.close)
@@ -197,6 +198,14 @@ class HttpLaneTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.lane.download(42, "/file", 1)).outcome, "denied")
         await self.lane.close()
         self.assertEqual((await self.lane.upload(42, "/file", b"a", 1)).outcome, "denied")
+        self.send.assert_not_called()
+
+    async def test_reauthentication_requires_explicit_attachment(self):
+        self.ws.principal = "u-eve"
+        self.assertEqual((await self.lane.download(42, "/file", 1)).outcome, "denied")
+        self.ws.principal = "u-alice"
+        self.ws.ws = object()
+        self.assertEqual((await self.lane.download(42, "/file", 1)).outcome, "denied")
         self.send.assert_not_called()
 
     def test_attach_refuses_unauthenticated_or_remote_session(self):

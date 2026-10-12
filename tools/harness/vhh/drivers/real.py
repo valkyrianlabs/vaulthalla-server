@@ -97,7 +97,11 @@ class WsConsole:
         return await self.ws.execute(real, deadline_s)
 
     async def close(self) -> None:
-        await self.ws.close()
+        try:
+            if self.http is not None:
+                await self.http.close()
+        finally:
+            await self.ws.close()
 
 
 class FuseSession:
