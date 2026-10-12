@@ -31,6 +31,8 @@ mode_t modeOf(const stdfs::path& p) {
     return st.st_mode & 07777;
 }
 
+}
+
 class StateDirectoryTest : public ::testing::Test {
 protected:
     stdfs::path dir = scratch();
@@ -40,8 +42,6 @@ protected:
         stdfs::remove_all(dir, ec);
     }
 };
-
-}
 
 #if defined(__APPLE__)
 
