@@ -1,15 +1,22 @@
 #pragma once
 
-#define FUSE_USE_VERSION 35
-
 #include "concurrency/AsyncService.hpp"
 #include "storage/Fwd.hpp"
 
-#include <fuse_lowlevel.h>
-
 #include <atomic>
+#include <memory>
+
+struct fuse_session;  // libfuse's opaque session handle
 
 namespace vh::fuse {
+
+// The kernel FUSE bridge is a build capability: Linux always builds it; a build without it (`-Dfuse=disabled`,
+// the macOS default until a Finder backend is chosen) serves vaults over HTTP/WS/CLI only.
+// makeService() returns nullptr there and kernelBridgeBuilt() is false; nothing ever claims a mount.
+[[nodiscard]] bool kernelBridgeBuilt() noexcept;
+
+class Service;
+[[nodiscard]] std::shared_ptr<Service> makeService();
 
 class Service final : public concurrency::AsyncService {
     friend class ServiceManager;

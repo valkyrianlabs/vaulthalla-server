@@ -54,13 +54,19 @@ vh_paths_header = configure_file(
 
 # ╭──────────────────────────── DEFINE DEPENDENCIES ────────────────────────────╮
 
+host_os = host_machine.system()
+
 fmt_dep = dependency('fmt', required: true)
 # apt.vaulthalla.sh's libpqxx-vh-dev: a static libpqxx SDK under its own pkg-config name (the .pc links libpqxx.a
 # by path and the system libpq by SONAME), so neither Ubuntu's libpqxx-dev nor its headers can be picked up.
 pqxx_dep = dependency('libpqxx-vh', version: '>=8.0.2', method: 'pkg-config', static: true, required: true)
 
+# The kernel FUSE bridge (core/src/fuse/{Bridge,Reply,Resolver,Service}.cpp): required on Linux, which the Debian
+# package ships; off by default elsewhere (macOS serves vaults over HTTP/WS/CLI until a Finder backend is chosen).
+fuse_dep = dependency('fuse3', required: get_option('fuse').enable_auto_if(host_os == 'linux').disable_auto_if(host_os != 'linux'))
+fuse_bridge_sources = ['fuse/Bridge.cpp', 'fuse/Reply.cpp', 'fuse/Resolver.cpp', 'fuse/Service.cpp']
+
 deps = [
-    dependency('fuse3', required: true),
     dependency('libsodium', required: true),
     dependency('libcurl', required: true),
     dependency('boost', modules: ['filesystem'], required: true),
@@ -72,17 +78,28 @@ deps = [
     dependency('yaml-cpp', required: true),
     dependency('libjpeg', required: true),
     dependency('pugixml', required: true),
-    dependency('uuid', required: true),
     dependency('threads', required: true),
     dependency('spdlog', required: true),
     dependency('libturbojpeg', required: true),
-    dependency('tss2-esys', required: true),
-    dependency('tss2-tctildr', required: true),
-    dependency('tss2-rc', required: true),
     dependency('openssl', version: '>=3.0', required: true),
     dependency('zlib', required: true),
     fmt_dep
 ]
+
+if fuse_dep.found()
+    deps += fuse_dep
+endif
+
+# Linux-only system libraries: libuuid (macOS has <uuid/uuid.h> in libSystem) and the TPM2 stack behind the TPM
+# secret sealer (crypto/secrets/tpm/).
+if host_os == 'linux'
+    deps += [
+        dependency('uuid', required: true),
+        dependency('tss2-esys', required: true),
+        dependency('tss2-tctildr', required: true),
+        dependency('tss2-rc', required: true),
+    ]
+endif
 
 test_deps = deps + dependency('gtest', required: true, main: false)
 
@@ -101,10 +118,29 @@ src         = join_paths(core_root, 'src')
 tests_src   = join_paths(core_root, 'tests/unit')
 main        = files(join_paths(core_root, 'main/main.cpp'))
 
+# Platform-specific code lives under platform/<os>/ (and fuse/unbuilt/, the stand-in for a build without the kernel
+# FUSE bridge); only the host's directory is compiled. Everything else is shared by every OS.
+platform_src_prefixes = ['platform/', 'fuse/unbuilt/']
 sources = []
 foreach f : run_command('sh', '-c', 'find "$1" -type f -name "*.cpp" | LC_ALL=C sort', 'find-cpp', src, check: true).stdout().strip().split('\n')
-    sources += files(f)
+    rel = f.replace(src + '/', '')
+    skip = not fuse_dep.found() and rel in fuse_bridge_sources
+    foreach prefix : platform_src_prefixes
+        skip = skip or rel.startswith(prefix)
+    endforeach
+    if not skip
+        sources += files(f)
+    endif
 endforeach
+platform_os_dir = host_os == 'darwin' ? 'darwin' : 'linux'
+foreach f : run_command('sh', '-c', 'find "$1" -type f -name "*.cpp" | LC_ALL=C sort', 'find-cpp', src / 'platform' / platform_os_dir, check: false).stdout().strip().split('\n')
+    if f != ''
+        sources += files(f)
+    endif
+endforeach
+if not fuse_dep.found()
+    sources += files(src / 'fuse/unbuilt/Service.cpp')
+endif
 
 # The usage module's contract export uses the vendored nlohmann/json (header-only).
 usage_inc = include_directories('usage/include', 'vendor')
@@ -131,8 +167,12 @@ core_pch = get_option('optimization') == '0' ? ['pch/vaulthalla_pch.hpp'] : []
 # so every gtest registration survives.
 if get_option('build_unit_tests')
     unit_test_sources = []
+    # Suites of the kernel FUSE bridge itself; without it (-Dfuse=disabled) there is nothing to test.
+    fuse_bridge_tests = ['test_fuse_denial.cpp']
     foreach f : run_command('sh', '-c', 'find "$1" -type f -name "*.cpp" | LC_ALL=C sort', 'find-cpp', tests_src, check: true).stdout().strip().split('\n')
-        unit_test_sources += files(f)
+        if fuse_dep.found() or fs.name(f) not in fuse_bridge_tests
+            unit_test_sources += files(f)
+        endif
     endforeach
 
     # A protocol-speaking fake converter for the preview::derive::Runner tests (never installed).
@@ -219,8 +259,8 @@ executable('vaulthalla-server', main,
            install: true
 )
 
-executable('vaulthalla-cli', files(join_paths(core_root, 'main/cli.cpp')),
-           include_directories: include_directories('vendor'),
+executable('vaulthalla-cli', files(join_paths(core_root, 'main/cli.cpp'), src / 'platform' / platform_os_dir / 'Fd.cpp'),
+           include_directories: include_directories('vendor', 'include'),
            dependencies: fmt_dep,
            install: true
 )

@@ -374,17 +374,17 @@ std::shared_ptr<Engine> Manager::getEngine(const unsigned int id) const {
     return vaultToEngine_.at(id);
 }
 
-void Manager::registerOpenHandle(const fuse_ino_t ino) {
+void Manager::registerOpenHandle(const vh::fs::Inode ino) {
     std::scoped_lock lock(openHandleMutex_);
     ++openHandleCounts_[ino];
 }
 
-void Manager::closeOpenHandle(const fuse_ino_t ino) {
+void Manager::closeOpenHandle(const vh::fs::Inode ino) {
     std::scoped_lock lock(openHandleMutex_);
     if (--openHandleCounts_[ino] == 0) openHandleCounts_.erase(ino);
 }
 
-unsigned int Manager::getOpenHandleCount(const fuse_ino_t ino) const {
+unsigned int Manager::getOpenHandleCount(const vh::fs::Inode ino) const {
     std::scoped_lock lock(openHandleMutex_);
     if (openHandleCounts_.contains(ino)) return openHandleCounts_.at(ino);
     return 0;

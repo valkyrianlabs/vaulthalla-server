@@ -1,13 +1,11 @@
 #pragma once
 
-#define FUSE_USE_VERSION 35
-
 #include <filesystem>
-#include <fuse_lowlevel.h>
 #include <memory>
 #include <optional>
 #include <vector>
 #include "fs/Fwd.hpp"
+#include "fs/Inode.hpp"
 #include "identities/Fwd.hpp"
 #include "storage/Fwd.hpp"
 
@@ -41,7 +39,7 @@ namespace vh {
             std::shared_ptr<fs::model::Entry> entry{};
             std::shared_ptr<fs::model::Entry> parentEntry{};
             std::optional<std::filesystem::path> path{};
-            std::optional<fuse_ino_t> ino{};
+            std::optional<vh::fs::Inode> ino{};
             std::shared_ptr<storage::Engine> engine{};
             std::optional<std::vector<std::shared_ptr<fs::model::Entry>>> dir{};
 

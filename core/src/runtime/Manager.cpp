@@ -66,7 +66,7 @@ Manager& Manager::instance() {
 
 Manager::Manager()
     : syncController(std::make_shared<sync::Controller>()),
-      fuseService(std::make_shared<fuse::Service>()),
+      fuseService(fuse::makeService()),
       protocolService(std::make_shared<protocols::ProtocolService>()),
       s3GatewayService(std::make_shared<protocols::s3::GatewayService>()),
       connectionLifecycleManager(std::make_shared<protocols::ws::ConnectionLifecycleManager>()),
@@ -78,7 +78,7 @@ Manager::Manager()
       operatorEmailService(std::make_shared<notifications::OperatorEmailService>()) {
 
     services_["SyncController"] = syncController;
-    services_["FUSE"] = fuseService;
+    if (fuseService) services_["FUSE"] = fuseService;  // null: built without the kernel FUSE bridge
     services_["ProtocolService"] = protocolService;
     services_["S3GatewayService"] = s3GatewayService;
     services_["ConnectionLifecycleManager"] = connectionLifecycleManager;

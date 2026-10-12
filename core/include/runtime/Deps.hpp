@@ -1,8 +1,5 @@
 #pragma once
 
-#define FUSE_USE_VERSION 35
-
-#include <fuse3/fuse_lowlevel.h>
 #include <memory>
 #include "auth/Fwd.hpp"
 #include "crypto/Fwd.hpp"
@@ -10,6 +7,8 @@
 #include "protocols/shell/Fwd.hpp"
 #include "storage/Fwd.hpp"
 #include "sync/Fwd.hpp"
+
+struct fuse_session;  // libfuse's opaque session handle; only the FUSE bridge needs its definition
 
 namespace vh::fs::cache { class Registry; }
 namespace vh::vault { class APIKeyManager; }
