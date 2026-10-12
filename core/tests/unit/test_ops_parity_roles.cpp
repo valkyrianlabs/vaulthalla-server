@@ -359,4 +359,26 @@ TEST_F(RoleParityTest, SeededPermissionsMatchWhatRolesExport) {
     EXPECT_EQ(seededVault, exportedVault);
 }
 
+
+// Deleting an admin role counted vault_role_assignments (a separate id sequence) instead of admin_role_assignments:
+// a role users held was deleted anyway and ON DELETE CASCADE silently stripped their admin role, while an unassigned
+// role could be refused because a vault role with the same id had assignments. Found by the Tier A proofs.
+TEST_F(RoleParityTest, AnAdminRoleThatUsersHoldCannotBeDeleted) {
+    const auto roleName = "rp_held_" + rolesTag();
+    const auto role = ops::roles::createAdminRole(superUser, {.name = roleName, .from = std::string("unprivileged")},
+                                                  "test");
+    const auto holder = createUser("rp_holder_" + rolesTag(), roleName);
+
+    EXPECT_THROW((void)ops::roles::removeAdminRole(superUser, role->id, "test"), ops::Conflict);
+    ASSERT_TRUE(db::query::rbac::role::Admin::get(roleName));
+    identities::manager().reconcile();   // a cascade would be out-of-band SQL; make the canonical user see it
+    const auto reloaded = identities::manager().userByName(holder->name());
+    ASSERT_TRUE(reloaded);
+    ASSERT_TRUE(reloaded->state()->roles.admin);
+    EXPECT_EQ(reloaded->state()->roles.admin->id, role->id);
+
+    const auto unheld = ops::roles::createAdminRole(superUser, {.name = "rp_unheld_" + rolesTag()}, "test");
+    EXPECT_NO_THROW((void)ops::roles::removeAdminRole(superUser, unheld->id, "test"));
+}
+
 }

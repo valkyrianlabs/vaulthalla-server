@@ -140,7 +140,7 @@ void vh::db::Connection::initPreparedAdminRoleAssignments() const {
     conn_->prepare("count_admin_role_assignments_by_role_id",
         R"SQL(
             SELECT COUNT(*)
-            FROM vault_role_assignments
+            FROM admin_role_assignments
             WHERE role_id = $1
             )SQL"
         );
