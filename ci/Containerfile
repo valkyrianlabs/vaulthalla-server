@@ -33,7 +33,7 @@ RUN apt-get update \
  && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli.gpg \
  && curl -fsSL 'https://keyserver.ubuntu.com/pks/lookup?op=get&options=mr&search=0xF23C5A6CF475977595C89F51BA6932366A755776' \
       | gpg --dearmor -o /etc/apt/keyrings/deadsnakes.gpg \
- && gpg --show-keys --with-colons /etc/apt/keyrings/deadsnakes.gpg \
+ && gpg --homedir "$(mktemp -d)" --show-keys --with-colons /etc/apt/keyrings/deadsnakes.gpg \
       | grep -q '^fpr:::::::::F23C5A6CF475977595C89F51BA6932366A755776:$' \
  && chmod 0644 /etc/apt/keyrings/*.gpg \
  && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/vaulthalla.gpg] https://apt.vaulthalla.sh stable main" > /etc/apt/sources.list.d/vaulthalla.list \
