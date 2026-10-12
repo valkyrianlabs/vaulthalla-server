@@ -27,11 +27,23 @@ bool underTmp(const std::string_view value) {
     return normal.starts_with("/tmp/") && normal.size() > 5 && normal.find("/../") == std::string::npos;
 }
 
-bool safeDatabaseName(const std::string_view name) {
+}
+
+bool isTestDatabaseName(const std::string_view name) {
     if (name.empty() || name == "vaulthalla" || name == "postgres" || name.starts_with("template")) return false;
     return name.starts_with("vh_harness_") || name.find("test") != std::string_view::npos;
 }
 
+std::optional<std::string> hostRefusal(const std::string_view hostname, const std::string_view cgroup) {
+    if (hostname.starts_with("vh-storage"))
+        return "this is the production lab (" + std::string(hostname) + "): test instances never run here";
+    // "0::/system.slice/vaulthalla.service" (cgroup v2) or "N:name=…:/system.slice/vaulthalla.service" (v1).
+    for (std::size_t pos = 0; (pos = cgroup.find("/vaulthalla.service", pos)) != std::string_view::npos; ++pos) {
+        const auto end = pos + std::string_view("/vaulthalla.service").size();
+        if (end == cgroup.size() || cgroup[end] == '\n' || cgroup[end] == '/')
+            return "running inside vaulthalla.service: the packaged service never enters test mode";
+    }
+    return std::nullopt;
 }
 
 bool requested(const EnvLookup& env) {
@@ -52,7 +64,7 @@ std::optional<std::string> refusal(const EnvLookup& env) {
     if (std::filesystem::path(mount).lexically_normal() == std::filesystem::path(backing).lexically_normal())
         return "VH_TEST_MOUNT_PATH and VH_TEST_BACKING_PATH must differ";
 
-    if (!safeDatabaseName(env("VH_TEST_DB_NAME")))
+    if (!isTestDatabaseName(env("VH_TEST_DB_NAME")))
         return "VH_TEST_DB_NAME must be a test database (vh_harness_* or a name containing \"test\")";
 
     return std::nullopt;

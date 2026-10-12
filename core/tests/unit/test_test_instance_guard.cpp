@@ -99,4 +99,24 @@ TEST(TestInstanceGuard, RealDatabasesAreRefused) {
     }
 }
 
+TEST(TestInstanceGuard, TheLabAndThePackagedServiceNeverRunATestInstance) {
+    using runtime::test_instance::hostRefusal;
+    EXPECT_NE(hostRefusal("vh-storage", "0::/user.slice\n"), std::nullopt);
+    EXPECT_NE(hostRefusal("vh-storage-2", "0::/user.slice\n"), std::nullopt);
+    EXPECT_NE(hostRefusal("dev", "0::/system.slice/vaulthalla.service\n"), std::nullopt);
+    EXPECT_NE(hostRefusal("dev", "12:pids:/system.slice/vaulthalla.service\n0::/system.slice/vaulthalla.service"),
+              std::nullopt);
+    EXPECT_EQ(hostRefusal("dev", "0::/user.slice/user-1000.slice/session-3.scope\n"), std::nullopt);
+    EXPECT_EQ(hostRefusal("dev", "0::/system.slice/vaulthalla-price-bot.service\n"), std::nullopt);
+    EXPECT_EQ(hostRefusal("dev", "0::/system.slice/actions.runner.vaulthalla.service\n"), std::nullopt);
+}
+
+TEST(TestInstanceGuard, OnlyTestDatabasesCanBeWiped) {
+    using runtime::test_instance::isTestDatabaseName;
+    for (const auto* name : {"vaulthalla", "postgres", "template0", "template1", "", "prod", "vaulthalla_prod"})
+        EXPECT_FALSE(isTestDatabaseName(name)) << name;
+    for (const auto* name : {"vh_harness_proof_1", "vh_harness_unit_x", "vh_cli_test", "test_db"})
+        EXPECT_TRUE(isTestDatabaseName(name)) << name;
+}
+
 }

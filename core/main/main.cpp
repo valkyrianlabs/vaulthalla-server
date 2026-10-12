@@ -232,6 +232,19 @@ constexpr int kExitConfig = 78;  // EX_CONFIG
 bool enterTestInstanceMode() {
     const auto env = [](const char* key) { return std::getenv(key); };
     if (!vh::runtime::test_instance::requested(env)) return true;
+    std::string hostname(256, '\0');
+    if (::gethostname(hostname.data(), hostname.size()) != 0) hostname.clear();
+    hostname.resize(std::strlen(hostname.c_str()));
+    std::string cgroup;
+    if (std::FILE* f = std::fopen("/proc/self/cgroup", "r")) {
+        char buf[512];
+        while (std::fgets(buf, sizeof buf, f)) cgroup += buf;
+        std::fclose(f);
+    }
+    if (const auto why = vh::runtime::test_instance::hostRefusal(hostname, cgroup)) {
+        std::fprintf(stderr, "[-] Refusing to start a test instance: %s\n", why->c_str());
+        return false;
+    }
     if (const auto why = vh::runtime::test_instance::refusal(env)) {
         std::fprintf(stderr, "[-] Refusing to start a test instance: %s\n", why->c_str());
         return false;
