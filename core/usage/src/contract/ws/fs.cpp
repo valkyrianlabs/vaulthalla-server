@@ -1,0 +1,218 @@
+// ws book: fs.* (core/src/protocols/ws/handler/fs/Storage.cpp; fs.download.* and the share-session forms of
+// fs.metadata / fs.list / fs.upload.* are the share handlers' native surface, handler/share/*.cpp).
+
+#include "fields.hpp"
+
+namespace vh::contract::ws::detail {
+
+namespace {
+
+// enforcePermission() throws std::runtime_error("Permission denied: ..."): no data.code, the client classifies the
+// text. Missing paths are runtime errors as well.
+std::vector<std::string> fsUntypedRefusals() { return {"denied", "not_found"}; }
+
+std::vector<WsField> fsListResponse() {
+    return {str("vault"), str("path"), object("entry", "FsEntry"), objectArray("files", "FsEntry")};
+}
+
+std::vector<WsField> fsMoveResponse() { return {str("from"), str("to")}; }
+
+std::vector<WsField> fsMovePayload() { return {vaultId(), vaultPath("from"), vaultPath("to")}; }
+
+WsField fsTransferId() { return str("transfer_id").gen(gen::ref("transfer", {"id"}, "own")).desc("From fs.download.start."); }
+
+WsField shareRelativePath() {
+    return str("path").opt().desc("Share-relative path (the share root when absent).");
+}
+
+}
+
+std::vector<WsCommandUsage> fsCommands() {
+    using namespace std::chrono_literals;
+    std::vector<WsCommandUsage> out;
+
+    out.push_back({
+        .command = "fs.dir.create",
+        .description = "Create a directory (Touch on the path).",
+        .payload = {vaultId(), vaultPath("path")},
+        .response = {str("path")},
+        .refusal_codes = {"unauthorized"},
+        .untyped_refusals = {"denied", "conflict"},
+        .operation = "fs.mkdir",
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "fs.dir.list",
+        .description = "List a directory (List on the path).",
+        .payload = {vaultId(), vaultPath("path").opt().desc("Defaults to \"/\".")},
+        .response = fsListResponse(),
+        .refusal_codes = {"unauthorized"},
+        .untyped_refusals = fsUntypedRefusals(),
+        .operation = "fs.list",
+        .client_timeout = 30s,
+    });
+
+    out.push_back({
+        .command = "fs.metadata",
+        .description = "One entry's metadata (Lookup on the path).",
+        .payload = {vaultId(), vaultPath("path").opt().desc("Defaults to \"/\".")},
+        .response = {str("vault"), str("path"), object("entry", "FsEntry")},
+        .variants = {{.mode = "share",
+                      .description = "In a share session: share-relative paths, entries reduced to the share view.",
+                      .payload = {vaultId().opt().nullable(), shareRelativePath()},
+                      .response = {str("path"), object("entry", "ShareEntry")}}},
+        .refusal_codes = {"unauthorized"},
+        .untyped_refusals = fsUntypedRefusals(),
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "fs.list",
+        .description = "fs.dir.list for console sessions; in a share session the share's view of the directory.",
+        .payload = {vaultId(), vaultPath("path").opt().desc("Defaults to \"/\".")},
+        .response = fsListResponse(),
+        .variants = {{.mode = "share",
+                      .description = "In a share session: share-relative paths, entries reduced to the share view.",
+                      .payload = {vaultId().opt().nullable(), shareRelativePath()},
+                      .response = {str("path"), object("entry", "ShareEntry"), objectArray("files", "ShareEntry")}}},
+        .refusal_codes = {"unauthorized"},
+        .untyped_refusals = fsUntypedRefusals(),
+        .operation = "fs.list",
+        .client_timeout = 30s,
+    });
+
+    out.push_back({
+        .command = "fs.entry.delete",
+        .description = "Delete a file or directory tree (Delete on the path).",
+        .payload = {vaultId(), vaultPath("path")},
+        .response = {str("path")},
+        .refusal_codes = {"unauthorized"},
+        .untyped_refusals = fsUntypedRefusals(),
+        .operation = "fs.delete",
+        .client_timeout = 180s,
+    });
+
+    out.push_back({
+        .command = "fs.entry.move",
+        .description = "Move an entry (Move on the source).",
+        .payload = fsMovePayload(),
+        .response = fsMoveResponse(),
+        .refusal_codes = {"unauthorized", "not_found"},
+        .untyped_refusals = {"denied"},
+        .client_timeout = 180s,
+    });
+
+    out.push_back({
+        .command = "fs.entry.rename",
+        .description = "Rename an entry (Rename on the source).",
+        .payload = fsMovePayload(),
+        .response = fsMoveResponse(),
+        .refusal_codes = {"unauthorized", "not_found"},
+        .untyped_refusals = {"denied"},
+        .operation = "fs.rename",
+        .client_timeout = 60s,
+    });
+
+    out.push_back({
+        .command = "fs.entry.copy",
+        .description = "Copy an entry or tree: Copy on every source, Read on source files, Write (files) or Touch "
+                       "(directories) at each destination, all checked before anything is written.",
+        .payload = fsMovePayload(),
+        .response = fsMoveResponse(),
+        .refusal_codes = {"unauthorized", "not_found"},
+        .untyped_refusals = {"denied"},
+        .operation = "fs.copy",
+        .client_timeout = 180s,
+    });
+
+    out.push_back({
+        .command = "fs.upload.start",
+        .description = "Start a chunked ws upload (Write on the path). The console uploads over HTTP instead "
+                       "(POST /upload/session); this is the native ws transfer.",
+        .payload = {vaultId(), vaultPath("path"), uinteger("size").gen(gen::intRange(0, 65536))},
+        .response = {str("upload_id")},
+        .variants = {{.mode = "share",
+                      .description = "In a share session: the share upload surface (target resolved inside the share).",
+                      .payload = {vaultId().opt().nullable(),
+                                  shareRelativePath(),
+                                  str("filename").opt(),
+                                  uinteger("size_bytes").opt(),
+                                  uinteger("size").opt(),
+                                  str("mime_type").opt().nullable(),
+                                  str("duplicate_policy").opt().oneOf({"reject"})},
+                      .response = {str("upload_id"), str("transfer_id"), str("path"), str("filename"),
+                                   uinteger("size_bytes"), uinteger("chunk_size"), str("duplicate_policy")}}},
+        .refusal_codes = {"unauthorized"},
+        .untyped_refusals = {"denied"},
+        .operation = "fs.write",
+        .client_timeout = 30s,
+    });
+
+    out.push_back({
+        .command = "fs.upload.finish",
+        .description = "Finish the session's active ws upload.",
+        .payload = {vaultId(), vaultPath("path")},
+        .response = {str("path")},
+        .variants = {{.mode = "share",
+                      .description = "In a share session.",
+                      .payload = {str("upload_id").opt(), str("transfer_id").opt()},
+                      .response = {str("upload_id"), boolean("complete"), object("entry", "ShareEntry")}}},
+        .refusal_codes = {"unauthorized"},
+        .untyped_refusals = {"denied"},
+        .client_timeout = 180s,
+    });
+
+    out.push_back({
+        .command = "fs.upload.cancel",
+        .description = "Abort the session's active ws upload.",
+        .payload = {},
+        .response = {boolean("cancelled")},
+        .variants = {{.mode = "share",
+                      .description = "In a share session.",
+                      .payload = {str("upload_id").opt(), str("transfer_id").opt()},
+                      .response = {boolean("cancelled"), str("upload_id")}}},
+        .refusal_codes = {"unauthorized"},
+        .client_timeout = kDefaultTimeout,
+    });
+
+    // fs.download.* is the share download surface: a console session is refused (share mode required).
+    out.push_back({
+        .command = "fs.download.start",
+        .description = "Share sessions only: start a chunked download of a file inside the share.",
+        .auth = "share",
+        .payload = {shareRelativePath(), vaultId().opt().nullable()},
+        .response = {str("transfer_id"), str("filename"), str("path"), uinteger("size_bytes"),
+                     str("mime_type").opt().nullable(), uinteger("chunk_size")},
+        .refusal_codes = {"unauthorized"},
+        .untyped_refusals = {"denied", "not_found"},
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "fs.download.chunk",
+        .description = "Share sessions only: read the next chunk (base64).",
+        .auth = "share",
+        .payload = {fsTransferId(), uinteger("offset").gen(gen::intRange(0, 0)).desc("Byte offset; next_offset of the previous chunk."),
+                    uinteger("length").opt()},
+        .response = {str("transfer_id"), uinteger("offset"), uinteger("bytes"), str("data_base64"),
+                     uinteger("next_offset"), boolean("complete")},
+        .refusal_codes = {"unauthorized"},
+        .untyped_refusals = {"invalid"},
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "fs.download.cancel",
+        .description = "Share sessions only: drop a transfer.",
+        .auth = "share",
+        .payload = {fsTransferId()},
+        .response = {boolean("cancelled"), str("transfer_id")},
+        .refusal_codes = {"unauthorized"},
+        .client_timeout = kDefaultTimeout,
+    });
+
+    return out;
+}
+
+}

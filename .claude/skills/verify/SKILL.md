@@ -26,14 +26,14 @@ bash tools/dev/verify.sh core web   # explicit profiles
 | `lifecycle` | `deploy/lifecycle` unit tests (minimum test count) | seconds |
 | `docs` | payload-markdown checker on changed docs (or all), then `pmdocs validate --source docs` | seconds |
 | `shell` | `bash -n` (+ shellcheck if installed) on changed `bin/`, `web/bin/`, and maintainer scripts | seconds |
-| `integration` | **Destructive:** `make uninstall && make clean-full && make run_test` on `/tmp/vh_mount` | 10+ min |
+| `integration` | `make itest`: Tier A proofs as an isolated private instance (sudo; never touches the dev install) | ~10 s once built |
 | `all` | every profile except `integration` | |
 
 ## Rules
 
 - `integration` tears down the live dev install on this VM. It refuses to run without
   `VERIFY_ALLOW_DESTRUCTIVE=1`. Only set that after the user agrees in this conversation.
-- DB-backed unit tests need `make test` first. That step is also destructive to the local test DB, so ask first.
+- DB-backed unit tests: `make test` (per-run DB; ARGS="--gtest_filter=..."). Isolated, no heads-up needed.
   See `.claude/context/testing.md`.
 - The `packaging` and `lifecycle` suites have minimum test counts (`run_suite` in `tools/dev/verify.sh`). When you add
   tests, raise the floor; never lower it to get green, and never weaken a contract test to pass.

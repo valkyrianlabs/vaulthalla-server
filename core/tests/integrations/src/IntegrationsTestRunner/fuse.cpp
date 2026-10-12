@@ -18,6 +18,7 @@
 #include "protocols/ws/Session.hpp"
 #include "protocols/ws/handler/fs/Storage.hpp"
 #include "storage/PlaintextReader.hpp"
+#include "seed/Stream.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -35,6 +36,7 @@
 #include "rbac/role/Vault.hpp"
 
 #include <fstream>
+#include <iostream>
 #include <unistd.h>
 
 using namespace vh::test::integration::fuse;
@@ -130,11 +132,12 @@ namespace vh::test::integration {
         // Runs a ws filesystem command in-process as `user`, the way the console sends it.
         ExecResult wsCommand(const std::function<nlohmann::json(const std::shared_ptr<::vh::protocols::ws::Session>&)>& fn,
                              const std::shared_ptr<User>& user, const std::string& okText) {
+            const auto command = "ws handler (in-process) as " + user->name() + ": " + okText;
             try {
                 (void)fn(wsSessionFor(user));
-                return {.exit_code = 0, .stdout_text = okText + "\n", .stderr_text = {}};
+                return {.exit_code = 0, .stdout_text = okText + "\n", .stderr_text = {}, .command = command};
             } catch (const std::exception& e) {
-                return {.exit_code = EIO, .stdout_text = {}, .stderr_text = e.what()};
+                return {.exit_code = EIO, .stdout_text = {}, .stderr_text = e.what(), .command = command};
             }
         }
 
@@ -171,6 +174,8 @@ namespace vh::test::integration {
                 out = {.exit_code = EIO, .stdout_text = {}, .stderr_text = e.what()};
             }
             http::Router::resetPreviewSessionResolverForTesting();
+            out.command = "GET /download?vault_id=" + std::to_string(engine->vault->id) + "&path=" + encoded +
+                          " (in-process) as " + user->name();
             return out;
         }
 
@@ -909,44 +914,61 @@ namespace vh::test::integration {
     }
 
     void IntegrationsTestRunner::runFUSETests() {
-        constexpr std::array always_run {
-            testFUSECRUD,
-            testCopyAndDelete
+        struct Scenario {
+            const char* name;
+            TestStage (*fn)();
         };
 
-        for (const auto& function : always_run) {
-            auto stage = function();
+        // One scenario's failure (a throw from setup, say) is reported as that scenario's failure; the rest still run.
+        const auto run = [&](const Scenario& s) {
+            TestStage stage;
+            try {
+                const seed::Scope scope(std::string("fuse:") + s.name);
+                stage = s.fn();
+            } catch (const std::exception& e) {
+                auto tc = std::make_shared<TestCase>();
+                tc->name = std::string(s.name) + " scenario";
+                tc->path = "fuse/scenario";
+                tc->result.exit_code = -1;
+                tc->result.stderr_text = e.what();
+                tc->fail(std::string("FUSE scenario aborted by a harness exception: ") + e.what());
+                stage = TestStage{std::string("FUSE: ") + s.name + " (aborted)", {tc}};
+            }
+            actors().reset();
             validateStage(stage);
 
             for (const auto& uid : stage.uids) linux_uids_.push_back(uid);
             for (const auto& gid : stage.gids) linux_gids_.push_back(gid);
 
             stages_.push_back(std::move(stage));
-        }
-
-        if (geteuid() != 0) return;
-
-        constexpr std::array root_only {
-            testFUSERootListingSuperAdmin,
-            testFUSERootListingUnprivilegedUser,
-            testFUSEAllow,
-            testFUSEDeny,
-            testVaultPermOverridesAllow,
-            testVaultPermOverridesDeny,
-            testVaultPermOverridesListFilter,
-            testFUSEGroupPermissions,
-            testGroupPermOverrides,
-            testFUSEUserOverridesGroupOverride
         };
 
-        for (const auto& function : root_only) {
-            auto stage = function();
-            validateStage(stage);
+        constexpr std::array<Scenario, 2> always_run {{
+            {"CRUD", testFUSECRUD},
+            {"Copy And Delete", testCopyAndDelete},
+        }};
 
-            for (const auto& uid : stage.uids) linux_uids_.push_back(uid);
-            for (const auto& gid : stage.gids) linux_gids_.push_back(gid);
+        for (const auto& s : always_run) run(s);
 
-            stages_.push_back(std::move(stage));
+        if (geteuid() != 0) {
+            std::cout << "FUSE: not root, skipping the 10 root-only RBAC scenarios (bin/tests/run_proof.sh runs them)"
+                      << std::endl;
+            return;
         }
+
+        constexpr std::array<Scenario, 10> root_only {{
+            {"Root Listing Super Admin", testFUSERootListingSuperAdmin},
+            {"Root Listing Unprivileged User", testFUSERootListingUnprivilegedUser},
+            {"Permissions Allow", testFUSEAllow},
+            {"Permissions Deny", testFUSEDeny},
+            {"Vault Permission Overrides Allow", testVaultPermOverridesAllow},
+            {"Vault Permission Overrides Deny", testVaultPermOverridesDeny},
+            {"Vault Permission Overrides List Filter", testVaultPermOverridesListFilter},
+            {"Group Permissions", testFUSEGroupPermissions},
+            {"Group Permission Overrides", testGroupPermOverrides},
+            {"User Overrides Group Override", testFUSEUserOverridesGroupOverride},
+        }};
+
+        for (const auto& s : root_only) run(s);
     }
 }

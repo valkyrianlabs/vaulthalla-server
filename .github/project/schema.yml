@@ -98,7 +98,7 @@ fields:
       - {name: crypto-secrets, color: ORANGE, max_autonomy: Checkpointed, description: "Keys, TPM sealing, secrets on disk. Never print or commit secrets."}
       - {name: auth-rbac-share, color: ORANGE, description: "Authorization or share scoping (review hotspot). Share overwrite goes through filesystem RBAC."}
       - {name: fuse-blocking, color: YELLOW, description: "Can wedge /mnt/vaulthalla or the DB pool. Use timeouts; prefer mountinfo/fusectl."}
-      - {name: destructive-local, color: YELLOW, description: "Proof wipes the local dev install/test DB (make run_test etc.). Give a heads-up."}
+      - {name: destructive-local, color: YELLOW, description: "Proof tears down or replaces the local dev install (make dev, uninstall, clean-full). Give a heads-up."}
 
   - name: Proof
     type: multi_select
@@ -111,7 +111,7 @@ fields:
       - {name: lifecycle, color: PURPLE, description: "verify.sh lifecycle: deploy/lifecycle unit tests."}
       - {name: docs, color: GREEN, description: "verify.sh docs: payload-markdown checker + pmdocs validate."}
       - {name: shell, color: GREEN, description: "verify.sh shell: bash -n on bin/ and maintainer scripts."}
-      - {name: integration, color: ORANGE, implies_hazards: [destructive-local], description: "verify.sh integration: make run_test on /tmp/vh_mount (destructive)."}
+      - {name: integration, color: ORANGE, description: "verify.sh integration: make itest, Tier A proofs as an isolated private instance (sudo; non-destructive)."}
       - {name: lab-smoke, color: RED, implies_hazards: [vh-storage], description: "Real-apt install/upgrade proof on vh-storage (tools/lab/lab_smoke). Released packages only."}
 
   - name: Agent

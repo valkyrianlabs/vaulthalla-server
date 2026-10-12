@@ -17,7 +17,7 @@
 
 namespace vh::protocols::shell {
 
-// Serves `vh` over /run/vaulthalla/cli.sock. Each client runs on its own thread (bounded by
+// Serves `vh` over /run/vaulthalla/cli.sock (a test instance: VH_TEST_CLI_SOCKET). Each client runs on its own thread (bounded by
 // kMaxConcurrentClients), so a slow command, a DB stall, or a user sitting at an interactive prompt never blocks
 // other `vh` invocations. Every client read has a timeout.
 class Server final : public concurrency::AsyncService {

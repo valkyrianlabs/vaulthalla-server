@@ -4,13 +4,13 @@
 
 | Changed | Minimum proof | Stronger proof |
 |---|---|---|
-| `core/**` C++ | `meson compile -C build` (unity build) | `meson test -C build --print-errorlogs` (unit, DB-backed), `make run_test` (integration harness) |
+| `core/**` C++ | `meson compile -C build` (unity build) | `meson test -C build --print-errorlogs` (unit, DB-backed), `make itest` (Tier A, private instance), `tools/harness/vhh.sh run --target launch` (Tier B) |
 | `web/**` | `pnpm --dir web typecheck && pnpm --dir web lint` | `pnpm --dir web build` (needs private icons), Playwright `pnpm --dir web test:e2e` |
 | `release.toml`, `.release/`, `VERSION`, version targets | `vlr check && vlr version check` | `make deb` (local release rehearsal: prepare + build + validate in a worktree of HEAD) |
 | `debian/**`, `deploy/systemd`, `deploy/psql` | `bash tools/dev/verify.sh packaging` (`tools/contracts`) | `make deb`, then install it on the dev VM (never on vh-storage; `/lab`) |
 | `deploy/lifecycle/**` | `bash tools/dev/verify.sh lifecycle` | a dev VM `vh setup …` run |
 | `docs/**` | `python3 .claude/skills/payload-markdown/scripts/check_payload_markdown_doc.py <files>` | `pmdocs validate --source docs` |
-| `bin/**` shell | `bash -n <script>` | a real `make test` / `make dev` cycle, after asking first |
+| `bin/**` shell | `bash -n <script>` | `make test` / `make itest` (isolated); a `make dev` cycle only after asking |
 
 `bash tools/dev/verify.sh <profile>` wraps the common profiles. See the `/verify` skill.
 
@@ -23,7 +23,7 @@
   (`core/pch/`): tests always, the library only when the buildtype is -O0. Optimized builds never use a PCH: GCC
   drops `#pragma GCC diagnostic`/`push_options` state across one (see the header comments).
 - `make build` is **broken**: it calls `conan install . -r vaulthalla` but there is no conanfile. Use meson directly.
-  `run-test` is declared `.PHONY` in the Makefile but has no recipe. Use `run_test`.
+  Tests never use `build/`: they build `build-itest/` (pinned options, configured only when they differ).
 - **Zero-warning bar (2026-10-04):** the tree builds with no output but `[n/N]` progress at `-O3 -Werror`, both unity
   (`meson setup build-o3 -Dbuildtype=release -Dwerror=true -Dbuild_unit_tests=true -Dintegration_tests=true`) and
   per-file (the same plus `-Dunity=off`; `core/meson.build` forces `unity=on` on `lib_usage_native`, so drop that
@@ -31,17 +31,35 @@
   one suppression is `core/include/compat/gcc_variant.hpp` (force-included for GCC): a libstdc++ `<variant>`
   `-Wmaybe-uninitialized` false positive reached through `pqxx::params`. Fix warnings at the source; don't add flags.
 
+## Isolated test runs (setup, credentials, cleanup)
+
+- One-time host setup: `sudo tools/harness/bootstrap.sh` (Python 3.14 venv, the `vh_harness` PostgreSQL role with its
+  settings in the root-only `/var/lib/vaulthalla-harness/db.env`, the `vhh-actor-NN` nologin accounts). The run path
+  never installs or changes the host; `bin/tests/lib/itest.sh` only checks the setup (preflight) and points here.
+- Every run gets its own database, owned by `vh_harness`, dropped afterwards (`make test`: empty, the suites build their
+  schema; `make itest`: cloned from the migrated template `vh_harness_tpl_<hash of deploy/psql>`, built once per
+  migration set by `vh_migrate` = the daemon's SqlDeployer; `ITEST_DB_TEMPLATE=0` starts empty to cover migrations).
+  No role is rotated or dropped, no repo env file gets credentials, nothing is installed into `/usr`.
+- Guards in code: test mode takes all five `VH_TEST_DB_*` from the environment or throws (no fallback to the configured
+  database or `/run/vaulthalla/db_password`; no repo env file is read); `wipe_all_data_restart_identity` /
+  `nuke_and_recreate_schema_public` refuse outside test mode or on a database that isn't `vh_harness_*`/`*test*`;
+  test instances refuse to start on `vh-storage*` or inside `vaulthalla.service`.
+- `bin/tests/prove_isolation.sh`: fingerprints `/usr` binaries, env files, the dev service, role password hashes,
+  databases and dev DB content, runs `make itest`, `make test` (subset) and a launched Tier B run, and requires no
+  change (passed 2026-10-12, ~45 s). `make clean-test` drops leftovers of interrupted runs only.
+- The retired shared `make run_test` (it installed an ASan build over `/usr`, rotated the `vaulthalla_test` password into
+  the dev daemon's env file, could truncate the dev DB, ran `DROP OWNED` cluster-wide) is gone; `run_test`, `run-test`
+  and `proof` are aliases of `itest`. `bin/tests/retire_legacy_test_env.sh` removes its leftovers once, explicitly.
+- Audit: `~/VAULTHALLA_RUN_TEST_AUDIT.md`.
+
 ## DB-backed unit tests
 
-- **Teardown hazard:** `make test`/`make run_test`/`make uninstall` run `bin/tests/uninstall_db.sh`, which executes
-  `DROP OWNED BY vaulthalla_test` in *every* database before dropping the role. A burner DB created with
-  `-O vaulthalla_test` (the usual way to give tests their own DB) is emptied, and the role drop then fails. Don't run
-  those targets while a burner owned by that role is in use; `install_db.sh` also rotates the role's password.
+```bash
+make test                                              # whole vh_unit_tests binary against a per-run DB (~7 min)
+make test ARGS="--gtest_filter='RoleParity*'"           # or: bash bin/tests/run_unit.sh -- --gtest_filter=...
+```
 
-1. `make test`. It uninstalls the test env, creates the test DB role and DB, and rewrites the generated `VH_TEST_DB_*`
-   credentials into the ignored `deploy/vaulthalla.env`.
-2. `set -a; source ./deploy/vaulthalla.env; set +a`
-3. `./build/core/vh_unit_tests --gtest_filter='<Filter>'`
+The tests run as you (not root), with the role's settings only in the test process's environment.
 
 CLI ↔ ws parity for families migrated to `core/ops/`:
 `--gtest_filter='*Parity*:OpsGroups*:AuthPasswordChange*'` (groups, roles, API keys, vaults, users, S3 gateway,
@@ -50,8 +68,9 @@ runs one logical operation through `shell::Router::executeLine` and through the 
 role, and compares allow/deny (against an oracle from the role's permission bits) and resulting DB state, never text.
 New families add a `test_ops_parity_<family>.cpp` on the same pattern.
 
-Don't assume the shell `.bashrc` has current credentials. **Never print or commit secret values.** If you hit DB auth,
-stale secrets, or port conflicts: `make uninstall` → `make test` → re-source.
+**Never print or commit secret values.** DB auth problems mean the harness role's settings and the role disagree:
+re-run `sudo tools/harness/bootstrap.sh` (it never rotates an existing role's password; remove the settings file first
+to re-key).
 
 ## Rich-preview / HTTP suites
 
@@ -94,21 +113,65 @@ stale secrets, or port conflicts: `make uninstall` → `make test` → re-source
   against a running install behind the reverse proxy (fixtures from `tests/e2e/fixtures/preview/generate.mjs`; see
   `web-client.md`).
 
-## Integration harness (preferred for FUSE / CLI end-to-end)
+## Integration proofs (Tier A, `make itest`, preferred for FUSE / CLI end-to-end)
 
 ```bash
-make uninstall && make clean-full && make run_test   # destructive to local dev/test state
+make itest                      # = bash bin/tests/run_proof.sh (needs sudo; never touches the dev install)
+VH_TEST_CONFIG=default VH_TEST_SEED=0x... bash bin/tests/run_proof.sh --build-dir build
+make itest-selftest             # negative controls + fail-closed env checks
 ```
 
-This runs `core/tests/integrations/main.cpp` in test mode: it wipes, inits, and seeds the DB, starts FUSE + shell, and runs the CLI and FUSE suites
-against **`/tmp/vh_mount`**. The last known result was 97/97 (2026-10-10, `fix/decision-bugs`: #143 #162 #164 #166 #167 #168 #187). It's isolated from systemd/prod state.
-The "Copy And Delete" stage (#167/#168, 14 cases, runs unprivileged too) copies a nested folder over ws
-`fs.entry.copy` and reads every copied file through FUSE and through `/download` (in-process `http::Router`), then checks
-that unlink / `fs.entry.delete` keep folders and that rmdir of a non-empty folder is ENOTEMPTY; with it the expected
-total is 97.
-If `apt-get update` fails in `bin/setup/install_deps.sh` on an unrelated host apt source (e.g. a Caddy Cloudsmith
-`402 Payment Required`), run the remaining steps directly: `bin/tests/uninstall.sh`, `bin/setup/install_users.sh`,
-`bin/tests/install_dirs.sh`, `bin/tests/install_db.sh`, `bin/tests/install_core.sh --run`.
+`core/tests/integrations/main.cpp` (`vh_integration_tests`) runs in-process against a **private** instance: a per-run
+database owned by the harness role `vh_harness`, `/tmp/vhh_proof_<run>/` paths, its own FUSE mount. It refuses to
+start (exit 78) without a complete private environment (`runtime/TestInstance.hpp`); there is no opt-out. Last results (2026-10-11):
+minimal 102/102, default 270/270 (seed 0x8f86ba60a0e5ccba; it caught the admin-role deletion defect fixed in bf56dec3).
+- Seeds: `VH_TEST_SEED` (printed in the header, summary and reports); per-test BLAKE2b-64 streams, so a seed
+  reproduces the same command lines. `VH_TEST_SEED_THREADS=1` for exact DB-id repro.
+- Knobs: `VH_TEST_CONFIG` (minimal|default|medium|large), `VH_TEST_STAGES`, `VH_TEST_NEGATIVE_CONTROL=assertion|oracle`
+  (must fail), `VH_TEST_UID_BASE` (default 2100000000; `users.linux_uid` is a signed INTEGER), `VH_TEST_FS_OP_TIMEOUT_MS`.
+- Reports: JSON + JUnit in `build-itest/proof-artifacts/<run>/`. A run takes ~7.7 s (binary ~4.9 s, of which ~2.6 s
+  tests; wrapper ~0.6 s; template clone 0.07 s vs ~0.5 s of in-binary migrations from empty). Exit non-zero on any failure or zero tests.
+- Filesystem probes go through `vh_fs_actor` (`core/tests/helpers/fs_actor.cpp`, built with `-Dintegration_tests=true`):
+  posix_spawn'd per uid, JSON lines, per-op deadline, fusectl abort of the run's own mount on a wedge.
+- Integration is no longer a meson `test()`.
+
+## Integration engine (Tier B, `tools/harness`)
+
+Out-of-process, against a private daemon instance (`vaulthalla-server` with `VH_TEST_MODE=1`). One engine, two intent
+sources: seeded planners and external agents (fake-agent gateway in `vhh/gateway.py`), sharing the operation catalog,
+identity broker, guardrails, recorder and judges. Design: `~/VAULTHALLA_INTEGRATION_HARNESS_AUDIT.md`.
+
+```bash
+sudo tools/harness/bootstrap.sh                                    # once: venv, vh_harness role, vhh-actor-NN accounts
+sudo tools/harness/vhh.sh run --target launch --build build --seed 0x2a --sessions 8 --ops 30 \
+     --surfaces ws,fuse --schedule barrier                         # launch, provision pentest-v1, run, tear down
+sudo tools/harness/vhh.sh replay --target launch --build build --trace runs/<run>/trace.jsonl --window 15..30
+sudo tools/harness/vhh.sh shrink --target launch --build <fault build> --trace ... --predicate oracle --out x.jsonl
+sudo tools/harness/vhh.sh regress --build build                    # every tools/harness/regressions/*.jsonl must not reproduce
+sudo tools/harness/vhh.sh scenario hang|crash --build build        # daemon stopped/killed with a FUSE op in flight
+tools/harness/vhh.sh world oracle-check                            # RBAC model vs the fixture's 59 expectations
+bash tools/dev/verify.sh harness                                   # unit + self tests (CI tooling job)
+```
+
+- Every failed run prints a one-line `reproduce with:` command; artifacts hold `trace.jsonl` (redacted), `summary.json`,
+  `instance/` (daemon log, target.json, evidence on wedges, sanitizer logs) and `instance.json`.
+- Surfaces: `ws` (the console: ws for metadata, HTTP lanes for bytes), `fuse` (vh_fs_actor per actor account),
+  `cli_sock` / `cli_bin` (real peer uid via the `vhh-actor-NN` accounts). Admin-side provisioning reuses the pentest
+  `Seeder` against the private socket.
+- Judges: oracle (RBAC model, revocation grace window), parity (same probe across surfaces), canary, integrity
+  (deterministic content), liveness/wedge, unexplained errors, harness faults. Any harness fault, unexplained error,
+  daemon death, unclean stop, sanitizer report or zero executed ops fails the run.
+- Replay reproduces the op sequence and overlap, not the daemon's internal thread interleavings; use `barrier`,
+  `--repeat` and a TSan build for races.
+- Fault fixtures (`tools/harness/faults/*.patch`, `build.sh <fault>` builds a throwaway worktree), all caught
+  (2026-10-12): libmagic race (`scenario magic`: ASan heap-use-after-free, trace replay 8/10 on the fault build vs
+  0/10 fixed; `RACE_ACCEPTANCE.md`), stale revocation (`scenario revoke`: the next request after an unassign is still
+  allowed; the documented contract is that CLI/console changes apply to the very next request), ws list without
+  RBAC (oracle; shrinks to one op). `vhh regress` keeps all of them (`regressions/*.jsonl`, `*.scenario.json`).
+- Lessons: the engine never touches the mount itself (a `Path.resolve()` blocked it in D state under a stopped
+  daemon); `Instance.watchdog()` aborts the run's own FUSE connection past a hard deadline.
+- Never point mutating commands at vh-storage: targets are validated (a live `VH_TEST_MODE=1` daemon serving a
+  `vh_harness_*` database), anything else fails closed.
 
 ## Production-style mount dogfooding (`/mnt/vaulthalla`)
 

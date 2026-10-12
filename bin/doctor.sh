@@ -137,12 +137,19 @@ echo
 echo "---- 🌍 Env Sanity ----"
 
 if [[ -f "$CONFIG_DIR/vaulthalla.env" ]]; then
-  echo "📄 $CONFIG_DIR/vaulthalla.env"
-  nl -ba "$CONFIG_DIR/vaulthalla.env" | sed "s/^/   /"
+  # Key names only: the file holds secrets, and values are never printed (CLAUDE.md).
+  echo "📄 $CONFIG_DIR/vaulthalla.env (values masked)"
+  sed -nE 's/^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=.*/\2=<set>/p' \
+    "$CONFIG_DIR/vaulthalla.env" | nl -ba | sed "s/^/   /"
 
   echo
-  echo "⚠️  suspicious lines:"
-  grep -nE "^[[:space:]]*export[[:space:]]+|[[:space:]]+=[[:space:]]*" "$CONFIG_DIR/vaulthalla.env" || echo "   none"
+  echo "⚠️  suspicious lines (line numbers only):"
+  grep -nE "^[[:space:]]*export[[:space:]]+|[[:space:]]+=[[:space:]]*" "$CONFIG_DIR/vaulthalla.env" | cut -d: -f1 \
+    | sed 's/^/   line /' || echo "   none"
+  if grep -qE '^(export )?VH_TEST_DB_' "$CONFIG_DIR/vaulthalla.env"; then
+    echo "⚠️  VH_TEST_DB_* keys are in the daemon's environment file (left by the retired make run_test);"
+    echo "   remove them with bin/tests/retire_legacy_test_env.sh"
+  fi
 else
   echo "❌ env file missing"
 fi

@@ -139,17 +139,11 @@ ensure_test_db_env() {
     return 0
   fi
 
-  if [[ -x "$REPO_ROOT/bin/tests/install_db.sh" ]]; then
-    SETUP_COMMAND_RUN="./bin/tests/install_db.sh"
-    echo "Test DB env incomplete after sourcing known env files; running $SETUP_COMMAND_RUN." >&2
-    "$REPO_ROOT/bin/tests/install_db.sh" >/dev/null
-    reload_known_env
-  fi
-
-  if ! vh_e2e_require_test_db_env; then
-    echo "DB env remains incomplete after setup command: $SETUP_COMMAND_RUN" >&2
-    return 1
-  fi
+  # The shared test role (and the script that rotated its password into the repo's env files) is gone; nothing here
+  # creates or rewrites credentials. Point VH_TEST_DB_* at the install the E2E run targets, explicitly.
+  echo "VH_TEST_DB_* is incomplete: export VH_TEST_DB_{USER,PASS,HOST,PORT,NAME} for the database of the install" >&2
+  echo "under test (see tools/e2e/load_env.sh); E2E no longer provisions a shared test role." >&2
+  return 1
 }
 
 guard_test_db_target() {

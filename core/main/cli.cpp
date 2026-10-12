@@ -374,7 +374,17 @@ constexpr int kTempFail = 75;     // EX_TEMPFAIL: daemon not responding / busy
 constexpr int kNoPerm = 77;       // EX_NOPERM: not allowed to use the control socket
 }
 
-static constexpr const char* kSocketPath = "/run/vaulthalla/cli.sock";
+static constexpr const char* kDefaultSocketPath = "/run/vaulthalla/cli.sock";
+
+// VAULTHALLA_CLI_SOCKET points `vh` at another daemon's socket (a private test instance). The daemon still decides
+// who the caller is from the peer credentials, so this grants nothing.
+static const char* socket_path() {
+    static const char* path = [] {
+        const char* env = std::getenv("VAULTHALLA_CLI_SOCKET");
+        return env && *env ? env : kDefaultSocketPath;
+    }();
+    return path;
+}
 
 static int connect_timeout_seconds() {
     if (const char* env = std::getenv("VAULTHALLA_CLI_TIMEOUT"); env && *env) {
@@ -391,7 +401,7 @@ static int report_not_responding(const int seconds) {
                "    Is vaulthalla.service running?  systemctl status vaulthalla\n"
                "    Recent daemon log:               journalctl -u vaulthalla -n 50\n"
                "    (Set VAULTHALLA_CLI_TIMEOUT=<seconds> to wait longer.)\n",
-               kSocketPath, seconds);
+               socket_path(), seconds);
     return exit_code::kTempFail;
 }
 
@@ -404,7 +414,7 @@ static int report_connect_error(const int err, const int seconds) {
                        "    The control socket is restricted to the 'vaulthalla' group. Either run with sudo, or add\n"
                        "    yourself to the group and start a new login session:\n"
                        "      sudo usermod -aG vaulthalla $USER\n",
-                       kSocketPath);
+                       socket_path());
             return exit_code::kNoPerm;
         case ENOENT:
         case ECONNREFUSED:
@@ -412,14 +422,14 @@ static int report_connect_error(const int err, const int seconds) {
                        "vh: the vaulthalla daemon is not running (nothing is listening at {}).\n"
                        "    Check the service:  systemctl status vaulthalla\n"
                        "    Recent daemon log:  journalctl -u vaulthalla -n 50\n",
-                       kSocketPath);
+                       socket_path());
             return exit_code::kUnavailable;
         case EAGAIN:
         case ETIMEDOUT:
         case EINPROGRESS:
             return report_not_responding(seconds);
         default:
-            fmt::print(stderr, "vh: cannot connect to {}: {}\n", kSocketPath, std::strerror(err));
+            fmt::print(stderr, "vh: cannot connect to {}: {}\n", socket_path(), std::strerror(err));
             return exit_code::kUnavailable;
     }
 }
@@ -459,7 +469,7 @@ int main(const int argc, char** argv) {
         fmt::print(stderr,
                    "vaulthalla-cli --systemd is obsolete: vaulthalla.service owns {} directly.\n"
                    "Disable the stale units:  sudo systemctl disable --now vaulthalla-cli.socket vaulthalla-cli.service\n",
-                   kSocketPath);
+                   socket_path());
         return 0;
     }
 
@@ -485,7 +495,7 @@ int main(const int argc, char** argv) {
 
     sockaddr_un addr{};
     addr.sun_family = AF_UNIX;
-    std::snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", kSocketPath);
+    std::snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", socket_path());
     if (::connect(s, reinterpret_cast<sockaddr*>(&addr), sizeof(sa_family_t) + std::strlen(addr.sun_path) + 1) != 0) {
         const int err = errno;
         ::close(s);

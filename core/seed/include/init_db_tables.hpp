@@ -3,7 +3,11 @@
 #include "db/Transactions.hpp"
 #include "identities/Manager.hpp"
 #include "seed/include/SqlDeployer.hpp"
+#include "runtime/TestInstance.hpp"
 #include <paths.h>
+
+#include <stdexcept>
+#include <string>
 
 namespace vh::db::seed {
 
@@ -19,9 +23,22 @@ inline void init_tables_if_not_exists() {
 // ############################################## TESTING ONLY ####################################################
 // ################################################################################################################
 
+// Every destructive helper below checks first: the process is in test mode and connected to a test database
+// (runtime/TestInstance: vh_harness_* or a name containing "test"). Whatever chose the connection, a wipe can't reach
+// a dev or production database.
+inline void requireTestDatabase(const char* what) {
+    if (!paths::isTestMode()) throw std::runtime_error(std::string(what) + ": refused outside test mode");
+    const auto name = Transactions::exec("reset_db::current_database", [&](pqxx::work& txn) {
+        return txn.exec("SELECT current_database()").one_field_ref().as<std::string>();
+    });
+    if (!runtime::test_instance::isTestDatabaseName(name))
+        throw std::runtime_error(std::string(what) + ": refused on database '" + name + "' (not a test database)");
+}
+
 // Fast + safe for dev/test: empties every table in `public` and
 // resets all owned sequences back to 1. Keeps schema, types, funcs, RLS, etc.
 inline void wipe_all_data_restart_identity() {
+    requireTestDatabase("wipe_all_data_restart_identity");
     Transactions::exec("reset_db::wipe_all_data", [&](pqxx::work& txn) {
         txn.exec(R"(
 DO $$
@@ -68,6 +85,7 @@ $$;
 // Hard reset: drop & recreate the entire `public` schema (tables, types,
 // funcs, triggers, policies, indexes, everything), then rebuild schema.
 inline void nuke_and_recreate_schema_public() {
+    requireTestDatabase("nuke_and_recreate_schema_public");
     // Drop + recreate schema in its own transaction
     Transactions::exec("reset_db::nuke_and_recreate_schema_public", [&](pqxx::work& txn) {
         txn.exec(R"(

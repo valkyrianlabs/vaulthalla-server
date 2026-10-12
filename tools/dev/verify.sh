@@ -13,8 +13,10 @@
 #   lifecycle   deploy/lifecycle unit tests (minimum test count)
 #   docs        payload-markdown checker on changed docs (or all docs) + pmdocs validate
 #   shell       bash -n on changed/all bin/ and debian maintainer scripts
-#   integration DESTRUCTIVE: make uninstall && make clean-full && make run_test (requires VERIFY_ALLOW_DESTRUCTIVE=1)
-#   all         core web release packaging lifecycle docs shell
+#   harness     integration engine unit + self tests (tools/harness, no daemon; Python 3.14 with `websockets`:
+#               the tools/harness/.venv from bootstrap.sh, or VERIFY_HARNESS_PYTHON)
+#   integration make itest: Tier A proofs as an isolated private instance (sudo; never touches the dev install)
+#   all         core web release packaging lifecycle docs shell harness
 set -euo pipefail
 
 ROOT_DIR="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)"
@@ -141,10 +143,25 @@ run_shell() {
   else warn "shellcheck not installed; syntax check only"; fi
 }
 
+run_harness() {
+  local py="${VERIFY_HARNESS_PYTHON:-}"
+  [[ -z "$py" && -x tools/harness/.venv/bin/python ]] && py="$ROOT_DIR/tools/harness/.venv/bin/python"
+  py="${py:-python3.14}"
+  [[ "$py" == */* && "$py" != /* ]] && py="$ROOT_DIR/$py"
+  "$py" -c 'import sys; sys.exit(sys.version_info < (3, 14))' 2>/dev/null || die "tools/harness needs Python 3.14 ($py): sudo tools/harness/bootstrap.sh (or VERIFY_HARNESS_PYTHON)"
+  "$py" -c 'import websockets' 2>/dev/null || die "tools/harness needs websockets: sudo tools/harness/bootstrap.sh (or VERIFY_HARNESS_PYTHON)"
+  log "integration engine tests (tools/harness/tests, $py)"
+  local output rc=0 ran
+  output="$(cd tools/harness && "$py" -m unittest discover -s tests -t . 2>&1)" || rc=$?
+  [[ "$rc" -eq 0 ]] || { printf '%s\n' "$output" | tail -n 40 >&2; die "harness tests failed"; }
+  ran="$(grep -oE '^Ran [0-9]+' <<<"$output" | grep -oE '[0-9]+' || true)"
+  (( ${ran:-0} >= 119 )) || die "harness: only ${ran:-0} test(s) ran, expected at least 119"
+  log "harness: $ran tests passed"
+}
+
 run_integration() {
-  [[ "${VERIFY_ALLOW_DESTRUCTIVE:-0}" == "1" ]] || die "integration tears down local dev/test state; re-run with VERIFY_ALLOW_DESTRUCTIVE=1 after confirming with the maintainer"
-  warn "tearing down local dev + test installs, then running the harness on /tmp/vh_mount"
-  make uninstall && make clean-full && make run_test
+  log "make itest (isolated private instance: per-run DB, private paths, nothing installed)"
+  make --no-print-directory itest
 }
 
 infer_profiles() {
@@ -157,6 +174,7 @@ infer_profiles() {
   grep -qE '^deploy/lifecycle/'                                 <<<"$files" && echo lifecycle
   grep -qE '^docs/|^debian/README'                              <<<"$files" && echo docs
   grep -qE '^bin/|^web/bin/|^tools/.*\.sh$|^debian/(postinst|prerm|postrm)$'   <<<"$files" && echo shell
+  grep -qE '^tools/harness/|^tools/lab/pentest/'                <<<"$files" && echo harness
   return 0
 }
 
@@ -165,8 +183,8 @@ expanded=()
 for p in "${profiles[@]}"; do
   case "$p" in
     changed) mapfile -t -O "${#expanded[@]}" expanded < <(infer_profiles) ;;
-    all) expanded+=(core web release packaging lifecycle docs shell) ;;
-    doctor|core|web|release|packaging|lifecycle|docs|shell|integration) expanded+=("$p") ;;
+    all) expanded+=(core web release packaging lifecycle docs shell harness) ;;
+    doctor|core|web|release|packaging|lifecycle|docs|shell|harness|integration) expanded+=("$p") ;;
     *) die "unknown profile '$p'" ;;
   esac
 done

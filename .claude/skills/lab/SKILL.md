@@ -46,7 +46,7 @@ unit states with restart counts and timestamps, the FUSE wedge indicator, D-stat
 `apt-get install ./x.deb`, no CI dry-run artifacts. The lab exists to test the real `apt.vaulthalla.sh` install and
 upgrade path, so it has to sit on a published version when a release is cut. Pre-flashing a candidate defeats that,
 and on 2026-10-02 it also broke DNS resolution on the maintainer's network. Prove candidates on the dev VM
-(`/verify`, `make run_test`) and with a CI dry run. Lab upgrades come from the real repo, after publishing, and only
+(`/verify`, `make itest`) and with a CI dry run. Lab upgrades come from the real repo, after publishing, and only
 when the maintainer asks.
 
 When the maintainer asks for a real-repo upgrade: baseline `inspect.sh` (must be `ii`, lock free, `waiting=0`), then

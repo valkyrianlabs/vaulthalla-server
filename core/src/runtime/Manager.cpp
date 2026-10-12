@@ -89,7 +89,8 @@ Manager::Manager()
     services_["StatsSnapshotService"] = statsSnapshotService;
     services_["OperatorEmailService"] = operatorEmailService;
 
-    if (!paths::testMode) {
+    // A test instance serves `vh` only on a private socket (VH_TEST_CLI_SOCKET), never the system one.
+    if (!paths::testMode || paths::testCliSocket) {
         shellServer = std::make_shared<protocols::shell::Server>();
         services_["ShellServer"] = shellServer;
     }

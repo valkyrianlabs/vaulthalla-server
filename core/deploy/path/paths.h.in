@@ -9,7 +9,6 @@
 #define VH_S3_GATEWAY_MULTIPART_PARTS_DIRNAME @VH_S3_GATEWAY_MULTIPART_PARTS_DIRNAME@
 #define VH_PSQL_SCHEMAS_PATH @VH_PSQL_SCHEMAS_PATH@
 #define VH_PSQL_TEST_SCHEMAS_PATH @VH_PSQL_TEST_SCHEMAS_PATH@
-#define VH_TEST_ENV_PATH @VH_TEST_ENV_PATH@
 
 #include <cstdlib>
 #include <filesystem>
@@ -24,10 +23,13 @@ inline std::filesystem::path mountPath = VH_MOUNT_PATH;
 inline std::filesystem::path runtimePath = VH_RUNTIME_PATH;
 inline std::filesystem::path psqlSchemaPath = VH_PSQL_SCHEMAS_PATH;
 inline std::filesystem::path psqlTestSchemaPath = VH_PSQL_TEST_SCHEMAS_PATH;
-inline std::filesystem::path testEnvPath = VH_TEST_ENV_PATH;
+inline std::filesystem::path cliSocketPath = "/run/vaulthalla/cli.sock";
+// Set only by enableTestMode() from VH_TEST_CLI_SOCKET: a private test instance serves `vh` on its own socket.
+inline bool testCliSocket = false;
 
 inline void setLogPathForTesting() {
-    logPath = std::filesystem::temp_directory_path() / "vh_log";
+    const char* forced = std::getenv("VH_TEST_LOG_PATH");
+    logPath = forced && *forced ? std::filesystem::path(forced) : std::filesystem::temp_directory_path() / "vh_log";
     if (!std::filesystem::exists(logPath)) {
         std::filesystem::create_directories(logPath);
         std::filesystem::permissions(
@@ -58,6 +60,11 @@ inline void enableTestMode() {
 
     constexpr const char* envVar2 = "VH_PATH_TO_CONFIG";
     if (std::getenv(envVar2)) configPath = std::getenv(envVar2);
+
+    if (const char* socket = std::getenv("VH_TEST_CLI_SOCKET"); socket && *socket) {
+        cliSocketPath = socket;
+        testCliSocket = true;
+    }
 }
 
 inline bool isTestMode() { return testMode; }
@@ -70,5 +77,5 @@ inline std::filesystem::path getRuntimePath() { return runtimePath; }
 inline std::filesystem::path getCachePath() { return VH_CACHE_PATH; }
 inline std::filesystem::path getS3GatewayMultipartPartsPath() { return getBackingPath() / VH_S3_GATEWAY_MULTIPART_PARTS_DIRNAME; }
 inline std::filesystem::path getPsqlSchemasPath() { return isTestMode() ? VH_PSQL_TEST_SCHEMAS_PATH : VH_PSQL_SCHEMAS_PATH; }
-inline std::filesystem::path getTestEnvPath() { return testEnvPath; }
+inline std::filesystem::path getCliSocketPath() { return cliSocketPath; }
 }

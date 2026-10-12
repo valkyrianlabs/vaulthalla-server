@@ -10,13 +10,19 @@ static std::shared_ptr<CommandUsage> buildBaseUsage(const std::weak_ptr<CommandU
     return cmd;
 }
 
-static const auto userPos = Positional::WithAliases("username", "Username or ID of the user", {"name", "id"});
-static const auto namePos = Positional::Alias("username", "Username of the user", "name");
-static const auto nameOpt = Optional::Single("username", "New username for the user", "name", "new_name");
-static const auto emailOpt = Optional::ManyToOne("email", "Email address of the user", {"email", "e"}, "email");
-static const auto role = Option::Multi("role", "Role name or ID to assign to the user", {"role", "r"}, {"name", "id"});
+static const auto userPos = Positional::WithAliases("username", "Username or ID of the user", {"name", "id"},
+                                                   contract::gen::ref("user", {"name", "id"}));
+static const auto namePos = Positional::Alias("username", "Username of the user", "name", contract::gen::freshName("user_"));
+static const auto nameOpt = Optional::Single("username", "New username for the user", "name", "new_name")
+                                .withGen("new_name", contract::gen::freshName("user_"));
+static const auto emailOpt = Optional::ManyToOne("email", "Email address of the user", {"email", "e"}, "email")
+                                 .withGen("email", contract::gen::email());
+static const auto role = Option::Multi("role", "Role name or ID to assign to the user", {"role", "r"}, {"name", "id"})
+                             .withGen("name", contract::gen::ref("role.admin", {"name"}))
+                             .withGen("id", contract::gen::ref("role.admin", {"id"}));
 static const auto linuxUidOpt = Optional::ManyToOne("linux_uid", "Linux UID for system integration",
-                                                    {"linux-uid", "uid"}, "id");
+                                                    {"linux-uid", "uid"}, "id")
+                                    .withGen("id", contract::gen::testLinuxId());
 static const auto disableFlag = Flag::WithAliases("disable", "Deactivate the account and end its sessions",
                                                   {"disable", "deactivate"});
 static const auto enableFlag = Flag::WithAliases("enable", "Reactivate a deactivated account", {"enable", "activate"});
@@ -58,7 +64,8 @@ static std::shared_ptr<CommandUsage> remove(const std::weak_ptr<CommandUsage>& p
                        "transferred with --transfer-to; you are asked to confirm either way.";
     cmd->positionals = {userPos};
     cmd->optional = {Optional::ManyToOne("transfer_to", "Give the user's vaults to this user instead of destroying them",
-                                         {"transfer-to"}, "user")};
+                                         {"transfer-to"}, "user")
+                         .withGen("user", contract::gen::ref("user", {"name", "id"}))};
     cmd->optional_flags = {Flag::Alias("yes", "Delete without asking for confirmation", "yes")};
     cmd->examples = {
         {"vh user delete alice", "Delete the user named 'alice' after confirming; her vaults are destroyed."},

@@ -35,26 +35,33 @@ const auto outputFile = Optional::ManyToOne("output", "Output file for the expor
                             {"output", "o"}, "file");
 
 const auto subjectOption = Option::Multi("subject", "Specify the user or group the command is targeting", {"user", "u", "group", "g"},
-                      {"id", "name"});
+                      {"id", "name"})
+                              .withGen("id", contract::gen::ref("subject", {"id"}))
+                              .withGen("name", contract::gen::ref("subject", {"name"}));
 
 const auto permissionsFlags = Flag::WithAliases("permissions", "Permission flags to set for the new role (see 'vh permissions') min=1",
                           ALL_SHELL_PERMS_STR);
 
 const auto jsonFlag = Flag::WithAliases("json_output", "Output the list in JSON format", {"json", "j"});
 
-const auto limitOpt = Optional::ManyToOne("limit", "Limit the number of vaults displayed", {"limit", "n"}, "limit");
+const auto limitOpt = Optional::ManyToOne("limit", "Limit the number of vaults displayed", {"limit", "n"}, "limit")
+                         .withGen("limit", contract::gen::intRange(1, 50));
 
-const auto pageOpt = Optional::ManyToOne("page", "Specify the page number when using --limit for pagination", {"page", "p"}, "page");
+const auto pageOpt = Optional::ManyToOne("page", "Specify the page number when using --limit for pagination", {"page", "p"}, "page")
+                        .withGen("page", contract::gen::intRange(1, 3));
 
 const auto sortOpt = Optional::ManyToOne("sort", "Sort by this field", {"sort"}, "field");
 
-const auto directionOpt = Optional::ManyToOne("direction", "Sort direction: asc or desc", {"direction"}, "asc|desc");
+const auto directionOpt = Optional::ManyToOne("direction", "Sort direction: asc or desc", {"direction"}, "asc|desc")
+                             .withGen("asc|desc", contract::gen::oneOf({"asc", "desc"}));
 
-const auto filterOpt = Optional::ManyToOne("filter", "Only show entries matching this text", {"filter"}, "text");
+const auto filterOpt = Optional::ManyToOne("filter", "Only show entries matching this text", {"filter"}, "text")
+                          .withGen("text", contract::gen::pattern("{a}{a}"));
 
 // Every option parseListQuery() reads; list commands that use it declare all of these.
 inline std::vector<Optional> listQueryOptions() { return {limitOpt, pageOpt, sortOpt, directionOpt, filterOpt}; }
 
-const auto userPos = Positional::WithAliases("user", "Username or ID of the user", {"name", "id"});
+const auto userPos = Positional::WithAliases("user", "Username or ID of the user", {"name", "id"},
+                                             contract::gen::ref("user", {"name", "id"}));
 
 }

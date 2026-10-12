@@ -1,0 +1,2 @@
+{"kind":"regression","world":"pentest-v1","predicate":"oracle","finding":"ws fs.dir.list must not list a vault the caller has no rights in (cross-tenant listing)","found_by":"faults/ws-list-skips-rbac.patch, seed 0x29, shrunk from 16 ops"}
+{"args": {"path": "/", "vault": "v-alice"}, "barrier": null, "causes": [], "intent": "replay", "op": "fs.list", "principal": "u-eve", "seq": 28, "session": "s02", "surface": "ws"}

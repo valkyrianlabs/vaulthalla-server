@@ -1,0 +1,101 @@
+name: Integration engine (privileged)
+# Manual only on an administrator-provisioned, dedicated host. See tools/harness/RUNNER.md.
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Workload
+        type: choice
+        options: [smoke, pressure, assault, proof, regress, revoke, magic]
+        default: smoke
+      seed:
+        description: Reproducible decimal or 0x seed (empty generates and records one)
+        type: string
+        default: ""
+      sessions:
+        description: Concurrent sessions (magic requires an even count, 2..64)
+        type: number
+        default: 8
+      rounds:
+        description: Magic write/read rounds
+        type: number
+        default: 20
+      sanitizer:
+        description: Build sanitizer (thread requires a compatible runner kernel)
+        type: choice
+        options: ["none", "address,undefined", "thread"]
+        default: "address,undefined"
+permissions:
+  contents: read
+concurrency:
+  group: vaulthalla-harness
+  cancel-in-progress: false
+jobs:
+  harness:
+    runs-on: [self-hosted, Linux, X64, vaulthalla-harness]
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check prerequisites and allocate this run's workspace
+        run: |
+          set -euo pipefail
+          case "$(hostname -s)" in vh-storage*) echo "refusing production host" >&2; exit 2;; esac
+          sudo -n true
+          sudo -n test -r /var/lib/vaulthalla-harness/db.env
+          test -c /dev/fuse
+          getent passwd vhh-actor-07 >/dev/null
+          work="$(mktemp -d "$RUNNER_TEMP/vhh-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-XXXXXX")"
+          {
+            echo "VHH_WORK=$work"
+            echo "VHH_BUILD=$work/build"
+            echo "VHH_ARTIFACTS=$work/artifacts"
+          } >> "$GITHUB_ENV"
+          mkdir "$work/artifacts"
+          python3.14 -m venv "$work/python"
+          "$work/python/bin/pip" install -r tools/harness/requirements.txt
+      - name: Build daemon, CLI, FUSE actor and integration targets
+        env:
+          SANITIZER: ${{ inputs.sanitizer }}
+        run: |
+          set -euo pipefail
+          case "$SANITIZER" in none|address,undefined|thread) ;; *) exit 2;; esac
+          meson setup "$VHH_BUILD" -Dbuild_unit_tests=true -Dintegration_tests=true \
+            -Dinstall_data=false -Dmanpage=false "-Db_sanitize=$SANITIZER"
+          meson compile -C "$VHH_BUILD" core/vaulthalla-server core/vaulthalla-cli core/vh_fs_actor \
+            core/vh_integration_tests core/vh_usage
+      - name: Harness unit tests
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools/harness:. "$VHH_WORK/python/bin/python" -m unittest discover -s tools/harness/tests \
+            2>&1 | tee "$VHH_ARTIFACTS/unit-tests.log"
+      - name: Run isolated workload (60 minute bound, graceful interrupt for teardown)
+        env:
+          PROFILE: ${{ inputs.profile }}
+          SEED: ${{ inputs.seed }}
+          SESSIONS: ${{ inputs.sessions }}
+          ROUNDS: ${{ inputs.rounds }}
+        run: |
+          set -euo pipefail
+          timeout --signal=INT --kill-after=90s 60m bash tools/harness/ci_run.sh \
+            2>&1 | tee "$VHH_ARTIFACTS/workload.log"
+      - name: Collect readable diagnostics from this run only
+        if: always() && env.VHH_ARTIFACTS != ''
+        run: |
+          set -euo pipefail
+          if [[ -d "$VHH_BUILD/meson-logs" ]]; then
+            cp -a "$VHH_BUILD/meson-logs" "$VHH_ARTIFACTS/build-logs"
+          fi
+          sudo -n chmod -R u+rwX,go+rX "$VHH_ARTIFACTS"
+      - name: Keep logs, traces, verdicts and sanitizer reports
+        if: always() && env.VHH_ARTIFACTS != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: harness-${{ inputs.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.VHH_ARTIFACTS }}
+          if-no-files-found: error
+          retention-days: 14

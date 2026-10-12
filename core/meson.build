@@ -42,7 +42,6 @@ conf.set_quoted('VH_CACHE_PATH', '/.cache')
 conf.set_quoted('VH_S3_GATEWAY_MULTIPART_PARTS_DIRNAME', '.8f3a9c1d6e2b4f70')
 conf.set_quoted('VH_PSQL_SCHEMAS_PATH', psql_dir)
 conf.set_quoted('VH_PSQL_TEST_SCHEMAS_PATH', join_paths(repo_root, 'deploy/psql'))
-conf.set_quoted('VH_TEST_ENV_PATH', join_paths(repo_root, 'deploy/vaulthalla.env'))
 
 vh_paths_header = configure_file(
     input: 'deploy/path/paths.h.in',
@@ -107,7 +106,8 @@ foreach f : run_command('sh', '-c', 'find "$1" -type f -name "*.cpp" | LC_ALL=C 
     sources += files(f)
 endforeach
 
-usage_inc = include_directories('usage/include')
+# The usage module's contract export uses the vendored nlohmann/json (header-only).
+usage_inc = include_directories('usage/include', 'vendor')
 usage_src = join_paths(core_root, 'usage/src')
 main_usage = files(join_paths(core_root, 'main/usage.cpp'))
 
@@ -243,6 +243,14 @@ vh_md = custom_target('vh-md',
                       build_by_default: true
 )
 
+# The server-owned contract (CLI books, ws command book, operation catalog): build/core/usage.json. The integration
+# engine reads it; web/src/util/generated/wsContract.{json,ts} are generated from it (tools/contracts/ws_contract.py).
+usage_json = custom_target('usage-json',
+                           output: 'usage.json',
+                           command: [vh_usage, '--json', '--out', '@OUTPUT@'],
+                           build_by_default: true
+)
+
 if get_option('manpage')
     man1 = custom_target('vh-man',
                          input: vh_md,
@@ -284,13 +292,35 @@ if get_option('build_unit_tests')
          depends: unit_test_helper_targets)
 endif
 
+# Drift: the committed web contract (web/src/util/generated/wsContract.{json,ts}) must be what this build's usage
+# module generates. Fix with: python3 tools/contracts/ws_contract.py --write --vh-usage <build>/core/vh_usage
+python3 = find_program('python3', required: false)
+if python3.found()
+    test('ws_contract_drift', python3,
+         args: [join_paths(repo_root, 'tools/contracts/ws_contract.py'), '--check', '--usage-json', usage_json],
+         depends: usage_json, timeout: 60)
+endif
+
 if get_option('integration_tests')
-    test_uid = run_command('id', '-u', check: true).stdout().strip()
-    integration_test_env = environment()
-    integration_test_env.set('VH_PATH_TO_CONFIG', join_paths(repo_root, 'deploy/config/config.yaml'))
-    integration_test_env.set('VH_PATH_TO_SUPERADMIN_UID', join_paths('/tmp', 'vh_integration_' + test_uid + '_runtime'))
-    integration_test_env.set('VH_TEST_BACKING_PATH', join_paths('/tmp', 'vh_integration_' + test_uid + '_backing'))
-    integration_test_env.set('VH_TEST_MOUNT_PATH', join_paths('/tmp', 'vh_integration_' + test_uid + '_mount'))
+    # Filesystem probes for the integration harnesses (Tier A here, tools/harness too): one JSON request per line
+    # as a given uid/gid. Single-threaded and free of daemon code on purpose.
+    vh_fs_actor = executable(
+        'vh_fs_actor',
+        files(join_paths(core_root, 'tests/helpers/fs_actor.cpp')),
+        include_directories: include_directories('vendor'),
+        dependencies: dependency('openssl', version: '>=3.0', required: true),
+        install: false,
+    )
+
+    # Builds the migrated template database per-run test databases are cloned from, with the daemon's SqlDeployer.
+    vh_migrate = executable(
+        'vh_migrate',
+        files(join_paths(core_root, 'tests/helpers/migrate.cpp')),
+        include_directories: include_directories('include', 'vendor', '.'),
+        link_with: [lib_core, lib_seed, lib_usage],
+        dependencies: deps,
+        install: false,
+    )
 
     cli_test_inc = include_directories(
         'tests/integrations/include',
@@ -312,8 +342,10 @@ if get_option('integration_tests')
         include_directories: cli_test_inc,
         link_with: [lib_core, lib_seed, lib_usage],
         dependencies: deps,
+        cpp_args: ['-DVH_FS_ACTOR_DEFAULT="' + vh_fs_actor.full_path() + '"'],
         install: false,
     )
 
-    test('vh_integration_tests', vh_integration_tests, env: integration_test_env, workdir: meson.current_build_dir())
+    # Not a meson test(): the harness runs only as a private instance (a per-run DB, private /tmp paths, root for the
+    # FUSE RBAC proofs) and refuses anything else. Run it with `make proof` / bin/tests/run_proof.sh.
 endif

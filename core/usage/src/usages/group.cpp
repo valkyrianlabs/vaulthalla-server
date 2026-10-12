@@ -10,11 +10,15 @@ static std::shared_ptr<CommandUsage> buildBaseUsage(const std::weak_ptr<CommandU
     return cmd;
 }
 
-static const auto namePos = Positional::Alias("group", "Name of the group", "name");
-static const auto nameOptional = Optional::Single("group", "New name for the group", "name", "new_name");
-static const auto groupPos = Positional::WithAliases("group", "Name or ID of the group", {"name", "id"});
-static const auto descriptionOpt = Optional::ManyToOne("description", "Description of the group", {"desc", "d"}, "description");
-static const auto linuxGidOpt = Optional::ManyToOne("linux_group", "Linux GID for system integration", {"linux-gid", "gid"}, "id");
+static const auto namePos = Positional::Alias("group", "Name of the group", "name", contract::gen::freshName("group_"));
+static const auto nameOptional = Optional::Single("group", "New name for the group", "name", "new_name")
+                                     .withGen("new_name", contract::gen::freshName("group_"));
+static const auto groupPos = Positional::WithAliases("group", "Name or ID of the group", {"name", "id"},
+                                                    contract::gen::ref("group", {"name", "id"}));
+static const auto descriptionOpt = Optional::ManyToOne("description", "Description of the group", {"desc", "d"}, "description")
+                                       .withGen("description", contract::gen::pattern("group {a}{a}{a}{a}{a}"));
+static const auto linuxGidOpt = Optional::ManyToOne("linux_group", "Linux GID for system integration", {"linux-gid", "gid"}, "id")
+                                    .withGen("id", contract::gen::testLinuxId());
 
 static std::shared_ptr<CommandUsage> list(const std::weak_ptr<CommandUsage>& parent) {
     const auto cmd = buildBaseUsage(parent);
@@ -107,16 +111,13 @@ static std::shared_ptr<CommandUsage> user_remove(const std::weak_ptr<CommandUsag
     return cmd;
 }
 
+// Children are attached by base(), which also wires their test usage: building them here as well left two copies,
+// and the test usage pointed at the copy nobody kept (expired weak_ptrs).
 static std::shared_ptr<CommandUsage> group_user(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"user", "u"};
     cmd->pluralAliasImpliesList = true;
     cmd->description = "Add or remove users from a group.";
-    cmd->subcommands = {
-        user_add(cmd->weak_from_this()),
-        user_remove(cmd->weak_from_this()),
-        user_list(cmd->weak_from_this())
-    };
     return cmd;
 }
 
@@ -147,6 +148,7 @@ static std::shared_ptr<CommandUsage> base(const std::weak_ptr<CommandUsage>& par
     const auto usersCmd       = user_list(groupUserCmd->weak_from_this());
     const auto userAddCmd     = user_add(groupUserCmd->weak_from_this());
     const auto userRmCmd      = user_remove(groupUserCmd->weak_from_this());
+    groupUserCmd->subcommands = { userAddCmd, userRmCmd, usersCmd };
 
     // ---------- test commands ----------
     const auto createMultiple = TestCommandUsage::Multiple(createCmd);

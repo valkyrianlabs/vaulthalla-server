@@ -1,0 +1,3 @@
+{"kind": "scenario-regression", "scenario": "revoke",
+ "finding": "a vault-role grant/revoke through the CLI applies to the very next ws and FUSE request (no stale identity)",
+ "found_by": "faults/stale-revocation.patch at a8116cc1: next request still allowed, revoked only after 0.17-0.78s"}

@@ -3,6 +3,7 @@
 #include "db/encoding/interval.hpp"
 
 #include <nlohmann/json.hpp>
+#include <pqxx/row>
 
 using namespace vh::sync::model;
 using namespace vh::db::encoding;

@@ -8,6 +8,7 @@
 #include "protocols/ws/handler/Pricing.hpp"
 #include "protocols/ws/handler/S3Gateway.hpp"
 #include "protocols/ws/handler/Groups.hpp"
+#include "protocols/ws/handler/Meta.hpp"
 #include "protocols/ws/handler/Stats.hpp"
 #include "protocols/ws/handler/SyncConflicts.hpp"
 #include "protocols/ws/handler/dashboard/Preferences.hpp"
@@ -27,6 +28,7 @@ using namespace vh::protocols::ws;
 
 void Handler::registerAllHandlers(const std::shared_ptr<Router>& r) {
     registerAuthHandlers(r);
+    registerMetaHandlers(r);
     registerFileSystemHandlers(r);
     registerStorageHandlers(r);
     registerAPIKeyHandlers(r);
@@ -63,6 +65,10 @@ void Handler::registerAuthHandlers(const std::shared_ptr<Router>& r) {
     r->registerSessionOnlyHandler("auth.users.list", &handler::Auth::listUsers);
     r->registerSessionOnlyHandler("auth.security.status", &handler::Auth::securityStatus);
     r->registerHandlerWithToken("auth.refresh", &handler::Auth::refreshToken);
+}
+
+void Handler::registerMetaHandlers(const std::shared_ptr<Router>& r) {
+    r->registerEmptyHandler("meta.contract.get", &handler::Meta::contract);
 }
 
 void Handler::registerFileSystemHandlers(const std::shared_ptr<Router>& r) {

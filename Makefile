@@ -8,8 +8,12 @@
 	install \
 	dev \
 	test \
+	itest \
+	itest-selftest \
 	run_test \
 	run-test \
+	proof \
+	proof-selftest \
 	clean-test \
 	deb \
 	release \
@@ -20,7 +24,7 @@
 	clean-package \
 	purge-builds
 
-dev test run_test run-test clean-test: export VH_BUILD_MODE=dev
+dev: export VH_BUILD_MODE=dev
 
 # Default target: build
 all: build
@@ -44,19 +48,32 @@ dev:
 	@echo "🛡️  Running install script..."
 	./bin/install.sh
 
+## Tests never install, never touch the dev install or a shared role/database: each run gets its own database (owned
+## by the vh_harness role, from `sudo tools/harness/bootstrap.sh`, once), private /tmp paths and the build-itest/ build.
+## DB-backed unit tests (vh_unit_tests) against a per-run database. Pass gtest args: make test ARGS="--gtest_filter=..."
 test:
-	./bin/tests/uninstall.sh
-	@echo "🛡️  Running integration tests install script..."
-	./bin/tests/install.sh
+	./bin/tests/run_unit.sh -- $(ARGS)
 
-run_test:
-	./bin/tests/uninstall.sh
-	@echo "🛡️  Running integration tests install script..."
-	./bin/tests/install.sh --run
+## Tier A integration proofs (vh_integration_tests) as a private instance: per-run DB from the migrated template,
+## private FUSE mount, reports in build-itest/proof-artifacts/.
+itest:
+	./bin/tests/run_proof.sh
 
+itest-selftest:
+	./bin/tests/run_proof_selftest.sh
+
+# Old names of `itest`; the shared-environment run_test (install over /usr, rotate the vaulthalla_test role, truncate
+# whatever DB it reached) no longer exists.
+run_test run-test proof:
+	@echo "note: '$@' is now 'make itest' (isolated: per-run DB, private paths, nothing installed)"
+	@$(MAKE) --no-print-directory itest
+
+proof-selftest:
+	@$(MAKE) --no-print-directory itest-selftest
+
+## Removes leftovers of interrupted isolated runs (their databases and unmounted /tmp/vhh_* dirs), nothing else.
 clean-test:
-	@echo "💣 Running integration tests uninstall script..."
-	./bin/tests/uninstall.sh
+	./bin/tests/clean_itest.sh
 
 deb:
 	@echo "🔧 Local release rehearsal (vlr prepare + build-deb + validate in a throwaway worktree of HEAD)..."
@@ -76,7 +93,6 @@ doctor:
 uninstall:
 	@echo "💣 Running uninstall script..."
 	./bin/uninstall.sh
-	./bin/tests/uninstall.sh
 
 clean:
 	./bin/clean.sh
