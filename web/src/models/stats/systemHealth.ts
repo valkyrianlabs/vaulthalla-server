@@ -33,6 +33,10 @@ export interface IDependencyHealth {
   shell_usage_manager: boolean
   http_cache_stats: boolean
   fuse_session: boolean
+  // "multiuser" (kernel FUSE bridge) or "disabled" (a build without it); absent from older daemons.
+  fuse_mount?: string
+  // "tpm2", or "file" (macOS development backend).
+  secrets_backend?: string
 }
 
 export interface IShellHealth {
