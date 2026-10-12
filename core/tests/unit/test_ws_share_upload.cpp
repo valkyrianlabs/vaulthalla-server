@@ -1,5 +1,5 @@
 #include "fs/model/Directory.hpp"
-#include "fuse/Service.hpp"
+#include "protocols/http/upload/Staging.hpp"
 #include "fs/model/File.hpp"
 #include "fs/model/Path.hpp"
 #include "identities/User.hpp"
@@ -703,7 +703,7 @@ TEST_F(WsShareUploadTest, HttpShareUploadStreamsBodyToTempFileAndRecordsBytes) {
 
     const auto batchId = created.at("upload_id").get<std::string>();
     const auto transferId = created.at("files").at(0).at("transfer_id").get<std::string>();
-    const auto tempPath = http_upload::stagingPathFor(httpEngine->paths->vaultRoot / "reports" / "http.txt", httpEngine->vault->id,
+    const auto tempPath = http_upload::staging::pathFor(httpEngine->paths->vaultRoot / "reports" / "http.txt", httpEngine->vault->id,
                                                        ".upload-http-" + batchId + "-f0.part");
 
     auto stream = http_upload::Coordinator::instance().beginFile(
@@ -721,7 +721,7 @@ TEST_F(WsShareUploadTest, HttpShareUploadStreamsBodyToTempFileAndRecordsBytes) {
     EXPECT_EQ(store->getUpload(transferId)->received_size_bytes, 5u);
     EXPECT_TRUE(writer->bytes_by_path.empty());
     // The staged bytes are the only file in the staging area (with FUSE: anywhere under the mount).
-    EXPECT_EQ(readOnlyRegularFileUnder(vh::fuse::kernelBridgeBuilt() ? vh::paths::mountPath : tempPath.parent_path()),
+    EXPECT_EQ(readOnlyRegularFileUnder(http_upload::staging::mode() == "mount" ? vh::paths::mountPath : tempPath.parent_path()),
               "hello");
 
     const auto cancelled = http_upload::Coordinator::instance().cancelSession(
@@ -747,7 +747,7 @@ TEST_F(WsShareUploadTest, HttpShareUploadStreamsBodyToTempFileAndRecordsBytes) {
     );
     const auto recreatedBatchId = recreated.at("upload_id").get<std::string>();
     EXPECT_NE(recreatedBatchId, batchId);
-    const auto recreatedTempPath = http_upload::stagingPathFor(httpEngine->paths->vaultRoot / "reports" / "http.txt", httpEngine->vault->id,
+    const auto recreatedTempPath = http_upload::staging::pathFor(httpEngine->paths->vaultRoot / "reports" / "http.txt", httpEngine->vault->id,
                                                        ".upload-http-" + recreatedBatchId + "-f0.part");
 
     auto recreatedStream = http_upload::Coordinator::instance().beginFile(
@@ -790,7 +790,7 @@ TEST_F(WsShareUploadTest, HttpShareUploadAbortAllFailsActiveStreamsAndClearsTemp
 
     const auto batchId = created.at("upload_id").get<std::string>();
     const auto transferId = created.at("files").at(0).at("transfer_id").get<std::string>();
-    const auto tempPath = http_upload::stagingPathFor(httpEngine->paths->vaultRoot / "reports" / "http.txt", httpEngine->vault->id,
+    const auto tempPath = http_upload::staging::pathFor(httpEngine->paths->vaultRoot / "reports" / "http.txt", httpEngine->vault->id,
                                                        ".upload-http-" + batchId + "-f0.part");
 
     auto stream = http_upload::Coordinator::instance().beginFile(

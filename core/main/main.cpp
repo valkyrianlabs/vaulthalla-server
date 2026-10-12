@@ -17,7 +17,7 @@
 // Previews
 #include "preview/cache/Maintenance.hpp"
 #include "preview/derive/Queue.hpp"
-#include "protocols/http/upload/Coordinator.hpp"
+#include "protocols/http/upload/Staging.hpp"
 #include "preview/render/Raster.hpp"
 
 // Seed
@@ -170,8 +170,8 @@ void wireStorage() {
     // anything can serve them.
     vh::preview::cache::sweepAtStartup(vh::runtime::Deps::get().storageManager->getEngines());
 
-    // Builds without the kernel FUSE bridge stage HTTP uploads privately; a crash can leave partial ones (no-op on Linux).
-    vh::protocols::http::upload::sweepStagingAtStartup();
+    // Private HTTP upload staging (protocols/http/upload/Staging.hpp): a crash can leave partial uploads behind.
+    vh::protocols::http::upload::staging::sweepAtStartup();
 }
 
 // --- Runtime ---
