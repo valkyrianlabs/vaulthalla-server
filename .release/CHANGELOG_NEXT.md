@@ -26,3 +26,6 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   refuses a conflicting existing account, symlinked or foreign-owned paths, and a purge into a mounted namespace.
 - vh: on macOS, the "not running", "not responding" and "permission denied" hints name launchctl, the log file and
   dseditgroup instead of systemctl, journalctl and usermod (Linux wording unchanged).
+- macOS (development, not packaged): HTTP uploads stage in a private directory under the state root when the build
+  has no FUSE bridge, and the daemon refuses to start unless that state root is private to it (no symlink, no
+  writable ancestor, owned by the daemon user). Linux keeps staging through the FUSE mount (`http_upload_staging=auto`).
