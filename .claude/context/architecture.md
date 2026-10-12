@@ -8,8 +8,12 @@ core-backend, and protocol-map docs, with stale claims corrected.
 - Root `meson.build` holds `project('vaulthalla', 'cpp', version: '1.6.6')`: `cpp_std=c++23`,
   `unity=on`, `unity_size=9`, `warning_level=3`, `werror=false`, `prefix=/usr`, meson >= 1.3.0.
   It enters C++ via `subdir('core')` and also installs `deploy/lifecycle` → `/usr/lib/vaulthalla/lifecycle`.
-- `core/meson.build`: deps `fuse3 libsodium libcurl boost libpqxx-vh pdfium yaml-cpp spdlog fmt
-  openssl>=3 tss2-esys tss2-tctildr tss2-rc libmagic libjpeg libturbojpeg pugixml uuid zlib threads`.
+- `core/meson.build`: deps `libsodium libcurl boost(filesystem) libpqxx-vh pdfium yaml-cpp spdlog fmt openssl>=3
+  libmagic libjpeg libturbojpeg pugixml zlib threads`, plus `fuse3` when the kernel bridge is built (`-Dfuse`, auto:
+  required on Linux, off on macOS) and the Linux-only `uuid tss2-esys tss2-tctildr tss2-rc`.
+  OS-specific code lives only in `core/src/platform/{linux,darwin}/` behind `core/include/platform/*.hpp` (see
+  `macos.md`); source discovery adds the host's directory and, without FUSE, swaps the four libfuse sources for
+  `fuse/unbuilt/Service.cpp`.
   The two Vaulthalla-built SDKs come only from apt.vaulthalla.sh: `libpqxx-vh-dev` (libpqxx 8, a **static** archive
   under its own pkg-config name `libpqxx-vh`, so servers need only `libpq5`) and `libpdfium-dev` (Chromium-tracking
   PDFium, runtime `libpdfium<branch>`, e.g. `libpdfium8059`). The pdfium dependency carries a version window
@@ -47,7 +51,7 @@ Fwd.hpp once it's forward-declared in more than one place. The `vh_usage` librar
 optional seed → runtime deps → storage wiring (+ derived-cache startup sweep) → `runtime::Manager` start → wait
 for SIGINT/SIGTERM. Shutdown: `Manager::stopAll` → `preview::derive::Queue::shutdown()` → thread pools.
 Shutdown is bounded and fast (restart ≈1 s; guard: `test_shutdown_bounds.cpp`): the SIGTERM/SIGINT handler only sets
-an atomic and writes an eventfd; a watcher thread (started before startup) wakes main and `_Exit`s 10 s after the first
+an atomic and notifies a `platform::Waker` (eventfd on Linux, self-pipe on macOS); a watcher thread (started before startup) wakes main and `_Exit`s 10 s after the first
 signal whatever main is doing; a second signal exits at once. `stopAll` calls `requestStop()` on every service but FUSE
 (non-blocking: flag + cv notify + `onStop()`), joins them, then stops FUSE last. Services sleep with `lazySleep` (cv,
 woken by stop), never `sleep_for` loops. FUSE `onStop()` lazily unmounts, ends the session, and after 1 s aborts the
