@@ -2,16 +2,16 @@
 
 #include "config/Registry.hpp"
 #include "log/Registry.hpp"
+#include "platform/ChildProcess.hpp"
+#include "platform/Fd.hpp"
 
 #include <paths.h>
 
 #include <fcntl.h>
 #include <poll.h>
-#include <sys/prctl.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
-#include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -97,7 +97,7 @@ std::system_error sysError(const char* what) { return {errno, std::generic_categ
 
 void makePipe(Fd& readEnd, Fd& writeEnd) {
     std::array<int, 2> fds{};
-    if (::pipe2(fds.data(), O_CLOEXEC) != 0) throw sysError("pipe2");
+    if (!platform::fd::pipe(fds.data())) throw sysError("pipe");
     readEnd = Fd(fds[0]);
     writeEnd = Fd(fds[1]);
 }
@@ -117,37 +117,6 @@ uint64_t getLe(const uint8_t* in, const std::size_t bytes) {
     return value;
 }
 
-// Threads in pid's thread group (/proc/<pid>/stat field 20), or -1 when it cannot be read (exited, no procfs).
-long threadCount(const pid_t pid) {
-    const std::string path = "/proc/" + std::to_string(pid) + "/stat";
-    const Fd fd(::open(path.c_str(), O_RDONLY | O_CLOEXEC));
-    if (!fd.open()) return -1;
-    std::array<char, 4096> buf{};
-    ssize_t n = 0;
-    do n = ::read(fd.get(), buf.data(), buf.size());
-    while (n < 0 && errno == EINTR);
-    if (n <= 0) return -1;
-    std::string_view stat(buf.data(), static_cast<std::size_t>(n));
-    // comm (field 2) may contain spaces and parentheses: fields 3.. start after the last ')'.
-    const auto close = stat.rfind(')');
-    if (close == std::string_view::npos) return -1;
-    stat.remove_prefix(close + 1);
-    for (int field = 3; field < 20; ++field) {
-        const auto start = stat.find_first_not_of(' ');
-        if (start == std::string_view::npos) return -1;
-        const auto end = stat.find(' ', start);
-        if (end == std::string_view::npos) return -1;
-        stat.remove_prefix(end);
-    }
-    const auto start = stat.find_first_not_of(' ');
-    if (start == std::string_view::npos) return -1;
-    long value = 0;
-    bool any = false;
-    for (auto i = start; i < stat.size() && stat[i] >= '0' && stat[i] <= '9'; ++i, any = true)
-        value = value * 10 + (stat[i] - '0');
-    return any ? value : -1;
-}
-
 // Everything the child needs, prepared before fork: after fork the child may only make async-signal-safe calls.
 struct ChildPlan {
     const char* path = nullptr;
@@ -156,7 +125,7 @@ struct ChildPlan {
     std::array<int, kChildFdCount> fds{};   // sources for child fds 0..5
     rlimit as{}, cpu{}, fsize{}, nofile{}, core{};
     pid_t parent = 0;
-    int closeLoopLimit = 1024;              // fallback when close_range(2) is unavailable
+    int closeLoopLimit = 1024;              // fallback when close_range(2) is unavailable (always on macOS)
 };
 
 [[noreturn]] void childExec(const ChildPlan& plan) noexcept {
@@ -168,12 +137,11 @@ struct ChildPlan {
     };
 
     if (::setsid() < 0) fail(errno);
-    if (::prctl(PR_SET_PDEATHSIG, SIGKILL, 0, 0, 0) != 0) fail(errno);
-    if (::getppid() != plan.parent) ::_exit(127);   // the daemon died before PDEATHSIG was armed
-    if (::prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) fail(errno);
+    if (const int armed = platform::child::armChild(plan.parent); armed < 0) ::_exit(127);   // the daemon died
+    else if (armed != 0) fail(armed);
 
     sigset_t none;
-    ::sigemptyset(&none);
+    sigemptyset(&none);  // a macro on macOS: no ::
     ::sigprocmask(SIG_SETMASK, &none, nullptr);
     struct sigaction defaults{};
     defaults.sa_handler = SIG_DFL;
@@ -191,10 +159,10 @@ struct ChildPlan {
         if (::dup2(high[static_cast<std::size_t>(i)], i) < 0) fail(errno);
     statusFd = 5;
     if (::fcntl(5, F_SETFD, FD_CLOEXEC) < 0) fail(errno);
-    if (::syscall(SYS_close_range, 6u, ~0u, 0u) != 0)
-        for (int fd = 6; fd < plan.closeLoopLimit; ++fd) ::close(fd);
+    platform::child::closeFrom(6, plan.closeLoopLimit);
 
-    if (::setrlimit(RLIMIT_AS, &plan.as) != 0 || ::setrlimit(RLIMIT_CPU, &plan.cpu) != 0 ||
+    if (const int err = platform::child::limitAddressSpace(plan.as); err != 0) fail(err);
+    if (::setrlimit(RLIMIT_CPU, &plan.cpu) != 0 ||
         ::setrlimit(RLIMIT_FSIZE, &plan.fsize) != 0 || ::setrlimit(RLIMIT_NOFILE, &plan.nofile) != 0 ||
         ::setrlimit(RLIMIT_CORE, &plan.core) != 0)
         fail(errno);
@@ -284,7 +252,7 @@ void Session::spawn() {
     makePipe(res_, resW);
     makePipe(statusR, statusW);
     std::array<int, 2> sp{};
-    if (::socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sp.data()) != 0) throw sysError("socketpair");
+    if (platform::fd::socketpair(AF_UNIX, SOCK_STREAM, 0, sp.data()) != 0) throw sysError("socketpair");
     range_ = Fd(sp[0]);
     Fd rangeChild(sp[1]);
 
@@ -302,8 +270,8 @@ void Session::spawn() {
     if (rlimit current{}; ::getrlimit(RLIMIT_NOFILE, &current) == 0 && current.rlim_cur != RLIM_INFINITY)
         plan.closeLoopLimit = static_cast<int>(std::min<rlim_t>(current.rlim_cur, 1u << 20));
 
-    // _Fork: no atfork handlers run in the child (it only execs), async-signal-safe.
-    pid_ = ::_Fork();
+    // Linux _Fork: no atfork handlers run in the child (it only execs), async-signal-safe.
+    pid_ = platform::child::forkForExec();
     if (pid_ < 0) throw sysError("fork");
     if (pid_ == 0) childExec(plan);
 
@@ -326,7 +294,7 @@ void Session::spawn() {
         return;
     }
 
-    if (const long fd = ::syscall(SYS_pidfd_open, pid_, 0); fd >= 0) pidfd_ = Fd(static_cast<int>(fd));
+    if (const int fd = platform::child::exitWatchFd(pid_); fd >= 0) pidfd_ = Fd(fd);
     setNonBlocking(out_);
     setNonBlocking(err_);
     setNonBlocking(res_);
@@ -465,7 +433,7 @@ void Session::readResult() {
 
 void Session::checkThreads() {
     if (exited_ || killed_ || request_.limits.maxThreads == 0) return;
-    const long threads = threadCount(pid_);
+    const long threads = platform::child::threadCount(pid_);
     if (threads > 0 && static_cast<uint64_t>(threads) > request_.limits.maxThreads) {
         result_.threadLimitExceeded = true;
         killGroup();
@@ -696,6 +664,11 @@ std::string RunResult::failureMessage() const {
 RunResult Runner::run(const RunRequest& request) {
     if (!isExecutable(request.executable))
         throw HelperUnavailable("converter helper not available: " + request.executable.string());
+    if (!platform::child::addressSpaceLimitEnforced())
+        runner_impl::logOnce("no-as-limit", [] {
+            log::Registry::thumb()->warn("[preview::derive] This platform cannot cap a converter helper's address space "
+                                           "(RLIMIT_AS); helpers run without the memory limit");
+        });
     RunRequest resolved = request;
     if (runner_impl::trustChecksEnforced()) {
         // Resolve once, check that, execute that: every component of the canonical path is root-owned and not

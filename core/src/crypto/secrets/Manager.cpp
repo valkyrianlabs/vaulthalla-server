@@ -14,7 +14,7 @@ using namespace vh::crypto::model;
 namespace vh::crypto::secrets {
 
 Manager::Manager()
-: tpmKeyProvider_(std::make_unique<TPMKeyProvider>(paths::testMode ? "test_master" : "master")) {
+: tpmKeyProvider_(std::make_unique<KeyProvider>(paths::testMode ? "test_master" : "master")) {
     tpmKeyProvider_->init();
 }
 

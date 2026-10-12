@@ -50,7 +50,6 @@ protected:
     void onStop() override;
 
 private:
-    static constexpr std::string_view kAddAdminCmd = "usermod -aG vaulthalla {}";
     static constexpr std::string_view kVerifyInAdminGroup = R"(id -Gn {} | grep -qw vaulthalla)";
 
     struct ClientSlot {
@@ -82,7 +81,7 @@ private:
     void shutdownClients();
     void reapFinishedClients(bool joinAll);
     void handleClient(int cfd);
-    void initAdminUid(int cfd, uid_t uid);
+    void initAdminUid(uid_t uid);
 };
 
 }

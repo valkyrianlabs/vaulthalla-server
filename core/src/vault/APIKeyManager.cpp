@@ -17,7 +17,7 @@ using namespace vh::vault::model;
 
 APIKeyManager::APIKeyManager() {
     const std::string tpmKeyName = paths::testMode ? "test_ak_master" : "ak_master";
-    tpmKeyProvider_ = std::make_unique<secrets::TPMKeyProvider>(tpmKeyName);
+    tpmKeyProvider_ = std::make_unique<secrets::KeyProvider>(tpmKeyName);
     tpmKeyProvider_->init();
 
     initAPIKeys();

@@ -7,6 +7,9 @@
 #include "protocols/shell/SocketIO.hpp"
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
+#include "platform/Fd.hpp"
+#include "platform/LocalAccounts.hpp"
+#include "platform/PeerCredentials.hpp"
 
 #include <paths.h>
 #include <version.h>
@@ -21,6 +24,7 @@
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <cerrno>
+#include <cstddef>
 #include <vector>
 #include <string>
 #include <cstring>
@@ -34,30 +38,8 @@ using namespace vh::protocols::shell;
 
 namespace {
 
-struct Peer {
-    uid_t uid;
-    gid_t gid;
-    pid_t pid;
-};
-
-Peer peercred(const int fd) {
-    ucred c{};
-    socklen_t len = sizeof(c);
-    if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &c, &len) != 0) throw std::runtime_error("SO_PEERCRED failed");
-    return {c.uid, c.gid, c.pid};
-}
-
-bool in_group(uid_t uid, gid_t admin_gid) {
-    if (uid == 0) return true;
-    // Quick check: primary group ok?
-    const passwd* pw = getpwuid(uid);
-    if (!pw) return false;
-    if (pw->pw_gid == admin_gid) return true;
-    int ng = 0;
-    getgrouplist(pw->pw_name, pw->pw_gid, nullptr, &ng);
-    std::vector<gid_t> gs(ng);
-    if (getgrouplist(pw->pw_name, pw->pw_gid, gs.data(), &ng) < 0) return false;
-    return std::ranges::any_of(gs, [admin_gid](gid_t g) { return g == admin_gid; });
+bool in_group(const uid_t uid, const gid_t admin_gid) {
+    return uid == 0 || vh::platform::accounts::isMember(uid, admin_gid);
 }
 
 void setCliSocketTimeout(const int fd, const int opt, const std::chrono::milliseconds timeout) {
@@ -121,13 +103,19 @@ std::size_t Server::activeClients() const {
 int Server::bindListener() {
     ::unlink(socketPath_.c_str());
 
-    const int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    sockaddr_un addr{};
+    // sun_path is 108 bytes on Linux but 104 on macOS (whose $TMPDIR paths are long): refuse instead of truncating.
+    if (socketPath_.size() >= sizeof(addr.sun_path))
+        throw std::runtime_error("CLI socket path too long for a unix socket: " + socketPath_);
+
+    const int fd = vh::platform::fd::socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) throw std::runtime_error(std::string("socket(): ") + std::strerror(errno));
 
-    sockaddr_un addr{};
     addr.sun_family = AF_UNIX;
-    std::snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", socketPath_.c_str());
-    if (::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(sa_family_t) + std::strlen(addr.sun_path) + 1) != 0) {
+    std::memcpy(addr.sun_path, socketPath_.c_str(), socketPath_.size() + 1);
+    // offsetof, not sizeof(sa_family_t): BSD's sockaddr_un starts with sun_len (on Linux the two are equal).
+    const auto addrLen = static_cast<socklen_t>(offsetof(sockaddr_un, sun_path) + socketPath_.size() + 1);
+    if (::bind(fd, reinterpret_cast<sockaddr*>(&addr), addrLen) != 0) {
         const auto err = errno;
         ::close(fd);
         throw std::runtime_error("bind(" + socketPath_ + "): " + std::strerror(err));
@@ -207,7 +195,7 @@ void Server::onStop() {
     closeListener(true);
 }
 
-void Server::initAdminUid(const int cfd, const uid_t uid) {
+void Server::initAdminUid(const uid_t uid) {
     const auto msg = fmt::format(
         "[CtlServerService] 'admin' user has no Linux UID set; Assigning first user UID {} to 'admin'", uid);
     log::Registry::shell()->info(msg);
@@ -216,8 +204,6 @@ void Server::initAdminUid(const int cfd, const uid_t uid) {
     const struct passwd* pw = getpwuid(uid);
     if (!pw) throw std::runtime_error("Unable to resolve UID to username");
     const std::string uname = pw->pw_name;
-
-    log::Registry::shell()->info("[CtlServerService] Adding UID {} to vaulthalla group", uid);
 
     // Assign UID to admin
     if (const auto admin = vh::identities::manager().userByName("admin"))
@@ -228,49 +214,9 @@ void Server::initAdminUid(const int cfd, const uid_t uid) {
 
     log::Registry::shell()->info("[CtlServerService] Assigned UID {} to 'admin' user", uid);
 
-    // Check if user is already in the vaulthalla group
-    struct group* grp = getgrnam("vaulthalla");
-    if (!grp) throw std::runtime_error("Group 'vaulthalla' not found");
-
-    bool in_group = false;
-    for (char** mem = grp->gr_mem; *mem != nullptr; ++mem) {
-        if (uname == *mem) {
-            in_group = true;
-            break;
-        }
-    }
-
-    if (!in_group) {
-        // Fall back to system() since group modification isn't possible without `usermod`
-        std::string cmd = fmt::format(kAddAdminCmd, uname);
-        log::Registry::shell()->debug("[CtlServerService] Running fallback group add command: {}", cmd);
-
-        if (const int result = std::system(cmd.c_str()); result != 0) {
-            log::Registry::shell()->warn("[CtlServerService] usermod failed, checking group manually...");
-
-            // Retry group check (maybe the change propagated anyway)
-            endgrent(); // flush group cache
-            grp = getgrnam("vaulthalla");
-            if (!grp) throw std::runtime_error("Group 'vaulthalla' not found after fallback");
-
-            in_group = false;
-            for (char** mem = grp->gr_mem; *mem != nullptr; ++mem) {
-                if (uname == *mem) {
-                    in_group = true;
-                    break;
-                }
-            }
-
-            if (!in_group) {
-                log::Registry::shell()->error("[CtlServerService] Failed to add '{}' to vaulthalla group", uname);
-                sendCliError(cfd, 1, "failed to add to vaulthalla group");
-                throw std::runtime_error("Group add failed and could not verify fallback");
-            }
-        }
-    }
-
-    log::Registry::shell()->info("[CtlServerService] Verified '{}' in vaulthalla group", uname);
-    log::Registry::audit()->info("Promoted user '{}' (UID {}) to admin group", uname, uid);
+    // No group change here: the connection already passed the 'vaulthalla' group gate (handleClient), and the
+    // daemon runs unprivileged, so it could not change group membership anyway.
+    log::Registry::audit()->info("Bound user '{}' (UID {}) to the 'admin' account", uname, uid);
 
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
 }
@@ -282,14 +228,15 @@ void Server::handleClient(const int cfd) {
         setCliSocketTimeout(cfd, SO_RCVTIMEO, kRequestTimeout);
         setCliSocketTimeout(cfd, SO_SNDTIMEO, kSendTimeout);
 
-        const auto p = peercred(cfd);
+        const auto p = vh::platform::peerCredentials(cfd);
         log::Registry::shell()->debug("[CtlServerService] Connection from UID {} (PID {})", p.uid, p.pid);
 
         if (!in_group(p.uid, adminGid_)) {
             log::Registry::shell()->debug("[CtlServerService] Connection from UID {} (PID {}) not in vaulthalla group",
                                           p.uid, p.pid);
-            sendCliError(cfd, 77, "permission denied: this user is not in the 'vaulthalla' group "
-                                "(sudo usermod -aG vaulthalla $USER, then log in again; or use sudo)");
+            sendCliError(cfd, 77, "permission denied: this user is not in the 'vaulthalla' group (" +
+                                      vh::platform::accounts::addMemberCommand("$USER", "vaulthalla") +
+                                      ", then log in again; or use sudo)");
             return;
         }
 
@@ -315,14 +262,14 @@ void Server::handleClient(const int cfd) {
             synthetic.name = p.uid == 0 ? "root" : "uid:" + std::to_string(p.uid);
             user = identities::User::detached(0, std::move(synthetic));
         } else {
-            if (!paths::testMode && p.uid != 0 && p.uid >= 1000 && !adminUIDSet_.load()) {
+            if (!paths::testMode && p.uid != 0 && p.uid >= vh::platform::accounts::firstHumanUid() && !adminUIDSet_.load()) {
                 std::scoped_lock adminLock(adminInitMutex_);
                 if (!adminStateKnown_.load()) {
                     const auto admin = vh::identities::manager().userByName("admin");
                     if (admin && admin->linuxUid().has_value()) adminUIDSet_.store(true);
                     adminStateKnown_.store(true);
                 }
-                if (!adminUIDSet_.load()) initAdminUid(cfd, p.uid);
+                if (!adminUIDSet_.load()) initAdminUid(p.uid);
             }
 
             user = p.uid == 0 ?
@@ -402,11 +349,12 @@ void Server::runLoop() {
             throw std::runtime_error(std::string("poll(): ") + std::strerror(errno));
         }
 
-        const int cfd = ::accept4(listenFd, nullptr, nullptr, SOCK_CLOEXEC);
+        const int cfd = vh::platform::fd::accept(listenFd, nullptr, nullptr);
         if (cfd < 0) {
             if (shouldStop()) break;
             continue;
         }
+        vh::platform::fd::suppressSigpipe(cfd);
 
         std::scoped_lock lock(clientsMutex_);
         const auto inFlight = static_cast<std::size_t>(

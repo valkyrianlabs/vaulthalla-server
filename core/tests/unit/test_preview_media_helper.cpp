@@ -6,6 +6,7 @@
 // VH_PREVIEW_MEDIA_HELPER.
 
 #include "../../tools/preview-media/Browser.hpp"
+#include "platform/Fd.hpp"
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
@@ -234,8 +235,8 @@ Run runHelper(const std::vector<uint8_t>& input, const std::string& command, con
               const std::chrono::seconds timeout = std::chrono::seconds(180)) {
     Run run;
     int sv[2], outPipe[2], resPipe[2], errPipe[2];
-    if (::socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sv) != 0 || ::pipe2(outPipe, O_CLOEXEC) != 0 ||
-        ::pipe2(resPipe, O_CLOEXEC) != 0 || ::pipe2(errPipe, O_CLOEXEC) != 0)
+    if (vh::platform::fd::socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0 || !vh::platform::fd::pipe(outPipe) ||
+        !vh::platform::fd::pipe(resPipe) || !vh::platform::fd::pipe(errPipe))
         throw std::runtime_error("pipe setup failed");
     const int childRange = highFd(sv[1]), childOut = highFd(outPipe[1]), childRes = highFd(resPipe[1]),
               childErr = highFd(errPipe[1]);

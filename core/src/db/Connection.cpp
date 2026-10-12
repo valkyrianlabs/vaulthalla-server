@@ -1,7 +1,7 @@
 #include "db/DBConnection.hpp"
 #include "config/Config.hpp"
 #include "config/Registry.hpp"
-#include "crypto/secrets/TPMKeyProvider.hpp"
+#include "crypto/secrets/KeyProvider.hpp"
 #include "log/Registry.hpp"
 
 #include <fstream>
@@ -94,7 +94,7 @@ static std::optional<std::string> getTestEnvValue(const char* key) {
 }
 
 Connection::Connection() : tpmKeyProvider_(
-    std::make_unique<secrets::TPMKeyProvider>(paths::testMode ? "test_psql" : "psql")) {
+    std::make_unique<secrets::KeyProvider>(paths::testMode ? "test_psql" : "psql")) {
     if (paths::testMode) {
         const auto user = getTestEnvValue("VH_TEST_DB_USER");
         const auto pass = getTestEnvValue("VH_TEST_DB_PASS");

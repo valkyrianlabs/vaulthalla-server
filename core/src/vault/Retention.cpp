@@ -1,7 +1,7 @@
 #include "vault/Retention.hpp"
 
 #include "config/Registry.hpp"
-#include "crypto/secrets/TPMKeyProvider.hpp"
+#include "crypto/secrets/KeyProvider.hpp"
 #include "crypto/util/encrypt.hpp"
 #include "db/query/vault/Deletion.hpp"
 #include "log/Registry.hpp"
@@ -280,7 +280,7 @@ void setControllerFactoryForTesting(ControllerFactory factory) {
 RetainedKey retainedKey(const unsigned int vaultId) {
     const auto keys = DeletionQuery::retainedKeys(vaultId);
     if (keys.empty()) throw std::runtime_error("no key is retained for deleted vault " + std::to_string(vaultId));
-    crypto::secrets::TPMKeyProvider tpm(paths::testMode ? "test_vault_master" : "vault_master");
+    crypto::secrets::KeyProvider tpm(paths::testMode ? "test_vault_master" : "vault_master");
     tpm.init();
     RetainedKey out{.key = crypto::util::decrypt_aes256_gcm(keys.front()->encrypted_key, tpm.getMasterKey(), keys.front()->iv),
                     .record = keys.front()};

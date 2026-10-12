@@ -20,7 +20,9 @@
 
 #include <dirent.h>
 #include <fcntl.h>
+#if defined(__linux__)
 #include <sys/prctl.h>
+#endif
 #include <sys/resource.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -28,6 +30,7 @@
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <climits>
 #include <csignal>
 #include <cstdint>
 #include <cstdlib>
@@ -95,12 +98,54 @@ void result(const nlohmann::json& json) {
     ::close(kResultFd);
 }
 
+#if defined(__linux__)
+constexpr const char* kOwnFdDir = "/proc/self/fd";
+#else
+constexpr const char* kOwnFdDir = "/dev/fd";
+#endif
+
+// Linux-only process properties the runner arms (PR_SET_NO_NEW_PRIVS, PR_SET_PDEATHSIG); null where the OS has none.
+nlohmann::json noNewPrivs() {
+#if defined(__linux__)
+    return ::prctl(PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0);
+#else
+    return nullptr;
+#endif
+}
+
+nlohmann::json parentDeathSignal() {
+#if defined(__linux__)
+    int sig = 0;
+    ::prctl(PR_GET_PDEATHSIG, &sig, 0, 0, 0);
+    return sig;
+#else
+    return nullptr;
+#endif
+}
+
+std::string stdinTarget() {
+#if defined(__linux__)
+    std::array<char, 256> target{};
+    const ssize_t n = ::readlink("/proc/self/fd/0", target.data(), target.size() - 1);
+    return std::string(target.data(), n > 0 ? static_cast<std::size_t>(n) : 0);
+#else
+    std::array<char, PATH_MAX> target{};
+    return ::fcntl(0, F_GETPATH, target.data()) == 0 ? std::string(target.data()) : std::string();
+#endif
+}
+
+bool emptySigset(const sigset_t& mask) {
+    for (int sig = 1; sig < NSIG; ++sig)
+        if (sigismember(&mask, sig) == 1) return false;
+    return true;
+}
+
 nlohmann::json inspect() {
     nlohmann::json env = nlohmann::json::array();
     for (char** e = environ; e && *e; ++e) env.push_back(*e);
 
     nlohmann::json fds = nlohmann::json::array();
-    if (DIR* dir = ::opendir("/proc/self/fd")) {
+    if (DIR* dir = ::opendir(kOwnFdDir)) {
         const int own = ::dirfd(dir);
         while (const dirent* entry = ::readdir(dir)) {
             if (entry->d_name[0] == '.') continue;
@@ -131,16 +176,12 @@ nlohmann::json inspect() {
         {"env", env},
         {"fds", fds},
         {"cwd", dir ? dir : ""},
-        {"no_new_privs", ::prctl(PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0)},
+        {"no_new_privs", noNewPrivs()},
         {"session_leader", ::getsid(0) == ::getpid()},
-        {"pdeathsig", [] { int sig = 0; ::prctl(PR_GET_PDEATHSIG, &sig, 0, 0, 0); return sig; }()},
-        {"sigmask_empty", sigisemptyset(&mask) == 1},
+        {"pdeathsig", parentDeathSignal()},
+        {"sigmask_empty", emptySigset(mask)},
         {"sigpipe_default", pipeAction.sa_handler == SIG_DFL},
-        {"stdin", [] {
-             std::array<char, 256> target{};
-             const ssize_t n = ::readlink("/proc/self/fd/0", target.data(), target.size() - 1);
-             return std::string(target.data(), n > 0 ? static_cast<std::size_t>(n) : 0);
-         }()},
+        {"stdin", stdinTarget()},
         {"rlimit_as", limit(RLIMIT_AS)},
         {"rlimit_cpu", limit(RLIMIT_CPU)},
         {"rlimit_fsize", limit(RLIMIT_FSIZE)},
@@ -288,7 +329,9 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (command == "stderr-flood") {
+#if defined(F_SETPIPE_SZ)  // Linux: a bigger pipe floods faster; macOS pipes are fixed-size
         (void)::fcntl(2, F_SETPIPE_SZ, 1 << 20);
+#endif
         const auto flood = [] {
             std::vector<char> block(1u << 16, 'f');
             while (true) writeAll(2, block.data(), block.size());

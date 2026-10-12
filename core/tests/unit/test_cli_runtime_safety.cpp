@@ -7,6 +7,7 @@
 //  - (DB-backed) no CLI self-promotion, no role upsert-over-existing, no daemon crash on unknown group.
 
 #include "../helpers/identities.hpp"
+#include "platform/Fd.hpp"
 #include "auth/model/Token.hpp"
 #include "auth/model/TokenPair.hpp"
 #include "auth/session/Issuer.hpp"
@@ -93,7 +94,7 @@ void ensureUsageManager() {
 // Minimal `vh` wire client
 
 int connectTo(const fs::path& socketPath) {
-    const int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    const int fd = vh::platform::fd::socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) return -1;
     sockaddr_un addr{};
     addr.sun_family = AF_UNIX;
@@ -206,7 +207,7 @@ TEST_F(ShellServerTest, IdleClientIsDroppedAfterRequestTimeout) {
 TEST_F(ShellServerTest, RebindsWhenSocketPathIsTakenOver) {
     // Simulate systemd's vaulthalla-cli.socket (re)creating the path with a listener nobody accepts on.
     ::unlink(socketPath.c_str());
-    const int stale = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    const int stale = vh::platform::fd::socket(AF_UNIX, SOCK_STREAM, 0);
     ASSERT_GE(stale, 0);
     sockaddr_un addr{};
     addr.sun_family = AF_UNIX;

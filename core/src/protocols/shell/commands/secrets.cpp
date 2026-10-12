@@ -3,7 +3,7 @@
 #include "protocols/shell/Router.hpp"
 #include "protocols/shell/util/argsHelpers.hpp"
 #include "identities/User.hpp"
-#include "crypto/secrets/TPMKeyProvider.hpp"
+#include "crypto/secrets/KeyProvider.hpp"
 #include "crypto/secrets/Manager.hpp"
 #include "fs/ops/file.hpp"
 #include <nlohmann/json.hpp>
@@ -128,7 +128,7 @@ static nlohmann::json generateSecretOutput(const std::string& name, const std::s
 }
 
 static nlohmann::json getDBPassword() {
-    vh::crypto::secrets::TPMKeyProvider tpm(vh::paths::testMode ? "test_psql" : "psql");
+    vh::crypto::secrets::KeyProvider tpm(vh::paths::testMode ? "test_psql" : "psql");
     tpm.init();
     return generateSecretOutput("db-password", tpm.getMasterKey());
 }
