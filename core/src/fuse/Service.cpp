@@ -7,6 +7,7 @@
 #include "concurrency/ThreadPoolManager.hpp"
 #include "fuse/task/Request.hpp"
 #include "log/Registry.hpp"
+#include "platform/Mount.hpp"
 
 #include <cstring>
 #include <fstream>
@@ -16,7 +17,6 @@
 #include <atomic>
 #include <utility>
 #include <paths.h>
-#include <sys/mount.h>    // umount2, MNT_DETACH
 #include <sys/stat.h>     // lstat
 #include <unistd.h>       // close
 #include <chrono>
@@ -53,15 +53,6 @@ static bool isMountedOrStale(const stdfs::path& p) {
     return st.st_dev != pst.st_dev;
 }
 
-static void lazyUmount(const stdfs::path& p) {
-    // 1) Try kernel lazy detach
-    if (::umount2(p.c_str(), MNT_DETACH) == 0) return;
-
-    // 2) Fallbacks (some distros prefer fusermount3), stopping at the first that works
-    for (const auto* command : {"fusermount3 -uz ", "fusermount -uz ", "umount -l "})
-        if (std::system((command + p.string() + " >/dev/null 2>&1").c_str()) == 0) return;
-}
-
 static void waitUnmounted(const stdfs::path& p, std::chrono::milliseconds timeout = std::chrono::milliseconds(1500)) {
     const auto deadline = std::chrono::steady_clock::now() + timeout;
     while (std::chrono::steady_clock::now() < deadline) {
@@ -96,7 +87,7 @@ static void ensureFreshMountpoint() {
         if (stdfs::exists(mountPath, ec)) {
             // If it’s a mountpoint (or stale), detach it first.
             if (isMountedOrStale(mountPath)) {
-                lazyUmount(mountPath);
+                platform::mount::detach(mountPath);
                 waitUnmounted(mountPath);
             }
 
@@ -116,7 +107,7 @@ static void ensureFreshMountpoint() {
     if (ec) {
         if (ec.value() == ENOTCONN || ec == std::errc::not_connected) {
             // One more forceful pass if a stale endpoint just got noticed late
-            lazyUmount(mountPath);
+            platform::mount::detach(mountPath);
             waitUnmounted(mountPath);
             ec.clear();
             stdfs::remove_all(mountPath, ec); // ignore errors
@@ -162,30 +153,14 @@ void fuse_ll_init(void* userdata, fuse_conn_info* conn) {
                               conn->max_readahead, conn->max_write);
 }
 
-// The fusectl connection id of the FUSE mount at `p` (the minor of its st_dev), read from /proc/self/mountinfo
-// rather than stat(): stat'ing the mount root is a FUSE request this process would have to answer itself.
-static std::optional<std::string> fuseConnectionId(const stdfs::path& p) {
-    std::ifstream mountinfo("/proc/self/mountinfo");
-    std::string line;
-    while (std::getline(mountinfo, line)) {
-        // <id> <parent> <major>:<minor> <root> <mount point> ... - <fstype> ...
-        std::istringstream fields(line);
-        std::string id, parent, dev, root, mountPoint;
-        if (!(fields >> id >> parent >> dev >> root >> mountPoint)) continue;
-        if (mountPoint != p.string() || line.find(" - fuse.") == std::string::npos) continue;
-        if (const auto colon = dev.find(':'); colon != std::string::npos) return dev.substr(colon + 1);
-    }
-    return std::nullopt;
-}
-
 void Service::onStop() {
     const auto mountPath = paths::getMountPath();
-    const auto connection = fuseConnectionId(mountPath);
+    const auto connection = platform::mount::fuseConnection(mountPath);
     if (!loopActive_.load() && !connection) return;  // never mounted (or already gone)
 
     // New lookups fail at once; the kernel ends the connection (and fuse_session_receive_buf() returns) when the
     // last reference to the mount goes away.
-    lazyUmount(mountPath);
+    platform::mount::detach(mountPath);
     if (session_) fuse_session_exit(session_);
 
     using namespace std::chrono_literals;
@@ -195,10 +170,9 @@ void Service::onStop() {
 
     // Something (an open file, a shell's cwd) still holds the detached mount, so the receive loop would block
     // forever. Aborting the connection fails its requests and wakes the loop. The mounting user owns the file.
-    std::ofstream abort("/sys/fs/fuse/connections/" + *connection + "/abort");
-    abort << "1" << std::flush;
+    const bool aborted = platform::mount::abortConnection(*connection);
     log::Registry::fuse()->warn("[FUSE] Mount still referenced 1s after unmount; aborted FUSE connection {}{}",
-                                *connection, abort ? "" : " (failed)");
+                                *connection, aborted ? "" : " (failed or unsupported on this platform)");
 }
 
 void Service::runLoop() {
@@ -206,13 +180,9 @@ void Service::runLoop() {
 
     ensureFreshMountpoint();
 
-    const std::vector<std::string> argsStr = {
-        "vaulthalla-fuse",
-        "-f",
-        "-o", "allow_other",
-        "-o", "auto_unmount",
-        paths::getMountPath()
-    };
+    std::vector<std::string> argsStr = {"vaulthalla-fuse", "-f"};
+    for (auto& option : platform::mount::fuseOptions()) argsStr.push_back(std::move(option));
+    argsStr.push_back(paths::getMountPath());
 
     std::vector<std::unique_ptr<char[]>> ownedCStrs;
     std::vector<char*> argsCStr;

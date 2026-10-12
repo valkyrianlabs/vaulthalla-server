@@ -104,6 +104,11 @@ deps = [
 ]
 
 if fuse_dep.found()
+    if host_os == 'darwin'
+        # macFUSE's libfuse3 defaults to its Darwin extensions (fuse_darwin_attr instead of struct stat); the vanilla
+        # libfuse API keeps the bridge identical to Linux's.
+        fuse_dep = declare_dependency(dependencies: fuse_dep, compile_args: ['-DFUSE_DARWIN_ENABLE_EXTENSIONS=0'])
+    endif
     deps += fuse_dep
 endif
 
