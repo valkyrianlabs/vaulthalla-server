@@ -14,11 +14,14 @@ import os
 import sys
 from pathlib import Path
 
-from vhh import fixture_v1, oracle, replay as R, run as RUN, sim, targets, world as W, worldgen
+from vhh import fixture_v1, oracle, sim, targets, worldgen
+from vhh import replay as R
+from vhh import run as RUN
+from vhh import world as W
 from vhh.broker import IdentityBroker
 from vhh.catalog import load as load_catalog
 from vhh.engine import Engine, Session
-from vhh.model import Op, Result
+from vhh.model import Op, Result, Verdict
 from vhh.recorder import TraceError, read_trace
 from vhh.redact import Redactor
 from vhh.seeds import fmt_seed, parse_seed
@@ -199,12 +202,14 @@ def _run_launched(a) -> int:
 def cmd_scenario(a) -> int:
     from vhh import scenarios
     out = Path(a.out) if a.out else RUN.new_run_dir()
-    ok, report = scenarios.run(a.kind, a.build, out)
+    seed = parse_seed(a.seed)
+    ok, report = scenarios.run(a.kind, a.build, out, seed=seed, sessions=a.sessions, rounds=a.rounds)
     for k in ("outcome", "after", "wedge", "took_s", "grant_latency_s", "revoke_latency_s", "steps", "died",
+              "seed", "executed", "overlapping_write_batches", "trace", "sanitizers",
               "mount_gone", "db_dropped", "why"):
         if k in report:
             print(f"  {k}: {report[k]}")
-    say("PASS" if ok else "FAIL", f"scenario {a.kind}: {'detected and contained' if ok else 'NOT contained'} "
+    say("PASS" if ok else "FAIL", f"scenario {a.kind}: {'completed' if ok else 'failed'} "
         f"(artifacts {out})")
     return PASS if ok else FAIL
 
@@ -253,15 +258,17 @@ def _launched_engine_factory(w, a):
     """Each replay/shrink attempt gets a fresh private instance (launch, provision, engine); the engine's teardown
     stops it. Replay assumes a freshly provisioned world, so nothing is reused between attempts."""
     import concurrent.futures
+
     from vhh import provision
     from vhh.drivers import real
     from vhh.instance import Instance
 
     def factory(ops):
         red, broker = _broker(w, "launch", None, None)
-        inst = Instance(Path(a.build), redactor=red)
-        inst.start()
+        artifacts = RUN.new_run_dir(a.artifacts) if getattr(a, "artifacts", None) else None
+        inst = Instance(Path(a.build), redactor=red, artifacts=artifacts)
         try:
+            inst.start()
             with concurrent.futures.ThreadPoolExecutor(1) as pool:   # provision is async; we are inside a loop
                 binding = pool.submit(asyncio.run, provision.provision(inst.target, w, broker, red)).result()
         except BaseException:
@@ -269,10 +276,29 @@ def _launched_engine_factory(w, a):
             raise
         make = real.factory(inst, binding, w, broker, red)
         engine = Engine(w, load_catalog(a.catalog), broker, red)
+        if getattr(a, "_scenario", None) == "magic":
+            from vhh.scenario_magic import MagicJudges
+            engine.judges = MagicJudges()
         for sid in sorted({o.session for o in ops}):
             o = next(x for x in ops if x.session == sid)
             engine.add_session(Session(sid, o.principal, o.surface, make(o.surface, o.principal), intent="replay"))
-        engine.teardown = inst.stop
+        engine.artifacts = str(inst.artifacts)
+        def teardown():
+            died = not inst.alive()
+            stop = inst.stop()
+            reports = inst.sanitizer_reports()
+            (Path(inst.artifacts) / "instance.json").write_text(
+                json.dumps(red.redact({"stop": stop, "died": died, "sanitizers": reports}), indent=2))
+            if reports:
+                engine.fail(Verdict("sanitizer", False, None, "sanitizer finding in replay: " + ", ".join(reports),
+                                    classification="product"))
+            if died:
+                engine.fail(Verdict("liveness", False, None, "daemon died during replay",
+                                    actual="crash", classification="product"))
+            if stop.get("stop") != "clean" or stop.get("returncode") != 0 or not stop.get("db_dropped"):
+                engine.fail(Verdict("harness", False, None, "replay instance did not tear down cleanly",
+                                    classification="unknown"))
+        engine.teardown = teardown
         return engine
     return factory
 
@@ -288,6 +314,7 @@ def _replay_factory(a, w):
 
 def _load_trace_and_world(a):
     trace = read_trace(a.trace)
+    a._scenario = trace.header.get("scenario")
     return trace, world_from_header(trace.header)
 
 
@@ -481,18 +508,23 @@ def parser() -> argparse.ArgumentParser:
             p.add_argument("--attempts", type=int, default=1)
             p.add_argument("--out", default="shrunk.jsonl")
         p.set_defaults(fn=fn)
+        p.add_argument("--artifacts", help="parent directory for private replay/shrink instance diagnostics")
 
     p = sub.add_parser("regress", help="replay stored regressions against a build (fresh instance each; root)")
     p.add_argument("--build", required=True)
     p.add_argument("--dir", default=str(Path(__file__).resolve().parent.parent / "regressions"))
     p.add_argument("--repeat", type=int, default=1)
     p.add_argument("--catalog")
+    p.add_argument("--artifacts", help="parent directory for private regression instance diagnostics")
     p.set_defaults(fn=cmd_regress)
 
     p = sub.add_parser("scenario", help="hang/crash during an in-flight FUSE op, or revoke on live sessions (root)")
-    p.add_argument("kind", choices=("hang", "crash", "revoke"))
+    p.add_argument("kind", choices=("hang", "crash", "revoke", "magic"))
     p.add_argument("--build", required=True)
     p.add_argument("--out")
+    p.add_argument("--seed")
+    p.add_argument("--sessions", type=int, default=8)
+    p.add_argument("--rounds", type=int, default=20)
     p.set_defaults(fn=cmd_scenario)
 
     p = sub.add_parser("verify", help="verify a finished trace offline")

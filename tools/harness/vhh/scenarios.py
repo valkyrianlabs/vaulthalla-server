@@ -52,16 +52,23 @@ async def _in_flight(inst: Instance, kind: str, deadline_s: float) -> dict:
             "why": "" if ok else f"crash not contained: in-flight {res.outcome}, next {after.outcome}"}
 
 
-def run(kind: str, build: str, out: Path, deadline_s: float = 4.0) -> tuple[bool, dict]:
+def run(kind: str, build: str, out: Path, deadline_s: float = 4.0, *,
+        seed: int = 0, sessions: int = 8, rounds: int = 20) -> tuple[bool, dict]:
+    from vhh.redact import Redactor
     out.mkdir(parents=True, exist_ok=True)
-    inst = Instance(Path(build), artifacts=out / "instance")
-    inst.start()
+    inst = Instance(Path(build), artifacts=out / "instance", redactor=Redactor())
     report: dict = {"scenario": kind, "run_id": inst.run_id}
     try:
-        with inst.watchdog(deadline_s * 6 + 120) as dog:
+        inst.start()
+        with inst.watchdog(max(deadline_s * 6 + 120, 120 + rounds * 60 if kind == "magic" else 0)) as dog:
             if kind == "revoke":
-                from vhh.scenario_revoke import run_revoke   # grant + revoke on live ws and FUSE sessions
+                from vhh.scenario_revoke import (
+                    run_revoke,  # grant + revoke on live ws and FUSE sessions
+                )
                 report.update(asyncio.run(run_revoke(inst)))
+            elif kind == "magic":
+                from vhh.scenario_magic import run_magic
+                report.update(asyncio.run(run_magic(inst, seed, sessions, rounds)))
             else:
                 report.update(asyncio.run(_in_flight(inst, kind, deadline_s)))
         if dog.fired:
@@ -72,14 +79,21 @@ def run(kind: str, build: str, out: Path, deadline_s: float = 4.0) -> tuple[bool
             report["ok"], report["why"] = False, "wedge reported without evidence"
         report["died"] = not inst.alive()
     except Exception as e:  # noqa: BLE001 - a scenario that raises is a failed scenario, never a pass
-        report.update(ok=False, why=f"scenario raised: {e!r}")
+        report.update(ok=False, why=f"scenario failed ({type(e).__name__}); inspect private instance artifacts")
     finally:
         stop = inst.stop()
         report["stop"] = stop
         report["mount_gone"] = mount_entry(inst.mount) is None
         report["db_dropped"] = stop.get("db_dropped", False)
-    ok = bool(report.get("ok")) and report["mount_gone"] and report["db_dropped"]
+        report["sanitizers"] = inst.sanitizer_reports()
+    ok = (bool(report.get("ok")) and report["mount_gone"] and report["db_dropped"]
+          and not report["sanitizers"])
+    if kind not in ("crash", "hang"):
+        ok = ok and stop.get("stop") == "clean" and stop.get("returncode") == 0
     if kind == "crash":
         ok = ok and report.get("died", False)
+    if not ok and not report.get("why"):
+        report["why"] = "daemon, sanitizer or teardown checks failed; inspect scenario.json"
+    report["ok"] = ok
     (out / "scenario.json").write_text(json.dumps(report, indent=2, default=str))
     return ok, report

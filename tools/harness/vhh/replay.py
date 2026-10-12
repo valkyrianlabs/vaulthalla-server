@@ -10,8 +10,8 @@ Shrink is ddmin: first over sessions, then over ops, keeping a failure predicate
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable
 
 from vhh.engine import Engine
 from vhh.model import Op, Result, Verdict
@@ -127,7 +127,8 @@ async def replay(factory: EngineFactory, pairs: list[tuple[Op, Result]], mode: s
         engine = await execute(factory, ops, mode)
         hit = predicate(engine)
         rep.reproduced += int(hit)
-        rep.runs.append({"run": i, "reproduced": hit, "failures": [v.message for v in engine.failures[:5]]})
+        rep.runs.append({"run": i, "reproduced": hit, "failures": [v.message for v in engine.failures[:5]],
+                         "artifacts": getattr(engine, "artifacts", None)})
     return rep
 
 
