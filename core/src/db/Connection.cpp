@@ -52,7 +52,7 @@ void Connection::configureSession(pqxx::connection& conn) {
 }
 
 static std::optional<std::string> getFirstInitDBPass() {
-    const std::filesystem::path f{"/run/vaulthalla/db_password"};
+    const std::filesystem::path f{VH_DB_PASSWORD_SEED_PATH};  // the installed path, also in test mode
 
     if (!std::filesystem::exists(f)) {
         log::Registry::runtime()->debug("[seed] No pending db_password file at {}", f.string());
@@ -75,7 +75,7 @@ static std::optional<std::string> getFirstInitDBPass() {
 }
 
 static void clearPendingDBPassIfPresent() {
-    const std::filesystem::path f{"/run/vaulthalla/db_password"};
+    const std::filesystem::path f{VH_DB_PASSWORD_SEED_PATH};  // the installed path, also in test mode
     if (!std::filesystem::exists(f)) return;
 
     try {

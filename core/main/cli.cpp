@@ -24,6 +24,7 @@
 #include <cstddef>
 
 #include "platform/Fd.hpp"
+#include <paths.h>  // generated: VH_CLI_SOCKET_PATH, VH_LIFECYCLE_PATH
 
 static bool readn(const int fd, void* b, size_t n) {
     auto* p = static_cast<uint8_t*>(b);
@@ -244,7 +245,7 @@ static int lifecycle_sudo_required(const std::vector<std::string>& argv_norm) {
 static std::string lifecycle_binary_path() {
     if (const char* env = std::getenv("VAULTHALLA_LIFECYCLE_BIN"); env && *env)
         return env;
-    return "/usr/lib/vaulthalla/lifecycle";
+    return VH_LIFECYCLE_PATH;
 }
 
 static int run_lifecycle_command(const std::vector<std::string>& argv_norm) {
@@ -377,7 +378,7 @@ constexpr int kTempFail = 75;     // EX_TEMPFAIL: daemon not responding / busy
 constexpr int kNoPerm = 77;       // EX_NOPERM: not allowed to use the control socket
 }
 
-static constexpr const char* kDefaultSocketPath = "/run/vaulthalla/cli.sock";
+static constexpr const char* kDefaultSocketPath = VH_CLI_SOCKET_PATH;
 
 // VAULTHALLA_CLI_SOCKET points `vh` at another daemon's socket (a private test instance). The daemon still decides
 // who the caller is from the peer credentials, so this grants nothing.

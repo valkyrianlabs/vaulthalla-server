@@ -29,15 +29,32 @@ config_dir = join_paths(get_option('sysconfdir'), meson.project_name())
 log_dir = join_paths(get_option('localstatedir'), 'log', meson.project_name())
 state_dir = join_paths(get_option('localstatedir'), 'lib', meson.project_name())
 runtime_dir = join_paths('/run', meson.project_name())
+mount_dir = join_paths('/mnt', meson.project_name())
+config_path = join_paths('/', config_dir, 'config.yaml')
 data_dir = join_paths(get_option('prefix'), get_option('datadir'), meson.project_name())
 psql_dir = join_paths(data_dir, 'psql')
+# `vh setup/teardown`: deploy/lifecycle/main.py, installed by the root meson.build as <prefix>/lib/vaulthalla/lifecycle.
+lifecycle_path = join_paths(get_option('prefix'), 'lib', meson.project_name(), 'lifecycle')
+
+# macOS: /run, /mnt and /etc/<pkg> are not places a macOS install owns (/run and /mnt don't exist; the system volume is
+# read-only). Data lives where it stays put whichever way Vaulthalla is installed (pkg, Homebrew, a future app); the
+# defaults are proposed in roadmap #203 and are only compiled in, never read from config.yaml.
+if host_machine.system() == 'darwin'
+    support_dir = '/Library/Application Support/Vaulthalla'
+    config_path = join_paths(support_dir, 'config.yaml')
+    state_dir = join_paths(support_dir, 'state')
+    log_dir = '/Library/Logs/Vaulthalla'
+    runtime_dir = '/var/run/vaulthalla'
+    mount_dir = '/Volumes/Vaulthalla'
+endif
 
 conf = configuration_data()
-conf.set_quoted('VH_MOUNT_PATH', join_paths('/mnt', meson.project_name()))
-conf.set_quoted('VH_CONFIG_PATH', join_paths('/', config_dir, 'config.yaml'))
+conf.set_quoted('VH_MOUNT_PATH', mount_dir)
+conf.set_quoted('VH_CONFIG_PATH', config_path)
 conf.set_quoted('VH_LOG_PATH', log_dir)
 conf.set_quoted('VH_BACKING_PATH', state_dir)
 conf.set_quoted('VH_RUNTIME_PATH', runtime_dir)
+conf.set_quoted('VH_LIFECYCLE_PATH', lifecycle_path)
 conf.set_quoted('VH_CACHE_PATH', '/.cache')
 conf.set_quoted('VH_S3_GATEWAY_MULTIPART_PARTS_DIRNAME', '.8f3a9c1d6e2b4f70')
 conf.set_quoted('VH_PSQL_SCHEMAS_PATH', psql_dir)

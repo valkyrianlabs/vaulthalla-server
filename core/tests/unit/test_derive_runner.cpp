@@ -243,8 +243,9 @@ TEST_F(DeriveRunnerTest, ChildGetsAnEmptyEnvironmentOnlyProtocolFdsAndLimits) {
     EXPECT_EQ(j["session_leader"], true);
     EXPECT_EQ(j["sigmask_empty"], true);
     EXPECT_EQ(j["sigpipe_default"], true);
-    if (vh::platform::child::addressSpaceLimitEnforced())
+    if (vh::platform::child::addressSpaceLimitEnforced()) {
         EXPECT_EQ(j["rlimit_as"]["soft"].get<double>(), static_cast<double>(1ull << 30));
+    }
     EXPECT_EQ(j["rlimit_cpu"]["soft"].get<double>(), 17.0);
     EXPECT_EQ(j["rlimit_cpu"]["hard"].get<double>(), 22.0);
     EXPECT_EQ(j["rlimit_fsize"]["soft"].get<double>(), 0.0);
