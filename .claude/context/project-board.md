@@ -65,3 +65,16 @@ same day: `board.py lint` reports 0 problems; bug-labeled issues typed Bug; #96 
 Triaged with a Handoff line; the dogfood findings #157–#168 and #170–#173 are sub-issues of #156;
 `needs:decision` marks #118, #162, #164, #166 and #168. View group/sort/
 column settings by hand: #181 (Parked, low priority while there are no outside contributors).
+
+macOS initiative additions, live on #4 since 2026-10-12 (additive; option ids kept, no item values
+changed; pre-change snapshot `.claude/scratch/board/prod-4-pre-macos-2026-10-12.json`):
+- Labels: `platform:macos`, `platform:linux` (only where a change also touches Linux code paths),
+  `hardware:apple-silicon` (needs validation on Apple Silicon), `needs:review` (a proposed
+  design awaiting maintainer review; `needs:decision` stays for a concrete choice that blocks
+  work). `needs:review` is in the Ready gate's `forbid_labels` and in the Needs info filter.
+- Hazards `macos-system-policy` (system extensions, Reduced Security, service accounts,
+  LaunchDaemons, keychain ACLs; capped at Checkpointed). Proof `macos` (native Homebrew Meson
+  build + unit tests on hosted arm64 CI or a Mac).
+- View `macOS` (`label:"platform:macos"`; sort Priority asc and group by Status set by hand, #181).
+- Repo milestones `macOS A`–`macOS F` (Native core, Working storage, Operational parity,
+  Distribution, Finder, Native app) group the initiative's sub-issues.

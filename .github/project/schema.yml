@@ -99,6 +99,7 @@ fields:
       - {name: auth-rbac-share, color: ORANGE, description: "Authorization or share scoping (review hotspot). Share overwrite goes through filesystem RBAC."}
       - {name: fuse-blocking, color: YELLOW, description: "Can wedge /mnt/vaulthalla or the DB pool. Use timeouts; prefer mountinfo/fusectl."}
       - {name: destructive-local, color: YELLOW, description: "Proof tears down or replaces the local dev install (make dev, uninstall, clean-full). Give a heads-up."}
+      - {name: macos-system-policy, color: RED, max_autonomy: Checkpointed, description: "Changes macOS security policy or system state: kernel/system extensions, Reduced Security, service accounts, LaunchDaemons, keychain ACLs. Needs explicit approval."}
 
   - name: Proof
     type: multi_select
@@ -113,6 +114,7 @@ fields:
       - {name: shell, color: GREEN, description: "verify.sh shell: bash -n on bin/ and maintainer scripts."}
       - {name: integration, color: ORANGE, description: "verify.sh integration: make itest, Tier A proofs as an isolated private instance (sudo; non-destructive)."}
       - {name: lab-smoke, color: RED, implies_hazards: [vh-storage], description: "Real-apt install/upgrade proof on vh-storage (tools/lab/lab_smoke). Released packages only."}
+      - {name: macos, color: GRAY, description: "macOS build: native Homebrew Meson build + unit tests (hosted arm64 CI or a Mac)."}
 
   - name: Agent
     type: text
@@ -283,6 +285,10 @@ areas:
 labels:
   "needs:repro": {color: "d93f0b", description: "Cannot proceed without a reproduction"}
   "needs:decision": {color: "fbca04", description: "Waiting on a maintainer decision"}
+  "needs:review": {color: "c5def5", description: "Proposed design/architecture awaiting maintainer review (needs:decision = a blocking choice)"}
+  "platform:macos": {color: "5319e7", description: "macOS-specific work"}
+  "platform:linux": {color: "0e8a16", description: "Linux-specific work, or a change that also touches Linux code paths"}
+  "hardware:apple-silicon": {color: "bfd4f2", description: "Needs validation on Apple Silicon hardware"}
 
 # Views: matched by name. `apply` sets filter, layout (on create) and visible fields. Group-by,
 # sort and board column field are not settable through the API; `ui` lists what to set by hand.
@@ -310,7 +316,7 @@ views:
     ui: {sort: Last touched asc}
   - name: Needs info
     layout: table
-    filter: "is:open label:\"needs:repro\",\"needs:decision\""
+    filter: "is:open label:\"needs:repro\",\"needs:decision\",\"needs:review\""
     fields: [Title, Status, Labels, Priority, Assignees]
   - name: Current iteration
     layout: board
@@ -351,6 +357,12 @@ views:
     fields: [Title, Assignees, Status, Labels, Linked pull requests, Sub-issues progress]
     ui: {column_field: Status}
 
+  - name: macOS
+    layout: table
+    filter: "label:\"platform:macos\""
+    fields: [Title, Status, Priority, Size, Clarity, Autonomy, Hazards, Labels, Linked pull requests, Sub-issues progress]
+    ui: {sort: Priority asc, group_by: Status}
+
 # The Ready gate, checked by `board.py lint`.
 ready_gate:
   require_issue_type: true
@@ -358,6 +370,6 @@ ready_gate:
   require_fields: [Priority, Size, Clarity, Autonomy, Hazards, Proof]
   forbid_sizes: [XL]
   require_sub_issues_for_sizes: [L]
-  forbid_labels: ["needs:repro", "needs:decision"]
+  forbid_labels: ["needs:repro", "needs:decision", "needs:review"]
   forbid_open_blockers: true
   require_body_heading_any: [Acceptance, Done when]  # markdown heading starting with one of these
