@@ -36,6 +36,18 @@ Decisions awaiting the maintainer are `needs:review` issues #200–#206 on the R
   Proof tooling: `tools/macos/fuse-probe/`.
 - macFUSE's license forbids bundling or automated installation with commercial software without permission.
 
+## System service (launchd, #216/#202)
+
+- `deploy/launchd/sh.vaulthalla.{server,web}.plist.in` mirror the systemd units (KeepAlive SuccessfulExit=false ≈
+  Restart=on-failure, ThrottleInterval, ExitTimeOut 30, NOFILE 65535, Core 0, Umask 077), running as `_vaulthalla`
+  in the system domain: up before login, across logout. No StartLimit and no ordering after PostgreSQL in launchd.
+- `vaulthalla-provision` (installed to `<prefix>/lib/vaulthalla/`): idempotent; plan by default, `--apply`,
+  `--remove [--purge]`. Hidden role account `_vaulthalla` (uid/gid 200-399, alias `vaulthalla` so the daemon's
+  `vaulthalla` user/group lookups work unchanged), `state` 0700, `run` 0750 (CLI socket), `mount` 0700, logs 0750,
+  config.yaml only if missing. Never enrolls a user in the group (#202). Contract:
+  `tools/contracts/test_macos_launchd_contract.py` (stubs, `--root`; runs on Linux CI too).
+- Runtime dir on macOS is `/Library/Application Support/Vaulthalla/run` (launchd has no RuntimeDirectory).
+
 ## Build and test on a Mac
 
 `tools/macos/bootstrap.sh` (Brewfile, pinned PDFium `chromium/8066`, `libpqxx-vh.pc` alias over Homebrew's shared

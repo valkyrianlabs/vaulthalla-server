@@ -21,3 +21,5 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   Silicon (tools/macos, .github/workflows/macos.yml); FUSE is off and secrets use a development file backend.
 - fix(fuse): a rename with RENAME_EXCHANGE (or any flag besides RENAME_NOREPLACE) is refused with EINVAL; it used
   to be carried out as a plain rename that overwrote the entry the caller asked to swap.
+- macOS (development, not packaged): launchd LaunchDaemons and an idempotent provisioning script for the headless
+  `_vaulthalla` system service (deploy/launchd); Linux installs exactly the same files as before.

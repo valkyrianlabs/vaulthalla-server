@@ -1,0 +1,197 @@
+#!/bin/bash
+# vaulthalla-provision: the macOS system service's account, private directories and LaunchDaemons (the counterpart of
+# what debian/postinst does for systemd on Linux). Idempotent: running it again changes nothing that is already right.
+#
+#   vaulthalla-provision                 show what would change (default; changes nothing)
+#   vaulthalla-provision --apply         make the changes (root)
+#   vaulthalla-provision --remove        unload and remove the LaunchDaemons; account and data stay
+#   vaulthalla-provision --remove --purge   also delete the state, logs, runtime dir and the _vaulthalla account
+#
+# What it sets up:
+#   - _vaulthalla, a hidden role account (uid/gid in 200-399, no shell, no home) with the record alias "vaulthalla",
+#     so the daemon's lookups of the 'vaulthalla' user and group work as on Linux.
+#   - @SUPPORT_DIR@            root:wheel 0755
+#     .../state                _vaulthalla 0700   encrypted backing store, sealed secrets, upload staging
+#     .../run                  _vaulthalla 0750   the CLI socket (members of the vaulthalla group may connect)
+#     .../mount                _vaulthalla 0700   the optional service-private FUSE mount point
+#     @LOG_DIR@                _vaulthalla 0750
+#   - config.yaml, only if missing (never overwritten), root:_vaulthalla 0640.
+#   - /Library/LaunchDaemons/sh.vaulthalla.{server,web}.plist, bootstrapped in the system domain.
+# It never adds anyone to the vaulthalla group: enrolling a local user for `vh` is an explicit step (#202).
+set -euo pipefail
+
+SERVICE=_vaulthalla
+ALIAS=vaulthalla
+SUPPORT_DIR="@SUPPORT_DIR@"
+STATE_DIR="@STATE_DIR@"
+RUN_DIR="@RUN_DIR@"
+MOUNT_DIR="@MOUNT_DIR@"
+LOG_DIR="@LOG_DIR@"
+CONFIG_PATH="@CONFIG_PATH@"
+SHARE_DIR="@SHARE_DIR@"
+BINDIR="@BINDIR@"
+WEB_DIR="@WEB_DIR@"
+NODE="@NODE@"
+LAUNCHD_DIR=/Library/LaunchDaemons
+LABELS="sh.vaulthalla.server sh.vaulthalla.web"
+
+# Tools, overridable for tests (tools/contracts/test_macos_launchd_contract.py runs this with stubs and --root).
+DSCL=${VH_DSCL:-/usr/bin/dscl}
+LAUNCHCTL=${VH_LAUNCHCTL:-/bin/launchctl}
+INSTALL=${VH_INSTALL:-/usr/bin/install}
+PLUTIL=${VH_PLUTIL:-/usr/bin/plutil}
+
+ACTION=provision
+APPLY=false
+PURGE=false
+ROOT=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --apply) APPLY=true ;;
+    --remove) ACTION=remove ;;
+    --purge) PURGE=true ;;
+    --root) ROOT="$2"; shift ;;
+    -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
+    *) echo "vaulthalla-provision: unknown argument: $1" >&2; exit 2 ;;
+  esac
+  shift
+done
+if [ "$PURGE" = true ] && [ "$ACTION" != remove ]; then
+  echo "vaulthalla-provision: --purge only goes with --remove" >&2; exit 2
+fi
+if [ "$APPLY" = true ] && [ -z "$ROOT" ] && [ "$(id -u)" != 0 ]; then
+  echo "vaulthalla-provision: --apply needs root (sudo)" >&2; exit 1
+fi
+
+changes=0
+note() { echo "[provision] $*"; }
+run() {  # every change goes through here: printed in plan mode, executed with --apply
+  changes=$((changes + 1))
+  if [ "$APPLY" = true ]; then "$@"; else printf '[provision] would run:'; printf ' %q' "$@"; echo; fi
+}
+
+account_id() { "$DSCL" . -read "/Users/$SERVICE" UniqueID 2>/dev/null | awk '{print $2}'; }
+
+free_id() {
+  local used id
+  used=$( { "$DSCL" . -list /Users UniqueID; "$DSCL" . -list /Groups PrimaryGroupID; } 2>/dev/null | awk '{print $2}')
+  for id in $(seq 200 399); do
+    echo "$used" | grep -qx "$id" || { echo "$id"; return 0; }
+  done
+  return 1
+}
+
+ensure_account() {
+  local id
+  id=$(account_id || true)
+  if [ -n "$id" ]; then note "account $SERVICE exists (uid $id)"; return 0; fi
+  id=$(free_id) || { echo "vaulthalla-provision: no free uid/gid in 200-399" >&2; exit 1; }
+  note "creating hidden role account $SERVICE (uid/gid $id)"
+  run "$DSCL" . -create "/Groups/$SERVICE"
+  run "$DSCL" . -create "/Groups/$SERVICE" PrimaryGroupID "$id"
+  run "$DSCL" . -create "/Groups/$SERVICE" RealName "Vaulthalla service"
+  run "$DSCL" . -create "/Groups/$SERVICE" Password '*'
+  run "$DSCL" . -append "/Groups/$SERVICE" RecordName "$ALIAS"
+  run "$DSCL" . -create "/Users/$SERVICE"
+  run "$DSCL" . -create "/Users/$SERVICE" UniqueID "$id"
+  run "$DSCL" . -create "/Users/$SERVICE" PrimaryGroupID "$id"
+  run "$DSCL" . -create "/Users/$SERVICE" RealName "Vaulthalla service"
+  run "$DSCL" . -create "/Users/$SERVICE" UserShell /usr/bin/false
+  run "$DSCL" . -create "/Users/$SERVICE" NFSHomeDirectory /var/empty
+  run "$DSCL" . -create "/Users/$SERVICE" Password '*'
+  run "$DSCL" . -create "/Users/$SERVICE" IsHidden 1
+  run "$DSCL" . -append "/Users/$SERVICE" RecordName "$ALIAS"
+}
+
+# ensure_dir PATH OWNER GROUP MODE
+ensure_dir() {
+  local path="$ROOT$1" mode owner
+  if [ -d "$path" ]; then
+    case "$(uname -s)" in
+      Darwin) mode=$(stat -f '%Lp' "$path"); owner=$(stat -f '%Su:%Sg' "$path") ;;
+      *) mode=$(stat -c '%a' "$path"); owner=$(stat -c '%U:%G' "$path") ;;  # the contract tests on Linux CI
+    esac
+    # Under --root (tests) everything belongs to the test user: only the mode is checked there.
+    if { [ "$mode" = "${4#0}" ] || [ "$mode" = "$4" ]; } && { [ -n "$ROOT" ] || [ "$owner" = "$2:$3" ]; }; then
+      note "ok $1 ($2:$3 $4)"; return 0
+    fi
+  fi
+  run "$INSTALL" -d -o "$2" -g "$3" -m "$4" "$path"
+}
+
+ensure_config() {
+  if [ -e "$ROOT$CONFIG_PATH" ]; then note "keeping existing $CONFIG_PATH"; return 0; fi
+  run "$INSTALL" -o root -g "$SERVICE" -m 0640 "$ROOT$SHARE_DIR/config/config.yaml" "$ROOT$CONFIG_PATH"
+}
+
+render_plist() {  # render_plist LABEL > file
+  # The placeholders are spelled with $at so configuring this script doesn't substitute them here as well.
+  local at=@
+  sed -e "s|${at}BINDIR${at}|$BINDIR|g" -e "s|${at}STATE_DIR${at}|$STATE_DIR|g" -e "s|${at}LOG_DIR${at}|$LOG_DIR|g" \
+      -e "s|${at}WEB_DIR${at}|$WEB_DIR|g" -e "s|${at}NODE${at}|$NODE|g" "$ROOT$SHARE_DIR/launchd/$1.plist.in"
+}
+
+loaded() { "$LAUNCHCTL" print "system/$1" >/dev/null 2>&1; }
+
+ensure_daemons() {
+  local label target tmp changed
+  for label in $LABELS; do
+    target="$ROOT$LAUNCHD_DIR/$label.plist"
+    tmp=$(mktemp)
+    render_plist "$label" > "$tmp"
+    "$PLUTIL" -lint "$tmp" >/dev/null || { echo "vaulthalla-provision: rendered $label.plist is invalid" >&2; rm -f "$tmp"; exit 1; }
+    changed=false
+    if ! cmp -s "$tmp" "$target"; then
+      run "$INSTALL" -o root -g wheel -m 0644 "$tmp" "$target"
+      changed=true
+    else
+      note "ok $LAUNCHD_DIR/$label.plist"
+    fi
+    rm -f "$tmp"
+    if ! loaded "$label"; then
+      run "$LAUNCHCTL" bootstrap system "$LAUNCHD_DIR/$label.plist"
+    elif [ "$changed" = true ]; then
+      run "$LAUNCHCTL" bootout "system/$label"
+      run "$LAUNCHCTL" bootstrap system "$LAUNCHD_DIR/$label.plist"
+    else
+      note "ok $label loaded"
+    fi
+  done
+}
+
+remove_daemons() {
+  local label
+  for label in $LABELS; do
+    if loaded "$label"; then run "$LAUNCHCTL" bootout "system/$label"; fi
+    if [ -e "$ROOT$LAUNCHD_DIR/$label.plist" ]; then run rm -f "$ROOT$LAUNCHD_DIR/$label.plist"; fi
+  done
+}
+
+purge() {
+  local dir
+  for dir in "$STATE_DIR" "$RUN_DIR" "$MOUNT_DIR" "$LOG_DIR"; do
+    # Never follow a mount: an unmount problem must not turn into deleting through a FUSE view.
+    if mount | grep -q " on $ROOT$dir "; then echo "vaulthalla-provision: $dir is a mount point; unmount it first" >&2; exit 1; fi
+    if [ -e "$ROOT$dir" ]; then run rm -rf "$ROOT$dir"; fi
+  done
+  if [ -n "$(account_id || true)" ]; then
+    run "$DSCL" . -delete "/Users/$SERVICE"
+    run "$DSCL" . -delete "/Groups/$SERVICE"
+  fi
+}
+
+if [ "$ACTION" = remove ]; then
+  remove_daemons
+  [ "$PURGE" = true ] && purge
+else
+  ensure_account
+  ensure_dir "$SUPPORT_DIR" root wheel 0755
+  ensure_dir "$STATE_DIR" "$SERVICE" "$SERVICE" 0700
+  ensure_dir "$RUN_DIR" "$SERVICE" "$SERVICE" 0750
+  ensure_dir "$MOUNT_DIR" "$SERVICE" "$SERVICE" 0700
+  ensure_dir "$LOG_DIR" "$SERVICE" "$SERVICE" 0750
+  ensure_config
+  ensure_daemons
+fi
+
+if [ "$APPLY" = true ]; then note "done ($changes change(s))"; else note "$changes change(s) to make; rerun with --apply"; fi
