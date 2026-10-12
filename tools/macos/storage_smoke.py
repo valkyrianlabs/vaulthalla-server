@@ -85,13 +85,15 @@ class Daemon:
             return None
 
 
-def prepare(ws_port: int, http_port: int) -> None:
+def prepare(ws_port: int, http_port: int, mount_mode: str | None) -> None:
     if ROOT.exists():
         shutil.rmtree(ROOT)
     for d in ("backing", "mount", "log", "run"):
         (ROOT / d).mkdir(parents=True)
     config = (REPO / "deploy/config/config.yaml").read_text()
     config = config.replace("port: 36969", f"port: {ws_port}").replace("port: 36970", f"port: {http_port}")
+    if mount_mode:
+        config += f"\nmount:\n  mode: {mount_mode}\n"
     (ROOT / "config.yaml").write_text(config)
 
 
@@ -114,7 +116,7 @@ def backing_files(name: str) -> list[Path]:
 
 
 async def run(args) -> bool:
-    prepare(args.ws_port, args.http_port)
+    prepare(args.ws_port, args.http_port, args.mount_mode)
     daemon = Daemon(REPO / args.build / "core/vaulthalla-server", instance_env())
     target = Target(hostname="127.0.0.1", connect_ip="127.0.0.1", ws_port=args.ws_port, http_port=args.http_port)
     payload = os.urandom(1 << 20)
@@ -131,9 +133,16 @@ async def run(args) -> bool:
         good &= step("ws login as admin", True)
         health = (await ws.must("stats.system.health")).get("stats", {})
         deps = health.get("deps", {})
+        state = deps.get("mount_state")
         good &= step("health reports mount + secrets backend honestly",
-                     deps.get("fuse_mount") in ("disabled", "multiuser") and bool(deps.get("secrets_backend")),
-                     f"fuse_mount={deps.get('fuse_mount')} secrets_backend={deps.get('secrets_backend')}")
+                     deps.get("fuse_mount") in ("disabled", "service_private", "multiuser") and bool(deps.get("secrets_backend"))
+                     and (args.expect_mount_state is None or state == args.expect_mount_state),
+                     f"mode={deps.get('fuse_mount')} state={state} detail={deps.get('mount_detail')} "
+                     f"secrets_backend={deps.get('secrets_backend')}")
+        if args.expect_mount_state not in (None, "disabled", "mounted"):
+            # A configured mount that isn't there is degraded health, never "healthy", and never blocks storage.
+            overall = health.get("overall_status") or health.get("status")
+            good &= step("unmounted configured mount reads as degraded", overall in ("degraded", "warning"), f"overall={overall}")
         vault = (await ws.must("storage.vault.add", {"name": "storage_smoke", "type": "local"}))["vault"]
         vault_id = int(vault["id"])
         good &= step("create encrypted local vault", vault_id > 0, f"id={vault_id}")
@@ -178,6 +187,9 @@ def main() -> int:
     p.add_argument("--ws-port", type=int, default=46969)
     p.add_argument("--http-port", type=int, default=46970)
     p.add_argument("--keep", action="store_true", help=f"keep {ROOT} (kept anyway on failure)")
+    p.add_argument("--mount-mode", choices=["disabled", "service_private", "multiuser"],
+                   help="write mount.mode into the instance's config.yaml")
+    p.add_argument("--expect-mount-state", help="health must report this mount_state (e.g. disabled, unavailable)")
     ok_all = asyncio.run(run(p.parse_args()))
     print("storage smoke:", "PASSED" if ok_all else "FAILED")
     return 0 if ok_all else 1
