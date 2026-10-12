@@ -9,6 +9,11 @@
 // The daemon's CLI socket and the first-install DB password handoff, both in the runtime directory.
 #define VH_CLI_SOCKET_PATH VH_RUNTIME_PATH "/cli.sock"
 #define VH_DB_PASSWORD_SEED_PATH VH_RUNTIME_PATH "/db_password"
+// How `vh` tells the operator to inspect the service, read its log, and enroll a user for the CLI socket.
+#define VH_HINT_SERVICE_NAME @VH_HINT_SERVICE_NAME@
+#define VH_HINT_SERVICE_STATUS @VH_HINT_SERVICE_STATUS@
+#define VH_HINT_SERVICE_LOG @VH_HINT_SERVICE_LOG@
+#define VH_HINT_CLI_ENROLL @VH_HINT_CLI_ENROLL@
 #define VH_CACHE_PATH @VH_CACHE_PATH@
 #define VH_S3_GATEWAY_MULTIPART_PARTS_DIRNAME @VH_S3_GATEWAY_MULTIPART_PARTS_DIRNAME@
 #define VH_PSQL_SCHEMAS_PATH @VH_PSQL_SCHEMAS_PATH@

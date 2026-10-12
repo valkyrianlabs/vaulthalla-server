@@ -67,6 +67,17 @@ conf.set_quoted('VH_BACKING_PATH', state_dir)
 conf.set_quoted('VH_RUNTIME_PATH', runtime_dir)
 conf.set_quoted('VH_LIFECYCLE_PATH', lifecycle_path)
 conf.set_quoted('VH_CACHE_PATH', '/.cache')
+if host_machine.system() == 'darwin'
+    conf.set_quoted('VH_HINT_SERVICE_NAME', 'sh.vaulthalla.server')
+    conf.set_quoted('VH_HINT_SERVICE_STATUS', 'sudo launchctl print system/sh.vaulthalla.server')
+    conf.set_quoted('VH_HINT_SERVICE_LOG', 'sudo tail -n 50 "' + join_paths(log_dir, 'vaulthalla.log') + '"')
+    conf.set_quoted('VH_HINT_CLI_ENROLL', 'sudo dseditgroup -o edit -a $USER -t user _vaulthalla')
+else
+    conf.set_quoted('VH_HINT_SERVICE_NAME', 'vaulthalla.service')
+    conf.set_quoted('VH_HINT_SERVICE_STATUS', 'systemctl status vaulthalla')
+    conf.set_quoted('VH_HINT_SERVICE_LOG', 'journalctl -u vaulthalla -n 50')
+    conf.set_quoted('VH_HINT_CLI_ENROLL', 'sudo usermod -aG vaulthalla $USER')
+endif
 conf.set_quoted('VH_S3_GATEWAY_MULTIPART_PARTS_DIRNAME', '.8f3a9c1d6e2b4f70')
 conf.set_quoted('VH_PSQL_SCHEMAS_PATH', psql_dir)
 conf.set_quoted('VH_PSQL_TEST_SCHEMAS_PATH', join_paths(repo_root, 'deploy/psql'))
