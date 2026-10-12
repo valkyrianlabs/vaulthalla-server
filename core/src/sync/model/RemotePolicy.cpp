@@ -1,5 +1,7 @@
 #include "sync/model/RemotePolicy.hpp"
 #include "db/encoding/timestamp.hpp"
+
+#include <pqxx/row>
 #include "db/encoding/interval.hpp"
 #include "sync/model/Conflict.hpp"
 #include "fs/model/File.hpp"

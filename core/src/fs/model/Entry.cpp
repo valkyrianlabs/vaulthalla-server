@@ -207,8 +207,10 @@ std::vector<std::shared_ptr<Entry>> vh::fs::model::fromS3XML(const std::u8string
         auto full_path = std::filesystem::path(reinterpret_cast<const char*>(key.c_str()));
         std::filesystem::path current;
 
-        for (auto pit = full_path.begin(); pit != std::prev(full_path.end()); ++pit) {
-            current /= *pit;
+        // Every component but the last (the object itself). libc++'s path::iterator isn't bidirectional, so no
+        // std::prev(end()); parent_path() also makes an empty key iterate nothing instead of decrementing begin().
+        for (const auto& component : full_path.parent_path()) {
+            current /= component;
 
             const auto dir_str = current.u8string();
 

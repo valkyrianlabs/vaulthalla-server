@@ -63,7 +63,7 @@ deps = [
     dependency('fuse3', required: true),
     dependency('libsodium', required: true),
     dependency('libcurl', required: true),
-    dependency('boost', modules: ['filesystem', 'system'], required: true),
+    dependency('boost', modules: ['filesystem'], required: true),
     pqxx_dep,
     # apt.vaulthalla.sh's Chromium-tracking build (<milestone>.<branch>.<n>). The retired 2025.06.29 fork snapshot sorts
     # higher, so the upper bound is what keeps a stale host from building against (and depending on) it.

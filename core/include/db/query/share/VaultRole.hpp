@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 #include "rbac/Fwd.hpp"
+#include "rbac/permission/Override.hpp"  // complete type: the `= {}` default arguments instantiate std::vector<Override>
 
 namespace vh::db::query::share {
 
