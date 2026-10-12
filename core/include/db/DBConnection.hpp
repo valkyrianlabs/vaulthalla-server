@@ -6,7 +6,7 @@
 #include <vector>
 #include <pqxx/connection>
 
-namespace vh::crypto::secrets { class TPMKeyProvider; }
+namespace vh::crypto::secrets { class KeyProvider; }
 
 namespace vh::db {
 
@@ -41,7 +41,7 @@ class Connection {
     // to assemble, quote or URI-escape.
     using Params = std::vector<std::pair<std::string, std::string>>;
 
-    std::unique_ptr<crypto::secrets::TPMKeyProvider> tpmKeyProvider_;
+    std::unique_ptr<crypto::secrets::KeyProvider> tpmKeyProvider_;
     Params params_;
     std::unique_ptr<pqxx::connection> conn_;
     bool prepared_ = false;

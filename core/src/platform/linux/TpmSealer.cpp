@@ -1,4 +1,4 @@
-#include "crypto/secrets/TPMKeyProvider.hpp"
+#include "platform/Sealer.hpp"
 #include "log/Registry.hpp"
 
 #include <tss2/tss2_esys.h>
@@ -21,11 +21,7 @@
 
 using namespace std::string_literals;
 
-namespace vh::crypto::secrets {
-    static std::filesystem::path resolveSealedDir(const std::string &key) {
-        return paths::getBackingPath() / (".sealed_" + key + ".blob");
-    }
-
+namespace vh::platform::sealer {
     struct TctiSelection {
         std::string tctiConfig;
         std::string backend;
@@ -190,28 +186,6 @@ namespace vh::crypto::secrets {
         Esys_FlushContext(ctx, handle);
     }
 
-    static std::vector<uint8_t> random_key(std::size_t n = 32) {
-        std::vector<uint8_t> k(n);
-        std::random_device rd;
-        std::generate(k.begin(), k.end(), [&] { return static_cast<uint8_t>(rd()); });
-        return k;
-    }
-
-    TPMKeyProvider::TPMKeyProvider(const std::string &name)
-        : name_(name), sealedDir_(resolveSealedDir(name)) {
-    }
-
-    void TPMKeyProvider::init(const std::optional<std::string> &initSecret) {
-        if (std::filesystem::exists(sealedDir_ / (name_ + ".priv"))) {
-            unseal();
-            return;
-        }
-        if (initSecret) masterKey_ = std::vector<uint8_t>(initSecret->begin(), initSecret->end());
-        generate_and_seal();
-    }
-
-    const std::vector<uint8_t> &TPMKeyProvider::getMasterKey() const { return masterKey_; }
-
     static std::vector<uint8_t> slurp(const std::filesystem::path &p) {
         std::ifstream f(p, std::ios::binary);
         return {std::istreambuf_iterator<char>(f), {}};
@@ -269,9 +243,12 @@ namespace vh::crypto::secrets {
         return primHandle;
     }
 
-    void TPMKeyProvider::generate_and_seal() {
-        if (masterKey_.empty()) masterKey_ = random_key();
+    std::string_view backend() noexcept { return "tpm2"; }
 
+    // A KEYEDHASH object holding the secret under the TPM's storage primary, which is recreated on each use (no
+    // persistent handle). The blob only loads into this TPM. No PCR policy: whoever can read `dir` and reach the TPM
+    // can unseal it.
+    void seal(const std::filesystem::path &dir, const std::string &name, const std::vector<uint8_t> &secret) {
         auto runtime = init_esys();
         ESYS_TR parent = ESYS_TR_NONE;
         TPM2B_PRIVATE *outPriv = nullptr;
@@ -283,8 +260,8 @@ namespace vh::crypto::secrets {
             TPM2B_SENSITIVE_CREATE sens{};
             sens.size = 0;
             sens.sensitive.userAuth.size = 0;
-            sens.sensitive.data.size = masterKey_.size();
-            memcpy(sens.sensitive.data.buffer, masterKey_.data(), masterKey_.size());
+            sens.sensitive.data.size = secret.size();
+            memcpy(sens.sensitive.data.buffer, secret.data(), secret.size());
 
             TPM2B_PUBLIC pub{};
             pub.size = 0;
@@ -312,8 +289,8 @@ namespace vh::crypto::secrets {
                 throw std::runtime_error("Esys_Create failed " + describe_rc(rc));
             }
 
-            dump(sealedDir_ / (name_ + ".priv"), {outPriv->buffer, outPriv->buffer + outPriv->size});
-            dump(sealedDir_ / (name_ + ".pub"),
+            dump(dir / (name + ".priv"), {outPriv->buffer, outPriv->buffer + outPriv->size});
+            dump(dir / (name + ".pub"),
                  {
                      reinterpret_cast<uint8_t *>(&outPub->publicArea),
                      reinterpret_cast<uint8_t *>(&outPub->publicArea) + sizeof(outPub->publicArea)
@@ -329,10 +306,11 @@ namespace vh::crypto::secrets {
         if (outPub) Esys_Free(outPub);
         flush_if_valid(runtime.esys, parent);
 
-        log::Registry::crypto()->debug("[TPMKeyProvider] Sealed {} key to {}", name_, sealedDir_.string());
+        log::Registry::crypto()->debug("[TPMKeyProvider] Sealed {} key to {}", name, dir.string());
     }
 
-    void TPMKeyProvider::unseal() {
+    std::vector<uint8_t> unseal(const std::filesystem::path &dir, const std::string &name) {
+        std::vector<uint8_t> secret;
         auto runtime = init_esys();
         ESYS_TR parent = ESYS_TR_NONE;
         ESYS_TR obj = ESYS_TR_NONE;
@@ -342,7 +320,7 @@ namespace vh::crypto::secrets {
             parent = create_primary(runtime.esys); // recreate parent each boot
 
             TPM2B_PRIVATE inPriv{};
-            auto privBuf = slurp(sealedDir_ / (name_ + ".priv"));
+            auto privBuf = slurp(dir / (name + ".priv"));
             if (privBuf.size() > sizeof(inPriv.buffer)) {
                 throw std::runtime_error("sealed TPM private blob is too large");
             }
@@ -350,7 +328,7 @@ namespace vh::crypto::secrets {
             memcpy(inPriv.buffer, privBuf.data(), privBuf.size());
 
             TPM2B_PUBLIC inPub{};
-            auto pubBuf = slurp(sealedDir_ / (name_ + ".pub"));
+            auto pubBuf = slurp(dir / (name + ".pub"));
             if (pubBuf.size() < sizeof(inPub.publicArea)) {
                 throw std::runtime_error("sealed TPM public blob is incomplete");
             }
@@ -370,7 +348,7 @@ namespace vh::crypto::secrets {
                 throw std::runtime_error("Esys_Unseal failed " + describe_rc(rc));
             }
 
-            masterKey_.assign(outData->buffer, outData->buffer + outData->size);
+            secret.assign(outData->buffer, outData->buffer + outData->size);
         } catch (...) {
             if (outData) Esys_Free(outData);
             flush_if_valid(runtime.esys, obj);
@@ -382,17 +360,17 @@ namespace vh::crypto::secrets {
         flush_if_valid(runtime.esys, obj);
         flush_if_valid(runtime.esys, parent);
 
-        log::Registry::crypto()->debug("[TPMKeyProvider] Unsealed master key from {}", sealedDir_.string());
+        log::Registry::crypto()->debug("[TPMKeyProvider] Unsealed master key from {}", dir.string());
+        return secret;
     }
 
-    void TPMKeyProvider::updateMasterKey(const std::vector<uint8_t> &newMasterKey) {
-        masterKey_ = newMasterKey;
-        generate_and_seal();
+    bool present(const std::filesystem::path &dir, const std::string &name) {
+        return std::filesystem::exists(dir / (name + ".priv"));
     }
 
-    bool TPMKeyProvider::sealedExists() const {
-        const auto priv = sealedDir_ / (name_ + ".priv");
-        const auto pub = sealedDir_ / (name_ + ".pub");
+    bool complete(const std::filesystem::path &dir, const std::string &name) {
+        const auto priv = dir / (name + ".priv");
+        const auto pub = dir / (name + ".pub");
         return std::filesystem::exists(priv) && std::filesystem::exists(pub);
     }
-} // namespace vh::crypto
+} // namespace vh::platform::sealer

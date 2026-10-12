@@ -66,7 +66,7 @@ void refreshCachedEncryption(const FileSP& file) {
     if (!file || !file->inode) return;
     const auto& cache = runtime::Deps::get().fsCache;
     if (!cache) return;
-    const auto cached = std::dynamic_pointer_cast<fs::model::File>(cache->getEntry(static_cast<fuse_ino_t>(*file->inode)));
+    const auto cached = std::dynamic_pointer_cast<fs::model::File>(cache->getEntry(static_cast<vh::fs::Inode>(*file->inode)));
     if (!cached || cached == file || cached->path != file->path) return;
     cached->encryption_iv = file->encryption_iv;
     cached->encrypted_with_key_version = file->encrypted_with_key_version;

@@ -3,7 +3,7 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 #include <string>
-#include <fmt/core.h>
+#include <fmt/format.h>
 #include <cstdint>
 
 namespace vh::protocols::shell {

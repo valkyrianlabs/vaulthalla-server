@@ -90,10 +90,18 @@ class IdentityWritesContractTests(unittest.TestCase):
             klass = text[text.index(f"class {header[:-4]} final"):]
             klass = klass[: re.search(r"\n\s*};", klass).start()]
             public, _, private = klass.partition("private:")
-            self.assertIn(f"std::atomic<std::shared_ptr<const {state}>> state_;", private, header)
+            self.assertIn(f"concurrency::AtomicSharedPtr<const {state}> state_;", private, header)
             # Public data members: only the immutable id.
             members = re.findall(r"^\s{4,8}(?!//)(?:const\s+)?(?:unsigned\s+)?[\w:<>]+\s+(\w+)\s*(?:\{[^}]*\})?;\s*$", public, re.M)
             self.assertEqual(members, ["id"], f"{header}: public data members {members}")
+
+
+    def test_atomic_shared_ptr_is_the_standard_type_where_it_exists(self) -> None:
+        # Identity state is read on every authorization: where the library implements P0718 (libstdc++, Linux) the
+        # wrapper must be exactly std::atomic<std::shared_ptr<T>>; the fallback is for libc++ (macOS) only.
+        text = (REPO_ROOT / "core" / "include" / "concurrency" / "AtomicSharedPtr.hpp").read_text(encoding="utf-8")
+        standard = text.split("#if defined(__cpp_lib_atomic_shared_ptr)", 1)[1].split("#else", 1)[0]
+        self.assertIn("using AtomicSharedPtr = std::atomic<std::shared_ptr<T>>;", standard)
 
 
 if __name__ == "__main__":

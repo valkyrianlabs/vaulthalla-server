@@ -8,6 +8,7 @@
 #include <memory>
 #include <chrono>
 #include <future>
+#include <functional>
 #include <atomic>
 #include <mutex>
 #include <vector>

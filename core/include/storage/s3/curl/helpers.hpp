@@ -3,9 +3,15 @@
 #include <string>
 #include <vector>
 #include <filesystem>
+#include <istream>
+#include <sstream>
 #include <curl/curl.h>
 #include <map>
 #include "vault/Fwd.hpp"
+
+// fmt >= 10 no longer formats unscoped enums implicitly; found by ADL (CURLcode is a global enum), so log lines that
+// print a CURLcode keep the numeric code. fmt 9 (Ubuntu noble) ignores format_as and already prints the number.
+inline int format_as(const CURLcode code) { return static_cast<int>(code); }
 
 namespace vh::storage::s3::curl {
 

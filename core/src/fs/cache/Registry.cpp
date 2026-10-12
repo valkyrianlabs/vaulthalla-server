@@ -63,8 +63,8 @@ Registry::Registry() {
     stats_ = std::make_shared<CacheStats>();
 
     // Seed hard root mapping for FUSE
-    inodeToPath_[FUSE_ROOT_ID] = "/";
-    pathToInode_["/"] = FUSE_ROOT_ID;
+    inodeToPath_[vh::fs::kRootInode] = "/";
+    pathToInode_["/"] = vh::fs::kRootInode;
 
     nextInode_ = db::query::fs::Entry::getNextInode();
 
@@ -84,9 +84,9 @@ void Registry::initRoot() {
     if (!rootEntry->inode) {
         rootEntry->inode = std::make_optional(getOrAssignInode("/"));
         db::query::fs::Entry::updateFSEntry(rootEntry);
-    } else if (rootEntry->inode != FUSE_ROOT_ID) {
+    } else if (rootEntry->inode != vh::fs::kRootInode) {
         log::Registry::storage()->warn("[FSCache] Root entry inode is not FUSE_ROOT_ID, resetting to 1");
-        rootEntry->inode = FUSE_ROOT_ID;
+        rootEntry->inode = vh::fs::kRootInode;
         db::query::fs::Entry::updateFSEntry(rootEntry);
     }
 
@@ -94,7 +94,7 @@ void Registry::initRoot() {
 }
 
 void Registry::restoreCache() {
-    const auto rootEntry = getEntry(FUSE_ROOT_ID);
+    const auto rootEntry = getEntry(vh::fs::kRootInode);
     if (!rootEntry) throw std::runtime_error("[FSCache] Root entry not found, cannot restore cache");
 
     for (const auto& entry : db::query::fs::Entry::listDir(rootEntry->id, true)) {
@@ -176,7 +176,7 @@ std::shared_ptr<Entry> Registry::getEntry(const std::filesystem::path& absPath) 
     }
 }
 
-std::shared_ptr<Entry> Registry::getEntry(const fuse_ino_t ino) {
+std::shared_ptr<Entry> Registry::getEntry(const Inode ino) {
     log::Registry::storage()->trace("[FSCache] Retrieving entry for inode: {}", ino);
 
     {
@@ -212,7 +212,7 @@ std::shared_ptr<Entry> Registry::getEntryById(unsigned int id) {
     return entry;
 }
 
-fuse_ino_t Registry::resolveInode(const std::filesystem::path& absPath) {
+vh::fs::Inode Registry::resolveInode(const std::filesystem::path& absPath) {
     // Try hot map first
     {
         std::shared_lock lock(mutex_);
@@ -222,48 +222,48 @@ fuse_ino_t Registry::resolveInode(const std::filesystem::path& absPath) {
     const auto entry = getEntry(absPath);
     if (!entry) {
         log::Registry::storage()->warn("[FSCache] No entry found for path: {}", absPath.string());
-        return FUSE_ROOT_ID;
+        return vh::fs::kRootInode;
     }
 
-    const fuse_ino_t ino = (entry->inode ? *entry->inode : getOrAssignInode(absPath));
-    if (ino == FUSE_ROOT_ID) {
+    const Inode ino = (entry->inode ? *entry->inode : getOrAssignInode(absPath));
+    if (ino == vh::fs::kRootInode) {
         log::Registry::storage()->error("[FSCache] Failed to resolve inode for path: {}", absPath.string());
-        return FUSE_ROOT_ID;
+        return vh::fs::kRootInode;
     }
 
     linkPath(absPath, ino);
     return ino;
 }
 
-fuse_ino_t Registry::assignInode(const std::filesystem::path& path) {
+vh::fs::Inode Registry::assignInode(const std::filesystem::path& path) {
     std::unique_lock lock(mutex_);
     if (const auto it = pathToInode_.find(path); it != pathToInode_.end()) return it->second;
 
-    const fuse_ino_t ino = nextInode_++;
+    const Inode ino = nextInode_++;
     inodeToPath_[ino] = path;
     pathToInode_[path] = ino;
     return ino;
 }
 
-fuse_ino_t Registry::getOrAssignInode(const std::filesystem::path& path) {
+vh::fs::Inode Registry::getOrAssignInode(const std::filesystem::path& path) {
     std::scoped_lock lock(mutex_);
     if (path.empty()) throw std::runtime_error("Cannot assign inode to empty path");
 
     if (const auto it = pathToInode_.find(path); it != pathToInode_.end()) return it->second;
 
-    const fuse_ino_t ino = nextInode_++;
+    const Inode ino = nextInode_++;
     pathToInode_[path] = ino;
     inodeToPath_[ino] = path;
     return ino;
 }
 
-std::filesystem::path Registry::resolvePath(fuse_ino_t ino) {
+std::filesystem::path Registry::resolvePath(Inode ino) {
     std::shared_lock lock(mutex_);
     if (!inodeToPath_.contains(ino)) throw std::runtime_error("[FSCache] Inode not found: " + std::to_string(ino));
     return inodeToPath_.at(ino);
 }
 
-void Registry::linkPath(const std::filesystem::path& absPath, const fuse_ino_t ino) {
+void Registry::linkPath(const std::filesystem::path& absPath, const Inode ino) {
     std::unique_lock lock(mutex_);
     if (pathToInode_.contains(absPath)) {
         log::Registry::storage()->debug("[FSCache] Path {} already linked to inode {}", absPath.string(), ino);
@@ -273,7 +273,7 @@ void Registry::linkPath(const std::filesystem::path& absPath, const fuse_ino_t i
     inodeToPath_[ino] = absPath;
 }
 
-void Registry::decrementInodeRef(const fuse_ino_t ino, const uint64_t nlookup) {
+void Registry::decrementInodeRef(const Inode ino, const uint64_t nlookup) {
     if (nlookup > 1) return;
     evictIno(ino);
 }
@@ -284,7 +284,7 @@ bool Registry::entryExists(const std::filesystem::path& absPath) const {
     return pathToEntry_.contains(path);
 }
 
-std::shared_ptr<Entry> Registry::getEntryFromInode(const fuse_ino_t ino) const {
+std::shared_ptr<Entry> Registry::getEntryFromInode(const Inode ino) const {
     std::shared_lock lock(mutex_);
     if (const auto it = inodeToEntry_.find(ino); it != inodeToEntry_.end()) return it->second;
     log::Registry::storage()->warn("[FSCache] No entry found for inode: {}", ino);
@@ -297,7 +297,7 @@ void Registry::cacheEntry(const std::shared_ptr<Entry>& entry, const bool isFirs
     log::Registry::storage()->debug("[FSCache] Caching entry: {} with inode {}", entry->fuse_path.string(), *entry->inode);
 
     // Preflight: reconstruct fuse/backing paths when needed
-    if (*entry->inode != FUSE_ROOT_ID) {
+    if (*entry->inode != vh::fs::kRootInode) {
         if (!entry->vault_id) {
             log::Registry::storage()->error("[FSCache] Entry {} has no vault_id, cannot cache", entry->id);
             throw std::runtime_error("Entry has no vault_id");
@@ -327,7 +327,7 @@ void Registry::cacheEntry(const std::shared_ptr<Entry>& entry, const bool isFirs
     std::unique_lock lock(mutex_);
 
     // --- Used-bytes accounting (incremental, no rescans) ---
-    const fuse_ino_t ino = *entry->inode;
+    const Inode ino = *entry->inode;
 
     bool existedAlready = false;
     uint64_t oldSize = 0;
@@ -346,7 +346,7 @@ void Registry::cacheEntry(const std::shared_ptr<Entry>& entry, const bool isFirs
 
     const uint64_t newSize = safeSizeBytes(entry);
 
-    auto eraseInode = [&](const fuse_ino_t staleIno) {
+    auto eraseInode = [&](const Inode staleIno) {
         for (auto it = pathToInode_.begin(); it != pathToInode_.end();) {
             if (it->second == staleIno) {
                 pathToEntry_.erase(it->first);
@@ -455,7 +455,7 @@ void Registry::updateEntry(const std::shared_ptr<Entry>& entry) {
                              entry->fuse_path.string(), entry->inode ? *entry->inode : 0);
 }
 
-void Registry::evictIno(fuse_ino_t ino) {
+void Registry::evictIno(Inode ino) {
     std::unique_lock lock(mutex_);
 
     if (!inodeToPath_.contains(ino) && !inodeToId_.contains(ino)) {
@@ -500,7 +500,7 @@ void Registry::evictId(const unsigned int id) {
 
     auto entryIt = idToEntry_.find(id);
     std::shared_ptr<Entry> entry = entryIt == idToEntry_.end() ? nullptr : entryIt->second;
-    std::optional<fuse_ino_t> ino;
+    std::optional<Inode> ino;
 
     if (entry && entry->inode)
         ino = *entry->inode;
@@ -568,7 +568,7 @@ void Registry::evictId(const unsigned int id) {
 }
 
 void Registry::evictPath(const std::filesystem::path& path) {
-    fuse_ino_t ino;
+    Inode ino;
 
     {
         std::unique_lock lock(mutex_);
@@ -597,7 +597,7 @@ void Registry::evictVault(const unsigned int vaultId, const std::filesystem::pat
     std::unique_lock lock(mutex_);
 
     std::unordered_set<unsigned int> ids;
-    std::unordered_set<fuse_ino_t> inodes;
+    std::unordered_set<Inode> inodes;
     uint64_t removedSize = 0;
 
     for (const auto& [id, e] : idToEntry_) {
@@ -612,7 +612,7 @@ void Registry::evictVault(const unsigned int vaultId, const std::filesystem::pat
         if (ids.contains(id)) inodes.insert(ino);
     for (const auto& [path, ino] : pathToInode_)
         if (underRoot(path)) inodes.insert(ino);
-    inodes.erase(FUSE_ROOT_ID);
+    inodes.erase(vh::fs::kRootInode);
 
     if (ids.empty() && inodes.empty()) return;
 

@@ -27,6 +27,10 @@ namespace stdfs = std::filesystem;
 
 namespace vh::fuse {
 
+bool kernelBridgeBuilt() noexcept { return true; }
+
+std::shared_ptr<Service> makeService() { return std::make_shared<Service>(); }
+
 using vh::concurrency::AsyncService;
 using vh::concurrency::ThreadPoolManager;
 

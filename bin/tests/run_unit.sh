@@ -31,7 +31,7 @@ done
 
 itest_preflight
 itest_log "building vh_unit_tests in $BUILD_DIR"
-itest_ensure_build "$BUILD_DIR" core/vh_unit_tests
+itest_ensure_build "$BUILD_DIR" core/vh_unit_tests core/vh_fake_derive_helper  # the derive suites spawn the fake helper
 BIN="$BUILD_DIR/core/vh_unit_tests"
 [[ -x "$BIN" ]] || itest_die "not built: $BIN"
 

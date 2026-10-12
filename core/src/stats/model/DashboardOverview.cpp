@@ -375,7 +375,7 @@ DashboardCardSummary dashboardOverviewBuildSystemHealth(const DashboardOverviewC
         const auto severity = card.severity == "error" ? "error" : "warning";
         dashboardOverviewAddIssue(card, "system.health.unhealthy", severity, "System health is " + status + ".");
     }
-    if (!health.deps.fuseSession) dashboardOverviewAddIssue(card, "system.health.fuse_missing", "warning", "FUSE session is not present.", "fuse");
+    if (!health.deps.fuseSession && health.deps.fuseMount != "disabled") dashboardOverviewAddIssue(card, "system.health.fuse_missing", "warning", "FUSE session is not present.", "fuse");
 
     return card;
 }

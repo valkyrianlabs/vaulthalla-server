@@ -60,6 +60,13 @@ struct DependencyHealth {
     bool shellUsageManager = false;
     bool httpCacheStats = false;
     bool fuseSession = false;
+    // What the filesystem mount can be in this build: "multiuser" (the kernel FUSE bridge, per-caller-uid
+    // authorization) or "disabled" (built without it: vaults are served over HTTP/WS/CLI only). A disabled mount is
+    // not a missing FUSE session. Mount modes are roadmap #200.
+    std::string fuseMount = "multiuser";
+    // The secret sealing backend (platform/Sealer.hpp): "tpm2", or "file" (macOS development backend, no hardware
+    // binding).
+    std::string secretsBackend;
 };
 
 struct ShellHealth {

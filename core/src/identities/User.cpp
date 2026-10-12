@@ -7,6 +7,7 @@
 #include "rbac/role/vault/Global.hpp"
 #include "rbac/permission/admin/Vaults.hpp"
 
+#include "db/encoding/has.hpp"
 #include "db/encoding/timestamp.hpp"
 #include "protocols/shell/util/lineHelpers.hpp"
 #include "protocols/shell/Table.hpp"
@@ -26,6 +27,9 @@ using namespace vh::rbac::role;
 namespace {
     template<typename T>
     std::optional<T> try_as_optional(pqxx::row_ref row, const char *column) {
+        // Check first, never catch: libpqxx marks row[name] [[gnu::pure]], which clang treats as non-throwing,
+        // so a missing column would bypass this catch and terminate.
+        if (!vh::db::encoding::hasColumn(row, column)) return std::nullopt;
         try {
             const auto field = row[column];
             if (field.is_null()) return std::nullopt;
@@ -36,6 +40,9 @@ namespace {
     }
 
     std::optional<std::string> try_as_optional_string(pqxx::row_ref row, const char *column) {
+        // Check first, never catch: libpqxx marks row[name] [[gnu::pure]], which clang treats as non-throwing,
+        // so a missing column would bypass this catch and terminate.
+        if (!vh::db::encoding::hasColumn(row, column)) return std::nullopt;
         try {
             const auto field = row[column];
             if (field.is_null()) return std::nullopt;
@@ -46,6 +53,9 @@ namespace {
     }
 
     std::optional<std::time_t> try_as_optional_timestamp(pqxx::row_ref row, const char *column) {
+        // Check first, never catch: libpqxx marks row[name] [[gnu::pure]], which clang treats as non-throwing,
+        // so a missing column would bypass this catch and terminate.
+        if (!vh::db::encoding::hasColumn(row, column)) return std::nullopt;
         try {
             const auto field = row[column];
             if (field.is_null()) return std::nullopt;
@@ -56,6 +66,9 @@ namespace {
     }
 
     std::time_t try_as_timestamp_or_now(pqxx::row_ref row, const char *column) {
+        // Check first, never catch: libpqxx marks row[name] [[gnu::pure]], which clang treats as non-throwing,
+        // so a missing column would bypass this catch and terminate.
+        if (!vh::db::encoding::hasColumn(row, column)) return std::time(nullptr);
         try {
             const auto field = row[column];
             if (field.is_null()) return std::time(nullptr);

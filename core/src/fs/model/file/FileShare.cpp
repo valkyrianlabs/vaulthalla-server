@@ -1,6 +1,8 @@
 #include "fs/model/file/Share.hpp"
 #include "db/encoding/timestamp.hpp"
 
+#include <pqxx/row>
+
 using namespace vh::fs::model::file;
 using namespace vh::db::encoding;
 

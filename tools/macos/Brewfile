@@ -1,0 +1,29 @@
+# macOS (Apple Silicon) build + unit-test dependencies for core/. Used by tools/macos/bootstrap.sh and .github/workflows/macos.yml:
+#   brew bundle --file tools/macos/Brewfile
+# Formulae only, no casks. Not here on purpose: FUSE (off by default on darwin), tss2/TPM and uuid (Linux-only deps),
+# pdfium (pinned SDK from tools/macos/fetch-pdfium.sh), and the web toolchain (no web job on macOS).
+
+# Build tools
+brew "meson"          # build system
+brew "ninja"          # meson backend
+brew "pkgconf"        # pkg-config: every core/meson.build dependency() resolves through it
+brew "pandoc"         # manpages (-Dmanpage=true, core/usage)
+
+# Libraries (core/meson.build deps)
+brew "boost"          # filesystem (+ header-only system)
+brew "fmt"            # fmt_dep
+brew "spdlog"         # logging
+brew "yaml-cpp"       # config.yaml parsing
+brew "pugixml"        # S3 XML (gateway + provider)
+brew "libsodium"      # vault crypto
+brew "libmagic"       # MIME sniffing
+brew "jpeg-turbo"     # libjpeg + libturbojpeg (previews/thumbnails)
+brew "curl"           # libcurl; keg-only, env.sh puts it ahead of the SDK's older curl
+brew "openssl@3"      # OpenSSL 3 like Linux; keg-only, env.sh puts it FIRST (unversioned `openssl` may be 4.x)
+brew "libpq"          # libpqxx's backend; keg-only
+brew "libpqxx"        # libpqxx >= 8.0.2, wrapped as pkg-config `libpqxx-vh` by make-pc-aliases.sh
+
+# Tests
+brew "googletest"     # gtest for vh_unit_tests
+brew "postgresql@16"  # initdb/pg_ctl/psql for the disposable cluster of tools/macos/test-db.sh (never a brew service)
+brew "python@3.12"    # python3 >= 3.10 for the ws_contract_drift meson test and the zip checks (macOS ships 3.9)

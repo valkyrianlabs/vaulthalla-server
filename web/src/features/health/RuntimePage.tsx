@@ -17,12 +17,13 @@ import { bool, int, num, obj, pair, seconds, type Raw } from '@/features/health/
 const CARDS = ['system.health', 'system.threadpools', 'system.connections']
 
 
-const FactGrid = ({ items, className = 'sm:grid-cols-2 xl:grid-cols-3' }: { items: [string, boolean | null, string?, string?][]; className?: string }) => (
+// A string value is a neutral statement (e.g. "Disabled in this build"), not a yes/no fact.
+const FactGrid = ({ items, className = 'sm:grid-cols-2 xl:grid-cols-3' }: { items: [string, boolean | string | null, string?, string?][]; className?: string }) => (
   <ul className={cn('grid grid-cols-1 gap-2 text-sm', className)}>
     {items.map(([label, value, yes, no]) => (
       <li key={label} className="flex items-center justify-between gap-3 rounded-control bg-surface-1 px-3 py-2">
         <span className="truncate text-fg-muted">{label}</span>
-        <Fact value={value} yes={yes} no={no} />
+        {typeof value === 'string' ? <span className="text-fg-muted">{value}</span> : <Fact value={value} yes={yes} no={no} />}
       </li>
     ))}
   </ul>
@@ -88,7 +89,18 @@ const SystemHealthBody = ({ stats }: { stats: Raw }) => {
         </div>
         <div>
           <SubHeading>Dependencies</SubHeading>
-          <FactGrid className="sm:grid-cols-2" items={Object.keys(DEP_LABELS).filter(k => k in deps).map(k => [DEP_LABELS[k], bool(deps[k])])} />
+          <FactGrid
+            className="sm:grid-cols-2"
+            items={[
+              ...Object.keys(DEP_LABELS)
+                .filter(k => k in deps && !(k === 'fuse_session' && deps.fuse_mount === 'disabled'))
+                .map((k): [string, boolean | null] => [DEP_LABELS[k], bool(deps[k])]),
+              ...(deps.fuse_mount === 'disabled' ? [['Filesystem mount', 'Disabled in this build'] as [string, string]] : []),
+              ...(typeof deps.secrets_backend === 'string' && deps.secrets_backend
+                ? [['Secrets backend', deps.secrets_backend === 'file' ? 'file (development, no hardware binding)' : deps.secrets_backend] as [string, string]]
+                : []),
+            ]}
+          />
         </div>
       </div>
 

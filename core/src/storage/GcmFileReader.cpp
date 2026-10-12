@@ -1,4 +1,5 @@
 #include "storage/GcmFileReader.hpp"
+#include "platform/FileTime.hpp"
 
 #include "crypto/util/Gcm.hpp"
 
@@ -76,7 +77,7 @@ GcmFileReader::GcmFileReader(Params params) : params_(std::move(params)) {
         .dev = static_cast<uint64_t>(st.st_dev),
         .ino = static_cast<uint64_t>(st.st_ino),
         .size = static_cast<uint64_t>(st.st_size),
-        .mtime_ns = static_cast<int64_t>(st.st_mtim.tv_sec) * 1'000'000'000 + st.st_mtim.tv_nsec
+        .mtime_ns = static_cast<int64_t>(platform::mtime(st).tv_sec) * 1'000'000'000 + platform::mtime(st).tv_nsec
     };
 
     if (params_.strict) {

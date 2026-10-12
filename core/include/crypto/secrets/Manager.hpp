@@ -1,6 +1,8 @@
 #pragma once
 
-#include "crypto/secrets/TPMKeyProvider.hpp"
+#include "crypto/secrets/KeyProvider.hpp"
+
+#include "concurrency/AtomicSharedPtr.hpp"
 
 #include <atomic>
 #include <memory>
@@ -30,8 +32,8 @@ private:
     // The JWT secret signs and verifies every session token; it is read and unsealed once, then served from
     // memory. Every write goes through setJWTSecret()/getOrInitSecret() in this process, which republish it.
     mutable std::mutex jwtMutex_;
-    mutable std::atomic<std::shared_ptr<const std::string>> jwtSecret_;
-    std::unique_ptr<TPMKeyProvider> tpmKeyProvider_;
+    mutable concurrency::AtomicSharedPtr<const std::string> jwtSecret_;
+    std::unique_ptr<KeyProvider> tpmKeyProvider_;
     mutable std::optional<std::unordered_map<std::string, std::string>> testSecrets_;
 
     std::string getOrInitSecret(const std::string& key) const;

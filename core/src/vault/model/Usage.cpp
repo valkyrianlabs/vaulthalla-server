@@ -1,6 +1,8 @@
 #include "vault/model/Usage.hpp"
 #include "db/encoding/timestamp.hpp"
 
+#include <pqxx/row>
+
 using namespace vh::vault::model;
 using namespace vh::db::encoding;
 

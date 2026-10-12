@@ -30,6 +30,7 @@ live P0 (the DB pool wedges after a PostgreSQL restart, which hangs FUSE and `ap
 Phase 1 (packaging/upgrade/release hardening) results and how candidates are proven on the lab: `.claude/context/phase1-results.md`.
 Phase 2 (one CLI/web operation layer, security fixes, v1.8.0 candidate) lab matrix and open items: `.claude/context/phase2-results.md`.
 Web console overhaul + dogfood (design system, data layer, budgets, e2e suites, bugs filed): `.claude/context/web-dogfood-results.md`.
+macOS port (seams, Mac build/test, clang/libc++ gotchas): `.claude/context/macos.md`.
 Other context: `.claude/context/environment.md` (VM topology: this box, the lab, dev-db, price bot), `link-sharing.md`
 (share model, invariants, open gaps), `history/stats-dashboard.md` (dashboard design log).
 `.claude/scratch/` is gitignored working notes, including the pre-migration Codex archive. Use it for

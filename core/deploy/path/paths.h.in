@@ -5,6 +5,10 @@
 #define VH_MOUNT_PATH @VH_MOUNT_PATH@
 #define VH_BACKING_PATH @VH_BACKING_PATH@
 #define VH_RUNTIME_PATH @VH_RUNTIME_PATH@
+#define VH_LIFECYCLE_PATH @VH_LIFECYCLE_PATH@
+// The daemon's CLI socket and the first-install DB password handoff, both in the runtime directory.
+#define VH_CLI_SOCKET_PATH VH_RUNTIME_PATH "/cli.sock"
+#define VH_DB_PASSWORD_SEED_PATH VH_RUNTIME_PATH "/db_password"
 #define VH_CACHE_PATH @VH_CACHE_PATH@
 #define VH_S3_GATEWAY_MULTIPART_PARTS_DIRNAME @VH_S3_GATEWAY_MULTIPART_PARTS_DIRNAME@
 #define VH_PSQL_SCHEMAS_PATH @VH_PSQL_SCHEMAS_PATH@
@@ -23,7 +27,7 @@ inline std::filesystem::path mountPath = VH_MOUNT_PATH;
 inline std::filesystem::path runtimePath = VH_RUNTIME_PATH;
 inline std::filesystem::path psqlSchemaPath = VH_PSQL_SCHEMAS_PATH;
 inline std::filesystem::path psqlTestSchemaPath = VH_PSQL_TEST_SCHEMAS_PATH;
-inline std::filesystem::path cliSocketPath = "/run/vaulthalla/cli.sock";
+inline std::filesystem::path cliSocketPath = VH_CLI_SOCKET_PATH;
 // Set only by enableTestMode() from VH_TEST_CLI_SOCKET: a private test instance serves `vh` on its own socket.
 inline bool testCliSocket = false;
 

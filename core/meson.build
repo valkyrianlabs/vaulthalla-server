@@ -29,15 +29,32 @@ config_dir = join_paths(get_option('sysconfdir'), meson.project_name())
 log_dir = join_paths(get_option('localstatedir'), 'log', meson.project_name())
 state_dir = join_paths(get_option('localstatedir'), 'lib', meson.project_name())
 runtime_dir = join_paths('/run', meson.project_name())
+mount_dir = join_paths('/mnt', meson.project_name())
+config_path = join_paths('/', config_dir, 'config.yaml')
 data_dir = join_paths(get_option('prefix'), get_option('datadir'), meson.project_name())
 psql_dir = join_paths(data_dir, 'psql')
+# `vh setup/teardown`: deploy/lifecycle/main.py, installed by the root meson.build as <prefix>/lib/vaulthalla/lifecycle.
+lifecycle_path = join_paths(get_option('prefix'), 'lib', meson.project_name(), 'lifecycle')
+
+# macOS: /run, /mnt and /etc/<pkg> are not places a macOS install owns (/run and /mnt don't exist; the system volume is
+# read-only). Data lives where it stays put whichever way Vaulthalla is installed (pkg, Homebrew, a future app); the
+# defaults are proposed in roadmap #203 and are only compiled in, never read from config.yaml.
+if host_machine.system() == 'darwin'
+    support_dir = '/Library/Application Support/Vaulthalla'
+    config_path = join_paths(support_dir, 'config.yaml')
+    state_dir = join_paths(support_dir, 'state')
+    log_dir = '/Library/Logs/Vaulthalla'
+    runtime_dir = '/var/run/vaulthalla'
+    mount_dir = '/Volumes/Vaulthalla'
+endif
 
 conf = configuration_data()
-conf.set_quoted('VH_MOUNT_PATH', join_paths('/mnt', meson.project_name()))
-conf.set_quoted('VH_CONFIG_PATH', join_paths('/', config_dir, 'config.yaml'))
+conf.set_quoted('VH_MOUNT_PATH', mount_dir)
+conf.set_quoted('VH_CONFIG_PATH', config_path)
 conf.set_quoted('VH_LOG_PATH', log_dir)
 conf.set_quoted('VH_BACKING_PATH', state_dir)
 conf.set_quoted('VH_RUNTIME_PATH', runtime_dir)
+conf.set_quoted('VH_LIFECYCLE_PATH', lifecycle_path)
 conf.set_quoted('VH_CACHE_PATH', '/.cache')
 conf.set_quoted('VH_S3_GATEWAY_MULTIPART_PARTS_DIRNAME', '.8f3a9c1d6e2b4f70')
 conf.set_quoted('VH_PSQL_SCHEMAS_PATH', psql_dir)
@@ -54,16 +71,22 @@ vh_paths_header = configure_file(
 
 # ╭──────────────────────────── DEFINE DEPENDENCIES ────────────────────────────╮
 
+host_os = host_machine.system()
+
 fmt_dep = dependency('fmt', required: true)
 # apt.vaulthalla.sh's libpqxx-vh-dev: a static libpqxx SDK under its own pkg-config name (the .pc links libpqxx.a
 # by path and the system libpq by SONAME), so neither Ubuntu's libpqxx-dev nor its headers can be picked up.
 pqxx_dep = dependency('libpqxx-vh', version: '>=8.0.2', method: 'pkg-config', static: true, required: true)
 
+# The kernel FUSE bridge (core/src/fuse/{Bridge,Reply,Resolver,Service}.cpp): required on Linux, which the Debian
+# package ships; off by default elsewhere (macOS serves vaults over HTTP/WS/CLI until a Finder backend is chosen).
+fuse_dep = dependency('fuse3', required: get_option('fuse').enable_auto_if(host_os == 'linux').disable_auto_if(host_os != 'linux'))
+fuse_bridge_sources = ['fuse/Bridge.cpp', 'fuse/Reply.cpp', 'fuse/Resolver.cpp', 'fuse/Service.cpp']
+
 deps = [
-    dependency('fuse3', required: true),
     dependency('libsodium', required: true),
     dependency('libcurl', required: true),
-    dependency('boost', modules: ['filesystem', 'system'], required: true),
+    dependency('boost', modules: ['filesystem'], required: true),
     pqxx_dep,
     # apt.vaulthalla.sh's Chromium-tracking build (<milestone>.<branch>.<n>). The retired 2025.06.29 fork snapshot sorts
     # higher, so the upper bound is what keeps a stale host from building against (and depending on) it.
@@ -72,17 +95,28 @@ deps = [
     dependency('yaml-cpp', required: true),
     dependency('libjpeg', required: true),
     dependency('pugixml', required: true),
-    dependency('uuid', required: true),
     dependency('threads', required: true),
     dependency('spdlog', required: true),
     dependency('libturbojpeg', required: true),
-    dependency('tss2-esys', required: true),
-    dependency('tss2-tctildr', required: true),
-    dependency('tss2-rc', required: true),
     dependency('openssl', version: '>=3.0', required: true),
     dependency('zlib', required: true),
     fmt_dep
 ]
+
+if fuse_dep.found()
+    deps += fuse_dep
+endif
+
+# Linux-only system libraries: libuuid (macOS has <uuid/uuid.h> in libSystem) and the TPM2 stack behind the TPM
+# secret sealer (crypto/secrets/tpm/).
+if host_os == 'linux'
+    deps += [
+        dependency('uuid', required: true),
+        dependency('tss2-esys', required: true),
+        dependency('tss2-tctildr', required: true),
+        dependency('tss2-rc', required: true),
+    ]
+endif
 
 test_deps = deps + dependency('gtest', required: true, main: false)
 
@@ -101,10 +135,29 @@ src         = join_paths(core_root, 'src')
 tests_src   = join_paths(core_root, 'tests/unit')
 main        = files(join_paths(core_root, 'main/main.cpp'))
 
+# Platform-specific code lives under platform/<os>/ (and fuse/unbuilt/, the stand-in for a build without the kernel
+# FUSE bridge); only the host's directory is compiled. Everything else is shared by every OS.
+platform_src_prefixes = ['platform/', 'fuse/unbuilt/']
 sources = []
 foreach f : run_command('sh', '-c', 'find "$1" -type f -name "*.cpp" | LC_ALL=C sort', 'find-cpp', src, check: true).stdout().strip().split('\n')
-    sources += files(f)
+    rel = f.replace(src + '/', '')
+    skip = not fuse_dep.found() and rel in fuse_bridge_sources
+    foreach prefix : platform_src_prefixes
+        skip = skip or rel.startswith(prefix)
+    endforeach
+    if not skip
+        sources += files(f)
+    endif
 endforeach
+platform_os_dir = host_os == 'darwin' ? 'darwin' : 'linux'
+foreach f : run_command('sh', '-c', 'find "$1" -type f -name "*.cpp" | LC_ALL=C sort', 'find-cpp', src / 'platform' / platform_os_dir, check: false).stdout().strip().split('\n')
+    if f != ''
+        sources += files(f)
+    endif
+endforeach
+if not fuse_dep.found()
+    sources += files(src / 'fuse/unbuilt/Service.cpp')
+endif
 
 # The usage module's contract export uses the vendored nlohmann/json (header-only).
 usage_inc = include_directories('usage/include', 'vendor')
@@ -131,8 +184,12 @@ core_pch = get_option('optimization') == '0' ? ['pch/vaulthalla_pch.hpp'] : []
 # so every gtest registration survives.
 if get_option('build_unit_tests')
     unit_test_sources = []
+    # Suites of the kernel FUSE bridge itself; without it (-Dfuse=disabled) there is nothing to test.
+    fuse_bridge_tests = ['test_fuse_denial.cpp']
     foreach f : run_command('sh', '-c', 'find "$1" -type f -name "*.cpp" | LC_ALL=C sort', 'find-cpp', tests_src, check: true).stdout().strip().split('\n')
-        unit_test_sources += files(f)
+        if fuse_dep.found() or fs.name(f) not in fuse_bridge_tests
+            unit_test_sources += files(f)
+        endif
     endforeach
 
     # A protocol-speaking fake converter for the preview::derive::Runner tests (never installed).
@@ -219,8 +276,8 @@ executable('vaulthalla-server', main,
            install: true
 )
 
-executable('vaulthalla-cli', files(join_paths(core_root, 'main/cli.cpp')),
-           include_directories: include_directories('vendor'),
+executable('vaulthalla-cli', files(join_paths(core_root, 'main/cli.cpp'), src / 'platform' / platform_os_dir / 'Fd.cpp'),
+           include_directories: include_directories('vendor', 'include'),
            dependencies: fmt_dep,
            install: true
 )

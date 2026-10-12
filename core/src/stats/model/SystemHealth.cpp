@@ -1,6 +1,8 @@
 #include "stats/model/SystemHealth.hpp"
 
+#include "crypto/secrets/KeyProvider.hpp"
 #include "db/DBPool.hpp"
+#include "fuse/Service.hpp"
 #include "db/Transactions.hpp"
 #include "protocols/ProtocolService.hpp"
 #include "protocols/s3/GatewayService.hpp"
@@ -40,7 +42,7 @@ std::size_t countReadyDeps(const DependencyHealth& deps) {
 }
 
 bool depsHealthy(const DependencyHealth& deps, const HealthSummary& summary) {
-    return summary.depsReady == summary.depsTotal && deps.fuseSession;
+    return summary.depsReady == summary.depsTotal && (deps.fuseSession || deps.fuseMount == "disabled");
 }
 
 bool protocolsHealthy(const ProtocolHealth& protocols, const S3GatewayHealth& s3Gateway) {
@@ -185,7 +187,9 @@ SystemHealth SystemHealth::snapshot() {
         .fsCache = depsStatus.fsCache,
         .shellUsageManager = depsStatus.shellUsageManager,
         .httpCacheStats = depsStatus.httpCacheStats,
-        .fuseSession = depsStatus.fuseSession
+        .fuseSession = depsStatus.fuseSession,
+        .fuseMount = fuse::kernelBridgeBuilt() ? "multiuser" : "disabled",
+        .secretsBackend = std::string(crypto::secrets::KeyProvider::backend())
     };
 
     out.shell.adminUidBound = shellServer ? std::optional<bool>(shellServer->adminUIDSet()) : std::nullopt;
@@ -288,6 +292,8 @@ void to_json(nlohmann::json& j, const DependencyHealth& health) {
         {"shell_usage_manager", health.shellUsageManager},
         {"http_cache_stats", health.httpCacheStats},
         {"fuse_session", health.fuseSession},
+        {"fuse_mount", health.fuseMount},
+        {"secrets_backend", health.secretsBackend},
     };
 }
 

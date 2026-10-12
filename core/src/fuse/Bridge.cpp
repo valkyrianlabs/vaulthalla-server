@@ -24,8 +24,16 @@
 #include <mutex>
 #include <string_view>
 #include <system_error>
+#include <type_traits>
 #include <sys/statvfs.h>
 #include <unistd.h>
+
+#include "fs/Inode.hpp"
+#include "platform/FileTime.hpp"
+
+// The FS cache's inode numbers go to the kernel unconverted.
+static_assert(std::is_same_v<fuse_ino_t, vh::fs::Inode>);
+static_assert(FUSE_ROOT_ID == vh::fs::kRootInode);
 
 using vh::identities::User;
 using vh::identities::Group;
@@ -198,9 +206,9 @@ void setattr(const fuse_req_t req, const fuse_ino_t ino,
     }
 
     timespec times[2]{};
-    if (to_set & FUSE_SET_ATTR_ATIME) times[0] = attr->st_atim;
+    if (to_set & FUSE_SET_ATTR_ATIME) times[0] = platform::atime(*attr);
     else times[0].tv_nsec = UTIME_OMIT;
-    if (to_set & FUSE_SET_ATTR_MTIME) times[1] = attr->st_mtim;
+    if (to_set & FUSE_SET_ATTR_MTIME) times[1] = platform::mtime(*attr);
     else times[1].tv_nsec = UTIME_OMIT;
 
     if (::utimensat(AT_FDCWD, resolved.entry->backing_path.c_str(), times, 0) < 0) {
@@ -216,9 +224,9 @@ void setattr(const fuse_req_t req, const fuse_ino_t ino,
     }
 
     auto sanitized = statFromEntry(resolved.entry, ino);  // plaintext size, not the ciphertext's
-    sanitized.st_atim = st.st_atim;
-    sanitized.st_mtim = st.st_mtim;
-    sanitized.st_ctim = st.st_ctim;
+    platform::atime(sanitized) = platform::atime(st);
+    platform::mtime(sanitized) = platform::mtime(st);
+    platform::ctime(sanitized) = platform::ctime(st);
 
     timer.success();
     fuse_reply_attr(req, &sanitized, kKernelMetadataTimeout);
@@ -973,8 +981,8 @@ struct stat statFromEntry(const std::shared_ptr<Entry>& entry, const fuse_ino_t&
     // While a file is open its working copy holds the newest plaintext.
     if (!entry->isDirectory() && !entry->isSymlink())
         if (const auto open = WorkingCopies::instance().openSize(ino)) st.st_size = static_cast<off_t>(*open);
-    st.st_mtim.tv_sec = entry->updated_at;
-    st.st_atim = st.st_ctim = st.st_mtim;
+    platform::mtime(st).tv_sec = entry->updated_at;
+    platform::atime(st) = platform::ctime(st) = platform::mtime(st);
     st.st_nlink = 1;
     return st;
 }

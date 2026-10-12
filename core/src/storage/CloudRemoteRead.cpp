@@ -2,6 +2,7 @@
 // protocol. See CloudEngine::hydrate and storage/RemoteRangedReader.hpp for the contracts.
 
 #include "storage/CloudEngine.hpp"
+#include "platform/StagedFile.hpp"
 
 #include "crypto/util/Gcm.hpp"
 #include "crypto/util/encrypt.hpp"
@@ -65,7 +66,7 @@ public:
         std::error_code ec;
         std::filesystem::create_directories(dir, ec);
 
-        fd_ = ::open(dir.c_str(), O_TMPFILE | O_RDWR | O_CLOEXEC, 0600);
+        fd_ = platform::staged::openUnnamed(dir.c_str());
         if (fd_ >= 0) return;
 
         named_ = target_;
@@ -95,10 +96,7 @@ public:
 
         int rc = 0;
         if (named_.empty()) {
-            const auto procPath = "/proc/self/fd/" + std::to_string(fd_);
-            rc = ::linkat(AT_FDCWD, procPath.c_str(), AT_FDCWD, target_.c_str(), AT_SYMLINK_FOLLOW);
-            if (rc < 0 && errno == ENOENT && std::filesystem::exists(target_.parent_path()))
-                rc = ::linkat(fd_, "", AT_FDCWD, target_.c_str(), AT_EMPTY_PATH);  // no /proc
+            rc = platform::staged::linkUnnamed(fd_, target_.c_str());
         } else {
             rc = ::link(named_.c_str(), target_.c_str());
         }

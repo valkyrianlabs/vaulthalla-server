@@ -21,6 +21,10 @@
 #include <iostream>
 #include <cerrno>
 #include <initializer_list>
+#include <cstddef>
+
+#include "platform/Fd.hpp"
+#include <paths.h>  // generated: VH_CLI_SOCKET_PATH, VH_LIFECYCLE_PATH
 
 static bool readn(const int fd, void* b, size_t n) {
     auto* p = static_cast<uint8_t*>(b);
@@ -241,7 +245,7 @@ static int lifecycle_sudo_required(const std::vector<std::string>& argv_norm) {
 static std::string lifecycle_binary_path() {
     if (const char* env = std::getenv("VAULTHALLA_LIFECYCLE_BIN"); env && *env)
         return env;
-    return "/usr/lib/vaulthalla/lifecycle";
+    return VH_LIFECYCLE_PATH;
 }
 
 static int run_lifecycle_command(const std::vector<std::string>& argv_norm) {
@@ -374,7 +378,7 @@ constexpr int kTempFail = 75;     // EX_TEMPFAIL: daemon not responding / busy
 constexpr int kNoPerm = 77;       // EX_NOPERM: not allowed to use the control socket
 }
 
-static constexpr const char* kDefaultSocketPath = "/run/vaulthalla/cli.sock";
+static constexpr const char* kDefaultSocketPath = VH_CLI_SOCKET_PATH;
 
 // VAULTHALLA_CLI_SOCKET points `vh` at another daemon's socket (a private test instance). The daemon still decides
 // who the caller is from the peer credentials, so this grants nothing.
@@ -486,17 +490,26 @@ int main(const int argc, char** argv) {
     std::string line = build_line_from_tokens(argv_norm);
     const int timeoutSeconds = connect_timeout_seconds();
 
-    const int s = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    sockaddr_un addr{};
+    const std::string_view path = socket_path();
+    if (path.size() >= sizeof(addr.sun_path)) {
+        fmt::print(stderr, "vh: control socket path is too long for a unix socket: {}\n", path);
+        return 1;
+    }
+
+    const int s = vh::platform::fd::socket(AF_UNIX, SOCK_STREAM, 0);
     if (s < 0) { perror("socket"); return 1; }
+    vh::platform::fd::suppressSigpipe(s);
 
     // Bounds connect() when the listener's backlog is full (a wedged daemon that stopped accepting).
     timeval tv{.tv_sec = timeoutSeconds, .tv_usec = 0};
     (void)::setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
-    sockaddr_un addr{};
     addr.sun_family = AF_UNIX;
-    std::snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", socket_path());
-    if (::connect(s, reinterpret_cast<sockaddr*>(&addr), sizeof(sa_family_t) + std::strlen(addr.sun_path) + 1) != 0) {
+    std::memcpy(addr.sun_path, path.data(), path.size());
+    // offsetof, not sizeof(sa_family_t): BSD's sockaddr_un starts with sun_len (on Linux the two are equal).
+    const auto addrLen = static_cast<socklen_t>(offsetof(sockaddr_un, sun_path) + path.size() + 1);
+    if (::connect(s, reinterpret_cast<sockaddr*>(&addr), addrLen) != 0) {
         const int err = errno;
         ::close(s);
         if (lifecycleHelp && ::geteuid() == 0) return run_lifecycle_command(argv_norm);

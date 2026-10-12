@@ -1,4 +1,5 @@
 #include "config/Config.hpp"
+#include "platform/ChildProcess.hpp"
 #include "config/Registry.hpp"
 #include "ops/Config.hpp"
 #include "ops/Error.hpp"
@@ -202,6 +203,8 @@ TEST_F(DeriveRunnerTest, ACrashIsReportedNotThrown) {
 }
 
 TEST_F(DeriveRunnerTest, AddressSpaceLimitStopsAllocation) {
+    if (!vh::platform::child::addressSpaceLimitEnforced())
+        GTEST_SKIP() << "no RLIMIT_AS on this platform; the daemon-side memory cap is roadmap #218";
     auto r = request("alloc");
     r.limits.maxAddressSpaceBytes = 256ull << 20;
     const auto res = Runner::run(r);
@@ -229,12 +232,20 @@ TEST_F(DeriveRunnerTest, ChildGetsAnEmptyEnvironmentOnlyProtocolFdsAndLimits) {
     EXPECT_EQ(j["fds"], nlohmann::json::array({0, 1, 2, 3, 4})) << j["fds"].dump();
     EXPECT_EQ(j["stdin"], "/dev/null");
     EXPECT_EQ(j["cwd"], "/");
+#if defined(__linux__)
     EXPECT_EQ(j["no_new_privs"], 1);
-    EXPECT_EQ(j["session_leader"], true);
     EXPECT_EQ(j["pdeathsig"], SIGKILL);
+#else
+    // macOS has neither (platform/ChildProcess.hpp): the daemon kills the process group itself.
+    EXPECT_TRUE(j["no_new_privs"].is_null());
+    EXPECT_TRUE(j["pdeathsig"].is_null());
+#endif
+    EXPECT_EQ(j["session_leader"], true);
     EXPECT_EQ(j["sigmask_empty"], true);
     EXPECT_EQ(j["sigpipe_default"], true);
-    EXPECT_EQ(j["rlimit_as"]["soft"].get<double>(), static_cast<double>(1ull << 30));
+    if (vh::platform::child::addressSpaceLimitEnforced()) {
+        EXPECT_EQ(j["rlimit_as"]["soft"].get<double>(), static_cast<double>(1ull << 30));
+    }
     EXPECT_EQ(j["rlimit_cpu"]["soft"].get<double>(), 17.0);
     EXPECT_EQ(j["rlimit_cpu"]["hard"].get<double>(), 22.0);
     EXPECT_EQ(j["rlimit_fsize"]["soft"].get<double>(), 0.0);
@@ -352,7 +363,9 @@ public:
 
 TEST_F(DeriveRunnerTest, HelpersMustBeRootOwnedAndNotWritableByOthers) {
     const TrustChecksOn on;
-    const auto dir = fs::temp_directory_path() / ("vh-derive-trust-" + std::to_string(::getpid()));
+    // Under /tmp, the sticky world-writable directory the checks below rely on ($TMPDIR on macOS is a private 0700
+    // directory), canonical because macOS's /tmp is a symlink to /private/tmp and problems name the real path.
+    const auto dir = fs::canonical("/tmp") / ("vh-derive-trust-" + std::to_string(::getpid()));
     fs::remove_all(dir);
     fs::create_directories(dir);
     fs::permissions(dir, fs::perms::owner_all);

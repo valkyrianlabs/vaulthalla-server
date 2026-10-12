@@ -88,7 +88,7 @@ WorkingCopyHooks runtimeHooks() {
             engineFor(*staged)->encryptionManager->encryptFileToFile(from, to, staged);
         },
         .current = [](const uint64_t ino) -> std::shared_ptr<fs::model::File> {
-            const auto entry = runtime::Deps::get().fsCache->getEntry(static_cast<fuse_ino_t>(ino));
+            const auto entry = runtime::Deps::get().fsCache->getEntry(static_cast<vh::fs::Inode>(ino));
             if (!entry || entry->isDirectory() || entry->isSymlink()) return nullptr;
             return std::static_pointer_cast<fs::model::File>(entry);
         },

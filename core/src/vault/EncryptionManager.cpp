@@ -33,7 +33,7 @@ struct WipedKeyCopy {
 
 EncryptionManager::EncryptionManager(const unsigned int vault_id)
     : vault_id_(vault_id) {
-    tpmKeyProvider_ = std::make_unique<secrets::TPMKeyProvider>(paths::testMode ? "test_vault_master" : "vault_master");
+    tpmKeyProvider_ = std::make_unique<secrets::KeyProvider>(paths::testMode ? "test_vault_master" : "vault_master");
     tpmKeyProvider_->init();
     load_key();
 }

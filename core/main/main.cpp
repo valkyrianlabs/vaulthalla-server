@@ -40,9 +40,9 @@
 #include <thread>
 #include <cstdint>
 #include <execinfo.h>
-#include <sys/eventfd.h>
-#include <sys/prctl.h>
 #include <unistd.h>
+#include "platform/Process.hpp"
+#include "platform/Waker.hpp"
 
 using namespace vh::config;
 using namespace vh::concurrency;
@@ -56,15 +56,14 @@ constexpr auto kShutdownDeadline = std::chrono::seconds(10);
 
 std::atomic<bool> shouldExit{false};
 std::atomic<int> receivedSignal{0};
-int signalWakeFd = -1;
+vh::platform::Waker* signalWaker = nullptr;  // set before the handler is installed, never freed
 
 // Async-signal-safe only (atomics, write, _exit): logging from here could deadlock on a lock the interrupted
 // thread holds. The main thread reports the signal. A second SIGTERM/SIGINT during shutdown exits at once.
 void signalHandler(const int signum) {
     if (shouldExit.exchange(true)) ::_exit(128 + signum);
     receivedSignal.store(signum);
-    const std::uint64_t one = 1;
-    (void)!::write(signalWakeFd, &one, sizeof one);
+    signalWaker->notify();
 }
 
 // A crashing FUSE daemon must die at once. A core dump first waits for every thread to stop, but a thread in close()
@@ -84,8 +83,8 @@ void fatalSignalHandler(const int signum) {
 }
 
 void installCrashGuard() {
-    if (::prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) != 0)
-        std::fprintf(stderr, "[vaulthalla] could not disable core dumps: %s\n", std::strerror(errno));
+    if (const int err = vh::platform::process::disableCoreDumps(); err != 0)
+        std::fprintf(stderr, "[vaulthalla] could not disable core dumps: %s\n", std::strerror(err));
 
     // backtrace() loads libgcc on first use, which allocates: do it now, never from a handler on a broken heap.
     void* warm[1];
@@ -103,8 +102,7 @@ void installCrashGuard() {
 // on, the process has kShutdownDeadline to exit, whatever main is doing: still starting up (a database that never
 // answers), or stuck shutting down. The watcher also wakes main, which the handler itself can't safely do.
 void startShutdownWatcher() {
-    signalWakeFd = ::eventfd(0, EFD_CLOEXEC);
-    if (signalWakeFd < 0) throw std::runtime_error(std::string("eventfd: ") + std::strerror(errno));
+    signalWaker = new vh::platform::Waker();
 
     struct sigaction action{};
     action.sa_handler = signalHandler;
@@ -113,13 +111,9 @@ void startShutdownWatcher() {
     for (const int sig : {SIGINT, SIGTERM}) ::sigaction(sig, &action, nullptr);
 
     std::thread([] {
-        std::uint64_t count = 0;
-        while (::read(signalWakeFd, &count, sizeof count) < 0)
-            if (errno != EINTR) {
-                // Not expected for an eventfd; fall back to polling the flag the handler sets.
-                while (!shouldExit.load()) std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                break;
-            }
+        if (!signalWaker->wait())
+            // Not expected; fall back to polling the flag the handler sets.
+            while (!shouldExit.load()) std::this_thread::sleep_for(std::chrono::milliseconds(100));
         shouldExit.notify_all();
 
         std::this_thread::sleep_for(kShutdownDeadline);

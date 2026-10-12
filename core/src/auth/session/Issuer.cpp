@@ -41,7 +41,7 @@ static std::string generateUUID() {
     uuid_t uuid;
     char uuidStr[37];
     uuid_generate(uuid);
-    uuid_unparse(uuid, uuidStr);
+    uuid_unparse_lower(uuid, uuidStr);  // explicit: macOS uuid_unparse is upper-case, PostgreSQL uuid is lower
     return {uuidStr};
 }
 

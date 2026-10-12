@@ -105,7 +105,7 @@ std::vector<std::string> missingDependencies(const stats::model::SystemHealth& h
     if (!deps.fsCache) out.push_back("filesystem cache");
     if (!deps.shellUsageManager) out.push_back("shell usage manager");
     if (!deps.httpCacheStats) out.push_back("HTTP cache stats");
-    if (!deps.fuseSession) out.push_back("FUSE session");
+    if (!deps.fuseSession && deps.fuseMount != "disabled") out.push_back("FUSE session");
     return out;
 }
 

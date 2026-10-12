@@ -1,6 +1,6 @@
 #pragma once
 
-#include "crypto/secrets/TPMKeyProvider.hpp"
+#include "crypto/secrets/KeyProvider.hpp"
 #include "db/query/s3/Gateway.hpp"
 #include "identities/Fwd.hpp"
 
@@ -49,7 +49,7 @@ public:
     static std::string generateSecretKey();
 
 private:
-    std::unique_ptr<crypto::secrets::TPMKeyProvider> tpmKeyProvider_;
+    std::unique_ptr<crypto::secrets::KeyProvider> tpmKeyProvider_;
 
     [[nodiscard]] std::vector<uint8_t> encryptSecret(const std::string& secret, std::vector<uint8_t>& iv) const;
     [[nodiscard]] std::string decryptSecret(const std::vector<uint8_t>& ciphertext, const std::vector<uint8_t>& iv) const;

@@ -1,4 +1,5 @@
 #include "fs/metadata/Magic.hpp"
+#include <filesystem>
 #include <mutex>
 #include <stdexcept>
 #include <magic.h>
@@ -9,8 +10,12 @@ Magic::Magic() {
     cookie = magic_open(MAGIC_MIME_TYPE);
     if (!cookie) throw std::runtime_error("Failed to create magic cookie");
 
-    // Let libmagic find its own database unless overridden
-    if (magic_load(cookie, "/usr/share/misc/magic.mgc") != 0) {
+    // Debian/Ubuntu's database; where it isn't installed (macOS: Homebrew's libmagic) libmagic's own compiled-in
+    // default (nullptr) finds it.
+    constexpr const char* kDebianMagicDb = "/usr/share/misc/magic.mgc";
+    std::error_code ec;
+    const char* database = std::filesystem::exists(kDebianMagicDb, ec) ? kDebianMagicDb : nullptr;
+    if (magic_load(cookie, database) != 0) {
         std::string err = magic_error(cookie) ? magic_error(cookie) : "Unknown error";
         magic_close(cookie);
         throw std::runtime_error("Failed to load magic database: " + err);

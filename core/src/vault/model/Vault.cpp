@@ -8,7 +8,7 @@
 
 #include <nlohmann/json.hpp>
 #include <pqxx/row>
-#include <fmt/core.h>
+#include <fmt/format.h>
 #include <algorithm>
 #include <cctype>
 #include <stdexcept>
