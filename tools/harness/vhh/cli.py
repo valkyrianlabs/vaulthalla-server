@@ -18,6 +18,7 @@ from vhh import fixture_v1, oracle, replay as R, run as RUN, sim, targets, world
 from vhh.broker import IdentityBroker
 from vhh.catalog import load as load_catalog
 from vhh.engine import Engine, Session
+from vhh.model import Op, Result
 from vhh.recorder import TraceError, read_trace
 from vhh.redact import Redactor
 from vhh.seeds import fmt_seed, parse_seed
@@ -247,24 +248,60 @@ def _engine_factory(w, kind, target, a):
     return factory
 
 
+def _launched_engine_factory(w, a):
+    """Each replay/shrink attempt gets a fresh private instance (launch, provision, engine); the engine's teardown
+    stops it. Replay assumes a freshly provisioned world, so nothing is reused between attempts."""
+    import concurrent.futures
+    from vhh import provision
+    from vhh.drivers import real
+    from vhh.instance import Instance
+
+    def factory(ops):
+        red, broker = _broker(w, "launch", None, None)
+        inst = Instance(Path(a.build), redactor=red)
+        inst.start()
+        try:
+            with concurrent.futures.ThreadPoolExecutor(1) as pool:   # provision is async; we are inside a loop
+                binding = pool.submit(asyncio.run, provision.provision(inst.target, w, broker, red)).result()
+        except BaseException:
+            inst.stop()
+            raise
+        make = real.factory(inst, binding, w, broker, red)
+        engine = Engine(w, load_catalog(a.catalog), broker, red)
+        for sid in sorted({o.session for o in ops}):
+            o = next(x for x in ops if x.session == sid)
+            engine.add_session(Session(sid, o.principal, o.surface, make(o.surface, o.principal), intent="replay"))
+        engine.teardown = inst.stop
+        return engine
+    return factory
+
+
+def _replay_factory(a, w):
+    if a.target == "launch":
+        if not a.build:
+            raise ValueError("--target launch needs --build")
+        return _launched_engine_factory(w, a)
+    resolved = _target(a)
+    return None if resolved is None else _engine_factory(w, *resolved, a)
+
+
 def _load_trace_and_world(a):
     trace = read_trace(a.trace)
     return trace, world_from_header(trace.header)
 
 
 def cmd_replay(a) -> int:
-    resolved = _target(a)
-    if resolved is None:
-        return REFUSED
     try:
         trace, w = _load_trace_and_world(a)
-    except (TraceError, W.WorldError, OSError) as e:
+        factory = _replay_factory(a, w)
+    except (TraceError, W.WorldError, OSError, ValueError) as e:
         say("FAIL", str(e))
         return FAIL
+    if factory is None:
+        return REFUSED
     lo, hi = R.parse_window(a.window)
     pairs = R.window(trace, lo, hi)
-    rep = asyncio.run(R.replay(_engine_factory(w, *resolved, a), pairs, a.schedule, a.repeat,
-                               R.predicate(a.predicate)))
+    rep = asyncio.run(R.replay(factory, pairs, a.schedule, a.repeat, R.predicate(a.predicate)))
     print(json.dumps(rep.to_json(), indent=2))
     print(f"vhh: note: {R.NOTE}")
     ok = rep.ops > 0 and rep.reproduced > 0
@@ -272,15 +309,46 @@ def cmd_replay(a) -> int:
     return PASS if ok else FAIL
 
 
+def cmd_regress(a) -> int:
+    """Replay every stored regression (tools/harness/regressions/*.jsonl) against a build, each on a fresh private
+    instance. A regression file is a header line {"kind":"regression", "world", "predicate", "finding", ...} followed
+    by the shrunk ops. PASS means none of them reproduces; any reproduction, or a regression that can't run, fails."""
+    files = sorted(Path(a.dir).glob("*.jsonl"))
+    if not files:
+        say("FAIL", f"no regressions in {a.dir}")
+        return FAIL
+    failed = 0
+    for f in files:
+        lines = [json.loads(x) for x in f.read_text().splitlines() if x.strip()]
+        head = lines[0] if lines and lines[0].get("kind") == "regression" else {}
+        ops = [Op(**{k: v for k, v in o.items() if k in Op.__dataclass_fields__}) for o in lines[1 if head else 0:]]
+        try:
+            w = load_world(head.get("world", "pentest-v1"))
+            a.target = "launch"
+            pairs = [(o, Result("ok")) for o in ops]
+            rep = asyncio.run(R.replay(_launched_engine_factory(w, a), pairs, "lockstep", a.repeat,
+                                       R.predicate(head.get("predicate", "any"))))
+        except Exception as e:  # noqa: BLE001 - a regression that cannot run is a failure, never a pass
+            print(f"  ERROR {f.name}: {e!r}")
+            failed += 1
+            continue
+        bad = rep.reproduced > 0 or rep.ops == 0
+        failed += bad
+        print(f"  {'REPRODUCED' if bad else 'ok'} {f.name}: {head.get('finding', '')} "
+              f"({rep.reproduced}/{rep.repeat} reproduced, {rep.ops} op(s))")
+    say("FAIL" if failed else "PASS", f"{len(files) - failed}/{len(files)} regressions hold against {a.build}")
+    return FAIL if failed else PASS
+
+
 def cmd_shrink(a) -> int:
-    resolved = _target(a)
-    if resolved is None:
-        return REFUSED
     try:
         trace, w = _load_trace_and_world(a)
+        factory = _replay_factory(a, w)
+        if factory is None:
+            return REFUSED
         lo, hi = R.parse_window(a.window)
-        ops = asyncio.run(R.shrink(_engine_factory(w, *resolved, a), R.window(trace, lo, hi), a.schedule,
-                                   R.predicate(a.predicate), a.attempts))
+        ops = asyncio.run(R.shrink(factory, R.window(trace, lo, hi), a.schedule, R.predicate(a.predicate),
+                                   a.attempts))
     except (TraceError, W.WorldError, OSError, ValueError) as e:
         say("FAIL", str(e))
         return FAIL
@@ -405,12 +473,20 @@ def parser() -> argparse.ArgumentParser:
         p.add_argument("--window", help="SEQ..SEQ")
         p.add_argument("--schedule", choices=("lockstep", "barrier"), default="barrier")
         p.add_argument("--predicate", default="any", help="e.g. 'canary|wedge|oracle|parity|integrity|any'")
+        p.add_argument("--build", help="with --target launch: a fresh private instance per attempt from this build")
         if name == "replay":
             p.add_argument("--repeat", type=int, default=1)
         else:
             p.add_argument("--attempts", type=int, default=1)
             p.add_argument("--out", default="shrunk.jsonl")
         p.set_defaults(fn=fn)
+
+    p = sub.add_parser("regress", help="replay stored regressions against a build (fresh instance each; root)")
+    p.add_argument("--build", required=True)
+    p.add_argument("--dir", default=str(Path(__file__).resolve().parent.parent / "regressions"))
+    p.add_argument("--repeat", type=int, default=1)
+    p.add_argument("--catalog")
+    p.set_defaults(fn=cmd_regress)
 
     p = sub.add_parser("scenario", help="daemon hang/crash during an in-flight FUSE op (needs root)")
     p.add_argument("kind", choices=("hang", "crash"))

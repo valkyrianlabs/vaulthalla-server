@@ -187,7 +187,12 @@ class World:
         return w
 
     def world_hash(self) -> str:
-        blob = json.dumps(self.to_json(), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        """Identity of the logical world. Deployment bindings (the Linux uid an actor account got when the world was
+        provisioned) are excluded, so a trace recorded after provisioning replays into a freshly provisioned world."""
+        data = self.to_json()
+        for p in data.get("principals", []):
+            p.pop("linux_uid", None)
+        blob = json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
         return hashlib.sha256(blob.encode()).hexdigest()
 
     # ---------------------------------------------------------------- validation

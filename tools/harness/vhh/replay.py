@@ -32,8 +32,10 @@ def parse_window(text: str | None) -> tuple[int | None, int | None]:
 
 
 def window(trace: Trace, lo: int | None = None, hi: int | None = None) -> list[tuple[Op, Result]]:
+    # Setup ops (session namespaces, the contested directory) always come along: a window replayed into a fresh
+    # world needs the directories its ops write into.
     out = [(o, r) for o, r in trace.ops if r.outcome != "blocked"
-           and (lo is None or o.seq >= lo) and (hi is None or o.seq <= hi)]
+           and (o.intent == "setup" or ((lo is None or o.seq >= lo) and (hi is None or o.seq <= hi)))]
     return sorted(out, key=lambda x: x[0].seq)
 
 
@@ -77,6 +79,9 @@ async def execute(factory: EngineFactory, ops: list[Op], mode: str) -> Engine:
         await engine.quiesce()
     finally:
         await engine.close_all()
+        teardown = getattr(engine, "teardown", None)   # launched targets: stop the per-attempt instance
+        if teardown is not None:
+            await asyncio.to_thread(teardown)
     return engine
 
 

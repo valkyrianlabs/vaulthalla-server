@@ -1,0 +1,2 @@
+{"kind": "regression", "world": "pentest-v1", "predicate": "error", "finding": "ws fs.entry.rename into a missing destination folder is a typed not_found, not an untyped error", "found_by": "clean build, seed 0x29 (ws surface), fixed in 038060b9"}
+{"seq": 0, "session": "s04", "principal": "u-alice", "surface": "ws", "op": "fs.rename", "args": {"vault": "v-sh-preview", "path": "/data/records.csv", "to": "/s04/x9.txt"}, "intent": "replay", "causes": [], "barrier": null}
