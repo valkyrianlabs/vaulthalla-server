@@ -17,7 +17,6 @@
 #include <atomic>
 #include <utility>
 #include <paths.h>
-#include <sys/stat.h>     // lstat
 #include <unistd.h>       // close
 #include <chrono>
 #include <thread>
@@ -87,23 +86,10 @@ static bool isSafeTestMountpoint(const stdfs::path& p) {
     return s.rfind("/tmp/", 0) == 0; // starts_with("/tmp/")
 }
 
-static bool isMountedOrStale(const stdfs::path& p) {
-    // If lstat returns ENOTCONN, it’s a stale FUSE endpoint => treat as mounted.
-    struct stat st{}, pst{};
-    if (::lstat(p.c_str(), &st) != 0) return (errno == ENOTCONN);
-    const auto parent = p.parent_path().empty() ? stdfs::path("/") : p.parent_path();
-
-    // If parent can't be stat'ed, be conservative.
-    if (::lstat(parent.c_str(), &pst) != 0) return true;
-
-    // Different st_dev than parent => mountpoint boundary
-    return st.st_dev != pst.st_dev;
-}
-
 static void waitUnmounted(const stdfs::path& p, std::chrono::milliseconds timeout = std::chrono::milliseconds(1500)) {
     const auto deadline = std::chrono::steady_clock::now() + timeout;
     while (std::chrono::steady_clock::now() < deadline) {
-        if (!isMountedOrStale(p)) return;
+        if (!platform::mount::isMountedOrStale(p)) return;
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 }
@@ -133,7 +119,7 @@ static void ensureFreshMountpoint() {
 
         if (stdfs::exists(mountPath, ec)) {
             // If it’s a mountpoint (or stale), detach it first.
-            if (isMountedOrStale(mountPath)) {
+            if (platform::mount::isMountedOrStale(mountPath)) {
                 platform::mount::detach(mountPath);
                 waitUnmounted(mountPath);
             }
@@ -148,6 +134,9 @@ static void ensureFreshMountpoint() {
             }
         }
     }
+
+    // A mount a previous run left behind, found without touching the path (macOS; Linux handles ENOTCONN below).
+    platform::mount::detachStale(mountPath);
 
     // Create fresh directory (handle ENOTCONN paranoia: retry once after forced detach)
     stdfs::create_directories(mountPath, ec);

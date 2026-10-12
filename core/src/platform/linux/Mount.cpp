@@ -1,6 +1,8 @@
 #include "platform/Mount.hpp"
 
+#include <cerrno>
 #include <cstdlib>
+#include <sys/stat.h>
 #include <fstream>
 #include <sstream>
 #include <sys/mount.h>  // umount2, MNT_DETACH
@@ -20,6 +22,21 @@ std::string_view isolation(std::string_view) noexcept { return "enforced"; }  //
 std::vector<std::string> fuseOptions(std::string_view) {
     return {"-o", "allow_other", "-o", "auto_unmount"};
 }
+
+bool isMountedOrStale(const std::filesystem::path& p) {
+    // If lstat returns ENOTCONN, it's a stale FUSE endpoint => treat as mounted.
+    struct stat st{}, pst{};
+    if (::lstat(p.c_str(), &st) != 0) return (errno == ENOTCONN);
+    const auto parent = p.parent_path().empty() ? std::filesystem::path("/") : p.parent_path();
+
+    // If parent can't be stat'ed, be conservative.
+    if (::lstat(parent.c_str(), &pst) != 0) return true;
+
+    // Different st_dev than parent => mountpoint boundary
+    return st.st_dev != pst.st_dev;
+}
+
+void detachStale(const std::filesystem::path&) noexcept {}
 
 void detach(const std::filesystem::path& path) noexcept {
     // 1) Try kernel lazy detach

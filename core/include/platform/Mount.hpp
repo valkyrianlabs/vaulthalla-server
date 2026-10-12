@@ -36,6 +36,15 @@ namespace vh::platform::mount {
 // name/attribute caches off; Finder metadata kept out of vaults.
 [[nodiscard]] std::vector<std::string> fuseOptions(std::string_view mode);
 
+// Whether something is mounted at `path`, or a dead FUSE endpoint is left there.
+// Linux: lstat (ENOTCONN, or a st_dev boundary with the parent) — the proven check. macOS: the kernel's mount table
+// (getfsstat(MNT_NOWAIT)) only, never a request into the file system, which a wedged daemon could leave hanging.
+[[nodiscard]] bool isMountedOrStale(const std::filesystem::path& path);
+
+// Before (re)creating the mountpoint: detaches a mount a previous run left there. Linux: nothing (the existing
+// ENOTCONN handling covers it). macOS: found in the mount table, then detached, without touching the path itself.
+void detachStale(const std::filesystem::path& path) noexcept;
+
 // Detaches the mount at `path` without waiting for its users (Linux: lazy umount2(MNT_DETACH), then fusermount3/
 // fusermount/umount -l; macOS: unmount(MNT_FORCE), then diskutil unmount force). Best effort.
 void detach(const std::filesystem::path& path) noexcept;
