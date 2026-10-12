@@ -24,6 +24,7 @@ live P0 (the DB pool wedges after a PostgreSQL restart, which hangs FUSE and `ap
 | `tools/{smoke,e2e,dev}` | S3 gateway smoke, Playwright env, share preview smoke, `dev/verify.sh` (shared verification entrypoint) | `.claude/context/testing.md` |
 | `tools/contracts/` | product contracts (Debian packaging, maintainer scripts, shipped migrations, release workflow) | `.claude/context/packaging-lifecycle.md` |
 | `.github/project/`, `tools/project/` | Roadmap board schema (fields, `area:*` labels, views, Ready gate) + `board.py` reconcile/migrate/lint | `.claude/context/project-board.md` |
+| `tools/harness/` | Tier B integration engine: private daemon instances, multi-surface seeded sessions, oracle/parity/canary judges, trace replay/shrink, regressions, fault fixtures, agent gateway | `.claude/context/testing.md` |
 | `tools/lab/` | real-host tooling: ws client, CLI↔web parity smoke, ws churn, `lab_smoke` (real-apt upgrade check), TEST-ONLY S3/R2 credential scaffold, `pentest/` (seed/verify/publish/reset a synthetic authorized-pentest fixture; seeding mutates the lab) | `.claude/context/phase1-results.md` |
 
 Phase 1 (packaging/upgrade/release hardening) results and how candidates are proven on the lab: `.claude/context/phase1-results.md`.
@@ -39,7 +40,8 @@ in-flight plans; promote durable facts into `.claude/context/`.
 ```bash
 meson setup build -Dbuild_unit_tests=true && meson compile -C build   # core: unity, -O0 (= PR CI; packages are -O3); `make build` is broken (conan)
 meson test -C build --print-errorlogs                                 # unit tests (DB-backed: see testing.md)
-make run_test                                                         # integration harness on /tmp/vh_mount (destructive to local test env)
+make proof                                                            # Tier A integration proofs on a private instance (sudo; safe for the dev install)
+sudo tools/harness/vhh.sh run --target launch --build build           # Tier B multi-surface engine (see testing.md)
 pnpm --dir web typecheck && pnpm --dir web lint                       # web ("pnpm test" = the same two)
 vlr check && vlr version check                                        # release contract + version drift (VERSION/meson/package.json)
 bash tools/dev/verify.sh [profiles]               # surface-aware verification (see /verify)

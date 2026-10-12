@@ -715,3 +715,15 @@ stage "Copy And Delete")
     `readAllAuthenticated` fetches the whole object and checks the tag. Chunked AEAD is the eventual fix.
   - `off`: `ContentUnavailable`.
 - Dev R2 dogfooding hits a real bucket. With `dev.init_r2_test_vault`, initdb clears the `VAULTHALLA_TEST_R2_*` bucket.
+
+## Test instances, contracts and the fs actor (2026-10-11)
+
+- `VH_TEST_MODE=1` makes `vaulthalla-server` a private test instance: `runtime/TestInstance.hpp` refuses to start
+  (exit 78) unless the DB settings, backing/mount/log/runtime/config paths and `VH_TEST_CLI_SOCKET` all come from the
+  environment and are private (paths under `/tmp/`, a `vh_harness_*` or test database). Test mode then serves `vh` on
+  that socket (`paths::getCliSocketPath()`); the client honours `VAULTHALLA_CLI_SOCKET`.
+- `core/usage` also holds the contract: `FieldGen` generators on CLI usage entries, `OperationSpec` catalog,
+  `WsCommandUsage` book, exported by `vh_usage --json`.
+- `vh_fs_actor` (`core/tests/helpers/fs_actor.cpp`, `-Dintegration_tests=true`): a single-threaded helper that
+  switches to a test uid at startup and serves filesystem ops as JSON lines; used by Tier A and `tools/harness`.
+
