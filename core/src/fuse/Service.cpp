@@ -57,7 +57,9 @@ std::shared_ptr<Service> makeService() {
 }
 
 MountStatus mountStatus() {
-    MountStatus status{.configuredMode = configuredMountMode(), .backend = std::string(platform::mount::backend())};
+    MountStatus status;
+    status.configuredMode = configuredMountMode();
+    status.backend = std::string(platform::mount::backend());
     if (status.configuredMode == "disabled") {
         status.state = "disabled";
         status.isolation = "not_applicable";
