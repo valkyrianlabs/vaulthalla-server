@@ -17,6 +17,7 @@
 // Previews
 #include "preview/cache/Maintenance.hpp"
 #include "preview/derive/Queue.hpp"
+#include "protocols/http/upload/Coordinator.hpp"
 #include "preview/render/Raster.hpp"
 
 // Seed
@@ -168,6 +169,9 @@ void wireStorage() {
     // Every start (so every upgraded install): legacy plaintext thumbnails and orphaned artifacts go away before
     // anything can serve them.
     vh::preview::cache::sweepAtStartup(vh::runtime::Deps::get().storageManager->getEngines());
+
+    // Builds without the kernel FUSE bridge stage HTTP uploads privately; a crash can leave partial ones (no-op on Linux).
+    vh::protocols::http::upload::sweepStagingAtStartup();
 }
 
 // --- Runtime ---

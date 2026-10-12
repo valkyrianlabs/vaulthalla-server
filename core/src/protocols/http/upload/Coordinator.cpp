@@ -9,6 +9,8 @@
 #include "fs/model/File.hpp"
 #include "fs/model/Path.hpp"
 #include "fs/ops/file.hpp"
+#include "fuse/Service.hpp"
+#include <paths.h>
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
 #include "protocols/cookie.hpp"
@@ -327,6 +329,27 @@ void ensureNoExistingShareTarget(
     throw std::runtime_error("Share upload duplicate policy is not supported in this pass");
 }
 
+// HTTP uploads stage next to their target *through the mount* where there is one (intentional, see CLAUDE.md). A
+// build without the kernel FUSE bridge (macOS, #213) has no mount: it stages in a daemon-private 0700 directory
+// under the backing path instead, never visible over HTTP, S3, sync or a vault, and commits the same way
+// (Filesystem::createFile seals the bytes, then the staged plaintext is removed).
+std::filesystem::path stagingRoot() {
+    return vh::paths::getBackingPath() / ".upload-staging";
+}
+
+std::filesystem::path uploadStagingPath(
+    const std::filesystem::path& targetAbsPath,
+    const unsigned int vaultId,
+    const std::string& name
+) {
+    if (vh::fuse::kernelBridgeBuilt()) return targetAbsPath.parent_path() / name;
+    const auto dir = stagingRoot() / std::to_string(vaultId);
+    std::filesystem::create_directories(dir);
+    for (const auto& p : {stagingRoot(), dir})
+        std::filesystem::permissions(p, std::filesystem::perms::owner_all, std::filesystem::perm_options::replace);
+    return dir / name;
+}
+
 void createEmptyTempFile(const std::filesystem::path& path) {
     std::filesystem::create_directories(path.parent_path());
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
@@ -630,6 +653,17 @@ void Coordinator::FileStream::fail(std::string reason) noexcept {
     }
 }
 
+void sweepStagingAtStartup() {
+    if (vh::fuse::kernelBridgeBuilt()) return;
+    std::error_code ec;
+    const auto removed = std::filesystem::remove_all(stagingRoot(), ec);
+    if (ec)
+        vh::log::Registry::fs()->warn("[HttpUpload] Could not clear upload staging {}: {}", stagingRoot().string(),
+                                      ec.message());
+    else if (removed > 0)
+        vh::log::Registry::fs()->info("[HttpUpload] Removed {} stale upload staging entries", removed);
+}
+
 Coordinator& Coordinator::instance() {
     static Coordinator value;
     return value;
@@ -723,7 +757,7 @@ nlohmann::json Coordinator::createSession(const request& req, const nlohmann::js
 
                 const auto vaultPath = std::filesystem::path(finalVaultPath);
                 const auto absPath = engine->paths->absPath(vaultPath, PathType::VAULT_ROOT);
-                const auto tmpPath = absPath.parent_path() / (".upload-http-" + upload->id + "-" + fileId + ".part");
+                const auto tmpPath = uploadStagingPath(absPath, parent.vault_id, ".upload-http-" + upload->id + "-" + fileId + ".part");
                 const auto fuseTo = engine->paths->absRelToRoot(absPath, PathType::FUSE_ROOT);
                 const auto fuseFrom = engine->paths->absRelToRoot(tmpPath, PathType::FUSE_ROOT);
 
@@ -796,7 +830,7 @@ nlohmann::json Coordinator::createSession(const request& req, const nlohmann::js
                     "Upload exceeds available vault storage");
 
                 const auto absPath = engine->paths->absPath(vaultPath, PathType::VAULT_ROOT);
-                const auto tmpPath = absPath.parent_path() / (".upload-http-" + upload->id + "-" + fileId + ".part");
+                const auto tmpPath = uploadStagingPath(absPath, vaultId, ".upload-http-" + upload->id + "-" + fileId + ".part");
                 const auto fuseTo = engine->paths->absRelToRoot(absPath, PathType::FUSE_ROOT);
                 const auto fuseFrom = engine->paths->absRelToRoot(tmpPath, PathType::FUSE_ROOT);
 

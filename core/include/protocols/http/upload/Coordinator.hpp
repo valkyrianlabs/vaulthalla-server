@@ -18,6 +18,10 @@
 
 namespace vh::protocols::http::upload {
 
+// A build without the kernel FUSE bridge stages uploads in <backing>/.upload-staging (see Coordinator.cpp). Removes
+// what an earlier run left there; call once at startup, before the HTTP server accepts uploads. No-op with FUSE.
+void sweepStagingAtStartup();
+
 struct ParsedFileTarget {
     std::string upload_id;
     std::string file_id;
