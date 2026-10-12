@@ -1,5 +1,42 @@
 # Vaulthalla release notes
 
+<!-- vl-release:entry version=1.12.3 -->
+## 1.12.3 — Trustworthy integration testing, an admin-role fix and typed console errors
+
+_Released 2026-10-12_
+
+##### Fixed
+
+- **Admin roles:** deleting an admin role that accounts still hold is refused again. The check counted the wrong
+  table, so a held role could be deleted, which silently removed the admin role from every account that had it; an
+  unused role could also be refused for no reason.
+- **Web console:** moving, renaming or copying into a folder that doesn't exist (or from a missing source) now says
+  "not found" instead of a generic error.
+
+##### Web console follows the server's command definitions
+
+- The console's command types are generated from the daemon's own command definitions, so the two can't drift
+  apart unnoticed.
+- After a daemon upgrade, an open console page notices that the server's commands changed and suggests reloading
+  (once, without interrupting anything). This uses a new read-only command, `meta.contract.get`, which needs a
+  signed-in session and returns no secrets.
+
+##### For contributors: an integration engine for the real daemon
+
+- `vaulthalla-server` can run as a fully private test instance (`VH_TEST_MODE=1`): its own database, paths, ports,
+  CLI socket and FUSE mount. It refuses to start if anything would point at a real install. `vh` honours
+  `VAULTHALLA_CLI_SOCKET` to talk to such an instance.
+- Tests are isolated from the development install. `make test` (DB-backed unit tests) and `make itest` (integration
+  proofs) each run against a database created for that run and dropped afterwards, with private paths and nothing
+  installed. The old `make run_test`, which installed a test build over the system binaries, rotated a shared test
+  password into the daemon's environment file and could reach the development database, is gone (`run_test` now
+  runs `make itest`). One-time setup: `sudo tools/harness/bootstrap.sh`.
+- Test mode can no longer fall back to the configured database: it needs its connection settings in the environment,
+  and the test-only wipe helpers refuse any database that isn't a test database.
+- `tools/harness` drives many independent CLI, web-console (ws), HTTP and FUSE sessions against a private instance,
+  checks every result against an authorization model, canaries and cross-surface parity, records a replayable trace,
+  shrinks failures and keeps them as regressions. See `.claude/context/testing.md`.
+
 <!-- vl-release:entry version=1.12.2 -->
 ## 1.12.2 — Identity checks from memory and cheaper previews
 
