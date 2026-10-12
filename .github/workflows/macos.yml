@@ -1,8 +1,7 @@
 name: macOS
 # Builds core/ on Apple Silicon with Homebrew deps and runs vh_unit_tests against a disposable PostgreSQL 16 cluster
 # (tools/macos/). Independent of the Linux CI (ci/run-ci containers, self-hosted runners) and of release.yml: nothing
-# here packages or publishes. Until the macOS port of core/meson.build lands, this job is expected to fail at
-# meson setup/compile; that failure is real, never masked.
+# here packages or publishes. Failures are real, never masked.
 on:
   pull_request:
     paths:
