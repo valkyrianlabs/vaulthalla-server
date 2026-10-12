@@ -14,9 +14,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 PROOF="$SCRIPT_DIR/run_proof.sh"
+ITEST_TAG=selftest
+# shellcheck source=bin/tests/lib/itest.sh
+. "$SCRIPT_DIR/lib/itest.sh"
 
 PASS_ARGS=()
-BUILD_DIR="$REPO_ROOT/build-proof"
+BUILD_DIR="$REPO_ROOT/build-itest"
 BIN=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -28,10 +31,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$BIN" ]]; then
-  if [[ ! -f "$BUILD_DIR/build.ninja" ]]; then
-    meson setup "$BUILD_DIR" "$REPO_ROOT" -Dintegration_tests=true -Dinstall_data=false -Dmanpage=false
-  fi
-  meson compile -C "$BUILD_DIR" core/vh_integration_tests core/vh_fs_actor
+  itest_ensure_build "$BUILD_DIR" core/vh_integration_tests core/vh_fs_actor core/vh_migrate
   BIN="$BUILD_DIR/core/vh_integration_tests"
   PASS_ARGS+=(--bin "$BIN")
 fi

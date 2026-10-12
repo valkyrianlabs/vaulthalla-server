@@ -94,7 +94,6 @@ void IntegrationsTestRunner::writeReports(const int exitStatus) const {
     report["uid_base"] = options_.uidBase;
     report["seed_threads"] = options_.seedThreads;
     report["fs_op_timeout_ms"] = fuse::opTimeout().count();
-    report["legacy_shared_env"] = options_.legacySharedEnv;
     report["started_at"] = isoTime(startedAt_);
     report["duration_ms"] = durationMs;
 

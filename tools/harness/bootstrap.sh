@@ -7,7 +7,7 @@
 # - .venv with tools/harness/requirements.txt
 # - PostgreSQL role `vh_harness` (LOGIN, no CREATEDB, no superuser) whose settings live in the root-only file
 #   /var/lib/vaulthalla-harness/db.env. Per-run databases are created by postgres and owned by this role, and dropped
-#   after each run. It is separate from the `vaulthalla_test` role that `make test` rotates and tears down.
+#   after each run. `make test` and `make itest` use it too (bin/tests/lib/itest.sh); it is never rotated or dropped.
 # - CLI actor accounts `vhh-actor-01..N`: system users with no home and no login shell, in the `vaulthalla` group.
 #   The daemon identifies CLI callers by their Linux uid and checks the caller's group through the passwd database,
 #   so CLI sessions need real accounts. Nothing can log in as them; the engine (root) starts processes as them.

@@ -15,7 +15,7 @@
 #   shell       bash -n on changed/all bin/ and debian maintainer scripts
 #   harness     integration engine unit + self tests (tools/harness, no daemon; Python 3.14 with `websockets`:
 #               the tools/harness/.venv from bootstrap.sh, or VERIFY_HARNESS_PYTHON)
-#   integration DESTRUCTIVE: make uninstall && make clean-full && make run_test (requires VERIFY_ALLOW_DESTRUCTIVE=1)
+#   integration make itest: Tier A proofs as an isolated private instance (sudo; never touches the dev install)
 #   all         core web release packaging lifecycle docs shell harness
 set -euo pipefail
 
@@ -160,9 +160,8 @@ run_harness() {
 }
 
 run_integration() {
-  [[ "${VERIFY_ALLOW_DESTRUCTIVE:-0}" == "1" ]] || die "integration tears down local dev/test state; re-run with VERIFY_ALLOW_DESTRUCTIVE=1 after confirming with the maintainer"
-  warn "tearing down local dev + test installs, then running the harness on /tmp/vh_mount"
-  make uninstall && make clean-full && make run_test
+  log "make itest (isolated private instance: per-run DB, private paths, nothing installed)"
+  make --no-print-directory itest
 }
 
 infer_profiles() {

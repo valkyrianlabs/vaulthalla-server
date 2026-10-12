@@ -18,9 +18,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+ITEST_TAG=proof
+# shellcheck source=bin/tests/lib/itest.sh
+. "$SCRIPT_DIR/lib/itest.sh"
 
-DB_ENV_FILE="/var/lib/vaulthalla-harness/db.env"
-BUILD_DIR="$REPO_ROOT/build-proof"
+DB_ENV_FILE="$ITEST_DB_ENV"
+BUILD_DIR="$REPO_ROOT/build-itest"
 BIN=""
 ACTOR=""
 ARTIFACTS=""
@@ -32,7 +35,8 @@ usage() {
 Usage: $0 [options]
 
 Options:
-  --build-dir DIR   meson build dir with -Dintegration_tests=true (default: build-proof; set up and compiled if needed)
+  --build-dir DIR   meson build dir (default: build-itest; configured with the isolated-run options only when they
+                    differ, then just the needed targets compiled; never installed)
   --bin PATH        run this vh_integration_tests binary instead of compiling one
   --actor PATH      vh_fs_actor binary to use (default: the one next to the test binary)
   --artifacts DIR   where reports and logs go (default: <build-dir>/proof-artifacts/<run>)
@@ -60,18 +64,13 @@ done
 log() { printf '[proof] %s\n' "$*"; }
 die() { printf '[proof] error: %s\n' "$*" >&2; exit 1; }
 
-sudo -n true 2>/dev/null || die "needs passwordless sudo (FUSE, root-only proofs, $DB_ENV_FILE)"
-sudo -n test -r "$DB_ENV_FILE" || die "$DB_ENV_FILE is missing (the vh_harness role's connection settings)"
+itest_preflight fuse
 
 # ---------------------------------------------------------------- binaries
 
 if [[ -z "$BIN" ]]; then
-  if [[ ! -f "$BUILD_DIR/build.ninja" ]]; then
-    log "configuring $BUILD_DIR"
-    meson setup "$BUILD_DIR" "$REPO_ROOT" -Dintegration_tests=true -Dinstall_data=false -Dmanpage=false
-  fi
-  log "compiling vh_integration_tests and vh_fs_actor in $BUILD_DIR"
-  meson compile -C "$BUILD_DIR" core/vh_integration_tests core/vh_fs_actor
+  log "building vh_integration_tests, vh_fs_actor and vh_migrate in $BUILD_DIR"
+  itest_ensure_build "$BUILD_DIR" core/vh_integration_tests core/vh_fs_actor core/vh_migrate
   BIN="$BUILD_DIR/core/vh_integration_tests"
 fi
 [[ -x "$BIN" ]] || die "test binary not found: $BIN"
@@ -135,7 +134,7 @@ cleanup() {
     if [[ "$KEEP_DB" == true ]]; then
       log "keeping database $DB_NAME (--keep-db); drop it with: sudo -u postgres dropdb --force $DB_NAME"
     else
-      sudo -n -u postgres timeout 60 dropdb --force --if-exists "$DB_NAME"
+      itest_drop_db "$DB_NAME" || true
       if [[ -n "$(sudo -n -u postgres psql -Atqc "SELECT 1 FROM pg_database WHERE datname = '$DB_NAME'" 2>/dev/null)" ]]; then
         log "error: database $DB_NAME still exists"
         CLEANUP_FAILED=true
@@ -186,11 +185,17 @@ sudo -n install -m 0644 "$CONFIG_TMP" "$ROOT/config.yaml"
 rm -f "$CONFIG_TMP"
 cp "$ROOT/config.yaml" "$ARTIFACTS/config.yaml"
 
-sudo -n -u postgres createdb -O vh_harness "$DB_NAME"
+# A clone of the migrated template (built once per migration set by the daemon's own SqlDeployer); ITEST_DB_TEMPLATE=0
+# starts from an empty database instead, so the migration path itself stays covered.
+TEMPLATE=""
+if [[ "${ITEST_DB_TEMPLATE:-1}" != 0 ]]; then
+  TEMPLATE="$(itest_db_template "$(dirname "$BIN")/vh_migrate")"
+fi
+itest_create_db "$DB_NAME" "$TEMPLATE"
 DB_CREATED=true
 
 log "run $RUN_ID"
-log "  database  $DB_NAME"
+log "  database  $DB_NAME${TEMPLATE:+ (from $TEMPLATE)}"
 log "  root      $ROOT"
 log "  binary    $BIN"
 log "  artifacts $ARTIFACTS"

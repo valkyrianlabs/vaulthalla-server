@@ -32,14 +32,13 @@ struct RunOptions {
     uint32_t uidBase = 0;
     unsigned int seedThreads = 1;
     std::string reportDir;
-    bool legacySharedEnv = false;
 
     [[nodiscard]] bool has(std::string_view stage) const;
     [[nodiscard]] std::string stagesText() const;
     [[nodiscard]] std::string negativeControlText() const;
 
     // Reads VH_TEST_SEED, VH_TEST_CONFIG, VH_TEST_STAGES, VH_TEST_NEGATIVE_CONTROL, VH_TEST_UID_BASE,
-    // VH_TEST_SEED_THREADS, VH_TEST_REPORT_DIR and VH_TEST_LEGACY_SHARED_ENV. Unknown values are an error, never a
+    // VH_TEST_SEED_THREADS and VH_TEST_REPORT_DIR. Unknown values are an error, never a
     // silent default.
     static std::optional<RunOptions> fromEnv(std::string& error);
 };

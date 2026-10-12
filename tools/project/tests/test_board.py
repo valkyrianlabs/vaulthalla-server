@@ -106,7 +106,8 @@ class Migration(unittest.TestCase):
 
     def test_area_labels_seed_hazards_and_proof(self):
         p = self.plan(labels=["area:fuse", "bug"])
-        self.assertEqual(p["set"]["Hazards"], ["fuse-blocking", "destructive-local"])
+        # integration (make itest) is isolated now: FUSE work no longer implies a destructive local proof.
+        self.assertEqual(p["set"]["Hazards"], ["fuse-blocking"])
         self.assertEqual(p["set"]["Proof"], ["core", "integration"])
         self.assertEqual(p["labels"], [])
 

@@ -42,7 +42,6 @@ conf.set_quoted('VH_CACHE_PATH', '/.cache')
 conf.set_quoted('VH_S3_GATEWAY_MULTIPART_PARTS_DIRNAME', '.8f3a9c1d6e2b4f70')
 conf.set_quoted('VH_PSQL_SCHEMAS_PATH', psql_dir)
 conf.set_quoted('VH_PSQL_TEST_SCHEMAS_PATH', join_paths(repo_root, 'deploy/psql'))
-conf.set_quoted('VH_TEST_ENV_PATH', join_paths(repo_root, 'deploy/vaulthalla.env'))
 
 vh_paths_header = configure_file(
     input: 'deploy/path/paths.h.in',
@@ -310,6 +309,16 @@ if get_option('integration_tests')
         files(join_paths(core_root, 'tests/helpers/fs_actor.cpp')),
         include_directories: include_directories('vendor'),
         dependencies: dependency('openssl', version: '>=3.0', required: true),
+        install: false,
+    )
+
+    # Builds the migrated template database per-run test databases are cloned from, with the daemon's SqlDeployer.
+    vh_migrate = executable(
+        'vh_migrate',
+        files(join_paths(core_root, 'tests/helpers/migrate.cpp')),
+        include_directories: include_directories('include', 'vendor', '.'),
+        link_with: [lib_core, lib_seed, lib_usage],
+        dependencies: deps,
         install: false,
     )
 

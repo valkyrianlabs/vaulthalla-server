@@ -54,7 +54,6 @@ std::string RunOptions::negativeControlText() const {
 
 std::optional<RunOptions> RunOptions::fromEnv(std::string& error) {
     RunOptions o;
-    o.legacySharedEnv = env("VH_TEST_LEGACY_SHARED_ENV") == "1";
     o.reportDir = env("VH_TEST_REPORT_DIR");
 
     if (const auto text = env("VH_TEST_SEED"); !text.empty()) {

@@ -26,6 +26,8 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
+#include <cstring>
 #include <paths.h>
 #include <sys/mount.h>
 #include <unistd.h>
@@ -103,7 +105,7 @@ void printHeader(const RunOptions& o) {
               << "  seed threads  " << o.seedThreads << (o.seedThreads > 1 ? " (DB ids can interleave)" : "") << "\n"
               << "  fs op timeout " << fuse::opTimeout().count() << " ms\n"
               << "  fs actor      " << (fuse::actorPath().empty() ? "(none)" : fuse::actorPath()) << "\n"
-              << "  environment   " << (o.legacySharedEnv ? "legacy shared (make run_test)" : "private instance") << "\n"
+              << "  environment   private instance\n"
               << "  reports       " << (o.reportDir.empty() ? "(VH_TEST_REPORT_DIR not set)" : o.reportDir) << "\n"
               << std::endl;
 }
@@ -130,19 +132,22 @@ void writeSetupFailureReport(const RunOptions& o, const std::string& why) {
 int main() {
     const auto env = [](const char* key) { return std::getenv(key); };
 
-    // A private instance (bin/tests/run_proof.sh) or nothing: every path, the CLI socket and the database must come
-    // from the environment and be private. Only the legacy `make run_test` env (install_core.sh) opts out.
-    const char* legacy = std::getenv("VH_TEST_LEGACY_SHARED_ENV");
-    const bool legacyShared = legacy && std::string(legacy) == "1";
-    if (!legacyShared) {
-        if (const auto why = vh::runtime::test_instance::refusal(env)) {
-            std::fprintf(stderr,
-                         "[-] vh_integration_tests refuses to run: %s\n"
-                         "    Run it through bin/tests/run_proof.sh (a per-run DB and private /tmp paths), or set\n"
-                         "    VH_TEST_LEGACY_SHARED_ENV=1 for the shared make run_test environment.\n",
-                         why->c_str());
-            return kExitRefused;
-        }
+    // A private instance (bin/tests/run_proof.sh, make itest) or nothing: every path, the CLI socket and the database
+    // must come from the environment and be private, and never on the lab or inside the packaged service. There is
+    // no opt-out: the shared make run_test environment it replaced is gone.
+    std::string hostname(256, '\0');
+    if (::gethostname(hostname.data(), hostname.size()) != 0) hostname.clear();
+    hostname.resize(std::strlen(hostname.c_str()));
+    std::string cgroup;
+    if (std::ifstream f("/proc/self/cgroup"); f) cgroup.assign(std::istreambuf_iterator<char>(f), {});
+    auto why = vh::runtime::test_instance::hostRefusal(hostname, cgroup);
+    if (!why) why = vh::runtime::test_instance::refusal(env);
+    if (why) {
+        std::fprintf(stderr,
+                     "[-] vh_integration_tests refuses to run: %s\n"
+                     "    Run it through `make itest` (bin/tests/run_proof.sh: a per-run DB and private /tmp paths).\n",
+                     why->c_str());
+        return kExitRefused;
     }
 
     std::string error;
@@ -182,7 +187,7 @@ int main() {
     fuse::actors().reset();
 
     // A private instance detaches its own mount on the way out (non-blocking; run_proof.sh confirms it is gone).
-    if (!legacyShared) (void)::umount2(vh::paths::getMountPath().c_str(), MNT_DETACH);
+    (void)::umount2(vh::paths::getMountPath().c_str(), MNT_DETACH);
 
     // No orderly shutdown: stopping every service here SIGTERMs threads and exits 1 (the shutdown path has its own
     // tests); the exit status is the verdict.
