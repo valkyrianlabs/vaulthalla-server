@@ -156,6 +156,16 @@ namespace vh::test::integration::fuse {
                               "OK mv " + from.string() + " -> " + to.string() + "\n");
     }
 
+    // renameat2(RENAME_EXCHANGE): atomically swap two existing entries.
+    inline ExecResult exchange_as(const uid_t uid, const gid_t gid,
+                                  const std::filesystem::path& a, const std::filesystem::path& b) {
+        auto request = detail::req("rename_exchange", a);
+        request["to"] = b.string();
+        const auto r = detail::call(uid, gid, std::move(request));
+        return detail::result(r, detail::describe(uid, gid, "rename --exchange", a, b),
+                              "OK exchange " + a.string() + " <-> " + b.string() + "\n");
+    }
+
     inline ExecResult chmod_as(const uid_t uid, const gid_t gid, const std::filesystem::path& p, const mode_t mode) {
         const auto r = detail::call(uid, gid, {{"op", "chmod"}, {"path", p.string()}, {"mode", mode}});
         return detail::result(r, detail::describe(uid, gid, "chmod " + detail::oct(mode), p),
@@ -247,6 +257,10 @@ namespace vh::test::integration::fuse {
 
     inline ExecResult mv_as(const uid_t uid, const std::filesystem::path& from, const std::filesystem::path& to) {
         return mv_as(uid, uid, from, to);
+    }
+
+    inline ExecResult exchange_as(const uid_t uid, const std::filesystem::path& a, const std::filesystem::path& b) {
+        return exchange_as(uid, uid, a, b);
     }
 
     inline ExecResult chmod_as(const uid_t uid, const std::filesystem::path& p, const mode_t mode) {

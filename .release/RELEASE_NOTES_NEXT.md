@@ -18,5 +18,7 @@ Fixes found along the way:
 - `vh … --help` no longer reads an uninitialized color theme while rendering help text.
 - The `vh` client and daemon compute the control-socket address length portably and refuse socket paths that are
   too long instead of truncating them.
+- On the FUSE mount, an exchange-rename (`renameat2(RENAME_EXCHANGE)`) is now refused instead of silently
+  overwriting the second file.
 - Binding the first CLI user to the `admin` account no longer attempts a group change the unprivileged daemon could
   never make (membership is already checked when `vh` connects).

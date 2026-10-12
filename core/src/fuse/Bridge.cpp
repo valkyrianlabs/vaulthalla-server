@@ -663,7 +663,13 @@ void rename(const fuse_req_t req, const fuse_ino_t parent, const char* name, con
         return;
     }
 
-    // Flags handling (RENAME_NOREPLACE = 1, RENAME_EXCHANGE = 2)
+    // Only RENAME_NOREPLACE is implemented. An exchange (RENAME_EXCHANGE; RENAME_SWAP on macOS) or any flag we don't
+    // know is refused: carried out as a plain rename it would overwrite the entry the caller asked to keep.
+    if (flags & ~static_cast<unsigned int>(RENAME_NOREPLACE)) {
+        replyError(req, timer, EINVAL);
+        return;
+    }
+
     if ((flags & RENAME_NOREPLACE) && cache->entryExists(toPath)) {
         replyError(req, timer, EEXIST);
         return;
