@@ -279,7 +279,7 @@ protected:
             CommandResult r;
             try {
                 r = router->executeLine(line, user, nullptr,
-                                        withTransfer ? std::make_optional(TransferPeer{.fd = pair.daemon}) : std::nullopt);
+                                        withTransfer ? std::make_optional(TransferPeer{.fd = pair.daemon, .putSize = std::nullopt}) : std::nullopt);
             } catch (const std::exception& e) {
                 r = {-1, "", e.what()};
             }
