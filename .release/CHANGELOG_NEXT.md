@@ -19,3 +19,5 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
 - tests: make test / make itest entry scripts are executable again (Permission denied on a fresh clone).
 - macOS (development only, not packaged): the daemon, vh and the unit tests build and pass natively on Apple
   Silicon (tools/macos, .github/workflows/macos.yml); FUSE is off and secrets use a development file backend.
+- fix(fuse): a rename with RENAME_EXCHANGE (or any flag besides RENAME_NOREPLACE) is refused with EINVAL; it used
+  to be carried out as a plain rename that overwrote the entry the caller asked to swap.

@@ -379,6 +379,30 @@ namespace vh::test::integration {
             .fn = [=]{ return mv_as(*ctx.admin->state()->meta.linux_uid, ctx.hello(), ctx.base() / "hello2.txt"); }
         });
 
+        // The bridge only implements RENAME_NOREPLACE. An exchange used to run as a plain rename, overwriting the
+        // other entry; it must be refused and leave both files as they were (the next cases read them).
+        builder.makeTestCase({
+            .name = "FUSE write a second file for the exchange check (admin)",
+            .path = "fuse/write",
+            .must_contain = {"OK write"},
+            .fn = [=]{ return write_as(*ctx.admin->state()->meta.linux_uid, ctx.base() / "exchange-other.txt", "other\n"); }
+        });
+
+        builder.makeTestCase({
+            .name = "FUSE RENAME_EXCHANGE is refused (admin)",
+            .path = "fuse/rename",
+            .expect_exit = EINVAL,
+            .fn = [=]{ return exchange_as(*ctx.admin->state()->meta.linux_uid, ctx.base() / "hello2.txt",
+                                          ctx.base() / "exchange-other.txt"); }
+        });
+
+        builder.makeTestCase({
+            .name = "FUSE refused exchange left the other file alone (admin)",
+            .path = "fuse/read",
+            .must_contain = {"other"},
+            .fn = [=] { return read_as(*ctx.admin->state()->meta.linux_uid, ctx.base() / "exchange-other.txt"); }
+        });
+
         builder.makeTestCase({
             .name = "FUSE read after rename is still plaintext (admin)",
             .path = "fuse/read",

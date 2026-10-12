@@ -314,6 +314,9 @@ private:
         if (op == "rmdir") return void(::rmdir(path.c_str()) == 0 ? r : r.fail(errno));
         if (op == "unlink") return void(::unlink(path.c_str()) == 0 ? r : r.fail(errno));
         if (op == "rename") return void(::rename(path.c_str(), str(req, "to").c_str()) == 0 ? r : r.fail(errno));
+        if (op == "rename_exchange")
+            return void(::renameat2(AT_FDCWD, path.c_str(), AT_FDCWD, str(req, "to").c_str(), RENAME_EXCHANGE) == 0
+                            ? r : r.fail(errno));
         if (op == "chmod") {
             if (!hasMode) throw std::invalid_argument("missing mode");
             return void(::chmod(path.c_str(), mode) == 0 ? r : r.fail(errno));
