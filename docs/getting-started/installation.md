@@ -1,6 +1,7 @@
 ---
-title: Installation
-description: Install Vaulthalla from the APT repository, choose an install profile, and verify the package lifecycle.
+title: Install Vaulthalla
+navTitle: Install
+description: Choose a platform and install Vaulthalla - Linux through APT or macOS through the installer package or Homebrew.
 order: 10
 status: published
 tags:
@@ -9,254 +10,87 @@ tags:
   - operator
 ---
 
-# Installation
+# Install Vaulthalla
 
-Vaulthalla is packaged for Linux systems that use APT, systemd, FUSE, PostgreSQL, Nginx, and TPM-compatible secret protection. The recommended path is the signed APT repository. Source installs are useful for development only.
+Vaulthalla runs on Linux and on Apple Silicon Macs. Both run the same daemon, web console, CLI, encryption, access control, sharing and S3 gateway; they differ in how the service is installed and managed, how master keys are protected, and whether vaults can be mounted as a filesystem.
 
 :::toc[On this page]{depth="3" theme="compact"}
 :::
 
-## Before You Install
+## Choose A Platform
 
-Plan these items first:
+| | Linux | macOS |
+| --- | --- | --- |
+| Hardware | amd64 (x86-64) | Apple Silicon (arm64) |
+| Operating system | Ubuntu 24.04 LTS (tested) | macOS 14 Sonoma or later |
+| Install channel | APT, `apt.vaulthalla.sh` | Installer package or Homebrew cask |
+| Service manager | systemd | launchd |
+| Database | Distribution PostgreSQL (local or remote) | Bundled PostgreSQL 16 |
+| Master key protection | TPM2 (hardware or software TPM) | Protected files + FileVault |
+| Filesystem mount | FUSE at `/mnt/vaulthalla` | Not in the package |
+| HTTPS | `vh setup nginx` | `vh setup caddy` |
+| Status | Production | New in this release; see [what is not supported yet](/macos#not-yet-supported) |
 
-- A Linux host with systemd.
-- A user account that will operate `vh`.
-- PostgreSQL, either local or remote.
-- Nginx if you want the web console exposed through a domain.
-- Hardware TPM through `/dev/tpmrm0` or `/dev/tpm0`, or the packaged `swtpm` fallback.
-- Enough disk space for `/var/lib/vaulthalla`, PostgreSQL, cache data, and any local vault bodies.
+For a server you will rely on, Linux is the more complete platform. A Mac is a good fit for a home or small-office server where the web console, sync, sharing and the S3 gateway cover how you reach your files.
 
-:::callout{theme="warning" title="Do not use the development install for production"}
-`sudo make install -- -d` is a volatile development path. It can reset state and should not be used for production installs.
-:::
+## Quick Install
 
-## Recommended APT Install
+:::tabs{default="linux"}
 
-Use the install script for the normal packaged install:
-
+:::tab[Linux]{value="linux"}
 ```bash
 curl -fsSL https://apt.vaulthalla.sh/install.sh | bash
 ```
 
-For an interactive install with prompts for optional setup:
+The installer adds the signed Vaulthalla APT repository and installs the `vaulthalla` package with PostgreSQL and nginx. Add `-s -- --interactive` after `bash` to choose an install profile and the Linux user who administers Vaulthalla.
 
-```bash
-curl -fsSL https://apt.vaulthalla.sh/install.sh | bash -s -- --interactive
-```
+Then sign in at `http://<host>/` as `admin` with the password in `/var/lib/vaulthalla/super_admin_initial_password`.
 
-From a checked-out repository, the same helper is available as:
-
-```bash
-./bin/vh/install.sh
-./bin/vh/install.sh --interactive
-```
-
-## Manual APT Setup
-
-If you prefer to add the repository yourself:
-
-```bash
-sudo curl -fsSL https://apt.vaulthalla.sh/pubkey.gpg -o /usr/share/keyrings/vaulthalla.gpg
-echo "deb [arch=amd64 signed-by=/usr/share/keyrings/vaulthalla.gpg] https://apt.vaulthalla.sh stable main" | sudo tee /etc/apt/sources.list.d/vaulthalla.list > /dev/null
-sudo apt update
-sudo apt install vaulthalla
-```
-
-:::callout{theme="info" title="apt.vaulthalla.sh is required"}
-Vaulthalla depends on libraries that are built for it and published only in this repository (PDFium as `libpdfium<branch>`, for example `libpdfium8059`). Installing a downloaded `.deb` without the repository configured leaves those dependencies unresolved.
+Full guide: [Install On Linux](/linux/installation).
 :::
 
-## Install Profiles
-
-The default package includes the core daemon, CLI, web runtime, systemd units, lifecycle utility, SQL assets, Nginx template, and recommended dependencies.
-
-Use a lean install when the host already has the required services and you do not want recommended packages installed:
-
+:::tab[macOS (Homebrew)]{value="brew"}
 ```bash
-sudo apt install --no-install-recommends vaulthalla
+brew install --cask vaulthalla/tap/vaulthalla
 ```
 
-Skip local database bootstrap during package install:
+Then sign in at `http://127.0.0.1:36968` as `admin` with the password in `/Library/Application Support/Vaulthalla/state/super_admin_initial_password`.
 
-```bash
-VH_SKIP_DB_BOOTSTRAP=1 sudo -E apt install vaulthalla
-```
-
-Skip Nginx setup during package install:
-
-```bash
-VH_SKIP_NGINX_CONFIG=1 sudo -E apt install vaulthalla
-```
-
-The repository helper also accepts install-time controls:
-
-```bash
-./bin/vh/install.sh --lean
-./bin/vh/install.sh --no-db
-./bin/vh/install.sh --no-nginx
-./bin/vh/install.sh --assign-user <linux-user>
-./bin/vh/install.sh --skip-admin-assign
-```
-
-## Optional Preview Packages
-
-Two converter packages add previews that need heavy third-party libraries. `vaulthalla` only **Suggests** them, so a normal or lean install never pulls them in, and the core package installs and runs without Open CASCADE or FFmpeg's libraries:
-
-| Package | Adds | Built on |
-| --- | --- | --- |
-| `vaulthalla-preview-cad` | STEP and STP models in the web console's 3D viewer (converted to glTF on the server) | Open CASCADE |
-| `vaulthalla-preview-media` | Probing video and audio, poster frames, and **Convert for playback** for media the browser can't decode (H.264/AAC transcodes, including hardware encoders) | FFmpeg libraries |
-
-Install either or both at any time:
-
-```bash
-sudo apt install vaulthalla-preview-cad vaulthalla-preview-media
-```
-
-Each package installs one helper program under `/usr/lib/vaulthalla/helpers/` and must match the installed `vaulthalla` version exactly. No restart or configuration is needed. The daemon never loads these libraries itself: it runs the helper as a separate process for each conversion, hands it the file's bytes over a private channel (nothing decrypted is written to disk), and the helper sandboxes itself so it cannot open files for writing, reach the network or start programs. Memory, CPU-time, wall-clock and output limits come from `preview.derive.*` in [Configuration](/reference/configuration#rich-previews).
-
-Without the packages, STEP files are listed and downloadable but have no 3D preview, and browser-playable media still streams; the console explains that the converter isn't installed.
-
-:::callout[Hardware video encoding is unvalidated]{variant="warning"}
-`vaulthalla-preview-media` detects VAAPI, Intel Quick Sync and NVENC automatically (`preview.media.hwaccel: auto`) and falls back to software encoding (libx264) whenever a hardware encoder is missing or fails. The hardware paths have not yet been validated on real GPUs in this release; software encoding is the tested path.
+Full guide: [Install On macOS](/macos/installation).
 :::
 
-## What The Package Creates
-
-The package installs these main runtime pieces:
-
-- `vaulthalla.service` for the core daemon, which also owns the local CLI control socket `/run/vaulthalla/cli.sock`.
-- `vaulthalla-web.service` for the packaged web console.
-- `vaulthalla-swtpm.service` when the software TPM fallback is needed.
-- `/usr/bin/vh` and `/usr/bin/vaulthalla`, both pointing at the CLI.
-- `/etc/vaulthalla/config.yaml` for runtime configuration. It is copied from the packaged default at `/usr/share/vaulthalla/config/config.yaml` only when missing, and upgrades never overwrite it.
-- `/var/lib/vaulthalla` for Vaulthalla state.
-- `/run/vaulthalla` for sockets and runtime secrets.
-- `/mnt/vaulthalla` for the FUSE filesystem surface.
-
-See [Runtime Paths](/reference/runtime-paths) for the full path map.
-
-## TPM Or Software TPM
-
-Vaulthalla needs TPM-compatible key protection. The package prefers a hardware TPM when `/dev/tpmrm0` or `/dev/tpm0` is available. If no hardware TPM is available, the managed `swtpm` service provides a local software TPM with state under `/var/lib/swtpm/vaulthalla`.
-
-If neither hardware TPM nor `swtpm` is usable (for example after `--no-install-recommends` on a VM), the install still completes, but the TPM backend is reported as deferred and `vaulthalla.service` is not started. Install the fallback and re-run configuration:
+:::tab[macOS (package)]{value="pkg"}
+Download `vaulthalla-<version>-arm64.pkg` from the [GitHub releases](https://github.com/vaulthalla/vaulthalla/releases), then:
 
 ```bash
-sudo apt install swtpm swtpm-tools
-sudo dpkg-reconfigure vaulthalla
+sudo installer -pkg vaulthalla-<version>-arm64.pkg -target /
 ```
 
-Use [Install Troubleshooting](/troubleshooting/install-troubleshooting) to diagnose TPM and `swtpm` failures.
+The package is not signed by Apple yet: opening it from Finder needs **Open Anyway** in System Settings → Privacy & Security once.
 
-## Local PostgreSQL Bootstrap
+Full guide: [Install On macOS](/macos/installation).
+:::
 
-When local PostgreSQL is installed and healthy, package setup creates the `vaulthalla` role and database and hands the generated password to the service, which seals it with the TPM. Upgrades never touch an existing role or database, and a remote database configured with `vh setup remote-db` is never bootstrapped locally.
+:::
 
-If a `vaulthalla` database already exists but this host has no sealed credential for it (typically a reinstall after `apt purge`), setup asks whether to **adopt** it (keep the data and rotate the role password), **overwrite** it (drop and recreate), or **abort**. Noninteractive installs read `VH_EXISTING_DB_ACTION=adopt|overwrite|abort` and default to abort, which stops configuration without changing PostgreSQL:
+## After Installing
 
-```bash
-sudo env VH_EXISTING_DB_ACTION=adopt dpkg --configure -a
-sudo env VH_EXISTING_DB_ACTION=overwrite dpkg --configure -a
-```
+:::steps
 
-Adopting keeps users and vault metadata, but vault encryption keys and stored provider API keys are only recoverable if the original `/var/lib/vaulthalla/.sealed_*.blob` files and the same TPM are restored.
+### Sign in and change the generated password
 
-You can also bootstrap later:
+Every install generates its own `admin` password and stores a plaintext copy that only root can read. See [First Run](/getting-started/first-run).
 
-```bash
-sudo vh setup db
-sudo vh setup db --adopt      # keep an existing database without a sealed credential
-sudo vh setup db --overwrite  # drop it and start fresh
-```
+### Serve it over HTTPS
 
-`vh setup db` reports success only after `vaulthalla.service` stays running and has consumed the password handoff.
+[nginx on Linux](/https/nginx) or [Caddy on macOS](/https/caddy), for a private network name or a public domain.
 
-`VH_SKIP_DB_BOOTSTRAP=1` and `VH_SKIP_NGINX_CONFIG=1` opt-outs are remembered across upgrades. `vh setup db` and `vh setup nginx` opt back in.
+### Create a vault and plan backups
 
-For a remote database, use:
+[Local Vaults](/vaults/local-vaults), [S3 And R2 Vaults](/vaults/s3-r2-vaults), and [Backup And Recovery](/vaults/backup-and-recovery) before important data goes in.
 
-```bash
-sudo vh setup remote-db --host <host> --port 5432 --user <user> --database <name> --password-file <path>
-```
+:::
 
-## Nginx And TLS
+## Building From Source
 
-Package setup can configure Nginx when the host has Nginx active and the lifecycle checks are low risk. You can also configure it later:
-
-```bash
-sudo vh setup nginx --domain vault.example.com
-sudo vh setup nginx --domain vault.example.com --certbot
-sudo vh setup nginx --domain vaulthalla.dev --s3-domain s3.vaulthalla.dev --certbot-dns-cloudflare /etc/vaulthalla/certbot/cloudflare.ini
-```
-
-On a fresh install, the unmodified distro default site (`/etc/nginx/sites-enabled/default`) would shadow the Vaulthalla site on port 80, so setup disables that symlink and records it. `apt remove`, `apt purge`, and `vh teardown nginx` restore it. A modified default site is never touched. Setup then requests `http://127.0.0.1/` and reports whether the console actually answers. Upgrades never re-enable a site you removed.
-
-The web console reaches the daemon through Nginx. Fresh installs bind the websocket (36969) and preview (36970) servers to `127.0.0.1`.
-
-The managed site turns off Nginx proxy buffering on `/preview` and `/download`, so decrypted downloads and media streams pass straight through and are never spooled to Nginx's temporary files. Upgrades never rewrite an existing site; on upgraded hosts streaming still works without buffering because the daemon sends `X-Accel-Buffering: no` on every streamed response.
-
-The Certbot option validates prerequisites and uses rollback behavior if certificate setup fails. The Cloudflare DNS-01 option issues a certificate without requiring an inbound HTTP challenge endpoint and renders a dedicated HTTPS S3 host. It is the only mode that supports `--s3-domain`, and it needs a Cloudflare API token in a root-only credentials file (`dns_cloudflare_api_token = <token>`). See [S3 Gateway Setup](/s3-gateway/setup#create-the-credentials-file).
-
-## Verify The Install
-
-After installation:
-
-```bash
-vh status
-systemctl status vaulthalla.service
-systemctl status vaulthalla-web.service
-```
-
-If the CLI reports a socket or permission error, finish [First Run](/getting-started/first-run), especially the admin Linux UID and `vaulthalla` group steps.
-
-## Upgrade
-
-```bash
-sudo apt update
-sudo apt upgrade
-```
-
-Use `apt upgrade`, `apt full-upgrade`, or `sudo apt install vaulthalla`. A release can add a new library dependency (1.12 adds `libpdfium8059`), and plain `apt-get upgrade` never installs new packages: it reports Vaulthalla as "kept back" and leaves the old version running.
-
-The upgrade restarts the running Vaulthalla services. Libraries the previous release needed and nothing needs anymore (after 1.12: `libpdfium-2025`, `libpqxx-7.10`) stay installed until `sudo apt autoremove`. Keep them until you no longer want to roll back: they are no longer published, and an older release can't be reinstalled without them.
-
-The database server must be PostgreSQL 11 or newer; local installs on Ubuntu 24.04 use PostgreSQL 16.
-
-## Remove Or Purge
-
-Remove the package while preserving most state:
-
-```bash
-sudo apt remove vaulthalla
-```
-
-Purge package-managed config:
-
-```bash
-sudo apt purge vaulthalla
-```
-
-Purge removes `/etc/vaulthalla/config.yaml`, `/var/log/vaulthalla`, `/var/log/vaulthalla-package.log`, the web cache, and the contents of `/var/lib/vaulthalla`, including the sealed secrets. If `/var/lib/vaulthalla` is a mount point, such as a dedicated data disk, purge empties it without crossing into other filesystems and keeps the directory. Operator-provided certbot credentials under `/etc/vaulthalla/certbot/` are kept because certbot renewal still references them.
-
-Package purge does not silently destroy a preserved database. Interactive purge flows may offer database cleanup. Noninteractive purge preserves database state. `vh` is gone after purge, so remove a preserved database with:
-
-```bash
-sudo -u postgres psql -c 'DROP DATABASE IF EXISTS vaulthalla WITH (FORCE);'
-sudo -u postgres psql -c 'DROP ROLE IF EXISTS vaulthalla;'
-```
-
-While the package is installed, tear down the local database with this command, which stops `vaulthalla.service` first:
-
-```bash
-sudo vh teardown db
-```
-
-Reinstalling after `apt remove` re-enables and starts the services.
-
-To remove managed Nginx configuration:
-
-```bash
-sudo vh teardown nginx
-```
+Source builds (`make install`, `make dev`) are for development. Production installs use the APT package on Linux and the installer package or Homebrew cask on macOS. See [Development Setup](/contributors/development-setup).
