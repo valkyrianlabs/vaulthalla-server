@@ -61,8 +61,9 @@ bool cliCommandRunsWithoutUserLookup(const std::string& cmd) {
 }
 
 gid_t lookupCliAdminGid() {
-    if (const group* grp = getgrnam("vaulthalla")) return grp->gr_gid;
-    vh::log::Registry::shell()->error("[CtlServerService] Group 'vaulthalla' not found; only root can use the CLI");
+    if (const group* grp = getgrnam(VH_SERVICE_ACCOUNT)) return grp->gr_gid;
+    vh::log::Registry::shell()->error("[CtlServerService] Group '" VH_SERVICE_ACCOUNT "' not found; only root can use "
+                                      "the CLI");
     return static_cast<gid_t>(-1);
 }
 
@@ -232,10 +233,10 @@ void Server::handleClient(const int cfd) {
         log::Registry::shell()->debug("[CtlServerService] Connection from UID {} (PID {})", p.uid, p.pid);
 
         if (!in_group(p.uid, adminGid_)) {
-            log::Registry::shell()->debug("[CtlServerService] Connection from UID {} (PID {}) not in vaulthalla group",
-                                          p.uid, p.pid);
-            sendCliError(cfd, 77, "permission denied: this user is not in the 'vaulthalla' group (" +
-                                      vh::platform::accounts::addMemberCommand("$USER", "vaulthalla") +
+            log::Registry::shell()->debug("[CtlServerService] Connection from UID {} (PID {}) not in "
+                                          VH_SERVICE_ACCOUNT " group", p.uid, p.pid);
+            sendCliError(cfd, 77, "permission denied: this user is not in the '" VH_SERVICE_ACCOUNT "' group (" +
+                                      vh::platform::accounts::addMemberCommand("$USER", VH_SERVICE_ACCOUNT) +
                                       ", then log in again; or use sudo)");
             return;
         }

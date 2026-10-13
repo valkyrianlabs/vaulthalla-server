@@ -6,6 +6,11 @@
 #define VH_BACKING_PATH @VH_BACKING_PATH@
 #define VH_RUNTIME_PATH @VH_RUNTIME_PATH@
 #define VH_LIFECYCLE_PATH @VH_LIFECYCLE_PATH@
+// The instance ("" = production; e.g. "dev" for `make dev`), its service account (user and group; on macOS the record
+// alias of the hidden role account) and its systemd unit. An instance never shares any of them with production.
+#define VH_INSTANCE @VH_INSTANCE@
+#define VH_SERVICE_ACCOUNT @VH_SERVICE_ACCOUNT@
+#define VH_SYSTEMD_UNIT @VH_SYSTEMD_UNIT@
 // The daemon's CLI socket and the first-install DB password handoff, both in the runtime directory.
 #define VH_CLI_SOCKET_PATH VH_RUNTIME_PATH "/cli.sock"
 #define VH_DB_PASSWORD_SEED_PATH VH_RUNTIME_PATH "/db_password"

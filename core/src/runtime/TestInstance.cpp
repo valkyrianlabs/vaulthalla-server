@@ -1,5 +1,7 @@
 #include "runtime/TestInstance.hpp"
 
+#include <paths.h>  // generated: VH_SYSTEMD_UNIT
+
 #include <array>
 #include <filesystem>
 #include <string_view>
@@ -37,11 +39,15 @@ bool isTestDatabaseName(const std::string_view name) {
 std::optional<std::string> hostRefusal(const std::string_view hostname, const std::string_view cgroup) {
     if (hostname.starts_with("vh-storage"))
         return "this is the production lab (" + std::string(hostname) + "): test instances never run here";
-    // "0::/system.slice/vaulthalla.service" (cgroup v2) or "N:name=…:/system.slice/vaulthalla.service" (v1).
-    for (std::size_t pos = 0; (pos = cgroup.find("/vaulthalla.service", pos)) != std::string_view::npos; ++pos) {
-        const auto end = pos + std::string_view("/vaulthalla.service").size();
-        if (end == cgroup.size() || cgroup[end] == '\n' || cgroup[end] == '/')
-            return "running inside vaulthalla.service: the packaged service never enters test mode";
+    // "0::/system.slice/vaulthalla.service" (cgroup v2) or "N:name=…:/system.slice/vaulthalla.service" (v1). The
+    // packaged service, and this build's own instance unit (vaulthalla-dev.service for `make dev`), never test.
+    for (const std::string_view unit : {std::string_view("/vaulthalla.service"), std::string_view("/" VH_SYSTEMD_UNIT)}) {
+        for (std::size_t pos = 0; (pos = cgroup.find(unit, pos)) != std::string_view::npos; ++pos) {
+            const auto end = pos + unit.size();
+            if (end == cgroup.size() || cgroup[end] == '\n' || cgroup[end] == '/')
+                return "running inside " + std::string(unit.substr(1)) +
+                       ": an installed service never enters test mode";
+        }
     }
     return std::nullopt;
 }

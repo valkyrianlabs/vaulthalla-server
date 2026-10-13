@@ -32,9 +32,11 @@ subdir('core')
 if get_option('install_data')
     project_name = meson.project_name()
     bindir = get_option('bindir')
-    sysconf_dir = join_paths('/', get_option('sysconfdir'), project_name)
-    state_dir = join_paths('/', get_option('localstatedir'), 'lib', project_name)
-    log_dir = join_paths('/', get_option('localstatedir'), 'log', project_name)
+    # An instance (-Dinstance=dev) owns its own /etc, /var/lib and /var/log names (vh_instance_name, core/meson.build);
+    # its binaries and data live under its own prefix, so nothing below overwrites a production install.
+    sysconf_dir = join_paths('/', get_option('sysconfdir'), vh_instance_name)
+    state_dir = join_paths('/', get_option('localstatedir'), 'lib', vh_instance_name)
+    log_dir = join_paths('/', get_option('localstatedir'), 'log', vh_instance_name)
     data_dir = get_option('datadir') / project_name
     doc_dir = get_option('datadir') / 'doc' / project_name
     libexec_dir = 'lib' / project_name
@@ -46,11 +48,27 @@ if get_option('install_data')
 
     # Packaged defaults live under /usr/share; postinst copies config.yaml into
     # /etc/vaulthalla only when it is missing (it is runtime-owned, not a conffile).
-    install_data(
-        'deploy/config/config.yaml',
-        'deploy/config/config_template.yaml.in',
-        install_dir: data_dir / 'config',
-    )
+    if vh_instance == ''
+        install_data(
+            'deploy/config/config.yaml',
+            'deploy/config/config_template.yaml.in',
+            install_dir: data_dir / 'config',
+        )
+    else
+        # The instance's default config: listener ports +100 and database vaulthalla_<instance> (deploy/instance).
+        custom_target(
+            'instance-config',
+            input: 'deploy/config/config.yaml',
+            output: 'config.yaml',
+            # macOS: the instance's own PostgreSQL cluster (bin/setup/install_db.sh) at 5432 + the port offset.
+            command: [find_program('python3'), files('deploy/instance/render.py'), 'config', '--instance',
+                      vh_instance] + (host_machine.system() == 'darwin' ? ['--db-port', (5432 + vh_port_offset).to_string()] : [])
+                     + ['@INPUT@', '@OUTPUT@'],
+            install: true,
+            install_dir: data_dir / 'config',
+        )
+        install_data('deploy/config/config_template.yaml.in', install_dir: data_dir / 'config')
+    endif
 
     # Source installs only: opt in to installing the gitignored repo-root config.yaml
     # into /etc/vaulthalla. Package builds never set this, so a private local config
@@ -86,8 +104,9 @@ if get_option('install_data')
         install_dir: doc_dir,
     )
 
-    # Linux: systemd units, the TPM udev rule and tmpfiles (unchanged).
-    if host_machine.system() == 'linux'
+    # Linux: systemd units, the TPM udev rule and tmpfiles (unchanged). An instance installs none of these: its units
+    # are rendered from the same templates under their own names by bin/setup/install_systemd.sh (deploy/instance).
+    if host_machine.system() == 'linux' and vh_instance == ''
         unit_conf = configuration_data()
         unit_conf.set('BINDIR', get_option('prefix') / bindir)
 
@@ -127,7 +146,11 @@ if get_option('install_data')
             install_dir: data_dir / 'launchd',
         )
         provision_conf = configuration_data()
-        provision_conf.set('SUPPORT_DIR', '/Library/Application Support/Vaulthalla')
+        provision_conf.set('SERVICE', vh_darwin_account)
+        provision_conf.set('ALIAS', vh_service_account)
+        provision_conf.set('LABEL_PREFIX', vh_launchd_prefix)
+        provision_conf.set('PORT_OFFSET', vh_port_offset)
+        provision_conf.set('SUPPORT_DIR', vh_support_dir)
         provision_conf.set('STATE_DIR', vh_state_dir)
         provision_conf.set('RUN_DIR', vh_runtime_dir)
         provision_conf.set('MOUNT_DIR', vh_mount_dir)
@@ -158,4 +181,13 @@ if get_option('install_data')
         install_dir: bindir,
         pointing_to: 'vaulthalla-cli',
     )
+
+    # An instance's CLI under its own name (vh-dev), so a PATH entry never confuses it with production's vh.
+    if vh_instance != ''
+        install_symlink(
+            'vh-' + vh_instance,
+            install_dir: bindir,
+            pointing_to: 'vaulthalla-cli',
+        )
+    endif
 endif

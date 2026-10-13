@@ -49,8 +49,8 @@ static CommandResult handle_secrets_set(const CommandCall& call) {
             "PostgreSQL role password must change with it or the daemon can no longer connect.\n"
             "To rotate the database password:\n"
             "  1. Set the new password on the role, e.g.  sudo -u postgres psql -c '\\password vaulthalla'\n"
-            "  2. Hand the same password to the daemon:   write it to /run/vaulthalla/db_password\n"
-            "     (owner vaulthalla, mode 0600, single line)\n"
+            "  2. Hand the same password to the daemon:   write it to " VH_DB_PASSWORD_SEED_PATH "\n"
+            "     (owner " VH_SERVICE_ACCOUNT ", mode 0600, single line)\n"
             "  3. Restart the daemon:                     sudo systemctl restart vaulthalla\n"
             "The daemon reseals the handed-off password with the TPM on startup and deletes the file.");
     }
