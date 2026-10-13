@@ -5,17 +5,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 source "$ROOT_DIR/bin/lib/dev_mode.sh"
+source "$ROOT_DIR/bin/lib/platform.sh"
+# Production (make install): vaulthalla*.service as always. The dev instance (make dev): vaulthalla-dev*.service,
+# rendered from the same templates with its own paths, account and ports (deploy/instance/render.py).
+vh_instance_layout "$(vh_selected_instance)"
 
-: "${PREFIX:=/usr}"
-: "${BINDIR:=$PREFIX/bin}"
-: "${SYSTEMD_UNIT_DIR:=/etc/systemd/system}"
-: "${CONFIG_DIR:=/etc/vaulthalla}"
-: "${VH_USER:=vaulthalla}"
-: "${VH_GROUP:=vaulthalla}"
+BINDIR="$VH_BINDIR"
+SYSTEMD_UNIT_DIR="$VH_SYSTEMD_UNIT_DIR"
+if [[ -z "$VH_INSTANCE" ]]; then CONFIG_DIR="${CONFIG_DIR:-$VH_CONFIG_DIR}"; else CONFIG_DIR="$VH_CONFIG_DIR"; fi
 
 SWTPM_BASE_DIR="/var/lib/swtpm"
-SWTPM_STATE_DIR="$SWTPM_BASE_DIR/vaulthalla"
-TPM_BACKEND_DROPIN="$SYSTEMD_UNIT_DIR/vaulthalla.service.d/tpm-backend.conf"
+SWTPM_STATE_DIR="$VH_SWTPM_STATE_DIR"
+TPM_BACKEND_DROPIN="$SYSTEMD_UNIT_DIR/$VH_UNIT_CORE.d/tpm-backend.conf"
 TPM_BACKEND_MODE="hardware"
 
 render_unit() {
@@ -28,7 +29,18 @@ render_unit() {
   }
 
   sudo mkdir -p "$(dirname "$output")"
-  sed "s|@BINDIR@|$BINDIR|g" "$input" | sudo tee "$output" >/dev/null
+  if [[ -z "$VH_INSTANCE" ]]; then
+    sed "s|@BINDIR@|$BINDIR|g" "$input" | sudo tee "$output" >/dev/null
+  else
+    local rendered node
+    node="$(command -v node || true)"
+    [[ -n "$node" ]] || { echo "❗️ node is required for the web unit"; exit 1; }
+    rendered="$(mktemp)"
+    python3 "$ROOT_DIR/deploy/instance/render.py" systemd --instance "$VH_INSTANCE" --bindir "$BINDIR" \
+      --node "$node" --web-dir "$VH_WEB_DIR" "$input" "$rendered"
+    sudo install -m 0644 "$rendered" "$output"
+    rm -f "$rendered"
+  fi
   sudo chmod 0644 "$output"
 }
 
@@ -62,7 +74,7 @@ assert_swtpm_listening() {
   if ! command -v ss >/dev/null 2>&1; then
     return 0
   fi
-  ss -H -ltn '( sport = :2321 )' 2>/dev/null | grep -q '127.0.0.1:2321'
+  ss -H -ltn "( sport = :$VH_SWTPM_PORT )" 2>/dev/null | grep -q "127.0.0.1:$VH_SWTPM_PORT"
 }
 
 configure_tpm_backend() {
@@ -70,7 +82,7 @@ configure_tpm_backend() {
     TPM_BACKEND_MODE="hardware"
     echo "🔐 Hardware TPM detected; using hardware TPM backend."
     sudo rm -f "$TPM_BACKEND_DROPIN"
-    sudo systemctl disable --now vaulthalla-swtpm.service >/dev/null 2>&1 || true
+    sudo systemctl disable --now "$VH_UNIT_SWTPM" >/dev/null 2>&1 || true
     return 0
   fi
 
@@ -86,34 +98,42 @@ configure_tpm_backend() {
   sudo install -d -m 0755 "$SWTPM_BASE_DIR"
   sudo install -d -m 0700 -o "$VH_USER" -g "$VH_GROUP" "$SWTPM_STATE_DIR"
   sudo install -d -m 0755 "$(dirname "$TPM_BACKEND_DROPIN")"
-  printf '[Service]\nEnvironment=TSS2_TCTI=swtpm:host=127.0.0.1,port=2321\n' \
+  printf '[Service]\nEnvironment=TSS2_TCTI=swtpm:host=127.0.0.1,port=%s\n' "$VH_SWTPM_PORT" \
     | sudo tee "$TPM_BACKEND_DROPIN" >/dev/null
   sudo chmod 0644 "$TPM_BACKEND_DROPIN"
 }
+
+if [[ "$(vh_os)" != linux ]]; then
+  echo "❗️ install_systemd.sh is Linux-only (macOS: bin/setup/install_service.sh)"
+  exit 1
+fi
 
 echo "🛠️  Installing Vaulthalla systemd units..."
 
 render_unit \
   "$ROOT_DIR/deploy/systemd/vaulthalla.service.in" \
-  "$SYSTEMD_UNIT_DIR/vaulthalla.service"
+  "$SYSTEMD_UNIT_DIR/$VH_UNIT_CORE"
 
 render_unit \
   "$ROOT_DIR/deploy/systemd/vaulthalla-web.service.in" \
-  "$SYSTEMD_UNIT_DIR/vaulthalla-web.service"
+  "$SYSTEMD_UNIT_DIR/$VH_UNIT_WEB"
 
 render_unit \
   "$ROOT_DIR/deploy/systemd/vaulthalla-swtpm.service.in" \
-  "$SYSTEMD_UNIT_DIR/vaulthalla-swtpm.service"
+  "$SYSTEMD_UNIT_DIR/$VH_UNIT_SWTPM"
 
-retire_legacy_cli_units
+# The dev instance never had the legacy units; they are production's to retire.
+if [[ -z "$VH_INSTANCE" ]]; then
+  retire_legacy_cli_units
+fi
 echo "🧩 Installing service overrides..."
-sudo install -d -m 0755 "$SYSTEMD_UNIT_DIR/vaulthalla.service.d"
+sudo install -d -m 0755 "$SYSTEMD_UNIT_DIR/$VH_UNIT_CORE.d"
 
 if [[ -f "$CONFIG_DIR/vaulthalla.env" ]]; then
   printf '[Service]\nEnvironmentFile=%s/vaulthalla.env\n' "$CONFIG_DIR" \
-    | sudo tee "$SYSTEMD_UNIT_DIR/vaulthalla.service.d/override.conf" >/dev/null
+    | sudo tee "$SYSTEMD_UNIT_DIR/$VH_UNIT_CORE.d/override.conf" >/dev/null
 else
-  sudo rm -f "$SYSTEMD_UNIT_DIR/vaulthalla.service.d/override.conf"
+  sudo rm -f "$SYSTEMD_UNIT_DIR/$VH_UNIT_CORE.d/override.conf"
 fi
 
 configure_tpm_backend
@@ -122,28 +142,28 @@ sudo systemctl daemon-reload
 
 echo "🚀 Enabling Vaulthalla services..."
 if [[ "$TPM_BACKEND_MODE" == "swtpm" ]]; then
-  sudo systemctl enable --now vaulthalla-swtpm.service
-  if ! sudo systemctl --quiet is-active vaulthalla-swtpm.service; then
-    echo "❗️ vaulthalla-swtpm.service failed to become active."
-    echo "   Inspect with: sudo journalctl -u vaulthalla-swtpm.service"
+  sudo systemctl enable --now "$VH_UNIT_SWTPM"
+  if ! sudo systemctl --quiet is-active "$VH_UNIT_SWTPM"; then
+    echo "❗️ $VH_UNIT_SWTPM failed to become active."
+    echo "   Inspect with: sudo journalctl -u $VH_UNIT_SWTPM"
     exit 1
   fi
   if ! assert_swtpm_listening; then
-    echo "❗️ swtpm expected listener not detected on 127.0.0.1:2321."
-    echo "   Inspect with: sudo journalctl -u vaulthalla-swtpm.service"
+    echo "❗️ swtpm expected listener not detected on 127.0.0.1:$VH_SWTPM_PORT."
+    echo "   Inspect with: sudo journalctl -u $VH_UNIT_SWTPM"
     exit 1
   fi
 fi
-sudo systemctl enable --now vaulthalla.service
-sudo systemctl enable --now vaulthalla-web.service
+sudo systemctl enable --now "$VH_UNIT_CORE"
+sudo systemctl enable --now "$VH_UNIT_WEB"
 
 echo
 echo "🏁 Vaulthalla installed successfully!"
 
 if [[ "${VH_FOLLOW_LOGS:-0}" == "1" ]]; then
-  echo "📜 Tailing vaulthalla.service logs..."
-  sudo journalctl -f -u vaulthalla.service
+  echo "📜 Tailing $VH_UNIT_CORE logs..."
+  sudo journalctl -f -u "$VH_UNIT_CORE"
 else
-  echo "📜 Recent vaulthalla.service logs:"
-  sudo journalctl -n 25 --no-pager -u vaulthalla.service
+  echo "📜 Recent $VH_UNIT_CORE logs:"
+  sudo journalctl -n 25 --no-pager -u "$VH_UNIT_CORE"
 fi

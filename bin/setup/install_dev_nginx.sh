@@ -21,6 +21,14 @@ if ! vh_is_dev_mode; then
   exit 0
 fi
 
+# `vh setup nginx` (deploy/lifecycle) configures the production install's paths, ports and services, so it never
+# runs for the isolated dev instance: the dogfood nginx endpoint belongs to production.
+source "$ROOT_DIR/bin/lib/platform.sh"
+if [[ -n "$(vh_selected_instance)" ]]; then
+  echo "Skipping dev nginx setup: the lifecycle tool targets the production install, not the '$(vh_selected_instance)' instance."
+  exit 0
+fi
+
 if env_flag_enabled "${VH_SKIP_DEV_NGINX:-}"; then
   echo "Skipping dev nginx setup (VH_SKIP_DEV_NGINX=${VH_SKIP_DEV_NGINX})."
   exit 0

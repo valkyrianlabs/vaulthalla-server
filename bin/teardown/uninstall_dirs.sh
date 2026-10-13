@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "🗑️  Cleaning Vaulthalla directories..."
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=bin/lib/platform.sh
+source "$SCRIPT_DIR/../lib/platform.sh"
+# Production's directories (make uninstall), or only the dev instance's (/var/lib/vaulthalla-dev, /mnt/vh_dev, ...).
+vh_instance_layout "$(vh_selected_instance)"
 
-PROGRAM_NAME=vaulthalla
+echo "🗑️  Cleaning Vaulthalla directories..."
 
 is_mounted_path() {
   local path="$1"
@@ -14,16 +18,24 @@ is_mounted_path() {
   grep -Fq " $(readlink -f "$path" 2>/dev/null || echo "$path") " /proc/self/mountinfo 2>/dev/null
 }
 
+# Exactly the directories this install owns; anything else is refused.
+if [[ -z "$VH_INSTANCE" ]]; then
+  OWNED_DIRS=(/mnt/vaulthalla /var/lib/vaulthalla /var/log/vaulthalla /run/vaulthalla /etc/vaulthalla /usr/share/vaulthalla
+              /usr/lib/vaulthalla)
+else
+  # The instance's data/lib dirs live under its prefix (bin/teardown/uninstall_binaries.sh removes that).
+  OWNED_DIRS=("$VH_MOUNT_DIR" "$VH_STATE_DIR" "$VH_LOG_DIR" "$VH_RUNTIME_DIR" "$VH_CONFIG_DIR" "$VH_WEB_CACHE_DIR")
+fi
+
 safe_rm_tree() {
-  local path="$1"
-  case "$path" in
-    /mnt/vaulthalla|/var/lib/vaulthalla|/var/log/vaulthalla|/run/vaulthalla|/etc/vaulthalla|/usr/share/vaulthalla|/usr/lib/vaulthalla|/var/lib/swtpm/vaulthalla)
-      ;;
-    *)
-      echo "Refusing to remove unexpected path: $path" >&2
-      return 1
-      ;;
-  esac
+  local path="$1" owned=false dir
+  for dir in "${OWNED_DIRS[@]}" "$VH_SWTPM_STATE_DIR"; do
+    [[ "$path" == "$dir" ]] && owned=true
+  done
+  if [[ "$owned" != true ]]; then
+    echo "Refusing to remove unexpected path: $path" >&2
+    return 1
+  fi
 
   if [[ ! -e "$path" ]]; then
     return 0
@@ -37,14 +49,17 @@ safe_rm_tree() {
   sudo rm -rf --one-file-system "$path"
 }
 
-sudo rm -f /etc/nginx/sites-enabled/vaulthalla
-sudo rm -f /etc/nginx/sites-available/vaulthalla
+if [[ -z "$VH_INSTANCE" ]]; then
+  # The nginx site is production's (the dev instance never gets one: bin/setup/install_dev_nginx.sh).
+  sudo rm -f /etc/nginx/sites-enabled/vaulthalla
+  sudo rm -f /etc/nginx/sites-available/vaulthalla
+fi
 
-for dir in /mnt /var/lib /var/log /run /etc /usr/share /usr/lib ; do
-  safe_rm_tree "$dir/$PROGRAM_NAME"
+for dir in "${OWNED_DIRS[@]}"; do
+  safe_rm_tree "$dir"
 done
 
-safe_rm_tree "/var/lib/swtpm/$PROGRAM_NAME"
+safe_rm_tree "$VH_SWTPM_STATE_DIR"
 if ! sudo rmdir /var/lib/swtpm >/dev/null 2>&1; then
   echo "ℹ️  /var/lib/swtpm not empty or not removable; leaving it in place."
 fi

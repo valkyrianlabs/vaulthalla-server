@@ -1,6 +1,40 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# macOS: read-only state of production (the package) and of the dev instance (make dev), side by side.
+if [[ "$(uname -s)" == Darwin ]]; then
+  # shellcheck source=bin/lib/platform.sh
+  source "$(cd "$(dirname "$0")" && pwd)/lib/platform.sh"
+  echo "🧠 Vaulthalla Doctor — macOS"
+  echo "==========================="
+  for instance in "" dev; do
+    vh_instance_layout "$instance"
+    echo
+    vh_print_layout
+    if dscl . -read "/Users/$VH_ACCOUNT" UniqueID >/dev/null 2>&1; then
+      echo "✅ account $VH_ACCOUNT ($(dscl . -read "/Users/$VH_ACCOUNT" UniqueID | awk '{print "uid " $2}'))"
+    else
+      echo "❌ account $VH_ACCOUNT missing"
+    fi
+    for label in "$VH_LABEL_PREFIX.server" "$VH_LABEL_PREFIX.web" "$VH_PG_LABEL"; do
+      if out="$(launchctl print "system/$label" 2>/dev/null)"; then
+        echo "▶ $label: $(printf '%s\n' "$out" | awk '$1 == "state" {s = $3} $1 == "pid" {p = $3} END {print "state=" s (p ? " pid=" p : "")}')"
+      else
+        echo "▶ $label: not loaded"
+      fi
+    done
+    if [[ -S "$VH_RUNTIME_DIR/cli.sock" ]] || sudo -n test -S "$VH_RUNTIME_DIR/cli.sock" 2>/dev/null; then
+      echo "✅ $VH_RUNTIME_DIR/cli.sock"
+    else
+      echo "❌ $VH_RUNTIME_DIR/cli.sock missing (or not visible without sudo)"
+    fi
+  done
+  echo
+  echo "Mounted FUSE (mount table):"
+  /sbin/mount | grep -i vaulthalla || echo "   none"
+  exit 0
+fi
+
 PROJECT="vaulthalla"
 
 BINDIR="/usr/bin"
