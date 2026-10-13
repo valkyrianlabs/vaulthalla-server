@@ -1,8 +1,8 @@
 name: macOS
 # Builds core/ on Apple Silicon with Homebrew deps and runs vh_unit_tests against a disposable PostgreSQL 16 cluster
-# (tools/macos/), and builds the installer package (tools/macos/pkg/) as an artifact. Independent of the Linux CI
-# (ci/run-ci containers, self-hosted runners); nothing here publishes (release.yml does). Failures are real, never
-# masked.
+# (tools/macos/); on manual dispatch it also builds the installer package (tools/macos/pkg/) as an artifact. Runs in
+# parallel with the Linux CI (ci/run-ci containers, self-hosted runners); nothing here publishes (release.yml does).
+# Failures are real, never masked.
 on:
   pull_request:
     paths:
@@ -137,8 +137,11 @@ jobs:
           VH_TEST_PG_DIR: ${{ runner.temp }}/vh-pg
         run: tools/macos/test-db.sh down
 
+  # Not part of PR CI: release.yml builds the package (in parallel with the Debian build) for every release. Run this
+  # workflow by hand (Actions > macOS > Run workflow) to rehearse a package from any branch.
   package:
     name: Installer package (macOS arm64)
+    if: github.event_name == 'workflow_dispatch'
     runs-on: macos-26
     timeout-minutes: 90
     defaults:
