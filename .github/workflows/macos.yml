@@ -23,7 +23,7 @@ on:
   workflow_dispatch:
     inputs:
       nexus_test:
-        description: 'Also publish the rehearsal package to NEXUS_PKG_REPO (delete it there afterwards)'
+        description: 'Also publish the rehearsal package to Nexus from the VPS runner (delete it there afterwards)'
         type: boolean
         default: false
       nexus_upload_check:
@@ -275,35 +275,60 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Publish the rehearsal package to Nexus (opt-in)
-        if: inputs.nexus_test
+  # Nexus is published to from the VPS runner, straight to Nexus on its loopback (pkg.vaulthalla.sh serves the
+  # read-only group vaulthalla-raw; uploads go to its hosted member), in the CI container sharing the host's network,
+  # as release.yml's macos-publish-nexus does. Only on manual runs; delete what these publish afterwards.
+  nexus-publish-rehearsal:
+    name: Nexus publish (rehearsal package)
+    needs: package
+    if: github.event_name == 'workflow_dispatch' && inputs.nexus_test && needs.package.result == 'success'
+    runs-on: [self-hosted, Linux, X64, vaulthalla, vps-ci]
+    defaults:
+      run:
+        shell: bash ./ci/run-ci bash -euo pipefail {0}
+    timeout-minutes: 15
+    env:
+      CI_NETWORK: host
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: vaulthalla-macos-pkg
+          path: pkg/
+      - name: Publish
         env:
           RELEASE_PUBLISH_MODE: nexus
-          NEXUS_PKG_REPO: ${{ vars.NEXUS_PKG_REPO }}
+          NEXUS_PKG_REPO: ${{ vars.NEXUS_PKG_UPLOAD_URL || 'http://127.0.0.1:8081/repository/vaulthalla-raw-hosted' }}
           NEXUS_USER: ${{ secrets.NEXUS_USER }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD || secrets.NEXUS_PASS }}
-        run: bash tools/macos/pkg/publish-nexus.sh "$VH_CANDIDATE_DIR/pkg"
+        run: bash tools/macos/pkg/publish-nexus.sh pkg
 
-  # The Nexus raw repository's upload path alone (credentials, the size limit of every proxy in front of it,
-  # readback, the identical/different-bytes rules), with a dummy package the size of a real one: no build.
+  # The upload path alone (credentials, size, readback, the identical/different-bytes rules), with a dummy package
+  # larger than a real one: no build.
   nexus-upload-check:
     name: Nexus upload check (dummy package)
     if: github.event_name == 'workflow_dispatch' && inputs.nexus_upload_check
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, vaulthalla, vps-ci]
+    defaults:
+      run:
+        shell: bash ./ci/run-ci bash -euo pipefail {0}
     timeout-minutes: 15
+    env:
+      CI_NETWORK: host
     steps:
       - uses: actions/checkout@v4
       - name: A 120 MB dummy package
         run: |
-          mkdir -p "$RUNNER_TEMP/pkg" && cd "$RUNNER_TEMP/pkg"
+          mkdir -p dummy-pkg && cd dummy-pkg
           head -c 125829120 /dev/urandom > vaulthalla-0.0.0-uploadcheck-arm64.pkg
           sha256sum vaulthalla-0.0.0-uploadcheck-arm64.pkg > vaulthalla-0.0.0-uploadcheck-arm64.pkg.sha256
       - name: "Publish it, then again (identical bytes must be skipped)"
         env:
           RELEASE_PUBLISH_MODE: nexus
-          NEXUS_PKG_REPO: ${{ vars.NEXUS_PKG_REPO }}
+          NEXUS_PKG_REPO: ${{ vars.NEXUS_PKG_UPLOAD_URL || 'http://127.0.0.1:8081/repository/vaulthalla-raw-hosted' }}
           NEXUS_USER: ${{ secrets.NEXUS_USER }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD || secrets.NEXUS_PASS }}
         run: |
-          bash tools/macos/pkg/publish-nexus.sh "$RUNNER_TEMP/pkg"
-          bash tools/macos/pkg/publish-nexus.sh "$RUNNER_TEMP/pkg"
+          bash tools/macos/pkg/publish-nexus.sh dummy-pkg
+          bash tools/macos/pkg/publish-nexus.sh dummy-pkg
+          rm -rf dummy-pkg

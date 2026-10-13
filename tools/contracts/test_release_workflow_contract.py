@@ -44,6 +44,9 @@ def _needs(job: str) -> set[str]:
 
 # GitHub-hosted macOS jobs (tools/macos/pkg): outside the VPS container by necessity, and off the APT critical path.
 MACOS_JOBS = {"macos-package", "macos-publish"}
+# The macOS package's Nexus publication runs on the VPS runner (in the CI container, with the host's network to reach
+# Nexus on its loopback); like the hosted macOS jobs it is off the APT critical path.
+MACOS_PATH = MACOS_JOBS | {"macos-publish-nexus"}
 
 
 class ReleaseWorkflowContractTests(unittest.TestCase):
@@ -166,6 +169,15 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
                 with self.subTest(job=name):
                     self.assertGreaterEqual(indent, 10, "secrets belong in a step's env, not the job's")
 
+    def test_only_the_nexus_publication_leaves_the_isolated_container_network(self) -> None:
+        for name, job in self.jobs.items():
+            with self.subTest(job=name):
+                if name == "macos-publish-nexus":
+                    self.assertIn("      CI_NETWORK: host\n", job)
+                    self.assertIn("environment: Production", job)
+                else:
+                    self.assertNotIn("CI_NETWORK", job)
+
     def test_least_privilege_writes(self) -> None:
         self.assertRegex(self.workflow, r"(?m)^permissions:\n  contents: read$")
         writers = {name for name, job in self.jobs.items() if "contents: write" in job}
@@ -179,10 +191,10 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("needs.github-release.result == 'success'", publish)
         self.assertIn("needs.macos-package.result == 'success'", publish)
         for name, job in self.jobs.items():
-            if name in MACOS_JOBS:
+            if name in MACOS_PATH:
                 continue
             with self.subTest(job=name):
-                for macos in MACOS_JOBS:
+                for macos in MACOS_PATH:
                     self.assertNotRegex(job, rf"(?m)^\s+(needs: |- ){macos}$")
 
     def test_every_checkout_honors_the_dispatch_ref(self) -> None:

@@ -403,8 +403,7 @@ jobs:
           path: ${{ env.VH_CANDIDATE_DIR }}/pkg/
           if-no-files-found: error
 
-  # Attaches the package to the GitHub release, publishes it to the Nexus raw repository (NEXUS_PKG_REPO, with the APT
-  # repository's credentials and RELEASE_PUBLISH_MODE gate) and updates the Homebrew cask (vaulthalla/homebrew-tap, with
+  # Attaches the package to the GitHub release and updates the Homebrew cask (vaulthalla/homebrew-tap, with
   # HOMEBREW_TAP_TOKEN: contents:write on that repository; without it the cask update is skipped with a warning).
   macos-publish:
     name: Publish the macOS package
@@ -429,15 +428,6 @@ jobs:
         with:
           name: vaulthalla-macos-${{ needs.release-check.outputs.version }}
           path: pkg/
-
-      # Immutable like the APT publication: identical bytes already there are skipped, different ones refused.
-      - name: Publish to the Nexus package repository
-        env:
-          RELEASE_PUBLISH_MODE: ${{ vars.RELEASE_PUBLISH_MODE || 'disabled' }}
-          NEXUS_PKG_REPO: ${{ vars.NEXUS_PKG_REPO }}
-          NEXUS_USER: ${{ secrets.NEXUS_USER }}
-          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD || secrets.NEXUS_PASS }}
-        run: bash tools/macos/pkg/publish-nexus.sh pkg
 
       - name: Attach to the GitHub release
         env:
@@ -465,6 +455,49 @@ jobs:
           if git diff --cached --quiet; then echo "cask already at $VERSION"; exit 0; fi
           git commit -q -m "vaulthalla $VERSION"
           git push -q origin HEAD:main
+
+  # The package into the Nexus raw repository, from the VPS runner straight to Nexus on its loopback (the public
+  # pkg.vaulthalla.sh serves the read-only group vaulthalla-raw; uploads go to its hosted member). In the CI container
+  # sharing the host's network (see the job's env), the APT publication's gate and credentials, never cancelled.
+  # Immutable: identical bytes already there are skipped, different ones refused.
+  macos-publish-nexus:
+    name: Publish the macOS package to Nexus
+    runs-on: [self-hosted, Linux, X64, vaulthalla, vps-ci]
+    defaults:
+      run:
+        shell: bash ./ci/run-ci bash -euo pipefail {0}
+    needs:
+      - release-check
+      - macos-package
+    if: >-
+      !cancelled() &&
+      needs.macos-package.result == 'success'
+    environment: Production
+    timeout-minutes: 15
+    concurrency:
+      group: vaulthalla-pkg-publish
+      cancel-in-progress: false
+    env:
+      CI_NETWORK: host
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - name: Download the package
+        uses: actions/download-artifact@v4
+        with:
+          name: vaulthalla-macos-${{ needs.release-check.outputs.version }}
+          path: pkg/
+
+      - name: Publish to the Nexus package repository
+        env:
+          RELEASE_PUBLISH_MODE: ${{ vars.RELEASE_PUBLISH_MODE || 'disabled' }}
+          NEXUS_PKG_REPO: ${{ vars.NEXUS_PKG_UPLOAD_URL || 'http://127.0.0.1:8081/repository/vaulthalla-raw-hosted' }}
+          NEXUS_USER: ${{ secrets.NEXUS_USER }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD || secrets.NEXUS_PASS }}
+        run: bash tools/macos/pkg/publish-nexus.sh pkg
 
   finalize:
     name: Record the release on main
