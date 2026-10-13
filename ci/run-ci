@@ -182,7 +182,9 @@ reap pod
 name="ci-${GITHUB_RUN_ID:-local}-${GITHUB_JOB:-job}-$$"
 name="${name//[^a-zA-Z0-9_.-]/-}"
 pod=""
-limits=(--memory "${CI_MEMORY:-12g}" --pids-limit 16384 --label "ci.run-ci.pid=$$")
+# 20g: the host keeps >= 24 GB free for CI, and a -Werror build of the unity test objects needs more than the old 12g
+# at full parallelism (the kernel OOM-killed cc1plus). The build action also sizes its jobs to this limit.
+limits=(--memory "${CI_MEMORY:-20g}" --pids-limit 16384 --label "ci.run-ci.pid=$$")
 
 # shellcheck disable=SC2317 # trap handler
 cleanup() {
