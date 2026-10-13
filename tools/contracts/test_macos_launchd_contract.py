@@ -32,6 +32,30 @@ PATHS = {
     "NODE": "/usr/local/libexec/vaulthalla/node/bin/node",
     "PG_BIN": "/usr/local/libexec/vaulthalla/postgresql/bin",
     "PG_DIR": "/Library/Application Support/Vaulthalla/postgres",
+    "SERVICE": "_vaulthalla",
+    "ALIAS": "vaulthalla",
+    "LABEL_PREFIX": "sh.vaulthalla",
+    "PORT_OFFSET": "0",
+}
+
+# meson -Dinstance=dev (`make dev`): what core/meson.build configures the same script with.
+DEV_PATHS = {
+    "SUPPORT_DIR": "/Library/Application Support/Vaulthalla-dev",
+    "STATE_DIR": "/Library/Application Support/Vaulthalla-dev/state",
+    "RUN_DIR": "/Library/Application Support/Vaulthalla-dev/run",
+    "MOUNT_DIR": "/Library/Application Support/Vaulthalla-dev/mount",
+    "LOG_DIR": "/Library/Logs/Vaulthalla-dev",
+    "CONFIG_PATH": "/Library/Application Support/Vaulthalla-dev/config.yaml",
+    "SHARE_DIR": "/usr/local/vaulthalla-dev/share/vaulthalla",
+    "BINDIR": "/usr/local/vaulthalla-dev/bin",
+    "WEB_DIR": "/usr/local/vaulthalla-dev/share/vaulthalla-web",
+    "NODE": "/usr/local/vaulthalla-dev/libexec/vaulthalla/node/bin/node",
+    "SERVICE": "_vaulthalla_dev",
+    "ALIAS": "vaulthalla-dev",
+    "LABEL_PREFIX": "sh.vaulthalla.dev",
+    "PORT_OFFSET": "100",
+    "PG_BIN": "/usr/local/vaulthalla-dev/libexec/vaulthalla/postgresql/bin",
+    "PG_DIR": "/Library/Application Support/Vaulthalla-dev/postgres",
 }
 
 
@@ -165,7 +189,10 @@ plistlib.loads(open(sys.argv[-1], "rb").read())
 
 
 class Provisioning(unittest.TestCase):
+    PATHS = PATHS
+
     def setUp(self) -> None:
+        PATHS = self.PATHS  # noqa: N806 -- the instance subclass provisions with its own configuration
         self.tmp = tempfile.TemporaryDirectory()
         base = Path(self.tmp.name)
         self.root = base / "root"
@@ -192,9 +219,13 @@ class Provisioning(unittest.TestCase):
             self.path(exe).chmod(0o755)
         self.path(PATHS["WEB_DIR"]).mkdir(parents=True)
         self.path(PATHS["WEB_DIR"] + "/server.js").write_text("")
+        self.prepare()
         self.script = base / "vaulthalla-provision"
         self.script.write_text(render((LAUNCHD / "vaulthalla-provision.in").read_text(), PATHS))
         self.script.chmod(0o755)
+
+    def prepare(self) -> None:
+        pass
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -432,10 +463,76 @@ class Provisioning(unittest.TestCase):
         self.assertEqual(self.run_provision("--purge").returncode, 2)
 
 
+class DevInstanceProvisioning(Provisioning):
+    """`make dev` on a Mac with production installed: the dev instance's account, tree and daemons are its own."""
+    PATHS = DEV_PATHS
+
+    def prepare(self) -> None:
+        # Production already provisioned on this host (uid 499, alias vaulthalla, its daemons loaded).
+        self.write_db({"Users": {"_vaulthalla": {
+            "RecordName": ["_vaulthalla", "vaulthalla"], "UniqueID": ["499"], "PrimaryGroupID": ["499"],
+            "UserShell": ["/usr/bin/false"], "NFSHomeDirectory": ["/var/empty"], "IsHidden": ["1"]}},
+            "Groups": {"_vaulthalla": {"RecordName": ["_vaulthalla", "vaulthalla"], "PrimaryGroupID": ["499"]}}})
+
+    def test_apply_creates_account_private_tree_config_and_daemons(self) -> None:
+        r = self.run_provision(apply=True)
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        db = json.loads(self.state.read_text())
+        user, group = db["Users"]["_vaulthalla_dev"], db["Groups"]["_vaulthalla_dev"]
+        self.assertEqual(int(user["UniqueID"][0]), 498, "the next free id; production keeps 499")
+        self.assertIn("vaulthalla-dev", user["RecordName"])
+        self.assertIn("vaulthalla-dev", group["RecordName"])
+        self.assertEqual(db["Users"]["_vaulthalla"]["UniqueID"], ["499"], "production's account is untouched")
+        for key in ("STATE_DIR", "RUN_DIR", "MOUNT_DIR", "LOG_DIR"):
+            self.assertTrue(self.path(DEV_PATHS[key]).is_dir(), key)
+            self.assertFalse(self.path(PATHS[key]).exists(), "nothing of production's tree is created: " + key)
+        server = plistlib.loads(self.path("/Library/LaunchDaemons/sh.vaulthalla.dev.server.plist").read_bytes())
+        web = plistlib.loads(self.path("/Library/LaunchDaemons/sh.vaulthalla.dev.web.plist").read_bytes())
+        self.assertEqual(server["Label"], "sh.vaulthalla.dev.server")
+        self.assertEqual((server["UserName"], server["GroupName"]), ("_vaulthalla_dev", "_vaulthalla_dev"))
+        self.assertEqual(server["WorkingDirectory"], DEV_PATHS["STATE_DIR"])
+        self.assertEqual(server["ProgramArguments"], [DEV_PATHS["BINDIR"] + "/vaulthalla-server"])
+        self.assertEqual(web["Label"], "sh.vaulthalla.dev.web")
+        self.assertEqual(web["EnvironmentVariables"]["PORT"], "37068")
+        self.assertEqual(web["EnvironmentVariables"]["VAULTHALLA_AUTH_ORIGIN"], "http://127.0.0.1:37070")
+        self.assertNotIn("36968", self.path("/Library/LaunchDaemons/sh.vaulthalla.dev.web.plist").read_text())
+        self.assertFalse(self.path("/Library/LaunchDaemons/sh.vaulthalla.server.plist").exists())
+        self.assertIn("bootstrap system /Library/LaunchDaemons/sh.vaulthalla.dev.server.plist", self.calls())
+        self.assertNotIn("system/sh.vaulthalla.server", self.calls())
+
+    def test_an_existing_matching_account_is_reused(self) -> None:
+        self.assertEqual(self.run_provision(apply=True).returncode, 0)
+        r = self.run_provision(apply=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("account _vaulthalla_dev exists and matches (uid 498)", r.stdout)
+
+    def test_never_enrolls_anyone_in_the_vaulthalla_group(self) -> None:
+        self.assertEqual(self.run_provision(apply=True).returncode, 0)
+        self.assertNotIn("GroupMembership", self.calls())
+        self.assertNotIn("dseditgroup", self.calls())
+
+    def test_remove_unloads_and_purge_deletes_account_and_data(self) -> None:
+        self.assertEqual(self.run_provision(apply=True).returncode, 0)
+        r = self.run_provision("--remove", "--purge", apply=True)
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        db = json.loads(self.state.read_text())
+        self.assertNotIn("_vaulthalla_dev", db["Users"])
+        self.assertIn("_vaulthalla", db["Users"], "purging the instance never touches production's account")
+        self.assertFalse(self.path(DEV_PATHS["STATE_DIR"]).exists())
+        self.assertNotIn("bootout system/sh.vaulthalla.server", self.calls())
+
+
+
+# Only the instance's own tests run for it: the inherited ones assert production's names.
+for _name in dir(Provisioning):
+    if _name.startswith("test_") and _name not in DevInstanceProvisioning.__dict__:
+        setattr(DevInstanceProvisioning, _name, None)
+
+
 class BuildInstallsPlatformServiceFiles(unittest.TestCase):
     def test_linux_keeps_systemd_and_macos_gets_launchd(self) -> None:
         meson = (REPO / "meson.build").read_text()
-        linux = meson.split("if host_machine.system() == 'linux'\n        unit_conf", 1)
+        linux = meson.split("if host_machine.system() == 'linux' and vh_instance == ''\n        unit_conf", 1)
         self.assertEqual(len(linux), 2, "systemd units must stay inside the Linux-only block")
         darwin = meson.split("if host_machine.system() == 'darwin'", 1)[1]
         self.assertIn("deploy/launchd/vaulthalla-provision.in", darwin)

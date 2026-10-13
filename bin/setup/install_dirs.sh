@@ -1,36 +1,37 @@
 #!/usr/bin/env bash
+# Linux: runtime/state directories, CLI links and the shared data payloads of the install bin/lib/platform.sh selects
+# (production for make install, the isolated dev instance for make dev). macOS: vaulthalla-provision does this
+# (bin/setup/install_service.sh).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+# shellcheck source=bin/lib/platform.sh
+source "$ROOT_DIR/bin/lib/platform.sh"
+vh_instance_layout "$(vh_selected_instance)"
 
-: "${VH_USER:=vaulthalla}"
-: "${VH_GROUP:=vaulthalla}"
-: "${PREFIX:=/usr}"
-: "${BINDIR:=$PREFIX/bin}"
-: "${SYSCONFDIR:=/etc}"
-: "${DATADIR:=$PREFIX/share}"
-: "${LIBDIR:=$PREFIX/lib}"
-: "${SYSTEMD_UNIT_DIR:=/etc/systemd/system}"
+[[ "$(vh_os)" == linux ]] || vh_die "install_dirs.sh is Linux-only (macOS: bin/setup/install_service.sh)"
 
-PROJECT_NAME="vaulthalla"
+BINDIR="$VH_BINDIR"
+DATADIR="$VH_DATADIR"
+if [[ -z "$VH_INSTANCE" ]]; then LIBDIR="${LIBDIR:-$VH_PREFIX/lib}"; else LIBDIR="$VH_PREFIX/lib"; fi
 
-CONFIG_DIR="$SYSCONFDIR/$PROJECT_NAME"
-DATA_DIR="$DATADIR/$PROJECT_NAME"
-LIBEXEC_DIR="$LIBDIR/$PROJECT_NAME"
-RUNTIME_DIR="/run/$PROJECT_NAME"
-STATE_DIR="/var/lib/$PROJECT_NAME"
-LOG_DIR="/var/log/$PROJECT_NAME"
-MOUNT_DIR="/mnt/$PROJECT_NAME"
+CONFIG_DIR="$VH_CONFIG_DIR"
+DATA_DIR="$DATADIR/vaulthalla"
+LIBEXEC_DIR="$LIBDIR/vaulthalla"
+RUNTIME_DIR="$VH_RUNTIME_DIR"
+STATE_DIR="$VH_STATE_DIR"
+LOG_DIR="$VH_LOG_DIR"
+MOUNT_DIR="$VH_MOUNT_DIR"
 SWTPM_BASE_DIR="/var/lib/swtpm"
-SWTPM_STATE_DIR="$SWTPM_BASE_DIR/$PROJECT_NAME"
+SWTPM_STATE_DIR="$VH_SWTPM_STATE_DIR"
 
 install_dir() {
   local dir="$1"
   local mode="$2"
-  sudo mkdir -p "$dir"
-  sudo chmod "$mode" "$dir"
-  sudo chown "$VH_USER:$VH_GROUP" "$dir"
+  vh_priv mkdir -p "$dir"
+  vh_priv chmod "$mode" "$dir"
+  vh_priv chown "$VH_USER:$VH_GROUP" "$dir"
 }
 
 install_file() {
@@ -38,45 +39,64 @@ install_file() {
   local dst="$2"
   local mode="${3:-0644}"
 
-  sudo mkdir -p "$(dirname "$dst")"
-  sudo install -m "$mode" "$src" "$dst"
+  vh_priv mkdir -p "$(dirname "$dst")"
+  vh_priv install -m "$mode" "$src" "$dst"
+}
+
+# An instance's config is production's (the private repo-root override or the shipped default) with its own ports
+# and database (deploy/instance/render.py); production installs the file as is.
+install_config() {
+  local src="$1" dst="$2"
+  if [[ -z "$VH_INSTANCE" ]]; then
+    install_file "$src" "$dst" 0640
+  else
+    local rendered
+    rendered="$(mktemp)"
+    python3 "$ROOT_DIR/deploy/instance/render.py" config --instance "$VH_INSTANCE" "$src" "$rendered"
+    install_file "$rendered" "$dst" 0640
+    rm -f "$rendered"
+  fi
+  vh_priv chown "$VH_USER:$VH_GROUP" "$dst"
 }
 
 echo "📁 Installing Vaulthalla runtime/data directories..."
 
 install_dir "$RUNTIME_DIR" 750
 install_dir "$STATE_DIR" 700
-sudo install -d -m 0755 "$SWTPM_BASE_DIR"
+vh_priv install -d -m 0755 "$SWTPM_BASE_DIR"
 install_dir "$SWTPM_STATE_DIR" 700
 install_dir "$LOG_DIR" 750
 install_dir "$MOUNT_DIR" 755
 
 echo "🔗 Installing CLI symlinks..."
-sudo ln -sf "$BINDIR/vaulthalla-cli" "$BINDIR/vaulthalla"
-sudo ln -sf "$BINDIR/vaulthalla-cli" "$BINDIR/vh"
+vh_priv mkdir -p "$BINDIR"
+vh_priv ln -sf "$BINDIR/vaulthalla-cli" "$BINDIR/vaulthalla"
+vh_priv ln -sf "$BINDIR/vaulthalla-cli" "$BINDIR/vh"
+if [[ -n "$VH_INSTANCE" ]]; then
+  # The instance's CLI on PATH under its own name; production's vh is never replaced.
+  vh_priv ln -sfn "$BINDIR/vaulthalla-cli" "$VH_CLI_LINK"
+fi
 
 echo "📦 Installing shared data/config payloads..."
 
 if [[ -f "$ROOT_DIR/deploy/vaulthalla.env" ]]; then
   install_file "$ROOT_DIR/deploy/vaulthalla.env" "$CONFIG_DIR/vaulthalla.env" 0640
-  sudo chown "$VH_USER:$VH_GROUP" "$CONFIG_DIR/vaulthalla.env"
+  vh_priv chown "$VH_USER:$VH_GROUP" "$CONFIG_DIR/vaulthalla.env"
 fi
 
 if [[ -f "$ROOT_DIR/config.yaml" ]]; then
-  install_file "$ROOT_DIR/config.yaml" "$CONFIG_DIR/config.yaml" 0640
-  sudo chown "$VH_USER:$VH_GROUP" "$CONFIG_DIR/config.yaml"
+  install_config "$ROOT_DIR/config.yaml" "$CONFIG_DIR/config.yaml"
 else
-  install_file "$ROOT_DIR/deploy/config/config.yaml" "$CONFIG_DIR/config.yaml" 0640
-  sudo chown "$VH_USER:$VH_GROUP" "$CONFIG_DIR/config.yaml"
+  install_config "$ROOT_DIR/deploy/config/config.yaml" "$CONFIG_DIR/config.yaml"
 fi
 
 install_file "$ROOT_DIR/deploy/config/config_template.yaml.in" "$CONFIG_DIR/config_template.yaml.in" 0640
-sudo chown "$VH_USER:$VH_GROUP" "$CONFIG_DIR/config_template.yaml.in"
+vh_priv chown "$VH_USER:$VH_GROUP" "$CONFIG_DIR/config_template.yaml.in"
 
 echo "🗄️  Installing SQL assets..."
 if [[ -d "$ROOT_DIR/deploy/psql" ]]; then
-  sudo mkdir -p "$DATA_DIR"
-  sudo rsync -a "$ROOT_DIR/deploy/psql/" "$DATA_DIR/psql/"
+  vh_priv mkdir -p "$DATA_DIR"
+  vh_priv rsync -a "$ROOT_DIR/deploy/psql/" "$DATA_DIR/psql/"
 fi
 
 echo "🌐 Installing nginx template payload..."
@@ -84,13 +104,5 @@ install_file "$ROOT_DIR/deploy/nginx/vaulthalla.conf" "$DATA_DIR/nginx/vaulthall
 
 echo "🧰 Installing lifecycle utility..."
 install_file "$ROOT_DIR/deploy/lifecycle/main.py" "$LIBEXEC_DIR/lifecycle" 0755
-
-# Historical Meson experiments kept here for reference only:
-#
-# license_files: ['LICENSE', 'debian/copyright']
-# install_data('LICENSE', install_dir: license_dir)
-# install_data('debian/copyright', install_dir: license_dir, rename: 'copyright')
-# install_data('debian/tmpfiles.d/vaulthalla.conf', install_dir: ...)
-# install_data('debian/vaulthalla.udev', install_dir: ..., rename: '60-vaulthalla-tpm.rules')
 
 echo "✅ Directory/data installation complete."

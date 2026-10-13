@@ -1,17 +1,30 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=bin/lib/platform.sh
+source "$SCRIPT_DIR/../lib/platform.sh"
+# Production's units (make uninstall), or only the dev instance's (make dev / uninstall in dev mode).
+vh_instance_layout "$(vh_selected_instance)"
+
 echo "🗑️  Removing Vaulthalla systemd services..."
 SYSTEMCTL_TIMEOUT="${VH_SYSTEMCTL_STOP_TIMEOUT:-35s}"
 
-# vaulthalla-cli.{service,socket} are retired (#110); kept so older dev installs are cleaned up.
 UNITS=(
-  vaulthalla-web.service
-  vaulthalla-cli.service
-  vaulthalla-cli.socket
-  vaulthalla.service
-  vaulthalla-swtpm.service
+  "$VH_UNIT_WEB"
+  "$VH_UNIT_CORE"
+  "$VH_UNIT_SWTPM"
 )
+if [[ -z "$VH_INSTANCE" ]]; then
+  # vaulthalla-cli.{service,socket} are retired (#110); kept so older dev installs are cleaned up.
+  UNITS=(
+    vaulthalla-web.service
+    vaulthalla-cli.service
+    vaulthalla-cli.socket
+    vaulthalla.service
+    vaulthalla-swtpm.service
+  )
+fi
 
 unit_exists() {
   local unit="$1"
@@ -55,10 +68,10 @@ for unit in "${UNITS[@]}"; do
 done
 
 echo "🧹 Removing exact Vaulthalla unit files and overrides..."
-if unit_deactivating vaulthalla.service; then
-  echo "⚠️  vaulthalla.service is still deactivating; preserving drop-ins until the stop job clears."
+if unit_deactivating "$VH_UNIT_CORE"; then
+  echo "⚠️  $VH_UNIT_CORE is still deactivating; preserving drop-ins until the stop job clears."
 else
-  sudo rm -rf /etc/systemd/system/vaulthalla.service.d
+  sudo rm -rf "/etc/systemd/system/$VH_UNIT_CORE.d"
 fi
 
 for unit in "${UNITS[@]}"; do

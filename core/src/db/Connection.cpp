@@ -136,10 +136,10 @@ Connection::Connection() : tpmKeyProvider_(
         if (!initPass) {
             const auto msg = std::string("Database password failed to initialize: no TPM-sealed DB password under ") +
                              paths::getBackingPath().string() +
-                             " and no pending password handoff at /run/vaulthalla/db_password (the sealed secret was "
+                             " and no pending password handoff at " VH_DB_PASSWORD_SEED_PATH " (the sealed secret was "
                              "removed, e.g. by a package purge, or first-time DB setup never ran). Write the "
-                             "PostgreSQL role's password to /run/vaulthalla/db_password (owner vaulthalla, mode 0600) "
-                             "and restart vaulthalla.service.";
+                             "PostgreSQL role's password to " VH_DB_PASSWORD_SEED_PATH " (owner " VH_SERVICE_ACCOUNT
+                             ", mode 0600) and restart " VH_HINT_SERVICE_NAME ".";
             log::Registry::runtime()->error("[DBConnection] {}", msg);
             throw std::runtime_error(msg);
         }

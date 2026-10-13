@@ -283,4 +283,29 @@ if vh_cleanup_protocol_ports 36969; then
 fi
 [[ "${#killed[@]}" -eq 0 ]] || fail "D-state listener thread should not be killed"
 
+# `make dev` installs the isolated dev instance beside production: only the instance's identities are eligible.
+(
+  export VH_UNIT_STEM=vaulthalla-dev VH_INSTANCE_BINDIRS=/opt/vaulthalla-dev/bin VH_MOUNTPOINT=/mnt/vh_dev
+  export VH_WEB_SERVER_PATH=/opt/vaulthalla-dev/share/vaulthalla-web/server.js
+  export VH_SWTPM_STATE_DIR=/var/lib/swtpm/vaulthalla-dev VH_CONFIG_PATH=/etc/vaulthalla-dev/config.yaml
+  # shellcheck source=bin/teardown/kill_dev_artifacts.sh
+  source "$REPO_ROOT/bin/teardown/kill_dev_artifacts.sh"
+  user_scope="0::/user.slice/user-1000.slice/session-2.scope"
+  assert_allowed "dev server exe" /opt/vaulthalla-dev/bin/vaulthalla-server /opt/vaulthalla-dev/bin/vaulthalla-server \
+    vaulthalla-server "$user_scope"
+  assert_allowed "dev core cgroup" /bin/sh "/bin/sh -c true" sh "0::/system.slice/vaulthalla-dev.service"
+  assert_allowed "dev web node" /usr/bin/node "/usr/bin/node /opt/vaulthalla-dev/share/vaulthalla-web/server.js" node \
+    "$user_scope"
+  assert_refused "production server exe" /usr/bin/vaulthalla-server /usr/bin/vaulthalla-server vaulthalla-server \
+    "$user_scope"
+  assert_refused "production core cgroup" /bin/sh "/bin/sh -c true" sh "0::/system.slice/vaulthalla.service"
+  assert_refused "production web cgroup" /usr/bin/node "/usr/bin/node /usr/share/vaulthalla-web/server.js" node \
+    "0::/system.slice/vaulthalla-web.service"
+  assert_refused "production swtpm" /usr/bin/swtpm \
+    "/usr/bin/swtpm socket --tpm2 --tpmstate dir=/var/lib/swtpm/vaulthalla --server type=tcp,port=2321" swtpm \
+    "0::/system.slice/vaulthalla-swtpm.service"
+  assert_refused "production fusermount" /usr/bin/fusermount3 "/usr/bin/fusermount3 -uz /mnt/vaulthalla" fusermount3 \
+    "$user_scope"
+)
+
 printf 'PASS: kill_dev_artifacts classifier\n'

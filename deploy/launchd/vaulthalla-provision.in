@@ -26,8 +26,13 @@
 # 'admin' when no one is bound yet; they can change that later with `vh`).
 set -euo pipefail
 
-SERVICE=_vaulthalla
-ALIAS=vaulthalla
+# The account, its record alias and the daemon labels: _vaulthalla / vaulthalla / sh.vaulthalla for production; an
+# isolated instance (meson -Dinstance=dev) gets _vaulthalla_dev / vaulthalla-dev / sh.vaulthalla.dev, listener ports
+# +PORT_OFFSET, and its own directories, so it never shares anything with production.
+SERVICE="@SERVICE@"
+ALIAS="@ALIAS@"
+LABEL_PREFIX="@LABEL_PREFIX@"
+PORT_OFFSET=@PORT_OFFSET@
 SUPPORT_DIR="@SUPPORT_DIR@"
 STATE_DIR="@STATE_DIR@"
 RUN_DIR="@RUN_DIR@"
@@ -40,10 +45,10 @@ WEB_DIR="@WEB_DIR@"
 NODE="@NODE@"
 PG_BIN="@PG_BIN@"
 PG_DIR="$SUPPORT_DIR/postgres"
-PG_PORT=36971
-PG_LABEL=sh.vaulthalla.postgres
+PG_PORT=$((36971 + PORT_OFFSET))
+PG_LABEL="$LABEL_PREFIX.postgres"
 LAUNCHD_DIR=/Library/LaunchDaemons
-LABELS="sh.vaulthalla.server sh.vaulthalla.web"
+LABELS="$LABEL_PREFIX.server $LABEL_PREFIX.web"
 
 # Tools, overridable for tests (tools/contracts/test_macos_launchd_contract.py runs this with stubs and --root).
 DSCL=${VH_DSCL:-/usr/bin/dscl}
@@ -293,11 +298,16 @@ check_runtime() {
 }
 
 render_plist() {  # render_plist LABEL > file
-  # The placeholders are spelled with $at so configuring this script doesn't substitute them here as well.
-  local at=@
+  # The placeholders are spelled with $at so configuring this script doesn't substitute them here as well. The
+  # templates are production's (sh.vaulthalla.<role>); an instance renames the label and account and shifts the ports.
+  local at=@ role="${1##*.}"
   sed -e "s|${at}BINDIR${at}|$BINDIR|g" -e "s|${at}STATE_DIR${at}|$STATE_DIR|g" -e "s|${at}LOG_DIR${at}|$LOG_DIR|g" \
       -e "s|${at}WEB_DIR${at}|$WEB_DIR|g" -e "s|${at}NODE${at}|$NODE|g" -e "s|${at}PG_BIN${at}|$PG_BIN|g" \
-      -e "s|${at}PG_DIR${at}|$PG_DIR|g" "$ROOT$SHARE_DIR/launchd/$1.plist.in"
+      -e "s|${at}PG_DIR${at}|$PG_DIR|g" \
+      -e "s|<string>sh\.vaulthalla\.$role</string>|<string>$1</string>|" \
+      -e "s|<string>_vaulthalla</string>|<string>$SERVICE</string>|g" \
+      -e "s|36968|$((36968 + PORT_OFFSET))|g" -e "s|36970|$((36970 + PORT_OFFSET))|g" \
+      "$ROOT$SHARE_DIR/launchd/sh.vaulthalla.$role.plist.in"
 }
 
 loaded() { "$LAUNCHCTL" print "system/$1" >/dev/null 2>&1; }
