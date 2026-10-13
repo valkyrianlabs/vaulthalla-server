@@ -272,7 +272,8 @@ phase_accept() {
   printf '%s\n' "$out" | sed -n '1,20s/^/  /p'
   check "enrolled $CLI_USER gets an answer from vh status (exit $id)" test "$id" -le 2
   out=$(sudo -u "$CLI_USER" -- $PREFIX/bin/vh vault list 2>&1) || true
-  check "enrolled $CLI_USER sees the acceptance vault" grep -q install_acceptance <<<"$out"
+  check "enrolled $CLI_USER (bound to admin as the first CLI user) sees the acceptance vault" grep -q install_acceptance <<<"$out"
+  if sudo -u "$CLI_USER" -- $PREFIX/bin/vh help fs >/dev/null 2>&1; then accept_vh_fs; fi
 
   say "== logs"
   { tail -n 5 "$LOGS/server.log" 2>/dev/null || true; } | sed 's/^/  server.log: /'
@@ -299,6 +300,29 @@ sys.exit(0 if plain == 0 and sealed >= len(want) else 1)
 EOF
 }
 
+accept_vh_fs() {  # vh fs (#229), when the installed build has it: the bytes through the CLI socket, as the enrolled user
+  local vid src got work rc
+  say "== vh fs as $CLI_USER"
+  vid=$(/usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["vault_id"])' "$REPORT/acceptance.json")
+  src=$(/usr/bin/python3 -c 'import json,sys; print(next(p for p in json.load(open(sys.argv[1]))["files"] if p.startswith("/acceptance-")))' "$REPORT/acceptance.json")
+  work=$(mktemp -d /tmp/vh-fs-acceptance.XXXXXX)
+  chown "$CLI_USER" "$work"
+  check "vh fs ls lists the vault" sh -c "sudo -u $CLI_USER -- $PREFIX/bin/vh fs ls $vid / | grep -q acceptance-"
+  check "vh fs get downloads a file uploaded over HTTP" sudo -u "$CLI_USER" -- $PREFIX/bin/vh fs get "$vid" "$src" -o "$work/got.bin"
+  got=$(shasum -a 256 "$work/got.bin" 2>/dev/null | awk '{print $1}')
+  check "  ...with the bytes the web upload stored" /usr/bin/python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))["files"][sys.argv[2]]["sha256"] == sys.argv[3] else 1)' "$REPORT/acceptance.json" "$src" "$got"
+  head -c 3000000 /dev/urandom > "$work/up.bin"; chown "$CLI_USER" "$work/up.bin"
+  check "vh fs put uploads a 3 MB file" sudo -u "$CLI_USER" -- $PREFIX/bin/vh fs put "$vid" "$work/up.bin" /cli/up.bin
+  check "  ...and it reads back identical" sh -c "sudo -u $CLI_USER -- $PREFIX/bin/vh fs get $vid /cli/up.bin -o - | cmp -s - '$work/up.bin'"
+  rc=0; sudo -u "$CLI_USER" -- $PREFIX/bin/vh fs put "$vid" "$work/up.bin" /cli/up.bin >/dev/null 2>&1 || rc=$?
+  check "vh fs put refuses to replace without --overwrite (exit $rc)" test "$rc" = 73
+  check "vh fs put --overwrite replaces it" sudo -u "$CLI_USER" -- $PREFIX/bin/vh fs put "$vid" "$work/up.bin" /cli/up.bin --overwrite
+  rc=0; sudo -u "$PROBE" -- $PREFIX/bin/vh fs get "$vid" "$src" -o - >/dev/null 2>&1 || rc=$?
+  check "$PROBE can't use vh fs (exit $rc)" test "$rc" = 77
+  check "no CLI upload left plaintext staged" test -z "$(find "$STATE/.cli-staging" -name '*.part' 2>/dev/null)"
+  rm -rf "$work"
+}
+
 no_secrets_leaked() {
   local s f
   for s in "$STATE/super_admin_initial_password" "$DB_PW_FILE"; do
@@ -313,7 +337,9 @@ no_secrets_leaked() {
 free_uid() {
   local used id
   used=$(dscl . -list /Users UniqueID | awk '{print $2}')
-  for id in $(seq 449 -1 420); do echo "$used" | grep -qx "$id" || { echo "$id"; return; }; done
+  # Human-range uids (>= 501): the daemon binds the first CLI user to 'admin' only from there. Hidden, no shell, no
+  # password, and high enough to stay clear of real accounts (System Settings counts up from 501).
+  for id in $(seq 949 -1 900); do echo "$used" | grep -qx "$id" || { echo "$id"; return; }; done
   return 1
 }
 
@@ -322,7 +348,7 @@ make_test_user() {
     dscl . -read "/Users/$1" RealName | grep -qF "$TEST_MARK" || die "$1 exists and isn't ours; not touching it"
     return 0
   fi
-  local id; id=$(free_uid) || die "no free uid in 420-449"
+  local id; id=$(free_uid) || die "no free uid in 900-949"
   dscl . -create "/Users/$1"
   dscl . -create "/Users/$1" UniqueID "$id"
   dscl . -create "/Users/$1" PrimaryGroupID 20
