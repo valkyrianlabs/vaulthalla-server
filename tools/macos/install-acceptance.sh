@@ -143,7 +143,7 @@ phase_install() {
   phase_preflight >/dev/null
   local p created=()
   while IFS= read -r p; do created+=("$p"); done < <(new_roots)
-  for p in "${created[@]}"; do
+  for p in ${created[@]+"${created[@]}"}; do
     if [ -L "$STAGE$p" ]; then
       ln -s "$(readlink "$STAGE$p")" "$p"; chown -h root:wheel "$p"
     elif [ -d "$STAGE$p" ]; then
