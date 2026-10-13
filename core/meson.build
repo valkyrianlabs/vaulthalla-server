@@ -25,11 +25,18 @@ vh_version_header = configure_file(
 
 repo_root = meson.project_source_root()
 core_root = meson.current_source_dir()
-config_dir = join_paths(get_option('sysconfdir'), meson.project_name())
-log_dir = join_paths(get_option('localstatedir'), 'log', meson.project_name())
-state_dir = join_paths(get_option('localstatedir'), 'lib', meson.project_name())
-runtime_dir = join_paths('/run', meson.project_name())
-mount_dir = join_paths('/mnt', meson.project_name())
+# -Dinstance=NAME (`make dev` uses dev): an isolated instance beside a production install. Every compiled-in location,
+# the service account, the service names and the CLI socket carry the name; the empty default is production, unchanged.
+vh_instance = get_option('instance')
+if vh_instance.underscorify() != vh_instance or vh_instance.to_lower() != vh_instance
+    error('instance must be a short lowercase name of letters, digits and _ (e.g. dev), got: ' + vh_instance)
+endif
+vh_instance_name = vh_instance == '' ? meson.project_name() : meson.project_name() + '-' + vh_instance
+config_dir = join_paths(get_option('sysconfdir'), vh_instance_name)
+log_dir = join_paths(get_option('localstatedir'), 'log', vh_instance_name)
+state_dir = join_paths(get_option('localstatedir'), 'lib', vh_instance_name)
+runtime_dir = join_paths('/run', vh_instance_name)
+mount_dir = vh_instance == '' ? join_paths('/mnt', meson.project_name()) : join_paths('/mnt', 'vh_' + vh_instance)
 config_path = join_paths('/', config_dir, 'config.yaml')
 data_dir = join_paths(get_option('prefix'), get_option('datadir'), meson.project_name())
 psql_dir = join_paths(data_dir, 'psql')
@@ -39,11 +46,18 @@ lifecycle_path = join_paths(get_option('prefix'), 'lib', meson.project_name(), '
 # macOS: /run, /mnt and /etc/<pkg> are not places a macOS install owns (/run and /mnt don't exist; the system volume is
 # read-only). Data lives where it stays put whichever way Vaulthalla is installed (pkg, Homebrew, a future app); the
 # defaults are proposed in roadmap #203 and are only compiled in, never read from config.yaml.
+# The service account (Linux user and group; on macOS the record alias of the hidden _vaulthalla[_NAME] account), the
+# service units/labels, and the port offset of an instance (production: 0; an instance: +100 on every listener).
+vh_service_account = vh_instance_name
+vh_systemd_unit = vh_instance_name + '.service'
+vh_launchd_prefix = vh_instance == '' ? 'sh.vaulthalla' : 'sh.vaulthalla.' + vh_instance
+vh_darwin_account = vh_instance == '' ? '_vaulthalla' : '_vaulthalla_' + vh_instance
+vh_port_offset = vh_instance == '' ? 0 : 100
 if host_machine.system() == 'darwin'
-    support_dir = '/Library/Application Support/Vaulthalla'
+    support_dir = vh_instance == '' ? '/Library/Application Support/Vaulthalla' : '/Library/Application Support/Vaulthalla-' + vh_instance
     config_path = join_paths(support_dir, 'config.yaml')
     state_dir = join_paths(support_dir, 'state')
-    log_dir = '/Library/Logs/Vaulthalla'
+    log_dir = vh_instance == '' ? '/Library/Logs/Vaulthalla' : '/Library/Logs/Vaulthalla-' + vh_instance
     # Not /var/run: launchd has no RuntimeDirectory and the daemon (as _vaulthalla) can't create one there at boot.
     # A persistent, service-owned directory instead; the daemon rebinds a stale socket on start.
     runtime_dir = join_paths(support_dir, 'run')
@@ -58,6 +72,7 @@ vh_log_dir = log_dir
 vh_runtime_dir = runtime_dir
 vh_mount_dir = mount_dir
 vh_config_path = config_path
+vh_support_dir = host_machine.system() == 'darwin' ? support_dir : ''
 
 conf = configuration_data()
 conf.set_quoted('VH_MOUNT_PATH', mount_dir)
@@ -67,19 +82,24 @@ conf.set_quoted('VH_BACKING_PATH', state_dir)
 conf.set_quoted('VH_RUNTIME_PATH', runtime_dir)
 conf.set_quoted('VH_LIFECYCLE_PATH', lifecycle_path)
 conf.set_quoted('VH_CACHE_PATH', '/.cache')
+conf.set_quoted('VH_INSTANCE', vh_instance)
+conf.set_quoted('VH_SERVICE_ACCOUNT', vh_service_account)
+conf.set_quoted('VH_SYSTEMD_UNIT', vh_systemd_unit)
 if host_machine.system() == 'darwin'
-    conf.set_quoted('VH_HINT_SERVICE_NAME', 'sh.vaulthalla.server')
-    conf.set_quoted('VH_HINT_SERVICE_STATUS', 'sudo launchctl print system/sh.vaulthalla.server')
+    conf.set_quoted('VH_HINT_SERVICE_NAME', vh_launchd_prefix + '.server')
+    conf.set_quoted('VH_HINT_SERVICE_STATUS', 'sudo launchctl print system/' + vh_launchd_prefix + '.server')
     conf.set_quoted('VH_HINT_SERVICE_LOG', 'sudo tail -n 50 "' + join_paths(log_dir, 'vaulthalla.log') + '"')
-    conf.set_quoted('VH_HINT_CLI_ENROLL', 'sudo dseditgroup -o edit -a $USER -t user _vaulthalla')
+    conf.set_quoted('VH_HINT_CLI_ENROLL', 'sudo dseditgroup -o edit -a $USER -t user ' + vh_darwin_account)
 else
-    conf.set_quoted('VH_HINT_SERVICE_NAME', 'vaulthalla.service')
-    conf.set_quoted('VH_HINT_SERVICE_STATUS', 'systemctl status vaulthalla')
-    conf.set_quoted('VH_HINT_SERVICE_LOG', 'journalctl -u vaulthalla -n 50')
-    conf.set_quoted('VH_HINT_CLI_ENROLL', 'sudo usermod -aG vaulthalla $USER')
+    conf.set_quoted('VH_HINT_SERVICE_NAME', vh_systemd_unit)
+    conf.set_quoted('VH_HINT_SERVICE_STATUS', 'systemctl status ' + vh_instance_name)
+    conf.set_quoted('VH_HINT_SERVICE_LOG', 'journalctl -u ' + vh_instance_name + ' -n 50')
+    conf.set_quoted('VH_HINT_CLI_ENROLL', 'sudo usermod -aG ' + vh_service_account + ' $USER')
 endif
 conf.set_quoted('VH_S3_GATEWAY_MULTIPART_PARTS_DIRNAME', '.8f3a9c1d6e2b4f70')
 conf.set_quoted('VH_PSQL_SCHEMAS_PATH', psql_dir)
+# A libmagic database shipped with the install (the macOS package bundles one); absent on Debian, which has its own.
+conf.set_quoted('VH_MAGIC_DB_PATH', join_paths(data_dir, 'magic.mgc'))
 conf.set_quoted('VH_PSQL_TEST_SCHEMAS_PATH', join_paths(repo_root, 'deploy/psql'))
 
 vh_paths_header = configure_file(

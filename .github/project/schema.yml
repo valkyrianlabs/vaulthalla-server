@@ -357,9 +357,11 @@ views:
     fields: [Title, Assignees, Status, Labels, Linked pull requests, Sub-issues progress]
     ui: {column_field: Status}
 
+  # Free text, not label:"platform:macos": it matches that label and "macOS" in a title, so the Roadmap's draft
+  # items (which can't carry labels) show up too. Project filters AND their terms; there is no OR.
   - name: macOS
     layout: table
-    filter: "label:\"platform:macos\""
+    filter: "macOS"
     fields: [Title, Status, Priority, Size, Clarity, Autonomy, Hazards, Labels, Linked pull requests, Sub-issues progress]
     ui: {sort: Priority asc, group_by: Status}
 

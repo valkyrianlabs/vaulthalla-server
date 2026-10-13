@@ -6,6 +6,7 @@
 #   vaulthalla-provision --apply         make the changes (root)
 #   vaulthalla-provision --remove        unload and remove the LaunchDaemons; account and data stay
 #   vaulthalla-provision --remove --purge   also delete the state, logs, runtime dir and the _vaulthalla account
+#   vaulthalla-provision --apply --enroll USER   also enroll USER for `vh` and bind them to 'admin' if nobody is yet
 #
 # What it sets up:
 #   - _vaulthalla, a hidden role account (uid/gid in 450-499, no shell, no home) with the record alias "vaulthalla",
@@ -17,11 +18,21 @@
 #     @LOG_DIR@                _vaulthalla 0750
 #   - config.yaml, only if missing (never overwritten), root:_vaulthalla 0640.
 #   - /Library/LaunchDaemons/sh.vaulthalla.{server,web}.plist, bootstrapped in the system domain.
-# It never adds anyone to the vaulthalla group: enrolling a local user for `vh` is an explicit step (#202).
+#   - With the package's bundled PostgreSQL (@PG_BIN@): a private cluster in .../postgres (_vaulthalla 0700; socket
+#     inside it, peer auth; 127.0.0.1:36971 with scram) run by sh.vaulthalla.postgres, the role and database
+#     'vaulthalla' with a generated password handed to the daemon in .../run/db_password (it seals it on start), and a
+#     config.yaml pointing at it. A config.yaml identical to the shipped template counts as unconfigured.
+# Group enrollment happens only for --enroll USER (the package passes the installing user, who becomes the CLI
+# 'admin' when no one is bound yet; they can change that later with `vh`).
 set -euo pipefail
 
-SERVICE=_vaulthalla
-ALIAS=vaulthalla
+# The account, its record alias and the daemon labels: _vaulthalla / vaulthalla / sh.vaulthalla for production; an
+# isolated instance (meson -Dinstance=dev) gets _vaulthalla_dev / vaulthalla-dev / sh.vaulthalla.dev, listener ports
+# +PORT_OFFSET, and its own directories, so it never shares anything with production.
+SERVICE="@SERVICE@"
+ALIAS="@ALIAS@"
+LABEL_PREFIX="@LABEL_PREFIX@"
+PORT_OFFSET=@PORT_OFFSET@
 SUPPORT_DIR="@SUPPORT_DIR@"
 STATE_DIR="@STATE_DIR@"
 RUN_DIR="@RUN_DIR@"
@@ -32,8 +43,12 @@ SHARE_DIR="@SHARE_DIR@"
 BINDIR="@BINDIR@"
 WEB_DIR="@WEB_DIR@"
 NODE="@NODE@"
+PG_BIN="@PG_BIN@"
+PG_DIR="$SUPPORT_DIR/postgres"
+PG_PORT=$((36971 + PORT_OFFSET))
+PG_LABEL="$LABEL_PREFIX.postgres"
 LAUNCHD_DIR=/Library/LaunchDaemons
-LABELS="sh.vaulthalla.server sh.vaulthalla.web"
+LABELS="$LABEL_PREFIX.server $LABEL_PREFIX.web"
 
 # Tools, overridable for tests (tools/contracts/test_macos_launchd_contract.py runs this with stubs and --root).
 DSCL=${VH_DSCL:-/usr/bin/dscl}
@@ -46,17 +61,22 @@ ACTION=provision
 APPLY=false
 PURGE=false
 ROOT=""
+ENROLL=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --apply) APPLY=true ;;
     --remove) ACTION=remove ;;
     --purge) PURGE=true ;;
     --root) ROOT="$2"; shift ;;
-    -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
+    --enroll) ENROLL="$2"; shift ;;
+    -h|--help) sed -n '2,32p' "$0"; exit 0 ;;
     *) echo "vaulthalla-provision: unknown argument: $1" >&2; exit 2 ;;
   esac
   shift
 done
+if [ -n "$ENROLL" ] && [ "$ACTION" != provision ]; then
+  echo "vaulthalla-provision: --enroll goes with provisioning, not --remove" >&2; exit 2
+fi
 if [ "$PURGE" = true ] && [ "$ACTION" != remove ]; then
   echo "vaulthalla-provision: --purge only goes with --remove" >&2; exit 2
 fi
@@ -74,7 +94,11 @@ run() {  # every change goes through here: printed in plan mode, executed with -
 die() { echo "vaulthalla-provision: $*" >&2; exit 1; }
 
 # dscl: every value of KEY on RECORD, one per line.
-values() { "$DSCL" . -read "$1" "$2" 2>/dev/null | sed -e "s/^$2:[[:space:]]*//" | tr ' ' '\n' | sed '/^$/d'; }
+# dscl prints attributes outside the standard set with a prefix ("dsAttrTypeNative:IsHidden: 1"), and long values on
+# the next line (a bare "RealName:" line); both shapes reduce to the value words.
+values() {
+  "$DSCL" . -read "$1" "$2" 2>/dev/null | sed -e "s/^\(dsAttrTypeNative:\)\{0,1\}$2:[[:space:]]*//" | tr ' ' '\n' | sed '/^$/d'
+}
 exists() { "$DSCL" . -read "$1" RecordName >/dev/null 2>&1; }
 account_id() { values "/Users/$SERVICE" UniqueID | head -1; }
 
@@ -162,10 +186,106 @@ ensure_dir() {
   run "$INSTALL" -d -o "$2" -g "$3" -m "$4" "$path"
 }
 
+bundled_pg() { [ -x "$ROOT$PG_BIN/postgres" ]; }
+
+# The config this script writes: the shipped template, pointed at the bundled cluster when there is one.
+render_config() {
+  if bundled_pg; then
+    awk -v port="$PG_PORT" '
+      /^database:/ { db = 1 } /^[^ #]/ && !/^database:/ { db = 0 }
+      db && /^  host:/ { sub(/host: *[^ ]+/, "host: 127.0.0.1") }
+      db && /^  port:/ { sub(/port: *[0-9]+/, "port: " port) }
+      { print }' "$ROOT$SHARE_DIR/config/config.yaml"
+  else
+    cat "$ROOT$SHARE_DIR/config/config.yaml"
+  fi
+}
+
 ensure_config() {
+  local tmp
   [ -L "$ROOT$CONFIG_PATH" ] && die "$CONFIG_PATH is a symlink; refusing to use it"
-  if [ -e "$ROOT$CONFIG_PATH" ]; then note "keeping existing $CONFIG_PATH"; return 0; fi
-  run "$INSTALL" -o root -g "$SERVICE" -m 0640 "$ROOT$SHARE_DIR/config/config.yaml" "$ROOT$CONFIG_PATH"
+  tmp=$(mktemp)
+  render_config > "$tmp"
+  # An existing config is the operator's, unless it is still byte-for-byte the shipped template (never configured).
+  if [ -e "$ROOT$CONFIG_PATH" ]; then
+    if cmp -s "$ROOT$CONFIG_PATH" "$tmp"; then note "ok $CONFIG_PATH"; rm -f "$tmp"; return 0; fi
+    if ! cmp -s "$ROOT$CONFIG_PATH" "$ROOT$SHARE_DIR/config/config.yaml"; then
+      note "keeping existing $CONFIG_PATH"; rm -f "$tmp"; return 0
+    fi
+  fi
+  run "$INSTALL" -o root -g "$SERVICE" -m 0640 "$tmp" "$ROOT$CONFIG_PATH"
+  [ "$APPLY" = true ] && rm -f "$tmp"
+  return 0
+}
+
+as_service() { run /usr/bin/sudo -u "$SERVICE" -- "$@"; }
+pg_ready() { /usr/bin/sudo -u "$SERVICE" -- "$PG_BIN/pg_isready" -q -h "$PG_DIR" -p "$PG_PORT" -d postgres; }
+pg_query() { /usr/bin/sudo -u "$SERVICE" -- "$PG_BIN/psql" -X -q -At -h "$PG_DIR" -p "$PG_PORT" -d postgres -c "$1"; }
+
+ensure_postgres() {
+  bundled_pg || { note "no bundled PostgreSQL at $PG_BIN: the database is configured separately"; return 0; }
+  ensure_dir "$PG_DIR" "$SERVICE" "$SERVICE" 0700
+  cd /  # initdb and psql run as _vaulthalla, which can't read the caller's working directory
+  if [ ! -f "$ROOT$PG_DIR/data/PG_VERSION" ]; then
+    if [ -e "$ROOT$PG_DIR/data" ] && [ -n "$(ls -A "$ROOT$PG_DIR/data" 2>/dev/null)" ]; then
+      die "$PG_DIR/data exists but is not a PostgreSQL cluster; refusing to initialize over it"
+    fi
+    as_service "$PG_BIN/initdb" -D "$PG_DIR/data" -U "$SERVICE" -E UTF8 --locale=C --auth-local=peer \
+      --auth-host=scram-sha-256 -c listen_addresses=127.0.0.1 -c "port=$PG_PORT" \
+      -c "unix_socket_directories=$PG_DIR" -c max_connections=200
+  else
+    note "ok cluster $PG_DIR/data"
+  fi
+  ensure_daemons "$PG_LABEL"
+  [ "$APPLY" = true ] || { note "would create the role and database 'vaulthalla' if missing"; return 0; }
+  local i=0
+  until pg_ready; do i=$((i + 1)); [ "$i" -lt 120 ] || die "the bundled PostgreSQL did not come up (see $LOG_DIR/postgres.log)"; sleep 0.5; done
+  if [ "$(pg_query "SELECT 1 FROM pg_roles WHERE rolname = 'vaulthalla'")" = 1 ]; then
+    note "ok role vaulthalla"
+  else
+    # The password goes straight into the daemon's handoff file (sealed and removed on its next start) and from there
+    # into psql, which reads it itself: it never appears on a command line or in this script's output.
+    ( umask 077; /usr/bin/openssl rand -hex 32 > "$ROOT$RUN_DIR/db_password" )
+    run chown "$SERVICE:$SERVICE" "$ROOT$RUN_DIR/db_password"
+    local sql
+    sql=$(mktemp)
+    printf '%s\n' "\\set pw \`cat :'pwfile'\`" \
+      "SELECT format('CREATE ROLE vaulthalla LOGIN PASSWORD %L', :'pw') \\gexec" > "$sql"
+    # On stdin: _vaulthalla can't open a file in root's private temp directory (that was the first real install's failure).
+    run /usr/bin/sudo -u "$SERVICE" -- "$PG_BIN/psql" -X -q -v ON_ERROR_STOP=1 -h "$PG_DIR" -p "$PG_PORT" \
+      -d postgres -v pwfile="$RUN_DIR/db_password" -f - < "$sql"
+    rm -f "$sql"
+  fi
+  if [ "$(pg_query "SELECT 1 FROM pg_database WHERE datname = 'vaulthalla'")" = 1 ]; then
+    note "ok database vaulthalla"
+  else
+    run /usr/bin/sudo -u "$SERVICE" -- "$PG_BIN/createdb" -h "$PG_DIR" -p "$PG_PORT" -O vaulthalla vaulthalla
+  fi
+}
+
+# --enroll USER: a real local account (uid >= 501) joins the vaulthalla group; its first `vh` command binds it to
+# 'admin' when no one is bound yet (the daemon's first-CLI-user rule, made deterministic by running it here).
+enroll() {
+  local user="$1" uid i
+  uid=$(values "/Users/$user" UniqueID | head -1 || true)
+  case "$uid" in ''|*[!0-9]*) die "--enroll $user: no such local user" ;; esac
+  [ "$uid" -ge 501 ] || die "--enroll $user: uid $uid is not a person's account"
+  if /usr/sbin/dseditgroup -o checkmember -m "$user" "$SERVICE" >/dev/null 2>&1; then
+    note "ok $user is enrolled in $SERVICE"
+  else
+    run /usr/sbin/dseditgroup -o edit -a "$user" -t user "$SERVICE"
+  fi
+  [ "$APPLY" = true ] || return 0
+  i=0
+  until [ -S "$RUN_DIR/cli.sock" ] && /usr/bin/sudo -u "$user" -- "$BINDIR/vh" status >/dev/null 2>&1; do
+    i=$((i + 1)); [ "$i" -lt 240 ] || { note "the server isn't answering yet; $user is bound on their first vh command"; return 0; }
+    sleep 0.5
+  done
+  if /usr/bin/sudo -u "$user" -- "$BINDIR/vh" vault list >/dev/null 2>&1; then
+    note "$user can use vh (the first enrolled user becomes 'admin')"
+  else
+    note "$user is enrolled; 'admin' is already bound to another account (see: vh user list)"
+  fi
 }
 
 # The daemons are bootstrapped only when what they run is actually installed.
@@ -178,17 +298,23 @@ check_runtime() {
 }
 
 render_plist() {  # render_plist LABEL > file
-  # The placeholders are spelled with $at so configuring this script doesn't substitute them here as well.
-  local at=@
+  # The placeholders are spelled with $at so configuring this script doesn't substitute them here as well. The
+  # templates are production's (sh.vaulthalla.<role>); an instance renames the label and account and shifts the ports.
+  local at=@ role="${1##*.}"
   sed -e "s|${at}BINDIR${at}|$BINDIR|g" -e "s|${at}STATE_DIR${at}|$STATE_DIR|g" -e "s|${at}LOG_DIR${at}|$LOG_DIR|g" \
-      -e "s|${at}WEB_DIR${at}|$WEB_DIR|g" -e "s|${at}NODE${at}|$NODE|g" "$ROOT$SHARE_DIR/launchd/$1.plist.in"
+      -e "s|${at}WEB_DIR${at}|$WEB_DIR|g" -e "s|${at}NODE${at}|$NODE|g" -e "s|${at}PG_BIN${at}|$PG_BIN|g" \
+      -e "s|${at}PG_DIR${at}|$PG_DIR|g" \
+      -e "s|<string>sh\.vaulthalla\.$role</string>|<string>$1</string>|" \
+      -e "s|<string>_vaulthalla</string>|<string>$SERVICE</string>|g" \
+      -e "s|36968|$((36968 + PORT_OFFSET))|g" -e "s|36970|$((36970 + PORT_OFFSET))|g" \
+      "$ROOT$SHARE_DIR/launchd/sh.vaulthalla.$role.plist.in"
 }
 
 loaded() { "$LAUNCHCTL" print "system/$1" >/dev/null 2>&1; }
 
-ensure_daemons() {
-  local label target tmp changed
-  for label in $LABELS; do
+ensure_daemons() {  # ensure_daemons [LABEL...] (default: the server and the web console)
+  local label target tmp changed labels="${*:-$LABELS}"
+  for label in $labels; do
     target="$ROOT$LAUNCHD_DIR/$label.plist"
     [ -L "$target" ] && die "$LAUNCHD_DIR/$label.plist is a symlink; refusing to replace it"
     tmp=$(mktemp)
@@ -215,7 +341,7 @@ ensure_daemons() {
 
 remove_daemons() {
   local label
-  for label in $LABELS; do
+  for label in $LABELS $PG_LABEL; do
     if loaded "$label"; then run "$LAUNCHCTL" bootout "system/$label"; fi
     if [ -e "$ROOT$LAUNCHD_DIR/$label.plist" ]; then run rm -f "$ROOT$LAUNCHD_DIR/$label.plist"; fi
   done
@@ -254,7 +380,7 @@ purge_dir() {
 }
 
 purge() {
-  local dir id problems dirs=("$STATE_DIR" "$RUN_DIR" "$MOUNT_DIR" "$LOG_DIR")
+  local dir id problems dirs=("$STATE_DIR" "$RUN_DIR" "$MOUNT_DIR" "$PG_DIR" "$LOG_DIR")
   for dir in "${dirs[@]}"; do purge_check "$dir"; done
   id=$(account_id || true)
   if [ -n "$id" ]; then
@@ -277,9 +403,11 @@ else
   ensure_dir "$RUN_DIR" "$SERVICE" "$SERVICE" 0750
   ensure_dir "$MOUNT_DIR" "$SERVICE" "$SERVICE" 0700
   ensure_dir "$LOG_DIR" "$SERVICE" "$SERVICE" 0750
+  ensure_postgres
   ensure_config
   check_runtime
   ensure_daemons
+  if [ -n "$ENROLL" ]; then enroll "$ENROLL"; fi
 fi
 
 if [ "$APPLY" = true ]; then note "done ($changes change(s))"; else note "$changes change(s) to make; rerun with --apply"; fi

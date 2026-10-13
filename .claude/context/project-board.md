@@ -75,6 +75,6 @@ changed; pre-change snapshot `.claude/scratch/board/prod-4-pre-macos-2026-10-12.
 - Hazards `macos-system-policy` (system extensions, Reduced Security, service accounts,
   LaunchDaemons, keychain ACLs; capped at Checkpointed). Proof `macos` (native Homebrew Meson
   build + unit tests on hosted arm64 CI or a Mac).
-- View `macOS` (`label:"platform:macos"`; sort Priority asc and group by Status set by hand, #181).
+- View `macOS` (free text `macOS`: the `platform:macos` label or "macOS" in a title, so label-less Roadmap drafts show too; project filters AND their terms, no OR; sort Priority asc and group by Status set by hand, #181).
 - Repo milestones `macOS A`–`macOS F` (Native core, Working storage, Operational parity,
   Distribution, Finder, Native app) group the initiative's sub-issues.

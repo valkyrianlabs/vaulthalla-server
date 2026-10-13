@@ -47,13 +47,19 @@ Decisions awaiting the maintainer are `needs:review` issues #200–#206 on the R
   config.yaml only if missing. Never enrolls a user in the group (#202). Contract:
   `tools/contracts/test_macos_launchd_contract.py` (stubs, `--root`; runs on Linux CI too).
 - Runtime dir on macOS is `/Library/Application Support/Vaulthalla/run` (launchd has no RuntimeDirectory).
+- Dev instance (`make dev`, meson `-Dinstance=dev`): the same provisioner configured with `_vaulthalla_dev` / alias
+  `vaulthalla-dev` / labels `sh.vaulthalla.dev.*` / ports +100 (it renders production's plist templates), prefix
+  `/usr/local/vaulthalla-dev`, `/Library/Application Support/Vaulthalla-dev`, its own PostgreSQL 16 cluster
+  (Homebrew binaries, `sh.vaulthalla.dev.postgres`, 127.0.0.1:5532, scram) and `vh-dev`. `bin/lib/darwin_private_dylibs.sh`
+  copies dylibs a build links from `~/.cache` (PDFium) into the prefix: the role account can't read a 0750 home.
+  `make dev-plan` prints every privileged step. A production install is never touched by any of it.
 
 ## Build and test on a Mac
 
 `tools/macos/bootstrap.sh` (Brewfile, pinned PDFium `chromium/8066`, `libpqxx-vh.pc` alias over Homebrew's shared
 libpqxx), then `source tools/macos/env.sh && meson setup build-macos -Dbuild_unit_tests=true && meson compile -C
 build-macos`. DB-backed tests: `eval "$(tools/macos/test-db.sh up)"; meson test -C build-macos; tools/macos/test-db.sh
-down` (disposable cluster on :54329, never the brew service). CI: `.github/workflows/macos.yml` (hosted macos-26).
+down` (disposable cluster on :54329, never the brew service). CI: `.github/workflows/macos.yml` (hosted `xcode-27`: macOS 27 public preview; `macos-26` is the fallback).
 
 ## Gotchas found by the port (keep these in mind on Linux too)
 

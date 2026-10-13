@@ -7,7 +7,7 @@
 
 set -euo pipefail
 
-UNIT="vaulthalla.service"
+UNIT="${VH_UNIT_CORE:-vaulthalla.service}"  # make dev: vaulthalla-dev.service (bin/lib/platform.sh)
 MOUNT="${VH_MOUNTPOINT:-/mnt/vaulthalla}"
 FORCE_VAULTHALLA_PIDS=false
 SYSTEMCTL_STOP_TIMEOUT="${VH_SYSTEMCTL_STOP_TIMEOUT:-35s}"

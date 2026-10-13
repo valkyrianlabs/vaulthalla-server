@@ -5,10 +5,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WEB_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 ROOT_DIR="$(cd "$WEB_DIR/.." && pwd)"
 
-: "${PREFIX:=/usr}"
-: "${DATADIR:=$PREFIX/share}"
+# shellcheck source=bin/lib/platform.sh
+source "$ROOT_DIR/bin/lib/platform.sh"
+# Production (make install): $PREFIX/share/vaulthalla-web as always; the dev instance (make dev): its own prefix.
+vh_instance_layout "$(vh_selected_instance)"
 
-WEB_INSTALL_DIR="$DATADIR/vaulthalla-web"
+WEB_INSTALL_DIR="$VH_WEB_DIR"
 WEB_STANDALONE_DIR="$WEB_DIR/.next/standalone"
 WEB_STATIC_DIR="$WEB_DIR/.next/static"
 WEB_PUBLIC_DIR="$WEB_DIR/public"
@@ -33,21 +35,21 @@ require_command() {
 
 setup_web_runtime_cache() {
     local web_root="${WEB_INSTALL_DIR:-/usr/share/vaulthalla-web}"
-    local cache_dir="/var/cache/vaulthalla-web"
+    local cache_dir="$VH_WEB_CACHE_DIR"
     local cache_link="${web_root}/.next/cache"
 
-    sudo install -d -m 0750 -o vaulthalla -g vaulthalla "$cache_dir"
-    sudo install -d -m 0755 "$web_root/.next"
+    vh_priv install -d -m 0750 -o "$VH_USER" -g "$VH_GROUP" "$cache_dir"
+    vh_priv install -d -m 0755 "$web_root/.next"
 
     if [[ -e "$cache_link" && ! -L "$cache_link" ]]; then
-        sudo rm -rf "$cache_link"
+        vh_priv rm -rf "$cache_link"
     fi
 
     if [[ ! -e "$cache_link" ]]; then
-        sudo ln -s "$cache_dir" "$cache_link"
+        vh_priv ln -s "$cache_dir" "$cache_link"
     fi
 
-    sudo chown -h vaulthalla:vaulthalla "$cache_link" || true
+    vh_priv chown -h "$VH_USER:$VH_GROUP" "$cache_link" || true
 
     echo "[install_web] runtime cache ready: ${cache_link} -> ${cache_dir}"
 }
@@ -69,10 +71,15 @@ require_command "pnpm" "Install pnpm, then rerun the installer."
 require_command "node" "Install Node.js, then rerun the installer."
 
 log "installing dependencies"
-run_in_web_dir pnpm install --frozen-lockfile
+run_in_web_dir vh_run pnpm install --frozen-lockfile
 
 log "building vaulthalla-web"
-run_in_web_dir pnpm build
+run_in_web_dir vh_run pnpm build
+
+if vh_dry_run; then
+  log "dry run: would install $WEB_STANDALONE_DIR into $WEB_INSTALL_DIR (root-owned)"
+  exit 0
+fi
 
 log "validating build artifacts"
 if [[ ! -d "$WEB_STANDALONE_DIR" ]]; then
@@ -86,24 +93,28 @@ if [[ ! -f "$WEB_STANDALONE_DIR/server.js" ]]; then
 fi
 
 log "installing web artifacts"
-sudo rm -rf "$WEB_INSTALL_DIR"
-sudo install -d -m 0755 "$WEB_INSTALL_DIR"
+vh_priv rm -rf "$WEB_INSTALL_DIR"
+vh_priv install -d -m 0755 "$WEB_INSTALL_DIR"
 
 # Mirror Debian packaging artifact layout from debian/rules.
-sudo cp -a "$WEB_STANDALONE_DIR/." "$WEB_INSTALL_DIR/"
-sudo install -d -m 0755 "$WEB_INSTALL_DIR/.next"
-sudo cp -a "$WEB_STATIC_DIR" "$WEB_INSTALL_DIR/.next/"
+vh_priv cp -a "$WEB_STANDALONE_DIR/." "$WEB_INSTALL_DIR/"
+vh_priv install -d -m 0755 "$WEB_INSTALL_DIR/.next"
+vh_priv cp -a "$WEB_STATIC_DIR" "$WEB_INSTALL_DIR/.next/"
 if [[ -d "$WEB_PUBLIC_DIR" ]]; then
-  sudo cp -a "$WEB_PUBLIC_DIR" "$WEB_INSTALL_DIR/"
+  vh_priv cp -a "$WEB_PUBLIC_DIR" "$WEB_INSTALL_DIR/"
 fi
 
 # Debian package payload ownership at rest is root-owned.
-sudo chown -R root:root "$WEB_INSTALL_DIR"
+vh_priv chown -R "root:$VH_ROOT_GROUP" "$WEB_INSTALL_DIR"
 
-setup_web_runtime_cache
+# macOS: the service account doesn't exist until vaulthalla-provision runs, so bin/setup/install_service.sh links the
+# runtime cache afterwards.
+if [[ "$(vh_os)" == linux ]]; then
+  setup_web_runtime_cache
 
-# Debian package payload ownership at rest is root-owned.
-sudo chown -R root:root "$WEB_INSTALL_DIR"
+  # Debian package payload ownership at rest is root-owned.
+  vh_priv chown -R root:root "$WEB_INSTALL_DIR"
+fi
 
 if [[ ! -d "$WEB_INSTALL_DIR" ]]; then
   fail "installed web artifact directory is missing: $WEB_INSTALL_DIR"

@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The macOS package's private PostgreSQL cluster (the counterpart of the distribution's postgresql.service that the
+     Debian package uses). Runs as _vaulthalla from a 0700 directory beside the state tree; its unix socket lives in
+     that directory, so only _vaulthalla reaches it (peer auth); the daemon connects over 127.0.0.1 with a password.
+     Installed and bootstrapped by vaulthalla-provision only when the bundled server is present. -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>sh.vaulthalla.postgres</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>@PG_BIN@/postgres</string>
+        <string>-D</string>
+        <string>@PG_DIR@/data</string>
+    </array>
+    <key>UserName</key>
+    <string>_vaulthalla</string>
+    <key>GroupName</key>
+    <string>_vaulthalla</string>
+    <key>Umask</key>
+    <integer>63</integer>
+    <key>WorkingDirectory</key>
+    <string>@PG_DIR@</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <!-- Restarted after any exit, clean or not: nothing but launchd stops it. -->
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+    <!-- SIGTERM is PostgreSQL's smart shutdown (it waits for the daemon's pool to disconnect); then SIGKILL, after
+         which the next start runs crash recovery. -->
+    <key>ExitTimeOut</key>
+    <integer>60</integer>
+    <key>ProcessType</key>
+    <string>Standard</string>
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>65535</integer>
+        <key>Core</key>
+        <integer>0</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>@LOG_DIR@/postgres.log</string>
+    <key>StandardErrorPath</key>
+    <string>@LOG_DIR@/postgres.log</string>
+</dict>
+</plist>

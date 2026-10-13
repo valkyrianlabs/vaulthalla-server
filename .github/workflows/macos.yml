@@ -1,13 +1,15 @@
 name: macOS
 # Builds core/ on Apple Silicon with Homebrew deps and runs vh_unit_tests against a disposable PostgreSQL 16 cluster
-# (tools/macos/). Independent of the Linux CI (ci/run-ci containers, self-hosted runners) and of release.yml: nothing
-# here packages or publishes. Failures are real, never masked.
+# (tools/macos/); on manual dispatch it also builds the installer package (tools/macos/pkg/) as an artifact. Runs in
+# parallel with the Linux CI (ci/run-ci containers, self-hosted runners); nothing here publishes (release.yml does).
+# Failures are real, never masked.
 on:
   pull_request:
     paths:
       - 'core/**'
       - 'meson*'
       - 'tools/macos/**'
+      - 'deploy/launchd/**'
       - '.github/workflows/macos.yml'
   push:
     branches:
@@ -16,6 +18,7 @@ on:
       - 'core/**'
       - 'meson*'
       - 'tools/macos/**'
+      - 'deploy/launchd/**'
       - '.github/workflows/macos.yml'
   workflow_dispatch:
 
@@ -27,6 +30,14 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
+  # ccache (meson uses it when it's on PATH at setup). The unity test objects use a precompiled header: clang's PCH
+  # timestamp and the PCH defines would otherwise make every one of them a miss.
+  CCACHE_DIR: /Users/runner/Library/Caches/ccache
+  CCACHE_BASEDIR: ${{ github.workspace }}
+  CCACHE_COMPILERCHECK: content
+  CCACHE_SLOPPINESS: pch_defines,time_macros,include_file_mtime,include_file_ctime
+  CCACHE_MAXSIZE: 3G
+  CXXFLAGS: -Xclang -fno-pch-timestamp
   HOMEBREW_NO_ANALYTICS: '1'
   HOMEBREW_NO_INSTALL_CLEANUP: '1'
   HOMEBREW_NO_ENV_HINTS: '1'
@@ -34,9 +45,9 @@ env:
 jobs:
   build-and-test:
     name: Build and unit tests (macOS arm64)
-    # GitHub-hosted Apple Silicon. macos-26 (arm64) matches the maintainer's macOS 26 dev hosts; macos-15 is the
-    # fallback label if the 26 image misbehaves.
-    runs-on: macos-26
+    # GitHub-hosted Apple Silicon on macOS 27 (the `xcode-27` image, public preview; there is no macos-27 label yet),
+    # matching the maintainer's macOS 27 hosts. macos-26 is the fallback label if the preview image misbehaves.
+    runs-on: xcode-27
     timeout-minutes: 90
     continue-on-error: false
     defaults:
@@ -63,6 +74,14 @@ jobs:
           path: ${{ env.VH_MACOS_DEPS }}
           key: macos-deps-${{ runner.arch }}-${{ hashFiles('tools/macos/fetch-pdfium.sh') }}
 
+      # A new key every run (caches are immutable); restore takes the newest one from this branch, else main's.
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: /Users/runner/Library/Caches/ccache
+          key: ccache-macos-debug-${{ runner.arch }}-${{ github.sha }}
+          restore-keys: ccache-macos-debug-${{ runner.arch }}-
+
       - name: Bootstrap (brew bundle, PDFium, pkg-config aliases)
         run: tools/macos/bootstrap.sh
 
@@ -82,7 +101,9 @@ jobs:
       - name: meson compile
         run: |
           . tools/macos/env.sh
+          ccache -z >/dev/null
           meson compile -C build-macos
+          ccache -s
 
       - name: Test database up
         env:
@@ -115,3 +136,82 @@ jobs:
         env:
           VH_TEST_PG_DIR: ${{ runner.temp }}/vh-pg
         run: tools/macos/test-db.sh down
+
+  # Not part of PR CI: release.yml builds the package (in parallel with the Debian build) for every release. Run this
+  # workflow by hand (Actions > macOS > Run workflow) to rehearse a package from any branch.
+  package:
+    name: Installer package (macOS arm64)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: xcode-27
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash -euo pipefail {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deps prefix
+        run: |
+          {
+            echo "VH_MACOS_DEPS=$RUNNER_TEMP/vaulthalla-macos-deps"
+            echo "VH_CANDIDATE_DIR=$RUNNER_TEMP/candidate"
+          } >> "$GITHUB_ENV"
+
+      - name: Cache Homebrew downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/Homebrew/downloads
+          key: brew-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tools/macos/Brewfile') }}
+          restore-keys: brew-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Cache PDFium prefix
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.VH_MACOS_DEPS }}
+          key: macos-deps-${{ runner.arch }}-${{ hashFiles('tools/macos/fetch-pdfium.sh') }}
+
+      # The PostgreSQL build is pinned by version and sha256 in build-postgres.sh.
+      - name: Cache PostgreSQL build
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/vaulthalla-macos-pkg
+          key: macos-postgres-${{ runner.arch }}-${{ hashFiles('tools/macos/pkg/build-postgres.sh') }}
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: /Users/runner/Library/Caches/ccache
+          key: ccache-macos-release-${{ runner.arch }}-${{ github.sha }}
+          restore-keys: ccache-macos-release-${{ runner.arch }}-
+
+      - name: Bootstrap (brew bundle, PDFium, pkg-config aliases)
+        run: tools/macos/bootstrap.sh
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Web dependencies
+        run: |
+          npm install -g pnpm@11.0.8
+          pnpm --dir web install --frozen-lockfile
+
+      - name: Stage (release build, web console, Node runtime, pdfium)
+        run: tools/macos/candidate.sh stage
+
+      - name: Build the package
+        run: tools/macos/candidate.sh pkg
+
+      - name: Package contents
+        run: |
+          pkg=$(ls "$VH_CANDIDATE_DIR"/pkg/vaulthalla-*-arm64.pkg)
+          pkgutil --payload-files "$pkg" | grep -E '/(bin|LaunchDaemons|libexec/vaulthalla/postgresql/bin)/' | head -40
+          tools/macos/pkg/render-cask.sh "$pkg" > "$VH_CANDIDATE_DIR/pkg/vaulthalla.rb"
+          ruby -c "$VH_CANDIDATE_DIR/pkg/vaulthalla.rb"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vaulthalla-macos-pkg
+          path: ${{ env.VH_CANDIDATE_DIR }}/pkg/
+          if-no-files-found: error
+          retention-days: 14

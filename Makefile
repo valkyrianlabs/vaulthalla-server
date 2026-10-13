@@ -7,6 +7,8 @@
 	build \
 	install \
 	dev \
+	dev-plan \
+	dev-uninstall \
 	test \
 	itest \
 	itest-selftest \
@@ -24,7 +26,7 @@
 	clean-package \
 	purge-builds
 
-dev: export VH_BUILD_MODE=dev
+dev dev-plan dev-uninstall: export VH_BUILD_MODE=dev
 
 # Default target: build
 all: build
@@ -41,12 +43,25 @@ install:
 	@echo "🛡️  Running install script..."
 	./bin/install.sh
 
-## 🛠️ Install in development mode
+## 🛠️ Install the isolated dev instance (Linux and macOS), beside any production install and never touching it:
+## its own prefix (/opt/vaulthalla-dev; /usr/local/vaulthalla-dev), paths (/etc|/var/lib|/run/vaulthalla-dev, /mnt/vh_dev;
+## /Library/Application Support/Vaulthalla-dev), account, units (vaulthalla-dev*.service; sh.vaulthalla.dev.*), database
+## (vaulthalla_dev), ports (+100: web 37068) and CLI (vh-dev). Each run reinstalls it fresh (its data is dropped).
 dev:
 	./bin/uninstall.sh
 	./bin/setup/install_guard.sh
 	@echo "🛡️  Running install script..."
 	./bin/install.sh
+
+## The same, printing every privileged command instead of running it (and skipping the build).
+dev-plan:
+	VH_DRY_RUN=1 ./bin/uninstall.sh
+	VH_DRY_RUN=1 ./bin/setup/install_guard.sh
+	VH_DRY_RUN=1 ./bin/install.sh
+
+## Remove the dev instance (and only it).
+dev-uninstall:
+	./bin/uninstall.sh
 
 ## Tests never install, never touch the dev install or a shared role/database: each run gets its own database (owned
 ## by the vh_harness role, from `sudo tools/harness/bootstrap.sh`, once), private /tmp paths and the build-itest/ build.

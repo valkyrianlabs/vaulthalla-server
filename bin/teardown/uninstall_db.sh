@@ -5,8 +5,11 @@ source "$(dirname "$0")/../lib/dev_mode.sh"
 
 vh_require_dev_mode
 
-DB_NAME="vaulthalla"
-DB_ROLE="vaulthalla"
+source "$(dirname "$0")/../lib/platform.sh"
+# make dev runs this for the dev instance: its own database and role (vaulthalla_dev), never production's.
+vh_instance_layout "$(vh_selected_instance)"
+DB_NAME="$VH_DB_NAME"
+DB_ROLE="$VH_DB_ROLE"
 
 if ! command -v psql >/dev/null 2>&1 || ! id -u postgres >/dev/null 2>&1; then
     echo "🛡️  PostgreSQL client not installed or 'postgres' user missing. Skipping database cleanup."

@@ -10,6 +10,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
+# The install this cleans up. Defaults: production's names (the dev install used to be production's). `make dev` now
+# installs an isolated instance and passes its own (bin/lib/platform.sh): unit stem vaulthalla-dev, its binaries under
+# /opt/vaulthalla-dev, /mnt/vh_dev; then nothing that belongs to a production install beside it is ever eligible.
+VH_UNIT_STEM="${VH_UNIT_STEM:-vaulthalla}"
+VH_INSTANCE_BINDIRS="${VH_INSTANCE_BINDIRS:-/usr/bin /usr/local/bin}"
+VH_CONFIG_PATH="${VH_CONFIG_PATH:-/etc/vaulthalla/config.yaml}"
 VH_MOUNTPOINT="${VH_MOUNTPOINT:-/mnt/vaulthalla}"
 VH_WEB_SERVER_PATH="${VH_WEB_SERVER_PATH:-/usr/share/vaulthalla-web/server.js}"
 VH_SWTPM_STATE_DIR="${VH_SWTPM_STATE_DIR:-/var/lib/swtpm/vaulthalla}"
@@ -18,11 +24,11 @@ VH_PID_GRACE_SECONDS="${VH_PID_GRACE_SECONDS:-2}"
 
 # vaulthalla-cli.{socket,service} are retired (#110) but still cleaned up on older dev installs.
 VH_DEV_CLEANUP_UNITS=(
-  vaulthalla-web.service
-  vaulthalla-cli.socket
-  vaulthalla-cli.service
-  vaulthalla.service
-  vaulthalla-swtpm.service
+  "$VH_UNIT_STEM-web.service"
+  "$VH_UNIT_STEM-cli.socket"
+  "$VH_UNIT_STEM-cli.service"
+  "$VH_UNIT_STEM.service"
+  "$VH_UNIT_STEM-swtpm.service"
 )
 
 vh_log() {
@@ -39,14 +45,21 @@ vh_canon_path() {
 }
 
 vh_is_exact_vaulthalla_unit() {
-  case "$1" in
-    vaulthalla.service|vaulthalla-cli.service|vaulthalla-cli.socket|vaulthalla-web.service|vaulthalla-swtpm.service)
-      return 0
-      ;;
-    *)
-      return 1
-      ;;
-  esac
+  local unit
+  for unit in "${VH_DEV_CLEANUP_UNITS[@]}"; do
+    [[ "$1" == "$unit" ]] && return 0
+  done
+  return 1
+}
+
+vh_is_instance_binary() {
+  local dir
+  for dir in $VH_INSTANCE_BINDIRS; do
+    case "$1" in
+      "$dir/vaulthalla-server"|"$dir/vaulthalla-cli") return 0 ;;
+    esac
+  done
+  return 1
 }
 
 vh_unit_exists() {
@@ -270,11 +283,9 @@ vh_identity_is_kill_eligible() {
     return 1
   fi
 
-  case "$exe" in
-    /usr/bin/vaulthalla-server|/usr/local/bin/vaulthalla-server|/usr/bin/vaulthalla-cli|/usr/local/bin/vaulthalla-cli)
-      return 0
-      ;;
-  esac
+  if vh_is_instance_binary "$exe"; then
+    return 0
+  fi
 
   if vh_cgroup_has_exact_vaulthalla_unit "$cgroup"; then
     return 0
@@ -436,10 +447,14 @@ vh_active_config_path() {
   local candidate
   for candidate in \
     "${VH_PATH_TO_CONFIG:-}" \
-    /etc/vaulthalla/config.yaml \
+    "$VH_CONFIG_PATH" \
     "$REPO_ROOT/config.yaml" \
     "$REPO_ROOT/deploy/config/config.yaml"; do
     [[ -n "$candidate" && -r "$candidate" ]] || continue
+    # An instance's ports are only in its own config: the repo's carry production's.
+    if [[ "$VH_UNIT_STEM" != vaulthalla && "$candidate" != "${VH_PATH_TO_CONFIG:-}" && "$candidate" != "$VH_CONFIG_PATH" ]]; then
+      continue
+    fi
     printf '%s\n' "$candidate"
     return 0
   done

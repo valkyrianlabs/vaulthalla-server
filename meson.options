@@ -77,3 +77,10 @@ option(
     value: 'auto',
     description: 'Where HTTP uploads stage before commit (protocols/http/upload/Staging.hpp). auto: mount on Linux (through the FUSE mount, as always), private elsewhere (daemon-private, mount-independent)'
 )
+
+option(
+    'instance',
+    type: 'string',
+    value: '',
+    description: 'Empty (default): the production install. A name (e.g. dev, used by `make dev`): an isolated instance whose every compiled-in location, service account, service name and CLI socket carries the name, so it never touches a production install on the same host'
+)

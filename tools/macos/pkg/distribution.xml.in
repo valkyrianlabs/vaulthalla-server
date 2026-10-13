@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="2">
+    <title>Vaulthalla @VERSION@</title>
+    <organization>sh.vaulthalla</organization>
+    <options customize="never" require-scripts="true" hostArchitectures="arm64"/>
+    <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
+    <allowed-os-versions><os-version min="14.0"/></allowed-os-versions>
+    <choices-outline><line choice="default"><line choice="sh.vaulthalla.server"/></line></choices-outline>
+    <choice id="default"/>
+    <choice id="sh.vaulthalla.server" visible="false"><pkg-ref id="sh.vaulthalla.server"/></choice>
+    <pkg-ref id="sh.vaulthalla.server" version="@VERSION@" onConclusion="none">component.pkg</pkg-ref>
+</installer-gui-script>

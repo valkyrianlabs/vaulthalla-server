@@ -15,22 +15,22 @@ case "$OS" in
         echo "${GREEN}${BOLD}🛡️  Vaulthalla recognizes this as a worthy environment.${RESET}"
         ;;
     Darwin)
-        clear
-        cat << EOF
-${YELLOW}${BOLD}⛔️  macOS Detected${RESET}
+        # macOS: `make dev` installs the isolated dev instance from source (bin/lib/platform.sh). A production install
+        # comes from the installer package or the Homebrew cask, never from these scripts.
+        if [ "${VH_BUILD_MODE:-}" = dev ]; then
+            echo "${GREEN}${BOLD}🛡️  macOS: installing the isolated dev instance (sh.vaulthalla.dev.*, vh-dev).${RESET}"
+        else
+            cat << EOF
+${YELLOW}${BOLD}⛔️  macOS: production installs come from the package${RESET}
 
-${CYAN}╔══════════════════════════════════════════════════════════════════════╗
-║  macOS is not yet battle-tested for Vaulthalla.                       ║
-║  Join the contributors and help make it happen:                       ║
-║                                                                       ║
-║     ⚔️  https://vaulthalla.dev/contribute/mac                         ║
-╚══════════════════════════════════════════════════════════════════════╝${RESET}
+${CYAN}Install Vaulthalla on a Mac with the signed installer package or Homebrew:
+    brew install --cask vaulthalla/tap/vaulthalla      (or open vaulthalla-<version>.pkg)
 
-${YELLOW}Until then, run a Linux VM or boot live media.${RESET}
-${CYAN}You're not excluded—just invited to help.${RESET}
+From a source checkout, 'make dev' installs an isolated development instance
+(vh-dev, sh.vaulthalla.dev.*) that never touches a production install.${RESET}
 EOF
-        sleep 2
-        exit 1
+            exit 1
+        fi
         ;;
     MINGW* | MSYS* | CYGWIN* | Windows_NT)
         clear

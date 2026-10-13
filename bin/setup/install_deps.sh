@@ -4,6 +4,25 @@ set -euo pipefail
 
 echo "🔍 Checking for required build dependencies..."
 
+if [ "$(uname -s)" = Darwin ]; then
+    # macOS: Homebrew formulae (tools/macos/Brewfile), the pinned PDFium SDK and pkg-config aliases, as you (never
+    # root); plus the web console's toolchain. PostgreSQL 16 comes from the Brewfile too (the instance runs its own
+    # cluster with those binaries: bin/setup/install_db.sh).
+    REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd -P)"
+    # shellcheck source=bin/lib/platform.sh
+    source "$REPO_ROOT/bin/lib/platform.sh"
+    [ "$(id -u)" != 0 ] || vh_die "run make dev as yourself (it uses sudo for the privileged steps), not as root"
+    command -v brew >/dev/null 2>&1 || vh_die "install Homebrew first (https://brew.sh)"
+    vh_run "$REPO_ROOT/tools/macos/bootstrap.sh"
+    for tool in pnpm node; do
+        command -v "$tool" >/dev/null 2>&1 || vh_die "$tool is required for the web console (brew install node pnpm)"
+    done
+    [ -x "$(brew --prefix)/opt/postgresql@16/bin/initdb" ] || vh_dry_run \
+        || vh_die "postgresql@16 is missing (brew bundle --file tools/macos/Brewfile)"
+    echo "✅ macOS build dependencies ready."
+    exit 0
+fi
+
 # apt.vaulthalla.sh is the only source of Vaulthalla's own packages and build SDKs (libpdfium-dev,
 # libpqxx-vh-dev). Same keyring and source line as bin/vh/install.sh.
 readonly VH_KEYRING="/usr/share/keyrings/vaulthalla.gpg"

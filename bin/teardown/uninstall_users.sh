@@ -1,15 +1,20 @@
 #!/usr/bin/env bash
-if id vaulthalla &>/dev/null; then
-    echo "👤 Removing system user 'vaulthalla'..."
-    sudo userdel -r vaulthalla || echo "⚠️  Could not delete home or user not removable"
+# shellcheck source=bin/lib/platform.sh
+source "$(dirname "$0")/../lib/platform.sh"
+# Production's account (make uninstall --remove-users), or only the dev instance's (vaulthalla-dev).
+vh_instance_layout "$(vh_selected_instance)"
+
+if id "$VH_USER" &>/dev/null; then
+    echo "👤 Removing system user '$VH_USER'..."
+    sudo userdel -r "$VH_USER" || echo "⚠️  Could not delete home or user not removable"
 else
-    echo "✅ System user 'vaulthalla' not present."
+    echo "✅ System user '$VH_USER' not present."
 fi
 
-# Remove 'vaulthalla' group if it exists
-if getent group vaulthalla > /dev/null; then
-    echo "👥 Removing 'vaulthalla' group..."
-    sudo groupdel vaulthalla || echo "⚠️  Could not delete group 'vaulthalla' or group not removable"
+# Remove the service group if it exists
+if getent group "$VH_GROUP" > /dev/null; then
+    echo "👥 Removing '$VH_GROUP' group..."
+    sudo groupdel "$VH_GROUP" || echo "⚠️  Could not delete group '$VH_GROUP' or group not removable"
 else
-    echo "✅ 'vaulthalla' group not present."
+    echo "✅ '$VH_GROUP' group not present."
 fi

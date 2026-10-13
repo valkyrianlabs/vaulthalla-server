@@ -8,6 +8,7 @@ brew "meson"          # build system
 brew "ninja"          # meson backend
 brew "pkgconf"        # pkg-config: every core/meson.build dependency() resolves through it
 brew "pandoc"         # manpages (-Dmanpage=true, core/usage)
+brew "ccache"         # compiler cache; meson picks it up from PATH at setup (CI caches ~/Library/Caches/ccache)
 
 # Libraries (core/meson.build deps)
 brew "boost"          # filesystem (+ header-only system)
