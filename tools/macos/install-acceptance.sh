@@ -116,9 +116,12 @@ phase_preflight() {
   done < <(staged_paths)
   [ "$conflicts" = 0 ] || die "$conflicts staged path(s) would overwrite something; nothing installed"
   say "staged paths: $new new, $updates update(s) to files an earlier run installed, $(staged_paths | wc -l | tr -d ' ') total; nothing else would be overwritten"
-  for p in $PORTS; do
-    if listening "$p" && ! has_pid "$SERVER"; then die "port $p is in use by something else"; fi
-  done
+  # Our own LaunchDaemons (loaded by an earlier run) may hold the ports; anything else is a foreign listener.
+  if ! launchctl print "system/$SERVER" >/dev/null 2>&1 && ! launchctl print "system/$WEB" >/dev/null 2>&1; then
+    for p in $PORTS; do
+      if listening "$p"; then die "port $p is in use by something else"; fi
+    done
+  fi
   if dscl . -read /Users/_vaulthalla RecordName >/dev/null 2>&1; then say "_vaulthalla exists (provisioning validates it)"
   else say "_vaulthalla does not exist yet"; fi
   for p in "$SUPPORT" "$LOGS" /Library/LaunchDaemons/$SERVER.plist /Library/LaunchDaemons/$WEB.plist; do
