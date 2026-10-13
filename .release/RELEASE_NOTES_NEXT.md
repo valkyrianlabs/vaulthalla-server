@@ -18,6 +18,10 @@ console and the database at boot through launchd, before anyone logs in. The per
 `/Library/Application Support/Vaulthalla/uninstall.sh` removes it and keeps the data unless given `--purge`.
 On macOS the vault isn't mounted in Finder yet: use the web console, the S3 gateway or `vh fs`.
 
+The package isn't signed by Apple yet. Opened from Finder, macOS blocks it the first time: choose **Open Anyway** in
+System Settings → Privacy & Security, then run it again. `sudo installer -pkg vaulthalla-<version>-arm64.pkg -target /`
+and the Homebrew cask install it without that prompt.
+
 Existing behavior on Ubuntu installs is unchanged. Internals that touched Linux-only system calls now sit behind small
 platform interfaces, so one code base builds and passes its tests on both systems.
 

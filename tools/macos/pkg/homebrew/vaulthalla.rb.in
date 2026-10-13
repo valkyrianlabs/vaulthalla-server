@@ -30,6 +30,7 @@ cask "vaulthalla" do
   }
 
   caveats <<~EOS
+    The package is not yet signed by Apple; Homebrew installs it with `installer`, which doesn't prompt.
     Vaulthalla runs as a system service (LaunchDaemons sh.vaulthalla.*) and starts at boot.
     Web console: http://127.0.0.1:36968 (user 'admin'; first password:
       sudo cat "/Library/Application Support/Vaulthalla/state/super_admin_initial_password")
