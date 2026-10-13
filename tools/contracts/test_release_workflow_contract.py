@@ -42,6 +42,10 @@ def _needs(job: str) -> set[str]:
     return {line.strip()[2:] for line in match.group(2).splitlines()}
 
 
+# GitHub-hosted macOS jobs (tools/macos/pkg): outside the VPS container by necessity, and off the APT critical path.
+MACOS_JOBS = {"macos-package", "macos-publish"}
+
+
 class ReleaseWorkflowContractTests(unittest.TestCase):
     workflow = _read(".github/workflows/release.yml")
     jobs = _jobs(workflow)
@@ -104,6 +108,8 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
 
     def test_every_release_job_runs_on_the_vps_runner_in_the_ci_container(self) -> None:
         for name, job in self.jobs.items():
+            if name in MACOS_JOBS:
+                continue
             with self.subTest(job=name):
                 self.assertIn(f"runs-on: {VPS_RUNNER}\n    defaults:\n      run:\n        shell: {CONTAINER_SHELL}\n", job)
                 self.assertNotRegex(job, r"(?m)^\s+shell: (?!bash \./ci/run-ci )")
@@ -163,7 +169,21 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
     def test_least_privilege_writes(self) -> None:
         self.assertRegex(self.workflow, r"(?m)^permissions:\n  contents: read$")
         writers = {name for name, job in self.jobs.items() if "contents: write" in job}
-        self.assertEqual(writers, {"github-release", "finalize"})
+        self.assertEqual(writers, {"github-release", "finalize", "macos-publish"})
+
+    def test_macos_package_jobs_never_gate_the_apt_release(self) -> None:
+        # The macOS package builds on GitHub-hosted Apple Silicon and publishes only after the GitHub release exists;
+        # nothing on the Debian/APT path waits for it, so a macOS failure can't fail or hold a live APT release.
+        self.assertIn("    runs-on: macos-26\n", self.jobs["macos-package"])
+        publish = self.jobs["macos-publish"]
+        self.assertIn("needs.github-release.result == 'success'", publish)
+        self.assertIn("needs.macos-package.result == 'success'", publish)
+        for name, job in self.jobs.items():
+            if name in MACOS_JOBS:
+                continue
+            with self.subTest(job=name):
+                for macos in MACOS_JOBS:
+                    self.assertNotRegex(job, rf"(?m)^\s+(needs: |- ){macos}$")
 
     def test_every_checkout_honors_the_dispatch_ref(self) -> None:
         checkouts = re.findall(r"uses: actions/checkout@v4\n        with:\n          ref: (.+)\n", self.workflow)
