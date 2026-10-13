@@ -27,13 +27,6 @@ runs:
       shell: bash ./ci/run-ci bash -euo pipefail {0}
       run: |
         meson setup build --buildtype=${{ inputs.build_type }} -Dwerror=true -Dbuild_unit_tests=true -Dinstall_data=false
-        # The container's memory limit (ci/run-ci --memory; /proc/meminfo shows the host's, not ours) bounds the jobs:
-        # a unity test object takes up to ~2.5 GB in GCC, and ninja's default (cores + 2) overran the old 12g limit.
-        limit=$(cat /sys/fs/cgroup/memory.max 2>/dev/null || echo max)
-        cores=$(nproc)
-        if [ "$limit" = max ]; then jobs=$cores; else jobs=$(( limit / 2500000000 )); fi
-        [ "$jobs" -ge 1 ] || jobs=1; [ "$jobs" -le "$cores" ] || jobs=$cores
-        echo "compile jobs: $jobs (cores $cores, container memory limit $limit)"
-        meson compile -C build -j "$jobs"
+        meson compile -C build
         sudo meson install -C build
         sudo ldconfig

@@ -30,6 +30,14 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
+  # ccache (meson uses it when it's on PATH at setup). The unity test objects use a precompiled header: clang's PCH
+  # timestamp and the PCH defines would otherwise make every one of them a miss.
+  CCACHE_DIR: /Users/runner/Library/Caches/ccache
+  CCACHE_BASEDIR: ${{ github.workspace }}
+  CCACHE_COMPILERCHECK: content
+  CCACHE_SLOPPINESS: pch_defines,time_macros,include_file_mtime,include_file_ctime
+  CCACHE_MAXSIZE: 3G
+  CXXFLAGS: -Xclang -fno-pch-timestamp
   HOMEBREW_NO_ANALYTICS: '1'
   HOMEBREW_NO_INSTALL_CLEANUP: '1'
   HOMEBREW_NO_ENV_HINTS: '1'
@@ -66,6 +74,14 @@ jobs:
           path: ${{ env.VH_MACOS_DEPS }}
           key: macos-deps-${{ runner.arch }}-${{ hashFiles('tools/macos/fetch-pdfium.sh') }}
 
+      # A new key every run (caches are immutable); restore takes the newest one from this branch, else main's.
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: /Users/runner/Library/Caches/ccache
+          key: ccache-macos-debug-${{ runner.arch }}-${{ github.sha }}
+          restore-keys: ccache-macos-debug-${{ runner.arch }}-
+
       - name: Bootstrap (brew bundle, PDFium, pkg-config aliases)
         run: tools/macos/bootstrap.sh
 
@@ -85,7 +101,9 @@ jobs:
       - name: meson compile
         run: |
           . tools/macos/env.sh
+          ccache -z >/dev/null
           meson compile -C build-macos
+          ccache -s
 
       - name: Test database up
         env:
@@ -136,6 +154,13 @@ jobs:
             echo "VH_CANDIDATE_DIR=$RUNNER_TEMP/candidate"
           } >> "$GITHUB_ENV"
 
+      - name: Cache Homebrew downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/Homebrew/downloads
+          key: brew-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tools/macos/Brewfile') }}
+          restore-keys: brew-${{ runner.os }}-${{ runner.arch }}-
+
       - name: Cache PDFium prefix
         uses: actions/cache@v4
         with:
@@ -148,6 +173,13 @@ jobs:
         with:
           path: ~/.cache/vaulthalla-macos-pkg
           key: macos-postgres-${{ runner.arch }}-${{ hashFiles('tools/macos/pkg/build-postgres.sh') }}
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: /Users/runner/Library/Caches/ccache
+          key: ccache-macos-release-${{ runner.arch }}-${{ github.sha }}
+          restore-keys: ccache-macos-release-${{ runner.arch }}-
 
       - name: Bootstrap (brew bundle, PDFium, pkg-config aliases)
         run: tools/macos/bootstrap.sh
