@@ -71,8 +71,14 @@ cmd_stage() {
   export VH_MACOS_DEPS="$DIR/deps"
   env_setup  # again, so PKG_CONFIG_PATH has the relocated pdfium.pc first
   local build="$REPO/build-candidate" stage="$DIR/stage" next="$DIR/stage.next"
-  if [ -f "$build/build.ninja" ]; then meson setup --reconfigure "$build" >/dev/null
-  else meson setup "$build" --prefix="$PREFIX" -Dbuildtype=release -Doptimization=3 -Dbuild_unit_tests=false >/dev/null; fi
+  # Meson caches the dependency paths: a build dir configured against another deps dir would link a stale pdfium.
+  if [ -f "$build/build.ninja" ] && [ "$(cat "$build/.vh-candidate-deps" 2>/dev/null)" = "$VH_MACOS_DEPS" ]; then
+    meson setup --reconfigure "$build" >/dev/null
+  else
+    rm -rf "$build"
+    meson setup "$build" --prefix="$PREFIX" -Dbuildtype=release -Doptimization=3 -Dbuild_unit_tests=false >/dev/null
+    printf '%s\n' "$VH_MACOS_DEPS" > "$build/.vh-candidate-deps"
+  fi
   log "building (log: $DIR/build.log)"
   meson compile -C "$build" > "$DIR/build.log" 2>&1 || { tail -20 "$DIR/build.log" >&2; die "build failed"; }
   rm -rf "$next"
@@ -133,7 +139,7 @@ cmd_accept() {
   chown "${SUDO_USER:-root}" "$DIR/report"
   log "candidate $(cat "$DIR/stage.commit"); log: $DIR/report/run.log"
   "$REPO/tools/macos/install-acceptance.sh" --phase "${1:-all}" --stage "$DIR/stage" \
-    --db-port "$PG_PORT" --db-name "$DB_ROLE" --db-user "$DB_ROLE" --db-password-file "$DIR/pg/install-role-password" \
+    --db-port "$PG_PORT" --db-name "$DB_ROLE" --db-user "$DB_ROLE" --db-password-file "$DIR/pg/install-role-password" --db-dir "$DIR/pg" \
     --python "$DIR/venv/bin/python" --report-dir "$DIR/report" 2>&1 | tee -a "$DIR/report/run.log"
 }
 

@@ -2,7 +2,7 @@
 # Installs a staged macOS build as the real system service and proves it (roadmap #230). Root, on a Mac you may change.
 #
 #   sudo tools/macos/install-acceptance.sh --stage DIR --db-port N --db-name NAME --db-user USER \
-#        --db-password-file FILE --python PY --report-dir DIR [--client USER] [--phase PHASE]
+#        --db-password-file FILE --python PY --report-dir DIR [--client USER] [--phase PHASE] [--db-dir DIR]
 #
 # Phases (default: all, in this order; each can be rerun on its own):
 #   preflight  read-only: every staged file is new (nothing installed is overwritten), no foreign account or
@@ -14,7 +14,9 @@
 #   accept     account + permissions; both LaunchDaemons (status, restart, crash recovery, stop/start); encrypted
 #              vault over HTTP with RBAC denial (tools/macos/install_acceptance.py, run as --client); ciphertext at
 #              rest; two hidden local test identities: one enrolled in the vaulthalla group (the CLI works), one
-#              not (the state, run, log and config paths and the CLI socket are all refused).
+#              not (the state, run, log and config paths and the CLI socket are all refused). With --db-dir (a
+#              tools/macos/test-db.sh cluster, run by its owner): PostgreSQL stopped under the running service, and
+#              the service restarted while it is down (boot before the database), each recovering once it returns.
 #   cleanup    removes the two test identities (only if this script created them).
 # It never purges, never touches an existing config.yaml beyond the database block of the one provisioning created,
 # and never prints secrets: the admin password goes from the state directory to the client on stdin.
@@ -36,11 +38,12 @@ PROBE=vhtest_probe
 CLI_USER=vhtest_cli
 REPO="$(cd "$(dirname "$0")/../.." && pwd -P)"
 
-STAGE="" DB_PORT="" DB_NAME="" DB_USER="" DB_PW_FILE="" PY="" REPORT="" CLIENT="${SUDO_USER:-}" PHASE=all
+STAGE="" DB_DIR="" DB_PORT="" DB_NAME="" DB_USER="" DB_PW_FILE="" PY="" REPORT="" CLIENT="${SUDO_USER:-}" PHASE=all
 while [ $# -gt 0 ]; do
   case "$1" in
     --stage) STAGE="$2"; shift ;;
     --db-port) DB_PORT="$2"; shift ;;
+    --db-dir) DB_DIR="$2"; shift ;;
     --db-name) DB_NAME="$2"; shift ;;
     --db-user) DB_USER="$2"; shift ;;
     --db-password-file) DB_PW_FILE="$2"; shift ;;
@@ -48,7 +51,7 @@ while [ $# -gt 0 ]; do
     --report-dir) REPORT="$2"; shift ;;
     --client) CLIENT="$2"; shift ;;
     --phase) PHASE="$2"; shift ;;
-    -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
     *) echo "install-acceptance: unknown argument: $1" >&2; exit 2 ;;
   esac
   shift
@@ -249,6 +252,8 @@ phase_accept() {
   check "web restarts" wait_for 60 new_pid $WEB "$pid"
   check "web listens after restart" wait_for 60 listening 36968
 
+  if [ -n "$DB_DIR" ]; then accept_db_outage; fi
+
   say "== local identities: one enrolled for the CLI, one not"
   make_test_user "$PROBE"
   make_test_user "$CLI_USER"
@@ -321,6 +326,41 @@ accept_vh_fs() {  # vh fs (#229), when the installed build has it: the bytes thr
   check "$PROBE can't use vh fs (exit $rc)" test "$rc" = 77
   check "no CLI upload left plaintext staged" test -z "$(find "$STATE/.cli-staging" -name '*.part' 2>/dev/null)"
   rm -rf "$work"
+}
+
+pg_ctl_as_owner() {  # pg_ctl_as_owner start|stop: the disposable cluster, as the user who owns it
+  local bin owner
+  bin="$(dirname "$(readlink -f /opt/homebrew/opt/postgresql@16/bin/pg_ctl)")"
+  owner="$(stat -f %Su "$DB_DIR/data")"
+  sudo -u "$owner" -- "$bin/pg_ctl" -D "$DB_DIR/data" -l "$DB_DIR/server.log" -w -t 60 -m fast "$1" >/dev/null
+}
+
+verify_within() {  # verify_within SECONDS: client verify passes before the deadline (the pool reconnects on its own)
+  local deadline=$(( $(date +%s) + $1 ))
+  until client verify >/dev/null 2>&1; do [ "$(date +%s)" -lt "$deadline" ] || { client verify; return 1; }; sleep 3; done
+}
+
+accept_db_outage() {  # the P0 shape: PostgreSQL goes away under the service, and the service starts before it
+  local pid
+  say "== database outage under the running server"
+  pid=$(pid_of $SERVER)
+  pg_ctl_as_owner stop
+  sleep 10
+  check "server stays up or launchd restarts it while the database is down" wait_for 15 has_pid $SERVER
+  pg_ctl_as_owner start
+  check "verify within 120s of the database returning (pool recovered)" verify_within 120
+  say "  server pid $pid -> $(pid_of $SERVER)"
+
+  say "== server restarted while the database is down (boot before PostgreSQL)"
+  pg_ctl_as_owner stop
+  pid=$(pid_of $SERVER)
+  launchctl kickstart -k "system/$SERVER"
+  check "restarted with a new pid" wait_for 60 new_pid $SERVER "$pid"
+  sleep 15
+  check "still running (or retrying under KeepAlive) without a database" wait_for 15 has_pid $SERVER
+  pg_ctl_as_owner start
+  check "ready once the database is up" wait_for 120 server_ready
+  check "verify within 120s of the database returning" verify_within 120
 }
 
 no_secrets_leaked() {
