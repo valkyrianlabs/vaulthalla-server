@@ -26,6 +26,10 @@ on:
         description: 'Also publish the rehearsal package to NEXUS_PKG_REPO (delete it there afterwards)'
         type: boolean
         default: false
+      nexus_upload_check:
+        description: 'Only check the Nexus upload path: publish a 120 MB dummy package (no build); delete it afterwards'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -174,7 +178,7 @@ jobs:
   package:
     name: Installer package (macOS arm64)
     needs: gate
-    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' }}
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && !inputs.nexus_upload_check }}
     runs-on: xcode-27
     timeout-minutes: 90
     defaults:
@@ -264,6 +268,13 @@ jobs:
           sudo grep -E 'vaulthalla|preinstall|postinstall|PackageKit: Install' /var/log/install.log | tail -n 80 || true
           sudo sh -c 'tail -n 60 /Library/Logs/Vaulthalla/*.log' || true
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vaulthalla-macos-pkg
+          path: ${{ env.VH_CANDIDATE_DIR }}/pkg/
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Publish the rehearsal package to Nexus (opt-in)
         if: inputs.nexus_test
         env:
@@ -273,9 +284,26 @@ jobs:
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD || secrets.NEXUS_PASS }}
         run: bash tools/macos/pkg/publish-nexus.sh "$VH_CANDIDATE_DIR/pkg"
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: vaulthalla-macos-pkg
-          path: ${{ env.VH_CANDIDATE_DIR }}/pkg/
-          if-no-files-found: error
-          retention-days: 14
+  # The Nexus raw repository's upload path alone (credentials, the size limit of every proxy in front of it,
+  # readback, the identical/different-bytes rules), with a dummy package the size of a real one: no build.
+  nexus-upload-check:
+    name: Nexus upload check (dummy package)
+    if: github.event_name == 'workflow_dispatch' && inputs.nexus_upload_check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: A 120 MB dummy package
+        run: |
+          mkdir -p "$RUNNER_TEMP/pkg" && cd "$RUNNER_TEMP/pkg"
+          head -c 125829120 /dev/urandom > vaulthalla-0.0.0-uploadcheck-arm64.pkg
+          sha256sum vaulthalla-0.0.0-uploadcheck-arm64.pkg > vaulthalla-0.0.0-uploadcheck-arm64.pkg.sha256
+      - name: "Publish it, then again (identical bytes must be skipped)"
+        env:
+          RELEASE_PUBLISH_MODE: nexus
+          NEXUS_PKG_REPO: ${{ vars.NEXUS_PKG_REPO }}
+          NEXUS_USER: ${{ secrets.NEXUS_USER }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD || secrets.NEXUS_PASS }}
+        run: |
+          bash tools/macos/pkg/publish-nexus.sh "$RUNNER_TEMP/pkg"
+          bash tools/macos/pkg/publish-nexus.sh "$RUNNER_TEMP/pkg"
