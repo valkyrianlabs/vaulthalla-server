@@ -54,8 +54,9 @@ if [ -n "${VH_PKG_CODESIGN_IDENTITY:-}" ]; then
   done
 fi
 
-# Root owns everything; nothing group/world-writable.
-chmod -R go-w "$ROOT"
+# Root owns everything; everything readable (the daemons run as _vaulthalla, the CLI as anyone), nothing
+# group/world-writable. Nothing secret is in the payload: secrets are generated at install time.
+chmod -R u+rwX,go+rX,go-w "$ROOT"
 pkgbuild --analyze --root "$ROOT" "$WORK/component.plist" >/dev/null
 /usr/libexec/PlistBuddy -c "Print" "$WORK/component.plist" >/dev/null 2>&1 && {
   n=$(/usr/libexec/PlistBuddy -c "Print" "$WORK/component.plist" | grep -c BundleIsRelocatable || true)

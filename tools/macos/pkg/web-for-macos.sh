@@ -61,6 +61,9 @@ leftover=$(find "$work/vaulthalla-web" -type f \( -name '*.node' -o -name '*.so'
            grep -v '/@img/sharp-darwin-arm64/\|/@img/sharp-libvips-darwin-arm64/' || true)
 [ -z "$leftover" ] || die "native files for another platform remain: $leftover"
 
+# The bundle was built in a CI container with a restrictive umask: the installed console must be readable by the
+# service account (it runs as _vaulthalla), and writable by nobody but root.
+chmod -R u+rwX,go+rX,go-w "$work/vaulthalla-web"
 mkdir -p "$(dirname "$WEB")"
 rm -rf "$WEB"
 mv "$work/vaulthalla-web" "$WEB"
