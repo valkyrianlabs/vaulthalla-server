@@ -231,6 +231,11 @@ vh fs get <vault> <path> [-o <file>|-] [--owner <user>]
 vh fs put <vault> <local-file|-> <path> [--overwrite] [--owner <user>]
 ```
 
+:::callout{theme="warning" title="Interim"}
+`vh fs` is a stopgap for hosts without a usable mount (macOS today). It will be retired once the macOS FUSE identity
+adapter maps each local user to their own Vaulthalla identity on the mount; scripts should not treat it as permanent.
+:::
+
 Reads and writes vault files without a mount, through the control socket. `vh` itself reads the local file (or standard input) for `put` and writes the local file for `get`; the daemon only ever sees the vault path. Permissions are the web console's: `ls` needs List, `get` needs Read, `put` needs Write on the new path (missing folders are created) and `--overwrite` needs Overwrite on the existing file. A path you can't read reports "permission denied" whether or not it exists.
 
 `get -o <file>` writes to a temporary file next to `<file>` and replaces `<file>` only when every byte arrived and the stored file passed its integrity check; anything else leaves `<file>` as it was. Without `-o`, the bytes go to standard output, and `vh` refuses to write them to a terminal unless you pass `-o -`. A `put` stores nothing unless the whole file arrives, and a replacement fails if the file changed while uploading. Removing someone's access stops their running transfer.

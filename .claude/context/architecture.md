@@ -108,7 +108,8 @@ shipped. The client waits at most `VAULTHALLA_CLI_TIMEOUT` (default 10s) for the
 75 (not responding), 77 (not in the `vaulthalla` group), 76 (reply without exit status). `vh status` exits 0/1/2 for
 healthy/degraded/critical and includes a live `SELECT 1` DB probe.
 
-**File transfer (`vh fs ls|get|put`, #229).** Bytes ride the same length-prefixed JSON frames, never a second channel
+**File transfer (`vh fs ls|get|put`, #229). Interim:** retire it once a macOS FUSE identity adapter maps local
+uids to Vaulthalla users on the mount (#221); don't grow it into a second file API. Bytes ride the same length-prefixed JSON frames, never a second channel
 (`protocols/shell/Transfer.hpp`, header-only and shared with the client): the request carries `"transfer": {"v":1}`
 (`put_size` for put), the daemon answers `transfer`/`transfer-ready`, then `data` frames (`seq`, base64 of at most
 256 KiB) and `transfer-end`/`transfer-abort`, then the usual `result`. Limits are checked before allocation: 512 KiB

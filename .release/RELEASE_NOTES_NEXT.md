@@ -15,7 +15,8 @@ development. macOS packaging is not part of this release.
 
 New: `vh fs ls`, `vh fs get` and `vh fs put` read and write vault files over the control socket, without a mount, with
 the same permissions as the web console. Downloads to a file are written atomically and only when complete; uploads
-are stored only when every byte arrives, and `--overwrite` refuses to replace a file that changed meanwhile.
+are stored only when every byte arrives, and `--overwrite` refuses to replace a file that changed meanwhile. This is
+an interim path for macOS until its FUSE mount can map local users to their own Vaulthalla identities.
 
 Fixes found along the way:
 
