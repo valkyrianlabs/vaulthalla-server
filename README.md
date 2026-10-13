@@ -62,7 +62,7 @@ Privacy & Security once. Guide: [Install On macOS](https://vaulthalla.io/docs/ma
 
 2. Change it with `vh setup set-super-admin-password` (or keep it and delete that file).
 3. Serve it over HTTPS:
-   - Linux: `sudo vh setup nginx --domain vault.example.com --certbot`
+   - Linux: `sudo vh setup nginx --domain <domain> --certbot` (Let's Encrypt through nginx)
    - macOS: `sudo vh setup caddy --domain vault.home.arpa --trust` for a home-network name with Vaulthalla's own
      certificate authority, or `--domain vault.example.com` for Let's Encrypt.
 4. Create a vault, then export its keys before important data goes in.
