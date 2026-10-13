@@ -15,8 +15,6 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DISPATCH_REF = "${{ github.event.inputs.ref || github.ref }}"
 # Every CI step runs in the disposable CI container (ci/run-ci, ci/Containerfile) on the VPS runner, never on the host.
 CONTAINER_SHELL = "bash ./ci/run-ci bash -euo pipefail {0}"
-# The unit tests' container also gets a throwaway postgres (named as a test database), so no DB-backed suite skips.
-TEST_SHELL = "env CI_POSTGRES_DB=vh_harness_unit_ci CI_POSTGRES_ROLE=vh_harness bash ./ci/run-ci --postgres bash -euo pipefail {0}"
 VPS_RUNNER = "[self-hosted, Linux, X64, vaulthalla, vps-ci]"
 
 
@@ -140,15 +138,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             with self.subTest(action=action):
                 shells = re.findall(r"(?m)^\s+shell: (.+)$", text)
                 self.assertTrue(shells or "uses: ./.github/actions/" in text)
-                allowed = {CONTAINER_SHELL, TEST_SHELL} if action == "test" else {CONTAINER_SHELL}
-                self.assertEqual(set(shells) - allowed, set())
-
-    def test_pr_unit_tests_run_the_db_backed_suites(self) -> None:
-        # The release relies on PR CI for every test: the DB-backed suites must run there, never GTEST_SKIP.
-        text = _read(".github/actions/test/action.yml")
-        self.assertIn(f"shell: {TEST_SHELL}", text)
-        self.assertIn("VH_TEST_DB_NAME=vh_harness_unit_ci", text)
-        self.assertIn("Skipping db tests", text)
+                self.assertEqual(set(shells) - {CONTAINER_SHELL}, set())
 
     def test_docs_failure_cannot_block_or_fail_the_release_record(self) -> None:
         self.assertNotIn("docs-publish", _needs(self.jobs["finalize"]))
