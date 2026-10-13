@@ -1,13 +1,15 @@
 name: macOS
 # Builds core/ on Apple Silicon with Homebrew deps and runs vh_unit_tests against a disposable PostgreSQL 16 cluster
-# (tools/macos/). Independent of the Linux CI (ci/run-ci containers, self-hosted runners) and of release.yml: nothing
-# here packages or publishes. Failures are real, never masked.
+# (tools/macos/), and builds the installer package (tools/macos/pkg/) as an artifact. Independent of the Linux CI
+# (ci/run-ci containers, self-hosted runners); nothing here publishes (release.yml does). Failures are real, never
+# masked.
 on:
   pull_request:
     paths:
       - 'core/**'
       - 'meson*'
       - 'tools/macos/**'
+      - 'deploy/launchd/**'
       - '.github/workflows/macos.yml'
   push:
     branches:
@@ -16,6 +18,7 @@ on:
       - 'core/**'
       - 'meson*'
       - 'tools/macos/**'
+      - 'deploy/launchd/**'
       - '.github/workflows/macos.yml'
   workflow_dispatch:
 
@@ -115,3 +118,65 @@ jobs:
         env:
           VH_TEST_PG_DIR: ${{ runner.temp }}/vh-pg
         run: tools/macos/test-db.sh down
+
+  package:
+    name: Installer package (macOS arm64)
+    runs-on: macos-26
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash -euo pipefail {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deps prefix
+        run: |
+          {
+            echo "VH_MACOS_DEPS=$RUNNER_TEMP/vaulthalla-macos-deps"
+            echo "VH_CANDIDATE_DIR=$RUNNER_TEMP/candidate"
+          } >> "$GITHUB_ENV"
+
+      - name: Cache PDFium prefix
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.VH_MACOS_DEPS }}
+          key: macos-deps-${{ runner.arch }}-${{ hashFiles('tools/macos/fetch-pdfium.sh') }}
+
+      # The PostgreSQL build is pinned by version and sha256 in build-postgres.sh.
+      - name: Cache PostgreSQL build
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/vaulthalla-macos-pkg
+          key: macos-postgres-${{ runner.arch }}-${{ hashFiles('tools/macos/pkg/build-postgres.sh') }}
+
+      - name: Bootstrap (brew bundle, PDFium, pkg-config aliases)
+        run: tools/macos/bootstrap.sh
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Web dependencies
+        run: |
+          npm install -g pnpm@11.0.8
+          pnpm --dir web install --frozen-lockfile
+
+      - name: Stage (release build, web console, Node runtime, pdfium)
+        run: tools/macos/candidate.sh stage
+
+      - name: Build the package
+        run: tools/macos/candidate.sh pkg
+
+      - name: Package contents
+        run: |
+          pkg=$(ls "$VH_CANDIDATE_DIR"/pkg/vaulthalla-*-arm64.pkg)
+          pkgutil --payload-files "$pkg" | grep -E '/(bin|LaunchDaemons|libexec/vaulthalla/postgresql/bin)/' | head -40
+          tools/macos/pkg/render-cask.sh "$pkg" > "$VH_CANDIDATE_DIR/pkg/vaulthalla.rb"
+          ruby -c "$VH_CANDIDATE_DIR/pkg/vaulthalla.rb"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vaulthalla-macos-pkg
+          path: ${{ env.VH_CANDIDATE_DIR }}/pkg/
+          if-no-files-found: error
+          retention-days: 14
