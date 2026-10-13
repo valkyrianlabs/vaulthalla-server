@@ -8,6 +8,9 @@
 #   --image IMAGE   run IMAGE (e.g. a pinned stock distribution image for a clean-install smoke
 #                   test) instead of the repository's ci/Containerfile image, with the same
 #                   mounts and isolation
+#   CI_NETWORK=host (environment) shares the runner host's network instead of the isolated default: only for
+#                   jobs that must reach a service on the host's loopback (the macOS package publication to
+#                   Nexus on 127.0.0.1:8081). Not combinable with --postgres.
 #   --root          run as container root (still an unprivileged subordinate uid on the host),
 #                   for images without sudo; files it leaves in the workspace are handed back
 #
@@ -201,6 +204,12 @@ trap cleanup EXIT
 # --- optional postgres (same pod, so it is at 127.0.0.1:5432) --------------------------------
 run_args=(--rm --init --name "$name" --stop-timeout 10 --timeout "${CI_TIMEOUT:-10800}" --workdir "$workdir")
 if $root_user; then run_args+=(--user 0:0); fi
+if [ "${CI_NETWORK:-}" = host ]; then
+  $postgres && die "CI_NETWORK=host and --postgres don't combine"
+  run_args+=(--network host)
+elif [ -n "${CI_NETWORK:-}" ]; then
+  die "CI_NETWORK: only 'host' is supported"
+fi
 if $postgres; then
   pod="$name-pod"
   podman pod create --name "$pod" --hostname ci --userns=keep-id --shm-size 2g --label "ci.run-ci.pid=$$" >/dev/null

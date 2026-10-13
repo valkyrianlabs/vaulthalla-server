@@ -35,8 +35,9 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/vh-pkg.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 ROOT="$WORK/root"
 ditto "$STAGE" "$ROOT"
-"$HERE/build-postgres.sh" "$ROOT"
-"$HERE/build-caddy.sh" "$ROOT"
+# Already in the stage when CI built them in an earlier job (release.yml macos-build); built here otherwise.
+[ -x "$ROOT/usr/local/libexec/vaulthalla/postgresql/bin/postgres" ] || "$HERE/build-postgres.sh" "$ROOT"
+[ -x "$ROOT/usr/local/libexec/vaulthalla/caddy/caddy" ] || "$HERE/build-caddy.sh" "$ROOT"
 python3 "$HERE/bundle_dylibs.py" "$ROOT"
 
 # Nothing in the payload may point into Homebrew or the build tree.
@@ -53,8 +54,9 @@ if [ -n "${VH_PKG_CODESIGN_IDENTITY:-}" ]; then
   done
 fi
 
-# Root owns everything; nothing group/world-writable.
-chmod -R go-w "$ROOT"
+# Root owns everything; everything readable (the daemons run as _vaulthalla, the CLI as anyone), nothing
+# group/world-writable. Nothing secret is in the payload: secrets are generated at install time.
+chmod -R u+rwX,go+rX,go-w "$ROOT"
 pkgbuild --analyze --root "$ROOT" "$WORK/component.plist" >/dev/null
 /usr/libexec/PlistBuddy -c "Print" "$WORK/component.plist" >/dev/null 2>&1 && {
   n=$(/usr/libexec/PlistBuddy -c "Print" "$WORK/component.plist" | grep -c BundleIsRelocatable || true)

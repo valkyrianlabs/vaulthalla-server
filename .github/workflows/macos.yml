@@ -21,6 +21,15 @@ on:
       - 'deploy/launchd/**'
       - '.github/workflows/macos.yml'
   workflow_dispatch:
+    inputs:
+      nexus_test:
+        description: 'Also publish the rehearsal package to Nexus from the VPS runner (delete it there afterwards)'
+        type: boolean
+        default: false
+      nexus_upload_check:
+        description: 'Only check the Nexus upload path: publish a 120 MB dummy package (no build); delete it afterwards'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -169,7 +178,7 @@ jobs:
   package:
     name: Installer package (macOS arm64)
     needs: gate
-    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' }}
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && !inputs.nexus_upload_check }}
     runs-on: xcode-27
     timeout-minutes: 90
     defaults:
@@ -219,17 +228,22 @@ jobs:
         with:
           node-version: '24'
 
-      - name: Web dependencies
+      # GitHub's Macs don't have the licensed icon set, so the console comes from the latest release's web bundle
+      # (built on the Linux runner), as release.yml takes it from release-artifacts.
+      - name: Web bundle (latest release)
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          npm install -g pnpm@11.0.8
-          pnpm --dir web install --frozen-lockfile
+          mkdir -p "$RUNNER_TEMP/web"
+          gh release download --repo "$GITHUB_REPOSITORY" --pattern 'vaulthalla-web_*_next-standalone.tar.gz' --dir "$RUNNER_TEMP/web"
+          echo "VH_CANDIDATE_WEB_TARBALL=$(ls "$RUNNER_TEMP"/web/vaulthalla-web_*_next-standalone.tar.gz)" >> "$GITHUB_ENV"
 
       - uses: actions/setup-go@v5
         with:
           go-version: stable
           cache: false
 
-      - name: Stage (release build, web console, Node runtime, pdfium)
+      - name: Stage (release build, web console from the bundle, Node runtime, pdfium)
         run: tools/macos/candidate.sh stage
 
       - name: Build the package
@@ -242,9 +256,79 @@ jobs:
           tools/macos/pkg/render-cask.sh "$pkg" > "$VH_CANDIDATE_DIR/pkg/vaulthalla.rb"
           ruby -c "$VH_CANDIDATE_DIR/pkg/vaulthalla.rb"
 
+      # The Homebrew path on this clean Mac: install through the release cask, use it, uninstall, reinstall, zap.
+      - name: Homebrew cask smoke (install, use, uninstall, zap)
+        run: |
+          pkg=$(ls "$VH_CANDIDATE_DIR"/pkg/vaulthalla-*-arm64.pkg)
+          bash tools/macos/pkg/cask-smoke.sh "$pkg"
+
+      - name: Diagnostics
+        if: failure()
+        run: |
+          sudo grep -E 'vaulthalla|preinstall|postinstall|PackageKit: Install' /var/log/install.log | tail -n 80 || true
+          sudo sh -c 'tail -n 60 /Library/Logs/Vaulthalla/*.log' || true
+
       - uses: actions/upload-artifact@v4
         with:
           name: vaulthalla-macos-pkg
           path: ${{ env.VH_CANDIDATE_DIR }}/pkg/
           if-no-files-found: error
           retention-days: 14
+
+  # Nexus is published to from the VPS runner, straight to Nexus on its loopback (pkg.vaulthalla.sh serves the
+  # read-only group vaulthalla-raw; uploads go to its hosted member), in the CI container sharing the host's network,
+  # as release.yml's macos-publish-nexus does. Only on manual runs; delete what these publish afterwards.
+  nexus-publish-rehearsal:
+    name: Nexus publish (rehearsal package)
+    needs: package
+    if: github.event_name == 'workflow_dispatch' && inputs.nexus_test && needs.package.result == 'success'
+    runs-on: [self-hosted, Linux, X64, vaulthalla, vps-ci]
+    defaults:
+      run:
+        shell: bash ./ci/run-ci bash -euo pipefail {0}
+    timeout-minutes: 15
+    env:
+      CI_NETWORK: host
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: vaulthalla-macos-pkg
+          path: pkg/
+      - name: Publish
+        env:
+          RELEASE_PUBLISH_MODE: nexus
+          NEXUS_PKG_REPO: ${{ vars.NEXUS_PKG_UPLOAD_URL || 'http://127.0.0.1:8081/repository/vaulthalla-raw-hosted' }}
+          NEXUS_USER: ${{ secrets.NEXUS_USER }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD || secrets.NEXUS_PASS }}
+        run: bash tools/macos/pkg/publish-nexus.sh pkg
+
+  # The upload path alone (credentials, size, readback, the identical/different-bytes rules), with a dummy package
+  # larger than a real one: no build.
+  nexus-upload-check:
+    name: Nexus upload check (dummy package)
+    if: github.event_name == 'workflow_dispatch' && inputs.nexus_upload_check
+    runs-on: [self-hosted, Linux, X64, vaulthalla, vps-ci]
+    defaults:
+      run:
+        shell: bash ./ci/run-ci bash -euo pipefail {0}
+    timeout-minutes: 15
+    env:
+      CI_NETWORK: host
+    steps:
+      - uses: actions/checkout@v4
+      - name: A 120 MB dummy package
+        run: |
+          mkdir -p dummy-pkg && cd dummy-pkg
+          head -c 125829120 /dev/urandom > vaulthalla-0.0.0-uploadcheck-arm64.pkg
+          sha256sum vaulthalla-0.0.0-uploadcheck-arm64.pkg > vaulthalla-0.0.0-uploadcheck-arm64.pkg.sha256
+      - name: "Publish it, then again (identical bytes must be skipped)"
+        env:
+          RELEASE_PUBLISH_MODE: nexus
+          NEXUS_PKG_REPO: ${{ vars.NEXUS_PKG_UPLOAD_URL || 'http://127.0.0.1:8081/repository/vaulthalla-raw-hosted' }}
+          NEXUS_USER: ${{ secrets.NEXUS_USER }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD || secrets.NEXUS_PASS }}
+        run: |
+          bash tools/macos/pkg/publish-nexus.sh dummy-pkg
+          bash tools/macos/pkg/publish-nexus.sh dummy-pkg
+          rm -rf dummy-pkg

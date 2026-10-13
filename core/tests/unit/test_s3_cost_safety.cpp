@@ -1443,15 +1443,20 @@ TEST(S3CostSafetyTest, EngineFreeSpaceTreatsZeroQuotaAsUnlimitedWithoutUnderflow
     std::filesystem::create_directories(engine.paths->backingVaultRoot);
     std::filesystem::create_directories(engine.paths->cacheRoot);
 
+    // Free space moves while the test runs (a shared CI disk): the engine's reading must fall between the readings
+    // taken just before and just after it, less the reserve, never an underflowed huge value.
+    const auto usable = [](const std::uintmax_t free) {
+        return free > vh::storage::Engine::MIN_FREE_SPACE ? free - vh::storage::Engine::MIN_FREE_SPACE : 0;
+    };
     std::error_code ec;
-    const auto available = std::filesystem::space(engine.paths->backingRoot, ec).available;
+    const auto before = std::filesystem::space(engine.paths->backingRoot, ec).available;
     ASSERT_FALSE(ec);
-    const auto expected = available > vh::storage::Engine::MIN_FREE_SPACE
-        ? available - vh::storage::Engine::MIN_FREE_SPACE
-        : 0;
+    const auto reported = engine.freeSpace();
+    const auto after = std::filesystem::space(engine.paths->backingRoot, ec).available;
+    ASSERT_FALSE(ec);
 
-    EXPECT_EQ(expected, engine.freeSpace());
-    EXPECT_LE(engine.freeSpace(), available);
+    EXPECT_GE(reported, usable(std::min(before, after)));
+    EXPECT_LE(reported, usable(std::max(before, after)));
 }
 
 TEST(S3CostSafetyTest, UnlimitedBudgetPolicyPrintsLegacyWarning) {

@@ -11,7 +11,10 @@
 # package), report/ (acceptance.json and run.log). `stage` and `pkg` run as you, never as root.
 #
 # Stage contents: meson install (prefix /usr/local, -O3, no unit tests) minus headers and static libraries; the web
-# console's standalone build (web/.next, rebuilt unless VH_CANDIDATE_REUSE_WEB=1) under share/vaulthalla-web, as
+# console under share/vaulthalla-web: from VH_CANDIDATE_WEB_TARBALL (a release web bundle, made for macOS by
+# tools/macos/pkg/web-for-macos.sh; how CI does it, since only the Linux runner has the licensed icons), left out with
+# VH_CANDIDATE_WEB=none (added later), else this checkout's standalone build (web/.next, rebuilt unless
+# VH_CANDIDATE_REUSE_WEB=1), as
 # debian/rules does; the official Node 24 runtime under libexec/vaulthalla/node (Homebrew's node links @rpath
 # libnode, which the service can't resolve); libpdfium under lib/vaulthalla. Bash 3.2 compatible.
 set -euo pipefail
@@ -82,15 +85,21 @@ cmd_stage() {
   rm -rf "$next"
   DESTDIR="$next" meson install -C "$build" --no-rebuild > "$DIR/install.log" 2>&1 || die "meson install failed"
   rm -rf "$next$PREFIX/include" "$next$PREFIX"/lib/*.a
-  if [ "${VH_CANDIDATE_REUSE_WEB:-0}" != 1 ] || [ ! -d "$REPO/web/.next/standalone" ]; then
-    log "building the web console (log: $DIR/web.log)"
-    pnpm --dir "$REPO/web" build > "$DIR/web.log" 2>&1 || { tail -20 "$DIR/web.log" >&2; die "web build failed"; }
+  if [ -n "${VH_CANDIDATE_WEB_TARBALL:-}" ]; then
+    "$REPO/tools/macos/pkg/web-for-macos.sh" "$VH_CANDIDATE_WEB_TARBALL" "$next"
+  elif [ "${VH_CANDIDATE_WEB:-}" = none ]; then
+    log "web console left out (VH_CANDIDATE_WEB=none): add it with tools/macos/pkg/web-for-macos.sh before packaging"
+  else
+    if [ "${VH_CANDIDATE_REUSE_WEB:-0}" != 1 ] || [ ! -d "$REPO/web/.next/standalone" ]; then
+      log "building the web console (log: $DIR/web.log)"
+      pnpm --dir "$REPO/web" build > "$DIR/web.log" 2>&1 || { tail -20 "$DIR/web.log" >&2; die "web build failed"; }
+    fi
+    local web="$next$PREFIX/share/vaulthalla-web"
+    mkdir -p "$web/.next"
+    cp -a "$REPO/web/.next/standalone/." "$web/"
+    cp -a "$REPO/web/.next/static" "$web/.next/"
+    if [ -d "$REPO/web/public" ]; then cp -a "$REPO/web/public" "$web/"; fi
   fi
-  local web="$next$PREFIX/share/vaulthalla-web"
-  mkdir -p "$web/.next"
-  cp -a "$REPO/web/.next/standalone/." "$web/"
-  cp -a "$REPO/web/.next/static" "$web/.next/"
-  if [ -d "$REPO/web/public" ]; then cp -a "$REPO/web/public" "$web/"; fi
   node_runtime "$next$PREFIX/libexec/vaulthalla/node"
   mkdir -p "$next$PREFIX/lib/vaulthalla" && cp "$DIR/deps/lib/libpdfium.dylib" "$next$PREFIX/lib/vaulthalla/"
   # libmagic's database, which Homebrew keeps in its own share/ (the daemon looks for this copy: VH_MAGIC_DB_PATH).

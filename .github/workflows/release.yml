@@ -305,14 +305,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: vlr github-release
 
-  # macOS: the self-contained installer package (tools/macos/pkg/), on GitHub-hosted Apple Silicon. Signed and
-  # notarized when the Developer ID secrets exist (MACOS_SIGNING_P12 + MACOS_SIGNING_P12_PASSWORD holding the
-  # Application and Installer identities; MACOS_NOTARY_APPLE_ID, MACOS_NOTARY_TEAM_ID, MACOS_NOTARY_PASSWORD),
-  # unsigned otherwise. Its failure never fails the APT release; re-run it with "Re-run failed jobs".
+  # macOS: the self-contained installer package (tools/macos/pkg/), on GitHub-hosted Apple Silicon. One -O3 build
+  # (PR CI already ran the tests), packaged with the web console from release-artifacts' web bundle (only the Linux
+  # runner has the licensed icons; tools/macos/pkg/web-for-macos.sh swaps sharp's native addon for darwin-arm64), then
+  # installed through the Homebrew cask on this clean Mac before anything is published. Signed and notarized when the
+  # Developer ID secrets exist (MACOS_SIGNING_P12 + MACOS_SIGNING_P12_PASSWORD holding the Application and Installer
+  # identities; MACOS_NOTARY_APPLE_ID, MACOS_NOTARY_TEAM_ID, MACOS_NOTARY_PASSWORD), unsigned otherwise. It never fails
+  # the APT release; re-run it with "Re-run failed jobs".
   macos-package:
     name: macOS installer package
     runs-on: xcode-27
-    needs: release-check
+    needs:
+      - release-check
+      - release-artifacts
     if: needs.release-check.outputs.publish_required == 'true'
     timeout-minutes: 120
     defaults:
@@ -325,8 +330,15 @@ jobs:
 
       - name: Paths
         run: |
-          echo "VH_MACOS_DEPS=$RUNNER_TEMP/vaulthalla-macos-deps" >> "$GITHUB_ENV"
-          echo "VH_CANDIDATE_DIR=$RUNNER_TEMP/candidate" >> "$GITHUB_ENV"
+          {
+            echo "VH_MACOS_DEPS=$RUNNER_TEMP/vaulthalla-macos-deps"
+            echo "VH_CANDIDATE_DIR=$RUNNER_TEMP/candidate"
+          } >> "$GITHUB_ENV"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: vaulthalla-release-${{ needs.release-check.outputs.version }}
+          path: release/
 
       - name: Bootstrap (brew bundle, PDFium, pkg-config aliases)
         run: tools/macos/bootstrap.sh
@@ -334,11 +346,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-
-      - name: Web dependencies
-        run: |
-          npm install -g pnpm@11.0.8
-          pnpm --dir web install --frozen-lockfile
 
       # Caddy for `vh setup caddy` is built with xcaddy (tools/macos/pkg/build-caddy.sh).
       - uses: actions/setup-go@v5
@@ -375,14 +382,20 @@ jobs:
             echo "VH_PKG_NOTARY_PROFILE=vaulthalla-notary" >> "$GITHUB_ENV"
           fi
 
-      - name: Stage and build the package
+      - name: Build and package
         run: |
-          tools/macos/candidate.sh stage
+          web=$(find release -name "vaulthalla-web_${{ needs.release-check.outputs.version }}_next-standalone.tar.gz" | head -1)
+          [ -n "$web" ] || { echo "::error::no web bundle in the release artifacts"; exit 1; }
+          VH_CANDIDATE_WEB_TARBALL="$web" tools/macos/candidate.sh stage
           tools/macos/candidate.sh pkg
           pkg=$(ls "$VH_CANDIDATE_DIR"/pkg/vaulthalla-*-arm64.pkg)
           [ "$(basename "$pkg")" = "vaulthalla-${{ needs.release-check.outputs.version }}-arm64.pkg" ]
           tools/macos/pkg/render-cask.sh "$pkg" > "$VH_CANDIDATE_DIR/pkg/vaulthalla.rb"
           ruby -c "$VH_CANDIDATE_DIR/pkg/vaulthalla.rb"
+
+      # The Homebrew path on this clean Mac, before anything is published: install, use, uninstall, reinstall, zap.
+      - name: Homebrew cask smoke
+        run: bash tools/macos/pkg/cask-smoke.sh "$(ls "$VH_CANDIDATE_DIR"/pkg/vaulthalla-*-arm64.pkg)"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -390,8 +403,7 @@ jobs:
           path: ${{ env.VH_CANDIDATE_DIR }}/pkg/
           if-no-files-found: error
 
-  # Attaches the package to the GitHub release, publishes it to the Nexus raw repository (NEXUS_PKG_REPO, with the APT
-  # repository's credentials and RELEASE_PUBLISH_MODE gate) and updates the Homebrew cask (vaulthalla/homebrew-tap, with
+  # Attaches the package to the GitHub release and updates the Homebrew cask (vaulthalla/homebrew-tap, with
   # HOMEBREW_TAP_TOKEN: contents:write on that repository; without it the cask update is skipped with a warning).
   macos-publish:
     name: Publish the macOS package
@@ -416,15 +428,6 @@ jobs:
         with:
           name: vaulthalla-macos-${{ needs.release-check.outputs.version }}
           path: pkg/
-
-      # Immutable like the APT publication: identical bytes already there are skipped, different ones refused.
-      - name: Publish to the Nexus package repository
-        env:
-          RELEASE_PUBLISH_MODE: ${{ vars.RELEASE_PUBLISH_MODE || 'disabled' }}
-          NEXUS_PKG_REPO: ${{ vars.NEXUS_PKG_REPO }}
-          NEXUS_USER: ${{ secrets.NEXUS_USER }}
-          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD || secrets.NEXUS_PASS }}
-        run: bash tools/macos/pkg/publish-nexus.sh pkg
 
       - name: Attach to the GitHub release
         env:
@@ -452,6 +455,49 @@ jobs:
           if git diff --cached --quiet; then echo "cask already at $VERSION"; exit 0; fi
           git commit -q -m "vaulthalla $VERSION"
           git push -q origin HEAD:main
+
+  # The package into the Nexus raw repository, from the VPS runner straight to Nexus on its loopback (the public
+  # pkg.vaulthalla.sh serves the read-only group vaulthalla-raw; uploads go to its hosted member). In the CI container
+  # sharing the host's network (see the job's env), the APT publication's gate and credentials, never cancelled.
+  # Immutable: identical bytes already there are skipped, different ones refused.
+  macos-publish-nexus:
+    name: Publish the macOS package to Nexus
+    runs-on: [self-hosted, Linux, X64, vaulthalla, vps-ci]
+    defaults:
+      run:
+        shell: bash ./ci/run-ci bash -euo pipefail {0}
+    needs:
+      - release-check
+      - macos-package
+    if: >-
+      !cancelled() &&
+      needs.macos-package.result == 'success'
+    environment: Production
+    timeout-minutes: 15
+    concurrency:
+      group: vaulthalla-pkg-publish
+      cancel-in-progress: false
+    env:
+      CI_NETWORK: host
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - name: Download the package
+        uses: actions/download-artifact@v4
+        with:
+          name: vaulthalla-macos-${{ needs.release-check.outputs.version }}
+          path: pkg/
+
+      - name: Publish to the Nexus package repository
+        env:
+          RELEASE_PUBLISH_MODE: ${{ vars.RELEASE_PUBLISH_MODE || 'disabled' }}
+          NEXUS_PKG_REPO: ${{ vars.NEXUS_PKG_UPLOAD_URL || 'http://127.0.0.1:8081/repository/vaulthalla-raw-hosted' }}
+          NEXUS_USER: ${{ secrets.NEXUS_USER }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD || secrets.NEXUS_PASS }}
+        run: bash tools/macos/pkg/publish-nexus.sh pkg
 
   finalize:
     name: Record the release on main
