@@ -160,6 +160,29 @@ meson test -C build
 
 If your change is in core code and you did not build it on Linux, say so.
 
+### Zero-Warning Builds On Both Platforms
+
+Every pushed C++ change must configure and build on Linux and macOS with nothing but progress output:
+
+```bash
+meson setup build -Dwerror=true -Dbuild_unit_tests=true 2>&1 | tee setup.log     # macOS: source tools/macos/env.sh first
+bash tools/dev/quiet-build.sh build setup.log
+```
+
+CI runs the same check on both platforms and fails on any warning, note or Meson deprecation. If you only have one platform, say which one you built on; CI covers the other. See [Builds Must Be Silent](/contributors/development-setup#builds-must-be-silent).
+
+## macOS Service And Package Changes
+
+For `deploy/launchd/*` or `tools/macos/pkg/*`:
+
+```bash
+python3 -m unittest tools/contracts/test_macos_launchd_contract.py tools/contracts/test_macos_caddy_contract.py
+tools/macos/candidate.sh stage && tools/macos/candidate.sh pkg
+sudo tools/macos/candidate.sh accept
+```
+
+The contract tests run the real scripts against stubs and also run on Linux CI. Only the last command installs the package as the real system service and proves it end to end (account and permissions, the LaunchDaemons, an encrypted vault, crash and database-outage recovery, CLI access, `vh setup caddy`, an upgrade). Do it on a Mac you may change.
+
 ## FUSE And Filesystem Changes
 
 FUSE work needs more than a compile.

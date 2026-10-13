@@ -10,7 +10,7 @@ tags:
 
 # Contributor Guide
 
-Vaulthalla is Linux-native infrastructure software. It includes a C++ core daemon, a FUSE filesystem surface, a local CLI control socket owned by the daemon, a packaged Next.js admin client, PostgreSQL-backed state, systemd units, Debian lifecycle scripts, and release tooling.
+Vaulthalla is self-hosted infrastructure software for Linux and macOS. It includes a C++ core daemon with OS-specific seams, a FUSE filesystem surface on Linux, a local CLI control socket owned by the daemon, a packaged Next.js admin client, PostgreSQL-backed state, systemd units and Debian lifecycle scripts on Linux, launchd LaunchDaemons and an installer package on macOS, and release tooling.
 
 Contributions are welcome. Correctness matters more than patch velocity.
 

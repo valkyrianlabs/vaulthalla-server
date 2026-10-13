@@ -58,7 +58,7 @@ Large agent-generated rewrites are not.
 
 ### Validation expectations
 
-Vaulthalla is Linux-native software. Some work cannot be meaningfully validated from macOS, Windows, browser sandboxes, or remote-only agent workflows.
+Vaulthalla runs on Linux and macOS, and some work can be validated on only one of them. FUSE, Debian packaging, systemd and TPM behavior need Linux; launchd, provisioning and the macOS package need a Mac; nothing runtime-related can be validated from Windows, browser sandboxes, or remote-only agent workflows. Every pushed change must also build without warnings on both platforms (see [Builds Must Be Silent](/contributors/development-setup#builds-must-be-silent)).
 
 Contributors should be honest about what they actually tested.
 

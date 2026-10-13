@@ -12,24 +12,22 @@ tags:
 
 This guide is for contributors getting from clone to useful local work.
 
-If you are doing docs-only work, you do not need the full Linux runtime environment. If you are touching core runtime, FUSE, packaging, systemd, PostgreSQL, TPM/swtpm, or install lifecycle behavior, you do.
+If you are doing docs-only work, you do not need a runtime environment. If you are touching the core daemon, you need Linux or a Mac; if you are touching FUSE, Debian packaging, systemd, TPM/swtpm or the Linux install lifecycle, you need Linux.
 
 ## Platform Assumptions
 
-Vaulthalla is Linux-native software.
+The core builds and its unit tests run natively on Linux (GCC, libstdc++) and on Apple Silicon Macs (Apple clang, libc++). OS-specific code lives behind small seams in `core/include/platform` with `linux` and `darwin` implementations chosen by Meson, so one code base serves both.
 
-Meaningful validation for these areas requires a Linux environment:
+| Area | Where it can be validated |
+| --- | --- |
+| Core daemon logic, storage, sync, auth, RBAC, protocols | Linux or macOS (`meson test`) |
+| FUSE behavior | Linux (the macOS package has no FUSE bridge) |
+| Debian packaging and maintainer scripts | Linux |
+| systemd units, TPM/`swtpm`, `make test` / `make itest` harness | Linux |
+| launchd units, `vaulthalla-provision`, `vaulthalla-caddy`, the macOS package | macOS (contract tests also run on Linux CI) |
+| Web console | Either |
 
-- core daemon work
-- FUSE behavior
-- package lifecycle scripts
-- systemd services
-- PostgreSQL bootstrap and state handling
-- TPM or `swtpm` integration
-
-Debian and Ubuntu-style environments are the safest contributor path because the repo scripts and package metadata assume `apt`, `sudo`, systemd, and Debian packaging.
-
-If you are on macOS or Windows, docs work is fine, and some web or release-tooling work may still be possible. Do not pretend that means you fully validated Linux runtime behavior.
+Debian and Ubuntu-style environments remain the reference: the integration harness, the Debian package and the release pipeline assume `apt`, `sudo` and systemd. A green macOS build does not validate Linux-only behavior, and the reverse is also true.
 
 ## Quick Health Check
 
@@ -179,13 +177,37 @@ For destructive dev-mode reinstall behavior, the `Makefile` target is just wrapp
 
 The current CI-style core build path is Meson-based:
 
+:::tabs{default="linux"}
+
+:::tab[Linux]{value="linux"}
 ```bash
-meson setup build --buildtype=debug -Dbuild_unit_tests=true -Dinstall_data=false
-meson compile -C build
+meson setup build --buildtype=debug -Dwerror=true -Dbuild_unit_tests=true -Dinstall_data=false 2>&1 | tee setup.log
+bash tools/dev/quiet-build.sh build setup.log
 meson test -C build
 ```
 
 That matches the shape used in `.github/actions/build/action.yml` and `.github/actions/test/action.yml`.
+:::
+
+:::tab[macOS]{value="macos"}
+```bash
+tools/macos/bootstrap.sh                      # once: Brewfile, pinned PDFium, pkg-config aliases (runs as you)
+source tools/macos/env.sh                     # every shell: pkg-config paths, openssl@3 first, system include paths
+meson setup build-macos -Dwerror=true -Dbuild_unit_tests=true 2>&1 | tee setup.log
+bash tools/dev/quiet-build.sh build-macos setup.log
+eval "$(tools/macos/test-db.sh up)"           # a disposable PostgreSQL 16 cluster on :54329
+meson test -C build-macos
+tools/macos/test-db.sh down
+```
+
+`env.sh` pins OpenSSL 3 ahead of Homebrew's unversioned `openssl` (which may be 4.x), treats a `CPATH` that points at Homebrew's headers as system include paths so their warnings stay out of the build, and drops `-L`/`-I` entries for directories that no longer exist. CI runs the same steps in `.github/workflows/macos.yml`.
+:::
+
+:::
+
+### Builds Must Be Silent
+
+Code pushed to GitHub, to a branch or a pull request, must build on Linux and macOS with no output but ninja's `[n/N]` progress lines: no compiler or linker warnings, no notes, no Meson `WARNING` or `DEPRECATION` lines. `tools/dev/quiet-build.sh` runs ninja and fails on anything else; CI runs it on both platforms with `-Werror`. Fix the cause of a warning; never silence it with a pragma, a weaker warning set, or by dropping `-Werror`. Third-party headers are the only exception and are already treated as system headers. The rule is stated in `AGENTS.md` at the repository root.
 
 The repo root is the Meson project root. `core/` remains the C++ subsystem, and `compile_commands.json` is emitted at `build/compile_commands.json`.
 
@@ -224,7 +246,7 @@ isn't a test database.
 ## Local Config And Environment Notes
 
 - Default runtime config ships from `deploy/config/config.yaml`.
-- Install scripts copy config into `/etc/vaulthalla/config.yaml`.
+- Install scripts copy config into `/etc/vaulthalla/config.yaml` on Linux; on macOS, `vaulthalla-provision` writes `/Library/Application Support/Vaulthalla/config.yaml`.
 - The web service unit uses `deploy/systemd/vaulthalla-web.service.in`.
 - Some local scripts look for `deploy/vaulthalla.env`.
 
@@ -290,7 +312,7 @@ is never touched.
 
 ### Cross-platform false confidence
 
-If you changed FUSE, packaging, auth/session, systemd, PostgreSQL lifecycle, or TPM behavior from a non-Linux machine, your local check is not enough. Say that plainly in the PR and ask for the right Linux validation.
+If you changed FUSE, Debian packaging, systemd, the Linux PostgreSQL lifecycle, or TPM behavior from a Mac, your local check is not enough; if you changed launchd, provisioning, Caddy or the macOS package from Linux, the contract tests are not a real install. Say that plainly in the PR and ask for the right validation. The macOS install is proven with `tools/macos/candidate.sh stage && tools/macos/candidate.sh pkg`, then `sudo tools/macos/candidate.sh accept`, which installs the package on the Mac and runs the full acceptance.
 
 ## Where To Go Next
 
