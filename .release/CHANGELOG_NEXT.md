@@ -46,5 +46,20 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   Homebrew cask (vaulthalla/homebrew-tap) wraps the same package; release.yml builds it on GitHub-hosted Apple
   Silicon (signed and notarized with Developer ID secrets), attaches it to the GitHub release and updates the cask,
   without gating the APT release.
+- feat(macos): `vh setup caddy` / `vh teardown caddy` (deploy/launchd/vaulthalla-caddy, bash, no Python): Caddy as
+  _vaulthalla under sh.vaulthalla.caddy (admin API off; unprivileged :80/:443), routes identical to `vh setup nginx`.
+  Certificate source follows the name: an EC P-256 Vaulthalla CA with critical X.509 name constraints (the hostnames,
+  or --ca-scope; replaced, never widened, for a name outside it), Let's Encrypt (HTTP-01/TLS-ALPN; --acme-staging),
+  Cloudflare DNS-01 from a root-owned 0600 certbot-format file, or --cert/--key. Generated config is validated as the
+  service account before it replaces the working one. vaulthalla-provision keeps the daemon loaded once configured
+  (so package upgrades restart it); the package bundles Caddy v2.11.7 + caddy-dns/cloudflare v0.2.4 (xcaddy, static).
+  `vh setup caddy` on Linux points to `vh setup nginx` before asking for sudo.
+- build: zero warnings and no extraneous output on Linux (GCC) and macOS (clang), both with -Werror;
+  tools/dev/quiet-build.sh fails CI on anything but progress (AGENTS.md). Third-party headers are system headers;
+  tools/macos/env.sh treats CPATH as system includes and drops -L/-I entries for missing directories; libpqxx-vh is read
+  through pkg-config (its `-l:libpq.so.5` made meson warn); test assets via fs.copyfile.
+- ci: the macOS workflow skips pushes to main that its merged PR run already tested (the Linux gate, parameterized);
+  the CI container gets 20g (12g OOM-killed cc1plus); release publishes the macOS package to the Nexus raw repository
+  (NEXUS_PKG_REPO, RELEASE_PUBLISH_MODE=nexus; identical bytes skipped, different bytes refused).
 - fix(macos): vaulthalla-provision reads dscl's native-attribute form (`dsAttrTypeNative:IsHidden`); a config.yaml
   still identical to the shipped template is rendered for the bundled database instead of kept.
