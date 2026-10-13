@@ -13,7 +13,9 @@
 #              RBAC denial (tools/macos/install_acceptance.py as --client); ciphertext at rest; restart, crash
 #              recovery, stop/start; PostgreSQL restarted under the server and the server started before PostgreSQL
 #              (each recovers); `vh` and `vh fs` as the enrolled client; a hidden unenrolled identity refused
-#              everywhere; the package reinstalled over itself (an upgrade) keeping every byte.
+#              everywhere; `vh setup caddy` on an internal name (HTTPS through the Vaulthalla CA, WebSockets, previews,
+#              provisioning still idempotent); the package reinstalled over itself (an upgrade) keeping every byte and
+#              bringing Caddy back; then `vh teardown caddy --purge`.
 #   cleanup    removes the hidden test identity (only if this script created it).
 # It never purges and never prints secrets: the admin password goes from the state directory to the client on stdin.
 set -euo pipefail
@@ -34,6 +36,7 @@ PKG_ID=sh.vaulthalla.server
 PORTS="36968 36969 36970 36971"
 TEST_MARK="Vaulthalla acceptance test identity"
 PROBE=vhtest_probe
+CADDY_NAME=acceptance.vaulthalla.test
 REPO="$(cd "$(dirname "$0")/../.." && pwd -P)"
 
 PKG="" PY="" REPORT="" CLIENT="${SUDO_USER:-}" PHASE=all
@@ -245,6 +248,7 @@ phase_accept() {
   out=$(as_client $PREFIX/bin/vh vault list 2>&1) || true
   check "$CLIENT is bound to 'admin' and sees the acceptance vault" grep -q install_acceptance <<<"$out"
   accept_vh_fs
+  accept_caddy
 
   say "== upgrade: the package installed over itself"
   # installer's exit status, not its wording: a reinstall reports "The upgrade was successful."
@@ -252,6 +256,11 @@ phase_accept() {
   check "ready after the upgrade" wait_for 120 server_ready
   check "verify after the upgrade: every byte kept" verify_within 120
   check "the admin binding survived the upgrade" sh -c "sudo -u $CLIENT -- $PREFIX/bin/vh vault list 2>&1 | grep -q install_acceptance"
+  if [ -f "$SUPPORT/caddy/Caddyfile" ]; then
+    check "Caddy is back after the upgrade" wait_for 60 caddy_https_ok
+    $PREFIX/bin/vh teardown caddy --purge | sed 's/^/  /'
+    check "vh teardown caddy --purge removed it" caddy_gone
+  fi
 
   say "== logs"
   { tail -n 5 "$LOGS/server.log" 2>/dev/null || true; } | sed 's/^/  server.log: /'
@@ -323,6 +332,51 @@ accept_vh_fs() {  # vh fs (#229), when the installed build has it: the bytes thr
   check "$PROBE can't use vh fs (exit $rc)" test "$rc" = 77
   check "no CLI upload left plaintext staged" test -z "$(find "$STATE/.cli-staging" -name '*.part' 2>/dev/null)"
   rm -rf "$work"
+}
+
+caddy_https_ok() {  # the console answers through Caddy, verified against the exported Vaulthalla CA
+  local code
+  code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 --cacert "$SUPPORT/vaulthalla-local-ca.crt" \
+    --resolve "$CADDY_NAME:443:127.0.0.1" "https://$CADDY_NAME/" 2>/dev/null || true)
+  case "$code" in 2??|3??) return 0 ;; *) return 1 ;; esac
+}
+caddy_gone() { ! loaded sh.vaulthalla.caddy && [ ! -e "$SUPPORT/caddy" ] && not listening 443; }
+caddy_private() {
+  [ "$(stat -f '%Sp %Su' "$SUPPORT/caddy")" = "drwx------ _vaulthalla" ] && [ "$(stat -f '%Lp' "$SUPPORT/caddy/Caddyfile")" = 600 ]
+}
+ca_constrained() {
+  openssl x509 -in "$SUPPORT/vaulthalla-local-ca.crt" -noout -text | grep -A2 'Name Constraints' | grep -q "DNS:$CADDY_NAME"
+}
+ws_through_caddy() {
+  as_client "$PY" - "$SUPPORT/vaulthalla-local-ca.crt" "$CADDY_NAME" <<'WSEOF'
+import asyncio, json, ssl, sys
+import websockets
+async def main():
+    ctx = ssl.create_default_context(cafile=sys.argv[1])
+    async with websockets.connect(f"wss://{sys.argv[2]}/ws", ssl=ctx, host="127.0.0.1", port=443,
+                                  server_hostname=sys.argv[2], open_timeout=10) as ws:
+        await ws.send(json.dumps({"command": "auth.isAuthenticated", "requestId": "1", "payload": {}}))
+        await asyncio.wait_for(ws.recv(), 10)
+asyncio.run(main())
+WSEOF
+}
+
+accept_caddy() {  # vh setup caddy on an internal name: HTTPS, WebSockets and previews through Caddy as _vaulthalla
+  [ -x "$PREFIX/lib/vaulthalla/vaulthalla-caddy" ] || { say "vh setup caddy not in this build; skipped"; return 0; }
+  say "== vh setup caddy --domain $CADDY_NAME"
+  if listening 443 && ! loaded sh.vaulthalla.caddy; then say "port 443 is in use by something else; skipped"; return 0; fi
+  check "vh setup caddy succeeds" sh -c "$PREFIX/bin/vh setup caddy --domain $CADDY_NAME > '$REPORT/caddy-setup.log' 2>&1"
+  sed 's/^/  /' "$REPORT/caddy-setup.log" | head -8
+  check "Caddy runs as _vaulthalla" runs_as_service sh.vaulthalla.caddy
+  check "the caddy directory and Caddyfile are private to it" caddy_private
+  check "the CA is name-constrained to $CADDY_NAME" ca_constrained
+  check "the console answers over HTTPS, verified against the Vaulthalla CA" wait_for 60 caddy_https_ok
+  out=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 --cacert "$SUPPORT/vaulthalla-local-ca.crt" \
+    --resolve "$CADDY_NAME:443:127.0.0.1" "https://$CADDY_NAME/preview?vault_id=1&path=/x" || true)
+  check "/preview is routed to the HTTP server (got $out without a session)" test "$out" = 401
+  check "a WebSocket opens through Caddy and the daemon answers" ws_through_caddy
+  "$PROV" > "$REPORT/provision-caddy.txt"
+  check "provisioning is still a no-op with Caddy configured" grep -q "0 change(s) to make" "$REPORT/provision-caddy.txt"
 }
 
 no_secrets_leaked() {
