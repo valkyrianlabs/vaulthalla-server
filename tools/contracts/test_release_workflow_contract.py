@@ -16,7 +16,7 @@ DISPATCH_REF = "${{ github.event.inputs.ref || github.ref }}"
 # Every CI step runs in the disposable CI container (ci/run-ci, ci/Containerfile) on the VPS runner, never on the host.
 CONTAINER_SHELL = "bash ./ci/run-ci bash -euo pipefail {0}"
 # The unit tests' container also gets a throwaway postgres (named as a test database), so no DB-backed suite skips.
-TEST_SHELL = "env CI_POSTGRES_DB=vh_harness_unit_ci bash ./ci/run-ci --postgres bash -euo pipefail {0}"
+TEST_SHELL = "env CI_POSTGRES_DB=vh_harness_unit_ci CI_POSTGRES_ROLE=vh_harness bash ./ci/run-ci --postgres bash -euo pipefail {0}"
 VPS_RUNNER = "[self-hosted, Linux, X64, vaulthalla, vps-ci]"
 
 

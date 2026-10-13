@@ -6,13 +6,18 @@ runs:
     # The DB-backed suites need a database, or they GTEST_SKIP: a throwaway postgres:16 in the container's pod
     # (ci/run-ci --postgres), named as a test database (runtime::test_instance::isTestDatabaseName).
     - name: Run Tests
-      shell: env CI_POSTGRES_DB=vh_harness_unit_ci bash ./ci/run-ci --postgres bash -euo pipefail {0}
+      shell: env CI_POSTGRES_DB=vh_harness_unit_ci CI_POSTGRES_ROLE=vh_harness bash ./ci/run-ci --postgres bash -euo pipefail {0}
       run: |
         export PATH_TO_TEST_DATA="$GITHUB_WORKSPACE/test-assets"
-        export VH_TEST_DB_HOST=127.0.0.1 VH_TEST_DB_PORT=5432 VH_TEST_DB_USER=postgres VH_TEST_DB_PASS=postgres \
+        # A non-superuser owner, like `make test`: superusers bypass the connection limit the pool tests rely on.
+        export VH_TEST_DB_HOST=127.0.0.1 VH_TEST_DB_PORT=5432 VH_TEST_DB_USER=vh_harness VH_TEST_DB_PASS=vh_harness \
           VH_TEST_DB_NAME=vh_harness_unit_ci
         echo "Using test data path $PATH_TO_TEST_DATA"
-        meson test -C build --print-errorlogs
+        if ! meson test -C build --print-errorlogs; then
+          # --print-errorlogs shows only the tail: show where the first failures happened.
+          grep -n -B2 -A12 -m6 -E '^\[  FAILED  \] |Failure$|C\+\+ exception|what\(\)' build/meson-logs/testlog.txt | head -150
+          exit 1
+        fi
         # A skipped DB suite would make this gate silently weaker: none may skip.
         if grep -q 'Skipping db tests' build/meson-logs/testlog.txt; then
           echo "::error::DB-backed unit tests were skipped"; exit 1

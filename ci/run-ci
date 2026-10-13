@@ -5,7 +5,9 @@
 #
 #   --postgres      also start a throwaway postgres:16 in the same pod (data on tmpfs) and set
 #                   DATABASE_URL to it unless the caller already set one; its database is named
-#                   $CI_POSTGRES_DB (default: ci), e.g. vh_harness_unit_ci for the DB-backed unit tests
+#                   $CI_POSTGRES_DB (default: ci), e.g. vh_harness_unit_ci for the DB-backed unit tests;
+#                   with $CI_POSTGRES_ROLE it is owned by that LOGIN, non-superuser role (password = name),
+#                   like `make test`'s vh_harness (superusers bypass limits the tests rely on)
 #   --image IMAGE   run IMAGE (e.g. a pinned stock distribution image for a clean-install smoke
 #                   test) instead of the repository's ci/Containerfile image, with the same
 #                   mounts and isolation
@@ -208,7 +210,16 @@ if $postgres; then
   # The pod maps the caller's uid (keep-id), which would also become postgres's default user;
   # start it as container root (an unprivileged subordinate uid on the host) so its entrypoint can
   # set up the data directory and drop to the postgres user as usual.
-  podman run --detach --pod "$pod" --name "$name-postgres" --user 0:0 "${limits[@]}" \
+  pg_init=()
+  if [ -n "${CI_POSTGRES_ROLE:-}" ]; then
+    case "$CI_POSTGRES_ROLE${CI_POSTGRES_DB:-ci}" in *[!a-z0-9_]*) die "CI_POSTGRES_ROLE/CI_POSTGRES_DB: lowercase letters, digits, _" ;; esac
+    init_dir="$(mktemp -d)"
+    printf 'CREATE ROLE %s LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD %s;\nALTER DATABASE %s OWNER TO %s;\n' \
+      "$CI_POSTGRES_ROLE" "'$CI_POSTGRES_ROLE'" "${CI_POSTGRES_DB:-ci}" "$CI_POSTGRES_ROLE" > "$init_dir/01-test-role.sql"
+    chmod 0755 "$init_dir"; chmod 0644 "$init_dir/01-test-role.sql"
+    pg_init=(--volume "$init_dir:/docker-entrypoint-initdb.d:ro,Z")
+  fi
+  podman run --detach --pod "$pod" --name "$name-postgres" --user 0:0 "${limits[@]}" "${pg_init[@]}" \
     --env POSTGRES_PASSWORD=postgres --env POSTGRES_DB="${CI_POSTGRES_DB:-ci}" --tmpfs /var/lib/postgresql/data:rw,size=2g \
     docker.io/library/postgres:16 >/dev/null
   for _ in $(seq 60); do
@@ -216,6 +227,7 @@ if $postgres; then
     sleep 1
   done
   podman exec "$name-postgres" pg_isready -q -h 127.0.0.1 -U postgres || die "postgres did not start"
+  if [ -n "${init_dir:-}" ]; then rm -rf "$init_dir"; fi  # read once, by initdb, before the server accepted connections
   if [ -z "${DATABASE_URL:-}" ]; then env_args+=(--env "DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/${CI_POSTGRES_DB:-ci}"); fi
   run_args+=(--pod "$pod")
 else
