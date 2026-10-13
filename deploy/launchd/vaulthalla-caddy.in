@@ -349,8 +349,10 @@ hosts_entry() {  # hosts_entry add|remove: a marked line in /etc/hosts for the c
 }
 
 check_live() {  # the console answers over HTTPS on this host, verified against the configured trust
-  local url="https://$DOMAIN:$HTTPS_PORT/" code i=0 args=(-sS -o /dev/null -w '%{http_code}' --max-time 10
+  local port="" url code i=0 args=(-sS -o /dev/null -w '%{http_code}' --max-time 10
     --resolve "$DOMAIN:$HTTPS_PORT:127.0.0.1")
+  [ "$HTTPS_PORT" = 443 ] || port=":$HTTPS_PORT"
+  url="https://$DOMAIN$port/"
   [ "$MODE" != internal ] || args+=(--cacert "$ROOT$CA_DIR/root.crt")
   [ "$MODE" != acme ] && [ "$MODE" != cloudflare ] || [ "$STAGING" = false ] || { note "staging certificates aren't trusted: skipping the live check"; return 0; }
   while :; do
@@ -410,7 +412,9 @@ teardown() {
   [ -z "$DOMAIN" ] || hosts_entry remove
   if [ "$PURGE" = true ]; then
     [ -L "$ROOT$CADDY_DIR" ] && die "$CADDY_DIR is a symlink; refusing to delete through it"
-    rm -rf "${ROOT:?}$CADDY_DIR" "${ROOT:?}$CA_EXPORT"
+    # Only the caddy directory under the support directory, and the exported CA beside it.
+    case "$CADDY_DIR" in "$SUPPORT_DIR"/caddy) ;; *) die "refusing to purge $CADDY_DIR" ;; esac
+    rm -rf -- "$ROOT$CADDY_DIR" "$ROOT$CA_EXPORT"
     note "deleted certificates, ACME account and the internal CA ($CADDY_DIR)"
     note "clients that trusted the CA keep trusting it until you remove it there"
   else
@@ -500,10 +504,13 @@ mv "$ROOT$CADDYFILE.next" "$ROOT$CADDYFILE"
 note "configuration: $CADDYFILE ($MODE$([ "$STAGING" = true ] && echo ', Let'"'"'s Encrypt staging'))"
 
 # The LaunchDaemon is vaulthalla-provision's to render and keep loaded (it starts a configured Caddy after upgrades).
+# A first setup is started by that bootstrap; only a running Caddy needs a restart for a changed configuration.
+was_loaded=false
+loaded && was_loaded=true
 if [ -z "$ROOT" ] || [ -n "${VH_PROVISION:-}" ]; then
   "${VH_PROVISION:-$PROVISION}" --apply ${ROOT:+--root "$ROOT"} >/dev/null
 fi
-if [ "$changed" = true ] && loaded; then "$LAUNCHCTL" kickstart -k "system/$LABEL"; note "restarted $LABEL"; fi
+if [ "$changed" = true ] && [ "$was_loaded" = true ]; then "$LAUNCHCTL" kickstart -k "system/$LABEL"; note "restarted $LABEL"; fi
 
 [ "$HOSTS" = false ] || hosts_entry add
 [ "$TRUST" = false ] || trust_ca

@@ -67,6 +67,7 @@ wait_for() {  # wait_for SECONDS CMD...: polls every 0.5s
   until "$@"; do [ "$(date +%s)" -lt "$deadline" ] || return 1; sleep 0.5; done
 }
 not() { ! "$@"; }
+gone() { ! kill -0 "$1" 2>/dev/null; }
 loaded() { launchctl print "system/$1" >/dev/null 2>&1; }
 pid_of() { { launchctl print "system/$1" 2>/dev/null || true; } | awk '$1 == "pid" && $2 == "=" {print $3}'; }
 runs_as_service() { local p; p=$(pid_of "$1"); [ -n "$p" ] && [ "$(ps -o uid= -p "$p" | tr -d ' ')" = "$(id -u _vaulthalla)" ]; }
@@ -209,7 +210,7 @@ phase_accept() {
   say "== stop and start (bootout / bootstrap)"
   pid=$(pid_of $SERVER); t0=$(date +%s)
   launchctl bootout "system/$SERVER"
-  check "process is gone" wait_for 40 not kill -0 "$pid"
+  check "process is gone" wait_for 40 gone "$pid"
   took=$(( $(date +%s) - t0 ))
   check "stopped gracefully, before launchd's 30s ExitTimeOut (${took}s)" test "$took" -lt 30
   check "ports closed" wait_for 10 not listening 36969
@@ -258,7 +259,7 @@ phase_accept() {
   check "the admin binding survived the upgrade" sh -c "sudo -u $CLIENT -- $PREFIX/bin/vh vault list 2>&1 | grep -q install_acceptance"
   if [ -f "$SUPPORT/caddy/Caddyfile" ]; then
     check "Caddy is back after the upgrade" wait_for 60 caddy_https_ok
-    $PREFIX/bin/vh teardown caddy --purge | sed 's/^/  /'
+    $PREFIX/bin/vh teardown caddy --purge 2>&1 | sed 's/^/  /' || true
     check "vh teardown caddy --purge removed it" caddy_gone
   fi
 
@@ -273,7 +274,7 @@ accept_db_outage() {  # the P0 shape: PostgreSQL restarts under the server, and 
   say "== PostgreSQL restarted under the running server"
   pid=$(pid_of $PG)
   launchctl kill SIGINT "system/$PG"  # fast shutdown; KeepAlive brings it back after ThrottleInterval
-  check "PostgreSQL went down" wait_for 30 not kill -0 "$pid"
+  check "PostgreSQL went down" wait_for 30 gone "$pid"
   check "launchd restarted PostgreSQL" wait_for 60 new_pid $PG "$pid"
   check "server stayed up or came back" wait_for 30 has_pid $SERVER
   check "verify within 120s of PostgreSQL returning (pool recovered)" verify_within 120

@@ -368,6 +368,16 @@ class CaddySetup(unittest.TestCase):
         self.assertNotIn("s3.home.arpa {", self.caddyfile)
 
 
+class RealInstallPaths(unittest.TestCase):
+    """The tests run with --root; a real install runs with ROOT empty. `${ROOT:?}` aborts exactly there (the first
+    real `vh teardown caddy --purge` died on it), so no macOS script may use it."""
+
+    def test_no_script_aborts_on_an_empty_root(self) -> None:
+        for path in (LAUNCHD / "vaulthalla-caddy.in", LAUNCHD / "vaulthalla-provision.in"):
+            with self.subTest(path=path.name):
+                self.assertNotIn("${ROOT:?}", path.read_text())
+
+
 class CaddyDaemon(unittest.TestCase):
     """The LaunchDaemon template, and vaulthalla-provision managing it once a Caddyfile exists."""
 
