@@ -84,13 +84,25 @@ client() {  # client seed|verify: the admin password goes from the state dir to 
     --expect-mount-state disabled < "$STATE/super_admin_initial_password"
 }
 
+# Paths an earlier run of this script installed (installed-paths.txt): a rerun may update them from a new stage.
+ours() {
+  local r
+  [ -f "$REPORT/installed-paths.txt" ] || return 1
+  while IFS= read -r r; do
+    case "$1" in "$r"|"$r"/*) return 0 ;; esac
+  done < "$REPORT/installed-paths.txt"
+  return 1
+}
+
 staged_paths() { (cd "$STAGE" && find . -mindepth 1 | LC_ALL=C sort | sed 's|^\.||'); }
 
 phase_preflight() {
   [ -d "$STAGE$PREFIX/bin" ] || die "--stage $STAGE has no $PREFIX/bin"
-  local p conflicts=0 new=0
+  local p conflicts=0 new=0 updates=0
   while IFS= read -r p; do
-    if [ -L "$p" ] || [ -e "$p" ]; then
+    if { [ -L "$p" ] || [ -e "$p" ]; } && ours "$p"; then
+      if [ -f "$STAGE$p" ] && ! cmp -s "$STAGE$p" "$p"; then updates=$((updates + 1)); fi
+    elif [ -L "$p" ] || [ -e "$p" ]; then
       if [ -d "$STAGE$p" ] && [ ! -L "$STAGE$p" ]; then
         [ -d "$p" ] && [ ! -L "$p" ] || { say "conflict: $p exists and is not a directory"; conflicts=$((conflicts + 1)); }
       elif [ -L "$STAGE$p" ]; then
@@ -103,7 +115,7 @@ phase_preflight() {
     fi
   done < <(staged_paths)
   [ "$conflicts" = 0 ] || die "$conflicts staged path(s) would overwrite something; nothing installed"
-  say "staged paths: $new new, $(staged_paths | wc -l | tr -d ' ') total; nothing existing would be overwritten"
+  say "staged paths: $new new, $updates update(s) to files an earlier run installed, $(staged_paths | wc -l | tr -d ' ') total; nothing else would be overwritten"
   for p in $PORTS; do
     if listening "$p" && ! has_pid "$SERVER"; then die "port $p is in use by something else"; fi
   done
@@ -140,6 +152,16 @@ phase_install() {
     fi
     say "installed $p"
   done
+  # Files an earlier run installed and the new stage changes: replaced in place (same owner and modes).
+  local n=0
+  while IFS= read -r p; do
+    if [ -f "$STAGE$p" ] && [ ! -L "$STAGE$p" ] && [ -f "$p" ] && ours "$p" && ! cmp -s "$STAGE$p" "$p"; then
+      if [ -x "$STAGE$p" ]; then install -o root -g wheel -m 0755 "$STAGE$p" "$p"
+      else install -o root -g wheel -m 0644 "$STAGE$p" "$p"; fi
+      n=$((n + 1))
+    fi
+  done < <(staged_paths)
+  say "$n file(s) an earlier run installed were updated"
   [ "${#created[@]}" -gt 0 ] && printf '%s\n' "${created[@]}" >> "$REPORT/installed-paths.txt"
   say "${#created[@]} path(s) created; list in $REPORT/installed-paths.txt"
 }

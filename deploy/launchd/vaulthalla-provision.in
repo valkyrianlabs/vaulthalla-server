@@ -74,7 +74,11 @@ run() {  # every change goes through here: printed in plan mode, executed with -
 die() { echo "vaulthalla-provision: $*" >&2; exit 1; }
 
 # dscl: every value of KEY on RECORD, one per line.
-values() { "$DSCL" . -read "$1" "$2" 2>/dev/null | sed -e "s/^$2:[[:space:]]*//" | tr ' ' '\n' | sed '/^$/d'; }
+# dscl prints attributes outside the standard set with a prefix ("dsAttrTypeNative:IsHidden: 1"), and long values on
+# the next line (a bare "RealName:" line); both shapes reduce to the value words.
+values() {
+  "$DSCL" . -read "$1" "$2" 2>/dev/null | sed -e "s/^\(dsAttrTypeNative:\)\{0,1\}$2:[[:space:]]*//" | tr ' ' '\n' | sed '/^$/d'
+}
 exists() { "$DSCL" . -read "$1" RecordName >/dev/null 2>&1; }
 account_id() { values "/Users/$SERVICE" UniqueID | head -1; }
 

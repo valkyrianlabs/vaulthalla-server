@@ -95,7 +95,10 @@ if op == "-read":
     if r is None: sys.exit(56)
     if len(args) > 2:
         if args[2] not in r: print(f"No such key: {args[2]}"); sys.exit(181)
-        print(f"{args[2]}: {' '.join(r[args[2]])}")
+        # Like the real dscl: non-standard attributes carry the native prefix, values with spaces go on the next line.
+        key = ("dsAttrTypeNative:" if args[2] in ("IsHidden",) else "") + args[2]
+        value = ' '.join(r[args[2]])
+        print(f"{key}:\n {value}" if " " in value else f"{key}: {value}")
     sys.exit(0)
 if op == "-list":
     kind = args[1].strip("/"); key = args[2]
