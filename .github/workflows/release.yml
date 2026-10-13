@@ -305,19 +305,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: vlr github-release
 
-  # macOS: the self-contained installer package (tools/macos/pkg/), on GitHub-hosted Apple Silicon, in two jobs so
-  # the slow part runs in parallel with the Debian build. macos-build compiles everything but the web console (core,
-  # PostgreSQL, Caddy, Node, pdfium; libraries bundled). macos-package adds the web console from release-artifacts'
-  # web bundle (only the Linux runner has the licensed icons; tools/macos/pkg/web-for-macos.sh swaps sharp's native
-  # addon for darwin-arm64), builds the package, and installs it through the Homebrew cask on that clean Mac before
-  # anything is published. Signed and notarized when the Developer ID secrets exist (MACOS_SIGNING_P12 +
-  # MACOS_SIGNING_P12_PASSWORD holding the Application and Installer identities; MACOS_NOTARY_APPLE_ID,
-  # MACOS_NOTARY_TEAM_ID, MACOS_NOTARY_PASSWORD), unsigned otherwise. Neither job ever fails the APT release; re-run
-  # them with "Re-run failed jobs".
-  macos-build:
-    name: macOS build (core, PostgreSQL, Caddy)
+  # macOS: the self-contained installer package (tools/macos/pkg/), on GitHub-hosted Apple Silicon. One -O3 build
+  # (PR CI already ran the tests), packaged with the web console from release-artifacts' web bundle (only the Linux
+  # runner has the licensed icons; tools/macos/pkg/web-for-macos.sh swaps sharp's native addon for darwin-arm64), then
+  # installed through the Homebrew cask on this clean Mac before anything is published. Signed and notarized when the
+  # Developer ID secrets exist (MACOS_SIGNING_P12 + MACOS_SIGNING_P12_PASSWORD holding the Application and Installer
+  # identities; MACOS_NOTARY_APPLE_ID, MACOS_NOTARY_TEAM_ID, MACOS_NOTARY_PASSWORD), unsigned otherwise. It never fails
+  # the APT release; re-run it with "Re-run failed jobs".
+  macos-package:
+    name: macOS installer package
     runs-on: xcode-27
-    needs: release-check
+    needs:
+      - release-check
+      - release-artifacts
     if: needs.release-check.outputs.publish_required == 'true'
     timeout-minutes: 120
     defaults:
@@ -335,73 +335,23 @@ jobs:
             echo "VH_CANDIDATE_DIR=$RUNNER_TEMP/candidate"
           } >> "$GITHUB_ENV"
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: vaulthalla-release-${{ needs.release-check.outputs.version }}
+          path: release/
+
       - name: Bootstrap (brew bundle, PDFium, pkg-config aliases)
         run: tools/macos/bootstrap.sh
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
 
       # Caddy for `vh setup caddy` is built with xcaddy (tools/macos/pkg/build-caddy.sh).
       - uses: actions/setup-go@v5
         with:
           go-version: stable
           cache: false
-
-      - name: Stage everything but the web console
-        run: |
-          VH_CANDIDATE_WEB=none tools/macos/candidate.sh stage
-          stage="$VH_CANDIDATE_DIR/stage"
-          tools/macos/pkg/build-postgres.sh "$stage"
-          tools/macos/pkg/build-caddy.sh "$stage"
-          # Bundled here, where Homebrew's libraries are: the packaging job needs nothing from Homebrew.
-          python3 tools/macos/pkg/bundle_dylibs.py "$stage"
-          tar -C "$VH_CANDIDATE_DIR" -czf "$RUNNER_TEMP/macos-stage.tar.gz" stage stage.commit
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: vaulthalla-macos-stage-${{ needs.release-check.outputs.version }}
-          path: ${{ runner.temp }}/macos-stage.tar.gz
-          if-no-files-found: error
-          retention-days: 3
-
-  macos-package:
-    name: macOS installer package
-    runs-on: xcode-27
-    needs:
-      - release-check
-      - release-artifacts
-      - macos-build
-    if: needs.release-check.outputs.publish_required == 'true'
-    timeout-minutes: 60
-    defaults:
-      run:
-        shell: bash -euo pipefail {0}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.ref || github.ref }}
-
-      - name: Paths
-        run: echo "VH_CANDIDATE_DIR=$RUNNER_TEMP/candidate" >> "$GITHUB_ENV"
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: vaulthalla-macos-stage-${{ needs.release-check.outputs.version }}
-          path: ${{ runner.temp }}
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: vaulthalla-release-${{ needs.release-check.outputs.version }}
-          path: release/
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-
-      - name: Add the release's web console
-        run: |
-          mkdir -p "$VH_CANDIDATE_DIR"
-          tar -C "$VH_CANDIDATE_DIR" -xzf "$RUNNER_TEMP/macos-stage.tar.gz"
-          web=$(find release -name "vaulthalla-web_${{ needs.release-check.outputs.version }}_next-standalone.tar.gz" | head -1)
-          [ -n "$web" ] || { echo "::error::no web bundle in the release artifacts"; exit 1; }
-          tools/macos/pkg/web-for-macos.sh "$web" "$VH_CANDIDATE_DIR/stage"
 
       - name: Signing identities (only when the secrets exist)
         env:
@@ -432,8 +382,11 @@ jobs:
             echo "VH_PKG_NOTARY_PROFILE=vaulthalla-notary" >> "$GITHUB_ENV"
           fi
 
-      - name: Build the package
+      - name: Build and package
         run: |
+          web=$(find release -name "vaulthalla-web_${{ needs.release-check.outputs.version }}_next-standalone.tar.gz" | head -1)
+          [ -n "$web" ] || { echo "::error::no web bundle in the release artifacts"; exit 1; }
+          VH_CANDIDATE_WEB_TARBALL="$web" tools/macos/candidate.sh stage
           tools/macos/candidate.sh pkg
           pkg=$(ls "$VH_CANDIDATE_DIR"/pkg/vaulthalla-*-arm64.pkg)
           [ "$(basename "$pkg")" = "vaulthalla-${{ needs.release-check.outputs.version }}-arm64.pkg" ]
