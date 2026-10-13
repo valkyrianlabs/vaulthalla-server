@@ -69,3 +69,11 @@ option(
     value: 'auto',
     description: 'Build the kernel FUSE bridge (libfuse3). auto: required on Linux, off elsewhere (macOS serves vaults over HTTP/WS/CLI until a Finder backend is chosen)'
 )
+
+option(
+    'http_upload_staging',
+    type: 'combo',
+    choices: ['auto', 'mount', 'private'],
+    value: 'auto',
+    description: 'Where HTTP uploads stage before commit (protocols/http/upload/Staging.hpp). auto: mount on Linux (through the FUSE mount, as always), private elsewhere (daemon-private, mount-independent)'
+)

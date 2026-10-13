@@ -17,6 +17,7 @@
 // Previews
 #include "preview/cache/Maintenance.hpp"
 #include "preview/derive/Queue.hpp"
+#include "protocols/http/upload/Staging.hpp"
 #include "preview/render/Raster.hpp"
 
 // Seed
@@ -42,6 +43,7 @@
 #include <execinfo.h>
 #include <unistd.h>
 #include "platform/Process.hpp"
+#include "platform/StateDirectory.hpp"
 #include "platform/Waker.hpp"
 
 using namespace vh::config;
@@ -168,6 +170,9 @@ void wireStorage() {
     // Every start (so every upgraded install): legacy plaintext thumbnails and orphaned artifacts go away before
     // anything can serve them.
     vh::preview::cache::sweepAtStartup(vh::runtime::Deps::get().storageManager->getEngines());
+
+    // Private HTTP upload staging (protocols/http/upload/Staging.hpp): a crash can leave partial uploads behind.
+    vh::protocols::http::upload::staging::sweepAtStartup();
 }
 
 // --- Runtime ---
@@ -186,6 +191,12 @@ void startVaulthalla() {
     const auto log = vh::log::Registry::vaulthalla();
 
     ThreadPoolManager::instance().init();
+
+    // Before anything is written under it (sealed secrets, vault bytes, upload staging): only the daemon's uid may
+    // traverse the backing tree. Fail closed: no secrets or storage without that boundary. (A no-op on Linux, where
+    // the package owns its modes.)
+    if (const auto problem = vh::platform::state::restrictToService(vh::paths::getBackingPath()); !problem.empty())
+        throw std::runtime_error("cannot make the state directory private: " + problem);
 
     // Reader policies (preview.media.*) and the derived-artifact negative-cache TTL.
     vh::preview::cache::applyConfig();

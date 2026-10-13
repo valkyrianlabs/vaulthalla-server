@@ -169,7 +169,7 @@ main        = files(join_paths(core_root, 'main/main.cpp'))
 
 # Platform-specific code lives under platform/<os>/ (and fuse/unbuilt/, the stand-in for a build without the kernel
 # FUSE bridge); only the host's directory is compiled. Everything else is shared by every OS.
-platform_src_prefixes = ['platform/', 'fuse/unbuilt/']
+platform_src_prefixes = ['platform/', 'fuse/unbuilt/', 'protocols/http/upload/staging/']
 sources = []
 foreach f : run_command('sh', '-c', 'find "$1" -type f -name "*.cpp" | LC_ALL=C sort', 'find-cpp', src, check: true).stdout().strip().split('\n')
     rel = f.replace(src + '/', '')
@@ -190,6 +190,15 @@ endforeach
 if not fuse_dep.found()
     sources += files(src / 'fuse/unbuilt/Service.cpp')
 endif
+
+upload_staging = get_option('http_upload_staging')
+if upload_staging == 'auto'
+    upload_staging = host_os == 'linux' ? 'mount' : 'private'
+endif
+if upload_staging == 'mount' and not fuse_dep.found()
+    error('-Dhttp_upload_staging=mount stages uploads through the FUSE mount and needs the kernel bridge (-Dfuse)')
+endif
+sources += files(src / 'protocols/http/upload/staging' / upload_staging / 'Staging.cpp')
 
 # The usage module's contract export uses the vendored nlohmann/json (header-only).
 usage_inc = include_directories('usage/include', 'vendor')
