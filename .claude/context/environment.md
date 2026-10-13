@@ -12,7 +12,9 @@ The dev infrastructure is on the maintainer's home Proxmox server. All VMs are o
 ## This VM (`dev`)
 
 - A live source install runs here: `vaulthalla`, `vaulthalla-cli(.socket)`, `vaulthalla-web` are active,
-  FUSE is mounted at `/mnt/vaulthalla`, and local PostgreSQL 16 is running. `make dev`/`make uninstall` replace or tear that down.
+  FUSE is mounted at `/mnt/vaulthalla`, and local PostgreSQL 16 is running. `make uninstall` tears that down; `make dev` now installs the isolated dev instance beside it (`/opt/vaulthalla-dev`,
+  `vaulthalla-dev*.service`, `/mnt/vh_dev`, DB `vaulthalla_dev`, ports +100, `vh-dev`), and `VH_INSTANCE= make dev` is
+  the old in-place dev install.
 - `vaulthalla-price-bot.service` (gunicorn on `127.0.0.1:36933`) runs the **price bot**, a separate repo checked out at
   `/srv/vaulthalla-price-bot` (github.com/vaulthalla/vaulthalla-price-bot). It drives S3 cost estimates; see
   `architecture.md` → S3 pricing. It's outside this repo's install lifecycle: `make uninstall/dev` must not touch it,

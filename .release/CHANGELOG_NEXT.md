@@ -29,3 +29,7 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
 - macOS (development, not packaged): HTTP uploads stage in a private directory under the state root when the build
   has no FUSE bridge, and the daemon refuses to start unless that state root is private to it (no symlink, no
   writable ancestor, owned by the daemon user). Linux keeps staging through the FUSE mount (`http_upload_staging=auto`).
+- build/dev: meson `-Dinstance=NAME` builds an isolated instance (own prefix, paths, account, units/LaunchDaemons,
+  database, ports +100, `vh-NAME`); `make dev` now installs the `dev` instance beside production instead of over it,
+  on Linux and macOS (`make dev-plan` prints the privileged steps, `make dev-uninstall` removes it). Production builds
+  and `make install` are unchanged.

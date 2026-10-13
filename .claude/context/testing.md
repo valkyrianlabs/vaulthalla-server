@@ -10,7 +10,7 @@
 | `debian/**`, `deploy/systemd`, `deploy/psql` | `bash tools/dev/verify.sh packaging` (`tools/contracts`) | `make deb`, then install it on the dev VM (never on vh-storage; `/lab`) |
 | `deploy/lifecycle/**` | `bash tools/dev/verify.sh lifecycle` | a dev VM `vh setup …` run |
 | `docs/**` | `python3 .claude/skills/payload-markdown/scripts/check_payload_markdown_doc.py <files>` | `pmdocs validate --source docs` |
-| `bin/**` shell | `bash -n <script>` | `make test` / `make itest` (isolated); a `make dev` cycle only after asking |
+| `bin/**` shell | `bash -n <script>` (and `/bin/bash -n`: 3.2 on macOS), `tools/contracts/test_dev_instance_contract.py`, `bin/tests/kill_dev_artifacts_classifier.sh` | `make dev-plan` (macOS, prints every privileged step); `make test` / `make itest` (isolated); a `make dev` cycle only after asking |
 
 `bash tools/dev/verify.sh <profile>` wraps the common profiles. See the `/verify` skill.
 

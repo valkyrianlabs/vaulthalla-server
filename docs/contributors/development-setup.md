@@ -60,8 +60,9 @@ make clean
 
 What they do at a high level:
 
-- `make install` runs the normal install guard, then `./bin/install.sh`
-- `make dev` runs `./bin/uninstall.sh`, then the install guard, then `./bin/install.sh`
+- `make install` runs the normal install guard, then `./bin/install.sh` (the production install; Linux only, as before)
+- `make dev` runs `./bin/uninstall.sh`, then the install guard, then `./bin/install.sh`, all for the isolated dev
+  instance (see below); `make dev-plan` prints what it would do, `make dev-uninstall` removes the dev instance
 - `make test` runs the DB-backed unit tests against a database created for that run, then drops it
 - `make itest` runs the integration proofs as a private daemon instance (own database, paths and FUSE mount)
 - `make clean-test` removes leftovers of interrupted test runs, nothing else
@@ -112,11 +113,33 @@ Run it deliberately. It changes the host.
 
 ## Preferred Dev Workflow
 
-The fastest rebuild-and-reinstall loop in this repo is the destructive dev workflow behind `make dev`.
+The fastest rebuild-and-reinstall loop in this repo is the dev workflow behind `make dev`.
 
-It is fast because it starts from a fresh local install every time.
+It installs an **isolated dev instance** (meson `-Dinstance=dev`, `bin/lib/platform.sh`) that can sit beside a
+production install on the same host and never touches it:
 
-It is dangerous because `make dev` begins by running `./bin/uninstall.sh`, which can wipe Vaulthalla directories and local database state with no interactive warning path once dev mode is active.
+| | Production | Dev instance |
+|---|---|---|
+| Linux prefix | `/usr` | `/opt/vaulthalla-dev` |
+| Linux paths | `/etc`, `/var/lib`, `/var/log`, `/run` `…/vaulthalla`, `/mnt/vaulthalla` | `…/vaulthalla-dev`, `/mnt/vh_dev` |
+| Linux units | `vaulthalla.service`, `-web`, `-swtpm` | `vaulthalla-dev.service`, `-web`, `-swtpm` (swtpm on 2421) |
+| macOS prefix | the package (`/usr/local`) | `/usr/local/vaulthalla-dev` |
+| macOS paths | `/Library/Application Support/Vaulthalla`, `/Library/Logs/Vaulthalla` | `…/Vaulthalla-dev` |
+| macOS daemons | `sh.vaulthalla.{server,web}` | `sh.vaulthalla.dev.{server,web,postgres}` |
+| Account | `vaulthalla` (macOS `_vaulthalla`) | `vaulthalla-dev` (macOS `_vaulthalla_dev`) |
+| Database | `vaulthalla` | `vaulthalla_dev` (macOS: its own cluster on 127.0.0.1:5532) |
+| Ports | web 36968, ws 36969, http 36970, s3 39000 | +100 |
+| CLI | `vh` | `vh-dev` |
+
+It is fast because it starts from a fresh dev instance every time: `make dev` begins by running `./bin/uninstall.sh`,
+which wipes the dev instance's directories, database and account (and only those) with no interactive warning once
+dev mode is active. The vaulthalla.dev nginx endpoint (`bin/setup/install_dev_nginx.sh`) belongs to production and is
+skipped for the instance. `VH_INSTANCE= make dev` restores the old behavior (a dev build installed over production's
+paths) on a box where that is what you want.
+
+On macOS, `make dev` is the only source install: production comes from the installer package or the Homebrew cask.
+It needs Homebrew (`tools/macos/bootstrap.sh` runs as you), `node` and `pnpm`, and sudo for the privileged steps;
+`make dev-plan` (`VH_DRY_RUN=1`) prints every privileged command without running any of them.
 
 ### Dev mode guardrails
 
@@ -261,7 +284,9 @@ Some scripts reference `deploy/vaulthalla.env`, while the repo only includes `de
 
 ### `make dev` is not a safe default
 
-It is a rebuild convenience for contributors who intentionally want a fresh local install every time. It is not a normal "development server" command and it is not safe on a machine whose Vaulthalla state you care about keeping.
+It is a rebuild convenience for contributors who intentionally want a fresh dev instance every time. It is not a
+normal "development server" command, and the dev instance's data does not survive it. A production install beside it
+is never touched.
 
 ### Cross-platform false confidence
 
