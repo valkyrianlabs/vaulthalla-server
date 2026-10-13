@@ -13,6 +13,12 @@ runs:
         export VH_TEST_DB_HOST=127.0.0.1 VH_TEST_DB_PORT=5432 VH_TEST_DB_USER=vh_harness VH_TEST_DB_PASS=vh_harness \
           VH_TEST_DB_NAME=vh_harness_unit_ci
         echo "Using test data path $PATH_TO_TEST_DATA"
+        # The sealer tests and every DB suite's setup seal secrets: a throwaway software TPM where TpmSealer looks
+        # for one (127.0.0.1:2321), as the managed vaulthalla-swtpm service provides on a host.
+        tpm_state="$(mktemp -d)"
+        swtpm socket --tpm2 --tpmstate "dir=$tpm_state" --server type=tcp,port=2321,bindaddr=127.0.0.1 \
+          --ctrl type=tcp,port=2322,bindaddr=127.0.0.1 --flags not-need-init,startup-clear --daemon
+        for _ in $(seq 50); do (exec 3<>/dev/tcp/127.0.0.1/2321) 2>/dev/null && break; sleep 0.1; done
         if ! meson test -C build --print-errorlogs; then
           # --print-errorlogs shows only the tail: show where the first failures happened.
           grep -n -B2 -A12 -m6 -E '^\[  FAILED  \] |Failure$|C\+\+ exception|what\(\)' build/meson-logs/testlog.txt | head -150
