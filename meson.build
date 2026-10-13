@@ -18,6 +18,12 @@ project('vaulthalla', 'cpp',
 # environment provides (dpkg-buildflags), which left packaged binaries without -O and hardening flags.
 add_project_arguments('-D_GLIBCXX_USE_CXX11_ABI=1', language: 'cpp')
 
+# Builds print nothing but progress (AGENTS.md). Apple's ld warns when two dependencies both pass -lz (libcurl's and
+# zlib's .pc files); GNU ld doesn't. The duplicate is harmless, so the warning is the noise, not the link line.
+if host_machine.system() == 'darwin'
+    add_project_link_arguments('-Wl,-no_warn_duplicate_libraries', language: 'cpp')
+endif
+
 fs = import('fs')
 
 # See core/include/compat/gcc_variant.hpp: a GCC-only false positive inside libstdc++'s <variant> (via libpqxx) that

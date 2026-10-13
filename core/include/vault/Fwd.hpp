@@ -10,6 +10,7 @@ namespace vh::vault::model {
     struct Vault;
     struct S3Vault;
     struct APIKey;
+    struct Key;
     enum class VaultType;
     struct Deletion;
     enum class DeletionState;

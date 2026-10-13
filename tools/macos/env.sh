@@ -42,4 +42,34 @@ _vh_prepend PATH "$VH_BREW_PREFIX/opt/postgresql@16/bin"
 # Boost is found through BOOST_ROOT (Meson's boost finder does not consult pkg-config).
 export BOOST_ROOT="${BOOST_ROOT:-$VH_BREW_PREFIX/opt/boost}"
 
-unset -f _vh_prepend
+# -L/-I entries in the caller's LDFLAGS/CPPFLAGS/CXXFLAGS that point at directories that don't exist (a removed
+# Homebrew keg, e.g. llvm@17) only make the linker print "search path ... not found" on every link: dropped. Everything
+# else in those variables is kept as given.
+_vh_drop_missing_dirs() {
+  eval "_vh_in=\${$1:-}"
+  [ -n "${_vh_in}" ] || return 0
+  _vh_out=""
+  # Split through a command substitution: zsh (unlike bash) doesn't word-split an unquoted parameter.
+  # shellcheck disable=SC2046
+  for _vh_w in $(printf '%s\n' "${_vh_in}"); do
+    case "${_vh_w}" in
+      -L*|-I*) [ -d "${_vh_w#-?}" ] || continue ;;
+    esac
+    _vh_out="${_vh_out:+${_vh_out} }${_vh_w}"
+  done
+  eval "export $1=\"\${_vh_out}\""
+  unset _vh_in _vh_out _vh_w
+}
+# CPATH is searched like -I: with Homebrew's include dir there (a common shell setup), every Homebrew header counts as
+# project code and its warnings land in our build (spdlog's fmt 12 deprecations: thousands of lines). The same
+# directories as C_INCLUDE_PATH/CPLUS_INCLUDE_PATH are searched as system headers: same lookup, their warnings stay theirs.
+if [ -n "${CPATH:-}" ]; then
+  export C_INCLUDE_PATH="${CPATH}${C_INCLUDE_PATH:+:${C_INCLUDE_PATH}}"
+  export CPLUS_INCLUDE_PATH="${CPATH}${CPLUS_INCLUDE_PATH:+:${CPLUS_INCLUDE_PATH}}"
+  unset CPATH
+fi
+_vh_drop_missing_dirs LDFLAGS
+_vh_drop_missing_dirs CPPFLAGS
+_vh_drop_missing_dirs CXXFLAGS
+
+unset -f _vh_prepend _vh_drop_missing_dirs

@@ -115,7 +115,9 @@ vh_paths_header = configure_file(
 
 host_os = host_machine.system()
 
-fmt_dep = dependency('fmt', required: true)
+# Third-party headers are system headers (-isystem), as they already are on Linux under /usr/include: Homebrew's
+# spdlog 1.17 calls an fmt 12 conversion that fmt deprecates, which is theirs to fix, not a warning in our code.
+fmt_dep = dependency('fmt', required: true, include_type: 'system')
 # apt.vaulthalla.sh's libpqxx-vh-dev: a static libpqxx SDK under its own pkg-config name (the .pc links libpqxx.a
 # by path and the system libpq by SONAME), so neither Ubuntu's libpqxx-dev nor its headers can be picked up.
 pqxx_dep = dependency('libpqxx-vh', version: '>=8.0.2', method: 'pkg-config', static: true, required: true)
@@ -138,7 +140,7 @@ deps = [
     dependency('libjpeg', required: true),
     dependency('pugixml', required: true),
     dependency('threads', required: true),
-    dependency('spdlog', required: true),
+    dependency('spdlog', required: true, include_type: 'system'),
     dependency('libturbojpeg', required: true),
     dependency('openssl', version: '>=3.0', required: true),
     dependency('zlib', required: true),
@@ -170,7 +172,7 @@ if host_os == 'linux'
     ]
 endif
 
-test_deps = deps + dependency('gtest', required: true, main: false)
+test_deps = deps + dependency('gtest', required: true, main: false, include_type: 'system')
 
 
 # ╭───────────────────────────── CONVERTER HELPERS ─────────────────────────────╮
