@@ -1,6 +1,8 @@
 #pragma once
 
 #include "fs/Fwd.hpp"
+#include "identities/Fwd.hpp"
+#include "rbac/Fwd.hpp"
 #include "protocols/ws/Fwd.hpp"
 #include "share/Fwd.hpp"
 #include "storage/Fwd.hpp"
@@ -36,7 +38,8 @@ struct BadRequest final : std::runtime_error { using std::runtime_error::runtime
 enum class Need {
     Preview,    // lossy server renders only (human: Read; share: Preview)
     Download,   // original bytes or full-fidelity derivatives (human: Read [+List for dirs]; share: Download)
-    Overwrite   // replace an existing file's content (human: Overwrite; shares: not supported)
+    Overwrite,  // replace an existing file's content (human: Overwrite; shares: not supported)
+    List        // a directory's entries (human: List; share: List)
 };
 
 enum class Expect { File, Directory, Any };
@@ -73,6 +76,13 @@ struct Target {
 [[nodiscard]] Target resolve(const Caller& caller, const Params& params, Need need, Expect expect = Expect::File);
 [[nodiscard]] Target resolvePath(const Caller& caller, uint32_t vaultId, const std::string& path, Need need,
                                  Expect expect = Expect::File);
+// The same human resolution for a caller that isn't an HTTP session (`vh fs`, whose user comes from the CLI socket's
+// peer credentials): one evaluator, one path normalization, one no-existence-oracle rule for every surface.
+[[nodiscard]] Target resolveUserPath(const std::shared_ptr<identities::User>& user, uint32_t vaultId,
+                                     const std::string& path, Need need, Expect expect = Expect::File);
+// Throws Forbidden unless `user` holds `action` on `vaultPath` (normalized) in the engine's vault.
+void requireUser(const std::shared_ptr<identities::User>& user, const std::shared_ptr<storage::Engine>& engine,
+                 const std::filesystem::path& vaultPath, rbac::permission::vault::FilesystemAction action);
 
 // Human directory archives: every child must be readable (and directories listable).
 void requireHumanChild(const Caller& caller, const Target& root, const std::shared_ptr<fs::model::Entry>& child);

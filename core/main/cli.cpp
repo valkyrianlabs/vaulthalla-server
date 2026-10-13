@@ -2,6 +2,8 @@
 #include <sys/un.h>
 #include <poll.h>
 #include <sys/wait.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 #include <termios.h>
 #include <unistd.h>
 #include <cstdint>
@@ -24,6 +26,7 @@
 #include <cstddef>
 
 #include "platform/Fd.hpp"
+#include "protocols/shell/Transfer.hpp"
 #include <paths.h>  // generated: VH_CLI_SOCKET_PATH, VH_LIFECYCLE_PATH, VH_HINT_*
 
 static bool readn(const int fd, void* b, size_t n) {
@@ -48,17 +51,21 @@ static bool writen(const int fd, const void* b, size_t n) {
     return true;
 }
 
-static void send_json_frame(const int fd, const nlohmann::json& j) {
+static bool send_json_frame(const int fd, const nlohmann::json& j) {
     const auto s = j.dump();
     uint32_t n = htonl(static_cast<uint32_t>(s.size()));
-    (void)writen(fd, &n, 4);
-    (void)writen(fd, s.data(), s.size());
+    return writen(fd, &n, 4) && writen(fd, s.data(), s.size());
 }
 
-static bool recv_json_frame(const int fd, nlohmann::json& out) {
+// Any reply frame (a command's whole output); during a file transfer the much smaller transfer limit applies.
+static constexpr uint32_t kMaxReplyFrameBytes = 64u << 20;
+
+// The length is checked before anything is allocated for the body.
+static bool recv_json_frame(const int fd, nlohmann::json& out, const uint32_t maxBytes = kMaxReplyFrameBytes) {
     uint32_t len_be = 0;
     if (!readn(fd, &len_be, 4)) return false;
     const uint32_t len = ntohl(len_be);
+    if (len > maxBytes) return false;
     std::string body(len, '\0');
     if (!readn(fd, body.data(), len)) return false;
     out = nlohmann::json::parse(body, nullptr, /*allow_exceptions=*/false);
@@ -466,6 +473,262 @@ static int final_exit_code(const nlohmann::json& frame) {
     return exit_code::kProtocol;
 }
 
+namespace tx = vh::protocols::shell::transfer;
+
+// `vh fs get`: where the bytes go. A named file is written to a temporary sibling (0600) and renamed over the target
+// only after the daemon's result says every byte arrived and authenticated; on anything else the temporary file is
+// removed. Stdout gets the bytes as they come, binary-safe (write(2), never stdio), and the exit status decides.
+struct GetSink {
+    int fd = STDOUT_FILENO;
+    std::string target, temp;
+    bool committed = false;
+
+    GetSink() = default;
+    GetSink(const GetSink&) = delete;
+    GetSink& operator=(const GetSink&) = delete;
+    ~GetSink() {
+        if (temp.empty() || committed) return;
+        ::close(fd);
+        ::unlink(temp.c_str());
+    }
+
+    bool open(const std::string& path, std::string& error) {
+        if (path.empty()) return true;
+        struct stat st{};
+        if (path.back() == '/' || (::stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode))) {
+            error = path + " is a directory";
+            return false;
+        }
+        const auto slash = path.rfind('/');
+        const std::string dir = slash == std::string::npos ? "." : slash == 0 ? "/" : path.substr(0, slash);
+        const std::string base = slash == std::string::npos ? path : path.substr(slash + 1);
+        std::string tmpl = dir + "/." + base + ".vh-XXXXXX";
+        const int tfd = ::mkstemp(tmpl.data());
+        if (tfd < 0) {
+            error = "cannot create a file next to " + path + ": " + std::strerror(errno);
+            return false;
+        }
+        fd = tfd;
+        target = path;
+        temp = tmpl;
+        return true;
+    }
+
+    bool write(const uint8_t* p, size_t n) const {
+        while (n) {
+            const ssize_t w = ::write(fd, p, n);
+            if (w < 0 && errno == EINTR) continue;
+            if (w <= 0) return false;
+            p += w;
+            n -= static_cast<size_t>(w);
+        }
+        return true;
+    }
+
+    bool commit(std::string& error) {
+        if (temp.empty()) return true;
+        const mode_t mask = ::umask(0);
+        ::umask(mask);
+        if (::fchmod(fd, 0666 & ~mask) != 0 || ::fsync(fd) != 0) {
+            error = std::string("cannot finish ") + target + ": " + std::strerror(errno);
+            return false;
+        }
+        ::close(fd);
+        fd = -1;
+        if (::rename(temp.c_str(), target.c_str()) != 0) {
+            error = "cannot replace " + target + ": " + std::strerror(errno);
+            ::unlink(temp.c_str());
+            committed = true;  // nothing left to clean up
+            return false;
+        }
+        committed = true;
+        return true;
+    }
+};
+
+// `vh fs put`: what is read. A regular file is sent as it is (its size is announced first, and a file that changes
+// size while being sent is abandoned); standard input is spooled to an unlinked temporary file first so its size is
+// known before anything is sent.
+struct PutSource {
+    int fd = -1;
+    uint64_t size = 0;
+
+    PutSource() = default;
+    PutSource(const PutSource&) = delete;
+    PutSource& operator=(const PutSource&) = delete;
+    ~PutSource() { if (fd >= 0) ::close(fd); }
+
+    bool open(const std::string& path, std::string& error) {
+        if (path == "-") return spoolStdin(error);
+        fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+        if (fd < 0) {
+            error = "cannot read " + path + ": " + std::strerror(errno);
+            return false;
+        }
+        struct stat st{};
+        if (::fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
+            error = path + " is not a regular file";
+            return false;
+        }
+        size = static_cast<uint64_t>(st.st_size);
+        return true;
+    }
+
+    bool spoolStdin(std::string& error) {
+        const char* tmpdir = std::getenv("TMPDIR");
+        std::string tmpl = std::string(tmpdir && *tmpdir ? tmpdir : "/tmp") + "/vh-put-XXXXXX";
+        fd = ::mkstemp(tmpl.data());
+        if (fd < 0) {
+            error = std::string("cannot spool standard input: ") + std::strerror(errno);
+            return false;
+        }
+        ::unlink(tmpl.c_str());
+        std::vector<uint8_t> buf(tx::kChunkBytes);
+        for (;;) {
+            const ssize_t r = ::read(STDIN_FILENO, buf.data(), buf.size());
+            if (r < 0 && errno == EINTR) continue;
+            if (r < 0) { error = std::string("reading standard input failed: ") + std::strerror(errno); return false; }
+            if (r == 0) break;
+            if (!writen_file(buf.data(), static_cast<size_t>(r))) {
+                error = std::string("spooling standard input failed: ") + std::strerror(errno);
+                return false;
+            }
+            size += static_cast<uint64_t>(r);
+        }
+        return true;
+    }
+
+private:
+    bool writen_file(const uint8_t* p, size_t n) const {
+        while (n) {
+            const ssize_t w = ::write(fd, p, n);
+            if (w < 0 && errno == EINTR) continue;
+            if (w <= 0) return false;
+            p += w;
+            n -= static_cast<size_t>(w);
+        }
+        return true;
+    }
+};
+
+static bool daemon_has_spoken(const int s) {
+    pollfd pfd{.fd = s, .events = POLLIN, .revents = 0};
+    return ::poll(&pfd, 1, 0) > 0;
+}
+
+static int connection_lost() {
+    fmt::print(stderr, "vh: the connection to the vaulthalla daemon closed before the transfer finished\n");
+    return exit_code::kTempFail;
+}
+
+static int run_get(const int s, GetSink& sink, const int timeoutSeconds) {
+    std::optional<uint64_t> expected;
+    uint64_t received = 0, seq = 0;
+    bool first = true;
+    for (;;) {
+        if (first && !wait_readable(s, timeoutSeconds)) return report_not_responding(timeoutSeconds);
+        first = false;
+        nlohmann::json frame;
+        if (!recv_json_frame(s, frame, expected ? tx::kMaxTransferFrameBytes : kMaxReplyFrameBytes))
+            return connection_lost();
+        const auto type = frame.value("type", std::string{});
+        if (type == "hello") continue;
+        if (type == "transfer") {
+            if (expected || !frame.contains("size") || !frame["size"].is_number_unsigned()) break;
+            expected = frame["size"].get<uint64_t>();
+            continue;
+        }
+        if (type == "data") {
+            if (!expected || !frame.contains("seq") || !frame["seq"].is_number_unsigned() ||
+                frame["seq"].get<uint64_t>() != seq || !frame.contains("b64") || !frame["b64"].is_string())
+                break;
+            const auto bytes = tx::decodeChunk(frame["b64"].get_ref<const std::string&>());
+            if (!bytes || bytes->empty() || bytes->size() > *expected - received) break;
+            if (!sink.write(bytes->data(), bytes->size())) {
+                fmt::print(stderr, "vh: writing {} failed: {}\n", sink.target.empty() ? "stdout" : sink.target,
+                           std::strerror(errno));
+                return tx::exitcode::kIoErr;
+            }
+            received += bytes->size();
+            ++seq;
+            continue;
+        }
+        if (type == "output") {
+            fmt::print(stderr, "{}", ensureNewLine(frame.value("text", std::string{})));
+            continue;
+        }
+        if (type == "result") {
+            print_text_field(frame, "stderr", stderr);
+            const int ec = final_exit_code(frame);
+            if (ec != 0) return ec;
+            if (!expected || received != *expected) {
+                fmt::print(stderr, "vh: received {} of {} bytes; nothing was kept\n", received, expected.value_or(0));
+                return tx::exitcode::kDataErr;
+            }
+            std::string error;
+            if (!sink.commit(error)) {
+                fmt::print(stderr, "vh: {}\n", error);
+                return tx::exitcode::kCantCreat;
+            }
+            return 0;
+        }
+        break;
+    }
+    fmt::print(stderr, "vh: the daemon sent a malformed transfer; nothing was kept\n");
+    return tx::exitcode::kDataErr;
+}
+
+static int run_put(const int s, const PutSource& source, const int timeoutSeconds) {
+    bool first = true;
+    for (;;) {
+        if (first && !wait_readable(s, timeoutSeconds)) return report_not_responding(timeoutSeconds);
+        first = false;
+        nlohmann::json frame;
+        if (!recv_json_frame(s, frame)) return connection_lost();
+        const auto type = frame.value("type", std::string{});
+        if (type == "hello") continue;
+        if (type == "output") {
+            fmt::print("{}", ensureNewLine(frame.value("text", std::string{})));
+            continue;
+        }
+        if (type == "result") {
+            print_text_field(frame, "stdout", stdout);
+            print_text_field(frame, "stderr", stderr);
+            return final_exit_code(frame);
+        }
+        if (type != "transfer-ready") {
+            fmt::print(stderr, "vh: unexpected reply from the daemon during the upload\n");
+            return tx::exitcode::kDataErr;
+        }
+
+        // Stream, but stop as soon as the daemon says anything (a refusal, a revocation): its result is read next.
+        std::vector<uint8_t> buf(tx::kChunkBytes);
+        uint64_t offset = 0, seq = 0;
+        bool sent = true;
+        while (offset < source.size && !daemon_has_spoken(s)) {
+            const auto want = static_cast<size_t>(std::min<uint64_t>(buf.size(), source.size - offset));
+            ssize_t n = ::pread(source.fd, buf.data(), want, static_cast<off_t>(offset));
+            while (n < 0 && errno == EINTR) n = ::pread(source.fd, buf.data(), want, static_cast<off_t>(offset));
+            if (n <= 0) {
+                (void)send_json_frame(s, {{"type", "transfer-abort"}});
+                fmt::print(stderr, "vh: the local file changed or became unreadable while it was being sent; "
+                                   "nothing was stored\n");
+                return tx::exitcode::kIoErr;
+            }
+            if (!send_json_frame(s, {{"type", "data"}, {"seq", seq},
+                                     {"b64", tx::encode(std::span<const uint8_t>(buf.data(), static_cast<size_t>(n)))}})) {
+                sent = false;
+                break;
+            }
+            offset += static_cast<uint64_t>(n);
+            ++seq;
+        }
+        if (sent && offset == source.size)
+            (void)send_json_frame(s, {{"type", "transfer-end"}, {"bytes", source.size}});
+        // Whatever happened, the daemon's verdict follows (or the connection is gone).
+    }
+}
+
 int main(const int argc, char** argv) {
     std::vector<std::string> argv_norm = canonicalize_argv_norm(argc, argv);
 
@@ -491,6 +754,33 @@ int main(const int argc, char** argv) {
     // Quoted line for legacy servers
     std::string line = build_line_from_tokens(argv_norm);
     const int timeoutSeconds = connect_timeout_seconds();
+
+    // `vh fs get|put`: the local side is prepared before connecting, so a missing input or an unwritable output never
+    // reaches the daemon. The daemon gets only the vault path; the local file stays in this process.
+    const auto plan = is_help_request(argv_norm) ? tx::LocalPlan{} : tx::planLocal(argv_norm);
+    if (!plan.error.empty()) {
+        fmt::print(stderr, "vh: {}\n", plan.error);
+        return tx::exitcode::kUsage;
+    }
+    GetSink sink;
+    PutSource source;
+    if (plan.kind == tx::LocalPlan::Kind::Get) {
+        if (plan.local.empty() && !plan.explicitStdout && ::isatty(STDOUT_FILENO)) {
+            fmt::print(stderr, "vh: refusing to write file contents to a terminal; use -o <file>, or -o - to insist\n");
+            return tx::exitcode::kUsage;
+        }
+        std::string error;
+        if (!sink.open(plan.local, error)) {
+            fmt::print(stderr, "vh: {}\n", error);
+            return tx::exitcode::kCantCreat;
+        }
+    } else if (plan.kind == tx::LocalPlan::Kind::Put) {
+        std::string error;
+        if (!source.open(plan.local, error)) {
+            fmt::print(stderr, "vh: {}\n", error);
+            return tx::exitcode::kNoInput;
+        }
+    }
 
     sockaddr_un addr{};
     const std::string_view path = socket_path();
@@ -532,9 +822,25 @@ int main(const int argc, char** argv) {
     j["argv"] = argv_norm;
     j["line"] = line;
     j["interactive"] = interactive;
+    if (plan.kind != tx::LocalPlan::Kind::None) {
+        j["interactive"] = false;
+        j["transfer"] = {{"v", tx::kVersion}};
+        if (plan.kind == tx::LocalPlan::Kind::Put) j["transfer"]["put_size"] = source.size;
+    }
 
     // Send request
-    send_json_frame(s, j);
+    (void)send_json_frame(s, j);
+
+    if (plan.kind == tx::LocalPlan::Kind::Get) {
+        const int rc = run_get(s, sink, timeoutSeconds);
+        ::close(s);
+        return rc;
+    }
+    if (plan.kind == tx::LocalPlan::Kind::Put) {
+        const int rc = run_put(s, source, timeoutSeconds);
+        ::close(s);
+        return rc;
+    }
 
     // A connect() to a unix socket succeeds as soon as the connection is queued, even when nobody will ever
     // accept it (daemon crash-looping, a stale listener left by another unit). The daemon answers every accepted
@@ -620,7 +926,7 @@ int main(const int argc, char** argv) {
                 {"id", id},
                 {"value", value}
             };
-            send_json_frame(s, reply);
+            (void)send_json_frame(s, reply);
             continue;
         }
 

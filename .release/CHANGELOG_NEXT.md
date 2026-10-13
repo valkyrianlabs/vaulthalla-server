@@ -33,3 +33,8 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   database, ports +100, `vh-NAME`); `make dev` now installs the `dev` instance beside production instead of over it,
   on Linux and macOS (`make dev-plan` prints the privileged steps, `make dev-uninstall` removes it). Production builds
   and `make install` are unchanged.
+- feat(cli): `vh fs ls|get|put` (#229): vault file access over the CLI socket's existing length-prefixed JSON frames
+  (256 KiB base64 data frames, every frame bounded before allocation, at most 4 downloads and 2 uploads in flight);
+  authorization through the HTTP lanes' evaluator (http::access::resolveUserPath, re-checked every 8 MiB and before
+  commit); uploads staged privately and sealed by fs::Filesystem::createFile (compare-and-swap on overwrite); the
+  client keeps local files local, writes outputs atomically and caps every reply frame (64 MiB, 512 KiB in a transfer).
