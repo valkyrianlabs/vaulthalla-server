@@ -43,8 +43,34 @@ env:
   HOMEBREW_NO_ENV_HINTS: '1'
 
 jobs:
+  # Pushes to main skip the build when the merged pull request's run of this workflow already built and tested the
+  # exact tree (the Linux CI's gate, .github/scripts/ci_gate.py, pointed at this workflow). Direct pushes build.
+  gate:
+    name: Decide whether this push needs CI
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+      - id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_GATE_WORKFLOW: macos.yml
+          CI_GATE_JOB: Build and unit tests (macOS arm64)
+        run: python3 .github/scripts/ci_gate.py
+
   build-and-test:
     name: Build and unit tests (macOS arm64)
+    needs: gate
+    if: ${{ !cancelled() && needs.gate.outputs.run != 'false' }}
     # GitHub-hosted Apple Silicon on macOS 27 (the `xcode-27` image, public preview; there is no macos-27 label yet),
     # matching the maintainer's macOS 27 hosts. macos-26 is the fallback label if the preview image misbehaves.
     runs-on: xcode-27
@@ -96,13 +122,14 @@ jobs:
       - name: meson setup
         run: |
           . tools/macos/env.sh
-          meson setup build-macos -Dbuild_unit_tests=true -Dmanpage=true
+          meson setup build-macos -Dwerror=true -Dbuild_unit_tests=true -Dmanpage=true 2>&1 | tee "$RUNNER_TEMP/meson-setup.log"
 
       - name: meson compile
         run: |
           . tools/macos/env.sh
           ccache -z >/dev/null
-          meson compile -C build-macos
+          # Progress only, as on Linux: any warning, note or chatter fails the build (AGENTS.md).
+          bash tools/dev/quiet-build.sh build-macos "$RUNNER_TEMP/meson-setup.log"
           ccache -s
 
       - name: Test database up
@@ -141,7 +168,8 @@ jobs:
   # workflow by hand (Actions > macOS > Run workflow) to rehearse a package from any branch.
   package:
     name: Installer package (macOS arm64)
-    if: github.event_name == 'workflow_dispatch'
+    needs: gate
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' }}
     runs-on: xcode-27
     timeout-minutes: 90
     defaults:
