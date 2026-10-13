@@ -21,6 +21,11 @@ on:
       - 'deploy/launchd/**'
       - '.github/workflows/macos.yml'
   workflow_dispatch:
+    inputs:
+      nexus_test:
+        description: 'Also publish the rehearsal package to NEXUS_PKG_REPO (delete it there afterwards)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -241,6 +246,27 @@ jobs:
           pkgutil --payload-files "$pkg" | grep -E '/(bin|LaunchDaemons|libexec/vaulthalla/postgresql/bin)/' | head -40
           tools/macos/pkg/render-cask.sh "$pkg" > "$VH_CANDIDATE_DIR/pkg/vaulthalla.rb"
           ruby -c "$VH_CANDIDATE_DIR/pkg/vaulthalla.rb"
+
+      # The Homebrew path on this clean Mac: install through the release cask, use it, uninstall, reinstall, zap.
+      - name: Homebrew cask smoke (install, use, uninstall, zap)
+        run: |
+          pkg=$(ls "$VH_CANDIDATE_DIR"/pkg/vaulthalla-*-arm64.pkg)
+          bash tools/macos/pkg/cask-smoke.sh "$pkg"
+
+      - name: Diagnostics
+        if: failure()
+        run: |
+          sudo tail -n 80 /var/log/install.log || true
+          sudo sh -c 'tail -n 60 /Library/Logs/Vaulthalla/*.log' || true
+
+      - name: Publish the rehearsal package to Nexus (opt-in)
+        if: inputs.nexus_test
+        env:
+          RELEASE_PUBLISH_MODE: nexus
+          NEXUS_PKG_REPO: ${{ vars.NEXUS_PKG_REPO }}
+          NEXUS_USER: ${{ secrets.NEXUS_USER }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD || secrets.NEXUS_PASS }}
+        run: bash tools/macos/pkg/publish-nexus.sh "$VH_CANDIDATE_DIR/pkg"
 
       - uses: actions/upload-artifact@v4
         with:
