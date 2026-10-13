@@ -47,7 +47,7 @@ brew tap-new --no-git "$TAP" >/dev/null
 casks="$(brew --repository)/Library/Taps/vaulthalla/homebrew-smoke/Casks"
 mkdir -p "$casks"
 "$HERE/render-cask.sh" "$PKG" |
-  sed -e "s|^  url \".*\",\$|  url \"file://$PKG\"|" -e '/^      verified: /d' > "$casks/vaulthalla.rb"
+  sed -e "s|^  url \".*\"\$|  url \"file://$PKG\"|" > "$casks/vaulthalla.rb"
 grep -q "file://$PKG" "$casks/vaulthalla.rb" || die "the rendered cask's url wasn't replaced"
 ruby -c "$casks/vaulthalla.rb" >/dev/null
 
