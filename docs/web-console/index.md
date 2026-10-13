@@ -22,7 +22,7 @@ The Vaulthalla web console is the browser-based control surface for most operato
 | Task | Web console | CLI |
 | --- | --- | --- |
 | View runtime health | Health | `vh status` |
-| Browse files | Files | `/mnt/vaulthalla` and vault commands |
+| Browse files | Files | `vh fs ls`, and `/mnt/vaulthalla` on Linux |
 | Create vaults | Vaults → New vault | `vh vault create ...` |
 | Manage S3/R2 API keys | Provider credentials | `vh api-key ...` |
 | Manage users and groups | Users and Groups | `vh user ...`, `vh group ...` |

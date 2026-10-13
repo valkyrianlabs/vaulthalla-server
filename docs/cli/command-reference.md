@@ -36,11 +36,19 @@ sudo vh setup nginx --domain vault.example.com --certbot
 sudo vh setup nginx --domain vaulthalla.dev --s3-domain s3.vaulthalla.dev --certbot-dns-cloudflare /etc/vaulthalla/certbot/cloudflare.ini
 sudo vh teardown nginx
 sudo vh teardown db
+sudo vh setup caddy --domain <name> [--s3-domain <name>|none] [--internal] [--ca-scope <domain>]
+sudo vh setup caddy --domain <name> --email <address> [--acme-staging]
+sudo vh setup caddy --domain <name> --dns-cloudflare <credentials>
+sudo vh setup caddy --domain <name> --cert <file> --key <file>
+sudo vh setup caddy [--listen <address>] [--trust] [--hosts-entry] [--dry-run] [--status]
+sudo vh teardown caddy [--purge]
 ```
+
+`setup db`, `setup remote-db`, `setup nginx` and their teardowns are Linux commands; `setup caddy` and `teardown caddy` (alias `https`) are macOS commands, and each platform says so instead of running the other's. Every `setup caddy` option is described in [Serve Vaulthalla With Caddy](/https/caddy#options).
 
 The `--s3-domain` form needs a Cloudflare API token in a root-only credentials file (`dns_cloudflare_api_token = <token>`). See [S3 Gateway Setup](/s3-gateway/setup#create-the-credentials-file).
 
-`setup assign-admin` and `setup set-super-admin-password` are normal CLI commands. `setup set-super-admin-password` changes the web console password of the built-in `admin` account; only the Linux user bound as the super admin may run it, without `sudo`, and it removes the generated initial password file. The database, remote database, Nginx, and teardown commands are privileged lifecycle commands and should be run with `sudo`.
+`setup assign-admin` and `setup set-super-admin-password` are normal CLI commands. `setup set-super-admin-password` changes the web console password of the built-in `admin` account; only the local user bound as the super admin may run it, without `sudo`, and it removes the generated initial password file. The database, remote database, nginx, Caddy, and teardown commands are privileged lifecycle commands and must be run with `sudo`.
 
 `setup nginx` checks for the generated initial `admin` password first. If it is still in use and its plaintext copy (`/var/lib/vaulthalla/super_admin_initial_password`) still exists, it offers to change the password, delete the file and keep the password, continue, or cancel. Run without a terminal, it warns and continues.
 

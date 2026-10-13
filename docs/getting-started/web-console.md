@@ -11,34 +11,48 @@ tags:
 
 # Web Console
 
-The Vaulthalla web console is a packaged Next.js application served locally by `vaulthalla-web.service` and normally exposed through the Nginx site created by `sudo vh setup nginx`.
+The Vaulthalla web console is a packaged Next.js application served locally (by `vaulthalla-web.service` on Linux, the `sh.vaulthalla.web` LaunchDaemon on macOS) and normally exposed through the HTTPS proxy that `sudo vh setup nginx` (Linux) or `sudo vh setup caddy` (macOS) configures.
 
 :::toc[On this page]{depth="3" theme="compact"}
 :::
 
 ## Access
 
-After Nginx setup, open the configured domain:
+After HTTPS setup, open the configured hostname:
 
 ```text
 https://vault.example.com
+https://vault.home.arpa
 ```
 
-The packaged web runtime listens on localhost, while the core daemon exposes WebSocket and preview endpoints on local ports for the Nginx proxy. Operators normally do not connect to those ports directly.
+The web runtime listens on `127.0.0.1:36968`, and the daemon's WebSocket and HTTP endpoints listen on local ports for the proxy (see [HTTPS And Reverse Proxies](/https)). Operators normally do not connect to those ports directly; on a Mac without HTTPS, `http://127.0.0.1:36968` works on the Mac itself.
 
 Relevant services:
 
+:::tabs{default="linux"}
+
+:::tab[Linux]{value="linux"}
 ```bash
 systemctl status vaulthalla-web.service
 systemctl status vaulthalla.service
 ```
+:::
+
+:::tab[macOS]{value="macos"}
+```bash
+sudo launchctl print system/sh.vaulthalla.web | grep -E 'state|pid'
+sudo launchctl print system/sh.vaulthalla.server | grep -E 'state|pid'
+```
+:::
+
+:::
 
 ### HTTP And HTTPS
 
-A fresh package install serves the console over plain HTTP on port 80 (`http://<host>/`), which is enough to finish first run on a trusted network. The session cookie is marked `Secure` only when the browser-facing request arrived over HTTPS, as reported by the local Nginx proxy (`X-Forwarded-Proto`), so login works on both.
+A fresh Linux package install serves the console over plain HTTP on port 80 (`http://<host>/`), which is enough to finish first run on a trusted network; a fresh Mac install serves it only on `http://127.0.0.1:36968`. The session cookie is marked `Secure` only when the browser-facing request arrived over HTTPS, as reported by the local proxy (`X-Forwarded-Proto`), so login works on both.
 
 :::callout{theme="warning" title="Use HTTPS beyond a trusted LAN"}
-Over plain HTTP, passwords and session tokens cross the network unencrypted. Before exposing the console, enable TLS with `sudo vh setup nginx --domain vault.example.com --certbot`.
+Over plain HTTP, passwords and session tokens cross the network unencrypted. Before exposing the console, enable TLS: `sudo vh setup nginx --domain vault.example.com --certbot` on Linux, `sudo vh setup caddy --domain vault.home.arpa` on macOS.
 :::
 
 ### First Login
@@ -46,17 +60,18 @@ Over plain HTTP, passwords and session tokens cross the network unencrypted. Bef
 There is no default password. When the service first starts with a new database, it generates a strong password for the web `admin` account (16 random bytes, shown as 32 hex characters), unique to this install, and writes a copy to a root-readable file:
 
 ```bash
-sudo cat /var/lib/vaulthalla/super_admin_initial_password
+sudo cat /var/lib/vaulthalla/super_admin_initial_password                                 # Linux
+sudo cat "/Library/Application Support/Vaulthalla/state/super_admin_initial_password"     # macOS
 ```
 
 Sign in as `admin` with it. The session is a normal one; nothing forces you to change the password first. Repeated failed logins are rate-limited per client address and account.
 
 Changing it is recommended but not required:
 
-- Change it with `vh setup set-super-admin-password`, run as the Linux user bound as the Vaulthalla super admin (see `vh setup assign-admin`), without `sudo`. Changing it from the web console works too. Either way the file is removed.
-- Or keep the generated password and delete the file: `sudo rm /var/lib/vaulthalla/super_admin_initial_password`. Deleting the file doesn't change the password.
+- Change it with `vh setup set-super-admin-password`, run as the local user bound as the Vaulthalla super admin (on Linux see `vh setup assign-admin`; on macOS the installing user is bound), without `sudo`. Changing it from the web console works too. Either way the file is removed.
+- Or keep the generated password and delete the file (`sudo rm` the path above). Deleting the file doesn't change the password.
 
-Until you do one or the other, the console shows the super admin a warning, and `vh setup nginx` asks what to do before putting the console behind nginx. The file is written only once: deleting it never makes a new one appear, and upgrades, reinstalls and restarts keep the existing password.
+Until you do one or the other, the console shows the super admin a warning, and on Linux `vh setup nginx` asks what to do before putting the console behind nginx. The file is written only once: deleting it never makes a new one appear, and upgrades, reinstalls and restarts keep the existing password.
 
 Installs older than 1.8.0 seeded the same default password everywhere. If `admin` still uses it, the first start of 1.8.0 replaces it with a generated one, writes it to the file above, and ends the account's web sessions. Passwords you set yourself are not touched.
 
@@ -136,7 +151,7 @@ Use **Notifications** (operator email) to configure provider credentials, run dr
 
 ## Troubleshooting Access
 
-If the web console is unavailable:
+If the web console is unavailable on Linux:
 
 ```bash
 systemctl status vaulthalla-web.service
@@ -145,5 +160,7 @@ systemctl status vaulthalla.service
 journalctl -fu vaulthalla.service
 sudo nginx -t
 ```
+
+On macOS, see [The Web Console Doesn't Load](/macos/troubleshooting#the-web-console-doesnt-load).
 
 If the console says it can't reach the server, the daemon is down or restarting, or the WebSocket proxy path (`/ws`) is wrong; the page reconnects on its own once it's back. If login succeeds but a page shows an error, check the core daemon logs first. If previews or downloads fail, also check the preview endpoint proxy and vault permissions.

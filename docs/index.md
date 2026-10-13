@@ -1,7 +1,7 @@
 ---
-title: Vaulthalla User Documentation
+title: Vaulthalla Documentation
 navTitle: Home
-description: End-user and operator documentation for installing, configuring, operating, syncing, backing up, and troubleshooting Vaulthalla.
+description: Install, operate, secure, back up and troubleshoot Vaulthalla, the self-hosted encrypted cloud, on Linux and macOS.
 order: 1
 status: published
 tags:
@@ -9,73 +9,112 @@ tags:
   - operator
 ---
 
-# Vaulthalla User Documentation
+# Vaulthalla Documentation
 
-Vaulthalla is a Linux-native, self-hosted vault platform with a C++ daemon, a FUSE filesystem surface, a local CLI, a web console, PostgreSQL-backed metadata, TPM-aware secret handling, role-based access control, and local or S3-compatible vault storage.
+Vaulthalla is **the final cloud**: sovereign, encrypted storage on hardware you own. A native C++ daemon encrypts every file before it reaches a disk or a bucket, enforces one set of permissions across the web console, the `vh` CLI, the S3-compatible gateway and (on Linux) a real filesystem mount, and syncs vaults to S3-compatible providers under cost limits you set. It runs on Linux and on Apple Silicon Macs.
 
-These docs focus on using and operating Vaulthalla. They cover installation, first-run setup, CLI and web workflows, vault creation, encryption, sync, cost controls, backup planning, sharing, and troubleshooting.
+These pages are for the people who install and run it, and the people who use it. Contributor documentation is under [Contributors](/contributors/README).
 
-:::toc[On this page]{depth="3" theme="compact"}
+:::toc[On this page]{depth="2" theme="compact"}
 :::
 
 ## Start Here
 
 :::cards{columns="3" cardTheme="muted"}
-:::card[Install Vaulthalla]{href="/getting-started/installation" linkScope="title"}
-Install from the APT repository, choose a lean or interactive profile, and understand what the package creates.
+
+:::card[Install Vaulthalla]{href="/getting-started/installation" linkScope="title" eyebrow="Linux or macOS"}
+Choose a platform and install from APT, the macOS installer package, or Homebrew.
 :::
 
 :::card[First Run]{href="/getting-started/first-run" linkScope="title"}
-Bootstrap the database, claim the CLI admin Linux UID, configure Nginx, and check service health.
+Sign in, secure the generated admin password, confirm CLI access, and create a vault.
 :::
 
-:::card[Web Console]{href="/getting-started/web-console" linkScope="title"}
-Open the browser interface and learn how the dashboard, filesystem, vault, user, cost, and admin pages fit together.
+:::card[HTTPS]{href="/https" linkScope="title"}
+Serve the console on a home-network name or a public domain: nginx on Linux, Caddy on macOS.
 :::
+
 :::
+
+## Your Platform
+
+:::cards{columns="2" cardTheme="muted"}
+
+:::card[Linux]{href="/linux" linkScope="title" eyebrow="amd64 · Ubuntu 24.04"}
+The Debian package, systemd services, TPM2 key sealing, the FUSE mount, PostgreSQL and nginx integration. [Install](/linux/installation) · [Administer](/linux/administration) · [Troubleshoot](/linux/troubleshooting)
+:::
+
+:::card[macOS]{href="/macos" linkScope="title" eyebrow="Apple Silicon · macOS 14+"}
+The installer package or Homebrew cask, launchd LaunchDaemons, a bundled PostgreSQL and Caddy. [Install](/macos/installation) · [Administer](/macos/administration) · [Troubleshoot](/macos/troubleshooting)
+:::
+
+:::
+
+Every difference between the two is in [Platform Comparison](/reference/platforms); everything else on this site applies to both.
 
 ## Daily Operation
 
 :::cards{columns="3" cardTheme="muted"}
+
+:::card[Web Console]{href="/getting-started/web-console" linkScope="title"}
+Files, previews, shares, vaults, users, cost control, health and notifications in the browser.
+:::
+
 :::card[CLI Guide]{href="/cli" linkScope="title"}
-Use `vh` for status checks, setup, vaults, users, roles, API keys, secrets, sync, pricing budgets, and email checks.
+`vh` for status, users, roles, vaults, sync, API keys, secrets, budgets and file transfers.
 :::
 
 :::card[Vaults]{href="/vaults" linkScope="title"}
-Understand local vaults, S3/R2 vaults, the FUSE mount, upstream encryption, and vault-level access control.
+Local and S3/R2 vaults, ownership, permissions, and [filesystem access](/vaults/filesystem-access).
 :::
 
 :::card[Sync]{href="/vaults/sync" linkScope="title"}
-Choose cache, sync, or mirror behavior, run dry-runs, import S3 Inventory, ingest events, and reconcile remote indexes.
+Cache, sync or mirror strategies, dry-runs, S3 Inventory imports and conflict resolution.
+:::
+
+:::card[Sharing]{href="/sharing" linkScope="title"}
+Public and email-validated share links with expiry, limits and upload policies.
 :::
 
 :::card[S3 Gateway]{href="/s3-gateway" linkScope="title"}
-Expose Vaulthalla vaults through an S3-compatible endpoint for AWS CLI, rclone, MinIO mc, SDKs, and backup tools.
+Vaults as S3 buckets for the AWS CLI, rclone, MinIO mc, SDKs and backup tools.
 :::
+
 :::
 
 ## Safety And Recovery
 
 :::cards{columns="3" cardTheme="muted"}
+
 :::card[Encryption]{href="/vaults/encryption" linkScope="title"}
-Understand TPM-backed master keys, per-vault AES keys, upstream S3 encryption, key rotation, and export boundaries.
+How master keys are protected on each platform, per-vault AES-256-GCM keys, upstream encryption and rotation.
 :::
 
 :::card[Backup And Recovery]{href="/vaults/backup-and-recovery" linkScope="title"}
-Build a usable disaster recovery set from PostgreSQL, Vaulthalla state, config, key exports, and secret exports.
+A recovery set that actually restores: database, state, configuration, key and secret exports.
 :::
 
 :::card[Cost Control]{href="/cost-control" linkScope="title"}
-Use request budgets and price budgets to keep S3/R2 operations bounded before sync work runs.
+Request budgets and price budgets that stop S3/R2 work before it runs up a bill.
 :::
+
 :::
 
-## Administration
+## Administration And Reference
 
-Use [Users, Groups, And Roles](/admin/users-groups-roles) to grant access, [S3 Gateway Administration](/admin/s3-gateway) to manage gateway service, credentials, buckets, and budgets, [Operator Emails](/admin/operator-emails) to configure notifications, and [Sharing](/sharing) to issue controlled public or email-validated links. For the first-class S3-compatible protocol guide, start with [S3 Gateway](/s3-gateway).
+- [Users, Groups And Roles](/admin/users-groups-roles), [S3 Gateway Administration](/admin/s3-gateway), [Operator Emails](/admin/operator-emails).
+- [Configuration](/reference/configuration), [Runtime Paths](/reference/runtime-paths), [Platform Comparison](/reference/platforms), [Command Reference](/cli/command-reference).
+- When something breaks: [Linux Troubleshooting](/linux/troubleshooting), [macOS Troubleshooting](/macos/troubleshooting), then [General Troubleshooting](/troubleshooting/general-troubleshooting) for vaults, sync, previews, shares and costs.
 
-When something breaks, start with [Install Troubleshooting](/troubleshooting/install-troubleshooting) for package and service issues, then use [General Troubleshooting](/troubleshooting/general-troubleshooting) for CLI, web, vault, sync, encryption, and cost-control symptoms.
+## What Ships Today
 
-## Scope
+| Area | Status |
+| --- | --- |
+| Linux (amd64, APT): daemon, web console, CLI, FUSE mount, TPM2 sealing, nginx integration | Production |
+| Encrypted local and S3/R2 vaults, sync, cost controls, RBAC, sharing, S3 gateway | Production, on both platforms |
+| macOS (Apple Silicon): installer package, Homebrew cask, launchd, bundled PostgreSQL, `vh setup caddy` | New in this release |
+| `vh fs` file transfers over the CLI socket | Interim file access on macOS until a mount ships |
+| Hardware video encoding in `vaulthalla-preview-media` | Detected, not yet validated on real GPUs |
+| macOS Finder mount, Secure Enclave key sealing, an Apple-signed package | Planned, not shipped |
 
-These pages describe the shipped operator surfaces: `vh`, the web console, the package lifecycle, systemd services, the FUSE mount, PostgreSQL state, TPM or `swtpm` key protection, and S3-compatible storage behavior. Contributor-only docs remain available under [Contributors](/contributors/README), but they are not the primary path for operators.
+These docs describe what the installed product does. Anything planned is labeled as such.

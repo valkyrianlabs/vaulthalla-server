@@ -10,19 +10,34 @@ tags:
 
 # General Troubleshooting
 
-Use this guide after Vaulthalla is installed but an operator workflow is failing.
+Use this guide after Vaulthalla is installed but an operator workflow is failing. Problems with the install itself, the services, the database or HTTPS are platform-specific: see [Linux Troubleshooting](/linux/troubleshooting) and [macOS Troubleshooting](/macos/troubleshooting).
 
 :::toc[On this page]{depth="3" theme="compact"}
 :::
 
 ## Fast Triage
 
+:::tabs{default="linux"}
+
+:::tab[Linux]{value="linux"}
 ```bash
 vh status
 systemctl status vaulthalla.service
 systemctl status vaulthalla-web.service
 journalctl -u vaulthalla.service -n 200
 ```
+:::
+
+:::tab[macOS]{value="macos"}
+```bash
+vh status
+sudo launchctl print system/sh.vaulthalla.server | grep -E 'state|last exit'
+sudo launchctl print system/sh.vaulthalla.web | grep -E 'state|last exit'
+sudo tail -n 200 /Library/Logs/Vaulthalla/vaulthalla.log
+```
+:::
+
+:::
 
 For vault sync:
 
@@ -41,7 +56,7 @@ vh permissions --type vault
 
 ## CLI Permission Error
 
-Check:
+On Linux, check:
 
 ```bash
 id
@@ -49,7 +64,7 @@ getent group vaulthalla
 ls -l /run/vaulthalla/cli.sock
 ```
 
-If group membership was just changed, refresh the session with `newgrp vaulthalla` or log out and back in. Then confirm the Vaulthalla user has the expected Linux UID mapping.
+If group membership was just changed, refresh the session with `newgrp vaulthalla` or log out and back in. Then confirm the Vaulthalla user has the expected Linux UID mapping. On macOS, see [vh Says Permission Denied](/macos/troubleshooting#vh-says-permission-denied).
 
 ## Web Login Works But Pages Are Empty
 
