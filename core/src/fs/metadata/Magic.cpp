@@ -3,6 +3,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <magic.h>
+#include <paths.h>  // generated: VH_MAGIC_DB_PATH
 
 using namespace vh::fs::metadata;
 
@@ -10,11 +11,13 @@ Magic::Magic() {
     cookie = magic_open(MAGIC_MIME_TYPE);
     if (!cookie) throw std::runtime_error("Failed to create magic cookie");
 
-    // Debian/Ubuntu's database; where it isn't installed (macOS: Homebrew's libmagic) libmagic's own compiled-in
-    // default (nullptr) finds it.
+    // Debian/Ubuntu's database, else the one the install ships (the macOS package bundles libmagic without
+    // Homebrew's share/), else libmagic's own compiled-in default (nullptr: a Homebrew development build).
     constexpr const char* kDebianMagicDb = "/usr/share/misc/magic.mgc";
     std::error_code ec;
-    const char* database = std::filesystem::exists(kDebianMagicDb, ec) ? kDebianMagicDb : nullptr;
+    const char* database = nullptr;
+    for (const char* candidate : {kDebianMagicDb, VH_MAGIC_DB_PATH})
+        if (std::filesystem::exists(candidate, ec)) { database = candidate; break; }
     if (magic_load(cookie, database) != 0) {
         std::string err = magic_error(cookie) ? magic_error(cookie) : "Unknown error";
         magic_close(cookie);

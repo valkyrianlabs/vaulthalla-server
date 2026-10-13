@@ -1,0 +1,28 @@
+#!/bin/bash
+# Vaulthalla package postinstall: provisions the system service (account, private directories, bundled PostgreSQL,
+# LaunchDaemons; idempotent, so upgrades take the same path) and enrolls the person installing it, who becomes the CLI
+# 'admin' unless someone already is. Any failure fails the install: nothing is left silently half-configured.
+set -euo pipefail
+SUPPORT="/Library/Application Support/Vaulthalla"
+PROV=/usr/local/lib/vaulthalla/vaulthalla-provision
+
+# Installer.app and `sudo installer` (Homebrew) both run this as root; the person installing is the console user.
+user="$(/usr/bin/stat -f %Su /dev/console 2>/dev/null || true)"
+case "$user" in ''|root|_mbsetupuser|loginwindow) user="" ;; esac
+
+args=(--apply)
+if [ -n "$user" ]; then args+=(--enroll "$user"); else echo "vaulthalla postinstall: no console user; enroll one later"; fi
+"$PROV" "${args[@]}"
+
+# The uninstaller and its provisioner live beside the data, outside the package receipt, so they outlive the files
+# they remove (Homebrew's zap runs after the package's files are gone).
+/usr/bin/install -o root -g wheel -m 0755 "$PROV" "$SUPPORT/vaulthalla-provision"
+/usr/bin/install -o root -g wheel -m 0755 /usr/local/share/vaulthalla/uninstall.sh "$SUPPORT/uninstall.sh"
+
+cat <<MSG
+Vaulthalla is installed and running.
+  Web console: http://127.0.0.1:36968 -- sign in as 'admin'; the first password is in
+    "$SUPPORT/state/super_admin_initial_password" (sudo cat it, then change it).
+  CLI: vh status${user:+ ($user is enrolled)}
+  Uninstall: sudo "$SUPPORT/uninstall.sh" (keeps vault data; --purge deletes it)
+MSG

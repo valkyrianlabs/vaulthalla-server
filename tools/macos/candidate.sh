@@ -2,13 +2,13 @@
 # A reproducible macOS install candidate and its disposable database, for tools/macos/install-acceptance.sh.
 #
 #   tools/macos/candidate.sh stage        # release build of this checkout, staged as it would install under /usr/local
-#   tools/macos/candidate.sh db up|down   # disposable PostgreSQL 16 cluster for the installed service (port 54331)
-#   sudo tools/macos/candidate.sh accept [PHASE]   # install-acceptance.sh with the paths below (default phase: all)
+#   tools/macos/candidate.sh pkg          # the installer package from that stage (tools/macos/pkg/build-pkg.sh)
+#   sudo tools/macos/candidate.sh accept [PHASE]   # install-acceptance.sh on that package (default phase: all)
 #
 # Everything lives in VH_CANDIDATE_DIR (default ~/.cache/vaulthalla-macos-candidate; under sudo, the invoking user's),
 # so a reboot doesn't lose it: stage/ (the tree install-acceptance copies), deps/ (pdfium with its install name set to
-# /usr/local/lib/vaulthalla), node/ (verified official Node 24 tarballs), venv/ (the client's websockets), pg/ (the
-# cluster), report/ (acceptance.json and run.log). `stage` and `db` run as you, never as root.
+# /usr/local/lib/vaulthalla), node/ (verified official Node 24 tarballs), venv/ (the client's websockets), pkg/ (the
+# package), report/ (acceptance.json and run.log). `stage` and `pkg` run as you, never as root.
 #
 # Stage contents: meson install (prefix /usr/local, -O3, no unit tests) minus headers and static libraries; the web
 # console's standalone build (web/.next, rebuilt unless VH_CANDIDATE_REUSE_WEB=1) under share/vaulthalla-web, as
@@ -25,8 +25,6 @@ fi
 DIR="${VH_CANDIDATE_DIR:-$USER_HOME/.cache/vaulthalla-macos-candidate}"
 DIR="${DIR%/}"
 PREFIX=/usr/local
-PG_PORT=54331
-DB_ROLE=vh_mac_install
 
 log() { printf 'candidate: %s\n' "$*" >&2; }
 die() { printf 'candidate: error: %s\n' "$*" >&2; exit 1; }
@@ -95,6 +93,8 @@ cmd_stage() {
   if [ -d "$REPO/web/public" ]; then cp -a "$REPO/web/public" "$web/"; fi
   node_runtime "$next$PREFIX/libexec/vaulthalla/node"
   mkdir -p "$next$PREFIX/lib/vaulthalla" && cp "$DIR/deps/lib/libpdfium.dylib" "$next$PREFIX/lib/vaulthalla/"
+  # libmagic's database, which Homebrew keeps in its own share/ (the daemon looks for this copy: VH_MAGIC_DB_PATH).
+  cp "$(brew --prefix libmagic)/share/misc/magic.mgc" "$next$PREFIX/share/vaulthalla/magic.mgc"
   otool -L "$next$PREFIX/bin/vaulthalla-server" | grep -q "$PREFIX/lib/vaulthalla/libpdfium.dylib" \
     || die "vaulthalla-server doesn't link pdfium from $PREFIX/lib/vaulthalla"
   rm -rf "$stage" && mv "$next" "$stage"
@@ -104,48 +104,29 @@ cmd_stage() {
   log "staged $(cat "$DIR/stage.commit") in $stage ($(cd "$stage" && find . -mindepth 1 | wc -l | tr -d ' ') paths)"
 }
 
-cmd_db() {
-  not_root db
-  env_setup
-  local pg="$DIR/pg"
-  export VH_TEST_PG_DIR="$pg" VH_TEST_PG_PORT="$PG_PORT"
-  case "${1:-}" in
-    up)
-      mkdir -p "$DIR"
-      "$REPO/tools/macos/test-db.sh" up >/dev/null
-      if [ ! -s "$pg/install-role-password" ]; then (umask 077; openssl rand -hex 24 > "$pg/install-role-password"); fi
-      # psql reads the password from the file itself (\set with backquotes); it never appears on a command line.
-      "$(brew --prefix postgresql@16)/bin/psql" -X -q -v ON_ERROR_STOP=1 -h "$pg/sock" -p "$PG_PORT" -U vh_test_admin \
-        -d postgres -v pwfile="$pg/install-role-password" -v role="$DB_ROLE" >/dev/null <<'SQL'
-\set pw `cat :'pwfile'`
-SELECT format('CREATE ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE', :'role')
- WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'role') \gexec
-SELECT format('ALTER ROLE %I PASSWORD %L', :'role', :'pw') \gexec
-SELECT format('CREATE DATABASE %I OWNER %I', :'role', :'role')
- WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = :'role') \gexec
-SQL
-      log "ready: $DB_ROLE@127.0.0.1:$PG_PORT/$DB_ROLE"
-      ;;
-    down) "$REPO/tools/macos/test-db.sh" down ;;
-    *) die "usage: candidate.sh db up|down" ;;
-  esac
+cmd_pkg() {
+  not_root pkg
+  [ -f "$DIR/stage.commit" ] || die "nothing staged in $DIR (tools/macos/candidate.sh stage)"
+  rm -rf "$DIR/pkg"
+  "$REPO/tools/macos/pkg/build-pkg.sh" "$DIR/stage" "$DIR/pkg"
+  cp "$DIR/stage.commit" "$DIR/pkg.commit"
 }
 
 cmd_accept() {
   [ "$(id -u)" = 0 ] || die "accept needs root: sudo tools/macos/candidate.sh accept"
-  [ -f "$DIR/stage.commit" ] || die "nothing staged in $DIR (tools/macos/candidate.sh stage)"
-  [ -s "$DIR/pg/install-role-password" ] || die "no database in $DIR/pg (tools/macos/candidate.sh db up)"
+  local pkg
+  pkg=$(ls "$DIR"/pkg/vaulthalla-*-arm64.pkg 2>/dev/null | head -1)
+  [ -n "$pkg" ] || die "no package in $DIR/pkg (tools/macos/candidate.sh stage && tools/macos/candidate.sh pkg)"
   mkdir -p "$DIR/report"
   chown "${SUDO_USER:-root}" "$DIR/report"
-  log "candidate $(cat "$DIR/stage.commit"); log: $DIR/report/run.log"
-  "$REPO/tools/macos/install-acceptance.sh" --phase "${1:-all}" --stage "$DIR/stage" \
-    --db-port "$PG_PORT" --db-name "$DB_ROLE" --db-user "$DB_ROLE" --db-password-file "$DIR/pg/install-role-password" --db-dir "$DIR/pg" \
+  log "package $(basename "$pkg") from $(cat "$DIR/pkg.commit"); log: $DIR/report/run.log"
+  "$REPO/tools/macos/install-acceptance.sh" --phase "${1:-all}" --pkg "$pkg" \
     --python "$DIR/venv/bin/python" --report-dir "$DIR/report" 2>&1 | tee -a "$DIR/report/run.log"
 }
 
 case "${1:-}" in
   stage) cmd_stage ;;
-  db) shift; cmd_db "$@" ;;
+  pkg) cmd_pkg ;;
   accept) shift; cmd_accept "$@" ;;
   *) sed -n '2,17p' "$0"; exit 2 ;;
 esac

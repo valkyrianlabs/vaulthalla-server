@@ -30,6 +30,8 @@ PATHS = {
     "BINDIR": "/usr/local/bin",
     "WEB_DIR": "/usr/local/share/vaulthalla-web",
     "NODE": "/usr/local/libexec/vaulthalla/node/bin/node",
+    "PG_BIN": "/usr/local/libexec/vaulthalla/postgresql/bin",
+    "PG_DIR": "/Library/Application Support/Vaulthalla/postgres",
 }
 
 
@@ -42,6 +44,14 @@ def render(text: str, values: dict[str, str]) -> str:
 class LaunchDaemonPlists(unittest.TestCase):
     def load(self, name: str) -> dict:
         return plistlib.loads(render((LAUNCHD / f"{name}.plist.in").read_text(), PATHS).encode())
+
+    def test_bundled_postgres_runs_privately_as_the_service_account(self) -> None:
+        p = self.load("sh.vaulthalla.postgres")
+        self.assertEqual(p["ProgramArguments"], [f"{PATHS['PG_BIN']}/postgres", "-D", f"{PATHS['PG_DIR']}/data"])
+        self.assertEqual((p["UserName"], p["GroupName"]), ("_vaulthalla", "_vaulthalla"))
+        self.assertTrue(p["RunAtLoad"])
+        self.assertIs(p["KeepAlive"], True)
+        self.assertEqual(p["Umask"], 0o077)
 
     def test_server_is_a_system_daemon_for_the_service_account(self) -> None:
         p = self.load("sh.vaulthalla.server")
@@ -251,12 +261,35 @@ class Provisioning(unittest.TestCase):
         self.assertEqual(self.run_provision(apply=True).returncode, 0)
         self.assertEqual(config.read_text(), "operator: edited\n")
 
-    def test_never_enrolls_anyone_in_the_vaulthalla_group(self) -> None:
-        self.assertEqual(self.run_provision(apply=True).returncode, 0)
+    def test_enrolls_no_one_without_enroll(self) -> None:
+        r = self.run_provision(apply=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
         self.assertNotIn("GroupMembership", self.calls())
-        self.assertNotIn("dseditgroup", self.script.read_text())
+        self.assertNotIn("dseditgroup", r.stdout)
         db = json.loads(self.state.read_text())
         self.assertNotIn("GroupMembership", db["Groups"]["_vaulthalla"])
+
+    def test_enroll_takes_only_a_real_person_account(self) -> None:
+        self.assertEqual(self.run_provision(apply=True).returncode, 0)
+        db = self.dscl_db()
+        db["Users"]["alice"] = {"RecordName": ["alice"], "UniqueID": ["501"]}
+        db["Users"]["_daemonish"] = {"RecordName": ["_daemonish"], "UniqueID": ["260"]}
+        self.write_db(db)
+        r = self.run_provision("--enroll", "alice")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("dseditgroup -o edit -a alice -t user _vaulthalla", r.stdout)
+        for who, why in (("_daemonish", "not a person"), ("nobody_here", "no such local user")):
+            r = self.run_provision("--enroll", who)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn(why, r.stderr)
+        self.assertNotEqual(self.run_provision("--remove", "--enroll", "alice").returncode, 0)
+
+    def test_a_pristine_template_config_is_rendered_but_an_edited_one_is_kept(self) -> None:
+        config = self.path(PATHS["CONFIG_PATH"])
+        self.assertEqual(self.run_provision(apply=True).returncode, 0)
+        self.assertEqual(config.read_text(), "shipped: true\n")
+        r = self.run_provision()
+        self.assertIn(f"ok {PATHS['CONFIG_PATH']}", r.stdout)
 
     def test_remove_unloads_and_purge_deletes_account_and_data(self) -> None:
         self.assertEqual(self.run_provision(apply=True).returncode, 0)

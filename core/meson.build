@@ -80,6 +80,8 @@ else
 endif
 conf.set_quoted('VH_S3_GATEWAY_MULTIPART_PARTS_DIRNAME', '.8f3a9c1d6e2b4f70')
 conf.set_quoted('VH_PSQL_SCHEMAS_PATH', psql_dir)
+# A libmagic database shipped with the install (the macOS package bundles one); absent on Debian, which has its own.
+conf.set_quoted('VH_MAGIC_DB_PATH', join_paths(data_dir, 'magic.mgc'))
 conf.set_quoted('VH_PSQL_TEST_SCHEMAS_PATH', join_paths(repo_root, 'deploy/psql'))
 
 vh_paths_header = configure_file(

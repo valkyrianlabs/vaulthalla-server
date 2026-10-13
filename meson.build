@@ -124,8 +124,10 @@ if get_option('install_data')
         install_data(
             'deploy/launchd/sh.vaulthalla.server.plist.in',
             'deploy/launchd/sh.vaulthalla.web.plist.in',
+            'deploy/launchd/sh.vaulthalla.postgres.plist.in',
             install_dir: data_dir / 'launchd',
         )
+        install_data('tools/macos/pkg/uninstall.sh', install_dir: data_dir, install_mode: 'rwxr-xr-x')
         provision_conf = configuration_data()
         provision_conf.set('SUPPORT_DIR', '/Library/Application Support/Vaulthalla')
         provision_conf.set('STATE_DIR', vh_state_dir)
@@ -137,6 +139,8 @@ if get_option('install_data')
         provision_conf.set('BINDIR', get_option('prefix') / bindir)
         provision_conf.set('WEB_DIR', get_option('prefix') / get_option('datadir') / 'vaulthalla-web')
         provision_conf.set('NODE', get_option('prefix') / 'libexec' / 'vaulthalla' / 'node' / 'bin' / 'node')
+        # The package's private PostgreSQL (tools/macos/pkg/build-postgres.sh); a source install has none.
+        provision_conf.set('PG_BIN', get_option('prefix') / 'libexec' / 'vaulthalla' / 'postgresql' / 'bin')
         configure_file(
             input: 'deploy/launchd/vaulthalla-provision.in',
             output: 'vaulthalla-provision',
