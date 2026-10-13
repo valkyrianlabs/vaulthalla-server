@@ -1,6 +1,6 @@
 ---
 title: Runtime Paths
-description: Reference for Vaulthalla configuration, runtime, state, log, mount, SQL, web, Nginx, and TPM paths.
+description: Reference for Vaulthalla configuration, runtime, state, log, mount, SQL, web, proxy, database and key paths on Linux and macOS.
 order: 700
 status: published
 tags:
@@ -11,12 +11,14 @@ tags:
 
 # Runtime Paths
 
-Use this reference when backing up, troubleshooting, or verifying package layout.
+Use this reference when backing up, troubleshooting, or verifying package layout. Linux paths come first; the [macOS](#macos) section maps the same roles onto the Mac's layout. The differences are summarized in [Platform Comparison](/reference/platforms).
 
 :::toc[On this page]{depth="3" theme="compact"}
 :::
 
-## Core Paths
+## Linux
+
+### Core Paths
 
 | Path | Purpose |
 | --- | --- |
@@ -30,7 +32,7 @@ Use this reference when backing up, troubleshooting, or verifying package layout
 | `/usr/share/vaulthalla-web` | Packaged web runtime. |
 | `/var/cache/vaulthalla-web` | Web runtime cache. |
 
-## Services
+### Services
 
 | Service | Purpose |
 | --- | --- |
@@ -38,18 +40,7 @@ Use this reference when backing up, troubleshooting, or verifying package layout
 | `vaulthalla-web.service` | Web console runtime. |
 | `vaulthalla-swtpm.service` | Managed software TPM fallback. |
 
-## Network Defaults
-
-| Listener | Default |
-| --- | --- |
-| Web runtime | `127.0.0.1:36968` |
-| WebSocket server | `127.0.0.1:36969` |
-| Preview HTTP server | `127.0.0.1:36970` |
-| Software TPM | `127.0.0.1:2321` and `127.0.0.1:2322` |
-
-These listeners are intended for local service wiring and Nginx proxying, not direct public exposure.
-
-## Nginx Paths
+### Nginx Paths
 
 | Path | Purpose |
 | --- | --- |
@@ -60,7 +51,7 @@ These listeners are intended for local service wiring and Nginx proxying, not di
 
 Use `sudo vh setup nginx` and `sudo vh teardown nginx` instead of editing managed state by hand when possible.
 
-## TPM Paths
+### TPM Paths
 
 | Path | Purpose |
 | --- | --- |
@@ -70,7 +61,7 @@ Use `sudo vh setup nginx` and `sudo vh teardown nginx` instead of editing manage
 
 Sealed key blobs are stored in Vaulthalla state. Treat TPM and sealed key state as sensitive backup material.
 
-## CLI Socket
+### CLI Socket
 
 The CLI connects to:
 
@@ -86,3 +77,51 @@ id
 getent group vaulthalla
 systemctl status vaulthalla.service
 ```
+
+## macOS
+
+### Data And Configuration
+
+Everything that holds data belongs to the hidden `_vaulthalla` account.
+
+| Path | Owner and mode | Purpose |
+| --- | --- | --- |
+| `/Library/Application Support/Vaulthalla` | `root:wheel 0755` | Service root. |
+| `…/config.yaml` | `root:_vaulthalla 0640` | Runtime configuration. Written only when missing. |
+| `…/state` | `_vaulthalla 0700` | Vault data (ciphertext), sealed secrets (`file` backend), previews cache, upload staging, the initial admin password. |
+| `…/run` | `_vaulthalla 0750` | The CLI socket `cli.sock` (`0660`, group `_vaulthalla`) and the one-time database password handoff. |
+| `…/postgres` | `_vaulthalla 0700` | The bundled PostgreSQL cluster (`data/`) and its socket. |
+| `…/caddy` | `_vaulthalla 0700` | After `vh setup caddy`: the Caddyfile, certificates, ACME account and the Vaulthalla CA. |
+| `…/vaulthalla-local-ca.crt` | `0644` | The Vaulthalla CA certificate to install on devices (internal names). |
+| `…/mount` | `_vaulthalla 0700` | Reserved for a future service-private mount; unused by the package. |
+| `…/uninstall.sh`, `…/vaulthalla-provision` | `root:wheel 0755` | Copies kept outside the package receipt so uninstalling still works after the program files are gone. |
+| `/Library/Logs/Vaulthalla` | `_vaulthalla 0750` | `vaulthalla.log`, `server.log`, `web.log`, `postgres.log`, `caddy.log`. |
+
+`…` is `/Library/Application Support/Vaulthalla`.
+
+### Programs
+
+| Path | Purpose |
+| --- | --- |
+| `/usr/local/bin/vh`, `vaulthalla`, `vaulthalla-cli`, `vaulthalla-server` | CLI and daemon. |
+| `/usr/local/lib/vaulthalla` | `vaulthalla-provision`, `vaulthalla-caddy`, the lifecycle utility, bundled libraries (`lib*.dylib`). |
+| `/usr/local/libexec/vaulthalla/postgresql` | Bundled PostgreSQL 16. |
+| `/usr/local/libexec/vaulthalla/node` | Node runtime for the web console. |
+| `/usr/local/libexec/vaulthalla/caddy/caddy` | Caddy with the Cloudflare DNS module. |
+| `/usr/local/share/vaulthalla` | SQL migrations, configuration and LaunchDaemon templates, libmagic database. |
+| `/usr/local/share/vaulthalla-web` | Web console. |
+| `/Library/LaunchDaemons/sh.vaulthalla.{server,web,postgres,caddy}.plist` | LaunchDaemons. |
+
+## Network Defaults
+
+| Listener | Default | Platform |
+| --- | --- | --- |
+| Web runtime | `127.0.0.1:36968` | both |
+| WebSocket server | `127.0.0.1:36969` | both |
+| HTTP server (previews, downloads, uploads) | `127.0.0.1:36970` | both |
+| S3 gateway (disabled by default) | `0.0.0.0:39000` | both |
+| Bundled PostgreSQL | `127.0.0.1:36971` | macOS |
+| Caddy | `:80`, `:443` (after `vh setup caddy`) | macOS |
+| Software TPM | `127.0.0.1:2321` and `127.0.0.1:2322` | Linux |
+
+These listeners are intended for local service wiring and the HTTPS proxy, not direct public exposure. The isolated development instance adds 100 to the Vaulthalla ports.

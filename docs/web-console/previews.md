@@ -50,7 +50,7 @@ GLB, glTF, STL and OBJ files open in an interactive viewer: drag to orbit, right
 
 The viewer refuses models over 512 MiB, over 20 million triangles, and glTF files that require KTX2/Basis textures, with an explanation instead of freezing the tab.
 
-STEP and STP files are converted to glTF on the server by the optional `vaulthalla-preview-cad` helper, once per file version. Without that package the sheet says the 3D converter isn't installed and offers Download. See [Installation](/getting-started/installation#optional-preview-packages).
+STEP and STP files are converted to glTF on the server by the optional `vaulthalla-preview-cad` helper, once per file version. Without that package the sheet says the 3D converter isn't installed and offers Download. See [Install On Linux](/linux/installation#optional-preview-packages).
 
 ### Text And Markdown
 

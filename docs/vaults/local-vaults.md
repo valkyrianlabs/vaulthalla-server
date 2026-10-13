@@ -55,11 +55,13 @@ vh vault update docs --on-sync-conflict ask
 
 ## Access Files
 
-Use the web filesystem browser, or use the mounted filesystem surface:
+Use the web filesystem browser, `vh fs`, or on Linux the mounted filesystem surface:
 
 ```text
 /mnt/vaulthalla
 ```
+
+See [Filesystem Access](/vaults/filesystem-access).
 
 Access is still controlled by Vaulthalla roles and the daemon. If a user can see the mount but cannot perform an operation, check the vault role assignment first.
 

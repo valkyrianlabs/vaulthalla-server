@@ -20,18 +20,37 @@ don't hand-edit them; reinstall to upgrade.
 
 ## Sections
 
-`getting-started/` · `web-console/` · `cli/` (incl. `command-reference.md`) · `vaults/` (local, S3/R2,
-sync, encryption, secrets/key export, backup & recovery, S3 gateway) · `cost-control/` (request vs
-price budgets) · `admin/` (users/groups/roles, operator emails, S3 guardrails, S3 gateway) ·
-`sharing/` · `s3-gateway/` (8 pages) · `reference/` (runtime paths, configuration) ·
-`troubleshooting/`.
+Cross-platform IA (Linux + macOS): shared behavior is documented once; platform differences live in the platform
+sections and `reference/platforms.md`. Use `:::tabs` (`value="linux"` / `value="macos"`) only for genuinely parallel
+commands.
+
+`getting-started/` (installation = platform chooser, first-run, web-console) · `linux/` (index, installation,
+administration, troubleshooting) · `macos/` (index, installation, administration, troubleshooting) · `https/` (index,
+caddy, client-trust, nginx) · `web-console/` · `cli/` (incl. `command-reference.md`) · `vaults/` (local, S3/R2, sync,
+filesystem access, encryption, secrets/key export, backup & recovery, S3 gateway) · `cost-control/` · `admin/` ·
+`sharing/` · `s3-gateway/` (8 pages) · `reference/` (runtime paths, configuration, platforms) · `troubleshooting/`
+(general only; install/service problems are per platform). Moved pages keep their old route in `redirectFrom`
+(`/troubleshooting/install-troubleshooting` → `/linux/troubleshooting`).
 
 ## Product facts docs must stay consistent with
 
-- Install: `curl -fsSL https://apt.vaulthalla.sh/install.sh | bash`, manual APT, or `./bin/vh/install.sh`.
-  Source installs (`make install` / `make dev`) are development-only.
-- CLI names: `vh`, `vaulthalla`. Socket: `/run/vaulthalla/cli.sock`. Non-root operators need the `vaulthalla`
-  group plus a UID mapping via `vh setup assign-admin`. `setup db|remote-db|nginx` and `teardown db|nginx` need `sudo`.
+- Install (Linux, amd64, Ubuntu 24.04 tested): `curl -fsSL https://apt.vaulthalla.sh/install.sh | bash`, manual APT, or
+  `./bin/vh/install.sh`. Source installs (`make install` / `make dev`) are development-only.
+- Install (macOS, Apple Silicon, macOS 14+): `brew install --cask vaulthalla/tap/vaulthalla` or
+  `sudo installer -pkg vaulthalla-<version>-arm64.pkg -target /`. Unsigned: Finder needs **Open Anyway** once.
+  Postinstall = `vaulthalla-provision --apply --enroll <console user>` (hidden `_vaulthalla`, bundled PostgreSQL on
+  127.0.0.1:36971, LaunchDaemons `sh.vaulthalla.{postgres,server,web}` + `caddy` after `vh setup caddy`, installing
+  user enrolled and bound to `admin`). Uninstall: `sudo "/Library/Application Support/Vaulthalla/uninstall.sh"
+  [--purge]`. Paths under `/Library/Application Support/Vaulthalla/{state,run,postgres,caddy,config.yaml}`, logs in
+  `/Library/Logs/Vaulthalla`.
+- macOS limits (never promise otherwise until shipped and accepted): no FUSE/Finder mount (`vh fs`, console, S3 gateway
+  instead), secrets backend `file` (0600 files + FileVault, not Secure Enclave), unsigned package, no
+  `vh setup db|remote-db|nginx`. HTTPS on macOS is `vh setup caddy` (internal CA with X.509 name constraints, Let's
+  Encrypt, `--dns-cloudflare`, `--cert/--key`); on Linux `vh setup nginx`.
+- CLI names: `vh`, `vaulthalla`. Socket: `/run/vaulthalla/cli.sock` (macOS: `…/Vaulthalla/run/cli.sock`). Non-root
+  operators need the `vaulthalla` group (macOS `_vaulthalla`, `dseditgroup`) plus a UID mapping (`vh setup
+  assign-admin` on Linux; the installer binds the installing user on macOS). Lifecycle commands need `sudo`:
+  `setup db|remote-db|nginx` and `teardown db|nginx` (Linux), `setup|teardown caddy` (macOS).
 - Services: `vaulthalla` (owns `/run/vaulthalla/cli.sock`), `vaulthalla-web`, `vaulthalla-swtpm`. `vaulthalla-cli.socket`/`.service` were retired in #110; mention them only as legacy units that upgrades remove.
 - S3/R2 sync strategies: `cache | sync | mirror`. Request budgets and price budgets are separate systems.
   Price budget scopes are global, provider, and vault; modes are `off | report | warn | enforce`.

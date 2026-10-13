@@ -41,13 +41,13 @@ This split matters for backup. A usable disaster recovery plan needs PostgreSQL 
 
 ## FUSE Mount
 
-The core daemon exposes a Linux filesystem surface at:
+On Linux, the core daemon exposes vaults as a filesystem at:
 
 ```text
 /mnt/vaulthalla
 ```
 
-The web console and CLI operate through Vaulthalla permissions and metadata. Host-level filesystem access still depends on the daemon, FUSE health, Linux permissions, and the mounted state.
+The web console and CLI operate through Vaulthalla permissions and metadata. Host-level filesystem access still depends on the daemon, FUSE health, Linux permissions, and the mounted state. The macOS package has no mount yet; see [Filesystem Access](/vaults/filesystem-access) for the mount's model and the alternatives on a Mac.
 
 ## Ownership
 

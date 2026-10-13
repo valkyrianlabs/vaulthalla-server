@@ -1,17 +1,21 @@
 ---
-title: Install Troubleshooting
-description: Diagnose Vaulthalla package install, setup, database, TPM, swtpm, Nginx, Certbot, FUSE, and service failures.
-order: 800
+title: Linux Troubleshooting
+navTitle: Troubleshooting
+description: Diagnose a Linux Vaulthalla install - the APT package, systemd services, database bootstrap, TPM and swtpm, nginx, Certbot and the FUSE mount.
+order: 43
 status: published
 tags:
+  - linux
   - troubleshooting
   - install
   - operations
+redirectFrom:
+  - /troubleshooting/install-troubleshooting
 ---
 
-# Install Troubleshooting
+# Linux Troubleshooting
 
-Use this guide when the package install, first-run setup, services, database bootstrap, TPM setup, Nginx, Certbot, or FUSE mount does not behave as expected.
+Use this guide when the package install, first-run setup, services, database bootstrap, TPM setup, nginx, Certbot, or the FUSE mount does not behave as expected. Problems that are the same on every platform (sync, S3 vaults, previews, shares) are in [General Troubleshooting](/troubleshooting/general-troubleshooting).
 
 :::toc[On this page]{depth="3" theme="compact"}
 :::
