@@ -43,7 +43,7 @@ def _needs(job: str) -> set[str]:
 
 
 # GitHub-hosted macOS jobs (tools/macos/pkg): outside the VPS container by necessity, and off the APT critical path.
-MACOS_JOBS = {"macos-package", "macos-publish"}
+MACOS_JOBS = {"macos-build", "macos-package", "macos-publish"}
 
 
 class ReleaseWorkflowContractTests(unittest.TestCase):

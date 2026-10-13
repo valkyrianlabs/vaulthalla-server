@@ -224,17 +224,22 @@ jobs:
         with:
           node-version: '24'
 
-      - name: Web dependencies
+      # GitHub's Macs don't have the licensed icon set, so the console comes from the latest release's web bundle
+      # (built on the Linux runner), as release.yml takes it from release-artifacts.
+      - name: Web bundle (latest release)
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          npm install -g pnpm@11.0.8
-          pnpm --dir web install --frozen-lockfile
+          mkdir -p "$RUNNER_TEMP/web"
+          gh release download --repo "$GITHUB_REPOSITORY" --pattern 'vaulthalla-web_*_next-standalone.tar.gz' --dir "$RUNNER_TEMP/web"
+          echo "VH_CANDIDATE_WEB_TARBALL=$(ls "$RUNNER_TEMP"/web/vaulthalla-web_*_next-standalone.tar.gz)" >> "$GITHUB_ENV"
 
       - uses: actions/setup-go@v5
         with:
           go-version: stable
           cache: false
 
-      - name: Stage (release build, web console, Node runtime, pdfium)
+      - name: Stage (release build, web console from the bundle, Node runtime, pdfium)
         run: tools/macos/candidate.sh stage
 
       - name: Build the package
@@ -256,7 +261,7 @@ jobs:
       - name: Diagnostics
         if: failure()
         run: |
-          sudo tail -n 80 /var/log/install.log || true
+          sudo grep -E 'vaulthalla|preinstall|postinstall|PackageKit: Install' /var/log/install.log | tail -n 80 || true
           sudo sh -c 'tail -n 60 /Library/Logs/Vaulthalla/*.log' || true
 
       - name: Publish the rehearsal package to Nexus (opt-in)

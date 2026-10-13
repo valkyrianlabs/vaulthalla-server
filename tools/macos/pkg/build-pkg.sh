@@ -35,8 +35,9 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/vh-pkg.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 ROOT="$WORK/root"
 ditto "$STAGE" "$ROOT"
-"$HERE/build-postgres.sh" "$ROOT"
-"$HERE/build-caddy.sh" "$ROOT"
+# Already in the stage when CI built them in an earlier job (release.yml macos-build); built here otherwise.
+[ -x "$ROOT/usr/local/libexec/vaulthalla/postgresql/bin/postgres" ] || "$HERE/build-postgres.sh" "$ROOT"
+[ -x "$ROOT/usr/local/libexec/vaulthalla/caddy/caddy" ] || "$HERE/build-caddy.sh" "$ROOT"
 python3 "$HERE/bundle_dylibs.py" "$ROOT"
 
 # Nothing in the payload may point into Homebrew or the build tree.
