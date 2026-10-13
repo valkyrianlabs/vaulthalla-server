@@ -311,7 +311,7 @@ jobs:
   # unsigned otherwise. Its failure never fails the APT release; re-run it with "Re-run failed jobs".
   macos-package:
     name: macOS installer package
-    runs-on: macos-26
+    runs-on: xcode-27
     needs: release-check
     if: needs.release-check.outputs.publish_required == 'true'
     timeout-minutes: 120

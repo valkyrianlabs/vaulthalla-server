@@ -5,3 +5,5 @@ self-hosted-runner:
     - vh-lab
     - vaulthalla
     - vps-ci
+    # GitHub-hosted macOS 27 (public preview image; actionlint predates the label).
+    - xcode-27

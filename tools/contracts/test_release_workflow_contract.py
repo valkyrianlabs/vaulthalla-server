@@ -174,7 +174,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
     def test_macos_package_jobs_never_gate_the_apt_release(self) -> None:
         # The macOS package builds on GitHub-hosted Apple Silicon and publishes only after the GitHub release exists;
         # nothing on the Debian/APT path waits for it, so a macOS failure can't fail or hold a live APT release.
-        self.assertIn("    runs-on: macos-26\n", self.jobs["macos-package"])
+        self.assertIn("    runs-on: xcode-27\n", self.jobs["macos-package"])
         publish = self.jobs["macos-publish"]
         self.assertIn("needs.github-release.result == 'success'", publish)
         self.assertIn("needs.macos-package.result == 'success'", publish)

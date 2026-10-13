@@ -59,7 +59,7 @@ Decisions awaiting the maintainer are `needs:review` issues #200–#206 on the R
 `tools/macos/bootstrap.sh` (Brewfile, pinned PDFium `chromium/8066`, `libpqxx-vh.pc` alias over Homebrew's shared
 libpqxx), then `source tools/macos/env.sh && meson setup build-macos -Dbuild_unit_tests=true && meson compile -C
 build-macos`. DB-backed tests: `eval "$(tools/macos/test-db.sh up)"; meson test -C build-macos; tools/macos/test-db.sh
-down` (disposable cluster on :54329, never the brew service). CI: `.github/workflows/macos.yml` (hosted macos-26).
+down` (disposable cluster on :54329, never the brew service). CI: `.github/workflows/macos.yml` (hosted `xcode-27`: macOS 27 public preview; `macos-26` is the fallback).
 
 ## Gotchas found by the port (keep these in mind on Linux too)
 
