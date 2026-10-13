@@ -3,9 +3,18 @@ description: 'Runs compiled binary tests.'
 runs:
   using: "composite"
   steps:
+    # The DB-backed suites need a database, or they GTEST_SKIP: a throwaway postgres:16 in the container's pod
+    # (ci/run-ci --postgres), named as a test database (runtime::test_instance::isTestDatabaseName).
     - name: Run Tests
-      shell: bash ./ci/run-ci bash -euo pipefail {0}
+      shell: env CI_POSTGRES_DB=vh_harness_unit_ci bash ./ci/run-ci --postgres bash -euo pipefail {0}
       run: |
         export PATH_TO_TEST_DATA="$GITHUB_WORKSPACE/test-assets"
+        export VH_TEST_DB_HOST=127.0.0.1 VH_TEST_DB_PORT=5432 VH_TEST_DB_USER=postgres VH_TEST_DB_PASS=postgres \
+          VH_TEST_DB_NAME=vh_harness_unit_ci
         echo "Using test data path $PATH_TO_TEST_DATA"
         meson test -C build --print-errorlogs
+        # A skipped DB suite would make this gate silently weaker: none may skip.
+        if grep -q 'Skipping db tests' build/meson-logs/testlog.txt; then
+          echo "::error::DB-backed unit tests were skipped"; exit 1
+        fi
+        grep -hE '\[  PASSED  \] [0-9]+ tests' build/meson-logs/testlog.txt

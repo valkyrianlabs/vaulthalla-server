@@ -4,7 +4,8 @@
 #   ci/run-ci [--postgres] [--image IMAGE] [--] COMMAND [ARGS...]
 #
 #   --postgres      also start a throwaway postgres:16 in the same pod (data on tmpfs) and set
-#                   DATABASE_URL to it unless the caller already set one
+#                   DATABASE_URL to it unless the caller already set one; its database is named
+#                   $CI_POSTGRES_DB (default: ci), e.g. vh_harness_unit_ci for the DB-backed unit tests
 #   --image IMAGE   run IMAGE (e.g. a pinned stock distribution image for a clean-install smoke
 #                   test) instead of the repository's ci/Containerfile image, with the same
 #                   mounts and isolation
@@ -208,14 +209,14 @@ if $postgres; then
   # start it as container root (an unprivileged subordinate uid on the host) so its entrypoint can
   # set up the data directory and drop to the postgres user as usual.
   podman run --detach --pod "$pod" --name "$name-postgres" --user 0:0 "${limits[@]}" \
-    --env POSTGRES_PASSWORD=postgres --env POSTGRES_DB=ci --tmpfs /var/lib/postgresql/data:rw,size=2g \
+    --env POSTGRES_PASSWORD=postgres --env POSTGRES_DB="${CI_POSTGRES_DB:-ci}" --tmpfs /var/lib/postgresql/data:rw,size=2g \
     docker.io/library/postgres:16 >/dev/null
   for _ in $(seq 60); do
     if podman exec "$name-postgres" pg_isready -q -h 127.0.0.1 -U postgres 2>/dev/null; then break; fi
     sleep 1
   done
   podman exec "$name-postgres" pg_isready -q -h 127.0.0.1 -U postgres || die "postgres did not start"
-  if [ -z "${DATABASE_URL:-}" ]; then env_args+=(--env DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/ci); fi
+  if [ -z "${DATABASE_URL:-}" ]; then env_args+=(--env "DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/${CI_POSTGRES_DB:-ci}"); fi
   run_args+=(--pod "$pod")
 else
   run_args+=(--hostname ci --userns=keep-id --shm-size 2g)
