@@ -226,9 +226,11 @@ static std::string lifecycle_subcommand(const std::vector<std::string>& argv_nor
         if (in({"db", "database", "postgres"})) return "db";
         if (in({"remote-db", "remote_db", "remote", "rdb"})) return "remote-db";
         if (in({"nginx", "proxy"})) return "nginx";
+        if (in({"caddy", "https"})) return "caddy";
     } else if (cmd == "teardown") {
         if (in({"db", "database", "postgres"})) return "db";
         if (in({"nginx", "proxy"})) return "nginx";
+        if (in({"caddy", "https"})) return "caddy";
     }
     return {};
 }
@@ -256,7 +258,14 @@ static std::string lifecycle_binary_path() {
 }
 
 static int run_lifecycle_command(const std::vector<std::string>& argv_norm) {
-    const auto lifecycleBin = lifecycle_binary_path();
+    // `vh setup|teardown caddy` is macOS's HTTPS front end (deploy/launchd/vaulthalla-caddy); Linux has nginx.
+    const bool caddy = lifecycle_subcommand(argv_norm) == "caddy";
+    if (caddy && std::string_view(VH_CADDY_TOOL_PATH).empty()) {
+        fmt::print(stderr, "vh {} caddy is for macOS. On Linux, HTTPS goes through nginx: sudo vh {} nginx --help\n",
+                   argv_norm[0], argv_norm[0]);
+        return 2;
+    }
+    const auto lifecycleBin = caddy ? std::string(VH_CADDY_TOOL_PATH) : lifecycle_binary_path();
     if (::access(lifecycleBin.c_str(), F_OK) != 0) {
         fmt::print(
             stderr,

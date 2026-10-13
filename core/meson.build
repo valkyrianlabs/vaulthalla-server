@@ -81,6 +81,9 @@ conf.set_quoted('VH_LOG_PATH', log_dir)
 conf.set_quoted('VH_BACKING_PATH', state_dir)
 conf.set_quoted('VH_RUNTIME_PATH', runtime_dir)
 conf.set_quoted('VH_LIFECYCLE_PATH', lifecycle_path)
+# `vh setup|teardown caddy`: macOS only (Linux has `vh setup nginx`), installed beside the lifecycle utility.
+conf.set_quoted('VH_CADDY_TOOL_PATH', host_machine.system() == 'darwin'
+                ? join_paths(get_option('prefix'), 'lib', meson.project_name(), 'vaulthalla-caddy') : '')
 conf.set_quoted('VH_CACHE_PATH', '/.cache')
 conf.set_quoted('VH_INSTANCE', vh_instance)
 conf.set_quoted('VH_SERVICE_ACCOUNT', vh_service_account)

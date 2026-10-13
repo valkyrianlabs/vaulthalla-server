@@ -4,7 +4,8 @@
 #
 #   tools/macos/pkg/build-pkg.sh STAGE OUTDIR      # -> OUTDIR/vaulthalla-<version>-arm64.pkg (+ .sha256)
 #
-# The package is self-contained: the bundled PostgreSQL (build-postgres.sh) and every non-system library the binaries
+# The package is self-contained: the bundled PostgreSQL (build-postgres.sh), Caddy with the Cloudflare DNS module for
+# `vh setup caddy` (build-caddy.sh), and every non-system library the binaries
 # load (bundle_dylibs.py, into /usr/local/lib/vaulthalla) ship inside it, so a Mac without Homebrew runs it. Its
 # preinstall stops running services; its postinstall provisions (vaulthalla-provision --apply --enroll <console user>).
 #
@@ -35,6 +36,7 @@ trap 'rm -rf "$WORK"' EXIT
 ROOT="$WORK/root"
 ditto "$STAGE" "$ROOT"
 "$HERE/build-postgres.sh" "$ROOT"
+"$HERE/build-caddy.sh" "$ROOT"
 python3 "$HERE/bundle_dylibs.py" "$ROOT"
 
 # Nothing in the payload may point into Homebrew or the build tree.

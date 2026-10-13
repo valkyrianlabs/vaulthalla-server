@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- HTTPS in front of the console, WebSockets, transfers and the S3 gateway (`vh setup caddy`; macOS's counterpart of
+     `vh setup nginx`). Runs as _vaulthalla: macOS lets an unprivileged process listen on :80/:443, so no root daemon.
+     Its admin API is off (no local user can reconfigure it); its state (certificates, ACME account, the internal CA)
+     lives in the 0700 caddy directory. Installed and kept loaded by vaulthalla-provision while a Caddyfile exists. -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>sh.vaulthalla.caddy</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>@CADDY_BIN@</string>
+        <string>run</string>
+        <string>--config</string>
+        <string>@CADDY_DIR@/Caddyfile</string>
+        <string>--adapter</string>
+        <string>caddyfile</string>
+    </array>
+    <key>UserName</key>
+    <string>_vaulthalla</string>
+    <key>GroupName</key>
+    <string>_vaulthalla</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>@CADDY_DIR@</string>
+        <key>XDG_CONFIG_HOME</key>
+        <string>@CADDY_DIR@/config</string>
+        <key>XDG_DATA_HOME</key>
+        <string>@CADDY_DIR@/data</string>
+    </dict>
+    <key>Umask</key>
+    <integer>63</integer>
+    <key>WorkingDirectory</key>
+    <string>@CADDY_DIR@</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+    <key>ExitTimeOut</key>
+    <integer>15</integer>
+    <key>ProcessType</key>
+    <string>Standard</string>
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>65535</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>@LOG_DIR@/caddy.log</string>
+    <key>StandardErrorPath</key>
+    <string>@LOG_DIR@/caddy.log</string>
+</dict>
+</plist>

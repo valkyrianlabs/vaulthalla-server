@@ -1,7 +1,7 @@
 #!/bin/bash
 # Vaulthalla package preinstall: on an upgrade, stop the services while their files are replaced (the server first, so
 # PostgreSQL's smart shutdown isn't left waiting on its pool). postinstall's provisioning starts them again.
-for label in sh.vaulthalla.server sh.vaulthalla.web sh.vaulthalla.postgres; do
+for label in sh.vaulthalla.caddy sh.vaulthalla.server sh.vaulthalla.web sh.vaulthalla.postgres; do
   if /bin/launchctl print "system/$label" >/dev/null 2>&1; then
     echo "vaulthalla preinstall: stopping $label"
     /bin/launchctl bootout "system/$label" || true

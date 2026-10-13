@@ -1,0 +1,512 @@
+#!/bin/bash
+# vaulthalla-caddy: HTTPS for the macOS service through Caddy (`vh setup caddy` / `vh teardown caddy`; the counterpart
+# of `vh setup nginx` on Linux). Generates the Caddyfile, the certificates' source, and the sh.vaulthalla.caddy
+# LaunchDaemon (installed and kept loaded by vaulthalla-provision), validates, starts, and checks the result.
+#
+#   sudo vh setup caddy --domain vault.home.arpa            internal: a Vaulthalla CA, name-constrained to the domain(s)
+#   sudo vh setup caddy --domain vault.example.com --email you@example.com      public: Let's Encrypt (HTTP-01/TLS-ALPN)
+#   sudo vh setup caddy --domain vault.example.com --dns-cloudflare /path/cloudflare.ini     public: DNS-01 via Cloudflare
+#   sudo vh setup caddy --domain vault.home.arpa --cert fullchain.pem --key privkey.pem      your own certificate
+#   sudo vh setup caddy                                     re-render and re-apply the current settings
+#   sudo vh setup caddy --status                            what is configured, certificate state, daemon state
+#   sudo vh teardown caddy [--purge]                        stop and remove; --purge also deletes certificates and the CA
+#
+# Options (setup):
+#   --domain NAME          the console's hostname. Internal when it ends in .home.arpa, .internal, .lan, .local,
+#                          .localhost or .test (or with --internal); public otherwise.
+#   --s3-domain NAME       a second hostname for the S3 gateway (path-style), on the same certificate source;
+#                          `--s3-domain none` removes it.
+#   --internal             treat --domain as internal whatever its suffix.
+#   --ca-scope NAME        internal CA: permit NAME and everything under it (e.g. home.arpa) instead of only the
+#                          configured hostnames, so adding a hostname later doesn't need a new CA on every client.
+#   --email ADDRESS        ACME account contact (expiry notices).
+#   --acme-staging         use Let's Encrypt's staging directory (untrusted certificates; for rehearsals).
+#   --dns-cloudflare FILE  DNS-01 through Cloudflare; FILE is root-owned, mode 0600, with the line
+#                          'dns_cloudflare_api_token = <token>' (the certbot format `vh setup nginx` uses). Needs the
+#                          Caddy the package ships (built with caddy-dns/cloudflare).
+#   --cert FILE --key FILE PEM certificate chain and private key; copied in (the key stays 0600). Rerun to replace.
+#   --listen ADDRESS       bind :80/:443 to one address instead of all interfaces.
+#   --trust                also trust the internal CA on this Mac (System keychain; macOS asks to confirm).
+#   --hosts-entry          also point the hostname(s) at 127.0.0.1 in /etc/hosts on this Mac (a marked line).
+#   --dry-run              print the Caddyfile that would be used; change nothing.
+# Plumbing: --root DIR and VH_CADDY / VH_LAUNCHCTL / VH_PROVISION / VH_SECURITY / VH_LSOF / VH_CURL tool overrides, and
+# VH_CADDY_HTTP_PORT / VH_CADDY_HTTPS_PORT, exist for tools/contracts/test_macos_caddy_contract.py.
+set -euo pipefail
+
+SERVICE="@SERVICE@"
+LABEL_PREFIX="@LABEL_PREFIX@"
+PORT_OFFSET=@PORT_OFFSET@
+SUPPORT_DIR="@SUPPORT_DIR@"
+CONFIG_PATH="@CONFIG_PATH@"
+LOG_DIR="@LOG_DIR@"
+CADDY_BIN="@CADDY_BIN@"
+PROVISION="@PROVISION@"
+CADDY_DIR="$SUPPORT_DIR/caddy"
+CADDYFILE="$CADDY_DIR/Caddyfile"
+SETTINGS="$CADDY_DIR/settings"
+CA_DIR="$CADDY_DIR/ca"
+TLS_DIR="$CADDY_DIR/tls"
+CA_EXPORT="$SUPPORT_DIR/vaulthalla-local-ca.crt"
+LABEL="$LABEL_PREFIX.caddy"
+HOSTS_MARK="# vaulthalla-caddy ($LABEL)"
+LE_PROD=https://acme-v02.api.letsencrypt.org/directory
+LE_STAGING=https://acme-staging-v02.api.letsencrypt.org/directory
+
+ROOT=""
+LAUNCHCTL=${VH_LAUNCHCTL:-/bin/launchctl}
+SECURITY=${VH_SECURITY:-/usr/bin/security}
+LSOF=${VH_LSOF:-/usr/sbin/lsof}
+CURL=${VH_CURL:-/usr/bin/curl}
+OPENSSL=/usr/bin/openssl
+
+die() { echo "vh setup caddy: $*" >&2; exit 1; }
+stat_mode() { case "$(uname -s)" in Darwin) stat -f '%Lp' "$1" ;; *) stat -c '%a' "$1" ;; esac; }
+stat_owner() { case "$(uname -s)" in Darwin) stat -f '%Su' "$1" ;; *) stat -c '%U' "$1" ;; esac; }
+note() { echo "[caddy] $*"; }
+
+# --- arguments --------------------------------------------------------------------------------------------------------
+# Called as `vaulthalla-caddy setup caddy [options]` or `... teardown caddy [options]` (the CLI passes its argv through),
+# or directly with the options.
+ACTION=setup
+if [ "${1:-}" = setup ] || [ "${1:-}" = teardown ]; then ACTION="$1"; shift; [ "${1:-}" = caddy ] && shift; fi
+DOMAIN="" S3_DOMAIN="" INTERNAL=false CA_SCOPE="" EMAIL="" STAGING=false CF_FILE="" CERT="" KEY="" LISTEN=""
+TRUST=false HOSTS=false DRY=false STATUS=false PURGE=false GIVEN_DOMAIN=false
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --domain|-d) DOMAIN="${2:-}"; GIVEN_DOMAIN=true; shift ;;
+    --s3-domain) S3_DOMAIN="${2:-}"; shift ;;
+    --internal) INTERNAL=true ;;
+    --ca-scope) CA_SCOPE="${2:-}"; shift ;;
+    --email) EMAIL="${2:-}"; shift ;;
+    --acme-staging) STAGING=true ;;
+    --dns-cloudflare) CF_FILE="${2:-}"; shift ;;
+    --cert) CERT="${2:-}"; shift ;;
+    --key) KEY="${2:-}"; shift ;;
+    --listen) LISTEN="${2:-}"; shift ;;
+    --trust) TRUST=true ;;
+    --hosts-entry) HOSTS=true ;;
+    --dry-run) DRY=true ;;
+    --status) STATUS=true ;;
+    --purge) PURGE=true ;;
+    --root) ROOT="${2:-}"; shift ;;
+    -h|--help) sed -n '2,37p' "$0"; exit 0 ;;
+    *) die "unknown option: $1 (see: vh setup caddy --help)" ;;
+  esac
+  shift
+done
+[ "$ACTION" = teardown ] || [ "$PURGE" = false ] || die "--purge goes with 'vh teardown caddy'"
+if [ -z "$ROOT" ] && [ "$(id -u)" != 0 ] && [ "$DRY" = false ] && [ "$STATUS" = false ]; then
+  die "needs root: sudo vh $ACTION caddy"
+fi
+
+HTTP_PORT=${VH_CADDY_HTTP_PORT:-$(( PORT_OFFSET == 0 ? 80 : 8000 + PORT_OFFSET ))}
+HTTPS_PORT=${VH_CADDY_HTTPS_PORT:-$(( PORT_OFFSET == 0 ? 443 : 8400 + PORT_OFFSET ))}
+
+# The Caddy to run: the package's (built with the Cloudflare DNS module), else one on PATH (Homebrew's, for source
+# builds; it has no DNS modules).
+caddy_bin() {
+  if [ -n "${VH_CADDY:-}" ]; then echo "$VH_CADDY"; return; fi
+  if [ -x "$ROOT$CADDY_BIN" ]; then echo "$CADDY_BIN"; return; fi
+  command -v caddy 2>/dev/null || return 1
+}
+
+as_service() {  # runs a command as the service account (directly under --root, where everything is the test user's)
+  if [ -n "$ROOT" ]; then "$@"; else /usr/bin/sudo -u "$SERVICE" -- "$@"; fi
+}
+
+# --- validation ---------------------------------------------------------------------------------------------------------
+valid_name() {  # a DNS hostname: labels of letters, digits and inner hyphens; at least two labels; no wildcard
+  printf '%s' "$1" | grep -Eq '^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$'
+}
+
+internal_name() {
+  case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+    *.home.arpa|*.internal|*.lan|*.local|*.localhost|*.test) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Settings persist between runs (a bare `vh setup caddy` re-applies them), one KEY=VALUE per line.
+load_settings() {
+  [ -f "$ROOT$SETTINGS" ] || return 0
+  [ -L "$ROOT$SETTINGS" ] && die "$SETTINGS is a symlink; refusing to read it"
+  local k v
+  while IFS='=' read -r k v; do
+    case "$k" in
+      domain) [ -n "$DOMAIN" ] || DOMAIN="$v" ;;
+      s3_domain) [ -n "$S3_DOMAIN" ] || S3_DOMAIN="$v" ;;
+      mode) SAVED_MODE="$v" ;;
+      cf_file) [ -n "$CF_FILE" ] || SAVED_CF_FILE="$v" ;;
+      ca_scope) [ -n "$CA_SCOPE" ] || CA_SCOPE="$v" ;;
+      email) [ -n "$EMAIL" ] || EMAIL="$v" ;;
+      staging) [ "$v" = true ] && STAGING=true ;;
+      listen) [ -n "$LISTEN" ] || LISTEN="$v" ;;
+    esac
+  done < "$ROOT$SETTINGS"
+}
+SAVED_MODE="" SAVED_CF_FILE=""
+
+# --- configuration the daemon listens on --------------------------------------------------------------------------------
+cfg() {  # cfg BLOCK KEY DEFAULT: a scalar from config.yaml's top-level BLOCK
+  local v=""
+  if [ -r "$ROOT$CONFIG_PATH" ]; then
+    v=$(awk -v blk="$1:" -v key="$2" '
+      $0 ~ "^[^ #]" { inb = ($1 == blk) ; next }
+      inb && $1 == key":" { sub(/#.*/, ""); print $2; exit }' "$ROOT$CONFIG_PATH")
+  fi
+  echo "${v:-$3}"
+}
+
+# --- certificates ---------------------------------------------------------------------------------------------------------
+cf_token() {  # the Cloudflare token from a certbot-style credentials file, after checking who can read it
+  local f="$1" owner mode tok
+  [ -f "$f" ] && [ ! -L "$f" ] || die "--dns-cloudflare $f: not a regular file"
+  owner=$(stat_owner "$f"); mode=$(stat_mode "$f")
+  if [ -z "$ROOT" ] && [ "$owner" != root ]; then die "--dns-cloudflare $f: owned by $owner; it must be root's"; fi
+  case "$mode" in 600|400) ;; *) die "--dns-cloudflare $f: mode $mode; it must be 0600 (it holds an API token)" ;; esac
+  tok=$(sed -n 's/^[[:space:]]*dns_cloudflare_api_token[[:space:]]*=[[:space:]]*\([^[:space:]]*\)[[:space:]]*$/\1/p' "$f" | head -1)
+  [ -n "$tok" ] || die "--dns-cloudflare $f: no 'dns_cloudflare_api_token = <token>' line"
+  printf '%s' "$tok"
+}
+
+ca_names() {  # the names the internal CA may sign for
+  if [ -n "$CA_SCOPE" ]; then echo "$CA_SCOPE"; else echo "$DOMAIN"; [ -z "$S3_DOMAIN" ] || echo "$S3_DOMAIN"; fi
+}
+
+ca_permits() {  # ca_permits NAME: the existing CA's name constraints cover NAME
+  local name="$1" p
+  for p in $("$OPENSSL" x509 -in "$ROOT$CA_DIR/root.crt" -noout -text 2>/dev/null |
+             sed -n '/Name Constraints/,/^ *X509v3 [A-Z]/p' | sed -n 's/^ *DNS:\(.*\)$/\1/p'); do
+    case "$name" in "$p"|*."$p") return 0 ;; esac
+  done
+  return 1
+}
+
+# A root that only signs for Vaulthalla's names (X.509 name constraints, honored by macOS, iOS, Windows, Chrome and
+# Firefox): trusting it on a client can't let it vouch for any other site. Caddy keeps the intermediate and the
+# short-lived leaf certificates signed by it renewed by itself.
+ensure_ca() {
+  local n need=false cnf permitted=""
+  if [ -f "$ROOT$CA_DIR/root.crt" ] && [ -f "$ROOT$CA_DIR/root.key" ]; then
+    for n in $DOMAIN $S3_DOMAIN; do ca_permits "$n" || need=true; done
+    if [ "$need" = false ]; then note "ok internal CA ($CA_DIR/root.crt)"; return 0; fi
+    note "the existing CA doesn't cover $DOMAIN${S3_DOMAIN:+ $S3_DOMAIN}: creating a new one (clients must trust it again)"
+    mv "$ROOT$CA_DIR" "$ROOT$CA_DIR.replaced-$(date +%Y%m%d%H%M%S)"
+  fi
+  mkdir -p "$ROOT$CA_DIR"
+  chmod 0700 "$ROOT$CA_DIR"
+  for n in $(ca_names); do permitted="${permitted:+$permitted,}permitted;DNS:$n"; done
+  cnf=$(mktemp)
+  cat > "$cnf" <<EOF
+[req]
+distinguished_name = dn
+prompt = no
+x509_extensions = v3_ca
+[dn]
+O = Vaulthalla
+CN = Vaulthalla Local CA ($(ca_names | head -1)) $(date +%Y-%m-%d)
+[v3_ca]
+basicConstraints = critical, CA:true, pathlen:1
+keyUsage = critical, keyCertSign, cRLSign
+subjectKeyIdentifier = hash
+nameConstraints = critical, $permitted
+EOF
+  ( umask 077
+    "$OPENSSL" ecparam -name prime256v1 -genkey -noout -out "$ROOT$CA_DIR/root.key" 2>/dev/null
+    "$OPENSSL" req -new -x509 -days 3650 -sha256 -key "$ROOT$CA_DIR/root.key" -config "$cnf" \
+      -out "$ROOT$CA_DIR/root.crt" 2>/dev/null )
+  rm -f "$cnf"
+  note "created the internal CA, constrained to: $(ca_names | paste -sd ' ' -)"
+}
+
+copy_own_cert() {
+  [ -f "$CERT" ] && [ -f "$KEY" ] || die "--cert and --key must both name readable files"
+  "$OPENSSL" x509 -in "$CERT" -noout 2>/dev/null || die "--cert $CERT: not a PEM certificate"
+  "$OPENSSL" pkey -in "$KEY" -noout 2>/dev/null || die "--key $KEY: not a PEM private key (or it is encrypted)"
+  [ "$("$OPENSSL" x509 -in "$CERT" -noout -pubkey | "$OPENSSL" sha256)" = \
+    "$("$OPENSSL" pkey -in "$KEY" -pubout | "$OPENSSL" sha256)" ] || die "--cert and --key don't belong together"
+  local n
+  for n in $DOMAIN $S3_DOMAIN; do
+    "$OPENSSL" x509 -in "$CERT" -noout -text | grep -Eq "DNS:($n|\*\.${n#*.})([,[:space:]]|$)" \
+      || die "--cert $CERT doesn't cover $n"
+  done
+  mkdir -p "$ROOT$TLS_DIR" && chmod 0700 "$ROOT$TLS_DIR"
+  ( umask 077; cp "$CERT" "$ROOT$TLS_DIR/cert.pem"; cp "$KEY" "$ROOT$TLS_DIR/key.pem" )
+  note "certificate copied in (expires $("$OPENSSL" x509 -in "$CERT" -noout -enddate | cut -d= -f2)); rerun with --cert/--key to replace it"
+}
+
+# --- the Caddyfile ------------------------------------------------------------------------------------------------------
+q() { printf '"%s"' "$1"; }  # a Caddyfile token, quoted (the support directory has a space in it)
+
+render() {
+  local ws_port preview_port s3_port s3_on web_port
+  web_port=$(( 36968 + PORT_OFFSET ))
+  ws_port=$(cfg websocket_server port $(( 36969 + PORT_OFFSET )))
+  preview_port=$(cfg http_preview_server port $(( 36970 + PORT_OFFSET )))
+  s3_port=$(cfg s3_gateway port 39000)
+  s3_on=$(cfg s3_gateway enabled false)
+
+  echo "# Generated by 'vh setup caddy' ($MODE). Do not edit: rerun 'sudo vh setup caddy' to change it."
+  echo "{"
+  echo "	admin off"
+  echo "	persist_config off"
+  echo "	skip_install_trust"
+  echo "	storage file_system $(q "$ROOT$CADDY_DIR/data")"
+  echo "	http_port $HTTP_PORT"
+  echo "	https_port $HTTPS_PORT"
+  [ -z "$EMAIL" ] || echo "	email $EMAIL"
+  case "$MODE" in
+    acme|cloudflare) echo "	acme_ca $([ "$STAGING" = true ] && echo "$LE_STAGING" || echo "$LE_PROD")" ;;
+    internal)
+      echo "	pki {"
+      echo "		ca vaulthalla {"
+      echo "			name $(q "Vaulthalla Local CA")"
+      echo "			root {"
+      echo "				cert $(q "$ROOT$CA_DIR/root.crt")"
+      echo "				key $(q "$ROOT$CA_DIR/root.key")"
+      echo "			}"
+      echo "		}"
+      echo "	}"
+      ;;
+  esac
+  echo "	log {"
+  echo "		output stderr"
+  echo "		format console"
+  echo "		level WARN"
+  echo "	}"
+  echo "}"
+  echo ""
+  echo "(vaulthalla_tls) {"
+  case "$MODE" in
+    internal) printf '\ttls {\n\t\tissuer internal {\n\t\t\tca vaulthalla\n\t\t}\n\t}\n' ;;
+    files) echo "	tls $(q "$ROOT$TLS_DIR/cert.pem") $(q "$ROOT$TLS_DIR/key.pem")" ;;
+    cloudflare) printf '\ttls {\n\t\tdns cloudflare %s\n\t\tresolvers 1.1.1.1 1.0.0.1\n\t}\n' "$CF_TOKEN" ;;
+    acme) : ;;
+  esac
+  [ -z "$LISTEN" ] || echo "	bind $LISTEN"
+  echo "	header {"
+  echo "		Strict-Transport-Security \"max-age=31536000\""
+  echo "		-Server"
+  echo "	}"
+  echo "}"
+  echo ""
+  echo "$DOMAIN {"
+  echo "	import vaulthalla_tls"
+  echo "	# The same routes as 'vh setup nginx': WebSockets to the daemon, previews and transfers streamed both ways,"
+  echo "	# everything else to the web console. reverse_proxy adds X-Forwarded-For/-Proto/-Host and passes Host."
+  echo "	@ws path /ws /ws/*"
+  echo "	reverse_proxy @ws 127.0.0.1:$ws_port"
+  echo "	@http path /preview* /download* /upload*"
+  echo "	reverse_proxy @http 127.0.0.1:$preview_port {"
+  echo "		flush_interval -1"
+  echo "		header_up X-Real-IP {remote_host}"
+  echo "	}"
+  echo "	reverse_proxy 127.0.0.1:$web_port {"
+  echo "		header_up X-Real-IP {remote_host}"
+  echo "	}"
+  echo "}"
+  if [ -n "$S3_DOMAIN" ]; then
+    echo ""
+    echo "$S3_DOMAIN {"
+    echo "	import vaulthalla_tls"
+    [ "$s3_on" = true ] || echo "	# s3_gateway.enabled is false in config.yaml: this answers 502 until it is enabled."
+    echo "	reverse_proxy 127.0.0.1:$s3_port {"
+    echo "		flush_interval -1"
+    echo "		transport http {"
+    echo "			read_timeout 1h"
+    echo "			write_timeout 1h"
+    echo "		}"
+    echo "		header_up X-Real-IP {remote_host}"
+    echo "		header_up X-Vaulthalla-S3-Path-Style-Only true"
+    echo "	}"
+    echo "}"
+  fi
+}
+
+# --- the daemon ---------------------------------------------------------------------------------------------------------
+loaded() { "$LAUNCHCTL" print "system/$LABEL" >/dev/null 2>&1; }
+
+ports_free_or_ours() {
+  local p pids pid cmd
+  for p in "$HTTP_PORT" "$HTTPS_PORT"; do
+    pids=$("$LSOF" -nP -t -iTCP:"$p" -sTCP:LISTEN 2>/dev/null || true)
+    for pid in $pids; do
+      cmd=$(ps -o comm= -p "$pid" 2>/dev/null || true)
+      case "$cmd" in */caddy|caddy) loaded || die "port $p is held by a Caddy that isn't Vaulthalla's (pid $pid)" ;;
+        *) die "port $p is in use by ${cmd:-pid $pid}; stop it or use --listen with another address" ;; esac
+    done
+  done
+}
+
+hosts_entry() {  # hosts_entry add|remove: a marked line in /etc/hosts for the configured names
+  local hosts="$ROOT/etc/hosts" tmp
+  [ -f "$hosts" ] || return 0
+  tmp=$(mktemp)
+  grep -vF "$HOSTS_MARK" "$hosts" > "$tmp" || true
+  if [ "$1" = add ]; then printf '127.0.0.1\t%s %s\n' "$DOMAIN${S3_DOMAIN:+ $S3_DOMAIN}" "$HOSTS_MARK" >> "$tmp"; fi
+  if ! cmp -s "$tmp" "$hosts"; then cat "$tmp" > "$hosts"; note "/etc/hosts: $1 ${DOMAIN}${S3_DOMAIN:+ $S3_DOMAIN}"; fi
+  rm -f "$tmp"
+}
+
+check_live() {  # the console answers over HTTPS on this host, verified against the configured trust
+  local url="https://$DOMAIN:$HTTPS_PORT/" code i=0 args=(-sS -o /dev/null -w '%{http_code}' --max-time 10
+    --resolve "$DOMAIN:$HTTPS_PORT:127.0.0.1")
+  [ "$MODE" != internal ] || args+=(--cacert "$ROOT$CA_DIR/root.crt")
+  [ "$MODE" != acme ] && [ "$MODE" != cloudflare ] || [ "$STAGING" = false ] || { note "staging certificates aren't trusted: skipping the live check"; return 0; }
+  while :; do
+    code=$("$CURL" "${args[@]}" "$url" 2>/dev/null || true)
+    case "$code" in 2??|3??) note "verified: $url answers $code over a trusted certificate"; return 0 ;; esac
+    i=$((i + 1)); [ "$i" -lt 60 ] || break
+    sleep 2
+  done
+  if [ "$MODE" = acme ] || [ "$MODE" = cloudflare ]; then
+    note "not answering with a trusted certificate yet: issuance may still be running (see $LOG_DIR/caddy.log)"
+    note "public issuance needs $DOMAIN to resolve to this host and, without --dns-cloudflare, ports 80/443 reachable"
+    return 0
+  fi
+  die "https://$DOMAIN didn't answer with a valid certificate (see $LOG_DIR/caddy.log)"
+}
+
+trust_ca() {
+  [ "$MODE" = internal ] || die "--trust is for the internal CA (public certificates are already trusted)"
+  if "$SECURITY" verify-cert -c "$ROOT$CA_DIR/root.crt" >/dev/null 2>&1; then note "ok this Mac trusts the CA"; return 0; fi
+  note "adding the CA to the System keychain (macOS asks you to confirm)"
+  "$SECURITY" add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain "$ROOT$CA_DIR/root.crt"
+}
+
+print_trust_help() {
+  [ "$MODE" = internal ] || return 0
+  cat <<EOF
+
+Clients must trust the Vaulthalla CA once (it can only vouch for: $(ca_names | paste -sd ' ' -)):
+  certificate: $CA_EXPORT   (sha256 $("$OPENSSL" x509 -in "$ROOT$CA_DIR/root.crt" -noout -fingerprint -sha256 | cut -d= -f2))
+  this Mac:    sudo vh setup caddy --trust
+  other Macs:  sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain vaulthalla-local-ca.crt
+  iPhone/iPad: AirDrop or mail the .crt, install the profile, then Settings > General > About > Certificate Trust Settings
+  Linux:       sudo cp vaulthalla-local-ca.crt /usr/local/share/ca-certificates/ && sudo update-ca-certificates
+  Windows:     certutil -addstore -f Root vaulthalla-local-ca.crt (as Administrator)
+  Firefox:     uses the system store with security.enterprise_roots.enabled (default on macOS/Windows), else import it
+And $DOMAIN must resolve to this Mac on those devices (a DNS record on your router, or --hosts-entry for this Mac).
+EOF
+}
+
+status() {
+  load_settings
+  if [ ! -f "$ROOT$CADDYFILE" ]; then echo "caddy: not configured (sudo vh setup caddy --domain <name>)"; return 0; fi
+  echo "caddy: ${SAVED_MODE:-?} for $DOMAIN${S3_DOMAIN:+ and $S3_DOMAIN} on :$HTTP_PORT/:$HTTPS_PORT${LISTEN:+ ($LISTEN)}"
+  if loaded; then echo "daemon: $LABEL loaded"; else echo "daemon: $LABEL not loaded"; fi
+  local served
+  served=$(echo | "$OPENSSL" s_client -connect "127.0.0.1:$HTTPS_PORT" -servername "$DOMAIN" 2>/dev/null |
+           "$OPENSSL" x509 -noout -issuer -enddate 2>/dev/null | tr '\n' ' ' || true)
+  echo "certificate: ${served:-none served yet}"
+  [ "${SAVED_MODE:-}" != internal ] || echo "internal CA: $CA_EXPORT"
+}
+
+teardown() {
+  load_settings
+  if loaded; then "$LAUNCHCTL" bootout "system/$LABEL" || true; note "stopped $LABEL"; fi
+  [ ! -e "$ROOT/Library/LaunchDaemons/$LABEL.plist" ] || { rm -f "$ROOT/Library/LaunchDaemons/$LABEL.plist"; note "removed $LABEL.plist"; }
+  rm -f "$ROOT$CADDYFILE"
+  [ -z "$DOMAIN" ] || hosts_entry remove
+  if [ "$PURGE" = true ]; then
+    [ -L "$ROOT$CADDY_DIR" ] && die "$CADDY_DIR is a symlink; refusing to delete through it"
+    rm -rf "${ROOT:?}$CADDY_DIR" "${ROOT:?}$CA_EXPORT"
+    note "deleted certificates, ACME account and the internal CA ($CADDY_DIR)"
+    note "clients that trusted the CA keep trusting it until you remove it there"
+  else
+    note "kept certificates and the internal CA in $CADDY_DIR (vh teardown caddy --purge deletes them)"
+  fi
+}
+
+# --- main ---------------------------------------------------------------------------------------------------------------
+if [ "$ACTION" = teardown ]; then teardown; exit 0; fi
+if [ "$STATUS" = true ]; then status; exit 0; fi
+
+load_settings
+[ -n "$DOMAIN" ] || die "--domain is required the first time (e.g. --domain vault.home.arpa)"
+DOMAIN=$(printf '%s' "$DOMAIN" | tr '[:upper:]' '[:lower:]'); S3_DOMAIN=$(printf '%s' "$S3_DOMAIN" | tr '[:upper:]' '[:lower:]')
+valid_name "$DOMAIN" || die "--domain '$DOMAIN' is not a hostname"
+[ "$S3_DOMAIN" != none ] || S3_DOMAIN=""
+[ -z "$S3_DOMAIN" ] || valid_name "$S3_DOMAIN" || die "--s3-domain '$S3_DOMAIN' is not a hostname"
+[ -z "$S3_DOMAIN" ] || [ "$S3_DOMAIN" != "$DOMAIN" ] || die "--s3-domain must differ from --domain"
+[ -z "$CA_SCOPE" ] || valid_name "$CA_SCOPE" || die "--ca-scope '$CA_SCOPE' is not a domain"
+if [ -n "$CERT$KEY" ] && { [ -z "$CERT" ] || [ -z "$KEY" ]; }; then die "--cert and --key go together"; fi
+[ -z "$EMAIL" ] || printf '%s' "$EMAIL" | grep -Eq '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$' || die "--email '$EMAIL' is not an address"
+
+# The certificate source: an explicit option, else the saved one (unless the hostname changed), else the hostname's kind.
+if [ -n "$CERT" ]; then MODE=files
+elif [ -n "$CF_FILE" ]; then MODE=cloudflare
+elif [ "$INTERNAL" = true ]; then MODE=internal
+elif [ "$GIVEN_DOMAIN" = false ] && [ -n "$SAVED_MODE" ]; then
+  MODE="$SAVED_MODE"
+  case "$MODE" in
+    files) [ -f "$ROOT$TLS_DIR/cert.pem" ] || die "the saved certificate is missing: pass --cert and --key again" ;;
+    cloudflare) CF_FILE="$SAVED_CF_FILE"; [ -n "$CF_FILE" ] || die "pass --dns-cloudflare <credentials> again" ;;
+  esac
+elif internal_name "$DOMAIN" && { [ -z "$S3_DOMAIN" ] || internal_name "$S3_DOMAIN"; }; then MODE=internal
+else MODE=acme; fi
+if [ "$MODE" = cloudflare ] || [ "$MODE" = acme ]; then
+  for n in $DOMAIN $S3_DOMAIN; do
+    internal_name "$n" && die "$n is an internal name: public CAs can't issue for it (drop --dns-cloudflare/--email, or use --cert)"
+  done
+fi
+[ "$MODE" = internal ] || [ -z "$CA_SCOPE" ] || die "--ca-scope is for the internal CA"
+[ "$TRUST" = false ] || [ "$MODE" = internal ] || die "--trust is for the internal CA (public certificates are already trusted)"
+
+CADDY=$(caddy_bin) || die "Caddy is not installed (the macOS package ships it; for a source build: brew install caddy)"
+CF_TOKEN=""
+if [ "$MODE" = cloudflare ]; then
+  "$CADDY" list-modules 2>/dev/null | grep -qx 'dns.providers.cloudflare' \
+    || die "$CADDY has no Cloudflare DNS module (the package's Caddy does; Homebrew's doesn't)"
+  CF_TOKEN=$(cf_token "$CF_FILE")
+fi
+
+if [ "$DRY" = true ]; then
+  [ "$MODE" != cloudflare ] || CF_TOKEN="<token from $CF_FILE>"
+  render
+  exit 0
+fi
+
+[ -d "$ROOT$SUPPORT_DIR" ] || die "$SUPPORT_DIR is missing: install Vaulthalla (the package) first"
+[ -L "$ROOT$CADDY_DIR" ] && die "$CADDY_DIR is a symlink; refusing to use it"
+ports_free_or_ours
+mkdir -p "$ROOT$CADDY_DIR" "$ROOT$CADDY_DIR/data"
+chmod 0700 "$ROOT$CADDY_DIR"
+case "$MODE" in
+  internal) ensure_ca ;;
+  files) if [ -n "$CERT" ]; then copy_own_cert; else note "ok certificate ($TLS_DIR/cert.pem)"; fi ;;
+esac
+
+new=$(mktemp)
+render > "$new"
+# Settings and Caddyfile are written as root first and handed to the service account together with everything else.
+{ echo "caddy=$CADDY"; echo "domain=$DOMAIN"; echo "s3_domain=$S3_DOMAIN"; echo "mode=$MODE"; echo "ca_scope=$CA_SCOPE"; echo "email=$EMAIL"
+  echo "staging=$STAGING"; echo "listen=$LISTEN"; echo "cf_file=$CF_FILE"; } > "$ROOT$SETTINGS"
+changed=false
+cmp -s "$new" "$ROOT$CADDYFILE" || changed=true
+( umask 077; cp "$new" "$ROOT$CADDYFILE.next" )
+rm -f "$new"
+if [ "$MODE" = internal ]; then install -m 0644 "$ROOT$CA_DIR/root.crt" "$ROOT$CA_EXPORT"; fi
+[ -n "$ROOT" ] || chown -R "$SERVICE:$SERVICE" "$CADDY_DIR"
+chmod 0600 "$ROOT$SETTINGS" "$ROOT$CADDYFILE.next"
+
+# Validated as the account that will run it, before it replaces the working configuration.
+if ! out=$(as_service "$CADDY" validate --config "$ROOT$CADDYFILE.next" --adapter caddyfile 2>&1); then
+  rm -f "$ROOT$CADDYFILE.next"
+  printf '%s\n' "$out" | tail -5 >&2
+  die "the generated configuration didn't validate; nothing was changed"
+fi
+mv "$ROOT$CADDYFILE.next" "$ROOT$CADDYFILE"
+note "configuration: $CADDYFILE ($MODE$([ "$STAGING" = true ] && echo ', Let'"'"'s Encrypt staging'))"
+
+# The LaunchDaemon is vaulthalla-provision's to render and keep loaded (it starts a configured Caddy after upgrades).
+if [ -z "$ROOT" ] || [ -n "${VH_PROVISION:-}" ]; then
+  "${VH_PROVISION:-$PROVISION}" --apply ${ROOT:+--root "$ROOT"} >/dev/null
+fi
+if [ "$changed" = true ] && loaded; then "$LAUNCHCTL" kickstart -k "system/$LABEL"; note "restarted $LABEL"; fi
+
+[ "$HOSTS" = false ] || hosts_entry add
+[ "$TRUST" = false ] || trust_ca
+[ -n "$ROOT" ] && [ -z "${VH_CURL:-}" ] || check_live
+print_trust_help
+note "done: https://$DOMAIN${S3_DOMAIN:+ and https://$S3_DOMAIN (S3)}"
