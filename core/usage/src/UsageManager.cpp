@@ -24,6 +24,7 @@ UsageManager::UsageManager() {
     };
 
     registerBook(vault::get(root_->weak_from_this()));
+    registerBook(fs_book::get(root_->weak_from_this()));
     registerBook(user::get(root_->weak_from_this()));
     registerBook(group::get(root_->weak_from_this()));
     registerBook(secrets::get(root_->weak_from_this()));

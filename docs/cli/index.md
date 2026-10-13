@@ -161,6 +161,8 @@ Treat these outputs as sensitive:
 - `vh vault keys export ...`
 - Any command output that contains provider credentials, tokens, or unencrypted key material.
 
+`vh fs get` writes vault plaintext wherever you point it (or to standard output); `vh fs put` sends the local file's plaintext to the daemon over the control socket, where it is encrypted like a web upload.
+
 Use GPG recipients and files for exports whenever possible. Avoid pasting unencrypted key export output into tickets, chats, terminals with logging, or shell history.
 
 ## Reference

@@ -27,6 +27,7 @@ namespace teardown { std::shared_ptr<CommandBook> get(const std::weak_ptr<Comman
 namespace status { std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent); }
 namespace help { std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent); }
 namespace version { std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent); }
+namespace fs_book { std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent); }
 
 const auto gpgRecipient = Optional::ManyToOne("gpg_recipient", "GPG fingerprint to encrypt the exported key (if blank will not encrypt)",
                             {"recipient", "r"}, "gpg-fingerprint");

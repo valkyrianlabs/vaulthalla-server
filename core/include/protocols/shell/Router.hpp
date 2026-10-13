@@ -18,7 +18,8 @@ public:
 
     CommandResult executeLine(const std::string& line,
         const std::shared_ptr<identities::User>& user,
-        SocketIO* io = nullptr) const;
+        SocketIO* io = nullptr,
+        std::optional<TransferPeer> transfer = std::nullopt) const;
 
     // The option-validation verdict executeLine would reach for `line`, without running the handler: an error
     // message for an undeclared option, or nullopt. Lets tests check definitions against documented examples.
