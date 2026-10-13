@@ -251,9 +251,9 @@ ensure_postgres() {
     sql=$(mktemp)
     printf '%s\n' "\\set pw \`cat :'pwfile'\`" \
       "SELECT format('CREATE ROLE vaulthalla LOGIN PASSWORD %L', :'pw') \\gexec" > "$sql"
-    chmod 0644 "$sql"
+    # On stdin: _vaulthalla can't open a file in root's private temp directory (that was the first real install's failure).
     run /usr/bin/sudo -u "$SERVICE" -- "$PG_BIN/psql" -X -q -v ON_ERROR_STOP=1 -h "$PG_DIR" -p "$PG_PORT" \
-      -d postgres -v pwfile="$RUN_DIR/db_password" -f "$sql"
+      -d postgres -v pwfile="$RUN_DIR/db_password" -f - < "$sql"
     rm -f "$sql"
   fi
   if [ "$(pg_query "SELECT 1 FROM pg_database WHERE datname = 'vaulthalla'")" = 1 ]; then
