@@ -247,8 +247,8 @@ phase_accept() {
   accept_vh_fs
 
   say "== upgrade: the package installed over itself"
-  installer -pkg "$PKG" -target / > "$REPORT/reinstall.log" 2>&1
-  check "reinstall succeeded" grep -q 'The install was successful' "$REPORT/reinstall.log"
+  # installer's exit status, not its wording: a reinstall reports "The upgrade was successful."
+  check "reinstall succeeded" installer -pkg "$PKG" -target / > "$REPORT/reinstall.log" 2>&1
   check "ready after the upgrade" wait_for 120 server_ready
   check "verify after the upgrade: every byte kept" verify_within 120
   check "the admin binding survived the upgrade" sh -c "sudo -u $CLIENT -- $PREFIX/bin/vh vault list 2>&1 | grep -q install_acceptance"
