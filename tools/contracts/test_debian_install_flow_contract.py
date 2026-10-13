@@ -239,7 +239,8 @@ class DebianInstallFlowContractTests(unittest.TestCase):
         # The README is a brief front page (recommended installer + first sign-in + a docs pointer); the manual APT
         # path, install opt-outs and post-install setup live in the installation guide.
         readme = (self._repo_root() / "README.md").read_text(encoding="utf-8")
-        guide = (self._repo_root() / "docs/getting-started/installation.md").read_text(encoding="utf-8")
+        # The Linux install guide (docs/getting-started/installation is now the platform chooser that links to it).
+        guide = (self._repo_root() / "docs/linux/installation.md").read_text(encoding="utf-8")
         for fragment in (
             "curl -fsSL https://apt.vaulthalla.sh/install.sh | bash",
             "https://vaulthalla.io/docs",

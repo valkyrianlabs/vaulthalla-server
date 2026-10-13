@@ -340,6 +340,12 @@ jobs:
           npm install -g pnpm@11.0.8
           pnpm --dir web install --frozen-lockfile
 
+      # Caddy for `vh setup caddy` is built with xcaddy (tools/macos/pkg/build-caddy.sh).
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+
       - name: Signing identities (only when the secrets exist)
         env:
           P12: ${{ secrets.MACOS_SIGNING_P12 }}
@@ -384,7 +390,8 @@ jobs:
           path: ${{ env.VH_CANDIDATE_DIR }}/pkg/
           if-no-files-found: error
 
-  # Attaches the package to the GitHub release and updates the Homebrew cask (vaulthalla/homebrew-tap, with
+  # Attaches the package to the GitHub release, publishes it to the Nexus raw repository (NEXUS_PKG_REPO, with the APT
+  # repository's credentials and RELEASE_PUBLISH_MODE gate) and updates the Homebrew cask (vaulthalla/homebrew-tap, with
   # HOMEBREW_TAP_TOKEN: contents:write on that repository; without it the cask update is skipped with a warning).
   macos-publish:
     name: Publish the macOS package
@@ -401,10 +408,23 @@ jobs:
       contents: write
     timeout-minutes: 15
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
       - uses: actions/download-artifact@v4
         with:
           name: vaulthalla-macos-${{ needs.release-check.outputs.version }}
           path: pkg/
+
+      # Immutable like the APT publication: identical bytes already there are skipped, different ones refused.
+      - name: Publish to the Nexus package repository
+        env:
+          RELEASE_PUBLISH_MODE: ${{ vars.RELEASE_PUBLISH_MODE || 'disabled' }}
+          NEXUS_PKG_REPO: ${{ vars.NEXUS_PKG_REPO }}
+          NEXUS_USER: ${{ secrets.NEXUS_USER }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD || secrets.NEXUS_PASS }}
+        run: bash tools/macos/pkg/publish-nexus.sh pkg
 
       - name: Attach to the GitHub release
         env:

@@ -47,6 +47,11 @@ PG_BIN="@PG_BIN@"
 PG_DIR="$SUPPORT_DIR/postgres"
 PG_PORT=$((36971 + PORT_OFFSET))
 PG_LABEL="$LABEL_PREFIX.postgres"
+# HTTPS through Caddy (vaulthalla-caddy, `vh setup caddy`): its LaunchDaemon is managed here once a Caddyfile exists,
+# so a package upgrade (which stops every sh.vaulthalla.* daemon) starts it again.
+CADDY_DIR="$SUPPORT_DIR/caddy"
+CADDY_LABEL="$LABEL_PREFIX.caddy"
+CADDY_BIN="@CADDY_BIN@"
 LAUNCHD_DIR=/Library/LaunchDaemons
 LABELS="$LABEL_PREFIX.server $LABEL_PREFIX.web"
 
@@ -297,13 +302,22 @@ check_runtime() {
   [ -z "$missing" ] || die "not installed:$missing; refusing to start the LaunchDaemons"
 }
 
+caddy_configured() { [ -f "$ROOT$CADDY_DIR/Caddyfile" ] && [ ! -L "$ROOT$CADDY_DIR" ]; }
+# The Caddy vaulthalla-caddy validated the configuration with (recorded in its settings): the package's, or Homebrew's.
+caddy_binary() {
+  local b=""
+  [ -f "$ROOT$CADDY_DIR/settings" ] && b=$(sed -n 's/^caddy=//p' "$ROOT$CADDY_DIR/settings" | head -1)
+  echo "${b:-$CADDY_BIN}"
+}
+
 render_plist() {  # render_plist LABEL > file
   # The placeholders are spelled with $at so configuring this script doesn't substitute them here as well. The
   # templates are production's (sh.vaulthalla.<role>); an instance renames the label and account and shifts the ports.
   local at=@ role="${1##*.}"
   sed -e "s|${at}BINDIR${at}|$BINDIR|g" -e "s|${at}STATE_DIR${at}|$STATE_DIR|g" -e "s|${at}LOG_DIR${at}|$LOG_DIR|g" \
       -e "s|${at}WEB_DIR${at}|$WEB_DIR|g" -e "s|${at}NODE${at}|$NODE|g" -e "s|${at}PG_BIN${at}|$PG_BIN|g" \
-      -e "s|${at}PG_DIR${at}|$PG_DIR|g" \
+      -e "s|${at}PG_DIR${at}|$PG_DIR|g" -e "s|${at}CADDY_BIN${at}|$(caddy_binary)|g" \
+      -e "s|${at}CADDY_DIR${at}|$CADDY_DIR|g" \
       -e "s|<string>sh\.vaulthalla\.$role</string>|<string>$1</string>|" \
       -e "s|<string>_vaulthalla</string>|<string>$SERVICE</string>|g" \
       -e "s|36968|$((36968 + PORT_OFFSET))|g" -e "s|36970|$((36970 + PORT_OFFSET))|g" \
@@ -341,7 +355,7 @@ ensure_daemons() {  # ensure_daemons [LABEL...] (default: the server and the web
 
 remove_daemons() {
   local label
-  for label in $LABELS $PG_LABEL; do
+  for label in $LABELS $PG_LABEL $CADDY_LABEL; do
     if loaded "$label"; then run "$LAUNCHCTL" bootout "system/$label"; fi
     if [ -e "$ROOT$LAUNCHD_DIR/$label.plist" ]; then run rm -f "$ROOT$LAUNCHD_DIR/$label.plist"; fi
   done
@@ -380,7 +394,7 @@ purge_dir() {
 }
 
 purge() {
-  local dir id problems dirs=("$STATE_DIR" "$RUN_DIR" "$MOUNT_DIR" "$PG_DIR" "$LOG_DIR")
+  local dir id problems dirs=("$STATE_DIR" "$RUN_DIR" "$MOUNT_DIR" "$PG_DIR" "$CADDY_DIR" "$LOG_DIR")
   for dir in "${dirs[@]}"; do purge_check "$dir"; done
   id=$(account_id || true)
   if [ -n "$id" ]; then
@@ -407,6 +421,7 @@ else
   ensure_config
   check_runtime
   ensure_daemons
+  if caddy_configured; then ensure_daemons "$CADDY_LABEL"; fi
   if [ -n "$ENROLL" ]; then enroll "$ENROLL"; fi
 fi
 

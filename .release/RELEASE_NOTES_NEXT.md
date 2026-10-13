@@ -18,6 +18,15 @@ console and the database at boot through launchd, before anyone logs in. The per
 `/Library/Application Support/Vaulthalla/uninstall.sh` removes it and keeps the data unless given `--purge`.
 On macOS the vault isn't mounted in Finder yet: use the web console, the S3 gateway or `vh fs`.
 
+HTTPS on macOS is one command: `sudo vh setup caddy --domain vault.home.arpa` serves the console, WebSockets,
+uploads and downloads (and, with `--s3-domain`, the S3 gateway) through Caddy, running as the service account.
+Internal names (`.home.arpa`, `.internal`, `.lan`, `.local`, `.test`) get certificates from Vaulthalla's own CA, which is
+name-constrained to your hostnames so trusting it on a device can't let it vouch for any other site; `--trust` trusts
+it on the Mac, and the command prints how to trust it on phones and other computers. Public names get Let's Encrypt
+certificates, through Cloudflare DNS with `--dns-cloudflare` (the same credentials file `vh setup nginx` uses on
+Linux) when the Mac isn't reachable from the internet, or use your own certificate with `--cert`/`--key`. Caddy renews
+certificates by itself; `vh setup caddy --status` shows what is served, and `vh teardown caddy` removes it.
+
 The package isn't signed by Apple yet. Opened from Finder, macOS blocks it the first time: choose **Open Anyway** in
 System Settings → Privacy & Security, then run it again. `sudo installer -pkg vaulthalla-<version>-arm64.pkg -target /`
 and the Homebrew cask install it without that prompt.

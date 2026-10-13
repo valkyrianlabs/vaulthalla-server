@@ -30,8 +30,9 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable
 
-WORKFLOW = "build_and_test.yml"
-BUILD_JOB = "build"
+# The workflow and job whose pull_request run must have tested the tree: Linux CI by default; macos.yml passes its own.
+WORKFLOW = os.environ.get("CI_GATE_WORKFLOW", "build_and_test.yml")
+BUILD_JOB = os.environ.get("CI_GATE_JOB", "build")
 CUT_SUBJECT = re.compile(r"^chore\(release\): v(\d+\.\d+\.\d+)$")
 REPO_ROOT = Path(__file__).resolve().parents[2]
 

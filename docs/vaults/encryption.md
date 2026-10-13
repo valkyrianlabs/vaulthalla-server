@@ -1,6 +1,6 @@
 ---
 title: Encryption
-description: Understand Vaulthalla TPM-backed keys, per-vault encryption, S3/R2 upstream encryption, key rotation, and export risk.
+description: Understand how Vaulthalla protects master keys on Linux (TPM2) and macOS (file backend), per-vault encryption, S3/R2 upstream encryption, key rotation, and export risk.
 order: 240
 status: published
 tags:
@@ -11,7 +11,7 @@ tags:
 
 # Encryption
 
-Vaulthalla combines TPM-protected master keys, per-vault AES-256-GCM keys, per-file encryption metadata, and optional upstream S3/R2 encryption. Operators should understand these layers before changing vault encryption policy or planning recovery.
+Vaulthalla combines host-protected master keys (TPM2 on Linux, a file backend on macOS), per-vault AES-256-GCM keys, per-file encryption metadata, and optional upstream S3/R2 encryption. Operators should understand these layers before changing vault encryption policy or planning recovery.
 
 :::toc[On this page]{depth="3" theme="compact"}
 :::
@@ -20,15 +20,28 @@ Vaulthalla combines TPM-protected master keys, per-vault AES-256-GCM keys, per-f
 
 | Layer | Purpose |
 | --- | --- |
-| TPM or `swtpm` master material | Protects Vaulthalla master keys on the host. |
+| Host key protection | Protects Vaulthalla master keys on the host: TPM or `swtpm` on Linux, the `file` backend on macOS. |
 | Vault master key provider | Encrypts stored per-vault keys. |
 | Per-vault AES-256-GCM key | Encrypts file content for a vault. |
 | Per-file IV and key version | Lets Vaulthalla decrypt the correct ciphertext with the correct vault key version. |
 | S3/R2 upstream encryption metadata | Records whether remote object bodies are Vaulthalla-encrypted and which IV/key version applies. |
 
-## TPM Selection
+## How Master Keys Are Protected
 
-At startup, Vaulthalla uses TPM configuration in this order:
+Master keys (the vault master key, the database password, API-key and S3 gateway secrets) are sealed by a platform backend before they are stored. `vh status` names the backend in use.
+
+| Platform | Backend | What protects the keys |
+| --- | --- | --- |
+| Linux | TPM2 (hardware TPM, or the managed `swtpm`) | The keys are sealed to the TPM; a copy of the state directory alone doesn't unseal them on another host. |
+| macOS | `file` | The keys are stored as `0600` files inside the `0700` state directory, owned by `_vaulthalla`. Nothing binds them to the machine: they are as safe as the directory's permissions and, at rest, FileVault. |
+
+:::callout[On macOS, keep FileVault on]{variant="warning"}
+With the `file` backend, anyone who can read `/Library/Application Support/Vaulthalla/state` as root or `_vaulthalla`, or read the disk of a Mac without FileVault, can read the master keys and decrypt the vaults stored with them. `vh status` reports it as `secrets backend: file (development: no hardware binding)`. A Secure Enclave or keychain backend is planned and not shipped. Keep FileVault on, keep the Mac physically secure, and keep GPG-encrypted [vault key exports](#export-vault-keys) elsewhere.
+:::
+
+### TPM Selection On Linux
+
+At startup on Linux, Vaulthalla uses TPM configuration in this order:
 
 1. Explicit TCTI overrides such as `VH_TPM_TCTI`, `TSS2_TCTI`, or `TPM2TOOLS_TCTI`.
 2. Hardware TPM devices such as `/dev/tpmrm0` or `/dev/tpm0`.
@@ -36,7 +49,7 @@ At startup, Vaulthalla uses TPM configuration in this order:
 
 If no usable TPM path exists, encryption initialization fails and the service cannot safely run.
 
-## Software TPM State
+### Software TPM State
 
 When `swtpm` is used, its state is stored under:
 
@@ -121,4 +134,4 @@ See [Secrets And Key Export](/vaults/secrets-and-key-export).
 
 Vaulthalla's AES-256-GCM path depends on supported CPU and crypto-library features. Production hosts should have AES/PCLMUL-capable hardware support. Development-only overrides may exist, but they are not a production escape hatch.
 
-If the service fails during crypto initialization, check [Install Troubleshooting](/troubleshooting/install-troubleshooting).
+If the service fails during crypto initialization, check [Linux Troubleshooting](/linux/troubleshooting#crypto-initialization-fails). Apple Silicon Macs have the required AES instructions.

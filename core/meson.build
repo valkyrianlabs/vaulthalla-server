@@ -81,6 +81,9 @@ conf.set_quoted('VH_LOG_PATH', log_dir)
 conf.set_quoted('VH_BACKING_PATH', state_dir)
 conf.set_quoted('VH_RUNTIME_PATH', runtime_dir)
 conf.set_quoted('VH_LIFECYCLE_PATH', lifecycle_path)
+# `vh setup|teardown caddy`: macOS only (Linux has `vh setup nginx`), installed beside the lifecycle utility.
+conf.set_quoted('VH_CADDY_TOOL_PATH', host_machine.system() == 'darwin'
+                ? join_paths(get_option('prefix'), 'lib', meson.project_name(), 'vaulthalla-caddy') : '')
 conf.set_quoted('VH_CACHE_PATH', '/.cache')
 conf.set_quoted('VH_INSTANCE', vh_instance)
 conf.set_quoted('VH_SERVICE_ACCOUNT', vh_service_account)
@@ -115,10 +118,22 @@ vh_paths_header = configure_file(
 
 host_os = host_machine.system()
 
-fmt_dep = dependency('fmt', required: true)
+# Third-party headers are system headers (-isystem), as they already are on Linux under /usr/include: Homebrew's
+# spdlog 1.17 calls an fmt 12 conversion that fmt deprecates, which is theirs to fix, not a warning in our code.
+fmt_dep = dependency('fmt', required: true, include_type: 'system')
 # apt.vaulthalla.sh's libpqxx-vh-dev: a static libpqxx SDK under its own pkg-config name (the .pc links libpqxx.a
 # by path and the system libpq by SONAME), so neither Ubuntu's libpqxx-dev nor its headers can be picked up.
-pqxx_dep = dependency('libpqxx-vh', version: '>=8.0.2', method: 'pkg-config', static: true, required: true)
+# Read through pkg-config itself rather than dependency(): meson can't resolve the .pc's GNU ld `-l:libpq.so.5` and
+# warned on every configure, although the link line it produced was right. The flags are passed through unchanged.
+pqxx_pkgconfig = find_program('pkg-config', required: true)
+if run_command(pqxx_pkgconfig, '--atleast-version=8.0.2', 'libpqxx-vh', check: false).returncode() != 0
+    error('libpqxx-vh >= 8.0.2 not found by pkg-config (Linux: apt.vaulthalla.sh libpqxx-vh-dev; macOS: tools/macos/bootstrap.sh)')
+endif
+pqxx_dep = declare_dependency(
+    compile_args: run_command(pqxx_pkgconfig, '--cflags', 'libpqxx-vh', check: true).stdout().strip().split(),
+    link_args: run_command(pqxx_pkgconfig, '--libs', '--static', 'libpqxx-vh', check: true).stdout().strip().split(),
+    version: run_command(pqxx_pkgconfig, '--modversion', 'libpqxx-vh', check: true).stdout().strip(),
+)
 
 # The kernel FUSE bridge (core/src/fuse/{Bridge,Reply,Resolver,Service}.cpp): required on Linux, which the Debian
 # package ships; off by default elsewhere (macOS serves vaults over HTTP/WS/CLI until a Finder backend is chosen).
@@ -138,7 +153,7 @@ deps = [
     dependency('libjpeg', required: true),
     dependency('pugixml', required: true),
     dependency('threads', required: true),
-    dependency('spdlog', required: true),
+    dependency('spdlog', required: true, include_type: 'system'),
     dependency('libturbojpeg', required: true),
     dependency('openssl', version: '>=3.0', required: true),
     dependency('zlib', required: true),
@@ -170,7 +185,7 @@ if host_os == 'linux'
     ]
 endif
 
-test_deps = deps + dependency('gtest', required: true, main: false)
+test_deps = deps + dependency('gtest', required: true, main: false, include_type: 'system')
 
 
 # ╭───────────────────────────── CONVERTER HELPERS ─────────────────────────────╮
@@ -383,13 +398,12 @@ endif
 # ╭────────────────────────────────────── TESTS ────────────────────────────────────────╮
 
 if get_option('build_unit_tests')
-    configure_file(input: 'test-assets/sample.jpg', output: 'sample.jpg', copy: true)
-    configure_file(input: 'test-assets/sample.pdf', output: 'sample.pdf', copy: true)
-    configure_file(
-        input: 'test-assets/Screenshot 2025-06-26 at 3.29.35\u202FPM.png',
-        output: 'Screenshot 2025-06-26 at 3.29.35\u202FPM.png',
-        copy: true
-    )
+    # The S3 provider tests open these by relative path from the test's workdir (this build directory).
+    unit_test_assets = [
+        fs.copyfile('test-assets/sample.jpg'),
+        fs.copyfile('test-assets/sample.pdf'),
+        fs.copyfile('test-assets/Screenshot 2025-06-26 at 3.29.35\u202FPM.png'),
+    ]
 endif
 
 if get_option('build_unit_tests')
@@ -407,7 +421,7 @@ if get_option('build_unit_tests')
 
     # DB-backed suites make one run take several minutes (#123); 120s always timed out.
     test('vh_unit_tests', vh_unit_tests, env: unit_test_env, workdir: meson.current_build_dir(), timeout: 1800,
-         depends: unit_test_helper_targets)
+         depends: unit_test_helper_targets + unit_test_assets)
 endif
 
 # Drift: the committed web contract (web/src/util/generated/wsContract.{json,ts}) must be what this build's usage

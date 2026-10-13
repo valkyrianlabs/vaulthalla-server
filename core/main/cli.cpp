@@ -226,9 +226,11 @@ static std::string lifecycle_subcommand(const std::vector<std::string>& argv_nor
         if (in({"db", "database", "postgres"})) return "db";
         if (in({"remote-db", "remote_db", "remote", "rdb"})) return "remote-db";
         if (in({"nginx", "proxy"})) return "nginx";
+        if (in({"caddy", "https"})) return "caddy";
     } else if (cmd == "teardown") {
         if (in({"db", "database", "postgres"})) return "db";
         if (in({"nginx", "proxy"})) return "nginx";
+        if (in({"caddy", "https"})) return "caddy";
     }
     return {};
 }
@@ -255,8 +257,19 @@ static std::string lifecycle_binary_path() {
     return VH_LIFECYCLE_PATH;
 }
 
+// `vh setup|teardown caddy` is macOS's HTTPS front end (deploy/launchd/vaulthalla-caddy); Linux has nginx. Said before
+// asking for sudo, so nobody elevates just to hear it.
+static bool lifecycle_unsupported_here(const std::vector<std::string>& argv_norm) {
+    if (lifecycle_subcommand(argv_norm) != "caddy" || !std::string_view(VH_CADDY_TOOL_PATH).empty()) return false;
+    fmt::print(stderr, "vh {} caddy is for macOS. On Linux, HTTPS goes through nginx: vh {} nginx --help\n",
+               argv_norm[0], argv_norm[0]);
+    return true;
+}
+
 static int run_lifecycle_command(const std::vector<std::string>& argv_norm) {
-    const auto lifecycleBin = lifecycle_binary_path();
+    if (lifecycle_unsupported_here(argv_norm)) return 2;
+    const bool caddy = lifecycle_subcommand(argv_norm) == "caddy";
+    const auto lifecycleBin = caddy ? std::string(VH_CADDY_TOOL_PATH) : lifecycle_binary_path();
     if (::access(lifecycleBin.c_str(), F_OK) != 0) {
         fmt::print(
             stderr,
@@ -746,6 +759,7 @@ int main(const int argc, char** argv) {
     // the daemon is unreachable (e.g. before `setup db`) does root fall back to the lifecycle utility's own --help.
     const bool lifecycleHelp = is_lifecycle_command(argv_norm) && is_help_request(argv_norm);
     if (is_lifecycle_command(argv_norm) && !lifecycleHelp) {
+        if (lifecycle_unsupported_here(argv_norm)) return 2;
         if (::geteuid() != 0)
             return lifecycle_sudo_required(argv_norm);
         return run_lifecycle_command(argv_norm);

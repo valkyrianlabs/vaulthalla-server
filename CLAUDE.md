@@ -71,6 +71,9 @@ versions, cutting releases), `payload-markdown` + `payload-markdown-docs` (doc a
 - **Release history and versions are vl-release's:** never hand-edit `debian/changelog`, `RELEASE_NOTES.md` or version
   numbers (`vlr version`). Material changes update `.release/RELEASE_NOTES_NEXT.md` and `.release/CHANGELOG_NEXT.md` in
   the same change (see `/vl-release`); run `vlr check` before calling substantial work done.
+- **Builds are silent (AGENTS.md):** anything pushed to GitHub, branch or PR, compiles on Linux and macOS with no output
+  but progress: no warnings, notes or chatter from `meson setup` or the build. Check with `tools/dev/quiet-build.sh`;
+  CI fails on anything else. Fix causes, never suppress them.
 - **Unity build:** no new file-scope `using namespace` in `core/src/**/*.cpp`, keep `LC_ALL=C sort` source
   discovery, and never weaken unity/warning flags to get green.
 - **Maintainer scripts:** idempotent, never overwrite `/etc/vaulthalla/config.yaml`, never destructively reset

@@ -9,8 +9,6 @@
 
 namespace vh::vault::model {
 
-class Key;
-
 enum class S3Provider {
     AWS, CloudflareR2, Wasabi, BackblazeB2,
     DigitalOcean, MinIO, Ceph, Storj, Other

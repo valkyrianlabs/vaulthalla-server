@@ -13,7 +13,6 @@
 #include <vector>
 
 namespace vh::storage::s3 { class Controller; }
-namespace vh::vault::model { struct Key; }
 
 // Safe vault deletion with retention (#162). Trusted primitives below ops::vaults (callers authorize):
 //

@@ -107,7 +107,7 @@ TEST(ShutdownBounds, QueuedWorkIsDroppedOnStopAndItsWaitersAreReleased) {
     pool.submit(std::move(queued));
 
     pool.requestStop();
-    EXPECT_THROW(future.get(), std::future_error) << "a dropped task's promise is broken, not left hanging";
+    EXPECT_THROW(static_cast<void>(future.get()), std::future_error) << "a dropped task's promise is broken, not left hanging";
     gate->set_value();
     EXPECT_EQ(pool.join(Clock::now() + 2s), 0u);
 

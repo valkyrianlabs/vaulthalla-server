@@ -20,6 +20,20 @@ static std::shared_ptr<CommandUsage> nginx(const std::weak_ptr<CommandUsage>& pa
     return cmd;
 }
 
+static const auto caddyPurgeFlag = Flag::WithAliases("purge", "Also delete the certificates, the ACME account and Vaulthalla's internal CA (clients that trusted it keep trusting it until removed there)", {"purge"});
+
+static std::shared_ptr<CommandUsage> caddy(const std::weak_ptr<CommandUsage>& parent) {
+    const auto cmd = buildBaseUsage(parent);
+    cmd->aliases = {"caddy", "https"};
+    cmd->description = "macOS: stop and remove Vaulthalla's Caddy HTTPS front end. Keeps certificates and the internal CA "
+                       "unless --purge. Requires sudo.";
+    cmd->optional_flags = {caddyPurgeFlag};
+    cmd->examples = {
+        {"sudo vh teardown caddy", "Stop serving HTTPS; keep certificates for a later `vh setup caddy`."}
+    };
+    return cmd;
+}
+
 static std::shared_ptr<CommandUsage> db(const std::weak_ptr<CommandUsage>& parent) {
     const auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"db", "database", "postgres"};
@@ -40,6 +54,7 @@ static std::shared_ptr<CommandUsage> base(const std::weak_ptr<CommandUsage>& par
     };
     cmd->subcommands = {
         nginx(cmd->weak_from_this()),
+        caddy(cmd->weak_from_this()),
         db(cmd->weak_from_this())
     };
     return cmd;

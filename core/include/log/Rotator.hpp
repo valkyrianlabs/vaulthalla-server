@@ -12,9 +12,9 @@
 
 namespace vh::log {
 
-constexpr std::uint64_t operator"" _KiB(unsigned long long v) { return v * 1024ULL; }
-constexpr std::uint64_t operator"" _MiB(unsigned long long v) { return v * 1024ULL * 1024ULL; }
-constexpr std::uint64_t operator"" _GiB(unsigned long long v) { return v * 1024ULL * 1024ULL * 1024ULL; }
+constexpr std::uint64_t operator""_KiB(unsigned long long v) { return v * 1024ULL; }
+constexpr std::uint64_t operator""_MiB(unsigned long long v) { return v * 1024ULL * 1024ULL; }
+constexpr std::uint64_t operator""_GiB(unsigned long long v) { return v * 1024ULL * 1024ULL * 1024ULL; }
 
 class Rotator {
 public:

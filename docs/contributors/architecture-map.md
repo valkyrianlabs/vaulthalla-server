@@ -24,9 +24,10 @@ This is the contributor-facing map of the repo. It is not a full internal design
 | --- | --- |
 | `core/` | C++ daemon, CLI transport, FUSE service, runtime manager, auth, RBAC, crypto, sync, storage, previews, tests, usage/manpage generation |
 | `web/` | Next.js admin and filesystem client, websocket session and data layer, login-gate middleware |
-| `deploy/` | Runtime config, PostgreSQL schema SQL, systemd units, nginx template, lifecycle utility |
+| `deploy/` | Runtime config, PostgreSQL schema SQL, systemd units, launchd LaunchDaemons and the macOS provisioning and Caddy tools (`deploy/launchd/`), nginx template, lifecycle utility |
 | `debian/` | Debian package metadata and maintainer scripts |
-| `bin/` | Dev and operator install/uninstall/test helpers |
+| `bin/` | Dev and operator install/uninstall/test helpers (Linux and macOS, through `bin/lib/platform.sh`) |
+| `tools/macos/` | macOS build environment (`env.sh`, `bootstrap.sh`), the installer package (`pkg/`), install candidates and the install acceptance |
 | `release.toml`, `.release/` | vl-release configuration and the staged release notes and changelog for the next release |
 | `tools/contracts/` | Contract tests for Debian packaging, maintainer scripts, shipped migrations, and the release workflow |
 | `.github/` | CI workflows and composite actions |
@@ -46,7 +47,9 @@ This is the contributor-facing map of the repo. It is not a full internal design
 | Sync engine | Plans and executes upload, download, delete, conflict, and key-rotation work | `core/src/sync/*`, `core/include/sync/*` | Maintainer-guided | Integration-style validation, repro steps, manual data-safety checks |
 | RBAC and permission model | Defines admin and vault permissions, glob/path policy logic, role templates, and permission resolution | `core/src/rbac/*`, `core/include/rbac/*`, `deploy/psql/060_acl.sql` | Security-sensitive | Maintainer approval first, focused tests, threat-aware review |
 | Auth, session, and secret handling | Manages token issuance, refresh/session validation, secret storage, and auth-related protocol behavior | `core/src/auth/*`, `core/include/auth/*`, `core/src/crypto/*`, `core/include/crypto/*`, `web/src/stores/useWebSocket.ts` | Security-sensitive | Maintainer approval first, focused tests, no hand-wavy validation |
+| Platform seams | Isolate OS-specific system calls behind small interfaces with `linux` and `darwin` implementations chosen by Meson: peer credentials, local accounts, child processes, mounts, sealers, state directory checks, staged files, wakers | `core/include/platform/*`, `core/src/platform/{linux,darwin}/*` | Maintainer-guided | Build and unit tests on both platforms |
 | Packaging, systemd, and lifecycle | Defines package payload, install/remove/purge scripts, systemd units, and privileged host setup flows | `debian/*`, `deploy/systemd/*`, `deploy/lifecycle/main.py`, `bin/setup/*`, `bin/teardown/*` | Coordinate before implementing | Package dry runs, lifecycle tests, clean-host install/upgrade/remove/purge checks |
+| macOS service and package | launchd LaunchDaemons, idempotent provisioning (account, directories, bundled PostgreSQL, enrollment), `vh setup caddy`, the self-contained installer package and Homebrew cask | `deploy/launchd/*`, `tools/macos/pkg/*`, `tools/macos/install-acceptance.sh` | Coordinate before implementing | `tools/contracts/test_macos_*_contract.py`, a real install with `sudo tools/macos/candidate.sh accept` |
 | Release process | vl-release (`vlr`) keeps versions in sync, builds and validates the package, publishes to APT and records the release history | `release.toml`, `.release/*`, `.github/workflows/release.yml`, `web/bin/build_release_payload.sh` | Maintainer-guided | `bash tools/dev/verify.sh release packaging`, `make deb` |
 | Tests and harnesses | Unit, integration, lifecycle, and packaging contract coverage | `core/tests/*`, `deploy/lifecycle/tests/*`, `tools/contracts/*`, `tools/lab/tests/*` | Open for scoped work | Run the relevant test surface and avoid unrelated churn |
 
@@ -88,7 +91,7 @@ Read [Security-Sensitive Work](/contributors/security-sensitive-work#preview-and
 
 ### Packaging and lifecycle
 
-The Debian maintainer scripts in `debian/postinst`, `debian/prerm`, and `debian/postrm` are the lifecycle source of truth for install, upgrade, remove, and purge. The `bin/` scripts are helpful local wrappers, but they are not the Debian contract.
+The Debian maintainer scripts in `debian/postinst`, `debian/prerm`, and `debian/postrm` are the lifecycle source of truth for install, upgrade, remove, and purge on Linux. On macOS that role belongs to `deploy/launchd/vaulthalla-provision.in`, which the package's postinstall runs, and `tools/macos/pkg/uninstall.sh`. The `bin/` scripts are helpful local wrappers, but they are not either platform's package contract.
 
 ### Releases
 

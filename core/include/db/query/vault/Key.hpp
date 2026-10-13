@@ -4,7 +4,7 @@
 #include <memory>
 #include <optional>
 
-namespace vh::vault::model { struct Key; }
+#include "vault/Fwd.hpp"
 
 namespace vh::db::query::vault {
 

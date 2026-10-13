@@ -18,6 +18,12 @@ project('vaulthalla', 'cpp',
 # environment provides (dpkg-buildflags), which left packaged binaries without -O and hardening flags.
 add_project_arguments('-D_GLIBCXX_USE_CXX11_ABI=1', language: 'cpp')
 
+# Builds print nothing but progress (AGENTS.md). Apple's ld warns when two dependencies both pass -lz (libcurl's and
+# zlib's .pc files); GNU ld doesn't. The duplicate is harmless, so the warning is the noise, not the link line.
+if host_machine.system() == 'darwin'
+    add_project_link_arguments('-Wl,-no_warn_duplicate_libraries', language: 'cpp')
+endif
+
 fs = import('fs')
 
 # See core/include/compat/gcc_variant.hpp: a GCC-only false positive inside libstdc++'s <variant> (via libpqxx) that
@@ -144,6 +150,7 @@ if get_option('install_data')
             'deploy/launchd/sh.vaulthalla.server.plist.in',
             'deploy/launchd/sh.vaulthalla.web.plist.in',
             'deploy/launchd/sh.vaulthalla.postgres.plist.in',
+            'deploy/launchd/sh.vaulthalla.caddy.plist.in',
             install_dir: data_dir / 'launchd',
         )
         install_data('tools/macos/pkg/uninstall.sh', install_dir: data_dir, install_mode: 'rwxr-xr-x')
@@ -164,9 +171,22 @@ if get_option('install_data')
         provision_conf.set('NODE', get_option('prefix') / 'libexec' / 'vaulthalla' / 'node' / 'bin' / 'node')
         # The package's private PostgreSQL (tools/macos/pkg/build-postgres.sh); a source install has none.
         provision_conf.set('PG_BIN', get_option('prefix') / 'libexec' / 'vaulthalla' / 'postgresql' / 'bin')
+        # The package's Caddy (built with the Cloudflare DNS module by tools/macos/pkg/build-caddy.sh); a source
+        # install uses one on PATH (Homebrew's) instead.
+        provision_conf.set('CADDY_BIN', get_option('prefix') / 'libexec' / 'vaulthalla' / 'caddy' / 'caddy')
+        provision_conf.set('PROVISION', get_option('prefix') / libexec_dir / 'vaulthalla-provision')
         configure_file(
             input: 'deploy/launchd/vaulthalla-provision.in',
             output: 'vaulthalla-provision',
+            configuration: provision_conf,
+            install: true,
+            install_dir: libexec_dir,
+            install_mode: 'rwxr-xr-x',
+        )
+        # `vh setup caddy` / `vh teardown caddy` (core/main/cli.cpp execs it: VH_CADDY_TOOL_PATH).
+        configure_file(
+            input: 'deploy/launchd/vaulthalla-caddy.in',
+            output: 'vaulthalla-caddy',
             configuration: provision_conf,
             install: true,
             install_dir: libexec_dir,

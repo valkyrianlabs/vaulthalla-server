@@ -8,8 +8,6 @@
 #include <string>
 #include <vector>
 
-namespace vh::vault::model { struct Key; }
-
 // Rows behind safe vault deletion (#162, migration 106): the vault's deleted_at mark, its vault_deletion record and
 // the sealed key copies in vault_deletion_key. Trusted primitives: callers authorize. Every multi-step change runs in
 // one transaction, so a crash leaves either the old state or the new one.

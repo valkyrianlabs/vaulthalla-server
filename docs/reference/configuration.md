@@ -13,9 +13,12 @@ tags:
 
 The main configuration file is:
 
-```text
-/etc/vaulthalla/config.yaml
-```
+| Platform | Path |
+| --- | --- |
+| Linux | `/etc/vaulthalla/config.yaml` |
+| macOS | `/Library/Application Support/Vaulthalla/config.yaml` |
+
+The keys are the same on both platforms. Installs write the file only when it is missing and upgrades never overwrite it. The daemon reads it at startup: restart it after an edit (`sudo systemctl restart vaulthalla` on Linux, `sudo launchctl kickstart -k system/sh.vaulthalla.server` on macOS).
 
 Most operators should use CLI setup commands for lifecycle changes and edit `config.yaml` only for settings that are intentionally file-based.
 
@@ -210,7 +213,7 @@ Dashboard backup/recovery readiness indicators should be treated as policy/statu
 
 ## Rich Previews
 
-Every key in this section is optional. Existing installs need no edits: a missing key keeps the default shown here, and upgrades never rewrite `/etc/vaulthalla/config.yaml`. The shipped default config lists the `preview` keys commented out. The daemon reads them at startup, so restart `vaulthalla.service` after changing one.
+Every key in this section is optional. Existing installs need no edits: a missing key keeps the default shown here, and upgrades never rewrite `config.yaml`. The shipped default config lists the `preview` keys commented out. The daemon reads them at startup, so restart the daemon after changing one.
 
 ### Derived Cache And Thumbnails
 
@@ -272,7 +275,7 @@ preview:
 
 Numeric values outside their allowed range are clamped. An unknown value for one of the `preview.media` choices is a configuration error, and the daemon refuses to start until it is fixed.
 
-The converters run as separate, sandboxed processes from optional packages; see [Optional Preview Packages](/getting-started/installation#optional-preview-packages). If previews fail but downloads work, see [General Troubleshooting](/troubleshooting/general-troubleshooting#previews-and-media).
+The converters run as separate, sandboxed processes from optional packages; see [Optional Preview Packages](/linux/installation#optional-preview-packages). If previews fail but downloads work, see [General Troubleshooting](/troubleshooting/general-troubleshooting#previews-and-media).
 
 ## Operator Email
 
@@ -290,6 +293,15 @@ operator_emails:
 ```
 
 See [Operator Emails](/admin/operator-emails).
+
+## Filesystem Mount
+
+```yaml
+mount:
+  mode: multiuser   # disabled | service_private | multiuser
+```
+
+`mount.mode` records which filesystem mount the operator intends. When the key is absent the build's default applies: `multiuser` on Linux (the FUSE mount at `/mnt/vaulthalla`), and no mount on the macOS package, which doesn't include the FUSE bridge. `service_private` is reserved for a mount only the service account uses and is not shipped. Any other value stops the daemon at startup rather than becoming a different mode. `vh status` shows the configured mode and the actual state side by side. See [Filesystem Access](/vaults/filesystem-access).
 
 ## Development Settings
 

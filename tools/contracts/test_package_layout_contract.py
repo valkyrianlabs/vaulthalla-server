@@ -62,7 +62,11 @@ class PackageLayoutContractTests(unittest.TestCase):
 
     def test_core_consumes_the_vaulthalla_db_and_pdf_sdks(self) -> None:
         meson = self._read("core/meson.build")
-        self.assertRegex(meson, r"dependency\('libpqxx-vh', version: '>=8\.0\.2', method: 'pkg-config', static: true")
+        # Read through pkg-config itself (meson can't parse the SDK's `-l:libpq.so.5` and warned): the static SDK by
+        # name, at least 8.0.2, with --static link flags.
+        self.assertIn("run_command(pqxx_pkgconfig, '--atleast-version=8.0.2', 'libpqxx-vh'", meson)
+        self.assertIn("run_command(pqxx_pkgconfig, '--libs', '--static', 'libpqxx-vh'", meson)
+        self.assertIn("pqxx_dep = declare_dependency(", meson)
         self.assertNotIn("dependency('libpqxx'", meson)
         # The retired 2025.06.29 PDFium fork snapshot sorts above Chromium milestones; only the upper bound keeps a
         # stale build host from producing a package that depends on it.

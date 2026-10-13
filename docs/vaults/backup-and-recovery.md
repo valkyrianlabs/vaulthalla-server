@@ -1,6 +1,6 @@
 ---
 title: Backup And Recovery
-description: Build a Vaulthalla disaster recovery set from PostgreSQL, config, state, TPM or swtpm material, vault keys, internal secrets, and object storage.
+description: Build a Vaulthalla disaster recovery set on Linux or macOS from PostgreSQL, config, state, key protection material, vault keys, internal secrets, and object storage.
 order: 260
 status: published
 tags:
@@ -20,12 +20,12 @@ Backups for Vaulthalla must cover metadata, file bodies, configuration, key prot
 
 A practical recovery set includes:
 
-| Item | Why it matters |
-| --- | --- |
-| PostgreSQL database dump | Users, groups, roles, vault definitions, sync policy, shares, audit state, key records, remote indexes, and metadata. |
-| `/etc/vaulthalla/config.yaml` | Runtime ports, auth settings, pricing settings, sharing settings, cache policy, and service configuration. |
-| `/var/lib/vaulthalla` | Vaulthalla-managed state, local vault bodies, cache/index state, and sealed key blobs. |
-| `/var/lib/swtpm/vaulthalla` | Software TPM state when `swtpm` is used. |
+| Item | Linux | macOS | Why it matters |
+| --- | --- | --- | --- |
+| PostgreSQL database dump | distribution or remote PostgreSQL | the bundled cluster | Users, groups, roles, vault definitions, sync policy, shares, audit state, key records, remote indexes, and metadata. |
+| Configuration | `/etc/vaulthalla/config.yaml` | `/Library/Application Support/Vaulthalla/config.yaml` | Runtime ports, auth settings, pricing settings, sharing settings, cache policy, and service configuration. |
+| State | `/var/lib/vaulthalla` | `/Library/Application Support/Vaulthalla/state` | Vaulthalla-managed state, local vault bodies, cache/index state, and sealed key material. |
+| Key protection | `/var/lib/swtpm/vaulthalla` when `swtpm` is used | included in the state directory (`file` backend) | Unseals the master keys on the original host. |
 | Vault key export | Portable recovery material for encrypted vault content. |
 | Internal secret export | Database and JWT secrets managed by Vaulthalla. |
 | S3/R2 bucket data | Remote object bodies for S3-compatible vaults. |
@@ -37,21 +37,15 @@ The current operator surfaces expose key and secret export commands, but a full 
 
 ## Recommended Backup Command Set
 
-Create a PostgreSQL custom-format dump for a local database:
+Dump the database and archive configuration and state:
 
+:::tabs{default="linux"}
+
+:::tab[Linux]{value="linux"}
 ```bash
 sudo -u postgres pg_dump -Fc vaulthalla > vaulthalla-db.dump
-```
+# remote PostgreSQL: pg_dump -h <host> -U <user> -Fc vaulthalla > vaulthalla-db.dump
 
-For remote PostgreSQL, use your database host, credentials, and network path:
-
-```bash
-pg_dump -h <host> -U <user> -Fc vaulthalla > vaulthalla-db.dump
-```
-
-Archive config and state:
-
-```bash
 sudo tar -C / -czf vaulthalla-config-state.tgz \
   etc/vaulthalla \
   var/lib/vaulthalla
@@ -62,6 +56,21 @@ If using `swtpm`, include software TPM state:
 ```bash
 sudo tar -C / -czf vaulthalla-swtpm-state.tgz var/lib/swtpm/vaulthalla
 ```
+:::
+
+:::tab[macOS]{value="macos"}
+```bash
+sudo -u _vaulthalla /usr/local/libexec/vaulthalla/postgresql/bin/pg_dump \
+  -h "/Library/Application Support/Vaulthalla/postgres" -p 36971 -Fc vaulthalla > vaulthalla-db.dump
+
+sudo tar -C "/Library/Application Support" -czf vaulthalla-config-state.tgz \
+  Vaulthalla/config.yaml Vaulthalla/state
+```
+
+The state archive contains the master keys in plaintext files (the `file` backend). Encrypt it, or store it only where the vault data itself may be stored. Do not archive the `postgres` directory of a running cluster; the dump is the database backup.
+:::
+
+:::
 
 Export vault keys:
 
@@ -103,14 +112,18 @@ Hardware TPM-sealed material is tied to the original TPM context. For host repla
 
 When using `swtpm`, restoring `/var/lib/swtpm/vaulthalla` can preserve the software TPM context. Protect this directory like key material. Restoring it to a different host should be treated as a sensitive security event.
 
+## macOS Key Recovery
+
+On macOS the sealed keys are files in the state directory, so restoring the state archive to a Mac restores the master keys with it, on any Mac. That makes the archive itself key material: protect it like a GPG-encrypted key export, and prefer the exports for long-term storage.
+
 ## Restore Outline
 
 Use this as a cautious outline, not a blind script:
 
 1. Install the same Vaulthalla version where possible.
 2. Stop Vaulthalla services.
-3. Restore `/etc/vaulthalla` and `/var/lib/vaulthalla`.
-4. Restore `/var/lib/swtpm/vaulthalla` if the backup used software TPM.
+3. Restore the configuration and state directories listed in the [Recovery Set](#recovery-set) for your platform.
+4. On Linux, restore `/var/lib/swtpm/vaulthalla` if the backup used software TPM.
 5. Restore PostgreSQL from the dump.
 6. Reseed or verify the database password secret if the database connection changed.
 7. Start services.
@@ -120,14 +133,31 @@ Use this as a cautious outline, not a blind script:
 
 Example service boundary:
 
+:::tabs{default="linux"}
+
+:::tab[Linux]{value="linux"}
 ```bash
 sudo systemctl stop vaulthalla.service vaulthalla-web.service
 sudo systemctl start vaulthalla.service vaulthalla-web.service
 ```
+:::
+
+:::tab[macOS]{value="macos"}
+```bash
+sudo launchctl bootout system/sh.vaulthalla.web
+sudo launchctl bootout system/sh.vaulthalla.server
+# restore files and the database here (PostgreSQL keeps running for pg_restore)
+sudo /usr/local/lib/vaulthalla/vaulthalla-provision --apply
+```
+
+`vaulthalla-provision --apply` loads the daemons again and checks ownership and modes of the restored directories.
+:::
+
+:::
 
 ## Preserved Database Reinstall
 
-If the package was removed but the database was preserved, reseed the runtime database password file before restart when needed:
+On Linux, if the package was removed but the database was preserved, reseed the runtime database password file before restart when needed:
 
 ```bash
 sudo install -d -m 0755 /run/vaulthalla
