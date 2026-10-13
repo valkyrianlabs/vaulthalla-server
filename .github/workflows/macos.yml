@@ -224,6 +224,11 @@ jobs:
           npm install -g pnpm@11.0.8
           pnpm --dir web install --frozen-lockfile
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+
       - name: Stage (release build, web console, Node runtime, pdfium)
         run: tools/macos/candidate.sh stage
 
