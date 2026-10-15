@@ -25,3 +25,5 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   sync; vaults that encrypt upstream still refuse it unless their event subscription imports foreign objects.
 - storage: new SigV4 signer (any service/region) and an HTTP client with connect/total timeouts and cancellation for the
   admin and queue APIs.
+- fix(shell): the CLI router's debug log no longer contains credential option values (`--secret`, `--password`,
+  `--token`, …); they were logged verbatim when shell debug logging was enabled.
