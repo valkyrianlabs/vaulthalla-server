@@ -46,7 +46,7 @@ std::optional<uint64_t> sizeField(const json& object, const char* name) {
     return std::nullopt;
 }
 
-std::string unquote(std::string etag) {
+std::string unquoteEtag(std::string etag) {
     if (etag.size() >= 2 && etag.front() == '"' && etag.back() == '"') etag = etag.substr(1, etag.size() - 2);
     return etag;
 }
@@ -130,7 +130,7 @@ void decodeAwsRecords(const json& payload, const std::string& messageId, Decoded
         e.event_name = eventName;
         e.sequencer = stringField(object, "sequencer");
         e.version_id = stringField(object, "versionId");
-        if (const auto etag = stringField(object, "eTag")) e.etag = unquote(*etag);
+        if (const auto etag = stringField(object, "eTag")) e.etag = unquoteEtag(*etag);
         e.size = sizeField(object, "size");
         e.message_id = messageId;
         e.rule_id = stringField(s3, "configurationId").value_or("");
@@ -247,7 +247,7 @@ Decoded decodeR2Message(const std::string& body, const std::string& messageId, c
         return out;
     }
     e.event_name = *action;
-    if (const auto etag = stringField(object, "eTag")) e.etag = unquote(*etag);
+    if (const auto etag = stringField(object, "eTag")) e.etag = unquoteEtag(*etag);
     e.size = sizeField(object, "size");
     e.message_id = messageId;
     setTime(e, stringField(payload, "eventTime"), sentAt);
