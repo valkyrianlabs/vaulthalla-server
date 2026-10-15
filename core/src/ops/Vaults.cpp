@@ -265,6 +265,10 @@ VaultPtr create(const Actor& actor, const Create& req) {
                            std::to_string(owner->vault_id) + "), pending purge: restore it with `vh vault restore " +
                            std::to_string(owner->vault_id) + "`, or purge it now with `vh vault delete " +
                            std::to_string(owner->vault_id) + " --now`");
+        else if (owner)
+            // One vault per (key, bucket). The upsert used to hand the other vault's binding to the new one.
+            throw Conflict("bucket '" + req.s3->bucket + "' is already the storage of vault '" + owner->vault_name +
+                           "' (ID " + std::to_string(owner->vault_id) + ") with this API key");
         auto s3 = std::make_shared<S3Vault>(req.name, req.s3->api_key_id, req.s3->bucket);
         s3->storage_tier_id = normalizedTier(req.s3->api_key_id, req.s3->storage_tier);
         s3->encrypt_upstream = req.s3->encrypt_upstream.value_or(true);
@@ -359,8 +363,14 @@ VaultPtr update(const Actor& actor, const Update& req) {
             if (req.bucket->empty()) throw Invalid("bucket cannot be empty");
             s3->bucket = *req.bucket;
         }
-        if (s3->api_key_id != before->api_key_id || s3->bucket != before->bucket)
+        if (s3->api_key_id != before->api_key_id || s3->bucket != before->bucket) {
             requireBucketUnprotected(s3->api_key_id, s3->bucket);
+            if (const auto owner = db::query::vault::Vault::bucketOwner(s3->api_key_id, s3->bucket);
+                owner && owner->vault_id != existing->id)
+                throw Conflict("bucket '" + s3->bucket + "' is already the storage of " +
+                               std::string(owner->deleted ? "deleted vault '" : "vault '") + owner->vault_name + "' (ID " +
+                               std::to_string(owner->vault_id) + ") with this API key");
+        }
         // The tier is provider-specific: re-normalize whenever it or the key (provider) changes.
         if (req.storage_tier || s3->api_key_id != before->api_key_id)
             s3->storage_tier_id = normalizedTier(s3->api_key_id, req.storage_tier ? *req.storage_tier : s3->storage_tier_id);

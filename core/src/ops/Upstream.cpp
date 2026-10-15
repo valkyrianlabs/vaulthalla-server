@@ -493,6 +493,7 @@ BucketRow protect(const Actor& actor, const KeyRef& ref, const std::string& buck
     const auto id = identityOf(key, bucket);
     (void)BucketQuery::protect(id, std::nullopt, actor->id, actor->name(), reason);
     storage::upstream::guard::reload();
+    sync::events::subscriptions::onBucketProtected(id);
     sync::events::subscriptions::invalidateCache();
     auditRecord(actor, "protect", id, key->id, std::nullopt, bmodel::AuditOutcome::Ok, {{"reason", reason}});
     log::Registry::audit()->info("[ops::upstream] {} protected bucket '{}' ({})", actor->name(), bucket, id.toString());
@@ -512,6 +513,7 @@ BucketRow unprotect(const Actor& actor, const KeyRef& ref, const std::string& bu
             (current->protection_reason ? ": " + *current->protection_reason : std::string{}) + ".");
     (void)BucketQuery::unprotect(id);
     storage::upstream::guard::reload();
+    sync::events::subscriptions::onBucketUnprotected(id);
     sync::events::subscriptions::invalidateCache();
     auditRecord(actor, "unprotect", id, key->id, std::nullopt, bmodel::AuditOutcome::Ok,
                 {{"previous_reason", current->protection_reason.value_or("")}});
