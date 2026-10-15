@@ -66,6 +66,12 @@ size_t onHeader(const char* ptr, const size_t size, const size_t nmemb, void* us
     return n;
 }
 
+thread_local const std::atomic<bool>* cancelFlag = nullptr;
+
+int onProgress(void*, curl_off_t, curl_off_t, curl_off_t, curl_off_t) {
+    return cancellationRequested() ? 1 : 0;   // non-zero aborts (CURLE_ABORTED_BY_CALLBACK)
+}
+
 struct CurlDeleter {
     void operator()(CURL* h) const { curl_easy_cleanup(h); }
 };
@@ -81,6 +87,12 @@ std::optional<std::string> Response::header(const std::string_view name) const {
         if (iequals(k, name)) return v;
     return std::nullopt;
 }
+
+ScopedCancellation::ScopedCancellation(const std::atomic<bool>* flag) : previous_(cancelFlag) { cancelFlag = flag; }
+
+ScopedCancellation::~ScopedCancellation() { cancelFlag = previous_; }
+
+bool cancellationRequested() { return cancelFlag && cancelFlag->load(std::memory_order_acquire); }
 
 void setTransportForTesting(std::optional<Transport> transport) {
     std::scoped_lock lock(transportMutex());
@@ -117,7 +129,12 @@ Response perform(const Request& request) {
 
     curl_easy_setopt(h, CURLOPT_URL, request.url.c_str());
     curl_easy_setopt(h, CURLOPT_NOSIGNAL, 1L);
-    curl_easy_setopt(h, CURLOPT_NOPROGRESS, 1L);
+    if (cancelFlag) {
+        curl_easy_setopt(h, CURLOPT_NOPROGRESS, 0L);
+        curl_easy_setopt(h, CURLOPT_XFERINFOFUNCTION, onProgress);
+    } else {
+        curl_easy_setopt(h, CURLOPT_NOPROGRESS, 1L);
+    }
     curl_easy_setopt(h, CURLOPT_FOLLOWLOCATION, 0L);   // a redirect is an answer (S3 region hints), not a hop
     curl_easy_setopt(h, CURLOPT_CONNECTTIMEOUT, 10L);
     curl_easy_setopt(h, CURLOPT_TIMEOUT, static_cast<long>(std::max<long long>(1, request.timeout.count())));
@@ -141,7 +158,10 @@ Response perform(const Request& request) {
     const auto rc = curl_easy_perform(h);
     curl_easy_getinfo(h, CURLINFO_RESPONSE_CODE, &out.status);
     out.truncated = sink.truncated;
-    if (rc != CURLE_OK && !(rc == CURLE_WRITE_ERROR && sink.truncated)) {
+    if (rc == CURLE_ABORTED_BY_CALLBACK) {
+        out.transport_ok = false;
+        out.transport_error = "cancelled";
+    } else if (rc != CURLE_OK && !(rc == CURLE_WRITE_ERROR && sink.truncated)) {
         out.transport_ok = false;
         out.transport_error = errorBuffer[0] ? std::string(errorBuffer) : std::string(curl_easy_strerror(rc));
     }

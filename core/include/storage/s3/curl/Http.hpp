@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <functional>
@@ -41,6 +42,22 @@ struct Response {
 using Transport = std::function<Response(const Request&)>;
 
 [[nodiscard]] Response perform(const Request& request);
+
+// Cooperative cancellation for long requests (SQS long polls): while a ScopedCancellation is alive on a thread, every
+// request that thread performs checks `flag` about every 100 ms and aborts (transport error "cancelled") once it is
+// set. Test transports honour it through cancellationRequested().
+class ScopedCancellation {
+public:
+    explicit ScopedCancellation(const std::atomic<bool>* flag);
+    ~ScopedCancellation();
+    ScopedCancellation(const ScopedCancellation&) = delete;
+    ScopedCancellation& operator=(const ScopedCancellation&) = delete;
+
+private:
+    const std::atomic<bool>* previous_;
+};
+
+[[nodiscard]] bool cancellationRequested();
 
 void setTransportForTesting(std::optional<Transport> transport);
 

@@ -95,6 +95,7 @@ private:
     std::shared_ptr<vault::RetentionService> vaultRetentionService;
     std::shared_ptr<stats::SnapshotService> statsSnapshotService;
     std::shared_ptr<notifications::OperatorEmailService> operatorEmailService;
+    std::shared_ptr<sync::events::Service> upstreamEventService;
 
     mutable std::mutex mutex_;
     std::map<std::string, std::shared_ptr<concurrency::AsyncService>> services_;

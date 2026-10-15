@@ -25,6 +25,12 @@
 #include "fs/model/File.hpp"
 #include "sync/model/Event.hpp"
 #include "sync/model/RemoteManifest.hpp"
+#include "sync/events/Applier.hpp"
+#include "sync/events/Event.hpp"
+#include "sync/events/Ingest.hpp"
+#include "storage/s3/provider/admin/Admin.hpp"
+#include "vault/model/S3Vault.hpp"
+#include "vault/model/APIKey.hpp"
 
 #include <algorithm>
 #include <array>
@@ -272,30 +278,6 @@ namespace {
         return files;
     }
 
-    int hexValue(const char c) {
-        if (c >= '0' && c <= '9') return c - '0';
-        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-        return -1;
-    }
-
-    std::string decodeS3EventKey(const std::string& encoded) {
-        std::string out;
-        out.reserve(encoded.size());
-        for (size_t i = 0; i < encoded.size(); ++i) {
-            if (encoded[i] == '+') out.push_back(' ');
-            else if (encoded[i] == '%' && i + 2 < encoded.size()) {
-                const auto hi = hexValue(encoded[i + 1]);
-                const auto lo = hexValue(encoded[i + 2]);
-                if (hi >= 0 && lo >= 0) {
-                    out.push_back(static_cast<char>((hi << 4) | lo));
-                    i += 2;
-                } else out.push_back(encoded[i]);
-            } else out.push_back(encoded[i]);
-        }
-        return out;
-    }
-
     void collectS3EventRecords(const nlohmann::json& payload, std::vector<nlohmann::json>& records) {
         if (!payload.is_object()) return;
 
@@ -321,16 +303,15 @@ namespace {
 
     struct EventIngestResult {
         size_t records{};
-        size_t upserts{};
-        size_t deletes{};
+        size_t events{};
+        size_t inserted{};
         size_t skipped{};
+        vh::sync::events::Applier::Outcome applied{};
     };
 
-    bool startsWith(const std::string& value, const std::string_view prefix) {
-        return value.size() >= prefix.size() && std::equal(prefix.begin(), prefix.end(), value.begin());
-    }
-
-    EventIngestResult ingestS3EventFile(const uint32_t vaultId, const std::filesystem::path& filePath) {
+    // The manual webhook: S3 event JSON from a file goes through the same durable inbox and applier as queue
+    // deliveries (#96), so duplicates, ordering, Vaulthalla's own writes and the scoped pass behave identically.
+    EventIngestResult ingestS3EventFile(const std::shared_ptr<CloudEngine>& engine, const std::filesystem::path& filePath) {
         std::ifstream input(filePath);
         if (!input) throw std::runtime_error("unable to open S3 event JSON: " + filePath.string());
 
@@ -339,59 +320,32 @@ namespace {
         collectS3EventRecords(payload, records);
 
         EventIngestResult result{.records = records.size()};
+        const auto s3 = std::static_pointer_cast<S3Vault>(engine->vault);
+        const auto key = engine->s3ApiKey();
+        const auto provider = storage::s3::provider::admin::providerIdentity(key->provider);
+        const auto account = storage::s3::provider::admin::staticAccountRef(*key).value_or("unresolved");
 
+        std::vector<vh::sync::events::UpstreamEvent> events;
         for (const auto& record : records) {
-            const auto eventName = record.value("eventName", std::string{});
-            if (!record.contains("s3") || !record.at("s3").contains("object") ||
-                !record.at("s3").at("object").contains("key") ||
-                !record.at("s3").at("object").at("key").is_string()) {
+            const auto decoded = vh::sync::events::decodeAwsMessage(nlohmann::json{{"Records", {record}}}.dump(), "file");
+            if (!decoded.error.empty() || decoded.events.empty()) {
                 ++result.skipped;
                 continue;
             }
-
-            const auto key = decodeS3EventKey(record.at("s3").at("object").at("key").get<std::string>());
-            if (key.empty() || remote_manifest::isVaulthallaManifestKey(key)) {
-                ++result.skipped;
-                continue;
+            for (auto e : decoded.events) {
+                if (e.key.empty() || remote_manifest::isVaulthallaManifestKey(e.key) || e.bucket != s3->bucket) {
+                    ++result.skipped;
+                    continue;
+                }
+                e.provider = provider;
+                e.account_ref = account;
+                events.push_back(std::move(e));
             }
-
-            const auto& object = record.at("s3").at("object");
-            const auto sequencer = object.contains("sequencer") && object.at("sequencer").is_string()
-                ? std::make_optional(object.at("sequencer").get<std::string>())
-                : std::optional<std::string>{};
-            const auto versionId = object.contains("versionId") && object.at("versionId").is_string()
-                ? std::make_optional(object.at("versionId").get<std::string>())
-                : std::optional<std::string>{};
-
-            if (startsWith(eventName, "ObjectRemoved:")) {
-                db::query::sync::RemoteObjectIndex::deleteEventKey(vaultId, key, sequencer);
-                ++result.deletes;
-                continue;
-            }
-
-            if (!startsWith(eventName, "ObjectCreated:")) {
-                ++result.skipped;
-                continue;
-            }
-
-            const auto size = object.contains("size") && object.at("size").is_number_integer() &&
-                              object.at("size").get<int64_t>() >= 0
-                ? static_cast<uint64_t>(object.at("size").get<int64_t>())
-                : uint64_t{0};
-
-            auto file = std::make_shared<vh::fs::model::File>(
-                key,
-                size,
-                parseObjectTime(record.value("eventTime", std::string{})));
-            if (object.contains("eTag") && object.at("eTag").is_string())
-                file->remote_etag = object.at("eTag").get<std::string>();
-            file->remote_version_id = versionId;
-            file->remote_sequencer = sequencer;
-
-            db::query::sync::RemoteObjectIndex::upsertEventFile(vaultId, file);
-            ++result.upserts;
         }
-
+        result.events = events.size();
+        if (!events.empty())
+            result.inserted = vh::sync::events::ingest(events, std::nullopt, engine->vault->id, s3->bucket).inserted;
+        result.applied = vh::sync::events::Applier().applyVault(engine->vault->id);
         return result;
     }
 
@@ -631,21 +585,23 @@ static CommandResult handle_vault_sync_events(const CommandCall& call) {
     const auto policy = cloud->remote_policy();
 
     try {
-        const auto result = ingestS3EventFile(engine->vault->id, eventPath);
+        const auto result = ingestS3EventFile(cloud, eventPath);
         if (result.records == 0) return invalid("vault sync events: no S3 event records found");
+        (void)policy;
 
-        const ScopedS3RequestBudget s3Budget(cloud, policy->s3_request_budget);
-        if (result.upserts > 0 || result.deletes > 0) cloud->publishRemoteIndexManifestWithRetry();
-        const auto metrics = s3Budget.metrics();
-
+        const auto& a = result.applied;
+        std::string pass = a.pass_started ? "started" : a.busy ? "queued (another pass is running)" : a.held
+            ? "held until the baseline listing completes" : "not needed";
         return ok(
             "S3 event notifications ingested for '" + engine->vault->name + "' (ID: " + std::to_string(engine->vault->id) + ")\n"
             "  Records read: " + std::to_string(result.records) + "\n"
-            "  Objects upserted: " + std::to_string(result.upserts) + "\n"
-            "  Objects deleted: " + std::to_string(result.deletes) + "\n"
+            "  Events stored: " + std::to_string(result.inserted) + " new, " +
+                std::to_string(result.events - result.inserted) + " already known\n"
             "  Records skipped: " + std::to_string(result.skipped) + "\n"
-            "  Manifest PUT requests: " + std::to_string(metrics.put_requests) + "\n"
-            "  Manifest HEAD requests: " + std::to_string(metrics.head_requests));
+            "  Applied to the remote index: " + std::to_string(a.applied) + "\n"
+            "  Vaulthalla's own writes: " + std::to_string(a.self) + "\n"
+            "  Superseded or unchanged: " + std::to_string(a.skipped) + "\n"
+            "  Scoped sync pass: " + pass);
     } catch (const std::exception& e) {
         return invalid("vault sync events: " + std::string(e.what()));
     }

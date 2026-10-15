@@ -1,6 +1,7 @@
 #include "storage/Manager.hpp"
 #include "storage/Engine.hpp"
 #include "storage/CloudEngine.hpp"
+#include "sync/events/Subscriptions.hpp"
 #include "config/Registry.hpp"
 #include "vault/model/Vault.hpp"
 #include "vault/model/S3Vault.hpp"
@@ -322,6 +323,8 @@ void Manager::retireVault(const unsigned int vaultId) {
     }
     // The sync controller drops the vault's task once its engine is gone.
     if (const auto& sync = runtime::Deps::get().syncController) sync->refreshEngines();
+    // Event-driven sync (#96): the vault's bucket rules come down (in the background); upstream data stays.
+    sync::events::subscriptions::onVaultRetired(vaultId);
     log::Registry::storage()->info("[StorageManager] Vault {} deleted: engine retired, pending purge", vaultId);
 }
 
@@ -355,6 +358,7 @@ std::shared_ptr<Vault> Manager::reinstateVault(const unsigned int vaultId) {
         engines_[enginePathKey(engine)] = engine;
     }
     if (const auto& sync = runtime::Deps::get().syncController) sync->refreshEngines();
+    sync::events::subscriptions::onVaultReinstated(vaultId);
     log::Registry::storage()->info("[StorageManager] Vault {} restored", vaultId);
     return vault;
 }
