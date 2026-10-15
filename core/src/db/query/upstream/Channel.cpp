@@ -82,11 +82,25 @@ void Channel::recordPoll(const int64_t id, const bool ok, const unsigned int rec
             const std::optional<int64_t> backlogParam =
                 backlog ? std::make_optional(static_cast<int64_t>(*backlog)) : std::nullopt;
             txn.exec(pqxx::prepped{"upstream_channel_record_poll_ok"},
-                     pqxx::params{id, static_cast<int>(received), backlogParam, epochParam(nextPollAt)});
+                     pqxx::params{id, static_cast<int>(received), backlogParam, epochParam(nextPollAt),
+                                  static_cast<double>(kContinuityGap.count())});
         } else {
             txn.exec(pqxx::prepped{"upstream_channel_record_poll_failed"},
                      pqxx::params{id, error.value_or("poll failed"), epochParam(nextPollAt)});
         }
+    });
+}
+
+void Channel::markContinuityBroken(const int64_t id, const std::string& note) {
+    Transactions::exec("upstream::Channel::markContinuityBroken", [&](pqxx::work& txn) {
+        txn.exec(pqxx::prepped{"upstream_channel_mark_continuity_broken"}, pqxx::params{id, note});
+    });
+}
+
+void Channel::setDlqDepth(const int64_t id, const std::optional<uint64_t> depth) {
+    const std::optional<int64_t> param = depth ? std::make_optional(static_cast<int64_t>(*depth)) : std::nullopt;
+    Transactions::exec("upstream::Channel::setDlqDepth", [&](pqxx::work& txn) {
+        txn.exec(pqxx::prepped{"upstream_channel_set_dlq_depth"}, pqxx::params{id, param});
     });
 }
 

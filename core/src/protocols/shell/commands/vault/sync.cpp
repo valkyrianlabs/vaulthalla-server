@@ -25,6 +25,7 @@
 #include "fs/model/File.hpp"
 #include "sync/model/Event.hpp"
 #include "sync/model/RemoteManifest.hpp"
+#include "ops/Upstream.hpp"
 #include "sync/events/Applier.hpp"
 #include "sync/events/Event.hpp"
 #include "sync/events/Ingest.hpp"
@@ -301,53 +302,36 @@ namespace {
         if (payload.contains("s3")) records.push_back(payload);
     }
 
-    struct EventIngestResult {
-        size_t records{};
-        size_t events{};
-        size_t inserted{};
-        size_t skipped{};
-        vh::sync::events::Applier::Outcome applied{};
-    };
-
-    // The manual webhook: S3 event JSON from a file goes through the same durable inbox and applier as queue
-    // deliveries (#96), so duplicates, ordering, Vaulthalla's own writes and the scoped pass behave identically.
-    EventIngestResult ingestS3EventFile(const std::shared_ptr<CloudEngine>& engine, const std::filesystem::path& filePath) {
+    // S3 event notification records from a file (a notification, an SQS dump, an SNS envelope), one JSON text each,
+    // for ops::upstream::ingestEventRecords (the same durable inbox and applier as queue deliveries, #96).
+    std::vector<std::string> readS3EventRecords(const std::filesystem::path& filePath) {
         std::ifstream input(filePath);
         if (!input) throw std::runtime_error("unable to open S3 event JSON: " + filePath.string());
-
         const auto payload = nlohmann::json::parse(input);
         std::vector<nlohmann::json> records;
         collectS3EventRecords(payload, records);
-
-        EventIngestResult result{.records = records.size()};
-        const auto s3 = std::static_pointer_cast<S3Vault>(engine->vault);
-        const auto key = engine->s3ApiKey();
-        const auto provider = storage::s3::provider::admin::providerIdentity(key->provider);
-        const auto account = storage::s3::provider::admin::staticAccountRef(*key).value_or("unresolved");
-
-        std::vector<vh::sync::events::UpstreamEvent> events;
-        for (const auto& record : records) {
-            const auto decoded = vh::sync::events::decodeAwsMessage(nlohmann::json{{"Records", {record}}}.dump(), "file");
-            if (!decoded.error.empty() || decoded.events.empty()) {
-                ++result.skipped;
-                continue;
-            }
-            for (auto e : decoded.events) {
-                if (e.key.empty() || remote_manifest::isVaulthallaManifestKey(e.key) || e.bucket != s3->bucket) {
-                    ++result.skipped;
-                    continue;
-                }
-                e.provider = provider;
-                e.account_ref = account;
-                events.push_back(std::move(e));
-            }
-        }
-        result.events = events.size();
-        if (!events.empty())
-            result.inserted = vh::sync::events::ingest(events, std::nullopt, engine->vault->id, s3->bucket).inserted;
-        result.applied = vh::sync::events::Applier().applyVault(engine->vault->id);
-        return result;
+        std::vector<std::string> out;
+        out.reserve(records.size());
+        for (const auto& r : records) out.push_back(r.dump());
+        return out;
     }
+
+    // The vault's pass lease for a command that rewrites the remote index (a reconcile LIST, an inventory import), so
+    // it never interleaves with an event batch or a sync pass (#96).
+    struct IndexLease {
+        unsigned int vaultId;
+        bool held = false;
+        explicit IndexLease(const unsigned int id) : vaultId(id) {
+            const auto& controller = runtime::Deps::get().syncController;
+            held = !controller || controller->tryAcquirePass(vaultId);
+        }
+        ~IndexLease() {
+            if (!held) return;
+            if (const auto& controller = runtime::Deps::get().syncController) controller->releasePass(vaultId);
+        }
+        IndexLease(const IndexLease&) = delete;
+        IndexLease& operator=(const IndexLease&) = delete;
+    };
 
     std::string remoteIndexSummaryString(
         const db::query::sync::RemoteIndexSummary& summary,
@@ -467,15 +451,24 @@ static CommandResult handle_vault_sync_reconcile(const CommandCall& call) {
                     : std::string("unknown; no prior remote index was available")));
     }
 
+    const IndexLease lease(engine->vault->id);
+    if (!lease.held)
+        return invalid("vault sync reconcile: a sync pass or event batch of this vault is running; try again shortly");
+
     try {
         const ScopedS3RequestBudget s3Budget(cloud, policy->s3_request_budget);
 
+        const auto listStartedAt = std::time(nullptr);
         const auto remoteMap = cloud->getGroupedFilesFromS3();
         std::vector<std::shared_ptr<vh::fs::model::File>> files;
         files.reserve(remoteMap.size());
         for (const auto& [_, file] : remoteMap) files.push_back(file);
         db::query::sync::RemoteObjectIndex::replaceFromListObjects(engine->vault->id, files);
         cloud->publishRemoteIndexManifestWithRetry();
+        // A full listing: the event subscription's new baseline (older events are superseded by it).
+        try {
+            vh::sync::events::Applier::onBaselineListed(engine->vault->id, listStartedAt);
+        } catch (const std::exception&) {}
 
         const auto metrics = s3Budget.metrics();
 
@@ -527,6 +520,10 @@ static CommandResult handle_vault_sync_inventory(const CommandCall& call) {
 
     const auto cloud = std::static_pointer_cast<CloudEngine>(engine);
     const auto policy = cloud->remote_policy();
+
+    const IndexLease lease(engine->vault->id);
+    if (!lease.held)
+        return invalid("vault sync inventory: a sync pass or event batch of this vault is running; try again shortly");
 
     try {
         size_t skippedRows = 0;
@@ -581,27 +578,25 @@ static CommandResult handle_vault_sync_events(const CommandCall& call) {
     if (!std::filesystem::exists(eventPath))
         return invalid("vault sync events: file does not exist: " + eventPath.string());
 
-    const auto cloud = std::static_pointer_cast<CloudEngine>(engine);
-    const auto policy = cloud->remote_policy();
-
     try {
-        const auto result = ingestS3EventFile(cloud, eventPath);
-        if (result.records == 0) return invalid("vault sync events: no S3 event records found");
-        (void)policy;
+        const auto records = readS3EventRecords(eventPath);
+        if (records.empty()) return invalid("vault sync events: no S3 event records found");
+        const auto r = ops::upstream::ingestEventRecords(call.user, engine->vault->id, records);
 
-        const auto& a = result.applied;
-        std::string pass = a.pass_started ? "started" : a.busy ? "queued (another pass is running)" : a.held
+        std::string pass = r.pass_started ? "started" : r.busy ? "queued (another pass is running)" : r.held
             ? "held until the baseline listing completes" : "not needed";
         return ok(
             "S3 event notifications ingested for '" + engine->vault->name + "' (ID: " + std::to_string(engine->vault->id) + ")\n"
-            "  Records read: " + std::to_string(result.records) + "\n"
-            "  Events stored: " + std::to_string(result.inserted) + " new, " +
-                std::to_string(result.events - result.inserted) + " already known\n"
-            "  Records skipped: " + std::to_string(result.skipped) + "\n"
-            "  Applied to the remote index: " + std::to_string(a.applied) + "\n"
-            "  Vaulthalla's own writes: " + std::to_string(a.self) + "\n"
-            "  Superseded or unchanged: " + std::to_string(a.skipped) + "\n"
+            "  Records read: " + std::to_string(r.records) + "\n"
+            "  Events stored: " + std::to_string(r.inserted) + " new, " +
+                std::to_string(r.events - r.inserted) + " already known\n"
+            "  Records skipped: " + std::to_string(r.skipped) + "\n"
+            "  Applied to the remote index: " + std::to_string(r.applied) + "\n"
+            "  Vaulthalla's own writes: " + std::to_string(r.self) + "\n"
+            "  Superseded or unchanged: " + std::to_string(r.superseded) + "\n"
             "  Scoped sync pass: " + pass);
+    } catch (const ops::Error& e) {
+        return invalid("vault sync events: " + std::string(e.what()));
     } catch (const std::exception& e) {
         return invalid("vault sync events: " + std::string(e.what()));
     }

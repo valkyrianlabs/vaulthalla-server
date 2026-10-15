@@ -40,6 +40,7 @@ struct InboxEvent {
     std::optional<std::string> etag;
     std::optional<uint64_t> size_bytes;
     std::time_t event_time{};
+    std::optional<int64_t> event_time_ms;   // milliseconds (ordering within a second); null on rows from before FX-3
     std::time_t received_at{};
     InboxState state{InboxState::Pending};
     InboxOrigin origin{InboxOrigin::Unknown};

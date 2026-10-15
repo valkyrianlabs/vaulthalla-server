@@ -6,10 +6,12 @@
 #include "storage/s3/curl/Http.hpp"
 #include "storage/s3/provider/admin/Admin.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <ctime>
 #include <deque>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -36,6 +38,10 @@ struct FakeProviderState {
     unsigned int ensureCalls = 0, subscribeCalls = 0, removeChannelCalls = 0;
     std::vector<std::string> unsubscribed;        // rule ids handed to unsubscribe
     std::vector<padmin::NotificationRule> foreignRules;
+    std::map<std::string, std::vector<std::string>> ownedRules;   // bucket → our rule ids (the bucket's document)
+    std::optional<uint64_t> dlqDepth;              // backlog() of the dead-letter queue ("dlq")
+    std::atomic<bool> blockUnsubscribe{false};     // unsubscribe blocks until the HTTP layer reports cancellation
+    std::atomic<bool> unsubscribeEntered{false};
     std::atomic<bool> blockPolls{false};          // poll blocks until the HTTP layer reports cancellation
     std::atomic<bool> pollEntered{false};
     unsigned int nextReceipt = 0;
@@ -107,15 +113,31 @@ public:
             --s_->subscribeFailures;
             throw padmin::ProviderError("Configurations overlap with another application's rule", "InvalidArgument", 400);
         }
+        auto& owned = s_->ownedRules[spec.bucket];
+        if (std::find(owned.begin(), owned.end(), spec.rule_id) == owned.end()) owned.push_back(spec.rule_id);
         return {spec.rule_id};
     }
-    void unsubscribe(const padmin::ChannelRef&, const padmin::SubscriptionSpec&, const std::vector<std::string>& ruleIds) override {
+    void unsubscribe(const padmin::ChannelRef&, const padmin::SubscriptionSpec& spec,
+                     const std::vector<std::string>& ruleIds) override {
+        s_->unsubscribeEntered = true;
+        while (s_->blockUnsubscribe.load()) {
+            if (storage::s3::curl::http::cancellationRequested()) throw padmin::ProviderError("cancelled");
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
         std::scoped_lock lock(s_->mutex);
         s_->unsubscribed.insert(s_->unsubscribed.end(), ruleIds.begin(), ruleIds.end());
+        auto& owned = s_->ownedRules[spec.bucket];
+        std::erase_if(owned, [&](const std::string& id) {
+            return std::find(ruleIds.begin(), ruleIds.end(), id) != ruleIds.end();
+        });
     }
-    std::vector<padmin::NotificationRule> rules(const std::string&) override {
+    std::vector<padmin::NotificationRule> rules(const std::string& bucket) override {
         std::scoped_lock lock(s_->mutex);
-        return s_->foreignRules;
+        auto out = s_->foreignRules;
+        for (const auto& id : s_->ownedRules[bucket])
+            out.push_back({.id = id, .destination = "queue", .destination_name = {}, .events = {}, .prefix = {},
+                           .suffix = {}, .foreign = false, .raw = {}});
+        return out;
     }
     void removeChannel(const padmin::ChannelRef&) override {
         std::scoped_lock lock(s_->mutex);
@@ -147,7 +169,11 @@ public:
         }
     }
     void retry(const padmin::ChannelRef&, const std::vector<std::string>&, std::chrono::seconds) override {}
-    std::optional<uint64_t> backlog(const padmin::ChannelRef&) override { return s_->queue.size(); }
+    std::optional<uint64_t> backlog(const padmin::ChannelRef& ref) override {
+        std::scoped_lock lock(s_->mutex);
+        if (ref.queue_ref == "dlq") return s_->dlqDepth;
+        return s_->queue.size();
+    }
     padmin::Metrics metrics() const override { return {}; }
 
 private:

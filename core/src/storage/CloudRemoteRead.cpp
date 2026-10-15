@@ -2,6 +2,7 @@
 // protocol. See CloudEngine::hydrate and storage/RemoteRangedReader.hpp for the contracts.
 
 #include "storage/CloudEngine.hpp"
+#include "sync/events/Subscriptions.hpp"
 #include "platform/StagedFile.hpp"
 
 #include "crypto/util/Gcm.hpp"
@@ -291,11 +292,12 @@ std::shared_ptr<vh::fs::model::File> CloudEngine::hydrateNow(const std::shared_p
         std::array<uint8_t, crypto::util::AES_IV_SIZE> iv{};
         std::optional<crypto::util::GcmStreamEncryptor> sealer;
         const bool rowEncrypted = !f->encryption_iv.empty();
-        if (!head->encrypted && rowEncrypted)
+        if (!head->encrypted && rowEncrypted && !vh::sync::events::subscriptions::importsForeignObjects(vault->id))
             // A bucket that now claims plaintext for a file whose row records its encryption (an IV) is a downgrade,
-            // not a format we accept. A row without an IV was indexed from an object that was plaintext to begin with
-            // (an adopted bucket's or a waivered bucket's existing data, another tool's upload): it is sealed below on
-            // the way in, whatever the vault's upstream encryption setting says about objects Vaulthalla writes.
+            // not a format we accept, unless the vault's event subscription explicitly imports foreign objects (the
+            // same rule as CloudEngine's download path). A row without an IV was indexed from an object that was
+            // plaintext to begin with (an adopted bucket's or a waivered bucket's existing data, another tool's
+            // upload): it is sealed below on the way in, whatever the vault's upstream encryption setting says.
             throw IntegrityError("Remote object is unencrypted but the file is stored encrypted: " + f->path.string());
         if (head->encrypted && rowEncrypted && !head->iv_b64.empty() &&
             (head->iv_b64 != f->encryption_iv || head->key_version != f->encrypted_with_key_version))

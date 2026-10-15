@@ -227,6 +227,18 @@ EventStatus repairEvents(const Actor& actor, unsigned int vaultId);
 // One vault, or every S3 vault the actor may view (view).
 [[nodiscard]] std::vector<EventStatus> eventStatus(const Actor& actor, std::optional<unsigned int> vaultId = std::nullopt);
 
+// The manual webhook (`vh vault sync events --file`): S3 event notification records (each one JSON object, as in a
+// notification's `Records` array) go through the same durable inbox and applier as queue deliveries. A removal can
+// delete local files, so this needs what configuring events needs: admin.upstream.configure, vault sync.config.edit
+// and Consume on the vault's key.
+struct ManualIngest {
+    size_t records = 0, events = 0, inserted = 0, skipped = 0;
+    size_t applied = 0, self = 0, superseded = 0;
+    bool pass_started = false, busy = false, held = false;
+};
+[[nodiscard]] ManualIngest ingestEventRecords(const Actor& actor, unsigned int vaultId,
+                                              const std::vector<std::string>& recordsJson);
+
 namespace detail {
 // The events step of finishProvision (ops/UpstreamEvents.cpp): subscribe without re-authorizing (the vault creation
 // already did). Returns a warning instead of throwing.

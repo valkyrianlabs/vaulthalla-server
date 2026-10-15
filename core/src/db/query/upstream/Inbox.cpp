@@ -35,8 +35,10 @@ uint64_t Inbox::insertMany(const std::vector<InboxModel>& events) {
                 pqxx::prepped{"upstream_inbox_insert"},
                 pqxx::params{e.channel_id, e.subscription_id, e.vault_id, e.provider, e.account_ref, e.bucket,
                              e.object_key, imodel::to_string(e.kind), e.event_name, e.dedupe_key, e.message_id,
-                             e.sequencer, e.version_id, e.etag, size, static_cast<double>(e.event_time),
-                             imodel::to_string(e.state), imodel::to_string(e.origin), e.note});
+                             e.sequencer, e.version_id, e.etag, size,
+                             e.event_time_ms ? static_cast<double>(*e.event_time_ms) / 1000.0
+                                             : static_cast<double>(e.event_time),
+                             imodel::to_string(e.state), imodel::to_string(e.origin), e.note, e.event_time_ms});
             if (!res.empty()) ++inserted;
         }
         return inserted;
@@ -120,11 +122,28 @@ InboxCounts Inbox::counts(const uint32_t vaultId) {
 }
 
 uint64_t Inbox::routeUnassigned(const std::string& provider, const std::string& accountRef, const std::string& bucket,
-                                const uint32_t vaultId, const int64_t subscriptionId) {
+                                const uint32_t vaultId, const int64_t subscriptionId, const std::string& prefix,
+                                const std::time_t since) {
     return Transactions::exec("upstream::Inbox::routeUnassigned", [&](pqxx::work& txn) {
         const auto res = txn.exec(pqxx::prepped{"upstream_inbox_route_unassigned"},
-                                  pqxx::params{provider, accountRef, bucket, vaultId, subscriptionId});
+                                  pqxx::params{provider, accountRef, bucket, vaultId, subscriptionId, prefix,
+                                               static_cast<double>(since)});
         return static_cast<uint64_t>(res.affected_rows());
+    });
+}
+
+bool Inbox::settleOwnWrite(const int64_t rowId, const uint32_t vaultId, const std::string& key,
+                           const imodel::WriteOp op, const std::optional<uint64_t> size, const std::time_t eventTime,
+                           const std::optional<std::string>& etag, const std::string& note) {
+    const std::optional<int64_t> sizeParam = size ? std::make_optional(static_cast<int64_t>(*size)) : std::nullopt;
+    return Transactions::exec("upstream::Inbox::settleOwnWrite", [&](pqxx::work& txn) {
+        const auto consumed = txn.exec(pqxx::prepped{"upstream_write_intent_consume"},
+                                       pqxx::params{vaultId, key, imodel::to_string(op), sizeParam,
+                                                    static_cast<double>(eventTime), etag});
+        if (consumed.empty()) return false;
+        txn.exec(pqxx::prepped{"upstream_inbox_mark_skipped"},
+                 pqxx::params{inboxIdArray({rowId}), note, imodel::to_string(imodel::InboxOrigin::Self)});
+        return true;
     });
 }
 

@@ -16,6 +16,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace vh::storage {
@@ -143,6 +144,9 @@ namespace vh::storage {
 
         // One metered HEAD; nullopt when the object does not exist.
         [[nodiscard]] std::optional<RemoteObjectHead> headRemoteObject(const std::filesystem::path &rel_path) const;
+        // Like headRemoteObject, but nullopt only for a confirmed absence (404): a refused or failed HEAD throws, so
+        // an outage can never read as a deletion.
+        [[nodiscard]] std::optional<RemoteObjectHead> headRemoteObjectStrict(const std::filesystem::path &rel_path) const;
 
         // Sync conflict resolution and previews (#187). One metered GET of the object (If-Match `ifMatch` when
         // given: ConditionalRequestFailed when it changed), aborted past `maxBytes`, decrypted (authenticated) with
@@ -204,7 +208,23 @@ namespace vh::storage {
         // Event-driven sync (#96): before Vaulthalla's own PUT/DELETE of an object, while the vault has an active
         // event subscription, record a write intent so the notification it causes is recognised as ours. Best
         // effort: a failure only costs a redundant transfer later.
-        void noteOwnWrite(const std::filesystem::path &key, bool isDelete, std::optional<uint64_t> objectSize) const;
+        // Vaulthalla's own PUT/DELETE of `key`, recorded only while the vault has an active event subscription so the
+        // notification it causes is recognised as ours. done() after the request succeeded; destroyed without it
+        // (the request threw), the intent is removed so it can never claim someone else's event.
+        class OwnWrite {
+        public:
+            OwnWrite() = default;
+            explicit OwnWrite(std::optional<int64_t> id) : id_(id) {}
+            OwnWrite(OwnWrite&& other) noexcept : id_(std::exchange(other.id_, std::nullopt)) {}
+            OwnWrite& operator=(OwnWrite&&) = delete;
+            OwnWrite(const OwnWrite&) = delete;
+            ~OwnWrite();
+            void done();
+        private:
+            std::optional<int64_t> id_;
+        };
+        [[nodiscard]] OwnWrite noteOwnWrite(const std::filesystem::path &key, bool isDelete,
+                                            std::optional<uint64_t> objectSize) const;
         [[nodiscard]] s3::RequestOptions requestOptionsFor(s3::provider::RequestOperation operation) const;
         [[nodiscard]] std::optional<std::string> configuredStorageClass() const;
 

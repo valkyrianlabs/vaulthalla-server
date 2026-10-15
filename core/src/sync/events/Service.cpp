@@ -24,6 +24,7 @@ namespace svcmodel = storage::upstream::model;
 namespace svcadmin = storage::s3::provider::admin;
 
 constexpr auto kMaintenanceInterval = std::chrono::seconds(30);
+constexpr auto kDlqCheckInterval = std::chrono::minutes(5);
 constexpr auto kVisibility = std::chrono::seconds(120);
 constexpr auto kCycleWait = std::chrono::seconds(1);
 
@@ -76,7 +77,9 @@ std::chrono::seconds channelBackoff(const unsigned int failures) {
     return std::min(std::chrono::seconds(300), std::chrono::seconds(5) * (1 << exp));
 }
 
-Service::Service() : AsyncService("UpstreamEventService") {}
+Service::Service()
+    : AsyncService("UpstreamEventService"),
+      applier_(Applier::Hooks{.shouldStop = [this] { return stopRequested(); }}) {}
 
 Service::~Service() { stopPollers(); }
 
@@ -121,9 +124,21 @@ PollOutcome Service::pollOnce(const svcmodel::Channel& channel, svcadmin::Events
 
     // The durability point: nothing is acknowledged unless it is stored.
     if (!events.empty()) {
-        const auto ingested = ingest(events, channel.id);
-        out.inserted = ingested.inserted;
-        out.unrouted = ingested.unrouted;
+        try {
+            const auto ingested = ingest(events, channel.id);
+            out.inserted = ingested.inserted;
+            out.unrouted = ingested.unrouted;
+        } catch (...) {
+            // Each failed attempt burns one delivery; a message on its last one goes to the dead-letter queue next,
+            // and the stream can no longer be trusted to be complete.
+            const auto maxDeliveries = svcadmin::ChannelSpec{}.max_receive_count;
+            if (std::ranges::any_of(received.messages, [&](const auto& m) { return m.attempts + 1 >= maxDeliveries; }))
+                try {
+                    db::query::upstream::Channel::markContinuityBroken(
+                        channel.id, "events could not be stored before their last delivery");
+                } catch (const std::exception&) {}
+            throw;
+        }
     }
     if (!ackable.empty()) {
         client.ack(ref, ackable);
@@ -239,25 +254,84 @@ void Service::superviseChannels() {
             pollers_.emplace(id, std::move(poller));
         }
     }
-    for (const auto& p : finished)
-        if (p->thread.joinable()) p->thread.join();
+    {
+        std::scoped_lock lock(pollersMutex_);
+        for (auto& p : finished) retired_.push_back(std::move(p));
+    }
+    reapRetired();
+}
+
+void Service::reapRetired() {
+    std::vector<std::shared_ptr<Poller>> done;
+    {
+        std::scoped_lock lock(pollersMutex_);
+        for (auto it = retired_.begin(); it != retired_.end();) {
+            if ((*it)->finished.load(std::memory_order_acquire)) {
+                done.push_back(std::move(*it));
+                it = retired_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+    for (const auto& p : done)
+        if (p->thread.joinable()) p->thread.join();   // already finished: returns at once
 }
 
 void Service::stopPollers() {
     std::map<int64_t, std::shared_ptr<Poller>> pollers;
+    std::vector<std::shared_ptr<Poller>> retired;
     {
         std::scoped_lock lock(pollersMutex_);
         for (auto& [_, p] : pollers_) p->stop.store(true, std::memory_order_release);
         pollers.swap(pollers_);
+        retired.swap(retired_);
     }
     for (auto& [_, p] : pollers)
+        if (p->thread.joinable()) p->thread.join();
+    for (auto& p : retired)
         if (p->thread.joinable()) p->thread.join();
 }
 
 void Service::maintenance() {
     storage::upstream::guard::reload();
     subscriptions::invalidateCache();
+    if (stopRequested()) return;
     subscriptions::retryTeardowns();
+    if (stopRequested()) return;
+    const auto now = std::chrono::steady_clock::now();
+    if (now - lastDlqCheck_ >= kDlqCheckInterval) {
+        lastDlqCheck_ = now;
+        checkDeadLetters();
+    }
+    (void)Applier::checkContinuity();
+}
+
+void Service::checkDeadLetters() {
+    for (const auto& channel : db::query::upstream::Channel::listPollable()) {
+        if (stopRequested()) return;
+        if (!channel.dlq_ref || !channel.api_key_id) continue;
+        try {
+            const auto key = runtime::Deps::get().apiKeyManager->getAPIKey(*channel.api_key_id);
+            const auto client = svcadmin::eventsFor(key);
+            if (!client) continue;
+            auto dlq = channelRef(channel);
+            dlq.queue_ref = *channel.dlq_ref;
+            dlq.queue_arn = channel.dlq_arn.value_or("");
+            const auto depth = client->backlog(dlq);   // nullopt: the provider can't tell (R2)
+            if (!depth) continue;
+            if (*depth > channel.dlq_depth.value_or(0))
+                db::query::upstream::Channel::markContinuityBroken(
+                    channel.id, std::to_string(*depth) + " message(s) in the dead-letter queue");
+            db::query::upstream::Channel::setDlqDepth(channel.id, depth);
+            if (*depth > 0)
+                log::Registry::sync()->warn("[UpstreamEvents] {} queue '{}': {} message(s) in the dead-letter queue",
+                                            channel.provider, channel.queue_name, *depth);
+        } catch (const std::exception& e) {
+            log::Registry::sync()->debug("[UpstreamEvents] {} queue '{}': dead-letter depth unavailable: {}",
+                                         channel.provider, channel.queue_name, e.what());
+        }
+    }
 }
 
 void Service::cycle() {
@@ -285,7 +359,7 @@ void Service::cycle() {
         return;
     }
     for (const auto vaultId : vaults) {
-        if (shouldStop()) return;
+        if (stopRequested()) return;
         try {
             (void)applier_.applyVault(vaultId);
         } catch (const std::exception& e) {
@@ -295,6 +369,8 @@ void Service::cycle() {
 }
 
 void Service::runLoop() {
+    // Everything this thread sends (teardown retries, the applier's HEADs and manifest publish) aborts on stop.
+    const storage::s3::curl::http::ScopedCancellation cancellation(&interruptFlag_);
     installCloudHooks();
     log::Registry::sync()->info("[UpstreamEvents] Upstream event service started");
     while (!shouldStop()) {

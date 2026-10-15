@@ -94,6 +94,10 @@ ScopedCancellation::~ScopedCancellation() { cancelFlag = previous_; }
 
 bool cancellationRequested() { return cancelFlag && cancelFlag->load(std::memory_order_acquire); }
 
+bool cancellationActive() { return cancelFlag != nullptr; }
+
+int cancellationProgressHook(void*, long long, long long, long long, long long) { return cancellationRequested() ? 1 : 0; }
+
 void setTransportForTesting(std::optional<Transport> transport) {
     std::scoped_lock lock(transportMutex());
     testTransport() = std::move(transport);

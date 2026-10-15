@@ -1859,7 +1859,10 @@ TEST(S3CostSafetyTest, RemoteEncryptedPayloadUsesCaseInsensitiveHeadMetadata) {
     EXPECT_EQ(1, fake->head_object_calls);
 }
 
-TEST(S3CostSafetyTest, ExplicitRemotePlaintextMetadataWinsOverLocalFileIv) {
+// vh-encrypted=false is honoured over a file the vault holds sealed only when the vault doesn't encrypt upstream; in an
+// encrypting vault it would let a relabelled object replace sealed content (#96 review), so the local IV is used and
+// the plaintext fails authentication.
+TEST(S3CostSafetyTest, ExplicitRemotePlaintextMetadataIsHonouredOnlyWhenTheVaultDoesNotEncryptUpstream) {
     if (!hasDbEnv()) GTEST_SKIP() << "Skipping db-backed plaintext remote provenance test due to missing environment variables.";
 
     auto fake = std::make_shared<CountingS3Controller>();
@@ -1889,13 +1892,25 @@ TEST(S3CostSafetyTest, ExplicitRemotePlaintextMetadataWinsOverLocalFileIv) {
     };
 
     const std::vector<uint8_t> plaintext{'p', 'l', 'a', 'i', 'n'};
+    const auto s3 = std::static_pointer_cast<vh::vault::model::S3Vault>(engine->vault);
+    const bool encrypting = s3->encrypt_upstream;
+
+    s3->encrypt_upstream = false;
     const auto decrypted = engine->decryptRemotePayload(
         path,
         plaintext,
         local,
         vh::storage::CloudEngine::RemoteEncryptionResolveOptions{false, true});
+    EXPECT_EQ(plaintext, decrypted) << "a vault that doesn't encrypt upstream takes the label";
 
-    EXPECT_EQ(plaintext, decrypted);
+    s3->encrypt_upstream = true;
+    EXPECT_ANY_THROW((void)engine->decryptRemotePayload(
+        path,
+        plaintext,
+        local,
+        vh::storage::CloudEngine::RemoteEncryptionResolveOptions{false, true}))
+        << "an encrypting vault treats the relabelled object over its sealed file as tampering";
+    s3->encrypt_upstream = encrypting;
 }
 
 TEST(S3CostSafetyTest, ShareStyleRemotePayloadDoesNotTrustLocalFileIv) {

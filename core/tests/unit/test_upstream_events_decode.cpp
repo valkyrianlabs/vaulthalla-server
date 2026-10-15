@@ -130,6 +130,16 @@ TEST(UpstreamEventDecode, OrderingUsesSequencerThenTime) {
     EXPECT_FALSE(newerOrEqual(c, d));
 }
 
+TEST(UpstreamEventDecode, SequencersCompareAsAwsDocumentsLeftPadded) {
+    // AWS (S3 event message structure, `sequencer`): left-pad the shorter value with zeros, then compare.
+    // 00A1 vs 009FFF -> 0000A1 vs 009FFF: 009FFF is the later event.
+    UpstreamEvent a, b;
+    a.sequencer = "00A1";
+    b.sequencer = "009FFF";
+    EXPECT_TRUE(newerOrEqual(b, a));
+    EXPECT_FALSE(newerOrEqual(a, b));
+}
+
 TEST(UpstreamEventDecode, EventTimeParsesMilliseconds) {
     EXPECT_EQ(vh::sync::events::parseEventTimeMs("1970-01-01T00:00:01.5Z").value_or(-1), 1500);
     EXPECT_EQ(vh::sync::events::parseEventTimeMs("1970-01-01T00:00:02Z").value_or(-1), 2000);

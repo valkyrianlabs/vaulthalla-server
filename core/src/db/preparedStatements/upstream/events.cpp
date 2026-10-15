@@ -52,8 +52,27 @@ void vh::db::Connection::initPreparedUpstreamEvents() const {
             backlog_estimate = COALESCE($3::bigint, backlog_estimate),
             next_poll_at = CASE WHEN $4::double precision IS NULL THEN NULL ELSE to_timestamp($4::double precision) END,
             state = CASE WHEN state = 'degraded' THEN 'active' ELSE state END,
+            -- A delivery gap longer than what the queue keeps: messages may have expired unread.
+            continuity_broken_at = CASE
+                WHEN last_success_at IS NOT NULL
+                     AND last_success_at < CURRENT_TIMESTAMP - make_interval(secs => $5::double precision)
+                THEN CURRENT_TIMESTAMP ELSE continuity_broken_at END,
+            continuity_note = CASE
+                WHEN last_success_at IS NOT NULL
+                     AND last_success_at < CURRENT_TIMESTAMP - make_interval(secs => $5::double precision)
+                THEN 'no successful poll for longer than the queue retention' ELSE continuity_note END,
             updated_at = CURRENT_TIMESTAMP
         WHERE id = $1
+    )SQL");
+
+    conn_->prepare("upstream_channel_mark_continuity_broken", R"SQL(
+        UPDATE upstream_event_channel SET continuity_broken_at = CURRENT_TIMESTAMP, continuity_note = $2,
+                                          updated_at = CURRENT_TIMESTAMP
+        WHERE id = $1
+    )SQL");
+
+    conn_->prepare("upstream_channel_set_dlq_depth", R"SQL(
+        UPDATE upstream_event_channel SET dlq_depth = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1
     )SQL");
 
     conn_->prepare("upstream_channel_record_poll_failed", R"SQL(
@@ -155,19 +174,21 @@ void vh::db::Connection::initPreparedUpstreamEvents() const {
     conn_->prepare("upstream_inbox_insert", R"SQL(
         INSERT INTO upstream_event_inbox (channel_id, subscription_id, vault_id, provider, account_ref, bucket,
                                           object_key, kind, event_name, dedupe_key, message_id, sequencer, version_id,
-                                          etag, size_bytes, event_time, state, origin, note)
+                                          etag, size_bytes, event_time, state, origin, note, event_time_ms, finished_at)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, to_timestamp($16::double precision),
-                $17, $18, $19)
+                $17, $18, $19, $20, CASE WHEN $17 IN ('skipped', 'done') THEN CURRENT_TIMESTAMP END)
         ON CONFLICT (provider, account_ref, bucket, dedupe_key) DO NOTHING
         RETURNING id
     )SQL");
 
-    // Hex sequencers compare numerically once left-padded (S3 sequencers vary in length).
+    // Hex sequencers compare numerically once left-padded: AWS documents "left-pad the shorter value with zeros, then
+    // compare lexicographically" (S3 event message structure, `sequencer`).
     conn_->prepare("upstream_inbox_claim_for_vault", R"SQL(
         SELECT * FROM upstream_event_inbox
         WHERE vault_id = $1 AND state = 'pending'
           AND (next_attempt_at IS NULL OR next_attempt_at <= CURRENT_TIMESTAMP)
-        ORDER BY object_key, lpad(lower(ltrim(COALESCE(sequencer, ''), '0')), 64, '0'), event_time, id
+        ORDER BY object_key, lpad(lower(ltrim(COALESCE(sequencer, ''), '0')), 64, '0'),
+                 COALESCE(event_time_ms, (EXTRACT(EPOCH FROM event_time) * 1000)::bigint), id
         LIMIT $2
         FOR UPDATE SKIP LOCKED
     )SQL");
@@ -190,19 +211,19 @@ void vh::db::Connection::initPreparedUpstreamEvents() const {
     conn_->prepare("upstream_inbox_mark_applied", R"SQL(
         UPDATE upstream_event_inbox SET state = 'applied', origin = COALESCE($2, origin), next_attempt_at = NULL,
                                         last_error = NULL
-        WHERE id = ANY($1::bigint[])
+        WHERE id = ANY($1::bigint[]) AND state = 'pending'
     )SQL");
 
     conn_->prepare("upstream_inbox_mark_done", R"SQL(
         UPDATE upstream_event_inbox SET state = 'done', finished_at = CURRENT_TIMESTAMP, next_attempt_at = NULL,
                                         last_error = NULL
-        WHERE id = ANY($1::bigint[])
+        WHERE id = ANY($1::bigint[]) AND state = 'applied'
     )SQL");
 
     conn_->prepare("upstream_inbox_mark_skipped", R"SQL(
         UPDATE upstream_event_inbox SET state = 'skipped', note = $2, origin = $3, finished_at = CURRENT_TIMESTAMP,
                                         next_attempt_at = NULL
-        WHERE id = ANY($1::bigint[])
+        WHERE id = ANY($1::bigint[]) AND state IN ('pending', 'applied')
     )SQL");
 
     conn_->prepare("upstream_inbox_mark_failed", R"SQL(
@@ -210,8 +231,9 @@ void vh::db::Connection::initPreparedUpstreamEvents() const {
             attempts = attempts + 1,
             last_error = $2,
             state = CASE WHEN $3::double precision IS NULL THEN 'failed' ELSE state END,
-            next_attempt_at = CASE WHEN $3::double precision IS NULL THEN NULL ELSE to_timestamp($3::double precision) END
-        WHERE id = $1
+            next_attempt_at = CASE WHEN $3::double precision IS NULL THEN NULL ELSE to_timestamp($3::double precision) END,
+            finished_at = CASE WHEN $3::double precision IS NULL THEN CURRENT_TIMESTAMP ELSE finished_at END
+        WHERE id = $1 AND state IN ('pending', 'applied')
     )SQL");
 
     conn_->prepare("upstream_inbox_requeue_applied", R"SQL(
@@ -234,9 +256,13 @@ void vh::db::Connection::initPreparedUpstreamEvents() const {
         WHERE vault_id = $1
     )SQL");
 
+    // Events that arrived (and were stored as unrouted) while the subscription was being set up: only keys under its
+    // prefix and only since just before it was created become work again; older ones stay skipped.
     conn_->prepare("upstream_inbox_route_unassigned", R"SQL(
-        UPDATE upstream_event_inbox SET vault_id = $4, subscription_id = $5
-        WHERE vault_id IS NULL AND provider = $1 AND account_ref = $2 AND bucket = $3
+        UPDATE upstream_event_inbox SET vault_id = $4, subscription_id = $5, state = 'pending', note = NULL,
+                                        finished_at = NULL, next_attempt_at = NULL
+        WHERE vault_id IS NULL AND state = 'skipped' AND provider = $1 AND account_ref = $2 AND bucket = $3
+          AND starts_with(object_key, $6) AND received_at >= to_timestamp($7::double precision)
     )SQL");
 
     conn_->prepare("upstream_inbox_sweep_finished", R"SQL(
@@ -248,7 +274,8 @@ void vh::db::Connection::initPreparedUpstreamEvents() const {
     conn_->prepare("upstream_inbox_latest_for_key", R"SQL(
         SELECT * FROM upstream_event_inbox
         WHERE vault_id = $1 AND object_key = $2
-        ORDER BY lpad(lower(ltrim(COALESCE(sequencer, ''), '0')), 64, '0') DESC, event_time DESC, id DESC
+        ORDER BY lpad(lower(ltrim(COALESCE(sequencer, ''), '0')), 64, '0') DESC,
+                 COALESCE(event_time_ms, (EXTRACT(EPOCH FROM event_time) * 1000)::bigint) DESC, id DESC
         LIMIT 1
     )SQL");
 
@@ -267,12 +294,22 @@ void vh::db::Connection::initPreparedUpstreamEvents() const {
               AND expires_at > CURRENT_TIMESTAMP
               AND recorded_at <= to_timestamp($5::double precision) + INTERVAL '5 seconds'
               AND ($4::bigint IS NULL OR expected_size IS NULL OR expected_size = $4::bigint)
+              AND ($6::text IS NULL OR etag IS NULL OR etag = $6::text)
             ORDER BY recorded_at
             LIMIT 1
             FOR UPDATE SKIP LOCKED
         )
         RETURNING id
     )SQL");
+
+    // The request finished: the intent lives `ttl` from now (a long multipart upload must not outlive its intent).
+    conn_->prepare("upstream_write_intent_complete", R"SQL(
+        UPDATE upstream_write_intent SET completed_at = CURRENT_TIMESTAMP, etag = COALESCE($2, etag),
+                                         expires_at = CURRENT_TIMESTAMP + make_interval(secs => $3::double precision)
+        WHERE id = $1
+    )SQL");
+
+    conn_->prepare("upstream_write_intent_remove", "DELETE FROM upstream_write_intent WHERE id = $1");
 
     conn_->prepare("upstream_write_intent_sweep",
                    "DELETE FROM upstream_write_intent WHERE expires_at <= CURRENT_TIMESTAMP");

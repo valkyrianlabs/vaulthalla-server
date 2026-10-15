@@ -20,9 +20,13 @@ class Applier {
 public:
     // Seams for tests; defaults go to runtime::Deps (the sync controller).
     struct Hooks {
-        std::function<bool(uint32_t)> tryAcquirePass;
-        std::function<void(uint32_t)> releasePass;
-        std::function<Controller::ScopedResult(uint32_t, std::shared_ptr<model::PassScope>)> runScoped;
+        std::function<bool(uint32_t)> tryAcquirePass{};
+        std::function<void(uint32_t)> releasePass{};
+        std::function<Controller::ScopedResult(uint32_t, std::shared_ptr<model::PassScope>)> runScoped{};
+        // A regular pass of the vault is waiting for the lease: the applier yields to it (bounded by the controller).
+        std::function<bool(uint32_t)> regularWaiting{};
+        // Checked between keys: a stopping service ends the batch early (rows not reached stay pending).
+        std::function<bool()> shouldStop{};
     };
 
     struct Outcome {
@@ -46,8 +50,14 @@ public:
     // Baseline (adoption): the vault's first full listing finished; events older than it are superseded.
     static void onBaselineListed(uint32_t vaultId, std::time_t listStartedAt);
     [[nodiscard]] static bool baselineNeeded(uint32_t vaultId);
-    // An active subscription with a recently healthy channel keeps the remote index fresh.
+    // An active subscription with a recently healthy, contiguous channel keeps the remote index fresh: no delivery
+    // gap longer than the queue retention, nothing in the dead-letter queue, no lost receives since the last full
+    // listing.
     [[nodiscard]] static bool indexKeptFresh(uint32_t vaultId, std::chrono::seconds maxAge);
+    // The event service's sweep: subscriptions whose channel lost continuity after their last full listing go back to
+    // baseline `pending`, which holds their events and makes the next regular pass list the bucket (then events older
+    // than that listing are superseded). Returns how many were reset.
+    static size_t checkContinuity();
 
     // Clock skew allowed between a provider's event time and our listing start.
     static constexpr std::time_t kBaselineSkewSeconds = 60;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "storage/upstream/model/InboxEvent.hpp"
+#include "storage/upstream/model/WriteIntent.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -52,9 +53,17 @@ public:
 
     [[nodiscard]] static InboxCounts counts(uint32_t vaultId);
 
-    // Events that arrived for a bucket before it was routed to a vault get that vault + subscription.
+    // Events stored as unrouted (skipped, no vault) for a bucket while its subscription was being set up become pending
+    // work of that vault: only keys under `prefix`, only received at or after `since` (epoch seconds).
     static uint64_t routeUnassigned(const std::string& provider, const std::string& accountRef, const std::string& bucket,
-                                    uint32_t vaultId, int64_t subscriptionId);
+                                    uint32_t vaultId, int64_t subscriptionId, const std::string& prefix = {},
+                                    std::time_t since = 0);
+    // One transaction: consume a matching write intent of ours (WriteIntent::consumeMatching rules, plus the ETag when
+    // both are known) and, when one matched, mark the row skipped with origin self. True when it was ours.
+    [[nodiscard]] static bool settleOwnWrite(int64_t rowId, uint32_t vaultId, const std::string& key,
+                                             storage::upstream::model::WriteOp op, std::optional<uint64_t> size,
+                                             std::time_t eventTime, const std::optional<std::string>& etag,
+                                             const std::string& note);
     // Deletes done/skipped rows finished before now - olderThan.
     static uint64_t sweepFinished(std::chrono::seconds olderThan);
     // The newest event for one key of the vault (sequencer, then event_time, then id), any state.

@@ -15,8 +15,12 @@
 #include "vault/model/APIKey.hpp"
 #include "vault/model/S3Vault.hpp"
 
+#include <algorithm>
 #include <chrono>
+#include <map>
+#include <memory>
 #include <mutex>
+#include <set>
 #include <stdexcept>
 #include <unordered_set>
 
@@ -110,8 +114,46 @@ smodel::ForeignObjects foreignFrom(const std::string& value) {
     }
 }
 
+// Every provider rule change of one bucket (subscribe, unsubscribe, teardown) runs under that bucket's lock: AWS
+// notification configuration is a whole-document GET-merge-PUT, so two concurrent changes would drop each other's rule.
+std::mutex& bucketRuleLock(const std::string& bucketKey) {
+    static std::mutex mapMutex;
+    static std::map<std::string, std::unique_ptr<std::mutex>> locks;
+    std::scoped_lock lock(mapMutex);
+    auto& slot = locks[bucketKey];
+    if (!slot) slot = std::make_unique<std::mutex>();
+    return *slot;
+}
+
+std::string bucketKeyOf(const int64_t upstreamBucketId) { return "bucket#" + std::to_string(upstreamBucketId); }
+
+// After a rule write: every live subscription on the bucket must still find its own rules (another writer, or a
+// provider that replaced the document, could have dropped one). A missing one is marked failed for repair.
+void verifyOwnedRules(sadmin::EventsClient& events, const std::string& bucketName, const int64_t upstreamBucketId) {
+    std::set<std::string> present;
+    for (const auto& rule : events.rules(bucketName))
+        if (!rule.foreign) present.insert(rule.id);
+    const auto bucket = db::query::upstream::Bucket::get(upstreamBucketId);
+    if (!bucket) return;
+    for (const auto& other : SubQ::listLiveForBucket(bucket->provider, bucket->account_ref, bucket->bucket)) {
+        if (other.state != smodel::SubscriptionState::Active || other.rule_ids.empty()) continue;
+        const bool intact = std::ranges::all_of(other.rule_ids, [&](const std::string& id) { return present.contains(id); });
+        if (intact) continue;
+        SubQ::setState(other.id, smodel::SubscriptionState::Failed,
+                       "its notification rule is missing from the bucket; run `vh upstream events repair`");
+        if (other.vault_id) cacheSet(*other.vault_id, false);
+        log::Registry::sync()->warn("[UpstreamEvents] bucket '{}': subscription {} lost its rule; marked for repair",
+                                    bucketName, other.id);
+    }
+}
+
 // Removes our rules and, when nothing references the channel any more and Vaulthalla created it, the queue.
-void teardown(const smodel::Subscription& sub, const std::optional<std::string>& endNote) {
+void teardown(const smodel::Subscription& requested, const std::optional<std::string>& endNote) {
+    std::scoped_lock ruleLock(bucketRuleLock(bucketKeyOf(requested.upstream_bucket_id)));
+    // Re-read under the lock: disable() and the teardown sweep can race for the same row.
+    const auto current = SubQ::get(requested.id);
+    if (!current || current->state == smodel::SubscriptionState::Removed) return;
+    const auto& sub = *current;
     SubQ::setState(sub.id, smodel::SubscriptionState::Removing);
     if (sub.vault_id) cacheSet(*sub.vault_id, false);
 
@@ -172,19 +214,28 @@ void provision(const Context& ctx, smodel::Subscription sub) {
         channel = *ChanQ::get(channel.id);
     }
 
-    unsigned int foreign = 0;
-    for (const auto& rule : events->rules(ctx.vault->bucket))
-        if (rule.foreign) ++foreign;
-    SubQ::setForeignRules(sub.id, foreign);
+    {
+        std::scoped_lock ruleLock(bucketRuleLock(bucketKeyOf(sub.upstream_bucket_id)));
+        unsigned int foreign = 0;
+        for (const auto& rule : events->rules(ctx.vault->bucket))
+            if (rule.foreign) ++foreign;
+        SubQ::setForeignRules(sub.id, foreign);
 
-    const auto ruleIds = events->subscribe(refOf(channel), {.bucket = ctx.vault->bucket, .rule_id = ruleIdFor(sub.id),
-                                                            .prefix = sub.prefix});
-    SubQ::setRuleIds(sub.id, ruleIds);
-    SubQ::setState(sub.id, smodel::SubscriptionState::Active, "");
+        const auto ruleIds = events->subscribe(refOf(channel), {.bucket = ctx.vault->bucket, .rule_id = ruleIdFor(sub.id),
+                                                                .prefix = sub.prefix});
+        SubQ::setRuleIds(sub.id, ruleIds);
+        SubQ::setState(sub.id, smodel::SubscriptionState::Active, "");
+        verifyOwnedRules(*events, ctx.vault->bucket, sub.upstream_bucket_id);
+    }
+    if (const auto after = SubQ::get(sub.id); after && after->state != smodel::SubscriptionState::Active)
+        throw std::runtime_error(after->last_error.value_or("the notification rule did not stick"));
     if (sub.vault_id) {
         cacheSet(*sub.vault_id, true);
+        // Events stored as unrouted while this was being set up: only under the prefix, only since just before the
+        // subscription existed (older ones predate it and stay skipped).
         (void)db::query::upstream::Inbox::routeUnassigned(ctx.identity.provider, *ctx.identity.account_ref,
-                                                          ctx.vault->bucket, *sub.vault_id, sub.id);
+                                                          ctx.vault->bucket, *sub.vault_id, sub.id, sub.prefix,
+                                                          sub.created_at - 60);
     }
 }
 

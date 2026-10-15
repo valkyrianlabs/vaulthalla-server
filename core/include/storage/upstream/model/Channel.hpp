@@ -36,6 +36,9 @@ struct Channel {
     unsigned int consecutive_failures{};
     std::optional<uint64_t> backlog_estimate;
     std::optional<std::time_t> next_poll_at;
+    std::optional<std::time_t> continuity_broken_at;   // the stream may have lost messages since then
+    std::optional<std::string> continuity_note;
+    std::optional<uint64_t> dlq_depth;                 // dead-letter queue depth at the last check
     std::time_t created_at{};
     std::time_t updated_at{};
 

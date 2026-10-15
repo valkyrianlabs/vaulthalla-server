@@ -16,6 +16,14 @@
 #include "storage/s3/provider/admin/Admin.hpp"
 #include "storage/upstream/Guard.hpp"
 #include "storage/upstream/model/Audit.hpp"
+#include "db/query/upstream/Bucket.hpp"
+#include "db/query/upstream/Channel.hpp"
+#include "rbac/permission/vault/sync/Config.hpp"
+#include "rbac/resolver/vault/all.hpp"
+#include "storage/CloudEngine.hpp"
+#include "sync/events/Applier.hpp"
+#include "sync/events/Event.hpp"
+#include "sync/events/Ingest.hpp"
 #include "sync/events/Subscriptions.hpp"
 #include "vault/model/APIKey.hpp"
 #include "vault/model/S3Vault.hpp"
@@ -97,6 +105,20 @@ EventStatus toStatus(const vault::model::S3Vault& vault, const subs::Status& s) 
     return out;
 }
 
+// A channel is operated by one API key (possibly another vault's, on a shared channel): its account and its errors
+// (which can name the account, queue and provider responses) are shown only to who may view that key.
+void redactChannelFor(const Actor& actor, EventStatus& status, const std::optional<int64_t> channelId) {
+    if (!status.channel || !channelId) return;
+    std::optional<uint32_t> keyId;
+    try {
+        if (const auto ch = db::query::upstream::Channel::get(*channelId)) keyId = ch->api_key_id;
+    } catch (const std::exception&) {}
+    if (keyId && rbac::resolver::Admin::has<EvKeyPerm>({.user = actor, .permission = EvKeyPerm::View, .api_key_id = *keyId}))
+        return;
+    status.channel->account_ref.clear();
+    status.channel->last_error.reset();
+}
+
 template <typename Fn>
 auto eventsMapped(Fn&& fn) -> decltype(fn()) {
     try {
@@ -136,6 +158,21 @@ void auditEvents(const Actor& actor, const std::string& action, const vault::mod
     db::query::upstream::Audit::appendNoThrow(r);
 }
 
+// What a vault takes from objects without Vaulthalla metadata when the caller doesn't say. A vault that encrypts
+// upstream ignores them (an import over a sealed file would be a downgrade), unless its bucket was adopted: adoption
+// accepted the bucket's foreign plaintext explicitly.
+std::string defaultForeignObjects(const vault::model::S3Vault& vault) {
+    if (!vault.encrypt_upstream) return "import";
+    try {
+        if (const auto bucket = db::query::upstream::Bucket::getForVault(vault.id);
+            bucket && bucket->ownership == storage::upstream::model::Ownership::Adopted)
+            return "import";
+    } catch (const std::exception&) {
+        // Unknown: the conservative default.
+    }
+    return "ignore";
+}
+
 subs::Status run(const Actor& actor, const std::string& action, const vault::model::S3Vault& vault,
                  const std::function<subs::Status()>& fn) {
     try {
@@ -153,7 +190,7 @@ subs::Status run(const Actor& actor, const std::string& action, const vault::mod
 EventStatus enableEvents(const Actor& actor, const unsigned int vaultId, const EventsEnable& req) {
     const auto vault = authorizeVault(actor, vaultId, EvUpPerm::Configure, EvVaultPerm::Edit, EvKeyPerm::Consume);
     if (const auto gap = supportGap(*vault); !gap.empty()) throw Invalid(gap);
-    const auto foreign = req.foreign_objects.value_or("import");
+    const auto foreign = req.foreign_objects.value_or(defaultForeignObjects(*vault));
     if (foreign != "import" && foreign != "ignore") throw Invalid("foreign objects must be import or ignore");
     const auto s = run(actor, "events.enable", *vault, [&] {
         return subs::enable({.vault_id = vaultId, .prefix = req.prefix, .foreign_objects = foreign, .baseline_required = false});
@@ -176,7 +213,10 @@ std::vector<EventStatus> eventStatus(const Actor& actor, const std::optional<uns
     requireActor(actor);
     if (vaultId) {
         const auto vault = authorizeVault(actor, *vaultId, EvUpPerm::View, EvVaultPerm::View, EvKeyPerm::View);
-        return {toStatus(*vault, eventsMapped([&] { return subs::status(*vaultId); }))};
+        const auto s = eventsMapped([&] { return subs::status(*vaultId); });
+        auto status = toStatus(*vault, s);
+        redactChannelFor(actor, status, s.channel ? std::make_optional(s.channel->id) : std::nullopt);
+        return {status};
     }
     if (!rbac::resolver::Admin::has<EvUpPerm>({.user = actor, .permission = EvUpPerm::View}))
         throw Denied("this needs the admin.upstream.view permission");
@@ -187,7 +227,10 @@ std::vector<EventStatus> eventStatus(const Actor& actor, const std::optional<uns
         if (!rbac::resolver::Admin::has<EvVaultPerm>({.user = actor, .permission = EvVaultPerm::View, .vault_id = s3->id}))
             continue;
         try {
-            out.push_back(toStatus(*s3, subs::status(s3->id)));
+            const auto s = subs::status(s3->id);
+            auto status = toStatus(*s3, s);
+            redactChannelFor(actor, status, s.channel ? std::make_optional(s.channel->id) : std::nullopt);
+            out.push_back(std::move(status));
         } catch (const std::exception& e) {
             EventStatus failed = toStatus(*s3, subs::Status{});
             failed.last_error = e.what();
@@ -195,6 +238,55 @@ std::vector<EventStatus> eventStatus(const Actor& actor, const std::optional<uns
         }
     }
     std::ranges::sort(out, {}, &EventStatus::vault_id);
+    return out;
+}
+
+ManualIngest ingestEventRecords(const Actor& actor, const unsigned int vaultId, const std::vector<std::string>& recordsJson) {
+    const auto vault = authorizeVault(actor, vaultId, EvUpPerm::Configure, EvVaultPerm::View, EvKeyPerm::Consume);
+    using SyncConfigPerm = rbac::permission::vault::sync::SyncConfigPermissions;
+    if (!rbac::resolver::Vault::has<SyncConfigPerm>({.user = actor, .permission = SyncConfigPerm::Edit, .vault_id = vaultId}))
+        throw Denied("ingesting event notifications needs vault sync.config.edit on '" + vault->name + "'");
+
+    const auto engine = std::dynamic_pointer_cast<storage::CloudEngine>(runtime::Deps::get().storageManager->getEngine(vaultId));
+    if (!engine) throw Invalid("vault '" + vault->name + "' has no active S3 storage engine");
+    const auto key = engine->s3ApiKey();
+    if (!key) throw Invalid("vault '" + vault->name + "' has no API key");
+
+    ManualIngest out;
+    out.records = recordsJson.size();
+    const auto id = storage::upstream::identityFor(*key, vault->bucket);
+    std::vector<sync::events::UpstreamEvent> events;
+    for (const auto& record : recordsJson) {
+        const auto decoded = sync::events::decodeAwsMessage("{\"Records\":[" + record + "]}", "file");
+        if (!decoded.error.empty() || decoded.events.empty()) {
+            ++out.skipped;
+            continue;
+        }
+        for (auto e : decoded.events) {
+            if (e.key.empty() || e.bucket != vault->bucket) {
+                ++out.skipped;
+                continue;
+            }
+            e.provider = id.provider;
+            e.account_ref = id.account_ref.value_or("unresolved");
+            events.push_back(std::move(e));
+        }
+    }
+    out.events = events.size();
+    eventsMapped([&] {
+        if (!events.empty())
+            out.inserted = sync::events::ingest(events, std::nullopt, vaultId, vault->bucket).inserted;
+        const auto applied = sync::events::Applier().applyVault(vaultId);
+        out.applied = applied.applied;
+        out.self = applied.self;
+        out.superseded = applied.skipped;
+        out.pass_started = applied.pass_started;
+        out.busy = applied.busy;
+        out.held = applied.held;
+        return 0;
+    });
+    auditEvents(actor, "events.ingest_file", *vault, storage::upstream::model::AuditOutcome::Ok,
+                {{"records", out.records}, {"events", out.events}, {"inserted", out.inserted}});
     return out;
 }
 
@@ -206,7 +298,9 @@ std::optional<std::string> subscribeNewVault(const Actor& actor, const unsigned 
         const auto vault = requireS3Vault(vaultId);
         if (const auto gap = supportGap(*vault); !gap.empty()) return "event-driven sync was not enabled: " + gap;
         (void)run(actor, "events.enable", *vault, [&] {
-            return subs::enable({.vault_id = vaultId, .prefix = prefix, .foreign_objects = "import",
+            // Adoption (baseline required) accepted the bucket's foreign objects; a new bucket only holds ours.
+            return subs::enable({.vault_id = vaultId, .prefix = prefix,
+                                 .foreign_objects = baselineRequired ? std::string("import") : defaultForeignObjects(*vault),
                                  .baseline_required = baselineRequired});
         });
         return std::nullopt;

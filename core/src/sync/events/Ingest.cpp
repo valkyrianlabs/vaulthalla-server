@@ -2,6 +2,7 @@
 
 #include "db/query/upstream/Inbox.hpp"
 #include "db/query/upstream/Subscription.hpp"
+#include "sync/model/RemoteManifest.hpp"
 
 #include <map>
 #include <tuple>
@@ -25,6 +26,8 @@ imodel::InboxEvent toInbox(const UpstreamEvent& event) {
     row.etag = event.etag;
     row.size_bytes = event.size;
     row.event_time = event.event_time;
+    // Hand-built events (tests, manual paths) may carry only seconds.
+    row.event_time_ms = event.event_time_ms != 0 ? event.event_time_ms : static_cast<int64_t>(event.event_time) * 1000;
     row.received_at = std::time(nullptr);
     return row;
 }
@@ -72,7 +75,12 @@ IngestResult ingest(const std::vector<UpstreamEvent>& events, const std::optiona
         }
         if (route) row.subscription_id = route->id;
 
-        if (!row.vault_id) {
+        if (model::remote_manifest::isVaulthallaManifestKey(e.key)) {
+            // Vaulthalla's own index manifest: stored (so redeliveries stay deduplicated) but never work.
+            row.state = imodel::InboxState::Skipped;
+            row.origin = imodel::InboxOrigin::Self;
+            row.note = "Vaulthalla's index manifest";
+        } else if (!row.vault_id) {
             row.state = imodel::InboxState::Skipped;
             row.note = "unrouted: no live subscription for this bucket/prefix";
             ++result.unrouted;

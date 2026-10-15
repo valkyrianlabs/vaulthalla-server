@@ -3,6 +3,7 @@
 #include "storage/upstream/model/Channel.hpp"
 #include "storage/upstream/model/Subscription.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <ctime>
 #include <optional>
@@ -34,6 +35,12 @@ public:
 
     // One poll's bookkeeping. ok: last_success_at, consecutive_failures = 0, degraded → active, last_message_at when
     // received > 0, backlog when known. Failure: consecutive_failures + 1, last_error(+_at), active → degraded after 3.
+    // A successful poll after a gap longer than this marks the stream discontinuous (the queues keep messages 4 days;
+    // the margin covers clock skew and the time a message already waited).
+    static constexpr std::chrono::seconds kContinuityGap{3 * 24 * 3600};
+    // The stream may have lost messages (DLQ, retention gap, burnt receives): events alone no longer keep the index.
+    static void markContinuityBroken(int64_t id, const std::string& note);
+    static void setDlqDepth(int64_t id, std::optional<uint64_t> depth);
     static void recordPoll(int64_t id, bool ok, unsigned int received, std::optional<uint64_t> backlog,
                            const std::optional<std::string>& error, std::optional<std::time_t> nextPollAt);
 
