@@ -30,7 +30,9 @@ struct UpstreamEvent {
     std::optional<std::string> etag;      // unquoted
     std::optional<uint64_t> size;
     std::time_t event_time{};
+    int64_t event_time_ms{};              // milliseconds since the epoch (ordering within one second; R2 has no sequencer)
     std::string message_id;               // queue message id (diagnostics)
+    std::string rule_id;                  // AWS s3.configurationId (our "vaulthalla-<id>" rules route by it); R2: empty
 };
 
 // Decoding outcome of one queue message: zero or more events, or a reason to ignore it (test events), or an error
@@ -48,8 +50,12 @@ struct Decoded {
 // S3 keys in event JSON: percent-decoding with '+' as space.
 [[nodiscard]] std::string decodeS3EventKey(const std::string& encoded);
 
-// Newer-or-equal ordering between two events for one key: sequencer when both have one (hex, length-first), else
-// event time, else dedupe key as a stable tiebreak.
+// "2024-05-24T19:36:44.379Z" → milliseconds since the epoch; nullopt when unparsable.
+[[nodiscard]] std::optional<int64_t> parseEventTimeMs(const std::string& iso);
+
+// Newer-or-equal ordering between two events for one key: sequencer when both have one (hex: left-pad with zeros,
+// then compare; AWS documents it only for the same key), else event time in milliseconds, else dedupe key as a
+// stable tiebreak.
 [[nodiscard]] bool newerOrEqual(const UpstreamEvent& candidate, const UpstreamEvent& current);
 
 }
