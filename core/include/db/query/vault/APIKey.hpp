@@ -49,6 +49,8 @@ public:
     static void clearProviderToken(unsigned int keyId);
     // nullopt clears it (e.g. the key's endpoint or provider changed, so the old account no longer applies).
     static void setAccountRef(unsigned int keyId, const std::optional<std::string>& accountRef);
+    // The key now points somewhere else: no administration, no probe results, no Cloudflare token, no account.
+    static void resetAdmin(unsigned int keyId);
 };
 
 }

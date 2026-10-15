@@ -58,6 +58,31 @@ std::string ruleFilterPrefix(const pugi::xml_node& rule) {
     return rule.child_value("Prefix");
 }
 
+// Whether a lifecycle rule uses anything beyond ID, Status, a plain prefix (legacy Prefix or Filter/Prefix),
+// Expiration/Days, NoncurrentVersionExpiration/NoncurrentDays and AbortIncompleteMultipartUpload/DaysAfterInitiation.
+bool lifecycleRuleUnmodeled(const pugi::xml_node& rule) {
+    const auto onlyChildren = [](const pugi::xml_node& node, std::initializer_list<const char*> allowed) {
+        for (const auto child : node.children()) {
+            if (child.type() != pugi::node_element) continue;
+            bool known = false;
+            for (const auto* name : allowed) known = known || std::string(child.name()) == name;
+            if (!known) return false;
+        }
+        return true;
+    };
+    for (const auto child : rule.children()) {
+        if (child.type() != pugi::node_element) continue;
+        const std::string name = child.name();
+        if (name == "ID" || name == "Status" || name == "Prefix") continue;
+        if (name == "Filter" && onlyChildren(child, {"Prefix"})) continue;
+        if (name == "Expiration" && onlyChildren(child, {"Days"})) continue;
+        if (name == "NoncurrentVersionExpiration" && onlyChildren(child, {"NoncurrentDays"})) continue;
+        if (name == "AbortIncompleteMultipartUpload" && onlyChildren(child, {"DaysAfterInitiation"})) continue;
+        return true;
+    }
+    return false;
+}
+
 std::string toString(const pugi::xml_document& doc) {
     std::ostringstream out;
     doc.save(out, "", pugi::format_raw);
@@ -159,7 +184,10 @@ std::vector<LifecycleRule> parseLifecycle(const std::string& xml) {
         rule.abort_incomplete_multipart_days = uintChild(node.child("AbortIncompleteMultipartUpload"), "DaysAfterInitiation");
         rule.expire_current_days = uintChild(node.child("Expiration"), "Days");
         rule.expire_noncurrent_days = uintChild(node.child("NoncurrentVersionExpiration"), "NoncurrentDays");
-        rule.foreign = !isOwnedId(rule.id);
+        // Only Vaulthalla's one managed rule is ever rebuilt from fields; every other rule — another application's,
+        // the provider's default, or any other "vaulthalla-*" id — goes back to the provider byte for byte.
+        rule.foreign = rule.id != "vaulthalla-managed";
+        rule.unmodeled = lifecycleRuleUnmodeled(node);
         rule.raw_xml = printNode(node);
         rules.push_back(std::move(rule));
     }

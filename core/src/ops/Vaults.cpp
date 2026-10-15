@@ -7,6 +7,7 @@
 #include "db/query/identities/User.hpp"
 #include "db/encoding/timestamp.hpp"
 #include "db/query/sync/Policy.hpp"
+#include "db/query/upstream/Bucket.hpp"
 #include "db/query/vault/APIKey.hpp"
 #include "db/query/vault/Deletion.hpp"
 #include "db/query/vault/Key.hpp"
@@ -427,6 +428,21 @@ void requireRemovable(const Actor& actor, const unsigned int vaultId) {
     if (!canOnVault(actor, VaultPerm::Remove, vaultId)) throw Denied("you do not have permission to remove vault " + vault->name);
 }
 
+namespace {
+
+// An adopted bucket held data before its vault existed (often other applications' objects): "delete the vault's
+// upstream data" would delete all of it. Only buckets Vaulthalla created, or plain vault bindings, keep that option.
+void refuseUpstreamDeleteOfAdoptedBucket(const unsigned int vaultId, const bool deleteUpstream) {
+    if (!deleteUpstream) return;
+    if (const auto row = db::query::upstream::Bucket::getForVault(vaultId);
+        row && row->ownership == storage::upstream::model::Ownership::Adopted)
+        throw Invalid("bucket '" + row->bucket + "' was adopted with the data it already held: deleting this vault's upstream "
+                      "data would delete everything in it, other applications' objects included. Delete the vault and keep "
+                      "its upstream data, then `vh upstream detach` the bucket and clean it up with the provider.");
+}
+
+}
+
 DeletionPtr remove(const Actor& actor, const Remove& req) {
     requireActor(actor);
     if (req.id == 0) throw Invalid("vault ID must be a positive integer");
@@ -446,6 +462,7 @@ DeletionPtr remove(const Actor& actor, const Remove& req) {
             throw Invalid("only S3 vaults have upstream data to delete");
         if (pending->isS3() && pending->upstream_purged_at && !deleteUpstream)
             throw Conflict("the upstream data of vault '" + pending->vault_name + "' is already deleted");
+        refuseUpstreamDeleteOfAdoptedBucket(req.id, deleteUpstream && !pending->upstream_purged_at);
         // The delete already answered the key question; only switching to "keep upstream" asks it again.
         requireKeyLossAccepted(pending->isS3() && pending->encrypt_upstream.value_or(true) && pending->delete_upstream &&
                                    !deleteUpstream && !pending->keyExported(),
@@ -464,6 +481,7 @@ DeletionPtr remove(const Actor& actor, const Remove& req) {
     const bool isS3 = live->type == VaultType::S3;
     if (req.delete_upstream && *req.delete_upstream && !isS3) throw Invalid("only S3 vaults have upstream data to delete");
     const bool deleteUpstream = isS3 && req.delete_upstream.value_or(false);
+    refuseUpstreamDeleteOfAdoptedBucket(req.id, deleteUpstream);
 
     if (isS3) {
         const auto s3 = std::static_pointer_cast<S3Vault>(live);

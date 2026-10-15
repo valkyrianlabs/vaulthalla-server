@@ -1,5 +1,6 @@
 #include "vault/Retention.hpp"
 
+#include "db/query/upstream/Bucket.hpp"
 #include "db/query/vault/APIKey.hpp"
 #include "storage/upstream/Guard.hpp"
 #include "vault/model/APIKey.hpp"
@@ -83,6 +84,10 @@ std::optional<std::string> upstreamBlocker(const model::Deletion& d, std::shared
     if (const auto key = db::query::vault::APIKey::getAPIKey(s3->api_key_id);
         !key || storage::upstream::guard::isProtected(storage::upstream::identityFor(*key, s3->bucket)))
         return key ? "bucket '" + s3->bucket + "' is protected" : "the vault's API key no longer exists";
+    // An adopted bucket held data before the vault (#237): its objects aren't the vault's to delete wholesale.
+    if (const auto row = db::query::upstream::Bucket::getForVault(d.vault_id);
+        row && row->ownership == storage::upstream::model::Ownership::Adopted)
+        return "bucket '" + s3->bucket + "' was adopted with data that predates the vault";
     if (const auto others = DeletionQuery::otherVaultsOnBucket(d.vault_id); !others.empty()) {
         std::string names;
         for (const auto& name : others) names += (names.empty() ? "" : ", ") + name;

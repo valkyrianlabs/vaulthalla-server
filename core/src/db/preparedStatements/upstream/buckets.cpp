@@ -28,32 +28,73 @@ void vh::db::Connection::initPreparedUpstreamBuckets() const {
             updated_at           = CURRENT_TIMESTAMP
     )SQL");
 
-    // The create path's lease. Inserting is the only way in for an unknown identity.
+    // The create path's lease. Inserting is the only way in for an unknown identity. The row claims nothing about the
+    // bucket yet: it stays unmanaged and not created_by_vaulthalla until CreateBucket succeeded and the bucket listed
+    // empty (upstream_bucket_confirm_created).
     conn_->prepare("upstream_bucket_claim_insert", R"SQL(
         INSERT INTO upstream_bucket (provider, account_ref, bucket, region, ownership, provisioning_state,
-                                     created_by_vaulthalla, operation_token, last_seen_api_key_id)
-        VALUES ($1, $2, $3, $4, 'managed', 'creating', TRUE, $5, $6)
+                                     created_by_vaulthalla, provision_attempted, operation_token, last_seen_api_key_id)
+        VALUES ($1, $2, $3, $4, 'unmanaged', 'creating', FALSE, TRUE, $5, $6)
         ON CONFLICT (provider, account_ref, bucket) DO NOTHING
         RETURNING *
     )SQL");
 
-    // Our own earlier attempt: unbound, unlocked, and failed, deleted, or abandoned in creating.
+    // Our own earlier attempt (provision_attempted): unbound, unlocked, and failed or abandoned in creating. A row whose
+    // bucket Vaulthalla created and later deleted is no longer ours: it restarts as a plain attempt (created flag off),
+    // so a bucket someone re-created under that name is never resumed as ours.
     conn_->prepare("upstream_bucket_claim_retry", R"SQL(
         UPDATE upstream_bucket SET
             provisioning_state = 'creating',
-            ownership          = 'managed',
+            created_by_vaulthalla = CASE WHEN provisioning_state = 'deleted' THEN FALSE ELSE created_by_vaulthalla END,
+            ownership          = CASE WHEN provisioning_state = 'deleted' THEN 'unmanaged' ELSE ownership END,
+            provision_attempted = TRUE,
             operation_token    = $4,
             region             = COALESCE($5, region),
             last_seen_api_key_id = COALESCE($6, last_seen_api_key_id),
             last_error         = NULL,
             updated_at         = CURRENT_TIMESTAMP
         WHERE provider = $1 AND account_ref = $2 AND bucket = $3
-          AND created_by_vaulthalla
+          AND provision_attempted
           AND vault_id IS NULL
           AND NOT is_protected
           AND (provisioning_state IN ('failed', 'deleted')
                OR (provisioning_state = 'creating' AND updated_at < CURRENT_TIMESTAMP - make_interval(secs => $7::double precision)))
         RETURNING *
+    )SQL");
+
+    // CreateBucket succeeded for this attempt and the bucket listed empty: from now on it is ours.
+    conn_->prepare("upstream_bucket_confirm_created", R"SQL(
+        UPDATE upstream_bucket SET created_by_vaulthalla = TRUE, ownership = 'managed', updated_at = CURRENT_TIMESTAMP
+        WHERE id = $1 AND operation_token = $2
+        RETURNING id
+    )SQL");
+
+    // The attempt found a bucket that isn't ours: nothing about it is Vaulthalla's.
+    conn_->prepare("upstream_bucket_disown", R"SQL(
+        UPDATE upstream_bucket SET ownership = 'unmanaged', created_by_vaulthalla = FALSE, provisioning_state = $3,
+                                   last_error = $4, updated_at = CURRENT_TIMESTAMP
+        WHERE id = $1 AND operation_token = $2
+        RETURNING id
+    )SQL");
+
+    // Cleanup's lease: a bucket Vaulthalla created, unbound, unlocked, in a settled state (or a cleanup abandoned past
+    // the stale window). A fresh token: concurrent adoption, retries and other cleanups see it as in flight.
+    conn_->prepare("upstream_bucket_begin_cleanup", R"SQL(
+        UPDATE upstream_bucket SET provisioning_state = 'deleting', operation_token = $2, last_error = NULL,
+                                   updated_at = CURRENT_TIMESTAMP
+        WHERE id = $1
+          AND ownership = 'managed' AND created_by_vaulthalla
+          AND vault_id IS NULL AND NOT is_protected
+          AND (provisioning_state IN ('ready', 'failed', 'detached')
+               OR (provisioning_state = 'deleting' AND updated_at < CURRENT_TIMESTAMP - make_interval(secs => $3::double precision)))
+        RETURNING *
+    )SQL");
+
+    // A lease holder's heartbeat: true only while the row still carries the token (and nothing locked or bound it).
+    conn_->prepare("upstream_bucket_heartbeat", R"SQL(
+        UPDATE upstream_bucket SET updated_at = CURRENT_TIMESTAMP
+        WHERE id = $1 AND operation_token = $2 AND NOT is_protected AND vault_id IS NULL
+        RETURNING id
     )SQL");
 
     conn_->prepare("upstream_bucket_lock_by_identity",
@@ -93,7 +134,9 @@ void vh::db::Connection::initPreparedUpstreamBuckets() const {
                    "UPDATE upstream_bucket SET vault_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $1");
 
     conn_->prepare("upstream_bucket_set_ownership", R"SQL(
-        UPDATE upstream_bucket SET ownership = $2, provisioning_state = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $1
+        UPDATE upstream_bucket SET ownership = $2, provisioning_state = $3, updated_at = CURRENT_TIMESTAMP
+        WHERE id = $1 AND ($4::text IS NULL OR operation_token IS NOT DISTINCT FROM $4)
+        RETURNING id
     )SQL");
 
     conn_->prepare("upstream_bucket_set_region",

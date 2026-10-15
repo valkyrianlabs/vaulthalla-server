@@ -170,9 +170,17 @@ TEST_F(UpstreamStoreTest, CreateClaimHasExactlyOneWinnerUnderARace) {
     EXPECT_NE(ra.has_value(), rb.has_value()) << "exactly one creator may hold the lease";
     const auto& winner = ra ? *ra : *rb;
     EXPECT_FALSE(winner.reclaimed);
-    EXPECT_EQ(winner.bucket.ownership, m::Ownership::Managed);
+    // A claim claims nothing about the bucket (data-safety review #1): unmanaged and not created by Vaulthalla until
+    // CreateBucket succeeded and the bucket listed empty.
+    EXPECT_EQ(winner.bucket.ownership, m::Ownership::Unmanaged);
     EXPECT_EQ(winner.bucket.provisioning_state, m::ProvisioningState::Creating);
-    EXPECT_TRUE(winner.bucket.created_by_vaulthalla);
+    EXPECT_FALSE(winner.bucket.created_by_vaulthalla);
+    EXPECT_TRUE(winner.bucket.provision_attempted);
+    EXPECT_FALSE(q::Bucket::confirmCreated(winner.bucket.id, "not-the-token"));
+    ASSERT_TRUE(q::Bucket::confirmCreated(winner.bucket.id, *winner.bucket.operation_token));
+    const auto confirmed = q::Bucket::get(winner.bucket.id);
+    EXPECT_EQ(confirmed->ownership, m::Ownership::Managed);
+    EXPECT_TRUE(confirmed->created_by_vaulthalla);
 
     // A third attempt while the winner is live loses too.
     EXPECT_FALSE(q::Bucket::claimForCreate(id, std::nullopt, std::nullopt, "token-c"));
@@ -242,6 +250,7 @@ TEST_F(UpstreamStoreTest, AdoptionRefusesLockedBoundAndBusyBuckets) {
     const auto mine = r2("adopt-mine-" + tag());
     const auto claim = q::Bucket::claimForCreate(mine, std::nullopt, std::nullopt, "c1");
     ASSERT_TRUE(claim);
+    ASSERT_TRUE(q::Bucket::confirmCreated(claim->bucket.id, "c1"));
     ASSERT_TRUE(q::Bucket::setProvisioningState(claim->bucket.id, m::ProvisioningState::Ready, "c1"));
     const auto again = q::Bucket::upsertAdopted(mine, std::nullopt, std::nullopt, "a5");
     ASSERT_EQ(again.result, q::AdoptResult::Adopted);

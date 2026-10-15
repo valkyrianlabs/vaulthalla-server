@@ -30,6 +30,7 @@
 #include <cctype>
 #include <map>
 #include <set>
+#include <unordered_map>
 
 namespace vh::ops::upstream {
 
@@ -171,6 +172,8 @@ auto mapped(Fn&& fn) -> decltype(fn()) {
         throw Conflict(e.what());
     } catch (const provision::BucketMissing& e) {
         throw NotFound(e.what());
+    } catch (const lifecycle::UnmodeledOwnedRule& e) {
+        throw Conflict(e.what());
     } catch (const padmin::CapabilityMissing& e) {
         throw Invalid(e.what());
     } catch (const padmin::ProviderError& e) {
@@ -273,6 +276,22 @@ bool applyLifecycle(padmin::AdminClient& admin, const vault::model::APIKey& key,
         throw NeedsConfirmation(DESTRUCTIVE_LIFECYCLE, destructiveText(bucket, std::nullopt));
     if (!merged.changed) return false;
     admin.putLifecycle(bucket, merged.rules);
+
+    // A lifecycle PUT replaces the whole document: re-read and check that every rule that isn't ours came back exactly
+    // as it was (the provider normalizes nothing we pass through raw, so a difference means something went wrong).
+    const auto after = admin.inspect(bucket);
+    if (after.lifecycle_readable) {
+        const auto foreignXml = [](const std::vector<padmin::LifecycleRule>& rules) {
+            std::vector<std::string> out;
+            for (const auto& r : rules)
+                if (r.id != lifecycle::kOwnedRuleId) out.push_back(r.id);
+            std::ranges::sort(out);
+            return out;
+        };
+        if (foreignXml(after.lifecycle) != foreignXml(config.lifecycle))
+            throw std::runtime_error("the lifecycle configuration of bucket '" + bucket + "' no longer holds the other "
+                                     "rules it had before Vaulthalla's write; check it with the provider");
+    }
     return true;
 }
 
@@ -501,7 +520,7 @@ BucketRow protect(const Actor& actor, const KeyRef& ref, const std::string& buck
 }
 
 BucketRow unprotect(const Actor& actor, const KeyRef& ref, const std::string& bucket, const bool confirm) {
-    auto key = authorize(actor, ref, UpPerm::Unprotect, KeyPerm::View);
+    auto key = authorize(actor, ref, UpPerm::Unprotect, KeyPerm::Consume);
     const auto id = identityOf(key, bucket);
     const auto current = BucketQuery::getByIdentity(id.provider, *id.account_ref, id.bucket);
     if (!current || !current->is_protected) return rowFor(id);
@@ -639,6 +658,9 @@ ProvisionTicket beginProvision(const Actor& actor, const unsigned int apiKeyId, 
     if (req.mode == BucketMode::Existing) return ticket;
 
     auto key = authorize(actor, KeyRef{apiKeyId}, UpPerm::Provision, KeyPerm::Consume);
+    // A lifecycle rule or an event subscription set up with the bucket are configuration: the same authority the
+    // dedicated operations (setLifecycle, enableEvents) need.
+    if (req.lifecycle || req.events) requireUpstream(actor, UpPerm::Configure);
     auto client = adminClient(key);
     const bool aws = key->provider == vault::model::S3Provider::AWS;
 
@@ -762,6 +784,12 @@ BucketRow detach(const Actor& actor, const KeyRef& ref, const std::string& bucke
                        "); detach it after that vault is gone");
     if (!db::query::upstream::Subscription::listLiveForBucket(id.provider, *id.account_ref, id.bucket).empty())
         throw Conflict("bucket '" + bucket + "' still has a live event subscription; turn it off first");
+    if (row->provisioning_state == bmodel::ProvisioningState::Creating ||
+        row->provisioning_state == bmodel::ProvisioningState::Configuring ||
+        row->provisioning_state == bmodel::ProvisioningState::Deleting)
+        throw Conflict("bucket '" + bucket + "' is being " +
+                       std::string(row->provisioning_state == bmodel::ProvisioningState::Deleting ? "cleaned up" : "provisioned") +
+                       " right now; try again when that has finished");
 
     auto client = adminClient(key);
     bool lifecycleRemoved = false;
@@ -775,7 +803,10 @@ BucketRow detach(const Actor& actor, const KeyRef& ref, const std::string& bucke
         auditRecord(actor, "detach", id, key->id, std::nullopt, bmodel::AuditOutcome::Failed, {{"error", e.what()}});
         throw Invalid(std::string("our lifecycle rule could not be removed, nothing was changed: ") + e.what());
     }
-    BucketQuery::setOwnership(row->id, bmodel::Ownership::Unmanaged, bmodel::ProvisioningState::Detached);
+    if (!BucketQuery::setOwnership(row->id, bmodel::Ownership::Unmanaged, bmodel::ProvisioningState::Detached,
+                                   row->operation_token))
+        throw Conflict("bucket '" + bucket + "' changed while it was being detached (another operation took it); "
+                       "run the detach again");
     auditRecord(actor, "detach", id, key->id, std::nullopt, bmodel::AuditOutcome::Ok,
                 {{"previous_ownership", bmodel::to_string(row->ownership)}, {"lifecycle_rule_removed", lifecycleRemoved}});
     return rowFor(id);
@@ -789,6 +820,16 @@ std::vector<std::string> cleanupBlockers(const BucketIdentity& id, const std::op
     if (!row || row->ownership != bmodel::Ownership::Managed || !row->created_by_vaulthalla)
         out.emplace_back("Vaulthalla only deletes buckets it created; this one is " +
                          std::string(row ? bmodel::to_string(row->ownership) : "unmanaged"));
+    else if (row->provisioning_state == bmodel::ProvisioningState::Creating ||
+             row->provisioning_state == bmodel::ProvisioningState::Configuring)
+        out.emplace_back("a provisioning attempt is still working on this bucket");
+    else if (row->provisioning_state == bmodel::ProvisioningState::Deleting)
+        out.emplace_back("another cleanup is running on this bucket");
+    else if (row->provisioning_state != bmodel::ProvisioningState::Ready &&
+             row->provisioning_state != bmodel::ProvisioningState::Failed &&
+             row->provisioning_state != bmodel::ProvisioningState::Detached)
+        out.emplace_back("the bucket's record is " + bmodel::to_string(row->provisioning_state) +
+                         ", not a settled bucket Vaulthalla created");
     for (const auto& b : storage::upstream::bindingsFor(id))
         out.push_back("used by vault '" + b.vault_name + "' (ID " + std::to_string(b.vault_id) + ")" +
                       (b.deleted ? ", pending deletion: purge or restore it first" : ""));
@@ -863,29 +904,46 @@ CleanupResult cleanup(const Actor& actor, const KeyRef& ref, const std::string& 
     }
     requireUnprotected(actor, id, "cleanup", key->id);   // a lock set while counting still wins
 
-    (void)BucketQuery::setProvisioningState(row->id, bmodel::ProvisioningState::Deleting, std::nullopt);
-    const auto run = mapped([&] { return cleanupx::execute(*client, bucket, deleteBucket); });
+    // The cleanup's own lease (fresh token, CAS from a settled state): adoption, create retries, detach and other
+    // cleanups see the bucket as in flight until it ends, and the run re-checks the lease before every round.
+    const auto leaseToken = provision::newOperationToken();
+    const auto leased = BucketQuery::beginCleanup(row->id, leaseToken);
+    if (!leased) {
+        auditRecord(actor, "cleanup", id, key->id, std::nullopt, bmodel::AuditOutcome::Refused,
+                    {{"reason", "another operation holds the bucket"}});
+        throw Conflict("bucket '" + bucket + "' is held by another operation (provisioning, adoption or another cleanup); "
+                       "try again when it has finished");
+    }
+    const auto run = cleanupx::execute(*client, bucket, deleteBucket, {},
+                                       [&] { return BucketQuery::heartbeat(row->id, leaseToken); });
 
     CleanupResult out;
     out.deleted = run.deleted;
     out.failed = run.failed;
     out.bucket_deleted = run.bucket_deleted;
     out.errors = run.errors;
+    if (!run.error.empty()) out.errors.insert(out.errors.begin(), run.error);
     if (run.bucket_deleted) out.outcome = "deleted";
-    else if (run.emptied && !deleteBucket) out.outcome = "emptied";
+    else if (run.emptied && !deleteBucket && !run.interrupted && !run.lease_lost) out.outcome = "emptied";
     else out.outcome = "partial";
 
+    // Settle the row, but only while the lease is still ours; a partial or interrupted run leaves it failed with the
+    // reason, which a new preflight + cleanup accepts again.
     const bool done = out.outcome != "partial";
-    (void)BucketQuery::setProvisioningState(row->id, run.bucket_deleted ? bmodel::ProvisioningState::Deleted
-                                                                       : (done ? bmodel::ProvisioningState::Ready
-                                                                               : bmodel::ProvisioningState::Failed),
-                                            std::nullopt,
-                                            done ? std::nullopt
-                                                 : std::make_optional<std::string>("cleanup incomplete: " +
-                                                                                    std::to_string(run.failed) + " failed"));
+    const auto lastError = done ? std::optional<std::string>{}
+                                : std::make_optional<std::string>(
+                                      "cleanup incomplete: " + std::to_string(run.deleted) + " deleted, " +
+                                      std::to_string(run.failed) + " failed" +
+                                      (run.error.empty() ? std::string{} : "; " + run.error));
+    (void)BucketQuery::setProvisioningState(row->id,
+                                            run.bucket_deleted ? bmodel::ProvisioningState::Deleted
+                                                               : (done ? bmodel::ProvisioningState::Ready
+                                                                       : bmodel::ProvisioningState::Failed),
+                                            leaseToken, lastError);
     auditRecord(actor, "cleanup", id, key->id, std::nullopt, done ? bmodel::AuditOutcome::Ok : bmodel::AuditOutcome::Partial,
                 {{"outcome", out.outcome}, {"deleted", out.deleted}, {"failed", out.failed},
-                 {"bucket_deleted", out.bucket_deleted}});
+                 {"bucket_deleted", out.bucket_deleted}, {"interrupted", run.interrupted}, {"lease_lost", run.lease_lost},
+                 {"error", run.error}});
     log::Registry::audit()->warn("[ops::upstream] {} cleaned up bucket '{}': {} ({} deleted, {} failed)", actor->name(), bucket,
                                  out.outcome, out.deleted, out.failed);
     return out;
@@ -896,11 +954,26 @@ CleanupResult cleanup(const Actor& actor, const KeyRef& ref, const std::string& 
 std::vector<AuditEntry> audit(const Actor& actor, const AuditQuery& query) {
     requireActor(actor);
     requireUpstream(actor, UpPerm::View);
+    const auto limit = std::clamp(query.limit, 1u, 1000u);
     std::vector<AuditEntry> out;
-    for (const auto& r : db::query::upstream::Audit::list(query.bucket, std::clamp(query.limit, 1u, 1000u)))
+    std::unordered_map<uint32_t, bool> keyVisible;
+    const auto visible = [&](const std::optional<uint32_t>& keyId) {
+        // Rows without a key (its credential was deleted, or a system action) only for full administrators; every
+        // other row only for those who may view that key: accounts, buckets and errors of keys you can't see stay hidden.
+        if (!keyId) return actor->isAdmin();
+        if (const auto it = keyVisible.find(*keyId); it != keyVisible.end()) return it->second;
+        const bool ok = rbac::resolver::Admin::has<KeyPerm>({.user = actor, .permission = KeyPerm::View, .api_key_id = *keyId});
+        keyVisible.emplace(*keyId, ok);
+        return ok;
+    };
+    // Fetch more than asked: rows the actor can't see are dropped before the limit applies.
+    for (const auto& r : db::query::upstream::Audit::list(query.bucket, std::min(limit * 4u, 4000u))) {
+        if (!visible(r.api_key_id)) continue;
         out.push_back({.id = r.id, .at = r.at, .user_name = r.user_name, .action = r.action, .provider = r.provider,
                        .account_ref = r.account_ref, .bucket = r.bucket, .outcome = bmodel::to_string(r.outcome),
                        .api_key_id = r.api_key_id, .vault_id = r.vault_id, .detail_json = r.detail_json});
+        if (out.size() >= limit) break;
+    }
     return out;
 }
 

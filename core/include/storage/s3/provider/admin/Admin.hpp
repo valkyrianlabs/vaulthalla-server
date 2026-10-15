@@ -91,6 +91,9 @@ struct LifecycleRule {
     std::optional<unsigned int> expire_current_days;      // destructive: deletes live objects
     std::optional<unsigned int> expire_noncurrent_days;   // AWS only; destructive for old versions
     bool foreign{false};                                  // not ours (read-only, preserved on every write)
+    // The rule has elements this model doesn't carry (tag/size filters, transitions, dates, delete-marker expiry,
+    // newer-noncurrent counts): rebuilding it from the fields above would change what it does.
+    bool unmodeled{false};
     std::string raw_xml;                                  // foreign rules round-trip verbatim
     [[nodiscard]] bool destructive() const { return expire_current_days || expire_noncurrent_days; }
 };

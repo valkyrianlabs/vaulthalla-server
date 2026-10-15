@@ -55,10 +55,11 @@ public:
     static void recordSeen(const std::string& provider, const std::string& accountRef, std::optional<uint32_t> apiKeyId,
                            const std::vector<SeenBucket>& buckets);
 
-    // The create-new path's lease: inserts (managed, creating, created_by_vaulthalla, token). nullopt when a row for
-    // the identity already exists and is not ours to retry — i.e. the bucket is known (discovered, adopted, bound,
-    // protected, or another live attempt). Our own row is re-claimed atomically when it is unbound, unprotected and
-    // failed, deleted, or stuck in creating past kStaleProvisioning.
+    // The create-new path's lease: inserts (unmanaged, creating, provision_attempted, token) — the row claims nothing
+    // about the bucket until confirmCreated. nullopt when a row for the identity already exists and is not ours to
+    // retry — i.e. the bucket is known (discovered, adopted, bound, protected, or another live attempt). Our own attempt
+    // row is re-claimed atomically when it is unbound, unprotected and failed, deleted, or stuck in creating past
+    // kStaleProvisioning; a row whose bucket we created and later deleted restarts with created_by_vaulthalla off.
     [[nodiscard]] static std::optional<ClaimOutcome> claimForCreate(const storage::upstream::BucketIdentity& id,
                                                                     const std::optional<std::string>& region,
                                                                     std::optional<uint32_t> apiKeyId,
@@ -81,10 +82,24 @@ public:
                                                    const std::optional<std::string>& expectedToken,
                                                    const std::optional<std::string>& lastError = std::nullopt);
 
+    // CreateBucket succeeded for the attempt holding `operationToken` and the bucket listed empty: managed and
+    // created_by_vaulthalla from now on. False when the token no longer matches.
+    [[nodiscard]] static bool confirmCreated(int64_t id, const std::string& operationToken);
+    // The attempt holding `operationToken` met a bucket that isn't ours: unmanaged, not created by Vaulthalla.
+    static bool disown(int64_t id, const std::string& operationToken, storage::upstream::model::ProvisioningState state,
+                       const std::optional<std::string>& lastError);
+    // Cleanup's lease (see upstream_bucket_begin_cleanup): nullopt when the row is not a settled, unbound, unlocked bucket
+    // Vaulthalla created, or another operation holds it.
+    [[nodiscard]] static std::optional<BucketModel> beginCleanup(int64_t id, const std::string& operationToken);
+    // True while the row still carries `operationToken` and is neither protected nor bound; refreshes updated_at.
+    [[nodiscard]] static bool heartbeat(int64_t id, const std::string& operationToken);
+
     static void bindVault(int64_t id, uint32_t vaultId, storage::upstream::model::Ownership ownership);
     static void unbindVault(int64_t id);
-    static void setOwnership(int64_t id, storage::upstream::model::Ownership ownership,
-                             storage::upstream::model::ProvisioningState state);
+    // With an expected token, only while the row still carries it (false otherwise).
+    static bool setOwnership(int64_t id, storage::upstream::model::Ownership ownership,
+                             storage::upstream::model::ProvisioningState state,
+                             const std::optional<std::string>& expectedToken = std::nullopt);
     static void setRegion(int64_t id, const std::string& region);
 
     // Locks the identity (row created as unmanaged when unknown). Idempotent: an existing lock keeps its first

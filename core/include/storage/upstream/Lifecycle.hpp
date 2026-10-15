@@ -3,6 +3,7 @@
 #include "storage/s3/provider/admin/Admin.hpp"
 
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -29,8 +30,14 @@ struct MergeResult {
     bool destructive = false;
 };
 
+// Our rule was changed outside Vaulthalla into something this model can't represent (a tag filter, transitions, …):
+// rewriting it would silently change what it does, so it is refused (removing it — `clear` — is still allowed).
+struct UnmodeledOwnedRule : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
 // Throws std::invalid_argument for fields the provider lacks (noncurrent versions without allowNoncurrent) or a
-// change that leaves a rule with no action.
+// change that leaves a rule with no action, and UnmodeledOwnedRule (above).
 [[nodiscard]] MergeResult mergeOwnedRule(const std::vector<s3::provider::admin::LifecycleRule>& current,
                                          const OwnedRuleChange& change, bool allowNoncurrent);
 

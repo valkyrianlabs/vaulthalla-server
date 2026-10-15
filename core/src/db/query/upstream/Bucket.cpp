@@ -27,8 +27,11 @@ std::optional<BucketModel> firstRow(const pqxx::result& res) {
 }
 
 bool busy(const BucketModel& b, const std::string& token) {
+    // A cleanup in progress is as much in flight as a provisioning attempt: nothing may adopt or claim the bucket
+    // while it is being emptied.
     const bool inFlight = b.provisioning_state == bmodel::ProvisioningState::Creating ||
-                          b.provisioning_state == bmodel::ProvisioningState::Configuring;
+                          b.provisioning_state == bmodel::ProvisioningState::Configuring ||
+                          b.provisioning_state == bmodel::ProvisioningState::Deleting;
     if (!inFlight || b.operation_token == token) return false;
     const auto age = std::time(nullptr) - b.updated_at;
     return age < std::chrono::duration_cast<std::chrono::seconds>(Bucket::kStaleProvisioning).count();
@@ -162,10 +165,41 @@ void Bucket::unbindVault(const int64_t id) {
     });
 }
 
-void Bucket::setOwnership(const int64_t id, const bmodel::Ownership ownership, const bmodel::ProvisioningState state) {
-    Transactions::exec("upstream::Bucket::setOwnership", [&](pqxx::work& txn) {
-        txn.exec(pqxx::prepped{"upstream_bucket_set_ownership"},
-                 pqxx::params{id, bmodel::to_string(ownership), bmodel::to_string(state)});
+bool Bucket::setOwnership(const int64_t id, const bmodel::Ownership ownership, const bmodel::ProvisioningState state,
+                          const std::optional<std::string>& expectedToken) {
+    return Transactions::exec("upstream::Bucket::setOwnership", [&](pqxx::work& txn) {
+        const auto res = txn.exec(pqxx::prepped{"upstream_bucket_set_ownership"},
+                                  pqxx::params{id, bmodel::to_string(ownership), bmodel::to_string(state), expectedToken});
+        return !res.empty();
+    });
+}
+
+bool Bucket::confirmCreated(const int64_t id, const std::string& operationToken) {
+    return Transactions::exec("upstream::Bucket::confirmCreated", [&](pqxx::work& txn) {
+        return !txn.exec(pqxx::prepped{"upstream_bucket_confirm_created"}, pqxx::params{id, operationToken}).empty();
+    });
+}
+
+bool Bucket::disown(const int64_t id, const std::string& operationToken, const bmodel::ProvisioningState state,
+                    const std::optional<std::string>& lastError) {
+    return Transactions::exec("upstream::Bucket::disown", [&](pqxx::work& txn) {
+        return !txn.exec(pqxx::prepped{"upstream_bucket_disown"},
+                         pqxx::params{id, operationToken, bmodel::to_string(state), lastError}).empty();
+    });
+}
+
+std::optional<BucketModel> Bucket::beginCleanup(const int64_t id, const std::string& operationToken) {
+    if (operationToken.empty()) throw std::invalid_argument("beginCleanup needs an operation token");
+    return Transactions::exec("upstream::Bucket::beginCleanup", [&](pqxx::work& txn) {
+        const double staleSeconds = std::chrono::duration<double>(kStaleProvisioning).count();
+        const auto res = txn.exec(pqxx::prepped{"upstream_bucket_begin_cleanup"}, pqxx::params{id, operationToken, staleSeconds});
+        return firstRow(res);
+    });
+}
+
+bool Bucket::heartbeat(const int64_t id, const std::string& operationToken) {
+    return Transactions::exec("upstream::Bucket::heartbeat", [&](pqxx::work& txn) {
+        return !txn.exec(pqxx::prepped{"upstream_bucket_heartbeat"}, pqxx::params{id, operationToken}).empty();
     });
 }
 
