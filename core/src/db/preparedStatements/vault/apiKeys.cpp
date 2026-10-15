@@ -4,6 +4,25 @@ void vh::db::Connection::initPreparedAPIKeys() const {
 
     conn_->prepare("get_api_key", "SELECT * FROM api_keys WHERE id = $1");
 
+    // Provider administration (#237, migration 110). Absent values keep what is stored.
+    conn_->prepare("api_key_set_admin", R"SQL(
+        UPDATE api_keys SET
+            admin_enabled       = $2,
+            provider_account_id = COALESCE($3, provider_account_id),
+            admin_capabilities  = COALESCE($4::jsonb, admin_capabilities),
+            admin_validated_at  = CASE WHEN $5::double precision IS NULL THEN admin_validated_at
+                                       ELSE to_timestamp($5::double precision) END
+        WHERE id = $1
+    )SQL");
+
+    conn_->prepare("api_key_set_provider_token",
+                   "UPDATE api_keys SET encrypted_provider_token = $2, provider_token_iv = $3 WHERE id = $1");
+
+    conn_->prepare("api_key_clear_provider_token",
+                   "UPDATE api_keys SET encrypted_provider_token = NULL, provider_token_iv = NULL WHERE id = $1");
+
+    conn_->prepare("api_key_set_account_ref", "UPDATE api_keys SET provider_account_id = $2 WHERE id = $1");
+
     conn_->prepare("get_api_key_by_name", "SELECT * FROM api_keys WHERE name = $1");
 
     conn_->prepare("upsert_api_key",

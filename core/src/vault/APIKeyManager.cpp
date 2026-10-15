@@ -115,6 +115,45 @@ std::shared_ptr<APIKey> APIKeyManager::getAPIKey(const unsigned int keyId) const
         key->encrypted_secret_access_key, masterKey, key->iv);
 
     key->secret_access_key.assign(decrypted.begin(), decrypted.end());
+    sodium_memzero(decrypted.data(), decrypted.size());
+
+    if (!key->encrypted_provider_token.empty() && !key->provider_token_iv.empty()) {
+        auto token = decrypt_aes256_gcm(key->encrypted_provider_token, masterKey, key->provider_token_iv);
+        key->provider_token.assign(token.begin(), token.end());
+        sodium_memzero(token.data(), token.size());
+    }
 
     return key;
+}
+
+void APIKeyManager::setProviderToken(const unsigned int keyId, std::optional<std::string> token) {
+    std::scoped_lock lock(apiKeysMutex_);
+    if (!db::query::vault::APIKey::getAPIKey(keyId)) throw std::runtime_error("API key not found");
+
+    if (!token || token->empty()) {
+        db::query::vault::APIKey::clearProviderToken(keyId);
+    } else {
+        const auto masterKey = tpmKeyProvider_->getMasterKey();
+        std::vector<uint8_t> iv;
+        std::vector<uint8_t> plaintext(token->begin(), token->end());
+        const auto ciphertext = encrypt_aes256_gcm(plaintext, masterKey, iv);
+        sodium_memzero(plaintext.data(), plaintext.size());
+        sodium_memzero(token->data(), token->size());
+        db::query::vault::APIKey::setProviderToken(keyId, ciphertext, iv);
+    }
+    if (auto refreshed = db::query::vault::APIKey::getAPIKey(keyId)) apiKeys_[keyId] = std::move(refreshed);
+}
+
+void APIKeyManager::setAdmin(const unsigned int keyId, const bool enabled, const std::optional<std::string>& accountRef,
+                             const std::optional<std::string>& capabilitiesJson,
+                             const std::optional<std::time_t> validatedAt) {
+    std::scoped_lock lock(apiKeysMutex_);
+    db::query::vault::APIKey::setAdmin(keyId, enabled, accountRef, capabilitiesJson, validatedAt);
+    if (auto refreshed = db::query::vault::APIKey::getAPIKey(keyId)) apiKeys_[keyId] = std::move(refreshed);
+}
+
+void APIKeyManager::setAccountRef(const unsigned int keyId, const std::optional<std::string>& accountRef) {
+    std::scoped_lock lock(apiKeysMutex_);
+    db::query::vault::APIKey::setAccountRef(keyId, accountRef);
+    if (auto refreshed = db::query::vault::APIKey::getAPIKey(keyId)) apiKeys_[keyId] = std::move(refreshed);
 }

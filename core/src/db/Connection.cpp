@@ -261,6 +261,10 @@ void Connection::initPrepared() {
     // Admin
     initPreparedSecrets();
     initPreparedWaivers();
+
+    // Upstream control plane
+    initPreparedUpstreamBuckets();
+    initPreparedUpstreamEvents();
 }
 
 }

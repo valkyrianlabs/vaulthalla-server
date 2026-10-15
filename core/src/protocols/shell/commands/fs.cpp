@@ -8,6 +8,7 @@
 #include "protocols/shell/Transfer.hpp"
 #include "protocols/shell/util/argsHelpers.hpp"
 #include "protocols/http/Access.hpp"
+#include "CommandUsage.hpp"
 #include "config/Registry.hpp"
 #include "fs/Filesystem.hpp"
 #include "fs/cache/Registry.hpp"

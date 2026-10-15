@@ -58,6 +58,7 @@ current    ff006c7f22c400a2a8f271cc8b59c89d2ab3726ac3daba920f5dc48ff2b466ba  106
 current    fbec5b8aabe413d0d7033288f6279cdbe74c9da966eeb44b209cef6eb69dbe9f  107_sync_conflict_resolution.sql  unreleased
 current    ff53cff0b5b1bd56fa558a0ca8cc054d70b99e8fe11c3ed075bb3093ab642398  108_identity_revision.sql  unreleased
 current    ee265dc60cb4e7ef2e38f0004d0b2f5bb525488113228b916311c930c650173e  109_derived_page_count.sql  unreleased
+current    c8d03f865ebf15cdbc45ba903b827146bbd5a934e92f688bab58bdaa15f3a64c  110_upstream_control_plane.sql  unreleased
 historical 64170212eb3f9fbe0f7c949791b953f0376a1f2bcf66b3dec7afc5db6325d570  020_vaults.sql  v0.28.0-alpha..v1.5.0
 historical c154cd7e10f7931f29c12b9221c90f66d6b953cfb5e3dc15ea50f0940e5d4220  060_acl.sql  v0.28.0-alpha..v1.5.1
 historical 720caaa27c0d51635fe3f459a8426f019d3f0dbdc0b7ae176d283309933a7f53  082_stats_metric_samples.sql  v1.2.4..v1.2.5
