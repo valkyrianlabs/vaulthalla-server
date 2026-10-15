@@ -8,6 +8,7 @@
 #include <memory>
 #include <queue>
 #include <unordered_map>
+#include <unordered_set>
 #include <mutex>
 #include <shared_mutex>
 
@@ -37,6 +38,18 @@ public:
 
     RunNowResult runNow(unsigned int vaultId, uint8_t trigger = 3); // Event::Trigger::WEBHOOK
 
+    // Event-driven sync (#96): reconcile only the keys in `scope` on the sync pool, recorded as a webhook-triggered
+    // sync event. Busy while another pass of the vault runs (the caller retries; nothing is lost); Disabled when the
+    // vault's sync is off; NoEngine for unknown or non-S3 vaults.
+    enum class ScopedResult { Started, Busy, Disabled, NoEngine };
+    ScopedResult runScoped(unsigned int vaultId, std::shared_ptr<model::PassScope> scope);
+
+    // One pass per vault at a time, regular or scoped. Regular Cloud passes take it when they start; runScoped takes
+    // it before submitting. Released by the pass when it ends.
+    [[nodiscard]] bool tryAcquirePass(unsigned int vaultId);
+    void releasePass(unsigned int vaultId);
+    [[nodiscard]] bool passRunning(unsigned int vaultId) const;
+
     void refreshEngines();
 
 protected:
@@ -57,6 +70,9 @@ private:
     mutable std::shared_mutex taskMapMutex_;
 
     std::unordered_map<unsigned int, std::shared_ptr<Local>> taskMap_{};
+
+    mutable std::mutex passMutex_;
+    std::unordered_set<unsigned int> activePasses_;
 
     void pruneStaleTasks(const std::vector<std::shared_ptr<storage::Engine>>& engines);
 

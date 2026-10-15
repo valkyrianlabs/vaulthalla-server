@@ -34,6 +34,9 @@
 #include "sync/Planner.hpp"
 
 #include "crypto/id/Generator.hpp"
+#include "sync/Controller.hpp"
+
+#include <mutex>
 
 #include <optional>
 #include <utility>
@@ -50,7 +53,57 @@ using namespace vh::crypto;
 // ########### FSTask Overrides #############
 // ##########################################
 
+namespace {
+
+std::mutex& pendingRemovalsMutex() {
+    static std::mutex m;
+    return m;
+}
+
+Cloud::PendingRemovalsProvider& pendingRemovalsProvider() {
+    static Cloud::PendingRemovalsProvider provider;
+    return provider;
+}
+
+// Releases the vault's pass lease (sync::Controller) when a pass ends, however it ends.
+struct PassLease {
+    unsigned int vaultId;
+    bool held;
+    ~PassLease() {
+        if (!held) return;
+        if (const auto& controller = vh::runtime::Deps::get().syncController) controller->releasePass(vaultId);
+    }
+};
+
+}
+
+void Cloud::setPendingRemovalsProvider(PendingRemovalsProvider provider) {
+    std::scoped_lock lock(pendingRemovalsMutex());
+    pendingRemovalsProvider() = std::move(provider);
+}
+
+void Cloud::loadRemovedKeys() {
+    PendingRemovalsProvider provider;
+    {
+        std::scoped_lock lock(pendingRemovalsMutex());
+        provider = pendingRemovalsProvider();
+    }
+    removedKeys.clear();
+    if (provider) removedKeys = provider(vaultId());
+    if (scope) removedKeys.insert(scope->removed.begin(), scope->removed.end());
+}
+
 void Cloud::operator()() {
+    // One pass per vault at a time (#96): a regular pass waits while an event-scoped pass runs, and the reverse.
+    // runScoped() takes the lease before it submits a scoped pass; a regular pass takes it here.
+    const auto& controller = runtime::Deps::get().syncController;
+    if (!scope && controller && !controller->tryAcquirePass(vaultId())) {
+        next_run = system_clock::now() + seconds(2);
+        requeue();
+        return;
+    }
+    const PassLease lease{vaultId(), controller != nullptr};
+
     startTask();
 
     std::shared_ptr<CloudEngine> cloud;
@@ -58,14 +111,24 @@ void Cloud::operator()() {
         cloud = cloudEngine();
         const ScopedS3RequestBudget s3Budget(cloud, cloud->remote_policy()->s3_request_budget);
 
-        const Stage stages[] = {
+        loadRemovedKeys();
+
+        // A scoped pass reconciles the named keys only: the vault-wide maintenance (at-rest repair, trash purge,
+        // key rotation) stays with the regular pass.
+        const Stage regularStages[] = {
             {"shared",   [this]{ processSharedOps(); }},
             {"initBins", [this]{ initBins(); }},
             {"sync",     [this]{ sync(); }},
             {"clearBins",[this]{ clearBins(); }},
         };
+        const Stage scopedStages[] = {
+            {"initBins", [this]{ initScopedBins(); }},
+            {"sync",     [this]{ sync(); }},
+            {"clearBins",[this]{ clearBins(); }},
+        };
 
-        runStages(stages);
+        if (scope) runStages(scopedStages);
+        else runStages(regularStages);
 
         const auto s3Metrics = s3Budget.metrics();
         event->applyS3RequestMetrics(s3Metrics);
@@ -102,6 +165,18 @@ void Cloud::operator()() {
     }
 
     shutdown();
+
+    if (scope && scope->on_finish) {
+        const bool ok = event && event->status == Event::Status::SUCCESS && event->num_failed_ops == 0;
+        std::string why;
+        if (event && !ok) why = !event->stall_reason.empty() ? event->stall_reason : event->error_message;
+        if (!ok && why.empty()) why = "scoped sync pass did not complete";
+        try {
+            scope->on_finish(ok, why);
+        } catch (const std::exception& e) {
+            log::Registry::sync()->error("[CloudSync] Vault {}: scoped pass completion handler failed: {}", vaultId(), e.what());
+        }
+    }
 }
 
 // ##########################################
@@ -279,12 +354,30 @@ void Cloud::initBins() {
     event->heartbeat();
 }
 
+void Cloud::initScopedBins() {
+    // Only the keys the events named, straight from the index the events were applied to: no LIST, no manifest
+    // refresh, no staleness gate (the scope is exactly what the provider just told us changed).
+    for (const auto& key : scope->keys) {
+        const std::filesystem::path path(key);
+        if (auto remote = db::query::sync::RemoteObjectIndex::getFile(engine->vault->id, path)) s3Map[key] = remote;
+        if (auto local = db::query::fs::File::getFileByPath(engine->vault->id, path)) localMap[key] = local;
+    }
+    s3Files = uMap2Vector(s3Map);
+    localFiles = uMap2Vector(localMap);
+    loadConflictState();
+    log::Registry::sync()->debug("[CloudSync] Vault {}: scoped pass over {} key(s) ({} remote, {} local, {} removed)",
+                                 engine->vault->id, scope->keys.size(), s3Map.size(), localMap.size(),
+                                 removedKeys.size());
+    event->heartbeat();
+}
+
 void Cloud::clearBins() {
     localFiles.clear();
     s3Files.clear();
     s3Map.clear();
     localMap.clear();
     remoteHashMap.clear();
+    removedKeys.clear();
     baselines.clear();
     openConflicts.clear();
     conflictWrites = {};

@@ -9,6 +9,10 @@
 #include "sync/model/Action.hpp"
 #include "sync/model/Baseline.hpp"
 #include "db/query/sync/Conflict.hpp"
+#include "sync/model/Scope.hpp"
+
+#include <functional>
+#include <unordered_set>
 
 #include <memory>
 #include <unordered_map>
@@ -27,10 +31,26 @@ namespace vh::sync {
         std::unordered_map<uint32_t, db::query::sync::ConflictRecord> openConflicts;    // by file id
         db::query::sync::ConflictPassWrites conflictWrites;
 
+        // Event-driven sync (#96). A scoped pass reconciles only scope->keys from the remote index; a regular pass has
+        // no scope. Either way, keys with a pending upstream removal (an applied removal event not yet settled) follow
+        // the removal rule instead of being re-uploaded as "local only".
+        std::shared_ptr<const model::PassScope> scope;
+        std::unordered_set<std::u8string> removedKeys;
+
+        // Installed by the event service: the vault's keys with an applied, unsettled removal event.
+        using PendingRemovalsProvider = std::function<std::unordered_set<std::u8string>(uint32_t vaultId)>;
+        static void setPendingRemovalsProvider(PendingRemovalsProvider provider);
+
         ~Cloud() override = default;
 
         explicit Cloud(const std::shared_ptr<storage::Engine> &engine) : Local(engine) {
         }
+
+        Cloud(const std::shared_ptr<storage::Engine> &engine, std::shared_ptr<const model::PassScope> passScope)
+            : Local(engine), scope(std::move(passScope)) {
+        }
+
+        [[nodiscard]] bool requeueAfterRun() const override { return scope == nullptr; }
 
         // ##########################################
         // ########### FSTask Overrides #############
@@ -45,6 +65,9 @@ namespace vh::sync {
         void sync();
 
         void initBins();
+        void initScopedBins();
+        // removedKeys from the pending-removals provider (and the scope's own removals).
+        void loadRemovedKeys();
 
         void clearBins();
 

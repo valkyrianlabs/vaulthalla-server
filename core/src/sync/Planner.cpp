@@ -35,6 +35,20 @@ std::vector<Action> Planner::build(
         if (L && !R) {
             // The remote side of an open conflict went away: there is nothing left to decide between.
             if (ctx->hasOpenConflict(L->id)) ctx->closeOpenConflict(L->id, "superseded");
+            // The provider said the object was removed (#96). A listing can't tell a deletion from an absence, an
+            // event can: a local copy nobody changed since both sides last agreed follows the deletion; one that
+            // changed (or never synced) is kept and uploaded again, as before.
+            // (mirror + keep_remote deletes every local leftover below anyway.)
+            if (ctx->removedKeys.contains(k.rel) && policy->propagatesRemoteRemoval() && !policy->deleteLocalLeftovers()) {
+                const auto* base = ctx->baselineFor(L->id);
+                if (base && !localChangedSince(*L, *base)) {
+                    plan.push_back({ ActionType::DeleteLocal, k, L, nullptr });
+                    continue;
+                }
+                log::Registry::sync()->info(
+                    "[SyncPlanner] '{}' was removed upstream but its local copy changed since the last sync (or was never "
+                    "synced); keeping it", L->path.string());
+            }
             if (policy->uploadLocalOnly())
                 plan.push_back({ ActionType::Upload, k, L, nullptr });
             continue;

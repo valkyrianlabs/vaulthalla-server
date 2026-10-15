@@ -15,4 +15,5 @@ namespace vh::sync::model {
     struct Conflict;
     struct Waiver;
     struct S3CostEstimate;
+    struct PassScope;
 }
