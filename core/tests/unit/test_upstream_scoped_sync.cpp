@@ -174,6 +174,29 @@ TEST_F(UpstreamScopedSyncTest, MetadataFreeOverwriteOfAnEncryptedFileIsNotImport
     EXPECT_EQ(readLocal(f, "/sealed.txt"), "original sealed content");
 }
 
+TEST_F(UpstreamScopedSyncTest, AnObjectRelabelledPlaintextOverAnEncryptedFileIsNotImported) {
+    // vh-encrypted=false is Vaulthalla's own label for plaintext objects; in a vault that encrypts upstream it is honoured
+    // only for keys the vault never sealed (or with an importing subscription), never over a file it holds sealed.
+    const auto f = remoteVault(superUser, sync::model::RemotePolicy::ConflictPolicy::KeepRemote);
+    write(f, "/relabelled.txt", "original sealed content");
+    (void)run(f, newPass(f, nullptr));
+    f.bucket->put("relabelled.txt", bytes("replaced and labelled plaintext"), {{"vh-encrypted", "false"}});
+    auto row = db::query::sync::RemoteObjectIndex::getFile(f.vault->id, "/relabelled.txt");
+    ASSERT_TRUE(row);
+    row->remote_etag = f.bucket->get("relabelled.txt")->etag;
+    row->size_bytes = 31;
+    row->content_hash.reset();
+    row->remote_encrypted.reset();
+    row->encryption_iv.clear();
+    row->encrypted_with_key_version = 0;
+    db::query::sync::RemoteObjectIndex::upsertEventFile(f.vault->id, row);
+
+    auto scope = scopeOf({"/relabelled.txt"});
+    scope->changed.insert(u8"/relabelled.txt");
+    (void)run(f, newPass(f, scope));
+    EXPECT_EQ(readLocal(f, "/relabelled.txt"), "original sealed content");
+}
+
 TEST(UpstreamPassLease, OnePassPerVault) {
     sync::Controller controller;
     EXPECT_TRUE(controller.tryAcquirePass(41));

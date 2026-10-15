@@ -421,7 +421,10 @@ TEST_F(UpstreamEventOpsTest, AVaultsBindingIsEditedInPlaceAndNeverTakenFromAnoth
 
 TEST_F(UpstreamEventOpsTest, ExternalChangesSyncThroughTheOpsLayerAndALockStopsThemUntilUnlocked) {
     const auto v = vaultOn(awsKey());
-    ASSERT_EQ(up::enableEvents(superUser, v.f.vault->id, {}).state, "active");
+    // This vault encrypts upstream, so it ignores foreign objects unless told otherwise: the plaintext PUTs below are
+    // meant to be imported.
+    ASSERT_EQ(up::enableEvents(superUser, v.f.vault->id, {.prefix = "", .foreign_objects = std::string("import")}).state,
+              "active");
     write(v.f, "/stays.txt", "keeps the index non-empty");
     (void)pass(v.f);
     PassCounts counts;
@@ -446,6 +449,7 @@ TEST_F(UpstreamEventOpsTest, ExternalChangesSyncThroughTheOpsLayerAndALockStopsT
     (void)applier.applyVault(v.f.vault->id);
     EXPECT_EQ(readLocal(v.f, "/photos/new.jpg"), "better jpeg");
 
+    v.f.bucket->erase("photos/new.jpg");   // really deleted upstream: the removal is confirmed by a HEAD
     ue::providerState()->push(ue::awsBody(v.bucket, "ObjectRemoved:Delete", "photos/new.jpg", "0C"));
     (void)poll(v.f.vault->id);
     (void)applier.applyVault(v.f.vault->id);

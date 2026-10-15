@@ -58,6 +58,10 @@ private:
 };
 
 [[nodiscard]] bool cancellationRequested();
+// A ScopedCancellation is installed on this thread (the data-path curl handles only add their abort hook then).
+[[nodiscard]] bool cancellationActive();
+// CURLOPT_XFERINFOFUNCTION for handles that don't go through perform(): aborts once cancellation is requested.
+int cancellationProgressHook(void* clientp, long long dltotal, long long dlnow, long long ultotal, long long ulnow);
 
 void setTransportForTesting(std::optional<Transport> transport);
 

@@ -420,7 +420,13 @@ TEST_F(UpstreamStoreTest, EventsReceivedBeforeRoutingAreAssignedLater) {
     auto e = event(vaultId, "early/key", "early-" + tag());
     e.vault_id.reset();
     e.bucket = "routing-" + tag();
-    ASSERT_EQ(q::Inbox::insertMany({e}), 1u);
+    e.state = m::InboxState::Skipped;   // how ingest stores an event no subscription routes yet
+    e.note = "unrouted";
+    auto outside = event(vaultId, "other/key", "outside-" + tag());
+    outside.vault_id.reset();
+    outside.bucket = e.bucket;
+    outside.state = m::InboxState::Skipped;
+    ASSERT_EQ(q::Inbox::insertMany({e, outside}), 2u);
     EXPECT_TRUE(q::Inbox::claimForVault(vaultId, 10).empty());
 
     const auto bucket = q::Bucket::upsertAdopted({.provider = e.provider, .account_ref = e.account_ref, .bucket = e.bucket},
@@ -429,7 +435,11 @@ TEST_F(UpstreamStoreTest, EventsReceivedBeforeRoutingAreAssignedLater) {
     const auto sub = q::Subscription::create(std::nullopt, bucket.bucket->id, vaultId, "", m::ForeignObjects::Import,
                                              m::BaselineState::Pending);
     ASSERT_TRUE(sub);
-    EXPECT_EQ(q::Inbox::routeUnassigned(e.provider, e.account_ref, e.bucket, vaultId, sub->id), 1u);
+    // Only keys under the subscription's prefix, only since just before it existed.
+    EXPECT_EQ(q::Inbox::routeUnassigned(e.provider, e.account_ref, e.bucket, vaultId, sub->id, "early/",
+                                        std::time(nullptr) + 3600), 0u) << "events received before `since` stay skipped";
+    EXPECT_EQ(q::Inbox::routeUnassigned(e.provider, e.account_ref, e.bucket, vaultId, sub->id, "early/",
+                                        std::time(nullptr) - 3600), 1u);
     const auto routed = q::Inbox::claimForVault(vaultId, 10);
     ASSERT_EQ(routed.size(), 1u);
     EXPECT_EQ(routed[0].subscription_id, std::optional<int64_t>(sub->id));

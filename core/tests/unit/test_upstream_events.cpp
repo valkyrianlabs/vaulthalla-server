@@ -23,6 +23,11 @@
 #include "sync/model/Scope.hpp"
 #include "protocols/shell/Router.hpp"
 #include "protocols/shell/commands/vault.hpp"
+#include "ops/Error.hpp"
+#include "ops/Roles.hpp"
+#include "ops/Upstream.hpp"
+
+#include <nlohmann/json.hpp>
 
 namespace vh::test_upstream_events {
 
@@ -196,6 +201,7 @@ TEST_F(UpstreamEventsTest, ExternalOverwriteAndDeleteSynchronise) {
     (void)pass(v.f);   // uploaded; baselines recorded
 
     externalPut(v, "doc.txt", "second, written by another tool");
+    v.f.bucket->erase("gone.txt");   // really deleted upstream: the removal is confirmed by a HEAD
     providerState()->push(awsBody(v.bucket, "ObjectCreated:Put", "doc.txt", "0B", 31, std::string("etag-new")));
     providerState()->push(awsBody(v.bucket, "ObjectRemoved:Delete", "gone.txt", "0C"));
     (void)poll(v);
@@ -435,6 +441,357 @@ TEST_F(UpstreamEventsTest, ShutdownCancelsAnInFlightLongPoll) {
     EXPECT_LT(took, std::chrono::seconds(1));
     EXPECT_EQ(service.pollerCount(), 0u);
     providerState()->blockPolls = false;
+}
+
+}
+
+// ---- FX-3 hardening (review findings) --------------------------------------------------------------------------
+
+namespace vh::test_upstream_events {
+
+class UpstreamEventsHardeningTest : public UpstreamEventsTest {
+protected:
+    static std::optional<std::string> manifestEtag(const EventVault& v) {
+        if (const auto o = v.f.bucket->get(".vaulthalla/index-v1.json")) return o->etag;
+        return std::nullopt;
+    }
+    static bool locallyPresent(const Fixture& f, const std::string& path) {
+        return db::query::fs::File::getFileByPath(f.vault->id, path) != nullptr;
+    }
+    static size_t intents(const uint32_t vaultId) {
+        return db::Transactions::exec("UpstreamEventsHardeningTest::intents", [&](pqxx::work& txn) {
+            return txn.exec("SELECT COUNT(*) FROM upstream_write_intent WHERE vault_id = $1", pqxx::params{vaultId})
+                .one_field_ref()
+                .as<size_t>();
+        });
+    }
+};
+
+TEST_F(UpstreamEventsHardeningTest, TheIndexManifestsOwnNotificationIsNeverWorkAndNeverRepublished) {
+    const auto v = subscribed();
+    const auto before = manifestEtag(v);
+    providerState()->push(awsBody(v.bucket, "ObjectCreated:Put", ".vaulthalla/index-v1.json", "0F", 120, std::string("m1")));
+    (void)poll(v);
+
+    unsigned passes = 0;
+    auto applier = inlineApplier(v.f, &passes);
+    const auto out = applier.applyVault(v.f.vault->id);
+    EXPECT_FALSE(out.index_changed);
+    EXPECT_EQ(passes, 0u) << "no scoped pass for Vaulthalla's own manifest";
+    EXPECT_EQ(manifestEtag(v), before) << "nothing republished: no feedback loop";
+    const auto rows = inbox(v.f.vault->id);
+    ASSERT_EQ(rows.size(), 1u);
+    EXPECT_EQ(rows[0].state, umodel::InboxState::Skipped);
+    EXPECT_EQ(rows[0].origin, umodel::InboxOrigin::Self);
+}
+
+TEST_F(UpstreamEventsHardeningTest, EventsOfOneSecondApplyInMillisecondOrderWhateverTheArrivalOrder) {
+    const auto v = subscribed();
+    externalPut(v, "ms.txt", "created last");
+    // No sequencers (as on R2): a delete at .100 and a create at .900 of the same second, delivered create-last-first.
+    providerState()->push(awsBody(v.bucket, "ObjectCreated:Put", "ms.txt", "", 12, std::string("e9"),
+                                  "2026-10-15T12:00:00.900Z"));
+    providerState()->push(awsBody(v.bucket, "ObjectRemoved:Delete", "ms.txt", "", std::nullopt, std::nullopt,
+                                  "2026-10-15T12:00:00.100Z"));
+    (void)poll(v);
+    const auto rows = inbox(v.f.vault->id);
+    ASSERT_EQ(rows.size(), 2u);
+    for (const auto& r : rows) EXPECT_TRUE(r.event_time_ms.has_value()) << "milliseconds are stored";
+
+    auto applier = inlineApplier(v.f);
+    (void)applier.applyVault(v.f.vault->id);
+    EXPECT_NE(db::query::sync::RemoteObjectIndex::getFile(v.f.vault->id, "ms.txt"), nullptr) << "the create (later) wins";
+    EXPECT_EQ(readLocal(v.f, "/ms.txt"), "created last");
+}
+
+TEST_F(UpstreamEventsHardeningTest, ATrueTieBetweenCreateAndRemoveIsDecidedByTheProvider) {
+    const auto v = subscribed();
+    // Same millisecond, no sequencer: the object exists, so the create stands.
+    externalPut(v, "tie-exists.txt", "still here");
+    providerState()->push(awsBody(v.bucket, "ObjectRemoved:Delete", "tie-exists.txt", "", std::nullopt, std::nullopt,
+                                  "2026-10-15T12:00:01.500Z"));
+    providerState()->push(awsBody(v.bucket, "ObjectCreated:Put", "tie-exists.txt", "", 10, std::string("t1"),
+                                  "2026-10-15T12:00:01.500Z"));
+    // Same millisecond, the object is gone: the removal stands.
+    providerState()->push(awsBody(v.bucket, "ObjectCreated:Put", "tie-gone.txt", "", 4, std::string("t2"),
+                                  "2026-10-15T12:00:02.250Z"));
+    providerState()->push(awsBody(v.bucket, "ObjectRemoved:Delete", "tie-gone.txt", "", std::nullopt, std::nullopt,
+                                  "2026-10-15T12:00:02.250Z"));
+    (void)poll(v);
+
+    auto applier = inlineApplier(v.f);
+    (void)applier.applyVault(v.f.vault->id);
+    EXPECT_NE(db::query::sync::RemoteObjectIndex::getFile(v.f.vault->id, "tie-exists.txt"), nullptr);
+    EXPECT_EQ(readLocal(v.f, "/tie-exists.txt"), "still here");
+    EXPECT_EQ(db::query::sync::RemoteObjectIndex::getFile(v.f.vault->id, "tie-gone.txt"), nullptr);
+    EXPECT_FALSE(locallyPresent(v.f, "/tie-gone.txt"));
+}
+
+TEST_F(UpstreamEventsHardeningTest, ARemovalTheProviderDoesNotConfirmDeletesNothing) {
+    const auto v = subscribed();
+    write(v.f, "/forged.txt", "real data");
+    (void)pass(v.f);   // uploaded: the object exists upstream
+    // A forged (or misordered) notification: the object is still there.
+    providerState()->push(awsBody(v.bucket, "ObjectRemoved:Delete", "forged.txt", "FF"));
+    (void)poll(v);
+
+    unsigned passes = 0;
+    auto applier = inlineApplier(v.f, &passes);
+    const auto out = applier.applyVault(v.f.vault->id);
+    EXPECT_EQ(out.applied, 0u);
+    EXPECT_TRUE(locallyPresent(v.f, "/forged.txt")) << "never deleted on an unconfirmed removal";
+    EXPECT_NE(db::query::sync::RemoteObjectIndex::getFile(v.f.vault->id, "forged.txt"), nullptr);
+    const auto rows = inbox(v.f.vault->id);
+    ASSERT_EQ(rows.size(), 1u);
+    EXPECT_EQ(rows[0].state, umodel::InboxState::Skipped);
+    EXPECT_NE(rows[0].note.value_or("").find("not confirmed"), std::string::npos);
+}
+
+TEST_F(UpstreamEventsHardeningTest, AFailedHeadIsRetriedNeverTakenForADeletion) {
+    const auto v = subscribed();
+    write(v.f, "/outage.txt", "kept through an outage");
+    (void)pass(v.f);
+    v.f.bucket->erase("outage.txt");   // really deleted upstream, but the HEAD that would confirm it fails
+    v.f.bucket->failHeads = true;
+    providerState()->push(awsBody(v.bucket, "ObjectRemoved:Delete", "outage.txt", "FE"));
+    (void)poll(v);
+
+    auto applier = inlineApplier(v.f);
+    const auto out = applier.applyVault(v.f.vault->id);
+    EXPECT_EQ(out.failed, 1u);
+    EXPECT_TRUE(locallyPresent(v.f, "/outage.txt"));
+    const auto rows = inbox(v.f.vault->id);
+    ASSERT_EQ(rows.size(), 1u);
+    EXPECT_EQ(rows[0].state, umodel::InboxState::Pending) << "retried with backoff";
+    EXPECT_TRUE(rows[0].next_attempt_at.has_value());
+
+    v.f.bucket->failHeads = false;
+    db::Transactions::exec("t", [&](pqxx::work& txn) {
+        txn.exec("UPDATE upstream_event_inbox SET next_attempt_at = NULL WHERE vault_id = $1", pqxx::params{v.f.vault->id});
+    });
+    (void)applier.applyVault(v.f.vault->id);
+    EXPECT_FALSE(locallyPresent(v.f, "/outage.txt")) << "once confirmed, the removal goes through";
+}
+
+TEST_F(UpstreamEventsHardeningTest, LostContinuityHoldsEventsUntilTheBucketIsListedAgain) {
+    const auto v = subscribed();
+    db::query::upstream::Channel::recordPoll(v.channel.id, true, 0, std::nullopt, std::nullopt, std::nullopt);
+    sync::events::Applier::onBaselineListed(v.f.vault->id, std::time(nullptr) - 100);
+    EXPECT_TRUE(sync::events::Applier::indexKeptFresh(v.f.vault->id, std::chrono::hours(24)));
+
+    db::query::upstream::Channel::markContinuityBroken(v.channel.id, "test: lost messages");
+    EXPECT_FALSE(sync::events::Applier::indexKeptFresh(v.f.vault->id, std::chrono::hours(24)));
+    // Every subscription on the channel shares its stream (the fake account's subscriptions all do).
+    EXPECT_GE(sync::events::Applier::checkContinuity(), 1u);
+    EXPECT_TRUE(sync::events::Applier::baselineNeeded(v.f.vault->id)) << "the next regular pass lists the bucket";
+    EXPECT_EQ(sync::events::Applier::checkContinuity(), 0u) << "reset once";
+
+    providerState()->push(awsBody(v.bucket, "ObjectCreated:Put", "held.txt", "0A", 1, std::string("h")));
+    (void)poll(v);
+    auto applier = inlineApplier(v.f);
+    EXPECT_TRUE(applier.applyVault(v.f.vault->id).held);
+
+    sync::events::Applier::onBaselineListed(v.f.vault->id, std::time(nullptr) + 1);
+    EXPECT_FALSE(sync::events::Applier::baselineNeeded(v.f.vault->id));
+    EXPECT_TRUE(sync::events::Applier::indexKeptFresh(v.f.vault->id, std::chrono::hours(24)));
+}
+
+TEST_F(UpstreamEventsHardeningTest, ADeliveryGapLongerThanTheRetentionBreaksContinuity) {
+    const auto v = subscribed();
+    db::Transactions::exec("t", [&](pqxx::work& txn) {   // the fake account's channel is shared by earlier tests
+        txn.exec("UPDATE upstream_event_channel SET continuity_broken_at = NULL WHERE id = $1", pqxx::params{v.channel.id});
+    });
+    db::query::upstream::Channel::recordPoll(v.channel.id, true, 0, std::nullopt, std::nullopt, std::nullopt);
+    EXPECT_FALSE(db::query::upstream::Channel::get(v.channel.id)->continuity_broken_at.has_value());
+    db::Transactions::exec("t", [&](pqxx::work& txn) {
+        txn.exec("UPDATE upstream_event_channel SET last_success_at = CURRENT_TIMESTAMP - INTERVAL '5 days' WHERE id = $1",
+                 pqxx::params{v.channel.id});
+    });
+    db::query::upstream::Channel::recordPoll(v.channel.id, true, 0, std::nullopt, std::nullopt, std::nullopt);
+    const auto ch = db::query::upstream::Channel::get(v.channel.id);
+    EXPECT_TRUE(ch->continuity_broken_at.has_value());
+    EXPECT_FALSE(sync::events::Applier::indexKeptFresh(v.f.vault->id, std::chrono::hours(24 * 30)));
+}
+
+TEST_F(UpstreamEventsHardeningTest, DeadLettersAreReportedAndBreakContinuity) {
+    const auto v = subscribed();
+    db::Transactions::exec("t", [&](pqxx::work& txn) {   // the fake account's channel is shared by earlier tests
+        txn.exec("UPDATE upstream_event_channel SET continuity_broken_at = NULL, dlq_depth = NULL WHERE id = $1",
+                 pqxx::params{v.channel.id});
+    });
+    providerState()->dlqDepth = 3;
+    {
+        sync::events::Service service;
+        service.cycle();   // the first cycle runs maintenance: dead-letter check + continuity sweep
+    }
+    const auto ch = db::query::upstream::Channel::get(v.channel.id);
+    EXPECT_EQ(ch->dlq_depth.value_or(0), 3u);
+    EXPECT_TRUE(ch->continuity_broken_at.has_value());
+    EXPECT_TRUE(sync::events::Applier::baselineNeeded(v.f.vault->id));
+}
+
+TEST_F(UpstreamEventsHardeningTest, AnIngestFailureOnAMessagesLastDeliveryBreaksContinuity) {
+    const auto v = subscribed();
+    providerState()->push(awsBody(v.bucket, "ObjectCreated:Put", "last-try.txt", "0A", 1, std::string("l")));
+    providerState()->queue.front().attempts = 7;   // the 8th delivery is the last before the DLQ
+    db::Transactions::exec("t", [&](pqxx::work& txn) {
+        txn.exec("CREATE OR REPLACE FUNCTION vh_test_refuse_inbox() RETURNS trigger LANGUAGE plpgsql AS "
+                 "$f$ BEGIN RAISE EXCEPTION 'test: inbox unavailable'; END $f$");
+        txn.exec("CREATE TRIGGER vh_test_refuse_inbox BEFORE INSERT ON upstream_event_inbox "
+                 "FOR EACH ROW EXECUTE FUNCTION vh_test_refuse_inbox()");
+    });
+    EXPECT_ANY_THROW((void)poll(v));
+    db::Transactions::exec("t", [&](pqxx::work& txn) {
+        txn.exec("DROP TRIGGER vh_test_refuse_inbox ON upstream_event_inbox");
+        txn.exec("DROP FUNCTION vh_test_refuse_inbox()");
+    });
+    EXPECT_TRUE(providerState()->acked.empty());
+    EXPECT_TRUE(db::query::upstream::Channel::get(v.channel.id)->continuity_broken_at.has_value());
+}
+
+TEST_F(UpstreamEventsHardeningTest, AFailedUploadLeavesNoWriteIntentAndASuccessfulOneLivesFromCompletion) {
+    const auto v = subscribed();
+    sync::events::subscriptions::invalidateCache();
+    const auto file = write(v.f, "/intent.txt", "payload");
+    v.f.bucket->failPuts = true;
+    EXPECT_ANY_THROW(v.f.engine->upload(file));
+    EXPECT_EQ(intents(v.f.vault->id), 0u) << "a failed request can never claim someone else's notification";
+
+    v.f.bucket->failPuts = false;
+    v.f.engine->upload(file);
+    ASSERT_EQ(intents(v.f.vault->id), 1u);
+    const auto completed = db::Transactions::exec("t", [&](pqxx::work& txn) {
+        return !txn.exec("SELECT completed_at FROM upstream_write_intent WHERE vault_id = $1", pqxx::params{v.f.vault->id})
+                    .one_row_ref()["completed_at"].is_null();
+    });
+    EXPECT_TRUE(completed);
+}
+
+TEST_F(UpstreamEventsHardeningTest, TheApplierTakesTheLeaseBeforeItReadsAndYieldsToAWaitingRegularPass) {
+    const auto v = subscribed();
+    providerState()->push(awsBody(v.bucket, "ObjectCreated:Put", "lease.txt", "0A", 1, std::string("x")));
+    (void)poll(v);
+
+    sync::events::Applier busy({.tryAcquirePass = [](uint32_t) { return false; },
+                                .releasePass = [](uint32_t) {},
+                                .runScoped = {}, .regularWaiting = [](uint32_t) { return false; }, .shouldStop = {}});
+    const auto a = busy.applyVault(v.f.vault->id);
+    EXPECT_TRUE(a.busy);
+    EXPECT_EQ(a.claimed, 0u) << "nothing read without the lease";
+
+    sync::events::Applier yielding({.tryAcquirePass = [](uint32_t) { return true; },
+                                    .releasePass = [](uint32_t) {},
+                                    .runScoped = {}, .regularWaiting = [](uint32_t) { return true; }, .shouldStop = {}});
+    const auto b = yielding.applyVault(v.f.vault->id);
+    EXPECT_TRUE(b.busy);
+    EXPECT_EQ(b.claimed, 0u);
+    EXPECT_EQ(countState(v.f.vault->id, umodel::InboxState::Pending), 1u);
+}
+
+TEST_F(UpstreamEventsHardeningTest, AScopedPassDroppedBeforeItRunsReleasesItsLeaseAndReportsFailure) {
+    const auto f = remoteVault(superUser);
+    const auto previous = runtime::Deps::get().syncController;
+    const auto controller = std::make_shared<sync::Controller>();
+    runtime::Deps::setSyncController(controller);
+    ASSERT_TRUE(controller->tryAcquirePass(f.vault->id));
+    bool failed = false;
+    {
+        auto scope = std::make_shared<sync::model::PassScope>();
+        scope->on_finish = [&](const bool ok, const std::string&) { failed = !ok; };
+        auto cloud = std::make_shared<sync::Cloud>(f.engine, scope);
+        cloud->adoptPassLease();
+    }   // dropped unrun
+    EXPECT_FALSE(controller->passRunning(f.vault->id));
+    EXPECT_TRUE(failed);
+    runtime::Deps::setSyncController(previous);
+}
+
+TEST_F(UpstreamEventsHardeningTest, ManualIngestNeedsTheEventConfigurationRights) {
+    const auto owner = createUser("ingest_owner", "unprivileged");
+    const auto f = remoteVault(owner);
+    EXPECT_THROW((void)ops::upstream::ingestEventRecords(owner, f.vault->id, {"{}"}), ops::Denied)
+        << "owning the vault is not enough: a removal could delete files";
+    const auto bucket = std::static_pointer_cast<vault::model::S3Vault>(f.vault)->bucket;
+    const auto body = nlohmann::json::parse(awsBody(bucket, "ObjectCreated:Put", "m.txt", "0A", 1, std::string("e")));
+    const auto r = ops::upstream::ingestEventRecords(superUser, f.vault->id, {body["Records"][0].dump()});
+    EXPECT_EQ(r.inserted, 1u);
+}
+
+TEST_F(UpstreamEventsHardeningTest, EncryptingVaultsIgnoreForeignObjectsByDefault) {
+    auto f = remoteVault(superUser);
+    const auto s3 = std::static_pointer_cast<vault::model::S3Vault>(f.vault);
+    ASSERT_TRUE(s3->encrypt_upstream);
+    runtime::Deps::get().apiKeyManager->setAdmin(s3->api_key_id, true, providerState()->account, "{}", std::time(nullptr));
+    const auto status = ops::upstream::enableEvents(superUser, f.vault->id, {});
+    EXPECT_EQ(status.foreign_objects, "ignore");
+}
+
+TEST_F(UpstreamEventsHardeningTest, ChannelAccountAndErrorsAreShownOnlyToWhoMayViewTheChannelsKey) {
+    const auto v = subscribed();
+    db::query::upstream::Channel::setState(v.channel.id, umodel::ChannelState::Active,
+                                           "provider said: account 123456789012 queue vaulthalla-events-us-east-1");
+    // A reader of upstream status and of vaults, but of no API key.
+    const auto roleName = "ev_reader_" + tag();
+    (void)ops::roles::createAdminRole(superUser, {.name = roleName, .from = std::string("unprivileged")}, "test");
+    db::Transactions::exec("t", [&](pqxx::work& txn) {
+        txn.exec("UPDATE admin_role SET upstream_permissions = B'00000001', "
+                 "vaults_permissions = (SELECT vaults_permissions FROM admin_role WHERE name = 'auditor') WHERE name = $1",
+                 pqxx::params{roleName});
+    });
+    (void)identities::manager().reconcile();
+    const auto reader = createUser("ev_reader", roleName);
+
+    const auto find = [&](const std::vector<ops::upstream::EventStatus>& all) -> std::optional<ops::upstream::EventStatus> {
+        for (const auto& s : all)
+            if (s.vault_id == v.f.vault->id) return s;
+        return std::nullopt;
+    };
+    const auto mine = find(ops::upstream::eventStatus(superUser));
+    ASSERT_TRUE(mine && mine->channel);
+    EXPECT_FALSE(mine->channel->account_ref.empty());
+    EXPECT_TRUE(mine->channel->last_error.has_value());
+
+    const auto theirs = find(ops::upstream::eventStatus(reader));
+    ASSERT_TRUE(theirs && theirs->channel) << "the vault and its subscription are still visible";
+    EXPECT_TRUE(theirs->channel->account_ref.empty()) << "no keys.api View on the channel's key";
+    EXPECT_FALSE(theirs->channel->last_error.has_value());
+    EXPECT_EQ(theirs->state, mine->state);
+}
+
+TEST_F(UpstreamEventsHardeningTest, ShutdownIsBoundedDuringATeardownRetry) {
+    const auto v = subscribed();
+    db::query::upstream::Subscription::setState(v.subscriptionId, umodel::SubscriptionState::Removing, "test");
+    providerState()->blockUnsubscribe = true;
+    sync::events::Service service;
+    service.start();
+    for (int i = 0; i < 300 && !providerState()->unsubscribeEntered.load(); ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    ASSERT_TRUE(providerState()->unsubscribeEntered.load()) << "the teardown retry reached the provider";
+    const auto started = std::chrono::steady_clock::now();
+    service.requestStop();
+    service.join();
+    EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(1));
+    providerState()->blockUnsubscribe = false;
+}
+
+TEST_F(UpstreamEventsHardeningTest, ShutdownIsBoundedDuringAnApplyBatch) {
+    const auto v = subscribed(false, "ignore");
+    for (int i = 0; i < 3; ++i)
+        providerState()->push(awsBody(v.bucket, "ObjectCreated:Put", "new-" + std::to_string(i) + ".txt",
+                                      "0" + std::to_string(i + 1), 1, std::string("n") + std::to_string(i)));
+    (void)poll(v);
+    v.f.bucket->blockHeads = true;   // the ignore policy HEADs unknown keys; this one never answers
+    sync::events::Service service;
+    service.start();
+    for (int i = 0; i < 300 && !v.f.bucket->headEntered.load(); ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    ASSERT_TRUE(v.f.bucket->headEntered.load()) << "the applier reached a HEAD";
+    const auto started = std::chrono::steady_clock::now();
+    service.requestStop();
+    service.join();
+    EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(1));
+    v.f.bucket->blockHeads = false;
+    EXPECT_GE(countState(v.f.vault->id, umodel::InboxState::Pending), 1u) << "keys not reached stay pending";
 }
 
 }

@@ -24,6 +24,8 @@ struct WriteIntent {
     std::optional<uint64_t> expected_size;
     std::time_t recorded_at{};
     std::time_t expires_at{};
+    std::optional<std::string> etag;            // the stored object's ETag when the request returned one
+    std::optional<std::time_t> completed_at;    // null while the request is in flight
 
     WriteIntent() = default;
     explicit WriteIntent(pqxx::row_ref row);

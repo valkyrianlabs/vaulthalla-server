@@ -211,3 +211,19 @@ CREATE TABLE IF NOT EXISTS upstream_write_intent
 
 CREATE INDEX IF NOT EXISTS idx_upstream_write_intent_key ON upstream_write_intent (vault_id, object_key, op);
 CREATE INDEX IF NOT EXISTS idx_upstream_write_intent_expiry ON upstream_write_intent (expires_at);
+
+-- FX-3: event pipeline hardening.
+--   inbox.event_time_ms           millisecond event time: R2 has no sequencer, and two events of one key within a
+--                                 second must still apply in the order they happened.
+--   write_intent.etag/completed_at our own write's ETag (when the request returned one) and when it finished: the
+--                                 intent lives from completion, and a failed request removes it.
+--   channel.continuity_*          the event stream may have lost messages (a delivery gap longer than the queue's
+--                                 retention, events that reached the dead-letter queue): the index is no longer kept
+--                                 fresh by events alone, and the next regular pass lists the bucket again.
+--   channel.dlq_depth             messages in the channel's dead-letter queue at the last check.
+ALTER TABLE upstream_event_inbox ADD COLUMN IF NOT EXISTS event_time_ms BIGINT DEFAULT NULL;
+ALTER TABLE upstream_write_intent ADD COLUMN IF NOT EXISTS etag TEXT DEFAULT NULL;
+ALTER TABLE upstream_write_intent ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ DEFAULT NULL;
+ALTER TABLE upstream_event_channel ADD COLUMN IF NOT EXISTS continuity_broken_at TIMESTAMPTZ DEFAULT NULL;
+ALTER TABLE upstream_event_channel ADD COLUMN IF NOT EXISTS continuity_note TEXT DEFAULT NULL;
+ALTER TABLE upstream_event_channel ADD COLUMN IF NOT EXISTS dlq_depth BIGINT DEFAULT NULL;

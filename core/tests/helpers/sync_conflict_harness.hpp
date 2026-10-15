@@ -29,6 +29,7 @@
 #include "storage/Manager.hpp"
 #include "storage/PlaintextReader.hpp"
 #include "storage/s3/Controller.hpp"
+#include "storage/s3/curl/Http.hpp"
 #include "sync/Cloud.hpp"
 #include "sync/model/Action.hpp"
 #include "sync/model/Baseline.hpp"
@@ -54,6 +55,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace vh::test_support::sync_conflicts {
@@ -94,6 +96,11 @@ public:
         objects_[key] = std::move(o);
     }
 
+    void erase(const std::string& key) {
+        std::scoped_lock lock(mutex_);
+        objects_.erase(key);
+    }
+
     std::optional<Object> get(const std::string& key) const {
         std::scoped_lock lock(mutex_);
         const auto it = objects_.find(key);
@@ -103,8 +110,17 @@ public:
 
     unsigned puts() const { return puts_.load(); }
 
+    // Failure knobs (#96 hardening tests): HEADs that fail like an outage (reported as HTTP 503), HEADs that block until
+    // the calling thread's HTTP cancellation is requested, uploads that throw.
+    std::atomic<bool> failHeads{false};
+    std::atomic<bool> blockHeads{false};
+    std::atomic<bool> headEntered{false};
+    std::atomic<bool> failPuts{false};
+    std::atomic<unsigned> heads{0};
+
     void uploadObjectWithMetadata(const std::filesystem::path& key, const std::filesystem::path& file,
                                   const storage::s3::RequestOptions& options) const override {
+        if (failPuts.load()) throw std::runtime_error("upload refused (test)");
         recordRequest(RequestKind::Put);
         std::ifstream in(file, std::ios::binary);
         std::vector<uint8_t> body((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
@@ -119,6 +135,7 @@ public:
 
     void uploadBufferWithMetadata(const std::filesystem::path& key, const std::vector<uint8_t>& buffer,
                                   const storage::s3::RequestOptions& options) const override {
+        if (failPuts.load()) throw std::runtime_error("upload refused (test)");
         recordRequest(RequestKind::Put);
         const_cast<FakeBucket*>(this)->put(key.string(), buffer, options.metadata);
         ++puts_;
@@ -161,6 +178,18 @@ public:
     }
 
     std::optional<std::unordered_map<std::string, std::string>> getHeadObject(const std::filesystem::path& key) const override {
+        ++const_cast<FakeBucket*>(this)->heads;
+        if (blockHeads.load()) {
+            const_cast<FakeBucket*>(this)->headEntered = true;
+            while (blockHeads.load() && !storage::s3::curl::http::cancellationRequested())
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            storage::s3::Controller::recordHeadOutcomeForTesting({.performed = true, .transport_ok = false, .http_status = 0});
+            return std::nullopt;
+        }
+        if (failHeads.load()) {
+            storage::s3::Controller::recordHeadOutcomeForTesting({.performed = true, .transport_ok = true, .http_status = 503});
+            return std::nullopt;
+        }
         recordRequest(RequestKind::Head);
         const auto o = get(key.string());
         if (!o) return std::nullopt;

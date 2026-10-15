@@ -108,15 +108,29 @@ void Cloud::loadRemovedKeys() {
     if (scope) removedKeys.insert(scope->removed.begin(), scope->removed.end());
 }
 
+Cloud::~Cloud() {
+    if (!scope || !passLeaseAdopted_ || ran_) return;
+    try {
+        if (const auto& controller = runtime::Deps::get().syncController) controller->releasePass(vaultId());
+        if (scope->on_finish) scope->on_finish(false, "the scoped sync pass was dropped before it ran");
+    } catch (...) {
+        // A destructor never throws; the rows are retried by their backoff anyway.
+    }
+}
+
 void Cloud::operator()() {
     // One pass per vault at a time (#96): a regular pass waits while an event-scoped pass runs, and the reverse.
-    // runScoped() takes the lease before it submits a scoped pass; a regular pass takes it here.
+    // runScoped() takes the lease before it submits a scoped pass; a regular pass takes it here. A regular pass that
+    // has to wait says so, and the event applier yields to it.
+    ran_ = true;
     const auto& controller = runtime::Deps::get().syncController;
     if (!scope && controller && !controller->tryAcquirePass(vaultId())) {
+        controller->markRegularWaiting(vaultId());
         next_run = system_clock::now() + seconds(2);
         requeue();
         return;
     }
+    if (!scope && controller) controller->clearRegularWaiting(vaultId());
     const PassLease lease{vaultId(), controller != nullptr};
 
     startTask();
@@ -367,7 +381,8 @@ void Cloud::initBins() {
         s3Map = cloud->getGroupedFilesFromS3();
         db::query::sync::RemoteObjectIndex::replaceFromListObjects(engine->vault->id, uMap2Vector(s3Map));
         cloud->publishRemoteIndexManifestWithRetry();
-        if (baseline && hooks.baselineListed) hooks.baselineListed(vaultId, listStartedAt);
+        // Every full listing is the event subscription's new baseline (adoption, lost continuity, or an empty index).
+        if (hooks.baselineListed) hooks.baselineListed(vaultId, listStartedAt);
     }
     s3Files = uMap2Vector(s3Map);
 

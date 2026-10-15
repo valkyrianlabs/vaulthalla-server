@@ -175,6 +175,9 @@ Channel::Channel(const pqxx::row_ref row)
       consecutive_failures(db::encoding::try_get<unsigned int>(row, "consecutive_failures").value_or(0)),
       backlog_estimate(db::encoding::try_get<uint64_t>(row, "backlog_estimate")),
       next_poll_at(optTime(row, "next_poll_at")),
+      continuity_broken_at(optTime(row, "continuity_broken_at")),
+      continuity_note(optText(row, "continuity_note")),
+      dlq_depth(db::encoding::try_get<uint64_t>(row, "dlq_depth")),
       created_at(reqTime(row, "created_at")),
       updated_at(reqTime(row, "updated_at")) {}
 
@@ -219,6 +222,7 @@ InboxEvent::InboxEvent(const pqxx::row_ref row)
       etag(optText(row, "etag")),
       size_bytes(db::encoding::try_get<uint64_t>(row, "size_bytes")),
       event_time(reqTime(row, "event_time")),
+      event_time_ms(db::encoding::try_get<int64_t>(row, "event_time_ms")),
       received_at(reqTime(row, "received_at")),
       state(inboxStateFromString(row["state"].as<std::string>())),
       origin(inboxOriginFromString(row["origin"].as<std::string>())),
@@ -235,6 +239,8 @@ WriteIntent::WriteIntent(const pqxx::row_ref row)
       op(writeOpFromString(row["op"].as<std::string>())),
       expected_size(db::encoding::try_get<uint64_t>(row, "expected_size")),
       recorded_at(reqTime(row, "recorded_at")),
-      expires_at(reqTime(row, "expires_at")) {}
+      expires_at(reqTime(row, "expires_at")),
+      etag(optText(row, "etag")),
+      completed_at(optTime(row, "completed_at")) {}
 
 }

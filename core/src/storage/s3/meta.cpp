@@ -52,6 +52,16 @@ SList Controller::makeSigHeaders(const std::string &method,
     return out; // RAII slist
 }
 
+namespace {
+thread_local Controller::HeadOutcome lastHead;
+}
+
+void Controller::resetLastHeadOutcome() noexcept { lastHead = {}; }
+
+Controller::HeadOutcome Controller::lastHeadOutcome() noexcept { return lastHead; }
+
+void Controller::recordHeadOutcomeForTesting(const HeadOutcome outcome) noexcept { lastHead = outcome; }
+
 std::optional<std::unordered_map<std::string, std::string> >
 Controller::getHeadObject(const std::filesystem::path &key) const {
     recordRequest(RequestKind::Head);
@@ -71,6 +81,7 @@ Controller::getHeadObject(const std::filesystem::path &key) const {
         curl_easy_setopt(h, CURLOPT_NOBODY, 1L); // HEAD request
         curl_easy_setopt(h, CURLOPT_HTTPHEADER, headers.get());
     });
+    lastHead = {.performed = true, .transport_ok = resp.curl == CURLE_OK, .http_status = resp.http};
 
     if (!resp.ok()) {
         log::Registry::cloud()->error("[S3Provider] getHeadObject failed for {}: CURL={} HTTP={}",

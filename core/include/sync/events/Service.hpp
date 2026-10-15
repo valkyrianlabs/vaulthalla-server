@@ -12,13 +12,16 @@
 #include <memory>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 // UpstreamEventService (#96): consumes the event channels (AWS SQS long polls, Cloudflare Queues HTTP pull), one
 // poller thread per channel, writes every decoded event to the inbox before acknowledging it, and drives the applier.
 // Every 30 s it reloads the protection guard and retries subscription teardowns left half done.
 //
-// Shutdown is bounded: requestStop() cancels in-flight polls (http::ScopedCancellation) and the pollers are joined
-// at the end of runLoop.
+// Shutdown is bounded: requestStop() cancels in-flight requests on every thread of the service (pollers and the main
+// loop: maintenance, teardown retries, the applier's HEADs and manifest publish run under http::ScopedCancellation),
+// the applier stops between keys, and the pollers are joined at the end of runLoop. Pollers that leave while the
+// service runs (channel removed) are joined only once they have finished, never waited for on the service thread.
 namespace vh::sync::events {
 
 struct PollOutcome {
@@ -68,18 +71,26 @@ private:
         std::thread thread;
     };
 
+    // A stop was requested (unlike shouldStop(), false for a service that was never started: tests drive cycle()).
+    [[nodiscard]] bool stopRequested() const { return interruptFlag_.load(std::memory_order_acquire); }
+
     void superviseChannels();
+    void reapRetired();
     void stopPollers();
     void pollerLoop(const std::shared_ptr<Poller>& poller);
     void maintenance();
+    // Dead-letter queue depth per channel (every kDlqCheckInterval): growth means events were lost.
+    void checkDeadLetters();
 
     Applier applier_;
     mutable std::mutex pollersMutex_;
     std::map<int64_t, std::shared_ptr<Poller>> pollers_;
+    std::vector<std::shared_ptr<Poller>> retired_;   // told to stop, joined once finished
     std::mutex workMutex_;
     std::condition_variable workCv_;
     bool workPending_ = false;
     std::chrono::steady_clock::time_point lastMaintenance_{};
+    std::chrono::steady_clock::time_point lastDlqCheck_{};
 };
 
 // Backoff after `failures` consecutive channel failures: 5 s doubling to 5 min.

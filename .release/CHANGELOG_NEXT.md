@@ -34,3 +34,19 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
 - fix(storage): remote-only files indexed from objects that were plaintext from the start (an adopted or waivered
   bucket's data, another tool's upload) could not be read in vaults that encrypt upstream (the hydrate called them a
   downgrade); they are now sealed on the way in. A sealed file whose object turns plaintext is still refused.
+- sync/events hardening (#96 review):
+  - the index manifest's own notification is never applied or republished (it fed an endless PUT loop);
+  - events are ordered to the millisecond (R2 has no sequencer); a create/remove tie is decided by one HEAD;
+  - a removal is applied only after a HEAD confirms the object is gone (404); a failed HEAD is retried, never read
+    as a deletion;
+  - lost continuity (dead-letter messages, a poll gap longer than queue retention, events not stored before their last
+    delivery) holds events and forces one full listing instead of trusting the index; DLQ depth is reported;
+  - the applier takes the vault's pass lease before reading its batch, yields to a waiting regular pass, and stops
+    between keys on shutdown; the service's own requests (teardown retries, HEADs, manifest publish) are cancellable;
+  - provider rule changes of one bucket are serialized and every live subscription's rules are verified after a PUT;
+  - write intents are removed when the request fails and live from completion; claiming one and settling the event
+    are one transaction; unrouted rows get swept and are re-routed only within the subscription's prefix and age;
+  - a scoped pass dropped before it runs releases its lease; `vault sync reconcile`/`inventory` take the lease;
+  - `vh vault sync events --file` needs admin.upstream.configure + sync.config.edit + key Consume (it can delete);
+  - vaults that encrypt upstream default to `foreign_objects=ignore` (adopted buckets keep `import`), and
+    `vh-encrypted=false` over a file the vault holds sealed is refused unless the subscription imports foreign objects.

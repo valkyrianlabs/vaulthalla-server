@@ -4,6 +4,7 @@
 #include "storage/Fwd.hpp"
 #include "sync/Fwd.hpp"
 
+#include <chrono>
 #include <condition_variable>
 #include <memory>
 #include <queue>
@@ -50,6 +51,14 @@ public:
     void releasePass(unsigned int vaultId);
     [[nodiscard]] bool passRunning(unsigned int vaultId) const;
 
+    // A regular pass found the lease taken and is waiting for it (retrying every 2 s). The event applier yields to it,
+    // so sustained event traffic cannot starve uploads, trash purge and rotation. Bounded: a mark older than
+    // kRegularWaitBound (the waiting task went away) no longer counts.
+    void markRegularWaiting(unsigned int vaultId);
+    void clearRegularWaiting(unsigned int vaultId);
+    [[nodiscard]] bool regularWaiting(unsigned int vaultId) const;
+    static constexpr std::chrono::seconds kRegularWaitBound{30};
+
     void refreshEngines();
 
 protected:
@@ -73,6 +82,7 @@ private:
 
     mutable std::mutex passMutex_;
     std::unordered_set<unsigned int> activePasses_;
+    std::unordered_map<unsigned int, std::chrono::steady_clock::time_point> regularWaiting_;
 
     void pruneStaleTasks(const std::vector<std::shared_ptr<storage::Engine>>& engines);
 

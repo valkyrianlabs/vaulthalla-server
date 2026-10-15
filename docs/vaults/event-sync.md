@@ -64,31 +64,41 @@ reports the conflict and changes nothing. A queue that already has a Worker cons
 - **Durable first.** Each event is written to the inbox in the database before its queue message is acknowledged. A
   crash or a database outage at any point means the message is delivered again, not lost.
 - **Duplicates** (providers deliver at least once) are recognised and recorded once.
-- **Order.** Events for one key are applied newest-wins: AWS sequencers when present, otherwise event time. A late,
-  older event never overwrites newer state.
+- **Order.** Events for one key are applied newest-wins: AWS sequencers when present, otherwise event time to the
+  millisecond. A late, older event never overwrites newer state. When nothing orders a create and a removal of one key
+  (same millisecond, no sequencer), the provider decides: one HEAD says whether the object exists.
 - **Targeted sync.** Changed keys are applied to the vault's remote index and a sync pass runs for just those keys,
   under the vault's request and price budgets. A new or overwritten object costs about one HEAD and one GET; a removal
-  costs nothing upstream.
-- **Removals.** A deletion upstream removes the vault's file only if it is unchanged since the two sides last agreed;
-  a file changed in the vault meanwhile is kept and uploaded again. Under `mirror` with `keep_local`, the vault stays
-  authoritative and deleted objects are uploaded again.
+  costs one HEAD.
+- **Removals.** A removal notification is only believed once a HEAD confirms the object is gone (404): a forged or
+  misordered notification, or a provider outage, never deletes anything; a failed HEAD is retried later. A confirmed
+  deletion removes the vault's file only if it is unchanged since the two sides last agreed; a file changed in the
+  vault meanwhile is kept and uploaded again. Under `mirror` with `keep_local`, the vault stays authoritative and
+  deleted objects are uploaded again.
 - **Vaulthalla's own writes.** Notifications about objects Vaulthalla itself uploaded or deleted are recognised and
-  don't cause another transfer.
-- **One sync per vault at a time.** Event passes and scheduled passes never overlap; events that arrive meanwhile wait.
+  don't cause another transfer, including the vault's own index manifest under `.vaulthalla/`.
+- **One sync per vault at a time.** Event passes and scheduled passes never overlap; events that arrive meanwhile wait,
+  and a scheduled pass that is waiting goes first.
 - **Messages that can't be read** are not acknowledged: after several deliveries they move to the dead-letter queue.
+- **Gaps.** When the event stream may have lost messages (messages in the dead-letter queue, no successful poll for
+  longer than the queue keeps messages, events that couldn't be stored before their last delivery), events alone no
+  longer keep the vault current: they are held, the next sync pass lists the bucket once, and events older than that
+  listing are dropped as superseded. Status shows the dead-letter queue depth.
 
 ### Objects Uploaded Directly To The Bucket
 
 Objects Vaulthalla writes carry Vaulthalla metadata (and, with upstream encryption on, are encrypted with the vault
 key). An object some other tool uploaded has none and is plaintext:
 
-- With `--foreign-objects import` (the default) it is imported as a vault file and sealed locally, including when it
-  overwrites a file the vault already has. Each import into a vault that encrypts upstream is logged.
+- With `--foreign-objects import` it is imported as a vault file and sealed locally, including when it overwrites a
+  file the vault already has. Each import into a vault that encrypts upstream is logged. This is the default for vaults
+  that don't encrypt upstream and for adopted buckets (adoption accepted their foreign objects).
 - With `--foreign-objects ignore`, new objects without Vaulthalla metadata are skipped (one HEAD each to tell them
-  apart) and counted in the status, and a metadata-free object over an encrypted file is treated as below.
-- Without an importing subscription, a vault that encrypts upstream treats a metadata-free object over one of its
-  encrypted files as tampering: it fails authentication and the vault keeps its copy. An object that claims to be
-  Vaulthalla-encrypted but fails authentication is never imported.
+  apart) and counted in the status, and a metadata-free object over an encrypted file is treated as below. This is the
+  default for vaults that encrypt upstream.
+- Without an importing subscription, a vault that encrypts upstream treats a metadata-free object, or one relabelled
+  `vh-encrypted: false`, over one of its encrypted files as tampering: it fails authentication and the vault keeps its
+  copy. An object that claims to be Vaulthalla-encrypted but fails authentication is never imported.
 
 ## Status And Repair
 
@@ -135,4 +145,6 @@ bucket that already has one stops all processing for it; its events stay in the 
 ## Importing Event Files By Hand
 
 `vh vault sync events <vault> --file s3-events.json` feeds saved S3 event notifications (or an SQS message dump)
-through the same pipeline. See [Sync](/vaults/sync#ingest-s3-events).
+through the same pipeline. Because removals can delete files, it needs what configuring events needs:
+`admin.upstream.configure`, the vault's `sync.config.edit` and the right to use the vault's API key. See
+[Sync](/vaults/sync#ingest-s3-events).

@@ -54,7 +54,10 @@ namespace vh::sync {
         };
         static void setEventHooks(EventHooks hooks);
 
-        ~Cloud() override = default;
+        // A scoped pass destroyed without running (dropped by the pool) still releases the lease runScoped() took and
+        // reports failure, so its inbox rows are retried instead of waiting forever.
+        ~Cloud() override;
+        void adoptPassLease() { passLeaseAdopted_ = true; }
 
         explicit Cloud(const std::shared_ptr<storage::Engine> &engine) : Local(engine) {
         }
@@ -64,6 +67,12 @@ namespace vh::sync {
         }
 
         [[nodiscard]] bool requeueAfterRun() const override { return scope == nullptr; }
+
+    private:
+        bool passLeaseAdopted_ = false;
+        bool ran_ = false;
+
+    public:
 
         // ##########################################
         // ########### FSTask Overrides #############
