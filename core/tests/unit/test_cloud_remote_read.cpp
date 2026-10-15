@@ -446,6 +446,19 @@ TEST_F(CloudRemoteReadTest, AnUnencryptedRemoteForAnEncryptedFileIsADowngradeAnd
     EXPECT_TRUE(bucket_->gets().empty());
 }
 
+TEST_F(CloudRemoteReadTest, APlaintextObjectIndexedWithoutAnIvIsSealedOnTheWayInEvenWhenTheVaultEncrypts) {
+    // An adopted (or waivered) bucket's existing data: objects another tool wrote, plaintext from the start, indexed
+    // without an IV. The vault encrypts what it writes; these must still be readable (#237), sealed locally.
+    const auto plaintext = randomBytes(6'000, 35);
+    bucket_->put("media/adopted.bin", FakeBucket::Object{.body = plaintext, .etag = "\"etag-adopted\"", .meta = {}});
+    const auto file = rowFor("/media/adopted.bin", plaintext.size(), "", 0);
+    const auto reader = engine_->openPlaintextReader(file, kHydrateStrict);
+    EXPECT_EQ(plaintext, readAll(*reader, plaintext.size()));
+    EXPECT_EQ(1u, bucket_->gets().size());
+    ASSERT_EQ(1u, catalogCommits_.size()) << "the new IV is recorded before the sealed copy is linked in";
+    EXPECT_FALSE(catalogCommits_[0].iv.empty());
+}
+
 TEST_F(CloudRemoteReadTest, ARemoteObjectWithAnotherIvIsNotServedUnderThisRow) {
     const auto plaintext = randomBytes(5'000, 33);
     const auto file = remoteEncrypted("/media/rollback.bin", plaintext);

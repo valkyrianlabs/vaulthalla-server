@@ -291,9 +291,11 @@ std::shared_ptr<vh::fs::model::File> CloudEngine::hydrateNow(const std::shared_p
         std::array<uint8_t, crypto::util::AES_IV_SIZE> iv{};
         std::optional<crypto::util::GcmStreamEncryptor> sealer;
         const bool rowEncrypted = !f->encryption_iv.empty();
-        const auto s3v = std::dynamic_pointer_cast<vh::vault::model::S3Vault>(vault);
-        if (!head->encrypted && (rowEncrypted || (s3v && s3v->encrypt_upstream)))
-            // A bucket that now claims plaintext for an encrypted file is a downgrade, not a format we accept.
+        if (!head->encrypted && rowEncrypted)
+            // A bucket that now claims plaintext for a file whose row records its encryption (an IV) is a downgrade,
+            // not a format we accept. A row without an IV was indexed from an object that was plaintext to begin with
+            // (an adopted bucket's or a waivered bucket's existing data, another tool's upload): it is sealed below on
+            // the way in, whatever the vault's upstream encryption setting says about objects Vaulthalla writes.
             throw IntegrityError("Remote object is unencrypted but the file is stored encrypted: " + f->path.string());
         if (head->encrypted && rowEncrypted && !head->iv_b64.empty() &&
             (head->iv_b64 != f->encryption_iv || head->key_version != f->encrypted_with_key_version))
