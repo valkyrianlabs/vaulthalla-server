@@ -27,3 +27,7 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   admin and queue APIs.
 - fix(shell): the CLI router's debug log no longer contains credential option values (`--secret`, `--password`,
   `--token`, …); they were logged verbatim when shell debug logging was enabled.
+- fix(vaults): changing an S3 vault's API key or bucket inserted a second binding row (`s3_pkey` violation), and
+  creating a vault on a key + bucket another vault used moved that vault's binding to the new one
+  (`upsert_s3_vault` conflicted on (api_key_id, bucket)); bindings are now updated per vault and a pair that belongs
+  to another vault (live or pending deletion) is refused.
