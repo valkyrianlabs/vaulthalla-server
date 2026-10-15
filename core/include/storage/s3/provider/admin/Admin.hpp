@@ -248,8 +248,10 @@ public:
     [[nodiscard]] virtual Metrics metrics() const = 0;
 };
 
-// Factory. nullptr when the key's provider has no admin adapter. EventsClient also nullptr for R2 without a provider
-// token (CapabilityMissing explains). Tests install fakes with setFactoryForTesting (honoured in test mode only).
+// Factory. nullptr when the key's provider has no admin adapter. eventsFor throws CapabilityMissing for R2 without a
+// provider token (the message says which Cloudflare token to add). The key must carry its decrypted secret (and, for
+// R2 events, provider_token). Tests install fakes with setFactoryForTesting (honoured in test mode only). Clients are
+// not thread-safe: one per worker.
 struct Factory {
     std::function<std::unique_ptr<AdminClient>(const std::shared_ptr<vault::model::APIKey>&)> admin;
     std::function<std::unique_ptr<EventsClient>(const std::shared_ptr<vault::model::APIKey>&)> events;
