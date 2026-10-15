@@ -106,6 +106,16 @@ std::optional<ClaimOutcome> Bucket::claimForCreate(const storage::upstream::Buck
     });
 }
 
+bool Bucket::releaseClaim(const int64_t id, const std::string& operationToken) {
+    return Transactions::exec("upstream::Bucket::releaseClaim", [&](pqxx::work& txn) {
+        const auto res = txn.exec(
+            "DELETE FROM upstream_bucket WHERE id = $1 AND operation_token = $2 AND vault_id IS NULL "
+            "AND NOT is_protected AND provisioning_state = 'creating' RETURNING id",
+            pqxx::params{id, operationToken});
+        return !res.empty();
+    });
+}
+
 AdoptOutcome Bucket::upsertAdopted(const storage::upstream::BucketIdentity& id, const std::optional<std::string>& region,
                                    const std::optional<uint32_t> apiKeyId, const std::string& operationToken) {
     const auto& account = requireAccount(id);

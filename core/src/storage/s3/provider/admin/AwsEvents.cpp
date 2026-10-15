@@ -9,7 +9,7 @@ namespace vh::storage::s3::provider::admin {
 
 namespace {
 
-constexpr const char* kXmlContentType = "application/xml";
+constexpr const char* kNotificationXmlContentType = "application/xml";
 
 std::string arnField(const std::string& arn, const std::size_t index) {
     std::size_t start = 0;
@@ -151,7 +151,7 @@ std::string AwsEvents::getNotificationXml(const std::string& bucket) {
 void AwsEvents::putNotificationXml(const std::string& bucket, const std::string& xml) {
     auto c = detail::call("PUT", {{"notification", ""}});
     c.body = xml;
-    c.headers["content-type"] = kXmlContentType;
+    c.headers["content-type"] = kNotificationXmlContentType;
     c.headers["content-md5"] = detail::md5Base64(c.body);
     const auto response = s3_.bucketCall(bucket, c, "put");
     if (!response.ok())
