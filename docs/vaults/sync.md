@@ -178,7 +178,8 @@ Inventory import indexes object metadata and publishes the Vaulthalla manifest w
 
 ## Ingest S3 Events
 
-Use event ingestion to keep the index current after initial import:
+For continuous, automatic event delivery from AWS S3 or Cloudflare R2, use [Event-Driven Sync](/vaults/event-sync).
+To feed saved event notifications by hand, use event ingestion:
 
 ```bash
 vh vault sync events <vault> --file s3-events.json
