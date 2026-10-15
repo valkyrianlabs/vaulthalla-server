@@ -31,3 +31,6 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   creating a vault on a key + bucket another vault used moved that vault's binding to the new one
   (`upsert_s3_vault` conflicted on (api_key_id, bucket)); bindings are now updated per vault and a pair that belongs
   to another vault (live or pending deletion) is refused.
+- fix(storage): remote-only files indexed from objects that were plaintext from the start (an adopted or waivered
+  bucket's data, another tool's upload) could not be read in vaults that encrypt upstream (the hydrate called them a
+  downgrade); they are now sealed on the way in. A sealed file whose object turns plaintext is still refused.
