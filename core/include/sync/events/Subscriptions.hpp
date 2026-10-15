@@ -65,6 +65,10 @@ void onVaultReinstated(uint32_t vaultId) noexcept;  // restored: re-arm
 // Cheap, cached (refreshed by the service): does the vault have an active subscription? CloudEngine records write
 // intents for its own PUT/DELETEs only then.
 [[nodiscard]] bool activeFor(uint32_t vaultId);
+// The vault has an active subscription that imports objects without Vaulthalla metadata (foreign_objects=import).
+// An encrypt_upstream vault only accepts a metadata-free object as plaintext content then; otherwise such an object
+// over a known encrypted file is treated as tampering (it fails authentication), as before #96. Uncached (rare path).
+[[nodiscard]] bool importsForeignObjects(uint32_t vaultId);
 // Forces the next activeFor() to reload (after enable/disable done elsewhere, and in tests).
 void invalidateCache() noexcept;
 

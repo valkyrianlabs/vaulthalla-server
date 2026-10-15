@@ -697,8 +697,18 @@ CloudEngine::RemoteEncryptionContext CloudEngine::resolveRemoteEncryptionContext
 
         // The object is there and carries no Vaulthalla metadata at all: plaintext written by another tool (#96 —
         // e.g. an external overwrite of a file Vaulthalla knows). The local row's IV describes the copy it replaced,
-        // so recovering from it would fail authentication on bytes that were never sealed.
-        return {};
+        // so recovering from it would fail authentication on bytes that were never sealed. A vault that doesn't
+        // encrypt upstream takes it as plaintext; an encrypting one only when its event subscription explicitly
+        // imports foreign objects. Otherwise it stays an authentication failure: a sealed object stripped of its
+        // metadata and replaced must not become vault content silently.
+        if (!s3Vault()->encrypt_upstream) return {};
+        if (vh::sync::events::subscriptions::importsForeignObjects(vault->id)) {
+            log::Registry::cloud()->warn(
+                "[CloudStorageEngine] Vault {}: importing '{}' as plaintext: the upstream object has no Vaulthalla "
+                "encryption metadata (written by another tool; event subscription imports foreign objects)",
+                vault->id, rel_path.string());
+            return {};
+        }
     }
 
     // No HEAD answer: fall back to what the index row or the local row recorded.

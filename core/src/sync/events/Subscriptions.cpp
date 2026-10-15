@@ -406,6 +406,16 @@ void retryTeardowns() noexcept {
     }
 }
 
+bool importsForeignObjects(const uint32_t vaultId) {
+    try {
+        const auto sub = SubQ::getLiveForVault(vaultId);
+        return sub && sub->state == smodel::SubscriptionState::Active &&
+               sub->foreign_objects == smodel::ForeignObjects::Import;
+    } catch (const std::exception&) {
+        return false;   // unknown: keep the strict (authenticated) behaviour
+    }
+}
+
 void invalidateCache() noexcept {
     auto& c = activeCache();
     std::scoped_lock lock(c.mutex);

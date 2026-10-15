@@ -150,6 +150,30 @@ TEST_F(UpstreamScopedSyncTest, ScopedCreateEventForAnUnchangedObjectTransfersNot
         << "a notification about Vaulthalla's own write must not trigger a transfer";
 }
 
+TEST_F(UpstreamScopedSyncTest, MetadataFreeOverwriteOfAnEncryptedFileIsNotImportedWithoutAnImportPolicy) {
+    // An encrypting vault with no event subscription importing foreign objects: a sealed object replaced by bytes
+    // without Vaulthalla metadata is tampering as far as the vault knows. It must fail authentication, not become the
+    // file's content.
+    const auto f = remoteVault(superUser, sync::model::RemotePolicy::ConflictPolicy::KeepRemote);
+    write(f, "/sealed.txt", "original sealed content");
+    (void)run(f, newPass(f, nullptr));
+    f.bucket->put("sealed.txt", bytes("replaced by another tool"), {});
+    auto row = db::query::sync::RemoteObjectIndex::getFile(f.vault->id, "/sealed.txt");
+    ASSERT_TRUE(row);
+    row->remote_etag = f.bucket->get("sealed.txt")->etag;
+    row->size_bytes = 24;
+    row->content_hash.reset();
+    row->remote_encrypted.reset();
+    row->encryption_iv.clear();
+    row->encrypted_with_key_version = 0;
+    db::query::sync::RemoteObjectIndex::upsertEventFile(f.vault->id, row);
+
+    auto scope = scopeOf({"/sealed.txt"});
+    scope->changed.insert(u8"/sealed.txt");
+    (void)run(f, newPass(f, scope));
+    EXPECT_EQ(readLocal(f, "/sealed.txt"), "original sealed content");
+}
+
 TEST(UpstreamPassLease, OnePassPerVault) {
     sync::Controller controller;
     EXPECT_TRUE(controller.tryAcquirePass(41));
