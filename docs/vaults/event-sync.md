@@ -79,11 +79,16 @@ reports the conflict and changes nothing. A queue that already has a Worker cons
 
 ### Objects Uploaded Directly To The Bucket
 
-Objects Vaulthalla writes are encrypted with the vault key and carry Vaulthalla metadata. An object some other tool
-uploaded is plaintext: by default (`--foreign-objects import`) it is imported as a vault file and sealed locally, like
-any upstream file. With `--foreign-objects ignore`, objects without Vaulthalla metadata are skipped (one HEAD each to
-tell them apart) and counted in the status. An object that claims to be Vaulthalla-encrypted but fails authentication
-is never imported.
+Objects Vaulthalla writes carry Vaulthalla metadata (and, with upstream encryption on, are encrypted with the vault
+key). An object some other tool uploaded has none and is plaintext:
+
+- With `--foreign-objects import` (the default) it is imported as a vault file and sealed locally, including when it
+  overwrites a file the vault already has. Each import into a vault that encrypts upstream is logged.
+- With `--foreign-objects ignore`, new objects without Vaulthalla metadata are skipped (one HEAD each to tell them
+  apart) and counted in the status, and a metadata-free object over an encrypted file is treated as below.
+- Without an importing subscription, a vault that encrypts upstream treats a metadata-free object over one of its
+  encrypted files as tampering: it fails authentication and the vault keeps its copy. An object that claims to be
+  Vaulthalla-encrypted but fails authentication is never imported.
 
 ## Status And Repair
 
