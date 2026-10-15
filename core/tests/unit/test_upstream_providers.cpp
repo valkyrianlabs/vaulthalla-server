@@ -4,6 +4,7 @@
 #include "storage/s3/provider/admin/Adapters.hpp"
 #include "storage/s3/curl/Http.hpp"
 #include "storage/upstream/Guard.hpp"
+#include "storage/upstream/Names.hpp"
 #include "vault/model/APIKey.hpp"
 
 #include <gtest/gtest.h>
@@ -254,17 +255,20 @@ TEST_F(UpstreamProviderTest, AwsUnsubscribeRemovesOnlyOurRuleAndGrant) {
 
 TEST_F(UpstreamProviderTest, QueuePolicyMerge) {
     namespace d = admin::detail;
-    auto p = d::mergeQueuePolicy("", kUpQueueArn, "111122223333", "a", true);
-    p = d::mergeQueuePolicy(p, kUpQueueArn, "111122223333", "b", true);
-    p = d::mergeQueuePolicy(p, kUpQueueArn, "111122223333", "a", true);   // no duplicate
-    EXPECT_EQ(d::policyBuckets(p), (std::vector<std::string>{"a", "b"}));
-    p = d::mergeQueuePolicy(p, kUpQueueArn, "111122223333", "a", false);
-    EXPECT_EQ(d::policyBuckets(p), std::vector<std::string>{"b"});
-    EXPECT_EQ(d::mergeQueuePolicy(p, kUpQueueArn, "111122223333", "b", false), "");
+    auto p = d::mergeQueuePolicy("", kUpQueueArn, "111122223333", "vh-aaa", true);
+    p = d::mergeQueuePolicy(p, kUpQueueArn, "111122223333", "vh-bbb", true);
+    p = d::mergeQueuePolicy(p, kUpQueueArn, "111122223333", "vh-aaa", true);   // no duplicate
+    EXPECT_EQ(d::policyBuckets(p), (std::vector<std::string>{"vh-aaa", "vh-bbb"}));
+    p = d::mergeQueuePolicy(p, kUpQueueArn, "111122223333", "vh-aaa", false);
+    EXPECT_EQ(d::policyBuckets(p), std::vector<std::string>{"vh-bbb"});
+    EXPECT_EQ(d::mergeQueuePolicy(p, kUpQueueArn, "111122223333", "vh-bbb", false), "");
     const auto foreign = upForeignPolicy();
-    const auto withOurs = d::mergeQueuePolicy(foreign, kUpQueueArn, "111122223333", "a", true);
-    EXPECT_EQ(nlohmann::json::parse(d::mergeQueuePolicy(withOurs, kUpQueueArn, "111122223333", "a", false)),
+    const auto withOurs = d::mergeQueuePolicy(foreign, kUpQueueArn, "111122223333", "vh-aaa", true);
+    EXPECT_EQ(nlohmann::json::parse(d::mergeQueuePolicy(withOurs, kUpQueueArn, "111122223333", "vh-aaa", false)),
               nlohmann::json::parse(foreign));
+    // ArnLike wildcards can't be smuggled in through a bucket name, nor a non-account through the account id.
+    EXPECT_THROW((void)d::mergeQueuePolicy("", kUpQueueArn, "111122223333", "vh-*", true), std::invalid_argument);
+    EXPECT_THROW((void)d::mergeQueuePolicy("", kUpQueueArn, "*", "vh-aaa", true), std::invalid_argument);
 }
 
 // ---- SQS ------------------------------------------------------------------------------------------------------
@@ -836,4 +840,84 @@ TEST_F(UpstreamProviderTest, ListingsParse) {
                                       .delete_marker = false, .latest = true}})
                   .find("<Key>a&amp;b</Key><VersionId>v1</VersionId>"),
               std::string::npos);
+}
+
+// FX-2 (security review #1/#5): names that would change what a URL addresses never reach a provider, and the
+// bearer-token Cloudflare paths (no signature covers them) carry the bucket encoded.
+TEST_F(UpstreamProviderTest, InvalidBucketNamesNeverReachAProvider) {
+    handler = [](const http::Request&) { return upRespond(200, "{}"); };
+    admin::AwsAdmin aws(upAwsKey());
+    admin::AwsEvents awsEvents(upAwsKey());
+    admin::R2Events r2Events(upR2Key());
+    for (const std::string bad : {"x/../prod", "prod/configuration?", "Prod", "ab", "prod%2F..", "bucket*", "a b",
+                                  "prod#frag", "../prod"}) {
+        EXPECT_THROW((void)aws.headBucket(bad), std::invalid_argument) << bad;
+        EXPECT_THROW((void)aws.inspect(bad), std::invalid_argument) << bad;
+        EXPECT_THROW((void)aws.listObjects(bad, {}, 1000), std::invalid_argument) << bad;
+        EXPECT_THROW(aws.createBucket({.name = bad, .region = std::string("us-east-2")}), std::invalid_argument) << bad;
+        EXPECT_THROW((void)awsEvents.subscribe(upAwsChannel(), {.bucket = bad, .rule_id = "vaulthalla-1", .prefix = ""}),
+                     std::invalid_argument) << bad;
+        EXPECT_THROW((void)r2Events.rules(bad), std::invalid_argument) << bad;
+        EXPECT_THROW((void)r2Events.subscribe(upR2Channel(), {.bucket = bad, .rule_id = "vaulthalla-1", .prefix = ""}),
+                     std::invalid_argument) << bad;
+        EXPECT_THROW(r2Events.unsubscribe(upR2Channel(), {.bucket = bad, .rule_id = "vaulthalla-1", .prefix = ""}, {"r1"}),
+                     std::invalid_argument) << bad;
+    }
+    EXPECT_TRUE(sent.empty()) << "a refused name must not cost a single request";
+}
+
+TEST_F(UpstreamProviderTest, CloudflarePathsEncodeTheirSegments) {
+    UpFakeCloudflare cf;
+    handler = std::ref(cf);
+    admin::R2Events events(upR2Key());
+    (void)events.rules("vh-r2.with.dots");
+    ASSERT_FALSE(sent.empty());
+    EXPECT_NE(sent.back().url.find("/event_notifications/r2/vh-r2.with.dots/configuration"), std::string::npos);
+    EXPECT_EQ(vh::storage::upstream::encodePathSegment("a/b?c#d e%"), "a%2Fb%3Fc%23d%20e%25");
+}
+
+TEST_F(UpstreamProviderTest, RegionsThatAreNotRegionsAreRefusedBeforeAnyRequest) {
+    handler = [](const http::Request&) { return upRespond(200); };
+    admin::AwsAdmin aws(upAwsKey());
+    for (const std::string bad : {"evil.example/#", "us-east-1.evil.com", "US-EAST-1", "us east 1"})
+        EXPECT_THROW(aws.createBucket({.name = "vh-good-name", .region = bad}), std::invalid_argument) << bad;
+    EXPECT_TRUE(sent.empty());
+    for (const std::string good : {"us-east-2", "eu-central-1", "ap-southeast-4", "us-gov-west-1", "cn-northwest-1"})
+        EXPECT_TRUE(vh::storage::upstream::validAwsRegion(good)) << good;
+    EXPECT_TRUE(vh::storage::upstream::validR2LocationHint("wnam"));
+    EXPECT_FALSE(vh::storage::upstream::validR2LocationHint("wnam/../x"));
+
+    // The CreateBucket body is built as XML, not by splicing strings.
+    aws.createBucket({.name = "vh-good-name", .region = std::string("us-east-2")});
+    ASSERT_EQ(sent.size(), 1u);
+    EXPECT_NE(sent[0].body.find("<LocationConstraint>us-east-2</LocationConstraint>"), std::string::npos);
+}
+
+// FX-2 (security review #2, data-safety #9): identity follows the endpoint, not the provider label.
+TEST_F(UpstreamProviderTest, IdentityFollowsTheEndpointWhateverTheProviderLabel) {
+    const auto r2AsOther = std::make_shared<APIKey>(1, "mislabelled", S3Provider::Other, "0123456789abcdef0123456789abcdef",
+                                                   kUpR2Secret, "auto",
+                                                   std::string("https://") + kUpR2Account + ".r2.cloudflarestorage.com");
+    const auto id = vh::storage::upstream::identityFor(*r2AsOther, "prod");
+    EXPECT_EQ(id.provider, "cloudflare-r2");
+    EXPECT_EQ(id.account_ref.value_or(""), kUpR2Account);
+    guard::setForTesting({{.provider = "cloudflare-r2", .account_ref = std::string(kUpR2Account), .bucket = "prod"}});
+    EXPECT_TRUE(guard::isProtected(id)) << "a cloudflare-r2 lock covers the bucket however the key is labelled";
+
+    const auto awsAsMinio = std::make_shared<APIKey>(1, "mislabelled-aws", S3Provider::MinIO, "AKIAEXAMPLEEXAMPLE00",
+                                                    kUpAwsSecret, "us-east-2", "https://s3.us-east-2.amazonaws.com");
+    const auto awsId = vh::storage::upstream::identityFor(*awsAsMinio, "prod-aws");
+    EXPECT_EQ(awsId.provider, "aws-s3");
+    EXPECT_FALSE(awsId.account_ref.has_value()) << "no resolved account: fail closed";
+    guard::setForTesting({{.provider = "aws-s3", .account_ref = std::string("111122223333"), .bucket = "prod-aws"}});
+    EXPECT_TRUE(guard::isProtected(awsId)) << "an unknown account matches any aws-s3 lock on the name";
+
+    EXPECT_TRUE(admin::providerEndpointMismatch(*r2AsOther).has_value());
+    EXPECT_TRUE(admin::providerEndpointMismatch(*awsAsMinio).has_value());
+    EXPECT_FALSE(admin::providerEndpointMismatch(*upAwsKey()).has_value());
+    EXPECT_FALSE(admin::providerEndpointMismatch(*upR2Key()).has_value());
+    const auto minio = std::make_shared<APIKey>(1, "minio", S3Provider::MinIO, "minioaccesskey00000000",
+                                               "miniosecret0000000000", "us-east-1", "https://minio.lan:9000");
+    EXPECT_EQ(vh::storage::upstream::identityFor(*minio, "b").provider, "s3:minio");
+    EXPECT_FALSE(admin::providerEndpointMismatch(*minio).has_value());
 }

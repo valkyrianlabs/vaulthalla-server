@@ -1,4 +1,5 @@
 #include "ops/Upstream.hpp"
+#include "storage/upstream/Names.hpp"
 #include "sync/events/Subscriptions.hpp"
 #include "ops/UpstreamJson.hpp"
 
@@ -116,8 +117,29 @@ std::unique_ptr<padmin::AdminClient> adminClient(const api_keys::APIKeyPtr& key)
     return client;
 }
 
-BucketIdentity identityOf(const api_keys::APIKeyPtr& key, const std::string& bucket) {
+// A provisioning region becomes part of a host name (AWS) or a CreateBucket body: only real values.
+void requireValidRegion(const vault::model::APIKey& key, const std::string& region) {
+    if (key.provider == vault::model::S3Provider::CloudflareR2) {
+        if (!storage::upstream::validR2LocationHint(region))
+            throw Invalid("unknown R2 location hint '" + region + "' (wnam, enam, weur, eeur, apac, oc or auto)");
+        return;
+    }
+    if (!storage::upstream::validAwsRegion(region)) throw Invalid("invalid AWS region '" + region + "'");
+}
+
+// Strict (default): the name will reach provider requests, so it must be a valid S3 bucket name. Relaxed (locks only,
+// which never call the provider): legacy names AWS once allowed (upper case, '_') can still be locked, but nothing that
+// could change a URL's meaning ('/', '?', '#', '%', spaces, control characters).
+BucketIdentity identityOf(const api_keys::APIKeyPtr& key, const std::string& bucket, const bool strict = true) {
     if (bucket.empty()) throw Invalid("bucket name is required");
+    if (strict) {
+        std::string why;
+        if (!storage::upstream::validBucketName(bucket, why)) throw Invalid("invalid bucket name '" + bucket + "': " + why);
+    } else if (bucket.size() > 255 || std::ranges::any_of(bucket, [](const unsigned char c) {
+                   return c <= 0x20 || c == 0x7f || c == '/' || c == '?' || c == '#' || c == '%' || c == '\\';
+               })) {
+        throw Invalid("invalid bucket name '" + bucket + "'");
+    }
     try {
         return storage::upstream::resolvedIdentity(withSecrets(key), bucket);
     } catch (const Error&) {
@@ -490,7 +512,7 @@ Inventory inventory(const Actor& actor, const KeyRef& ref, const InventoryQuery&
 BucketRow protect(const Actor& actor, const KeyRef& ref, const std::string& bucket, const std::string& reason) {
     auto key = authorize(actor, ref, UpPerm::Protect, KeyPerm::View);
     if (reason.empty()) throw Invalid("give a reason for the protection (it is shown to everyone who sees the bucket)");
-    const auto id = identityOf(key, bucket);
+    const auto id = identityOf(key, bucket, /*strict=*/false);
     (void)BucketQuery::protect(id, std::nullopt, actor->id, actor->name(), reason);
     storage::upstream::guard::reload();
     sync::events::subscriptions::onBucketProtected(id);
@@ -502,7 +524,7 @@ BucketRow protect(const Actor& actor, const KeyRef& ref, const std::string& buck
 
 BucketRow unprotect(const Actor& actor, const KeyRef& ref, const std::string& bucket, const bool confirm) {
     auto key = authorize(actor, ref, UpPerm::Unprotect, KeyPerm::View);
-    const auto id = identityOf(key, bucket);
+    const auto id = identityOf(key, bucket, /*strict=*/false);
     const auto current = BucketQuery::getByIdentity(id.provider, *id.account_ref, id.bucket);
     if (!current || !current->is_protected) return rowFor(id);
     if (!confirm)
@@ -659,6 +681,7 @@ ProvisionTicket beginProvision(const Actor& actor, const unsigned int apiKeyId, 
         const auto id = identityOf(key, bucket);
         requireUnprotected(actor, id, "bucket.create", key->id);
         const auto region = req.region && !req.region->empty() ? req.region : std::optional<std::string>(defaultRegion(*key));
+        if (region && !region->empty()) requireValidRegion(*key, *region);
         try {
             const auto lease = mapped([&] {
                 return provision::createManaged(*client, id, region && !region->empty() ? region : std::nullopt, key->id);

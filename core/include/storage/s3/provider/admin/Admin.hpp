@@ -265,6 +265,11 @@ void setFactoryForTesting(std::optional<Factory> factory);
 // The provider part of a bucket identity: the profile id for providers with an admin adapter ("aws-s3",
 // "cloudflare-r2"), "s3:<lower-case provider name>" for the others ("s3:minio").
 [[nodiscard]] std::string providerIdentity(vault::model::S3Provider provider);
+// The provider part of the identity of the buckets a key reaches, following its endpoint host: an R2 or AWS endpoint
+// is "cloudflare-r2" / "aws-s3" whatever provider the key was saved with (so a lock can't be dodged by the label).
+[[nodiscard]] std::string providerIdentity(const vault::model::APIKey& key);
+// Why the key's declared provider contradicts its endpoint (an R2 endpoint saved as "Other"), or nullopt.
+[[nodiscard]] std::optional<std::string> providerEndpointMismatch(const vault::model::APIKey& key);
 
 // The account a key belongs to without a network call when the provider encodes it (R2 endpoint host), else the
 // cached api_keys.provider_account_id, else nullopt.

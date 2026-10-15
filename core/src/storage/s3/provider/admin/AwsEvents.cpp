@@ -1,4 +1,5 @@
 #include "storage/s3/provider/admin/Adapters.hpp"
+#include "storage/upstream/Names.hpp"
 
 #include "vault/model/APIKey.hpp"
 
@@ -160,6 +161,7 @@ void AwsEvents::putNotificationXml(const std::string& bucket, const std::string&
 
 std::vector<std::string> AwsEvents::subscribe(const ChannelRef& channel, const SubscriptionSpec& spec) {
     if (!isOwnedId(spec.rule_id)) throw std::invalid_argument("subscription rule ids must start with vaulthalla-");
+    storage::upstream::requireValidBucketName(spec.bucket);   // the name lands in the queue policy's aws:SourceArn
     storage::upstream::guard::require(s3_.bucketIdentity(spec.bucket));
     const auto region = regionOfQueue(channel);
     const auto account = arnField(channel.queue_arn, 4);
@@ -200,6 +202,7 @@ std::vector<std::string> AwsEvents::subscribe(const ChannelRef& channel, const S
 }
 
 void AwsEvents::unsubscribe(const ChannelRef& channel, const SubscriptionSpec& spec, const std::vector<std::string>& ruleIds) {
+    storage::upstream::requireValidBucketName(spec.bucket);
     storage::upstream::guard::require(s3_.bucketIdentity(spec.bucket));
     const auto ids = ownIds(ruleIds, spec.rule_id);
 

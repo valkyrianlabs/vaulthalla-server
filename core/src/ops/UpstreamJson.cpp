@@ -1,4 +1,5 @@
 #include "ops/UpstreamJson.hpp"
+#include "storage/upstream/Names.hpp"
 
 #include "db/encoding/timestamp.hpp"
 #include "vault/model/APIKey.hpp"
@@ -281,6 +282,9 @@ Provision provisionFromJson(const nlohmann::json& j) {
     p.mode = bucketModeFromString(upstreamReqString(j, "mode").value_or("existing"));
     p.region = upstreamReqString(j, "region");
     if (p.region && p.region->empty()) p.region.reset();
+    // Checked against the key's provider in beginProvision; refuse anything that is neither form outright.
+    if (p.region && !storage::upstream::validAwsRegion(*p.region) && !storage::upstream::validR2LocationHint(*p.region))
+        throw Invalid("invalid region '" + *p.region + "'");
     p.generate_name = upstreamReqBool(j, "generate_name");
     if (j.contains("lifecycle") && !j.at("lifecycle").is_null()) p.lifecycle = lifecyclePatchFromJson(j.at("lifecycle"));
     p.events = upstreamReqBool(j, "events");

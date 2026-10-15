@@ -10,6 +10,7 @@
 #include "runtime/Deps.hpp"
 #include "storage/Manager.hpp"
 #include "storage/s3/Controller.hpp"
+#include "storage/s3/provider/admin/Admin.hpp"
 #include "vault/APIKeyManager.hpp"
 
 #include <paths.h>
@@ -76,6 +77,9 @@ APIKeyPtr create(const Actor& actor, const Create& req) {
     auto key = std::make_shared<vault::model::APIKey>(owner->id, req.name, req.provider, req.access_key,
                                                       req.secret_access_key, req.region.empty() ? "auto" : req.region,
                                                       req.endpoint);
+    // The identity (and protection locks) of the buckets a key reaches follows its endpoint; a label that contradicts
+    // it would split one bucket into two identities.
+    if (const auto mismatch = storage::s3::provider::admin::providerEndpointMismatch(*key)) throw Invalid(*mismatch);
     if (!paths::testMode) {
         const auto [valid, errors] = storage::s3::Controller(key, "").validateAPICredentials();
         if (!valid) throw Invalid("API key validation failed:\n" + errors);
@@ -98,6 +102,7 @@ APIKeyPtr update(const Actor& actor, const Ref& ref, const Update& req) {
     if (req.access_key) key->access_key = *req.access_key;
     if (req.endpoint) key->endpoint = *req.endpoint;
     if (req.region) key->region = req.region->empty() ? "auto" : *req.region;
+    if (const auto mismatch = storage::s3::provider::admin::providerEndpointMismatch(*key)) throw Invalid(*mismatch);
 
     std::vector<std::string> missing;
     if (key->name.empty()) missing.emplace_back("name");

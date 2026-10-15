@@ -66,42 +66,6 @@ bool listsEmpty(padmin::AdminClient& admin, const std::string& bucket) {
 
 }
 
-bool validBucketName(const std::string& name, std::string& why) {
-    if (name.size() < 3 || name.size() > 63) {
-        why = "a bucket name has 3 to 63 characters";
-        return false;
-    }
-    if (!std::ranges::all_of(name, [](const unsigned char c) { return std::islower(c) || std::isdigit(c) || c == '-' || c == '.'; })) {
-        why = "a bucket name uses only lower-case letters, digits, '-' and '.'";
-        return false;
-    }
-    const auto alnum = [](const unsigned char c) { return std::islower(c) || std::isdigit(c); };
-    if (!alnum(static_cast<unsigned char>(name.front())) || !alnum(static_cast<unsigned char>(name.back()))) {
-        why = "a bucket name starts and ends with a letter or digit";
-        return false;
-    }
-    if (name.find("..") != std::string::npos) {
-        why = "a bucket name has no two adjacent periods";
-        return false;
-    }
-    static const std::regex ipLike(R"(^\d{1,3}(\.\d{1,3}){3}$)");
-    if (std::regex_match(name, ipLike)) {
-        why = "a bucket name can't look like an IP address";
-        return false;
-    }
-    for (const auto* prefix : {"xn--", "sthree-", "amzn-s3-demo-"})
-        if (name.starts_with(prefix)) {
-            why = std::string("a bucket name can't start with '") + prefix + "'";
-            return false;
-        }
-    for (const auto* suffix : {"-s3alias", "--ol-s3", ".mrap", "--x-s3", "--table-s3"})
-        if (name.ends_with(suffix)) {
-            why = std::string("a bucket name can't end with '") + suffix + "'";
-            return false;
-        }
-    return true;
-}
-
 std::string newOperationToken() { return randomLower(32); }
 
 std::string generateBucketName(const std::string& vaultName, padmin::AdminClient& admin) {

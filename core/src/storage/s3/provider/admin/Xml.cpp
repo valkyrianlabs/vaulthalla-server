@@ -1,9 +1,11 @@
 #include "storage/s3/provider/admin/Internal.hpp"
+#include "storage/upstream/Names.hpp"
 
 #include <nlohmann/json.hpp>
 #include <pugixml.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <sstream>
 #include <stdexcept>
 
@@ -334,11 +336,15 @@ std::string mergeQueuePolicy(const std::string& policyJson, const std::string& q
         if (s.is_object() && s.value("Sid", "") == kPolicySid) arns = sourceArns(s);
         else kept.push_back(s);
     }
+    // ArnLike treats '*' and '?' as wildcards: only a valid bucket name (which can't contain them) may become an ARN.
+    storage::upstream::requireValidBucketName(bucket);
     const auto arn = "arn:aws:s3:::" + bucket;
     std::erase(arns, arn);
     if (add) arns.push_back(arn);
     std::ranges::sort(arns);
 
+    if (accountId.size() != 12 || !std::ranges::all_of(accountId, [](const unsigned char c) { return std::isdigit(c) != 0; }))
+        throw std::invalid_argument("queue policy: '" + accountId + "' is not an AWS account id");
     if (!arns.empty()) {
         kept.push_back({
             {"Sid", kPolicySid},

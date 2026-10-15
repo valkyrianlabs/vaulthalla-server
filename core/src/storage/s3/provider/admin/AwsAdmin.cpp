@@ -1,4 +1,5 @@
 #include "storage/s3/provider/admin/Adapters.hpp"
+#include "storage/upstream/Names.hpp"
 
 #include "vault/model/APIKey.hpp"
 
@@ -11,7 +12,12 @@ namespace vh::storage::s3::provider::admin {
 
 namespace {
 
-std::string s3Host(const std::string& region) { return "s3." + region + ".amazonaws.com"; }
+// The region becomes part of a host name: only a real region code may (a value like "evil.example/#" would send a
+// signed request, access key id included, to someone else's server).
+std::string s3Host(const std::string& region) {
+    if (!storage::upstream::validAwsRegion(region)) throw std::invalid_argument("invalid AWS region '" + region + "'");
+    return "s3." + region + ".amazonaws.com";
+}
 
 }
 
@@ -39,6 +45,7 @@ detail::Endpoint AwsAdmin::bucketEndpoint(const std::string& bucket) {
 
 std::optional<std::string> AwsAdmin::locationConstraint(const CreateBucketRequest& request) const {
     const auto region = request.region && !request.region->empty() ? *request.region : defaultRegion();
+    if (!storage::upstream::validAwsRegion(region)) throw std::invalid_argument("invalid AWS region '" + region + "'");
     if (region == "us-east-1") return std::nullopt;
     return region;
 }
@@ -75,6 +82,7 @@ std::string AwsAdmin::regionOf(const std::string& bucket) {
 
 std::optional<std::string> AwsAdmin::headBucket(const std::string& bucket) {
     if (bucket.empty()) throw std::invalid_argument("bucket name is required");
+    storage::upstream::requireValidBucketName(bucket);
     storage::upstream::guard::require(bucketIdentity(bucket));
 
     // The global endpoint answers for every bucket: 200 here, or a redirect/400 naming its region.
@@ -85,6 +93,7 @@ std::optional<std::string> AwsAdmin::headBucket(const std::string& bucket) {
     auto response = probe("us-east-1");
     if (response.transport_ok && response.status == 404) return std::nullopt;
     auto region = response.header("x-amz-bucket-region");
+    if (region && !storage::upstream::validAwsRegion(*region)) region.reset();   // never route by a malformed header
     if (response.ok()) {
         regions_[bucket] = region.value_or("us-east-1");
         return regions_[bucket];
@@ -101,6 +110,9 @@ std::optional<std::string> AwsAdmin::headBucket(const std::string& bucket) {
 }
 
 void AwsAdmin::createBucket(const CreateBucketRequest& request) {
+    storage::upstream::requireValidBucketName(request.name);
+    if (request.region && !request.region->empty() && !storage::upstream::validAwsRegion(*request.region))
+        throw std::invalid_argument("invalid AWS region '" + *request.region + "'");
     regions_[request.name] = request.region && !request.region->empty() ? *request.region : defaultRegion();
     try {
         S3ApiAdmin::createBucket(request);
