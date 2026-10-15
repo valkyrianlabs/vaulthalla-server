@@ -1,3 +1,5 @@
+![Vaulthalla - The Final Cloud](https://media.vaulthalla.io/Vaulthalla_%20The%20Final%20Cloud.png)
+
 [![build](https://img.shields.io/github/actions/workflow/status/vaulthalla/vaulthalla/build_and_test.yml?label=build)](https://github.com/vaulthalla/vaulthalla/actions)
 [![release](https://img.shields.io/github/v/release/vaulthalla/vaulthalla?display_name=tag&sort=semver)](https://github.com/vaulthalla/vaulthalla/releases)
 [![license](https://img.shields.io/github/license/vaulthalla/vaulthalla?v=2)](https://github.com/vaulthalla/vaulthalla/blob/main/LICENSE)
@@ -68,6 +70,8 @@ Privacy & Security once. Guide: [Install On macOS](https://vaulthalla.io/docs/ma
 4. Create a vault, then export its keys before important data goes in.
 
 ## Why Vaulthalla
+
+![Vaulthalla web 'vaults' dashboard](https://media.vaulthalla.io/vaulthalla-web-ultrawide-vault-preview-10-11-26.png)
 
 - **Encrypted at rest, always.** Every vault is AES-256-GCM with per-vault keys; master keys are sealed by the host's
   TPM2 on Linux (or a managed software TPM on VPS hosts). Cloud copies can be encrypted before they leave the host.
