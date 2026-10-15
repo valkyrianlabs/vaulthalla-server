@@ -11,6 +11,8 @@
 #include "db/query/sync/Conflict.hpp"
 #include "sync/model/Scope.hpp"
 
+#include <chrono>
+#include <ctime>
 #include <functional>
 #include <unordered_set>
 
@@ -40,6 +42,17 @@ namespace vh::sync {
         // Installed by the event service: the vault's keys with an applied, unsettled removal event.
         using PendingRemovalsProvider = std::function<std::unordered_set<std::u8string>(uint32_t vaultId)>;
         static void setPendingRemovalsProvider(PendingRemovalsProvider provider);
+
+        // Also installed by the event service (all optional):
+        //   baselineNeeded  an adopted bucket's subscription waits for one full listing: list even with an index
+        //   baselineListed  that listing finished (its start time supersedes older events)
+        //   indexFresh      an active subscription keeps the index fresh: skip the stale-index stall
+        struct EventHooks {
+            std::function<bool(uint32_t vaultId)> baselineNeeded;
+            std::function<void(uint32_t vaultId, std::time_t listStartedAt)> baselineListed;
+            std::function<bool(uint32_t vaultId, std::chrono::seconds maxAge)> indexFresh;
+        };
+        static void setEventHooks(EventHooks hooks);
 
         ~Cloud() override = default;
 

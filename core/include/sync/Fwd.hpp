@@ -7,6 +7,10 @@ namespace vh::sync {
     class Controller;
 }
 
+namespace vh::sync::events {
+    class Service;
+}
+
 namespace vh::sync::model {
     struct Policy;
     struct RemotePolicy;

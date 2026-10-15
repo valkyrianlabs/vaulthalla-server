@@ -25,6 +25,8 @@
 #include "sync/model/Event.hpp"
 #include "storage/s3/provider/Registry.hpp"
 #include "identities/Manager.hpp"
+#include "db/query/upstream/WriteIntent.hpp"
+#include "sync/events/Subscriptions.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -158,6 +160,7 @@ void CloudEngine::upload(const std::shared_ptr<File>& f) const {
         if (ciphertext.empty()) {
             auto options = requestOptionsFor(s3::provider::RequestOperation::PutObject);
             options.metadata = getMetaMapFromFile(f);
+            noteOwnWrite(s3Key, false, 0);
             s3Provider_->uploadBufferWithMetadata(s3Key, {}, options);
             return;
         }
@@ -171,6 +174,7 @@ void CloudEngine::upload(const std::shared_ptr<File>& f) const {
         const auto ciphertext = encryptionManager->encrypt({}, f);
         auto options = requestOptionsFor(s3::provider::RequestOperation::PutObject);
         options.metadata = getMetaMapFromFile(f);
+        noteOwnWrite(s3Key, false, ciphertext.size());
         s3Provider_->uploadBufferWithMetadata(s3Key, ciphertext, options);
         return;
     }
@@ -179,6 +183,7 @@ void CloudEngine::upload(const std::shared_ptr<File>& f) const {
     const auto meta = getMetaMapFromFile(f);
     auto options = requestOptionsFor(s3::provider::RequestOperation::PutObject);
     options.metadata = meta;
+    noteOwnWrite(s3Key, false, backingSize);
 
     if (backingSize < s3::Controller::MIN_PART_SIZE)
         s3Provider_->uploadObjectWithMetadata(s3Key, backingPath, options);
@@ -201,6 +206,7 @@ void CloudEngine::upload(const std::shared_ptr<File>& f, const std::vector<uint8
         const auto plaintext = isCiphertext ? decrypt(f, buffer) : buffer;
         auto options = requestOptionsFor(s3::provider::RequestOperation::PutObject);
         options.metadata = getMetaMapFromFile(f);
+        noteOwnWrite(stripLeadingSlash(f->path), false, plaintext.size());
         s3Provider_->uploadBufferWithMetadata(stripLeadingSlash(f->path), plaintext, options);
         return;
     }
@@ -209,6 +215,7 @@ void CloudEngine::upload(const std::shared_ptr<File>& f, const std::vector<uint8
     const auto meta = getMetaMapFromFile(f);
     auto options = requestOptionsFor(s3::provider::RequestOperation::PutObject);
     options.metadata = meta;
+    noteOwnWrite(s3Key, false, buffer.size());
 
     if (buffer.size() < s3::Controller::MIN_PART_SIZE) s3Provider_->uploadBufferWithMetadata(s3Key, buffer, options);
     else {
@@ -251,6 +258,7 @@ std::shared_ptr<File> CloudEngine::uploadBufferObject(
     const auto s3Key = stripLeadingSlash(file->path);
     auto options = requestOptionsFor(s3::provider::RequestOperation::PutObject);
     options.metadata = getMetaMapFromFile(file);
+    noteOwnWrite(s3Key, false, payload.size());
 
     if (payload.size() < s3::Controller::MIN_PART_SIZE) {
         s3Provider_->uploadBufferWithMetadata(s3Key, payload, options);
@@ -686,8 +694,14 @@ CloudEngine::RemoteEncryptionContext CloudEngine::resolveRemoteEncryptionContext
 
         if (const auto headPayload = encryption_payload_from_headers(*loadedHead))
             return encryptedWith(headPayload);
+
+        // The object is there and carries no Vaulthalla metadata at all: plaintext written by another tool (#96 —
+        // e.g. an external overwrite of a file Vaulthalla knows). The local row's IV describes the copy it replaced,
+        // so recovering from it would fail authentication on bytes that were never sealed.
+        return {};
     }
 
+    // No HEAD answer: fall back to what the index row or the local row recorded.
     if (filePayload) return encryptedWith(filePayload);
     if (const auto recoveryPayload = localPayload()) return encryptedWith(recoveryPayload);
 
@@ -789,6 +803,7 @@ void CloudEngine::purge(const std::shared_ptr<file::Trashed>& f) const {
 }
 
 void CloudEngine::removeRemotely(const fs::path& rel_path) const {
+    noteOwnWrite(stripLeadingSlash(rel_path), true, std::nullopt);
     s3Provider_->deleteObject(stripLeadingSlash(rel_path));
     // The file may still be indexed (remote-only removal); its derived artifacts go with the remote copy, as the
     // path-keyed thumbnails did. After removeLocally the row (and its artifacts) are already gone.
@@ -798,7 +813,22 @@ void CloudEngine::removeRemotely(const fs::path& rel_path) const {
 
 void CloudEngine::removeRemotely(const std::shared_ptr<file::Trashed>& f) const {
     // Trashing ended the file id and dropped its derived artifacts.
+    noteOwnWrite(stripLeadingSlash(makeAbsolute(f->path)), true, std::nullopt);
     s3Provider_->deleteObject(stripLeadingSlash(makeAbsolute(f->path)));
+}
+
+void CloudEngine::noteOwnWrite(const fs::path& key, const bool isDelete, const std::optional<uint64_t> objectSize) const {
+    if (!vault) return;
+    try {
+        if (!vh::sync::events::subscriptions::activeFor(vault->id)) return;
+        db::query::upstream::WriteIntent::record(
+            vault->id, key.string(),
+            isDelete ? vh::storage::upstream::model::WriteOp::Delete : vh::storage::upstream::model::WriteOp::Put,
+            isDelete ? std::nullopt : objectSize);
+    } catch (const std::exception& e) {
+        log::Registry::cloud()->warn("[CloudStorageEngine] Vault {}: could not record a write intent for '{}': {}",
+                                     vault->id, key.string(), e.what());
+    }
 }
 
 std::shared_ptr<vh::vault::model::S3Vault> CloudEngine::s3Vault() const { return std::static_pointer_cast<vh::vault::model::S3Vault>(vault); }

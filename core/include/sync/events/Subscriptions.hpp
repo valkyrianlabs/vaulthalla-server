@@ -46,7 +46,7 @@ struct Status {
 
 struct EnableRequest {
     uint32_t vault_id = 0;
-    std::string prefix;
+    std::string prefix{};
     std::string foreign_objects = "import";   // import | ignore
     // Adoption: events that arrive before the vault's first full listing are held and replayed after it.
     bool baseline_required = false;
@@ -65,5 +65,10 @@ void onVaultReinstated(uint32_t vaultId) noexcept;  // restored: re-arm
 // Cheap, cached (refreshed by the service): does the vault have an active subscription? CloudEngine records write
 // intents for its own PUT/DELETEs only then.
 [[nodiscard]] bool activeFor(uint32_t vaultId);
+// Forces the next activeFor() to reload (after enable/disable done elsewhere, and in tests).
+void invalidateCache() noexcept;
+
+// The event service's sweep: finishes teardowns left in `removing` (provider outage, deleted vault).
+void retryTeardowns() noexcept;
 
 }

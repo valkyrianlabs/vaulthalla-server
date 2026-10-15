@@ -201,6 +201,10 @@ namespace vh::storage {
 
         std::shared_ptr<vault::model::S3Vault> s3Vault() const;
         void resolveS3ProviderConfiguration();
+        // Event-driven sync (#96): before Vaulthalla's own PUT/DELETE of an object, while the vault has an active
+        // event subscription, record a write intent so the notification it causes is recognised as ours. Best
+        // effort: a failure only costs a redundant transfer later.
+        void noteOwnWrite(const std::filesystem::path &key, bool isDelete, std::optional<uint64_t> objectSize) const;
         [[nodiscard]] s3::RequestOptions requestOptionsFor(s3::provider::RequestOperation operation) const;
         [[nodiscard]] std::optional<std::string> configuredStorageClass() const;
 

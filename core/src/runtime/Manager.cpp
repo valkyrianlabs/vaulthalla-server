@@ -15,6 +15,7 @@
 #include "stats/SnapshotService.hpp"
 #include "sync/Controller.hpp"
 #include "vault/RetentionService.hpp"
+#include "sync/events/Service.hpp"
 
 #include <array>
 #include <chrono>
@@ -33,6 +34,7 @@ constexpr std::array kBaseStartOrder{
     "FUSE",
     "IdentityWatcher",
     "SyncController",
+    "UpstreamEventService",
     "DBJanitor",
     "VaultRetentionService",
     "LogRotationService",
@@ -54,6 +56,7 @@ constexpr std::array kBaseStopOrder{
     "DBJanitor",
     "IdentityWatcher",
     "LogRotationService",
+    "UpstreamEventService",
     "SyncController",
     "FUSE"
 };
@@ -75,7 +78,8 @@ Manager::Manager()
       identityWatcher(std::make_shared<identities::RevisionWatcher>()),
       vaultRetentionService(std::make_shared<vault::RetentionService>()),
       statsSnapshotService(std::make_shared<stats::SnapshotService>()),
-      operatorEmailService(std::make_shared<notifications::OperatorEmailService>()) {
+      operatorEmailService(std::make_shared<notifications::OperatorEmailService>()),
+      upstreamEventService(std::make_shared<sync::events::Service>()) {
 
     services_["SyncController"] = syncController;
     if (fuseService) services_["FUSE"] = fuseService;  // null: built without the kernel FUSE bridge
@@ -88,6 +92,7 @@ Manager::Manager()
     services_["VaultRetentionService"] = vaultRetentionService;
     services_["StatsSnapshotService"] = statsSnapshotService;
     services_["OperatorEmailService"] = operatorEmailService;
+    services_["UpstreamEventService"] = upstreamEventService;
 
     // A test instance serves `vh` only on a private socket (VH_TEST_CLI_SOCKET), never the system one.
     if (!paths::testMode || paths::testCliSocket) {

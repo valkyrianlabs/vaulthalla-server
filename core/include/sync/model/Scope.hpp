@@ -16,6 +16,9 @@ struct PassScope {
     // Keys whose latest event is a removal: a local copy unchanged since both sides last agreed is removed instead of
     // re-uploaded (a full pass can't tell a deletion from an absence; an event can).
     std::unordered_set<std::u8string> removed;
+    // Keys whose latest event is an external create/overwrite: the remote object changed, whatever sizes or ETags a
+    // hashless index row lets the baseline compare (a same-size overwrite after an upload would look unchanged).
+    std::unordered_set<std::u8string> changed;
     // Inbox rows this pass settles, handed back to the caller.
     std::vector<int64_t> inbox_ids;
     // Called once when the pass ends: ok = the plan ran with no failed operation.

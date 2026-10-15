@@ -65,6 +65,16 @@ Cloud::PendingRemovalsProvider& pendingRemovalsProvider() {
     return provider;
 }
 
+Cloud::EventHooks& eventHooksSlot() {
+    static Cloud::EventHooks hooks;
+    return hooks;
+}
+
+Cloud::EventHooks eventHooks() {
+    std::scoped_lock lock(pendingRemovalsMutex());
+    return eventHooksSlot();
+}
+
 // Releases the vault's pass lease (sync::Controller) when a pass ends, however it ends.
 struct PassLease {
     unsigned int vaultId;
@@ -75,6 +85,11 @@ struct PassLease {
     }
 };
 
+}
+
+void Cloud::setEventHooks(EventHooks hooks) {
+    std::scoped_lock lock(pendingRemovalsMutex());
+    eventHooksSlot() = std::move(hooks);
 }
 
 void Cloud::setPendingRemovalsProvider(PendingRemovalsProvider provider) {
@@ -327,11 +342,18 @@ void Cloud::sync() {
 void Cloud::initBins() {
     const auto cloud = cloudEngine();
     const auto policy = cloud->remote_policy();
-    const bool manifestRefreshed = cloud->refreshRemoteIndexFromManifestIfChanged();
-    const auto indexSummary = db::query::sync::RemoteObjectIndex::summaryForVault(engine->vault->id);
+    const auto hooks = eventHooks();
+    const auto vaultId = engine->vault->id;
+    // Adoption with events (#96): one full listing after the subscription exists, whatever the index holds.
+    const bool baseline = hooks.baselineNeeded && hooks.baselineNeeded(vaultId);
+    const bool manifestRefreshed = !baseline && cloud->refreshRemoteIndexFromManifestIfChanged();
+    const auto indexSummary = db::query::sync::RemoteObjectIndex::summaryForVault(vaultId);
+    const auto keptFresh = [&] {
+        return hooks.indexFresh && policy->max_remote_index_age && hooks.indexFresh(vaultId, *policy->max_remote_index_age);
+    };
 
-    if (manifestRefreshed || indexSummary.object_count > 0) {
-        if (!manifestRefreshed && indexSummary.isStale(policy->max_remote_index_age)) {
+    if (!baseline && (manifestRefreshed || indexSummary.object_count > 0)) {
+        if (!manifestRefreshed && indexSummary.isStale(policy->max_remote_index_age) && !keptFresh()) {
             const auto age = indexSummary.indexed_at
                 ? std::to_string(std::time(nullptr) - *indexSummary.indexed_at) + "s old"
                 : std::string("missing indexed_at");
@@ -341,9 +363,11 @@ void Cloud::initBins() {
         }
         s3Map = groupEntriesByPath(db::query::sync::RemoteObjectIndex::listFilesForVault(engine->vault->id));
     } else {
+        const auto listStartedAt = std::time(nullptr);
         s3Map = cloud->getGroupedFilesFromS3();
         db::query::sync::RemoteObjectIndex::replaceFromListObjects(engine->vault->id, uMap2Vector(s3Map));
         cloud->publishRemoteIndexManifestWithRetry();
+        if (baseline && hooks.baselineListed) hooks.baselineListed(vaultId, listStartedAt);
     }
     s3Files = uMap2Vector(s3Map);
 
