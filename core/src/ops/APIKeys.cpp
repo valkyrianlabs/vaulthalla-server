@@ -109,6 +109,16 @@ APIKeyPtr update(const Actor& actor, const Ref& ref, const Update& req) {
         throw Invalid(msg);
     }
 
+    // An administrative key repointed at another account (#237) must not stay "administrative" there on authority
+    // nobody with admin.upstream.configure granted for it; while event channels run on it, it can't move at all.
+    const bool repointed = key->provider != previousProvider || key->endpoint != previousEndpoint ||
+                           key->access_key != previousAccessKey;
+    if (repointed && key->admin_enabled)
+        if (const auto n = db::query::upstream::Subscription::countActiveUsingKey(key->id); n > 0)
+            throw Conflict("API key '" + key->name + "' operates " + std::to_string(n) + " active event subscription" +
+                           (n == 1 ? "" : "s") + "; turn them off (vh upstream events disable) before changing its "
+                           "provider, endpoint or access key");
+
     const bool newSecret = req.secret_access_key && !req.secret_access_key->empty();
     if (!paths::testMode) {
         auto probe = std::make_shared<vault::model::APIKey>(*key);
@@ -128,8 +138,16 @@ APIKeyPtr update(const Actor& actor, const Ref& ref, const Update& req) {
 
     // The account a key belongs to (#237: bucket identity, protection locks) follows its provider, endpoint and access
     // key; a change means it must be resolved again.
-    if (key->provider != previousProvider || key->endpoint != previousEndpoint || key->access_key != previousAccessKey)
-        runtime::Deps::get().apiKeyManager->setAccountRef(key->id, std::nullopt);
+    if (repointed) {
+        if (key->admin_enabled) {
+            db::query::vault::APIKey::resetAdmin(key->id);
+            log::Registry::audit()->warn("[ops::api_keys] {} repointed administrative API key {} ('{}'): provider "
+                                         "administration turned off until it is enabled again", actor->name(), key->id,
+                                         key->name);
+        } else {
+            runtime::Deps::get().apiKeyManager->setAccountRef(key->id, std::nullopt);
+        }
+    }
 
     // Vaults bound to the key keep their binding (same id); their live engines pick up the new credentials.
     if (const auto& storage = runtime::Deps::get().storageManager) {

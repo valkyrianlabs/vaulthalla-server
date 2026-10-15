@@ -211,3 +211,8 @@ CREATE TABLE IF NOT EXISTS upstream_write_intent
 
 CREATE INDEX IF NOT EXISTS idx_upstream_write_intent_key ON upstream_write_intent (vault_id, object_key, op);
 CREATE INDEX IF NOT EXISTS idx_upstream_write_intent_expiry ON upstream_write_intent (expires_at);
+
+-- FX-1: a create-new attempt is recorded separately from a bucket Vaulthalla really created. created_by_vaulthalla is
+-- set only after CreateBucket succeeded and the new bucket listed empty; provision_attempted marks rows a create
+-- claimed (so a retry can find its own attempt) without claiming anything about the bucket itself.
+ALTER TABLE upstream_bucket ADD COLUMN IF NOT EXISTS provision_attempted BOOLEAN NOT NULL DEFAULT FALSE;

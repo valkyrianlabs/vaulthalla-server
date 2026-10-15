@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstdint>
 #include <ctime>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -31,6 +32,9 @@ struct Run {
     uint64_t failed = 0;
     bool emptied = false;          // the bucket listed empty at the end
     bool bucket_deleted = false;   // deleted and confirmed absent by HeadBucket
+    bool interrupted = false;      // a provider error stopped it part way (`error`); what was deleted is still counted
+    bool lease_lost = false;       // the cleanup's lease was taken or the bucket locked/bound meanwhile: stopped
+    std::string error;
     std::vector<std::string> errors;
 };
 
@@ -40,10 +44,12 @@ struct Limits {
 };
 
 // Deletes versions page by page (≤1000 per batch) from the start of the listing, so a later run resumes where this one
-// stopped. Stops at the limits, or when a whole page fails. A provider refusal for an object (object lock, legal hold)
-// is a failure for that object, never bypassed.
+// stopped. Stops at the limits, when a whole page fails, when `stillOurs` (checked before every round and before the
+// bucket deletion) says the lease is gone, or at the first provider error (`interrupted`; never thrown, so the caller
+// can record what was already deleted). A provider refusal for an object (object lock, legal hold) is a failure for
+// that object, never bypassed.
 [[nodiscard]] Run execute(s3::provider::admin::AdminClient& admin, const std::string& bucket, bool deleteBucket,
-                          const Limits& limits = {});
+                          const Limits& limits = {}, const std::function<bool()>& stillOurs = {});
 
 // Confirmation tokens: single use, ten minutes, bound to the identity, the counts the person saw and the actor.
 inline constexpr std::chrono::minutes kTokenLifetime{10};

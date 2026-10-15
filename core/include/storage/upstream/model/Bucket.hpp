@@ -29,7 +29,10 @@ struct Bucket {
     std::optional<std::string> region;
     Ownership ownership{Ownership::Unmanaged};
     ProvisioningState provisioning_state{ProvisioningState::None};
+    // Set only once CreateBucket succeeded for this row and the bucket listed empty (cleanup trusts it).
     bool created_by_vaulthalla{false};
+    // A create-new attempt claimed this row (whether or not it created anything).
+    bool provision_attempted{false};
     std::optional<std::string> operation_token;
     std::optional<uint32_t> vault_id;
     bool is_protected{false};

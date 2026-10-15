@@ -34,3 +34,16 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
 - fix(storage): remote-only files indexed from objects that were plaintext from the start (an adopted or waivered
   bucket's data, another tool's upload) could not be read in vaults that encrypt upstream (the hydrate called them a
   downgrade); they are now sealed on the way in. A sealed file whose object turns plaintext is still refused.
+- upstream: a create-new attempt claims nothing until CreateBucket succeeded and the bucket listed empty (a transient
+  HeadBucket/CreateBucket failure no longer leaves a "created by Vaulthalla" record that cleanup would trust); retries
+  resume only a bucket the same record really created.
+- upstream: cleanup holds its own lease (adoption, create retries, detach and other cleanups are refused meanwhile; a
+  lock or binding set during the run stops it), and a provider error part way is reported and audited as partial with
+  the bucket left recoverable.
+- upstream: lifecycle writes rebuild only `vaulthalla-managed`; every other rule round-trips verbatim and is verified
+  after the write; an externally customised `vaulthalla-managed` rule is refused rather than rewritten; re-enabling a
+  disabled expiration needs the destructive confirmation.
+- vaults: deleting a vault on an adopted bucket refuses `--delete-upstream` (the retention purge refuses it too).
+- rbac: provisioning with a lifecycle rule or event subscription needs admin.upstream.configure; unprotect needs key
+  consume; the upstream audit log shows only entries for keys the reader may view; repointing an administrative key
+  (provider, endpoint or access key) turns administration off, and is refused while it operates event subscriptions.

@@ -126,6 +126,7 @@ Bucket::Bucket(const pqxx::row_ref row)
       ownership(ownershipFromString(row["ownership"].as<std::string>())),
       provisioning_state(provisioningStateFromString(row["provisioning_state"].as<std::string>())),
       created_by_vaulthalla(row["created_by_vaulthalla"].as<bool>()),
+      provision_attempted(db::encoding::try_get<bool>(row, "provision_attempted").value_or(false)),
       operation_token(optText(row, "operation_token")),
       vault_id(db::encoding::try_get<uint32_t>(row, "vault_id")),
       is_protected(row["is_protected"].as<bool>()),

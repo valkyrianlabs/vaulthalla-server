@@ -143,24 +143,33 @@ Lease createManaged(padmin::AdminClient& admin, const BucketIdentity& id, const 
     }
 
     Lease lease{.row = claim->bucket, .token = token, .created = false};
-    const auto fail = [&](const std::string& message) {
-        (void)BucketQuery::setProvisioningState(lease.row.id, ProvisioningState::Failed, token, message);
+    // Resumable only if this row recorded that an earlier attempt really created the bucket (created_by_vaulthalla is
+    // set by confirmCreated alone, after CreateBucket succeeded and the bucket listed empty). Any other existing bucket
+    // existed before us, or was re-created by someone else after we deleted ours: never ours.
+    const bool ourEarlierBucket = claim->reclaimed && claim->bucket.created_by_vaulthalla;
+    // Gives the identity back when this attempt didn't (or can't prove it did) create anything: the claim row goes, or
+    // at least claims nothing; a bucket an earlier attempt of ours created stays recorded as ours, failed.
+    const auto giveUp = [&](const std::string& message) {
+        if (ourEarlierBucket) {
+            (void)BucketQuery::setProvisioningState(lease.row.id, ProvisioningState::Failed, token, message);
+            return;
+        }
+        if (!BucketQuery::releaseClaim(lease.row.id, token))
+            (void)BucketQuery::disown(lease.row.id, token, ProvisioningState::Failed, message);
     };
 
     try {
         bool exists = false;
         (void)probeExisting(admin, id.bucket, exists);
         if (exists) {
-            // Our own earlier attempt may have created it (crash or failure after CreateBucket): resume only if it is
-            // still empty. Anything else existed before us.
-            if (claim->reclaimed && listsEmpty(admin, id.bucket)) {
-                lease.created = true;
-            } else if (claim->reclaimed) {
-                fail("bucket exists and holds objects; it is not ours to manage");
-                BucketQuery::setOwnership(lease.row.id, Ownership::Unmanaged, ProvisioningState::Failed);
-                throw ProvisionConflict("bucket '" + id.bucket + "' exists and holds objects; adopt it instead");
+            if (ourEarlierBucket && listsEmpty(admin, id.bucket)) {
+                lease.created = true;   // our own bucket from a failed attempt, still empty: resume it
+            } else if (ourEarlierBucket) {
+                giveUp("bucket holds objects; it is not resumed by a new vault");
+                throw ProvisionConflict("bucket '" + id.bucket + "' (created by an earlier attempt) holds objects; adopt it "
+                                        "or clean it up instead");
             } else {
-                (void)BucketQuery::releaseClaim(lease.row.id, token);
+                giveUp("bucket already exists");
                 throw ProvisionConflict("bucket '" + id.bucket + "' already exists; adopt it instead of creating it");
             }
         } else {
@@ -168,25 +177,30 @@ Lease createManaged(padmin::AdminClient& admin, const BucketIdentity& id, const 
                 admin.createBucket({.name = id.bucket, .region = region});
             } catch (const padmin::ProviderError& e) {
                 if (!isCollision(e)) throw;
-                if (!claim->reclaimed) (void)BucketQuery::releaseClaim(lease.row.id, token);
-                else fail("bucket name taken: " + std::string(e.what()));
+                giveUp("bucket name taken: " + std::string(e.what()));
                 throw ProvisionConflict("bucket '" + id.bucket + "' already exists (" + e.code + "); adopt it instead");
             }
-            lease.created = true;
             // AWS us-east-1 answers 200 to CreateBucket on a bucket the account already owns: a bucket that lists
-            // anything existed before this call.
+            // anything existed before this call. (Residual race: an *empty* bucket the same account created between
+            // our HeadBucket and CreateBucket is indistinguishable from a new one there; it can only come from another
+            // writer racing on the exact name within milliseconds, and it holds nothing.)
             if (!listsEmpty(admin, id.bucket)) {
-                lease.created = false;
-                fail("bucket held objects right after creation: it existed before");
-                BucketQuery::setOwnership(lease.row.id, Ownership::Unmanaged, ProvisioningState::Failed);
+                (void)BucketQuery::disown(lease.row.id, token, ProvisioningState::Failed,
+                                          "bucket held objects right after creation: it existed before");
                 throw ProvisionConflict("bucket '" + id.bucket + "' already existed and holds objects; nothing was "
                                         "changed. Adopt it instead");
             }
+            if (!BucketQuery::confirmCreated(lease.row.id, token))
+                throw ProvisionConflict("another provisioning attempt took over bucket '" + id.bucket + "'");
+            lease.created = true;
         }
     } catch (const ProvisionConflict&) {
         throw;
     } catch (const std::exception& e) {
-        fail(e.what());
+        // Before a confirmed create nothing is ours (a transient HeadBucket/CreateBucket failure must never leave a
+        // row that says "Vaulthalla created this"); after it, the bucket is ours and failed.
+        if (lease.created) (void)BucketQuery::setProvisioningState(lease.row.id, ProvisioningState::Failed, token, e.what());
+        else giveUp(e.what());
         throw;
     }
 
@@ -244,7 +258,7 @@ void compensate(padmin::AdminClient* admin, const Lease& lease, const std::strin
             }
             const auto current = BucketQuery::get(lease.row.id);
             const bool stillOurs = current && current->operation_token == lease.token && !current->vault_id &&
-                                   !current->is_protected;
+                                   !current->is_protected && current->created_by_vaulthalla;
             if (empty && stillOurs) {
                 admin->deleteBucket(lease.row.bucket);
                 (void)BucketQuery::setProvisioningState(lease.row.id, ProvisioningState::Deleted, lease.token,
@@ -264,9 +278,8 @@ void compensate(padmin::AdminClient* admin, const Lease& lease, const std::strin
             return;
         }
         // An adoption that didn't finish: the bucket is unmanaged again, exactly as it was.
-        if (const auto current = BucketQuery::get(lease.row.id); current && current->operation_token == lease.token &&
-                                                                  !current->vault_id)
-            BucketQuery::setOwnership(lease.row.id, Ownership::Unmanaged, ProvisioningState::None);
+        if (const auto current = BucketQuery::get(lease.row.id); current && !current->vault_id)
+            (void)BucketQuery::setOwnership(lease.row.id, Ownership::Unmanaged, ProvisioningState::None, lease.token);
     } catch (const std::exception& e) {
         log::Registry::storage()->error("[upstream::provision] compensation for '{}' failed: {}", lease.row.bucket, e.what());
     }

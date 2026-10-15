@@ -125,6 +125,14 @@ namespace vh::db::query::vault {
         });
     }
 
+    void APIKey::resetAdmin(const unsigned int keyId) {
+        Transactions::exec("APIKey::resetAdmin", [&](pqxx::work& txn) {
+            txn.exec("UPDATE api_keys SET admin_enabled = FALSE, admin_capabilities = NULL, admin_validated_at = NULL, "
+                     "encrypted_provider_token = NULL, provider_token_iv = NULL, provider_account_id = NULL WHERE id = $1",
+                     pqxx::params{keyId});
+        });
+    }
+
     void APIKey::setAccountRef(const unsigned int keyId, const std::optional<std::string>& accountRef) {
         Transactions::exec("APIKey::setAccountRef", [&](pqxx::work& txn) {
             txn.exec(pqxx::prepped{"api_key_set_account_ref"}, pqxx::params{keyId, accountRef});

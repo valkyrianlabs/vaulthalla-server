@@ -39,6 +39,10 @@ MergeResult mergeOwnedRule(const std::vector<LifecycleRule>& current, const Owne
         out.changed = before.has_value();
         return out;
     }
+    if (before && before->unmodeled)
+        throw UnmodeledOwnedRule(std::string("the bucket's '") + kOwnedRuleId + "' lifecycle rule was changed outside "
+                                 "Vaulthalla (it has filters or actions Vaulthalla doesn't manage); rewriting it would "
+                                 "change what it does. Remove it (clear) or edit it with the provider.");
 
     LifecycleRule rule = before.value_or(LifecycleRule{});
     rule.id = kOwnedRuleId;
@@ -60,7 +64,9 @@ MergeResult mergeOwnedRule(const std::vector<LifecycleRule>& current, const Owne
     const std::optional<unsigned int> noneDays;
     out.destructive = tightened(before ? before->expire_current_days : noneDays, rule.expire_current_days) ||
                       tightened(before ? before->expire_noncurrent_days : noneDays, rule.expire_noncurrent_days) ||
-                      (before && rule.destructive() && before->prefix != rule.prefix);
+                      (before && rule.destructive() && before->prefix != rule.prefix) ||
+                      // Turning a disabled expiration back on deletes data just as a new rule would.
+                      (before && !before->enabled && rule.destructive());
     out.changed = !before || before->abort_incomplete_multipart_days != rule.abort_incomplete_multipart_days ||
                   before->expire_current_days != rule.expire_current_days ||
                   before->expire_noncurrent_days != rule.expire_noncurrent_days || before->prefix != rule.prefix ||

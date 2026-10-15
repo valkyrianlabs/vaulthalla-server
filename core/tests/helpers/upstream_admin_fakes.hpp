@@ -7,6 +7,7 @@
 #include "storage/s3/provider/admin/Admin.hpp"
 #include "storage/upstream/Guard.hpp"
 
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -36,6 +37,10 @@ struct FakeCloud {
     std::set<std::string> otherAccount;   // HeadBucket 403
     std::set<std::string> hiddenFromHead; // HeadBucket says absent although it exists (race / us-east-1 create)
     bool silentCreate = false;            // CreateBucket on an existing bucket answers 200 (AWS us-east-1)
+    std::set<std::string> headFails;      // HeadBucket fails transiently (503 SlowDown)
+    int deleteObjectsFailAfter = -1;      // >= 0: DeleteObjects throws (503) once this many batches went through
+    // Called (without the lock) before every DeleteObjects batch: lets a test act while a cleanup is running.
+    std::function<void(const std::string&)> beforeDeleteObjects;
     std::map<std::string, unsigned> bucketCalls;
     unsigned calls = 0, deleteBucketCalls = 0;
 
@@ -75,6 +80,7 @@ public:
         std::scoped_lock lock(c_->mutex);
         c_->touch(bucket);
         if (c_->otherAccount.contains(bucket)) throw padmin::ProviderError("forbidden", "AccessDenied", 403);
+        if (c_->headFails.contains(bucket)) throw padmin::ProviderError("slow down", "SlowDown", 503);
         if (c_->hiddenFromHead.contains(bucket)) return std::nullopt;
         const auto it = c_->buckets.find(bucket);
         if (it == c_->buckets.end()) return std::nullopt;
@@ -137,8 +143,16 @@ public:
     std::vector<std::pair<std::string, std::string>> deleteObjects(const std::string& bucket,
                                                                    const std::vector<padmin::ObjectSummary>& objects) override {
         guard(bucket);
+        std::function<void(const std::string&)> hook;
+        {
+            std::scoped_lock lock(c_->mutex);
+            hook = c_->beforeDeleteObjects;
+        }
+        if (hook) hook(bucket);
         std::scoped_lock lock(c_->mutex);
         c_->touch(bucket);
+        if (c_->deleteObjectsFailAfter == 0) throw padmin::ProviderError("service unavailable", "ServiceUnavailable", 503);
+        if (c_->deleteObjectsFailAfter > 0) --c_->deleteObjectsFailAfter;
         std::vector<std::pair<std::string, std::string>> failed;
         auto& b = c_->buckets.at(bucket);
         for (const auto& o : objects) {

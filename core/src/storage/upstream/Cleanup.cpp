@@ -59,26 +59,41 @@ Count count(padmin::AdminClient& admin, const std::string& bucket, const uint64_
     return out;
 }
 
-Run execute(padmin::AdminClient& admin, const std::string& bucket, const bool deleteBucket, const Limits& limits) {
+Run execute(padmin::AdminClient& admin, const std::string& bucket, const bool deleteBucket, const Limits& limits,
+            const std::function<bool()>& stillOurs) {
     Run run;
     std::unordered_map<std::string, std::string> failedKeys;   // a key that keeps failing counts once
     const auto deadline = std::chrono::steady_clock::now() + limits.deadline;
-    while (std::chrono::steady_clock::now() < deadline && run.deleted < limits.max_objects) {
-        const auto page = admin.listObjectVersions(bucket, {}, 1000);
-        if (page.objects.empty()) {
-            run.emptied = true;
-            break;
+    const auto leaseHeld = [&] {
+        if (!stillOurs || stillOurs()) return true;
+        run.lease_lost = true;
+        run.error = "the cleanup's hold on the bucket was lost (locked, bound or taken over meanwhile); stopped";
+        return false;
+    };
+    try {
+        while (std::chrono::steady_clock::now() < deadline && run.deleted < limits.max_objects) {
+            if (!leaseHeld()) return run;
+            const auto page = admin.listObjectVersions(bucket, {}, 1000);
+            if (page.objects.empty()) {
+                run.emptied = true;
+                break;
+            }
+            const auto failures = admin.deleteObjects(bucket, page.objects);
+            run.deleted += page.objects.size() - std::min(page.objects.size(), failures.size());
+            for (const auto& [key, code] : failures)
+                if (failedKeys.emplace(key, code).second && run.errors.size() < 20) run.errors.push_back(key + ": " + code);
+            run.failed = failedKeys.size();
+            // A page that deleted nothing would be listed again forever (locked objects): stop and report.
+            if (failures.size() >= page.objects.size()) break;
         }
-        const auto failures = admin.deleteObjects(bucket, page.objects);
-        run.deleted += page.objects.size() - std::min(page.objects.size(), failures.size());
-        for (const auto& [key, code] : failures)
-            if (failedKeys.emplace(key, code).second && run.errors.size() < 20) run.errors.push_back(key + ": " + code);
-        run.failed = failedKeys.size();
-        // A page that deleted nothing would be listed again forever (locked objects): stop and report.
-        if (failures.size() >= page.objects.size()) break;
+    } catch (const std::exception& e) {
+        run.interrupted = true;
+        run.error = e.what();
+        return run;
     }
 
     if (run.emptied && deleteBucket) {
+        if (!leaseHeld()) return run;
         try {
             admin.deleteBucket(bucket);
             bool exists = true;

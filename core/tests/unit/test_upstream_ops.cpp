@@ -11,10 +11,12 @@
 #include "../helpers/sync_conflict_harness.hpp"
 #include "../helpers/upstream_admin_fakes.hpp"
 
+#include "db/query/upstream/Audit.hpp"
 #include "db/query/upstream/Bucket.hpp"
 #include "db/query/upstream/Channel.hpp"
 #include "db/query/upstream/Subscription.hpp"
 #include "ops/APIKeys.hpp"
+#include "ops/Roles.hpp"
 #include "ops/Upstream.hpp"
 #include "ops/UpstreamJson.hpp"
 #include "ops/Vaults.hpp"
@@ -22,6 +24,7 @@
 #include "rbac/permission/admin/keys/API.hpp"
 #include "rbac/resolver/admin/all.hpp"
 #include "storage/s3/provider/admin/Admin.hpp"
+#include "storage/s3/provider/admin/Internal.hpp"
 #include "storage/upstream/Guard.hpp"
 #include "storage/upstream/Lifecycle.hpp"
 #include "storage/upstream/Provisioner.hpp"
@@ -608,7 +611,7 @@ TEST_F(UpstreamOpsTest, EveryOperationFollowsTheUpstreamBitsAndTheKeysPermission
         EXPECT_EQ(allowed([&] { (void)up::protect(user, keyId, name, "rbac"); }), canProtect) << role;
         if (canProtect) {
             EXPECT_EQ(allowed([&] { (void)up::unprotect(user, keyId, name, true); }),
-                      bits.canUnprotect() && key(KeyPerm::View)) << role;
+                      bits.canUnprotect() && key(KeyPerm::Consume)) << role;
             (void)up::unprotect(superUser, keyId, name, true);
         }
         EXPECT_EQ(allowed([&] { (void)up::enableAdmin(user, keyId, {}); }), bits.canConfigure() && key(KeyPerm::Edit))
@@ -636,6 +639,337 @@ TEST_F(UpstreamOpsTest, JsonUsesTheDocumentedShapes) {
     EXPECT_EQ(status["enabled"], true);
     EXPECT_FALSE(status["api_key"].contains("secret_access_key"));
     EXPECT_FALSE(status.dump().contains("secret-value"));
+}
+
+// ---- review fixes (FX-1): ownership claims, cleanup lease, lifecycle fidelity, deletion, RBAC ----------------------
+
+namespace {
+
+std::map<std::string, uint64_t> manyObjects(const size_t n) {
+    std::map<std::string, uint64_t> out;
+    for (size_t i = 0; i < n; ++i) out["obj-" + std::to_string(100000 + i)] = 1;
+    return out;
+}
+
+unsigned auditCount(const std::string& bucket, const std::string& action, const std::string& outcome) {
+    unsigned n = 0;
+    for (const auto& r : db::query::upstream::Audit::list(bucket, 1000))
+        if (r.action == action && storage::upstream::model::to_string(r.outcome) == outcome) ++n;
+    return n;
+}
+
+}
+
+TEST_F(UpstreamOpsTest, ATransientFailureBeforeCreatingNeverLeavesAnOwnershipClaim) {
+    // Data-safety review #1: a create that failed on HeadBucket (503) used to leave a row saying
+    // managed / created_by_vaulthalla, which a later cleanup trusted.
+    const auto keyId = awsKey(superUser);
+    const auto name = bucketName();
+    {
+        std::scoped_lock lock(cloud->mutex);
+        cloud->headFails.insert(name);
+    }
+    EXPECT_ANY_THROW((void)up::beginProvision(superUser, keyId, "v", name, {.mode = up::BucketMode::Create}));
+    if (const auto row = rowOf(name)) {
+        EXPECT_NE(row->ownership, storage::upstream::model::Ownership::Managed);
+        EXPECT_FALSE(row->created_by_vaulthalla);
+    }
+
+    // The name turns out to be another application's bucket: it is never "ours" to clean up.
+    {
+        std::scoped_lock lock(cloud->mutex);
+        cloud->headFails.clear();
+    }
+    seedBucket(name, {{"their-data", 7}});
+    const auto plan = up::cleanupPreflight(superUser, keyId, name);
+    EXPECT_FALSE(plan.blockers.empty());
+    EXPECT_TRUE(plan.confirm_token.empty());
+    EXPECT_EQ(objectCount(name), 1u);
+}
+
+TEST_F(UpstreamOpsTest, ARetryResumesOnlyABucketThisRecordReallyCreated) {
+    namespace m = storage::upstream::model;
+    using BQ = db::query::upstream::Bucket;
+    const auto keyId = awsKey(superUser);
+
+    // An attempt that never created anything, then someone else creates an empty bucket with that name.
+    const auto attempted = bucketName();
+    const storage::upstream::BucketIdentity attemptedId{.provider = "aws-s3", .account_ref = kAccount, .bucket = attempted};
+    const auto claim = BQ::claimForCreate(attemptedId, std::nullopt, keyId, "old-attempt");
+    ASSERT_TRUE(claim);
+    ASSERT_TRUE(BQ::setProvisioningState(claim->bucket.id, m::ProvisioningState::Failed, "old-attempt", "boom"));
+    seedBucket(attempted);
+    EXPECT_THROW((void)up::beginProvision(superUser, keyId, "v", attempted, {.mode = up::BucketMode::Create}), ops::Conflict);
+    EXPECT_TRUE(exists(attempted));
+    if (const auto row = rowOf(attempted)) {
+        EXPECT_FALSE(row->created_by_vaulthalla);
+    }
+
+    // Our bucket, rolled back (deleted); someone re-creates the name, empty: not ours either.
+    const auto recreated = bucketName();
+    const auto t = up::beginProvision(superUser, keyId, "v", recreated, {.mode = up::BucketMode::Create});
+    up::abortProvision(t, "vault creation failed");
+    ASSERT_FALSE(exists(recreated));
+    seedBucket(recreated);
+    EXPECT_THROW((void)up::beginProvision(superUser, keyId, "v", recreated, {.mode = up::BucketMode::Create}), ops::Conflict);
+    EXPECT_TRUE(exists(recreated));
+    if (const auto row = rowOf(recreated)) {
+        EXPECT_FALSE(row->created_by_vaulthalla);
+    }
+
+    // Our own bucket from a failed attempt, still there and empty: resumed.
+    const auto ours = bucketName();
+    const auto first = up::beginProvision(superUser, keyId, "v", ours, {.mode = up::BucketMode::Create});
+    ASSERT_TRUE(BQ::setProvisioningState(first.upstream_bucket_id, m::ProvisioningState::Failed, first.operation_token, "x"));
+    const auto resumed = up::beginProvision(superUser, keyId, "v", ours, {.mode = up::BucketMode::Create});
+    EXPECT_TRUE(resumed.created);
+    EXPECT_EQ(resumed.upstream_bucket_id, first.upstream_bucket_id);
+
+    std::scoped_lock lock(cloud->mutex);
+    EXPECT_EQ(cloud->deleteBucketCalls, 1u) << "only the rollback of the bucket this attempt itself created";
+}
+
+TEST_F(UpstreamOpsTest, CleanupHoldsALeaseAgainstAdoptionAndProvisioning) {
+    namespace m = storage::upstream::model;
+    const auto keyId = awsKey(superUser);
+    const auto name = bucketName();
+    const auto ticket = up::beginProvision(superUser, keyId, "v", name, {.mode = up::BucketMode::Create});
+
+    // Still configuring (no vault yet): cleanup refused.
+    seedBucket(name, {{"a", 1}});
+    EXPECT_FALSE(up::cleanupPreflight(superUser, keyId, name).blockers.empty());
+
+    ASSERT_TRUE(db::query::upstream::Bucket::setProvisioningState(ticket.upstream_bucket_id, m::ProvisioningState::Ready,
+                                                                 ticket.operation_token));
+    seedBucket(name, manyObjects(1500));
+    std::optional<std::string> adoptionOutcome;
+    {
+        std::scoped_lock lock(cloud->mutex);
+        cloud->beforeDeleteObjects = [&](const std::string&) {
+            if (adoptionOutcome) return;
+            try {
+                (void)up::beginProvision(superUser, keyId, "late", name, {.mode = up::BucketMode::Adopt, .accept_adoption = true});
+                adoptionOutcome = "adopted";
+            } catch (const ops::Conflict& e) {
+                adoptionOutcome = std::string("conflict: ") + e.what();
+            } catch (const std::exception& e) {
+                adoptionOutcome = std::string("other: ") + e.what();
+            }
+        };
+    }
+    const auto plan = up::cleanupPreflight(superUser, keyId, name);
+    ASSERT_TRUE(plan.blockers.empty()) << plan.blockers.front();
+    const auto result = up::cleanup(superUser, keyId, name, plan.confirm_token);
+    {
+        std::scoped_lock lock(cloud->mutex);
+        cloud->beforeDeleteObjects = nullptr;
+    }
+    ASSERT_TRUE(adoptionOutcome);
+    EXPECT_TRUE(adoptionOutcome->starts_with("conflict")) << *adoptionOutcome;
+    EXPECT_EQ(result.outcome, "deleted");
+    EXPECT_EQ(rowOf(name)->provisioning_state, m::ProvisioningState::Deleted);
+    EXPECT_FALSE(rowOf(name)->vault_id);
+}
+
+TEST_F(UpstreamOpsTest, ALockSetDuringACleanupStopsItAsPartial) {
+    namespace m = storage::upstream::model;
+    const auto keyId = awsKey(superUser);
+    const auto name = bucketName();
+    const auto ticket = up::beginProvision(superUser, keyId, "v", name, {.mode = up::BucketMode::Create});
+    ASSERT_TRUE(db::query::upstream::Bucket::setProvisioningState(ticket.upstream_bucket_id, m::ProvisioningState::Ready,
+                                                                 ticket.operation_token));
+    seedBucket(name, manyObjects(2500));
+    const auto plan = up::cleanupPreflight(superUser, keyId, name);
+    bool locked = false;
+    {
+        std::scoped_lock lock(cloud->mutex);
+        cloud->beforeDeleteObjects = [&](const std::string&) {
+            if (locked) return;
+            locked = true;
+            (void)up::protect(superUser, keyId, name, "stop that");
+        };
+    }
+    const auto result = up::cleanup(superUser, keyId, name, plan.confirm_token);
+    {
+        std::scoped_lock lock(cloud->mutex);
+        cloud->beforeDeleteObjects = nullptr;
+    }
+    EXPECT_EQ(result.outcome, "partial");
+    EXPECT_FALSE(result.bucket_deleted);
+    EXPECT_TRUE(exists(name));
+    EXPECT_GT(objectCount(name), 0u) << "nothing past the lock is deleted";
+    EXPECT_GE(auditCount(name, "cleanup", "partial"), 1u);
+    (void)up::unprotect(superUser, keyId, name, true);
+}
+
+TEST_F(UpstreamOpsTest, AProviderErrorMidCleanupIsRecordedAsPartialAndCanBeResumed) {
+    namespace m = storage::upstream::model;
+    const auto keyId = awsKey(superUser);
+    const auto name = bucketName();
+    const auto ticket = up::beginProvision(superUser, keyId, "v", name, {.mode = up::BucketMode::Create});
+    ASSERT_TRUE(db::query::upstream::Bucket::setProvisioningState(ticket.upstream_bucket_id, m::ProvisioningState::Ready,
+                                                                 ticket.operation_token));
+    seedBucket(name, manyObjects(1500));
+    {
+        std::scoped_lock lock(cloud->mutex);
+        cloud->deleteObjectsFailAfter = 1;   // the first batch goes through, the second fails
+    }
+    const auto plan = up::cleanupPreflight(superUser, keyId, name);
+    const auto result = up::cleanup(superUser, keyId, name, plan.confirm_token);
+    EXPECT_EQ(result.outcome, "partial");
+    EXPECT_EQ(result.deleted, 1000u);
+    ASSERT_FALSE(result.errors.empty());
+    EXPECT_EQ(objectCount(name), 500u);
+    const auto row = rowOf(name);
+    EXPECT_EQ(row->provisioning_state, m::ProvisioningState::Failed) << "recoverable, not stuck in deleting";
+    EXPECT_TRUE(row->last_error && row->last_error->contains("1000 deleted"));
+    EXPECT_EQ(auditCount(name, "cleanup", "partial"), 1u) << "what was already deleted is on the record";
+
+    {
+        std::scoped_lock lock(cloud->mutex);
+        cloud->deleteObjectsFailAfter = -1;
+    }
+    const auto again = up::cleanupPreflight(superUser, keyId, name);
+    ASSERT_TRUE(again.blockers.empty()) << again.blockers.front();
+    EXPECT_EQ(up::cleanup(superUser, keyId, name, again.confirm_token).outcome, "deleted");
+    EXPECT_FALSE(exists(name));
+}
+
+TEST(UpstreamLifecycleFidelity, OnlyOurManagedRuleIsRebuiltAndUnmodeledVersionsOfItAreRefused) {
+    namespace detail = storage::s3::provider::admin::detail;
+    using storage::upstream::lifecycle::mergeOwnedRule;
+    const std::string xml =
+        R"(<LifecycleConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">)"
+        R"(<Rule><ID>vaulthalla-tmp</ID><Filter><And><Prefix>tmp/</Prefix><Tag><Key>tmp</Key><Value>true</Value></Tag></And></Filter>)"
+        R"(<Status>Enabled</Status><Expiration><Days>1</Days></Expiration></Rule>)"
+        R"(<Rule><ID>vaulthalla-managed</ID><Filter><Prefix></Prefix></Filter><Status>Enabled</Status>)"
+        R"(<AbortIncompleteMultipartUpload><DaysAfterInitiation>3</DaysAfterInitiation></AbortIncompleteMultipartUpload></Rule>)"
+        R"(</LifecycleConfiguration>)";
+    const auto rules = detail::parseLifecycle(xml);
+    ASSERT_EQ(rules.size(), 2u);
+    EXPECT_TRUE(rules[0].foreign) << "another vaulthalla-* id is not ours to rebuild";
+    EXPECT_TRUE(rules[0].unmodeled);
+    EXPECT_FALSE(rules[1].foreign);
+    EXPECT_FALSE(rules[1].unmodeled);
+
+    const auto merged = mergeOwnedRule(rules, {.abort_incomplete_multipart_days = 7}, true);
+    const auto written = detail::buildLifecycle(merged.rules, true);
+    EXPECT_TRUE(written.contains("<Tag>")) << "the tag filter survives byte for byte: " << written;
+    EXPECT_TRUE(written.contains("vaulthalla-tmp"));
+
+    // Our rule changed outside Vaulthalla into something the model can't carry: refused, not silently widened.
+    const std::string customized =
+        R"(<LifecycleConfiguration><Rule><ID>vaulthalla-managed</ID><Filter><Tag><Key>k</Key><Value>v</Value></Tag></Filter>)"
+        R"(<Status>Enabled</Status><Expiration><Days>30</Days></Expiration></Rule></LifecycleConfiguration>)";
+    const auto custom = detail::parseLifecycle(customized);
+    ASSERT_EQ(custom.size(), 1u);
+    EXPECT_TRUE(custom[0].unmodeled);
+    EXPECT_THROW((void)mergeOwnedRule(custom, {.abort_incomplete_multipart_days = 7}, true),
+                 storage::upstream::lifecycle::UnmodeledOwnedRule);
+    EXPECT_NO_THROW((void)mergeOwnedRule(custom, {.clear = true}, true)) << "removing it is still allowed";
+}
+
+TEST(UpstreamLifecycleFidelity, ReEnablingADisabledExpirationIsDestructive) {
+    using storage::upstream::lifecycle::mergeOwnedRule;
+    padmin::LifecycleRule disabled;
+    disabled.id = storage::upstream::lifecycle::kOwnedRuleId;
+    disabled.enabled = false;
+    disabled.expire_current_days = 30;
+    const auto merged = mergeOwnedRule({disabled}, {.abort_incomplete_multipart_days = 7}, true);
+    EXPECT_TRUE(merged.destructive) << "an unrelated patch turns the expiration back on";
+}
+
+TEST_F(UpstreamOpsTest, DeletingAnAdoptedVaultNeverDeletesTheBucketsData) {
+    const auto keyId = awsKey(superUser);
+    const auto name = bucketName();
+    seedBucket(name, {{"other-app.txt", 3}});
+    const auto vault = s3Vault(keyId, name, up::Provision{.mode = up::BucketMode::Adopt, .accept_adoption = true});
+    ASSERT_TRUE(vault);
+    EXPECT_THROW((void)ops::vaults::remove(superUser, {.id = vault->id, .delete_upstream = true, .accept_key_loss = true}),
+                 ops::Invalid);
+    EXPECT_NO_THROW((void)ops::vaults::remove(superUser, {.id = vault->id, .accept_key_loss = true}));
+    EXPECT_THROW((void)ops::vaults::remove(superUser, {.id = vault->id, .now = true, .delete_upstream = true,
+                                                       .confirm_now = true, .accept_key_loss = true}),
+                 ops::Invalid) << "not by switching it on later either";
+    EXPECT_EQ(objectCount(name), 1u);
+}
+
+TEST_F(UpstreamOpsTest, OwnershipWritesFollowTheOperationToken) {
+    namespace m = storage::upstream::model;
+    using BQ = db::query::upstream::Bucket;
+    const auto keyId = awsKey(superUser);
+    const auto name = bucketName();
+    const auto ticket = up::beginProvision(superUser, keyId, "v", name, {.mode = up::BucketMode::Create});
+    EXPECT_FALSE(BQ::setOwnership(ticket.upstream_bucket_id, m::Ownership::Unmanaged, m::ProvisioningState::Failed,
+                                  std::string("stale-token")));
+    EXPECT_EQ(rowOf(name)->ownership, m::Ownership::Managed);
+    EXPECT_TRUE(BQ::setOwnership(ticket.upstream_bucket_id, m::Ownership::Managed, m::ProvisioningState::Ready,
+                                 ticket.operation_token));
+}
+
+TEST_F(UpstreamOpsTest, ProvisioningWithLifecycleOrEventsNeedsConfigure) {
+    const auto keyId = awsKey(superUser);
+    const auto roleName = "up_provisioner_" + tag();
+    (void)ops::roles::createAdminRole(superUser, {.name = roleName, .permissions = {.changes = {
+        {"admin.upstream.view", true}, {"admin.upstream.provision", true},
+        {"admin.keys.api.admin.view", true}, {"admin.keys.api.admin.consume", true}}}}, "test");
+    const auto provisioner = createUser("up_provisioner", roleName);
+
+    EXPECT_THROW((void)up::beginProvision(provisioner, keyId, "v", bucketName(),
+                                          {.mode = up::BucketMode::Create,
+                                           .lifecycle = up::LifecyclePatch{.abort_incomplete_multipart_days = 3}}),
+                 ops::Denied);
+    EXPECT_THROW((void)up::beginProvision(provisioner, keyId, "v", bucketName(), {.mode = up::BucketMode::Create, .events = true}),
+                 ops::Denied);
+    EXPECT_NO_THROW((void)up::beginProvision(provisioner, keyId, "v", bucketName(), {.mode = up::BucketMode::Create}));
+}
+
+TEST_F(UpstreamOpsTest, RepointingAnAdministrativeKeyTurnsAdministrationOff) {
+    const auto keyId = awsKey(superUser);
+    ASSERT_TRUE(db::query::vault::APIKey::getAPIKey(keyId)->admin_enabled);
+    (void)ops::api_keys::update(superUser, keyId, {.endpoint = std::string("https://s3.eu-west-1.amazonaws.com")});
+    const auto key = db::query::vault::APIKey::getAPIKey(keyId);
+    EXPECT_FALSE(key->admin_enabled);
+    EXPECT_FALSE(key->provider_account_id);
+    EXPECT_FALSE(key->admin_capabilities_json);
+    EXPECT_FALSE(key->hasProviderToken());
+
+    // While it operates an event channel, it can't be repointed at all.
+    const auto busyKey = awsKey(superUser);
+    const auto bucket = db::query::upstream::Bucket::protect({.provider = "aws-s3", .account_ref = kAccount, .bucket = bucketName()},
+                                                             std::nullopt, std::nullopt, std::nullopt, "fixture");
+    (void)db::query::upstream::Bucket::unprotect(bucket.identity());
+    storage::upstream::guard::reload();
+    const auto channel = db::query::upstream::Channel::getOrCreate("aws-s3", kAccount, "us-east-2",
+                                                                   "vaulthalla-events-us-east-2-" + tag(), busyKey);
+    const auto vault = s3Vault(busyKey, bucketName());
+    const auto sub = db::query::upstream::Subscription::create(channel.id, bucket.id, vault->id, "",
+                                                               storage::upstream::model::ForeignObjects::Import,
+                                                               storage::upstream::model::BaselineState::None);
+    ASSERT_TRUE(sub);
+    db::query::upstream::Subscription::setState(sub->id, storage::upstream::model::SubscriptionState::Active, std::nullopt);
+    EXPECT_THROW((void)ops::api_keys::update(superUser, busyKey, {.access_key = std::string("AKIAOTHERACCESSKEY01")}),
+                 ops::Conflict);
+    EXPECT_TRUE(db::query::vault::APIKey::getAPIKey(busyKey)->admin_enabled);
+    EXPECT_NO_THROW((void)ops::api_keys::update(superUser, busyKey, {.name = std::string("renamed-" + tag())}))
+        << "a rename doesn't move the key anywhere";
+    db::query::upstream::Subscription::setState(sub->id, storage::upstream::model::SubscriptionState::Removed, std::nullopt);
+}
+
+TEST_F(UpstreamOpsTest, TheAuditLogShowsOnlyKeysTheReaderMayView) {
+    const auto keyId = awsKey(superUser);
+    const auto name = bucketName();
+    seedBucket(name);
+    (void)up::protect(superUser, keyId, name, "audit fixture");
+    (void)up::unprotect(superUser, keyId, name, true);
+    EXPECT_GE(up::audit(superUser, {.bucket = name}).size(), 2u);
+
+    const auto roleName = "up_auditor_" + tag();
+    (void)ops::roles::createAdminRole(superUser, {.name = roleName, .permissions = {.changes = {
+        {"admin.upstream.view", true}}}}, "test");
+    const auto reader = createUser("up_reader", roleName);
+    EXPECT_TRUE(up::audit(reader, {.bucket = name}).empty())
+        << "admin.upstream.view alone doesn't reveal the buckets and accounts of keys the reader can't see";
 }
 
 }

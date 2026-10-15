@@ -118,8 +118,9 @@ vh upstream unprotect <api-key> <bucket>
 - The lock belongs to the bucket itself (provider, account and bucket name), not to the credential. Deleting and
   re-creating the credential keeps it, and any other credential for the same account sees it.
 - Locks work for any provider, including ones without administration support.
-- Removing a lock needs the separate `admin.upstream.unprotect` permission and an explicit confirmation
-  (`--yes` for scripts). Both directions are recorded in the audit log with who, when and the reason.
+- Removing a lock needs the separate `admin.upstream.unprotect` permission, the right to use the credential
+  (`consume`), and an explicit confirmation (`--yes` for scripts). Both directions are recorded in the audit log with
+  who, when and the reason.
 - Locks are kept in the database and loaded before the server makes any upstream request; if they can't be loaded, the
   server doesn't start.
 
@@ -139,9 +140,16 @@ Creating never takes over an existing bucket:
 2. The provider must create it. "Already exists" or "already owned by you" is refused and nothing changes.
 3. The new bucket must be empty. If it isn't, creation stops, the bucket is left as it is and marked failed.
 
-Only then does the vault get created and bound. If anything fails after the bucket was created, an empty bucket created
-by this attempt is removed again; anything else is left untouched and marked failed. Retrying with the same name reuses
-Vaulthalla's own empty bucket from the failed attempt. Two creations racing for one name can't both win.
+Only then is the bucket recorded as one Vaulthalla created, and the vault created and bound. A failure before that
+point (a timeout, a throttled request) leaves no claim on the name at all. If anything fails after the bucket was
+created, an empty bucket created by this attempt is removed again; anything else is left untouched and marked failed.
+Retrying with the same name resumes only a bucket that an earlier attempt really created and that is still empty; a
+bucket someone else created under that name in the meantime is refused like any existing bucket. Two creations racing
+for one name can't both win.
+
+One race remains on AWS `us-east-1`, where CreateBucket also answers "created" for a bucket the account already owns:
+an *empty* bucket that someone in the same account creates in the milliseconds between Vaulthalla's check and its
+create can't be told apart from a new one. A bucket that already holds anything is always refused.
 
 ## Adopt An Existing Bucket
 
@@ -189,6 +197,8 @@ come with Cloudflare's default multipart-abort rule; it is kept as a foreign rul
 
 Deleting a vault ([Deleting And Restoring Vaults](/vaults/deleting-vaults)) leaves its bucket and objects in place
 unless you chose the existing opt-in upstream object purge. The bucket stays `managed` or `adopted` with no vault.
+That purge is refused for an adopted bucket: it held data before the vault existed (often other applications'), and
+the purge would delete all of it. Keep the upstream data, detach the bucket, and clean it up with the provider.
 
 **Detach** gives a bucket that no vault uses back to you: Vaulthalla removes its own event rules and lifecycle rule, and
 the bucket becomes `unmanaged`. Data is untouched.
@@ -207,9 +217,12 @@ It first prints a preflight: object, version and delete-marker counts, bytes, ve
 and anything that blocks it. It is refused for protected buckets, adopted or unmanaged buckets, buckets any vault
 (including one pending deletion) is bound to, and buckets with a live event subscription. To go ahead you type the
 bucket name (or pass the preflight's `--confirm-token`, valid for 10 minutes). Right before deleting, every check runs
-again. Object-lock and retention rules are the provider's to enforce: objects it refuses to delete are reported, and the
-result is `partial`, never `deleted`. Large buckets are deleted in rounds; run the command again to continue. Nothing
-is ever purged because a vault creation or a sync failed.
+again, and the cleanup then holds the bucket: an adoption, a create retry or a detach attempted meanwhile is refused,
+and a lock set while it runs stops it at the next round. Object-lock and retention rules are the provider's to enforce:
+objects it refuses to delete are reported, and the result is `partial`, never `deleted`. A provider error part way is
+also `partial`, with what was already deleted in the audit log; the bucket is left marked failed and a new preflight
+and cleanup continue. Large buckets are deleted in rounds; run the command again to continue. Nothing is ever purged
+because a vault creation or a sync failed.
 
 ## Permissions
 
@@ -237,4 +250,5 @@ vh upstream audit --bucket <bucket>
 
 Every lock and unlock, creation, adoption, lifecycle change, event subscription change, detach and cleanup, and
 refusals that matter (protected bucket, name collision), is recorded with the account, bucket, credential, vault, who
-did it and the outcome.
+did it and the outcome. Reading it needs `admin.upstream.view`, and shows only entries for credentials you may view;
+entries whose credential was deleted are shown to full administrators only.
