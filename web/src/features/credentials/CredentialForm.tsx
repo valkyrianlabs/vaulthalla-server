@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react'
 import Link from 'next/link'
+import dynamic from 'next/dynamic'
 import { useRouter } from 'next/navigation'
 import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -24,6 +25,9 @@ import {
   type VaultRef,
 } from '@/features/credentials/useCredentials'
 import { deleteCredential } from '@/features/credentials/deleteCredential'
+
+// Provider administration (#237): its own chunk, loaded with the credential.
+const AdminPanel = dynamic(() => import('@/features/credentials/upstream/AdminPanel'), { ssr: false })
 
 const schema = (editing: boolean) =>
   z.object({
@@ -351,6 +355,9 @@ export const EditCredentialPage = ({ id }: { id: number }) => {
               usedBy={usage ? (usage.get(data.api_key_id) ?? []) : null}
               onDone={() => router.push('/credentials')}
             />
+            <div className="mt-5">
+              <AdminPanel credential={data} />
+            </div>
           </>
         )}
       </QueryState>

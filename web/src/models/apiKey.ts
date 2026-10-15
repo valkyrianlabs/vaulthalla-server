@@ -5,6 +5,11 @@ export interface APIKeyType {
   name: string
   created_at: string
   provider?: string // Optional for S3APIKey
+  // Provider administration (#237); absent on older daemons.
+  admin_enabled?: boolean
+  provider_account_id?: string | null
+  has_provider_token?: boolean
+  admin_validated_at?: string | null
 }
 
 interface S3APIKeyType extends APIKeyType {
