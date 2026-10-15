@@ -58,20 +58,6 @@ const COMMAND_TIMEOUTS: Partial<Record<Command, number>> = {
   'pricing.budget.preflight': 60_000,
   // Resolving uploads or downloads each file (price-preflighted, metered); a bulk run can take minutes.
   'sync.conflicts.resolve': 600_000,
-  // Upstream control plane (#237/#96): each of these talks to the provider (probes, ListBuckets pages, bucket
-  // configuration, queue provisioning, bounded LIST/HEAD admission and cleanup passes).
-  'upstream.admin.enable': 60_000,
-  'upstream.admin.status': 60_000,
-  'upstream.bucket.list': 60_000,
-  'upstream.bucket.inspect': 60_000,
-  'upstream.bucket.lifecycle.set': 60_000,
-  'upstream.bucket.adopt.preflight': 180_000,
-  'upstream.bucket.detach': 60_000,
-  'upstream.bucket.cleanup.preflight': 180_000,
-  'upstream.bucket.cleanup': 600_000,
-  'upstream.events.enable': 120_000,
-  'upstream.events.disable': 60_000,
-  'upstream.events.repair': 120_000,
 }
 
 export const commandTimeout = (command: Command) => COMMAND_TIMEOUTS[command] ?? DEFAULT_TIMEOUT_MS

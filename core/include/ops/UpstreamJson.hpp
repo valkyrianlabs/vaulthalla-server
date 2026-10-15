@@ -34,4 +34,9 @@ void to_json(nlohmann::json& j, const CleanupPlan& v);
 void to_json(nlohmann::json& j, const CleanupResult& v);
 void to_json(nlohmann::json& j, const AuditEntry& v);
 
+// Readers for request objects (ws payloads; the CLI builds them from options). Unknown members are ignored; members of
+// the wrong type are ops::Invalid.
+[[nodiscard]] LifecyclePatch lifecyclePatchFromJson(const nlohmann::json& j);
+[[nodiscard]] Provision provisionFromJson(const nlohmann::json& j);
+
 }

@@ -6,7 +6,7 @@
 export const WS_CONTRACT_VERSION = 1
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = '3948f821deaef4be6cc69b01b7b43c2c12e4f63f563fa4fc00799b3212d9a311'
+export const WS_CONTRACT_HASH = 'f65d925ebe6d3251b2f7e6e66e8f3e6292b4547bc47f28a47a9deb5f4ddf397b'
 
 export interface WsContract {
   /**
@@ -385,7 +385,8 @@ export interface WsContract {
    * Create a vault. owner_id, description and quota (bytes, 0 = unlimited) are optional; the daemon picks the
    * backing directory. S3 vaults also need api_key_id and bucket. A refusal with data.code
    * 'encryption_waiver' means the bucket already holds data: resend with accept_encryption_waiver once the
-   * person accepts.
+   * person accepts. With provision (#237) the daemon creates a managed bucket or adopts an existing one;
+   * 'upstream_adoption' asks for provision.accept_adoption.
    */
   'storage.vault.add': {
     payload: {
@@ -402,6 +403,7 @@ export interface WsContract {
       encrypt_upstream?: boolean
       sync?: object
       accept_encryption_waiver?: boolean
+      provision?: object
     }
     response: { vault: object }
   }
@@ -433,6 +435,152 @@ export interface WsContract {
       accept_key_loss?: boolean
     }
     response: { deletion: object | null }
+  }
+  /**
+   * Turn provider administration off. Refused while an event subscription runs through the key.
+   */
+  'upstream.admin.disable': {
+    payload: { api_key_id: number }
+    response: { admin: object }
+  }
+  /**
+   * Turn on provider administration (AWS S3, Cloudflare R2) for an upstream API key after probing it, or
+   * store / clear the Cloudflare API token R2 events need. Idempotent. Needs admin.upstream.configure + key
+   * edit.
+   */
+  'upstream.admin.enable': {
+    payload: { api_key_id: number; provider_token?: string; clear_provider_token?: boolean }
+    response: { admin: object }
+  }
+  /**
+   * Administration status and the last capability probe; probe=true re-checks the credential (configure).
+   */
+  'upstream.admin.status': {
+    payload: { api_key_id: number; probe?: boolean }
+    response: { admin: object }
+  }
+  /**
+   * Upstream control-plane audit log (newest first): locks, creations, adoptions, lifecycle, events, cleanup.
+   */
+  'upstream.audit.list': {
+    payload: { bucket?: string; limit?: number }
+    response: { entries: object[] }
+  }
+  /**
+   * Read-only admission check of an existing bucket before adoption: object counts, encryption of a sample,
+   * versioning, object lock, Vaulthalla manifest, blockers.
+   */
+  'upstream.bucket.adopt.preflight': {
+    payload: { api_key_id: number; bucket: string; max_objects?: number; sample_heads?: number }
+    response: { report: object }
+  }
+  /**
+   * Delete every object version of a bucket Vaulthalla created and (delete_bucket, default) the bucket. Every
+   * check runs again first. A refusal with data.code 'upstream_cleanup' means the token is missing, expired
+   * or no longer matches the bucket: run the preflight again.
+   */
+  'upstream.bucket.cleanup': {
+    payload: { api_key_id: number; bucket: string; confirm_token: string; delete_bucket?: boolean }
+    response: { result: object }
+  }
+  /**
+   * What cleanup would delete (objects, versions, delete markers, bytes) and anything that blocks it, with a
+   * confirm_token valid for 10 minutes. Nothing changes.
+   */
+  'upstream.bucket.cleanup.preflight': {
+    payload: { api_key_id: number; bucket: string }
+    response: { plan: object }
+  }
+  /**
+   * Give a managed or adopted bucket that no vault uses back: Vaulthalla removes its own rules; data stays.
+   */
+  'upstream.bucket.detach': {
+    payload: { api_key_id: number; bucket: string }
+    response: { bucket: object }
+  }
+  /**
+   * Bucket configuration: region, versioning, object lock, lifecycle and notification rules (ours vs
+   * foreign).
+   */
+  'upstream.bucket.inspect': {
+    payload: { api_key_id: number; bucket: string }
+    response: { inspection: object }
+  }
+  /**
+   * Set or clear Vaulthalla's lifecycle rule on a managed or adopted bucket; foreign rules are preserved.
+   * Expiration is destructive: a refusal with data.code 'upstream_destructive_lifecycle' asks for
+   * accept_destructive.
+   */
+  'upstream.bucket.lifecycle.set': {
+    payload: {
+      api_key_id: number
+      bucket: string
+      abort_incomplete_multipart_days?: number
+      expire_current_days?: number
+      expire_noncurrent_days?: number
+      prefix?: string
+      clear?: boolean
+      accept_destructive?: boolean
+    }
+    response: { inspection: object }
+  }
+  /**
+   * One page of the account's buckets (ListBuckets) merged with what Vaulthalla knows: managed, adopted,
+   * unmanaged or protected. No bucket-level or object calls.
+   */
+  'upstream.bucket.list': {
+    payload: {
+      api_key_id: number
+      token?: string
+      max?: number
+      state?: 'managed' | 'adopted' | 'unmanaged' | 'protected'
+      filter?: string
+    }
+    response: { inventory: object }
+  }
+  /**
+   * Lock a bucket: Vaulthalla will not probe, adopt, bind, configure, sync, empty or delete it. Audited.
+   */
+  'upstream.bucket.protect': {
+    payload: { api_key_id: number; bucket: string; reason: string }
+    response: { bucket: object }
+  }
+  /**
+   * Remove a bucket lock (admin.upstream.unprotect). A refusal with data.code 'upstream_unprotect' asks for
+   * confirmation: resend with confirm.
+   */
+  'upstream.bucket.unprotect': {
+    payload: { api_key_id: number; bucket: string; confirm?: boolean }
+    response: { bucket: object }
+  }
+  /**
+   * Remove the vault's event rule (and the queue when nothing else uses it and Vaulthalla created it).
+   */
+  'upstream.events.disable': {
+    payload: { vault_id: number }
+    response: { events: object }
+  }
+  /**
+   * Subscribe an S3 vault's bucket for event-driven sync (AWS S3 → SQS, Cloudflare R2 → Queues).
+   */
+  'upstream.events.enable': {
+    payload: { vault_id: number; prefix?: string; foreign_objects?: 'import' | 'ignore' }
+    response: { events: object }
+  }
+  /**
+   * Re-create whatever is missing for the vault's subscription and re-arm it. Safe to repeat.
+   */
+  'upstream.events.repair': {
+    payload: { vault_id: number }
+    response: { events: object }
+  }
+  /**
+   * Event subscription, queue health and inbox counts for one vault (vault_id) or every S3 vault the caller
+   * may view. A vault without a subscription reports state 'none'.
+   */
+  'upstream.events.status': {
+    payload: { vault_id?: number }
+    response: { events: object[] }
   }
 }
 
@@ -486,6 +634,23 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'storage.vault.get',
   'storage.vault.list',
   'storage.vault.remove',
+  'upstream.admin.disable',
+  'upstream.admin.enable',
+  'upstream.admin.status',
+  'upstream.audit.list',
+  'upstream.bucket.adopt.preflight',
+  'upstream.bucket.cleanup',
+  'upstream.bucket.cleanup.preflight',
+  'upstream.bucket.detach',
+  'upstream.bucket.inspect',
+  'upstream.bucket.lifecycle.set',
+  'upstream.bucket.list',
+  'upstream.bucket.protect',
+  'upstream.bucket.unprotect',
+  'upstream.events.disable',
+  'upstream.events.enable',
+  'upstream.events.repair',
+  'upstream.events.status',
 ]
 
 // Client timeouts the server declares per command (a timeout means "no answer yet", never "failed").
@@ -533,8 +698,25 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'roles.vault.list.assigned': 15000,
   'share.link.create': 15000,
   'share.link.revoke': 15000,
-  'storage.vault.add': 60000,
+  'storage.vault.add': 180000,
   'storage.vault.get': 15000,
   'storage.vault.list': 15000,
   'storage.vault.remove': 15000,
+  'upstream.admin.disable': 15000,
+  'upstream.admin.enable': 60000,
+  'upstream.admin.status': 60000,
+  'upstream.audit.list': 15000,
+  'upstream.bucket.adopt.preflight': 180000,
+  'upstream.bucket.cleanup': 600000,
+  'upstream.bucket.cleanup.preflight': 180000,
+  'upstream.bucket.detach': 60000,
+  'upstream.bucket.inspect': 60000,
+  'upstream.bucket.lifecycle.set': 60000,
+  'upstream.bucket.list': 60000,
+  'upstream.bucket.protect': 15000,
+  'upstream.bucket.unprotect': 15000,
+  'upstream.events.disable': 120000,
+  'upstream.events.enable': 120000,
+  'upstream.events.repair': 120000,
+  'upstream.events.status': 15000,
 }
