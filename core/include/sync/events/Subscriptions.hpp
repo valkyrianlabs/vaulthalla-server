@@ -1,5 +1,7 @@
 #pragma once
 
+#include "storage/upstream/Guard.hpp"
+
 #include <cstdint>
 #include <ctime>
 #include <optional>
@@ -61,6 +63,12 @@ Status repair(uint32_t vaultId);
 // Vault lifecycle hooks (never throw; failures are recorded on the subscription for repair).
 void onVaultRetired(uint32_t vaultId) noexcept;     // deletion scheduled: stop consuming, tear rules down
 void onVaultReinstated(uint32_t vaultId) noexcept;  // restored: re-arm
+
+// Bucket lock changes (#237; never throw). A lock stops event processing for the bucket at once (its rules stay in
+// place: changing a protected bucket is what the lock forbids); removing it re-arms the subscriptions the lock
+// stopped and makes their held events due again.
+void onBucketProtected(const storage::upstream::BucketIdentity& bucket) noexcept;
+void onBucketUnprotected(const storage::upstream::BucketIdentity& bucket) noexcept;
 
 // Cheap, cached (refreshed by the service): does the vault have an active subscription? CloudEngine records write
 // intents for its own PUT/DELETEs only then.

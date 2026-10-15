@@ -31,6 +31,8 @@ using ChanQ = db::query::upstream::Channel;
 
 // The note a retirement teardown leaves, so a restore knows to re-arm.
 constexpr const char* kRetiredNote = "vault deleted";
+// The note a bucket lock leaves (the applier's too), so an unlock knows what to re-arm.
+constexpr const char* kProtectedNote = "bucket is protected";
 
 // activeFor cache.
 struct ActiveCache {
@@ -365,6 +367,51 @@ void onVaultReinstated(const uint32_t vaultId) noexcept {
         log::Registry::sync()->info("[UpstreamEvents] Vault {} restored; event-driven sync re-armed", vaultId);
     } catch (const std::exception& e) {
         log::Registry::sync()->warn("[UpstreamEvents] Vault {} restored, but event-driven sync was not re-armed: {}", vaultId, e.what());
+    }
+}
+
+void onBucketProtected(const storage::upstream::BucketIdentity& bucket) noexcept {
+    try {
+        if (!bucket.account_ref) return;
+        for (const auto& sub : SubQ::listLiveForBucket(bucket.provider, *bucket.account_ref, bucket.bucket)) {
+            if (sub.state != smodel::SubscriptionState::Active && sub.state != smodel::SubscriptionState::Pending) continue;
+            SubQ::setState(sub.id, smodel::SubscriptionState::Failed, std::string(kProtectedNote));
+            if (sub.vault_id) cacheSet(*sub.vault_id, false);
+        }
+    } catch (const std::exception& e) {
+        log::Registry::sync()->error("[UpstreamEvents] protecting '{}': stopping its subscriptions failed: {}", bucket.bucket,
+                                     e.what());
+    }
+}
+
+void onBucketUnprotected(const storage::upstream::BucketIdentity& bucket) noexcept {
+    try {
+        if (!bucket.account_ref) return;
+        for (const auto& sub : SubQ::listLiveForBucket(bucket.provider, *bucket.account_ref, bucket.bucket)) {
+            if (sub.state != smodel::SubscriptionState::Failed || !sub.last_error ||
+                !sub.last_error->starts_with(kProtectedNote))
+                continue;
+            const auto channel = sub.channel_id ? ChanQ::get(*sub.channel_id) : std::nullopt;
+            if (!sub.rule_ids.empty() && channel && channel->queue_ref &&
+                channel->state != smodel::ChannelState::Removed && channel->state != smodel::ChannelState::Failed) {
+                // The lock never touched the provider: rules and queue are as they were.
+                SubQ::setState(sub.id, smodel::SubscriptionState::Active, "");
+                if (sub.vault_id) cacheSet(*sub.vault_id, true);
+            } else {
+                SubQ::setState(sub.id, smodel::SubscriptionState::Failed,
+                               "the bucket was unprotected; run `vh upstream events repair` to finish setting events up");
+            }
+            // Events held while the bucket was locked are due again now, not after their protection backoff.
+            if (sub.vault_id)
+                db::Transactions::exec("upstream::subscriptions::onBucketUnprotected", [&](pqxx::work& txn) {
+                    txn.exec("UPDATE upstream_event_inbox SET next_attempt_at = NULL "
+                             "WHERE vault_id = $1 AND state = 'pending' AND last_error LIKE 'bucket is protected%'",
+                             pqxx::params{*sub.vault_id});
+                });
+        }
+    } catch (const std::exception& e) {
+        log::Registry::sync()->error("[UpstreamEvents] unprotecting '{}': re-arming its subscriptions failed: {}",
+                                     bucket.bucket, e.what());
     }
 }
 

@@ -34,12 +34,9 @@
 namespace vh::test_upstream_ops {
 
 using namespace test_support::sync_conflicts;
+using namespace test_support::upstream_admin;
 namespace padmin = storage::s3::provider::admin;
 namespace up = ops::upstream;
-
-using test_support::upstream_admin::FakeAdmin;
-using test_support::upstream_admin::FakeCloud;
-using test_support::upstream_admin::kAccount;
 
 class UpstreamOpsTest : public Harness {
 protected:
