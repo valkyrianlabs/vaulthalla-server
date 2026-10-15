@@ -22,6 +22,7 @@
 #include "storage/Manager.hpp"
 #include "storage/s3/Controller.hpp"
 #include "storage/s3/provider/Registry.hpp"
+#include "storage/upstream/Guard.hpp"
 #include "sync/Controller.hpp"
 #include "sync/model/LocalPolicy.hpp"
 #include "sync/model/Policy.hpp"
@@ -65,6 +66,15 @@ void requireConsume(const Actor& actor, const unsigned int keyId) {
     if (!db::query::vault::APIKey::getAPIKey(keyId)) throw NotFound("API key not found: " + std::to_string(keyId));
     if (!rbac::resolver::Admin::has<KeyPerm>({.user = actor, .permission = KeyPerm::Consume, .api_key_id = keyId}))
         throw Denied("you do not have permission to use api-key " + std::to_string(keyId) + " for this vault");
+}
+
+// A protected upstream bucket (#237) can never become a vault's storage. The lock is keyed to the bucket's identity
+// (an AWS key whose account isn't resolved yet matches any lock on the name: fail closed).
+void requireBucketUnprotected(const unsigned int keyId, const std::string& bucket) {
+    const auto key = db::query::vault::APIKey::getAPIKey(keyId);
+    if (!key) throw NotFound("API key not found: " + std::to_string(keyId));
+    if (storage::upstream::guard::isProtected(storage::upstream::identityFor(*key, bucket)))
+        throw Denied("bucket '" + bucket + "' is protected: it can't be used as vault storage until it is unprotected");
 }
 
 VaultPtr requireVault(const unsigned int vaultId) {
@@ -240,10 +250,15 @@ VaultPtr create(const Actor& actor, const Create& req) {
     }
 
     VaultPtr vault;
+    const bool provisioning = req.type == VaultType::S3 && req.s3 && req.s3->provision &&
+                              req.s3->provision->mode != upstream::BucketMode::Existing;
     if (req.type == VaultType::S3) {
         if (!req.s3) throw Invalid("S3 vaults need an API key and a bucket");
-        if (req.s3->bucket.empty()) throw Invalid("bucket is required for S3 vaults");
+        const bool generated = provisioning && req.s3->provision->mode == upstream::BucketMode::Create &&
+                               (req.s3->provision->generate_name || req.s3->bucket.empty());
+        if (req.s3->bucket.empty() && !generated) throw Invalid("bucket is required for S3 vaults");
         requireConsume(actor, req.s3->api_key_id);
+        if (!req.s3->bucket.empty()) requireBucketUnprotected(req.s3->api_key_id, req.s3->bucket);
         // A deleted vault keeps its bucket until it is purged (its upstream purge may still need it).
         if (const auto owner = db::query::vault::Vault::bucketOwner(req.s3->api_key_id, req.s3->bucket); owner && owner->deleted)
             throw Conflict("bucket '" + req.s3->bucket + "' still belongs to deleted vault '" + owner->vault_name + "' (ID " +
@@ -269,24 +284,42 @@ VaultPtr create(const Actor& actor, const Create& req) {
     auto policy = freshPolicy(req.type);
     applySync(*policy, req.type, req.sync);
 
-    std::shared_ptr<S3Vault> needsWaiver;
-    if (req.type == VaultType::S3) {
+    // Provisioning (#237) runs after every check that can refuse without touching the provider, and is compensated if
+    // anything after it fails: a bucket this attempt created is deleted only while empty, an adoption is released.
+    upstream::ProvisionTicket ticket;
+    if (provisioning) {
         const auto s3 = std::static_pointer_cast<S3Vault>(vault);
-        if (bucketHoldsData(*s3)) {
-            if (!req.accept_waiver) throw NeedsConfirmation("encryption_waiver", waiverTextFor(*s3));
-            needsWaiver = s3;
-        }
+        ticket = upstream::beginProvision(actor, s3->api_key_id, req.name, s3->bucket, *req.s3->provision);
+        s3->bucket = ticket.bucket;
     }
 
-    vault = runtime::Deps::get().storageManager->addVault(vault, policy);
+    std::shared_ptr<S3Vault> needsWaiver;
+    try {
+        if (req.type == VaultType::S3) {
+            const auto s3 = std::static_pointer_cast<S3Vault>(vault);
+            if (ticket.mode != upstream::BucketMode::Create && bucketHoldsData(*s3)) {
+                // An accepted adoption is the informed acceptance: its confirmation text carried the waiver.
+                const bool accepted = req.accept_waiver || (ticket.active() && ticket.mode == upstream::BucketMode::Adopt);
+                if (!accepted) throw NeedsConfirmation("encryption_waiver", waiverTextFor(*s3));
+                needsWaiver = s3;
+            }
+        }
+
+        vault = runtime::Deps::get().storageManager->addVault(vault, policy);
+    } catch (const std::exception& e) {
+        upstream::abortProvision(ticket, e.what());
+        throw;
+    }
     if (needsWaiver) {
         try {
             recordWaiver(actor, std::static_pointer_cast<S3Vault>(vault));
-        } catch (...) {
+        } catch (const std::exception& e) {
             runtime::Deps::get().storageManager->removeVault(vault->id);
+            upstream::abortProvision(ticket, e.what());
             throw;
         }
     }
+    if (ticket.active()) (void)upstream::finishProvision(actor, ticket, vault->id, *req.s3->provision);
     return vault;
 }
 
@@ -326,6 +359,8 @@ VaultPtr update(const Actor& actor, const Update& req) {
             if (req.bucket->empty()) throw Invalid("bucket cannot be empty");
             s3->bucket = *req.bucket;
         }
+        if (s3->api_key_id != before->api_key_id || s3->bucket != before->bucket)
+            requireBucketUnprotected(s3->api_key_id, s3->bucket);
         // The tier is provider-specific: re-normalize whenever it or the key (provider) changes.
         if (req.storage_tier || s3->api_key_id != before->api_key_id)
             s3->storage_tier_id = normalizedTier(s3->api_key_id, req.storage_tier ? *req.storage_tier : s3->storage_tier_id);

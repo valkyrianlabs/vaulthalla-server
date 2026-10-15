@@ -1,6 +1,7 @@
 #include "ops/APIKeys.hpp"
 
 #include "db/query/identities/User.hpp"
+#include "db/query/upstream/Subscription.hpp"
 #include "db/query/vault/APIKey.hpp"
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
@@ -88,6 +89,9 @@ APIKeyPtr update(const Actor& actor, const Ref& ref, const Update& req) {
     requireActor(actor);
     auto key = requireKey(ref);
     if (!canOnKey(actor, KeyPerm::Edit, key->id)) throw Denied("you do not have permission to edit this API key");
+    const auto previousProvider = key->provider;
+    const auto previousEndpoint = key->endpoint;
+    const auto previousAccessKey = key->access_key;
 
     if (req.name) key->name = *req.name;
     if (req.provider) key->provider = *req.provider;
@@ -122,6 +126,11 @@ APIKeyPtr update(const Actor& actor, const Ref& ref, const Update& req) {
         throw Conflict("another API key of this owner already has this name and access key");
     }
 
+    // The account a key belongs to (#237: bucket identity, protection locks) follows its provider, endpoint and access
+    // key; a change means it must be resolved again.
+    if (key->provider != previousProvider || key->endpoint != previousEndpoint || key->access_key != previousAccessKey)
+        runtime::Deps::get().apiKeyManager->setAccountRef(key->id, std::nullopt);
+
     // Vaults bound to the key keep their binding (same id); their live engines pick up the new credentials.
     if (const auto& storage = runtime::Deps::get().storageManager) {
         for (const auto& [vaultId, vaultName] : db::query::vault::APIKey::listVaultsUsingKey(key->id)) {
@@ -151,6 +160,10 @@ APIKeyPtr remove(const Actor& actor, const Ref& ref) {
                       ". Move or remove those vaults first.");
     };
     if (const auto vaults = db::query::vault::APIKey::listVaultsUsingKey(key->id); !vaults.empty()) refuseInUse(vaults);
+    // An event channel (#96) polls its queue with this key.
+    if (const auto n = db::query::upstream::Subscription::countActiveUsingKey(key->id); n > 0)
+        throw Conflict("API key '" + key->name + "' operates " + std::to_string(n) +
+                       " event subscription(s); turn event-driven sync off for those vaults first");
 
     try {
         runtime::Deps::get().apiKeyManager->removeAPIKey(key->id);

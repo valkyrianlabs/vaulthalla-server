@@ -71,6 +71,10 @@ public:
                                                     std::optional<uint32_t> apiKeyId,
                                                     const std::string& operationToken);
 
+    // Gives up a fresh claim that turned out to name a bucket that already exists (it isn't ours to call managed):
+    // deletes the row while it still carries our token, is unbound, unprotected and still creating. False otherwise.
+    [[nodiscard]] static bool releaseClaim(int64_t id, const std::string& operationToken);
+
     // Compare-and-set on the operation token (no expected token = unconditional). False when the token didn't match
     // (another attempt took over) or the row is gone. last_error is replaced (nullopt clears it).
     [[nodiscard]] static bool setProvisioningState(int64_t id, storage::upstream::model::ProvisioningState state,

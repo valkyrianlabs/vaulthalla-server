@@ -172,10 +172,13 @@ struct Provision {
 // the bucket name to bind. On any failure after a bucket was created, compensates (an empty bucket this attempt
 // created is deleted; anything else is left and marked failed) and rethrows.
 struct ProvisionTicket {
+    BucketMode mode = BucketMode::Existing;
     std::string bucket;
     int64_t upstream_bucket_id = 0;
     std::string operation_token;
     bool created = false;
+    unsigned int api_key_id = 0;
+    [[nodiscard]] bool active() const { return mode != BucketMode::Existing && upstream_bucket_id != 0; }
 };
 [[nodiscard]] ProvisionTicket beginProvision(const Actor& actor, unsigned int apiKeyId, const std::string& vaultName,
                                              const std::string& requestedBucket, const Provision& req);
@@ -224,6 +227,13 @@ EventStatus repairEvents(const Actor& actor, unsigned int vaultId);
 // One vault, or every S3 vault the actor may view (view).
 [[nodiscard]] std::vector<EventStatus> eventStatus(const Actor& actor, std::optional<unsigned int> vaultId = std::nullopt);
 
+namespace detail {
+// The events step of finishProvision (ops/UpstreamEvents.cpp): subscribe without re-authorizing (the vault creation
+// already did). Returns a warning instead of throwing.
+std::optional<std::string> subscribeNewVault(const Actor& actor, unsigned int vaultId, const std::string& prefix,
+                                             bool baselineRequired) noexcept;
+}
+
 // ---- detach and cleanup --------------------------------------------------------------------------------------------
 
 // Relinquish management of a managed/adopted bucket no live vault uses: remove our event rules and lifecycle rule,
@@ -238,6 +248,7 @@ struct CleanupPlan {
     std::optional<bool> object_lock;
     std::vector<std::string> sample_keys;
     std::vector<std::string> blockers;             // non-empty: cleanup refused
+    std::vector<std::string> warnings;
     std::string confirm_token;                     // pass to cleanup(); valid 10 minutes, bound to identity + counts
     std::time_t expires_at = 0;
 };
