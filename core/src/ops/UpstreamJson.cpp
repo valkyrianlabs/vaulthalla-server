@@ -239,4 +239,54 @@ void to_json(nlohmann::json& j, const AuditEntry& v) {
          {"detail", detail}};
 }
 
+namespace {
+
+std::optional<unsigned int> upstreamReqUint(const nlohmann::json& j, const char* name) {
+    if (!j.contains(name) || j.at(name).is_null()) return std::nullopt;
+    const auto& v = j.at(name);
+    if (!v.is_number_integer() || v.get<int64_t>() < 0)
+        throw Invalid(std::string(name) + " must be a non-negative integer");
+    return static_cast<unsigned int>(v.get<int64_t>());
+}
+
+std::optional<std::string> upstreamReqString(const nlohmann::json& j, const char* name) {
+    if (!j.contains(name) || j.at(name).is_null()) return std::nullopt;
+    if (!j.at(name).is_string()) throw Invalid(std::string(name) + " must be a string");
+    return j.at(name).get<std::string>();
+}
+
+bool upstreamReqBool(const nlohmann::json& j, const char* name) {
+    if (!j.contains(name) || j.at(name).is_null()) return false;
+    if (!j.at(name).is_boolean()) throw Invalid(std::string(name) + " must be a boolean");
+    return j.at(name).get<bool>();
+}
+
+}
+
+LifecyclePatch lifecyclePatchFromJson(const nlohmann::json& j) {
+    if (!j.is_object()) throw Invalid("lifecycle must be an object");
+    LifecyclePatch patch;
+    patch.abort_incomplete_multipart_days = upstreamReqUint(j, "abort_incomplete_multipart_days");
+    patch.expire_current_days = upstreamReqUint(j, "expire_current_days");
+    patch.expire_noncurrent_days = upstreamReqUint(j, "expire_noncurrent_days");
+    patch.prefix = upstreamReqString(j, "prefix");
+    patch.clear = upstreamReqBool(j, "clear");
+    patch.accept_destructive = upstreamReqBool(j, "accept_destructive");
+    return patch;
+}
+
+Provision provisionFromJson(const nlohmann::json& j) {
+    if (!j.is_object()) throw Invalid("provision must be an object");
+    Provision p;
+    p.mode = bucketModeFromString(upstreamReqString(j, "mode").value_or("existing"));
+    p.region = upstreamReqString(j, "region");
+    if (p.region && p.region->empty()) p.region.reset();
+    p.generate_name = upstreamReqBool(j, "generate_name");
+    if (j.contains("lifecycle") && !j.at("lifecycle").is_null()) p.lifecycle = lifecyclePatchFromJson(j.at("lifecycle"));
+    p.events = upstreamReqBool(j, "events");
+    p.events_prefix = upstreamReqString(j, "events_prefix").value_or("");
+    p.accept_adoption = upstreamReqBool(j, "accept_adoption");
+    return p;
+}
+
 }

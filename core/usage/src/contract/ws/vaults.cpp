@@ -21,7 +21,8 @@ std::vector<WsCommandUsage> vaultCommands() {
         .description = "Create a vault. owner_id, description and quota (bytes, 0 = unlimited) are optional; the "
                        "daemon picks the backing directory. S3 vaults also need api_key_id and bucket. A refusal with "
                        "data.code 'encryption_waiver' means the bucket already holds data: resend with "
-                       "accept_encryption_waiver once the person accepts.",
+                       "accept_encryption_waiver once the person accepts. With provision (#237) the daemon creates a managed "
+                       "bucket or adopts an existing one; 'upstream_adoption' asks for provision.accept_adoption.",
         .payload = {str("name").gen(gen::freshName("vault_")),
                     str("type").oneOf({"local", "s3"}).gen(gen::constant("local")),
                     uinteger("owner_id").opt().nullable().gen(gen::ref("user", {"id"})),
@@ -35,11 +36,15 @@ std::vector<WsCommandUsage> vaultCommands() {
                     boolean("encrypt_upstream").opt(),
                     object("sync").opt().desc("Sync policy patch: interval, enabled, strategy, conflict_policy, "
                                               "max_remote_index_age_seconds, s3_request_budget."),
-                    boolean("accept_encryption_waiver").opt()},
+                    boolean("accept_encryption_waiver").opt(),
+                    object("provision").opt().desc("S3 vaults with an admin-enabled key (#237): {mode: existing|create|"
+                                                   "adopt, region, generate_name, lifecycle, events, events_prefix, "
+                                                   "accept_adoption}. bucket may be empty with generate_name.")},
         .response = {vaultObject()},
-        .refusal_codes = {"denied", "invalid", "not_found", "conflict", "unauthorized", "encryption_waiver"},
+        .refusal_codes = {"denied", "invalid", "not_found", "conflict", "unauthorized", "encryption_waiver",
+                          "upstream_adoption"},
         .operation = "vaults.create",
-        .client_timeout = 60s,
+        .client_timeout = 180s,
     });
 
     out.push_back({

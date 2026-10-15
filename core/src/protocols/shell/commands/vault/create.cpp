@@ -18,6 +18,7 @@
 #include "identities/User.hpp"
 #include "db/encoding/interval.hpp"
 #include "CommandUsage.hpp"
+#include "ops/Upstream.hpp"
 
 #include <algorithm>
 #include <optional>
@@ -93,6 +94,35 @@ namespace vh::protocols::shell::commands::vault {
         size_t pos = 0;
         while (pos < s.size() && s[pos] == '-') ++pos;
         return s.substr(pos);
+    }
+
+    // --bucket-mode create|adopt and its options (#237); nullopt for the default "existing" without any of them.
+    static std::optional<ops::upstream::Provision> provisionFromOptions(const CommandCall& call) {
+        const auto mode = optVal(call, "bucket-mode");
+        const bool generate = hasFlag(call, "generate-bucket");
+        const bool events = hasFlag(call, "events");
+        const auto region = optVal(call, "region");
+        const auto eventsPrefix = optVal(call, "events-prefix");
+        const auto abortDays = optVal(call, "abort-multipart-days");
+        if (!mode && !generate && !events && !region && !eventsPrefix && !abortDays) return std::nullopt;
+
+        ops::upstream::Provision p;
+        p.mode = ops::upstream::bucketModeFromString(mode.value_or(generate ? "create" : "existing"));
+        if (p.mode == ops::upstream::BucketMode::Existing)
+            throw ops::Invalid("--generate-bucket, --region, --events, --events-prefix and --abort-multipart-days need "
+                               "--bucket-mode create or adopt");
+        if (generate && p.mode != ops::upstream::BucketMode::Create)
+            throw ops::Invalid("--generate-bucket only applies to --bucket-mode create");
+        p.generate_name = generate;
+        p.region = region;
+        p.events = events || eventsPrefix.has_value();
+        p.events_prefix = eventsPrefix.value_or("");
+        if (abortDays) {
+            const auto days = parseUInt(*abortDays);
+            if (!days) throw ops::Invalid("--abort-multipart-days must be a whole number of days");
+            p.lifecycle = ops::upstream::LifecyclePatch{.abort_incomplete_multipart_days = *days};
+        }
+        return p;
     }
 
     static CommandResult handle_vault_create_interactive(const CommandCall& call) {
@@ -207,20 +237,39 @@ namespace vh::protocols::shell::commands::vault {
             if (req.type == vh::vault::model::VaultType::S3) {
                 const auto keyId = apiKeyIdFromOption(call);
                 if (!keyId) return invalid("vault create: --api-key is required for S3 vaults");
+                const auto provision = provisionFromOptions(call);
                 const auto bucket = optVal(call, "bucket");
-                if (!bucket || bucket->empty()) return invalid("vault create: --bucket is required for S3 vaults");
-                req.s3 = ops::vaults::S3Spec{.api_key_id = *keyId, .bucket = *bucket,
+                const bool generated = provision && provision->generate_name;
+                if ((!bucket || bucket->empty()) && !generated)
+                    return invalid("vault create: --bucket is required for S3 vaults (or --bucket-mode create --generate-bucket)");
+                req.s3 = ops::vaults::S3Spec{.api_key_id = *keyId, .bucket = bucket.value_or(""),
                                              .storage_tier = optVal(call, std::vector<std::string>{"storage-tier", "storage-class"}),
-                                             .encrypt_upstream = encryptFromFlags(call)};
+                                             .encrypt_upstream = encryptFromFlags(call),
+                                             .provision = provision};
             }
         } catch (const ops::Error& e) {
             return invalid("vault create: " + std::string(e.what()));
         }
 
+        // Adoption (#237) is always explicit: the op answers NeedsConfirmation{upstream_adoption} with the admission
+        // report until a person accepts it here (or --yes did).
+        bool acceptAdoption = hasFlag(call, "yes");
         return runVaultChange(call, "vault create", [&](const bool accept) {
-            auto attempt = req;
-            attempt.accept_waiver = accept;
-            return ops::vaults::create(call.user, attempt);
+            for (;;) {
+                auto attempt = req;
+                attempt.accept_waiver = accept;
+                if (attempt.s3 && attempt.s3->provision) attempt.s3->provision->accept_adoption = acceptAdoption;
+                try {
+                    return ops::vaults::create(call.user, attempt);
+                } catch (const ops::NeedsConfirmation& e) {
+                    if (e.code != ops::upstream::ADOPTION_CONFIRM || acceptAdoption) throw;
+                    if (!call.io)
+                        throw ops::Invalid(std::string(e.what()) + "\nRe-run with --yes to adopt the bucket.");
+                    if (call.io->prompt(std::string(e.what()) + "\nType ADOPT to adopt this bucket", "no") != "ADOPT")
+                        throw ops::Invalid("the adoption was not confirmed; nothing was changed");
+                    acceptAdoption = true;
+                }
+            }
         }, createdVaultMessage);
     }
 }

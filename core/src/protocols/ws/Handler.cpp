@@ -16,6 +16,7 @@
 #include "protocols/ws/handler/rbac/roles/Vault.hpp"
 #include "protocols/ws/handler/vault/Vaults.hpp"
 #include "protocols/ws/handler/vault/APIKeys.hpp"
+#include "protocols/ws/handler/Upstream.hpp"
 #include "protocols/ws/handler/share/Download.hpp"
 #include "protocols/ws/handler/share/Filesystem.hpp"
 #include "protocols/ws/handler/share/Links.hpp"
@@ -32,6 +33,7 @@ void Handler::registerAllHandlers(const std::shared_ptr<Router>& r) {
     registerFileSystemHandlers(r);
     registerStorageHandlers(r);
     registerAPIKeyHandlers(r);
+    registerUpstreamHandlers(r);
     registerRoleHandlers(r);
     registerPermissionsHandlers(r);
     registerSettingsHandlers(r);
@@ -106,6 +108,26 @@ void Handler::registerAPIKeyHandlers(const std::shared_ptr<Router>& r) {
     r->registerPayload("storage.apiKey.remove", &handler::APIKeys::remove);
     r->registerSessionOnlyHandler("storage.apiKey.list", &handler::APIKeys::list);
     r->registerPayload("storage.apiKey.get", &handler::APIKeys::get);
+}
+
+void Handler::registerUpstreamHandlers(const std::shared_ptr<Router>& r) {
+    r->registerPayload("upstream.admin.enable", &handler::Upstream::adminEnable);
+    r->registerPayload("upstream.admin.disable", &handler::Upstream::adminDisable);
+    r->registerPayload("upstream.admin.status", &handler::Upstream::adminStatus);
+    r->registerPayload("upstream.bucket.list", &handler::Upstream::bucketList);
+    r->registerPayload("upstream.bucket.protect", &handler::Upstream::bucketProtect);
+    r->registerPayload("upstream.bucket.unprotect", &handler::Upstream::bucketUnprotect);
+    r->registerPayload("upstream.bucket.inspect", &handler::Upstream::bucketInspect);
+    r->registerPayload("upstream.bucket.lifecycle.set", &handler::Upstream::bucketLifecycleSet);
+    r->registerPayload("upstream.bucket.adopt.preflight", &handler::Upstream::bucketAdoptPreflight);
+    r->registerPayload("upstream.bucket.detach", &handler::Upstream::bucketDetach);
+    r->registerPayload("upstream.bucket.cleanup.preflight", &handler::Upstream::bucketCleanupPreflight);
+    r->registerPayload("upstream.bucket.cleanup", &handler::Upstream::bucketCleanup);
+    r->registerPayload("upstream.events.enable", &handler::Upstream::eventsEnable);
+    r->registerPayload("upstream.events.disable", &handler::Upstream::eventsDisable);
+    r->registerPayload("upstream.events.repair", &handler::Upstream::eventsRepair);
+    r->registerPayload("upstream.events.status", &handler::Upstream::eventsStatus);
+    r->registerPayload("upstream.audit.list", &handler::Upstream::auditList);
 }
 
 void Handler::registerRoleHandlers(const std::shared_ptr<Router>& r) {

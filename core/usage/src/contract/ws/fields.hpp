@@ -53,5 +53,6 @@ std::vector<WsCommandUsage> roleCommands();
 std::vector<WsCommandUsage> vaultCommands();
 std::vector<WsCommandUsage> shareCommands();
 std::vector<WsCommandUsage> metaCommands();
+std::vector<WsCommandUsage> upstreamCommands();
 
 }

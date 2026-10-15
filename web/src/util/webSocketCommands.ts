@@ -357,9 +357,9 @@ export interface WebSocketCommandMap {
   }
   'upstream.events.disable': { payload: { vault_id: number }; response: { events: EventStatus } }
   'upstream.events.repair': { payload: { vault_id: number }; response: { events: EventStatus } }
-  'upstream.events.status': { payload: { vault_id?: number } | null; response: { events: EventStatus[] } }
+  'upstream.events.status': { payload: { vault_id?: number }; response: { events: EventStatus[] } }
 
-  'upstream.audit.list': { payload: { bucket?: string; limit?: number } | null; response: { entries: AuditEntry[] } }
+  'upstream.audit.list': { payload: { bucket?: string; limit?: number }; response: { entries: AuditEntry[] } }
 
   // Roles and Permissions
 

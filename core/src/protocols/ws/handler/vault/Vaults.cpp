@@ -17,6 +17,7 @@
 #include "storage/s3/provider/Registry.hpp"
 #include "protocols/ws/Session.hpp"
 #include "ops/Vaults.hpp"
+#include "ops/UpstreamJson.hpp"
 #include "config/util.hpp"
 #include "db/encoding/timestamp.hpp"
 #include "vault/model/Deletion.hpp"
@@ -160,9 +161,13 @@ json Vaults::add(const json &payload, const std::shared_ptr<Session> &session) {
     if (type == VaultType::S3)
         req.s3 = vh::ops::vaults::S3Spec{
             .api_key_id = payload.at("api_key_id").get<unsigned int>(),
-            .bucket = payload.at("bucket").get<std::string>(),
+            .bucket = payload.value("bucket", std::string{}),
             .storage_tier = vaultPayloadField<std::string>(payload, "storage_tier_id"),
-            .encrypt_upstream = vaultPayloadField<bool>(payload, "encrypt_upstream")
+            .encrypt_upstream = vaultPayloadField<bool>(payload, "encrypt_upstream"),
+            // #237: a managed bucket (create) or an explicit adoption; absent or mode "existing" binds `bucket`.
+            .provision = payload.contains("provision") && !payload.at("provision").is_null()
+                ? std::make_optional(vh::ops::upstream::provisionFromJson(payload.at("provision")))
+                : std::nullopt
         };
 
     const auto vault = vh::ops::vaults::create(session->user, req);

@@ -155,7 +155,42 @@ static const auto acceptDecryptionWaiver = Flag::Alias("accept_decryption_waiver
                                                        "Acknowledge the risks of disabling encryption on an upstream s3 bucket with existing encrypted files.",
                                                        "accept-decryption-waiver");
 
+// Upstream bucket provisioning (#237), for keys with provider administration enabled (vh upstream admin enable).
+static const auto bucketModeOpt = Optional::Single(
+    "s3_bucket_mode",
+    "existing (default: bind --bucket as named), create (a new managed bucket; never takes over an existing one) or "
+    "adopt (associate an existing bucket after a read-only admission check)",
+    "bucket-mode", "existing|create|adopt")
+    .withGen("existing|create|adopt", contract::gen::constant("existing"));
+static const auto generateBucketFlag = Flag::Alias(
+    "s3_generate_bucket", "With --bucket-mode create: pick an available bucket name", "generate-bucket");
+static const auto bucketRegionOpt = Optional::Single(
+    "s3_bucket_region", "With --bucket-mode create: AWS region or R2 location hint (wnam, enam, weur, eeur, apac, oc)",
+    "region", "region")
+    .withGen("region", contract::gen::constant("us-east-2"));
+static const auto eventsFlag = Flag::Alias(
+    "s3_events", "With --bucket-mode create|adopt: turn on event-driven sync for the bucket", "events");
+static const auto eventsPrefixOpt = Optional::Single(
+    "s3_events_prefix", "With --events: only keys with this prefix", "events-prefix", "prefix")
+    .withGen("prefix", contract::gen::pattern("{a}{a}{a}/"));
+static const auto abortMultipartOpt = Optional::Single(
+    "s3_abort_multipart_days", "With --bucket-mode create|adopt: abort incomplete multipart uploads after N days",
+    "abort-multipart-days", "n")
+    .withGen("n", contract::gen::intRange(1, 30));
+static const auto acceptAdoptionFlag = Flag::Alias(
+    "accept_adoption", "With --bucket-mode adopt: accept the admission report without being asked", "yes");
+
 static const GroupedOptions localVaultOpts("Local Vault Options", {localConflictOpt});
+
+static const GroupedOptions s3ProvisionOpts("S3 Bucket Provisioning (administrative keys)", {
+                                                bucketModeOpt,
+                                                generateBucketFlag,
+                                                bucketRegionOpt,
+                                                eventsFlag,
+                                                eventsPrefixOpt,
+                                                abortMultipartOpt,
+                                                acceptAdoptionFlag
+                                            });
 
 static const GroupedOptions s3VaultOpts("S3 Vault Options", {
                                             apiKeyOpt,
@@ -177,11 +212,17 @@ static std::shared_ptr<CommandUsage> create(const std::weak_ptr<CommandUsage>& p
     cmd->required_flags = {vaultType};
     cmd->optional_flags = {interactiveFlag};
     cmd->optional = {descriptionOpt, quotaOpt, intervalOpt,  owner};
-    cmd->groups = {localVaultOpts, s3VaultOpts};
+    cmd->groups = {localVaultOpts, s3VaultOpts, s3ProvisionOpts};
     cmd->examples = {
         {"vh vault create myvault --local --desc \"My Local Vault\" --quota 10G",
          "Create a local vault with a 10GB quota."},
         {"vh vault create s3vault --s3 --api-key myapikey --bucket mybucket", "Create an S3-backed vault."},
+        {"vh vault create media --s3 --api-key aws-admin --bucket-mode create --generate-bucket --region us-east-2",
+         "Create the vault on a new managed bucket with a generated name."},
+        {"vh vault create media --s3 --api-key r2-admin --bucket-mode create --bucket vh-media --events",
+         "Create a managed R2 bucket with event-driven sync."},
+        {"vh vault create archive --s3 --api-key aws-admin --bucket legacy-photos --bucket-mode adopt",
+         "Adopt an existing bucket (shows the admission report and asks)."},
         {"vh vault create archive-ready --s3 --api-key aws-prod --bucket vaulthalla --storage-tier standard_ia",
          "Create an AWS S3 vault using the provider-local Standard-IA tier for new uploads."}
     };
@@ -625,13 +666,15 @@ static std::shared_ptr<CommandUsage> sync_inventory(const std::weak_ptr<CommandU
 static std::shared_ptr<CommandUsage> sync_events(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"events", "ingest-events", "event"};
-    cmd->description = "Ingest S3 Event Notifications JSON into the remote object index.";
+    cmd->description = "Feed saved S3 Event Notifications JSON (or an SQS message dump) through the event pipeline: "
+                       "stored in the durable inbox, applied to the remote object index, then synced by a pass scoped "
+                       "to the affected keys.";
     cmd->positionals = {vaultPos};
     cmd->required = {eventFileOpt};
     cmd->optional = {owner};
     cmd->examples = {
         {"vh vault sync events 42 --file s3-events.json",
-         "Apply ObjectCreated and ObjectRemoved notifications to the remote object index for S3 vault 42."}
+         "Apply ObjectCreated and ObjectRemoved notifications to S3 vault 42 and sync just those keys."}
     };
     return cmd;
 }
