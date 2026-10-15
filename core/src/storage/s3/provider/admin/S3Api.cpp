@@ -1,4 +1,8 @@
 #include "storage/s3/provider/admin/Adapters.hpp"
+#include "storage/upstream/Names.hpp"
+
+#include <pugixml.hpp>
+#include <sstream>
 
 #include "vault/model/APIKey.hpp"
 
@@ -46,11 +50,12 @@ curl::http::Response S3ApiAdmin::call(const detail::Endpoint& endpoint, const de
 }
 
 storage::upstream::BucketIdentity S3ApiAdmin::bucketIdentity(const std::string& bucket) {
-    return {.provider = providerIdentity(key_->provider), .account_ref = accountForGuard(), .bucket = bucket};
+    return {.provider = providerIdentity(*key_), .account_ref = accountForGuard(), .bucket = bucket};
 }
 
 curl::http::Response S3ApiAdmin::bucketCall(const std::string& bucket, detail::SignedCall signedCall, const char* kind) {
     if (bucket.empty()) throw std::invalid_argument("bucket name is required");
+    storage::upstream::requireValidBucketName(bucket);   // before the guard: the guard must see the real name
     storage::upstream::guard::require(bucketIdentity(bucket));
     signedCall.path = "/" + bucket + (signedCall.path == "/" ? std::string{} : signedCall.path);
     return call(bucketEndpoint(bucket), signedCall, kind);
@@ -77,8 +82,13 @@ std::optional<std::string> S3ApiAdmin::headBucket(const std::string& bucket) {
 void S3ApiAdmin::createBucket(const CreateBucketRequest& request) {
     auto c = detail::call("PUT");
     if (const auto location = locationConstraint(request)) {
-        c.body = std::string("<CreateBucketConfiguration xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">"
-                             "<LocationConstraint>") + *location + "</LocationConstraint></CreateBucketConfiguration>";
+        pugi::xml_document doc;
+        auto root = doc.append_child("CreateBucketConfiguration");
+        root.append_attribute("xmlns") = "http://s3.amazonaws.com/doc/2006-03-01/";
+        root.append_child("LocationConstraint").text().set(location->c_str());
+        std::ostringstream xml;
+        doc.save(xml, "", pugi::format_raw | pugi::format_no_declaration);
+        c.body = xml.str();
         c.headers["content-type"] = kXmlContentType;
     }
     const auto response = bucketCall(request.name, c, "put");

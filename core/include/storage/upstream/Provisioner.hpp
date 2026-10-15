@@ -1,5 +1,6 @@
 #pragma once
 
+#include "storage/upstream/Names.hpp"   // validBucketName (shared with ops and the adapters)
 #include "storage/s3/provider/admin/Admin.hpp"
 #include "storage/upstream/Guard.hpp"
 #include "storage/upstream/model/Bucket.hpp"
@@ -18,6 +19,9 @@
 // succeed, and the new bucket must list empty; any other answer is a ProvisionConflict and nothing is deleted.
 namespace vh::storage::upstream::provision {
 
+// Bucket naming lives in storage/upstream/Names.hpp (shared with ops and the adapters); kept reachable here.
+using storage::upstream::validBucketName;
+
 // The bucket exists, is known to Vaulthalla already, is bound, or another attempt holds it. Nothing was changed
 // upstream.
 struct ProvisionConflict : std::runtime_error {
@@ -28,10 +32,6 @@ struct ProvisionConflict : std::runtime_error {
 struct BucketMissing : std::runtime_error {
     using std::runtime_error::runtime_error;
 };
-
-// S3 bucket naming (AWS rules, which R2 also satisfies): 3-63 characters of a-z 0-9 . -, starting and ending with a
-// letter or digit, no "..", not an IP address, no xn-- / sthree- prefix, no -s3alias / --ol-s3 / .mrap suffix.
-[[nodiscard]] bool validBucketName(const std::string& name, std::string& why);
 
 // "vh-<slug of the vault name>-<8 random a-z0-9>", checked free with HeadBucket (≤5 tries).
 [[nodiscard]] std::string generateBucketName(const std::string& vaultName, s3::provider::admin::AdminClient& admin);

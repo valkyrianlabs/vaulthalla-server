@@ -1,4 +1,5 @@
 #include "storage/s3/provider/admin/Adapters.hpp"
+#include "storage/upstream/Names.hpp"
 
 #include "crypto/util/encrypt.hpp"
 #include "vault/model/APIKey.hpp"
@@ -9,6 +10,9 @@
 namespace vh::storage::s3::provider::admin {
 
 namespace {
+
+// One URL path segment for the bearer-token API, which no signature covers: encoded, never spliced in raw.
+std::string seg(const std::string& s) { return storage::upstream::encodePathSegment(s); }
 
 constexpr const char* kApiBase = "https://api.cloudflare.com/client/v4";
 
@@ -140,7 +144,7 @@ ChannelRef R2Events::ensureChannel(const ChannelSpec& spec) {
         ref.queue_ref = queue.value("queue_id", "");
         if (ref.queue_ref.empty()) throw ProviderError("Cloudflare Queues returned no queue id for " + spec.queue_name);
 
-        const auto consumers = api("GET", "/accounts/" + account_ + "/queues/" + ref.queue_ref + "/consumers");
+        const auto consumers = api("GET", "/accounts/" + account_ + "/queues/" + seg(ref.queue_ref) + "/consumers");
         bool pull = false;
         if (consumers.is_array())
             for (const auto& c : consumers) {
@@ -153,7 +157,7 @@ ChannelRef R2Events::ensureChannel(const ChannelSpec& spec) {
                 if (type == "http_pull") pull = true;
             }
         if (!pull)
-            (void)api("POST", "/accounts/" + account_ + "/queues/" + ref.queue_ref + "/consumers",
+            (void)api("POST", "/accounts/" + account_ + "/queues/" + seg(ref.queue_ref) + "/consumers",
                       {{"type", "http_pull"},
                        {"dead_letter_queue", dlqName},
                        {"settings",
@@ -169,9 +173,10 @@ ChannelRef R2Events::ensureChannel(const ChannelSpec& spec) {
 }
 
 nlohmann::json R2Events::bucketConfiguration(const std::string& bucket) {
+    storage::upstream::requireValidBucketName(bucket);   // before the guard: it must check the bucket the URL names
     storage::upstream::guard::require({.provider = "cloudflare-r2", .account_ref = account_, .bucket = bucket});
     try {
-        return api("GET", "/accounts/" + account_ + "/event_notifications/r2/" + bucket + "/configuration", nullptr,
+        return api("GET", "/accounts/" + account_ + "/event_notifications/r2/" + seg(bucket) + "/configuration", nullptr,
                    nullptr, true);
     } catch (const ProviderError& e) {
         // No configuration yet answers 404 on some accounts; an empty configuration is the same thing.
@@ -195,6 +200,7 @@ std::vector<std::string> R2Events::ourRuleIds(const nlohmann::json& config, cons
 
 std::vector<std::string> R2Events::subscribe(const ChannelRef& channel, const SubscriptionSpec& spec) {
     if (!isOwnedId(spec.rule_id)) throw std::invalid_argument("subscription rule ids must start with vaulthalla-");
+    storage::upstream::requireValidBucketName(spec.bucket);
     const auto config = bucketConfiguration(spec.bucket);
     if (auto existing = ourRuleIds(config, channel.queue_ref, spec.rule_id); !existing.empty()) return existing;
 
@@ -211,8 +217,8 @@ std::vector<std::string> R2Events::subscribe(const ChannelRef& channel, const Su
 
     nlohmann::json rule = {{"actions", detail::r2Actions()}, {"description", spec.rule_id}};
     if (!spec.prefix.empty()) rule["prefix"] = spec.prefix;
-    (void)api("PUT", "/accounts/" + account_ + "/event_notifications/r2/" + spec.bucket + "/configuration/queues/" +
-                         channel.queue_ref,
+    (void)api("PUT", "/accounts/" + account_ + "/event_notifications/r2/" + seg(spec.bucket) + "/configuration/queues/" +
+                         seg(channel.queue_ref),
               {{"rules", nlohmann::json::array({rule})}}, nullptr, true);
 
     auto ids = ourRuleIds(bucketConfiguration(spec.bucket), channel.queue_ref, spec.rule_id);
@@ -221,14 +227,15 @@ std::vector<std::string> R2Events::subscribe(const ChannelRef& channel, const Su
 }
 
 void R2Events::unsubscribe(const ChannelRef& channel, const SubscriptionSpec& spec, const std::vector<std::string>& ruleIds) {
+    storage::upstream::requireValidBucketName(spec.bucket);
     storage::upstream::guard::require({.provider = "cloudflare-r2", .account_ref = account_, .bucket = spec.bucket});
     auto ids = ruleIds;
     std::erase(ids, std::string{});
     if (ids.empty()) ids = ourRuleIds(bucketConfiguration(spec.bucket), channel.queue_ref, spec.rule_id);
     if (ids.empty()) return;
     // Never a body-less DELETE: that removes every rule of the queue on the bucket, other subscriptions' included.
-    (void)api("DELETE", "/accounts/" + account_ + "/event_notifications/r2/" + spec.bucket + "/configuration/queues/" +
-                            channel.queue_ref,
+    (void)api("DELETE", "/accounts/" + account_ + "/event_notifications/r2/" + seg(spec.bucket) + "/configuration/queues/" +
+                            seg(channel.queue_ref),
               {{"ruleIds", ids}}, nullptr, true);
 }
 
@@ -258,7 +265,7 @@ void R2Events::removeChannel(const ChannelRef& channel) {
     for (const auto* id : {&channel.queue_ref, &channel.dlq_ref}) {
         if (id->empty()) continue;
         try {
-            (void)api("DELETE", "/accounts/" + account_ + "/queues/" + *id);
+            (void)api("DELETE", "/accounts/" + account_ + "/queues/" + seg(*id));
         } catch (const ProviderError& e) {
             if (e.http_status != 404) throw;
         }
@@ -267,7 +274,7 @@ void R2Events::removeChannel(const ChannelRef& channel) {
 
 PollResult R2Events::poll(const ChannelRef& channel, const unsigned int max, std::chrono::seconds,
                           const std::chrono::seconds visibility) {
-    const auto result = api("POST", "/accounts/" + account_ + "/queues/" + channel.queue_ref + "/messages/pull",
+    const auto result = api("POST", "/accounts/" + account_ + "/queues/" + seg(channel.queue_ref) + "/messages/pull",
                             {{"batch_size", std::clamp(max, 1u, 100u)},
                              {"visibility_timeout_ms", std::max<long long>(1000, visibility.count() * 1000)}});
     PollResult out;
@@ -292,7 +299,7 @@ void R2Events::ack(const ChannelRef& channel, const std::vector<std::string>& re
     for (std::size_t start = 0; start < receipts.size(); start += 100) {
         nlohmann::json acks = nlohmann::json::array();
         for (std::size_t i = start; i < std::min(receipts.size(), start + 100); ++i) acks.push_back({{"lease_id", receipts[i]}});
-        (void)api("POST", "/accounts/" + account_ + "/queues/" + channel.queue_ref + "/messages/ack",
+        (void)api("POST", "/accounts/" + account_ + "/queues/" + seg(channel.queue_ref) + "/messages/ack",
                   {{"acks", acks}, {"retries", nlohmann::json::array()}});
     }
 }
@@ -302,7 +309,7 @@ void R2Events::retry(const ChannelRef& channel, const std::vector<std::string>& 
         nlohmann::json retries = nlohmann::json::array();
         for (std::size_t i = start; i < std::min(receipts.size(), start + 100); ++i)
             retries.push_back({{"lease_id", receipts[i]}, {"delay_seconds", std::clamp<long long>(delay.count(), 0, 43200)}});
-        (void)api("POST", "/accounts/" + account_ + "/queues/" + channel.queue_ref + "/messages/ack",
+        (void)api("POST", "/accounts/" + account_ + "/queues/" + seg(channel.queue_ref) + "/messages/ack",
                   {{"acks", nlohmann::json::array()}, {"retries", retries}});
     }
 }

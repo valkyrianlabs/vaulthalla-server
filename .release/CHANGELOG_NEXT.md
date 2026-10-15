@@ -47,3 +47,12 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
 - rbac: provisioning with a lifecycle rule or event subscription needs admin.upstream.configure; unprotect needs key
   consume; the upstream audit log shows only entries for keys the reader may view; repointing an administrative key
   (provider, endpoint or access key) turns administration off, and is refused while it operates event subscriptions.
+- fix(upstream): bucket names are validated before they reach a provider (vault create/update, every upstream op,
+  the AWS/R2 adapters) and Cloudflare REST paths are percent-encoded; a name such as `x/../prod` could address another,
+  protected bucket through the Cloudflare API, whose paths no signature covers. Legacy names can still be locked.
+- fix(upstream): bucket identity (and so protection locks) follows the credential's endpoint: an R2 or AWS endpoint
+  saved under another provider label is treated as R2/AWS (unknown AWS account fails closed); new keys whose provider
+  contradicts their endpoint are refused.
+- fix(upstream): provisioning regions are validated (AWS region codes, R2 location hints) before they become host
+  names or CreateBucket bodies, and the CreateBucket body is built as XML; queue policies refuse bucket names or
+  account ids that would widen `aws:SourceArn`/`aws:SourceAccount`.

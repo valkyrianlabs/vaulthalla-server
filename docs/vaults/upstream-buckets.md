@@ -117,7 +117,13 @@ vh upstream unprotect <api-key> <bucket>
 
 - The lock belongs to the bucket itself (provider, account and bucket name), not to the credential. Deleting and
   re-creating the credential keeps it, and any other credential for the same account sees it.
+- The provider and account come from the credential's endpoint, not its label: a credential for an
+  `….r2.cloudflarestorage.com` or `….amazonaws.com` endpoint is treated as Cloudflare R2 or AWS S3 whatever provider
+  it was saved with, so a lock can't be sidestepped by relabelling a key. New credentials whose provider contradicts
+  their endpoint are refused.
 - Locks work for any provider, including ones without administration support.
+- Bucket names are checked before they are used anywhere upstream (3–63 characters of `a-z 0-9 . -`); a name like
+  `x/../prod` is refused. Buckets with older, non-conforming names can still be locked.
 - Removing a lock needs the separate `admin.upstream.unprotect` permission, the right to use the credential
   (`consume`), and an explicit confirmation (`--yes` for scripts). Both directions are recorded in the audit log with
   who, when and the reason.

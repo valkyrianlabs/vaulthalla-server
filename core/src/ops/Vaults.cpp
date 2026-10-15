@@ -24,6 +24,7 @@
 #include "storage/s3/Controller.hpp"
 #include "storage/s3/provider/Registry.hpp"
 #include "storage/upstream/Guard.hpp"
+#include "storage/upstream/Names.hpp"
 #include "sync/Controller.hpp"
 #include "sync/model/LocalPolicy.hpp"
 #include "sync/model/Policy.hpp"
@@ -57,6 +58,11 @@ using SyncActionPerm = rbac::permission::vault::sync::SyncActionPermissions;
 
 bool canOnVault(const Actor& actor, const VaultPerm permission, const unsigned int vaultId) {
     return rbac::resolver::Admin::has<VaultPerm>({.user = actor, .permission = permission, .vault_id = vaultId});
+}
+
+void requireValidBucket(const std::string& bucket) {
+    std::string why;
+    if (!storage::upstream::validBucketName(bucket, why)) throw Invalid("invalid bucket name '" + bucket + "': " + why);
 }
 
 bool canCreateFor(const Actor& actor, const unsigned int ownerId) {
@@ -258,6 +264,7 @@ VaultPtr create(const Actor& actor, const Create& req) {
         const bool generated = provisioning && req.s3->provision->mode == upstream::BucketMode::Create &&
                                (req.s3->provision->generate_name || req.s3->bucket.empty());
         if (req.s3->bucket.empty() && !generated) throw Invalid("bucket is required for S3 vaults");
+        if (!req.s3->bucket.empty()) requireValidBucket(req.s3->bucket);
         requireConsume(actor, req.s3->api_key_id);
         if (!req.s3->bucket.empty()) requireBucketUnprotected(req.s3->api_key_id, req.s3->bucket);
         // A deleted vault keeps its bucket until it is purged (its upstream purge may still need it).
@@ -362,6 +369,7 @@ VaultPtr update(const Actor& actor, const Update& req) {
         }
         if (req.bucket) {
             if (req.bucket->empty()) throw Invalid("bucket cannot be empty");
+            if (*req.bucket != before->bucket) requireValidBucket(*req.bucket);   // legacy names keep working unchanged
             s3->bucket = *req.bucket;
         }
         if (s3->api_key_id != before->api_key_id || s3->bucket != before->bucket) {

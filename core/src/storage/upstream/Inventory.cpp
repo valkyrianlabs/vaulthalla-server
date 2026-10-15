@@ -40,7 +40,7 @@ std::vector<db::query::upstream::VaultBinding> bindingsFor(const BucketIdentity&
             out.push_back(binding);   // a binding whose key vanished: count it, never assume it is someone else's
             continue;
         }
-        if (s3::provider::admin::providerIdentity(key->provider) != id.provider) continue;
+        if (s3::provider::admin::providerIdentity(*key) != id.provider) continue;
         const auto account = s3::provider::admin::staticAccountRef(*key);
         if (account && id.account_ref && *account != *id.account_ref) continue;
         out.push_back(binding);
