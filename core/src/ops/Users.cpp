@@ -180,8 +180,8 @@ std::string generatePassword() {
 }
 
 bool isAdminIdentity(const rbac::role::Admin& role) {
-    return role.identities.toMask() || role.audits.toMask() || role.stats.toMask() || role.settings.toMask() ||
-           role.roles.toMask() || role.s3Gateway.toMask() || role.vaults.admin.raw() || role.vaults.user.raw() ||
+    return role.identities.toMask() || role.audits.toMask() || role.stats.toMask() || role.upstream.toMask() ||
+           role.settings.toMask() || role.roles.toMask() || role.s3Gateway.toMask() || role.vaults.admin.raw() || role.vaults.user.raw() ||
            role.keys.apiKeys.admin.raw() || role.keys.apiKeys.user.raw() || role.keys.encryptionKeys.raw();
 }
 

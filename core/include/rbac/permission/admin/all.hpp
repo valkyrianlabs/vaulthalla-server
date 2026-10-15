@@ -7,5 +7,6 @@
 #include "S3Gateway.hpp"
 #include "Settings.hpp"
 #include "Stats.hpp"
+#include "Upstream.hpp"
 #include "VaultGlobals.hpp"
 #include "Vaults.hpp"

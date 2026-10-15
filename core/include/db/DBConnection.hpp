@@ -113,6 +113,10 @@ class Connection {
     // Admin
     void initPreparedSecrets() const;
     void initPreparedWaivers() const;
+
+    // Upstream control plane (#237, #96)
+    void initPreparedUpstreamBuckets() const;
+    void initPreparedUpstreamEvents() const;
 };
 
 struct PathPatterns {

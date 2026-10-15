@@ -81,6 +81,8 @@ static std::shared_ptr<CommandUsage> admin_update(const std::weak_ptr<CommandUsa
                             "Revoke sharing and services settings edit permissions from 'settings_admin'."});
     cmd->examples.push_back({"vh role admin update support --allow-stats-view",
                             "Let the 'support' role view runtime health and system stats (the console's Health area)."});
+    cmd->examples.push_back({"vh role admin update support --allow-upstream-view --allow-upstream-protect",
+                            "Let the 'support' role see upstream bucket inventory and protect buckets (not unprotect them)."});
     cmd->option_prefixes = {"allow-", "deny-"};
     return cmd;
 }

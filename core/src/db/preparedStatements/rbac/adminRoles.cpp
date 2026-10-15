@@ -15,7 +15,8 @@ void vh::db::Connection::initPreparedAdminRoles() const {
                 vaults_permissions,
                 keys_permissions,
                 s3_gateway_permissions,
-                stats_permissions
+                stats_permissions,
+                upstream_permissions
             )
             VALUES (
                 $1,
@@ -28,7 +29,8 @@ void vh::db::Connection::initPreparedAdminRoles() const {
                 $8::bit(32),
                 $9::bit(32),
                 $10::bit(8),
-                $11::bit(8)
+                $11::bit(8),
+                $12::bit(8)
             )
             ON CONFLICT (id) DO UPDATE SET
                 name                 = EXCLUDED.name,
@@ -40,7 +42,8 @@ void vh::db::Connection::initPreparedAdminRoles() const {
                 vaults_permissions   = EXCLUDED.vaults_permissions,
                 keys_permissions     = EXCLUDED.keys_permissions,
                 s3_gateway_permissions = EXCLUDED.s3_gateway_permissions,
-                stats_permissions      = EXCLUDED.stats_permissions
+                stats_permissions      = EXCLUDED.stats_permissions,
+                upstream_permissions   = EXCLUDED.upstream_permissions
         )SQL"
     );
 
@@ -57,7 +60,8 @@ void vh::db::Connection::initPreparedAdminRoles() const {
                 vaults_permissions,
                 keys_permissions,
                 s3_gateway_permissions,
-                stats_permissions
+                stats_permissions,
+                upstream_permissions
             )
             VALUES (
                 $1,
@@ -69,7 +73,8 @@ void vh::db::Connection::initPreparedAdminRoles() const {
                 $7::bit(32),
                 $8::bit(32),
                 $9::bit(8),
-                $10::bit(8)
+                $10::bit(8),
+                $11::bit(8)
             )
             RETURNING
                 id,
@@ -84,7 +89,8 @@ void vh::db::Connection::initPreparedAdminRoles() const {
                 vaults_permissions::bigint   AS vaults_permissions,
                 keys_permissions::bigint     AS keys_permissions,
                 s3_gateway_permissions::bigint AS s3_gateway_permissions,
-                stats_permissions::bigint    AS stats_permissions
+                stats_permissions::bigint    AS stats_permissions,
+                upstream_permissions::bigint AS upstream_permissions
         )SQL"
     );
 
@@ -101,7 +107,8 @@ void vh::db::Connection::initPreparedAdminRoles() const {
                 vaults_permissions,
                 keys_permissions,
                 s3_gateway_permissions,
-                stats_permissions
+                stats_permissions,
+                upstream_permissions
             )
             VALUES (
                 $1,
@@ -113,7 +120,8 @@ void vh::db::Connection::initPreparedAdminRoles() const {
                 $7::bit(32),
                 $8::bit(32),
                 $9::bit(8),
-                $10::bit(8)
+                $10::bit(8),
+                $11::bit(8)
             )
             ON CONFLICT (name) DO UPDATE SET
                 description          = EXCLUDED.description,
@@ -124,7 +132,8 @@ void vh::db::Connection::initPreparedAdminRoles() const {
                 vaults_permissions   = EXCLUDED.vaults_permissions,
                 keys_permissions     = EXCLUDED.keys_permissions,
                 s3_gateway_permissions = EXCLUDED.s3_gateway_permissions,
-                stats_permissions      = EXCLUDED.stats_permissions
+                stats_permissions      = EXCLUDED.stats_permissions,
+                upstream_permissions   = EXCLUDED.upstream_permissions
             RETURNING
                 id,
                 name,
@@ -138,7 +147,8 @@ void vh::db::Connection::initPreparedAdminRoles() const {
                 vaults_permissions::bigint   AS vaults_permissions,
                 keys_permissions::bigint     AS keys_permissions,
                 s3_gateway_permissions::bigint AS s3_gateway_permissions,
-                stats_permissions::bigint    AS stats_permissions
+                stats_permissions::bigint    AS stats_permissions,
+                upstream_permissions::bigint AS upstream_permissions
         )SQL"
     );
 
@@ -158,7 +168,8 @@ void vh::db::Connection::initPreparedAdminRoles() const {
                 vaults_permissions::bigint   AS vaults_permissions,
                 keys_permissions::bigint     AS keys_permissions,
                 s3_gateway_permissions::bigint AS s3_gateway_permissions,
-                stats_permissions::bigint    AS stats_permissions
+                stats_permissions::bigint    AS stats_permissions,
+                upstream_permissions::bigint AS upstream_permissions
             FROM admin_role
             WHERE id = $1
         )SQL"
@@ -180,7 +191,8 @@ void vh::db::Connection::initPreparedAdminRoles() const {
                 vaults_permissions::bigint   AS vaults_permissions,
                 keys_permissions::bigint     AS keys_permissions,
                 s3_gateway_permissions::bigint AS s3_gateway_permissions,
-                stats_permissions::bigint    AS stats_permissions
+                stats_permissions::bigint    AS stats_permissions,
+                upstream_permissions::bigint AS upstream_permissions
             FROM admin_role
             WHERE name = $1
         )SQL"
@@ -200,7 +212,8 @@ void vh::db::Connection::initPreparedAdminRoles() const {
                 vaults_permissions   = $8::bit(32),
                 keys_permissions     = $9::bit(32),
                 s3_gateway_permissions = $10::bit(8),
-                stats_permissions    = $11::bit(8)
+                stats_permissions    = $11::bit(8),
+                upstream_permissions = $12::bit(8)
             WHERE id = $1
         )SQL"
     );
@@ -251,7 +264,8 @@ void vh::db::Connection::initPreparedAdminRoles() const {
                 vaults_permissions::bigint   AS vaults_permissions,
                 keys_permissions::bigint     AS keys_permissions,
                 s3_gateway_permissions::bigint AS s3_gateway_permissions,
-                stats_permissions::bigint    AS stats_permissions
+                stats_permissions::bigint    AS stats_permissions,
+                upstream_permissions::bigint AS upstream_permissions
             FROM admin_role
             ORDER BY name
         )SQL"

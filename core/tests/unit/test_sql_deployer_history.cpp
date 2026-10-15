@@ -311,6 +311,94 @@ TEST_F(SqlDeployerHistoryDb, StatsPermissionMigrationMatchesFreshSeedAndKeepsOld
     });
 }
 
+// #237: 110 adds the upstream control plane on an upgraded database: admin.upstream grants equal the fresh seed for
+// every built-in role (custom roles get nothing), the six catalog rows, admin columns on api_keys that leave existing
+// keys plain storage credentials, and the new tables. Re-running applies nothing.
+TEST_F(SqlDeployerHistoryDb, UpstreamControlPlaneMigrationMatchesFreshSeedAndIsIdempotent) {
+    inRolledBackTxn([](pqxx::work& txn) {
+        // A <= 1.13.x database: none of 110 exists.
+        for (const auto* table : {"upstream_write_intent", "upstream_event_inbox", "upstream_event_subscription",
+                                  "upstream_event_channel", "upstream_audit", "upstream_bucket"})
+            txn.exec(std::string("DROP TABLE ") + table + " CASCADE");
+        for (const auto* column : {"admin_enabled", "provider_account_id", "encrypted_provider_token", "provider_token_iv",
+                                   "admin_capabilities", "admin_validated_at"})
+            txn.exec(std::string("ALTER TABLE api_keys DROP COLUMN ") + column);
+        txn.exec("ALTER TABLE admin_role DROP COLUMN upstream_permissions");
+        txn.exec("DELETE FROM schema_migrations WHERE filename = '110_upstream_control_plane.sql'");
+        txn.exec("DELETE FROM permission WHERE name LIKE 'admin.upstream.%' AND category = 'admin'");
+
+        const auto upsert = [&](const std::string& name, const vh::rbac::role::Admin& bits) {
+            txn.exec(R"SQL(
+                INSERT INTO admin_role (name, description, identity_permissions, audit_permissions,
+                                        settings_permissions, roles_permissions, vaults_permissions, keys_permissions,
+                                        s3_gateway_permissions, stats_permissions)
+                VALUES ($1, 'x', $2::bit(32), $3::bit(8), $4::bit(64), $5::bit(16), $6::bit(32), $7::bit(32), $8::bit(8),
+                        $9::bit(8))
+                ON CONFLICT (name) DO UPDATE SET
+                    identity_permissions = EXCLUDED.identity_permissions, audit_permissions = EXCLUDED.audit_permissions,
+                    settings_permissions = EXCLUDED.settings_permissions, roles_permissions = EXCLUDED.roles_permissions,
+                    vaults_permissions = EXCLUDED.vaults_permissions, keys_permissions = EXCLUDED.keys_permissions,
+                    s3_gateway_permissions = EXCLUDED.s3_gateway_permissions, stats_permissions = EXCLUDED.stats_permissions
+            )SQL", pqxx::params{
+                name, bits.identities.toBitString(), bits.audits.toBitString(), bits.settings.toBitString(),
+                bits.roles.toBitString(), bits.vaults.toBitString(), bits.keys.toBitString(),
+                bits.s3Gateway.toBitString(), bits.stats.toBitString()
+            });
+        };
+        for (const auto& role : builtInAdminRoles()) upsert(role.name, role);
+        upsert("claude_test_custom_full_role", vh::rbac::role::Admin::SuperAdmin());   // custom name: no grant
+
+        migseed::SqlDeployReport report;
+        ASSERT_NO_THROW(report = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(applied(report, "110_upstream_control_plane.sql"));
+
+        const auto bitsOf = [&](const std::string& name) {
+            return txn.exec("SELECT upstream_permissions::text FROM admin_role WHERE name = $1", pqxx::params{name})
+                .one_row_ref()[0].as<std::string>();
+        };
+        for (const auto& role : builtInAdminRoles()) {
+            SCOPED_TRACE(role.name);
+            EXPECT_EQ(bitsOf(role.name), role.upstream.toBitString()) << "migration and fresh seed disagree";
+        }
+        EXPECT_EQ(bitsOf("super_admin"), "00111111");
+        EXPECT_EQ(bitsOf("claude_test_custom_full_role"), "00000000");
+
+        const auto catalog = txn.exec(
+            "SELECT name, bit_position FROM permission WHERE name LIKE 'admin.upstream.%' AND category = 'admin' "
+            "ORDER BY bit_position");
+        ASSERT_EQ(catalog.size(), 6u);
+        const std::vector<std::string> names{"admin.upstream.view", "admin.upstream.configure", "admin.upstream.provision",
+                                             "admin.upstream.protect", "admin.upstream.unprotect", "admin.upstream.destroy"};
+        for (std::size_t i = 0; i < names.size(); ++i) {
+            EXPECT_EQ(catalog[static_cast<int>(i)][0].as<std::string>(), names[i]);
+            EXPECT_EQ(catalog[static_cast<int>(i)][1].as<int>(), static_cast<int>(i));
+        }
+        // The catalog rows a fresh install seeds from core are the same names at the same bits.
+        for (const auto& p : vh::rbac::role::Admin::SuperAdmin().toPermissions()) {
+            if (!p.qualified_name.starts_with("admin.upstream.")) continue;
+            const auto it = std::ranges::find(names, p.qualified_name);
+            ASSERT_NE(it, names.end()) << p.qualified_name;
+            EXPECT_EQ(static_cast<std::size_t>(p.bit_position), static_cast<std::size_t>(it - names.begin()));
+        }
+
+        const auto adminDefault = txn.exec(
+            "SELECT column_default, is_nullable FROM information_schema.columns "
+            "WHERE table_schema = current_schema() AND table_name = 'api_keys' AND column_name = 'admin_enabled'");
+        ASSERT_EQ(adminDefault.size(), 1u);
+        EXPECT_EQ(adminDefault.one_row_ref()[0].as<std::string>(), "false");
+        EXPECT_EQ(adminDefault.one_row_ref()[1].as<std::string>(), "NO");
+        for (const auto* table : {"upstream_bucket", "upstream_audit", "upstream_event_channel",
+                                  "upstream_event_subscription", "upstream_event_inbox", "upstream_write_intent"})
+            EXPECT_EQ(txn.exec("SELECT to_regclass($1) IS NOT NULL", pqxx::params{table}).one_field_ref().as<bool>(), true)
+                << table;
+
+        migseed::SqlDeployReport again;
+        ASSERT_NO_THROW(again = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(again.applied.empty());
+        EXPECT_EQ(bitsOf("super_admin"), "00111111");
+    });
+}
+
 // #187: 107 grants vault.sync.action.resolve_conflicts wherever sync trigger is held (built-in and custom vault roles,
 // admin vault globals), lists the permission, makes event_id survive event pruning, and closes duplicate open
 // conflicts before enforcing one open conflict per file.
