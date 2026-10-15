@@ -1,6 +1,7 @@
 #pragma once
 
 #include "curl/wrappers.hpp"
+#include "storage/upstream/Guard.hpp"
 #include "vault/Fwd.hpp"
 
 #include <filesystem>
@@ -271,6 +272,8 @@ namespace vh::storage::s3 {
     private:
         std::shared_ptr<vault::model::APIKey> apiKey_;
         std::string bucket_;
+        // Who this controller talks to, for the protection guard (#237): checked before every metered request.
+        upstream::BucketIdentity identity_;
         mutable std::mutex metricsMutex_;
         mutable S3RequestMetrics metrics_;
         mutable std::optional<S3RequestBudget> requestBudget_;
