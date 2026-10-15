@@ -22,6 +22,7 @@ import { QuotaInput, quotaBytes, quotaDefaults, SLUG_PATTERN, storageTierOptions
 import { withEncryptionWaiver } from '@/features/vaults/waiver'
 
 const DeleteVaultDialog = dynamic(() => import('@/features/vaults/DeleteVaultDialog'), { ssr: false })
+const EventSyncPanel = dynamic(() => import('@/features/vaults/settings/EventSyncPanel'), { ssr: false })
 
 export const VaultSettings = () => {
   const vault = useCurrentVault()
@@ -29,6 +30,7 @@ export const VaultSettings = () => {
     <div className="max-w-3xl space-y-4">
       <GeneralForm vault={vault} />
       {vault.type === 's3' ? <BucketForm vault={vault} /> : null}
+      {vault.type === 's3' ? <EventSyncPanel vault={vault} /> : null}
       <DangerZone vault={vault} />
     </div>
   )
