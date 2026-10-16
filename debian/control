@@ -53,6 +53,7 @@ Depends:
  openssl,
  fuse3,
  python3,
+ vaulthalla-archive-keyring,
  ${shlibs:Depends},
  ${misc:Depends}
 Recommends:
