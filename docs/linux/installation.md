@@ -65,6 +65,14 @@ sudo apt update
 sudo apt install vaulthalla
 ```
 
+`vaulthalla` depends on `vaulthalla-archive-keyring`, which takes over `/usr/share/keyrings/vaulthalla.gpg` and
+keeps the repository's signing key current through normal upgrades (for example when its expiry changes). You don't
+need to download the key again later. Existing installs pick it up with `sudo apt upgrade` (or `apt-get dist-upgrade`).
+A plain `apt-get upgrade` never installs new packages, so it holds `vaulthalla` back until you do. To install
+the keyring on its own: `sudo apt install vaulthalla-archive-keyring`.
+
+The signing key fingerprint is `0657 4F63 2342 3EBC 99A1  DF7B E906 C69B 29C0 E706`.
+
 :::callout{theme="info" title="apt.vaulthalla.sh is required"}
 Vaulthalla depends on libraries that are built for it and published only in this repository (PDFium as `libpdfium<branch>`, for example `libpdfium8059`). Installing a downloaded `.deb` without the repository configured leaves those dependencies unresolved.
 :::

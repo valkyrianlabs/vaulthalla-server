@@ -30,6 +30,15 @@ class PackageLayoutContractTests(unittest.TestCase):
         lifecycle = self._read("deploy/lifecycle/main.py")
         self.assertTrue(lifecycle.startswith("#!/usr/bin/env python3"))
 
+    def test_depends_include_archive_keyring(self) -> None:
+        # vaulthalla-archive-keyring owns /usr/share/keyrings/vaulthalla.gpg, the signed-by= path install.sh and the
+        # manual setup have always written, so upgrades deliver renewed APT key metadata without touching sources.
+        # It must be a hard Depends: Recommends is skipped by --no-install-recommends (install.sh --lean).
+        self.assertIn("vaulthalla-archive-keyring", self._depends())
+        self.assertNotRegex(self._read("debian/control"), r"vaulthalla-archive-keyring\s*\(")
+        install_sh = self._read("bin/vh/install.sh")
+        self.assertIn('KEY_FILE="/usr/share/keyrings/vaulthalla.gpg"', install_sh)
+
     def test_nodejs_dependency_stays_installable_on_noble(self) -> None:
         # Next 16 wants >= 20.9, but noble ships 18.19; a version constraint would make
         # the package uninstallable there. Documented in README.Debian instead.
