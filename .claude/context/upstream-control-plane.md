@@ -27,21 +27,39 @@ buckets it created. Other providers: plain storage, but protection locks still a
 ## Invariants (keep them)
 
 - Protection belongs to the bucket identity, never the key; unknown account ⇒ any lock on (provider, bucket) applies.
+  Identity follows the endpoint host, not the key's provider label (`*.r2.cloudflarestorage.com` ⇒ cloudflare-r2,
+  `*.amazonaws.com` ⇒ aws-s3; `providerIdentity(const APIKey&)`); keys whose label contradicts the endpoint are refused.
+  Bucket names/regions are validated (`storage/upstream/Names`) before any request; Cloudflare REST segments are
+  percent-encoded (no signature covers those paths).
   Every protect/unprotect: `guard::reload()` + `subscriptions::invalidateCache()` + `onBucketProtected/Unprotected`.
 - Create-new never takes over: HeadBucket 404 → CreateBucket (collision = Conflict) → must list empty; compensation
   deletes only an empty bucket created by the same operation token. No rollback deletes a pre-existing bucket.
+  The claim row is `unmanaged` + `provision_attempted` until `confirmCreated` (token-guarded) after a 2xx create and an
+  empty listing; all ownership/state writes are token-guarded.
 - Vault delete/detach never deletes upstream data; cleanup only for `managed` + `created_by_vaulthalla`, unbound, not
   protected, no live subscription; preflight token bound to identity + counts + actor (10 min), all checks repeated
   right before deleting; object lock enabled = blocker, unreadable = warning (provider refusals → `partial`).
+  Cleanup holds its own lease (`deleting`, fresh token; busy for adoption/provision/detach), re-checked per round;
+  a mid-run provider error leaves the row failed + resumable. `delete_upstream` is refused for adopted buckets.
+- Lifecycle: only `vaulthalla-managed` is rebuilt from fields; every other rule round-trips raw and is re-verified;
+  an owned rule with unmodeled elements is refused rather than rewritten.
 - Only `vaulthalla-*` rules/statements/queues are ours. AWS notification config is replaced wholesale on PUT: always
   GET-merge-PUT and re-read. R2 DELETE always carries `ruleIds` (a bodyless DELETE removes every rule for the queue).
-- Inbox insert commits **before** the queue ack; undecodable messages are never acked (→ DLQ).
+- Inbox insert commits **before** the queue ack; undecodable messages are never acked (→ DLQ). Manifest keys are
+  ingested as skipped/self (they fed a republish loop). Order is `event_time_ms` (R2 has no sequencer); S3 sequencers
+  compare left-padded (= numeric), as AWS documents.
+- The index is fresh from events only while the stream is contiguous: a DLQ backlog, a poll gap over retention or an
+  ingest failure on a last delivery sets `continuity_broken_at` and the baseline back to pending (full LIST).
 - One pass per vault (pass lease). The applier holds the lease while it changes `remote_object_index` and republishes
   the manifest: a regular pass reloads the index from the manifest when it is empty or the manifest ETag moved, and a
   stale manifest resurrects deleted objects.
-- Removal events delete a local copy only if unchanged since the baseline; mirror+keep_local re-uploads.
+- Removal events delete a local copy only if unchanged since the baseline and a HEAD confirms 404 (a present object is
+  re-indexed; a failed HEAD retries); mirror+keep_local re-uploads. The applier takes the lease before claiming rows
+  and yields to a waiting regular pass. Write intents are removed on failure and match on ETag.
 - An object without Vaulthalla metadata over an encrypted file is plaintext only if the vault doesn't encrypt
   upstream, or its active subscription has `foreign_objects=import`; otherwise it stays an authentication failure.
+  `vh-encrypted=false` over a sealed file follows the same rule. Encrypting vaults default to `foreign_objects=ignore`
+  (adopted buckets: `import`). Manual `vault sync events --file` needs configure + sync.config.edit + key Consume.
 - `s3` bindings are upserted per vault (`ON CONFLICT (vault_id)`); a key+bucket pair of another vault is refused.
 
 ## Provider facts (verified live 2026-10-15)
