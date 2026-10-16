@@ -25,10 +25,12 @@ upstream request. Removing it needs its own permission and an explicit, audited 
 **Event-driven sync.** `vh upstream events enable <vault>` subscribes a vault's bucket to a Vaulthalla-owned queue
 (AWS S3 → SQS, Cloudflare R2 → Queues with HTTP pull), and files written to the bucket by other tools reach the vault
 within seconds: each event is stored before its queue message is acknowledged, deduplicated and ordered, applied to
-the remote index, and only the changed keys are synced (about one HEAD and one GET per new object, nothing for a
+the remote index, and only the changed keys are synced (about one HEAD and one GET per new object, one HEAD per
 removal), under the vault's request and price budgets. Other applications' notification rules are preserved; only
 Vaulthalla's own rules and queues are ever removed. Removals upstream now delete the vault's copy when it hasn't
-changed since the last sync. `vh upstream events status` shows queue health, backlog and errors; `repair` fixes
+changed since the last sync and the provider confirms the object is gone. If events may have been lost (dead-lettered
+messages, or a delivery gap longer than the queue keeps messages), the next sync lists the bucket again instead of
+trusting events. `vh upstream events status` shows queue health, backlog and errors; `repair` fixes
 failed provisioning. R2 event delivery needs one Cloudflare API token (Queues: Edit, Workers R2 Storage: Edit), stored
 sealed on the same credential; the R2 S3 key pair can't sign Cloudflare's account API.
 
@@ -36,9 +38,12 @@ sealed on the same credential; the R2 S3 key pair can't sign Cloudflare's accoun
 anything, and an existing bucket must be adopted explicitly. Deleting or detaching a vault leaves its bucket and
 objects in place. Deleting a bucket is a separate operation, only for buckets Vaulthalla created and no vault uses,
 after a preflight with object and version counts and a typed confirmation, and it reports partial results honestly.
-Every control-plane change is in the upstream audit log (`vh upstream audit`).
+Every control-plane change is in the upstream audit log (`vh upstream audit`), which shows each reader only the
+credentials they may view. Bucket names and regions are validated before any request, and a bucket's identity (and so
+its lock) follows the credential's endpoint, whatever provider label the credential was saved under.
 
 Existing credentials and vaults are unchanged until you turn administration on: plain credentials make no
 administrative calls. Also fixed: an object overwritten upstream by another tool could fail to sync on vaults that
 don't encrypt upstream. On vaults that do, an object without Vaulthalla metadata over an encrypted file is still
-treated as tampering unless the vault's event subscription imports foreign objects.
+treated as tampering unless the vault's event subscription imports foreign objects (the default for adopted buckets;
+other vaults that encrypt upstream ignore foreign objects unless you choose `--foreign-objects import`).
