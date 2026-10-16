@@ -63,6 +63,7 @@ export interface ProviderCredential {
   region?: string
   endpoint?: string
   user_id?: number
+  admin_enabled?: boolean // #237: the credential can provision and adopt buckets
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -90,6 +91,7 @@ export const parseCredentials = (keys: unknown): ProviderCredential[] => {
         region: typeof item.region === 'string' ? item.region : undefined,
         endpoint: typeof item.endpoint === 'string' ? item.endpoint : undefined,
         user_id: typeof item.user_id === 'number' ? item.user_id : undefined,
+        admin_enabled: item.admin_enabled === true,
       },
     ]
   })

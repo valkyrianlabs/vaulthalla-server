@@ -10,6 +10,8 @@
 #include "vault/model/Vault.hpp"
 #include "runtime/Deps.hpp"
 #include "log/Registry.hpp"
+#include "sync/model/Event.hpp"
+#include "sync/model/Scope.hpp"
 
 #include <unordered_set>
 #include <thread>
@@ -156,6 +158,63 @@ Controller::RunNowResult Controller::runNow(const unsigned int vaultId, const ui
     pqCv_.notify_one();
 
     return RunNowResult::Started;
+}
+
+Controller::ScopedResult Controller::runScoped(const unsigned int vaultId, std::shared_ptr<model::PassScope> scope) {
+    if (!scope) return ScopedResult::NoEngine;
+    const auto& storage = runtime::Deps::get().storageManager;
+    const auto engine = storage ? storage->getEngine(vaultId) : nullptr;
+    if (!engine || engine->type() != StorageType::Cloud) return ScopedResult::NoEngine;
+    {
+        std::shared_lock lock(engine->mutex);
+        if (!engine->sync || !engine->sync->enabled) return ScopedResult::Disabled;
+    }
+    if (!tryAcquirePass(vaultId)) return ScopedResult::Busy;
+
+    try {
+        auto task = std::make_shared<Cloud>(engine, std::move(scope));
+        task->runNow(static_cast<uint8_t>(model::Event::Trigger::WEBHOOK));
+        // The task owns the lease from here: it releases it when it runs, or when it is destroyed unrun (a pool that
+        // drops queued work while stopping).
+        task->adoptPassLease();
+        ThreadPoolManager::instance().syncPool()->submit(task);
+    } catch (...) {
+        releasePass(vaultId);
+        throw;
+    }
+    log::Registry::sync()->debug("[SyncController] Scoped (event) sync started for vault ID: {}", vaultId);
+    return ScopedResult::Started;
+}
+
+bool Controller::tryAcquirePass(const unsigned int vaultId) {
+    std::scoped_lock lock(passMutex_);
+    return activePasses_.insert(vaultId).second;
+}
+
+void Controller::releasePass(const unsigned int vaultId) {
+    std::scoped_lock lock(passMutex_);
+    activePasses_.erase(vaultId);
+}
+
+bool Controller::passRunning(const unsigned int vaultId) const {
+    std::scoped_lock lock(passMutex_);
+    return activePasses_.contains(vaultId);
+}
+
+void Controller::markRegularWaiting(const unsigned int vaultId) {
+    std::scoped_lock lock(passMutex_);
+    regularWaiting_.try_emplace(vaultId, std::chrono::steady_clock::now());
+}
+
+void Controller::clearRegularWaiting(const unsigned int vaultId) {
+    std::scoped_lock lock(passMutex_);
+    regularWaiting_.erase(vaultId);
+}
+
+bool Controller::regularWaiting(const unsigned int vaultId) const {
+    std::scoped_lock lock(passMutex_);
+    const auto it = regularWaiting_.find(vaultId);
+    return it != regularWaiting_.end() && std::chrono::steady_clock::now() - it->second < kRegularWaitBound;
 }
 
 void Controller::refreshEngines() {

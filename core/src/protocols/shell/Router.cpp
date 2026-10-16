@@ -6,6 +6,7 @@
 #include "CommandUsage.hpp"
 #include "protocols/shell/util/argsHelpers.hpp"
 #include "protocols/shell/util/usageOptions.hpp"
+#include "protocols/ws/LogRedaction.hpp"
 
 #include <fmt/core.h>
 #include <cctype>
@@ -18,7 +19,62 @@ using vh::identities::Group;
 
 using namespace vh::protocols::shell;
 
+namespace vh::protocols::shell {
+
+// The command line for the debug log, with the values of credential options (--secret, --password, --token, …; see
+// ws::isSensitiveLogKey) replaced: `vh api-key create … --secret <value>` used to land in the log verbatim.
+std::string redactLineForLog(const std::string& line) {
+    std::string out;
+    out.reserve(line.size());
+    bool redactNext = false;
+    size_t i = 0;
+    while (i < line.size()) {
+        if (std::isspace(static_cast<unsigned char>(line[i]))) {
+            out.push_back(line[i++]);
+            continue;
+        }
+        // One token, honouring quotes the way the tokenizer does.
+        const size_t start = i;
+        char quote = 0;
+        while (i < line.size() && (quote || !std::isspace(static_cast<unsigned char>(line[i])))) {
+            if (quote) {
+                if (line[i] == '\\' && i + 1 < line.size()) ++i;
+                else if (line[i] == quote) quote = 0;
+            } else if (line[i] == '"' || line[i] == '\'') {
+                quote = line[i];
+            }
+            ++i;
+        }
+        const std::string token = line.substr(start, i - start);
+        if (redactNext) {
+            redactNext = false;
+            if (!token.starts_with("-")) {
+                out += "[REDACTED]";
+                continue;
+            }
+        }
+        if (const auto dashes = token.find_first_not_of('-'); token.starts_with("-") && dashes != std::string::npos) {
+            const auto bare = token.substr(dashes);
+            const auto eq = bare.find('=');
+            auto name = bare.substr(0, eq);
+            std::ranges::replace(name, '-', '_');
+            if (vh::protocols::ws::isSensitiveLogKey(name)) {
+                if (eq != std::string::npos) {
+                    out += token.substr(0, token.size() - (bare.size() - eq - 1)) + "[REDACTED]";
+                    continue;
+                }
+                redactNext = true;
+            }
+        }
+        out += token;
+    }
+    return out;
+}
+
+}
+
 namespace {
+
 
 // Options are definition-driven: each must be declared by the command or by a subcommand its positionals select
 // (or belong to a family the definition declares in option_prefixes). Unknown options used to be silently
@@ -81,7 +137,7 @@ std::string Router::canonicalFor(const std::string& nameOrAlias) const {
 
 CommandResult Router::executeLine(const std::string& line, const std::shared_ptr<User>& user, SocketIO* io,
                                   std::optional<TransferPeer> transfer) const {
-    log::Registry::shell()->debug("[Router] Executing line: '{}'", line);
+    log::Registry::shell()->debug("[Router] Executing line: '{}'", redactLineForLog(line));
 
     auto call = parseTokens(tokenize(line));
     call.original_positionals = call.positionals;

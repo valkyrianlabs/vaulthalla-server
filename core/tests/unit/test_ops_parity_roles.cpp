@@ -60,7 +60,8 @@ std::string adminBits(const std::string& name) {
     const auto r = db::query::rbac::role::Admin::get(name);
     if (!r) return "<missing>";
     return r->identities.toBitString() + r->vaults.toBitString() + r->audits.toBitString() + r->settings.toBitString() +
-           r->roles.toBitString() + r->keys.toBitString() + r->s3Gateway.toBitString() + r->stats.toBitString();
+           r->roles.toBitString() + r->keys.toBitString() + r->s3Gateway.toBitString() + r->stats.toBitString() +
+           r->upstream.toBitString();
 }
 
 std::string vaultBits(const std::string& name) {
@@ -183,6 +184,34 @@ TEST_F(RoleParityTest, StatsViewIsGrantedTheSameWayOnBothSurfaces) {
     EXPECT_EQ(db::query::rbac::role::Admin::get(cliName)->stats.toBitString(), "00000001");
 
     ASSERT_EQ(cli("role admin update " + cliName + " --deny-stats-view", orgAdmin).first, 0);
+    EXPECT_TRUE(grantedAdmin(cliName).empty());
+}
+
+// #237: admin.upstream.* bits go through the same mechanism on both surfaces. The plain `admin` role holds
+// view|configure|provision|protect, so it may grant protect but not unprotect (escalation ceiling); super_admin may.
+TEST_F(RoleParityTest, UpstreamPermissionsAreGrantedTheSameWayOnBothSurfaces) {
+    const std::set<std::string> want{"admin.upstream.view", "admin.upstream.protect"};
+    const auto cliName = "rp_up_cli_" + rolesTag(), wsName = "rp_up_ws_" + rolesTag();
+
+    const auto [code, out] = cli("role admin create " + cliName + " --allow-upstream-view --allow-upstream-protect", orgAdmin);
+    ASSERT_EQ(code, 0) << out;
+    (void)protocols::ws::handler::rbac::roles::Admin::add(json{{"name", wsName}, {"permissions", adminSnapshot(want)}},
+                                                         ws(orgAdmin));
+
+    EXPECT_EQ(grantedAdmin(cliName), want);
+    EXPECT_EQ(grantedAdmin(wsName), want);
+    EXPECT_EQ(adminBits(cliName), adminBits(wsName));
+    EXPECT_EQ(db::query::rbac::role::Admin::get(cliName)->upstream.toBitString(), "00001001");
+
+    // Unprotect is beyond the org admin's own grants: refused, nothing changes.
+    EXPECT_NE(cli("role admin update " + cliName + " --allow-upstream-unprotect", orgAdmin).first, 0);
+    EXPECT_EQ(grantedAdmin(cliName), want);
+
+    ASSERT_EQ(cli("role admin update " + cliName + " --allow-upstream-unprotect --allow-upstream-destroy", superUser).first, 0);
+    EXPECT_EQ(db::query::rbac::role::Admin::get(cliName)->upstream.toBitString(), "00111001");
+
+    ASSERT_EQ(cli("role admin update " + cliName + " --deny-upstream-view --deny-upstream-protect "
+                  "--deny-upstream-unprotect --deny-upstream-destroy", superUser).first, 0);
     EXPECT_TRUE(grantedAdmin(cliName).empty());
 }
 

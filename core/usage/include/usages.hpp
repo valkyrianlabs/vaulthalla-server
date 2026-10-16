@@ -28,6 +28,7 @@ namespace status { std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandU
 namespace help { std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent); }
 namespace version { std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent); }
 namespace fs_book { std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent); }
+namespace upstream_book { std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent); }
 
 const auto gpgRecipient = Optional::ManyToOne("gpg_recipient", "GPG fingerprint to encrypt the exported key (if blank will not encrypt)",
                             {"recipient", "r"}, "gpg-fingerprint");

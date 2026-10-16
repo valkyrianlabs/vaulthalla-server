@@ -7,11 +7,14 @@ void vh::db::Connection::initPreparedVaults() const {
        RETURNING id)");
 
     conn_->prepare("upsert_s3_vault",
+                   // The vault's own row (one per vault): a key or bucket change edits it in place. Conflicting on
+                   // (api_key_id, bucket) used to make a key/bucket change insert a second row for the vault (s3_pkey
+                   // violation), and a vault created on a pair another vault held took that vault's binding over.
+                   // Another vault's (api_key_id, bucket) now fails the unique constraint; ops refuse it first.
                    "INSERT INTO s3 (vault_id, api_key_id, bucket, encrypt_upstream, storage_tier_id) VALUES ($1, $2, $3, $4, $5) "
-                   "ON CONFLICT (api_key_id, bucket) DO UPDATE "
+                   "ON CONFLICT (vault_id) DO UPDATE "
                    "SET bucket = EXCLUDED.bucket, api_key_id = EXCLUDED.api_key_id, "
-                   "encrypt_upstream = EXCLUDED.encrypt_upstream, storage_tier_id = EXCLUDED.storage_tier_id, "
-                   "vault_id = EXCLUDED.vault_id "
+                   "encrypt_upstream = EXCLUDED.encrypt_upstream, storage_tier_id = EXCLUDED.storage_tier_id "
                    "RETURNING vault_id");
 
     conn_->prepare("insert_s3_vault", "INSERT INTO s3 (vault_id, api_key_id, bucket, storage_tier_id) VALUES ($1, $2, $3, $4) "

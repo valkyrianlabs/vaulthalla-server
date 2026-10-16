@@ -10,11 +10,12 @@ import { Badge } from '@/components/ui/Badge'
 import { DataTable, type Column } from '@/components/ui/DataTable'
 import { DropdownMenu } from '@/components/ui/Menu'
 import { EmptyState, QueryState } from '@/components/ui/State'
-import { EllipsisIcon, KeySkeletonIcon, PenIcon, PlusIcon, TrashIcon } from '@/components/ui/icons'
+import { BucketIcon, EllipsisIcon, KeySkeletonIcon, PenIcon, PlusIcon, TrashIcon } from '@/components/ui/icons'
 import { DASH, formatDate, formatRelative } from '@/lib/format'
 import { maskAccessKey, type ProviderCredential } from '@/features/credentials/types'
 import { useCredentialList, useCredentialPerms, useCredentialUsage } from '@/features/credentials/useCredentials'
 import { deleteCredential } from '@/features/credentials/deleteCredential'
+import { useUpstreamPerms } from '@/features/credentials/upstream/hooks'
 
 const host = (endpoint: string) => {
   try {
@@ -29,6 +30,7 @@ export const CredentialsPage = () => {
   const can = useCredentialPerms()
   const list = useCredentialList(can.view)
   const { usage } = useCredentialUsage(can.view)
+  const upstream = useUpstreamPerms()
 
   const columns: Column<ProviderCredential>[] = [
     {
@@ -41,7 +43,18 @@ export const CredentialsPage = () => {
       key: 'provider',
       header: 'Provider',
       sortValue: row => row.provider,
-      cell: row => (row.provider ? <Badge>{row.provider}</Badge> : <span className="text-fg-faint">{DASH}</span>),
+      cell: row => (
+        <span className="flex flex-wrap items-center gap-1.5">
+          {row.provider ?
+            <Badge>{row.provider}</Badge>
+          : <span className="text-fg-faint">{DASH}</span>}
+          {row.admin_enabled ?
+            <Badge tone="accent" title="Provider administration is enabled: Vaulthalla can create, adopt and watch buckets">
+              Admin
+            </Badge>
+          : null}
+        </span>
+      ),
     },
     {
       key: 'endpoint',
@@ -149,7 +162,7 @@ export const CredentialsPage = () => {
                 }
                 filterPlaceholder="Filter credentials…"
                 rowActions={row =>
-                  can.edit || can.remove ?
+                  can.edit || can.remove || (row.admin_enabled && upstream.view) ?
                     <DropdownMenu
                       label={`Actions for ${row.name}`}
                       trigger={
@@ -161,6 +174,16 @@ export const CredentialsPage = () => {
                         />
                       }
                       entries={[
+                        ...(row.admin_enabled && upstream.view ?
+                          [
+                            {
+                              key: 'buckets',
+                              label: 'Buckets',
+                              icon: BucketIcon,
+                              onSelect: () => router.push(`/credentials/${row.api_key_id}/buckets`),
+                            },
+                          ]
+                        : []),
                         ...(can.edit ?
                           [
                             {

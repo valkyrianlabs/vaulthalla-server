@@ -3135,9 +3135,9 @@
     },
     {
       "auth": "human",
-      "client_timeout_ms": 60000,
+      "client_timeout_ms": 180000,
       "command": "storage.vault.add",
-      "description": "Create a vault. owner_id, description and quota (bytes, 0 = unlimited) are optional; the daemon picks the backing directory. S3 vaults also need api_key_id and bucket. A refusal with data.code 'encryption_waiver' means the bucket already holds data: resend with accept_encryption_waiver once the person accepts.",
+      "description": "Create a vault. owner_id, description and quota (bytes, 0 = unlimited) are optional; the daemon picks the backing directory. S3 vaults also need api_key_id and bucket. A refusal with data.code 'encryption_waiver' means the bucket already holds data: resend with accept_encryption_waiver once the person accepts. With provision (#237) the daemon creates a managed bucket or adopts an existing one; 'upstream_adoption' asks for provision.accept_adoption.",
       "input": "payload",
       "operation": "vaults.create",
       "payload": [
@@ -3281,6 +3281,14 @@
           "types": [
             "boolean"
           ]
+        },
+        {
+          "description": "S3 vaults with an admin-enabled key (#237): {mode: existing|create|adopt, region, generate_name, lifecycle, events, events_prefix, accept_adoption}. bucket may be empty with generate_name.",
+          "name": "provision",
+          "required": false,
+          "types": [
+            "object"
+          ]
         }
       ],
       "refusal_codes": [
@@ -3289,7 +3297,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "encryption_waiver"
+        "encryption_waiver",
+        "upstream_adoption"
       ],
       "response": [
         {
@@ -3456,7 +3465,1059 @@
       ],
       "untyped_refusals": [],
       "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "upstream.admin.disable",
+      "description": "Turn provider administration off. Refused while an event subscription runs through the key.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Upstream API key id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "api_key",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "api_key_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "model": "UpstreamAdminStatus",
+          "name": "admin",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 60000,
+      "command": "upstream.admin.enable",
+      "description": "Turn on provider administration (AWS S3, Cloudflare R2) for an upstream API key after probing it, or store / clear the Cloudflare API token R2 events need. Idempotent. Needs admin.upstream.configure + key edit.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Upstream API key id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "api_key",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "api_key_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Cloudflare account API token (Queues Edit + Workers R2 Storage Edit). Write-only.",
+          "name": "provider_token",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "clear_provider_token",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "model": "UpstreamAdminStatus",
+          "name": "admin",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 60000,
+      "command": "upstream.admin.status",
+      "description": "Administration status and the last capability probe; probe=true re-checks the credential (configure).",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Upstream API key id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "api_key",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "api_key_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "probe",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "model": "UpstreamAdminStatus",
+          "name": "admin",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "upstream.audit.list",
+      "description": "Upstream control-plane audit log (newest first): locks, creations, adoptions, lifecycle, events, cleanup.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "name": "bucket",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "limit",
+          "required": false,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "items": "object",
+          "model": "UpstreamAuditEntry",
+          "name": "entries",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 180000,
+      "command": "upstream.bucket.adopt.preflight",
+      "description": "Read-only admission check of an existing bucket before adoption: object counts, encryption of a sample, versioning, object lock, Vaulthalla manifest, blockers.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Upstream API key id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "api_key",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "api_key_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Bucket name in the key's account.",
+          "generator": {
+            "kind": "pattern",
+            "pattern": "vh-test-{a}{a}{a}{9}{9}"
+          },
+          "name": "bucket",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "max_objects",
+          "required": false,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "sample_heads",
+          "required": false,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "model": "UpstreamAdmissionReport",
+          "name": "report",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 600000,
+      "command": "upstream.bucket.cleanup",
+      "description": "Delete every object version of a bucket Vaulthalla created and (delete_bucket, default) the bucket. Every check runs again first. A refusal with data.code 'upstream_cleanup' means the token is missing, expired or no longer matches the bucket: run the preflight again.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Upstream API key id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "api_key",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "api_key_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Bucket name in the key's account.",
+          "generator": {
+            "kind": "pattern",
+            "pattern": "vh-test-{a}{a}{a}{9}{9}"
+          },
+          "name": "bucket",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "kind": "pattern",
+            "pattern": "{a}{a}{a}{a}{9}{9}{9}{9}"
+          },
+          "name": "confirm_token",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "delete_bucket",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "upstream_cleanup"
+      ],
+      "response": [
+        {
+          "model": "UpstreamCleanupResult",
+          "name": "result",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 180000,
+      "command": "upstream.bucket.cleanup.preflight",
+      "description": "What cleanup would delete (objects, versions, delete markers, bytes) and anything that blocks it, with a confirm_token valid for 10 minutes. Nothing changes.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Upstream API key id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "api_key",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "api_key_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Bucket name in the key's account.",
+          "generator": {
+            "kind": "pattern",
+            "pattern": "vh-test-{a}{a}{a}{9}{9}"
+          },
+          "name": "bucket",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "model": "UpstreamCleanupPlan",
+          "name": "plan",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 60000,
+      "command": "upstream.bucket.detach",
+      "description": "Give a managed or adopted bucket that no vault uses back: Vaulthalla removes its own rules; data stays.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Upstream API key id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "api_key",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "api_key_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Bucket name in the key's account.",
+          "generator": {
+            "kind": "pattern",
+            "pattern": "vh-test-{a}{a}{a}{9}{9}"
+          },
+          "name": "bucket",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "model": "UpstreamBucketRow",
+          "name": "bucket",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 60000,
+      "command": "upstream.bucket.inspect",
+      "description": "Bucket configuration: region, versioning, object lock, lifecycle and notification rules (ours vs foreign).",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Upstream API key id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "api_key",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "api_key_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Bucket name in the key's account.",
+          "generator": {
+            "kind": "pattern",
+            "pattern": "vh-test-{a}{a}{a}{9}{9}"
+          },
+          "name": "bucket",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "model": "UpstreamInspection",
+          "name": "inspection",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 60000,
+      "command": "upstream.bucket.lifecycle.set",
+      "description": "Set or clear Vaulthalla's lifecycle rule on a managed or adopted bucket; foreign rules are preserved. Expiration is destructive: a refusal with data.code 'upstream_destructive_lifecycle' asks for accept_destructive.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Upstream API key id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "api_key",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "api_key_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Bucket name in the key's account.",
+          "generator": {
+            "kind": "pattern",
+            "pattern": "vh-test-{a}{a}{a}{9}{9}"
+          },
+          "name": "bucket",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "abort_incomplete_multipart_days",
+          "required": false,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "expire_current_days",
+          "required": false,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "expire_noncurrent_days",
+          "required": false,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "prefix",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "clear",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "name": "accept_destructive",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "upstream_destructive_lifecycle"
+      ],
+      "response": [
+        {
+          "model": "UpstreamInspection",
+          "name": "inspection",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 60000,
+      "command": "upstream.bucket.list",
+      "description": "One page of the account's buckets (ListBuckets) merged with what Vaulthalla knows: managed, adopted, unmanaged or protected. No bucket-level or object calls.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Upstream API key id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "api_key",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "api_key_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "token",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "max",
+          "required": false,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "enum": [
+            "managed",
+            "adopted",
+            "unmanaged",
+            "protected"
+          ],
+          "name": "state",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "filter",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "model": "UpstreamInventory",
+          "name": "inventory",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "upstream.bucket.protect",
+      "description": "Lock a bucket: Vaulthalla will not probe, adopt, bind, configure, sync, empty or delete it. Audited.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Upstream API key id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "api_key",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "api_key_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Bucket name in the key's account.",
+          "generator": {
+            "kind": "pattern",
+            "pattern": "vh-test-{a}{a}{a}{9}{9}"
+          },
+          "name": "bucket",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "kind": "pattern",
+            "pattern": "test lock {a}{a}{a}"
+          },
+          "name": "reason",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "model": "UpstreamBucketRow",
+          "name": "bucket",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "upstream.bucket.unprotect",
+      "description": "Remove a bucket lock (admin.upstream.unprotect). A refusal with data.code 'upstream_unprotect' asks for confirmation: resend with confirm.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Upstream API key id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "api_key",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "api_key_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Bucket name in the key's account.",
+          "generator": {
+            "kind": "pattern",
+            "pattern": "vh-test-{a}{a}{a}{9}{9}"
+          },
+          "name": "bucket",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "confirm",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "upstream_unprotect"
+      ],
+      "response": [
+        {
+          "model": "UpstreamBucketRow",
+          "name": "bucket",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 120000,
+      "command": "upstream.events.disable",
+      "description": "Remove the vault's event rule (and the queue when nothing else uses it and Vaulthalla created it).",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "model": "UpstreamEventStatus",
+          "name": "events",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 120000,
+      "command": "upstream.events.enable",
+      "description": "Subscribe an S3 vault's bucket for event-driven sync (AWS S3 → SQS, Cloudflare R2 → Queues).",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "prefix",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "enum": [
+            "import",
+            "ignore"
+          ],
+          "name": "foreign_objects",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "model": "UpstreamEventStatus",
+          "name": "events",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 120000,
+      "command": "upstream.events.repair",
+      "description": "Re-create whatever is missing for the vault's subscription and re-arm it. Safe to repeat.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "model": "UpstreamEventStatus",
+          "name": "events",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "upstream.events.status",
+      "description": "Event subscription, queue health and inbox counts for one vault (vault_id) or every S3 vault the caller may view. A vault without a subscription reports state 'none'.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": false,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "items": "object",
+          "model": "UpstreamEventStatus",
+          "name": "events",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
     }
   ],
-  "ws_hash": "3948f821deaef4be6cc69b01b7b43c2c12e4f63f563fa4fc00799b3212d9a311"
+  "ws_hash": "f65d925ebe6d3251b2f7e6e66e8f3e6292b4547bc47f28a47a9deb5f4ddf397b"
 }

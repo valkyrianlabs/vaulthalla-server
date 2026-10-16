@@ -22,6 +22,7 @@
 
 // Seed
 #include "seed/include/seed_db.hpp"
+#include "storage/upstream/Guard.hpp"
 #include "seed/include/init_db_tables.hpp"
 
 // Misc
@@ -164,6 +165,9 @@ void initDeps() {
 // --- Wiring ---
 
 void wireStorage() {
+    // Upstream bucket protection locks (#237) are loaded before any engine can make a request; a failure here stops
+    // startup rather than running with an empty (unprotected) set.
+    vh::storage::upstream::guard::reload();
     Filesystem::init(vh::runtime::Deps::get().storageManager);
     vh::runtime::Deps::get().storageManager->initStorageEngines();
 

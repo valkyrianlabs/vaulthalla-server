@@ -1,6 +1,7 @@
 #pragma once
 
 #include "curl/wrappers.hpp"
+#include "storage/upstream/Guard.hpp"
 #include "vault/Fwd.hpp"
 
 #include <filesystem>
@@ -215,6 +216,19 @@ namespace vh::storage::s3 {
         [[nodiscard]] virtual std::optional<std::unordered_map<std::string, std::string> > getHeadObject(
             const fs::path &key) const;
 
+        // What the calling thread's last HEAD through this class's network path answered. getHeadObject returns
+        // nullopt for a 404 and for every failure alike; callers that must not mistake an outage for a deletion
+        // (event removals, #96) check this. Test fakes that override getHeadObject never set it (performed=false).
+        struct HeadOutcome {
+            bool performed = false;
+            bool transport_ok = false;
+            long http_status = 0;
+        };
+        static void resetLastHeadOutcome() noexcept;
+        [[nodiscard]] static HeadOutcome lastHeadOutcome() noexcept;
+        // Fakes that override getHeadObject report what their "network" answered (e.g. a 503).
+        static void recordHeadOutcomeForTesting(HeadOutcome outcome) noexcept;
+
         virtual void setObjectContentHash(const fs::path &key, const std::string &hash,
                                           const RequestOptions &options = {}) const;
 
@@ -271,6 +285,8 @@ namespace vh::storage::s3 {
     private:
         std::shared_ptr<vault::model::APIKey> apiKey_;
         std::string bucket_;
+        // Who this controller talks to, for the protection guard (#237): checked before every metered request.
+        upstream::BucketIdentity identity_;
         mutable std::mutex metricsMutex_;
         mutable S3RequestMetrics metrics_;
         mutable std::optional<S3RequestBudget> requestBudget_;

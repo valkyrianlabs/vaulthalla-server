@@ -9,6 +9,11 @@ export interface ProviderCredential {
   region: string
   endpoint: string
   created_at: string | null
+  // Provider administration (#237). Older daemons send none of these: treat as "not enabled".
+  admin_enabled: boolean
+  provider_account_id: string | null
+  has_provider_token: boolean
+  admin_validated_at: string | null
 }
 
 // Matches s3_provider_from_string in core/src/vault/model/APIKey.cpp.
@@ -54,6 +59,12 @@ export const toCredential = (input: unknown): ProviderCredential => {
     region: text(data.region),
     endpoint: text(data.endpoint),
     created_at: typeof data.created_at === 'string' && data.created_at ? data.created_at : null,
+    admin_enabled: data.admin_enabled === true,
+    provider_account_id:
+      typeof data.provider_account_id === 'string' && data.provider_account_id ? data.provider_account_id : null,
+    has_provider_token: data.has_provider_token === true,
+    admin_validated_at:
+      typeof data.admin_validated_at === 'string' && data.admin_validated_at ? data.admin_validated_at : null,
   }
 }
 

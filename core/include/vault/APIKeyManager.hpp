@@ -2,8 +2,11 @@
 
 #include "crypto/secrets/KeyProvider.hpp"
 #include "vault/Fwd.hpp"
+#include <ctime>
 #include <memory>
 #include <mutex>
+#include <optional>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -27,8 +30,16 @@ public:
 
     [[nodiscard]] std::vector<std::shared_ptr<model::APIKey>> listAPIKeys() const;
     [[nodiscard]] std::vector<std::shared_ptr<model::APIKey>> listUserAPIKeys(unsigned int userId) const;
-    // With the secret decrypted. Throws when the key does not exist.
+    // With the secret (and the provider token, when one is stored) decrypted. Throws when the key does not exist.
     [[nodiscard]] std::shared_ptr<model::APIKey> getAPIKey(unsigned int keyId) const;
+
+    // Provider administration (#237). A token is sealed with the same master key as the S3 secret and the plaintext
+    // wiped; nullopt removes the stored token.
+    void setProviderToken(unsigned int keyId, std::optional<std::string> token);
+    // Absent optionals keep the stored value.
+    void setAdmin(unsigned int keyId, bool enabled, const std::optional<std::string>& accountRef,
+                  const std::optional<std::string>& capabilitiesJson, std::optional<std::time_t> validatedAt);
+    void setAccountRef(unsigned int keyId, const std::optional<std::string>& accountRef);
 
 private:
     mutable std::mutex apiKeysMutex_;

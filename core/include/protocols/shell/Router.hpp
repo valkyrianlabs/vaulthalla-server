@@ -12,6 +12,11 @@
 
 namespace vh::protocols::shell {
 
+// The line as the debug log may show it: values of credential options (--secret, --password, --token, … per
+// ws::isSensitiveLogKey, in "--opt value" and "--opt=value" form) replaced by [REDACTED].
+[[nodiscard]] std::string redactLineForLog(const std::string& line);
+
+
 class Router {
 public:
     void registerCommand(const std::shared_ptr<CommandUsage>& usage, CommandHandler handler);

@@ -102,4 +102,41 @@ namespace vh::db::query::vault {
             return res.one_row_ref()["id"].as<unsigned int>();
         });
     }
+
+    void APIKey::setAdmin(const unsigned int keyId, const bool enabled, const std::optional<std::string>& accountRef,
+                          const std::optional<std::string>& capabilitiesJson, const std::optional<std::time_t> validatedAt) {
+        const std::optional<double> at = validatedAt ? std::make_optional(static_cast<double>(*validatedAt)) : std::nullopt;
+        Transactions::exec("APIKey::setAdmin", [&](pqxx::work& txn) {
+            txn.exec(pqxx::prepped{"api_key_set_admin"}, pqxx::params{keyId, enabled, accountRef, capabilitiesJson, at});
+        });
+    }
+
+    void APIKey::setProviderToken(const unsigned int keyId, const std::vector<uint8_t>& ciphertext,
+                                  const std::vector<uint8_t>& iv) {
+        Transactions::exec("APIKey::setProviderToken", [&](pqxx::work& txn) {
+            txn.exec(pqxx::prepped{"api_key_set_provider_token"},
+                     pqxx::params{keyId, to_hex_bytea(ciphertext), to_hex_bytea(iv)});
+        });
+    }
+
+    void APIKey::clearProviderToken(const unsigned int keyId) {
+        Transactions::exec("APIKey::clearProviderToken", [&](pqxx::work& txn) {
+            txn.exec(pqxx::prepped{"api_key_clear_provider_token"}, pqxx::params{keyId});
+        });
+    }
+
+    void APIKey::resetAdmin(const unsigned int keyId) {
+        Transactions::exec("APIKey::resetAdmin", [&](pqxx::work& txn) {
+            txn.exec("UPDATE api_keys SET admin_enabled = FALSE, admin_capabilities = NULL, admin_validated_at = NULL, "
+                     "encrypted_provider_token = NULL, provider_token_iv = NULL, provider_account_id = NULL WHERE id = $1",
+                     pqxx::params{keyId});
+        });
+    }
+
+    void APIKey::setAccountRef(const unsigned int keyId, const std::optional<std::string>& accountRef) {
+        Transactions::exec("APIKey::setAccountRef", [&](pqxx::work& txn) {
+            txn.exec(pqxx::prepped{"api_key_set_account_ref"}, pqxx::params{keyId, accountRef});
+        });
+    }
+
 }

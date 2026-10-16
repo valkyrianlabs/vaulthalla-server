@@ -2,7 +2,7 @@
 
 import React, { useEffect, useId } from 'react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { FormProvider, useForm, useWatch } from 'react-hook-form'
 import { PageHeader, Panel } from '@/components/ui/Panel'
 import { Button } from '@/components/ui/Button'
@@ -22,6 +22,15 @@ import { RequestGuardrailFields, SyncPolicyFields } from '@/features/vaults/sync
 import { QuotaInput, quotaBytes, SLUG_PATTERN, storageTierOptions, validateFuseName, type QuotaUnit } from '@/features/vaults/fields'
 import { withEncryptionWaiver } from '@/features/vaults/waiver'
 import { useServerPolicy } from '@/lib/serverPolicy'
+import { useUpstreamPerms, withConfirmation } from '@/features/credentials/upstream/hooks'
+import {
+  AdoptBucketFields,
+  BucketModeSelector,
+  CreateBucketFields,
+  provisionDefaults,
+  provisionPayload,
+} from '@/features/vaults/BucketProvisionFields'
+import { UPSTREAM_CODES, type BucketMode } from '@/models/upstream'
 
 interface NewVaultValues {
   type: VaultType
@@ -37,7 +46,17 @@ interface NewVaultValues {
   storage_tier_id: string
   encrypt_upstream: boolean
   sync: SyncFormValues
+  // #237 bucket provisioning (admin-enabled credentials only); 'existing' = bind the named bucket as before.
+  bucket_mode: BucketMode
+  generate_name: boolean
+  region: string
+  abort_multipart_days: string
+  events: boolean
+  events_prefix: string
+  adoption_reviewed: boolean
 }
+
+const BUCKET_MODES: BucketMode[] = ['existing', 'create', 'adopt']
 
 export const NewVaultPage = () => {
   const canCreate = useCan(VAULT_CREATE)
@@ -65,10 +84,15 @@ const NewVaultForm = () => {
   const me = useSession(state => state.user)
   const credentials = useCredentials()
   const { users } = useUserNames()
+  const upstream = useUpstreamPerms()
+  // Deep links from the bucket inventory: /vaults/new?type=s3&api_key_id=…&bucket=…&bucket_mode=adopt
+  const params = useSearchParams()
+  const linkedMode = BUCKET_MODES.find(m => m === params?.get('bucket_mode'))
+  const linkedKey = params?.get('api_key_id') ?? ''
 
   const form = useForm<NewVaultValues>({
     defaultValues: {
-      type: 'local',
+      type: params?.get('type') === 's3' ? 's3' : 'local',
       name: '',
       description: '',
       owner_id: '',
@@ -76,11 +100,13 @@ const NewVaultForm = () => {
       quota_unit: 'GiB',
       slug: '',
       fuse_name: '',
-      api_key_id: '',
-      bucket: '',
+      api_key_id: /^\d+$/.test(linkedKey) ? linkedKey : '',
+      bucket: params?.get('bucket') ?? '',
       storage_tier_id: '',
       encrypt_upstream: true,
       sync: syncFormDefaults(null),
+      bucket_mode: linkedMode ?? 'existing',
+      ...provisionDefaults,
     },
   })
   const { register, handleSubmit, control, setValue, formState, getFieldState, resetField } = form
@@ -90,6 +116,17 @@ const NewVaultForm = () => {
   const encrypt = useWatch({ control, name: 'encrypt_upstream' })
   const credential = credentials.data?.find(c => String(c.api_key_id) === apiKeyId)
   const tiers = storageTierOptions(credential?.provider)
+  const bucketMode = useWatch({ control, name: 'bucket_mode' })
+  // Creating or adopting needs a credential with provider administration and admin.upstream.provision; anything else
+  // binds a bucket by name as before.
+  const canProvision = Boolean(credential?.admin_enabled) && upstream.provision
+  const mode: BucketMode = canProvision ? bucketMode : 'existing'
+
+  // An admin-enabled credential starts in "create a new bucket", unless a link or the user already chose a mode.
+  useEffect(() => {
+    if (!canProvision || linkedMode || getFieldState('bucket_mode').isDirty) return
+    setValue('bucket_mode', 'create')
+  }, [canProvision, linkedMode, getFieldState, setValue])
 
   // New S3 vaults start from the operator's defaults (config vaults.s3.*), unless the user already chose.
   const remoteDefaults = useServerPolicy().data?.policy?.vaults?.s3
@@ -119,21 +156,33 @@ const NewVaultForm = () => {
       ...(values.fuse_name.trim() ? { fuse_name: values.fuse_name.trim() } : {}),
     }
     try {
+      const effective = { ...values, bucket_mode: mode }
+      const sendS3 = (adopted: boolean) =>
+        withEncryptionWaiver(accept => {
+          const provision = provisionPayload(effective, adopted)
+          return api.send('storage.vault.add', {
+            ...common,
+            type: 's3',
+            api_key_id: Number(values.api_key_id),
+            bucket: mode === 'create' && values.generate_name ? '' : values.bucket.trim(),
+            storage_tier_id: values.storage_tier_id || null,
+            encrypt_upstream: values.encrypt_upstream,
+            sync: syncPayload(values.sync),
+            ...(accept ? { accept_encryption_waiver: true } : {}),
+            ...(provision ? { provision } : {}),
+          })
+        })
       const res =
         values.type === 'local'
           ? await api.send('storage.vault.add', { ...common, type: 'local' })
-          : await withEncryptionWaiver(accept =>
-              api.send('storage.vault.add', {
-                ...common,
-                type: 's3',
-                api_key_id: Number(values.api_key_id),
-                bucket: values.bucket.trim(),
-                storage_tier_id: values.storage_tier_id || null,
-                encrypt_upstream: values.encrypt_upstream,
-                sync: syncPayload(values.sync),
-                ...(accept ? { accept_encryption_waiver: true } : {}),
-              }),
-            )
+          : mode === 'adopt'
+            ? await withConfirmation(UPSTREAM_CODES.adoption, sendS3, message => ({
+                title: 'Adopt this bucket?',
+                description: message,
+                confirmLabel: 'Adopt and create the vault',
+                tone: 'primary',
+              }))
+            : await sendS3(false)
       await invalidate('storage.vault.list', 'stats.system.storage')
       notify.success(`Vault “${common.name}” created`)
       const id = (res.vault as { id?: number } | undefined)?.id
@@ -197,9 +246,11 @@ const NewVaultForm = () => {
                     ))}
                   </Select>
                 </Field>
-                <Field label="Bucket" htmlFor={`${ids}-bucket`} required error={errors.bucket?.message}>
-                  <Input id={`${ids}-bucket`} className="font-mono" autoComplete="off" spellCheck={false} aria-invalid={Boolean(errors.bucket)} {...register('bucket', { validate: v => type !== 's3' || Boolean(v.trim()) || 'Enter the bucket name' })} />
-                </Field>
+                {mode === 'existing' ? (
+                  <Field label="Bucket" htmlFor={`${ids}-bucket`} required error={errors.bucket?.message}>
+                    <Input id={`${ids}-bucket`} className="font-mono" autoComplete="off" spellCheck={false} aria-invalid={Boolean(errors.bucket)} {...register('bucket', { validate: (v, all) => all.type !== 's3' || (canProvision && all.bucket_mode !== 'existing') || Boolean(v.trim()) || 'Enter the bucket name' })} />
+                  </Field>
+                ) : null}
                 <Field label="Storage tier" htmlFor={`${ids}-tier`} hint={tiers ? undefined : credential ? 'This provider uses its default tier.' : 'Leave empty for the provider default.'}>
                   {tiers ? (
                     <Select id={`${ids}-tier`} {...register('storage_tier_id')}>
@@ -214,6 +265,16 @@ const NewVaultForm = () => {
                   )}
                 </Field>
               </div>
+              {canProvision ? (
+                <div className="space-y-4 rounded-card border border-line p-4">
+                  <BucketModeSelector value={mode} onChange={m => setValue('bucket_mode', m, { shouldDirty: true })} canProvision={canProvision} />
+                  {mode === 'create' ? <CreateBucketFields regionHint={credential?.region} /> : null}
+                  {mode === 'adopt' ? <AdoptBucketFields apiKeyId={Number(apiKeyId)} /> : null}
+                  {mode === 'existing' ? (
+                    <p className="text-xs text-fg-subtle">Binds a bucket by name without any provider administration, as for any other credential.</p>
+                  ) : null}
+                </div>
+              ) : null}
               <SwitchRow
                 id={`${ids}-encrypt`}
                 label="Encrypt objects before upload"

@@ -7,6 +7,7 @@
 #include "protocols/shell/util/lineHelpers.hpp"
 #include "db/encoding/timestamp.hpp"
 #include "db/encoding/bytea.hpp"
+#include "db/encoding/has.hpp"
 #include "crypto/util/encrypt.hpp"
 #include "identities/Manager.hpp"
 
@@ -75,7 +76,15 @@ APIKey::APIKey(pqxx::row_ref row)
       region(row["region"].as<std::string>()),
       endpoint(row["endpoint"].as<std::string>()),
       encrypted_secret_access_key(from_hex_bytea(row["encrypted_secret_access_key"].as<std::string>())),
-      iv(from_hex_bytea(row["iv"].as<std::string>())) {}
+      iv(from_hex_bytea(row["iv"].as<std::string>())) {
+    // Admin columns (migration 110); absent in projections that don't select them.
+    admin_enabled = try_get<bool>(row, "admin_enabled").value_or(false);
+    provider_account_id = try_get<std::string>(row, "provider_account_id");
+    admin_capabilities_json = try_get<std::string>(row, "admin_capabilities");
+    if (const auto at = try_get<std::string>(row, "admin_validated_at")) admin_validated_at = parsePostgresTimestamp(*at);
+    if (const auto token = try_get<std::string>(row, "encrypted_provider_token")) encrypted_provider_token = from_hex_bytea(*token);
+    if (const auto tokenIv = try_get<std::string>(row, "provider_token_iv")) provider_token_iv = from_hex_bytea(*tokenIv);
+}
 
 void vh::vault::model::from_json(const nlohmann::json& j, APIKey& key) {
     key.id = j.at("api_key_id").get<unsigned int>();
@@ -99,7 +108,11 @@ void vh::vault::model::to_json(nlohmann::json& j, const APIKey& k) {
             {"access_key", k.access_key},
             {"region", k.region},
             {"endpoint", k.endpoint},
-            // Encrypted fields are not included in public JSON representation
+            {"admin_enabled", k.admin_enabled},
+            {"provider_account_id", k.provider_account_id ? nlohmann::json(*k.provider_account_id) : nlohmann::json(nullptr)},
+            {"has_provider_token", k.hasProviderToken()},
+            {"admin_validated_at", k.admin_validated_at ? nlohmann::json(timestampToString(*k.admin_validated_at)) : nlohmann::json(nullptr)},
+            // Encrypted fields (and the provider token) are never part of the public JSON representation
     };
 }
 
@@ -128,6 +141,9 @@ std::string vh::vault::model::to_string(const std::shared_ptr<APIKey>& key) {
     out += "  Access Key: " + key->access_key + "\n";
     out += "  Region: " + key->region + "\n";
     out += "  Endpoint: " + key->endpoint + "\n";
+    out += std::string("  Provider admin: ") + (key->admin_enabled ? "enabled" : "disabled") + "\n";
+    if (key->provider_account_id) out += "  Account: " + *key->provider_account_id + "\n";
+    if (key->admin_enabled) out += std::string("  Provider token: ") + (key->hasProviderToken() ? "stored" : "none") + "\n";
     return out;
 }
 

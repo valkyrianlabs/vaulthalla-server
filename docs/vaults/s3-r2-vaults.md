@@ -35,6 +35,12 @@ Use an upstream S3/R2 vault when Vaulthalla should store vault data in AWS S3, C
 
 ## Upstream Provider Credentials
 
+:::callout{theme="info" title="Let Vaulthalla manage the bucket"}
+With an AWS S3 or Cloudflare R2 credential, Vaulthalla can also create the bucket for you, adopt an existing one,
+protect buckets it must never touch, and sync from provider events instead of scans. See
+[Managed Upstream Buckets](/vaults/upstream-buckets) and [Event-Driven Sync](/vaults/event-sync).
+:::
+
 Create an upstream provider credential before creating the vault:
 
 ```bash

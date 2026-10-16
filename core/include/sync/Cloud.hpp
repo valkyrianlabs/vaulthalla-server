@@ -9,6 +9,12 @@
 #include "sync/model/Action.hpp"
 #include "sync/model/Baseline.hpp"
 #include "db/query/sync/Conflict.hpp"
+#include "sync/model/Scope.hpp"
+
+#include <chrono>
+#include <ctime>
+#include <functional>
+#include <unordered_set>
 
 #include <memory>
 #include <unordered_map>
@@ -27,10 +33,46 @@ namespace vh::sync {
         std::unordered_map<uint32_t, db::query::sync::ConflictRecord> openConflicts;    // by file id
         db::query::sync::ConflictPassWrites conflictWrites;
 
-        ~Cloud() override = default;
+        // Event-driven sync (#96). A scoped pass reconciles only scope->keys from the remote index; a regular pass has
+        // no scope. Either way, keys with a pending upstream removal (an applied removal event not yet settled) follow
+        // the removal rule instead of being re-uploaded as "local only".
+        std::shared_ptr<const model::PassScope> scope;
+        std::unordered_set<std::u8string> removedKeys;
+
+        // Installed by the event service: the vault's keys with an applied, unsettled removal event.
+        using PendingRemovalsProvider = std::function<std::unordered_set<std::u8string>(uint32_t vaultId)>;
+        static void setPendingRemovalsProvider(PendingRemovalsProvider provider);
+
+        // Also installed by the event service (all optional):
+        //   baselineNeeded  an adopted bucket's subscription waits for one full listing: list even with an index
+        //   baselineListed  that listing finished (its start time supersedes older events)
+        //   indexFresh      an active subscription keeps the index fresh: skip the stale-index stall
+        struct EventHooks {
+            std::function<bool(uint32_t vaultId)> baselineNeeded;
+            std::function<void(uint32_t vaultId, std::time_t listStartedAt)> baselineListed;
+            std::function<bool(uint32_t vaultId, std::chrono::seconds maxAge)> indexFresh;
+        };
+        static void setEventHooks(EventHooks hooks);
+
+        // A scoped pass destroyed without running (dropped by the pool) still releases the lease runScoped() took and
+        // reports failure, so its inbox rows are retried instead of waiting forever.
+        ~Cloud() override;
+        void adoptPassLease() { passLeaseAdopted_ = true; }
 
         explicit Cloud(const std::shared_ptr<storage::Engine> &engine) : Local(engine) {
         }
+
+        Cloud(const std::shared_ptr<storage::Engine> &engine, std::shared_ptr<const model::PassScope> passScope)
+            : Local(engine), scope(std::move(passScope)) {
+        }
+
+        [[nodiscard]] bool requeueAfterRun() const override { return scope == nullptr; }
+
+    private:
+        bool passLeaseAdopted_ = false;
+        bool ran_ = false;
+
+    public:
 
         // ##########################################
         // ########### FSTask Overrides #############
@@ -45,6 +87,9 @@ namespace vh::sync {
         void sync();
 
         void initBins();
+        void initScopedBins();
+        // removedKeys from the pending-removals provider (and the scope's own removals).
+        void loadRemovedKeys();
 
         void clearBins();
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ops/Actor.hpp"
+#include "ops/Upstream.hpp"
 #include "db/model/ListQueryParams.hpp"
 #include "vault/Fwd.hpp"
 #include "vault/model/Vault.hpp"
@@ -47,9 +48,12 @@ struct SyncPatch {
 
 struct S3Spec {
     unsigned int api_key_id = 0;
-    std::string bucket;
+    std::string bucket;                              // empty with provision.generate_name: pick one
     std::optional<std::string> storage_tier{};
     std::optional<bool> encrypt_upstream{};          // default: encrypt
+    // Upstream bucket provisioning (#237): create a managed bucket or adopt an existing one with an admin-enabled key.
+    // Absent or mode existing: the bucket is used as named, with no provider administration calls (as before).
+    std::optional<upstream::Provision> provision{};
 };
 
 struct Create {

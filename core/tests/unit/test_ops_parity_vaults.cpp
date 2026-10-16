@@ -254,7 +254,7 @@ TEST_F(VaultParityTest, NewS3VaultsTakeTheConfiguredRemoteDefaults) {
                                  superUser);
     ASSERT_EQ(code, 0) << out;
     const auto added = protocols::ws::handler::Vaults::add(
-        json{{"name", wsName}, {"type", "s3"}, {"api_key_id", key}, {"bucket", "vp-def"}}, ws(superUser));
+        json{{"name", wsName}, {"type", "s3"}, {"api_key_id", key}, {"bucket", "vp-def-ws"}}, ws(superUser));
 
     for (const auto id : {db::query::vault::Vault::getVault(cliName, superUser->id)->id,
                           added.at("vault").at("id").get<unsigned int>()}) {
@@ -267,7 +267,7 @@ TEST_F(VaultParityTest, NewS3VaultsTakeTheConfiguredRemoteDefaults) {
     // Explicit settings win over the defaults.
     const auto explicitName = "vp_def_explicit_" + vaultTag();
     ASSERT_EQ(cli("vault create " + explicitName + " --s3 --api-key " + std::to_string(key) +
-                  " --bucket vp-def --sync-strategy sync --on-sync-conflict keep_remote", superUser).first, 0);
+                  " --bucket vp-def-explicit --sync-strategy sync --on-sync-conflict keep_remote", superUser).first, 0);
     const auto explicitPolicy = std::dynamic_pointer_cast<sync::model::RemotePolicy>(
         db::query::sync::Policy::getSync(db::query::vault::Vault::getVault(explicitName, superUser->id)->id));
     ASSERT_TRUE(explicitPolicy);

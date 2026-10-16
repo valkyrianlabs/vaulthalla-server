@@ -179,11 +179,13 @@ void Local::shutdown() {
     engine->saveSyncEvent();
     if (event->status == Event::Status::SUCCESS) {
         db::query::sync::Policy::reportSyncSuccess(engine->sync->id);
-        next_run = hasPendingRunNow()
-            ? system_clock::now()
-            : system_clock::now() + seconds(engine->sync->interval.count());
-        requeue();
-        log::Registry::sync()->debug("[FSTask] Sync task requeued for vault '{}'", engine->vault->id);
+        if (requeueAfterRun()) {
+            next_run = hasPendingRunNow()
+                ? system_clock::now()
+                : system_clock::now() + seconds(engine->sync->interval.count());
+            requeue();
+            log::Registry::sync()->debug("[FSTask] Sync task requeued for vault '{}'", engine->vault->id);
+        }
         log::Registry::sync()->info("[FSTask] Sync completed for vault '{}' in {}s",
                               engine->vault->id, event->durationSeconds());
     } else {

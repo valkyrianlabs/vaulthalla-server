@@ -13,6 +13,21 @@ import { VaultSecurity } from '@/models/stats/vaultSecurity'
 import { VaultShareStats } from '@/models/stats/vaultShareStats'
 import { VaultSyncHealth } from '@/models/stats/vaultSyncHealth'
 import { APIKey, S3APIKey } from '@/models/apiKey'
+import type {
+  AdminStatus,
+  AdmissionReport,
+  AuditEntry,
+  BucketRow,
+  BucketState,
+  CleanupPlan,
+  CleanupResult,
+  EventStatus,
+  ForeignObjects,
+  Inspection,
+  Inventory,
+  LifecyclePatch,
+  Provision,
+} from '@/models/upstream'
 import type { GroupRecord, UserRecord } from '@/features/access/types'
 import { Permission } from '@/models/role'
 import type { WsContract } from '@/util/generated/wsContract'
@@ -209,6 +224,10 @@ export interface WebSocketCommandMap {
           encrypt_upstream?: boolean
           sync?: Partial<RemoteSyncPolicy>
           accept_encryption_waiver?: boolean
+          // #237: create a managed bucket or adopt an existing one (admin-enabled credentials). Absent or mode
+          // 'existing' binds `bucket` as before. Refusals with data.code 'upstream_adoption' (resend with
+          // provision.accept_adoption).
+          provision?: Provision
         })
     response: { vault: LocalDiskVault | S3Vault }
   }
@@ -286,6 +305,61 @@ export interface WebSocketCommandMap {
   'storage.apiKey.remove': { payload: { id: number }; response: Record<string, never> | null }
 
   'storage.apiKey.get': { payload: { id: number }; response: { api_key: APIKey } }
+
+  // Upstream control plane (#237) and event-driven sync (#96): ops::upstream. Authority is admin.upstream.*
+  // (view, configure, provision, protect, unprotect, destroy) plus the key's own keys.api permission.
+  // NeedsConfirmation codes: upstream_unprotect, upstream_destructive_lifecycle, upstream_adoption, upstream_cleanup.
+
+  // provider_token: the Cloudflare account API token (R2 Queues + event notifications); never sent back.
+  'upstream.admin.enable': {
+    payload: { api_key_id: number; provider_token?: string; clear_provider_token?: boolean }
+    response: { admin: AdminStatus }
+  }
+  'upstream.admin.disable': { payload: { api_key_id: number }; response: { admin: AdminStatus } }
+  // probe re-checks the credential against the provider (configure); without it, the last probe (view).
+  'upstream.admin.status': { payload: { api_key_id: number; probe?: boolean }; response: { admin: AdminStatus } }
+
+  // One page of the account's ListBuckets merged with what Vaulthalla knows. No bucket-specific calls.
+  'upstream.bucket.list': {
+    payload: { api_key_id: number; token?: string; max?: number; state?: BucketState; filter?: string }
+    response: { inventory: Inventory }
+  }
+  'upstream.bucket.protect': {
+    payload: { api_key_id: number; bucket: string; reason: string }
+    response: { bucket: BucketRow }
+  }
+  'upstream.bucket.unprotect': {
+    payload: { api_key_id: number; bucket: string; confirm?: boolean }
+    response: { bucket: BucketRow }
+  }
+  'upstream.bucket.inspect': { payload: { api_key_id: number; bucket: string }; response: { inspection: Inspection } }
+  'upstream.bucket.lifecycle.set': {
+    payload: { api_key_id: number; bucket: string } & LifecyclePatch
+    response: { inspection: Inspection }
+  }
+  'upstream.bucket.adopt.preflight': {
+    payload: { api_key_id: number; bucket: string; max_objects?: number; sample_heads?: number }
+    response: { report: AdmissionReport }
+  }
+  'upstream.bucket.detach': { payload: { api_key_id: number; bucket: string }; response: { bucket: BucketRow } }
+  'upstream.bucket.cleanup.preflight': {
+    payload: { api_key_id: number; bucket: string }
+    response: { plan: CleanupPlan }
+  }
+  'upstream.bucket.cleanup': {
+    payload: { api_key_id: number; bucket: string; confirm_token: string; delete_bucket?: boolean }
+    response: { result: CleanupResult }
+  }
+
+  'upstream.events.enable': {
+    payload: { vault_id: number; prefix?: string; foreign_objects?: ForeignObjects }
+    response: { events: EventStatus }
+  }
+  'upstream.events.disable': { payload: { vault_id: number }; response: { events: EventStatus } }
+  'upstream.events.repair': { payload: { vault_id: number }; response: { events: EventStatus } }
+  'upstream.events.status': { payload: { vault_id?: number }; response: { events: EventStatus[] } }
+
+  'upstream.audit.list': { payload: { bucket?: string; limit?: number }; response: { entries: AuditEntry[] } }
 
   // Roles and Permissions
 

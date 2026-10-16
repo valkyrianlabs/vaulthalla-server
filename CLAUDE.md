@@ -15,7 +15,7 @@ live P0 (the DB pool wedges after a PostgreSQL restart, which hangs FUSE and `ap
 |---|---|---|
 | `core/` | C++ daemon `vaulthalla-server`, CLI `vaulthalla-cli`, `usage/` (help + manpages), `tests/{unit,integrations}`, `tools/` (sandboxed preview helpers shipped as optional packages `vaulthalla-preview-{cad,media}`) | `.claude/context/architecture.md` |
 | `web/` | Next.js 16 / React 19 console: typed ws client + TanStack Query, `components/ui` design system, hard per-route JS budgets | `.claude/context/web-client.md` |
-| `deploy/` | runtime config, `psql/000…107` migrations, systemd units, nginx template, `lifecycle/` (Python behind `vh setup/teardown`) | `.claude/context/packaging-lifecycle.md` |
+| `deploy/` | runtime config, `psql/000…110` migrations, systemd units, nginx template, `lifecycle/` (Python behind `vh setup/teardown`) | `.claude/context/packaging-lifecycle.md` |
 | `debian/` | package metadata + maintainer scripts (the lifecycle source of truth) | `.claude/context/packaging-lifecycle.md` |
 | `release.toml`, `.release/` | vl-release (`vlr`) contract: versions, Debian package contract, APT publication; staged release notes + changelog for the next release | `.claude/context/release-pipeline.md` |
 | `.github/` | `build_and_test.yml`, `release.yml` (a thin `vlr` transaction), composite actions, self-hosted runners | `.claude/context/release-pipeline.md` |
@@ -31,6 +31,8 @@ Phase 1 (packaging/upgrade/release hardening) results and how candidates are pro
 Phase 2 (one CLI/web operation layer, security fixes, v1.8.0 candidate) lab matrix and open items: `.claude/context/phase2-results.md`.
 Web console overhaul + dogfood (design system, data layer, budgets, e2e suites, bugs filed): `.claude/context/web-dogfood-results.md`.
 macOS port (seams, Mac build/test, clang/libc++ gotchas): `.claude/context/macos.md`.
+Upstream control plane (S3/R2 bucket administration, protection locks, event-driven sync; #237/#96):
+`.claude/context/upstream-control-plane.md`.
 Other context: `.claude/context/environment.md` (VM topology: this box, the lab, dev-db, price bot), `link-sharing.md`
 (share model, invariants, open gaps), `history/stats-dashboard.md` (dashboard design log).
 `.claude/scratch/` is gitignored working notes, including the pre-migration Codex archive. Use it for

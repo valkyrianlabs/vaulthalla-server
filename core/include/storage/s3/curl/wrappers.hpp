@@ -1,6 +1,7 @@
 #pragma once
 
 #include "helpers.hpp"
+#include "storage/s3/curl/Http.hpp"
 
 #include <curl/curl.h>
 #include <stdexcept>
@@ -60,6 +61,16 @@ static HttpResponse performCurl(SetupFn&& setup) {
     curl_easy_setopt(static_cast<CURL*>(h), CURLOPT_HEADERDATA, &hdrBuf);
 
     setup(static_cast<CURL*>(h));                      // caller-specific tweaks
+
+    // A thread that installed an http::ScopedCancellation (the upstream event service) gets its S3 requests aborted on
+    // shutdown too; every other caller is unchanged.
+    if (vh::storage::s3::curl::http::cancellationActive()) {
+        curl_easy_setopt(static_cast<CURL*>(h), CURLOPT_NOPROGRESS, 0L);
+        curl_easy_setopt(static_cast<CURL*>(h), CURLOPT_XFERINFOFUNCTION,
+                         +[](void* p, curl_off_t dt, curl_off_t dn, curl_off_t ut, curl_off_t un) -> int {
+                             return vh::storage::s3::curl::http::cancellationProgressHook(p, dt, dn, ut, un);
+                         });
+    }
 
     HttpResponse r;
     r.curl = curl_easy_perform(static_cast<CURL*>(h));

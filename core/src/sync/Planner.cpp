@@ -35,6 +35,20 @@ std::vector<Action> Planner::build(
         if (L && !R) {
             // The remote side of an open conflict went away: there is nothing left to decide between.
             if (ctx->hasOpenConflict(L->id)) ctx->closeOpenConflict(L->id, "superseded");
+            // The provider said the object was removed (#96). A listing can't tell a deletion from an absence, an
+            // event can: a local copy nobody changed since both sides last agreed follows the deletion; one that
+            // changed (or never synced) is kept and uploaded again, as before.
+            // (mirror + keep_remote deletes every local leftover below anyway.)
+            if (ctx->removedKeys.contains(k.rel) && policy->propagatesRemoteRemoval() && !policy->deleteLocalLeftovers()) {
+                const auto* base = ctx->baselineFor(L->id);
+                if (base && !localChangedSince(*L, *base)) {
+                    plan.push_back({ ActionType::DeleteLocal, k, L, nullptr });
+                    continue;
+                }
+                log::Registry::sync()->info(
+                    "[SyncPlanner] '{}' was removed upstream but its local copy changed since the last sync (or was never "
+                    "synced); keeping it", L->path.string());
+            }
             if (policy->uploadLocalOnly())
                 plan.push_back({ ActionType::Upload, k, L, nullptr });
             continue;
@@ -57,6 +71,21 @@ std::vector<Action> Planner::build(
         }
 
         if (L && R) {
+            // An event said the object was overwritten by someone else (#96). A local copy unchanged since both sides
+            // last agreed takes the new object; a changed one goes through the conflict path below as a two-sided
+            // change (the baseline alone can miss a same-size overwrite of an object Vaulthalla uploaded).
+            if (ctx->scope && ctx->scope->changed.contains(k.rel) && !ctx->hasOpenConflict(L->id)) {
+                const auto* base = ctx->baselineFor(L->id);
+                if (base && !localChangedSince(*L, *base)) {
+                    if (R->requiresArchiveRestoreForBodyGet()) {
+                        if (planningNotes) ++planningNotes->archive_tier_downloads_skipped;
+                        continue;
+                    }
+                    plan.push_back({ ActionType::Download, k, L, R });
+                    continue;
+                }
+            }
+
             // Fast-path skip if equal content (let ctx decide via hashes, remoteHashMap, etc.)
             if (*L == *R) {
                 ctx->noteInSync(*L, *R);
@@ -72,8 +101,11 @@ std::vector<Action> Planner::build(
                 // Compared with what both sides were at their last sync (#187). Neither side changed since: nothing
                 // to transfer under any policy (#190). files.content_hash hashes the sealed bytes, so a file this
                 // vault downloaded never hash-matches the object it came from, and keep_* would fetch it every pass.
-                const auto divergence = ctx->hasOpenConflict(L->id) ? Divergence::Unknown
-                                                                    : classify(*L, *R, ctx->baselineFor(L->id));
+                auto divergence = ctx->hasOpenConflict(L->id) ? Divergence::Unknown
+                                                              : classify(*L, *R, ctx->baselineFor(L->id));
+                // The remote side changed (an event said so): a local-only reading is really both sides.
+                if (ctx->scope && ctx->scope->changed.contains(k.rel) && divergence == Divergence::LocalOnly)
+                    divergence = Divergence::Both;
                 if (divergence == Divergence::InSync) continue;
 
                 // Under `ask`, only a change on both sides is a conflict. A change on one side syncs in that

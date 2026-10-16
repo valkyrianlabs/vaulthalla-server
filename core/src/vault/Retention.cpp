@@ -1,5 +1,10 @@
 #include "vault/Retention.hpp"
 
+#include "db/query/upstream/Bucket.hpp"
+#include "db/query/vault/APIKey.hpp"
+#include "storage/upstream/Guard.hpp"
+#include "vault/model/APIKey.hpp"
+
 #include "config/Registry.hpp"
 #include "crypto/secrets/KeyProvider.hpp"
 #include "crypto/util/encrypt.hpp"
@@ -75,6 +80,14 @@ std::shared_ptr<storage::s3::Controller> controllerFor(const model::S3Vault& vau
 std::optional<std::string> upstreamBlocker(const model::Deletion& d, std::shared_ptr<model::S3Vault>& s3) {
     s3 = std::dynamic_pointer_cast<model::S3Vault>(DeletionQuery::getDeletedVault(d.vault_id));
     if (!s3 || s3->api_key_id == 0 || s3->bucket.empty()) return "the vault's bucket binding is gone";
+    // A protected bucket (#237) is never emptied, by a retention purge or anything else.
+    if (const auto key = db::query::vault::APIKey::getAPIKey(s3->api_key_id);
+        !key || storage::upstream::guard::isProtected(storage::upstream::identityFor(*key, s3->bucket)))
+        return key ? "bucket '" + s3->bucket + "' is protected" : "the vault's API key no longer exists";
+    // An adopted bucket held data before the vault (#237): its objects aren't the vault's to delete wholesale.
+    if (const auto row = db::query::upstream::Bucket::getForVault(d.vault_id);
+        row && row->ownership == storage::upstream::model::Ownership::Adopted)
+        return "bucket '" + s3->bucket + "' was adopted with data that predates the vault";
     if (const auto others = DeletionQuery::otherVaultsOnBucket(d.vault_id); !others.empty()) {
         std::string names;
         for (const auto& name : others) names += (names.empty() ? "" : ", ") + name;

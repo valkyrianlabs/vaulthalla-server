@@ -25,6 +25,8 @@
 #include "sync/model/Event.hpp"
 #include "storage/s3/provider/Registry.hpp"
 #include "identities/Manager.hpp"
+#include "db/query/upstream/WriteIntent.hpp"
+#include "sync/events/Subscriptions.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -158,7 +160,9 @@ void CloudEngine::upload(const std::shared_ptr<File>& f) const {
         if (ciphertext.empty()) {
             auto options = requestOptionsFor(s3::provider::RequestOperation::PutObject);
             options.metadata = getMetaMapFromFile(f);
+            auto own = noteOwnWrite(s3Key, false, 0);
             s3Provider_->uploadBufferWithMetadata(s3Key, {}, options);
+            own.done();
             return;
         }
         upload(f, ciphertext);
@@ -171,7 +175,9 @@ void CloudEngine::upload(const std::shared_ptr<File>& f) const {
         const auto ciphertext = encryptionManager->encrypt({}, f);
         auto options = requestOptionsFor(s3::provider::RequestOperation::PutObject);
         options.metadata = getMetaMapFromFile(f);
+        auto own = noteOwnWrite(s3Key, false, ciphertext.size());
         s3Provider_->uploadBufferWithMetadata(s3Key, ciphertext, options);
+        own.done();
         return;
     }
 
@@ -179,6 +185,7 @@ void CloudEngine::upload(const std::shared_ptr<File>& f) const {
     const auto meta = getMetaMapFromFile(f);
     auto options = requestOptionsFor(s3::provider::RequestOperation::PutObject);
     options.metadata = meta;
+    auto own = noteOwnWrite(s3Key, false, backingSize);
 
     if (backingSize < s3::Controller::MIN_PART_SIZE)
         s3Provider_->uploadObjectWithMetadata(s3Key, backingPath, options);
@@ -191,6 +198,7 @@ void CloudEngine::upload(const std::shared_ptr<File>& f) const {
             s3::Controller::MIN_PART_SIZE,
             multipartOptions);
     }
+    own.done();
 }
 
 void CloudEngine::upload(const std::shared_ptr<File>& f, const std::vector<uint8_t>& buffer, const bool isCiphertext) const {
@@ -201,7 +209,9 @@ void CloudEngine::upload(const std::shared_ptr<File>& f, const std::vector<uint8
         const auto plaintext = isCiphertext ? decrypt(f, buffer) : buffer;
         auto options = requestOptionsFor(s3::provider::RequestOperation::PutObject);
         options.metadata = getMetaMapFromFile(f);
+        auto own = noteOwnWrite(stripLeadingSlash(f->path), false, plaintext.size());
         s3Provider_->uploadBufferWithMetadata(stripLeadingSlash(f->path), plaintext, options);
+        own.done();
         return;
     }
 
@@ -209,6 +219,7 @@ void CloudEngine::upload(const std::shared_ptr<File>& f, const std::vector<uint8
     const auto meta = getMetaMapFromFile(f);
     auto options = requestOptionsFor(s3::provider::RequestOperation::PutObject);
     options.metadata = meta;
+    auto own = noteOwnWrite(s3Key, false, buffer.size());
 
     if (buffer.size() < s3::Controller::MIN_PART_SIZE) s3Provider_->uploadBufferWithMetadata(s3Key, buffer, options);
     else {
@@ -220,6 +231,7 @@ void CloudEngine::upload(const std::shared_ptr<File>& f, const std::vector<uint8
             s3::Controller::MIN_PART_SIZE,
             multipartOptions);
     }
+    own.done();
 }
 
 std::shared_ptr<File> CloudEngine::uploadBufferObject(
@@ -251,6 +263,7 @@ std::shared_ptr<File> CloudEngine::uploadBufferObject(
     const auto s3Key = stripLeadingSlash(file->path);
     auto options = requestOptionsFor(s3::provider::RequestOperation::PutObject);
     options.metadata = getMetaMapFromFile(file);
+    auto own = noteOwnWrite(s3Key, false, payload.size());
 
     if (payload.size() < s3::Controller::MIN_PART_SIZE) {
         s3Provider_->uploadBufferWithMetadata(s3Key, payload, options);
@@ -263,6 +276,7 @@ std::shared_ptr<File> CloudEngine::uploadBufferObject(
             s3::Controller::MIN_PART_SIZE,
             multipartOptions);
     }
+    own.done();
 
     return file;
 }
@@ -648,6 +662,32 @@ CloudEngine::RemoteEncryptionContext CloudEngine::resolveRemoteEncryptionContext
         return db::query::fs::File::getEncryptionIVAndVersion(vault->id, rel_path);
     };
 
+    // Whether this vault may take an object that says (or shows) it is plaintext as this file's content. A vault that
+    // doesn't encrypt upstream always may. An encrypting one may for a key it has never sealed locally (a new object,
+    // an adopted bucket's data) or when its event subscription imports foreign objects; for a file it holds sealed,
+    // "plaintext" upstream is a downgrade (a sealed object stripped of its metadata, or relabelled vh-encrypted=false)
+    // and stays an authentication failure.
+    const auto plaintextAllowed = [&]() {
+        const auto s3 = s3Vault();
+        if (!s3 || !s3->encrypt_upstream) return true;
+        try {
+            if (!db::query::fs::File::getEncryptionIVAndVersion(vault->id, rel_path)) return true;
+        } catch (const std::exception&) {
+            return false;   // unknown: keep the authenticated behaviour
+        }
+        if (vh::sync::events::subscriptions::importsForeignObjects(vault->id)) {
+            log::Registry::cloud()->warn(
+                "[CloudStorageEngine] Vault {}: importing '{}' as plaintext over a sealed file: the upstream object "
+                "carries no usable Vaulthalla encryption metadata (the event subscription imports foreign objects)",
+                vault->id, rel_path.string());
+            return true;
+        }
+        log::Registry::cloud()->warn(
+            "[CloudStorageEngine] Vault {}: refusing '{}' as plaintext: the vault holds it sealed and encrypts upstream",
+            vault->id, rel_path.string());
+        return false;
+    };
+
     const auto encryptedWith = [](std::optional<std::pair<std::string, unsigned int>> payload = std::nullopt) {
         RemoteEncryptionContext context;
         context.encrypted = true;
@@ -662,7 +702,7 @@ CloudEngine::RemoteEncryptionContext CloudEngine::resolveRemoteEncryptionContext
         if (const auto& loadedHead = loadHead()) {
             if (const auto flag = header_value(*loadedHead, META_VH_ENCRYPTED)) {
                 const auto encrypted = parse_encrypted_flag(*flag);
-                if (encrypted && !*encrypted) return {};
+                if (encrypted && !*encrypted && plaintextAllowed()) return {};
             }
             if (const auto headPayload = encryption_payload_from_headers(*loadedHead))
                 return encryptedWith(headPayload);
@@ -675,7 +715,12 @@ CloudEngine::RemoteEncryptionContext CloudEngine::resolveRemoteEncryptionContext
     if (const auto& loadedHead = loadHead()) {
         if (const auto flag = header_value(*loadedHead, META_VH_ENCRYPTED)) {
             if (const auto encrypted = parse_encrypted_flag(*flag)) {
-                if (!*encrypted) return {};
+                if (!*encrypted) {
+                    if (plaintextAllowed()) return {};
+                    if (filePayload) return encryptedWith(filePayload);
+                    if (const auto recoveryPayload = localPayload()) return encryptedWith(recoveryPayload);
+                    return encryptedWith();
+                }
                 if (const auto headPayload = encryption_payload_from_headers(*loadedHead))
                     return encryptedWith(headPayload);
                 if (filePayload) return encryptedWith(filePayload);
@@ -686,8 +731,17 @@ CloudEngine::RemoteEncryptionContext CloudEngine::resolveRemoteEncryptionContext
 
         if (const auto headPayload = encryption_payload_from_headers(*loadedHead))
             return encryptedWith(headPayload);
+
+        // The object is there and carries no Vaulthalla metadata at all: plaintext written by another tool (#96 —
+        // e.g. an external overwrite of a file Vaulthalla knows). The local row's IV describes the copy it replaced,
+        // so recovering from it would fail authentication on bytes that were never sealed. A vault that doesn't
+        // encrypt upstream takes it as plaintext; an encrypting one only when its event subscription explicitly
+        // imports foreign objects. Otherwise it stays an authentication failure: a sealed object stripped of its
+        // metadata and replaced must not become vault content silently.
+        if (plaintextAllowed()) return {};
     }
 
+    // No HEAD answer: fall back to what the index row or the local row recorded.
     if (filePayload) return encryptedWith(filePayload);
     if (const auto recoveryPayload = localPayload()) return encryptedWith(recoveryPayload);
 
@@ -737,6 +791,18 @@ std::optional<CloudEngine::RemoteObjectHead> CloudEngine::headRemoteObject(const
         out.requires_restore = true;
 
     return out;
+}
+
+std::optional<CloudEngine::RemoteObjectHead> CloudEngine::headRemoteObjectStrict(const fs::path& rel_path) const {
+    s3::Controller::resetLastHeadOutcome();
+    auto head = headRemoteObject(rel_path);
+    if (head) return head;
+    const auto outcome = s3::Controller::lastHeadOutcome();
+    if (outcome.performed && !(outcome.transport_ok && outcome.http_status == 404))
+        throw std::runtime_error(fmt::format("HEAD of '{}' failed (HTTP {}{}): whether the object exists is unknown",
+                                             rel_path.string(), outcome.http_status,
+                                             outcome.transport_ok ? "" : ", transport error"));
+    return std::nullopt;
 }
 
 std::vector<uint8_t> CloudEngine::fetchRemotePlaintext(const std::shared_ptr<File>& remoteFile,
@@ -789,7 +855,9 @@ void CloudEngine::purge(const std::shared_ptr<file::Trashed>& f) const {
 }
 
 void CloudEngine::removeRemotely(const fs::path& rel_path) const {
+    auto own = noteOwnWrite(stripLeadingSlash(rel_path), true, std::nullopt);
     s3Provider_->deleteObject(stripLeadingSlash(rel_path));
+    own.done();
     // The file may still be indexed (remote-only removal); its derived artifacts go with the remote copy, as the
     // path-keyed thumbnails did. After removeLocally the row (and its artifacts) are already gone.
     if (const auto file = db::query::fs::File::getFileByPath(vault->id, makeAbsolute(rel_path)))
@@ -798,7 +866,44 @@ void CloudEngine::removeRemotely(const fs::path& rel_path) const {
 
 void CloudEngine::removeRemotely(const std::shared_ptr<file::Trashed>& f) const {
     // Trashing ended the file id and dropped its derived artifacts.
+    auto own = noteOwnWrite(stripLeadingSlash(makeAbsolute(f->path)), true, std::nullopt);
     s3Provider_->deleteObject(stripLeadingSlash(makeAbsolute(f->path)));
+    own.done();
+}
+
+CloudEngine::OwnWrite CloudEngine::noteOwnWrite(const fs::path& key, const bool isDelete,
+                                               const std::optional<uint64_t> objectSize) const {
+    if (!vault) return OwnWrite{};
+    try {
+        if (!vh::sync::events::subscriptions::activeFor(vault->id)) return OwnWrite{};
+        return OwnWrite{db::query::upstream::WriteIntent::record(
+            vault->id, key.string(),
+            isDelete ? vh::storage::upstream::model::WriteOp::Delete : vh::storage::upstream::model::WriteOp::Put,
+            isDelete ? std::nullopt : objectSize)};
+    } catch (const std::exception& e) {
+        log::Registry::cloud()->warn("[CloudStorageEngine] Vault {}: could not record a write intent for '{}': {}",
+                                     vault->id, key.string(), e.what());
+        return OwnWrite{};
+    }
+}
+
+void CloudEngine::OwnWrite::done() {
+    if (!id_) return;
+    const auto id = *std::exchange(id_, std::nullopt);
+    try {
+        db::query::upstream::WriteIntent::complete(id);   // lives from completion, not from the start of the upload
+    } catch (const std::exception& e) {
+        log::Registry::cloud()->warn("[CloudStorageEngine] write intent {}: completion not recorded: {}", id, e.what());
+    }
+}
+
+CloudEngine::OwnWrite::~OwnWrite() {
+    if (!id_) return;
+    try {
+        db::query::upstream::WriteIntent::remove(*id_);    // the request failed: nothing of ours will be notified
+    } catch (...) {
+        // Expires on its own.
+    }
 }
 
 std::shared_ptr<vh::vault::model::S3Vault> CloudEngine::s3Vault() const { return std::static_pointer_cast<vh::vault::model::S3Vault>(vault); }

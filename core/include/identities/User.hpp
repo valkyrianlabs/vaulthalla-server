@@ -21,6 +21,7 @@ namespace vh::rbac::permission::admin {
     struct Settings;
     struct S3Gateway;
     struct Stats;
+    struct Upstream;
     struct Vaults;
     struct VaultGlobals;
 
@@ -159,6 +160,7 @@ namespace vh::identities {
         [[nodiscard]] rbac::permission::admin::keys::EncryptionKey encryptionKeysPerms() const;
         [[nodiscard]] rbac::permission::admin::S3Gateway s3GatewayPerms() const;
         [[nodiscard]] rbac::permission::admin::Stats statsPerms() const;
+        [[nodiscard]] rbac::permission::admin::Upstream upstreamPerms() const;
 
         // Replaces a detached object's state (tests). Throws for a canonical object: those change only through
         // identities::Manager.

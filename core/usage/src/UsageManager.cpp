@@ -34,6 +34,7 @@ UsageManager::UsageManager() {
     registerBook(resolve_book::get(root_->weak_from_this()));
     registerBook(s3gateway::get(root_->weak_from_this()));
     registerBook(aku::get(root_->weak_from_this()));
+    registerBook(upstream_book::get(root_->weak_from_this()));
     registerBook(role::get(root_->weak_from_this()));
     registerBook(permissions::get(root_->weak_from_this()));
     registerBook(setup::get(root_->weak_from_this()));

@@ -381,7 +381,7 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
 
 ## Database
 
-- PostgreSQL via libpqxx. The schema is `deploy/psql/000…107_*.sql`, applied in order (all in ONE transaction by `core/seed/include/SqlDeployer.hpp`) and installed to `/usr/share/vaulthalla/psql`.
+- PostgreSQL via libpqxx. The schema is `deploy/psql/000…110_*.sql`, applied in order (all in ONE transaction by `core/seed/include/SqlDeployer.hpp`) and installed to `/usr/share/vaulthalla/psql`.
   New migrations take the next number and must be idempotent against upgraded installs. SqlDeployer records sha256(raw bytes)
   per file and refuses to start on a mismatch, so **never edit a shipped migration**: 020/060/082 were edited in place and
   bricked upgrades (1.5.x→1.6.x crash loop on 060). Reviewed exceptions live in `kHistoricalMigrationChecksums` (accepted, recorded
@@ -512,7 +512,8 @@ safe deletion/restore, sync policy), `users`, `s3_gateway` (credentials, grants,
 policies), `config` (every settings write: one validation, one apply step that restarts the S3 gateway when
 `s3_gateway.enabled` changes), `stats` (authorization only, ws-only: there is no `vh` stats command; `vh status`
 is deliberately ungated, see Stats below), `conflicts` (sync conflicts, #187: ws `sync.conflicts.*`, `vh sync resolve` /
-`vh resolve`, the HTTP `/download/conflict` lane's authorization). Still per-surface: the ws-only pricing preflight/override/notification endpoints,
+`vh resolve`, the HTTP `/download/conflict` lane's authorization), `upstream` (S3/R2 bucket administration and event
+sync, #237/#96: ws `upstream.*`, `vh upstream …`; see `upstream-control-plane.md`). Still per-surface: the ws-only pricing preflight/override/notification endpoints,
 email test-send/history, vault keys/sync diagnostics, and lifecycle commands (`setup`, `teardown`, `secrets`).
 
 Rules the families hold (keep them in ops, never re-add them in a handler):

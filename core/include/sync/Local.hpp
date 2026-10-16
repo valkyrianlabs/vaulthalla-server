@@ -42,6 +42,9 @@ struct Local : concurrency::Task, std::enable_shared_from_this<Local> {
 
     void operator()() override;
 
+    // A scoped (event) pass runs once; only the vault's regular task is rescheduled after it runs.
+    [[nodiscard]] virtual bool requeueAfterRun() const { return true; }
+
     [[nodiscard]] unsigned int vaultId() const;
 
     [[nodiscard]] bool isRunning() const;

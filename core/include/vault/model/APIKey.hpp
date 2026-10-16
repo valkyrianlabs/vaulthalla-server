@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 #include <ctime>
+#include <optional>
+#include <memory>
 #include "vault/Fwd.hpp"
 #include "db/Fwd.hpp"
 
@@ -34,6 +36,18 @@ struct APIKey {
 
     // Runtime only (never stored in DB)
     std::string secret_access_key;
+
+    // Provider administration (#237, migration 110). An admin-enabled key may also list/create buckets and run the
+    // event infrastructure for its account; ops::upstream decides who may use that.
+    bool admin_enabled{false};
+    std::optional<std::string> provider_account_id;     // resolved account (AWS via STS, R2 from the endpoint)
+    std::optional<std::string> admin_capabilities_json; // last capability probe (JSON text)
+    std::optional<std::time_t> admin_validated_at;
+    // Cloudflare R2 only: the account API token (bearer) for Queues + event notifications. Sealed like the secret.
+    std::vector<uint8_t> encrypted_provider_token, provider_token_iv;
+    std::string provider_token;                         // runtime only, decrypted on demand; never serialized
+
+    [[nodiscard]] bool hasProviderToken() const { return !encrypted_provider_token.empty() || !provider_token.empty(); }
 
     APIKey() = default;
     explicit APIKey(pqxx::row_ref row);

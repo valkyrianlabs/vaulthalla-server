@@ -289,6 +289,10 @@ bool RemotePolicy::deleteRemoteLeftovers() const {
     return false;
 }
 
+bool RemotePolicy::propagatesRemoteRemoval() const {
+    return !(strategy == Strategy::Mirror && conflict_policy == ConflictPolicy::KeepLocal);
+}
+
 bool RemotePolicy::deleteLocalLeftovers() const {
     if (strategy != Strategy::Mirror) return false;
 

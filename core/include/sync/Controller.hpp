@@ -4,10 +4,12 @@
 #include "storage/Fwd.hpp"
 #include "sync/Fwd.hpp"
 
+#include <chrono>
 #include <condition_variable>
 #include <memory>
 #include <queue>
 #include <unordered_map>
+#include <unordered_set>
 #include <mutex>
 #include <shared_mutex>
 
@@ -37,6 +39,26 @@ public:
 
     RunNowResult runNow(unsigned int vaultId, uint8_t trigger = 3); // Event::Trigger::WEBHOOK
 
+    // Event-driven sync (#96): reconcile only the keys in `scope` on the sync pool, recorded as a webhook-triggered
+    // sync event. Busy while another pass of the vault runs (the caller retries; nothing is lost); Disabled when the
+    // vault's sync is off; NoEngine for unknown or non-S3 vaults.
+    enum class ScopedResult { Started, Busy, Disabled, NoEngine };
+    ScopedResult runScoped(unsigned int vaultId, std::shared_ptr<model::PassScope> scope);
+
+    // One pass per vault at a time, regular or scoped. Regular Cloud passes take it when they start; runScoped takes
+    // it before submitting. Released by the pass when it ends.
+    [[nodiscard]] bool tryAcquirePass(unsigned int vaultId);
+    void releasePass(unsigned int vaultId);
+    [[nodiscard]] bool passRunning(unsigned int vaultId) const;
+
+    // A regular pass found the lease taken and is waiting for it (retrying every 2 s). The event applier yields to it,
+    // so sustained event traffic cannot starve uploads, trash purge and rotation. Bounded: a mark older than
+    // kRegularWaitBound (the waiting task went away) no longer counts.
+    void markRegularWaiting(unsigned int vaultId);
+    void clearRegularWaiting(unsigned int vaultId);
+    [[nodiscard]] bool regularWaiting(unsigned int vaultId) const;
+    static constexpr std::chrono::seconds kRegularWaitBound{30};
+
     void refreshEngines();
 
 protected:
@@ -57,6 +79,10 @@ private:
     mutable std::shared_mutex taskMapMutex_;
 
     std::unordered_map<unsigned int, std::shared_ptr<Local>> taskMap_{};
+
+    mutable std::mutex passMutex_;
+    std::unordered_set<unsigned int> activePasses_;
+    std::unordered_map<unsigned int, std::chrono::steady_clock::time_point> regularWaiting_;
 
     void pruneStaleTasks(const std::vector<std::shared_ptr<storage::Engine>>& engines);
 

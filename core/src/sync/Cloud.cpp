@@ -34,6 +34,9 @@
 #include "sync/Planner.hpp"
 
 #include "crypto/id/Generator.hpp"
+#include "sync/Controller.hpp"
+
+#include <mutex>
 
 #include <optional>
 #include <utility>
@@ -50,7 +53,86 @@ using namespace vh::crypto;
 // ########### FSTask Overrides #############
 // ##########################################
 
+namespace {
+
+std::mutex& pendingRemovalsMutex() {
+    static std::mutex m;
+    return m;
+}
+
+Cloud::PendingRemovalsProvider& pendingRemovalsProvider() {
+    static Cloud::PendingRemovalsProvider provider;
+    return provider;
+}
+
+Cloud::EventHooks& eventHooksSlot() {
+    static Cloud::EventHooks hooks;
+    return hooks;
+}
+
+Cloud::EventHooks eventHooks() {
+    std::scoped_lock lock(pendingRemovalsMutex());
+    return eventHooksSlot();
+}
+
+// Releases the vault's pass lease (sync::Controller) when a pass ends, however it ends.
+struct PassLease {
+    unsigned int vaultId;
+    bool held;
+    ~PassLease() {
+        if (!held) return;
+        if (const auto& controller = vh::runtime::Deps::get().syncController) controller->releasePass(vaultId);
+    }
+};
+
+}
+
+void Cloud::setEventHooks(EventHooks hooks) {
+    std::scoped_lock lock(pendingRemovalsMutex());
+    eventHooksSlot() = std::move(hooks);
+}
+
+void Cloud::setPendingRemovalsProvider(PendingRemovalsProvider provider) {
+    std::scoped_lock lock(pendingRemovalsMutex());
+    pendingRemovalsProvider() = std::move(provider);
+}
+
+void Cloud::loadRemovedKeys() {
+    PendingRemovalsProvider provider;
+    {
+        std::scoped_lock lock(pendingRemovalsMutex());
+        provider = pendingRemovalsProvider();
+    }
+    removedKeys.clear();
+    if (provider) removedKeys = provider(vaultId());
+    if (scope) removedKeys.insert(scope->removed.begin(), scope->removed.end());
+}
+
+Cloud::~Cloud() {
+    if (!scope || !passLeaseAdopted_ || ran_) return;
+    try {
+        if (const auto& controller = runtime::Deps::get().syncController) controller->releasePass(vaultId());
+        if (scope->on_finish) scope->on_finish(false, "the scoped sync pass was dropped before it ran");
+    } catch (...) {
+        // A destructor never throws; the rows are retried by their backoff anyway.
+    }
+}
+
 void Cloud::operator()() {
+    // One pass per vault at a time (#96): a regular pass waits while an event-scoped pass runs, and the reverse.
+    // runScoped() takes the lease before it submits a scoped pass; a regular pass takes it here. A regular pass that
+    // has to wait says so, and the event applier yields to it.
+    ran_ = true;
+    const auto& controller = runtime::Deps::get().syncController;
+    if (!scope && controller && !controller->tryAcquirePass(vaultId())) {
+        controller->markRegularWaiting(vaultId());
+        next_run = system_clock::now() + seconds(2);
+        requeue();
+        return;
+    }
+    if (!scope && controller) controller->clearRegularWaiting(vaultId());
+    const PassLease lease{vaultId(), controller != nullptr};
+
     startTask();
 
     std::shared_ptr<CloudEngine> cloud;
@@ -58,14 +140,24 @@ void Cloud::operator()() {
         cloud = cloudEngine();
         const ScopedS3RequestBudget s3Budget(cloud, cloud->remote_policy()->s3_request_budget);
 
-        const Stage stages[] = {
+        loadRemovedKeys();
+
+        // A scoped pass reconciles the named keys only: the vault-wide maintenance (at-rest repair, trash purge,
+        // key rotation) stays with the regular pass.
+        const Stage regularStages[] = {
             {"shared",   [this]{ processSharedOps(); }},
             {"initBins", [this]{ initBins(); }},
             {"sync",     [this]{ sync(); }},
             {"clearBins",[this]{ clearBins(); }},
         };
+        const Stage scopedStages[] = {
+            {"initBins", [this]{ initScopedBins(); }},
+            {"sync",     [this]{ sync(); }},
+            {"clearBins",[this]{ clearBins(); }},
+        };
 
-        runStages(stages);
+        if (scope) runStages(scopedStages);
+        else runStages(regularStages);
 
         const auto s3Metrics = s3Budget.metrics();
         event->applyS3RequestMetrics(s3Metrics);
@@ -102,6 +194,18 @@ void Cloud::operator()() {
     }
 
     shutdown();
+
+    if (scope && scope->on_finish) {
+        const bool ok = event && event->status == Event::Status::SUCCESS && event->num_failed_ops == 0;
+        std::string why;
+        if (event && !ok) why = !event->stall_reason.empty() ? event->stall_reason : event->error_message;
+        if (!ok && why.empty()) why = "scoped sync pass did not complete";
+        try {
+            scope->on_finish(ok, why);
+        } catch (const std::exception& e) {
+            log::Registry::sync()->error("[CloudSync] Vault {}: scoped pass completion handler failed: {}", vaultId(), e.what());
+        }
+    }
 }
 
 // ##########################################
@@ -252,11 +356,18 @@ void Cloud::sync() {
 void Cloud::initBins() {
     const auto cloud = cloudEngine();
     const auto policy = cloud->remote_policy();
-    const bool manifestRefreshed = cloud->refreshRemoteIndexFromManifestIfChanged();
-    const auto indexSummary = db::query::sync::RemoteObjectIndex::summaryForVault(engine->vault->id);
+    const auto hooks = eventHooks();
+    const auto vaultId = engine->vault->id;
+    // Adoption with events (#96): one full listing after the subscription exists, whatever the index holds.
+    const bool baseline = hooks.baselineNeeded && hooks.baselineNeeded(vaultId);
+    const bool manifestRefreshed = !baseline && cloud->refreshRemoteIndexFromManifestIfChanged();
+    const auto indexSummary = db::query::sync::RemoteObjectIndex::summaryForVault(vaultId);
+    const auto keptFresh = [&] {
+        return hooks.indexFresh && policy->max_remote_index_age && hooks.indexFresh(vaultId, *policy->max_remote_index_age);
+    };
 
-    if (manifestRefreshed || indexSummary.object_count > 0) {
-        if (!manifestRefreshed && indexSummary.isStale(policy->max_remote_index_age)) {
+    if (!baseline && (manifestRefreshed || indexSummary.object_count > 0)) {
+        if (!manifestRefreshed && indexSummary.isStale(policy->max_remote_index_age) && !keptFresh()) {
             const auto age = indexSummary.indexed_at
                 ? std::to_string(std::time(nullptr) - *indexSummary.indexed_at) + "s old"
                 : std::string("missing indexed_at");
@@ -266,9 +377,12 @@ void Cloud::initBins() {
         }
         s3Map = groupEntriesByPath(db::query::sync::RemoteObjectIndex::listFilesForVault(engine->vault->id));
     } else {
+        const auto listStartedAt = std::time(nullptr);
         s3Map = cloud->getGroupedFilesFromS3();
         db::query::sync::RemoteObjectIndex::replaceFromListObjects(engine->vault->id, uMap2Vector(s3Map));
         cloud->publishRemoteIndexManifestWithRetry();
+        // Every full listing is the event subscription's new baseline (adoption, lost continuity, or an empty index).
+        if (hooks.baselineListed) hooks.baselineListed(vaultId, listStartedAt);
     }
     s3Files = uMap2Vector(s3Map);
 
@@ -279,12 +393,30 @@ void Cloud::initBins() {
     event->heartbeat();
 }
 
+void Cloud::initScopedBins() {
+    // Only the keys the events named, straight from the index the events were applied to: no LIST, no manifest
+    // refresh, no staleness gate (the scope is exactly what the provider just told us changed).
+    for (const auto& key : scope->keys) {
+        const std::filesystem::path path(key);
+        if (auto remote = db::query::sync::RemoteObjectIndex::getFile(engine->vault->id, path)) s3Map[key] = remote;
+        if (auto local = db::query::fs::File::getFileByPath(engine->vault->id, path)) localMap[key] = local;
+    }
+    s3Files = uMap2Vector(s3Map);
+    localFiles = uMap2Vector(localMap);
+    loadConflictState();
+    log::Registry::sync()->debug("[CloudSync] Vault {}: scoped pass over {} key(s) ({} remote, {} local, {} removed)",
+                                 engine->vault->id, scope->keys.size(), s3Map.size(), localMap.size(),
+                                 removedKeys.size());
+    event->heartbeat();
+}
+
 void Cloud::clearBins() {
     localFiles.clear();
     s3Files.clear();
     s3Map.clear();
     localMap.clear();
     remoteHashMap.clear();
+    removedKeys.clear();
     baselines.clear();
     openConflicts.clear();
     conflictWrites = {};

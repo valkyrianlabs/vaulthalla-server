@@ -30,6 +30,7 @@ namespace vh::storage::s3 {
     Controller::Controller(const std::shared_ptr<APIKey>& apiKey, std::string bucket)
     : apiKey_(apiKey), bucket_(std::move(bucket)) {
         if (!apiKey_) throw std::runtime_error("S3Provider requires a valid S3APIKey");
+        identity_ = upstream::identityFor(*apiKey_, bucket_);
         ensureCurlGlobalInit();
     }
 
@@ -71,6 +72,10 @@ namespace vh::storage::s3 {
     }
 
     void Controller::recordRequest(const RequestKind kind, const uint64_t amount) const {
+        // Hard protection (#237): every metered request of a bucket controller passes here before it is sent, so a
+        // lock set while a sync pass, hydrate, purge or retry is in flight stops its next request. Bytes of a GET
+        // already granted are not re-checked mid-stream.
+        if (kind != RequestKind::DownloadBytes) upstream::guard::require(identity_);
         // Every capture active on this thread sees the request: a nested capture (a preview hydrate's own cap
         // inside an S3 gateway request) must not hide it from the outer one. All captures and the engine-wide
         // budget are checked before anything is recorded.

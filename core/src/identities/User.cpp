@@ -198,6 +198,7 @@ namespace vh::identities {
     VH_ADMIN_PERMS(apiKeysPerms, rbac::permission::admin::keys::APIKeys, keys.apiKeys)
     VH_ADMIN_PERMS(s3GatewayPerms, rbac::permission::admin::S3Gateway, s3Gateway)
     VH_ADMIN_PERMS(statsPerms, rbac::permission::admin::Stats, stats)
+    VH_ADMIN_PERMS(upstreamPerms, rbac::permission::admin::Upstream, upstream)
     VH_ADMIN_PERMS(encryptionKeysPerms, rbac::permission::admin::keys::EncryptionKey, keys.encryptionKeys)
 
 #undef VH_ADMIN_PERMS
