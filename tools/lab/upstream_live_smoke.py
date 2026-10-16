@@ -269,7 +269,8 @@ class Smoke:
         self.step(f"{p}: a lock stops a bound vault's sync until unlocked", lock_bound)
 
         def events():
-            cp = self.vault(("upstream", "events", "enable"), vault, ok=False)
+            # The external object below is another tool's plaintext: encrypting vaults ignore those unless asked.
+            cp = self.vault(("upstream", "events", "enable"), vault, "--foreign-objects", "import", ok=False)
             if cp.returncode != 0:
                 raise Skip(f"event subscription refused (credential capability): {(cp.stdout + cp.stderr).strip()[:300]}")
             ext = ws / "external.txt"
