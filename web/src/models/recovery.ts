@@ -22,6 +22,7 @@ export const RECOVERY_CODES = {
   bucketAdoption: 'upstream_adoption', // accept_adoption: true
   pointDelete: 'recovery_point_delete', // confirm: true
   restoreConfirm: 'recovery_restore', // a fresh plan (and its token)
+  planExpired: 'recovery_plan_expired', // plan again
   unverifiedVersion: 'recovery_unverified_version', // accept_unverified: true
 } as const
 
