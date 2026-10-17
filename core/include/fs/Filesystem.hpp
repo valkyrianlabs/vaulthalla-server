@@ -20,12 +20,27 @@
 
 namespace vh::fs {
 
+// What a rename does to an existing entry at its destination.
+enum class RenameMode {
+    NoReplace,  // -EEXIST (the default: ws rename/move, uploads, RENAME_NOREPLACE)
+    Replace     // POSIX rename(2): the destination goes the way an unlink/rmdir would take it, in the same transaction
+};
+
+// Backing-path changes a rename made before its transaction committed, undone (newest first) if it does not commit.
+struct RenameJournal {
+    std::vector<std::pair<std::filesystem::path, std::filesystem::path>> moved;  // from -> to
+    std::vector<std::filesystem::path> created;
+    void rollback() noexcept;
+};
+
 struct RenameContext {
     std::filesystem::path from, to;
     std::vector<uint8_t> buffer;
     std::shared_ptr<identities::User> user;
     std::shared_ptr<storage::Engine> engine;
-    std::shared_ptr<model::Entry> entry;
+    std::shared_ptr<model::Entry> entry;   // a private copy: published to the cache only once the rename commits
+    std::shared_ptr<model::Entry> parent;  // its destination parent (as it will be after the rename)
+    RenameJournal& journal;
     pqxx::work& txn;
 };
 
@@ -126,7 +141,14 @@ public:
     // On a failure after that, nothing of the copy is left. Exceptions from ctx.authorize propagate.
     static int copy(const CopyContext& ctx);
     static void remove(const std::filesystem::path& path, unsigned int userId);
-    static int rename(const std::filesystem::path& oldPath, const std::filesystem::path& newPath, const std::shared_ptr<identities::User>& user = nullptr, std::shared_ptr<storage::Engine> engine = nullptr);
+    // Moves an entry (with everything under it) within one vault. Nothing changes on a refusal or a failure: -ENOENT,
+    // -EXDEV (other vault), -EINVAL (into itself), -EBUSY (a vault root), -EEXIST (destination taken, NoReplace).
+    // With RenameMode::Replace an existing destination is replaced as rename(2) replaces it (the FUSE handler, after
+    // checking Delete on it): a file is trashed like an unlink (row, backing bytes, derived artifacts), a symlink or
+    // an empty folder deleted; -EISDIR / -ENOTDIR / -ENOTEMPTY when the types don't allow it.
+    static int rename(const std::filesystem::path& oldPath, const std::filesystem::path& newPath,
+                      const std::shared_ptr<identities::User>& user = nullptr,
+                      std::shared_ptr<storage::Engine> engine = nullptr, RenameMode mode = RenameMode::NoReplace);
 
     static std::pair<int, std::shared_ptr<model::Entry>> createFile(const FuseCreateFileContext& ctx);
     static std::shared_ptr<model::File> createFile(const NewFileContext& ctx);

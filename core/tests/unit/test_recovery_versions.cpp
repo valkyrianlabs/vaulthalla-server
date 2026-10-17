@@ -369,6 +369,31 @@ TEST_F(RecoveryVersionsTest, DeletesKeepTheLastGenerationAfterTheFileIsGone) {
     EXPECT_EQ(decryptVersion(engine, versionsOf(engine, "/dir/sub/b.txt").at(0)), "beta");
 }
 
+TEST_F(RecoveryVersionsTest, AnEditorSaveByRenameOverKeepsTheReplacedVersion) {
+    // vim / LibreOffice / IDEs: write a temporary file, then rename it over the original.
+    const auto engine = localVault();
+    write(engine, "/doc.txt", "draft one");
+    write(engine, "/.doc.txt.swp", "draft two");
+    ASSERT_EQ(fs::Filesystem::rename(engine->vaultPathToFusePath("/.doc.txt.swp"), engine->vaultPathToFusePath("/doc.txt"),
+                                     superUser, engine, fs::RenameMode::Replace), 0);
+    EXPECT_EQ(readLocal(engine, "/doc.txt"), "draft two");
+    EXPECT_FALSE(row(engine, "/.doc.txt.swp"));
+
+    const auto kept = versionsOf(engine, "/doc.txt");
+    ASSERT_EQ(kept.size(), 1u) << "the save replaced a generation: it is kept";
+    EXPECT_EQ(kept[0].reason, "overwrite");
+    EXPECT_EQ(decryptVersion(engine, kept[0]), "draft one");
+    EXPECT_TRUE(versionsOf(engine, "/.doc.txt.swp").empty()) << "the temporary file moved, nothing of it was replaced";
+
+    // Without local versioning a rename over keeps nothing.
+    const auto off = localVault(std::nullopt);
+    write(off, "/a.txt", "a");
+    write(off, "/b.txt", "b");
+    ASSERT_EQ(fs::Filesystem::rename(off->vaultPathToFusePath("/b.txt"), off->vaultPathToFusePath("/a.txt"), superUser,
+                                     off, fs::RenameMode::Replace), 0);
+    EXPECT_TRUE(versionsOf(off, "/a.txt").empty());
+}
+
 TEST_F(RecoveryVersionsTest, RenameCopyAndKeyRotationKeepNoVersion) {
     const auto engine = localVault();
     write(engine, "/r.txt", "same bytes");

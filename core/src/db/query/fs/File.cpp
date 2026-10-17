@@ -279,7 +279,7 @@ void File::markFileAsTrashed(const unsigned int userId, const unsigned int fsId)
     });
 }
 
-void File::markFileAsTrashed(pqxx::work& txn, const unsigned int userId, const unsigned int fsId,
+void File::markFileAsTrashed(pqxx::work& txn, const std::optional<unsigned int> userId, const unsigned int fsId,
                              const std::filesystem::path& backingPath) {
     const auto row = txn.exec(pqxx::prepped{"get_file_parent_id_and_size"}, fsId).one_row();
     const auto parentId = row["parent_id"].as<std::optional<unsigned int>>();

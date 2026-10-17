@@ -48,6 +48,9 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
 
 ## Fixes
 
+- fuse: rename over an existing file replaces it as rename(2) does (editors' temp-file saves failed with EIO; a
+  failed cross-folder rename stranded the file's bytes); replacing needs Delete on the destination, and with local
+  versioning on the replaced content is kept as a version (reason overwrite).
 - S3 data plane: the legacy signer puts the canonical query in SigV4 order (paged listings past 1,000 keys failed
   with SignatureDoesNotMatch on page 2); a CompleteMultipartUpload 200 carrying an <Error> body is a failure.
 - fix(vault): a restart during an unfinished key rotation could not load the vault's key (`get_rotation_old_vault_key`

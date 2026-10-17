@@ -672,12 +672,28 @@ void rename(const fuse_req_t req, const fuse_ino_t parent, const char* name, con
         return;
     }
 
-    if ((flags & RENAME_NOREPLACE) && cache->entryExists(toPath)) {
-        replyError(req, timer, EEXIST);
-        return;
+    // Without RENAME_NOREPLACE an existing destination is replaced (editors save by renaming a temp file over the
+    // original). That removes it the way unlink/rmdir would, so it needs what they need: Delete on it. Replace is
+    // only granted for a destination checked here; one that appears after this check is refused (EEXIST).
+    auto mode = RenameMode::NoReplace;
+    if (!(flags & RENAME_NOREPLACE) && cache->entryExists(toPath)) {
+        const auto target = Resolver::resolve({
+            .caller = "rename",
+            .fuseReq = req,
+            .parentIno = newparent,
+            .childName = newname,
+            .action = permission::vault::FilesystemAction::Delete,
+            .target = resolver::Target::EntryForPath
+        });
+
+        if (target.ok()) mode = RenameMode::Replace;
+        else if (target.status != resolver::Status::MissingEntry) {
+            replyError(req, timer, target.errnum);
+            return;
+        }
     }
 
-    if (const auto err = Filesystem::rename(*resolved.path, toPath, resolved.user); err) {
+    if (const auto err = Filesystem::rename(*resolved.path, toPath, resolved.user, nullptr, mode); err) {
         replyError(req, timer, err);
         return;
     }

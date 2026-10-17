@@ -39,5 +39,5 @@ Estimates are computed on this server from its own measurements and the signed p
 anywhere — and they are labelled as estimates, not invoices. You can set a monthly threshold; going over it raises a
 notification and never blocks writes.
 
-**Fixes.** Vault keys load again after a restart in the middle of a key rotation. S3 bucket listings past 1,000
+**Fixes.** Editors can save over files on the mount again (renaming a temporary file over the original failed with an I/O error); with local versioning on, the version the save replaces is kept. Vault keys load again after a restart in the middle of a key rotation. S3 bucket listings past 1,000
 objects no longer fail their signature. Deleting a folder no longer leaves its subfolders cached.

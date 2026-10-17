@@ -184,14 +184,17 @@ void Directory::deleteDirectoryTree(const unsigned int id) {
 }
 
 bool Directory::deleteEmptyDirectory(const unsigned int id) {
-    return Transactions::exec("Directory::deleteEmptyDirectory", [&](pqxx::work& txn) {
-        if (!txn.exec(pqxx::prepped{"is_dir_empty"}, pqxx::params{id}).one_field_ref().as<bool>()) return false;
-        const auto totals = subtreeTotalsOf(txn, id);
-        if (!totals) return true;  // already gone
-        addToAncestorStats(txn, parentIdOf(txn, id), -totals->size_bytes, -totals->files, -totals->subdirs);
-        txn.exec(pqxx::prepped{"delete_fs_entry"}, pqxx::params{id});
-        return true;
-    });
+    return Transactions::exec("Directory::deleteEmptyDirectory",
+                              [&](pqxx::work& txn) { return deleteEmptyDirectory(txn, id); });
+}
+
+bool Directory::deleteEmptyDirectory(pqxx::work& txn, const unsigned int id) {
+    if (!txn.exec(pqxx::prepped{"is_dir_empty"}, pqxx::params{id}).one_field_ref().as<bool>()) return false;
+    const auto totals = subtreeTotalsOf(txn, id);
+    if (!totals) return true;  // already gone
+    addToAncestorStats(txn, parentIdOf(txn, id), -totals->size_bytes, -totals->files, -totals->subdirs);
+    txn.exec(pqxx::prepped{"delete_fs_entry"}, pqxx::params{id});
+    return true;
 }
 
 Directory::DirPtr Directory::getDirectoryByPath(const unsigned int vaultId, const std::filesystem::path& relPath) {
