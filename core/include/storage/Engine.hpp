@@ -88,6 +88,9 @@ namespace vh::storage {
 
         [[nodiscard]] uintmax_t getVaultAndCacheTotalSize() const;
 
+        // Physical bytes of the vault's recovery blobs (recovery::store), charged to the quota by freeSpace().
+        [[nodiscard]] uintmax_t getRecoverySize() const;
+
         [[nodiscard]] uintmax_t freeSpace() const;
 
         [[nodiscard]] virtual StorageType type() const { return StorageType::Local; }

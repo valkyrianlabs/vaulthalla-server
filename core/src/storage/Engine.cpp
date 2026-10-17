@@ -23,6 +23,7 @@
 #include "runtime/Deps.hpp"
 #include "crypto/util/encrypt.hpp"
 #include "preview/cache/Store.hpp"
+#include "recovery/Store.hpp"
 
 #include <cerrno>
 #include <cstring>
@@ -206,8 +207,22 @@ namespace vh::storage {
             return info.available - MIN_FREE_SPACE;
         }
 
-        const auto usedWithReserve = getVaultAndCacheTotalSize() + MIN_FREE_SPACE;
+        const auto usedWithReserve = getVaultAndCacheTotalSize() + getRecoverySize() + MIN_FREE_SPACE;
         return vault->quota > usedWithReserve ? vault->quota - usedWithReserve : 0;
+    }
+
+    // Retained generations (snapshots, local versions) count against the vault quota: their physical, deduplicated
+    // bytes from recovery_blob (no walk; cached briefly by the store). The store is outside backingVaultRoot, so
+    // getVaultSize never sees it. Without a quota the filesystem's free space already reflects them.
+    uintmax_t Engine::getRecoverySize() const {
+        if (!vault || vault->id == 0) return 0;
+        try {
+            return recovery::store::physicalBytes(vault->id);
+        } catch (const std::exception &e) {
+            log::Registry::storage()->debug("[StorageEngine] Recovery store size of vault {} unavailable: {}", vault->id,
+                                            e.what());
+            return 0;
+        }
     }
 
     void Engine::purgeDerivedArtifacts(const unsigned int fileId) const {

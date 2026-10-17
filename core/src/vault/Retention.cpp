@@ -10,6 +10,7 @@
 #include "crypto/util/encrypt.hpp"
 #include "db/query/vault/Deletion.hpp"
 #include "log/Registry.hpp"
+#include "recovery/Store.hpp"
 #include "runtime/Deps.hpp"
 #include "storage/Manager.hpp"
 #include "storage/s3/Controller.hpp"
@@ -206,6 +207,7 @@ void removeBackingData(const std::string& alias) {
     if (cache.is_absolute()) cache = cache.relative_path();
     removeVaultDirectory(backing, alias);
     removeVaultDirectory(backing / cache, alias);
+    recovery::store::removeVaultStore(alias);
 }
 
 DeletionPtr schedule(const unsigned int vaultId, const std::optional<unsigned int> deletedBy, const bool now,
