@@ -528,6 +528,13 @@ TEST_F(HttpAccessDbTest, FolderDownloadOfTamperedCiphertextTruncatesInsteadOfVou
         f.seekp(1000);
         f.put('\x5a');
     }
+    // Integrity verdicts are keyed by (IV, key version, inode, size, mtime). An in-place write within one filesystem
+    // timestamp tick keeps the old mtime (macOS stamps files from a coarse clock), so a verdict a background reader
+    // recorded on the pristine bytes (a thumbnail task, when libmagic calls the random payload an image) would vouch
+    // for the tampered ones. Vaulthalla never writes a backing file in place (sidecar + rename = a new inode); model
+    // the tamper as a modification the filesystem can see.
+    std::filesystem::last_write_time(file->backing_path,
+                                     std::filesystem::last_write_time(file->backing_path) + std::chrono::seconds(2));
     as(admin);
     auto res = Router::route(get(inA("/download", "%2Fziptamper")));
     ASSERT_EQ(statusOf(res), status::ok);  // the walk reads no bytes
