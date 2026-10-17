@@ -23,6 +23,7 @@ import { withEncryptionWaiver } from '@/features/vaults/waiver'
 
 const DeleteVaultDialog = dynamic(() => import('@/features/vaults/DeleteVaultDialog'), { ssr: false })
 const EventSyncPanel = dynamic(() => import('@/features/vaults/settings/EventSyncPanel'), { ssr: false })
+const RecoveryPanel = dynamic(() => import('@/features/recovery/RecoveryPanel'), { ssr: false })
 
 export const VaultSettings = () => {
   const vault = useCurrentVault()
@@ -31,6 +32,7 @@ export const VaultSettings = () => {
       <GeneralForm vault={vault} />
       {vault.type === 's3' ? <BucketForm vault={vault} /> : null}
       {vault.type === 's3' ? <EventSyncPanel vault={vault} /> : null}
+      <RecoveryPanel vault={vault} />
       <DangerZone vault={vault} />
     </div>
   )
