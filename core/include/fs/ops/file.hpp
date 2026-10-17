@@ -19,7 +19,8 @@ std::vector<uint8_t> readFileToVector(const std::filesystem::path& path);
 
 std::string readFileToString(const std::filesystem::path& path);
 
-void writeFile(const std::filesystem::path& absPath, const std::vector<uint8_t>& ciphertext);
+// Backing files are never written in place (a retained generation may share the inode; recovery.md): create them
+// with writeFileExclusive or replace them with replaceFileAtomic / writeFileAtomic. tools/contracts guards this.
 
 // fsync(2) a file, or a directory (so a rename or create in it is durable). Throw std::system_error.
 // Every content replacement (overwrite, FUSE seal, key rotation) stages the new ciphertext here, commits the row,

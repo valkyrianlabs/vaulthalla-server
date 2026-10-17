@@ -27,6 +27,8 @@
 #include "identities/Manager.hpp"
 #include "db/query/upstream/WriteIntent.hpp"
 #include "sync/events/Subscriptions.hpp"
+#include "recovery/local/Versions.hpp"
+#include "db/Transactions.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -355,6 +357,11 @@ std::shared_ptr<File> CloudEngine::indexAndDeleteFile(const std::shared_ptr<File
 
     const auto rel_path = makeAbsolute(remoteFile->path);
     auto indexed = db::query::fs::File::getFileByPath(vault->id, rel_path);
+    // The local copy this download replaces (cache strategy: index-only), when it holds other content.
+    std::optional<File> replaced;
+    if (indexed && !(remoteFile->encryption_iv == indexed->encryption_iv &&
+                     remoteFile->encrypted_with_key_version == indexed->encrypted_with_key_version))
+        replaced = *indexed;
 
     if (!indexed) {
         indexed = Filesystem::createFile({
@@ -376,7 +383,13 @@ std::shared_ptr<File> CloudEngine::indexAndDeleteFile(const std::shared_ptr<File
         indexed->encrypted_with_key_version = remoteFile->encrypted_with_key_version;
     indexed->updated_at = remoteFile->updated_at;
     indexed->last_modified_by = vault->owner_id;
-    db::query::fs::File::updateFile(indexed);
+    auto kept = replaced ? vh::recovery::local::versions::retain(*this, *replaced, vh::recovery::local::Reason::Download)
+                         : vh::recovery::local::versions::Pending{};
+    vh::db::Transactions::exec("CloudEngine::indexAndDeleteFile", [&](pqxx::work& txn) {
+        kept.attach(txn);
+        db::query::fs::File::updateFile(txn, indexed);
+    });
+    kept.committed();
 
     if (!indexed->backing_path.empty() && fs::exists(indexed->backing_path))
         fs::remove(indexed->backing_path);

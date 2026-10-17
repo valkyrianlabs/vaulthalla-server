@@ -27,6 +27,8 @@ struct WorkingCopy {
     std::mutex mutex;                          // serializes materializing, writes, truncation and sealing
     bool ready = false;
     bool dirty = false;
+    bool truncated = false;                    // emptied (O_TRUNC, truncate to 0) since the last seal
+
     std::optional<int32_t> lastWriter;
     unsigned int refs = 0;                     // guarded by the registry mutex
 };
@@ -40,8 +42,15 @@ struct WorkingCopyHooks {
                        const std::shared_ptr<fs::model::File>& staged)> seal;
     // The live entry for an inode (renames move it), or null once it has been deleted.
     std::function<std::shared_ptr<fs::model::File>(uint64_t ino)> current;
-    // Records the staged row (the files table only) BEFORE the sealed bytes are renamed into place. Optional.
-    std::function<void(const std::shared_ptr<fs::model::File>& staged)> commit;
+    // Records the staged row (the files table only) BEFORE the sealed bytes are renamed into place. `prior` is the
+    // entry as it still is (its sealed bytes at prior.backing_path, which local versioning keeps); `truncated` says
+    // the copy was emptied since the last seal. Optional.
+    struct Commit {
+        const fs::model::File& prior;
+        const std::shared_ptr<fs::model::File>& staged;
+        bool truncated{};
+    };
+    std::function<void(const Commit& commit)> commit;
     // Records a sealed entry after the rename: cache, directory totals (and the row, if `commit` is not set).
     std::function<void(const std::shared_ptr<fs::model::File>& file)> saved;
     // Serializes content replacement of one file with every other writer (fs::Filesystem::contentWriteMutex).
@@ -59,6 +68,9 @@ public:
 
     // The daemon's registry: copies under <backing>/.fuse-plaintext, sealed with each vault's key.
     static WorkingCopies& instance();
+    // The hooks instance() uses (vault keys, the files table with local versioning, the FS cache), for a registry
+    // over another root (tests).
+    static WorkingCopyHooks daemonHooks();
 
     // Removes working copies a previous run left behind (they are plaintext). Copies that failed to seal are kept
     // in unsaved/ for the operator.

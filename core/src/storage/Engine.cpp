@@ -24,6 +24,8 @@
 #include "crypto/util/encrypt.hpp"
 #include "preview/cache/Store.hpp"
 #include "recovery/Store.hpp"
+#include "recovery/local/Versions.hpp"
+#include "db/Transactions.hpp"
 
 #include <cerrno>
 #include <cstring>
@@ -291,7 +293,15 @@ namespace vh::storage {
         const auto path = rel_path.string().front() != '/' ? fs::path("/" / rel_path) : rel_path;
         const auto file = db::query::fs::File::getFileByPath(vault->id, path);
         if (!file) return;
-        db::query::fs::File::deleteFile(vault->owner_id, file);
+        // A sync DeleteLocal (the object went upstream): local versioning keeps the local copy's last generation. The
+        // provider removed it, so it is not upstream backlog.
+        auto kept = vh::recovery::local::versions::retain(*this, *file, vh::recovery::local::Reason::Delete,
+                                                          {.actor = std::nullopt, .upstream = false});
+        vh::db::Transactions::exec("Engine::removeLocally", [&](pqxx::work& txn) {
+            kept.attach(txn);
+            db::query::fs::File::deleteFile(txn, vault->owner_id, file);
+        });
+        kept.committed();
         purgeDerivedArtifacts(file->id);
         if (const auto& cache = runtime::Deps::get().fsCache) {
             cache->evictId(file->id);
