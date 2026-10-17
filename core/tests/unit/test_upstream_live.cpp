@@ -14,11 +14,13 @@
 
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <functional>
 #include <iostream>
 #include <random>
+#include <set>
 #include <thread>
 
 namespace {
@@ -281,4 +283,88 @@ TEST(UpstreamLive, R2Events) {
     admin::R2Admin r2(key);
     admin::R2Events events(key);
     liveExerciseEvents(r2, events, key, "", r2.identity().account_ref);
+}
+
+// The legacy data-plane signer must sign the query in SigV4 order: page 2 of a ListObjectsV2 carries
+// ?list-type=2&max-keys=…&continuation-token=…, which is out of order as written.
+TEST(UpstreamLive, AwsDataPlaneListsBeyondOnePage) {
+    if (!liveEnabled()) GTEST_SKIP() << "set VH_LIVE_UPSTREAM=1 to run live provider tests";
+    if (liveEnv("VH_AWS_ADMIN_API_KEY").empty()) GTEST_SKIP() << "VH_AWS_ADMIN_* not set";
+    const auto key = liveAwsKey();
+    admin::AwsAdmin aws(key);
+    const auto bucket = liveTestName();
+    std::cout << "[live] aws data-plane listing bucket " << bucket << std::endl;
+    LiveCleanup cleanup{[&] {
+        // 1001 objects are worth a retry: a DNS blip during teardown must not strand the bucket.
+        for (int attempt = 1;; ++attempt) {
+            try {
+                liveDestroyTestBucket(aws, bucket);
+                return;
+            } catch (const std::exception& e) {
+                if (attempt == 5) throw;
+                std::cerr << "[live cleanup] attempt " << attempt << ": " << e.what() << std::endl;
+                std::this_thread::sleep_for(std::chrono::seconds{5});
+            }
+        }
+    }};
+    aws.createBucket({.name = bucket, .region = std::string("us-east-2")});
+
+    constexpr int kObjects = 1001;   // one more than a full ListObjectsV2 page
+    const auto keyName = [](const int i) {
+        char name[32];
+        std::snprintf(name, sizeof(name), "page/%04d.txt", i);
+        return std::string(name);
+    };
+    std::set<std::string> expected;
+    for (int i = 0; i < kObjects; ++i) expected.insert(keyName(i));
+
+    std::atomic<int> next{0};
+    std::atomic<int> failures{0};
+    std::vector<std::thread> workers;
+    for (int t = 0; t < 8; ++t)
+        workers.emplace_back([&] {
+            const vh::storage::s3::Controller data(key, bucket);
+            for (int i = next++; i < kObjects; i = next++) {
+                try {
+                    data.uploadBufferWithMetadata(keyName(i), std::vector<uint8_t>{'x'},
+                                                  std::unordered_map<std::string, std::string>{});
+                } catch (const std::exception& e) {
+                    if (failures++ == 0) std::cerr << "[live] upload " << keyName(i) << ": " << e.what() << std::endl;
+                }
+            }
+        });
+    for (auto& w : workers) w.join();
+    ASSERT_EQ(failures.load(), 0);
+
+    const vh::storage::s3::Controller data(key, bucket);
+
+    // Paged listing: never partial, so a bad signature on page 2 throws.
+    std::set<std::string> paged;
+    std::string token;
+    int pages = 0;
+    try {
+        do {
+            auto page = data.listObjectKeysPage(token, 1000);
+            ++pages;
+            paged.insert(page.keys.begin(), page.keys.end());
+            token = page.next_continuation_token;
+        } while (!token.empty() && pages < 10);
+    } catch (const std::exception& e) {
+        ADD_FAILURE() << "listObjectKeysPage page " << pages + 1 << ": " << e.what();
+    }
+    EXPECT_EQ(pages, 2);
+    EXPECT_EQ(paged.size(), expected.size());
+    EXPECT_TRUE(paged == expected);
+
+    // Legacy whole-bucket listing: concatenated ListObjectsV2 XML.
+    const auto xml = data.listObjects();
+    const std::string raw(reinterpret_cast<const char*>(xml.data()), xml.size());
+    std::set<std::string> listed;
+    for (auto pos = raw.find("<Key>"); pos != std::string::npos; pos = raw.find("<Key>", pos)) {
+        pos += 5;
+        listed.insert(raw.substr(pos, raw.find("</Key>", pos) - pos));
+    }
+    EXPECT_EQ(raw.find("<Error>"), std::string::npos) << raw.substr(raw.find("<Error>"), 512);
+    EXPECT_EQ(listed.size(), expected.size()) << "listObjects keys";
+    EXPECT_TRUE(listed == expected);
 }
