@@ -7,6 +7,10 @@ Format: one "- " bullet per change (concise, technical). Indent continuation lin
 Optional "## Section" headings group bullets; if used, every bullet must be under one.
 One level of nested "  - " detail bullets is allowed. Consolidate; don't paste commit logs.
 -->
+
+- fix(vault): a restart during an unfinished key rotation could not load the vault's key
+  (`get_rotation_old_vault_key` selected `*` from `vault_keys_trashed`, which has no `updated_at`); regression test
+  `VaultKeyRestartDbTest`.
 - fuse: rename over an existing entry replaces it as rename(2) does instead of failing with EIO
   (UNIQUE(parent_id, name)). The replaced file is trashed like an unlink (row, backing bytes, derived artifacts) in
   the rename's transaction; a symlink or empty folder is deleted; EISDIR/ENOTDIR/ENOTEMPTY/EINVAL per rename(2).
