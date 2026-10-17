@@ -115,6 +115,51 @@ bucket: choosing `off`/`local_snapshots` does not suspend a bucket that is versi
 - Directory point-in-time restore = per object the latest version with `last_modified ≤ at` (a delete marker or no
   version = absent). Always labelled a timestamp-based reconstruction, never an atomic snapshot (`Plan.atomic=false`).
 
+### Provider recovery as built (`recovery/provider/*`, `storage/CloudEngineRestore.cpp`)
+
+- **Own writes** (`provider::noteOwnWrite`, fired by `CloudEngine::OwnWrite::done()` through `hooks::afterUpstreamWrite`):
+  a PUT/COPY response with `x-amz-version-id` upserts an origin `vaulthalla` row (etag, object size, last_modified =
+  now, IV/key version/hash/plaintext size from the written generation; sealed iff the generation says so, else
+  object size = plaintext + 16) and supersedes the key's previous latest. No version id (unversioned) → no row.
+  Our own DELETE supersedes the key's latest (it is hidden by a marker now) but records no marker: DeleteObject's
+  response id isn't surfaced, so the next listing learns the marker. `.vaulthalla/` keys are never indexed.
+- **Write intents carry the ETag**: `OwnWrite::done()` completes the event intent with the stored object's unquoted
+  ETag (PUT, multipart and CopyObject alike), so a restore's `ObjectCreated:Copy` settles as ours and an external
+  same-size write cannot claim the intent. The decoder/inbox keep `versionId`; the applier stores it on the index row.
+  `ObjectRemoved:DeleteMarkerCreated` and a permanent version delete both decode as removals and are HEAD-confirmed
+  against the *current* object: a permanent delete of a noncurrent version finds the object present and is skipped
+  (local data safe); the version index learns such deletions only from the next complete listing (gone_at).
+- **Listing** (`versions::refresh(engine, prefix, {max_requests, page_size, price_preflight})`): ListObjectVersions
+  pages only (a nested capture caps HEAD/GET/PUT/COPY/DELETE at 0), price preflight (`recovery_version_list`) and the
+  vault's request budget; rows are observed (never downgrading ours), `became_noncurrent_at` = the next newer
+  version's LastModified when the listing shows it; `markGoneUnder` only after a complete listing. Usage source
+  `recovery_version_list` is reported in the result (the ledger feed is the cost slice's).
+- **Points** (`points::fromRow/forPath/byId`): not restorable = gone, delete marker ("absent at this time"), current
+  version ("nothing to restore"), GLACIER/DEEP_ARCHIVE, a key version the vault no longer holds. Retention comes from
+  `RetentionInfo::from(ProviderVersioningState)` (effective noncurrent days, else indefinite only when Vaulthalla set
+  it and no foreign rule expires noncurrent versions, else `unknown`); expires_at = became_noncurrent_at + days.
+- **Plans** (`planFor`, `planOne`, `planAt`): Skip when the destination already is the version (current, same ETag
+  or same IV + key version); Conflict for a directory, an open sync conflict or local changes not uploaded yet
+  (baseline); `provider_copy` only for the same object key, ≤ 5 GiB, and sealed under the current key (or plaintext in
+  a plaintext-upstream vault); otherwise `provider_transfer`. Prune removals are `local_remove` (trash; the next sync
+  deletes upstream → delete marker).
+- **Restore** (`restore(engine, item, expectedSourceId, {accept_unverified, user_id, hooks})`): order is CAS precheck
+  (stale → `conflict`, already that generation → `skipped`) → origin check (`UnverifiedVersion`) → pass lease
+  (`PassBusy`) → price preflight (`recovery_restore`, worst case) → HEAD `?versionId` → copy or transfer. Every
+  request runs under the vault's request budget plus a per-step cap (HEAD 1, COPY 1, GET 1 + object bytes).
+  Copy: `CloudEngine::copyObjectVersionAsOwnWrite` (intent + hook with the restored generation); an earlier attempt's
+  copy that is already current is reused, never copied twice. Then `adoptIndexOnly` (files row = version metadata,
+  backing copy dropped, derived artifacts purged, under the content lock CAS); a local change meanwhile → `conflict`,
+  the copy is kept and the index learns it so the next pass sees a two-sided change. Index + manifest
+  (`applyRemoteIndexMutation` Upload with the new ETag/version id) and `Baseline::agreed`. Non-cache strategies
+  hydrate immediately. Transfer: GET into a 0600 `.vh-restore-*` temp next to the destination (plaintext objects are
+  sealed while streaming), verify (current key) or `resealFileToCurrent` (retired key), commit with createFile's
+  sidecar protocol under the CAS (`.vh-rotate` sidecar, so startup recovery settles a crash), then one `upload` +
+  index + `Baseline::afterUpload`; an upload failure leaves the local restore and the next pass uploads it once.
+  Outcomes carry `retryable` and the request usage (source `recovery_restore`).
+- Tests: `RecoveryProviderTest*`, `RecoverySmartCacheTest*` (the acceptance scenario), harness
+  `tests/helpers/recovery_provider_harness.hpp`.
+
 ## Local versions as the upstream backlog
 
 For upstream vaults with local versioning on, retained generations are also the ordered upstream backlog:

@@ -14,3 +14,8 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   signed `continuation-token` out of order), treats a CompleteMultipartUpload 200 carrying an <Error> body as a
   failure, and gains version-aware ListObjectVersions / HEAD / GET / CopyObject ?versionId= plus per-PUT ETag and
   version-id capture for file recovery.
+- File recovery, provider versions: an index of object versions from Vaulthalla's own writes (with each generation's
+  IV and key version) and from metadata-only, request-budgeted listings; restore of a version by CopyObject (same key
+  and key version, ≤ 5 GiB) or by a verified GET + re-seal + PUT, under the vault's sync pass lease with a CAS on the
+  planned destination; cache vaults adopt the restored generation index-only, so nothing is uploaded twice.
+  Event write intents now record the stored object's ETag.
