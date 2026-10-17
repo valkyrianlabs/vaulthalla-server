@@ -34,6 +34,8 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
 - Historical keys: retired vault key versions are unsealed on demand for recovery reads only and kept while
   recoverable data needs them (trigger `recovery_guard_retired_vault_key`); key export includes them.
 - Backing files are never written in place (new files are created exclusively or replaced by rename; contract test).
+- Re-sealing a retained generation wipes the decrypted (still unauthenticated) plaintext on every path, and unsealed
+  retired keys leave memory once idle on a 30 s timer instead of waiting for the next recovery read.
 
 ## Fixes
 

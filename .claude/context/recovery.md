@@ -101,12 +101,15 @@ bucket: choosing `off`/`local_snapshots` does not suspend a bucket that is versi
   copy does). Under an older key it is re-sealed: streaming GCM decrypt (old key) → encrypt (current key, fresh IV)
   into the sidecar; committed only after the old tag verifies. No plaintext touches disk.
 - API (`vault/EncryptionManager.hpp`): `historicalKeySnapshot(v)` (current / rotation-old from memory, else
-  `vault_keys_trashed[v]` unsealed and cached: ≤ 8 versions, LRU, dropped after 10 min unused, checked on access;
-  outstanding snapshots stay valid until released) throws `vault::KeyVersionUnavailable` for a version the vault
+  `vault_keys_trashed[v]` unsealed and cached: ≤ 8 versions, LRU, dropped after 10 min unused, checked on access
+  and by `evictIdleHistoricalKeys(now)` for every engine from `VaultRetentionService`'s 30 s loop, so an idle key
+  leaves memory without a later access; outstanding snapshots stay valid until released) throws `vault::KeyVersionUnavailable` for a version the vault
   doesn't hold (incl. 0). `retainedKeyVersions()`, `hasKeyVersion(v)`, `referencedHistoricalKeys()` (export).
   `resealFileToCurrent(src, iv, v, dst, f)` / `resealToCurrent(buf, …)` over `crypto::util::resealFile` /
   `resealBuffer` (`crypto/util/reseal.hpp`, 64 KiB chunks, `GcmStreamDecryptor` → `GcmStreamEncryptor`): a source
-  that fails authentication throws `storage::IntegrityError` and dst is removed (whatever it held). An empty
+  that fails authentication throws `storage::IntegrityError` and dst is removed (whatever it held). The plaintext
+  buffer (unauthenticated until the tag verifies) is wiped on every path, success or failure (`WipeOnExit`; tests
+  observe it through `setPlaintextWipeObserverForTesting`). An empty
   generation (empty IV, version 0, zero bytes) re-seals to an empty dst with empty IV/version 0 (how every empty file
   is stored); a non-empty source with an empty IV is plaintext and refused (`std::invalid_argument`). Same-version
   re-seal still draws a fresh IV (reuse the bytes instead if that is wanted).

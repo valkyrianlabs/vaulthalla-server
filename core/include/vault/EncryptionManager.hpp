@@ -59,6 +59,15 @@ public:
     // KeyVersionUnavailable for a version the vault doesn't hold.
     [[nodiscard]] crypto::SecretKeyPtr historicalKeySnapshot(unsigned int keyVersion) const;
 
+    // Drops the cached retired keys unused for longer than kHistoricalCacheIdle as of `now`; returns how many. Runs on
+    // every historicalKeySnapshot() and from VaultRetentionService's loop (every 30 s) for every engine, so an idle
+    // key leaves memory without a later access (it is wiped once the last outstanding snapshot is released).
+    std::size_t evictIdleHistoricalKeys(std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now()) const;
+    // Test-only: puts a retired key into the cache as if unsealed and last used at lastUsed.
+    void cacheHistoricalKeyForTesting(unsigned int version, std::span<const uint8_t> key,
+                                      std::chrono::steady_clock::time_point lastUsed);
+    [[nodiscard]] std::size_t cachedHistoricalKeyCount() const;
+
     // The current version and every retained (retired) one, ascending.
     [[nodiscard]] std::vector<unsigned int> retainedKeyVersions() const;
     [[nodiscard]] bool hasKeyVersion(unsigned int keyVersion) const;
@@ -149,6 +158,7 @@ private:
     [[nodiscard]] crypto::SecretKeyPtr liveKeyFor(unsigned int keyVersion) const;  // current/rotation-old or null
     [[nodiscard]] crypto::SecretKeyPtr cachedHistoricalKey(unsigned int keyVersion) const;
     void cacheHistoricalKey(unsigned int keyVersion, const crypto::SecretKeyPtr& key) const;
+    std::size_t evictIdleLocked(std::chrono::steady_clock::time_point now) const;  // historicalMutex_ held
 };
 
 }

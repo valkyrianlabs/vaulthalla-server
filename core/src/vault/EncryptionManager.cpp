@@ -340,11 +340,31 @@ SecretKeyPtr EncryptionManager::cachedHistoricalKey(const unsigned int keyVersio
     if (const auto it = testHistorical_.find(keyVersion); it != testHistorical_.end()) return it->second;
 
     const auto now = std::chrono::steady_clock::now();
-    std::erase_if(historicalCache_, [&](const auto& kv) { return now - kv.second.lastUsed > kHistoricalCacheIdle; });
+    evictIdleLocked(now);
     const auto it = historicalCache_.find(keyVersion);
     if (it == historicalCache_.end()) return nullptr;
     it->second.lastUsed = now;
     return it->second.key;
+}
+
+std::size_t EncryptionManager::evictIdleLocked(const std::chrono::steady_clock::time_point now) const {
+    return std::erase_if(historicalCache_, [&](const auto& kv) { return now - kv.second.lastUsed > kHistoricalCacheIdle; });
+}
+
+std::size_t EncryptionManager::evictIdleHistoricalKeys(const std::chrono::steady_clock::time_point now) const {
+    std::scoped_lock lock(historicalMutex_);
+    return evictIdleLocked(now);
+}
+
+void EncryptionManager::cacheHistoricalKeyForTesting(const unsigned int version, const std::span<const uint8_t> key,
+                                                     const std::chrono::steady_clock::time_point lastUsed) {
+    std::scoped_lock lock(historicalMutex_);
+    historicalCache_[version] = {std::make_shared<const SecretKey>(key), lastUsed};
+}
+
+std::size_t EncryptionManager::cachedHistoricalKeyCount() const {
+    std::scoped_lock lock(historicalMutex_);
+    return historicalCache_.size();
 }
 
 void EncryptionManager::cacheHistoricalKey(const unsigned int keyVersion, const SecretKeyPtr& key) const {
