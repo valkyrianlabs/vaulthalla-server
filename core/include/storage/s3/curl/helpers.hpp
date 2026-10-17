@@ -28,6 +28,7 @@ void parsePagination(const std::string& response, std::string& continuationToken
 [[nodiscard]] bool extractETag(const std::string& respHdr, std::string& etagOut);
 // Legacy data-path signer. The query (after '?' in fullPath, or canonicalQuery) must already be RFC 3986 encoded the
 // way the URL carries it; it is put in SigV4 canonical order (sorted by name, then value; a bare "flag" → "flag=").
+// The URL may keep any order: S3 canonicalizes what it receives the same way.
 std::string buildAuthorizationHeader(const std::shared_ptr<vault::model::APIKey>& api_key,
                                      const std::string& method, const std::string& fullPath,
                                      const std::map<std::string, std::string>& headers,
