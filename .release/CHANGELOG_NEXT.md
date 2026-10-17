@@ -14,3 +14,8 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   signed `continuation-token` out of order), treats a CompleteMultipartUpload 200 carrying an <Error> body as a
   failure, and gains version-aware ListObjectVersions / HEAD / GET / CopyObject ?versionId= plus per-PUT ETag and
   version-id capture for file recovery.
+- File recovery, local versioning: with vault_recovery_policy.local_versioning on, every content change (overwrite,
+  FUSE seal, truncate, delete, sync download, restore, conflict) keeps the prior sealed generation as a local version
+  (zero-copy link), pruned by keep-last / max-age / quota; in upstream vaults unsent versions are replayed in order
+  before the next upload when the bucket keeps history. Backing files are now never written in place (new files are
+  created exclusively or replaced by rename; contract-tested).

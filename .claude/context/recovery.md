@@ -35,8 +35,14 @@ bucket: choosing `off`/`local_snapshots` does not suspend a bucket that is versi
   loses the live file. Fallbacks: reflink (FICLONE / macOS `clonefile`), then copy. A blob is immutable once linked.
 - **Invariant this rests on: nothing writes a backing file in place.** A linked blob shares the live file's inode until
   the next rename-replace; an in-place writer would silently rewrite history. Every backing-file writer must replace
-  by rename (or the capture must use `captureCopy`). Guard: a contract test listing the writers (local versioning
-  slice).
+  by rename (or the capture must use `captureCopy`). Guard: `tools/contracts/test_backing_writers_contract.py` scans
+  `core/src` for in-place-capable write primitives (ofstream, `O_TRUNC`, `open(O_WRONLY|O_RDWR)` without `O_EXCL`,
+  `pwrite`, `ftruncate`/`resize_file`, `fopen`, `writeFile(`) against a per-file, counted allowlist with the reason each
+  never touches vault bytes. Audit (2026-10-16): new files are created with `writeFileExclusive` (FUSE create, empty
+  `createFile`) or `writeFileAtomic`/`replaceFileAtomic` (buffer and source-path `createFile`, the slow rename path);
+  `fs::ops::writeFile` (ofstream + truncate) is gone; seals, overwrites and rotation already rename a sidecar; the
+  remaining primitives write sidecars/temps (`encryptFileToFile`, `resealFile*`, `decrypt_aes256_gcm_file`), working
+  copies, staging/temp files, logs, caches or secrets.
 - Dedupe: unique `(vault_id, encryption_iv, key_version)` for non-empty IVs: the same generation captured twice
   (two snapshots of an unchanged file) is one blob. Physical accounting = sum of distinct blobs' `cipher_bytes`.
 - Crash safety: blob first (temp name + rename + dir fsync), then the DB rows in the same transaction as the files-row
@@ -49,7 +55,38 @@ bucket: choosing `off`/`local_snapshots` does not suspend a bucket that is versi
   the backing dirs.
 - Retention: snapshots are kept until deleted. Local versions: `version_keep_last` per file, `version_max_age_days`,
   `version_quota_bytes` (oldest first); a generation still `pending` upstream is never pruned; a blob still referenced
-  by a snapshot is never deleted (refcount = referencing `file_versions` rows).
+  by a snapshot is never deleted (refcount = referencing `file_versions` rows). `db::Janitor` runs
+  `recovery::local::versions::maintain` every 15 min (retention for vaults with local versioning on; the pending
+  backlog of upstream vaults whose bucket status isn't `enabled` is marked `skipped`) and, at startup and then daily,
+  `store::sweep` for every vault with a store directory (orphans of crashed captures, unreferenced rows). keep_last is
+  also applied right after a capture, in its transaction (bounded: only once the file's version number exceeds it, at
+  most 64 rows); the freed blobs go after commit.
+
+### Local versioning: capture (`recovery/local/Versions.*`)
+
+- One helper for every writer: `versions::retain(engine, priorRow, Reason, {actor, upstream}) -> Pending` stages the
+  blob (`captureLink` of the prior backing file) BEFORE the transaction; `Pending::attach(txn)` inserts the blob and
+  the `file_versions` row (origin `version`) in the same transaction that updates/trashes the files row;
+  `committed()` after commit; `abort()`/the destructor on failure. Callers rename the new bytes over (or unlink) the
+  backing file only after `committed()`.
+- Off path: the per-vault policy is cached in memory (`recovery::local::versioningPolicy`, 60 s TTL as a safety net);
+  whoever writes `vault_recovery_policy` calls `recovery::local::invalidatePolicy(vaultId)` after the commit. With
+  versioning off a write costs no query. A staging failure is logged/counted and never fails the write.
+- Skipped (counted, no row): an empty generation, legacy plaintext (blobs are never plaintext), a cloud file without
+  local bytes (the provider holds it).
+- Call sites (reason): `Filesystem::createFile` overwrite branch (`NewFileContext::version_reason`, default
+  `overwrite`; callers pass `restore`, `conflict`, `download`); the FUSE seal (`WorkingCopyHooks::commit` gets the
+  prior entry; `truncate` when the copy was emptied (O_TRUNC, truncate to 0) or the result is empty, else
+  `overwrite`); `Filesystem::remove` (file, and every file of a folder), FUSE `unlink`, S3 gateway DeleteObject (via
+  `Engine::remove`) and `ObjectStore::purgeLocalObjectState`, sync DeleteLocal (`Engine::removeLocally`) → `delete`;
+  cache-strategy index-only downloads over a different local copy (`CloudEngine::indexAndDeleteFile`) → `download`.
+  The S3 gateway PutObject, sync downloads (`downloadFile`) and conflict keep_remote (`replaceLocalContent`) reach the
+  createFile overwrite branch. Never: rename/move, copy, rotation, hydrate, `repairAtRest`; the HTTP upload temp part
+  unlink.
+- Upstream state at capture: `pending` with `upstream_key` = the vault path without its leading slash in an upstream
+  vault; `none` for local vaults, for `download`/`conflict` (content that lost to the remote side: replaying it would
+  reorder the provider's history) and for deletes the vault's sync policy doesn't propagate (only mirror + keep_local
+  deletes remote leftovers) or that came from upstream (sync DeleteLocal).
 
 ## Keys (historical key compatibility)
 
@@ -128,6 +165,37 @@ For upstream vaults with local versioning on, retained generations are also the 
 - Smart cache: in a `cache` vault (or gateway `remote_cache`) with provider versioning, a generation's local blob is
   released once the provider holds it (`sent`) unless a snapshot references it. Local history bodies exist only as an
   unacknowledged backlog, never as a duplicate of provider history.
+
+Implementation (`recovery/local/Backlog.*`, `storage/CloudEngineBacklog.cpp`, `recovery/provider/State.*`):
+
+- Triggers: `sync::tasks::Upload` calls `backlog::replayBeforeUpload(engine, file)` before `CloudEngine::upload`;
+  `sync::tasks::Delete` calls `replayBeforeRemoteDelete(engine, path)` before a REMOTE/PURGE delete. A replay that
+  fails (`blocked`) fails that task: the current content (or the delete marker) waits for its predecessors; the next
+  pass retries. Nothing runs on a FUSE/HTTP write path.
+- The key's backlog: pending rows of the file (any with another `upstream_key` were retained before a rename and are
+  `skipped`) plus pending rows retained at the same path by earlier incarnations, in capture (`id`) order.
+- `provider::bucketVersioningForVault(vaultId)` (newest `upstream_bucket` row of the vault): `keepsHistory()` =
+  status `enabled` and past `versioning_settles_at` (none recorded: settled). Anything else → every pending row of the
+  key is `skipped`.
+- Already upstream (no PUT): a known version of the key (`upstream_object_version`, same IV + key version or content
+  hash) → `sent` with its version id; the content both sides last agreed on (`sync_file_baseline.content_hash`, so
+  uploaded before Vaulthalla knew a version id) → `skipped`.
+- Replay PUT: `CloudEngine::uploadGeneration(key, blob, row)`: the generation's own `vh-iv` / `vh-key-version` /
+  `content-hash` / `vh-encrypted`, through `noteOwnWrite(...)`/`done()` (the recovery hook sees it); plaintext-upstream
+  vaults get the blob decrypted in memory with `historicalKeySnapshot` (buffers wiped). Version id from
+  `lastPutOutcome` → `markSent`; none (or `null`) → `skipped`. Local failures (blob or key version gone,
+  authentication fails: `ContentUnavailable`/`IntegrityError`) → `recordFailure` + `skipped` (never block the file
+  forever); any other failure → `recordFailure`, stop, `blocked`.
+- Smart-cache release after `sent` (incl. "already upstream" matches): `Generation::releaseBlob` + `store::removeBlobs`
+  (a snapshot-held blob stays). Rows `skipped` keep their blob (no version id to point at).
+- Price preflight: `sync::Planner::estimateS3Cost` adds one PUT and the blob bytes per pending row under the keys of
+  the plan's uploads and remote deletes, only while the bucket keeps history (`backlog::addPlannedReplays`).
+  Request budgets apply to replay PUTs like any other request.
+- `backlog::summary(vaultId)` → `recovery::Backlog` (status).
+- Open: pending rows of a deleted file whose key Vaulthalla never writes or deletes again (versioned bucket, no new
+  file at the path) stay pending until the bucket loses history; conflict keep_local (`ConflictResolver`) uploads
+  without replaying first (its price preflight doesn't cover replays), so the file's pending versions land upstream
+  after that content, at its next regular upload.
 
 ## Costs (computed locally; nothing leaves the host)
 

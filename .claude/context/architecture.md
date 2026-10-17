@@ -411,7 +411,8 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   session zone); columns a view depends on are skipped with a warning. New columns must be `TIMESTAMPTZ`. Text output
   is `YYYY-MM-DD HH:MM:SS[.ffffff]+00`, which `db::encoding::parsePostgresTimestamp` handles. Guard: `DbTimezoneTest`.
 - `db::Janitor` handles sweeps (DB cleanup every `services.db_sweeper.sweep_interval_minutes`, derived-artifact
-  eviction every 15 min). Stats rollups read from `file_activity`, `files_trashed`, `operations`, `share_*`.
+  eviction and local-version retention every 15 min, the recovery store's orphan sweep at startup and daily; see
+  `recovery.md`). Stats rollups read from `file_activity`, `files_trashed`, `operations`, `share_*`.
 
 ## Subsystem directory map (`core/src`, mirrored in `core/include`)
 
