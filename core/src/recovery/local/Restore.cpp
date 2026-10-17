@@ -1,4 +1,5 @@
 #include "recovery/local/Restore.hpp"
+#include "recovery/local/Versions.hpp"
 
 #include "crypto/util/Gcm.hpp"
 #include "crypto/util/encrypt.hpp"
@@ -450,6 +451,7 @@ ItemOutcome restore(const std::shared_ptr<storage::Engine>& engine, const std::s
             .overwrite = true,
             // "" matches no generation: a Create must not find a file there (ContentConflict).
             .expected_source_id = item.action == ItemAction::Create ? std::string() : *item.destination_source_id,
+            .version_reason = Reason::Restore,
             .sealed = writer,
         };
         static_cast<void>(fs::Filesystem::createFile(ctx));

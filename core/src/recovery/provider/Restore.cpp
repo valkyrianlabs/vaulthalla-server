@@ -1,4 +1,5 @@
 #include "recovery/provider/Restore.hpp"
+#include "recovery/local/Versions.hpp"
 
 #include "crypto/util/Gcm.hpp"
 #include "crypto/util/encrypt.hpp"
@@ -310,61 +311,34 @@ FilePtr adoptIndexOnly(const std::shared_ptr<storage::CloudEngine>& engine, cons
     return now;
 }
 
-// Replaces the destination's content with an already-sealed file (sealedPath, in the backing file's directory),
-// createFile's overwrite protocol: under the content lock and only while the row is still generation `expected`;
-// sidecar → row → rename over the backing file, so startup recovery settles a crash like any content write.
+// Replaces the destination's content with an already-sealed file (sealedPath, in the backing file's directory)
+// through createFile's pre-sealed commit: content lock, CAS on generation `expected`, open-working-copy refusal,
+// sidecar → row → rename, and local versioning keeps the content the restore replaces (reason restore).
 FilePtr commitSealed(const std::shared_ptr<storage::CloudEngine>& engine, const std::filesystem::path& vaultPath,
                      RestoreTemp& sealed, const std::string& ivB64, const unsigned int keyVersion,
                      const uint64_t plaintextSize, const std::string& expected,
                      const std::shared_ptr<identities::User>& user) {
-    const auto row = currentRow(*engine, vaultPath);
-    if (!row) throw fs::ContentConflict("the destination was removed meanwhile");
-
-    std::scoped_lock contentLock(fs::Filesystem::contentWriteMutex(row->id));
-    const auto now = currentRow(*engine, vaultPath);
-    if (!now || now->id != row->id || sourceIdOf(now) != expected)
-        throw fs::ContentConflict("the destination changed since the plan");
-    if (now->inode && fuse::WorkingCopies::instance().isOpen(*now->inode))
-        throw fs::ContentConflict("the destination is open through the mounted filesystem");
-
-    const auto backing = backingOf(*engine, *now);
-    std::filesystem::create_directories(backing.parent_path());
-    const auto sidecar = fs::ops::contentSidecarPath(backing);
-    std::error_code ec;
-    std::filesystem::remove(sidecar, ec);   // a leftover is settled by startup recovery; we hold the file's lock
     sealed.closeFd();
     fs::ops::fsyncFile(sealed.path());   // also covers a re-sealed file written by path
-    std::filesystem::rename(sealed.path(), sidecar);
-    sealed.release();
-    fsyncDirectoryQuietly(backing.parent_path());
-
-    const auto staged = std::make_shared<fs::model::File>(*now);
-    try {
-        staged->encryption_iv = ivB64;
-        staged->encrypted_with_key_version = ivB64.empty() ? 0u : keyVersion;
-        staged->size_bytes = plaintextSize;
-        staged->content_hash = crypto::hash::blake2b(sidecar);
-        staged->last_modified_by = user->id;
-        staged->updated_at = std::time(nullptr);
-        db::query::fs::File::updateFile(staged);
-    } catch (...) {
-        std::filesystem::remove(sidecar, ec);
-        throw;
-    }
-
-    // The row describes the sidecar now; a failed rename leaves it for recovery to promote.
-    std::filesystem::rename(sidecar, backing);
-    fsyncDirectoryQuietly(backing.parent_path());
-
-    now->encryption_iv = staged->encryption_iv;
-    now->encrypted_with_key_version = staged->encrypted_with_key_version;
-    now->size_bytes = staged->size_bytes;
-    now->content_hash = staged->content_hash;
-    now->last_modified_by = staged->last_modified_by;
-    now->updated_at = staged->updated_at;
-    if (now->parent_id) runtime::Deps::get().fsCache->refreshDirStats(*now->parent_id);
-    engine->purgeDerivedArtifacts(now->id);
-    return now;
+    const auto from = sealed.path();
+    fs::NewFileContext ctx{
+        .path = vaultPath,
+        .fuse_path = engine->vaultPathToFusePath(vaultPath),
+        .engine = engine,
+        .user = user,
+        .overwrite = true,
+        .expected_source_id = expected,
+        .version_reason = recovery::local::Reason::Restore,
+        .sealed = [&](const std::filesystem::path& dst) {
+            std::filesystem::rename(from, dst);   // same directory: the temp sits next to the backing file
+            sealed.release();
+            return fs::SealedContent{.encryption_iv = ivB64,
+                                     .key_version = ivB64.empty() ? 0u : keyVersion,
+                                     .plaintext_size = plaintextSize,
+                                     .mime_type = std::nullopt};
+        },
+    };
+    return fs::Filesystem::createFile(ctx);
 }
 
 // The remote index (and its manifest) learn the new current object; the sync baseline records that both sides agree.

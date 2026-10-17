@@ -17,7 +17,6 @@ std::vector<RecoveryPoint> list(const Actor&, uint32_t, const ListQuery&) { reco
 
 PointDetail inspect(const Actor&, const std::string&) { recoveryStubRefuse(); }
 
-PointDetail createSnapshot(const Actor&, uint32_t, const SnapshotRequest&) { recoveryStubRefuse(); }
 
 void deletePoint(const Actor&, const std::string&, bool) { recoveryStubRefuse(); }
 

@@ -5,7 +5,7 @@ import { Dialog, SheetContent } from '@/components/ui/Dialog'
 import { Button } from '@/components/ui/Button'
 import { DefinitionList } from '@/components/ui/Panel'
 import { confirm } from '@/components/ui/Confirm'
-import { ChevronLeftIcon, ChevronRightIcon, DownloadIcon, LockIcon, ShareNodesIcon } from '@/components/ui/icons'
+import { ChevronLeftIcon, ChevronRightIcon, ClockIcon, DownloadIcon, LockIcon, ShareNodesIcon } from '@/components/ui/icons'
 import { formatBytes, formatDateTime } from '@/lib/format'
 import type { Entry } from '@/features/files/entries'
 import { FileIcon } from '@/features/files/FileIcon'
@@ -27,6 +27,7 @@ export const PreviewSheet = ({
   onSelect,
   onDownload,
   onShare,
+  onRecoveryHistory,
 }: {
   source: FsSource
   entry: Entry | null
@@ -35,6 +36,7 @@ export const PreviewSheet = ({
   onSelect: (entry: Entry) => void
   onDownload: (entry: Entry) => void
   onShare?: (entry: Entry) => void
+  onRecoveryHistory?: (entry: Entry) => void
 }) => {
   const files = siblings.filter(e => e.kind === 'file')
   const index = entry ? files.findIndex(e => e.key === entry.key) : -1
@@ -94,6 +96,11 @@ export const PreviewSheet = ({
         width={wideRenderer(plan.renderer) ? 'max-w-4xl' : 'max-w-xl'}
         footer={
           <>
+            {onRecoveryHistory ?
+              <Button variant="ghost" onClick={() => onRecoveryHistory(entry)}>
+                <ClockIcon aria-hidden /> History
+              </Button>
+            : null}
             {onShare && source.caps.share ?
               <Button variant="ghost" onClick={() => onShare(entry)}>
                 <ShareNodesIcon aria-hidden /> Share
