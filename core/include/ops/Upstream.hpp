@@ -240,6 +240,13 @@ struct ManualIngest {
                                               const std::vector<std::string>& recordsJson);
 
 namespace detail {
+// File recovery (ops::recovery::update with accept_adoption): the bucket vault `vaultId` already uses, unmanaged until
+// now, becomes adopted and bound to that vault (no other vault may use it). Trusted step: the caller authorized it
+// (vault sync.config.edit, admin.upstream.provision + configure, key Consume) and ran the admission preflight. Never
+// touches the bucket's data; audited as bucket.adopt. Throws Denied (protected), Conflict (used by another vault, or
+// another operation holds it), NotFound (the bucket is gone).
+void adoptBoundBucket(const Actor& actor, unsigned int apiKeyId, unsigned int vaultId, const std::string& bucket);
+
 // The events step of finishProvision (ops/UpstreamEvents.cpp): subscribe without re-authorizing (the vault creation
 // already did). Returns a warning instead of throwing.
 std::optional<std::string> subscribeNewVault(const Actor& actor, unsigned int vaultId, const std::string& prefix,

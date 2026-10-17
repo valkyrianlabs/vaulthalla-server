@@ -114,6 +114,50 @@ MergeResult mergeOwnedRule(const std::vector<LifecycleRule>& current, const Owne
     return out;
 }
 
+bool isVaulthallaRule(const std::string& ruleId) { return ruleId == kOwnedRuleId || ruleId == kManifestRuleId; }
+
+MergeResult mergeManifestRule(const std::vector<LifecycleRule>& current, const bool present, const bool allowNoncurrent) {
+    if (present && !allowNoncurrent)
+        throw std::invalid_argument("this provider has no object versions: noncurrent-version expiration is not supported");
+
+    LifecycleRule wanted;
+    wanted.id = kManifestRuleId;
+    wanted.enabled = true;
+    wanted.prefix = kManifestRulePrefix;
+    wanted.expire_noncurrent_days = kManifestNoncurrentDays;
+    wanted.foreign = false;
+
+    // As read back, the rule carries its provider XML; compare what it does, not how it was spelled.
+    const auto sameAsWanted = [&](const LifecycleRule& r) {
+        for (const auto& e : noncurrentExpirations({r}))
+            return e.enabled && !e.conditional && e.prefix == wanted.prefix && e.days == wanted.expire_noncurrent_days &&
+                   !e.newer_noncurrent_versions && !r.abort_incomplete_multipart_days && !r.expire_current_days &&
+                   !r.unmodeled;
+        return false;
+    };
+
+    MergeResult out;
+    bool had = false, same = false;
+    for (const auto& rule : current) {
+        if (rule.id == kManifestRuleId) {
+            had = true;
+            same = sameAsWanted(rule);
+            continue;
+        }
+        out.rules.push_back(rule);
+    }
+    if (!present) {
+        out.changed = had;
+        return out;
+    }
+    out.rules.push_back(wanted);
+    out.owned = wanted;
+    out.changed = !had || !same;
+    // It only ever deletes old copies of Vaulthalla's own index: never a person's data.
+    out.destructive = false;
+    return out;
+}
+
 std::vector<NoncurrentExpiration> noncurrentExpirations(const std::vector<LifecycleRule>& rules) {
     std::vector<NoncurrentExpiration> out;
     for (const auto& rule : rules) {

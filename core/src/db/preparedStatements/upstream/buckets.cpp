@@ -16,6 +16,56 @@ void vh::db::Connection::initPreparedUpstreamBuckets() const {
     conn_->prepare("upstream_bucket_find_protected_by_name",
                    "SELECT * FROM upstream_bucket WHERE provider = $1 AND bucket = $2 AND is_protected ORDER BY account_ref");
 
+    // ---- provider versioning (file recovery, migration 111) ----
+    conn_->prepare("upstream_bucket_versioning_get", R"SQL(
+        SELECT versioning_status,
+               EXTRACT(EPOCH FROM versioning_checked_at)::bigint       AS checked_at,
+               EXTRACT(EPOCH FROM versioning_enabled_at)::bigint       AS enabled_at,
+               versioning_enabled_by, versioning_enabled_by_vaulthalla,
+               EXTRACT(EPOCH FROM versioning_settles_at)::bigint       AS settles_at,
+               versioning_mfa_delete, object_lock_enabled,
+               noncurrent_retention_mode, noncurrent_retention_days,
+               EXTRACT(EPOCH FROM noncurrent_retention_set_at)::bigint AS retention_set_at,
+               noncurrent_retention_set_by
+        FROM upstream_bucket WHERE id = $1
+    )SQL");
+
+    conn_->prepare("upstream_bucket_versioning_check", R"SQL(
+        UPDATE upstream_bucket SET
+            versioning_status     = $2,
+            versioning_mfa_delete = COALESCE($3, versioning_mfa_delete),
+            object_lock_enabled   = COALESCE($4, object_lock_enabled),
+            versioning_checked_at = CURRENT_TIMESTAMP,
+            updated_at            = CURRENT_TIMESTAMP
+        WHERE id = $1
+    )SQL");
+
+    // Enabled by Vaulthalla now: when and by whom. Found enabled: the first sighting only, and who turned it on stays
+    // unknown. The propagation window is never shortened.
+    conn_->prepare("upstream_bucket_versioning_enabled", R"SQL(
+        UPDATE upstream_bucket SET
+            versioning_status     = 'enabled',
+            versioning_checked_at = CURRENT_TIMESTAMP,
+            versioning_enabled_at = CASE WHEN $3::boolean OR versioning_enabled_at IS NULL THEN CURRENT_TIMESTAMP
+                                         ELSE versioning_enabled_at END,
+            versioning_enabled_by = CASE WHEN $3::boolean THEN $2::integer ELSE versioning_enabled_by END,
+            versioning_enabled_by_vaulthalla = versioning_enabled_by_vaulthalla OR $3::boolean,
+            versioning_settles_at = GREATEST(COALESCE(versioning_settles_at, to_timestamp($4::double precision)),
+                                             to_timestamp($4::double precision)),
+            updated_at            = CURRENT_TIMESTAMP
+        WHERE id = $1
+    )SQL");
+
+    conn_->prepare("upstream_bucket_retention_set", R"SQL(
+        UPDATE upstream_bucket SET
+            noncurrent_retention_mode   = $2,
+            noncurrent_retention_days   = $3,
+            noncurrent_retention_set_at = CURRENT_TIMESTAMP,
+            noncurrent_retention_set_by = $4,
+            updated_at                  = CURRENT_TIMESTAMP
+        WHERE id = $1
+    )SQL");
+
     conn_->prepare("upstream_bucket_record_seen", R"SQL(
         INSERT INTO upstream_bucket (provider, account_ref, bucket, region, last_seen_api_key_id, discovered_at,
                                      last_seen_at)

@@ -773,6 +773,52 @@ std::vector<std::string> finishProvision(const Actor& actor, const ProvisionTick
     return warnings;
 }
 
+void detail::adoptBoundBucket(const Actor& actor, const unsigned int apiKeyId, const unsigned int vaultId,
+                              const std::string& bucket) {
+    requireActor(actor);
+    const auto key = findKey(KeyRef{apiKeyId});
+    const auto id = identityOf(key, bucket);
+    requireUnprotected(actor, id, "bucket.adopt", key->id);
+    for (const auto& b : storage::upstream::bindingsFor(id))
+        if (b.vault_id != vaultId)
+            throw Conflict("bucket '" + bucket + "' is also used by vault '" + b.vault_name + "' (ID " +
+                           std::to_string(b.vault_id) + "); Vaulthalla adopts a bucket for one vault only");
+    auto client = adminClient(key);
+    const auto region = mapped([&] { return client->headBucket(bucket); });
+    if (!region) throw NotFound("bucket '" + bucket + "' does not exist");
+
+    const auto current = BucketQuery::getByIdentity(id.provider, *id.account_ref, id.bucket);
+    if (current && current->vault_id && *current->vault_id != vaultId)
+        throw Conflict("bucket '" + bucket + "' is recorded for vault " + std::to_string(*current->vault_id));
+    if (current && current->ownership != bmodel::Ownership::Unmanaged) return;   // already managed or adopted
+
+    std::optional<int64_t> rowId;
+    if (current && current->vault_id) {
+        // Recorded for this vault but unmanaged: adopt in place (the vault keeps its binding).
+        rowId = current->id;
+    } else {
+        const auto token = provision::newOperationToken();
+        const auto outcome = BucketQuery::upsertAdopted(id, region, key->id, token);
+        switch (outcome.result) {
+        case db::query::upstream::AdoptResult::Adopted: break;
+        case db::query::upstream::AdoptResult::Protected: throw Denied("bucket '" + bucket + "' is protected");
+        case db::query::upstream::AdoptResult::BoundElsewhere:
+            throw Conflict("bucket '" + bucket + "' is already bound to another vault");
+        case db::query::upstream::AdoptResult::Busy:
+            throw Conflict("another operation is working on bucket '" + bucket + "'; try again when it has finished");
+        }
+        if (!outcome.bucket) throw std::runtime_error("adoption returned no bucket row");
+        rowId = outcome.bucket->id;
+        if (!BucketQuery::setProvisioningState(*rowId, bmodel::ProvisioningState::Ready, token))
+            throw Conflict("bucket '" + bucket + "' was taken by another operation while it was being adopted");
+    }
+    BucketQuery::bindVault(*rowId, vaultId, bmodel::Ownership::Adopted);
+    auditRecord(actor, "bucket.adopt", id, key->id, vaultId, bmodel::AuditOutcome::Ok,
+                {{"vault_id", vaultId}, {"bound", true}, {"via", "recovery"}});
+    log::Registry::audit()->info("[ops::upstream] {} adopted bucket '{}' for vault {} ({})", actor->name(), bucket, vaultId,
+                                 id.toString());
+}
+
 void abortProvision(const ProvisionTicket& ticket, const std::string& reason) noexcept {
     if (!ticket.active()) return;
     try {
