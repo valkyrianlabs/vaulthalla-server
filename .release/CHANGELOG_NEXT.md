@@ -14,3 +14,5 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   signed `continuation-token` out of order), treats a CompleteMultipartUpload 200 carrying an <Error> body as a
   failure, and gains version-aware ListObjectVersions / HEAD / GET / CopyObject ?versionId= plus per-PUT ETag and
   version-id capture for file recovery.
+- Deleting a folder (web console, ws `fs.entry.delete`) now also drops its subfolders and symlinks from the
+  filesystem metadata cache; they stayed cached, so recreating a path under the deleted folder failed.
