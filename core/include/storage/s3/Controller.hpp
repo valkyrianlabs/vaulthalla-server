@@ -4,6 +4,8 @@
 #include "storage/upstream/Guard.hpp"
 #include "vault/Fwd.hpp"
 
+#include <cstdint>
+#include <ctime>
 #include <filesystem>
 #include <functional>
 #include <map>
@@ -79,11 +81,21 @@ namespace vh::storage::s3 {
         explicit ObjectNotFound(const std::string& message) : std::runtime_error(message) {}
     };
 
+    // A CopyObject whose source is larger than one request may copy (5 GiB). Thrown before anything is sent or
+    // metered; the caller falls back to a bounded transfer (GET + PUT).
+    class ObjectTooLargeForCopy final : public std::runtime_error {
+    public:
+        explicit ObjectTooLargeForCopy(const std::string& message) : std::runtime_error(message) {}
+    };
+
     // A streamed GET (Controller::streamObject).
     struct GetObjectOptions {
         std::optional<std::pair<uint64_t, uint64_t>> range;  // inclusive byte range, sent as a signed Range header
         std::optional<std::string> if_match;                 // signed If-Match: the bytes come from that version only
         std::optional<uint64_t> max_body_bytes;              // abort once the body would exceed this many bytes
+        // GET ?versionId= (signed, percent-encoded): that provider version instead of the current object. A version
+        // that is a delete marker or doesn't exist throws ObjectNotFound.
+        std::optional<std::string> version_id{};
     };
 
     struct GetObjectResult {
@@ -102,9 +114,63 @@ namespace vh::storage::s3 {
         std::string next_continuation_token;   // empty on the last page
     };
 
+    // ---- provider object versions (file recovery, .claude/context/recovery.md) ------------------------------------
+
+    // One entry of ListObjectVersions: an object version or a delete marker. Values are as the provider reports
+    // them: etag keeps its quotes, version_id is "null" for a version written while the bucket was unversioned or
+    // suspended, storage_class is absent for delete markers (and where the provider omits it).
+    struct ObjectVersionInfo {
+        std::string key, version_id, etag;
+        uint64_t size{};
+        std::optional<std::time_t> last_modified;
+        std::optional<std::string> storage_class;
+        bool is_latest{};
+        bool delete_marker{};
+    };
+
+    // One ListObjectVersions page: keys ascending, each key's versions newest first, in provider order. When
+    // truncated, the next page starts after (next_key_marker, next_version_id_marker).
+    struct ObjectVersionPage {
+        std::vector<ObjectVersionInfo> versions;
+        std::string next_key_marker, next_version_id_marker;
+        bool truncated{};
+    };
+
+    // HEAD ?versionId= of one version (metadata only, no body).
+    struct ObjectVersionHead {
+        std::string version_id, etag;               // etag as sent (quoted)
+        uint64_t content_length{};
+        std::optional<std::time_t> last_modified;
+        std::optional<std::string> storage_class;   // absent = the provider's default (STANDARD on AWS)
+        bool delete_marker{};                       // the version is a delete marker (AWS: HTTP 405 + x-amz-delete-marker)
+        // x-amz-meta-* user metadata: names lower-cased with the prefix stripped (vh-iv, vh-key-version,
+        // vh-encrypted, content-hash, ...).
+        std::unordered_map<std::string, std::string> metadata;
+    };
+
+    // What a CopyObject produced: the new object's ETag (quoted, from the CopyObjectResult body) and, on a versioned
+    // bucket, its version id (x-amz-version-id).
+    struct CopyResult {
+        std::string etag;
+        std::optional<std::string> version_id;
+    };
+
+    // What the calling thread's last successful PUT through a Controller produced (uploadObjectWithMetadata, every
+    // buffer upload incl. conditional ones, completeMultipartUpload and so uploadLargeObject, copyObjectVersion):
+    // the response ETag (as sent, quoted) and x-amz-version-id (absent on an unversioned bucket; "null" on a
+    // suspended one where the provider sends it). Each of those calls resets it first, so a failed or aborted PUT
+    // leaves it empty.
+    struct PutOutcome {
+        std::string etag;
+        std::optional<std::string> version_id;
+    };
+
     class Controller {
     public:
         static constexpr uintmax_t MIN_PART_SIZE = 5 * 1024 * 1024; // 5 MiB
+        // The largest object a single CopyObject request may copy (AWS: 5 GiB); larger ones need UploadPartCopy or
+        // a transfer.
+        static constexpr uint64_t MAX_SINGLE_COPY_BYTES = 5ULL * 1024 * 1024 * 1024;
 
         Controller(const std::shared_ptr<vault::model::APIKey> &apiKey, std::string bucket);
 
@@ -187,6 +253,7 @@ namespace vh::storage::s3 {
         // mid-stream. Throws ObjectNotFound (404), ConditionalRequestFailed (412: If-Match no longer matches),
         // RequestBudgetExceeded, or std::runtime_error (transport failure, other HTTP status, a Range the server
         // ignored, or a body over max_body_bytes).
+        // With options.version_id it GETs that provider version (a delete marker's 405 throws ObjectNotFound).
         GetObjectResult streamObject(const fs::path &key, const GetObjectOptions &options, const BodySink &sink) const;
 
         // #########################################################################
@@ -229,6 +296,46 @@ namespace vh::storage::s3 {
         // Fakes that override getHeadObject report what their "network" answered (e.g. a 503).
         static void recordHeadOutcomeForTesting(HeadOutcome outcome) noexcept;
 
+        // The thread's last PUT outcome (see PutOutcome). Fakes that override the PUT paths report theirs through
+        // recordPutOutcomeForTesting.
+        [[nodiscard]] static PutOutcome lastPutOutcome() noexcept;
+        static void resetLastPutOutcome() noexcept;
+        static void recordPutOutcomeForTesting(PutOutcome outcome) noexcept;
+
+        // #########################################################################
+        // ######################## OBJECT VERSIONS ################################
+        // #########################################################################
+
+        // One metered ListObjectVersions request (metadata only, never a body) for keys under prefix, starting after
+        // (keyMarker, versionIdMarker); maxKeys is clamped to 1-1000. Never returns a partial page: a transport or
+        // HTTP error, an unparsable body, or a truncated page without a next key marker throws. versionIdMarker
+        // needs a keyMarker (std::invalid_argument, nothing sent or metered).
+        [[nodiscard]] virtual ObjectVersionPage listObjectVersionsPage(const std::string &prefix,
+                                                                       const std::string &keyMarker = {},
+                                                                       const std::string &versionIdMarker = {},
+                                                                       unsigned int maxKeys = 1000) const;
+
+        // One metered HEAD ?versionId=. nullopt only for 404 (no such key/version); a delete marker answers a head
+        // with delete_marker=true; anything else that is not a 2xx (400, 403, 5xx, transport) throws, so an outage is
+        // never mistaken for absence. Sets lastHeadOutcome like getHeadObject.
+        [[nodiscard]] virtual std::optional<ObjectVersionHead> headObjectVersion(const std::string &key,
+                                                                                 const std::string &versionId) const;
+
+        // One metered CopyObject of sourceKey@sourceVersionId onto destKey in this bucket, with directive COPY: the
+        // source's user metadata (vh-iv, vh-key-version, vh-encrypted, content-hash) carries over unchanged; only
+        // options.system_headers are applied (e.g. x-amz-storage-class from RequestOperation::CopyObjectRewrite),
+        // never replacement metadata. ifSourceMatchEtag sends x-amz-copy-source-if-match. sourceSize is the
+        // source's size (from a HEAD or the version listing): above MAX_SINGLE_COPY_BYTES it throws
+        // ObjectTooLargeForCopy before anything is sent or metered. Copying the version that is already current onto
+        // its own key is refused by AWS (400); restoring a noncurrent version onto its key is the documented use.
+        // Throws ObjectNotFound (404), ConditionalRequestFailed (412), or std::runtime_error (other failures,
+        // including an HTTP 200 whose body is an <Error>, which S3 sends when a copy fails after it started).
+        // Records the PutOutcome.
+        virtual CopyResult copyObjectVersion(const std::string &sourceKey, const std::string &sourceVersionId,
+                                             const std::string &destKey, uint64_t sourceSize,
+                                             const RequestOptions &options,
+                                             const std::optional<std::string> &ifSourceMatchEtag = std::nullopt) const;
+
         virtual void setObjectContentHash(const fs::path &key, const std::string &hash,
                                           const RequestOptions &options = {}) const;
 
@@ -268,11 +375,28 @@ namespace vh::storage::s3 {
         // (HTTP status, body bytes) -> false aborts the transfer.
         using TransportBodyFn = std::function<bool(long, std::span<const uint8_t>)>;
 
-        // The signed GET behind streamObject; extraHeaders are lower-case and included in the SigV4 signature.
+        // The signed GET behind streamObject; extraHeaders are lower-case and included in the SigV4 signature;
+        // versionId (when set) travels as the signed, percent-encoded ?versionId= query.
         // Test seam: fakes override this and keep streamObject's metering and status handling.
         virtual TransportResponse transportGet(const fs::path &key,
+                                               const std::optional<std::string> &versionId,
                                                const std::map<std::string, std::string> &extraHeaders,
                                                const TransportBodyFn &onBody) const;
+
+        // A request signed with sigv4::sign: RFC 3986 encoded path, and a sorted, RFC 3986 encoded query that is
+        // also exactly what the URL carries, so version ids with '+', '/', '=' sign and travel identically. key
+        // empty = the bucket itself. The version-aware ops send these through curl::http (bounded timeouts).
+        struct SignedObjectRequest {
+            std::string method;
+            std::string url;                                          // scheme://host/encoded-path[?canonical-query]
+            std::vector<std::pair<std::string, std::string>> headers; // to send: authorization included, host not
+            std::string canonical_request;                            // diagnostics and tests; contains no secret
+        };
+        [[nodiscard]] SignedObjectRequest signObjectRequest(
+            const std::string &method, const std::string &key,
+            const std::vector<std::pair<std::string, std::string>> &query,
+            const std::map<std::string, std::string> &headers,
+            const std::string &payloadHash = "UNSIGNED-PAYLOAD") const;
 
         enum class RequestKind { List, Head, Get, Put, Copy, Delete, DownloadBytes };
         void recordRequest(RequestKind kind, uint64_t amount = 1) const;
@@ -298,6 +422,11 @@ namespace vh::storage::s3 {
                                            const std::string &canonical,
                                            const std::string &payloadHash,
                                            const std::string &query = "") const;
+
+        // Sets the thread's PutOutcome from a successful PUT's raw response headers (ETag, x-amz-version-id);
+        // bodyEtag (CompleteMultipartUpload / CopyObject results carry it in XML) wins over the header.
+        static void recordPutResponse(const std::string &rawHeaders,
+                                      const std::optional<std::string> &bodyEtag = std::nullopt);
 
     };
 }

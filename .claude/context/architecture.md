@@ -709,7 +709,17 @@ stage "Copy And Delete")
   checked and records each request (`Controller::recordRequest`), so a hydrate's own cap inside a gateway request
   is still visible to the gateway's capture. `Controller::streamObject` is the metered streaming GET (optional
   signed `Range` and `If-Match`; 412 → `ConditionalRequestFailed`; the GET is metered before it is sent, body
-  bytes as they arrive); fakes override the protected `transportGet` seam and keep the metering.
+  bytes as they arrive); fakes override the protected `transportGet(key, versionId, headers, onBody)` seam and keep
+  the metering.
+- **Provider versions (data plane, `storage/s3/version.cpp`):** `listObjectVersionsPage` (List), `headObjectVersion`
+  (Head; 404 → nullopt, delete marker → `delete_marker`, outages throw), `streamObject` with
+  `GetObjectOptions::version_id`, `copyObjectVersion` (Copy, directive COPY keeps vh-iv/key-version/hash; > 5 GiB →
+  `ObjectTooLargeForCopy` before metering; a 200 carrying `<Error>` fails). They sign with `sigv4::sign` (sorted,
+  RFC 3986 query identical in URL and signature: version ids carry `+/=`) and send through `curl::http` (timeouts,
+  test transport). Every PUT path records the thread's `lastPutOutcome()` (ETag + `x-amz-version-id`). The legacy
+  `buildAuthorizationHeader` sorts the canonical query (it signed `list-type&…&continuation-token` unsorted).
+  Test fake: `tests/helpers/versioned_bucket.hpp` (`VersionedBucket`: S3 versioning modes, delete markers, failure
+  injection, body-GET counters).
 - **Prefer the local ciphertext copy (D11).** Anything that reads a vault file's bytes goes through
   `Engine::openPlaintextReader`: a cloud file with a backing file reads it in place (zero S3 requests). The ws share
   download/preview lanes and the S3 gateway's file reads (`ObjectStore::readFileObject`, ranges read only their
