@@ -138,6 +138,7 @@ CloudEngine::CloudEngine(const std::shared_ptr<vh::vault::model::S3Vault>& vault
       key_(runtime::Deps::get().apiKeyManager->getAPIKey(vault->api_key_id)),
       s3Provider_(std::make_shared<s3::Controller>(key_, vault->bucket)) {
     resolveS3ProviderConfiguration();
+    s3Provider_->setUsageVault(vault->id);   // feeds the vault's local usage ledger (recovery cost estimates)
 }
 
 CloudEngine::CloudEngine(const std::shared_ptr<vh::vault::model::S3Vault>& vault, std::shared_ptr<s3::Controller> s3Provider)
@@ -145,6 +146,7 @@ CloudEngine::CloudEngine(const std::shared_ptr<vh::vault::model::S3Vault>& vault
       key_(runtime::Deps::get().apiKeyManager->getAPIKey(vault->api_key_id)),
       s3Provider_(std::move(s3Provider)) {
     resolveS3ProviderConfiguration();
+    if (s3Provider_ && vault) s3Provider_->setUsageVault(vault->id);
 }
 
 void CloudEngine::upload(const std::shared_ptr<File>& f) const {
@@ -980,6 +982,7 @@ s3::S3RequestMetrics CloudEngine::s3RequestMetrics() const {
 
 void CloudEngine::setS3ControllerForTesting(std::shared_ptr<s3::Controller> s3Provider) {
     s3Provider_ = std::move(s3Provider);
+    if (s3Provider_ && vault) s3Provider_->setUsageVault(vault->id);
 }
 
 void CloudEngine::setS3ProviderProfileForTesting(s3::provider::ProfilePtr profile) {

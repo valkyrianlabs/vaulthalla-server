@@ -7,6 +7,7 @@
 // Every request is metered by recordRequest before it is sent, which also enforces the protection lock (#237).
 
 #include "storage/s3/Controller.hpp"
+#include "recovery/usage/Ledger.hpp"
 #include "storage/s3/curl/Http.hpp"
 #include "storage/s3/curl/helpers.hpp"
 #include "storage/s3/sigv4/Signer.hpp"
@@ -203,7 +204,10 @@ ObjectVersionPage Controller::listObjectVersionsPage(const std::string& prefix, 
     if (!keyMarker.empty()) query.emplace_back("key-marker", keyMarker);
     if (!versionIdMarker.empty()) query.emplace_back("version-id-marker", versionIdMarker);
 
-    recordRequest(RequestKind::List);
+    {
+        const vh::recovery::usage::ScopedRequestTag tag(vh::recovery::usage::RequestTag::VersionList);
+        recordRequest(RequestKind::List);
+    }
     const auto response = version_detail::send(signObjectRequest("GET", {}, query, {}), version_detail::kMetadataTimeout);
     if (!response.ok() || response.truncated)
         throw std::runtime_error(fmt::format("ListObjectVersions failed for {} prefix '{}' ({})", bucket_, prefix,
@@ -312,7 +316,11 @@ CopyResult Controller::copyObjectVersion(const std::string& sourceKey, const std
     headers["x-amz-metadata-directive"] = "COPY";
     if (ifSourceMatchEtag) headers["x-amz-copy-source-if-match"] = *ifSourceMatchEtag;
 
-    recordRequest(RequestKind::Copy);
+    {
+        // Copying a version onto its key is how a provider version is restored.
+        const vh::recovery::usage::ScopedRequestTag tag(vh::recovery::usage::RequestTag::VersionRestore);
+        recordRequest(RequestKind::Copy);
+    }
     const auto response = version_detail::send(signObjectRequest("PUT", destKey, {}, headers, sigv4::sha256Hex("")),
                                                 version_detail::kCopyTimeout);
 

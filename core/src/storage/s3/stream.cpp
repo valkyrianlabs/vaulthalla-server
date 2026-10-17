@@ -1,4 +1,5 @@
 #include "storage/s3/Controller.hpp"
+#include "recovery/usage/Ledger.hpp"
 #include "storage/s3/curl/helpers.hpp"
 #include "storage/s3/curl/wrappers.hpp"
 
@@ -7,6 +8,7 @@
 #include <algorithm>
 #include <cctype>
 #include <exception>
+#include <optional>
 #include <sstream>
 #include <string_view>
 
@@ -97,6 +99,10 @@ GetObjectResult Controller::streamObject(const fs::path& key, const GetObjectOpt
         throw std::invalid_argument("S3 GET range is inverted for " + key.string());
     if (options.version_id && options.version_id->empty())
         throw std::invalid_argument("S3 GET version id is empty for " + key.string());
+
+    // A GET of a provider version is a restore transfer: its request and bytes count as such in the usage ledger.
+    std::optional<vh::recovery::usage::ScopedRequestTag> versionTag;
+    if (options.version_id) versionTag.emplace(vh::recovery::usage::RequestTag::VersionRestore);
 
     // Metered before anything is sent: a GET budget refusal costs nothing upstream.
     recordRequest(RequestKind::Get);

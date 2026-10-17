@@ -1,4 +1,5 @@
 #include "storage/s3/Controller.hpp"
+#include "recovery/usage/Ledger.hpp"
 #include "storage/ScopedS3RequestUsageCapture.hpp"
 #include "vault/model/APIKey.hpp"
 #include "storage/s3/curl/helpers.hpp"
@@ -168,6 +169,20 @@ namespace vh::storage::s3 {
         }
 
         for (auto* capture : requestUsageCaptures) recordCapture(capture);
+
+        // The vault's local usage ledger (cost estimates for file recovery); never throws.
+        if (const auto vaultId = usageVault(); vaultId != 0) {
+            using recovery::usage::Request;
+            switch (kind) {
+            case RequestKind::List: recovery::usage::noteRequest(vaultId, Request::List, amount); break;
+            case RequestKind::Head: recovery::usage::noteRequest(vaultId, Request::Head, amount); break;
+            case RequestKind::Get: recovery::usage::noteRequest(vaultId, Request::Get, amount); break;
+            case RequestKind::Put: recovery::usage::noteRequest(vaultId, Request::Put, amount); break;
+            case RequestKind::Copy: recovery::usage::noteRequest(vaultId, Request::Copy, amount); break;
+            case RequestKind::Delete: recovery::usage::noteRequest(vaultId, Request::Delete, amount); break;
+            case RequestKind::DownloadBytes: recovery::usage::noteDownloadedBytes(vaultId, amount); break;
+            }
+        }
     }
 
     void Controller::recordUploadBytes(const uint64_t amount) const {
@@ -177,6 +192,7 @@ namespace vh::storage::s3 {
             metrics_.uploaded_bytes += amount;
         }
         for (auto* capture : requestUsageCaptures) capture->recordUploadBytes(amount);
+        if (const auto vaultId = usageVault(); vaultId != 0) recovery::usage::noteUploadedBytes(vaultId, amount);
     }
 
     void Controller::deleteObject(const fs::path& key) const {

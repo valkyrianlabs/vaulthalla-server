@@ -13,6 +13,7 @@
 #include "protocols/ws/ConnectionLifecycleManager.hpp"
 #include "runtime/Deps.hpp"
 #include "stats/SnapshotService.hpp"
+#include "recovery/usage/Ledger.hpp"
 #include "sync/Controller.hpp"
 #include "vault/RetentionService.hpp"
 #include "sync/events/Service.hpp"
@@ -196,6 +197,10 @@ void Manager::stopAll(const int signal) {
         if (entry.name != "FUSE") stopService(entry, signal);
     for (const auto& entry : entries)
         if (entry.name == "FUSE") stopService(entry, signal);
+
+    // Every writer has stopped: the last counts of the local recovery usage ledger go to the database.
+    if (const auto flushed = recovery::usage::flush(); !flushed.ok)
+        log::Registry::runtime()->warn("[ServiceManager] Recovery usage counters not saved at shutdown: {}", flushed.error);
 
     log::Registry::runtime()->info("[ServiceManager] All services stopped in {} ms.",
                                    std::chrono::duration_cast<std::chrono::milliseconds>(

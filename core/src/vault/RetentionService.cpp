@@ -1,5 +1,6 @@
 #include "vault/RetentionService.hpp"
 #include "vault/Retention.hpp"
+#include "recovery/usage/Ledger.hpp"
 #include "log/Registry.hpp"
 
 #include <thread>
@@ -22,6 +23,9 @@ void RetentionService::runLoop() {
             // The database may be down; the next pass retries. Purges are resumable from any point.
             log::Registry::vaulthalla()->warn("[VaultRetention] Retention pass failed: {}", e.what());
         }
+
+        // File recovery's local usage ledger rides on this loop: flushed every 60 s, cost alerts at most hourly.
+        recovery::usage::tick(std::chrono::system_clock::now());
 
         for (auto waited = std::chrono::milliseconds(0); waited < kInterval && !shouldStop(); waited += tick) {
             if (retention::takePassRequest()) break;
