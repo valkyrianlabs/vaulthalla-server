@@ -5,6 +5,7 @@
 
 #include <openssl/hmac.h>
 #include <openssl/sha.h>
+#include <algorithm>
 #include <sstream>
 #include <iomanip>
 #include <regex>
@@ -114,6 +115,29 @@ namespace vh::storage::s3::curl {
         return !etagOut.empty();
     }
 
+    std::string canonicalQueryString(const std::string &query) {
+        if (query.empty()) return {};
+        std::vector<std::pair<std::string, std::string>> params;
+        std::size_t start = 0;
+        while (start <= query.size()) {
+            const auto amp = std::min(query.find('&', start), query.size());
+            const auto part = query.substr(start, amp - start);
+            if (!part.empty()) {
+                const auto eq = part.find('=');
+                if (eq == std::string::npos) params.emplace_back(part, std::string{});   // "?uploads" → "uploads="
+                else params.emplace_back(part.substr(0, eq), part.substr(eq + 1));
+            }
+            start = amp + 1;
+        }
+        std::ranges::sort(params);   // by encoded name, then encoded value (SigV4)
+        std::string out;
+        for (const auto &[name, value] : params) {
+            if (!out.empty()) out.push_back('&');
+            out += name + "=" + value;
+        }
+        return out;
+    }
+
     std::string buildAuthorizationHeader(const std::shared_ptr<vault::model::APIKey> &api_key,
                                          const std::string &method,
                                          const std::string &fullPath,
@@ -131,13 +155,11 @@ namespace vh::storage::s3::curl {
                 effectiveQuery = "";
             } else {
                 canonicalPath = fullPath.substr(0, qpos);
-                effectiveQuery = fullPath.substr(qpos + 1);
-                if (effectiveQuery.find('=') == std::string::npos)
-                    effectiveQuery += "="; // handle case like ?flag
+                effectiveQuery = canonicalQueryString(fullPath.substr(qpos + 1));
             }
         } else {
             canonicalPath = fullPath;
-            effectiveQuery = canonicalQuery;
+            effectiveQuery = canonicalQueryString(canonicalQuery);
         }
 
         const std::string service = "s3";
