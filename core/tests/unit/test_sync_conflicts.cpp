@@ -105,6 +105,11 @@ TEST_F(SyncConflictsTest, AnOpenConflictClosesItselfWhenBothSidesConverge) {
     write(f, "/converge.txt", "remote edit");
     db::Transactions::exec("SyncConflictsTest::sameHash", [&](pqxx::work& txn) {
         txn.exec("UPDATE files SET content_hash = 'remote-remote edit' WHERE fs_entry_id = $1", pqxx::params{local->id});
+        // Converged means the same content at the same time. Without pinning the timestamps, a write that lands in a
+        // later second than the remote's (slow runners) made the local side "newer" and the pass planned an upload.
+        txn.exec("UPDATE fs_entry SET updated_at = (SELECT last_modified FROM remote_object_index "
+                 "WHERE vault_id = $2 AND object_key = 'converge.txt') WHERE id = $1",
+                 pqxx::params{local->id, f.vault->id});
     });
     const auto plan = pass(f);
     EXPECT_EQ(planned(plan, ActionType::Upload, "/converge.txt") + planned(plan, ActionType::Download, "/converge.txt"), 0u);
