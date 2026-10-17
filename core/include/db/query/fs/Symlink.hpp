@@ -4,6 +4,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <pqxx/pqxx>
 #include "fs/Fwd.hpp"
 
 namespace vh::db::query::fs {
@@ -18,6 +19,9 @@ public:
     static unsigned int upsertSymlink(const SymlinkPtr& symlink);
 
     static void deleteSymlink(const SymlinkPtr& symlink);
+
+    // The same, inside the caller's transaction (a rename replacing the symlink).
+    static void deleteSymlink(pqxx::work& txn, unsigned int id);
 
     static SymlinkPtr getSymlinkById(unsigned int id);
 

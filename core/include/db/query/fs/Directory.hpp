@@ -50,6 +50,7 @@ public:
     // every ancestor's subdirectory count. It used to drop a non-empty directory with everything under it (cascade)
     // and only decrement its parent.
     [[nodiscard]] static bool deleteEmptyDirectory(unsigned int id);
+    [[nodiscard]] static bool deleteEmptyDirectory(pqxx::work& txn, unsigned int id);
 
     [[nodiscard]] static bool isDirectoryEmpty(unsigned int id);
 
