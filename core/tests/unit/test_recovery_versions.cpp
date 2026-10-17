@@ -8,12 +8,16 @@
 #include "../helpers/versioned_bucket.hpp"
 
 #include "crypto/util/encrypt.hpp"
+#include "crypto/util/hash.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/fs/File.hpp"
 #include "db/query/recovery/Blob.hpp"
 #include "db/query/recovery/Generation.hpp"
 #include "db/query/recovery/Policy.hpp"
 #include "db/query/recovery/Snapshot.hpp"
+#include "db/query/sync/Conflict.hpp"
+#include "db/query/sync/Event.hpp"
+#include "db/query/sync/RemoteObjectIndex.hpp"
 #include "fs/Filesystem.hpp"
 #include "fs/cache/Registry.hpp"
 #include "fs/model/File.hpp"
@@ -32,11 +36,17 @@
 #include "storage/CloudEngine.hpp"
 #include "storage/Manager.hpp"
 #include "storage/PlaintextReader.hpp"
+#include "sync/Cloud.hpp"
+#include "sync/ConflictResolver.hpp"
 #include "sync/Planner.hpp"
 #include "sync/model/Action.hpp"
+#include "sync/model/Event.hpp"
+#include "sync/model/RemoteManifest.hpp"
 #include "sync/model/RemotePolicy.hpp"
 #include "sync/model/ScopedOp.hpp"
+#include "sync/model/Throughput.hpp"
 #include "sync/rotation/Runtime.hpp"
+#include "sync/tasks/Download.hpp"
 #include "sync/tasks/Upload.hpp"
 #include "vault/APIKeyManager.hpp"
 #include "vault/EncryptionManager.hpp"
@@ -55,6 +65,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <functional>
 #include <iostream>
 #include <set>
 #include <string>
@@ -230,6 +241,40 @@ protected:
         auto done = task.promise.get_future();
         task();
         return std::get<bool>(done.get());
+    }
+
+    // One regular sync pass, inline: the real planner and tasks; the index mutation (and manifest) only when every
+    // transfer succeeded, as sync::Cloud does.
+    static std::vector<sync::model::Action> runPass(const Cloud& c) {
+        auto cloud = std::make_shared<sync::Cloud>(c.engine);
+        cloud->event = std::make_shared<sync::model::Event>();
+        cloud->event->vault_id = c.engine->vault->id;
+        cloud->event->timestamp_begin = std::time(nullptr);
+        db::query::sync::Event::create(cloud->event);
+        cloud->initBins();
+        const auto plan = cloud->planPass();
+        bool ok = true;
+        for (const auto& a : plan) {
+            using AT = sync::model::ActionType;
+            if (a.type == AT::Upload) {
+                sync::tasks::Upload task(c.engine, a.local, cloud->op(sync::model::Throughput::Metric::UPLOAD));
+                auto done = task.promise.get_future();
+                task();
+                ok = std::get<bool>(done.get()) && ok;
+            } else if (a.type == AT::Download) {
+                sync::tasks::Download task(c.engine, a.remote, cloud->op(sync::model::Throughput::Metric::DOWNLOAD), false);
+                auto done = task.promise.get_future();
+                task();
+                ok = std::get<bool>(done.get()) && ok;
+            }
+        }
+        if (ok) c.engine->applyRemoteIndexMutation(plan);
+        cloud->clearBins();
+        return plan;
+    }
+
+    static unsigned planned(const std::vector<sync::model::Action>& plan, const sync::model::ActionType type) {
+        return static_cast<unsigned>(std::ranges::count_if(plan, [&](const auto& a) { return a.type == type; }));
     }
 
     // The bucket's history of a key, oldest first, decrypted where Vaulthalla encrypted it.
@@ -484,6 +529,138 @@ TEST_F(RecoveryVersionsTest, ASnapshotHeldBlobOutlivesItsPrunedVersion) {
     EXPECT_TRUE(blob->present) << "the snapshot still references it";
 }
 
+// The recovery rows ride in the content write's transaction; failing them must never fail the write (a FUSE seal would
+// return EIO, an overwrite would be refused). attach() works under a savepoint: the version is skipped, the write lands.
+TEST_F(RecoveryVersionsTest, ABrokenVersionAttachSkipsTheVersionButNeverTheWrite) {
+    const auto engine = localVault();
+    const auto ref = store::vaultRef(*engine->vault);
+    const auto f = write(engine, "/b.txt", "one");
+
+    // The live generation already has a blob (as a snapshot leaves it): retain() reuses it (Existing) ...
+    auto held = store::captureLink(ref, f->backing_path, {.encryption_iv = f->encryption_iv,
+                                                          .key_version = f->encrypted_with_key_version,
+                                                          .plaintext_bytes = f->size_bytes,
+                                                          .content_hash = f->content_hash});
+    const auto heldId = db::Transactions::exec("RecoveryVersionsTest::held", [&](pqxx::work& txn) {
+        return held.attach(txn);
+    });
+    held.committed();
+    // ... and it is removed between retain() and attach().
+    versions::setAttachHookForTesting([&](pqxx::work&) {
+        EXPECT_TRUE(store::removeBlob(ref, heldId));
+    });
+    const auto failedBefore = versions::counters().failed;
+    EXPECT_NO_THROW(write(engine, "/b.txt", "two"));
+    versions::setAttachHookForTesting({});
+    EXPECT_EQ(readLocal(engine, "/b.txt"), "two") << "the write committed";
+    EXPECT_TRUE(versionsOf(engine, "/b.txt").empty()) << "that version was skipped";
+    EXPECT_EQ(versions::counters().failed, failedBefore + 1);
+
+    // A failing statement inside the attach (an FK error, …) aborts only the savepoint, through the FUSE seal too.
+    versions::setAttachHookForTesting([](pqxx::work& txn) { txn.exec("SELECT 1 / 0"); });
+    const auto cur = row(engine, "/b.txt");
+    ASSERT_TRUE(cur->inode);
+    fuse::WorkingCopies copies(scratch / ("wc_" + tag()), fuse::WorkingCopies::daemonHooks());
+    auto h = copies.open(*cur->inode, cur, O_RDWR);
+    ASSERT_EQ(copies.write(h, "T", 1, 0, std::nullopt), 1);
+    EXPECT_NO_THROW(copies.release(h)) << "no EIO from the seal";
+    versions::setAttachHookForTesting({});
+    EXPECT_EQ(readLocal(engine, "/b.txt"), "Two");
+    EXPECT_TRUE(versionsOf(engine, "/b.txt").empty());
+    EXPECT_EQ(versions::counters().failed, failedBefore + 2);
+
+    // Nothing left behind: the next write keeps its version as usual.
+    write(engine, "/b.txt", "three");
+    ASSERT_EQ(versionsOf(engine, "/b.txt").size(), 1u);
+    EXPECT_EQ(decryptVersion(engine, versionsOf(engine, "/b.txt").at(0)), "Two");
+}
+
+// Off-path and critical-section costs: with local versioning off and nothing pending, uploads cost no backlog query
+// (one check per vault, remembered until the policy changes); blobs a capture frees are unlinked after the content
+// lock is released (FUSE seal, createFile overwrite), never inside it.
+TEST_F(RecoveryVersionsTest, BacklogChecksAndBlobFreesStayOffTheHotPaths) {
+    const auto off = cloudVault(sync::model::RemotePolicy::Strategy::Sync, true, std::nullopt);
+    const auto checksBefore = versions::counters().backlog_checks;
+    for (int i = 0; i < 3; ++i) {
+        write(off.engine, "/o" + std::to_string(i) + ".txt", "x");
+        ASSERT_TRUE(upload(off, "/o" + std::to_string(i) + ".txt"));
+    }
+    EXPECT_EQ(versions::counters().backlog_checks, checksBefore + 1) << "one check for the vault, not one per upload";
+    setPolicy(off.engine->vault->id, on());   // a policy change forgets it
+    setPolicy(off.engine->vault->id, {});
+    write(off.engine, "/o0.txt", "y");
+    ASSERT_TRUE(upload(off, "/o0.txt"));
+    EXPECT_EQ(versions::counters().backlog_checks, checksBefore + 2);
+
+    const auto engine = localVault(on(1));
+    const auto f = write(engine, "/k.txt", "1");
+    write(engine, "/k.txt", "2");
+    unsigned frees = 0;
+    versions::setDeferredFreeHookForTesting([&] {
+        auto& m = fs::Filesystem::contentWriteMutex(f->id);
+        EXPECT_TRUE(m.try_lock()) << "the content lock is released before the blobs go";
+        m.unlock();
+        ++frees;
+    });
+    write(engine, "/k.txt", "3");   // keep_last 1 prunes version "1" and frees its blob
+    EXPECT_EQ(frees, 1u);
+    fuse::WorkingCopies copies(scratch / ("wc_" + tag()), fuse::WorkingCopies::daemonHooks());
+    const auto cur = row(engine, "/k.txt");
+    auto h = copies.open(*cur->inode, cur, O_RDWR);
+    ASSERT_EQ(copies.write(h, "4", 1, 0, std::nullopt), 1);
+    copies.release(h);              // the seal prunes version "2"
+    versions::setDeferredFreeHookForTesting({});
+    EXPECT_EQ(frees, 2u);
+    EXPECT_EQ(blobsOf(engine->vault->id), 1u) << "the frees did happen";
+    EXPECT_EQ(decryptVersion(engine, versionsOf(engine, "/k.txt").at(0)), "3");
+}
+
+// A delete links the backing file into the store. A seal (overwrite, rotation) that renames new bytes over it between
+// the delete reading the row and linking would leave a blob whose IV doesn't match its bytes. Deletes take the file's
+// content lock and re-read the row: here the "seal" holds the lock while the delete waits, and the kept version is the
+// sealed content, decryptable under its own IV.
+TEST_F(RecoveryVersionsTest, ADeleteRacingASealKeepsTheGenerationTheRowDescribes) {
+    const auto engine = localVault();
+    const std::vector<std::pair<std::string, std::function<void(const std::string&)>>> deletes{
+        {"Filesystem::remove", [&](const std::string& p) { fs::Filesystem::remove(engine->vaultPathToFusePath(p), superUser->id); }},
+        {"Engine::removeLocally", [&](const std::string& p) { engine->removeLocally(p); }},
+    };
+    for (const auto& [name, remove] : deletes) {
+        SCOPED_TRACE(name);
+        const auto path = "/race-" + tag() + ".txt";
+        const auto f = write(engine, path, "before the seal");
+        std::atomic<bool> done{false};
+        std::thread deleter;
+        {
+            std::unique_lock lock(fs::Filesystem::contentWriteMutex(f->id));
+            deleter = std::thread([&] {
+                remove(path);
+                done = true;
+            });
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            EXPECT_FALSE(done) << "the delete waits for the content lock";
+
+            // The seal's protocol, under the lock: sealed sidecar, row, rename over the backing file, cache.
+            auto staged = std::make_shared<fs::model::File>(*row(engine, path));
+            const auto sealed = engine->encryptionManager->encrypt(bytes("after the seal"), staged);
+            const auto sidecar = fs::ops::contentSidecarPath(staged->backing_path);
+            fs::ops::writeFileExclusive(sidecar, sealed);
+            staged->size_bytes = std::string("after the seal").size();
+            staged->content_hash = crypto::hash::blake2b(sidecar);
+            db::Transactions::exec("RecoveryVersionsTest::seal", [&](pqxx::work& txn) {
+                db::query::fs::File::updateFile(txn, staged);
+            });
+            sfs::rename(sidecar, staged->backing_path);
+            runtime::Deps::get().fsCache->updateEntry(staged);
+        }
+        deleter.join();
+        EXPECT_FALSE(row(engine, path));
+        const auto kept = versionsOf(engine, path);
+        ASSERT_EQ(kept.size(), 1u);
+        EXPECT_EQ(decryptVersion(engine, kept[0]), "after the seal") << "the blob's IV matches its bytes";
+    }
+}
+
 // ---- the upstream backlog ----------------------------------------------------------------------------------------------
 
 TEST_F(RecoveryVersionsTest, AnOutageQueuesVersionsInOrderAndTheReplayKeepsIt) {
@@ -530,6 +707,148 @@ TEST_F(RecoveryVersionsTest, AnOutageQueuesVersionsInOrderAndTheReplayKeepsIt) {
     }
     EXPECT_EQ(backlog::summary(c.engine->vault->id).pending_versions, 0u);
     EXPECT_TRUE(kept[1].blob_id) << "a sync vault keeps its local history";
+}
+
+// A replay interrupted half way leaves the bucket's current object at one of the file's own earlier generations,
+// Vaulthalla's own write of its history. The next pass must finish the publication: before the fix it read that object
+// as a remote change, so `ask` recorded a spurious conflict and keep_remote / keep_newest (LastModified) downloaded the
+// stale generation over the live file. An already-synced file (g0 uploaded; g1 lands, g2 fails) and a new file (its
+// first upload replays g0, then g1 fails), with the remote index from the DB and from a full LIST (ETag, no hash).
+TEST_F(RecoveryVersionsTest, AnInterruptedReplayIsFinishedByTheNextPassUnderEveryPolicy) {
+    using CP = sync::model::RemotePolicy::ConflictPolicy;
+    using AT = sync::model::ActionType;
+    struct Case {
+        CP policy;
+        bool fresh;     // never uploaded before the outage
+        bool listed;    // the next pass lists the bucket instead of reading the index
+    };
+    for (const auto& [policy, fresh, listed] :
+         {Case{CP::Ask, false, false}, Case{CP::KeepNewest, true, false}, Case{CP::Ask, false, true},
+          Case{CP::KeepRemote, true, false}, Case{CP::KeepRemote, true, true}, Case{CP::Ask, true, false}}) {
+        SCOPED_TRACE(std::string(sync::model::to_string(policy)) + (fresh ? ", new file" : ", synced file") +
+                     (listed ? ", listed" : ", indexed"));
+        const auto c = cloudVault(sync::model::RemotePolicy::Strategy::Sync);
+        c.engine->remote_policy()->conflict_policy = policy;
+        std::vector<std::string> expected;
+        if (!fresh) {
+            write(c.engine, "/i.txt", "g0");
+            ASSERT_EQ(planned(runPass(c), AT::Upload), 1u);
+            ASSERT_EQ(history(c, "/i.txt"), (std::vector<std::string>{"g0"}));
+            write(c.engine, "/i.txt", "g1");
+            write(c.engine, "/i.txt", "g2");
+            expected = {"g0", "g1"};
+        } else {
+            write(c.engine, "/i.txt", "g0");
+            write(c.engine, "/i.txt", "g1");
+            expected = {"g0"};
+        }
+        write(c.engine, "/i.txt", "current");
+        // One replay lands, then a failure (a new vault's first pass also publishes the index manifest first).
+        c.bucket->failAfter(VersionedBucket::Op::Put, VersionedBucket::Failure::Transport, fresh ? 2 : 1);
+        ASSERT_EQ(planned(runPass(c), AT::Upload), 1u);
+        ASSERT_EQ(history(c, "/i.txt"), expected) << "interrupted";
+        ASSERT_EQ(readLocal(c.engine, "/i.txt"), "current");
+
+        if (listed) {
+            // Lose the index and the manifest: the next pass lists the bucket (ETags, object sizes, no hashes).
+            db::query::sync::RemoteObjectIndex::replaceFromListObjects(c.engine->vault->id, {});
+            (void)c.bucket->seedDeleteMarker(sync::model::remote_manifest::INDEX_V1_KEY);
+        }
+        const auto next = runPass(c);
+        EXPECT_EQ(planned(next, AT::Upload), 1u) << "the publication is finished";
+        EXPECT_EQ(planned(next, AT::Download), 0u) << "never the stale generation over the live file";
+        EXPECT_EQ(readLocal(c.engine, "/i.txt"), "current");
+        const auto full = fresh ? std::vector<std::string>{"g0", "g1", "current"}
+                                : std::vector<std::string>{"g0", "g1", "g2", "current"};
+        EXPECT_EQ(history(c, "/i.txt"), full);
+        EXPECT_TRUE(db::query::sync::Conflict::openForVault(c.engine->vault->id).empty()) << "no conflict";
+        EXPECT_EQ(backlog::summary(c.engine->vault->id).pending_versions, 0u);
+
+        const auto after = runPass(c);
+        EXPECT_EQ(planned(after, AT::Upload) + planned(after, AT::Download), 0u) << "settled";
+    }
+}
+
+// An autosave/append workload during an outage would queue one full blob per write, every one replayed. A key keeps at
+// most keep_last (else kDefaultPendingCap) pending versions; older ones are skipped ('coalesced'), and the version
+// quota reaches pending versions too, visibly (skipped 'quota', reported).
+TEST_F(RecoveryVersionsTest, TheUpstreamBacklogOfAKeyIsBoundedAndTheQuotaReachesIt) {
+    const auto pendingOf = [](const std::vector<rq::GenerationRow>& rows) {
+        return std::ranges::count_if(rows, [](const auto& g) { return g.upstream_state == rq::UpstreamState::Pending; });
+    };
+
+    // keep_last 3: the backlog is the newest three; older ones were coalesced and pruned with their blobs.
+    const auto c = cloudVault(sync::model::RemotePolicy::Strategy::Sync, true, on(3));
+    const auto coalescedBefore = versions::counters().coalesced;
+    for (int i = 0; i < 10; ++i) write(c.engine, "/auto.txt", "save " + std::to_string(i));
+    auto kept = versionsOf(c.engine, "/auto.txt");
+    EXPECT_EQ(pendingOf(kept), 3);
+    EXPECT_EQ(kept.size(), 3u) << "coalesced versions beyond keep_last are pruned";
+    EXPECT_EQ(blobsOf(c.engine->vault->id), 3u);
+    EXPECT_GE(versions::counters().coalesced, coalescedBefore + 6);
+    ASSERT_TRUE(upload(c, "/auto.txt"));
+    EXPECT_EQ(history(c, "/auto.txt"), (std::vector<std::string>{"save 6", "save 7", "save 8", "save 9"}))
+        << "three replays, then the current content";
+
+    // No keep_last: the default cap; the coalesced versions stay as local versions, skipped, with the reason.
+    const auto d = cloudVault(sync::model::RemotePolicy::Strategy::Sync);
+    const auto writes = versions::kDefaultPendingCap + 8;
+    for (unsigned i = 0; i < writes; ++i) write(d.engine, "/log.txt", "line " + std::to_string(i));
+    kept = versionsOf(d.engine, "/log.txt");
+    ASSERT_EQ(kept.size(), writes - 1);
+    EXPECT_EQ(pendingOf(kept), static_cast<long>(versions::kDefaultPendingCap));
+    EXPECT_EQ(backlog::summary(d.engine->vault->id).pending_versions, versions::kDefaultPendingCap);
+    EXPECT_EQ(kept.front().upstream_state, rq::UpstreamState::Skipped);
+    EXPECT_EQ(kept.front().upstream_error, "coalesced");
+    EXPECT_TRUE(kept.front().blob_id) << "still a local version";
+    EXPECT_EQ(kept.back().upstream_state, rq::UpstreamState::Pending);
+
+    // The version quota applies to pending versions too: dropped oldest first, skipped 'quota' first, reported.
+    recovery::LocalVersioningPolicy tight = on();
+    tight.quota_bytes = 0;
+    const auto report = versions::applyRetention(store::vaultRef(*d.engine->vault), tight, std::time(nullptr));
+    EXPECT_EQ(report.pending_dropped, versions::kDefaultPendingCap);
+    EXPECT_TRUE(versionsOf(d.engine, "/log.txt").empty());
+    EXPECT_EQ(backlog::summary(d.engine->vault->id).pending_versions, 0u);
+    EXPECT_EQ(blobsOf(d.engine->vault->id), 0u);
+}
+
+// Every writer of a key's current content replays the key's backlog first, not only the sync Upload task: a conflict
+// resolved keep_local and a key rotation that re-publishes the file. Otherwise the provider got the current content
+// before its predecessors (and those were replayed on top of it later).
+TEST_F(RecoveryVersionsTest, KeepLocalResolutionAndRotationReplayTheBacklogFirst) {
+    {
+        const auto c = cloudVault(sync::model::RemotePolicy::Strategy::Sync);
+        c.engine->remote_policy()->conflict_policy = sync::model::RemotePolicy::ConflictPolicy::Ask;
+        write(c.engine, "/k.txt", "k0");
+        ASSERT_EQ(planned(runPass(c), sync::model::ActionType::Upload), 1u);
+        write(c.engine, "/k.txt", "k1");
+        write(c.engine, "/k.txt", "mine");
+        (void)c.bucket->seed("k.txt", "theirs");   // someone else's write meanwhile
+        db::query::sync::RemoteObjectIndex::replaceFromListObjects(c.engine->vault->id, {});
+        (void)c.bucket->seedDeleteMarker(sync::model::remote_manifest::INDEX_V1_KEY);
+        (void)runPass(c);   // lists the bucket: both sides changed
+        const auto open = db::query::sync::Conflict::openForVault(c.engine->vault->id);
+        const auto fileId = row(c.engine, "/k.txt")->id;
+        ASSERT_TRUE(open.contains(fileId));
+        sync::ConflictResolver::resolve(c.engine, open.at(fileId), sync::ConflictDecision::KeepLocal);
+        EXPECT_EQ(history(c, "/k.txt"), (std::vector<std::string>{"k0", "theirs", "k1", "mine"}));
+        EXPECT_EQ(backlog::summary(c.engine->vault->id).pending_versions, 0u);
+    }
+    {
+        const auto c = cloudVault(sync::model::RemotePolicy::Strategy::Sync);
+        write(c.engine, "/r.txt", "r1");
+        ASSERT_TRUE(upload(c, "/r.txt"));
+        write(c.engine, "/r.txt", "r2");
+        write(c.engine, "/r.txt", "r3");
+        c.engine->encryptionManager->prepare_key_rotation();
+        const auto deps = sync::rotation::runtimeDeps(c.engine);
+        static_cast<void>(sync::rotation::rotateFile(row(c.engine, "/r.txt"), deps));
+        c.engine->encryptionManager->finish_key_rotation();
+        EXPECT_EQ(history(c, "/r.txt"), (std::vector<std::string>{"r1", "r2", "r3"}))
+            << "r2 replayed before the rotation published r3";
+        EXPECT_EQ(backlog::summary(c.engine->vault->id).pending_versions, 0u);
+    }
 }
 
 TEST_F(RecoveryVersionsTest, AReplayedGenerationKeepsItsOwnKeyVersionAcrossARotation) {

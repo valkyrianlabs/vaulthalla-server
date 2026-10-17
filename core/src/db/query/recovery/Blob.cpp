@@ -117,6 +117,13 @@ uint64_t Blob::physicalBytes(const uint32_t vaultId) {
     });
 }
 
+uint64_t Blob::chargedBytes(const uint32_t vaultId) {
+    return Transactions::read("recovery::Blob::chargedBytes", [&](pqxx::transaction_base& txn) {
+        const auto res = txn.exec(pqxx::prepped{"recovery_blob_charged_bytes"}, pqxx::params{vaultId});
+        return detail::u64(res.one_row_ref()[0]);
+    });
+}
+
 std::vector<BlobRow> Blob::listUnreferenced(const uint32_t vaultId, const int64_t minAgeSeconds, const unsigned int limit) {
     return Transactions::read("recovery::Blob::listUnreferenced", [&](pqxx::transaction_base& txn) {
         const auto res = txn.exec(pqxx::prepped{"recovery_blob_list_unreferenced"},

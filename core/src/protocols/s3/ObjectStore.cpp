@@ -776,9 +776,13 @@ void ObjectStore::purgeLocalObjectState(
         oldInode = file->inode;
         oldId = file->id;
         oldBacking = file->backing_path;
-        // Local versioning keeps the purged object's last generation (the backing file goes after the commit).
-        auto kept = recovery::local::versions::retain(*engine, *file, recovery::local::Reason::Delete,
-                                                      {.actor = actorUserId});
+        // Local versioning keeps the purged object's last generation (the backing file goes after the commit), under
+        // the file's content lock with the row re-read, so a concurrent seal/overwrite can't be linked under the old IV.
+        std::scoped_lock contentLock(vh::fs::Filesystem::contentWriteMutex(file->id));
+        const auto current = db::query::fs::File::getFileById(file->id);
+        auto kept = current ? recovery::local::versions::retain(*engine, *current, recovery::local::Reason::Delete,
+                                                                {.actor = actorUserId})
+                            : recovery::local::versions::Pending{};
         db::Transactions::exec("ObjectStore::purgeLocalObjectState", [&](pqxx::work& txn) {
             kept.attach(txn);
             db::query::fs::File::deleteFile(txn, actorUserId, file);

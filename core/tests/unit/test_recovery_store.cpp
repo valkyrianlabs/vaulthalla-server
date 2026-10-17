@@ -362,6 +362,7 @@ TEST_F(RecoveryStoreTest, RecoveryBytesCountAgainstTheVaultQuota) {
     ASSERT_TRUE(engine);
     const auto savedQuota = engine->vault->quota;
     engine->vault->quota = 1ull << 30;
+    store::invalidateUsage(v->id);   // vault ids repeat across suites (each recreates the schema); the cache is per process
 
     const auto before = engine->freeSpace();
     EXPECT_EQ(engine->getRecoverySize(), 0u);

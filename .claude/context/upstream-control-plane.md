@@ -41,7 +41,7 @@ buckets it created. Other providers: plain storage, but protection locks still a
   right before deleting; object lock enabled = blocker, unreadable = warning (provider refusals → `partial`).
   Cleanup holds its own lease (`deleting`, fresh token; busy for adoption/provision/detach), re-checked per round;
   a mid-run provider error leaves the row failed + resumable. `delete_upstream` is refused for adopted buckets.
-- Lifecycle: only `vaulthalla-managed` is rebuilt from fields; every other rule round-trips raw and is re-verified;
+- Lifecycle: only `vaulthalla-managed` is rebuilt from fields (detach removes every `vaulthalla-*` rule); every other rule round-trips raw and is re-verified;
   an owned rule with unmodeled elements is refused rather than rewritten.
 - Only `vaulthalla-*` rules/statements/queues are ours. AWS notification config is replaced wholesale on PUT: always
   GET-merge-PUT and re-read. R2 DELETE always carries `ruleIds` (a bodyless DELETE removes every rule for the queue).

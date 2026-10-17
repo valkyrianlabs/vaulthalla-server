@@ -33,8 +33,11 @@ void fsyncFile(const std::filesystem::path& path);
 void fsyncDirectory(const std::filesystem::path& dir);
 
 // Creates absPath (O_CREAT | O_EXCL, never following or reusing an existing name) with `mode`, writes `bytes` and
-// fsyncs the file. The directory entry is not fsynced. On failure nothing is left at absPath.
+// fsyncs the file when `bytes` is not empty (an empty inode has no data to flush). The directory entry is not
+// fsynced. On failure nothing is left at absPath.
 void writeFileExclusive(const std::filesystem::path& absPath, std::span<const uint8_t> bytes, mode_t mode = 0600);
+// How many file fsyncs writeFileExclusive issued in this process (tests: empty creates issue none).
+[[nodiscard]] uint64_t writeFileExclusiveFsyncsForTesting();
 
 // Durably replaces absPath: `produce` writes the new content to a private sibling temp file (created 0600, O_EXCL),
 // which is fsynced and renamed over absPath, then the directory is fsynced. Readers see the old file or the new

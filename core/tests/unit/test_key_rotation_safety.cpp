@@ -717,6 +717,23 @@ TEST_F(KeyRotationSafetyTest, WriteFileExclusiveNeverReplacesAnExistingFile) {
     EXPECT_EQ(slurpBytes(target), old);
 }
 
+// FUSE create and an empty createFile make an empty inode: there is no data to flush, so no file fsync (the
+// pre-recovery ofstream create had none either). Content still is fsynced.
+TEST_F(KeyRotationSafetyTest, WriteFileExclusiveSkipsTheFsyncOfAnEmptyFile) {
+    const auto before = fs::ops::writeFileExclusiveFsyncsForTesting();
+    const auto empty = dir / "vault" / "empty";
+    fs::ops::writeFileExclusive(empty, {}, 0640);
+    EXPECT_EQ(fs::ops::writeFileExclusiveFsyncsForTesting(), before) << "an empty create costs no fsync";
+    struct stat st{};
+    ASSERT_EQ(::stat(empty.c_str(), &st), 0);
+    EXPECT_EQ(st.st_size, 0);
+    EXPECT_EQ(st.st_mode & 07777, 0640u);
+    EXPECT_THROW(fs::ops::writeFileExclusive(empty, {}), std::system_error) << "still exclusive";
+
+    fs::ops::writeFileExclusive(dir / "vault" / "full", Bytes{1, 2, 3});
+    EXPECT_EQ(fs::ops::writeFileExclusiveFsyncsForTesting(), before + 1) << "content is fsynced";
+}
+
 TEST_F(KeyRotationSafetyTest, StreamingVerificationMatchesTheTag) {
     const auto key = randomBytes(cu::AES_KEY_SIZE);
     Bytes iv;

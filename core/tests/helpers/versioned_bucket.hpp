@@ -26,6 +26,7 @@
 //
 // Knobs:
 //   setVersioning(mode)            switch modes at any time (existing versions are kept, as S3 does).
+//   failAfter(op, failure, k)      lets k requests of `op` through, then fails the next one.
 //   failNext(op, failure, n)       the next n requests of `op` (Op::Any = any kind) fail *after* being metered (a
 //                                  failed request still costs a request): Failure::Transport (connection error),
 //                                  Failure::Http503 (SlowDown), Failure::ErrorAfter200 (copy/complete only: a 200
@@ -141,7 +142,13 @@ public:
 
     void failNext(const Op op, const Failure failure, const unsigned times = 1) {
         std::scoped_lock lock(mutex_);
-        for (unsigned i = 0; i < times; ++i) failures_.push_back({op, failure});
+        for (unsigned i = 0; i < times; ++i) failures_.push_back({op, failure, 0});
+    }
+
+    // Lets the next `after` requests of `op` through, then fails one (an interruption mid-sequence).
+    void failAfter(const Op op, const Failure failure, const unsigned after) {
+        std::scoped_lock lock(mutex_);
+        failures_.push_back({op, failure, after});
     }
 
     void clearFailures() {
@@ -650,6 +657,7 @@ private:
     struct InjectedFailure {
         Op op;
         Failure failure;
+        unsigned after{0};      // matching requests to let through first
     };
 
     static TransportResponse deliver(const long status, const std::string& body, const TransportBodyFn& onBody) {
@@ -832,6 +840,10 @@ private:
     std::optional<Failure> takeFailureLocked(const Op op) const {
         for (auto it = failures_.begin(); it != failures_.end(); ++it) {
             if (it->op == Op::Any || it->op == op) {
+                if (it->after > 0) {
+                    --it->after;
+                    return std::nullopt;
+                }
                 const auto failure = it->failure;
                 failures_.erase(it);
                 return failure;

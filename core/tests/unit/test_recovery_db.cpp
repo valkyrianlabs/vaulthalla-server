@@ -612,7 +612,7 @@ TEST_F(RecoveryDbTest, BacklogReplaysInFileAndVersionOrderAndTracksTransitions) 
     EXPECT_EQ(rq::Generation::listPending(vaultId, 100).front().id, f1ids[1]);
 }
 
-TEST_F(RecoveryDbTest, RetentionNeverPrunesPendingVersionsOrSnapshotMembers) {
+TEST_F(RecoveryDbTest, RetentionKeepsPendingVersionsUnlessTheQuotaNeedsThemAndNeverSnapshotMembers) {
     const auto vaultId = addVault();
     const auto fileId = addFile(vaultId, "/r.txt");
     std::vector<int64_t> ids, blobs;
@@ -651,7 +651,10 @@ TEST_F(RecoveryDbTest, RetentionNeverPrunesPendingVersionsOrSnapshotMembers) {
     // ids[1] still takes it out of the version bytes (no other version row references it).
     EXPECT_EQ(pruned({.quota_bytes = 4000}), std::vector<int64_t>{ids[1]});
     EXPECT_EQ(pruned({.quota_bytes = 2500}), (std::vector<int64_t>{ids[1], ids[2], ids[3]}));
-    EXPECT_EQ(pruned({.quota_bytes = 0}), (std::vector<int64_t>{ids[1], ids[2], ids[3], ids[4]}));
+    // Still over with every sent version gone: the quota reaches the pending one too (the caller skips it first).
+    EXPECT_EQ(pruned({.quota_bytes = 0}), (std::vector<int64_t>{ids[0], ids[1], ids[2], ids[3], ids[4]}));
+    EXPECT_EQ(pruned({.quota_bytes = 1000}), (std::vector<int64_t>{ids[1], ids[2], ids[3], ids[4]}))
+        << "the pending version only when the sent ones are not enough";
 
     const auto freed = rq::Generation::removeVersions(vaultId, {ids[0], ids[1], ids[2], member});
     EXPECT_EQ(freed, std::vector<int64_t>{blobs[2]}) << "blob 1 still has the snapshot member";

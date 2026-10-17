@@ -225,6 +225,28 @@ uint64_t Generation::markSkipped(const std::vector<int64_t>& ids) {
     });
 }
 
+uint64_t Generation::markSkipped(pqxx::work& txn, const std::vector<int64_t>& ids, const std::string& reason) {
+    if (ids.empty()) return 0;
+    const auto res = txn.exec(pqxx::prepped{"recovery_generation_mark_skipped_reason"},
+                              pqxx::params{detail::idArray(ids), reason});
+    return static_cast<uint64_t>(res.affected_rows());
+}
+
+uint64_t Generation::markSkipped(const std::vector<int64_t>& ids, const std::string& reason) {
+    if (ids.empty()) return 0;
+    return Transactions::exec("recovery::Generation::markSkippedReason",
+                              [&](pqxx::work& txn) { return markSkipped(txn, ids, reason); });
+}
+
+std::vector<int64_t> Generation::coalescePending(pqxx::work& txn, const uint32_t vaultId, const std::string& upstreamKey,
+                                                 const unsigned int keep) {
+    const auto res = txn.exec(pqxx::prepped{"recovery_generation_coalesce_pending"},
+                              pqxx::params{vaultId, upstreamKey, static_cast<int64_t>(keep)});
+    std::vector<int64_t> ids;
+    for (const auto row : res) ids.push_back(row[0].as<int64_t>());
+    return ids;
+}
+
 void Generation::recordFailure(const int64_t id, const std::string& error) {
     Transactions::exec("recovery::Generation::recordFailure", [&](pqxx::work& txn) {
         txn.exec(pqxx::prepped{"recovery_generation_record_failure"}, pqxx::params{id, error});
@@ -309,6 +331,11 @@ std::vector<GenerationRow> Generation::listPrunable(const uint32_t vaultId, cons
             }
         for (size_t i = 0; i < candidates.size() && total - freed > *rule.quota_bytes; ++i)
             if (candidates[i].prunable && !selected[i]) select(i);
+        // Still over: the quota applies to the upstream backlog too, oldest first (the caller marks those rows
+        // skipped, reason 'quota', before removing them). Snapshot members are never versions to prune.
+        for (size_t i = 0; i < candidates.size() && total - freed > *rule.quota_bytes; ++i)
+            if (!selected[i] && candidates[i].row.upstream_state == UpstreamState::Pending && !candidates[i].row.snapshot_id)
+                select(i);
     }
 
     std::vector<GenerationRow> out;

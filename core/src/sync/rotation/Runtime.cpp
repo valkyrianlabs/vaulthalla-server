@@ -11,6 +11,7 @@
 #include "fs/ops/file.hpp"
 #include "fuse/WorkingCopies.hpp"
 #include "log/Registry.hpp"
+#include "recovery/local/Backlog.hpp"
 #include "runtime/Deps.hpp"
 #include "storage/CloudEngine.hpp"
 #include "storage/Engine.hpp"
@@ -87,6 +88,11 @@ std::optional<Remote> remoteFor(const std::shared_ptr<storage::Engine>& engine) 
         return std::nullopt;  // flagged encrypted without IV metadata: the caller tries the row's IV
     };
     remote.upload = [cloud](const FileSP& file, const std::vector<uint8_t>& bytes, const bool isCiphertext) {
+        // Publishing the file's content writes its key: local versioning's backlog goes first, as for a sync upload
+        // (recovery/local/Backlog). A replay that can't be sent fails this file's rotation; the next pass retries.
+        if (const auto replay = recovery::local::backlog::replayBeforeUpload(*cloud, *file); replay.blocked)
+            throw std::runtime_error("earlier versions could not be replayed upstream first: " +
+                                     replay.error.value_or("unknown"));
         cloud->upload(file, bytes, isCiphertext);
     };
     return remote;

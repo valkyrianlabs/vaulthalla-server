@@ -26,9 +26,12 @@
 
 #include <nlohmann/json.hpp>
 
+#include <sys/stat.h>
+
 #include <algorithm>
 #include <filesystem>
 #include <iterator>
+#include <optional>
 #include <mutex>
 #include <ranges>
 #include <set>
@@ -175,7 +178,19 @@ Created create(const std::shared_ptr<storage::Engine>& engine, const std::shared
     //    cloud file without one needs first.
     const auto cloud = engine->type() == storage::StorageType::Cloud
                            ? std::static_pointer_cast<storage::CloudEngine>(engine) : nullptr;
-    uint64_t newBlobBytes = 0, hydrateBytes = 0;
+    //    The vault quota is charged only what the capture newly allocates: a link to a live backing file shares its
+    //    inode (getVaultSize counts it once; it is charged when the file is replaced), so only a copy (the store on
+    //    another filesystem) or a hydrate costs space now. The snapshot quota counts the snapshot's blob bytes.
+    const auto storeDevice = [&]() -> std::optional<dev_t> {
+        std::error_code ec;
+        for (auto p = store::root(); !p.empty(); p = p.parent_path()) {
+            struct stat st{};
+            if (sfs::exists(p, ec) && ::stat(p.c_str(), &st) == 0) return st.st_dev;
+            if (p == p.parent_path()) break;
+        }
+        return std::nullopt;
+    }();
+    uint64_t newBlobBytes = 0, hydrateBytes = 0, copyBytes = 0;
     for (const auto& e : entries) {
         if (e->isDirectory() || e->isSymlink()) continue;
         const auto f = db::query::fs::File::getFileById(e->id);
@@ -183,13 +198,13 @@ Created create(const std::shared_ptr<storage::Engine>& engine, const std::shared
         if (!f->encryption_iv.empty() &&
             rq::Blob::findByGeneration(vaultId, f->encryption_iv, f->encrypted_with_key_version))
             continue;
-        std::error_code ec;
-        if (sfs::is_regular_file(f->backing_path, ec)) {
-            const auto size = sfs::file_size(f->backing_path, ec);
-            if (!ec) newBlobBytes += size;
+        struct stat st{};
+        if (::stat(f->backing_path.c_str(), &st) == 0 && S_ISREG(st.st_mode)) {
+            newBlobBytes += static_cast<uint64_t>(st.st_size);
+            if (!storeDevice || st.st_dev != *storeDevice) copyBytes += static_cast<uint64_t>(st.st_size);
         } else if (f->size_bytes > 0 && cloud) {
             newBlobBytes += f->size_bytes + crypto::util::AES_TAG_SIZE;
-            hydrateBytes += f->size_bytes + crypto::util::AES_TAG_SIZE;
+            hydrateBytes += f->size_bytes + crypto::util::AES_TAG_SIZE;   // the hydrated copy is linked, not copied
         }
     }
     if (policy.snapshot_quota_bytes) {
@@ -200,7 +215,7 @@ Created create(const std::shared_ptr<storage::Engine>& engine, const std::shared
                                 " new bytes but the vault's snapshot quota (" + std::to_string(quota) + " bytes) has " +
                                 std::to_string(quota > used ? quota - used : 0) + " left");
     }
-    if (const auto required = newBlobBytes + hydrateBytes; required > 0) {
+    if (const auto required = copyBytes + hydrateBytes; required > 0) {
         if (const auto free = engine->freeSpace(); required > free)
             throw ops::Conflict("the snapshot needs " + std::to_string(required) + " bytes but the vault has " +
                                 std::to_string(free) + " left in its quota");

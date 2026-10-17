@@ -213,13 +213,15 @@ namespace vh::storage {
         return vault->quota > usedWithReserve ? vault->quota - usedWithReserve : 0;
     }
 
-    // Retained generations (snapshots, local versions) count against the vault quota: their physical, deduplicated
-    // bytes from recovery_blob (no walk; cached briefly by the store). The store is outside backingVaultRoot, so
-    // getVaultSize never sees it. Without a quota the filesystem's free space already reflects them.
+    // Retained generations (snapshots, local versions) count against the vault quota: the deduplicated bytes of the
+    // blobs that are not a live file's current generation (from recovery_blob, no walk; cached briefly by the store).
+    // A blob linked from a live backing file shares its inode, which getVaultSize already counts. The store is outside
+    // backingVaultRoot, so getVaultSize never sees it. Without a quota the filesystem's free space already reflects
+    // them.
     uintmax_t Engine::getRecoverySize() const {
         if (!vault || vault->id == 0) return 0;
         try {
-            return recovery::store::physicalBytes(vault->id);
+            return recovery::store::chargedBytes(vault->id);
         } catch (const std::exception &e) {
             log::Registry::storage()->debug("[StorageEngine] Recovery store size of vault {} unavailable: {}", vault->id,
                                             e.what());
@@ -291,26 +293,32 @@ namespace vh::storage {
 
     void Engine::removeLocally(const fs::path &rel_path) const {
         const auto path = rel_path.string().front() != '/' ? fs::path("/" / rel_path) : rel_path;
-        const auto file = db::query::fs::File::getFileByPath(vault->id, path);
-        if (!file) return;
-        // A sync DeleteLocal (the object went upstream): local versioning keeps the local copy's last generation. The
-        // provider removed it, so it is not upstream backlog.
-        auto kept = vh::recovery::local::versions::retain(*this, *file, vh::recovery::local::Reason::Delete,
-                                                          {.actor = std::nullopt, .upstream = false});
-        vh::db::Transactions::exec("Engine::removeLocally", [&](pqxx::work& txn) {
-            kept.attach(txn);
-            db::query::fs::File::deleteFile(txn, vault->owner_id, file);
-        });
-        kept.committed();
-        purgeDerivedArtifacts(file->id);
-        if (const auto& cache = runtime::Deps::get().fsCache) {
-            cache->evictId(file->id);
-            if (file->parent_id) cache->refreshDirStats(*file->parent_id);
+        const auto found = db::query::fs::File::getFileByPath(vault->id, path);
+        if (!found) return;
+        {
+            // Under the file's content lock with the row re-read (a seal or overwrite may have renamed new bytes over
+            // the backing file since): the generation linked is the one the row describes. The backing file and the
+            // cache entry go under the lock, so a seal that waited for it finds nothing to write back to.
+            std::scoped_lock contentLock(Filesystem::contentWriteMutex(found->id));
+            const auto file = db::query::fs::File::getFileById(found->id);
+            if (!file) return;
+            // A sync DeleteLocal (the object went upstream): local versioning keeps the local copy's last generation.
+            // The provider removed it, so it is not upstream backlog.
+            auto kept = vh::recovery::local::versions::retain(*this, *file, vh::recovery::local::Reason::Delete,
+                                                              {.actor = std::nullopt, .upstream = false});
+            vh::db::Transactions::exec("Engine::removeLocally", [&](pqxx::work& txn) {
+                kept.attach(txn);
+                db::query::fs::File::deleteFile(txn, vault->owner_id, file);
+            });
+            kept.committed();
+            if (const auto& cache = runtime::Deps::get().fsCache) cache->evictId(file->id);
+            // The file's own backing path (alias layout), not BACKING_VAULT_ROOT/<vault path>: nothing is stored there.
+            std::error_code ec;
+            fs::remove(file->backing_path, ec);
         }
-
-        // The file's own backing path (alias layout), not BACKING_VAULT_ROOT/<vault path>: nothing is stored there.
-        std::error_code ec;
-        fs::remove(file->backing_path, ec);
+        purgeDerivedArtifacts(found->id);
+        if (const auto& cache = runtime::Deps::get().fsCache)
+            if (found->parent_id) cache->refreshDirStats(*found->parent_id);
     }
 
     void Engine::removeLocally(const std::shared_ptr<file::Trashed> &f) const {

@@ -13,15 +13,19 @@
 #include "sync/model/RemotePolicy.hpp"
 #include "vault/model/Vault.hpp"
 
+#include <pqxx/except>
 #include <pqxx/result>
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <filesystem>
+#include <functional>
 #include <mutex>
 #include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
+#include <utility>
 
 namespace vh::recovery::local {
 
@@ -42,7 +46,11 @@ std::unordered_map<uint32_t, CachedPolicy> policyCache;
 // Bumped by every invalidation, so a load that raced with one never caches what it read.
 uint64_t policyEpoch = 0;
 
-std::atomic<uint64_t> retainedCount{0}, skippedCount{0}, failedCount{0}, policyLoadCount{0};
+std::atomic<uint64_t> retainedCount{0}, skippedCount{0}, failedCount{0}, policyLoadCount{0}, coalescedCount{0},
+    backlogCheckCount{0};
+
+// Vaults (versioning off) known to have no pending version; cleared with the policy cache.
+std::unordered_set<uint32_t> noBacklog;
 
 std::string vaultPathOf(const fs::model::File& f) {
     auto p = db::encoding::to_utf8_string(f.path.generic_u8string());
@@ -111,13 +119,35 @@ LocalVersioningPolicy versioningPolicy(const uint32_t vaultId) {
 void invalidatePolicy(const uint32_t vaultId) noexcept {
     std::scoped_lock lock(policyMutex);
     policyCache.erase(vaultId);
+    noBacklog.erase(vaultId);
     ++policyEpoch;
 }
 
 void invalidateAllPolicies() noexcept {
     std::scoped_lock lock(policyMutex);
     policyCache.clear();
+    noBacklog.clear();
     ++policyEpoch;
+}
+
+bool mayHaveBacklog(const uint32_t vaultId) {
+    if (versioningPolicy(vaultId).enabled) return true;
+    uint64_t epoch = 0;
+    {
+        std::scoped_lock lock(policyMutex);
+        if (noBacklog.contains(vaultId)) return false;
+        epoch = policyEpoch;
+    }
+    ++backlogCheckCount;
+    const bool any = db::Transactions::read("recovery::local::mayHaveBacklog", [&](pqxx::transaction_base& txn) {
+        return txn.exec("SELECT EXISTS (SELECT 1 FROM file_versions WHERE vault_id = $1 AND upstream_state = 'pending')",
+                        pqxx::params{vaultId}).one_row_ref()[0].as<bool>();
+    });
+    if (!any) {
+        std::scoped_lock lock(policyMutex);
+        if (epoch == policyEpoch) noBacklog.insert(vaultId);
+    }
+    return any;
 }
 
 }
@@ -126,17 +156,94 @@ namespace vh::recovery::local::versions {
 
 namespace rq = db::query::recovery;
 
+namespace {
+
+std::function<void(pqxx::work&)>& attachHook() {
+    static std::function<void(pqxx::work&)> hook;
+    return hook;
+}
+
+}
+
+void setAttachHookForTesting(std::function<void(pqxx::work&)> hook) { attachHook() = std::move(hook); }
+
+namespace {
+
+struct DeferredFrees {
+    unsigned depth{0};
+    std::vector<std::pair<store::VaultRef, std::vector<int64_t>>> pending;
+};
+
+thread_local DeferredFrees deferredFrees;
+
+std::function<void()>& deferredFreeHook() {
+    static std::function<void()> hook;
+    return hook;
+}
+
+}
+
+void setDeferredFreeHookForTesting(std::function<void()> hook) { deferredFreeHook() = std::move(hook); }
+
+DeferBlobFrees::DeferBlobFrees() noexcept { ++deferredFrees.depth; }
+
+DeferBlobFrees::~DeferBlobFrees() {
+    if (--deferredFrees.depth > 0 || deferredFrees.pending.empty()) return;
+    auto work = std::exchange(deferredFrees.pending, {});
+    try {
+        if (deferredFreeHook()) deferredFreeHook()();
+    } catch (...) {
+    }
+    for (const auto& [vault, ids] : work) static_cast<void>(store::removeBlobs(vault, ids));
+}
+
 Pending::Pending(Pending&& other) noexcept
     : vault_(std::move(other.vault_)), capture_(std::move(other.capture_)), generation_(std::move(other.generation_)),
-      keepLast_(other.keepLast_), inserted_(other.inserted_), freedBlobs_(std::move(other.freedBlobs_)) {
+      keepLast_(other.keepLast_), inserted_(other.inserted_), freedBlobs_(std::move(other.freedBlobs_)),
+      coalesced_(other.coalesced_) {
     other.capture_.reset();
     other.inserted_.reset();
 }
 
 void Pending::attach(pqxx::work& txn) {
     if (!capture_ || inserted_) return;
+    // Bookkeeping must never fail the content write it rides on: the rows go in under a savepoint, and a failure (the
+    // reused blob was removed since retain(), a constraint, …) rolls back only them. The write commits; this
+    // generation is not kept (logged and counted).
+    txn.exec("SAVEPOINT vh_recovery_version");
+    try {
+        attachRows(txn);
+        txn.exec("RELEASE SAVEPOINT vh_recovery_version");
+    } catch (const pqxx::broken_connection&) {
+        throw;   // the caller's transaction is gone with it
+    } catch (const std::exception& e) {
+        txn.exec("ROLLBACK TO SAVEPOINT vh_recovery_version");   // throws (failing the write) only if the txn is broken
+        txn.exec("RELEASE SAVEPOINT vh_recovery_version");
+        ++failedCount;
+        log::Registry::storage()->error("[LocalVersions] Vault {}: the previous version of {} was not kept ({}); the "
+                                        "write goes ahead", vault_.id, generation_.path, e.what());
+        capture_->abort();
+        capture_.reset();
+        inserted_.reset();
+        freedBlobs_.clear();
+        coalesced_ = 0;
+    }
+}
+
+void Pending::attachRows(pqxx::work& txn) {
+    if (attachHook()) attachHook()(txn);
     generation_.blob_id = capture_->attach(txn);
     inserted_ = rq::Generation::insertLocalVersion(txn, generation_);
+
+    // The key's backlog stays bounded: an autosave/append workload would otherwise queue a full blob per write, every
+    // one replayed upstream. Older pending versions beyond the cap (keep_last, else kDefaultPendingCap) are skipped
+    // ('coalesced'): not replayed, still local versions under the vault's retention (keep_last prunes them below).
+    if (generation_.upstream_state == rq::UpstreamState::Pending && generation_.upstream_key) {
+        const auto cap = keepLast_ && *keepLast_ > 0 ? *keepLast_ : kDefaultPendingCap;
+        if (const auto coalesced = rq::Generation::coalescePending(txn, vault_.id, *generation_.upstream_key, cap);
+            !coalesced.empty())
+            coalesced_ = coalesced.size();
+    }
 
     // keep_last per file, right here and bounded: only once the file has had more generations than it keeps (the
     // numbers only grow), and at most a page of the oldest unpinned ones. Retention catches up with the rest.
@@ -157,8 +264,17 @@ void Pending::committed() noexcept {
     if (!capture_) return;
     capture_->committed();
     if (inserted_) ++retainedCount;
+    if (coalesced_) {
+        coalescedCount += coalesced_;
+        log::Registry::storage()->info("[LocalVersions] Vault {}: {} older unsent version(s) of {} coalesced (the "
+                                       "upstream backlog keeps the newest {})", vault_.id, coalesced_, generation_.path,
+                                       keepLast_ && *keepLast_ > 0 ? *keepLast_ : kDefaultPendingCap);
+        coalesced_ = 0;
+    }
     if (!freedBlobs_.empty()) {
-        static_cast<void>(store::removeBlobs(vault_, freedBlobs_));
+        // Inside a DeferBlobFrees scope (a content lock is held), the unlinks wait until the scope ends.
+        if (deferredFrees.depth > 0) deferredFrees.pending.emplace_back(vault_, std::move(freedBlobs_));
+        else static_cast<void>(store::removeBlobs(vault_, freedBlobs_));
         freedBlobs_.clear();
     }
 }
@@ -166,6 +282,7 @@ void Pending::committed() noexcept {
 void Pending::abort() noexcept {
     if (capture_) capture_->abort();
     inserted_.reset();
+    coalesced_ = 0;
     freedBlobs_.clear();
 }
 
@@ -238,8 +355,17 @@ RetentionReport applyRetention(const store::VaultRef& vault, const LocalVersioni
     const auto prunable = rq::Generation::listPrunable(vault.id, rule, now);
     constexpr std::size_t kChunk = 500;
     for (std::size_t i = 0; i < prunable.size(); i += kChunk) {
-        std::vector<int64_t> ids;
-        for (auto k = i; k < std::min(prunable.size(), i + kChunk); ++k) ids.push_back(prunable[k].id);
+        std::vector<int64_t> ids, pending;
+        for (auto k = i; k < std::min(prunable.size(), i + kChunk); ++k) {
+            ids.push_back(prunable[k].id);
+            if (prunable[k].upstream_state == rq::UpstreamState::Pending) pending.push_back(prunable[k].id);
+        }
+        // The version quota reaches unsent versions too: skipped visibly (reason 'quota', logged, reported) first.
+        if (!pending.empty()) {
+            report.pending_dropped += rq::Generation::markSkipped(pending, "quota");
+            log::Registry::storage()->warn("[LocalVersions] Vault {}: the version quota removed {} version(s) not yet "
+                                           "sent upstream; the provider will not get them", vault.id, pending.size());
+        }
         const auto freed = rq::Generation::removeVersions(vault.id, ids);
         report.versions_removed += ids.size();
         report.blobs_removed += store::removeBlobs(vault, freed);
@@ -272,6 +398,7 @@ MaintenanceReport maintain(const std::time_t now, const bool sweepStores) {
                 const auto r = applyRetention(ref, policy, now);
                 report.versions_removed += r.versions_removed;
                 report.blobs_removed += r.blobs_removed;
+                report.pending_dropped += r.pending_dropped;
             }
 
             // A bucket that keeps no history never gets the backlog replayed: only the latest content matters there.
@@ -305,7 +432,8 @@ MaintenanceReport maintain(const std::time_t now, const bool sweepStores) {
 
 Counters counters() {
     return {.retained = retainedCount.load(), .skipped = skippedCount.load(), .failed = failedCount.load(),
-            .policy_loads = policyLoadCount.load()};
+            .policy_loads = policyLoadCount.load(), .coalesced = coalescedCount.load(),
+            .backlog_checks = backlogCheckCount.load()};
 }
 
 }

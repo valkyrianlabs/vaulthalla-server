@@ -5,6 +5,7 @@
 #include "fs/Filesystem.hpp"
 #include "fs/model/File.hpp"
 #include "log/Registry.hpp"
+#include "recovery/local/Backlog.hpp"
 #include "storage/CloudEngine.hpp"
 #include "storage/PlaintextReader.hpp"
 #include "storage/RemoteFetch.hpp"
@@ -235,6 +236,11 @@ void ConflictResolver::resolve(const std::shared_ptr<storage::CloudEngine>& engi
         {
             const storage::ScopedS3RequestUsageCapture capture(*engine, policy->s3_request_budget);
             (void)requireRemoteUnchanged(*engine, conflict, local->path);
+            // The file's unsent local versions first, as a sync upload does (the price preflight above counts them:
+            // Planner::estimateS3Cost adds the planned replays); a replay that fails leaves the conflict open.
+            if (const auto replay = recovery::local::backlog::replayBeforeUpload(*engine, *local); replay.blocked)
+                throw std::runtime_error("earlier versions could not be replayed upstream first: " +
+                                         replay.error.value_or("unknown"));
             engine->upload(local);
             engine->applyRemoteIndexMutation({action});
         }

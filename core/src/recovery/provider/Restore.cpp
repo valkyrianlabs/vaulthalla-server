@@ -1,4 +1,5 @@
 #include "recovery/provider/Restore.hpp"
+#include "recovery/local/Backlog.hpp"
 #include "recovery/local/Versions.hpp"
 
 #include "crypto/util/Gcm.hpp"
@@ -1019,6 +1020,11 @@ RestoreOutcome restore(const std::shared_ptr<storage::CloudEngine>& engine, cons
 
         // 4b. One PUT of the committed generation (as a sync upload does), then the index and the baseline.
         try {
+            // The destination's local backlog first, as a sync upload does: the generation this restore replaced is
+            // normally already upstream (marked sent, no PUT); anything else keeps the provider's order.
+            if (const auto replay = local::backlog::replayBeforeUpload(*engine, *committed); replay.blocked)
+                throw std::runtime_error("earlier versions could not be replayed upstream first: " +
+                                         replay.error.value_or("unknown"));
             engine->upload(committed);
             const auto put = s3::Controller::lastPutOutcome();
             if (!put.etag.empty()) out.new_etag = put.etag;

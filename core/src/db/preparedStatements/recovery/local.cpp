@@ -67,6 +67,16 @@ void vh::db::Connection::initPreparedRecoveryLocal() const {
     conn_->prepare("recovery_blob_physical_bytes",
                    "SELECT COALESCE(sum(cipher_bytes), 0)::bigint FROM recovery_blob WHERE vault_id = $1");
 
+    // Blobs that are not the live generation of a file they were captured from (that file's inode is the blob's).
+    conn_->prepare("recovery_blob_charged_bytes", R"SQL(
+        SELECT COALESCE(sum(b.cipher_bytes), 0)::bigint FROM recovery_blob b
+        WHERE b.vault_id = $1
+          AND NOT (b.encryption_iv <> '' AND EXISTS (
+              SELECT 1 FROM file_versions fv JOIN files f ON f.fs_entry_id = fv.file_id
+              WHERE fv.blob_id = b.id AND f.encryption_iv = b.encryption_iv
+                AND f.encrypted_with_key_version = b.key_version))
+    )SQL");
+
     conn_->prepare("recovery_blob_usage", R"SQL(
         SELECT count(*) AS blobs, COALESCE(sum(cipher_bytes), 0)::bigint AS bytes,
                COALESCE(sum(plaintext_bytes), 0)::bigint AS plaintext_bytes,
@@ -255,6 +265,21 @@ void vh::db::Connection::initPreparedRecoveryLocal() const {
     conn_->prepare("recovery_generation_mark_skipped",
                    "UPDATE file_versions SET upstream_state = 'skipped' "
                    "WHERE id = ANY($1::bigint[]) AND upstream_state = 'pending'");
+
+    conn_->prepare("recovery_generation_mark_skipped_reason",
+                   "UPDATE file_versions SET upstream_state = 'skipped', upstream_error = $2 "
+                   "WHERE id = ANY($1::bigint[]) AND upstream_state = 'pending'");
+
+    // Coalescing a key's backlog: its pending versions past the newest $3, oldest first, skipped (bounded per call).
+    conn_->prepare("recovery_generation_coalesce_pending", R"SQL(
+        UPDATE file_versions SET upstream_state = 'skipped', upstream_error = 'coalesced'
+        WHERE id IN (
+            SELECT id FROM file_versions
+            WHERE vault_id = $1 AND upstream_state = 'pending' AND upstream_key = $2 AND origin = 'version'
+            ORDER BY id DESC OFFSET $3 LIMIT 256
+        )
+        RETURNING id
+    )SQL");
 
     conn_->prepare("recovery_generation_record_failure",
                    "UPDATE file_versions SET upstream_attempts = upstream_attempts + 1, upstream_error = $2 "

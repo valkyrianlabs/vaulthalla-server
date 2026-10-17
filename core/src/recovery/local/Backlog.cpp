@@ -4,14 +4,20 @@
 #include "db/encoding/u8.hpp"
 #include "db/query/recovery/Generation.hpp"
 #include "db/query/recovery/ObjectVersion.hpp"
+#include "db/query/sync/Conflict.hpp"
+#include "db/query/sync/RemoteObjectIndex.hpp"
 #include "fs/model/File.hpp"
 #include "log/Registry.hpp"
 #include "recovery/Store.hpp"
+#include "recovery/local/Versions.hpp"
 #include "recovery/provider/State.hpp"
 #include "storage/CloudEngine.hpp"
 #include "storage/PlaintextReader.hpp"
+#include "storage/s3/Controller.hpp"
 #include "sync/model/Action.hpp"
+#include "sync/model/Baseline.hpp"
 #include "sync/model/RemotePolicy.hpp"
+#include "vault/model/S3Vault.hpp"
 #include "vault/model/Vault.hpp"
 
 #include <nlohmann/json.hpp>
@@ -91,6 +97,46 @@ void releaseBody(const store::VaultRef& ref, const int64_t generationId, ReplayR
     }
 }
 
+// The replay PUT made generation `g` the key's current object. The remote index learns it (with the PUT's ETag and
+// version id), and the live file's sync baseline records "remote = what we put, local = unpublished history", so a
+// pass that runs before the rest of the backlog and the current content are uploaded sees Vaulthalla's own write and
+// finishes the publication (sync::model::Baseline::publishing) instead of a remote change: no spurious conflict, and
+// never the stale generation downloaded over the live file. Best effort (logged): a failure leaves the old state.
+void recordReplayed(const storage::CloudEngine& engine, const rq::GenerationRow& g, const std::string& etag,
+                    const std::optional<std::string>& versionId, const std::optional<uint32_t> liveFileId) noexcept {
+    try {
+        const auto vaultId = engine.vault->id;
+        auto f = std::make_shared<fs::model::File>();
+        f->vault_id = static_cast<int32_t>(vaultId);
+        f->path = g.path;
+        f->name = std::filesystem::path(g.path).filename().string();
+        f->size_bytes = g.size_bytes;
+        f->content_hash = g.content_hash;
+        f->updated_at = g.source_updated_at.value_or(g.created_at);
+        if (!etag.empty()) f->remote_etag = etag;
+        if (versionId && !versionId->empty() && *versionId != "null") f->remote_version_id = versionId;
+        f->remote_storage_class = engine.writeStorageClass();
+        const auto s3 = std::dynamic_pointer_cast<vault::model::S3Vault>(engine.vault);
+        if (s3 && s3->encrypt_upstream && g.encryption_iv && g.key_version) {
+            f->remote_encrypted = true;
+            f->encryption_iv = *g.encryption_iv;
+            f->encrypted_with_key_version = *g.key_version;
+        } else {
+            f->remote_encrypted = false;
+            f->encryption_iv.clear();
+            f->encrypted_with_key_version = 0;
+        }
+        db::query::sync::RemoteObjectIndex::upsertFile(vaultId, f);
+        if (liveFileId)
+            db::query::sync::Conflict::upsertBaseline(
+                vaultId, sync::model::Baseline::afterReplay(*liveFileId, g.content_hash, g.size_bytes,
+                                                            etag.empty() ? std::nullopt : std::make_optional(etag)));
+    } catch (const std::exception& e) {
+        log::Registry::storage()->warn("[LocalVersions] Vault {}: the replay of version {} of {} was not recorded in "
+                                       "the sync state: {}", engine.vault->id, g.version_number, g.path, e.what());
+    }
+}
+
 void skipOne(const rq::GenerationRow& g, const std::string& why, ReplayReport& report) {
     rq::Generation::recordFailure(g.id, why);
     report.skipped += rq::Generation::markSkipped({g.id});
@@ -99,7 +145,7 @@ void skipOne(const rq::GenerationRow& g, const std::string& why, ReplayReport& r
 }
 
 ReplayReport replay(const storage::CloudEngine& engine, const std::string& key, std::vector<rq::GenerationRow> rows,
-                    const std::optional<std::string>& agreedHash) {
+                    const std::optional<std::string>& agreedHash, const std::optional<uint32_t> liveFileId) {
     ReplayReport report;
     if (rows.empty()) return report;
     const auto vaultId = engine.vault->id;
@@ -144,6 +190,7 @@ ReplayReport replay(const storage::CloudEngine& engine, const std::string& key, 
         std::optional<std::string> versionId;
         try {
             versionId = engine.uploadGeneration(key, store::blobPath(ref, *g.storage_name), g);
+            recordReplayed(engine, g, storage::s3::Controller::lastPutOutcome().etag, versionId, liveFileId);
         } catch (const storage::ContentUnavailable& e) {
             skipOne(g, e.what(), report);
             continue;
@@ -199,7 +246,7 @@ ReplayReport replayBeforeUpload(const storage::CloudEngine& engine, const fs::mo
         const auto vaultId = engine.vault->id;
         const auto vaultPath = backlogVaultPath(file.path);
         const auto key = backlogKey(file.path);
-        if (!anyPendingFor(vaultId, file.id, key)) return ReplayReport{};
+        if (!mayHaveBacklog(vaultId) || !anyPendingFor(vaultId, file.id, key)) return ReplayReport{};
 
         ReplayReport renamedAway;
         std::vector<rq::GenerationRow> rows;
@@ -217,7 +264,7 @@ ReplayReport replayBeforeUpload(const storage::CloudEngine& engine, const fs::mo
             if (!seen.contains(g.id)) rows.push_back(std::move(g));
         if (!otherKey.empty()) renamedAway.skipped = rq::Generation::markSkipped(otherKey);
 
-        auto report = replay(engine, key, std::move(rows), agreedContentHash(vaultId, file.id));
+        auto report = replay(engine, key, std::move(rows), agreedContentHash(vaultId, file.id), file.id);
         report.skipped += renamedAway.skipped;
         return report;
     });
@@ -227,8 +274,9 @@ ReplayReport replayBeforeRemoteDelete(const storage::CloudEngine& engine, const 
     if (!engine.vault) return {};
     return guarded("replay before remote delete", [&] {
         const auto key = backlogKey(vaultPath);
-        if (!anyPendingFor(engine.vault->id, std::nullopt, key)) return ReplayReport{};
-        return replay(engine, key, pendingUnderKey(engine.vault->id, backlogVaultPath(vaultPath), key), std::nullopt);
+        if (!mayHaveBacklog(engine.vault->id) || !anyPendingFor(engine.vault->id, std::nullopt, key)) return ReplayReport{};
+        return replay(engine, key, pendingUnderKey(engine.vault->id, backlogVaultPath(vaultPath), key), std::nullopt,
+                      std::nullopt);
     });
 }
 

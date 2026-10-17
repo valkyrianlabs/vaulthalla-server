@@ -142,6 +142,9 @@ uint64_t removeBlobs(const VaultRef& vault, const std::vector<int64_t>& blobIds)
 // Physical (deduplicated) bytes of the vault's blobs, from the DB (no walk). Cached for `maxAge` per vault; captures
 // and removals through this store invalidate it.
 [[nodiscard]] uint64_t physicalBytes(uint32_t vaultId, std::chrono::milliseconds maxAge = std::chrono::seconds(5));
+// What the store adds beyond the vault's live backing files (BlobQuery::chargedBytes): what the vault quota charges.
+// Cached like physicalBytes; a replaced live generation is charged at the latest after maxAge.
+[[nodiscard]] uint64_t chargedBytes(uint32_t vaultId, std::chrono::milliseconds maxAge = std::chrono::seconds(5));
 void invalidateUsage(uint32_t vaultId) noexcept;
 
 // ---- maintenance ---------------------------------------------------------------------------------------------------

@@ -67,8 +67,14 @@ public:
     [[nodiscard]] static std::optional<BlobRow> deleteIfUnreferenced(int64_t id);
 
     [[nodiscard]] static BlobUsage usage(uint32_t vaultId);
-    // Total bytes only (one indexed aggregate; what Engine::freeSpace charges).
+    // Total bytes only (one indexed aggregate).
     [[nodiscard]] static uint64_t physicalBytes(uint32_t vaultId);
+    // What the store adds on disk beyond the vault's live backing files (what Engine::freeSpace charges): the bytes of
+    // blobs that are not the live generation of a file they were captured from. A blob linked from a live file's
+    // generation (same IV + key version, the file's row still describes it) shares that file's inode, which
+    // getVaultSize already counts; once the file is replaced or deleted the blob is the only copy and is charged.
+    // Derived from the rows (one pass over the vault's blobs, index lookups), no stat.
+    [[nodiscard]] static uint64_t chargedBytes(uint32_t vaultId);
 
     // Rows nothing references, created before now - minAgeSeconds, oldest first.
     [[nodiscard]] static std::vector<BlobRow> listUnreferenced(uint32_t vaultId, int64_t minAgeSeconds, unsigned int limit);

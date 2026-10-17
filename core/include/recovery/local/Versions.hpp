@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <ctime>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -48,9 +49,17 @@ enum class Reason : unsigned char { Overwrite, Truncate, Delete, Download, Resto
 void invalidatePolicy(uint32_t vaultId) noexcept;
 void invalidateAllPolicies() noexcept;
 
+// Whether the vault may have an upstream backlog to replay. True while local versioning is on (its writes queue
+// one); with it off, one EXISTS query per vault, remembered until the policy changes (invalidatePolicy, also every
+// maintenance run): no new pending rows can appear while versioning is off, so uploads cost no backlog query.
+[[nodiscard]] bool mayHaveBacklog(uint32_t vaultId);
+
 }
 
 namespace vh::recovery::local::versions {
+
+// The upstream backlog a key keeps pending when the policy has no keep_last (with one, keep_last is the cap).
+inline constexpr unsigned int kDefaultPendingCap = 32;
 
 struct RetainOptions {
     std::optional<uint32_t> actor{};      // created_by
@@ -78,6 +87,9 @@ public:
 
     // In the caller's transaction, before the files row changes: the blob row and the file_versions row (origin
     // 'version'); a per-file keep_last overflow is pruned in the same transaction (bounded). No-op when inactive.
+    // Never fails the caller's write: the rows go in under a savepoint, and a failure (the reused blob was removed
+    // since retain(), a constraint) rolls back only them, is logged and counted, and leaves this Pending inactive.
+    // Throws only when the caller's transaction itself is broken.
     void attach(pqxx::work& txn);
     // After the caller's transaction committed: finishes the capture and removes blobs the prune freed. Never throws.
     void committed() noexcept;
@@ -91,18 +103,40 @@ private:
     friend Pending retain(const storage::Engine& engine, const fs::model::File& prior, Reason reason,
                           const RetainOptions& options);
 
+    void attachRows(pqxx::work& txn);
+
     store::VaultRef vault_{};
     std::optional<store::Capture> capture_;
     db::query::recovery::NewGeneration generation_{};
     std::optional<unsigned int> keepLast_;
     std::optional<db::query::recovery::InsertedGeneration> inserted_;
     std::vector<int64_t> freedBlobs_;
+    uint64_t coalesced_{};
 };
+
+// Keeps the blob removals of the Pending objects committed on this thread while it lives (outermost scope only) and
+// does them when it ends. Declared before a content lock, it moves those unlinks out of the lock's critical section
+// (the FUSE seal, createFile's overwrite): the scope ends after the lock is released. Never throws.
+class DeferBlobFrees {
+public:
+    DeferBlobFrees() noexcept;
+    ~DeferBlobFrees();
+    DeferBlobFrees(const DeferBlobFrees&) = delete;
+    DeferBlobFrees& operator=(const DeferBlobFrees&) = delete;
+};
+
+// Tests: runs right before deferred blob removals (DeferBlobFrees) are carried out. Empty = none.
+void setDeferredFreeHookForTesting(std::function<void()> hook);
+
+// Tests: runs at the start of every attach(), inside its savepoint (a seam to remove a reused blob, or fail a statement,
+// between retain() and attach()). Empty = none.
+void setAttachHookForTesting(std::function<void(pqxx::work&)> hook);
 
 // ---- retention -------------------------------------------------------------------------------------------------------
 
 struct RetentionReport {
     uint64_t versions_removed{}, blobs_removed{};
+    uint64_t pending_dropped{};   // unsent versions the quota removed (skipped 'quota' first, logged)
 };
 
 // The policy's keep_last / max_age_days / quota_bytes for one vault (oldest first; never pending, never a blob a
@@ -110,7 +144,7 @@ struct RetentionReport {
 RetentionReport applyRetention(const store::VaultRef& vault, const LocalVersioningPolicy& policy, std::time_t now);
 
 struct MaintenanceReport {
-    uint64_t vaults{}, versions_removed{}, blobs_removed{}, backlog_skipped{};
+    uint64_t vaults{}, versions_removed{}, blobs_removed{}, backlog_skipped{}, pending_dropped{};
     uint64_t orphans_removed{}, unreferenced_removed{}, missing{};
     std::vector<std::string> errors{};
 };
@@ -127,6 +161,8 @@ struct Counters {
     uint64_t skipped{};           // nothing to keep: empty / legacy plaintext / no local bytes
     uint64_t failed{};            // staging failed (logged; the write went ahead)
     uint64_t policy_loads{};      // vault_recovery_policy reads (cache misses)
+    uint64_t coalesced{};         // older pending versions skipped to bound a key's backlog
+    uint64_t backlog_checks{};    // backlog existence queries (mayHaveBacklog with versioning off)
 };
 [[nodiscard]] Counters counters();
 
