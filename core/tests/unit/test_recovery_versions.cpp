@@ -21,6 +21,7 @@
 #include "fs/Filesystem.hpp"
 #include "fs/cache/Registry.hpp"
 #include "fs/model/File.hpp"
+#include "fs/model/file/Trashed.hpp"
 #include "fs/ops/file.hpp"
 #include "fuse/WorkingCopies.hpp"
 #include "identities/Manager.hpp"
@@ -929,6 +930,149 @@ TEST_F(RecoveryVersionsTest, ABucketWithoutHistorySkipsTheBacklog) {
     const auto report = versions::maintain(std::time(nullptr), false);
     EXPECT_GE(report.backlog_skipped, 1u);
     EXPECT_EQ(versionsOf(p.engine, "/p.txt").at(0).upstream_state, rq::UpstreamState::Skipped);
+}
+
+// #249: pending generations of a deleted file whose delete already reached the bucket (the trash purge deletes the
+// object without replaying the backlog), or whose key is never written again, used to stay pending forever and keep
+// their blobs. Maintenance settles them: replayed into a bucket that keeps history (then deleted again, so the file
+// stays deleted), skipped 'orphaned' where there is no history to complete; rows of any other key are not touched.
+TEST_F(RecoveryVersionsTest, MaintenanceSettlesTheBacklogOfADeletedFile) {
+    const auto c = cloudVault(sync::model::RemotePolicy::Strategy::Sync);
+    const auto vaultId = c.engine->vault->id;
+    // Deletes the file and purges it upstream the way Local::removeTrashedFiles does (no replay first).
+    const auto deleteAndPurge = [&](const std::string& path) {
+        fs::Filesystem::remove(c.engine->vaultPathToFusePath(path), superUser->id);
+        for (const auto& t : db::query::fs::File::listTrashedFiles(vaultId)) {
+            if (t->path != path) continue;
+            c.engine->purge(t);
+            db::query::sync::RemoteObjectIndex::deleteKey(vaultId, t->path);
+            c.engine->publishRemoteIndexManifestWithRetry();
+            db::query::fs::File::markTrashedFileDeleted(t->id);
+        }
+    };
+    const auto pendingOf = [&](const std::string& path) {
+        unsigned n = 0;
+        for (const auto& g : versionsOf(c.engine, path)) n += g.upstream_state == rq::UpstreamState::Pending;
+        return n;
+    };
+
+    // o.txt: synced, then edited while the provider was down, then deleted and purged with the provider up. g1 and g2
+    // are pending (each retained when the next write replaced it); g3, retained by the delete, stays local (a sync
+    // vault's delete doesn't queue its last generation upstream).
+    write(c.engine, "/o.txt", "g0");
+    ASSERT_EQ(planned(runPass(c), sync::model::ActionType::Upload), 1u);
+    c.bucket->failNext(VersionedBucket::Op::Put, VersionedBucket::Failure::Transport, 1);
+    write(c.engine, "/o.txt", "g1");
+    EXPECT_FALSE(upload(c, "/o.txt")) << "the provider is down";
+    write(c.engine, "/o.txt", "g2");
+    write(c.engine, "/o.txt", "g3");
+    deleteAndPurge("/o.txt");
+    ASSERT_EQ(history(c, "/o.txt"), (std::vector<std::string>{"g0", "<deleted>"}));
+    ASSERT_EQ(pendingOf("/o.txt"), 2u) << "g1 and g2 never reached the bucket";
+
+    // never.txt: created, edited and deleted before any upload: the bucket never had its content (the purge's DELETE
+    // only left a delete marker).
+    write(c.engine, "/never.txt", "n0");
+    write(c.engine, "/never.txt", "n1");
+    write(c.engine, "/never.txt", "n2");
+    deleteAndPurge("/never.txt");
+    ASSERT_EQ(pendingOf("/never.txt"), 2u);
+
+    // Keys a pass will still write or delete keep their rows: a live file, and a trashed file whose object is still
+    // in the bucket (its upstream delete is pending).
+    write(c.engine, "/live.txt", "l0");
+    write(c.engine, "/trashed.txt", "t0");
+    ASSERT_EQ(planned(runPass(c), sync::model::ActionType::Upload), 2u);
+    write(c.engine, "/live.txt", "l1");
+    write(c.engine, "/live.txt", "l2");
+    write(c.engine, "/trashed.txt", "t1");
+    write(c.engine, "/trashed.txt", "t2");
+    fs::Filesystem::remove(c.engine->vaultPathToFusePath("/trashed.txt"), superUser->id);
+    const auto liveBefore = pendingOf("/live.txt");
+    const auto trashedBefore = pendingOf("/trashed.txt");
+    ASSERT_GE(liveBefore, 1u);
+    ASSERT_GE(trashedBefore, 1u);
+
+    c.bucket->resetCounters();
+    const auto report = versions::maintain(std::time(nullptr), false);
+    for (const auto& e : report.errors) EXPECT_FALSE(e.starts_with("vault " + std::to_string(vaultId) + " ")) << e;
+
+    // Replayed oldest first, then deleted again: the provider's history is complete and the file stays deleted.
+    EXPECT_EQ(pendingOf("/o.txt"), 0u);
+    for (const auto& g : versionsOf(c.engine, "/o.txt"))
+        if (g.upstream_key) {
+            EXPECT_EQ(g.upstream_state, rq::UpstreamState::Sent) << g.id;
+        }
+    EXPECT_EQ(history(c, "/o.txt"), (std::vector<std::string>{"g0", "<deleted>", "g1", "g2", "<deleted>"}));
+    EXPECT_FALSE(c.bucket->current("o.txt")) << "never resurrected";
+    EXPECT_FALSE(db::query::sync::RemoteObjectIndex::getFile(vaultId, "/o.txt"));
+    EXPECT_GE(report.backlog_replayed, 2u);
+
+    // Never upstream: nothing to complete, nothing sent.
+    EXPECT_EQ(pendingOf("/never.txt"), 0u);
+    unsigned orphaned = 0;
+    for (const auto& g : versionsOf(c.engine, "/never.txt"))
+        orphaned += g.upstream_state == rq::UpstreamState::Skipped && g.upstream_error == std::optional<std::string>("orphaned");
+    EXPECT_EQ(orphaned, 2u);
+    EXPECT_EQ(history(c, "/never.txt"), (std::vector<std::string>{"<deleted>"}));
+    EXPECT_GE(report.backlog_orphaned, 2u);
+
+    // Untouched: they are a pass's to replay.
+    EXPECT_EQ(pendingOf("/live.txt"), liveBefore);
+    EXPECT_EQ(pendingOf("/trashed.txt"), trashedBefore);
+    const auto requests = c.bucket->counters();
+    EXPECT_EQ(requests.put, 2u) << "g1 and g2 only";
+    EXPECT_EQ(requests.del, 1u);
+    EXPECT_EQ(requests.head, 1u) << "the absence check of o.txt";
+
+    // The next pass neither downloads the replayed generations nor re-sends anything, and maintenance is idempotent.
+    const auto next = runPass(c);
+    for (const auto& a : next)
+        if (a.type == sync::model::ActionType::Download && a.remote) {
+            EXPECT_NE(a.remote->path.string(), "/o.txt") << "a replayed generation downloaded as the deleted file";
+        }
+    EXPECT_FALSE(row(c.engine, "/o.txt"));
+    c.bucket->resetCounters();
+    (void)versions::maintain(std::time(nullptr), false);
+    EXPECT_EQ(c.bucket->counters().put + c.bucket->counters().del, 0u);
+    EXPECT_EQ(backlog::summary(vaultId).pending_versions, pendingOf("/live.txt") + pendingOf("/trashed.txt"));
+}
+
+TEST_F(RecoveryVersionsTest, MaintenanceSkipsTheOrphanedBacklogOfABucketWithoutHistoryAndWaitsWhileItPropagates) {
+    // Propagating (enabled, not settled): nothing yet, no request.
+    const auto c = cloudVault(sync::model::RemotePolicy::Strategy::Sync);
+    write(c.engine, "/p.txt", "p0");
+    ASSERT_TRUE(upload(c, "/p.txt"));
+    c.bucket->failNext(VersionedBucket::Op::Put, VersionedBucket::Failure::Transport, 1);
+    write(c.engine, "/p.txt", "p1");
+    EXPECT_FALSE(upload(c, "/p.txt"));
+    write(c.engine, "/p.txt", "p2");
+    fs::Filesystem::remove(c.engine->vaultPathToFusePath("/p.txt"), superUser->id);
+    for (const auto& t : db::query::fs::File::listTrashedFiles(c.engine->vault->id))
+        if (t->path == "/p.txt") {
+            c.engine->purge(t);
+            db::query::fs::File::markTrashedFileDeleted(t->id);
+        }
+    setBucketVersioning(c, "enabled", std::time(nullptr) + 600);
+    c.bucket->resetCounters();
+    (void)versions::maintain(std::time(nullptr), false);
+    const auto pending = [&] {
+        unsigned n = 0;
+        for (const auto& g : versionsOf(c.engine, "/p.txt")) n += g.upstream_state == rq::UpstreamState::Pending;
+        return n;
+    };
+    EXPECT_GE(pending(), 1u) << "waits for the propagation window";
+    EXPECT_EQ(c.bucket->counters().put + c.bucket->counters().head + c.bucket->counters().del, 0u);
+
+    // The bucket keeps no history (suspended): skipped 'orphaned', without a request.
+    setBucketVersioning(c, "suspended", std::nullopt);
+    (void)versions::maintain(std::time(nullptr), false);
+    EXPECT_EQ(pending(), 0u);
+    bool orphaned = false;
+    for (const auto& g : versionsOf(c.engine, "/p.txt"))
+        orphaned = orphaned || g.upstream_error == std::optional<std::string>("orphaned");
+    EXPECT_TRUE(orphaned);
+    EXPECT_EQ(c.bucket->counters().put + c.bucket->counters().head + c.bucket->counters().del, 0u);
 }
 
 TEST_F(RecoveryVersionsTest, SmartCacheReleasesBodiesTheProviderHoldsAndKeepsTheRows) {

@@ -11,9 +11,12 @@
 #include "recovery/Store.hpp"
 #include "recovery/local/Versions.hpp"
 #include "recovery/provider/State.hpp"
+#include "recovery/provider/Versions.hpp"
+#include "runtime/Deps.hpp"
 #include "storage/CloudEngine.hpp"
 #include "storage/PlaintextReader.hpp"
 #include "storage/s3/Controller.hpp"
+#include "sync/Controller.hpp"
 #include "sync/model/Action.hpp"
 #include "sync/model/Baseline.hpp"
 #include "sync/model/RemotePolicy.hpp"
@@ -25,6 +28,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <optional>
 #include <set>
 
 namespace vh::recovery::local::backlog {
@@ -313,6 +317,152 @@ Backlog summary(const uint32_t vaultId) {
     const auto b = rq::Generation::backlog(vaultId);
     return {.pending_versions = b.pending, .pending_bytes = b.pending_bytes, .oldest_pending_at = b.oldest_pending_at,
             .failing = b.failing, .last_error = b.last_error};
+}
+
+// ---- orphaned backlog (#249) ------------------------------------------------------------------------------------------
+
+namespace {
+
+// Keys of pending generations no write or delete will replay (Backlog.hpp, settleOrphaned), oldest backlog first.
+std::vector<std::string> orphanedKeys(const uint32_t vaultId, const std::size_t limit) {
+    return db::Transactions::read("recovery::backlog::orphanedKeys", [&](pqxx::transaction_base& txn) {
+        const auto res = txn.exec(R"SQL(
+            SELECT fv.upstream_key FROM file_versions fv
+            WHERE fv.vault_id = $1 AND fv.upstream_state = 'pending' AND fv.origin = 'version'
+              AND fv.upstream_key IS NOT NULL AND fv.upstream_key <> ''
+              AND NOT EXISTS (SELECT 1 FROM fs_entry e WHERE e.vault_id = $1 AND e.path = '/' || fv.upstream_key)
+              AND NOT EXISTS (SELECT 1 FROM files_trashed t
+                              WHERE t.vault_id = $1 AND t.path = '/' || fv.upstream_key AND t.deleted_at IS NULL)
+              AND NOT EXISTS (SELECT 1 FROM remote_object_index r
+                              WHERE r.vault_id = $1 AND r.object_key = fv.upstream_key)
+            GROUP BY fv.upstream_key ORDER BY min(fv.id) LIMIT $2
+        )SQL", pqxx::params{vaultId, static_cast<int64_t>(limit)});
+        std::vector<std::string> keys;
+        for (const auto row : res) keys.push_back(row[0].as<std::string>());
+        return keys;
+    });
+}
+
+// The bucket ever held content at this key: a provider version (not a delete marker) Vaulthalla knows of, or a
+// generation that was sent there. A trash purge's DELETE of a key never uploaded leaves only a delete marker.
+bool bucketHadKey(const uint32_t vaultId, const std::string& key) {
+    for (const auto& v : rq::ObjectVersion::listForKey(vaultId, key, true, 100))
+        if (!v.is_delete_marker) return true;
+    return db::Transactions::read("recovery::backlog::bucketHadKey", [&](pqxx::transaction_base& txn) {
+        return txn.exec("SELECT EXISTS (SELECT 1 FROM file_versions WHERE vault_id = $1 AND upstream_key = $2 "
+                        "AND upstream_state = 'sent')", pqxx::params{vaultId, key})
+            .one_row_ref()[0].as<bool>();
+    });
+}
+
+std::vector<int64_t> idsOf(const std::vector<rq::GenerationRow>& rows) {
+    std::vector<int64_t> ids;
+    ids.reserve(rows.size());
+    for (const auto& g : rows) ids.push_back(g.id);
+    return ids;
+}
+
+// The vault's sync pass lease while the replay writes the key (a pass, a restore and the event applier hold it too).
+class SettleLease {
+public:
+    explicit SettleLease(const uint32_t vaultId) : vaultId_(vaultId) {
+        controller_ = runtime::Deps::get().syncController;
+        held_ = !controller_ || controller_->tryAcquirePass(vaultId_);
+    }
+    ~SettleLease() {
+        if (held_ && controller_) controller_->releasePass(vaultId_);
+    }
+    SettleLease(const SettleLease&) = delete;
+    SettleLease& operator=(const SettleLease&) = delete;
+    [[nodiscard]] bool held() const { return held_; }
+
+private:
+    uint32_t vaultId_;
+    std::shared_ptr<sync::Controller> controller_;
+    bool held_{false};
+};
+
+}
+
+SettleReport settleOrphaned(const storage::CloudEngine& engine, const std::size_t maxRows, const std::time_t now) {
+    SettleReport report;
+    if (!engine.vault || maxRows == 0) return report;
+    const auto vaultId = engine.vault->id;
+    if (!mayHaveBacklog(vaultId)) return report;
+
+    const auto versioning = provider::bucketVersioningForVault(vaultId, now);
+    const bool keepsHistory = versioning.keepsHistory();
+    if (!keepsHistory && versioning.status == "enabled") return report;   // propagating: replay once it settles
+
+    // A replay writes the key: hold the pass lease so no pass, restore or event batch writes it meanwhile, and look
+    // for orphans only once it is held (a file created at the path since would make the key a pass's again).
+    std::optional<SettleLease> lease;
+    if (keepsHistory) {
+        lease.emplace(vaultId);
+        if (!lease->held()) {
+            report.busy = true;
+            return report;
+        }
+    }
+
+    std::size_t rowsLeft = maxRows;
+    for (const auto& key : orphanedKeys(vaultId, maxRows)) {
+        const auto vaultPath = "/" + key;
+        auto rows = pendingUnderKey(vaultId, vaultPath, key);
+        if (rows.empty()) continue;
+        if (rows.size() > rowsLeft && report.keys > 0) break;   // whole keys only (a key's backlog is capped anyway)
+        rowsLeft -= std::min(rows.size(), rowsLeft);
+        ++report.keys;
+
+        try {
+            if (!keepsHistory || !bucketHadKey(vaultId, key)) {
+                report.orphaned += rq::Generation::markSkipped(idsOf(rows), "orphaned");
+                continue;
+            }
+
+            sync::model::S3CostEstimate planned;
+            planned.head_requests = 1;
+            planned.put_requests = rows.size();
+            planned.delete_requests = 1;
+            for (const auto& g : rows) planned.planned_upload_bytes += g.cipher_bytes.value_or(g.size_bytes);
+            provider::metering::PriceReservation price(engine, planned, "backlog_settle", key);
+
+            // The index says the object is gone; the provider decides. Present after all (another writer, an index
+            // behind the bucket): a pass reconciles the key, these rows stay as they are.
+            if (engine.headRemoteObjectStrict(vaultPath)) {
+                price.release();
+                continue;
+            }
+
+            const auto replayed = replay(engine, key, std::move(rows), std::nullopt, std::nullopt);
+            report.sent += replayed.sent;
+            report.already_upstream += replayed.already_upstream;
+            report.skipped += replayed.skipped;
+            report.released += replayed.released;
+            report.failed += replayed.failed;
+            if (replayed.sent > 0) {
+                // The last replay made an old generation the key's current object: the file stays deleted.
+                engine.removeRemotely(vaultPath);
+                db::query::sync::RemoteObjectIndex::deleteKey(vaultId, vaultPath);
+            }
+            price.commit();
+            if (replayed.blocked) {
+                report.errors.push_back("'" + key + "': " + replayed.error.value_or("replay failed"));
+                break;   // the provider is failing: the rest waits for the next run
+            }
+        } catch (const std::exception& e) {
+            report.errors.push_back("'" + key + "': " + e.what());
+            break;
+        }
+    }
+
+    if (report.sent || report.orphaned || report.already_upstream || !report.errors.empty())
+        log::Registry::storage()->info(
+            "[LocalVersions] Vault {}: orphaned backlog of {} key(s): replayed {}, already upstream {}, skipped {} "
+            "('orphaned' {}), released {}{}", vaultId, report.keys, report.sent, report.already_upstream,
+            report.skipped, report.orphaned, report.released,
+            report.errors.empty() ? std::string{} : ", stopped: " + report.errors.front());
+    return report;
 }
 
 }

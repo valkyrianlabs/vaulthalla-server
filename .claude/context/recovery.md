@@ -68,8 +68,9 @@ bucket: choosing `off`/`local_snapshots` does not suspend a bucket that is versi
   quota does as a last resort (oldest first, marked `skipped` with `upstream_error = 'quota'`, logged, reported as
   `pending_dropped`); a blob still referenced
   by a snapshot is never deleted (refcount = referencing `file_versions` rows). `db::Janitor` runs
-  `recovery::local::versions::maintain` every 15 min (retention for vaults with local versioning on; the pending
-  backlog of upstream vaults whose bucket status isn't `enabled` is marked `skipped`) and, at startup and then daily,
+  `recovery::local::versions::maintain` every 15 min (retention for vaults with local versioning on; the orphaned
+  backlog is settled, below; the rest of the pending backlog of upstream vaults whose bucket status isn't `enabled` is
+  marked `skipped`) and, at startup and then daily,
   `store::sweep` for every vault with a store directory (orphans of crashed captures, unreferenced rows). keep_last is
   also applied right after a capture, in its transaction (bounded: only once the file's version number exceeds it, at
   most 64 rows); the freed blobs go after commit, and after the content lock is released where one is held (FUSE
@@ -333,8 +334,16 @@ Implementation (`recovery/local/Backlog.*`, `storage/CloudEngineBacklog.cpp`, `r
   the plan's uploads and remote deletes, only while the bucket keeps history (`backlog::addPlannedReplays`).
   Request budgets apply to replay PUTs like any other request.
 - `backlog::summary(vaultId)` → `recovery::Backlog` (status).
-- Open: pending rows of a deleted file whose key Vaulthalla never writes or deletes again (versioned bucket, no new
-  file at the path) stay pending until the bucket loses history (bounded by the per-key cap and the version quota).
+- Orphaned backlog (#249, `backlog::settleOrphaned`, from `versions::maintain` only, ≤ 256 rows per vault per run):
+  pending rows whose key has no `fs_entry` at its path, no unpurged `files_trashed` entry, and no
+  `remote_object_index` row (the trash purge deletes upstream without replaying, or the key is never written again).
+  Rows of any other key stay a pass's. Bucket keeps history → under the vault's pass lease (busy: next run),
+  price-preflighted (`metering::PriceReservation`, operation `backlog_settle`), a strict HEAD confirms absence (present:
+  left alone), replay oldest first, then a DELETE (delete marker) so the key stays deleted and the index row the replay
+  added is removed; a key whose content the bucket never had (no non-delete-marker version known, nothing `sent`) is
+  skipped `'orphaned'` without a request. No history (status not `enabled`) → `'orphaned'`, no request. Propagating →
+  wait. A DELETE failing after a replay PUT leaves the replayed generation current and indexed (logged; a pass would
+  offer it as remote-only). The trash purge itself (`Local::removeTrashedFiles`) still deletes without replaying first.
 
 ## Costs (computed locally; nothing leaves the host)
 
@@ -480,7 +489,8 @@ are kept. `db::Janitor` expires plans and purges finished/expired ones after 30 
 
 Open, consolidated from the slices (the sections above keep the detail):
 
-- **Backlog:** pending rows of a deleted file whose key Vaulthalla never writes again stay pending; conflict keep_local
+- **Backlog:** pending rows of a deleted file are settled by maintenance since #249 (replayed + re-deleted, or
+  `'orphaned'`), up to 15 min late; the trash purge deletes upstream without replaying first; conflict keep_local
   uploads without replaying first (and its preflight doesn't price replays).
 - **Version index:** permanent deletes of noncurrent versions and our own delete markers are learned only from the next
   complete listing. Live event delivery on a versioned bucket is unproven.

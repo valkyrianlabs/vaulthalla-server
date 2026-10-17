@@ -47,11 +47,12 @@ void maintainRecovery(const bool sweepStores) {
     }
     try {
         const auto r = vh::recovery::local::versions::maintain(std::time(nullptr), sweepStores);
-        if (r.versions_removed || r.backlog_skipped || r.orphans_removed || r.unreferenced_removed)
+        if (r.versions_removed || r.backlog_skipped || r.backlog_replayed || r.orphans_removed || r.unreferenced_removed)
             log::Registry::vaulthalla()->info(
-                "[DBSweeper] Recovery: {} version(s) and {} blob(s) past retention, {} backlog version(s) skipped, "
-                "{} orphan blob(s) and {} unreferenced row(s) swept",
-                r.versions_removed, r.blobs_removed, r.backlog_skipped, r.orphans_removed, r.unreferenced_removed);
+                "[DBSweeper] Recovery: {} version(s) and {} blob(s) past retention, {} backlog version(s) skipped "
+                "({} orphaned), {} orphaned backlog version(s) replayed, {} orphan blob(s) and {} unreferenced row(s) swept",
+                r.versions_removed, r.blobs_removed, r.backlog_skipped, r.backlog_orphaned, r.backlog_replayed,
+                r.orphans_removed, r.unreferenced_removed);
     } catch (const std::exception& e) {
         log::Registry::vaulthalla()->warn("[DBSweeper] Recovery maintenance failed: {}", e.what());
     }

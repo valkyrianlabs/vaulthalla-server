@@ -5,6 +5,7 @@
 #include "db/query/recovery/Policy.hpp"
 #include "fs/model/File.hpp"
 #include "log/Registry.hpp"
+#include "recovery/local/Backlog.hpp"
 #include "recovery/provider/State.hpp"
 #include "runtime/Deps.hpp"
 #include "storage/CloudEngine.hpp"
@@ -399,6 +400,18 @@ MaintenanceReport maintain(const std::time_t now, const bool sweepStores) {
                 report.versions_removed += r.versions_removed;
                 report.blobs_removed += r.blobs_removed;
                 report.pending_dropped += r.pending_dropped;
+            }
+
+            // #249: generations of a key no write or delete will replay (its file is gone, and so is the object)
+            // settle here: replayed into a bucket that keeps history (then deleted again), else skipped 'orphaned'.
+            if (engine->type() == storage::StorageType::Cloud) {
+                const auto settled = backlog::settleOrphaned(*std::static_pointer_cast<storage::CloudEngine>(engine),
+                                                             kOrphanedBacklogRowsPerRun, now);
+                report.backlog_replayed += settled.sent + settled.already_upstream;
+                report.backlog_orphaned += settled.orphaned;
+                report.backlog_skipped += settled.skipped + settled.orphaned;
+                for (const auto& e : settled.errors)
+                    report.errors.push_back("vault " + std::to_string(vaultId) + " orphaned backlog " + e);
             }
 
             // A bucket that keeps no history never gets the backlog replayed: only the latest content matters there.

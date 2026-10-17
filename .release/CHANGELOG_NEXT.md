@@ -66,3 +66,7 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
 - S3 sync: a pass publishes the remote index manifest once (a vault's first pass PUT it twice: after the full LIST
   and again after its uploads); a pass that stops early still publishes the listed index; the expected 404 for a
   missing manifest (and any absent object's HEAD) is logged at debug, not as an error (#248).
+- Local versioning: pending upstream versions of a deleted file whose key is never written again no longer stay
+  pending forever: maintenance replays them into a bucket that keeps history (under the sync pass lease,
+  price-preflighted, then deleted again so the file stays deleted) or marks them skipped (`orphaned`) when the bucket
+  keeps none or never had the file, so retention can free their blobs; live and trashed keys are left to sync (#249).

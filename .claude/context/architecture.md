@@ -517,7 +517,8 @@ authorizing boundary (`ops::recovery`); migration 111. Design of record, as-buil
   `sync::tasks::Upload`/`Delete` replay a file's pending local versions first (`backlog::replayBeforeUpload` /
   `replayBeforeRemoteDelete`); the planner's price preflight adds them.
 - **Runtime:** `db::Janitor` runs `maintainRecovery` each loop (≤ 15 min: version retention, backlog skips for
-  unversioned buckets, plan expiry/purge) and, at startup then daily, the store sweep and interrupted-snapshot cleanup;
+  unversioned buckets, the orphaned backlog of deleted files settled (#249, the only Janitor path that sends S3
+  requests: under the pass lease, price-preflighted, bounded), plan expiry/purge) and, at startup then daily, the store sweep and interrupted-snapshot cleanup;
   `VaultRetentionService`'s loop calls `recovery::usage::tick` (ledger flush every 60 s, cost alerts hourly);
   `runtime::Manager::stopAll` flushes the ledger after every service stopped; vault purge removes the store directory
   (`vault/Retention.cpp`).

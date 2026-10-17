@@ -9,6 +9,7 @@
 
 #include <pqxx/transaction>
 
+#include <cstddef>
 #include <cstdint>
 #include <ctime>
 #include <functional>
@@ -60,6 +61,8 @@ namespace vh::recovery::local::versions {
 
 // The upstream backlog a key keeps pending when the policy has no keep_last (with one, keep_last is the cap).
 inline constexpr unsigned int kDefaultPendingCap = 32;
+// Orphaned backlog rows (backlog::settleOrphaned) one maintenance run settles per vault.
+inline constexpr std::size_t kOrphanedBacklogRowsPerRun = 256;
 
 struct RetainOptions {
     std::optional<uint32_t> actor{};      // created_by
@@ -145,12 +148,14 @@ RetentionReport applyRetention(const store::VaultRef& vault, const LocalVersioni
 
 struct MaintenanceReport {
     uint64_t vaults{}, versions_removed{}, blobs_removed{}, backlog_skipped{}, pending_dropped{};
+    uint64_t backlog_replayed{}, backlog_orphaned{};   // orphaned backlog (#249): replayed / skipped 'orphaned'
     uint64_t orphans_removed{}, unreferenced_removed{}, missing{};
     std::vector<std::string> errors{};
 };
 
-// Periodic maintenance (db::Janitor): retention for every vault with local versioning on; for upstream vaults whose
-// bucket keeps no history, the pending backlog is marked skipped. With sweepStores, also recovery::store::sweep for
+// Periodic maintenance (db::Janitor): retention for every vault with local versioning on; for upstream vaults, the
+// orphaned backlog is settled (backlog::settleOrphaned, bounded) and, where the bucket keeps no history, the rest of the
+// pending backlog is marked skipped. With sweepStores, also recovery::store::sweep for
 // every vault that has a store directory (orphan blobs of crashed captures, unreferenced rows). Never throws.
 MaintenanceReport maintain(std::time_t now, bool sweepStores);
 

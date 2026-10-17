@@ -42,4 +42,5 @@ notification and never blocks writes.
 **Fixes.** Editors can save over files on the mount again (renaming a temporary file over the original failed with an I/O error); with local versioning on, the version the save replaces is kept. Vault keys load again after a restart in the middle of a key rotation. S3 bucket listings past 1,000
 objects no longer fail their signature. Deleting a folder no longer leaves its subfolders cached. A sync pass whose
 bucket listing fails part-way now stops instead of working from a partial view, and S3 vaults with more than 1,000
-objects index all of them.
+objects index all of them. Unsent versions of a deleted file no longer stay pending in `vh vault recovery status`:
+maintenance sends them to a versioned bucket (the file stays deleted) or drops them where there is no history to keep.
