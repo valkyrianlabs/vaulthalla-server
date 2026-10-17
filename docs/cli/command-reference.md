@@ -260,6 +260,78 @@ vh vault keys rotate <vault-or-all> [--sync-now]
 
 Unencrypted key exports are dangerous. Prefer `--recipient` and `--output`.
 
+## File Recovery
+
+Earlier versions of files come from three places: local snapshots you take, local versions kept automatically when
+local versioning is on, and the provider's own object versions when an AWS S3 bucket has versioning enabled. Their
+ids are `snap-<id>`, `lv-<id>` and `pv-<id>`. Undeleting a whole vault is `vh vault restore`, not this.
+
+Vault settings:
+
+```bash
+vh vault recovery status <vault> [--refresh] [--json]
+vh vault recovery set <vault> [--mode off|local-snapshots|provider-versioning] [--retention 30d|90d|365d|indefinite]
+                              [--snapshot-quota <size>] [--cost-alert <amount>|none]
+                              [--local-versioning on|off] [--keep-last <n>] [--max-age-days <n>] [--version-quota <size>]
+                              [--accept-unpriced] [--accept-retention-shortening] [--adopt-bucket] [--yes]
+vh vault recovery disclosure <vault> [--retention <r>] [--json]
+vh vault recovery suspend <vault> [--yes]
+```
+
+`--mode provider-versioning` always fetches and prints the cost disclosure first (provider, bucket, region, storage
+class, current data, observed or illustrative write traffic, the estimated monthly additional storage, growth over
+12 months, retention, confidence and catalog freshness, what is not included, and the consequences, including that
+AWS can't return a bucket to unversioned, only suspend it). In a terminal you then type `ENABLE VERSIONING`, and when
+the cost can't be estimated you accept that separately (`ACCEPT UNPRICED`). Without a terminal it needs `--yes`, plus
+`--accept-unpriced` when unpriced. A shorter retention deletes history sooner and is asked separately
+(`--accept-retention-shortening`). Changing the mode never suspends a versioned bucket; `suspend` does, and it deletes
+nothing. `--keep-last 0` and `--max-age-days 0` remove the limit.
+
+Snapshots and recovery points:
+
+```bash
+vh snapshot create <vault> <path> [--name <name>] [--json]
+vh snapshot list <vault> [path] [--json]
+vh snapshot delete <snap-id> [--yes]
+vh recovery list <vault> [path] [--refresh] [--snapshots-only|--versions-only|--provider-only] [--limit <n>] [--json]
+vh recovery inspect <recovery-id> [--json]
+vh recovery delete <recovery-id> [--yes]
+```
+
+Snapshots need the mode `local-snapshots`. `recovery list` with a file path shows that file's history; `--refresh`
+lists the provider's versions of the path first (metadata only). You only see points you can read. `recovery delete`
+removes snapshots and local versions; provider versions are removed by the bucket's retention.
+
+Restoring:
+
+```bash
+vh recovery plan <recovery-id> [--to <path>] [--json]
+vh recovery plan <vault> <path> --at <ISO-8601 time> [--prune] [--to <path>] [--json]
+vh recovery restore <recovery-id> [--to <path>] [--yes] [--accept-unverified] [--json]
+vh recovery restore <plan-id> [--token <token>] [--yes] [--accept-unverified] [--json]
+```
+
+`plan` changes nothing: it shows what each item would do (create, overwrite, skip, conflict, remove, unavailable),
+the size and method, a provider request and cost estimate, warnings and blockers, and the plan id and token (valid 30
+minutes). A plan with `--at` is a timestamp-based reconstruction from each file's version history, not an atomic
+snapshot; only a local snapshot is taken in one pass. `--prune` also removes files that did not exist at that time.
+
+`restore` shows the plan and asks before it runs; type `RESTORE` when anything is overwritten or removed. Without a
+terminal it needs `--yes`, or the plan's `--token`. Every item is authorized again, and a destination that changed
+after the plan was made is reported as a conflict and left alone. Provider versions Vaulthalla did not write need
+`--accept-unverified`. The exit status is `1` when anything was not restored; run the same restore again to resume.
+
+Costs:
+
+```bash
+vh recovery costs <vault> [--json]
+```
+
+Shows the versioning surcharge separately from the current object storage, the cost of recovery operations and what
+is not modelled, with ranges, the basis of each figure (observed, scenario or illustrative) and the price catalog's
+freshness. A figure that can't be estimated says so and why; it is never shown as zero. The figures are computed on
+the host and are estimates, not provider invoices.
+
 ## Internal Secrets
 
 ```bash

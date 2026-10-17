@@ -726,6 +726,7 @@ static std::shared_ptr<CommandUsage> base(const std::weak_ptr<CommandUsage>& par
     const auto vroleCmd = vrole(cmd->weak_from_this());
     const auto keyCmd = key(cmd->weak_from_this());
     const auto syncCmd = sync(cmd->weak_from_this()); // executable (manual sync) + has subcommands
+    const auto recoveryCmd = recovery_book::vaultRecovery(cmd->weak_from_this());
 
     // ---- helpers to pluck children by alias from a parent we just built ----
     auto findChild = [](const std::shared_ptr<CommandUsage>& parentCmd, std::string_view alias)
@@ -858,7 +859,8 @@ static std::shared_ptr<CommandUsage> base(const std::weak_ptr<CommandUsage>& par
         {"vh vault role assign 42 read-only -u bob", "Add user 'bob' to the 'read-only' role for the vault with ID 42."},
         {"vh vault keys export 42 --output /var/lib/vaulthalla/keyfile.pem --recipient ABCDEF1234567890",
          "Export the encryption key for the vault with ID 42 to '/var/lib/vaulthalla/keyfile.pem', encrypted for the GPG recipient with fingerprint 'ABCDEF1234567890'."},
-        {"vh vault sync 42", "Manually trigger a sync for the vault with ID 42."}
+        {"vh vault sync 42", "Manually trigger a sync for the vault with ID 42."},
+        {"vh vault recovery status 42", "Show file recovery settings (snapshots, versioning) for the vault with ID 42."}
     };
 
     // ---- finalize tree ----
@@ -872,7 +874,8 @@ static std::shared_ptr<CommandUsage> base(const std::weak_ptr<CommandUsage>& par
         updateCmd,
         vroleCmd,
         keyCmd,
-        syncCmd
+        syncCmd,
+        recoveryCmd
     };
 
     return cmd;

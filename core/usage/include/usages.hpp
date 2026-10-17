@@ -29,6 +29,12 @@ namespace help { std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsa
 namespace version { std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent); }
 namespace fs_book { std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent); }
 namespace upstream_book { std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent); }
+// File recovery: `vh recovery …` (get), `vh snapshot …` (getSnapshot) and the `vh vault recovery …` subtree.
+namespace recovery_book {
+std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent);
+std::shared_ptr<CommandBook> getSnapshot(const std::weak_ptr<CommandUsage>& parent);
+std::shared_ptr<CommandUsage> vaultRecovery(const std::weak_ptr<CommandUsage>& parent);
+}
 
 const auto gpgRecipient = Optional::ManyToOne("gpg_recipient", "GPG fingerprint to encrypt the exported key (if blank will not encrypt)",
                             {"recipient", "r"}, "gpg-fingerprint");

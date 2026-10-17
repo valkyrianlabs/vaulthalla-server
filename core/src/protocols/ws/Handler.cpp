@@ -17,6 +17,7 @@
 #include "protocols/ws/handler/vault/Vaults.hpp"
 #include "protocols/ws/handler/vault/APIKeys.hpp"
 #include "protocols/ws/handler/Upstream.hpp"
+#include "protocols/ws/handler/Recovery.hpp"
 #include "protocols/ws/handler/share/Download.hpp"
 #include "protocols/ws/handler/share/Filesystem.hpp"
 #include "protocols/ws/handler/share/Links.hpp"
@@ -34,6 +35,7 @@ void Handler::registerAllHandlers(const std::shared_ptr<Router>& r) {
     registerStorageHandlers(r);
     registerAPIKeyHandlers(r);
     registerUpstreamHandlers(r);
+    registerRecoveryHandlers(r);
     registerRoleHandlers(r);
     registerPermissionsHandlers(r);
     registerSettingsHandlers(r);
@@ -108,6 +110,22 @@ void Handler::registerAPIKeyHandlers(const std::shared_ptr<Router>& r) {
     r->registerPayload("storage.apiKey.remove", &handler::APIKeys::remove);
     r->registerSessionOnlyHandler("storage.apiKey.list", &handler::APIKeys::list);
     r->registerPayload("storage.apiKey.get", &handler::APIKeys::get);
+}
+
+// File recovery (ops::recovery): recovery points, restore plans, snapshots, costs and the vault policy.
+void Handler::registerRecoveryHandlers(const std::shared_ptr<Router>& r) {
+    r->registerPayload("recovery.list", &handler::Recovery::list);
+    r->registerPayload("recovery.inspect", &handler::Recovery::inspect);
+    r->registerPayload("recovery.plan", &handler::Recovery::plan);
+    r->registerPayload("recovery.plan.get", &handler::Recovery::planGet);
+    r->registerPayload("recovery.restore", &handler::Recovery::restore);
+    r->registerPayload("recovery.snapshot.create", &handler::Recovery::snapshotCreate);
+    r->registerPayload("recovery.point.delete", &handler::Recovery::pointDelete);
+    r->registerPayload("recovery.costs", &handler::Recovery::costs);
+    r->registerPayload("vault.recovery.status", &handler::Recovery::vaultStatus);
+    r->registerPayload("vault.recovery.update", &handler::Recovery::vaultUpdate);
+    r->registerPayload("vault.recovery.disclosure", &handler::Recovery::vaultDisclosure);
+    r->registerPayload("vault.recovery.suspend", &handler::Recovery::vaultSuspend);
 }
 
 void Handler::registerUpstreamHandlers(const std::shared_ptr<Router>& r) {

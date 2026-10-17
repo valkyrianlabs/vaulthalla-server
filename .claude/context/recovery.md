@@ -149,6 +149,29 @@ For upstream vaults with local versioning on, retained generations are also the 
 - Alerts: `cost_alert_monthly` exceeded → `operator_notification` (type `recovery_versioning_cost`). Alerts never
   block writes or disable versioning.
 
+## Surfaces (CLI, ws)
+
+Both call `ops::recovery` and nothing else; payloads and `--json` use `ops/RecoveryJson.hpp` (the CLI builds the ws
+payload shape from its options and reads it with the same readers, so validation is one code path).
+
+- CLI (`protocols/shell/commands/{recovery,snapshot}.cpp`, `vault/recovery.cpp`; books `core/usage/src/usages/recovery.cpp`):
+  `vh snapshot create|list|delete`, `vh recovery list|inspect|plan|restore|delete|costs`,
+  `vh vault recovery status|set|suspend|disclosure` (`vh vault restore` stays vault undelete). Human output prints
+  unknown money as "cannot be estimated (reason)", never 0. `set --mode provider-versioning` always fetches and prints
+  the disclosure, then needs `ENABLE VERSIONING` typed (or `--yes` without a terminal) and, when unpriced, a separate
+  `ACCEPT UNPRICED` (`--accept-unpriced`); retention shortening / adoption are asked the same way
+  (`--accept-retention-shortening`, `--adopt-bucket`), also when the op raises them. `restore <recovery-id>` plans,
+  previews, asks (type `RESTORE` when anything is overwritten or removed; y/N otherwise) and restores with the plan's
+  token; `restore <plan-id> --token` is the scripted path; non-TTY without `--yes`/`--token` refuses. Exit 1 on a
+  partial/failed result or conflicts. `set` with only some local-versioning flags merges them into the stored policy
+  (reads `status` first; `--keep-last 0` / `--max-age-days 0` = no limit).
+- ws (`protocols/ws/handler/Recovery.cpp`, book `core/usage/src/contract/ws/recovery.cpp`): `recovery.list` (120 s),
+  `recovery.inspect` (30 s), `recovery.plan` (180 s), `recovery.plan.get`, `recovery.restore` (1800 s),
+  `recovery.snapshot.create` (300 s), `recovery.point.delete` (60 s, `confirm`), `recovery.costs` (60 s),
+  `vault.recovery.status` (60 s), `vault.recovery.update` (180 s), `vault.recovery.disclosure` (60 s),
+  `vault.recovery.suspend` (60 s, `confirm`). Refusal codes = the `NeedsConfirmation` codes in `ops/Recovery.hpp`.
+  Web types: `web/src/models/recovery.ts`. Parity: `test_ops_parity_recovery.cpp`.
+
 ## Module ownership (who edits what)
 
 | Area | Files |

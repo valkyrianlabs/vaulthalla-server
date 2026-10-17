@@ -14,3 +14,6 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   signed `continuation-token` out of order), treats a CompleteMultipartUpload 200 carrying an <Error> body as a
   failure, and gains version-aware ListObjectVersions / HEAD / GET / CopyObject ?versionId= plus per-PUT ETag and
   version-id capture for file recovery.
+- File recovery surfaces: `vh snapshot create|list|delete`, `vh recovery list|inspect|plan|restore|delete|costs`,
+  `vh vault recovery status|set|suspend|disclosure` and the ws `recovery.*` / `vault.recovery.*` commands over
+  ops::recovery (restore previews and confirmation, provider-versioning cost disclosure and acknowledgements).

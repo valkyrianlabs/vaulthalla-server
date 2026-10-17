@@ -21,5 +21,7 @@ void registerTeardownCommands(const std::shared_ptr<Router>& r);
 void registerStatusCommands(const std::shared_ptr<Router>& r);
 void registerFsCommands(const std::shared_ptr<Router>& r);
 void registerUpstreamCommands(const std::shared_ptr<Router>& r);
+void registerRecoveryCommands(const std::shared_ptr<Router>& r);
+void registerSnapshotCommands(const std::shared_ptr<Router>& r);
 
 }
