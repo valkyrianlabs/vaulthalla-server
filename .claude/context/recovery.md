@@ -272,7 +272,11 @@ For upstream vaults with local versioning on, retained generations are also the 
 
 Implementation (`recovery/local/Backlog.*`, `storage/CloudEngineBacklog.cpp`, `recovery/provider/State.*`):
 
-- Triggers: `sync::tasks::Upload` calls `backlog::replayBeforeUpload(engine, file)` before `CloudEngine::upload`;
+- Triggers: `sync::tasks::Upload` calls `backlog::replayBeforeUpload(engine, file)` before `CloudEngine::upload`, and so
+  does every other writer of a key's current content: conflict keep_local (`ConflictResolver`; its price preflight
+  already counts the replays through `Planner::estimateS3Cost`), key rotation's re-publish (`sync::rotation`
+  `runtimeDeps` remote.upload; a blocked replay fails that file's rotation, retried next pass) and the provider
+  restore's transfer upload (a blocked replay is reported like a failed upload; the next sync uploads);
   `sync::tasks::Delete` calls `replayBeforeRemoteDelete(engine, path)` before a REMOTE/PURGE delete. A replay that
   fails (`blocked`) fails that task: the current content (or the delete marker) waits for its predecessors; the next
   pass retries. Nothing runs on a FUSE/HTTP write path.
@@ -303,9 +307,7 @@ Implementation (`recovery/local/Backlog.*`, `storage/CloudEngineBacklog.cpp`, `r
   Request budgets apply to replay PUTs like any other request.
 - `backlog::summary(vaultId)` → `recovery::Backlog` (status).
 - Open: pending rows of a deleted file whose key Vaulthalla never writes or deletes again (versioned bucket, no new
-  file at the path) stay pending until the bucket loses history; conflict keep_local (`ConflictResolver`) uploads
-  without replaying first (its price preflight doesn't cover replays), so the file's pending versions land upstream
-  after that content, at its next regular upload.
+  file at the path) stay pending until the bucket loses history (bounded by the per-key cap and the version quota).
 
 ## Costs (computed locally; nothing leaves the host)
 

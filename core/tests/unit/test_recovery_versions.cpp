@@ -37,6 +37,7 @@
 #include "storage/Manager.hpp"
 #include "storage/PlaintextReader.hpp"
 #include "sync/Cloud.hpp"
+#include "sync/ConflictResolver.hpp"
 #include "sync/Planner.hpp"
 #include "sync/model/Action.hpp"
 #include "sync/model/Event.hpp"
@@ -810,6 +811,44 @@ TEST_F(RecoveryVersionsTest, TheUpstreamBacklogOfAKeyIsBoundedAndTheQuotaReaches
     EXPECT_TRUE(versionsOf(d.engine, "/log.txt").empty());
     EXPECT_EQ(backlog::summary(d.engine->vault->id).pending_versions, 0u);
     EXPECT_EQ(blobsOf(d.engine->vault->id), 0u);
+}
+
+// Every writer of a key's current content replays the key's backlog first, not only the sync Upload task: a conflict
+// resolved keep_local and a key rotation that re-publishes the file. Otherwise the provider got the current content
+// before its predecessors (and those were replayed on top of it later).
+TEST_F(RecoveryVersionsTest, KeepLocalResolutionAndRotationReplayTheBacklogFirst) {
+    {
+        const auto c = cloudVault(sync::model::RemotePolicy::Strategy::Sync);
+        c.engine->remote_policy()->conflict_policy = sync::model::RemotePolicy::ConflictPolicy::Ask;
+        write(c.engine, "/k.txt", "k0");
+        ASSERT_EQ(planned(runPass(c), sync::model::ActionType::Upload), 1u);
+        write(c.engine, "/k.txt", "k1");
+        write(c.engine, "/k.txt", "mine");
+        (void)c.bucket->seed("k.txt", "theirs");   // someone else's write meanwhile
+        db::query::sync::RemoteObjectIndex::replaceFromListObjects(c.engine->vault->id, {});
+        (void)c.bucket->seedDeleteMarker(sync::model::remote_manifest::INDEX_V1_KEY);
+        (void)runPass(c);   // lists the bucket: both sides changed
+        const auto open = db::query::sync::Conflict::openForVault(c.engine->vault->id);
+        const auto fileId = row(c.engine, "/k.txt")->id;
+        ASSERT_TRUE(open.contains(fileId));
+        sync::ConflictResolver::resolve(c.engine, open.at(fileId), sync::ConflictDecision::KeepLocal);
+        EXPECT_EQ(history(c, "/k.txt"), (std::vector<std::string>{"k0", "theirs", "k1", "mine"}));
+        EXPECT_EQ(backlog::summary(c.engine->vault->id).pending_versions, 0u);
+    }
+    {
+        const auto c = cloudVault(sync::model::RemotePolicy::Strategy::Sync);
+        write(c.engine, "/r.txt", "r1");
+        ASSERT_TRUE(upload(c, "/r.txt"));
+        write(c.engine, "/r.txt", "r2");
+        write(c.engine, "/r.txt", "r3");
+        c.engine->encryptionManager->prepare_key_rotation();
+        const auto deps = sync::rotation::runtimeDeps(c.engine);
+        static_cast<void>(sync::rotation::rotateFile(row(c.engine, "/r.txt"), deps));
+        c.engine->encryptionManager->finish_key_rotation();
+        EXPECT_EQ(history(c, "/r.txt"), (std::vector<std::string>{"r1", "r2", "r3"}))
+            << "r2 replayed before the rotation published r3";
+        EXPECT_EQ(backlog::summary(c.engine->vault->id).pending_versions, 0u);
+    }
 }
 
 TEST_F(RecoveryVersionsTest, AReplayedGenerationKeepsItsOwnKeyVersionAcrossARotation) {
