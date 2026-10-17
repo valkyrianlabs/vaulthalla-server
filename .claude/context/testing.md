@@ -86,7 +86,7 @@ Design and invariants: `recovery.md`.
 | `RecoverySnapshotsTest` (`test_recovery_snapshots.cpp`) | snapshot capture/skips, mode gate, dedupe, quotas, RBAC, crash cleanup, deletion |
 | `RecoveryLocalRestoreTest` (`test_recovery_local_restore.cpp`) | local plans/restores: original and alternate destinations, conflicts, re-seal across rotations |
 | `RecoveryProviderTest` (`test_recovery_provider.cpp`) | version index, provider points, point-in-time plans, provider copy / bounded transfer |
-| `RecoverySmartCacheTest` (`test_recovery_smart_cache.cpp`) | release-blocking acceptance: cache vault, history only in the bucket, restore without a second upload |
+| `RecoverySmartCacheTest` (`test_recovery_smart_cache.cpp`) | release-blocking acceptance: cache vault, history only in the bucket, restore without a second upload; one manifest publish per pass (#248: first pass, early stop, a manifest written after the LIST never replaces the listed index) |
 | `RecoveryPolicyTest`, `RecoveryDisclosureToken`, `RecoveryManifestRule` (`test_recovery_policy.cpp`) | status/update/disclosure/suspend/costs ordering, R2 refusal, protection, adoption, retention lifecycle |
 | `RecoveryCostModel`, `RecoveryCostCatalog` (`test_recovery_costs.cpp`) | golden decimals from the signed fixture `core/test-assets/pricing/versioning`, ranges, illustrative, unpriced |
 | `RecoveryUsageLedger`, `RecoveryUsageDbTest` (`test_recovery_usage.cpp`) | per-vault UTC-day counters, request tags, first put/overwrite/delete classification, failed flushes |

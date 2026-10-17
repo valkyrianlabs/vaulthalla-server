@@ -58,6 +58,12 @@ buckets it created. Other providers: plain storage, but protection locks still a
 - One pass per vault (pass lease). The applier holds the lease while it changes `remote_object_index` and republishes
   the manifest: a regular pass reloads the index from the manifest when it is empty or the manifest ETag moved, and a
   stale manifest resurrects deleted objects.
+- A pass publishes the manifest at most once (#248): a full LIST in `Cloud::initBins` only marks the index rebuilt
+  (`CloudEngine::markRemoteIndexRebuilt`); the pass's `applyRemoteIndexMutation` then publishes it with the plan's
+  changes (even with none), resolving a conflict by refreshing the ETag and overwriting, never by reloading the
+  manifest over the listed index. A pass that stops first (failed ops, error, stall) publishes it in
+  `Cloud::operator()` under the lease (`publishPendingRemoteIndexManifest`). A manifest reload or any publish clears
+  the mark. A missing manifest is an expected HEAD 404 (debug log; `getHeadObject` logs only real failures as errors).
 - Removal events delete a local copy only if unchanged since the baseline and a HEAD confirms 404 (a present object is
   re-indexed; a failed HEAD retries); mirror+keep_local re-uploads. The applier takes the lease before claiming rows
   and yields to a waiting regular pass. Write intents are removed on failure and match on ETag.

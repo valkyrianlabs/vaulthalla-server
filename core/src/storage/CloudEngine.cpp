@@ -411,7 +411,11 @@ CloudEngine::getGroupedFilesFromS3(const fs::path& prefix) const {
 bool CloudEngine::refreshRemoteIndexFromManifestIfChanged() const {
     const std::string manifestKey = remote_manifest::INDEX_V1_KEY;
     const auto head = s3Provider_->getHeadObject(manifestKey);
-    if (!head) return false;
+    if (!head) {
+        // Expected on a vault's first pass (nothing published yet); an outage reads the same and is logged by the HEAD.
+        log::Registry::cloud()->debug("[CloudStorageEngine] No remote index manifest for vault {}", vault->id);
+        return false;
+    }
 
     const auto remoteEtag = header_value(*head, "ETag");
     const auto localEtag = db::query::sync::RemoteObjectIndex::getManifestETag(vault->id, manifestKey);
@@ -427,6 +431,7 @@ bool CloudEngine::refreshRemoteIndexFromManifestIfChanged() const {
     const auto metadata = remote_manifest::inspectIndexV1Metadata(manifest, vault->id);
     const auto files = remote_manifest::parseIndexV1(manifest, vault->id);
     db::query::sync::RemoteObjectIndex::replaceFromManifest(vault->id, files);
+    remoteIndexPublishPending_ = false;   // the index is the manifest's again
     db::query::sync::RemoteObjectIndex::upsertManifestState(
         vault->id,
         manifestKey,
@@ -457,6 +462,8 @@ void CloudEngine::publishRemoteIndexManifest(const std::optional<std::string>& e
         options,
         ifMatch,
         ifNoneMatch);
+
+    remoteIndexPublishPending_ = false;   // the manifest now carries the whole index
 
     const auto head = s3Provider_->getHeadObject(remote_manifest::INDEX_V1_KEY);
     db::query::sync::RemoteObjectIndex::upsertManifestState(
@@ -502,6 +509,23 @@ void CloudEngine::publishRemoteIndexManifestWithRetry() const {
         (lastConflict.empty() ? std::string{} : ": " + lastConflict));
 }
 
+void CloudEngine::markRemoteIndexRebuilt() const { remoteIndexPublishPending_ = true; }
+
+bool CloudEngine::remoteIndexPublishPending() const { return remoteIndexPublishPending_; }
+
+void CloudEngine::publishPendingRemoteIndexManifest() const noexcept {
+    if (!remoteIndexPublishPending_) return;
+    try {
+        publishRemoteIndexManifestWithRetry();
+    } catch (const std::exception& e) {
+        log::Registry::cloud()->error("[CloudStorageEngine] Remote index manifest publish failed for vault {}: {}",
+                                      vault->id, e.what());
+    } catch (...) {
+        log::Registry::cloud()->error("[CloudStorageEngine] Remote index manifest publish failed for vault {}",
+                                      vault->id);
+    }
+}
+
 void CloudEngine::applyRemoteIndexMutation(const std::vector<Action>& plan) const {
     const auto replayMutation = [&]() {
         bool mutated = false;
@@ -536,6 +560,15 @@ void CloudEngine::applyRemoteIndexMutation(const std::vector<Action>& plan) cons
 
         return mutated;
     };
+
+    // This pass rebuilt the index from a full LIST (#248): it is the bucket's truth, so it takes the plan's changes
+    // and is published once, overwriting whatever manifest is there like the post-LIST publish used to (a conflict
+    // refreshes the ETag; reloading the manifest here would bring back what the LIST no longer saw).
+    if (remoteIndexPublishPending_) {
+        (void)replayMutation();
+        publishRemoteIndexManifestWithRetry();
+        return;
+    }
 
     std::string lastConflict;
     auto expectedETag = db::query::sync::RemoteObjectIndex::getManifestETag(

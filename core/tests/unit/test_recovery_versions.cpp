@@ -768,8 +768,9 @@ TEST_F(RecoveryVersionsTest, AnInterruptedReplayIsFinishedByTheNextPassUnderEver
             expected = {"g0"};
         }
         write(c.engine, "/i.txt", "current");
-        // One replay lands, then a failure (a new vault's first pass also publishes the index manifest first).
-        c.bucket->failAfter(VersionedBucket::Op::Put, VersionedBucket::Failure::Transport, fresh ? 2 : 1);
+        // One replay lands, then a failure (a new vault's first pass publishes its index manifest only after its
+        // transfers since #248, so nothing else is PUT first).
+        c.bucket->failAfter(VersionedBucket::Op::Put, VersionedBucket::Failure::Transport, 1);
         ASSERT_EQ(planned(runPass(c), AT::Upload), 1u);
         ASSERT_EQ(history(c, "/i.txt"), expected) << "interrupted";
         ASSERT_EQ(readLocal(c.engine, "/i.txt"), "current");

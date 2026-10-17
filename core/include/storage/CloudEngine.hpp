@@ -10,6 +10,7 @@
 #include "sync/Fwd.hpp"
 #include "vault/Fwd.hpp"
 
+#include <atomic>
 #include <functional>
 #include <future>
 #include <mutex>
@@ -103,6 +104,17 @@ namespace vh::storage {
         [[nodiscard]] bool refreshRemoteIndexFromManifestIfChanged() const;
         void publishRemoteIndexManifest(const std::optional<std::string>& expectedETag = std::nullopt) const;
         void publishRemoteIndexManifestWithRetry() const;
+        // The index was just rebuilt from a full LIST (Cloud::initBins): the pass's applyRemoteIndexMutation publishes
+        // it together with the plan's changes, so a pass publishes the manifest once (#248). Any successful publish
+        // or a reload from the manifest clears it.
+        void markRemoteIndexRebuilt() const;
+        [[nodiscard]] bool remoteIndexPublishPending() const;
+        // Publishes a rebuilt index that applyRemoteIndexMutation did not (failed operations, an error after the
+        // LIST). No-op when nothing is pending; logs instead of throwing.
+        void publishPendingRemoteIndexManifest() const noexcept;
+        // Records the plan's uploads/remote deletes in the index and publishes the manifest when it changed. After a
+        // rebuild (markRemoteIndexRebuilt) the index is the bucket's truth: it publishes even without changes and a
+        // conflict refreshes the ETag (as the post-LIST publish did) instead of reloading the index from the manifest.
         void applyRemoteIndexMutation(const std::vector<sync::model::Action>& plan) const;
         [[nodiscard]] bool selectedDownloadRequiresRestore(const std::shared_ptr<vh::fs::model::File>& remoteFile) const;
 
@@ -248,6 +260,8 @@ namespace vh::storage {
             std::exception_ptr error;
         };
         mutable std::unordered_map<std::string, HydrateFailure> hydrateFailures_;
+        // markRemoteIndexRebuilt: the index holds a full LIST the manifest doesn't have yet.
+        mutable std::atomic<bool> remoteIndexPublishPending_{false};
 
         std::shared_ptr<vault::model::S3Vault> s3Vault() const;
         void resolveS3ProviderConfiguration();

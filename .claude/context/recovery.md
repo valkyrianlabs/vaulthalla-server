@@ -269,8 +269,8 @@ bucket: choosing `off`/`local_snapshots` does not suspend a bucket that is versi
 - **Live acceptance on real AWS S3** (`test_recovery_live.cpp`, run per testing.md "Live provider tests"; passed
   2026-10-16, us-east-2, fresh test buckets): the same scenario through ops (disclosure → `update` with
   `accept_adoption` on a new bucket → list → plan → restore → costs), real `CloudEngine`, prices from the signed
-  fixture catalog. Measured: each upload pass PUT 2 (object + manifest; the vault's first pass PUTs the manifest
-  twice: PUT 3); listing 4 versions = LIST 1, 0 HEAD/GET; restore by copy = COPY 1, HEAD 2, PUT 1 (manifest), GET 0;
+  fixture catalog. Measured: each upload pass PUT 2 (object + manifest; the vault's first pass PUT the manifest
+  twice, PUT 3, until #248: now PUT 2 too); listing 4 versions = LIST 1, 0 HEAD/GET; restore by copy = COPY 1, HEAD 2, PUT 1 (manifest), GET 0;
   hydrate read = HEAD 1 + GET 1; next pass = HEAD 1 (manifest), 0 PUT; noncurrent 4 versions / 185 B exact; costs
   `active`, priced, month-to-date non-null. Across a key rotation: `provider_transfer`, GET 1 + PUT 2 (object +
   manifest), COPY 0, current object carries the new key version. Disclosure = 6 admin requests, enable (adoption +

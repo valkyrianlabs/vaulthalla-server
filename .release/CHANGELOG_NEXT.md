@@ -63,3 +63,6 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
 - Upstream admin (AWS): HeadBucket goes straight to the bucket's known region (cached, `upstream_bucket.region`, else
   the key's region): one request instead of a global-endpoint probe plus a regional one; the global endpoint is
   probed only when no region is known or a redirect names none (#247).
+- S3 sync: a pass publishes the remote index manifest once (a vault's first pass PUT it twice: after the full LIST
+  and again after its uploads); a pass that stops early still publishes the listed index; the expected 404 for a
+  missing manifest (and any absent object's HEAD) is logged at debug, not as an error (#248).

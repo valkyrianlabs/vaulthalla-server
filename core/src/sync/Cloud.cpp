@@ -193,6 +193,10 @@ void Cloud::operator()() {
         handleError("[CloudSync] Unknown exception");
     }
 
+    // A full LIST rebuilt the index but the pass stopped before publishing it (failed operations, an error or a stall
+    // after initBins): publish it now, as the post-LIST publish did. No-op otherwise.
+    if (cloud) cloud->publishPendingRemoteIndexManifest();
+
     shutdown();
 
     if (scope && scope->on_finish) {
@@ -380,7 +384,10 @@ void Cloud::initBins() {
         const auto listStartedAt = std::time(nullptr);
         s3Map = cloud->getGroupedFilesFromS3();
         db::query::sync::RemoteObjectIndex::replaceFromListObjects(engine->vault->id, uMap2Vector(s3Map));
-        cloud->publishRemoteIndexManifestWithRetry();
+        // Published once, by this pass's applyRemoteIndexMutation together with what the pass changes (#248: the
+        // first pass of a vault used to publish here and again after its uploads); if the pass never gets there,
+        // operator() publishes it on the way out.
+        cloud->markRemoteIndexRebuilt();
         // Every full listing is the event subscription's new baseline (adoption, lost continuity, or an empty index).
         if (hooks.baselineListed) hooks.baselineListed(vaultId, listStartedAt);
     }

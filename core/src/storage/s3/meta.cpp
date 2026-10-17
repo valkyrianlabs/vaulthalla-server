@@ -84,8 +84,12 @@ Controller::getHeadObject(const std::filesystem::path &key) const {
     lastHead = {.performed = true, .transport_ok = resp.curl == CURLE_OK, .http_status = resp.http};
 
     if (!resp.ok()) {
-        log::Registry::cloud()->error("[S3Provider] getHeadObject failed for {}: CURL={} HTTP={}",
-                                      key.string(), resp.curl, resp.http);
+        // 404 is an answer (the object is absent: a vault's first manifest HEAD, a removal check), not a failure.
+        if (resp.curl == CURLE_OK && resp.http == 404)
+            log::Registry::cloud()->debug("[S3Provider] getHeadObject: {} does not exist (HTTP 404)", key.string());
+        else
+            log::Registry::cloud()->error("[S3Provider] getHeadObject failed for {}: CURL={} HTTP={}",
+                                          key.string(), resp.curl, resp.http);
         return std::nullopt;
     }
 
