@@ -1,6 +1,7 @@
 #include "sync/tasks/Delete.hpp"
 
 #include "log/Registry.hpp"
+#include "recovery/local/Backlog.hpp"
 #include "storage/CloudEngine.hpp"
 #include "fs/model/File.hpp"
 #include "fs/model/file/Trashed.hpp"
@@ -81,9 +82,18 @@ void Delete::operator()() {
             if (!cloud)
                 throw std::runtime_error("DeleteTask: failed to cast to CloudStorageEngine");
 
+            // Local versioning's backlog for the key goes upstream before the delete marker does (recovery.md).
+            const auto replayBeforeRemoteDelete = [&](const std::filesystem::path& path) {
+                if (type != Type::PURGE && type != Type::REMOTE) return;
+                if (const auto replay = vh::recovery::local::backlog::replayBeforeRemoteDelete(*cloud, path); replay.blocked)
+                    throw std::runtime_error("earlier versions could not be replayed upstream: " +
+                                             replay.error.value_or("unknown"));
+            };
+
             std::visit(Overloaded{
                 [&](const std::shared_ptr<File>& f) {
                     if (!f) throw std::runtime_error("DeleteTask: null File");
+                    replayBeforeRemoteDelete(f->path);
 
                     if (type == Type::PURGE)      cloud->purge(f->path);
                     else if (type == Type::LOCAL) cloud->removeLocally(f->path);
@@ -92,6 +102,7 @@ void Delete::operator()() {
                 },
                 [&](const std::shared_ptr<file::Trashed>& f) {
                     if (!f) throw std::runtime_error("DeleteTask: null TrashedFile");
+                    replayBeforeRemoteDelete(f->path);
 
                     // Mirrors your existing DeleteTask behavior for trashed files.
                     if (type == Type::PURGE)      cloud->purge(f);

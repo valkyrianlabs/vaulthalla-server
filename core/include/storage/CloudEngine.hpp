@@ -1,5 +1,6 @@
 #pragma once
 
+#include "recovery/Fwd.hpp"
 #include "recovery/Hooks.hpp"
 #include "storage/Engine.hpp"
 #include "storage/RemoteFetch.hpp"
@@ -166,6 +167,16 @@ namespace vh::storage {
         std::shared_ptr<vh::fs::model::File> replaceLocalContent(const std::filesystem::path &rel_path,
                                                                  const std::vector<uint8_t> &plaintext,
                                                                  const std::string &expectedSourceId);
+
+        // Local versioning's upstream backlog (storage/CloudEngineBacklog.cpp): PUTs one retained generation at `key`
+        // with that generation's OWN metadata (vh-iv, vh-key-version, content-hash, vh-encrypted), never the file's
+        // current one. `blob` holds its sealed bytes; a vault that doesn't encrypt upstream gets the plaintext,
+        // decrypted in memory with the generation's (possibly retired) key. Goes through noteOwnWrite/done(), so the
+        // recovery hook records the version. Returns the provider's version id (nullopt: the bucket kept none).
+        // Throws ContentUnavailable (blob or key version gone) or IntegrityError (blob fails authentication) for
+        // local problems, anything else for the request.
+        std::optional<std::string> uploadGeneration(const std::filesystem::path &key, const std::filesystem::path &blob,
+                                                    const db::query::recovery::GenerationRow &generation) const;
 
         // Price preflight for remote reads (default: priceBudgetRemoteFetchGate).
         void setRemoteFetchGate(RemoteFetchGate gate);

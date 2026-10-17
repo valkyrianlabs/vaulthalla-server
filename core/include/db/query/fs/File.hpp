@@ -28,10 +28,13 @@ public:
     static unsigned int upsertFile(const FilePtr& file);
 
     static void updateFile(const FilePtr& file);
+    // In the caller's transaction (content writers that retain the prior generation in the same transaction).
+    static void updateFile(pqxx::work& txn, const FilePtr& file);
 
     static void markTrashedFileDeleted(unsigned int id);
 
     static void deleteFile(unsigned int userId, const FilePtr& file);
+    static void deleteFile(pqxx::work& txn, unsigned int userId, const FilePtr& file);
 
     [[nodiscard]] static std::string getMimeType(unsigned int vaultId, const std::filesystem::path& relPath);
 
@@ -50,6 +53,12 @@ public:
     static void markFileAsTrashed(unsigned int userId, unsigned int vaultId, const std::filesystem::path& relPath);
 
     static void markFileAsTrashed(unsigned int userId, unsigned int fsId);
+
+    // In the caller's transaction; `backingPath` is recorded with the trash row. Throws when the file is gone.
+    static void markFileAsTrashed(pqxx::work& txn, unsigned int userId, unsigned int vaultId,
+                                  const std::filesystem::path& relPath, const std::filesystem::path& backingPath);
+    static void markFileAsTrashed(pqxx::work& txn, unsigned int userId, unsigned int fsId,
+                                  const std::filesystem::path& backingPath);
 
     static void markRemoteFileAsTrashed(
         unsigned int userId,

@@ -208,9 +208,12 @@ TEST_F(WorkingCopiesTest, TheRowIsCommittedBeforeTheSealedBytesReplaceTheBacking
             staged->encryption_iv = "iv-new";
         },
         .current = [this](uint64_t) { return file; },
-        .commit = [&](const std::shared_ptr<fs::model::File>& staged) {
+        .commit = [&](const fuse::WorkingCopyHooks::Commit& c) {
             committed = true;
-            EXPECT_EQ(staged->encryption_iv, "iv-new");
+            EXPECT_EQ(c.staged->encryption_iv, "iv-new");
+            EXPECT_EQ(c.prior.encryption_iv, "iv-0") << "the generation being replaced, for local versioning";
+            EXPECT_EQ(c.prior.backing_path, file->backing_path);
+            EXPECT_TRUE(c.truncated) << "opened with O_TRUNC";
             EXPECT_EQ(slurp(file->backing_path), before) << "the old bytes are still in place when the row is written";
             EXPECT_TRUE(stdfs::exists(fs::ops::contentSidecarPath(file->backing_path)));
         },
@@ -234,7 +237,7 @@ TEST_F(WorkingCopiesTest, AFailedRowCommitKeepsTheOldBytesAndNoSidecar) {
             spit(to, fakeSeal(slurp(from)));
         },
         .current = [this](uint64_t) { return file; },
-        .commit = [](const std::shared_ptr<fs::model::File>&) { throw std::runtime_error("database unavailable"); },
+        .commit = [](const fuse::WorkingCopyHooks::Commit&) { throw std::runtime_error("database unavailable"); },
         .saved = [](const std::shared_ptr<fs::model::File>&) {},
         .lock = {},
     });

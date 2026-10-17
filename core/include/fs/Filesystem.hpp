@@ -14,6 +14,7 @@
 #include "fuse/resolver/Resolved.hpp"
 #include "fs/Fwd.hpp"
 #include "identities/Fwd.hpp"
+#include "recovery/Fwd.hpp"
 #include "storage/Fwd.hpp"
 
 namespace vh::fs {
@@ -39,6 +40,9 @@ struct NewFileContext {
     // Conditional overwrite: only replace the content if it is still this generation (storage::Generation::sourceId)
     // and not open through FUSE; otherwise ContentConflict.
     std::optional<std::string> expected_source_id{};
+    // Why an overwrite replaces the content, as local versioning records the replaced generation (default overwrite):
+    // a sync download, a restore, a conflict resolution.
+    std::optional<recovery::local::Reason> version_reason{};
 };
 
 struct ContentConflict final : std::runtime_error {
