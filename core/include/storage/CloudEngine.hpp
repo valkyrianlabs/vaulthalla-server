@@ -1,5 +1,6 @@
 #pragma once
 
+#include "recovery/Hooks.hpp"
 #include "storage/Engine.hpp"
 #include "storage/RemoteFetch.hpp"
 #include "sync/model/Action.hpp"
@@ -211,20 +212,26 @@ namespace vh::storage {
         // Vaulthalla's own PUT/DELETE of `key`, recorded only while the vault has an active event subscription so the
         // notification it causes is recognised as ours. done() after the request succeeded; destroyed without it
         // (the request threw), the intent is removed so it can never claim someone else's event.
+        // One upstream PUT/DELETE in flight: the event write intent (when a subscription is active) and what recovery
+        // learns once it succeeded (recovery::hooks::afterUpstreamWrite, fired by done()).
         class OwnWrite {
         public:
             OwnWrite() = default;
-            explicit OwnWrite(std::optional<int64_t> id) : id_(id) {}
-            OwnWrite(OwnWrite&& other) noexcept : id_(std::exchange(other.id_, std::nullopt)) {}
+            OwnWrite(std::optional<int64_t> id, std::optional<recovery::hooks::UpstreamWrite> write)
+                : id_(id), write_(std::move(write)) {}
+            OwnWrite(OwnWrite&& other) noexcept
+                : id_(std::exchange(other.id_, std::nullopt)), write_(std::exchange(other.write_, std::nullopt)) {}
             OwnWrite& operator=(OwnWrite&&) = delete;
             OwnWrite(const OwnWrite&) = delete;
             ~OwnWrite();
             void done();
         private:
             std::optional<int64_t> id_;
+            std::optional<recovery::hooks::UpstreamWrite> write_;
         };
         [[nodiscard]] OwnWrite noteOwnWrite(const std::filesystem::path &key, bool isDelete,
-                                            std::optional<uint64_t> objectSize) const;
+                                            std::optional<uint64_t> objectSize,
+                                            const std::shared_ptr<vh::fs::model::File> &file = nullptr) const;
         [[nodiscard]] s3::RequestOptions requestOptionsFor(s3::provider::RequestOperation operation) const;
         [[nodiscard]] std::optional<std::string> configuredStorageClass() const;
 
