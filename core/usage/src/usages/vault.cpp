@@ -505,7 +505,9 @@ static std::shared_ptr<CommandUsage> key_export(const std::weak_ptr<CommandUsage
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"export"};
     cmd->description = "Export an encryption key for a specific vault. --output is written by the daemon, so it must "
-                       "be an absolute path; the file is created with mode 0600.";
+                       "be an absolute path; the file is created with mode 0600. Retired key versions that recoverable "
+                       "data (snapshots, local versions, provider object versions) still needs are included under "
+                       "historical_keys.";
     cmd->positionals = {vaultOrAll};
     cmd->optional = {gpgRecipient, outputFile, owner};
     cmd->examples = {

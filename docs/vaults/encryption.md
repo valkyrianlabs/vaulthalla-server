@@ -65,6 +65,8 @@ Each vault has a generated 32-byte AES key. Vaulthalla encrypts that key with TP
 
 Key rotation creates a new vault key version, decrypts with the old key version, re-encrypts with the current key version, and records rotation state until complete.
 
+Rotation re-encrypts live files only. Retired key versions stay sealed in the database, and recovery data (snapshots, local versions, provider object versions) keeps the version it was sealed with. Restoring such a generation re-seals it under the current key as it is restored, and only after the old key authenticates it; no plaintext is written to disk. Vaulthalla refuses to delete a retired key while recovery data references it, and [key exports](/vaults/secrets-and-key-export#retired-keys-for-recovery-data) include those versions.
+
 ```bash
 vh vault keys rotate <vault> --sync-now
 vh vault keys rotate all
