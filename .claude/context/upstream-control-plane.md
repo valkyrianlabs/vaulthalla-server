@@ -31,6 +31,11 @@ buckets it created. Other providers: plain storage, but protection locks still a
   `*.amazonaws.com` ⇒ aws-s3; `providerIdentity(const APIKey&)`); keys whose label contradicts the endpoint are refused.
   Bucket names/regions are validated (`storage/upstream/Names`) before any request; Cloudflare REST segments are
   percent-encoded (no signature covers those paths).
+  AWS HeadBucket (#247) goes straight to a known region: the adapter's cache, `AdminClient::setKnownRegion`
+  (ops pass `upstream_bucket.region`: `ops::upstream` via `adminClient(key, id)`, `ops::recovery` policy), else the
+  key's region; the global endpoint only when none is known (key region empty/`auto`) or a redirect names no region;
+  an `x-amz-bucket-region` hint costs one more HEAD (≤ 3). Name validation and the guard still come first; a
+  malformed hint or header is ignored, never routed to.
   Every protect/unprotect: `guard::reload()` + `subscriptions::invalidateCache()` + `onBucketProtected/Unprotected`.
 - Create-new never takes over: HeadBucket 404 → CreateBucket (collision = Conflict) → must list empty; compensation
   deletes only an empty bucket created by the same operation token. No rollback deletes a pre-existing bucket.

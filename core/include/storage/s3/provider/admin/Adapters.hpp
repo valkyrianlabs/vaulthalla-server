@@ -83,7 +83,11 @@ public:
     [[nodiscard]] AccountIdentity identity() override;
     [[nodiscard]] Capabilities probe() override;
     // 404 → nullopt; 200/301/400 with x-amz-bucket-region → the region; 403 → ProviderError(AccessDenied).
+    // One HEAD when the region is known (cached, setKnownRegion, else the key's region) and right: it goes straight to
+    // that regional endpoint. The global endpoint is probed only when no region is known, or when a known region
+    // answers with a redirect that names no region; a region hint (x-amz-bucket-region) costs one more HEAD (#247).
     [[nodiscard]] std::optional<std::string> headBucket(const std::string& bucket) override;
+    void setKnownRegion(const std::string& bucket, const std::string& region) override;
     // Sent to the requested region's endpoint (default: the key's region).
     void createBucket(const CreateBucketRequest& request) override;
     [[nodiscard]] BucketConfiguration inspect(const std::string& bucket) override;
@@ -101,8 +105,12 @@ protected:
     [[nodiscard]] std::optional<std::string> expectedBucketOwner() const override;
 
 private:
+    // Where headBucket sends its first HEAD (nullopt = the global endpoint).
+    [[nodiscard]] std::optional<std::string> knownRegion(const std::string& bucket) const;
+
     std::optional<AccountIdentity> identity_;
-    std::map<std::string, std::string> regions_;
+    std::map<std::string, std::string> regions_;      // answered by the provider
+    std::map<std::string, std::string> knownRegions_; // setKnownRegion hints
 };
 
 class R2Admin final : public S3ApiAdmin {

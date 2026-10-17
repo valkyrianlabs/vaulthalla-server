@@ -12,6 +12,7 @@
 #include <nlohmann/json.hpp>
 
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -410,16 +411,131 @@ TEST_F(UpstreamProviderTest, HeadBucketOutcomes) {
         EXPECT_TRUE(e.accessDenied());
     }
 
+    // A bucket outside the key's region: the key's regional endpoint redirects with the region, one more HEAD there.
     sent.clear();
     handler = [](const http::Request& r) {
-        if (r.url.starts_with("https://s3.amazonaws.com/")) return upRespond(301, {}, {{"x-amz-bucket-region", "us-west-2"}});
+        if (!r.url.starts_with("https://s3.us-west-2.amazonaws.com/"))
+            return upRespond(301, {}, {{"x-amz-bucket-region", "us-west-2"}});
         return upRespond(200, {}, {{"x-amz-bucket-region", "us-west-2"}});
     };
     EXPECT_EQ(aws.headBucket("vh-west"), std::optional<std::string>("us-west-2"));
     ASSERT_EQ(sent.size(), 2u);
+    EXPECT_EQ(sent[0].url, "https://s3.us-east-2.amazonaws.com/vh-west");
     EXPECT_EQ(sent[1].url, "https://s3.us-west-2.amazonaws.com/vh-west");
     EXPECT_EQ(aws.regionOf("vh-west"), "us-west-2");   // cached: no third request
     EXPECT_EQ(sent.size(), 2u);
+    (void)aws.headBucket("vh-west");                   // the cached region: straight there
+    ASSERT_EQ(sent.size(), 3u);
+    EXPECT_EQ(sent[2].url, "https://s3.us-west-2.amazonaws.com/vh-west");
+}
+
+// #247: HeadBucket used to probe the global endpoint and then the bucket's region on every call (2 HEADs outside
+// us-east-1, 12 of the 29 requests of a live recovery enable). A known region is one HEAD.
+TEST_F(UpstreamProviderTest, HeadBucketGoesStraightToAKnownRegion) {
+    // The fake account: buckets answer only at their own regional endpoint; elsewhere a 301 names the region.
+    const std::map<std::string, std::string> where{{"vh-east2", "us-east-2"}, {"vh-west", "us-west-2"},
+                                                   {"vh-virginia", "us-east-1"}};
+    const auto account = [&](const http::Request& r) {
+        for (const auto& [bucket, region] : where) {
+            if (!r.url.ends_with("/" + bucket) && r.url.find("/" + bucket + "?") == std::string::npos) continue;
+            const auto host = region == "us-east-1" ? std::string("https://s3.amazonaws.com/")
+                                                    : "https://s3." + region + ".amazonaws.com/";
+            if (!r.url.starts_with(host)) return upRespond(301, {}, {{"x-amz-bucket-region", region}});
+            if (r.method == "HEAD") return upRespond(200, {}, {{"x-amz-bucket-region", region}});
+            if (r.url.find("?versioning") != std::string::npos)
+                return upRespond(200, "<VersioningConfiguration/>");
+            if (r.url.find("?object-lock") != std::string::npos)
+                return upRespond(404, "<Error><Code>ObjectLockConfigurationNotFoundError</Code></Error>");
+            if (r.url.find("?lifecycle") != std::string::npos)
+                return upRespond(404, "<Error><Code>NoSuchLifecycleConfiguration</Code></Error>");
+            return upRespond(200, "<NotificationConfiguration/>");
+        }
+        return upRespond(404);
+    };
+    handler = account;
+
+    // The key's region (us-east-2) is right: exactly one HEAD, to the regional endpoint, for headBucket and inspect.
+    {
+        admin::AwsAdmin aws(upAwsKey());
+        EXPECT_EQ(aws.headBucket("vh-east2"), std::optional<std::string>("us-east-2"));
+        ASSERT_EQ(sent.size(), 1u);
+        EXPECT_EQ(sent[0].url, "https://s3.us-east-2.amazonaws.com/vh-east2");
+        EXPECT_EQ(aws.metrics().head, 1u);
+    }
+    {
+        sent.clear();
+        admin::AwsAdmin aws(upAwsKey());
+        (void)aws.inspect("vh-east2");
+        const auto heads = matching("HEAD", "");
+        ASSERT_EQ(heads.size(), 1u) << "inspect HEADs once, at the bucket's region";
+        EXPECT_EQ(heads[0].url, "https://s3.us-east-2.amazonaws.com/vh-east2");
+        for (const auto& r : sent) EXPECT_TRUE(r.url.starts_with("https://s3.us-east-2.amazonaws.com/")) << r.url;
+    }
+
+    // A recorded region (upstream_bucket.region) beats the key's region: one HEAD to us-west-2.
+    {
+        sent.clear();
+        admin::AwsAdmin aws(upAwsKey());
+        aws.setKnownRegion("vh-west", "us-west-2");
+        EXPECT_EQ(aws.headBucket("vh-west"), std::optional<std::string>("us-west-2"));
+        ASSERT_EQ(sent.size(), 1u);
+        EXPECT_EQ(sent[0].url, "https://s3.us-west-2.amazonaws.com/vh-west");
+    }
+
+    // A stale or malformed hint never misroutes: the redirect names the region, one more HEAD; garbage is ignored.
+    {
+        sent.clear();
+        admin::AwsAdmin aws(upAwsKey());
+        aws.setKnownRegion("vh-west", "eu-central-1");
+        aws.setKnownRegion("vh-east2", "evil.example/#");
+        EXPECT_EQ(aws.headBucket("vh-west"), std::optional<std::string>("us-west-2"));
+        ASSERT_EQ(sent.size(), 2u);
+        EXPECT_EQ(sent[0].url, "https://s3.eu-central-1.amazonaws.com/vh-west");
+        EXPECT_EQ(sent[1].url, "https://s3.us-west-2.amazonaws.com/vh-west");
+        EXPECT_EQ(aws.headBucket("vh-east2"), std::optional<std::string>("us-east-2"));
+        ASSERT_EQ(sent.size(), 3u);
+        EXPECT_EQ(sent[2].url, "https://s3.us-east-2.amazonaws.com/vh-east2");
+    }
+
+    // No region known (key region "auto"): the global endpoint first, as before.
+    {
+        sent.clear();
+        auto key = upAwsKey();
+        key->region = "auto";
+        admin::AwsAdmin aws(key);
+        EXPECT_EQ(aws.headBucket("vh-virginia"), std::optional<std::string>("us-east-1"));
+        ASSERT_EQ(sent.size(), 1u);
+        EXPECT_EQ(sent[0].url, "https://s3.amazonaws.com/vh-virginia");
+        EXPECT_EQ(aws.headBucket("vh-west"), std::optional<std::string>("us-west-2"));
+        ASSERT_EQ(sent.size(), 3u);
+        EXPECT_EQ(sent[1].url, "https://s3.amazonaws.com/vh-west");
+        EXPECT_EQ(sent[2].url, "https://s3.us-west-2.amazonaws.com/vh-west");
+    }
+
+    // A redirect that names no region falls back to the global endpoint once.
+    {
+        sent.clear();
+        handler = [](const http::Request& r) {
+            if (r.url.starts_with("https://s3.amazonaws.com/")) return upRespond(200, {}, {{"x-amz-bucket-region", "us-east-1"}});
+            return upRespond(301);
+        };
+        admin::AwsAdmin aws(upAwsKey());
+        EXPECT_EQ(aws.headBucket("vh-virginia"), std::optional<std::string>("us-east-1"));
+        ASSERT_EQ(sent.size(), 2u);
+        EXPECT_EQ(sent[1].url, "https://s3.amazonaws.com/vh-virginia");
+    }
+
+    // Name validation and the protection lock still come before any request, hint or not.
+    {
+        sent.clear();
+        handler = account;
+        admin::AwsAdmin aws(upAwsKey());
+        aws.setKnownRegion("locked", "us-east-2");
+        guard::setForTesting({{.provider = "aws-s3", .account_ref = std::string("111122223333"), .bucket = "locked"}});
+        EXPECT_THROW((void)aws.headBucket("locked"), vh::storage::upstream::BucketProtected);
+        EXPECT_THROW((void)aws.headBucket("Not_A_Bucket"), std::invalid_argument);
+        EXPECT_TRUE(sent.empty());
+    }
 }
 
 TEST_F(UpstreamProviderTest, StsIdentity) {

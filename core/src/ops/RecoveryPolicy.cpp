@@ -168,6 +168,8 @@ PolProvider polAuthorizeProvider(const Actor& actor, const uint32_t vaultId, con
     if (!manager) throw std::runtime_error("the API key manager is not available");
     auto admin = padmin::adminFor(manager->getAPIKey(vb->api_key_id));
     if (!admin) throw Invalid("provider administration is not available for this API key");
+    // The recorded region routes the first HEAD straight to the bucket's endpoint (#247).
+    if (vb->row && vb->row->region) admin->setKnownRegion(vb->bucket, *vb->row->region);
     if (!admin->supportsVersioning())
         throw Invalid(vb->identity.provider == "cloudflare-r2" ? std::string(padmin::kR2VersioningUnsupported)
                                                                : "this provider has no object versioning");
@@ -414,6 +416,7 @@ Status polBuildStatus(const Actor& actor, const uint32_t vaultId, const bool ref
         } else {
             auto admin = padmin::adminFor(runtime::Deps::get().apiKeyManager->getAPIKey(vb->api_key_id));
             if (admin) {
+                if (vb->row && vb->row->region) admin->setKnownRegion(vb->bucket, *vb->row->region);
                 const auto config = polMapped([&] { return admin->inspect(vb->bucket); });
                 polRecordCheck(*vb, pol::to_string(config.versioning), config.mfa_delete, config.object_lock);
                 if (config.lifecycle_readable) lifecycleView = pol::describeRetention(config.lifecycle);

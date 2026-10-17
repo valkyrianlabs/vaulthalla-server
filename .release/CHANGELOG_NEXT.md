@@ -60,3 +60,6 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
 - S3 sync: a full bucket LIST throws when any page fails (transport error, 403/503, cut or non-XML body) instead of
   returning the keys gathered so far, and every page of a listing reaches the remote index (buckets past 1,000
   objects indexed only their first page) (#246).
+- Upstream admin (AWS): HeadBucket goes straight to the bucket's known region (cached, `upstream_bucket.region`, else
+  the key's region): one request instead of a global-endpoint probe plus a regional one; the global endpoint is
+  probed only when no region is known or a redirect names none (#247).

@@ -274,8 +274,9 @@ bucket: choosing `off`/`local_snapshots` does not suspend a bucket that is versi
   hydrate read = HEAD 1 + GET 1; next pass = HEAD 1 (manifest), 0 PUT; noncurrent 4 versions / 185 B exact; costs
   `active`, priced, month-to-date non-null. Across a key rotation: `provider_transfer`, GET 1 + PUT 2 (object +
   manifest), COPY 0, current object carries the new key version. Disclosure = 6 admin requests, enable (adoption +
-  versioning + retention) = 29 (HEAD 12: `AwsAdmin::headBucket` probes the global endpoint then the region, and
-  `inspect` re-HEADs even with the region cached). R2: refused with `kR2VersioningUnsupported`, 0 requests of any
+  versioning + retention) = 29 (HEAD 12: `AwsAdmin::headBucket` probed the global endpoint then the region on every
+  call; since #247 a known region (cache, `upstream_bucket.region`, else the key's region) is one HEAD, so the
+  enable should drop to ~23; not re-measured live). R2: refused with `kR2VersioningUnsupported`, 0 requests of any
   kind, local snapshot + restore on the same vault works. Nothing failed on real AWS that passed on the fake.
 
 ## Local versions as the upstream backlog
