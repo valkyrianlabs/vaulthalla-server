@@ -13,12 +13,14 @@
 #include "sync/model/RemotePolicy.hpp"
 #include "vault/model/Vault.hpp"
 
+#include <pqxx/except>
 #include <pqxx/result>
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <filesystem>
+#include <functional>
 #include <mutex>
 #include <stdexcept>
 #include <unordered_map>
@@ -126,6 +128,17 @@ namespace vh::recovery::local::versions {
 
 namespace rq = db::query::recovery;
 
+namespace {
+
+std::function<void(pqxx::work&)>& attachHook() {
+    static std::function<void(pqxx::work&)> hook;
+    return hook;
+}
+
+}
+
+void setAttachHookForTesting(std::function<void(pqxx::work&)> hook) { attachHook() = std::move(hook); }
+
 Pending::Pending(Pending&& other) noexcept
     : vault_(std::move(other.vault_)), capture_(std::move(other.capture_)), generation_(std::move(other.generation_)),
       keepLast_(other.keepLast_), inserted_(other.inserted_), freedBlobs_(std::move(other.freedBlobs_)) {
@@ -135,6 +148,30 @@ Pending::Pending(Pending&& other) noexcept
 
 void Pending::attach(pqxx::work& txn) {
     if (!capture_ || inserted_) return;
+    // Bookkeeping must never fail the content write it rides on: the rows go in under a savepoint, and a failure (the
+    // reused blob was removed since retain(), a constraint, …) rolls back only them. The write commits; this
+    // generation is not kept (logged and counted).
+    txn.exec("SAVEPOINT vh_recovery_version");
+    try {
+        attachRows(txn);
+        txn.exec("RELEASE SAVEPOINT vh_recovery_version");
+    } catch (const pqxx::broken_connection&) {
+        throw;   // the caller's transaction is gone with it
+    } catch (const std::exception& e) {
+        txn.exec("ROLLBACK TO SAVEPOINT vh_recovery_version");   // throws (failing the write) only if the txn is broken
+        txn.exec("RELEASE SAVEPOINT vh_recovery_version");
+        ++failedCount;
+        log::Registry::storage()->error("[LocalVersions] Vault {}: the previous version of {} was not kept ({}); the "
+                                        "write goes ahead", vault_.id, generation_.path, e.what());
+        capture_->abort();
+        capture_.reset();
+        inserted_.reset();
+        freedBlobs_.clear();
+    }
+}
+
+void Pending::attachRows(pqxx::work& txn) {
+    if (attachHook()) attachHook()(txn);
     generation_.blob_id = capture_->attach(txn);
     inserted_ = rq::Generation::insertLocalVersion(txn, generation_);
 

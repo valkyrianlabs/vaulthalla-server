@@ -73,7 +73,9 @@ bucket: choosing `off`/`local_snapshots` does not suspend a bucket that is versi
   backing file only after `committed()`.
 - Off path: the per-vault policy is cached in memory (`recovery::local::versioningPolicy`, 60 s TTL as a safety net);
   whoever writes `vault_recovery_policy` calls `recovery::local::invalidatePolicy(vaultId)` after the commit. With
-  versioning off a write costs no query. A staging failure is logged/counted and never fails the write.
+  versioning off a write costs no query. A staging failure is logged/counted and never fails the write;
+  neither does an attach failure: `Pending::attach` inserts its rows under a savepoint (`vh_recovery_version`), and a
+  failure (a reused blob removed since `retain`, a constraint) rolls back only them (counted `failed`, version skipped).
 - Skipped (counted, no row): an empty generation, legacy plaintext (blobs are never plaintext), a cloud file without
   local bytes (the provider holds it).
 - Call sites (reason): `Filesystem::createFile` overwrite branch (`NewFileContext::version_reason`, default

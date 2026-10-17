@@ -484,6 +484,52 @@ TEST_F(RecoveryVersionsTest, ASnapshotHeldBlobOutlivesItsPrunedVersion) {
     EXPECT_TRUE(blob->present) << "the snapshot still references it";
 }
 
+// The recovery rows ride in the content write's transaction; failing them must never fail the write (a FUSE seal would
+// return EIO, an overwrite would be refused). attach() works under a savepoint: the version is skipped, the write lands.
+TEST_F(RecoveryVersionsTest, ABrokenVersionAttachSkipsTheVersionButNeverTheWrite) {
+    const auto engine = localVault();
+    const auto ref = store::vaultRef(*engine->vault);
+    const auto f = write(engine, "/b.txt", "one");
+
+    // The live generation already has a blob (as a snapshot leaves it): retain() reuses it (Existing) ...
+    auto held = store::captureLink(ref, f->backing_path, {.encryption_iv = f->encryption_iv,
+                                                          .key_version = f->encrypted_with_key_version,
+                                                          .plaintext_bytes = f->size_bytes,
+                                                          .content_hash = f->content_hash});
+    const auto heldId = db::Transactions::exec("RecoveryVersionsTest::held", [&](pqxx::work& txn) {
+        return held.attach(txn);
+    });
+    held.committed();
+    // ... and it is removed between retain() and attach().
+    versions::setAttachHookForTesting([&](pqxx::work&) {
+        EXPECT_TRUE(store::removeBlob(ref, heldId));
+    });
+    const auto failedBefore = versions::counters().failed;
+    EXPECT_NO_THROW(write(engine, "/b.txt", "two"));
+    versions::setAttachHookForTesting({});
+    EXPECT_EQ(readLocal(engine, "/b.txt"), "two") << "the write committed";
+    EXPECT_TRUE(versionsOf(engine, "/b.txt").empty()) << "that version was skipped";
+    EXPECT_EQ(versions::counters().failed, failedBefore + 1);
+
+    // A failing statement inside the attach (an FK error, …) aborts only the savepoint, through the FUSE seal too.
+    versions::setAttachHookForTesting([](pqxx::work& txn) { txn.exec("SELECT 1 / 0"); });
+    const auto cur = row(engine, "/b.txt");
+    ASSERT_TRUE(cur->inode);
+    fuse::WorkingCopies copies(scratch / ("wc_" + tag()), fuse::WorkingCopies::daemonHooks());
+    auto h = copies.open(*cur->inode, cur, O_RDWR);
+    ASSERT_EQ(copies.write(h, "T", 1, 0, std::nullopt), 1);
+    EXPECT_NO_THROW(copies.release(h)) << "no EIO from the seal";
+    versions::setAttachHookForTesting({});
+    EXPECT_EQ(readLocal(engine, "/b.txt"), "Two");
+    EXPECT_TRUE(versionsOf(engine, "/b.txt").empty());
+    EXPECT_EQ(versions::counters().failed, failedBefore + 2);
+
+    // Nothing left behind: the next write keeps its version as usual.
+    write(engine, "/b.txt", "three");
+    ASSERT_EQ(versionsOf(engine, "/b.txt").size(), 1u);
+    EXPECT_EQ(decryptVersion(engine, versionsOf(engine, "/b.txt").at(0)), "Two");
+}
+
 // ---- the upstream backlog ----------------------------------------------------------------------------------------------
 
 TEST_F(RecoveryVersionsTest, AnOutageQueuesVersionsInOrderAndTheReplayKeepsIt) {

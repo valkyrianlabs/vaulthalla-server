@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <ctime>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -78,6 +79,9 @@ public:
 
     // In the caller's transaction, before the files row changes: the blob row and the file_versions row (origin
     // 'version'); a per-file keep_last overflow is pruned in the same transaction (bounded). No-op when inactive.
+    // Never fails the caller's write: the rows go in under a savepoint, and a failure (the reused blob was removed
+    // since retain(), a constraint) rolls back only them, is logged and counted, and leaves this Pending inactive.
+    // Throws only when the caller's transaction itself is broken.
     void attach(pqxx::work& txn);
     // After the caller's transaction committed: finishes the capture and removes blobs the prune freed. Never throws.
     void committed() noexcept;
@@ -91,6 +95,8 @@ private:
     friend Pending retain(const storage::Engine& engine, const fs::model::File& prior, Reason reason,
                           const RetainOptions& options);
 
+    void attachRows(pqxx::work& txn);
+
     store::VaultRef vault_{};
     std::optional<store::Capture> capture_;
     db::query::recovery::NewGeneration generation_{};
@@ -98,6 +104,10 @@ private:
     std::optional<db::query::recovery::InsertedGeneration> inserted_;
     std::vector<int64_t> freedBlobs_;
 };
+
+// Tests: runs at the start of every attach(), inside its savepoint (a seam to remove a reused blob, or fail a statement,
+// between retain() and attach()). Empty = none.
+void setAttachHookForTesting(std::function<void(pqxx::work&)> hook);
 
 // ---- retention -------------------------------------------------------------------------------------------------------
 
