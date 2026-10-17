@@ -8,24 +8,38 @@ Optional "## Section" headings group bullets; if used, every bullet must be unde
 One level of nested "  - " detail bullets is allowed. Consolidate; don't paste commit logs.
 -->
 
-- Depend on vaulthalla-archive-keyring, which owns /usr/share/keyrings/vaulthalla.gpg (the signed-by= path
-  install.sh writes) so APT signing-key renewals reach existing installs through upgrades (#121).
-- S3 data plane: the vault controller signs its query in SigV4 canonical order (paged listings past 1,000 keys
-  signed `continuation-token` out of order), treats a CompleteMultipartUpload 200 carrying an <Error> body as a
-  failure, and gains version-aware ListObjectVersions / HEAD / GET / CopyObject ?versionId= plus per-PUT ETag and
-  version-id capture for file recovery.
-- File recovery surfaces: `vh snapshot create|list|delete`, `vh recovery list|inspect|plan|restore|delete|costs`,
-  `vh vault recovery status|set|suspend|disclosure` and the ws `recovery.*` / `vault.recovery.*` commands over
-  ops::recovery (restore previews and confirmation, provider-versioning cost disclosure and acknowledgements).
-- File recovery, provider versions: an index of object versions from Vaulthalla's own writes (with each generation's
-  IV and key version) and from metadata-only, request-budgeted listings; restore of a version by CopyObject (same key
-  and key version, ≤ 5 GiB) or by a verified GET + re-seal + PUT, under the vault's sync pass lease with a CAS on the
-  planned destination; cache vaults adopt the restored generation index-only, so nothing is uploaded twice.
-  Event write intents now record the stored object's ETag.
-- File recovery, local versioning: with vault_recovery_policy.local_versioning on, every content change (overwrite,
-  FUSE seal, truncate, delete, sync download, restore, conflict) keeps the prior sealed generation as a local version
-  (zero-copy link), pruned by keep-last / max-age / quota; in upstream vaults unsent versions are replayed in order
-  before the next upload when the bucket keeps history. Backing files are now never written in place (new files are
-  created exclusively or replaced by rename; contract-tested).
-- Deleting a folder (web console, ws `fs.entry.delete`) now also drops its subfolders and symlinks from the
-  filesystem metadata cache; they stayed cached, so recreating a path under the deleted folder failed.
+## File recovery
+
+- Vault recovery preference (`off | local_snapshots | provider_versioning`, migration 111), shared recovery model and
+  one authorizing boundary (`ops::recovery`), CLI `vh snapshot …`, `vh recovery list|inspect|plan|restore|delete|costs`,
+  `vh vault recovery status|set|suspend|disclosure`, ws `recovery.*` / `vault.recovery.*`, web console Recovery
+  history, restore preview, vault Recovery panel, cost disclosure dialog and recovery cost panel.
+- Local snapshots: explicit, named, encrypted recovery points of a file or directory tree (deduplicated zero-copy
+  blobs under `<backing>/.vh-recovery/<vault>`), survive deletion of the live files (`file_versions.file_id` cascade
+  replaced by SET NULL), count against a snapshot quota and the vault quota, restore to the original or an alternate
+  destination with a CAS against concurrent writes.
+- Local versioning (opt-in): every content change keeps the prior sealed generation (keep-last / max-age / quota);
+  in upstream vaults unsent generations form an ordered backlog replayed into a versioned bucket when the provider is
+  reachable again; cache vaults release local bodies once the provider holds them.
+- Provider versioning (AWS S3): capability detection (R2 refused), explicit activation behind a signed cost
+  disclosure, adoption of an existing vault's bucket, propagation window, noncurrent retention (30/90/365 days or
+  indefinite; shortening needs its own acceptance), confirmed suspension that deletes nothing, a lifecycle rule
+  expiring the index manifest's noncurrent versions, protected and unmanaged buckets never mutated.
+- Version-aware restore: provider copy (same key, ≤ 5 GiB) or bounded GET + re-seal + PUT under the sync pass lease;
+  cache vaults adopt the restored generation index-only so nothing is uploaded twice; point-in-time directory plans
+  are labelled timestamp-based reconstructions.
+- Local, telemetry-free usage accounting per vault (`vault_upstream_usage_daily`) and a decimal cost model for
+  versioning (observed vs illustrative bases, ranges, retention scenarios, unpriced when no profile; never $0.00),
+  cost alerts as operator notifications that never block writes.
+- Historical keys: retired vault key versions are unsealed on demand for recovery reads only and kept while
+  recoverable data needs them (trigger `recovery_guard_retired_vault_key`); key export includes them.
+- Backing files are never written in place (new files are created exclusively or replaced by rename; contract test).
+
+## Fixes
+
+- S3 data plane: the legacy signer puts the canonical query in SigV4 order (paged listings past 1,000 keys failed
+  with SignatureDoesNotMatch on page 2); a CompleteMultipartUpload 200 carrying an <Error> body is a failure.
+- fix(vault): a restart during an unfinished key rotation could not load the vault's key (`get_rotation_old_vault_key`
+  selected `*` from `vault_keys_trashed`, which has no `updated_at`).
+- Deleting a folder (web console, ws `fs.entry.delete`) also drops its subfolders and symlinks from the filesystem
+  metadata cache; recreating a path under the deleted folder failed.
