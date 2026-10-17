@@ -60,6 +60,8 @@ void vh::db::Connection::initPreparedVaultKeys() const {
     conn_->prepare("vault_key_rotation_in_progress",
                    "SELECT EXISTS(SELECT 1 FROM vault_keys_trashed WHERE vault_id = $1 AND rotation_completed_at IS NULL) AS in_progress");
 
+    // vault_keys_trashed has no updated_at column (vault::model::Key reads one): a retired key's is when it retired.
     conn_->prepare("get_rotation_old_vault_key",
-                   "SELECT * FROM vault_keys_trashed WHERE vault_id = $1 AND rotation_completed_at IS NULL");
+                   "SELECT vault_id, version, encrypted_key, iv, created_at, COALESCE(trashed_at, created_at) AS updated_at "
+                   "FROM vault_keys_trashed WHERE vault_id = $1 AND rotation_completed_at IS NULL");
 }

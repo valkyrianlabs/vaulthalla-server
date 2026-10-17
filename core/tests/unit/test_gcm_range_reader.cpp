@@ -209,8 +209,12 @@ TEST_F(GcmFileReaderTest, OptimisticReaderAbortsOnceBackgroundVerificationFails)
 
     storage::GcmFileReader reader(paramsFor(path, s, false, "test:optimistic-bad"));
     std::vector<uint8_t> out(4096);
-    // The first read schedules verification and may be served before the verdict (optimistic).
-    (void)reader.read(0, out);
+    // The first read schedules verification and may be served before the verdict (optimistic), or refused when the
+    // background verification already failed (a busy machine runs the reader late): both are correct.
+    try {
+        (void)reader.read(0, out);
+    } catch (const storage::IntegrityError&) {
+    }
     const auto deadline = std::chrono::steady_clock::now() + 10s;
     while (reader.integrityState() != IntegrityState::Failed && std::chrono::steady_clock::now() < deadline)
         std::this_thread::sleep_for(5ms);
