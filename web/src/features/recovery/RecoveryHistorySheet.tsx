@@ -106,7 +106,8 @@ const RecoveryHistorySheet = ({
         width="max-w-2xl"
         data-testid="recovery-history">
         <div className="space-y-5">
-          {target.kind === 'dir' ?
+          {/* Point in time reconstructs from provider versions: S3 vaults only (the daemon refuses it elsewhere). */}
+          {target.kind === 'dir' && isS3 ?
             <PointInTimeForm path={target.path} onPlan={req => setRestore({ vault_id: vaultId, ...req })} />
           : null}
 

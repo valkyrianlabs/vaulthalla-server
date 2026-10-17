@@ -80,22 +80,10 @@ bool rpHas(const Actor& actor, const storage::Engine& engine, const std::string&
 
 using Visibility = access::Gate;
 
-prov::points::RetentionInfo rpRetention(const uint32_t vaultId) {
-    try {
-        const auto bucket = prov::policy::bucketForVault(vaultId);
-        if (!bucket || !bucket->versioning) return {};
-        rec::ProviderVersioningState state;
-        state.retention_mode = bucket->versioning->retention_mode;
-        state.retention_days = bucket->versioning->retention_days;
-        // Only what Vaulthalla set is known here; another application's shorter rule is reported by status, and an
-        // indefinite choice can't be promised without reading the lifecycle again.
-        if (state.retention_mode == "days") state.effective_noncurrent_days = state.retention_days;
-        if (state.retention_mode == "indefinite") return {};
-        return prov::points::RetentionInfo::from(state);
-    } catch (const std::exception&) {
-        return {};
-    }
-}
+// What a provider version's retention is, per point. Vaulthalla's recorded rule is only an upper bound: another
+// application's lifecycle rule can expire versions sooner, and only a lifecycle read (status --refresh) knows. So a
+// point says unknown rather than promise a retention it can't vouch for; status reports the effective one.
+prov::points::RetentionInfo rpRetention(const uint32_t /*vaultId*/) { return {}; }
 
 rec::RecoveryId rpParseId(const std::string& id) {
     try {
