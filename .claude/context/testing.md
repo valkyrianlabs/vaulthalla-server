@@ -234,6 +234,22 @@ Dev mode requires both `VH_BUILD_MODE=dev` and the gitignored `enable_dev_mode` 
 - The full `vh_unit_tests` binary against a real DB runs about 230s (S3CostSafety plus S3GatewayDb take about 185s),
   so `meson test` hits its 120s timeout. Run `./build/core/vh_unit_tests` directly for the DB-backed run.
 
+## Live provider tests (`UpstreamLive*`, never CI)
+
+- Skipped unless `VH_LIVE_UPSTREAM=1`. Credentials: `VH_AWS_ADMIN_{API_KEY,SECRET_KEY}` (IAM `vaulthalla-test-admin`,
+  us-east-2), `VH_R2_ADMIN_{ACCESS_KEY,SECRET_KEY,ENDPOINT}`, optional `VH_CF_API_TOKEN`, from the gitignored repo
+  `.bashrc` (source it, never print it). Helpers: `tests/helpers/upstream_live.hpp` (`liveTestName`, `LiveCleanup`,
+  `liveDestroyTestBucket` with every version + a retried DeleteBucket). Only NEW `vaulthalla-test-<unix>-<random>`
+  buckets, deleted again even on failure.
+- DB-free adapters: `(set -a; . ./.bashrc; set +a; VH_LIVE_UPSTREAM=1 build/core/vh_unit_tests --gtest_filter='UpstreamLive.Aws*')`.
+- DB-backed (`test_recovery_live.cpp`: `UpstreamLive.AwsRecoverySmartCache`, `UpstreamLive.AwsRecoveryAcrossKeyRotation`,
+  `UpstreamLive.R2VersioningRefused`) need the per-run DB, so they go through `bin/tests/run_unit.sh`, whose `env -i`
+  would drop the credentials. With `VH_LIVE_UPSTREAM=1` in the caller's environment it hands exactly
+  `LIVE_ENV_VARS` (the names above) through to the test process on a pipe (never argv, never a file):
+  `(set -a; . ./.bashrc; set +a; VH_LIVE_UPSTREAM=1 bash bin/tests/run_unit.sh --build-dir build -- --gtest_filter='UpstreamLive.AwsRecovery*:UpstreamLive.R2VersioningRefused')`
+  (~1 min, ~80 S3 requests per AWS case). Every admin client Vaulthalla opens goes through a tally
+  (`setFactoryForTesting`) that fails the test if it lists the account's buckets or names any other bucket.
+
 ## Provider test credentials (Phase 2 scaffold)
 
 - Canonical file: `/etc/vaulthalla/testing/providers.env` (root:vaulthalla 0640, dir 0750). Operator-managed and TEST-ONLY:

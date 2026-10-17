@@ -1,12 +1,13 @@
 // Live provider checks for the upstream admin/events adapters (#237, #96). Never part of CI: every test skips unless
 // VH_LIVE_UPSTREAM=1. They create ONLY buckets/queues named vaulthalla-test-<unix time>-<random> and remove them again,
-// even on failure. Nothing else in the accounts is read at object level, changed or deleted.
+// even on failure. Nothing else in the accounts is read at object level, changed or deleted. Credentials and helpers:
+// tests/helpers/upstream_live.hpp.
 //
-//   AWS:  VH_AWS_ADMIN_API_KEY, VH_AWS_ADMIN_SECRET_KEY            (buckets in us-east-2)
-//   R2:   VH_R2_ADMIN_ACCESS_KEY, VH_R2_ADMIN_SECRET_KEY, VH_R2_ADMIN_ENDPOINT, optional VH_CF_API_TOKEN (events)
-//
-// Run: (set -a; . ./.bashrc; VH_LIVE_UPSTREAM=1 build/core/vh_unit_tests --gtest_filter='UpstreamLive*')
+// Run: (set -a; . ./.bashrc; set +a; VH_LIVE_UPSTREAM=1 build/core/vh_unit_tests --gtest_filter='UpstreamLive*')
 // Versioning: UpstreamLive.AwsVersioning (a new bucket: unversioned → enabled → retention rule → suspended).
+// File recovery acceptance (DB-backed, through bin/tests/run_unit.sh): test_recovery_live.cpp.
+
+#include "../helpers/upstream_live.hpp"
 
 #include "storage/s3/Controller.hpp"
 #include "storage/s3/provider/admin/Adapters.hpp"
@@ -30,45 +31,13 @@ namespace admin = vh::storage::s3::provider::admin;
 using vh::vault::model::APIKey;
 using vh::vault::model::S3Provider;
 
-std::string liveEnv(const char* name) {
-    const auto* v = std::getenv(name);
-    return v ? std::string(v) : std::string{};
-}
-
-bool liveEnabled() { return liveEnv("VH_LIVE_UPSTREAM") == "1"; }
-
-std::string liveTestName(const std::string& suffix = {}) {
-    std::mt19937_64 rng(std::random_device{}());
-    char rand[9];
-    std::snprintf(rand, sizeof(rand), "%08x", static_cast<unsigned int>(rng()));
-    return "vaulthalla-test-" + std::to_string(std::time(nullptr)) + "-" + rand + suffix;
-}
-
-struct LiveCleanup {
-    std::function<void()> fn;
-    ~LiveCleanup() {
-        try {
-            if (fn) fn();
-        } catch (const std::exception& e) {
-            std::cerr << "[live cleanup] " << e.what() << std::endl;
-            ADD_FAILURE() << "cleanup failed: " << e.what();
-        }
-    }
-};
-
-// Empties and deletes a test bucket (all versions). Refuses any name that isn't ours.
-void liveDestroyTestBucket(admin::AdminClient& client, const std::string& bucket) {
-    if (!bucket.starts_with("vaulthalla-test-")) throw std::logic_error("refusing to delete a non-test bucket");
-    if (!client.headBucket(bucket)) return;
-    for (int round = 0; round < 20; ++round) {
-        const auto page = client.listObjectVersions(bucket, {}, 1000);
-        if (page.objects.empty()) break;
-        const auto failed = client.deleteObjects(bucket, page.objects);
-        if (!failed.empty()) throw std::runtime_error("could not delete " + std::to_string(failed.size()) + " test object(s)");
-    }
-    client.deleteBucket(bucket);
-    std::cout << "[live] deleted " << bucket << std::endl;
-}
+using vh::test_support::live::LiveCleanup;
+using vh::test_support::live::liveAwsKey;
+using vh::test_support::live::liveDestroyTestBucket;
+using vh::test_support::live::liveEnabled;
+using vh::test_support::live::liveEnv;
+using vh::test_support::live::liveR2Key;
+using vh::test_support::live::liveTestName;
 
 std::vector<admin::LifecycleRule> liveForeignRule() {
     return admin::detail::parseLifecycle(R"(<LifecycleConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
@@ -164,18 +133,6 @@ void liveExerciseBucket(admin::AdminClient& client, const std::shared_ptr<APIKey
     EXPECT_THROW((void)client.inspect(bucket), vh::storage::upstream::BucketProtected);
     EXPECT_THROW(data.uploadBufferWithMetadata("x", std::vector<uint8_t>{'x'}, std::unordered_map<std::string, std::string>{}), vh::storage::upstream::BucketProtected);
     vh::storage::upstream::guard::clearForTesting();
-}
-
-std::shared_ptr<APIKey> liveAwsKey() {
-    return std::make_shared<APIKey>(0, "live-aws", S3Provider::AWS, liveEnv("VH_AWS_ADMIN_API_KEY"),
-                                    liveEnv("VH_AWS_ADMIN_SECRET_KEY"), "us-east-2", "https://s3.us-east-2.amazonaws.com");
-}
-
-std::shared_ptr<APIKey> liveR2Key() {
-    auto key = std::make_shared<APIKey>(0, "live-r2", S3Provider::CloudflareR2, liveEnv("VH_R2_ADMIN_ACCESS_KEY"),
-                                        liveEnv("VH_R2_ADMIN_SECRET_KEY"), "auto", liveEnv("VH_R2_ADMIN_ENDPOINT"));
-    key->provider_token = liveEnv("VH_CF_API_TOKEN");
-    return key;
 }
 
 void livePrintCapabilities(const admin::Capabilities& caps) {
