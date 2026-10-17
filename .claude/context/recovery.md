@@ -270,7 +270,13 @@ Implementation (`recovery/local/Backlog.*`, `storage/CloudEngineBacklog.cpp`, `r
 - Replay PUT: `CloudEngine::uploadGeneration(key, blob, row)`: the generation's own `vh-iv` / `vh-key-version` /
   `content-hash` / `vh-encrypted`, through `noteOwnWrite(...)`/`done()` (the recovery hook sees it); plaintext-upstream
   vaults get the blob decrypted in memory with `historicalKeySnapshot` (buffers wiped). Version id from
-  `lastPutOutcome` → `markSent`; none (or `null`) → `skipped`. Local failures (blob or key version gone,
+  `lastPutOutcome` → `markSent`; none (or `null`) → `skipped`. Every replay PUT also updates the key's
+  `remote_object_index` row to that generation (its hash, the PUT's ETag and version id) and, for the live file, writes
+  `Baseline::afterReplay` (remote side = what we put; local hash = the `vh-replay` marker, which never matches). An
+  interrupted replay (g1 sent, g2 failed) therefore leaves "remote = our own write, local = unpublished history":
+  the Planner's `publishing()` rule plans an Upload under every conflict policy while the remote side is unchanged
+  since (hash, else ETag compared unquoted), so the next pass finishes the publication instead of a spurious `ask`
+  conflict or a keep_remote/keep_newest download of the stale generation over the live file. Local failures (blob or key version gone,
   authentication fails: `ContentUnavailable`/`IntegrityError`) → `recordFailure` + `skipped` (never block the file
   forever); any other failure → `recordFailure`, stop, `blocked`.
 - Smart-cache release after `sent` (incl. "already upstream" matches): `Generation::releaseBlob` + `store::removeBlobs`

@@ -87,6 +87,17 @@ std::vector<Action> Planner::build(
                 }
             }
 
+            // A backlog replay was interrupted (recovery/local/Backlog): the remote object is one of this file's own
+            // earlier generations that Vaulthalla put there, nobody changed it since, and the rest of the file's
+            // history and its current content are still to come. Finish publishing it, under every conflict policy:
+            // reading our own write as a remote change would be a spurious conflict, or overwrite the live file with
+            // the stale generation.
+            if (!ctx->hasOpenConflict(L->id))
+                if (const auto* base = ctx->baselineFor(L->id); base && base->publishing() && !remoteChangedSince(*R, *base)) {
+                    plan.push_back({ ActionType::Upload, k, L, R });
+                    continue;
+                }
+
             // Fast-path skip if equal content (let ctx decide via hashes, remoteHashMap, etc.)
             if (*L == *R) {
                 ctx->noteInSync(*L, *R);

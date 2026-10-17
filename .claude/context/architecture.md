@@ -634,7 +634,9 @@ stage "Copy And Delete")
   (local hash/size; remote index hash, ETag, size), written on agreement (`Cloud::noteInSync`) and after every
   successful upload/download/index refresh (`sync::tasks::recordBaseline`) and resolution. `Baseline::classify`:
   LocalOnly → Upload, RemoteOnly → Download (archive tier skipped), InSync → nothing, Both or Unknown (no baseline) →
-  conflict. Every policy skips a file whose classification is InSync (#190: under `keep_remote`/`keep_newest` a file
+  conflict. A baseline written by local versioning's backlog replay (`Baseline::publishing()`, recovery.md) whose
+  remote side is unchanged plans an Upload under every policy (finishing an interrupted publication). Every policy
+  skips a file whose classification is InSync (#190: under `keep_remote`/`keep_newest` a file
   downloaded from another writer's object used to differ by hash on every pass and be downloaded again). Otherwise
   `keep_*` still treat any difference (one-sided included) as theirs to settle.
 - **Resolution** (`ConflictResolver::resolve`, trusted; `ops::conflicts::resolve` authorizes per item): the local row

@@ -15,6 +15,9 @@
 #include "db/query/recovery/Generation.hpp"
 #include "db/query/recovery/Policy.hpp"
 #include "db/query/recovery/Snapshot.hpp"
+#include "db/query/sync/Conflict.hpp"
+#include "db/query/sync/Event.hpp"
+#include "db/query/sync/RemoteObjectIndex.hpp"
 #include "fs/Filesystem.hpp"
 #include "fs/cache/Registry.hpp"
 #include "fs/model/File.hpp"
@@ -33,11 +36,16 @@
 #include "storage/CloudEngine.hpp"
 #include "storage/Manager.hpp"
 #include "storage/PlaintextReader.hpp"
+#include "sync/Cloud.hpp"
 #include "sync/Planner.hpp"
 #include "sync/model/Action.hpp"
+#include "sync/model/Event.hpp"
+#include "sync/model/RemoteManifest.hpp"
 #include "sync/model/RemotePolicy.hpp"
 #include "sync/model/ScopedOp.hpp"
+#include "sync/model/Throughput.hpp"
 #include "sync/rotation/Runtime.hpp"
+#include "sync/tasks/Download.hpp"
 #include "sync/tasks/Upload.hpp"
 #include "vault/APIKeyManager.hpp"
 #include "vault/EncryptionManager.hpp"
@@ -232,6 +240,40 @@ protected:
         auto done = task.promise.get_future();
         task();
         return std::get<bool>(done.get());
+    }
+
+    // One regular sync pass, inline: the real planner and tasks; the index mutation (and manifest) only when every
+    // transfer succeeded, as sync::Cloud does.
+    static std::vector<sync::model::Action> runPass(const Cloud& c) {
+        auto cloud = std::make_shared<sync::Cloud>(c.engine);
+        cloud->event = std::make_shared<sync::model::Event>();
+        cloud->event->vault_id = c.engine->vault->id;
+        cloud->event->timestamp_begin = std::time(nullptr);
+        db::query::sync::Event::create(cloud->event);
+        cloud->initBins();
+        const auto plan = cloud->planPass();
+        bool ok = true;
+        for (const auto& a : plan) {
+            using AT = sync::model::ActionType;
+            if (a.type == AT::Upload) {
+                sync::tasks::Upload task(c.engine, a.local, cloud->op(sync::model::Throughput::Metric::UPLOAD));
+                auto done = task.promise.get_future();
+                task();
+                ok = std::get<bool>(done.get()) && ok;
+            } else if (a.type == AT::Download) {
+                sync::tasks::Download task(c.engine, a.remote, cloud->op(sync::model::Throughput::Metric::DOWNLOAD), false);
+                auto done = task.promise.get_future();
+                task();
+                ok = std::get<bool>(done.get()) && ok;
+            }
+        }
+        if (ok) c.engine->applyRemoteIndexMutation(plan);
+        cloud->clearBins();
+        return plan;
+    }
+
+    static unsigned planned(const std::vector<sync::model::Action>& plan, const sync::model::ActionType type) {
+        return static_cast<unsigned>(std::ranges::count_if(plan, [&](const auto& a) { return a.type == type; }));
     }
 
     // The bucket's history of a key, oldest first, decrypted where Vaulthalla encrypted it.
@@ -624,6 +666,66 @@ TEST_F(RecoveryVersionsTest, AnOutageQueuesVersionsInOrderAndTheReplayKeepsIt) {
     }
     EXPECT_EQ(backlog::summary(c.engine->vault->id).pending_versions, 0u);
     EXPECT_TRUE(kept[1].blob_id) << "a sync vault keeps its local history";
+}
+
+// A replay interrupted half way leaves the bucket's current object at one of the file's own earlier generations,
+// Vaulthalla's own write of its history. The next pass must finish the publication: before the fix it read that object
+// as a remote change, so `ask` recorded a spurious conflict and keep_remote / keep_newest (LastModified) downloaded the
+// stale generation over the live file. An already-synced file (g0 uploaded; g1 lands, g2 fails) and a new file (its
+// first upload replays g0, then g1 fails), with the remote index from the DB and from a full LIST (ETag, no hash).
+TEST_F(RecoveryVersionsTest, AnInterruptedReplayIsFinishedByTheNextPassUnderEveryPolicy) {
+    using CP = sync::model::RemotePolicy::ConflictPolicy;
+    using AT = sync::model::ActionType;
+    struct Case {
+        CP policy;
+        bool fresh;     // never uploaded before the outage
+        bool listed;    // the next pass lists the bucket instead of reading the index
+    };
+    for (const auto& [policy, fresh, listed] :
+         {Case{CP::Ask, false, false}, Case{CP::KeepNewest, true, false}, Case{CP::Ask, false, true},
+          Case{CP::KeepRemote, true, false}, Case{CP::KeepRemote, true, true}, Case{CP::Ask, true, false}}) {
+        SCOPED_TRACE(std::string(sync::model::to_string(policy)) + (fresh ? ", new file" : ", synced file") +
+                     (listed ? ", listed" : ", indexed"));
+        const auto c = cloudVault(sync::model::RemotePolicy::Strategy::Sync);
+        c.engine->remote_policy()->conflict_policy = policy;
+        std::vector<std::string> expected;
+        if (!fresh) {
+            write(c.engine, "/i.txt", "g0");
+            ASSERT_EQ(planned(runPass(c), AT::Upload), 1u);
+            ASSERT_EQ(history(c, "/i.txt"), (std::vector<std::string>{"g0"}));
+            write(c.engine, "/i.txt", "g1");
+            write(c.engine, "/i.txt", "g2");
+            expected = {"g0", "g1"};
+        } else {
+            write(c.engine, "/i.txt", "g0");
+            write(c.engine, "/i.txt", "g1");
+            expected = {"g0"};
+        }
+        write(c.engine, "/i.txt", "current");
+        // One replay lands, then a failure (a new vault's first pass also publishes the index manifest first).
+        c.bucket->failAfter(VersionedBucket::Op::Put, VersionedBucket::Failure::Transport, fresh ? 2 : 1);
+        ASSERT_EQ(planned(runPass(c), AT::Upload), 1u);
+        ASSERT_EQ(history(c, "/i.txt"), expected) << "interrupted";
+        ASSERT_EQ(readLocal(c.engine, "/i.txt"), "current");
+
+        if (listed) {
+            // Lose the index and the manifest: the next pass lists the bucket (ETags, object sizes, no hashes).
+            db::query::sync::RemoteObjectIndex::replaceFromListObjects(c.engine->vault->id, {});
+            (void)c.bucket->seedDeleteMarker(sync::model::remote_manifest::INDEX_V1_KEY);
+        }
+        const auto next = runPass(c);
+        EXPECT_EQ(planned(next, AT::Upload), 1u) << "the publication is finished";
+        EXPECT_EQ(planned(next, AT::Download), 0u) << "never the stale generation over the live file";
+        EXPECT_EQ(readLocal(c.engine, "/i.txt"), "current");
+        const auto full = fresh ? std::vector<std::string>{"g0", "g1", "current"}
+                                : std::vector<std::string>{"g0", "g1", "g2", "current"};
+        EXPECT_EQ(history(c, "/i.txt"), full);
+        EXPECT_TRUE(db::query::sync::Conflict::openForVault(c.engine->vault->id).empty()) << "no conflict";
+        EXPECT_EQ(backlog::summary(c.engine->vault->id).pending_versions, 0u);
+
+        const auto after = runPass(c);
+        EXPECT_EQ(planned(after, AT::Upload) + planned(after, AT::Download), 0u) << "settled";
+    }
 }
 
 TEST_F(RecoveryVersionsTest, AReplayedGenerationKeepsItsOwnKeyVersionAcrossARotation) {
