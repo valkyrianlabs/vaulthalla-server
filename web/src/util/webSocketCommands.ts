@@ -28,6 +28,17 @@ import type {
   LifecyclePatch,
   Provision,
 } from '@/models/upstream'
+import type {
+  ProviderRetentionInput,
+  RecoveryCostReport,
+  RecoveryDisclosure,
+  RecoveryPlan,
+  RecoveryPoint,
+  RecoveryPointDetail,
+  RecoveryRestoreResult,
+  RecoveryStatus,
+  RecoveryUpdate,
+} from '@/models/recovery'
 import type { GroupRecord, UserRecord } from '@/features/access/types'
 import { Permission } from '@/models/role'
 import type { WsContract } from '@/util/generated/wsContract'
@@ -360,6 +371,58 @@ export interface WebSocketCommandMap {
   'upstream.events.status': { payload: { vault_id?: number }; response: { events: EventStatus[] } }
 
   'upstream.audit.list': { payload: { bucket?: string; limit?: number }; response: { entries: AuditEntry[] } }
+
+  // File recovery: ops::recovery (core/include/ops/Recovery.hpp). Reads need filesystem Read on the point's path
+  // (points you can't read are omitted / not_found); the vault policy needs vault sync.config view/edit, provider
+  // versioning also admin.upstream.configure. NeedsConfirmation codes: RECOVERY_CODES in models/recovery.ts.
+  'recovery.list': {
+    payload: {
+      vault_id: number
+      path?: string
+      refresh_provider?: boolean
+      include_snapshots?: boolean
+      include_versions?: boolean
+      include_provider?: boolean
+      limit?: number
+    }
+    response: { points: RecoveryPoint[] }
+  }
+  'recovery.inspect': { payload: { recovery_id: string }; response: { detail: RecoveryPointDetail } }
+  'recovery.snapshot.create': {
+    payload: { vault_id: number; path: string; name?: string }
+    response: { detail: RecoveryPointDetail }
+  }
+  'recovery.point.delete': { payload: { recovery_id: string; confirm?: boolean }; response: { recovery_id: string } }
+  // A point to restore (recovery_id), or a point in time (vault_id + path + at). Never atomic unless plan.atomic.
+  'recovery.plan': {
+    payload: {
+      recovery_id?: string
+      vault_id?: number
+      path?: string
+      at?: string | number
+      destination?: string
+      prune?: boolean
+      refresh_provider?: boolean
+    }
+    response: { plan: RecoveryPlan }
+  }
+  'recovery.plan.get': { payload: { plan_id: number }; response: { plan: RecoveryPlan } }
+  'recovery.restore': {
+    payload: { plan_id: number; token?: string; accept_unverified?: boolean }
+    response: { result: RecoveryRestoreResult }
+  }
+  'recovery.costs': { payload: { vault_id: number }; response: { costs: RecoveryCostReport } }
+  'vault.recovery.status': {
+    payload: { vault_id: number; refresh_provider?: boolean }
+    response: { status: RecoveryStatus }
+  }
+  // mode provider_versioning needs disclosure_token from vault.recovery.disclosure, shown to a person first.
+  'vault.recovery.update': { payload: { vault_id: number } & RecoveryUpdate; response: { status: RecoveryStatus } }
+  'vault.recovery.disclosure': {
+    payload: { vault_id: number; provider_retention?: ProviderRetentionInput }
+    response: { disclosure: RecoveryDisclosure }
+  }
+  'vault.recovery.suspend': { payload: { vault_id: number; confirm?: boolean }; response: { status: RecoveryStatus } }
 
   // Roles and Permissions
 

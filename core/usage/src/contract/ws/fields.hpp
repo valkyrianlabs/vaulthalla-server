@@ -5,6 +5,7 @@
 #include "Contract.hpp"
 
 #include <chrono>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -54,5 +55,6 @@ std::vector<WsCommandUsage> vaultCommands();
 std::vector<WsCommandUsage> shareCommands();
 std::vector<WsCommandUsage> metaCommands();
 std::vector<WsCommandUsage> upstreamCommands();
+std::vector<WsCommandUsage> recoveryCommands();
 
 }

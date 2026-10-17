@@ -16,6 +16,7 @@ class Handler {
     static void registerStorageHandlers(const std::shared_ptr<Router>& r);
     static void registerAPIKeyHandlers(const std::shared_ptr<Router>& r);
     static void registerUpstreamHandlers(const std::shared_ptr<Router>& r);
+    static void registerRecoveryHandlers(const std::shared_ptr<Router>& r);
     static void registerRoleHandlers(const std::shared_ptr<Router>& r);
     static void registerPermissionsHandlers(const std::shared_ptr<Router>& r);
     static void registerSettingsHandlers(const std::shared_ptr<Router>& r);
