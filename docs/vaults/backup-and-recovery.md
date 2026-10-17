@@ -13,6 +13,8 @@ tags:
 
 Backups for Vaulthalla must cover metadata, file bodies, configuration, key protection state, and exported recovery material. A PostgreSQL dump alone is not a complete backup.
 
+This page is about disaster recovery of a whole installation: the database, configuration, state, keys and secrets. To bring back earlier versions of individual files and folders (snapshots, local versioning, S3 provider versioning), see [File Recovery](/vaults/recovery). Those recovery points live on the same host or in the same bucket as the vault, so they are not a backup.
+
 :::toc[On this page]{depth="3" theme="compact"}
 :::
 
@@ -28,7 +30,7 @@ A practical recovery set includes:
 | Key protection | `/var/lib/swtpm/vaulthalla` when `swtpm` is used | included in the state directory (`file` backend) | Unseals the master keys on the original host. |
 | Vault key export | Portable recovery material for encrypted vault content. |
 | Internal secret export | Database and JWT secrets managed by Vaulthalla. |
-| S3/R2 bucket data | Remote object bodies for S3-compatible vaults. |
+| S3/R2 bucket data | Remote object bodies for S3-compatible vaults (and, with provider versioning, their object versions). |
 | Package version record | Helps restore with the same or compatible schema and runtime behavior. |
 
 :::callout{theme="warning" title="No single backup command covers everything"}
@@ -96,7 +98,7 @@ vh version > vaulthalla-version.txt
 
 ## Local Vault Backup
 
-For local vaults, the file bodies live in Vaulthalla-managed local state. Back up `/var/lib/vaulthalla` consistently with the PostgreSQL dump. If the system is active during backup, use snapshots or a maintenance window so the database and file bodies represent a coherent point in time.
+For local vaults, the file bodies live in Vaulthalla-managed local state. Back up `/var/lib/vaulthalla` consistently with the PostgreSQL dump. Local snapshots and local versions are stored encrypted in `/var/lib/vaulthalla/.vh-recovery` (macOS: `state/.vh-recovery`) and indexed in the database, so they are only usable when both come from the same point in time. If the system is active during backup, use snapshots or a maintenance window so the database and file bodies represent a coherent point in time.
 
 ## S3/R2 Vault Backup
 

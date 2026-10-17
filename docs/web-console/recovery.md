@@ -14,7 +14,7 @@ tags:
 
 # File Recovery In The Web Console
 
-The web console exposes the same file recovery operations as `vh snapshot`, `vh recovery` and `vh vault recovery` (see [File Recovery](/cli/command-reference#file-recovery)). The daemon decides what you can see and do, with your normal vault permissions. The console only shows its answers.
+The web console exposes the same file recovery operations as `vh snapshot`, `vh recovery` and `vh vault recovery` (see [File Recovery](/cli/command-reference#file-recovery)). The daemon decides what you can see and do, with your normal vault permissions. The console only shows its answers. How each kind of history works, what it costs and what the refusals mean is in [File Recovery](/vaults/recovery).
 
 :::toc[On this page]{depth="3" theme="compact"}
 :::
@@ -48,7 +48,7 @@ When the vault's recovery mode is **Local snapshots**, **Create snapshot** captu
 
 ## Restoring
 
-Click **Restore…** on a point. Leave **Restore to** empty to restore over the original path, or enter another vault path to restore a copy there. For folders, **Restore this folder to a point in time** takes a date and time in your browser's time zone. You can also choose to remove files that didn't exist at that time.
+Click **Restore…** on a point. Leave **Restore to** empty to restore over the original path, or enter another vault path to restore a copy there. For folders in S3 vaults, **Restore this folder to a point in time** takes a date and time in your browser's time zone and rebuilds the folder from provider versions. You can also choose to remove files that didn't exist at that time. In a local vault the preview refuses it: restore a snapshot or a local version instead.
 
 Neither action changes anything yet. Vaulthalla first makes a plan, and the **Restore preview** shows it:
 

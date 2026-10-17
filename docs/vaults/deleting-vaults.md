@@ -23,6 +23,8 @@ Deleting a vault is a schedule, not an instant wipe. The vault disappears at onc
 1. **Right away**, the vault disappears from listings, the FUSE mount at `/mnt/vaulthalla`, sync, share links and the S3 gateway. Its name, slug, FUSE name and S3 bucket binding stay reserved.
 2. **Until `vaults.retention_window` ends** (default `5m`), you can restore it exactly as it was: files, roles, share links and sync settings.
 3. **Then the daemon purges it**: the vault's local backing and cache directories are removed, the bucket's objects too when you chose that, and the vault's database rows go. The name is free again.
+
+[File recovery](/vaults/recovery) data follows the same schedule: local snapshots and local versions are removed with the vault's local data. Provider versions are never deleted: when you chose to delete a versioned bucket's objects, the purge leaves delete markers, and the old versions stay in the bucket (and are billed) until its retention removes them. Export the vault's keys before deleting it if you want those versions to stay readable: the export of a deleted vault carries its current key only, not the retired versions old object versions may be sealed with.
 4. **The sealed encryption key is kept** until `vaults.tpm_retention_window` ends (default `90d`, `180d` for S3 vaults), counted from the deletion. After that it is destroyed. A small record of the deleted vault (name, key version, timestamps) stays.
 
 **Delete now** skips the restore window: the purge starts within moments. It never shortens the key retention window.

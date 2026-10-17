@@ -33,6 +33,8 @@ Web console overhaul + dogfood (design system, data layer, budgets, e2e suites, 
 macOS port (seams, Mac build/test, clang/libc++ gotchas): `.claude/context/macos.md`.
 Upstream control plane (S3/R2 bucket administration, protection locks, event-driven sync; #237/#96):
 `.claude/context/upstream-control-plane.md`.
+File recovery (local snapshots, local versioning, AWS provider versioning, cost disclosure; migration 111):
+`.claude/context/recovery.md`.
 Other context: `.claude/context/environment.md` (VM topology: this box, the lab, dev-db, price bot), `link-sharing.md`
 (share model, invariants, open gaps), `history/stats-dashboard.md` (dashboard design log).
 `.claude/scratch/` is gitignored working notes, including the pre-migration Codex archive. Use it for

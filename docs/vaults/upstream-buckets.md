@@ -62,6 +62,11 @@ The credential's IAM identity needs, on the buckets Vaulthalla manages:
   (`arn:aws:sqs:*:<account>:vaulthalla-*`): `sqs:CreateQueue`, `sqs:GetQueueUrl`, `sqs:GetQueueAttributes`,
   `sqs:SetQueueAttributes`, `sqs:ReceiveMessage`, `sqs:DeleteMessage`, `sqs:ChangeMessageVisibility`,
   `sqs:DeleteQueue`, and `sqs:ListQueues` (on `*`).
+- For [provider versioning](/vaults/recovery#provider-versioning-aws-s3), on the vault's bucket:
+  `s3:PutBucketVersioning` (turn versioning on, or suspend it) and `s3:GetObjectVersion` (read an old version's
+  metadata, copy it back or download it during a restore), on top of `s3:GetBucketVersioning`,
+  `s3:ListBucketVersions` and the lifecycle permissions above. They are checked when provider versioning is used, so
+  `status --probe` lists them without testing them. `s3:GetObjectVersionAttributes` isn't used.
 
 The same credential sets the queue's resource policy that lets Amazon S3 publish to it; no second IAM principal is
 involved. Vaulthalla reads the account ID with STS `GetCallerIdentity`, which needs no permission.
@@ -186,8 +191,11 @@ vh upstream lifecycle <api-key> <bucket> --clear
 ```
 
 `inspect` shows the bucket's region, versioning, object lock, lifecycle rules and event rules, marking which ones are
-Vaulthalla's. Vaulthalla owns exactly one lifecycle rule, `vaulthalla-managed`, on managed and adopted buckets, and
-preserves every other rule unchanged.
+Vaulthalla's. Vaulthalla owns one lifecycle rule, `vaulthalla-managed`, on managed and adopted buckets, and preserves
+every other rule unchanged. A vault with [provider versioning](/vaults/recovery#retention) also gets
+`vaulthalla-manifest-versions`, which expires old versions of Vaulthalla's own index under `.vaulthalla/` after one
+day, and its retention is the `NoncurrentDays` of `vaulthalla-managed`. For those vaults, change the retention with
+`vh vault recovery set --retention`, which asks before history is shortened.
 
 | Option | AWS S3 | Cloudflare R2 |
 | --- | --- | --- |
@@ -206,8 +214,10 @@ unless you chose the existing opt-in upstream object purge. The bucket stays `ma
 That purge is refused for an adopted bucket: it held data before the vault existed (often other applications'), and
 the purge would delete all of it. Keep the upstream data, detach the bucket, and clean it up with the provider.
 
-**Detach** gives a bucket that no vault uses back to you: Vaulthalla removes its own event rules and lifecycle rule, and
-the bucket becomes `unmanaged`. Data is untouched.
+**Detach** gives a bucket that no vault uses back to you: Vaulthalla removes its own event rules and its
+`vaulthalla-managed` lifecycle rule, and the bucket becomes `unmanaged`. Data is untouched. Detach doesn't change the
+bucket's versioning and, today, leaves a `vaulthalla-manifest-versions` rule in place: remove it with the provider if
+you no longer want it.
 
 ```bash
 vh upstream detach <api-key> <bucket>
