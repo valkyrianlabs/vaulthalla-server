@@ -180,6 +180,47 @@ bool GcmStreamVerifier::finish(const std::span<const uint8_t, AES_TAG_SIZE> tag)
     return ok;
 }
 
+struct GcmStreamDecryptor::Ctx {
+    gcm_detail::EvpCtx evp;
+};
+
+GcmStreamDecryptor::GcmStreamDecryptor(const GcmKey key, const GcmIv iv, const std::span<const uint8_t> aad)
+    : ctx_(std::make_unique<Ctx>(Ctx{newCtx()})) {
+    auto* c = ctx_->evp.get();
+    if (EVP_DecryptInit_ex(c, EVP_aes_256_gcm(), nullptr, nullptr, nullptr) != 1 ||
+        EVP_CIPHER_CTX_ctrl(c, EVP_CTRL_GCM_SET_IVLEN, static_cast<int>(AES_IV_SIZE), nullptr) != 1 ||
+        EVP_DecryptInit_ex(c, nullptr, nullptr, key.data(), iv.data()) != 1)
+        throw std::runtime_error("AES-GCM decryption initialization failed");
+    addAad(c, aad, false);
+}
+
+GcmStreamDecryptor::~GcmStreamDecryptor() = default;
+
+void GcmStreamDecryptor::update(const std::span<const uint8_t> ciphertext, const std::span<uint8_t> out) {
+    if (finished_) throw std::logic_error("GcmStreamDecryptor used after finish()");
+    if (out.size() < ciphertext.size()) throw std::invalid_argument("GcmStreamDecryptor: output buffer too small");
+    std::size_t done = 0;
+    while (done < ciphertext.size()) {
+        const auto step = std::min(ciphertext.size() - done, kMaxEvpStep);
+        int outLen = 0;
+        if (EVP_DecryptUpdate(ctx_->evp.get(), out.data() + done, &outLen, ciphertext.data() + done,
+                              static_cast<int>(step)) != 1 || static_cast<std::size_t>(outLen) != step)
+            throw std::runtime_error("AES-GCM decryption failed");
+        done += step;
+    }
+}
+
+bool GcmStreamDecryptor::finish(const std::span<const uint8_t, AES_TAG_SIZE> tag) {
+    if (finished_) throw std::logic_error("GcmStreamDecryptor finished twice");
+    finished_ = true;
+    if (EVP_CIPHER_CTX_ctrl(ctx_->evp.get(), EVP_CTRL_GCM_SET_TAG, static_cast<int>(AES_TAG_SIZE),
+                            const_cast<uint8_t*>(tag.data())) != 1)
+        throw std::runtime_error("AES-GCM tag setup failed");
+    std::array<uint8_t, 16> tail{};
+    int outLen = 0;
+    return EVP_DecryptFinal_ex(ctx_->evp.get(), tail.data(), &outLen) == 1;
+}
+
 bool gcmDecrypt(const GcmKey key, const GcmIv iv, const std::span<const uint8_t> body,
                 const std::span<const uint8_t, AES_TAG_SIZE> tag, const std::span<uint8_t> out,
                 const std::span<const uint8_t> aad) {

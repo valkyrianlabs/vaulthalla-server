@@ -56,6 +56,24 @@ bucket: choosing `off`/`local_snapshots` does not suspend a bucket that is versi
 - Restoring a generation sealed under the current key may reuse its sealed bytes (same IV for the same plaintext, as
   copy does). Under an older key it is re-sealed: streaming GCM decrypt (old key) → encrypt (current key, fresh IV)
   into the sidecar; committed only after the old tag verifies. No plaintext touches disk.
+- API (`vault/EncryptionManager.hpp`): `historicalKeySnapshot(v)` (current / rotation-old from memory, else
+  `vault_keys_trashed[v]` unsealed and cached: ≤ 8 versions, LRU, dropped after 10 min unused, checked on access;
+  outstanding snapshots stay valid until released) throws `vault::KeyVersionUnavailable` for a version the vault
+  doesn't hold (incl. 0). `retainedKeyVersions()`, `hasKeyVersion(v)`, `referencedHistoricalKeys()` (export).
+  `resealFileToCurrent(src, iv, v, dst, f)` / `resealToCurrent(buf, …)` over `crypto::util::resealFile` /
+  `resealBuffer` (`crypto/util/reseal.hpp`, 64 KiB chunks, `GcmStreamDecryptor` → `GcmStreamEncryptor`): a source
+  that fails authentication throws `storage::IntegrityError` and dst is removed (whatever it held). An empty
+  generation (empty IV, version 0, zero bytes) re-seals to an empty dst with empty IV/version 0 (how every empty file
+  is stored); a non-empty source with an empty IV is plaintext and refused (`std::invalid_argument`). Same-version
+  re-seal still draws a fresh IV (reuse the bytes instead if that is wanted).
+- Key export (`vh vault keys export`) adds, per vault, `historical_keys: [{key_version, key (base64), created_at,
+  retired_at}]` for the retired versions `recovery_blob` / live `upstream_object_version` rows reference (never the
+  current one), and `missing_key_versions` when a referenced version is gone. Both fields are omitted when empty, so
+  exports without recovery data are byte-identical to before. Export tracking (`exported_version`) still records the
+  current version only. A deleted vault's export (from `vault_deletion_key`) does not add historical keys yet.
+- `get_rotation_old_vault_key` used to `SELECT *` from `vault_keys_trashed`, which has no `updated_at` column, so
+  `vault::model::Key(row)` threw and a restart mid-rotation could not load the vault key. Retired-key reads now alias
+  `trashed_at AS updated_at` (pinned by `RecoveryKeysDbTest`).
 
 ## Provider versioning (AWS S3 first; capability contract per provider)
 

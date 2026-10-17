@@ -1,6 +1,7 @@
 #include "vault/EncryptionManager.hpp"
 #include "crypto/util/encrypt.hpp"
 #include "crypto/util/Gcm.hpp"
+#include "crypto/util/reseal.hpp"
 #include "log/Registry.hpp"
 #include "db/query/vault/Key.hpp"
 #include "vault/model/Key.hpp"
@@ -8,11 +9,17 @@
 
 #include <sodium.h>
 #include <openssl/evp.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <fstream>
 #include <stdexcept>
+#include <system_error>
 #include <paths.h>
+#include <ranges>
+#include <iterator>
 #include <fmt/format.h>
 
 using namespace vh::vault;
@@ -31,6 +38,10 @@ struct WipedKeyCopy {
 };
 }
 
+KeyVersionUnavailable::KeyVersionUnavailable(const unsigned int vaultId, const unsigned int version)
+    : std::runtime_error(fmt::format("Vault {} does not hold key version {}", vaultId, version)),
+      vaultId_(vaultId), version_(version) {}
+
 EncryptionManager::EncryptionManager(const unsigned int vault_id)
     : vault_id_(vault_id) {
     tpmKeyProvider_ = std::make_unique<secrets::KeyProvider>(paths::testMode ? "test_vault_master" : "vault_master");
@@ -45,6 +56,12 @@ EncryptionManager::EncryptionManager(ForTesting, const unsigned int vault_id, co
         old_key_ = std::make_shared<const SecretKey>(oldKey);
         rotation_in_progress_.store(true);
     }
+}
+
+void EncryptionManager::addHistoricalKeyForTesting(const unsigned int version, const std::span<const uint8_t> key) {
+    if (tpmKeyProvider_) throw std::logic_error("addHistoricalKeyForTesting is for ForTesting managers only");
+    std::scoped_lock lock(historicalMutex_);
+    testHistorical_[version] = std::make_shared<const SecretKey>(key);
 }
 
 unsigned int EncryptionManager::get_key_version() const {
@@ -309,6 +326,148 @@ SecretKeyPtr EncryptionManager::keySnapshot(const unsigned int keyVersion) const
     }
 
     return key_;
+}
+
+SecretKeyPtr EncryptionManager::liveKeyFor(const unsigned int keyVersion) const {
+    std::shared_lock lock(keyMutex_);
+    if (key_ && keyVersion == version_) return key_;
+    if (old_key_ && keyVersion + 1 == version_) return old_key_;
+    return nullptr;
+}
+
+SecretKeyPtr EncryptionManager::cachedHistoricalKey(const unsigned int keyVersion) const {
+    std::scoped_lock lock(historicalMutex_);
+    if (const auto it = testHistorical_.find(keyVersion); it != testHistorical_.end()) return it->second;
+
+    const auto now = std::chrono::steady_clock::now();
+    std::erase_if(historicalCache_, [&](const auto& kv) { return now - kv.second.lastUsed > kHistoricalCacheIdle; });
+    const auto it = historicalCache_.find(keyVersion);
+    if (it == historicalCache_.end()) return nullptr;
+    it->second.lastUsed = now;
+    return it->second.key;
+}
+
+void EncryptionManager::cacheHistoricalKey(const unsigned int keyVersion, const SecretKeyPtr& key) const {
+    std::scoped_lock lock(historicalMutex_);
+    historicalCache_[keyVersion] = {key, std::chrono::steady_clock::now()};
+    while (historicalCache_.size() > kHistoricalCacheSize) {
+        const auto lru = std::ranges::min_element(historicalCache_, {}, [](const auto& kv) { return kv.second.lastUsed; });
+        historicalCache_.erase(lru);  // outstanding snapshots keep their key until released, then it is wiped
+    }
+}
+
+SecretKeyPtr EncryptionManager::historicalKeySnapshot(const unsigned int keyVersion) const {
+    if (auto live = liveKeyFor(keyVersion)) return live;
+    if (auto cached = cachedHistoricalKey(keyVersion)) return cached;
+    if (keyVersion == 0 || !tpmKeyProvider_) throw KeyVersionUnavailable(vault_id_, keyVersion);
+
+    const auto rec = db::query::vault::Key::getRetiredVaultKey(vault_id_, keyVersion);
+    if (!rec) {
+        // A rotation may have moved the version between the two lookups; it is in memory then.
+        if (auto live = liveKeyFor(keyVersion)) return live;
+        throw KeyVersionUnavailable(vault_id_, keyVersion);
+    }
+
+    auto raw = decrypt_aes256_gcm(rec->encrypted_key, tpmKeyProvider_->getMasterKey(), rec->iv);
+    if (raw.size() != AES_KEY_SIZE) {
+        sodium_memzero(raw.data(), raw.size());
+        throw std::runtime_error(fmt::format("Retired key version {} of vault {} is not 32 bytes", keyVersion, vault_id_));
+    }
+    auto key = std::make_shared<const SecretKey>(raw);
+    sodium_memzero(raw.data(), raw.size());
+    cacheHistoricalKey(keyVersion, key);
+    log::Registry::crypto()->info("[VaultEncryptionManager] Unsealed retired key version {} of vault {} for recovery",
+                                  keyVersion, vault_id_);
+    return key;
+}
+
+std::vector<unsigned int> EncryptionManager::retainedKeyVersions() const {
+    std::vector<unsigned int> out;
+    {
+        std::shared_lock lock(keyMutex_);
+        if (key_) out.push_back(version_);
+        if (old_key_ && version_ > 0) out.push_back(version_ - 1);
+    }
+    {
+        std::scoped_lock lock(historicalMutex_);
+        for (const auto& version : testHistorical_ | std::views::keys) out.push_back(version);
+    }
+    if (tpmKeyProvider_) std::ranges::copy(db::query::vault::Key::retiredKeyVersions(vault_id_), std::back_inserter(out));
+    std::ranges::sort(out);
+    const auto dup = std::ranges::unique(out);
+    out.erase(dup.begin(), dup.end());
+    return out;
+}
+
+bool EncryptionManager::hasKeyVersion(const unsigned int keyVersion) const {
+    if (keyVersion == 0) return false;
+    if (liveKeyFor(keyVersion)) return true;
+    {
+        std::scoped_lock lock(historicalMutex_);
+        if (testHistorical_.contains(keyVersion) || historicalCache_.contains(keyVersion)) return true;
+    }
+    return tpmKeyProvider_ && db::query::vault::Key::hasRetiredKeyVersion(vault_id_, keyVersion);
+}
+
+EncryptionManager::ReferencedHistoricalKeys EncryptionManager::referencedHistoricalKeys() const {
+    ReferencedHistoricalKeys out;
+    if (!tpmKeyProvider_) return out;
+    const auto current = get_key_version();
+    for (const auto version : db::query::vault::Key::recoveryReferencedKeyVersions(vault_id_)) {
+        if (version == current) continue;
+        const auto record = db::query::vault::Key::getRetiredVaultKey(vault_id_, version);
+        if (!record) {
+            out.missing.push_back(version);
+            continue;
+        }
+        out.keys.push_back({version, historicalKeySnapshot(version), record->created_at, record->updated_at});
+    }
+    return out;
+}
+
+void EncryptionManager::resealFileToCurrent(const std::filesystem::path& src, const std::string& srcIvB64,
+                                            const unsigned int srcKeyVersion, const std::filesystem::path& dst,
+                                            const std::shared_ptr<File>& f) const {
+    if (!f) throw std::invalid_argument("Cannot re-seal a file without file metadata");
+
+    if (srcIvB64.empty()) {
+        // Every empty file is stored unencrypted (no IV, version 0, zero bytes); anything else here is plaintext.
+        if (std::filesystem::file_size(src) != 0)
+            throw std::invalid_argument("Refusing to re-seal an unencrypted generation: " + src.string());
+        if (dst.has_parent_path()) std::filesystem::create_directories(dst.parent_path());
+        const int fd = ::open(dst.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+        if (fd < 0) throw std::system_error(errno, std::generic_category(), "open " + dst.string());
+        ::close(fd);
+        f->encryption_iv.clear();
+        f->encrypted_with_key_version = 0;
+        return;
+    }
+
+    const auto oldKey = historicalKeySnapshot(srcKeyVersion);
+    const auto [newKey, version] = currentKey();
+    f->encryption_iv = resealFile(src, *oldKey, srcIvB64, dst, *newKey);
+    f->encrypted_with_key_version = version;
+}
+
+std::vector<uint8_t> EncryptionManager::resealToCurrent(const std::vector<uint8_t>& ciphertext,
+                                                        const std::string& srcIvB64, const unsigned int srcKeyVersion,
+                                                        const std::shared_ptr<File>& f) const {
+    if (!f) throw std::invalid_argument("Cannot re-seal a file without file metadata");
+
+    if (srcIvB64.empty()) {
+        if (!ciphertext.empty()) throw std::invalid_argument("Refusing to re-seal an unencrypted generation");
+        f->encryption_iv.clear();
+        f->encrypted_with_key_version = 0;
+        return {};
+    }
+
+    const auto oldKey = historicalKeySnapshot(srcKeyVersion);
+    const auto [newKey, version] = currentKey();
+    std::vector<uint8_t> iv;
+    auto out = resealBuffer(ciphertext, *oldKey, b64_decode(srcIvB64), *newKey, iv);
+    f->encryption_iv = b64_encode(iv);
+    f->encrypted_with_key_version = version;
+    return out;
 }
 
 std::vector<uint8_t> EncryptionManager::decrypt(const std::vector<uint8_t>& ciphertext, const std::string& b64_iv, const unsigned int keyVersion) const {

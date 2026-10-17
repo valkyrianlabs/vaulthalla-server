@@ -84,4 +84,37 @@ Key::KeyPtr Key::getRotationInProgressOldKey(unsigned int vaultId) {
     });
 }
 
+Key::KeyPtr Key::getRetiredVaultKey(const unsigned int vaultId, const unsigned int version) {
+    return Transactions::exec("Key::getRetiredVaultKey", [&](pqxx::work& txn) -> KeyPtr {
+        const auto res = txn.exec(pqxx::prepped{"get_retired_vault_key"}, pqxx::params{vaultId, version});
+        if (res.empty()) return nullptr;
+        return std::make_shared<K>(res[0]);
+    });
+}
+
+std::vector<unsigned int> Key::retiredKeyVersions(const unsigned int vaultId) {
+    return Transactions::exec("Key::retiredKeyVersions", [&](pqxx::work& txn) {
+        std::vector<unsigned int> out;
+        for (const auto& row : txn.exec(pqxx::prepped{"list_retired_vault_key_versions"}, vaultId))
+            out.push_back(row[0].as<unsigned int>());
+        return out;
+    });
+}
+
+bool Key::hasRetiredKeyVersion(const unsigned int vaultId, const unsigned int version) {
+    return Transactions::exec("Key::hasRetiredKeyVersion", [&](pqxx::work& txn) {
+        return txn.exec(pqxx::prepped{"retired_vault_key_version_exists"}, pqxx::params{vaultId, version})
+            .one_field_ref().as<bool>();
+    });
+}
+
+std::vector<unsigned int> Key::recoveryReferencedKeyVersions(const unsigned int vaultId) {
+    return Transactions::exec("Key::recoveryReferencedKeyVersions", [&](pqxx::work& txn) {
+        std::vector<unsigned int> out;
+        for (const auto& row : txn.exec(pqxx::prepped{"list_recovery_referenced_key_versions"}, vaultId))
+            out.push_back(row[0].as<unsigned int>());
+        return out;
+    });
+}
+
 }
