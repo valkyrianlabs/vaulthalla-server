@@ -1125,11 +1125,62 @@ Filesystem::createFile(const FuseCreateFileContext& ctx) {
     }
 }
 
+void RenameJournal::rollback() noexcept {
+    for (auto it = moved.rbegin(); it != moved.rend(); ++it) {
+        std::error_code ec;
+        std::filesystem::rename(it->second, it->first, ec);
+        if (ec) {
+            try {
+                log::Registry::fs()->error("[Filesystem::rename] Rollback could not move {} back to {}: {}",
+                                           it->second.string(), it->first.string(), ec.message());
+            } catch (...) {}
+        }
+    }
+    // Only what the rename created; a folder only once it is empty again.
+    for (auto it = created.rbegin(); it != created.rend(); ++it) {
+        std::error_code ec;
+        std::filesystem::remove(*it, ec);
+    }
+    moved.clear();
+    created.clear();
+}
+
+namespace {
+
+// The rename works on copies: the cached entries (shared with every in-flight FUSE op) change only once it commits.
+std::shared_ptr<Entry> cloneEntry(const std::shared_ptr<Entry>& e) {
+    if (const auto d = std::dynamic_pointer_cast<Directory>(e)) return std::make_shared<Directory>(*d);
+    if (const auto s = std::dynamic_pointer_cast<Symlink>(e)) return std::make_shared<Symlink>(*s);
+    if (const auto f = std::dynamic_pointer_cast<File>(e)) return std::make_shared<File>(*f);
+    throw std::runtime_error("unknown entry type: " + e->fuse_path.string());
+}
+
+// A failure inside the rename transaction that already has its errno: rolls the transaction back.
+struct RenameAborted : std::runtime_error {
+    int rc;
+    RenameAborted(const int code, const std::string& what) : std::runtime_error(what), rc(code) {}
+};
+
+// rename(2)'s rules for replacing `target` with `source`; 0 when it may.
+int replaceRefusal(const std::shared_ptr<Entry>& source, const std::shared_ptr<Entry>& target) {
+    if (!target->parent_id) return -EBUSY;  // a vault root
+    if (source->isDirectory()) {
+        if (!target->isDirectory()) return -ENOTDIR;
+        if (!vh::db::query::fs::Directory::isDirectoryEmpty(target->id)) return -ENOTEMPTY;
+        return 0;
+    }
+    return target->isDirectory() ? -EISDIR : 0;
+}
+
+}
+
 int Filesystem::rename(const std::filesystem::path& oldPath,
                        const std::filesystem::path& newPath,
                        const std::shared_ptr<identities::User>& user,
-                       std::shared_ptr<Engine> engine) {
+                       std::shared_ptr<Engine> engine,
+                       const RenameMode mode) {
     std::scoped_lock lock(mutex_);
+    RenameJournal journal;
 
     try {
         log::Registry::fs()->debug("[Filesystem::rename] Renaming {} to {}", oldPath.string(), newPath.string());
@@ -1142,7 +1193,8 @@ int Filesystem::rename(const std::filesystem::path& oldPath,
         if (oldPath == newPath)
             return 0;
 
-        const auto entry = runtime::Deps::get().fsCache->getEntry(oldPath);
+        const auto& cache = runtime::Deps::get().fsCache;
+        const auto entry = cache->getEntry(oldPath);
         if (!entry) {
             log::Registry::fs()->error(
                 "[Filesystem::rename] Source entry not found: {}",
@@ -1176,94 +1228,144 @@ int Filesystem::rename(const std::filesystem::path& oldPath,
             return -EXDEV;
         }
 
-        const auto oldBackingPath = entry->backing_path;
+        if (entry->isDirectory() && !entry->parent_id) {
+            log::Registry::fs()->error("[Filesystem::rename] Cannot rename root directory: {}", oldPath.string());
+            return -EBUSY;
+        }
 
-        int rc = 0;
+        if (isWithin(newPath, oldPath)) return -EINVAL;  // a folder into itself
+
+        const auto destParent = cache->getEntry(resolveParent(newPath));
+        if (!destParent || !destParent->isDirectory()) {
+            log::Registry::fs()->error(
+                "[Filesystem::rename] Parent directory does not exist: {}",
+                resolveParent(newPath).string());
+            return destParent ? -ENOTDIR : -ENOENT;
+        }
+
+        // An existing destination: refused, or replaced the way rename(2) replaces it.
+        const auto replaced = cache->getEntry(newPath);
+        if (replaced && replaced->id == entry->id) return 0;
+        if (replaced) {
+            if (mode != RenameMode::Replace) return -EEXIST;
+            if (const auto refusal = replaceRefusal(entry, replaced)) return refusal;
+        }
+
+        // Everything under a directory moves with it, shallowest first so each child's new parent is known.
+        std::vector<std::shared_ptr<Entry>> descendants;
+        if (entry->isDirectory()) {
+            descendants = cache->listDir(entry->id, true);
+            std::ranges::stable_sort(descendants, {}, [](const std::shared_ptr<Entry>& e) {
+                return std::ranges::distance(e->fuse_path.begin(), e->fuse_path.end());
+            });
+        }
+
+        const auto moved = cloneEntry(entry);
+        std::vector<std::pair<std::filesystem::path, std::shared_ptr<Entry>>> renamed;  // old FUSE path -> new entry
         std::optional<unsigned int> previousParentId;
 
         db::Transactions::exec("Filesystem::rename", [&](pqxx::work& txn) {
+            renamed.clear();
             std::vector<uint8_t> buffer;
 
-            // Everything under a directory moves with it. Take the directory's own subtree (it used to walk its
-            // parent's, so any sibling aborted the rename), shallowest first so each child's new parent exists.
-            std::vector<std::shared_ptr<Entry>> descendants;
-            if (entry->isDirectory()) {
-                if (!entry->parent_id) {
-                    log::Registry::fs()->error(
-                        "[Filesystem::rename] Cannot rename root directory: {}",
-                        oldPath.string());
-                    rc = -EBUSY;
-                    return;
+            if (replaced) {
+                if (replaced->isDirectory()) {
+                    if (!db::query::fs::Directory::deleteEmptyDirectory(txn, replaced->id))
+                        throw RenameAborted(-ENOTEMPTY, "destination folder is not empty: " + newPath.string());
+                } else if (replaced->isSymlink()) {
+                    db::query::fs::Symlink::deleteSymlink(txn, replaced->id);
+                } else {
+                    const auto uid = user ? std::optional<unsigned int>(user->id) : std::nullopt;
+                    db::query::fs::File::markFileAsTrashed(txn, uid, replaced->id, replaced->backing_path);
                 }
-
-                descendants = runtime::Deps::get().fsCache->listDir(entry->id, true);
-                std::ranges::stable_sort(descendants, {}, [](const std::shared_ptr<Entry>& e) {
-                    return std::ranges::distance(e->fuse_path.begin(), e->fuse_path.end());
-                });
             }
 
             // The subtree totals the entry carries to its ancestors, taken before anything changes (#158).
             const auto totals = db::query::fs::Directory::subtreeTotalsOf(txn, entry->id);
             const auto oldParentId = db::query::fs::Directory::parentIdOf(txn, entry->id);
 
-            rc = handleRename({
-                .from = oldPath,
-                .to = newPath,
-                .buffer = buffer,
-                .user = user,
-                .engine = engine,
-                .entry = entry,
-                .txn = txn
-            });
-
-            if (rc != 0)
-                return;
-
-            for (const auto& item : descendants) {
-                buffer.clear();
-                rc = handleRename({
-                    .from = item->fuse_path,
-                    .to = updateSubdirPath(oldPath, newPath, item->fuse_path),
+            if (const auto rc = handleRename({
+                    .from = oldPath,
+                    .to = newPath,
                     .buffer = buffer,
                     .user = user,
                     .engine = engine,
-                    .entry = item,
+                    .entry = moved,
+                    .parent = destParent,
+                    .journal = journal,
                     .txn = txn
-                });
+                }); rc != 0)
+                throw RenameAborted(rc, "could not rename " + oldPath.string());
+            renamed.emplace_back(oldPath, moved);
 
-                if (rc != 0)
-                    return;
+            std::unordered_map<std::string, std::shared_ptr<Entry>> byNewPath{{newPath.string(), moved}};
+            for (const auto& item : descendants) {
+                buffer.clear();
+                const auto child = cloneEntry(item);
+                const auto to = updateSubdirPath(oldPath, newPath, item->fuse_path);
+                const auto parentIt = byNewPath.find(resolveParent(to).string());
+                if (parentIt == byNewPath.end())
+                    throw RenameAborted(-EIO, "no renamed parent for " + item->fuse_path.string());
+
+                if (const auto rc = handleRename({
+                        .from = item->fuse_path,
+                        .to = to,
+                        .buffer = buffer,
+                        .user = user,
+                        .engine = engine,
+                        .entry = child,
+                        .parent = parentIt->second,
+                        .journal = journal,
+                        .txn = txn
+                    }); rc != 0)
+                    throw RenameAborted(rc, "could not rename " + item->fuse_path.string());
+                renamed.emplace_back(item->fuse_path, child);
+                if (child->isDirectory()) byNewPath.emplace(to.string(), child);
             }
 
             if (totals)
                 db::query::fs::Directory::shiftSubtreeTotals(
                     txn, oldParentId, db::query::fs::Directory::parentIdOf(txn, entry->id), *totals);
             previousParentId = oldParentId;
-
-            txn.commit();
-
-            try {
-                if (entry->backing_path != oldBackingPath)
-                    std::filesystem::remove_all(oldBackingPath);
-            } catch (const std::filesystem::filesystem_error& ex) {
-                log::Registry::fs()->warn(
-                    "[Filesystem::rename] Renamed successfully but failed to remove old backing path {}: {}",
-                    oldBackingPath.string(),
-                    ex.what());
-            }
         });
 
-        if (rc != 0)
-            return rc;
+        // Committed: nothing below may undo it.
+        journal.moved.clear();
+        journal.created.clear();
 
-        runtime::Deps::get().fsCache->evictPath(oldPath);
-        runtime::Deps::get().fsCache->evictPath(newPath);
-        runtime::Deps::get().fsCache->cacheEntry(entry); // also refreshes the new parent chain's totals
-        if (previousParentId) runtime::Deps::get().fsCache->refreshDirStats(*previousParentId);
+        const auto removeBacking = [](const std::filesystem::path& p, const bool recursive) {
+            std::error_code ec;
+            if (recursive) std::filesystem::remove_all(p, ec);
+            else std::filesystem::remove(p, ec);
+            if (ec)
+                log::Registry::fs()->warn("[Filesystem::rename] Renamed, but could not remove {}: {}", p.string(),
+                                          ec.message());
+        };
 
-        log::Registry::fs()->debug("[Filesystem::rename] Successfully renamed {} to {}", oldPath.string(), newPath.string());
+        // Whatever is left at the old place: a folder's emptied tree (a moved file or symlink is no longer there).
+        if (moved->backing_path != entry->backing_path) removeBacking(entry->backing_path, true);
+
+        if (replaced) {
+            removeBacking(replaced->backing_path, false);
+            // The file id ended with the trash: drop its sealed derived artifacts, as unlink does.
+            if (!replaced->isDirectory() && !replaced->isSymlink()) engine->purgeDerivedArtifacts(replaced->id);
+            cache->evictPath(newPath);
+        }
+
+        for (const auto& [from, item] : renamed) cache->evictPath(from);
+        for (const auto& [from, item] : renamed) cache->cacheEntry(item);  // also refreshes new parent chains
+        if (previousParentId) cache->refreshDirStats(*previousParentId);
+        if (replaced && replaced->parent_id) cache->refreshDirStats(static_cast<unsigned int>(*replaced->parent_id));
+
+        log::Registry::fs()->debug("[Filesystem::rename] Successfully renamed {} to {}{}", oldPath.string(),
+                                   newPath.string(), replaced ? " (replaced)" : "");
         return 0;
+    } catch (const RenameAborted& ex) {
+        journal.rollback();
+        log::Registry::fs()->error("[Filesystem::rename] {} -> {}: {}", oldPath.string(), newPath.string(), ex.what());
+        return ex.rc;
     } catch (const std::bad_alloc& ex) {
+        journal.rollback();
         log::Registry::fs()->error(
             "[Filesystem::rename] Out of memory renaming {} -> {}: {}",
             oldPath.string(),
@@ -1271,6 +1373,7 @@ int Filesystem::rename(const std::filesystem::path& oldPath,
             ex.what());
         return -ENOMEM;
     } catch (const std::filesystem::filesystem_error& ex) {
+        journal.rollback();
         log::Registry::fs()->error(
             "[Filesystem::rename] Filesystem error renaming {} -> {}: {}",
             oldPath.string(),
@@ -1278,6 +1381,7 @@ int Filesystem::rename(const std::filesystem::path& oldPath,
             ex.what());
         return ex.code() ? -ex.code().value() : -EIO;
     } catch (const std::exception& ex) {
+        journal.rollback();
         log::Registry::fs()->error(
             "[Filesystem::rename] Failed to rename {} -> {}: {}",
             oldPath.string(),
@@ -1285,6 +1389,7 @@ int Filesystem::rename(const std::filesystem::path& oldPath,
             ex.what());
         return -EIO;
     } catch (...) {
+        journal.rollback();
         log::Registry::fs()->error(
             "[Filesystem::rename] Unknown failure renaming {} -> {}",
             oldPath.string(),
@@ -1293,154 +1398,91 @@ int Filesystem::rename(const std::filesystem::path& oldPath,
     }
 }
 
+// Moves one entry (a private copy, see RenameContext) inside the rename's transaction. Exceptions propagate: the
+// caller rolls the transaction and ctx.journal back.
 int Filesystem::handleRename(const RenameContext& ctx) {
-    try {
-        const auto& cache = runtime::Deps::get().fsCache;
-        const auto& entry = ctx.entry;
-
-        if (!entry) {
-            log::Registry::fs()->error("[Filesystem::handleRename] Null entry for {} -> {}", ctx.from.string(), ctx.to.string());
-            return -EINVAL;
-        }
-
-        const auto oldBackingPath = entry->backing_path;
-        if (!symlinkStatusExists(oldBackingPath)) {
-            log::Registry::fs()->error(
-                "[Filesystem::handleRename] Source backing path does not exist: {}",
-                oldBackingPath.string());
-            return -ENOENT;
-        }
-
-        unsigned int id = 0;
-        if (entry->id == 0) {
-            const auto e = cache->getEntry(entry->fuse_path);
-            id = e ? e->id : 0;
-        } else {
-            id = entry->id;
-        }
-
-        const auto parent = cache->getEntry(resolveParent(ctx.to));
-        if (!parent) {
-            log::Registry::fs()->error(
-                "[Filesystem::handleRename] Parent directory does not exist: {}",
-                resolveParent(ctx.to).string());
-            return -ENOENT;
-        }
-
-        const auto oldVaultPath = entry->path;
-
-        entry->id = id;
-        entry->name = ctx.to.filename();
-        entry->path = ctx.engine->fusePathToVaultPath(ctx.to);
-        entry->fuse_path = ctx.to;
-        entry->parent_id = parent->id;
-        entry->created_by = entry->last_modified_by = userIdFor(ctx.user);
-        entry->updated_at = std::time(nullptr);
-        entry->backing_path = parent->backing_path / entry->base32_alias;
-
-        if (entry->isDirectory()) {
-            std::filesystem::create_directories(entry->backing_path);
-        } else if (entry->isSymlink()) {
-            std::filesystem::create_directories(entry->backing_path.parent_path());
-            std::filesystem::rename(oldBackingPath, entry->backing_path);
-            updateFSEntry(ctx.txn, entry);
-
-            cache->evictPath(ctx.from);
-            cache->evictPath(ctx.to);
-            cache->cacheEntry(entry);
-            return 0;
-        } else {
-            std::filesystem::create_directories(entry->backing_path.parent_path());
-
-            const auto f = std::static_pointer_cast<File>(entry);
-
-            if (canFastPath(entry, ctx.engine)) {
-                log::Registry::fs()->debug("[Filesystem::handleRename] Fast path rename for file: {}", ctx.from.string());
-
-                std::filesystem::rename(oldBackingPath, entry->backing_path);
-                updateFSEntry(ctx.txn, entry);
-
-                cache->evictPath(ctx.from);
-                cache->evictPath(ctx.to);
-                cache->cacheEntry(entry);
-                return 0;
-            }
-
-            auto buffer = ctx.buffer;
-
-            if (!f->encryption_iv.empty()) {
-                buffer = decrypt_file_to_memory(ctx.engine->vault->id, oldVaultPath, ctx.engine);
-            } else {
-                buffer = readFileToVector(oldBackingPath);
-            }
-
-            if (buffer.empty()) {
-                std::ofstream(entry->backing_path).close();
-
-                if (!std::filesystem::exists(entry->backing_path)) {
-                    log::Registry::fs()->error(
-                        "[Filesystem::handleRename] Failed to create real file at: {}",
-                        entry->backing_path.string());
-                    return -EIO;
-                }
-            } else {
-                const auto ciphertext = ctx.engine->encryptionManager->encrypt(buffer, f);
-                if (ciphertext.empty()) {
-                    log::Registry::fs()->error(
-                        "[Filesystem::handleRename] Encryption failed for file: {}",
-                        oldBackingPath.string());
-                    return -EIO;
-                }
-
-                writeFile(entry->backing_path, ciphertext);
-
-                f->size_bytes = buffer.size();  // the plaintext size, as everywhere else
-                f->mime_type = Magic::get_mime_type_from_buffer(buffer);
-                f->content_hash = hash::blake2b(entry->backing_path);
-
-                if (f->size_bytes > 0 && f->mime_type && isPreviewable(*f->mime_type))
-                    preview::render::enqueueThumbnails(ctx.engine, f, buffer);
-
-                updateFile(ctx.txn, f);
-            }
-        }
-
-        updateFSEntry(ctx.txn, entry);
-
-        cache->evictPath(ctx.from);
-        cache->evictPath(ctx.to);
-        cache->cacheEntry(entry);
-
-        log::Registry::fs()->debug("[Filesystem::handleRename] Renamed {} to {}", ctx.from.string(), ctx.to.string());
-        return 0;
-    } catch (const std::bad_alloc& ex) {
-        log::Registry::fs()->error(
-            "[Filesystem::handleRename] Out of memory renaming {} -> {}: {}",
-            ctx.from.string(),
-            ctx.to.string(),
-            ex.what());
-        return -ENOMEM;
-    } catch (const std::filesystem::filesystem_error& ex) {
-        log::Registry::fs()->error(
-            "[Filesystem::handleRename] Filesystem error renaming {} -> {}: {}",
-            ctx.from.string(),
-            ctx.to.string(),
-            ex.what());
-        return ex.code() ? -ex.code().value() : -EIO;
-    } catch (const std::exception& ex) {
-        log::Registry::fs()->error(
-            "[Filesystem::handleRename] Failed to rename {} -> {}: {}",
-            ctx.from.string(),
-            ctx.to.string(),
-            ex.what());
-        return -EIO;
-    } catch (...) {
-        log::Registry::fs()->error(
-            "[Filesystem::handleRename] Unknown failure renaming {} -> {}",
-            ctx.from.string(),
-            ctx.to.string());
-        return -EIO;
+    const auto& entry = ctx.entry;
+    if (!entry || !ctx.parent) {
+        log::Registry::fs()->error("[Filesystem::handleRename] Null entry or parent for {} -> {}", ctx.from.string(),
+                                   ctx.to.string());
+        return -EINVAL;
     }
+
+    const auto oldBackingPath = entry->backing_path;
+    if (!symlinkStatusExists(oldBackingPath)) {
+        log::Registry::fs()->error(
+            "[Filesystem::handleRename] Source backing path does not exist: {}",
+            oldBackingPath.string());
+        return -ENOENT;
+    }
+
+    if (entry->id == 0) {
+        const auto e = runtime::Deps::get().fsCache->getEntry(entry->fuse_path);
+        entry->id = e ? e->id : 0;
+    }
+
+    const auto oldVaultPath = entry->path;
+
+    entry->name = ctx.to.filename();
+    entry->path = ctx.engine->fusePathToVaultPath(ctx.to);
+    entry->fuse_path = ctx.to;
+    entry->parent_id = ctx.parent->id;
+    entry->last_modified_by = userIdFor(ctx.user);
+    entry->updated_at = std::time(nullptr);
+    entry->backing_path = ctx.parent->backing_path / entry->base32_alias;
+
+    if (entry->isDirectory()) {
+        if (std::filesystem::create_directories(entry->backing_path))
+            ctx.journal.created.push_back(entry->backing_path);
+    } else if (entry->isSymlink() || canFastPath(entry, ctx.engine)) {
+        // Within a vault the bytes only move (see canFastPath).
+        if (entry->backing_path != oldBackingPath) {
+            std::filesystem::rename(oldBackingPath, entry->backing_path);
+            ctx.journal.moved.emplace_back(oldBackingPath, entry->backing_path);
+        }
+    } else {
+        const auto f = std::static_pointer_cast<File>(entry);
+        auto buffer = ctx.buffer;
+
+        if (!f->encryption_iv.empty()) buffer = decrypt_file_to_memory(ctx.engine->vault->id, oldVaultPath, ctx.engine);
+        else buffer = readFileToVector(oldBackingPath);
+
+        ctx.journal.created.push_back(entry->backing_path);
+        if (buffer.empty()) {
+            std::ofstream(entry->backing_path).close();
+
+            if (!std::filesystem::exists(entry->backing_path)) {
+                log::Registry::fs()->error(
+                    "[Filesystem::handleRename] Failed to create real file at: {}",
+                    entry->backing_path.string());
+                return -EIO;
+            }
+        } else {
+            const auto ciphertext = ctx.engine->encryptionManager->encrypt(buffer, f);
+            if (ciphertext.empty()) {
+                log::Registry::fs()->error(
+                    "[Filesystem::handleRename] Encryption failed for file: {}",
+                    oldBackingPath.string());
+                return -EIO;
+            }
+
+            writeFile(entry->backing_path, ciphertext);
+
+            f->size_bytes = buffer.size();  // the plaintext size, as everywhere else
+            f->mime_type = Magic::get_mime_type_from_buffer(buffer);
+            f->content_hash = hash::blake2b(entry->backing_path);
+
+            if (f->size_bytes > 0 && f->mime_type && isPreviewable(*f->mime_type))
+                preview::render::enqueueThumbnails(ctx.engine, f, buffer);
+
+            updateFile(ctx.txn, f);
+        }
+    }
+
+    updateFSEntry(ctx.txn, entry);
+
+    log::Registry::fs()->debug("[Filesystem::handleRename] Renamed {} to {}", ctx.from.string(), ctx.to.string());
+    return 0;
 }
 
 Filesystem::AtRestRepair Filesystem::repairAtRest(const std::shared_ptr<Engine>& engine) {

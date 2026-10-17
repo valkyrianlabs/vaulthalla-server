@@ -45,15 +45,17 @@ unsigned int Symlink::upsertSymlink(const SymlinkPtr& symlink) {
 void Symlink::deleteSymlink(const SymlinkPtr& symlink) {
     if (!symlink) throw std::invalid_argument("Symlink cannot be null");
 
-    Transactions::exec("Symlink::deleteSymlink", [&](pqxx::work& txn) {
-        const auto row = txn.exec(pqxx::prepped{"get_symlink_parent_id_and_size"}, symlink->id).one_row();
-        const auto parentId = row["parent_id"].as<std::optional<unsigned int>>();
-        const auto sizeBytes = row["size_bytes"].as<std::uint64_t>();
+    Transactions::exec("Symlink::deleteSymlink", [&](pqxx::work& txn) { deleteSymlink(txn, symlink->id); });
+}
 
-        txn.exec(pqxx::prepped{"delete_fs_entry"}, symlink->id);
+void Symlink::deleteSymlink(pqxx::work& txn, const unsigned int id) {
+    const auto row = txn.exec(pqxx::prepped{"get_symlink_parent_id_and_size"}, id).one_row();
+    const auto parentId = row["parent_id"].as<std::optional<unsigned int>>();
+    const auto sizeBytes = row["size_bytes"].as<std::uint64_t>();
 
-        File::updateParentStats(txn, parentId, sizeBytes);
-    });
+    txn.exec(pqxx::prepped{"delete_fs_entry"}, id);
+
+    File::updateParentStats(txn, parentId, sizeBytes);
 }
 
 Symlink::SymlinkPtr Symlink::getSymlinkById(const unsigned int id) {

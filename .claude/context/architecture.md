@@ -344,7 +344,18 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   writes go to it; `flush` (so `close(2)` returns with the change on disk), `fsync` and the last `release` seal it
   back (new IV, fsynced temp + rename). `setattr` size works on the copy. Copies that fail to seal move to
   `.fuse-plaintext/unsaved/`; stale copies are deleted at mount. A same-vault rename only moves the bytes (no
-  re-encryption). `Filesystem::repairAtRest` (first sync pass per vault per start) seals plaintext left by older
+  re-encryption).
+- **Rename over an existing entry replaces it (editor saves; `FsRenameDbTest`, Tier A CRUD + "Rename Over Needs
+  Delete").** `Filesystem::rename(..., RenameMode)`: `NoReplace` (default: ws rename/move, uploads,
+  RENAME_NOREPLACE) answers -EEXIST; `Replace` (FUSE rename without flags, only after the Bridge resolved Delete on
+  the destination, like unlink) trashes a replaced file in the rename's own transaction
+  (`File::markFileAsTrashed(txn, ...)`), deletes a replaced symlink or empty folder, then removes its backing bytes
+  and derived artifacts after commit. rename(2) refusals come first: EISDIR, ENOTDIR, ENOTEMPTY, EINVAL (into
+  itself), EBUSY (vault root). The rename works on clones of the cached entries and records each backing move in a
+  `RenameJournal`; it publishes the clones to the cache only after commit and rolls the journal back on any failure.
+  Before, it mutated cached entries in place and moved bytes before the commit, so a failure (any rename over an
+  existing name hit UNIQUE(parent_id, name)) stranded the bytes and corrupted the cache. RENAME_EXCHANGE is still
+  refused (EINVAL). `Filesystem::repairAtRest` (first sync pass per vault per start) seals plaintext left by older
   builds and corrects ciphertext-length sizes.
 - **Vault key rotation is failure- and crash-safe (`sync/rotation/`).** `vh vault keys rotate` only prepares a new
   key; the sync pass re-encrypts. Per file: new ciphertext → `<backing>.vh-rotate` (O_EXCL, fsync file + dir) →

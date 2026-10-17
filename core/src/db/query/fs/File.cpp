@@ -265,15 +265,20 @@ void File::markFileAsTrashed(const unsigned int userId, const unsigned int fsId)
     if (!file) throw std::runtime_error("[markFileAsTrashed] File not found with ID: " + std::to_string(fsId));
 
     Transactions::exec("File::markFileAsTrashed", [&](pqxx::work& txn) {
-        const auto row = txn.exec(pqxx::prepped{"get_file_parent_id_and_size"}, fsId).one_row();
-        const auto parentId = row["parent_id"].as<std::optional<unsigned int>>();
-        const auto sizeBytes = row["size_bytes"].as<std::uint64_t>();
-
-        pqxx::params p{fsId, userId, to_utf8_string(file->backing_path.u8string())};
-        txn.exec(pqxx::prepped{"mark_file_trashed_by_id"}, p);
-
-        updateParentStats(txn, parentId, sizeBytes);
+        markFileAsTrashed(txn, userId, fsId, file->backing_path);
     });
+}
+
+void File::markFileAsTrashed(pqxx::work& txn, const std::optional<unsigned int> userId, const unsigned int fsId,
+                             const std::filesystem::path& backingPath) {
+    const auto row = txn.exec(pqxx::prepped{"get_file_parent_id_and_size"}, fsId).one_row();
+    const auto parentId = row["parent_id"].as<std::optional<unsigned int>>();
+    const auto sizeBytes = row["size_bytes"].as<std::uint64_t>();
+
+    pqxx::params p{fsId, userId, to_utf8_string(backingPath.u8string())};
+    txn.exec(pqxx::prepped{"mark_file_trashed_by_id"}, p);
+
+    updateParentStats(txn, parentId, sizeBytes);
 }
 
 void File::markRemoteFileAsTrashed(

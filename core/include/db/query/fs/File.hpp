@@ -51,6 +51,11 @@ public:
 
     static void markFileAsTrashed(unsigned int userId, unsigned int fsId);
 
+    // The same, inside the caller's transaction (a rename replacing the file). `backingPath` is what the trash row
+    // records; the caller removes the bytes once the transaction has committed.
+    static void markFileAsTrashed(pqxx::work& txn, std::optional<unsigned int> userId, unsigned int fsId,
+                                  const std::filesystem::path& backingPath);
+
     static void markRemoteFileAsTrashed(
         unsigned int userId,
         unsigned int vaultId,

@@ -403,6 +403,38 @@ namespace vh::test::integration {
             .fn = [=] { return read_as(*ctx.admin->state()->meta.linux_uid, ctx.base() / "exchange-other.txt"); }
         });
 
+        // How editors save (vim, LibreOffice, IDEs): write a temp file, rename(2) it over the original. It used to
+        // fail with EIO (UNIQUE(parent_id, name)) and leave the cached temp entry claiming the target's path.
+        builder.makeTestCase({
+            .name = "FUSE write an editor temp file (admin)",
+            .path = "fuse/write",
+            .must_contain = {"OK write"},
+            .fn = [=]{ return write_as(*ctx.admin->state()->meta.linux_uid, ctx.base() / ".exchange-other.txt.swp", "saved\n"); }
+        });
+
+        builder.makeTestCase({
+            .name = "FUSE rename over an existing file replaces it (admin)",
+            .path = "fuse/rename",
+            .must_contain = {"OK mv"},
+            .fn = [=]{ return mv_as(*ctx.admin->state()->meta.linux_uid, ctx.base() / ".exchange-other.txt.swp",
+                                    ctx.base() / "exchange-other.txt"); }
+        });
+
+        builder.makeTestCase({
+            .name = "FUSE replaced file reads the new content (admin)",
+            .path = "fuse/read",
+            .must_contain = {"saved"},
+            .must_not_contain = {"other\n"},
+            .fn = [=] { return read_as(*ctx.admin->state()->meta.linux_uid, ctx.base() / "exchange-other.txt"); }
+        });
+
+        builder.makeTestCase({
+            .name = "FUSE renamed temp file is gone (admin)",
+            .path = "fuse/read",
+            .expect_exit = ENOENT,
+            .fn = [=] { return read_as(*ctx.admin->state()->meta.linux_uid, ctx.base() / ".exchange-other.txt.swp"); }
+        });
+
         builder.makeTestCase({
             .name = "FUSE read after rename is still plaintext (admin)",
             .path = "fuse/read",
@@ -747,6 +779,69 @@ namespace vh::test::integration {
         return builder.exec();
     }
 
+    // Renaming over an existing file removes it, so it needs Delete on it, as unlink does.
+    static TestStage testRenameOverNeedsDelete() {
+        auto builder = Builder::make({
+            .name = "Rename Over Needs Delete",
+            .baseDir = "rename_over_seed"
+        });
+
+        builder.makeUser({ .userNameSeed = "user/create/rename_over" });
+
+        builder.buildAssignVRole({
+            .subjectType = TargetSubject::User,
+            .templateName = role::Vault::PowerUser().name,
+            .roleNameSeed = "vault_role/create/rename_over",
+            .description = "Power user who may not delete docs/*.txt",
+        });
+
+        const auto [ctx, subj] = builder.scenario();
+
+        builder.makeOverride({
+            .subjectType = TargetSubject::User,
+            .permName = "vault.fs.files.delete",
+            .effect = permission::OverrideOpt::DENY,
+            .pattern = fs::model::makeAbsolute(ctx.baseDir) / "docs" / "*.txt"
+        });
+
+        builder.makeTestCase({
+            .name = "FUSE write a temp file next to the protected one",
+            .path = "fuse/write",
+            .must_contain = {"OK write"},
+            .fn = [=]{ return write_as(subj.uid, ctx.docs() / "edit.tmp", "replaced\n"); }
+        });
+
+        builder.makeTestCase({
+            .name = "FUSE deny: rename over a file the caller may not delete",
+            .path = "fuse/rename",
+            .expect_exit = EACCES,
+            .fn = [=]{ return mv_as(subj.uid, ctx.docs() / "edit.tmp", ctx.secret()); }
+        });
+
+        builder.makeTestCase({
+            .name = "FUSE refused rename-over left the file alone",
+            .path = "fuse/read",
+            .must_contain = {"TOP SECRET"},
+            .fn = [=]{ return read_as(subj.uid, ctx.secret()); }
+        });
+
+        builder.makeTestCase({
+            .name = "FUSE allow: rename over a file the caller may delete",
+            .path = "fuse/rename",
+            .must_contain = {"OK mv"},
+            .fn = [=]{ return mv_as(subj.uid, ctx.docs() / "edit.tmp", ctx.note()); }
+        });
+
+        builder.makeTestCase({
+            .name = "FUSE allowed rename-over reads the new content",
+            .path = "fuse/read",
+            .must_contain = {"replaced"},
+            .fn = [=]{ return read_as(subj.uid, ctx.note()); }
+        });
+
+        return builder.exec();
+    }
+
     static TestStage testVaultPermOverridesListFilter() {
         auto builder = Builder::make({
             .name = "Vault Permission Overrides List Filter",
@@ -975,18 +1070,19 @@ namespace vh::test::integration {
         for (const auto& s : always_run) run(s);
 
         if (geteuid() != 0) {
-            std::cout << "FUSE: not root, skipping the 10 root-only RBAC scenarios (bin/tests/run_proof.sh runs them)"
+            std::cout << "FUSE: not root, skipping the 11 root-only RBAC scenarios (bin/tests/run_proof.sh runs them)"
                       << std::endl;
             return;
         }
 
-        constexpr std::array<Scenario, 10> root_only {{
+        constexpr std::array<Scenario, 11> root_only {{
             {"Root Listing Super Admin", testFUSERootListingSuperAdmin},
             {"Root Listing Unprivileged User", testFUSERootListingUnprivilegedUser},
             {"Permissions Allow", testFUSEAllow},
             {"Permissions Deny", testFUSEDeny},
             {"Vault Permission Overrides Allow", testVaultPermOverridesAllow},
             {"Vault Permission Overrides Deny", testVaultPermOverridesDeny},
+            {"Rename Over Needs Delete", testRenameOverNeedsDelete},
             {"Vault Permission Overrides List Filter", testVaultPermOverridesListFilter},
             {"Group Permissions", testFUSEGroupPermissions},
             {"Group Permission Overrides", testGroupPermOverrides},
