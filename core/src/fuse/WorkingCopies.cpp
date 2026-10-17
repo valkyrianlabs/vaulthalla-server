@@ -13,6 +13,8 @@
 #include "storage/Engine.hpp"
 #include "storage/Manager.hpp"
 #include "vault/EncryptionManager.hpp"
+#include "db/Transactions.hpp"
+#include "recovery/local/Versions.hpp"
 
 #include <paths.h>
 
@@ -92,7 +94,20 @@ WorkingCopyHooks runtimeHooks() {
             if (!entry || entry->isDirectory() || entry->isSymlink()) return nullptr;
             return std::static_pointer_cast<fs::model::File>(entry);
         },
-        .commit = [](const std::shared_ptr<fs::model::File>& staged) { db::query::fs::File::updateFile(staged); },
+        .commit = [](const WorkingCopyHooks::Commit& c) {
+            // Local versioning keeps the generation the seal replaces, in the row's transaction (truncate: the copy
+            // was emptied, e.g. O_TRUNC, or is empty now).
+            const auto reason = c.truncated || c.staged->size_bytes == 0 ? recovery::local::Reason::Truncate
+                                                                          : recovery::local::Reason::Overwrite;
+            const auto actor = c.staged->last_modified_by
+                ? std::make_optional(static_cast<uint32_t>(*c.staged->last_modified_by)) : std::nullopt;
+            auto kept = recovery::local::versions::retain(*engineFor(c.prior), c.prior, reason, {.actor = actor});
+            db::Transactions::exec("WorkingCopies::seal", [&](pqxx::work& txn) {
+                kept.attach(txn);
+                db::query::fs::File::updateFile(txn, c.staged);
+            });
+            kept.committed();
+        },
         .saved = [](const std::shared_ptr<fs::model::File>& file) {
             const auto& cache = runtime::Deps::get().fsCache;
             cache->updateEntry(file);
@@ -114,6 +129,8 @@ WorkingCopies& WorkingCopies::instance() {
     static WorkingCopies copies(paths::getBackingPath() / ".fuse-plaintext", runtimeHooks());
     return copies;
 }
+
+WorkingCopyHooks WorkingCopies::daemonHooks() { return runtimeHooks(); }
 
 void WorkingCopies::clearStale() const {
     std::error_code ec;
@@ -161,6 +178,7 @@ WorkingCopies::Handle WorkingCopies::open(const uint64_t ino, const std::shared_
                 // The content is about to be discarded: don't decrypt (or, for a remote-only file, download) it.
                 copy->ready = true;
                 copy->dirty = true;
+                copy->truncated = true;
             } else {
                 materialize(*copy);
             }
@@ -169,6 +187,7 @@ WorkingCopies::Handle WorkingCopies::open(const uint64_t ino, const std::shared_
         if (truncating && std::filesystem::file_size(copy->path) > 0) {
             std::filesystem::resize_file(copy->path, 0);
             copy->dirty = true;
+            copy->truncated = true;
         }
 
         const int fd = ::open(copy->path.c_str(), access | (flags & O_APPEND) | O_CLOEXEC);
@@ -206,6 +225,7 @@ void WorkingCopies::truncate(const Handle& handle, const off_t size, const std::
     std::scoped_lock lock(handle.copy->mutex);
     if (::ftruncate(handle.fd, size) < 0) throwErrno("truncate working copy");
     handle.copy->dirty = true;
+    if (size == 0) handle.copy->truncated = true;
     if (userId) handle.copy->lastWriter = userId;
 }
 
@@ -246,7 +266,8 @@ void WorkingCopies::seal(WorkingCopy& copy) const {
         if (plainSize > 0) staged->mime_type = fs::metadata::Magic::get_mime_type(copy.path.string());
         if (copy.lastWriter) staged->last_modified_by = copy.lastWriter;
         staged->updated_at = std::time(nullptr);
-        if (hooks_.commit) hooks_.commit(staged);  // row first: a crash after this leaves a promotable sidecar
+        // Row first: a crash after this leaves a promotable sidecar.
+        if (hooks_.commit) hooks_.commit({.prior = *entry, .staged = staged, .truncated = copy.truncated});
     } catch (...) {
         std::filesystem::remove(sealed, ec);
         throw;
@@ -263,6 +284,7 @@ void WorkingCopies::seal(WorkingCopy& copy) const {
     entry->updated_at = staged->updated_at;
     hooks_.saved(entry);
     copy.dirty = false;
+    copy.truncated = false;
 }
 
 void WorkingCopies::persist(const Handle& handle) const {

@@ -17,6 +17,8 @@
 #include "fuse/WorkingCopies.hpp"
 #include "fs/model/Symlink.hpp"
 #include "fs/model/File.hpp"
+#include "db/Transactions.hpp"
+#include "recovery/local/Versions.hpp"
 
 #include <cerrno>
 #include <chrono>
@@ -795,7 +797,21 @@ void unlink(const fuse_req_t req, const fuse_ino_t parent, const char* name) {
         return;
     }
 
-    db::query::fs::File::markFileAsTrashed(resolved.user->id, *entry->vault_id, entry->path);
+    {
+        // Local versioning keeps the file's last generation (a link, staged before the row goes); the backing file
+        // is unlinked only after the trash committed.
+        const auto& file = static_cast<const File&>(*entry);
+        auto kept = resolved.engine
+            ? vh::recovery::local::versions::retain(*resolved.engine, file, vh::recovery::local::Reason::Delete,
+                                                    {.actor = resolved.user->id})
+            : vh::recovery::local::versions::Pending{};
+        vh::db::Transactions::exec("fuse::unlink", [&](pqxx::work& txn) {
+            kept.attach(txn);
+            db::query::fs::File::markFileAsTrashed(txn, resolved.user->id, static_cast<unsigned int>(*entry->vault_id),
+                                                   entry->path, entry->backing_path);
+        });
+        kept.committed();
+    }
 
     if (::unlink(entry->backing_path.c_str()) < 0)
         log::Registry::fuse()->debug("[unlink] Failed to remove backing file: {}: {}", entry->backing_path.string(), strerror(errno));

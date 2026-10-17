@@ -2427,6 +2427,526 @@
     },
     {
       "auth": "human",
+      "client_timeout_ms": 60000,
+      "command": "recovery.costs",
+      "description": "The vault's recovery cost panel: versioning surcharge (separate from current object storage), recovery operations, what is not modelled, ranges, basis and catalog freshness. Unknown money is null.",
+      "input": "payload",
+      "operation": "recovery.costs",
+      "payload": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "model": "RecoveryCostReport",
+          "name": "costs",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 30000,
+      "command": "recovery.inspect",
+      "description": "One recovery point with its details; a snapshot lists its members (first page). A point the caller can't read is not_found.",
+      "input": "payload",
+      "operation": "recovery.inspect",
+      "payload": [
+        {
+          "description": "snap-<id> (snapshot), lv-<id> (local version) or pv-<id> (provider version).",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "recovery_point",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "recovery_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "model": "RecoveryPointDetail",
+          "name": "detail",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 120000,
+      "command": "recovery.list",
+      "description": "Recovery points of a vault, or of one path (a file's history or the points under a directory): local snapshots, local versions and provider versions. Points the caller can't read are omitted. refresh_provider lists the provider's versions first (metadata only, request-budgeted).",
+      "input": "payload",
+      "operation": "recovery.list",
+      "payload": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Vault-relative path (\"/docs/a.txt\").",
+          "generator": {
+            "kind": "path",
+            "pattern": "/{a}{a}{a}{9}"
+          },
+          "name": "path",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "refresh_provider",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "name": "include_snapshots",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "name": "include_versions",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "name": "include_provider",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "minimum": 1,
+          "name": "limit",
+          "required": false,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "items": "object",
+          "model": "RecoveryPoint",
+          "name": "points",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 180000,
+      "command": "recovery.plan",
+      "description": "Plan a restore (read-only): recovery_id, or vault_id + path + at for a point-in-time reconstruction (never atomic; see consistency_note). Returns the per-item preview, estimate, warnings, blockers and the token recovery.restore takes (stored 30 minutes).",
+      "input": "payload",
+      "operation": "recovery.plan",
+      "payload": [
+        {
+          "description": "snap-<id> (snapshot), lv-<id> (local version) or pv-<id> (provider version).",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "recovery_point",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "recovery_id",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": false,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Vault-relative path (\"/docs/a.txt\").",
+          "generator": {
+            "kind": "path",
+            "pattern": "/{a}{a}{a}{9}"
+          },
+          "name": "path",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "ISO-8601 UTC time or epoch seconds.",
+          "name": "at",
+          "required": false,
+          "types": [
+            "string",
+            "integer"
+          ]
+        },
+        {
+          "description": "Vault-relative path (\"/docs/a.txt\").",
+          "generator": {
+            "kind": "path",
+            "pattern": "/{a}{a}{a}{9}"
+          },
+          "name": "destination",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "prune",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "name": "refresh_provider",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "model": "RecoveryPlan",
+          "name": "plan",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "recovery.plan.get",
+      "description": "A stored restore plan (its state, items and token).",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Restore plan id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "recovery_plan",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 1,
+          "name": "plan_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "model": "RecoveryPlan",
+          "name": "plan",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 60000,
+      "command": "recovery.point.delete",
+      "description": "Delete a snapshot or a local version (filesystem Delete on its path). A refusal with data.code 'recovery_point_delete' asks for confirmation: resend with confirm.",
+      "input": "payload",
+      "operation": "recovery.point.delete",
+      "payload": [
+        {
+          "description": "snap-<id> (snapshot), lv-<id> (local version) or pv-<id> (provider version).",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "recovery_point",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "recovery_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "confirm",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "recovery_point_delete"
+      ],
+      "response": [
+        {
+          "name": "recovery_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 1800000,
+      "command": "recovery.restore",
+      "description": "Run a restore plan: every item is re-authorized and restored as a new current generation; a destination that changed since the plan is a 'conflict' outcome. Resumable. Refusals: 'recovery_restore' (token missing or expired: plan again), 'recovery_unverified_version' (resend with accept_unverified).",
+      "input": "payload",
+      "operation": "recovery.restore",
+      "payload": [
+        {
+          "description": "Restore plan id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "recovery_plan",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 1,
+          "name": "plan_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "token",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "accept_unverified",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "recovery_restore",
+        "recovery_plan_expired",
+        "recovery_unverified_version"
+      ],
+      "response": [
+        {
+          "model": "RecoveryRestoreResult",
+          "name": "result",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 300000,
+      "command": "recovery.snapshot.create",
+      "description": "Take a named local snapshot of a file or directory tree (vault mode local_snapshots). Needs Read + Copy on every file and List on every directory of the subtree.",
+      "input": "payload",
+      "operation": "recovery.snapshot.create",
+      "payload": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Vault-relative path (\"/docs/a.txt\").",
+          "generator": {
+            "kind": "path",
+            "pattern": "/{a}{a}{a}{9}"
+          },
+          "name": "path",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "name",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "model": "RecoveryPointDetail",
+          "name": "detail",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
       "client_timeout_ms": 15000,
       "command": "role.vault.assign",
       "description": "Assign a vault role to a user or group on a vault (one assignment per subject and vault).",
@@ -4517,7 +5037,330 @@
       ],
       "untyped_refusals": [],
       "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 60000,
+      "command": "vault.recovery.disclosure",
+      "description": "The cost disclosure a person must see before provider versioning is enabled, with the token vault.recovery.update needs (10 minutes). Read-only: at most one admin inspect, no object requests.",
+      "input": "payload",
+      "operation": "recovery.disclosure",
+      "payload": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Provider noncurrent-version retention: \"30d\", 30 (days), \"indefinite\" or {indefinite, days}.",
+          "name": "provider_retention",
+          "required": false,
+          "types": [
+            "string",
+            "integer",
+            "object"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "model": "RecoveryDisclosure",
+          "name": "disclosure",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 60000,
+      "command": "vault.recovery.status",
+      "description": "A vault's recovery mode, local versioning, store usage, upstream backlog and provider versioning state; refresh_provider re-reads the bucket (one admin round trip).",
+      "input": "payload",
+      "operation": "recovery.status",
+      "payload": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "refresh_provider",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "model": "RecoveryStatus",
+          "name": "status",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 60000,
+      "command": "vault.recovery.suspend",
+      "description": "Suspend versioning on the vault's bucket; existing versions are kept and nothing is deleted. A refusal with data.code 'recovery_versioning_suspend' asks for confirmation: resend with confirm.",
+      "input": "payload",
+      "operation": "recovery.suspend",
+      "payload": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "confirm",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "recovery_versioning_suspend"
+      ],
+      "response": [
+        {
+          "model": "RecoveryStatus",
+          "name": "status",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 180000,
+      "command": "vault.recovery.update",
+      "description": "Change a vault's recovery settings. mode provider_versioning needs disclosure_token from vault.recovery.disclosure ('recovery_versioning_disclosure'); unpriced costs need accept_unpriced ('recovery_versioning_unpriced'); a shorter retention needs accept_retention_shortening ('recovery_retention_shorten'); the vault's unmanaged bucket needs accept_adoption ('upstream_adoption').",
+      "input": "payload",
+      "operation": "recovery.update",
+      "payload": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "enum": [
+            "off",
+            "local_snapshots",
+            "provider_versioning"
+          ],
+          "name": "mode",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Provider noncurrent-version retention: \"30d\", 30 (days), \"indefinite\" or {indefinite, days}.",
+          "name": "provider_retention",
+          "required": false,
+          "types": [
+            "string",
+            "integer",
+            "object"
+          ]
+        },
+        {
+          "description": "0 = no snapshot quota.",
+          "minimum": 0,
+          "name": "snapshot_quota_bytes",
+          "required": false,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Decimal amount in the catalog currency; \"\" clears it.",
+          "name": "cost_alert_monthly",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "name": "enabled",
+              "required": false,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "keep_last",
+              "required": false,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "max_age_days",
+              "required": false,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "quota_bytes",
+              "required": false,
+              "types": [
+                "integer",
+                "null"
+              ]
+            }
+          ],
+          "name": "local_versioning",
+          "required": false,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "name": "disclosure_token",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "accept_unpriced",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "name": "accept_retention_shortening",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "name": "accept_adoption",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "recovery_versioning_disclosure",
+        "recovery_versioning_unpriced",
+        "recovery_retention_shorten",
+        "upstream_adoption"
+      ],
+      "response": [
+        {
+          "model": "RecoveryStatus",
+          "name": "status",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
     }
   ],
-  "ws_hash": "f65d925ebe6d3251b2f7e6e66e8f3e6292b4547bc47f28a47a9deb5f4ddf397b"
+  "ws_hash": "5e94c9e36fee0c64c165bcb7d9992484ea5b834ff963e08521f0b8dafb920829"
 }

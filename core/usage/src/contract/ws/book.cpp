@@ -10,7 +10,7 @@ std::vector<WsCommandUsage> commands() {
     std::vector<WsCommandUsage> all;
     for (auto&& part : {detail::authCommands(), detail::fsCommands(), detail::groupCommands(), detail::roleCommands(),
                         detail::vaultCommands(), detail::shareCommands(), detail::metaCommands(),
-                        detail::upstreamCommands()})
+                        detail::upstreamCommands(), detail::recoveryCommands()})
         all.insert(all.end(), std::make_move_iterator(part.begin()), std::make_move_iterator(part.end()));
 
     std::ranges::sort(all, {}, &WsCommandUsage::command);

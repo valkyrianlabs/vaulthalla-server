@@ -57,13 +57,6 @@ std::string readFileToString(const std::filesystem::path& path) {
     return buffer;
 }
 
-void writeFile(const std::filesystem::path& absPath, const std::vector<uint8_t>& ciphertext) {
-    std::ofstream out(absPath, std::ios::binary | std::ios::trunc);
-    if (!out) throw std::runtime_error("Failed to write encrypted file: " + absPath.string());
-    out.write(reinterpret_cast<const char*>(ciphertext.data()), static_cast<long>(ciphertext.size()));
-    out.close();
-}
-
 namespace {
 
 [[noreturn]] void throwErrnoAt(const int err, const std::string& what, const std::filesystem::path& path) {

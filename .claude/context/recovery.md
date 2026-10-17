@@ -35,8 +35,14 @@ bucket: choosing `off`/`local_snapshots` does not suspend a bucket that is versi
   loses the live file. Fallbacks: reflink (FICLONE / macOS `clonefile`), then copy. A blob is immutable once linked.
 - **Invariant this rests on: nothing writes a backing file in place.** A linked blob shares the live file's inode until
   the next rename-replace; an in-place writer would silently rewrite history. Every backing-file writer must replace
-  by rename (or the capture must use `captureCopy`). Guard: a contract test listing the writers (local versioning
-  slice).
+  by rename (or the capture must use `captureCopy`). Guard: `tools/contracts/test_backing_writers_contract.py` scans
+  `core/src` for in-place-capable write primitives (ofstream, `O_TRUNC`, `open(O_WRONLY|O_RDWR)` without `O_EXCL`,
+  `pwrite`, `ftruncate`/`resize_file`, `fopen`, `writeFile(`) against a per-file, counted allowlist with the reason each
+  never touches vault bytes. Audit (2026-10-16): new files are created with `writeFileExclusive` (FUSE create, empty
+  `createFile`) or `writeFileAtomic`/`replaceFileAtomic` (buffer and source-path `createFile`, the slow rename path);
+  `fs::ops::writeFile` (ofstream + truncate) is gone; seals, overwrites and rotation already rename a sidecar; the
+  remaining primitives write sidecars/temps (`encryptFileToFile`, `resealFile*`, `decrypt_aes256_gcm_file`), working
+  copies, staging/temp files, logs, caches or secrets.
 - Dedupe: unique `(vault_id, encryption_iv, key_version)` for non-empty IVs: the same generation captured twice
   (two snapshots of an unchanged file) is one blob. Physical accounting = sum of distinct blobs' `cipher_bytes`.
 - Crash safety: blob first (temp name + rename + dir fsync), then the DB rows in the same transaction as the files-row
@@ -49,7 +55,38 @@ bucket: choosing `off`/`local_snapshots` does not suspend a bucket that is versi
   the backing dirs.
 - Retention: snapshots are kept until deleted. Local versions: `version_keep_last` per file, `version_max_age_days`,
   `version_quota_bytes` (oldest first); a generation still `pending` upstream is never pruned; a blob still referenced
-  by a snapshot is never deleted (refcount = referencing `file_versions` rows).
+  by a snapshot is never deleted (refcount = referencing `file_versions` rows). `db::Janitor` runs
+  `recovery::local::versions::maintain` every 15 min (retention for vaults with local versioning on; the pending
+  backlog of upstream vaults whose bucket status isn't `enabled` is marked `skipped`) and, at startup and then daily,
+  `store::sweep` for every vault with a store directory (orphans of crashed captures, unreferenced rows). keep_last is
+  also applied right after a capture, in its transaction (bounded: only once the file's version number exceeds it, at
+  most 64 rows); the freed blobs go after commit.
+
+### Local versioning: capture (`recovery/local/Versions.*`)
+
+- One helper for every writer: `versions::retain(engine, priorRow, Reason, {actor, upstream}) -> Pending` stages the
+  blob (`captureLink` of the prior backing file) BEFORE the transaction; `Pending::attach(txn)` inserts the blob and
+  the `file_versions` row (origin `version`) in the same transaction that updates/trashes the files row;
+  `committed()` after commit; `abort()`/the destructor on failure. Callers rename the new bytes over (or unlink) the
+  backing file only after `committed()`.
+- Off path: the per-vault policy is cached in memory (`recovery::local::versioningPolicy`, 60 s TTL as a safety net);
+  whoever writes `vault_recovery_policy` calls `recovery::local::invalidatePolicy(vaultId)` after the commit. With
+  versioning off a write costs no query. A staging failure is logged/counted and never fails the write.
+- Skipped (counted, no row): an empty generation, legacy plaintext (blobs are never plaintext), a cloud file without
+  local bytes (the provider holds it).
+- Call sites (reason): `Filesystem::createFile` overwrite branch (`NewFileContext::version_reason`, default
+  `overwrite`; callers pass `restore`, `conflict`, `download`); the FUSE seal (`WorkingCopyHooks::commit` gets the
+  prior entry; `truncate` when the copy was emptied (O_TRUNC, truncate to 0) or the result is empty, else
+  `overwrite`); `Filesystem::remove` (file, and every file of a folder), FUSE `unlink`, S3 gateway DeleteObject (via
+  `Engine::remove`) and `ObjectStore::purgeLocalObjectState`, sync DeleteLocal (`Engine::removeLocally`) → `delete`;
+  cache-strategy index-only downloads over a different local copy (`CloudEngine::indexAndDeleteFile`) → `download`.
+  The S3 gateway PutObject, sync downloads (`downloadFile`) and conflict keep_remote (`replaceLocalContent`) reach the
+  createFile overwrite branch. Never: rename/move, copy, rotation, hydrate, `repairAtRest`; the HTTP upload temp part
+  unlink.
+- Upstream state at capture: `pending` with `upstream_key` = the vault path without its leading slash in an upstream
+  vault; `none` for local vaults, for `download`/`conflict` (content that lost to the remote side: replaying it would
+  reorder the provider's history) and for deletes the vault's sync policy doesn't propagate (only mirror + keep_local
+  deletes remote leftovers) or that came from upstream (sync DeleteLocal).
 
 ## Keys (historical key compatibility)
 
@@ -81,6 +118,42 @@ bucket: choosing `off`/`local_snapshots` does not suspend a bucket that is versi
 - `get_rotation_old_vault_key` used to `SELECT *` from `vault_keys_trashed`, which has no `updated_at` column, so
   `vault::model::Key(row)` threw and a restart mid-rotation could not load the vault key. Retired-key reads now alias
   `trashed_at AS updated_at` (pinned by `RecoveryKeysDbTest`).
+
+## Local snapshots and restore (`recovery/local/{Snapshots,Restore,Points}`)
+
+- Trusted primitives (no RBAC): `snapshots::create(engine, actor, path, name, authorize)`,
+  `snapshots::cleanupInterrupted(minAge)` (wire at startup), `snapshots::remove(id)`, `local::removeVersion(id)`,
+  `local::planFor(id, subPath, destination)`, `local::restore(engine, actor, item)`, `local::missingParents`,
+  `points::{list,get,detail,fromSnapshot,fromGeneration}`. `ops::recovery::createSnapshot`
+  (`ops/RecoverySnapshots.cpp`) authorizes List/Read on the root, then every entry (Read + Copy per file, List per
+  directory; symlinks are not captured) before anything is written; one denial refuses the whole snapshot.
+- Create: mode must be `local_snapshots` (`Invalid` names the mode). Plan = cache root + `Entry::listSubtree` (DB);
+  quota first (new physical bytes = generations without a blob yet, plus the hydrate copy for index-only cloud files)
+  against `snapshot_quota_bytes` and `Engine::freeSpace()` (`Conflict` with needed/left bytes). Per file under
+  `Filesystem::contentWriteMutex`: re-read the row, `captureLink` the backing file (empty file → empty blob),
+  members inserted with their blob `attach` 64 per transaction. Captures the last **sealed** generation: an open FUSE
+  working copy's unsealed changes are not in it. Skipped with a reason in `skipped_json`: `symlink`,
+  `upload_staging`, `content_unavailable` (cloud file with no local copy whose hydrate the remote-read gate refused or
+  that failed; never an unbounded fetch), `integrity_error`, `unsealed` (legacy plaintext), `vanished`, `moved`.
+  Directories without a captured file under them go to `empty_directories`. Any failure after the row exists: state
+  `failed` + error, members and now-unreferenced blobs released (the row stays as a record). A crash leaves
+  `creating`: `cleanupInterrupted` does the same at startup. Deleting a `creating` snapshot is refused.
+- Restore destinations: original paths (the path at capture; a renamed/moved file is left alone and the old path is
+  recreated), or an alternate directory D: the chosen point P goes INTO D under its own name (P/x → D/name(P)/x).
+  Plan items per member + empty directory (directory items: source `snap-<id>`, method `none`, note
+  `empty directory`): Create / Overwrite (`destination_source_id` = the destination's current `sourceId`) / Skip (same
+  IV + key version, or both empty) / Conflict (directory vs file, a file in the parent chain) / Unavailable (blob
+  missing, body only upstream, key version gone). Method `local_copy` (current key: sealed bytes reused with their
+  IV after `gcmVerifyFd`) or `local_reseal` (`resealFileToCurrent`). Blocker when the bytes exceed `freeSpace()`.
+- Commit: `NewFileContext::sealed` (`fs::SealedWriter`) commits pre-sealed bytes through createFile's own overwrite
+  and new-file branches (content lock, CAS, open-working-copy refusal, rows, parent stats, thumbnails), so the local
+  versioning capture on the overwrite branch also retains what a restore replaces. Create uses
+  `expected_source_id = ""` (no generation has it): a file that appeared since the plan is a `ContentConflict`.
+- Points: snapshot points carry `encryption.key_version = 0` (members differ) and `key_available` = every key version
+  the vault's blobs use is still held; members/versions carry their exact key. `restorable=false` with a reason for
+  a missing blob, a body released upstream, a missing key, or a snapshot that isn't `ready`.
+- Fixed on the way: `Filesystem::remove` of a folder left its subfolders/symlinks in the FS cache (a restore or mkdir
+  at the same path then hung new rows off deleted parents; FK violation).
 
 ## Provider versioning (AWS S3 first; capability contract per provider)
 
@@ -115,6 +188,51 @@ bucket: choosing `off`/`local_snapshots` does not suspend a bucket that is versi
 - Directory point-in-time restore = per object the latest version with `last_modified ≤ at` (a delete marker or no
   version = absent). Always labelled a timestamp-based reconstruction, never an atomic snapshot (`Plan.atomic=false`).
 
+### Provider recovery as built (`recovery/provider/*`, `storage/CloudEngineRestore.cpp`)
+
+- **Own writes** (`provider::noteOwnWrite`, fired by `CloudEngine::OwnWrite::done()` through `hooks::afterUpstreamWrite`):
+  a PUT/COPY response with `x-amz-version-id` upserts an origin `vaulthalla` row (etag, object size, last_modified =
+  now, IV/key version/hash/plaintext size from the written generation; sealed iff the generation says so, else
+  object size = plaintext + 16) and supersedes the key's previous latest. No version id (unversioned) → no row.
+  Our own DELETE supersedes the key's latest (it is hidden by a marker now) but records no marker: DeleteObject's
+  response id isn't surfaced, so the next listing learns the marker. `.vaulthalla/` keys are never indexed.
+- **Write intents carry the ETag**: `OwnWrite::done()` completes the event intent with the stored object's unquoted
+  ETag (PUT, multipart and CopyObject alike), so a restore's `ObjectCreated:Copy` settles as ours and an external
+  same-size write cannot claim the intent. The decoder/inbox keep `versionId`; the applier stores it on the index row.
+  `ObjectRemoved:DeleteMarkerCreated` and a permanent version delete both decode as removals and are HEAD-confirmed
+  against the *current* object: a permanent delete of a noncurrent version finds the object present and is skipped
+  (local data safe); the version index learns such deletions only from the next complete listing (gone_at).
+- **Listing** (`versions::refresh(engine, prefix, {max_requests, page_size, price_preflight})`): ListObjectVersions
+  pages only (a nested capture caps HEAD/GET/PUT/COPY/DELETE at 0), price preflight (`recovery_version_list`) and the
+  vault's request budget; rows are observed (never downgrading ours), `became_noncurrent_at` = the next newer
+  version's LastModified when the listing shows it; `markGoneUnder` only after a complete listing. Usage source
+  `recovery_version_list` is reported in the result (the ledger feed is the cost slice's).
+- **Points** (`points::fromRow/forPath/byId`): not restorable = gone, delete marker ("absent at this time"), current
+  version ("nothing to restore"), GLACIER/DEEP_ARCHIVE, a key version the vault no longer holds. Retention comes from
+  `RetentionInfo::from(ProviderVersioningState)` (effective noncurrent days, else indefinite only when Vaulthalla set
+  it and no foreign rule expires noncurrent versions, else `unknown`); expires_at = became_noncurrent_at + days.
+- **Plans** (`planFor`, `planOne`, `planAt`): Skip when the destination already is the version (current, same ETag
+  or same IV + key version); Conflict for a directory, an open sync conflict or local changes not uploaded yet
+  (baseline); `provider_copy` only for the same object key, ≤ 5 GiB, and sealed under the current key (or plaintext in
+  a plaintext-upstream vault); otherwise `provider_transfer`. Prune removals are `local_remove` (trash; the next sync
+  deletes upstream → delete marker).
+- **Restore** (`restore(engine, item, expectedSourceId, {accept_unverified, user_id, hooks})`): order is CAS precheck
+  (stale → `conflict`, already that generation → `skipped`) → origin check (`UnverifiedVersion`) → pass lease
+  (`PassBusy`) → price preflight (`recovery_restore`, worst case) → HEAD `?versionId` → copy or transfer. Every
+  request runs under the vault's request budget plus a per-step cap (HEAD 1, COPY 1, GET 1 + object bytes).
+  Copy: `CloudEngine::copyObjectVersionAsOwnWrite` (intent + hook with the restored generation); an earlier attempt's
+  copy that is already current is reused, never copied twice. Then `adoptIndexOnly` (files row = version metadata,
+  backing copy dropped, derived artifacts purged, under the content lock CAS); a local change meanwhile → `conflict`,
+  the copy is kept and the index learns it so the next pass sees a two-sided change. Index + manifest
+  (`applyRemoteIndexMutation` Upload with the new ETag/version id) and `Baseline::agreed`. Non-cache strategies
+  hydrate immediately. Transfer: GET into a 0600 `.vh-restore-*` temp next to the destination (plaintext objects are
+  sealed while streaming), verify (current key) or `resealFileToCurrent` (retired key), commit with createFile's
+  sidecar protocol under the CAS (`.vh-rotate` sidecar, so startup recovery settles a crash), then one `upload` +
+  index + `Baseline::afterUpload`; an upload failure leaves the local restore and the next pass uploads it once.
+  Outcomes carry `retryable` and the request usage (source `recovery_restore`).
+- Tests: `RecoveryProviderTest*`, `RecoverySmartCacheTest*` (the acceptance scenario), harness
+  `tests/helpers/recovery_provider_harness.hpp`.
+
 ## Local versions as the upstream backlog
 
 For upstream vaults with local versioning on, retained generations are also the ordered upstream backlog:
@@ -128,6 +246,37 @@ For upstream vaults with local versioning on, retained generations are also the 
 - Smart cache: in a `cache` vault (or gateway `remote_cache`) with provider versioning, a generation's local blob is
   released once the provider holds it (`sent`) unless a snapshot references it. Local history bodies exist only as an
   unacknowledged backlog, never as a duplicate of provider history.
+
+Implementation (`recovery/local/Backlog.*`, `storage/CloudEngineBacklog.cpp`, `recovery/provider/State.*`):
+
+- Triggers: `sync::tasks::Upload` calls `backlog::replayBeforeUpload(engine, file)` before `CloudEngine::upload`;
+  `sync::tasks::Delete` calls `replayBeforeRemoteDelete(engine, path)` before a REMOTE/PURGE delete. A replay that
+  fails (`blocked`) fails that task: the current content (or the delete marker) waits for its predecessors; the next
+  pass retries. Nothing runs on a FUSE/HTTP write path.
+- The key's backlog: pending rows of the file (any with another `upstream_key` were retained before a rename and are
+  `skipped`) plus pending rows retained at the same path by earlier incarnations, in capture (`id`) order.
+- `provider::bucketVersioningForVault(vaultId)` (newest `upstream_bucket` row of the vault): `keepsHistory()` =
+  status `enabled` and past `versioning_settles_at` (none recorded: settled). Anything else → every pending row of the
+  key is `skipped`.
+- Already upstream (no PUT): a known version of the key (`upstream_object_version`, same IV + key version or content
+  hash) → `sent` with its version id; the content both sides last agreed on (`sync_file_baseline.content_hash`, so
+  uploaded before Vaulthalla knew a version id) → `skipped`.
+- Replay PUT: `CloudEngine::uploadGeneration(key, blob, row)`: the generation's own `vh-iv` / `vh-key-version` /
+  `content-hash` / `vh-encrypted`, through `noteOwnWrite(...)`/`done()` (the recovery hook sees it); plaintext-upstream
+  vaults get the blob decrypted in memory with `historicalKeySnapshot` (buffers wiped). Version id from
+  `lastPutOutcome` → `markSent`; none (or `null`) → `skipped`. Local failures (blob or key version gone,
+  authentication fails: `ContentUnavailable`/`IntegrityError`) → `recordFailure` + `skipped` (never block the file
+  forever); any other failure → `recordFailure`, stop, `blocked`.
+- Smart-cache release after `sent` (incl. "already upstream" matches): `Generation::releaseBlob` + `store::removeBlobs`
+  (a snapshot-held blob stays). Rows `skipped` keep their blob (no version id to point at).
+- Price preflight: `sync::Planner::estimateS3Cost` adds one PUT and the blob bytes per pending row under the keys of
+  the plan's uploads and remote deletes, only while the bucket keeps history (`backlog::addPlannedReplays`).
+  Request budgets apply to replay PUTs like any other request.
+- `backlog::summary(vaultId)` → `recovery::Backlog` (status).
+- Open: pending rows of a deleted file whose key Vaulthalla never writes or deletes again (versioned bucket, no new
+  file at the path) stay pending until the bucket loses history; conflict keep_local (`ConflictResolver`) uploads
+  without replaying first (its price preflight doesn't cover replays), so the file's pending versions land upstream
+  after that content, at its next regular upload.
 
 ## Costs (computed locally; nothing leaves the host)
 
@@ -148,6 +297,29 @@ For upstream vaults with local versioning on, retained generations are also the 
   + reason, never `$0.00`; versions predating monitoring → `unaccounted_history`; catalog unverified/stale shown as such.
 - Alerts: `cost_alert_monthly` exceeded → `operator_notification` (type `recovery_versioning_cost`). Alerts never
   block writes or disable versioning.
+
+## Surfaces (CLI, ws)
+
+Both call `ops::recovery` and nothing else; payloads and `--json` use `ops/RecoveryJson.hpp` (the CLI builds the ws
+payload shape from its options and reads it with the same readers, so validation is one code path).
+
+- CLI (`protocols/shell/commands/{recovery,snapshot}.cpp`, `vault/recovery.cpp`; books `core/usage/src/usages/recovery.cpp`):
+  `vh snapshot create|list|delete`, `vh recovery list|inspect|plan|restore|delete|costs`,
+  `vh vault recovery status|set|suspend|disclosure` (`vh vault restore` stays vault undelete). Human output prints
+  unknown money as "cannot be estimated (reason)", never 0. `set --mode provider-versioning` always fetches and prints
+  the disclosure, then needs `ENABLE VERSIONING` typed (or `--yes` without a terminal) and, when unpriced, a separate
+  `ACCEPT UNPRICED` (`--accept-unpriced`); retention shortening / adoption are asked the same way
+  (`--accept-retention-shortening`, `--adopt-bucket`), also when the op raises them. `restore <recovery-id>` plans,
+  previews, asks (type `RESTORE` when anything is overwritten or removed; y/N otherwise) and restores with the plan's
+  token; `restore <plan-id> --token` is the scripted path; non-TTY without `--yes`/`--token` refuses. Exit 1 on a
+  partial/failed result or conflicts. `set` with only some local-versioning flags merges them into the stored policy
+  (reads `status` first; `--keep-last 0` / `--max-age-days 0` = no limit).
+- ws (`protocols/ws/handler/Recovery.cpp`, book `core/usage/src/contract/ws/recovery.cpp`): `recovery.list` (120 s),
+  `recovery.inspect` (30 s), `recovery.plan` (180 s), `recovery.plan.get`, `recovery.restore` (1800 s),
+  `recovery.snapshot.create` (300 s), `recovery.point.delete` (60 s, `confirm`), `recovery.costs` (60 s),
+  `vault.recovery.status` (60 s), `vault.recovery.update` (180 s), `vault.recovery.disclosure` (60 s),
+  `vault.recovery.suspend` (60 s, `confirm`). Refusal codes = the `NeedsConfirmation` codes in `ops/Recovery.hpp`.
+  Web types: `web/src/models/recovery.ts`. Parity: `test_ops_parity_recovery.cpp`.
 
 ## Module ownership (who edits what)
 

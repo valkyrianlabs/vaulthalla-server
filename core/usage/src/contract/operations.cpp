@@ -371,6 +371,168 @@ std::vector<OperationSpec> operations() {
         .refusals = opsRefusalMap(),
     });
 
+    // ---- file recovery (ops::recovery; .claude/context/recovery.md) ------------------------------------------
+
+    const auto recoveryPoint = [] { return opRef("point", "recovery_point", {"id"}); };
+    out.push_back({
+        .id = "recovery.status",
+        .description = "A vault's recovery settings, store usage, upstream backlog and provider versioning state.",
+        .fields = {opVault(), opOptional(opField("refresh", "bool", gen::boolean()))},
+        .requires_any = {"owner", "vault.sync.config.view"},
+        .effect = {.kind = "read", .entity = "vault_recovery_policy"},
+        .cli = CliBinding{.usage_path = {"vault", "recovery", "status"},
+                          .field_to_entry = {{"vault", "positional:vault"}, {"refresh", "flag:refresh"}}},
+        .ws = WsBinding{.command = "vault.recovery.status",
+                        .field_to_json = {{"vault", "/vault_id"}, {"refresh", "/refresh_provider"}}},
+        .deadline = 60s,
+        .refusals = opsRefusalMap(),
+    });
+
+    out.push_back({
+        .id = "recovery.update",
+        .description = "Change a vault's recovery mode, snapshot quota or local versioning (provider versioning also "
+                       "needs the cost disclosure's token).",
+        .fields = {opVault(),
+                   opOptional(FieldSpec{.name = "mode", .type = "enum", .enum_values = {"off", "local_snapshots"},
+                                        .generator = gen::oneOf({"off", "local_snapshots"})}),
+                   opOptional(opField("snapshot_quota", "uint", gen::intRange(0, 1073741824)))},
+        .requires_any = {"owner", "vault.sync.config.edit"},
+        .effect = {.kind = "update", .entity = "vault_recovery_policy"},
+        .cli = CliBinding{.usage_path = {"vault", "recovery", "set"},
+                          .field_to_entry = {{"vault", "positional:vault"}, {"mode", "optional:mode"},
+                                             {"snapshot_quota", "optional:snapshot_quota"}}},
+        .ws = WsBinding{.command = "vault.recovery.update",
+                        .field_to_json = {{"vault", "/vault_id"}, {"mode", "/mode"},
+                                          {"snapshot_quota", "/snapshot_quota_bytes"}}},
+        .deadline = 180s,
+        .refusals = opsRefusalMap(),
+    });
+
+    out.push_back({
+        .id = "recovery.disclosure",
+        .description = "The cost disclosure (and its token) for enabling provider versioning. Read-only.",
+        .fields = {opVault(), opOptional(FieldSpec{.name = "retention", .type = "enum",
+                                                   .enum_values = {"30d", "90d", "365d", "indefinite"},
+                                                   .generator = gen::oneOf({"30d", "90d", "365d", "indefinite"})})},
+        .requires_any = {"admin.upstream.configure"},
+        .effect = {.kind = "read", .entity = "vault_recovery_policy"},
+        .cli = CliBinding{.usage_path = {"vault", "recovery", "disclosure"},
+                          .field_to_entry = {{"vault", "positional:vault"}, {"retention", "optional:retention"}}},
+        .ws = WsBinding{.command = "vault.recovery.disclosure",
+                        .field_to_json = {{"vault", "/vault_id"}, {"retention", "/provider_retention"}}},
+        .deadline = 60s,
+        .refusals = opsRefusalMap(),
+    });
+
+    out.push_back({
+        .id = "recovery.suspend",
+        .description = "Suspend versioning on the vault's bucket (confirmed). Nothing is deleted.",
+        .fields = {opVault()},
+        .requires_any = {"admin.upstream.configure"},
+        .effect = {.kind = "update", .entity = "vault_recovery_policy"},
+        .cli = CliBinding{.usage_path = {"vault", "recovery", "suspend"},
+                          .field_to_entry = {{"vault", "positional:vault"}}, .fixed = {{"flag:yes", ""}}},
+        .ws = WsBinding{.command = "vault.recovery.suspend", .field_to_json = {{"vault", "/vault_id"}},
+                        .fixed = {{"/confirm", "true"}}},
+        .deadline = 60s,
+        .refusals = opsRefusalMap(),
+    });
+
+    out.push_back({
+        .id = "recovery.costs",
+        .description = "The vault's recovery cost estimates (computed locally; unknown money is null).",
+        .fields = {opVault()},
+        .requires_any = {"owner", "admin.stats.view"},
+        .effect = {.kind = "read", .entity = "vault_recovery_policy"},
+        .cli = CliBinding{.usage_path = {"recovery", "costs"}, .field_to_entry = {{"vault", "positional:vault"}}},
+        .ws = WsBinding{.command = "recovery.costs", .field_to_json = {{"vault", "/vault_id"}}},
+        .deadline = 60s,
+        .refusals = opsRefusalMap(),
+    });
+
+    out.push_back({
+        .id = "recovery.list",
+        .description = "Recovery points of a vault or a path the actor can read.",
+        .fields = {opVault(), opOptional(opPath())},
+        .requires_any = {"vault.fs.files.download", "vault.fs.directories.list"},
+        .effect = {.kind = "read", .entity = "recovery_point"},
+        .cli = CliBinding{.usage_path = {"recovery", "list"},
+                          .field_to_entry = {{"vault", "positional:vault"}, {"path", "positional:path"}}},
+        .ws = WsBinding{.command = "recovery.list", .field_to_json = {{"vault", "/vault_id"}, {"path", "/path"}}},
+        .deadline = 120s,
+        .refusals = opsRefusalMap(),
+    });
+
+    out.push_back({
+        .id = "recovery.inspect",
+        .description = "One recovery point (not_found when the actor can't read it).",
+        .fields = {recoveryPoint()},
+        .requires_any = {"vault.fs.files.download", "vault.fs.directories.list"},
+        .effect = {.kind = "read", .entity = "recovery_point"},
+        .cli = CliBinding{.usage_path = {"recovery", "inspect"}, .field_to_entry = {{"point", "positional:recovery_id"}}},
+        .ws = WsBinding{.command = "recovery.inspect", .field_to_json = {{"point", "/recovery_id"}}},
+        .deadline = 30s,
+        .refusals = opsRefusalMap(),
+    });
+
+    out.push_back({
+        .id = "recovery.snapshot.create",
+        .description = "Take a named local snapshot of a file or directory tree.",
+        .fields = {opVault(), opPath(), opOptional(opField("name", "string", gen::pattern("snap {a}{a}{a}")))},
+        .requires_any = {"vault.fs.files.copy", "vault.fs.directories.copy"},
+        .effect = {.kind = "create", .entity = "recovery_point"},
+        .cli = CliBinding{.usage_path = {"snapshot", "create"},
+                          .field_to_entry = {{"vault", "positional:vault"}, {"path", "positional:path"},
+                                             {"name", "optional:name"}}},
+        .ws = WsBinding{.command = "recovery.snapshot.create",
+                        .field_to_json = {{"vault", "/vault_id"}, {"path", "/path"}, {"name", "/name"}},
+                        .id_pointer = "/detail/point/id"},
+        .deadline = 300s,
+        .refusals = opsRefusalMap(),
+    });
+
+    out.push_back({
+        .id = "recovery.point.delete",
+        .description = "Delete a snapshot or a local version (confirmed).",
+        .fields = {recoveryPoint()},
+        .requires_any = {"vault.fs.files.delete", "vault.fs.directories.delete"},
+        .effect = {.kind = "delete", .entity = "recovery_point"},
+        .cli = CliBinding{.usage_path = {"recovery", "delete"}, .field_to_entry = {{"point", "positional:recovery_id"}},
+                          .fixed = {{"flag:yes", ""}}},
+        .ws = WsBinding{.command = "recovery.point.delete", .field_to_json = {{"point", "/recovery_id"}},
+                        .fixed = {{"/confirm", "true"}}},
+        .deadline = 60s,
+        .refusals = opsRefusalMap(),
+    });
+
+    out.push_back({
+        .id = "recovery.plan",
+        .description = "Plan restoring a recovery point (read-only; stored 30 minutes with a token).",
+        .fields = {recoveryPoint(), opOptional(opPath("destination"))},
+        .requires_any = {"vault.fs.files.download"},
+        .effect = {.kind = "create", .entity = "recovery_plan"},
+        .cli = CliBinding{.usage_path = {"recovery", "plan"},
+                          .field_to_entry = {{"point", "positional:source"}, {"destination", "optional:to"}}},
+        .ws = WsBinding{.command = "recovery.plan",
+                        .field_to_json = {{"point", "/recovery_id"}, {"destination", "/destination"}},
+                        .id_pointer = "/plan/id"},
+        .deadline = 180s,
+        .refusals = opsRefusalMap(),
+    });
+
+    out.push_back({
+        .id = "recovery.restore",
+        .description = "Run a restore plan with its token; every item is authorized again.",
+        .fields = {opRef("plan", "recovery_plan", {"id"}), opField("token", "string")},
+        .requires_any = {"vault.fs.files.overwrite", "vault.fs.files.upload"},
+        .effect = {.kind = "update", .entity = "fs.entry"},
+        .cli = CliBinding{.usage_path = {"recovery", "restore"},
+                          .field_to_entry = {{"plan", "positional:plan"}, {"token", "optional:token"}}},
+        .ws = WsBinding{.command = "recovery.restore", .field_to_json = {{"plan", "/plan_id"}, {"token", "/token"}}},
+        .deadline = 1800s,
+        .refusals = opsRefusalMap(),
+    });
+
     out.push_back({
         .id = "auth.login",
         .description = "Open an authenticated ws session.",

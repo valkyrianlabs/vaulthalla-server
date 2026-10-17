@@ -31,6 +31,15 @@ namespace vh::recovery {
     struct Disclosure;
 }
 
+namespace vh::recovery::local {
+    enum class Reason : unsigned char;
+}
+
+namespace vh::recovery::local::versions {
+    class Pending;
+    struct RetainOptions;
+}
+
 namespace vh::recovery::store {
     struct VaultRef;
     struct GenerationMeta;

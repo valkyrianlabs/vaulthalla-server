@@ -30,6 +30,7 @@
 #include "identities/User.hpp"
 #include "identities/Group.hpp"
 #include "fuse/WorkingCopies.hpp"
+#include "recovery/local/Versions.hpp"
 
 #include <ranges>
 #include <set>
@@ -805,15 +806,36 @@ void Filesystem::remove(const std::filesystem::path& path, const unsigned int us
         if (engine) engine->purgeDerivedArtifacts(fileId);
     };
 
+    // Local versioning keeps each removed file's last generation (linked before its row goes; the backing file is
+    // removed below, after the trash committed).
+    const auto trash = [&](const File& file, const std::function<void(pqxx::work&)>& markTrashed) {
+        auto kept = engine ? recovery::local::versions::retain(*engine, file, recovery::local::Reason::Delete,
+                                                               {.actor = userId})
+                           : recovery::local::versions::Pending{};
+        db::Transactions::exec("Filesystem::remove", [&](pqxx::work& txn) {
+            kept.attach(txn);
+            markTrashed(txn);
+        });
+        kept.committed();
+    };
+
     if (entry->isDirectory()) {
         for (const auto& file : db::query::fs::File::listFilesInDir(*entry->vault_id, entry->path, true)) {
-            db::query::fs::File::markFileAsTrashed(userId, file->id);
+            trash(*file, [&](pqxx::work& txn) {
+                db::query::fs::File::markFileAsTrashed(txn, userId, file->id, file->backing_path);
+            });
             cache->evictPath(file->fuse_path);
             purgeDerived(file->id);
         }
         // Trashing files never removes folders (#168): the directory, its subfolders and any symlinks are still
-        // there. Delete what is left, off its ancestors' totals.
+        // there. Delete what is left, off its ancestors' totals. Its subfolders and symlinks leave the cache too: a
+        // stale cached subfolder answered lookups after the delete and became the (deleted) parent of anything
+        // created again at its path.
+        const auto remaining = engine ? db::query::fs::Entry::listSubtree(entry->id)
+                                      : std::vector<std::shared_ptr<Entry>>{};
         db::query::fs::Directory::deleteDirectoryTree(entry->id);
+        for (const auto& e : remaining)
+            if (e) cache->evictPath(engine->vaultPathToFusePath(e->path));
         cache->evictPath(path);
     }
     else if (entry->isSymlink()) {
@@ -821,7 +843,10 @@ void Filesystem::remove(const std::filesystem::path& path, const unsigned int us
         cache->evictPath(path);
     }
     else {
-        db::query::fs::File::markFileAsTrashed(userId, *entry->vault_id, entry->path);
+        trash(static_cast<const File&>(*entry), [&](pqxx::work& txn) {
+            db::query::fs::File::markFileAsTrashed(txn, userId, static_cast<unsigned int>(*entry->vault_id), entry->path,
+                                                   entry->backing_path);
+        });
         cache->evictPath(path);
         purgeDerived(entry->id);
     }
@@ -900,7 +925,16 @@ std::shared_ptr<File> Filesystem::createFile(const NewFileContext& ctx) {
         ec.clear();
         std::filesystem::remove(sidecar, ec);  // a leftover is settled by startup recovery; we hold the file's lock
         try {
-            if (ctx.source_path) {
+            if (ctx.sealed) {
+                const auto sealed = ctx.sealed(sidecar);
+                std::filesystem::permissions(sidecar, static_cast<std::filesystem::perms>(mode),
+                                             std::filesystem::perm_options::replace);
+                fsyncFile(sidecar);
+                staged->encryption_iv = sealed.encryption_iv;
+                staged->encrypted_with_key_version = sealed.key_version;
+                staged->size_bytes = sealed.plaintext_size;
+                staged->mime_type = sealed.mime_type ? *sealed.mime_type : inferMimeTypeFromPath(ctx.path);
+            } else if (ctx.source_path) {
                 const auto plaintextSize = std::filesystem::file_size(*ctx.source_path);
                 if (plaintextSize == 0) {
                     writeFileExclusive(sidecar, {}, mode);
@@ -931,7 +965,17 @@ std::shared_ptr<File> Filesystem::createFile(const NewFileContext& ctx) {
             staged->content_hash = hash::blake2b(sidecar);
             staged->last_modified_by = userIdFor(ctx.user);
             staged->updated_at = std::time(nullptr);
-            db::query::fs::File::updateFile(staged);
+
+            // Local versioning keeps the generation being replaced (a link to its inode, staged before the row
+            // changes; the rename below never writes that inode again), recorded in the row's transaction.
+            auto kept = recovery::local::versions::retain(
+                *engine, *f, ctx.version_reason.value_or(recovery::local::Reason::Overwrite),
+                {.actor = ctx.user ? std::make_optional(ctx.user->id) : std::nullopt});
+            db::Transactions::exec("Filesystem::createFile overwrite", [&](pqxx::work& txn) {
+                kept.attach(txn);
+                db::query::fs::File::updateFile(txn, staged);
+            });
+            kept.committed();
         } catch (...) {
             std::filesystem::remove(sidecar, ec);
             throw;
@@ -987,14 +1031,25 @@ std::shared_ptr<File> Filesystem::createFile(const NewFileContext& ctx) {
         : (ctx.buffer.empty() ? inferMimeTypeFromPath(ctx.path) : Magic::get_mime_type_from_buffer(ctx.buffer));
     f->size_bytes = ctx.source_path ? std::filesystem::file_size(*ctx.source_path) : ctx.buffer.size();
 
+    // A new file at a fresh alias. Created exclusively or replaced by rename, never written in place: a retained
+    // generation may share an existing backing inode (recovery.md, "Local storage").
     std::filesystem::create_directories(f->backing_path.parent_path());
-    if (ctx.source_path) {
-        if (f->size_bytes == 0) std::ofstream(f->backing_path, std::ios::binary | std::ios::trunc).close();
-        else engine->encryptionManager->encryptFileToFile(*ctx.source_path, f->backing_path, f);
-    } else if (ctx.buffer.empty()) std::ofstream(f->backing_path).close();
+    if (ctx.sealed) {
+        replaceFileAtomic(f->backing_path, [&](const std::filesystem::path& temp) {
+            const auto sealed = ctx.sealed(temp);
+            f->encryption_iv = sealed.encryption_iv;
+            f->encrypted_with_key_version = sealed.key_version;
+            f->size_bytes = sealed.plaintext_size;
+            if (sealed.mime_type) f->mime_type = sealed.mime_type;
+        });
+    } else if (ctx.source_path && f->size_bytes > 0) {
+        replaceFileAtomic(f->backing_path, [&](const std::filesystem::path& temp) {
+            engine->encryptionManager->encryptFileToFile(*ctx.source_path, temp, f);
+        });
+    } else if (ctx.source_path || ctx.buffer.empty()) writeFileExclusive(f->backing_path, {}, 0600);
     else {
         const auto ciphertext = engine->encryptionManager->encrypt(ctx.buffer, f);
-        writeFile(f->backing_path, ciphertext);
+        writeFileAtomic(f->backing_path, ciphertext);
     }
 
     f->content_hash = hash::blake2b(f->backing_path);
@@ -1071,7 +1126,7 @@ Filesystem::createFile(const FuseCreateFileContext& ctx) {
 
         try {
             std::filesystem::create_directories(f->backing_path.parent_path());
-            std::ofstream(f->backing_path).close();
+            writeFileExclusive(f->backing_path, {}, 0600);
         } catch (const std::filesystem::filesystem_error& ex) {
             log::Registry::fs()->error(
                 "[Filesystem::createFile] Failed to create backing file for {}: {}",
@@ -1374,8 +1429,9 @@ int Filesystem::handleRename(const RenameContext& ctx) {
                 buffer = readFileToVector(oldBackingPath);
             }
 
+            // Replaced by rename, never in place (the old backing path may be this one).
             if (buffer.empty()) {
-                std::ofstream(entry->backing_path).close();
+                writeFileAtomic(entry->backing_path, {});
 
                 if (!std::filesystem::exists(entry->backing_path)) {
                     log::Registry::fs()->error(
@@ -1392,7 +1448,7 @@ int Filesystem::handleRename(const RenameContext& ctx) {
                     return -EIO;
                 }
 
-                writeFile(entry->backing_path, ciphertext);
+                writeFileAtomic(entry->backing_path, ciphertext);
 
                 f->size_bytes = buffer.size();  // the plaintext size, as everywhere else
                 f->mime_type = Magic::get_mime_type_from_buffer(buffer);

@@ -124,7 +124,8 @@ void to_json(nlohmann::json& j, const ItemOutcome& v) {
 
 void to_json(nlohmann::json& j, const RestoreResult& v) {
     j = {{"plan_id", v.plan_id}, {"state", v.state},       {"items", v.items},     {"restored", v.restored},
-         {"skipped", v.skipped}, {"conflicts", v.conflicts}, {"failed", v.failed}, {"removed", v.removed}};
+         {"skipped", v.skipped}, {"conflicts", v.conflicts}, {"failed", v.failed}, {"removed", v.removed},
+         {"unavailable", v.unavailable}};
 }
 
 void to_json(nlohmann::json& j, const ProviderRetention& v) {
@@ -257,6 +258,7 @@ void to_json(nlohmann::json& j, const CostReport::Alert& v) {
 
 void to_json(nlohmann::json& j, const CostReport& v) {
     j = {{"vault_id", v.vault_id},
+         {"phase", v.phase},
          {"priced", v.priced},
          {"unpriced_reason", rjOpt(v.unpriced_reason)},
          {"provider", rjOpt(v.provider)},
@@ -424,6 +426,28 @@ LocalVersioningPolicy localVersioningPolicyFromJson(const nlohmann::json& j) {
     return p;
 }
 
+vh::recovery::LocalVersioningPatch localVersioningPatchFromJson(const nlohmann::json& j) {
+    rjRequireObject(j, "local_versioning");
+    vh::recovery::LocalVersioningPatch p;
+    p.enabled = rjBool(j, "enabled");
+    const auto limit = [&](const char* name, const unsigned int max) -> std::optional<unsigned int> {
+        const auto* m = rjMember(j, name);
+        if (!m) return std::nullopt;
+        if (m->is_null()) return 0u;
+        if (!m->is_number_unsigned() || m->get<uint64_t>() > max)
+            throw Invalid(std::string(name) + " must be a whole number from 0 (no limit) to " + std::to_string(max));
+        return m->get<unsigned int>();
+    };
+    p.keep_last = limit("keep_last", 10000);
+    p.max_age_days = limit("max_age_days", 36500);
+    if (const auto* q = rjMember(j, "quota_bytes")) {
+        if (q->is_null()) p.quota_bytes = 0;
+        else if (!q->is_number_unsigned()) throw Invalid("quota_bytes must be a whole number of bytes (0 = no limit)");
+        else p.quota_bytes = q->get<uint64_t>();
+    }
+    return p;
+}
+
 Update updateFromJson(const nlohmann::json& j) {
     rjRequireObject(j, "recovery update");
     Update u;
@@ -443,7 +467,7 @@ Update updateFromJson(const nlohmann::json& j) {
             throw Invalid("cost_alert_monthly must be a non-negative decimal (up to 12 digits and 8 decimals)");
         u.cost_alert_monthly = value;
     }
-    if (const auto* lv = rjMember(j, "local_versioning")) u.local_versioning = localVersioningPolicyFromJson(*lv);
+    if (const auto* lv = rjMember(j, "local_versioning")) u.local_versioning = localVersioningPatchFromJson(*lv);
     u.disclosure_token = rjString(j, "disclosure_token");
     u.accept_unpriced = rjBool(j, "accept_unpriced").value_or(false);
     u.accept_retention_shortening = rjBool(j, "accept_retention_shortening").value_or(false);
@@ -546,6 +570,7 @@ vh::recovery::RestoreResult restoreResultFromJson(const nlohmann::json& j) {
     r.conflicts = rjUint(j, "conflicts").value_or(0);
     r.failed = rjUint(j, "failed").value_or(0);
     r.removed = rjUint(j, "removed").value_or(0);
+    r.unavailable = rjUint(j, "unavailable").value_or(0);
     return r;
 }
 

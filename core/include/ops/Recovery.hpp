@@ -13,7 +13,8 @@
 // vault.recovery.* commands. The only authorizing boundary for recovery; see .claude/context/recovery.md.
 //
 // Who (all through the existing resolvers; no recovery-specific permission bits):
-//   status, costs                      vault sync.config.view-equivalent: what reads a vault's sync settings and
+//   status, costs, versioningDisclosure
+//                                      vault sync.config.view-equivalent: what reads a vault's sync settings and
 //                                      stats.vault.pricing (owner, or admin with vault view + view_stats)
 //   update (mode, quotas, alert,
 //           local versioning)          vault sync.config.edit
@@ -33,6 +34,7 @@ namespace vh::ops::recovery {
 using vh::recovery::Backend;
 using vh::recovery::CostReport;
 using vh::recovery::Disclosure;
+using vh::recovery::LocalVersioningPatch;
 using vh::recovery::LocalVersioningPolicy;
 using vh::recovery::Mode;
 using vh::recovery::Plan;
@@ -48,7 +50,8 @@ inline constexpr const char* RETENTION_SHORTEN = "recovery_retention_shorten";  
 inline constexpr const char* VERSIONING_SUSPEND = "recovery_versioning_suspend";
 inline constexpr const char* BUCKET_ADOPTION = "upstream_adoption";                      // = ops::upstream
 inline constexpr const char* POINT_DELETE = "recovery_point_delete";
-inline constexpr const char* RESTORE_CONFIRM = "recovery_restore";                       // no/expired plan token
+inline constexpr const char* RESTORE_CONFIRM = "recovery_restore";                       // no or wrong plan token
+inline constexpr const char* PLAN_EXPIRED = "recovery_plan_expired";                     // plan again
 inline constexpr const char* UNVERIFIED_VERSION = "recovery_unverified_version";         // not written by Vaulthalla
 
 // ---- policy --------------------------------------------------------------------------------------------------------
@@ -61,8 +64,9 @@ struct Update {
     std::optional<Mode> mode{};
     std::optional<ProviderRetention> provider_retention{};
     std::optional<uint64_t> snapshot_quota_bytes{};      // 0 = no snapshot quota
-    std::optional<std::string> cost_alert_monthly{};     // decimal amount in the catalog currency; "" = clear
-    std::optional<LocalVersioningPolicy> local_versioning{};
+    // Decimal amount; stored with the vault's catalog currency (USD when no catalog profile applies); "" = clear.
+    std::optional<std::string> cost_alert_monthly{};
+    std::optional<LocalVersioningPatch> local_versioning{};
     std::optional<std::string> disclosure_token{};       // from versioningDisclosure()
     bool accept_unpriced = false;                        // VERSIONING_UNPRICED
     bool accept_retention_shortening = false;            // RETENTION_SHORTEN

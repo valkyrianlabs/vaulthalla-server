@@ -411,7 +411,8 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   session zone); columns a view depends on are skipped with a warning. New columns must be `TIMESTAMPTZ`. Text output
   is `YYYY-MM-DD HH:MM:SS[.ffffff]+00`, which `db::encoding::parsePostgresTimestamp` handles. Guard: `DbTimezoneTest`.
 - `db::Janitor` handles sweeps (DB cleanup every `services.db_sweeper.sweep_interval_minutes`, derived-artifact
-  eviction every 15 min). Stats rollups read from `file_activity`, `files_trashed`, `operations`, `share_*`.
+  eviction and local-version retention every 15 min, the recovery store's orphan sweep at startup and daily; see
+  `recovery.md`). Stats rollups read from `file_activity`, `files_trashed`, `operations`, `share_*`.
 
 ## Subsystem directory map (`core/src`, mirrored in `core/include`)
 
@@ -513,7 +514,7 @@ policies), `config` (every settings write: one validation, one apply step that r
 `s3_gateway.enabled` changes), `stats` (authorization only, ws-only: there is no `vh` stats command; `vh status`
 is deliberately ungated, see Stats below), `conflicts` (sync conflicts, #187: ws `sync.conflicts.*`, `vh sync resolve` /
 `vh resolve`, the HTTP `/download/conflict` lane's authorization), `upstream` (S3/R2 bucket administration and event
-sync, #237/#96: ws `upstream.*`, `vh upstream …`; see `upstream-control-plane.md`). Still per-surface: the ws-only pricing preflight/override/notification endpoints,
+sync, #237/#96: ws `upstream.*`, `vh upstream …`; see `upstream-control-plane.md`), `recovery` (file recovery: ws `recovery.*` / `vault.recovery.*`, `vh snapshot|recovery …`, `vh vault recovery …`; see `recovery.md`). Still per-surface: the ws-only pricing preflight/override/notification endpoints,
 email test-send/history, vault keys/sync diagnostics, and lifecycle commands (`setup`, `teardown`, `secrets`).
 
 Rules the families hold (keep them in ops, never re-add them in a handler):

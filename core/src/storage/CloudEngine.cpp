@@ -27,6 +27,8 @@
 #include "identities/Manager.hpp"
 #include "db/query/upstream/WriteIntent.hpp"
 #include "sync/events/Subscriptions.hpp"
+#include "recovery/local/Versions.hpp"
+#include "db/Transactions.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -357,6 +359,11 @@ std::shared_ptr<File> CloudEngine::indexAndDeleteFile(const std::shared_ptr<File
 
     const auto rel_path = makeAbsolute(remoteFile->path);
     auto indexed = db::query::fs::File::getFileByPath(vault->id, rel_path);
+    // The local copy this download replaces (cache strategy: index-only), when it holds other content.
+    std::optional<File> replaced;
+    if (indexed && !(remoteFile->encryption_iv == indexed->encryption_iv &&
+                     remoteFile->encrypted_with_key_version == indexed->encrypted_with_key_version))
+        replaced = *indexed;
 
     if (!indexed) {
         indexed = Filesystem::createFile({
@@ -378,7 +385,13 @@ std::shared_ptr<File> CloudEngine::indexAndDeleteFile(const std::shared_ptr<File
         indexed->encrypted_with_key_version = remoteFile->encrypted_with_key_version;
     indexed->updated_at = remoteFile->updated_at;
     indexed->last_modified_by = vault->owner_id;
-    db::query::fs::File::updateFile(indexed);
+    auto kept = replaced ? vh::recovery::local::versions::retain(*this, *replaced, vh::recovery::local::Reason::Download)
+                         : vh::recovery::local::versions::Pending{};
+    vh::db::Transactions::exec("CloudEngine::indexAndDeleteFile", [&](pqxx::work& txn) {
+        kept.attach(txn);
+        db::query::fs::File::updateFile(txn, indexed);
+    });
+    kept.committed();
 
     if (!indexed->backing_path.empty() && fs::exists(indexed->backing_path))
         fs::remove(indexed->backing_path);
@@ -900,8 +913,16 @@ CloudEngine::OwnWrite CloudEngine::noteOwnWrite(const fs::path& key, const bool 
 void CloudEngine::OwnWrite::done() {
     if (id_) {
         const auto id = *std::exchange(id_, std::nullopt);
+        // The stored object's ETag (unquoted, as notifications carry it), so the intent only matches the event of
+        // exactly this object (a restore's CopyObject included), never another writer's same-size object.
+        std::optional<std::string> etag;
+        if (write_ && !write_->is_delete) {
+            auto tag = s3::Controller::lastPutOutcome().etag;
+            if (tag.size() >= 2 && tag.front() == '"' && tag.back() == '"') tag = tag.substr(1, tag.size() - 2);
+            if (!tag.empty()) etag = std::move(tag);
+        }
         try {
-            db::query::upstream::WriteIntent::complete(id);   // lives from completion, not from the start of the upload
+            db::query::upstream::WriteIntent::complete(id, etag);   // lives from completion, not from the start of the upload
         } catch (const std::exception& e) {
             log::Registry::cloud()->warn("[CloudStorageEngine] write intent {}: completion not recorded: {}", id, e.what());
         }

@@ -2,6 +2,7 @@
 #include "storage/CloudEngine.hpp"
 #include "fs/model/File.hpp"
 #include "log/Registry.hpp"
+#include "recovery/local/Backlog.hpp"
 #include "sync/model/ScopedOp.hpp"
 #include "sync/model/Baseline.hpp"
 #include "sync/tasks/Baseline.hpp"
@@ -17,6 +18,10 @@ void Upload::operator()() {
     try {
         if (!op) throw std::runtime_error("UploadTask: null scoped operation");
         op->start(file->size_bytes);
+        // Local versioning's backlog first: the provider's history keeps the local order (recovery.md). A failed
+        // replay holds this upload back; the next pass retries both.
+        if (const auto replay = vh::recovery::local::backlog::replayBeforeUpload(*engine, *file); replay.blocked)
+            throw std::runtime_error("earlier versions could not be replayed upstream: " + replay.error.value_or("unknown"));
         engine->upload(file);
         op->success = true;
         recordBaseline(engine, vh::sync::model::Baseline::afterUpload(*file));

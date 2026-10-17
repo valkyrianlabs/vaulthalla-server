@@ -71,35 +71,37 @@ unsigned int File::upsertFile(const FilePtr& file) {
 }
 
 void File::updateFile(const FilePtr& file) {
+    Transactions::exec("File::updateFile", [&](pqxx::work& txn) { updateFile(txn, file); });
+}
+
+void File::updateFile(pqxx::work& txn, const FilePtr& file) {
     if (!file) throw std::invalid_argument("File cannot be null");
     if (file->id == 0) throw std::invalid_argument("File ID cannot be zero");
     if (!file->path.string().starts_with("/")) file->setPath("/" + to_utf8_string(file->path.u8string()));
 
-    Transactions::exec("File::updateFile", [&](pqxx::work& txn) {
-        const auto exists = txn.exec(pqxx::prepped{"fs_entry_exists_by_inode"}, file->inode).one_field_ref().as<bool>();
-        const auto sizeRes = txn.exec(pqxx::prepped{"get_file_size_by_inode"}, file->inode);
-        const auto existingSize = sizeRes.empty() ? 0 : sizeRes.one_field_ref().as<uintmax_t>();
+    const auto exists = txn.exec(pqxx::prepped{"fs_entry_exists_by_inode"}, file->inode).one_field_ref().as<bool>();
+    const auto sizeRes = txn.exec(pqxx::prepped{"get_file_size_by_inode"}, file->inode);
+    const auto existingSize = sizeRes.empty() ? 0 : sizeRes.one_field_ref().as<uintmax_t>();
 
-        pqxx::params p;
-        p.append(file->id);
-        p.append(file->size_bytes);
-        p.append(file->mime_type);
-        p.append(file->content_hash);
-        p.append(file->encryption_iv);
-        p.append(file->encrypted_with_key_version);
-        p.append(file->last_modified_by);
+    pqxx::params p;
+    p.append(file->id);
+    p.append(file->size_bytes);
+    p.append(file->mime_type);
+    p.append(file->content_hash);
+    p.append(file->encryption_iv);
+    p.append(file->encrypted_with_key_version);
+    p.append(file->last_modified_by);
 
-        file->updated_at = std::time(nullptr);
-        txn.exec(pqxx::prepped{"update_file_only"}, p);
-        txn.exec(
-            pqxx::prepped{"insert_file_activity"},
-            pqxx::params{file->id, file->last_modified_by, "modified"}
-        );
+    file->updated_at = std::time(nullptr);
+    txn.exec(pqxx::prepped{"update_file_only"}, p);
+    txn.exec(
+        pqxx::prepped{"insert_file_activity"},
+        pqxx::params{file->id, file->last_modified_by, "modified"}
+    );
 
-        Directory::addToAncestorStats(txn, file->parent_id,
-                                      static_cast<int64_t>(file->size_bytes) - static_cast<int64_t>(existingSize),
-                                      exists ? 0 : 1, 0);
-    });
+    Directory::addToAncestorStats(txn, file->parent_id,
+                                  static_cast<int64_t>(file->size_bytes) - static_cast<int64_t>(existingSize),
+                                  exists ? 0 : 1, 0);
 }
 
 void File::markTrashedFileDeleted(const unsigned int id) {
@@ -110,24 +112,26 @@ void File::markTrashedFileDeleted(const unsigned int id) {
 
 void File::deleteFile(const unsigned int userId, const FilePtr& file) {
     if (!file) throw std::invalid_argument("File cannot be null");
+    Transactions::exec("File::deleteFileByPath", [&](pqxx::work& txn) { deleteFile(txn, userId, file); });
+}
 
-    Transactions::exec("File::deleteFileByPath", [&](pqxx::work& txn) {
-        const auto path = to_utf8_string(file->path.u8string());
+void File::deleteFile(pqxx::work& txn, const unsigned int userId, const FilePtr& file) {
+    if (!file) throw std::invalid_argument("File cannot be null");
+    const auto path = to_utf8_string(file->path.u8string());
 
-        pqxx::params p{file->vault_id, path};
-        const auto row = txn.exec(pqxx::prepped{"get_file_parent_id_and_size_by_path"}, p).one_row();
-        const auto parentId = row["parent_id"].as<std::optional<unsigned int> >();
-        const auto sizeBytes = row["size_bytes"].as<std::uint64_t>();
+    pqxx::params p{file->vault_id, path};
+    const auto row = txn.exec(pqxx::prepped{"get_file_parent_id_and_size_by_path"}, p).one_row();
+    const auto parentId = row["parent_id"].as<std::optional<unsigned int> >();
+    const auto sizeBytes = row["size_bytes"].as<std::uint64_t>();
 
-        txn.exec(
-            pqxx::prepped{"mark_file_trashed"},
-            pqxx::params{file->vault_id, path, userId, to_utf8_string(file->backing_path.u8string())}
-        );
+    txn.exec(
+        pqxx::prepped{"mark_file_trashed"},
+        pqxx::params{file->vault_id, path, userId, to_utf8_string(file->backing_path.u8string())}
+    );
 
-        updateParentStats(txn, parentId, sizeBytes);
+    updateParentStats(txn, parentId, sizeBytes);
 
-        txn.exec(pqxx::prepped{"mark_trashed_file_deleted_by_base32_alias"}, pqxx::params{file->base32_alias});
-    });
+    txn.exec(pqxx::prepped{"mark_trashed_file_deleted_by_base32_alias"}, pqxx::params{file->base32_alias});
 }
 
 void File::moveFile(const FilePtr& file, const std::filesystem::path& newPath, unsigned int userId) {
@@ -246,18 +250,24 @@ void File::markFileAsTrashed(const unsigned int userId, const unsigned int vault
     if (!file) throw std::runtime_error("[markFileAsTrashed] File not found: " + to_utf8_string(relPath.u8string()));
 
     Transactions::exec("File::markFileAsTrashed", [&](pqxx::work& txn) {
-        const auto res = txn.exec(pqxx::prepped{"get_file_parent_id_and_size_by_path"},
-                                           pqxx::params{vaultId, to_utf8_string(relPath.u8string())});
-        if (res.empty()) throw std::runtime_error("[markFileAsTrashed] File not found: " + to_utf8_string(relPath.u8string()));
-
-        const auto row = res[0];
-        const auto parentId = row["parent_id"].as<std::optional<unsigned int> >();
-        const auto sizeBytes = row["size_bytes"].as<std::uint64_t>();
-
-        txn.exec(pqxx::prepped{"mark_file_trashed"}, pqxx::params{vaultId, to_utf8_string(relPath.u8string()), userId, to_utf8_string(file->backing_path.u8string())});
-
-        updateParentStats(txn, parentId, sizeBytes);
+        markFileAsTrashed(txn, userId, vaultId, relPath, file->backing_path);
     });
+}
+
+void File::markFileAsTrashed(pqxx::work& txn, const unsigned int userId, const unsigned int vaultId,
+                             const std::filesystem::path& relPath, const std::filesystem::path& backingPath) {
+    const auto res = txn.exec(pqxx::prepped{"get_file_parent_id_and_size_by_path"},
+                              pqxx::params{vaultId, to_utf8_string(relPath.u8string())});
+    if (res.empty()) throw std::runtime_error("[markFileAsTrashed] File not found: " + to_utf8_string(relPath.u8string()));
+
+    const auto row = res[0];
+    const auto parentId = row["parent_id"].as<std::optional<unsigned int> >();
+    const auto sizeBytes = row["size_bytes"].as<std::uint64_t>();
+
+    txn.exec(pqxx::prepped{"mark_file_trashed"}, pqxx::params{vaultId, to_utf8_string(relPath.u8string()), userId,
+                                                              to_utf8_string(backingPath.u8string())});
+
+    updateParentStats(txn, parentId, sizeBytes);
 }
 
 void File::markFileAsTrashed(const unsigned int userId, const unsigned int fsId) {
@@ -265,15 +275,20 @@ void File::markFileAsTrashed(const unsigned int userId, const unsigned int fsId)
     if (!file) throw std::runtime_error("[markFileAsTrashed] File not found with ID: " + std::to_string(fsId));
 
     Transactions::exec("File::markFileAsTrashed", [&](pqxx::work& txn) {
-        const auto row = txn.exec(pqxx::prepped{"get_file_parent_id_and_size"}, fsId).one_row();
-        const auto parentId = row["parent_id"].as<std::optional<unsigned int>>();
-        const auto sizeBytes = row["size_bytes"].as<std::uint64_t>();
-
-        pqxx::params p{fsId, userId, to_utf8_string(file->backing_path.u8string())};
-        txn.exec(pqxx::prepped{"mark_file_trashed_by_id"}, p);
-
-        updateParentStats(txn, parentId, sizeBytes);
+        markFileAsTrashed(txn, userId, fsId, file->backing_path);
     });
+}
+
+void File::markFileAsTrashed(pqxx::work& txn, const unsigned int userId, const unsigned int fsId,
+                             const std::filesystem::path& backingPath) {
+    const auto row = txn.exec(pqxx::prepped{"get_file_parent_id_and_size"}, fsId).one_row();
+    const auto parentId = row["parent_id"].as<std::optional<unsigned int>>();
+    const auto sizeBytes = row["size_bytes"].as<std::uint64_t>();
+
+    pqxx::params p{fsId, userId, to_utf8_string(backingPath.u8string())};
+    txn.exec(pqxx::prepped{"mark_file_trashed_by_id"}, p);
+
+    updateParentStats(txn, parentId, sizeBytes);
 }
 
 void File::markRemoteFileAsTrashed(

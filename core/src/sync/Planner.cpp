@@ -6,6 +6,7 @@
 #include "sync/model/Baseline.hpp"
 #include "fs/model/File.hpp"
 #include "log/Registry.hpp"
+#include "recovery/local/Backlog.hpp"
 
 using namespace vh::sync;
 using namespace vh::sync::model;
@@ -214,6 +215,15 @@ S3CostEstimate Planner::estimateS3Cost(const std::vector<Action>& plan) {
     if (mutatesRemoteIndex) {
         ++estimate.put_requests;
         estimate.head_requests += 2;
+    }
+
+    // Local versioning's backlog: the uploads and remote deletes above replay their keys' pending versions first.
+    for (const auto& action : plan) {
+        const auto& file = action.local ? action.local : action.remote;
+        if ((action.type != ActionType::Upload && action.type != ActionType::DeleteRemote) || !file || !file->vault_id)
+            continue;
+        vh::recovery::local::backlog::addPlannedReplays(static_cast<uint32_t>(*file->vault_id), plan, estimate);
+        break;
     }
 
     return estimate;

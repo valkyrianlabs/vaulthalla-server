@@ -6,7 +6,7 @@
 export const WS_CONTRACT_VERSION = 1
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = 'f65d925ebe6d3251b2f7e6e66e8f3e6292b4547bc47f28a47a9deb5f4ddf397b'
+export const WS_CONTRACT_HASH = '5e94c9e36fee0c64c165bcb7d9992484ea5b834ff963e08521f0b8dafb920829'
 
 export interface WsContract {
   /**
@@ -306,6 +306,88 @@ export interface WsContract {
     response: { contract_version: number; contract_hash: string; ws_hash: string }
   }
   /**
+   * The vault's recovery cost panel: versioning surcharge (separate from current object storage), recovery
+   * operations, what is not modelled, ranges, basis and catalog freshness. Unknown money is null.
+   */
+  'recovery.costs': {
+    payload: { vault_id: number }
+    response: { costs: object }
+  }
+  /**
+   * One recovery point with its details; a snapshot lists its members (first page). A point the caller can't
+   * read is not_found.
+   */
+  'recovery.inspect': {
+    payload: { recovery_id: string }
+    response: { detail: object }
+  }
+  /**
+   * Recovery points of a vault, or of one path (a file's history or the points under a directory): local
+   * snapshots, local versions and provider versions. Points the caller can't read are omitted.
+   * refresh_provider lists the provider's versions first (metadata only, request-budgeted).
+   */
+  'recovery.list': {
+    payload: {
+      vault_id: number
+      path?: string
+      refresh_provider?: boolean
+      include_snapshots?: boolean
+      include_versions?: boolean
+      include_provider?: boolean
+      limit?: number
+    }
+    response: { points: object[] }
+  }
+  /**
+   * Plan a restore (read-only): recovery_id, or vault_id + path + at for a point-in-time reconstruction
+   * (never atomic; see consistency_note). Returns the per-item preview, estimate, warnings, blockers and the
+   * token recovery.restore takes (stored 30 minutes).
+   */
+  'recovery.plan': {
+    payload: {
+      recovery_id?: string
+      vault_id?: number
+      path?: string
+      at?: string | number
+      destination?: string
+      prune?: boolean
+      refresh_provider?: boolean
+    }
+    response: { plan: object }
+  }
+  /**
+   * A stored restore plan (its state, items and token).
+   */
+  'recovery.plan.get': {
+    payload: { plan_id: number }
+    response: { plan: object }
+  }
+  /**
+   * Delete a snapshot or a local version (filesystem Delete on its path). A refusal with data.code
+   * 'recovery_point_delete' asks for confirmation: resend with confirm.
+   */
+  'recovery.point.delete': {
+    payload: { recovery_id: string; confirm?: boolean }
+    response: { recovery_id: string }
+  }
+  /**
+   * Run a restore plan: every item is re-authorized and restored as a new current generation; a destination
+   * that changed since the plan is a 'conflict' outcome. Resumable. Refusals: 'recovery_restore' (token
+   * missing or expired: plan again), 'recovery_unverified_version' (resend with accept_unverified).
+   */
+  'recovery.restore': {
+    payload: { plan_id: number; token?: string; accept_unverified?: boolean }
+    response: { result: object }
+  }
+  /**
+   * Take a named local snapshot of a file or directory tree (vault mode local_snapshots). Needs Read + Copy
+   * on every file and List on every directory of the subtree.
+   */
+  'recovery.snapshot.create': {
+    payload: { vault_id: number; path: string; name?: string }
+    response: { detail: object }
+  }
+  /**
    * Assign a vault role to a user or group on a vault (one assignment per subject and vault).
    */
   'role.vault.assign': {
@@ -582,6 +664,56 @@ export interface WsContract {
     payload: { vault_id?: number }
     response: { events: object[] }
   }
+  /**
+   * The cost disclosure a person must see before provider versioning is enabled, with the token
+   * vault.recovery.update needs (10 minutes). Read-only: at most one admin inspect, no object requests.
+   */
+  'vault.recovery.disclosure': {
+    payload: { vault_id: number; provider_retention?: string | number | object }
+    response: { disclosure: object }
+  }
+  /**
+   * A vault's recovery mode, local versioning, store usage, upstream backlog and provider versioning state;
+   * refresh_provider re-reads the bucket (one admin round trip).
+   */
+  'vault.recovery.status': {
+    payload: { vault_id: number; refresh_provider?: boolean }
+    response: { status: object }
+  }
+  /**
+   * Suspend versioning on the vault's bucket; existing versions are kept and nothing is deleted. A refusal
+   * with data.code 'recovery_versioning_suspend' asks for confirmation: resend with confirm.
+   */
+  'vault.recovery.suspend': {
+    payload: { vault_id: number; confirm?: boolean }
+    response: { status: object }
+  }
+  /**
+   * Change a vault's recovery settings. mode provider_versioning needs disclosure_token from
+   * vault.recovery.disclosure ('recovery_versioning_disclosure'); unpriced costs need accept_unpriced
+   * ('recovery_versioning_unpriced'); a shorter retention needs accept_retention_shortening
+   * ('recovery_retention_shorten'); the vault's unmanaged bucket needs accept_adoption ('upstream_adoption').
+   */
+  'vault.recovery.update': {
+    payload: {
+      vault_id: number
+      mode?: 'off' | 'local_snapshots' | 'provider_versioning'
+      provider_retention?: string | number | object
+      snapshot_quota_bytes?: number
+      cost_alert_monthly?: string
+      local_versioning?: {
+        enabled?: boolean
+        keep_last?: number | null
+        max_age_days?: number | null
+        quota_bytes?: number | null
+      }
+      disclosure_token?: string
+      accept_unpriced?: boolean
+      accept_retention_shortening?: boolean
+      accept_adoption?: boolean
+    }
+    response: { status: object }
+  }
 }
 
 export type WsContractCommand = keyof WsContract
@@ -623,6 +755,14 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'groups.list',
   'groups.list.byUser',
   'meta.contract.get',
+  'recovery.costs',
+  'recovery.inspect',
+  'recovery.list',
+  'recovery.plan',
+  'recovery.plan.get',
+  'recovery.point.delete',
+  'recovery.restore',
+  'recovery.snapshot.create',
   'role.vault.assign',
   'role.vault.get',
   'role.vault.unassign',
@@ -651,6 +791,10 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'upstream.events.enable',
   'upstream.events.repair',
   'upstream.events.status',
+  'vault.recovery.disclosure',
+  'vault.recovery.status',
+  'vault.recovery.suspend',
+  'vault.recovery.update',
 ]
 
 // Client timeouts the server declares per command (a timeout means "no answer yet", never "failed").
@@ -691,6 +835,14 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'groups.list': 15000,
   'groups.list.byUser': 15000,
   'meta.contract.get': 15000,
+  'recovery.costs': 60000,
+  'recovery.inspect': 30000,
+  'recovery.list': 120000,
+  'recovery.plan': 180000,
+  'recovery.plan.get': 15000,
+  'recovery.point.delete': 60000,
+  'recovery.restore': 1800000,
+  'recovery.snapshot.create': 300000,
   'role.vault.assign': 15000,
   'role.vault.get': 15000,
   'role.vault.unassign': 15000,
@@ -719,4 +871,8 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'upstream.events.enable': 120000,
   'upstream.events.repair': 120000,
   'upstream.events.status': 15000,
+  'vault.recovery.disclosure': 60000,
+  'vault.recovery.status': 60000,
+  'vault.recovery.suspend': 60000,
+  'vault.recovery.update': 180000,
 }
