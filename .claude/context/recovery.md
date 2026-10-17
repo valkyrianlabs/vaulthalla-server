@@ -82,6 +82,42 @@ bucket: choosing `off`/`local_snapshots` does not suspend a bucket that is versi
   `vault::model::Key(row)` threw and a restart mid-rotation could not load the vault key. Retired-key reads now alias
   `trashed_at AS updated_at` (pinned by `RecoveryKeysDbTest`).
 
+## Local snapshots and restore (`recovery/local/{Snapshots,Restore,Points}`)
+
+- Trusted primitives (no RBAC): `snapshots::create(engine, actor, path, name, authorize)`,
+  `snapshots::cleanupInterrupted(minAge)` (wire at startup), `snapshots::remove(id)`, `local::removeVersion(id)`,
+  `local::planFor(id, subPath, destination)`, `local::restore(engine, actor, item)`, `local::missingParents`,
+  `points::{list,get,detail,fromSnapshot,fromGeneration}`. `ops::recovery::createSnapshot`
+  (`ops/RecoverySnapshots.cpp`) authorizes List/Read on the root, then every entry (Read + Copy per file, List per
+  directory; symlinks are not captured) before anything is written; one denial refuses the whole snapshot.
+- Create: mode must be `local_snapshots` (`Invalid` names the mode). Plan = cache root + `Entry::listSubtree` (DB);
+  quota first (new physical bytes = generations without a blob yet, plus the hydrate copy for index-only cloud files)
+  against `snapshot_quota_bytes` and `Engine::freeSpace()` (`Conflict` with needed/left bytes). Per file under
+  `Filesystem::contentWriteMutex`: re-read the row, `captureLink` the backing file (empty file → empty blob),
+  members inserted with their blob `attach` 64 per transaction. Captures the last **sealed** generation: an open FUSE
+  working copy's unsealed changes are not in it. Skipped with a reason in `skipped_json`: `symlink`,
+  `upload_staging`, `content_unavailable` (cloud file with no local copy whose hydrate the remote-read gate refused or
+  that failed; never an unbounded fetch), `integrity_error`, `unsealed` (legacy plaintext), `vanished`, `moved`.
+  Directories without a captured file under them go to `empty_directories`. Any failure after the row exists: state
+  `failed` + error, members and now-unreferenced blobs released (the row stays as a record). A crash leaves
+  `creating`: `cleanupInterrupted` does the same at startup. Deleting a `creating` snapshot is refused.
+- Restore destinations: original paths (the path at capture; a renamed/moved file is left alone and the old path is
+  recreated), or an alternate directory D: the chosen point P goes INTO D under its own name (P/x → D/name(P)/x).
+  Plan items per member + empty directory (directory items: source `snap-<id>`, method `none`, note
+  `empty directory`): Create / Overwrite (`destination_source_id` = the destination's current `sourceId`) / Skip (same
+  IV + key version, or both empty) / Conflict (directory vs file, a file in the parent chain) / Unavailable (blob
+  missing, body only upstream, key version gone). Method `local_copy` (current key: sealed bytes reused with their
+  IV after `gcmVerifyFd`) or `local_reseal` (`resealFileToCurrent`). Blocker when the bytes exceed `freeSpace()`.
+- Commit: `NewFileContext::sealed` (`fs::SealedWriter`) commits pre-sealed bytes through createFile's own overwrite
+  and new-file branches (content lock, CAS, open-working-copy refusal, rows, parent stats, thumbnails), so the local
+  versioning capture on the overwrite branch also retains what a restore replaces. Create uses
+  `expected_source_id = ""` (no generation has it): a file that appeared since the plan is a `ContentConflict`.
+- Points: snapshot points carry `encryption.key_version = 0` (members differ) and `key_available` = every key version
+  the vault's blobs use is still held; members/versions carry their exact key. `restorable=false` with a reason for
+  a missing blob, a body released upstream, a missing key, or a snapshot that isn't `ready`.
+- Fixed on the way: `Filesystem::remove` of a folder left its subfolders/symlinks in the FS cache (a restore or mkdir
+  at the same path then hung new rows off deleted parents; FK violation).
+
 ## Provider versioning (AWS S3 first; capability contract per provider)
 
 - Capability: `AdminClient` reports `versioning` support (AWS: yes; R2: no — refused with the documented reason,
