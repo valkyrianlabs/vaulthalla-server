@@ -4,6 +4,7 @@
 #include "storage/upstream/Guard.hpp"
 #include "vault/Fwd.hpp"
 
+#include <atomic>
 #include <cstdint>
 #include <ctime>
 #include <filesystem>
@@ -180,6 +181,11 @@ namespace vh::storage::s3 {
         virtual void clearRequestBudget() const;
         virtual void resetRequestMetrics() const;
         [[nodiscard]] virtual S3RequestMetrics requestMetrics() const;
+        // The vault this controller works for: its metered requests also feed that vault's local usage ledger
+        // (recovery::usage, vault_upstream_usage_daily; nothing leaves the host). 0 (default) = none.
+        void setUsageVault(uint32_t vaultId) noexcept { usageVaultId_.store(vaultId, std::memory_order_relaxed); }
+        [[nodiscard]] uint32_t usageVault() const noexcept { return usageVaultId_.load(std::memory_order_relaxed); }
+
         static void pushRequestUsageCapture(ScopedS3RequestUsageCapture* capture);
         static void popRequestUsageCapture(ScopedS3RequestUsageCapture* capture) noexcept;
 
@@ -414,6 +420,7 @@ namespace vh::storage::s3 {
         mutable std::mutex metricsMutex_;
         mutable S3RequestMetrics metrics_;
         mutable std::optional<S3RequestBudget> requestBudget_;
+        std::atomic<uint32_t> usageVaultId_{0};
 
         std::pair<std::string, std::string> constructPaths(CURL *curl, const fs::path &p,
                                                            const std::string &query = "") const;

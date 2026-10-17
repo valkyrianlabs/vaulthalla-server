@@ -13,16 +13,6 @@ namespace {
 
 }
 
-Status status(const Actor&, uint32_t, bool) { recoveryStubRefuse(); }
-
-Status update(const Actor&, uint32_t, const Update&) { recoveryStubRefuse(); }
-
-Disclosure versioningDisclosure(const Actor&, uint32_t, const std::optional<ProviderRetention>&) { recoveryStubRefuse(); }
-
-Status suspendVersioning(const Actor&, uint32_t, bool) { recoveryStubRefuse(); }
-
-CostReport costs(const Actor&, uint32_t) { recoveryStubRefuse(); }
-
 std::vector<RecoveryPoint> list(const Actor&, uint32_t, const ListQuery&) { recoveryStubRefuse(); }
 
 PointDetail inspect(const Actor&, const std::string&) { recoveryStubRefuse(); }

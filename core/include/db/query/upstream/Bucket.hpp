@@ -5,6 +5,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <ctime>
 #include <optional>
 #include <string>
 #include <vector>
@@ -35,6 +36,24 @@ enum class AdoptResult {
 struct AdoptOutcome {
     AdoptResult result = AdoptResult::Adopted;
     std::optional<BucketModel> bucket;   // the row as it is now (absent only when there was none and nothing was written)
+};
+
+// What Vaulthalla knows and decided about a bucket's provider versioning (upstream_bucket.versioning_* /
+// noncurrent_retention_*, migration 111). Versioning belongs to the bucket identity, never to a vault preference.
+struct BucketVersioning {
+    int64_t bucket_id = 0;
+    std::optional<std::string> status;                 // unversioned | enabled | suspended | unknown; nullopt: never read
+    std::optional<std::time_t> checked_at;             // last read of the provider's state
+    std::optional<std::time_t> enabled_at;             // when Vaulthalla turned it on, or first saw it on
+    std::optional<uint32_t> enabled_by;
+    bool enabled_by_vaulthalla = false;
+    std::optional<std::time_t> settles_at;             // writes are versioned for sure from then on (AWS: + 15 min)
+    std::optional<bool> mfa_delete;
+    std::optional<bool> object_lock;
+    std::string retention_mode = "unset";              // unset | days | indefinite (what Vaulthalla set)
+    std::optional<unsigned int> retention_days;
+    std::optional<std::time_t> retention_set_at;
+    std::optional<uint32_t> retention_set_by;
 };
 
 class Bucket {
@@ -109,6 +128,20 @@ public:
                                const std::string& reason);
     // nullopt when Vaulthalla knows nothing about the identity.
     static std::optional<BucketModel> unprotect(const storage::upstream::BucketIdentity& id);
+
+    // ---- provider versioning (file recovery) ----
+    [[nodiscard]] static std::optional<BucketVersioning> getVersioning(int64_t id);
+    // A read of the provider's state: status (unversioned|enabled|suspended|unknown), MFA delete and object lock as
+    // read (nullopt keeps what was recorded); checked_at = now.
+    static void recordVersioningCheck(int64_t id, const std::string& status, std::optional<bool> mfaDelete,
+                                      std::optional<bool> objectLock);
+    // Versioning is on: by Vaulthalla now (enabled_at = now, enabled_by), or found on (enabled_at = now only when it
+    // was never recorded, enabled_by_vaulthalla kept). settles_at only ever moves later (never shortens a window).
+    static void recordVersioningEnabled(int64_t id, std::optional<uint32_t> userId, bool byVaulthalla,
+                                        std::time_t settlesAt);
+    // The noncurrent retention Vaulthalla set: mode unset | days | indefinite (days only with "days").
+    static void recordRetention(int64_t id, const std::string& mode, std::optional<unsigned int> days,
+                                std::optional<uint32_t> userId);
 
     // creating/configuring rows untouched for longer than `olderThan` (crash recovery).
     [[nodiscard]] static std::vector<BucketModel> listStaleProvisioning(std::chrono::seconds olderThan);

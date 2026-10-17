@@ -12,6 +12,15 @@
 namespace vh::storage::upstream::lifecycle {
 
 inline constexpr const char* kOwnedRuleId = "vaulthalla-managed";
+// File recovery: once a bucket keeps versions, the remote index manifest (.vaulthalla/index-v1.json, republished on
+// every sync pass) piles up noncurrent versions. This second Vaulthalla rule expires them after a day. It is written
+// whole from its fields (never patched) and only ever while provider versioning is managed by Vaulthalla.
+inline constexpr const char* kManifestRuleId = "vaulthalla-manifest-versions";
+inline constexpr const char* kManifestRulePrefix = ".vaulthalla/";
+inline constexpr unsigned int kManifestNoncurrentDays = 1;
+
+// One of the rules Vaulthalla writes (kOwnedRuleId, kManifestRuleId).
+[[nodiscard]] bool isVaulthallaRule(const std::string& ruleId);
 
 // Patch semantics: absent = unchanged, 0 = remove that field, clear = drop our rule.
 struct OwnedRuleChange {
@@ -40,6 +49,12 @@ struct UnmodeledOwnedRule : std::runtime_error {
 // change that leaves a rule with no action, and UnmodeledOwnedRule (above).
 [[nodiscard]] MergeResult mergeOwnedRule(const std::vector<s3::provider::admin::LifecycleRule>& current,
                                          const OwnedRuleChange& change, bool allowNoncurrent);
+
+// Adds (or refreshes) the manifest-versions rule, or removes it (present = false). Every other rule, ours included, is
+// passed through unchanged. changed = false when the document already says exactly that. Throws std::invalid_argument
+// without allowNoncurrent (the provider has no versions).
+[[nodiscard]] MergeResult mergeManifestRule(const std::vector<s3::provider::admin::LifecycleRule>& current, bool present,
+                                            bool allowNoncurrent);
 
 // ---- noncurrent-version retention already on a bucket (ours and foreign) ---------------------------------------------
 

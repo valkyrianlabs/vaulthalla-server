@@ -1,4 +1,5 @@
 #include "storage/s3/Controller.hpp"
+#include "recovery/usage/Ledger.hpp"
 #include "log/Registry.hpp"
 
 #include <pugixml.hpp>
@@ -18,7 +19,10 @@ std::string Controller::initiateMultipartUpload(
 std::string Controller::initiateMultipartUpload(
     const std::filesystem::path& key,
     const RequestOptions& options) const {
-    recordRequest(RequestKind::Put);
+    {
+        const vh::recovery::usage::ScopedRequestTag tag(vh::recovery::usage::RequestTag::MultipartInitiate);
+        recordRequest(RequestKind::Put);
+    }
 
     CURL* curl = curl_easy_init();
     if (!curl) return "";
@@ -67,7 +71,10 @@ std::string Controller::initiateMultipartUpload(
 
 void Controller::uploadPart(const std::filesystem::path& key, const std::string& uploadId,
                              const int partNumber, const std::string& partData, std::string& etagOut) const {
-    recordRequest(RequestKind::Put);
+    {
+        const vh::recovery::usage::ScopedRequestTag tag(vh::recovery::usage::RequestTag::MultipartPart);
+        recordRequest(RequestKind::Put);
+    }
     recordUploadBytes(partData.size());
 
     CURL* curl = curl_easy_init();

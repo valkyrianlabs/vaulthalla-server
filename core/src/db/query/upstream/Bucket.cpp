@@ -236,4 +236,62 @@ std::vector<BucketModel> Bucket::listStaleProvisioning(const std::chrono::second
     });
 }
 
+// ---- provider versioning ------------------------------------------------------------------------------------------
+
+std::optional<BucketVersioning> Bucket::getVersioning(const int64_t id) {
+    return Transactions::exec("upstream::Bucket::getVersioning", [&](pqxx::work& txn) -> std::optional<BucketVersioning> {
+        const auto res = txn.exec(pqxx::prepped{"upstream_bucket_versioning_get"}, pqxx::params{id});
+        if (res.empty()) return std::nullopt;
+        const auto row = res.one_row_ref();
+        const auto epoch = [&](const char* col) -> std::optional<std::time_t> {
+            if (row[col].is_null()) return std::nullopt;
+            return static_cast<std::time_t>(row[col].as<int64_t>());
+        };
+        BucketVersioning v;
+        v.bucket_id = id;
+        if (!row["versioning_status"].is_null()) v.status = row["versioning_status"].as<std::string>();
+        v.checked_at = epoch("checked_at");
+        v.enabled_at = epoch("enabled_at");
+        if (!row["versioning_enabled_by"].is_null()) v.enabled_by = row["versioning_enabled_by"].as<uint32_t>();
+        v.enabled_by_vaulthalla = row["versioning_enabled_by_vaulthalla"].as<bool>();
+        v.settles_at = epoch("settles_at");
+        if (!row["versioning_mfa_delete"].is_null()) v.mfa_delete = row["versioning_mfa_delete"].as<bool>();
+        if (!row["object_lock_enabled"].is_null()) v.object_lock = row["object_lock_enabled"].as<bool>();
+        v.retention_mode = row["noncurrent_retention_mode"].as<std::string>();
+        if (!row["noncurrent_retention_days"].is_null())
+            v.retention_days = row["noncurrent_retention_days"].as<unsigned int>();
+        v.retention_set_at = epoch("retention_set_at");
+        if (!row["noncurrent_retention_set_by"].is_null())
+            v.retention_set_by = row["noncurrent_retention_set_by"].as<uint32_t>();
+        return v;
+    });
+}
+
+void Bucket::recordVersioningCheck(const int64_t id, const std::string& status, const std::optional<bool> mfaDelete,
+                                   const std::optional<bool> objectLock) {
+    Transactions::exec("upstream::Bucket::recordVersioningCheck", [&](pqxx::work& txn) {
+        txn.exec(pqxx::prepped{"upstream_bucket_versioning_check"}, pqxx::params{id, status, mfaDelete, objectLock});
+    });
+}
+
+void Bucket::recordVersioningEnabled(const int64_t id, const std::optional<uint32_t> userId, const bool byVaulthalla,
+                                     const std::time_t settlesAt) {
+    Transactions::exec("upstream::Bucket::recordVersioningEnabled", [&](pqxx::work& txn) {
+        txn.exec(pqxx::prepped{"upstream_bucket_versioning_enabled"},
+                 pqxx::params{id, userId, byVaulthalla, static_cast<double>(settlesAt)});
+    });
+}
+
+void Bucket::recordRetention(const int64_t id, const std::string& mode, const std::optional<unsigned int> days,
+                             const std::optional<uint32_t> userId) {
+    if (mode != "unset" && mode != "days" && mode != "indefinite")
+        throw std::invalid_argument("noncurrent retention mode must be unset, days or indefinite");
+    if ((mode == "days") != days.has_value())
+        throw std::invalid_argument("noncurrent retention days go with mode 'days' only");
+    Transactions::exec("upstream::Bucket::recordRetention", [&](pqxx::work& txn) {
+        txn.exec(pqxx::prepped{"upstream_bucket_retention_set"},
+                 pqxx::params{id, mode, days ? std::make_optional(static_cast<int>(*days)) : std::nullopt, userId});
+    });
+}
+
 }

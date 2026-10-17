@@ -298,6 +298,67 @@ Implementation (`recovery/local/Backlog.*`, `storage/CloudEngineBacklog.cpp`, `r
 - Alerts: `cost_alert_monthly` exceeded → `operator_notification` (type `recovery_versioning_cost`). Alerts never
   block writes or disable versioning.
 
+### Policy, usage and costs as built (`recovery/{provider/Policy,usage,cost}`, `ops/RecoveryPolicy.cpp`)
+
+- **Who.** status: vault sync.config.view (refresh: + admin.upstream.view + key View). costs and versioningDisclosure:
+  sync.config.view + stats.vault.pricing (`ops::stats::canViewVault`); the disclosure's one inspect needs no key bit (the
+  enable re-checks everything and the token names the person). update: sync.config.edit; a provider change (entering
+  provider_versioning or a retention) + admin.upstream.configure + key Consume; adoption + admin.upstream.provision
+  (through `ops::upstream::adoptPreflight`). suspend: like a provider change.
+- **Order of a provider change** (nothing is sent before the first five): vault/bucket → configure + key Consume →
+  provider capability (identity `cloudflare-r2` or `supportsVersioning()==false` → Invalid, R2 text
+  `kR2VersioningUnsupported`) → admin-enabled key → protection (Denied + audit `refused`) → unmanaged without
+  `accept_adoption` → `upstream_adoption` → retention required (no hidden default) → one GetBucketVersioning → token →
+  unpriced → shortening → adoption (`adoptPreflight`, other bindings / another vault's manifest = Conflict, then
+  `ops::upstream::detail::adoptBoundBucket`, audited `bucket.adopt`) → PutBucketVersioning Enabled only when not
+  Enabled (`policy::putAndConfirm`: ≤ 6 reads, 250 ms doubling; unconfirmed = warning, still recorded enabled since the
+  PUT succeeded) → `versioning_settles_at = now + 15 min` (only ever moved later; also for a bucket found Enabled,
+  `enabled_by_vaulthalla` false) → retention → `Policy::upsert` → `recovery::local::invalidatePolicy`. Audit actions:
+  `recovery.disclosure`, `recovery.versioning.enable`, `recovery.retention.set`, `recovery.versioning.suspend`.
+- **Retention on the bucket.** The owned rule `vaulthalla-managed` gets `NoncurrentDays` (indefinite: removed, the
+  rule's other fields kept) plus `vaulthalla-manifest-versions` (prefix `.vaulthalla/`, NoncurrentDays 1, rebuilt from
+  fields, `lifecycle::mergeManifestRule`). GET-merge-PUT-GET; every non-Vaulthalla rule id must come back, ours must say
+  what was asked. "Current" history for shortening: the recorded retention, else indefinite when the bucket already
+  versions. Status/disclosure list foreign NoncurrentVersionExpiration rules (`policy::describeRetention`) and the
+  effective (shortest whole-vault) days. Known gap: `ops::upstream::detach` clears only `vaulthalla-managed`.
+- **Disclosure token.** `v1.<expires>.<hex HMAC-SHA256>` under a per-process random key over (vault, provider,
+  account, bucket, retention or `unset`, actor id, `cost::pricingDigest`, expiry), length-prefixed fields; 10 minutes;
+  stateless (a restart invalidates tokens). The pricing digest covers currency, catalog version, provider/region/class,
+  the unpriced reason and the provider-rule assumptions (rates, minimums) — never usage, which moves every minute.
+- **Usage ledger.** `usage::noteRequest/noteDownloadedBytes/noteUploadedBytes` from `s3::Controller::recordRequest` /
+  `recordUploadBytes` of controllers whose `setUsageVault` was called (`CloudEngine` constructors and
+  `setS3ControllerForTesting`). Thread-local `usage::ScopedRequestTag`: multipart.cpp tags CreateMultipartUpload
+  (`MultipartInitiate`) and UploadPart (`MultipartPart`); version.cpp tags ListObjectVersions (`VersionList`) and
+  `copyObjectVersion` (`VersionRestore`); stream.cpp tags a GET with `version_id` (`VersionRestore`, bytes too).
+  `noteUpstreamWrite` reads the key's `remote_object_index` row (one SELECT): absent = first put; present = overwrite
+  of its `size_bytes` (skipped when the row's ETag is already this write's); delete = a delete marker (+ the row's
+  bytes); the manifest key is ignored. Flushed by `usage::tick` from `VaultRetentionService`'s 30 s loop (every 60 s;
+  cost alerts at most hourly) and by `runtime::Manager::stopAll` after every service stopped. A failed flush keeps its
+  deltas (capped at 20 000 (vault, day) keys); rows of a deleted vault are dropped. Days are UTC strings computed in C++
+  (`usage::utcDay`), never `CURRENT_DATE`.
+- **Cost formulas** (`cost::estimate`, pure; `cost::gather` builds the inputs; `cpp_dec_float_50`, money 8 decimals).
+  r = first-tier storage rate per byte-month (gb_month / 1e9, gib, tb, tib). Over N measured days (≤ 30, rows of
+  `vault_upstream_usage_daily`): g = (overwritten + deleted bytes)/N + rewrites/N × avg current object size (rewrites =
+  copy − version-restore requests: metadata rewrites keep full noncurrent copies); v = (overwrite + deleted objects +
+  rewrites)/N; m = deleted objects/N; P = max(0, put − first_put − overwrite − multipart_parts − multipart_uploads)/N
+  (manifest publishes). N = 0: illustrative g = current bytes × {1, 5, 20} %/month ÷ (365/12) (low/expected/high), P = 24.
+  1 ≤ N < 7: low/high from the smallest/largest day (one day: ½× / 2×). D = max(R, D_min) billed days (R = chosen
+  retention, capped by a shorter foreign whole-vault rule; indefinite = 365-day horizon). Monthly at elapsed t days =
+  r × [max(g, v × S_min) × min(t, D) + m × t × keyBytes + P × max(M, S_min) × min(t, max(2, D_min))], M = max(1024,
+  256 × current objects). Steady state t = max(R, D_min, 2) (indefinite 365); accumulation t = 365k/12, k = 1..12.
+  Active: month-to-date = byteHours/730 × r; projected = (byteHours + B × H + g × H²/48)/730 × r (H = hours left in the
+  UTC month, B = known noncurrent bytes; no growth term when suspended). Recovery per GB = egress + retrieval + GET +
+  PUT; per object = COPY + HEAD (+ IA retrieval of an average version). Phase `active` = bucket Enabled and mode
+  provider_versioning. Unpriced (no profile, pricing disabled, versioning block unsupported, unknown billing rule, no
+  versioning block on a non-AWS profile) → every money field null. Catalog: one shared `PriceCatalogStore`
+  (`cost::lookupProfile`), refreshed only as the configuration allows.
+- **Alerts.** `cost::noteAlert`: one `operator_notification` per vault per UTC day (`run_uuid` =
+  `recovery_versioning_cost:<vault>:<day>`, refreshed in place, expires after 2 days), when `projected_monthly` exceeds
+  the threshold; evaluated by costs(), the disclosure and the hourly tick (`evaluateAlerts`: vaults with a threshold).
+- Tests: `RecoveryCost*` (golden decimals from the signed fixture `core/test-assets/pricing/versioning`, all 24
+  profiles because the signed manifest lists them), `RecoveryDisclosureToken*`, `RecoveryManifestRule*`,
+  `RecoveryUsageLedger*` (DB-free); `RecoveryPolicyTest*`, `RecoveryUsageDbTest*` (DB).
+
 ## Surfaces (CLI, ws)
 
 Both call `ops::recovery` and nothing else; payloads and `--json` use `ops/RecoveryJson.hpp` (the CLI builds the ws
