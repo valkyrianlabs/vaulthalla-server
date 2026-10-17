@@ -470,6 +470,98 @@ TEST_F(RecoveryProviderTest, AVersionVaulthallaDidNotWriteNeedsAnAcceptance) {
     EXPECT_EQ(readVia(f, "/foreign/a.txt"), "ours");
 }
 
+// Anyone who can write to the bucket can add a version without Vaulthalla's metadata. In a vault that encrypts
+// upstream such a version is not this vault's content (the sync engine's rule): even an accepted unverified restore
+// refuses it, unless the vault's event subscription imports foreign objects.
+TEST_F(RecoveryProviderTest, APlaintextVersionInAnEncryptingVaultIsRefusedUnlessForeignObjectsAreImported) {
+    using namespace test_support::upstream_events;
+    auto f = versionedVault();
+    const auto rows = generations(f, "/inject/a.txt", {"ours"});
+    const auto bare = f.bucket->seed("inject/a.txt", std::string("injected without metadata"));
+    const auto labelled = f.bucket->seed("inject/a.txt", std::string("injected, labelled plaintext"),
+                                         {{"vh-encrypted", "false"}});
+    // Our content is current again on top (same bytes, same ETag): the local file and the index stay in agreement.
+    const auto src = *f.bucket->version("inject/a.txt", rows[0].version_id);
+    (void)f.bucket->seed("inject/a.txt", src.body, src.meta);
+    ASSERT_TRUE(rp::versions::refresh(f.engine, "inject/").complete);
+
+    for (const auto& id : {bare, labelled}) {
+        const auto observed = *rowFor(f, "/inject/a.txt", id);
+        EXPECT_EQ(observed.origin, "observed");
+        const auto item = rp::planFor(f.engine, observed);
+        f.bucket->resetCounters();
+        const auto out = rp::restore(f.engine, item, item.destination_source_id, restoreOptions(true));
+        EXPECT_EQ(out.outcome, "unavailable") << id;
+        EXPECT_NE(out.error.value_or("").find("plaintext"), std::string::npos) << out.error.value_or("");
+        EXPECT_FALSE(out.provider_changed);
+        EXPECT_EQ(f.bucket->counters().copy + f.bucket->counters().put + f.bucket->counters().body_gets, 0u);
+        EXPECT_EQ(readVia(f, "/inject/a.txt"), "ours");
+    }
+
+    // The vault's active subscription imports foreign objects: then such a version is content (sealed on the way in).
+    installFakeProvider();
+    storage::upstream::guard::clearForTesting();
+    sync::events::subscriptions::invalidateCache();
+    const auto s3 = std::static_pointer_cast<vault::model::S3Vault>(f.vault);
+    runtime::Deps::get().apiKeyManager->setAdmin(s3->api_key_id, true, providerState()->account, "{}", std::time(nullptr));
+    const auto status = sync::events::subscriptions::enable(
+        {.vault_id = f.vault->id, .prefix = "", .foreign_objects = "import", .baseline_required = false});
+    ASSERT_EQ(status.state, "active");
+    sync::events::subscriptions::invalidateCache();
+    ASSERT_TRUE(sync::events::subscriptions::importsForeignObjects(f.vault->id));
+
+    const auto observed = *rowFor(f, "/inject/a.txt", bare);
+    const auto item = rp::planFor(f.engine, observed);
+    const auto out = rp::restore(f.engine, item, item.destination_source_id, restoreOptions(true));
+    ASSERT_EQ(out.outcome, "restored") << out.error.value_or("");
+    EXPECT_EQ(out.method, "provider_transfer");
+    EXPECT_EQ(readVia(f, "/inject/a.txt"), "injected without metadata");
+    const auto local = db::query::fs::File::getFileByPath(f.vault->id, "/inject/a.txt");
+    EXPECT_FALSE(local->encryption_iv.empty()) << "sealed locally";
+}
+
+// A version Vaulthalla wrote is restored only while the provider's copy still matches the row recorded from our own
+// write (IV, key version, size): anything else is unavailable, never restored silently.
+TEST_F(RecoveryProviderTest, AVersionThatDiffersFromWhatVaulthallaWroteIsUnavailable) {
+    auto f = versionedVault();
+    const auto rows = generations(f, "/own/a.txt", {"version one", "version two"});
+    ASSERT_EQ(rows[0].origin, "vaulthalla");
+    const auto setColumn = [&](const std::string& assignment) {
+        db::Transactions::exec("RecoveryProviderTest::tamper", [&](pqxx::work& txn) {
+            txn.exec("UPDATE upstream_object_version SET " + assignment + " WHERE id = $1", pqxx::params{rows[0].id});
+        });
+    };
+    // Planned while the row is intact; the restore re-reads it.
+    const auto item = rp::planFor(f.engine, *rowFor(f, "/own/a.txt", rows[0].version_id));
+    ASSERT_EQ(item.method, "provider_copy");
+    const auto attempt = [&](const std::string& what) {
+        f.bucket->resetCounters();
+        const auto out = rp::restore(f.engine, item, item.destination_source_id, restoreOptions());
+        EXPECT_EQ(out.outcome, "unavailable") << what;
+        EXPECT_NE(out.error.value_or("").find("differs from what Vaulthalla wrote"), std::string::npos)
+            << what << ": " << out.error.value_or("");
+        EXPECT_EQ(f.bucket->counters().copy + f.bucket->counters().put + f.bucket->counters().body_gets, 0u) << what;
+        EXPECT_EQ(readVia(f, "/own/a.txt"), "version two") << what;
+    };
+
+    setColumn("encryption_iv = 'AAAAAAAAAAAAAAAA'");
+    attempt("another IV");
+    setColumn("encryption_iv = " + db::Transactions::exec("RecoveryProviderTest::quote", [&](pqxx::work& txn) {
+                  return txn.quote(*rows[0].encryption_iv);
+              }));
+    setColumn("key_version = key_version + 7");
+    attempt("another key version");
+    setColumn("key_version = key_version - 7");
+    setColumn("size_bytes = size_bytes + 1");
+    attempt("another size");
+    setColumn("size_bytes = size_bytes - 1");
+
+    // As recorded: restored.
+    const auto out = restoreVersion(f, *rowFor(f, "/own/a.txt", rows[0].version_id));
+    ASSERT_EQ(out.outcome, "restored") << out.error.value_or("");
+    EXPECT_EQ(readVia(f, "/own/a.txt"), "version one");
+}
+
 TEST_F(RecoveryProviderTest, RestoreWorksAfterTheEnginesAreRebuilt) {
     auto f = versionedVault();
     const auto rows = generations(f, "/restart/a.txt", {"one", "two", "three"});

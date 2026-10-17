@@ -221,7 +221,12 @@ bucket: choosing `off`/`local_snapshots` does not suspend a bucket that is versi
   deletes upstream → delete marker).
 - **Restore** (`restore(engine, item, expectedSourceId, {accept_unverified, user_id, hooks})`): order is CAS precheck
   (stale → `conflict`, already that generation → `skipped`) → origin check (`UnverifiedVersion`) → pass lease
-  (`PassBusy`) → price preflight (`recovery_restore`, worst case) → HEAD `?versionId` → copy or transfer. Every
+  (`PassBusy`) → price preflight (`recovery_restore`, worst case) → HEAD `?versionId` → verification → copy or
+  transfer. Verification: an origin `vaulthalla` row must match the HEAD (IV + key version when the row is sealed,
+  object size) or the item is `unavailable` ("the bucket's copy differs from what Vaulthalla wrote"); a plaintext
+  version (no `vh-encrypted`, or `false`) in an `encrypt_upstream` vault is `unavailable` unless it is our own recorded
+  plaintext write or the vault's active subscription has `foreign_objects=import` (`subscriptions::importsForeignObjects`,
+  the sync engine's rule) — `accept_unverified` does not override it (a bucket writer could inject content). Every
   request runs under the vault's request budget plus a per-step cap (HEAD 1, COPY 1, GET 1 + object bytes).
   Copy: `CloudEngine::copyObjectVersionAsOwnWrite` (intent + hook with the restored generation); an earlier attempt's
   copy that is already current is reused, never copied twice. Then `adoptIndexOnly` (files row = version metadata,

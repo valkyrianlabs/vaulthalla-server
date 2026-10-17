@@ -26,6 +26,7 @@
 #include "storage/s3/Controller.hpp"
 #include "storage/s3/pricing/PriceEstimate.hpp"
 #include "sync/Controller.hpp"
+#include "sync/events/Subscriptions.hpp"
 #include "sync/model/Action.hpp"
 #include "sync/model/Baseline.hpp"
 #include "sync/model/RemotePolicy.hpp"
@@ -134,6 +135,23 @@ VersionMeta metaFromHead(const storage::s3::ObjectVersionHead& head) {
         m.plaintext_size = m.object_size;
     }
     return m;
+}
+
+// A version Vaulthalla wrote (origin 'vaulthalla': recorded from our own PUT/COPY response) must still carry what we
+// recorded: IV and key version when we sealed it, and the object size. What differs is described ("" = it matches).
+// A field the row doesn't hold is not compared. (A row recorded as plaintext whose HEAD claims a seal is not refused
+// here: sealed bytes only restore after they authenticate under this vault's key.)
+std::string ownWriteMismatch(const db::query::recovery::ObjectVersionRow& row, const VersionMeta& meta) {
+    const bool rowSealed = row.encrypted.value_or(false) && row.encryption_iv && !row.encryption_iv->empty();
+    if (rowSealed && !meta.encrypted) return "it is no longer sealed";
+    if (rowSealed) {
+        if (*row.encryption_iv != meta.iv) return "another IV";
+        if (row.key_version && *row.key_version != meta.key_version)
+            return "key version " + std::to_string(meta.key_version) + " instead of " + std::to_string(*row.key_version);
+    }
+    if (row.size_bytes && *row.size_bytes != meta.object_size)
+        return std::to_string(meta.object_size) + " bytes instead of " + std::to_string(*row.size_bytes);
+    return {};
 }
 
 std::filesystem::path backingOf(const storage::CloudEngine& engine, const fs::model::File& f) {
@@ -793,6 +811,29 @@ RestoreOutcome restore(const std::shared_ptr<storage::CloudEngine>& engine, cons
 
         const auto s3vault = std::static_pointer_cast<vault::model::S3Vault>(engine->vault);
         const bool encryptUpstream = s3vault->encrypt_upstream;
+
+        // Our own version must still be what we wrote; a difference is never restored silently.
+        const bool ownWrite = row->origin == "vaulthalla";
+        if (ownWrite) {
+            if (const auto why = d::ownWriteMismatch(*row, meta); !why.empty()) {
+                log::Registry::cloud()->warn("[Recovery] Vault {}: version {} of '{}' differs from what Vaulthalla wrote "
+                                             "({}); not restored", vaultId, row->version_id, srcKey, why);
+                return result("unavailable", "the bucket's copy differs from what Vaulthalla wrote (" + why + ")");
+            }
+        }
+        // Plaintext in a vault that encrypts upstream: anyone who can write to the bucket could have put it there, and
+        // restoring would seal it as this vault's content. Only our own plaintext write (recorded as such and matching,
+        // e.g. from before the vault encrypted upstream) or an event subscription that imports foreign objects
+        // (the sync engine's rule) makes it content.
+        if (!meta.encrypted && encryptUpstream && !ownWrite &&
+            !vh::sync::events::subscriptions::importsForeignObjects(vaultId)) {
+            log::Registry::cloud()->warn("[Recovery] Vault {}: version {} of '{}' is plaintext (no Vaulthalla encryption "
+                                         "metadata) in a vault that encrypts upstream; not restored", vaultId,
+                                         row->version_id, srcKey);
+            return result("unavailable", "the version is plaintext without Vaulthalla's encryption metadata, and this "
+                                         "vault encrypts upstream: it can't be verified as this vault's content (an "
+                                         "event subscription with foreign_objects=import accepts such objects)");
+        }
         const auto currentKeyVersion = engine->encryptionManager->get_key_version();
         const bool copyable = destKey == srcKey && meta.object_size <= s3::Controller::MAX_SINGLE_COPY_BYTES &&
                               ((meta.encrypted && encryptUpstream && meta.key_version == currentKeyVersion) ||

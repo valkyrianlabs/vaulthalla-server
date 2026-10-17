@@ -36,6 +36,9 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
 - Backing files are never written in place (new files are created exclusively or replaced by rename; contract test).
 - Re-sealing a retained generation wipes the decrypted (still unauthenticated) plaintext on every path, and unsealed
   retired keys leave memory once idle on a 30 s timer instead of waiting for the next recovery read.
+- Provider restore verifies what it restores: a plaintext version in a vault that encrypts upstream is refused (even
+  when unverified versions are accepted) unless the vault's event subscription imports foreign objects, and a version
+  Vaulthalla wrote must still match its recorded IV, key version and size.
 
 ## Fixes
 
