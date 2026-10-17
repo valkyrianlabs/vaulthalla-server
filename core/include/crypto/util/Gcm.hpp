@@ -62,6 +62,25 @@ private:
     bool finished_{false};
 };
 
+// Incremental AES-256-GCM decryption (OpenSSL EVP). The plaintext update() releases is NOT authenticated until
+// finish() returns true: callers keep it from anything durable or visible until then (and wipe it on failure).
+class GcmStreamDecryptor {
+public:
+    GcmStreamDecryptor(GcmKey key, GcmIv iv, std::span<const uint8_t> aad = {});
+    ~GcmStreamDecryptor();
+    GcmStreamDecryptor(const GcmStreamDecryptor&) = delete;
+    GcmStreamDecryptor& operator=(const GcmStreamDecryptor&) = delete;
+
+    // out.size() must be >= ciphertext.size().
+    void update(std::span<const uint8_t> ciphertext, std::span<uint8_t> out);
+    [[nodiscard]] bool finish(std::span<const uint8_t, AES_TAG_SIZE> tag);
+
+private:
+    struct Ctx;
+    std::unique_ptr<Ctx> ctx_;
+    bool finished_{false};
+};
+
 // One-pass authenticated decryption of an in-memory message: writes body.size() plaintext bytes to out and
 // returns true only if the tag matches; on mismatch the output is wiped and false is returned.
 [[nodiscard]] bool gcmDecrypt(GcmKey key, GcmIv iv, std::span<const uint8_t> body,
