@@ -13,6 +13,7 @@
 #include "rbac/permission/admin/Upstream.hpp"
 #include "rbac/permission/admin/keys/API.hpp"
 #include "rbac/resolver/admin/all.hpp"
+#include "recovery/Model.hpp"
 #include "runtime/Deps.hpp"
 #include "storage/s3/provider/admin/Admin.hpp"
 #include "storage/upstream/Cleanup.hpp"
@@ -600,10 +601,40 @@ Inspection setLifecycle(const Actor& actor, const KeyRef& ref, const std::string
     if (!row || row->ownership == bmodel::Ownership::Unmanaged)
         throw Invalid("Vaulthalla manages lifecycle rules only on buckets it created or adopted; bucket '" + bucket +
                       "' is unmanaged");
+    // File recovery keeps its noncurrent retention in this same owned rule (NoncurrentDays) and records it on the
+    // bucket. A noncurrent change here is that retention: shortening it needs the same acceptance (measured against
+    // what recovery recorded, whatever the rule says now), and the record follows the write.
+    const auto recorded = BucketQuery::getVersioning(row->id);
+    const bool recoveryRetention = recorded && recorded->retention_mode != "unset";
+    std::optional<vh::recovery::ProviderRetention> retentionTarget;
+    if (recoveryRetention && (patch.clear || patch.expire_noncurrent_days)) {
+        retentionTarget = patch.clear || *patch.expire_noncurrent_days == 0
+            ? vh::recovery::ProviderRetention{.indefinite = true, .days = 0}
+            : vh::recovery::ProviderRetention{.indefinite = false, .days = *patch.expire_noncurrent_days};
+        const bool fromIndefinite = recorded->retention_mode == "indefinite" || !recorded->retention_days;
+        const bool shortens = !retentionTarget->indefinite &&
+                              (fromIndefinite || retentionTarget->days < *recorded->retention_days);
+        if (shortens && !patch.accept_destructive)
+            throw NeedsConfirmation(DESTRUCTIVE_LIFECYCLE,
+                "Bucket '" + bucket + "' keeps the vault's recovery history (noncurrent versions) for " +
+                (fromIndefinite ? std::string("as long as it exists") : std::to_string(*recorded->retention_days) + " days") +
+                ". Expiring noncurrent versions after " + std::to_string(retentionTarget->days) + " days makes the "
+                "provider permanently delete older versions sooner, including history that exists now. Accept to apply it.");
+    }
+    if (recoveryRetention && recorded->retention_mode == "days" && patch.prefix && !patch.prefix->empty() && !patch.clear)
+        throw Invalid("bucket '" + bucket + "' keeps the vault's recovery retention in Vaulthalla's lifecycle rule; "
+                      "narrowing its prefix would leave part of the vault without it. Change the retention with "
+                      "vh vault recovery set instead");
+
     auto client = adminClient(key);
     const bool written = mapped([&] { return applyLifecycle(*client, *key, bucket, patch); });
+    if (retentionTarget)
+        BucketQuery::recordRetention(row->id, retentionTarget->indefinite ? "indefinite" : "days",
+                                     retentionTarget->indefinite ? std::nullopt : std::make_optional(retentionTarget->days),
+                                     actor->id);
     auditRecord(actor, "lifecycle.set", id, key->id, row->vault_id, bmodel::AuditOutcome::Ok,
-                {{"patch", patchJson(patch)}, {"written", written}});
+                {{"patch", patchJson(patch)}, {"written", written},
+                 {"recovery_retention", retentionTarget ? nlohmann::json(retentionTarget->str()) : nlohmann::json(nullptr)}});
     Inspection out;
     out.config = mapped([&] { return client->inspect(bucket); });
     out.bucket = rowFor(id, out.config.region);

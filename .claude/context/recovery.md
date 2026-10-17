@@ -323,7 +323,9 @@ Implementation (`recovery/local/Backlog.*`, `storage/CloudEngineBacklog.cpp`, `r
   what was asked. "Current" history for shortening: the recorded retention, else indefinite when the bucket already
   versions. Status/disclosure list foreign NoncurrentVersionExpiration rules (`policy::describeRetention`) and the
   effective (shortest whole-vault) days. `ops::upstream::detach` removes every `vaulthalla-*` rule (owned + manifest-versions; foreign rules re-verified) and resets
-  the recorded retention to `unset`.
+  the recorded retention to `unset`. `vh upstream lifecycle --expire-noncurrent-days` on a bucket with a recorded
+  retention IS that retention: shortening it (vs. the recorded value) needs `accept_destructive`, `0`/`--clear` record
+  `indefinite`, N records `days N`, and a non-empty prefix on a `days` retention is refused (Invalid).
 - **Disclosure token.** `v1.<expires>.<hex HMAC-SHA256>` under a per-process random key over (vault, provider,
   account, bucket, retention or `unset`, actor id, `cost::pricingDigest`, expiry), length-prefixed fields; 10 minutes;
   stateless (a restart invalidates tokens). The pricing digest covers currency, catalog version, provider/region/class,
