@@ -174,6 +174,13 @@ bucket: choosing `off`/`local_snapshots` does not suspend a bucket that is versi
   current keys only → delete markers); mutate protected/unmanaged buckets; expose versions through the S3 gateway.
 - Shortening retention (indefinite→N, N→M<N) needs `accept_retention_shortening` from every caller. Suspension is
   its own explicit, confirmed op and deletes nothing.
+- Local versioning limits that delete retained versions sooner need the same acceptance (`RETENTION_SHORTEN`,
+  `polLocalShortening`): a limit added where none applied (or turning versioning back on, since retention only runs
+  while it is on, so limits apply to everything kept meanwhile) or lowered, and only when the vault has local
+  versions. The message counts what the next retention run deletes now (versions + plaintext bytes; one
+  `listPrunable` per side, minus what the previous limits delete anyway). Turning local versioning off deletes nothing
+  and asks nothing. With a provider change in the same update, the provider's shortening question carries this text
+  too (asked before anything is sent), so one acceptance never covers an unseen consequence.
 - Version index `upstream_object_version`: rows from our own PUT/COPY responses (`x-amz-version-id`, origin
   `vaulthalla`, with IV/key version/hash/sizes) and from on-demand `ListObjectVersions` for a path (metadata only, no
   bodies, request-budgeted; origin `observed`). `became_noncurrent_at` when superseded; `gone_at` when no longer listed.
@@ -321,8 +328,11 @@ Implementation (`recovery/local/Backlog.*`, `storage/CloudEngineBacklog.cpp`, `r
   `ops::upstream::detail::adoptBoundBucket`, audited `bucket.adopt`) → PutBucketVersioning Enabled only when not
   Enabled (`policy::putAndConfirm`: ≤ 6 reads, 250 ms doubling; unconfirmed = warning, still recorded enabled since the
   PUT succeeded) → `versioning_settles_at = now + 15 min` (only ever moved later; also for a bucket found Enabled,
-  `enabled_by_vaulthalla` false) → retention → `Policy::upsert` → `recovery::local::invalidatePolicy`. Audit actions:
-  `recovery.disclosure`, `recovery.versioning.enable`, `recovery.retention.set`, `recovery.versioning.suspend`.
+  `enabled_by_vaulthalla` false) → retention → `Policy::upsert` → `recovery::local::invalidatePolicy`. Audit actions
+  (`upstream_audit`, bucket-affecting): `recovery.disclosure`, `recovery.versioning.enable`, `recovery.retention.set`,
+  `recovery.versioning.suspend`. Every `update` also logs its changes field by field to the audit log
+  (`log::Registry::audit()`, like the other ops): mode, snapshot quota, cost alert, local versioning on/off and its
+  limits, provider retention; `warn` when a local retention cut was accepted.
 - **Retention on the bucket.** The owned rule `vaulthalla-managed` gets `NoncurrentDays` (indefinite: removed, the
   rule's other fields kept) plus `vaulthalla-manifest-versions` (prefix `.vaulthalla/`, NoncurrentDays 1, rebuilt from
   fields, `lifecycle::mergeManifestRule`). GET-merge-PUT-GET; every non-Vaulthalla rule id must come back, ours must say

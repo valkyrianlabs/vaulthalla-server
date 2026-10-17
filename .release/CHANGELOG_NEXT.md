@@ -39,6 +39,9 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
 - Provider restore verifies what it restores: a plaintext version in a vault that encrypts upstream is refused (even
   when unverified versions are accepted) unless the vault's event subscription imports foreign objects, and a version
   Vaulthalla wrote must still match its recorded IV, key version and size.
+- Local versioning limits that delete retained versions sooner (a new or lower keep-last / max-age / quota, or turning
+  versioning back on with limits) need the same explicit acceptance as a shorter provider retention, with a count of
+  what the next retention run deletes; every recovery settings change is written to the audit log.
 
 ## Fixes
 
