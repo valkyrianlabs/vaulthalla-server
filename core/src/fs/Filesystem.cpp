@@ -828,8 +828,14 @@ void Filesystem::remove(const std::filesystem::path& path, const unsigned int us
             purgeDerived(file->id);
         }
         // Trashing files never removes folders (#168): the directory, its subfolders and any symlinks are still
-        // there. Delete what is left, off its ancestors' totals.
+        // there. Delete what is left, off its ancestors' totals. Its subfolders and symlinks leave the cache too: a
+        // stale cached subfolder answered lookups after the delete and became the (deleted) parent of anything
+        // created again at its path.
+        const auto remaining = engine ? db::query::fs::Entry::listSubtree(entry->id)
+                                      : std::vector<std::shared_ptr<Entry>>{};
         db::query::fs::Directory::deleteDirectoryTree(entry->id);
+        for (const auto& e : remaining)
+            if (e) cache->evictPath(engine->vaultPathToFusePath(e->path));
         cache->evictPath(path);
     }
     else if (entry->isSymlink()) {
@@ -919,7 +925,16 @@ std::shared_ptr<File> Filesystem::createFile(const NewFileContext& ctx) {
         ec.clear();
         std::filesystem::remove(sidecar, ec);  // a leftover is settled by startup recovery; we hold the file's lock
         try {
-            if (ctx.source_path) {
+            if (ctx.sealed) {
+                const auto sealed = ctx.sealed(sidecar);
+                std::filesystem::permissions(sidecar, static_cast<std::filesystem::perms>(mode),
+                                             std::filesystem::perm_options::replace);
+                fsyncFile(sidecar);
+                staged->encryption_iv = sealed.encryption_iv;
+                staged->encrypted_with_key_version = sealed.key_version;
+                staged->size_bytes = sealed.plaintext_size;
+                staged->mime_type = sealed.mime_type ? *sealed.mime_type : inferMimeTypeFromPath(ctx.path);
+            } else if (ctx.source_path) {
                 const auto plaintextSize = std::filesystem::file_size(*ctx.source_path);
                 if (plaintextSize == 0) {
                     writeFileExclusive(sidecar, {}, mode);
@@ -1019,7 +1034,15 @@ std::shared_ptr<File> Filesystem::createFile(const NewFileContext& ctx) {
     // A new file at a fresh alias. Created exclusively or replaced by rename, never written in place: a retained
     // generation may share an existing backing inode (recovery.md, "Local storage").
     std::filesystem::create_directories(f->backing_path.parent_path());
-    if (ctx.source_path && f->size_bytes > 0) {
+    if (ctx.sealed) {
+        replaceFileAtomic(f->backing_path, [&](const std::filesystem::path& temp) {
+            const auto sealed = ctx.sealed(temp);
+            f->encryption_iv = sealed.encryption_iv;
+            f->encrypted_with_key_version = sealed.key_version;
+            f->size_bytes = sealed.plaintext_size;
+            if (sealed.mime_type) f->mime_type = sealed.mime_type;
+        });
+    } else if (ctx.source_path && f->size_bytes > 0) {
         replaceFileAtomic(f->backing_path, [&](const std::filesystem::path& temp) {
             engine->encryptionManager->encryptFileToFile(*ctx.source_path, temp, f);
         });

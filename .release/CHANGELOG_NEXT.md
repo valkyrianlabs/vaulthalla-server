@@ -27,3 +27,5 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   (zero-copy link), pruned by keep-last / max-age / quota; in upstream vaults unsent versions are replayed in order
   before the next upload when the bucket keeps history. Backing files are now never written in place (new files are
   created exclusively or replaced by rename; contract-tested).
+- Deleting a folder (web console, ws `fs.entry.delete`) now also drops its subfolders and symlinks from the
+  filesystem metadata cache; they stayed cached, so recreating a path under the deleted folder failed.
