@@ -499,7 +499,9 @@ TEST_F(RecoveryVersionsTest, AnOutageQueuesVersionsInOrderAndTheReplayKeepsIt) {
 
     auto kept = versionsOf(c.engine, "/log.txt");
     ASSERT_EQ(kept.size(), 3u);
-    EXPECT_EQ(kept[0].upstream_state, rq::UpstreamState::Skipped) << "v1 was already upstream (the last agreement)";
+    // The provider version index learned v1 from its own PUT (recovery::provider::noteOwnWrite): recognized by IV.
+    EXPECT_EQ(kept[0].upstream_state, rq::UpstreamState::Sent) << "v1 was already upstream";
+    EXPECT_TRUE(kept[0].upstream_version_id) << "pointing at the provider's version of v1";
     EXPECT_EQ(kept[1].upstream_state, rq::UpstreamState::Pending);
     EXPECT_EQ(kept[1].upstream_key, "log.txt");
     EXPECT_EQ(backlog::summary(c.engine->vault->id).pending_versions, 2u);
@@ -598,9 +600,10 @@ TEST_F(RecoveryVersionsTest, SmartCacheReleasesBodiesTheProviderHoldsAndKeepsThe
     EXPECT_EQ(kept[1].upstream_state, rq::UpstreamState::Sent);
     EXPECT_FALSE(kept[1].blob_id) << "the provider holds c2: no local duplicate";
     EXPECT_TRUE(kept[1].upstream_version_id) << "the row stays, as a provider-held version";
-    EXPECT_EQ(kept[0].upstream_state, rq::UpstreamState::Skipped) << "c1 was already upstream";
-    EXPECT_TRUE(kept[0].blob_id) << "not sent by the replay: no version id to point at, kept";
-    EXPECT_EQ(blobsOf(c.engine->vault->id), 1u);
+    EXPECT_EQ(kept[0].upstream_state, rq::UpstreamState::Sent) << "c1 was already upstream (indexed by its own PUT)";
+    EXPECT_TRUE(kept[0].upstream_version_id);
+    EXPECT_FALSE(kept[0].blob_id) << "the provider holds c1 too: no local duplicate";
+    EXPECT_EQ(blobsOf(c.engine->vault->id), 0u);
     EXPECT_EQ(history(c, "/c.txt"), (std::vector<std::string>{"c1", "c2", "c3"}));
 }
 

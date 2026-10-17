@@ -430,8 +430,13 @@ vh::recovery::LocalVersioningPatch localVersioningPatchFromJson(const nlohmann::
     rjRequireObject(j, "local_versioning");
     vh::recovery::LocalVersioningPatch p;
     p.enabled = rjBool(j, "enabled");
+    // Unlike the other readers, null is meaningful here: it clears a limit (absent leaves it unchanged).
+    const auto present = [&](const char* name) -> const nlohmann::json* {
+        const auto it = j.find(name);
+        return it == j.end() ? nullptr : &*it;
+    };
     const auto limit = [&](const char* name, const unsigned int max) -> std::optional<unsigned int> {
-        const auto* m = rjMember(j, name);
+        const auto* m = present(name);
         if (!m) return std::nullopt;
         if (m->is_null()) return 0u;
         if (!m->is_number_integer() || m->get<int64_t>() < 0 || m->get<int64_t>() > static_cast<int64_t>(max))
@@ -440,7 +445,7 @@ vh::recovery::LocalVersioningPatch localVersioningPatchFromJson(const nlohmann::
     };
     p.keep_last = limit("keep_last", 10000);
     p.max_age_days = limit("max_age_days", 36500);
-    if (const auto* q = rjMember(j, "quota_bytes")) {
+    if (const auto* q = present("quota_bytes")) {
         if (q->is_null()) p.quota_bytes = 0;
         else if (!q->is_number_integer() || q->get<int64_t>() < 0)
             throw Invalid("quota_bytes must be a whole number of bytes (0 = no limit)");

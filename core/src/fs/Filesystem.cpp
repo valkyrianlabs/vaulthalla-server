@@ -1036,6 +1036,7 @@ std::shared_ptr<File> Filesystem::createFile(const NewFileContext& ctx) {
     std::filesystem::create_directories(f->backing_path.parent_path());
     if (ctx.sealed) {
         replaceFileAtomic(f->backing_path, [&](const std::filesystem::path& temp) {
+            std::filesystem::remove(temp);   // a SealedWriter creates its destination itself (private random name)
             const auto sealed = ctx.sealed(temp);
             f->encryption_iv = sealed.encryption_iv;
             f->encrypted_with_key_version = sealed.key_version;
