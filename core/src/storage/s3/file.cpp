@@ -20,6 +20,7 @@ void Controller::uploadLargeObject(const std::filesystem::path& key,
 const std::filesystem::path& filePath,
 const uintmax_t partSize,
 const RequestOptions& options) const {
+    resetLastPutOutcome();   // set by completeMultipartUpload; an aborted upload leaves it empty
     std::ifstream file(filePath, std::ios::binary);
     if (!file) throw std::runtime_error("Failed to open file for large upload: " + filePath.string());
 
@@ -82,6 +83,7 @@ void Controller::uploadObjectWithMetadata(
     const std::filesystem::path& key,
     const std::filesystem::path& filePath,
     const RequestOptions& options) const {
+    resetLastPutOutcome();
     recordRequest(RequestKind::Put);
 
     std::ifstream fin(filePath, std::ios::binary);
@@ -128,6 +130,7 @@ void Controller::uploadObjectWithMetadata(
 
     if (!resp.ok()) throw std::runtime_error(
         fmt::format("Failed to upload file to S3 (HTTP {}): {}", resp.http, resp.body));
+    recordPutResponse(resp.hdr);
 }
 
 void Controller::downloadObject(const std::filesystem::path& key,

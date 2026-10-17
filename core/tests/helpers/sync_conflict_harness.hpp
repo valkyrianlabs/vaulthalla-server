@@ -205,11 +205,13 @@ public:
     }
 
 protected:
-    TransportResponse transportGet(const std::filesystem::path& key, const std::map<std::string, std::string>& extraHeaders,
+    TransportResponse transportGet(const std::filesystem::path& key, const std::optional<std::string>& versionId,
+                                   const std::map<std::string, std::string>& extraHeaders,
                                    const TransportBodyFn& onBody) const override {
         TransportResponse response;
         const auto o = get(key.string());
-        if (!o) {
+        // Unversioned: there is no version history (tests/helpers/versioned_bucket.hpp has one).
+        if (!o || versionId) {
             response.http_status = 404;
             return response;
         }

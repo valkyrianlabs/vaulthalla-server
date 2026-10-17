@@ -132,8 +132,11 @@ public:
     }
 
 protected:
-    TransportResponse transportGet(const fs::path& key, const std::map<std::string, std::string>& extraHeaders,
+    TransportResponse transportGet(const fs::path& key, const std::optional<std::string>& versionId,
+                                   const std::map<std::string, std::string>& extraHeaders,
                                    const TransportBodyFn& onBody) const override {
+        // Remote reads never ask for a provider version.
+        if (versionId) return deliver(400, toBytes("<Error><Code>InvalidArgument</Code></Error>"), onBody);
         Get get{.key = key.string(), .range = {}, .ifMatch = {}};
         if (const auto it = extraHeaders.find("range"); it != extraHeaders.end()) get.range = it->second;
         if (const auto it = extraHeaders.find("if-match"); it != extraHeaders.end()) get.ifMatch = it->second;
