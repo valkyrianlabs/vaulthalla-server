@@ -9,8 +9,10 @@
 #include "sync/Fwd.hpp"
 #include "vault/Fwd.hpp"
 
+#include <functional>
 #include <future>
 #include <mutex>
+#include <span>
 #include <chrono>
 #include <exception>
 #include <unordered_map>
@@ -26,6 +28,10 @@ namespace vh::storage {
         struct RequestOptions;
         struct S3RequestBudget;
         struct S3RequestMetrics;
+        struct ObjectVersionPage;
+        struct ObjectVersionHead;
+        struct GetObjectResult;
+        struct CopyResult;
     }
 
     class CloudEngine final : public Engine {
@@ -168,6 +174,34 @@ namespace vh::storage {
         [[nodiscard]] const RangedReadLimits &rangedReadLimits() const { return rangedLimits_; }
         // Test seam for the files-row compare-and-set a hydrate needs when the stored IV changes.
         void setHydrateCatalogCommitForTesting(HydrateCatalogCommit commit);
+
+        // ---- file recovery: provider object versions (CloudEngineRestore.cpp; .claude/context/recovery.md) ------------
+        // Metered like every other request (engine budget, protection guard, every usage capture on the thread). The
+        // orchestration (pass lease, CAS, reconciliation) lives in recovery::provider.
+
+        // One ListObjectVersions page under prefix (metadata only, never a body).
+        [[nodiscard]] s3::ObjectVersionPage listObjectVersionsPage(const std::string &prefix, const std::string &keyMarker,
+                                                                   const std::string &versionIdMarker,
+                                                                   unsigned int maxKeys) const;
+        // HEAD ?versionId=: nullopt only for 404; a delete marker answers delete_marker=true; outages throw.
+        [[nodiscard]] std::optional<s3::ObjectVersionHead> headObjectVersion(const std::string &key,
+                                                                             const std::string &versionId) const;
+        // One streamed GET of key@versionId (If-Match ifMatch, aborted past maxBytes) into sink.
+        s3::GetObjectResult streamObjectVersion(const std::string &key, const std::string &versionId,
+                                                const std::optional<std::string> &ifMatch,
+                                                std::optional<uint64_t> maxBytes,
+                                                const std::function<void(std::span<const uint8_t>)> &sink) const;
+        // CopyObject of sourceKey@versionId onto destKey (directive COPY, the vault's storage class,
+        // x-amz-copy-source-if-match sourceEtag) as Vaulthalla's own write: a write intent with the object's size while
+        // an event subscription is active, and recovery::hooks::afterUpstreamWrite with `generation` (the restored
+        // generation's IV, key version, hash and plaintext size) once it succeeded. Throws what copyObjectVersion
+        // throws (ObjectTooLargeForCopy before anything is sent).
+        s3::CopyResult copyObjectVersionAsOwnWrite(const std::string &sourceKey, const std::string &versionId,
+                                                   const std::string &destKey, uint64_t objectSize,
+                                                   const std::string &sourceEtag,
+                                                   const std::shared_ptr<vh::fs::model::File> &generation) const;
+        // The storage class this vault writes new objects with (wire value); nullopt = the provider's default.
+        [[nodiscard]] std::optional<std::string> writeStorageClass() const { return configuredStorageClass(); }
 
     protected:
         // Remote-only file: preview.media.remote (ReaderOptions::remote) hydrate (default) | ranged | off.

@@ -898,8 +898,16 @@ CloudEngine::OwnWrite CloudEngine::noteOwnWrite(const fs::path& key, const bool 
 void CloudEngine::OwnWrite::done() {
     if (id_) {
         const auto id = *std::exchange(id_, std::nullopt);
+        // The stored object's ETag (unquoted, as notifications carry it), so the intent only matches the event of
+        // exactly this object (a restore's CopyObject included), never another writer's same-size object.
+        std::optional<std::string> etag;
+        if (write_ && !write_->is_delete) {
+            auto tag = s3::Controller::lastPutOutcome().etag;
+            if (tag.size() >= 2 && tag.front() == '"' && tag.back() == '"') tag = tag.substr(1, tag.size() - 2);
+            if (!tag.empty()) etag = std::move(tag);
+        }
         try {
-            db::query::upstream::WriteIntent::complete(id);   // lives from completion, not from the start of the upload
+            db::query::upstream::WriteIntent::complete(id, etag);   // lives from completion, not from the start of the upload
         } catch (const std::exception& e) {
             log::Registry::cloud()->warn("[CloudStorageEngine] write intent {}: completion not recorded: {}", id, e.what());
         }
