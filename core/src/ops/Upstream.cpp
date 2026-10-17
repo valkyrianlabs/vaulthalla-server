@@ -286,16 +286,27 @@ std::string destructiveText(const std::string& bucket, const std::optional<bmode
            "Accept to apply it.";
 }
 
-// Applies our lifecycle rule (GET-merge-PUT); returns whether anything was written.
+// Every rule Vaulthalla ever writes is named vaulthalla-* (the owned rule, the manifest-versions rule).
+bool ownedLifecycleRuleId(const std::string& id) {
+    return lifecycle::isVaulthallaRule(id) || id.starts_with("vaulthalla-");
+}
+
+// Applies our lifecycle rule (GET-merge-PUT); returns whether anything was written. `dropEveryOwnedRule` (detach)
+// also removes the other vaulthalla-* rules (the manifest-versions rule file recovery writes), not only ours.
 bool applyLifecycle(padmin::AdminClient& admin, const vault::model::APIKey& key, const std::string& bucket,
-                    const LifecyclePatch& patch) {
+                    const LifecyclePatch& patch, const bool dropEveryOwnedRule = false) {
     const auto config = admin.inspect(bucket);
     if (!config.lifecycle_readable)
         throw Invalid("the lifecycle configuration of bucket '" + bucket + "' can't be read with this credential");
-    const auto merged = lifecycle::mergeOwnedRule(config.lifecycle, toChange(patch),
-                                                  key.provider == vault::model::S3Provider::AWS);
+    auto merged = lifecycle::mergeOwnedRule(config.lifecycle, toChange(patch),
+                                            key.provider == vault::model::S3Provider::AWS);
     if (merged.destructive && !patch.accept_destructive)
         throw NeedsConfirmation(DESTRUCTIVE_LIFECYCLE, destructiveText(bucket, std::nullopt));
+    if (dropEveryOwnedRule) {
+        const auto before = merged.rules.size();
+        std::erase_if(merged.rules, [](const padmin::LifecycleRule& r) { return ownedLifecycleRuleId(r.id); });
+        merged.changed = merged.changed || merged.rules.size() != before;
+    }
     if (!merged.changed) return false;
     admin.putLifecycle(bucket, merged.rules);
 
@@ -303,16 +314,21 @@ bool applyLifecycle(padmin::AdminClient& admin, const vault::model::APIKey& key,
     // as it was (the provider normalizes nothing we pass through raw, so a difference means something went wrong).
     const auto after = admin.inspect(bucket);
     if (after.lifecycle_readable) {
-        const auto foreignXml = [](const std::vector<padmin::LifecycleRule>& rules) {
+        const auto foreignXml = [&](const std::vector<padmin::LifecycleRule>& rules) {
             std::vector<std::string> out;
             for (const auto& r : rules)
-                if (r.id != lifecycle::kOwnedRuleId) out.push_back(r.id);
+                if (r.id != lifecycle::kOwnedRuleId && !(dropEveryOwnedRule && ownedLifecycleRuleId(r.id)))
+                    out.push_back(r.id);
             std::ranges::sort(out);
             return out;
         };
         if (foreignXml(after.lifecycle) != foreignXml(config.lifecycle))
             throw std::runtime_error("the lifecycle configuration of bucket '" + bucket + "' no longer holds the other "
                                      "rules it had before Vaulthalla's write; check it with the provider");
+        if (dropEveryOwnedRule && std::ranges::any_of(after.lifecycle, [](const padmin::LifecycleRule& r) {
+                return ownedLifecycleRuleId(r.id);
+            }))
+            throw std::runtime_error("bucket '" + bucket + "' still holds a Vaulthalla lifecycle rule after removing them");
     }
     return true;
 }
@@ -865,7 +881,8 @@ BucketRow detach(const Actor& actor, const KeyRef& ref, const std::string& bucke
     try {
         LifecyclePatch clear;
         clear.clear = true;
-        lifecycleRemoved = applyLifecycle(*client, *key, bucket, clear);
+        // Every vaulthalla-* rule goes: the owned rule and the manifest-versions rule file recovery manages.
+        lifecycleRemoved = applyLifecycle(*client, *key, bucket, clear, true);
     } catch (const NeedsConfirmation&) {
         throw;
     } catch (const std::exception& e) {
@@ -876,6 +893,14 @@ BucketRow detach(const Actor& actor, const KeyRef& ref, const std::string& bucke
                                    row->operation_token))
         throw Conflict("bucket '" + bucket + "' changed while it was being detached (another operation took it); "
                        "run the detach again");
+    // The recovery retention lived in the rules just removed: the record says so too.
+    try {
+        if (const auto v = BucketQuery::getVersioning(row->id); v && v->retention_mode != "unset")
+            BucketQuery::recordRetention(row->id, "unset", std::nullopt, actor->id);
+    } catch (const std::exception& e) {
+        log::Registry::storage()->warn("[ops::upstream] bucket '{}': recovery retention record not cleared: {}", bucket,
+                                       e.what());
+    }
     auditRecord(actor, "detach", id, key->id, std::nullopt, bmodel::AuditOutcome::Ok,
                 {{"previous_ownership", bmodel::to_string(row->ownership)}, {"lifecycle_rule_removed", lifecycleRemoved}});
     return rowFor(id);

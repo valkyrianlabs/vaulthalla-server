@@ -535,6 +535,42 @@ TEST_F(UpstreamOpsTest, DetachRelinquishesOnlyUnusedBucketsAndKeepsTheData) {
     EXPECT_TRUE(cloud->buckets.at(name).lifecycle.empty()) << "our rule is gone, the data is not";
 }
 
+// File recovery adds a second Vaulthalla rule (vaulthalla-manifest-versions): detach relinquishes every vaulthalla-*
+// rule, never another application's.
+TEST_F(UpstreamOpsTest, DetachRemovesEveryVaulthallaLifecycleRuleAndKeepsForeignOnes) {
+    const auto keyId = awsKey(superUser);
+    const auto name = bucketName();
+    const auto ticket = up::beginProvision(superUser, keyId, "v", name, {.mode = up::BucketMode::Create,
+                                           .lifecycle = up::LifecyclePatch{.abort_incomplete_multipart_days = 2}});
+    (void)db::query::upstream::Bucket::setProvisioningState(ticket.upstream_bucket_id,
+                                                            storage::upstream::model::ProvisioningState::Ready,
+                                                            ticket.operation_token);
+    seedBucket(name, {{"kept", 4}});
+    {
+        std::scoped_lock lock(cloud->mutex);
+        auto& rules = cloud->buckets.at(name).lifecycle;
+        rules.clear();
+        padmin::LifecycleRule ours;
+        ours.id = storage::upstream::lifecycle::kOwnedRuleId;
+        ours.foreign = false;
+        ours.expire_noncurrent_days = 30;
+        rules.push_back(ours);
+        const auto manifest = storage::upstream::lifecycle::mergeManifestRule(rules, true, true);
+        rules = manifest.rules;
+        padmin::LifecycleRule foreign;
+        foreign.id = "backup-team-rule";
+        foreign.foreign = true;
+        foreign.abort_incomplete_multipart_days = 7;
+        rules.push_back(foreign);
+        ASSERT_EQ(rules.size(), 3u);
+    }
+    (void)up::detach(superUser, keyId, name);
+    std::scoped_lock lock(cloud->mutex);
+    const auto& left = cloud->buckets.at(name).lifecycle;
+    ASSERT_EQ(left.size(), 1u) << "vaulthalla-managed and vaulthalla-manifest-versions are gone";
+    EXPECT_EQ(left.front().id, "backup-team-rule");
+}
+
 // ---- admin credentials, keys ---------------------------------------------------------------------------------------
 
 TEST_F(UpstreamOpsTest, AdminEnableResolvesTheAccountAndKeysInUseByEventsCannotBeRemoved) {

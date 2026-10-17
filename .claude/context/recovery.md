@@ -322,7 +322,8 @@ Implementation (`recovery/local/Backlog.*`, `storage/CloudEngineBacklog.cpp`, `r
   fields, `lifecycle::mergeManifestRule`). GET-merge-PUT-GET; every non-Vaulthalla rule id must come back, ours must say
   what was asked. "Current" history for shortening: the recorded retention, else indefinite when the bucket already
   versions. Status/disclosure list foreign NoncurrentVersionExpiration rules (`policy::describeRetention`) and the
-  effective (shortest whole-vault) days. Known gap: `ops::upstream::detach` clears only `vaulthalla-managed`.
+  effective (shortest whole-vault) days. `ops::upstream::detach` removes every `vaulthalla-*` rule (owned + manifest-versions; foreign rules re-verified) and resets
+  the recorded retention to `unset`.
 - **Disclosure token.** `v1.<expires>.<hex HMAC-SHA256>` under a per-process random key over (vault, provider,
   account, bucket, retention or `unset`, actor id, `cost::pricingDigest`, expiry), length-prefixed fields; 10 minutes;
   stateless (a restart invalidates tokens). The pricing digest covers currency, catalog version, provider/region/class,
