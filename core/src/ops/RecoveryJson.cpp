@@ -434,16 +434,17 @@ vh::recovery::LocalVersioningPatch localVersioningPatchFromJson(const nlohmann::
         const auto* m = rjMember(j, name);
         if (!m) return std::nullopt;
         if (m->is_null()) return 0u;
-        if (!m->is_number_unsigned() || m->get<uint64_t>() > max)
+        if (!m->is_number_integer() || m->get<int64_t>() < 0 || m->get<int64_t>() > static_cast<int64_t>(max))
             throw Invalid(std::string(name) + " must be a whole number from 0 (no limit) to " + std::to_string(max));
-        return m->get<unsigned int>();
+        return static_cast<unsigned int>(m->get<int64_t>());
     };
     p.keep_last = limit("keep_last", 10000);
     p.max_age_days = limit("max_age_days", 36500);
     if (const auto* q = rjMember(j, "quota_bytes")) {
         if (q->is_null()) p.quota_bytes = 0;
-        else if (!q->is_number_unsigned()) throw Invalid("quota_bytes must be a whole number of bytes (0 = no limit)");
-        else p.quota_bytes = q->get<uint64_t>();
+        else if (!q->is_number_integer() || q->get<int64_t>() < 0)
+            throw Invalid("quota_bytes must be a whole number of bytes (0 = no limit)");
+        else p.quota_bytes = static_cast<uint64_t>(q->get<int64_t>());
     }
     return p;
 }

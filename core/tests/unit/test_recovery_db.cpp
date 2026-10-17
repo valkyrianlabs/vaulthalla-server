@@ -163,9 +163,13 @@ TEST(RecoveryJson, RequestReadersKeepDefaultsIgnoreUnknownAndRefuseWrongTypes) {
     EXPECT_EQ(u.provider_retention->days, 90u);
     EXPECT_EQ(u.snapshot_quota_bytes, 1024u);
     EXPECT_EQ(u.cost_alert_monthly, "12.50");
-    EXPECT_TRUE(u.local_versioning->enabled);
+    EXPECT_EQ(u.local_versioning->enabled, true);
     EXPECT_EQ(u.local_versioning->keep_last, 5u);
-    EXPECT_FALSE(u.local_versioning->max_age_days);
+    EXPECT_FALSE(u.local_versioning->max_age_days);   // a patch: absent = unchanged
+    const auto cleared = orec::updateFromJson(json{{"local_versioning", {{"keep_last", 0}, {"max_age_days", nullptr}}}});
+    EXPECT_EQ(cleared.local_versioning->keep_last, 0u);      // 0 and null clear a limit
+    EXPECT_EQ(cleared.local_versioning->max_age_days, 0u);
+    EXPECT_FALSE(cleared.local_versioning->enabled);
     EXPECT_TRUE(u.accept_unpriced);
     EXPECT_FALSE(u.accept_adoption);
 
@@ -180,7 +184,7 @@ TEST(RecoveryJson, RequestReadersKeepDefaultsIgnoreUnknownAndRefuseWrongTypes) {
                             json{{"cost_alert_monthly", "1.123456789"}}, json{{"snapshot_quota_bytes", -1}},
                             json{{"snapshot_quota_bytes", "10"}}, json{{"provider_retention", 0}},
                             json{{"provider_retention", "0d"}}, json{{"provider_retention", true}},
-                            json{{"local_versioning", {{"keep_last", 0}}}},
+                            json{{"local_versioning", {{"keep_last", -1}}}},
                             json{{"local_versioning", {{"max_age_days", 36501}}}},
                             json{{"local_versioning", true}}, json{{"accept_unpriced", "yes"}}, json::array()})
         EXPECT_THROW(static_cast<void>(orec::updateFromJson(bad)), ops::Invalid) << bad.dump();
