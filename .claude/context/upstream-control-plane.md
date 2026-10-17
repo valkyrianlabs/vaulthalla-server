@@ -71,6 +71,14 @@ buckets it created. Other providers: plain storage, but protection locks still a
   provider token. R2 accepts any SigV4 region (`auto`, `wnam`, `us-east-1`). New R2 buckets carry a default
   "Default Multipart Abort Rule" (foreign). Collisions: 409 `BucketAlreadyOwnedByYou` on both providers.
 - Live tests: `VH_LIVE_UPSTREAM=1 … --gtest_filter='UpstreamLive*'` (only `vaulthalla-test-<ts>-*` names; cleans up).
+- Provider versioning (file recovery, `AdminClient::{supportsVersioning,versioning,putVersioning}`; verified live
+  2026-10-16, `UpstreamLive.AwsVersioning`): PutBucketVersioning carries Content-MD5 (AWS requires an integrity
+  header) and `x-amz-expected-bucket-owner` when the account is known, Status only — never MfaDelete/`x-amz-mfa`.
+  The test identity has Get/PutBucketVersioning + ListBucketVersions; Enabled and Suspended read back on the first
+  GET (~130 ms), but AWS still asks for 15 min before relying on versioned writes. R2 has no versioning:
+  `versioning()` = Unversioned without a request, `putVersioning` = `CapabilityMissing("versioning")`, nothing sent.
+  Existing noncurrent retention (ours + foreign, incl. NewerNoncurrentVersions): `storage/upstream/Lifecycle`
+  `noncurrentExpirations` / `coverage` / `effectiveNoncurrentDays`.
 
 ## Tests
 

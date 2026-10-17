@@ -4,6 +4,7 @@
 #include "storage/s3/provider/admin/Adapters.hpp"
 #include "storage/s3/curl/Http.hpp"
 #include "storage/upstream/Guard.hpp"
+#include "storage/upstream/Lifecycle.hpp"
 #include "storage/upstream/Names.hpp"
 #include "vault/model/APIKey.hpp"
 
@@ -731,6 +732,9 @@ TEST_F(UpstreamProviderTest, ProtectedBucketRefusesEveryBucketCallWithoutSending
         EXPECT_THROW(client->deleteBucket("locked"), vh::storage::upstream::BucketProtected);
         EXPECT_THROW((void)client->inspect("locked"), vh::storage::upstream::BucketProtected);
         EXPECT_THROW(client->putLifecycle("locked", {}), vh::storage::upstream::BucketProtected);
+        EXPECT_THROW((void)client->versioning("locked"), vh::storage::upstream::BucketProtected);
+        EXPECT_THROW(client->putVersioning("locked", admin::Versioning::Enabled), vh::storage::upstream::BucketProtected);
+        EXPECT_THROW(client->putVersioning("locked", admin::Versioning::Suspended), vh::storage::upstream::BucketProtected);
         EXPECT_THROW((void)client->listObjects("locked", {}, 10), vh::storage::upstream::BucketProtected);
         EXPECT_THROW((void)client->listObjectVersions("locked", {}, 10), vh::storage::upstream::BucketProtected);
         EXPECT_THROW((void)client->deleteObjects("locked", {{.key = "a", .size = 0, .etag = {}, .last_modified = {},
@@ -920,4 +924,310 @@ TEST_F(UpstreamProviderTest, IdentityFollowsTheEndpointWhateverTheProviderLabel)
                                                "miniosecret0000000000", "us-east-1", "https://minio.lan:9000");
     EXPECT_EQ(vh::storage::upstream::identityFor(*minio, "b").provider, "s3:minio");
     EXPECT_FALSE(admin::providerEndpointMismatch(*minio).has_value());
+}
+
+// ---- provider versioning (file recovery) --------------------------------------------------------------------------
+
+namespace {
+
+constexpr const char* kUpVerNs = R"( xmlns="http://s3.amazonaws.com/doc/2006-03-01/")";
+
+std::string upVerXml(const std::string& inner) {
+    return std::string("<?xml version=\"1.0\" encoding=\"UTF-8\"?><VersioningConfiguration") + kUpVerNs + ">" + inner +
+           "</VersioningConfiguration>";
+}
+
+http::Response upVerHeadOr(const http::Request& r, http::Response otherwise) {
+    if (r.method == "HEAD") return upRespond(200, {}, {{"x-amz-bucket-region", "us-east-2"}});
+    return otherwise;
+}
+
+}  // namespace
+
+TEST_F(UpstreamProviderTest, GetVersioningParsesStatusAndMfaDelete) {
+    namespace d = admin::detail;
+    EXPECT_EQ(d::parseVersioningState(upVerXml("<Status>Enabled</Status>")).status, admin::Versioning::Enabled);
+    EXPECT_EQ(d::parseVersioningState(upVerXml("<Status>Suspended</Status>")).status, admin::Versioning::Suspended);
+    const auto never = d::parseVersioningState(std::string("<VersioningConfiguration") + kUpVerNs + "/>");
+    EXPECT_EQ(never.status, admin::Versioning::Unversioned) << "never configured: no Status element";
+    EXPECT_EQ(never.mfa_delete, std::nullopt);
+    const auto mfaOn = d::parseVersioningState(upVerXml("<Status>Enabled</Status><MfaDelete>Enabled</MfaDelete>"));
+    EXPECT_EQ(mfaOn.mfa_delete, std::optional<bool>(true));
+    const auto mfaOff = d::parseVersioningState(upVerXml("<Status>Suspended</Status><MfaDelete>Disabled</MfaDelete>"));
+    EXPECT_EQ(mfaOff.status, admin::Versioning::Suspended);
+    EXPECT_EQ(mfaOff.mfa_delete, std::optional<bool>(false));
+
+    // Through the adapter: HEAD (region) then GET ?versioning on the bucket's regional endpoint.
+    handler = [](const http::Request& r) {
+        return upVerHeadOr(r, upRespond(200, upVerXml("<Status>Enabled</Status><MfaDelete>Disabled</MfaDelete>")));
+    };
+    admin::AwsAdmin aws(upAwsKey());
+    const auto state = aws.versioning("vh-ver");
+    EXPECT_EQ(state.status, admin::Versioning::Enabled);
+    EXPECT_EQ(state.mfa_delete, std::optional<bool>(false));
+    const auto gets = matching("GET", "?versioning");
+    ASSERT_EQ(gets.size(), 1u);
+    EXPECT_EQ(gets[0].url, "https://s3.us-east-2.amazonaws.com/vh-ver?versioning=");
+    EXPECT_TRUE(gets[0].body.empty());
+
+    // inspect carries MFA delete next to the status.
+    handler = [](const http::Request& r) {
+        if (r.url.find("?versioning") != std::string::npos)
+            return upRespond(200, upVerXml("<Status>Suspended</Status><MfaDelete>Enabled</MfaDelete>"));
+        if (r.url.find("?object-lock") != std::string::npos)
+            return upRespond(404, "<Error><Code>ObjectLockConfigurationNotFoundError</Code></Error>");
+        if (r.url.find("?lifecycle") != std::string::npos)
+            return upRespond(404, "<Error><Code>NoSuchLifecycleConfiguration</Code></Error>");
+        return upVerHeadOr(r, upRespond(200, "<NotificationConfiguration/>"));
+    };
+    const auto config = aws.inspect("vh-ver");
+    EXPECT_EQ(config.versioning, admin::Versioning::Suspended);
+    EXPECT_EQ(config.mfa_delete, std::optional<bool>(true));
+    EXPECT_EQ(config.object_lock, std::optional<bool>(false));
+
+    // A refusal is an error from versioning(), never a guessed status; inspect turns it into Unknown + a warning.
+    handler = [](const http::Request& r) {
+        return upVerHeadOr(r, upRespond(403, "<Error><Code>AccessDenied</Code><Message>no s3:GetBucketVersioning</Message></Error>"));
+    };
+    try {
+        (void)aws.versioning("vh-ver");
+        FAIL() << "AccessDenied must throw";
+    } catch (const admin::ProviderError& e) {
+        EXPECT_TRUE(e.accessDenied());
+        EXPECT_NE(std::string(e.what()).find("GetBucketVersioning"), std::string::npos);
+    }
+    const auto denied = aws.inspect("vh-ver");
+    EXPECT_EQ(denied.versioning, admin::Versioning::Unknown);
+    EXPECT_EQ(denied.mfa_delete, std::nullopt);
+    EXPECT_FALSE(denied.warnings.empty());
+}
+
+TEST_F(UpstreamProviderTest, PutVersioningSendsStatusWithIntegrityHeaderAndNeverMfa) {
+    handler = [](const http::Request& r) { return upVerHeadOr(r, upRespond(200)); };
+    admin::AwsAdmin aws(upAwsKey());
+    aws.putVersioning("vh-ver", admin::Versioning::Enabled);
+    auto puts = matching("PUT", "?versioning");
+    ASSERT_EQ(puts.size(), 1u);
+    const auto& put = puts[0];
+    EXPECT_EQ(put.url, "https://s3.us-east-2.amazonaws.com/vh-ver?versioning=");
+    EXPECT_NE(put.body.find("<VersioningConfiguration xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">"), std::string::npos);
+    EXPECT_NE(put.body.find("<Status>Enabled</Status>"), std::string::npos);
+    EXPECT_EQ(put.body.find("MfaDelete"), std::string::npos);
+    EXPECT_EQ(upHeader(put, "content-md5"), admin::detail::md5Base64(put.body)) << "AWS requires an integrity header";
+    EXPECT_TRUE(upHeader(put, "x-amz-mfa").empty());
+    EXPECT_EQ(upHeader(put, "x-amz-expected-bucket-owner"), "111122223333") << "never another account's bucket";
+    EXPECT_EQ(upHeader(put, "content-type"), "application/xml");
+    EXPECT_NE(upHeader(put, "authorization").find("/us-east-2/s3/aws4_request"), std::string::npos);
+
+    sent.clear();
+    aws.putVersioning("vh-ver", admin::Versioning::Suspended);
+    puts = matching("PUT", "?versioning");
+    ASSERT_EQ(puts.size(), 1u);
+    EXPECT_NE(puts[0].body.find("<Status>Suspended</Status>"), std::string::npos);
+
+    // A bucket can never be put back to unversioned: refused before anything is sent.
+    sent.clear();
+    EXPECT_THROW(aws.putVersioning("vh-ver", admin::Versioning::Unversioned), std::invalid_argument);
+    EXPECT_THROW(aws.putVersioning("vh-ver", admin::Versioning::Unknown), std::invalid_argument);
+    EXPECT_THROW(aws.putVersioning("Not_A_Bucket", admin::Versioning::Enabled), std::invalid_argument);
+    EXPECT_TRUE(sent.empty());
+
+    // Provider refusals surface as ProviderError (Object Lock suspension, missing permission).
+    handler = [](const http::Request& r) {
+        return upVerHeadOr(r, upRespond(409, "<Error><Code>InvalidBucketState</Code><Message>An Object Lock "
+                                             "configuration is present</Message></Error>"));
+    };
+    try {
+        aws.putVersioning("vh-ver", admin::Versioning::Suspended);
+        FAIL() << "409 must throw";
+    } catch (const admin::ProviderError& e) {
+        EXPECT_EQ(e.code, "InvalidBucketState");
+        EXPECT_EQ(e.http_status, 409);
+    }
+
+    // Without a known account no expected-owner header is invented.
+    sent.clear();
+    handler = [](const http::Request& r) {
+        if (r.url.find("sts.amazonaws.com") != std::string::npos) return upRespond(500);
+        return upVerHeadOr(r, upRespond(200));
+    };
+    auto anonymous = upAwsKey();
+    anonymous->provider_account_id.reset();
+    admin::AwsAdmin awsNoAccount(anonymous);
+    awsNoAccount.putVersioning("vh-ver", admin::Versioning::Enabled);
+    puts = matching("PUT", "?versioning");
+    ASSERT_EQ(puts.size(), 1u);
+    EXPECT_TRUE(upHeader(puts[0], "x-amz-expected-bucket-owner").empty());
+}
+
+TEST_F(UpstreamProviderTest, R2HasNoVersioningAndSendsNothing) {
+    handler = [](const http::Request&) { return upRespond(200); };
+    admin::R2Admin r2(upR2Key());
+    EXPECT_FALSE(r2.supportsVersioning());
+    EXPECT_TRUE(admin::AwsAdmin(upAwsKey()).supportsVersioning());
+
+    const auto state = r2.versioning("vh-r2");
+    EXPECT_EQ(state.status, admin::Versioning::Unversioned) << "R2 never claims a versioned bucket";
+    EXPECT_EQ(state.mfa_delete, std::nullopt);
+    try {
+        r2.putVersioning("vh-r2", admin::Versioning::Enabled);
+        FAIL() << "R2 must refuse versioning";
+    } catch (const admin::CapabilityMissing& e) {
+        EXPECT_EQ(e.capability, "versioning");
+        EXPECT_NE(std::string(e.what()).find("R2"), std::string::npos);
+    }
+    EXPECT_THROW(r2.putVersioning("vh-r2", admin::Versioning::Suspended), admin::CapabilityMissing);
+    EXPECT_THROW(r2.putVersioning("vh-r2", admin::Versioning::Unversioned), std::invalid_argument);
+    EXPECT_TRUE(sent.empty()) << sent.size() << " request(s) reached R2";
+}
+
+TEST_F(UpstreamProviderTest, ProbeReportsVersioningCapability) {
+    handler = [](const http::Request& r) {
+        if (r.url.find("sts.amazonaws.com") != std::string::npos)
+            return upRespond(200, R"(<GetCallerIdentityResponse><GetCallerIdentityResult><Arn>arn:aws:iam::111122223333:user/vh</Arn>
+                <Account>111122223333</Account></GetCallerIdentityResult></GetCallerIdentityResponse>)");
+        if (!upHeader(r, "x-amz-target").empty())
+            return upRespond(400, R"({"__type":"com.amazonaws.sqs#AccessDenied","message":"denied"})");
+        return upRespond(200, R"(<ListAllMyBucketsResult><Buckets><Bucket><Name>b1</Name></Bucket></Buckets></ListAllMyBucketsResult>)");
+    };
+    const auto find = [](const admin::Capabilities& caps) -> std::optional<admin::Capability> {
+        for (const auto& c : caps.items)
+            if (c.name == "versioning") return c;
+        return std::nullopt;
+    };
+
+    admin::AwsAdmin aws(upAwsKey());
+    const auto awsCap = find(aws.probe());
+    ASSERT_TRUE(awsCap.has_value());
+    EXPECT_TRUE(awsCap->ok);
+    EXPECT_FALSE(awsCap->probed) << "checking PutBucketVersioning would change a bucket";
+    for (const char* action : {"s3:GetBucketVersioning", "s3:PutBucketVersioning", "s3:ListBucketVersions", "s3:GetObjectVersion"})
+        EXPECT_NE(awsCap->detail.find(action), std::string::npos) << action;
+    EXPECT_TRUE(matching("PUT", "?versioning").empty());
+
+    admin::R2Admin r2(upR2Key(false));
+    const auto r2Caps = r2.probe();
+    const auto r2Cap = find(r2Caps);
+    ASSERT_TRUE(r2Cap.has_value());
+    EXPECT_FALSE(r2Cap->ok);
+    EXPECT_EQ(r2Cap->detail, admin::kR2VersioningUnsupported);
+    EXPECT_FALSE(r2Caps.has("versioning"));
+}
+
+TEST_F(UpstreamProviderTest, R2InspectSendsNoVersioningRequest) {
+    handler = [](const http::Request& r) {
+        if (r.url.find("?lifecycle") != std::string::npos)
+            return upRespond(404, "<Error><Code>NoSuchLifecycleConfiguration</Code></Error>");
+        return upRespond(200);
+    };
+    admin::R2Admin r2(upR2Key(false));
+    const auto config = r2.inspect("vh-r2");
+    EXPECT_EQ(config.versioning, admin::Versioning::Unversioned);
+    EXPECT_EQ(config.mfa_delete, std::nullopt);
+    EXPECT_TRUE(matching("GET", "?versioning").empty());
+}
+
+// ---- noncurrent retention already on a bucket ------------------------------------------------------------------------
+
+namespace {
+
+std::vector<admin::LifecycleRule> upVerRules() {
+    return admin::detail::parseLifecycle(std::string("<LifecycleConfiguration") + kUpVerNs + R"(>
+      <Rule><ID>backup-tool-keep-90</ID><Filter><Prefix></Prefix></Filter><Status>Enabled</Status>
+        <NoncurrentVersionExpiration><NoncurrentDays>90</NoncurrentDays></NoncurrentVersionExpiration></Rule>
+      <Rule><ID>keep-three-newest</ID><Filter><Prefix>vaults/</Prefix></Filter><Status>Enabled</Status>
+        <NoncurrentVersionExpiration><NoncurrentDays>14</NoncurrentDays><NewerNoncurrentVersions>3</NewerNoncurrentVersions></NoncurrentVersionExpiration></Rule>
+      <Rule><ID>disabled-aggressive</ID><Filter><Prefix></Prefix></Filter><Status>Disabled</Status>
+        <NoncurrentVersionExpiration><NoncurrentDays>1</NoncurrentDays></NoncurrentVersionExpiration></Rule>
+      <Rule><ID>tagged-scratch</ID><Filter><And><Prefix>vaults/</Prefix><Tag><Key>scratch</Key><Value>1</Value></Tag></And></Filter><Status>Enabled</Status>
+        <NoncurrentVersionExpiration><NoncurrentDays>2</NoncurrentDays></NoncurrentVersionExpiration></Rule>
+      <Rule><ID>other-prefix</ID><Prefix>logs/</Prefix><Status>Enabled</Status>
+        <NoncurrentVersionExpiration><NoncurrentDays>3</NoncurrentDays></NoncurrentVersionExpiration></Rule>
+      <Rule><ID>vault-subtree</ID><Filter><Prefix>vaults/photos/raw/</Prefix></Filter><Status>Enabled</Status>
+        <NoncurrentVersionExpiration><NoncurrentDays>5</NoncurrentDays></NoncurrentVersionExpiration></Rule>
+      <Rule><ID>current-only</ID><Filter><Prefix></Prefix></Filter><Status>Enabled</Status>
+        <Expiration><Days>365</Days></Expiration></Rule>
+      <Rule><ID>vaulthalla-managed</ID><Filter><Prefix>vaults/photos/</Prefix></Filter><Status>Enabled</Status>
+        <NoncurrentVersionExpiration><NoncurrentDays>30</NoncurrentDays></NoncurrentVersionExpiration></Rule>
+    </LifecycleConfiguration>)");
+}
+
+}  // namespace
+
+TEST_F(UpstreamProviderTest, NoncurrentExpirationsReadForeignAndOwnedRules) {
+    namespace lc = vh::storage::upstream::lifecycle;
+    const auto rules = upVerRules();
+    const auto all = lc::noncurrentExpirations(rules);
+    ASSERT_EQ(all.size(), 7u) << "every rule with NoncurrentVersionExpiration, not the current-only one";
+
+    EXPECT_EQ(all[0].rule_id, "backup-tool-keep-90");
+    EXPECT_TRUE(all[0].foreign);
+    EXPECT_EQ(all[0].days, std::optional<unsigned int>(90));
+    EXPECT_EQ(all[0].newer_noncurrent_versions, std::nullopt);
+
+    EXPECT_EQ(all[1].rule_id, "keep-three-newest");
+    EXPECT_TRUE(rules[1].unmodeled) << "NewerNoncurrentVersions is outside the rule model";
+    EXPECT_EQ(all[1].days, std::optional<unsigned int>(14));
+    EXPECT_EQ(all[1].newer_noncurrent_versions, std::optional<unsigned int>(3));
+    EXPECT_EQ(all[1].prefix, "vaults/");
+
+    EXPECT_FALSE(all[2].enabled);
+    EXPECT_TRUE(all[3].conditional);
+    EXPECT_EQ(all[3].prefix, "vaults/");
+    EXPECT_EQ(all[4].prefix, "logs/") << "legacy top-level Prefix";
+    EXPECT_FALSE(all[6].foreign);
+    EXPECT_EQ(all[6].rule_id, "vaulthalla-managed");
+
+    using lc::Coverage;
+    const std::string vault = "vaults/photos/";
+    EXPECT_EQ(lc::coverage(all[0], vault), Coverage::Whole);
+    EXPECT_EQ(lc::coverage(all[1], vault), Coverage::Whole);
+    EXPECT_EQ(lc::coverage(all[2], vault), Coverage::None) << "disabled";
+    EXPECT_EQ(lc::coverage(all[3], vault), Coverage::Partial) << "tag filter";
+    EXPECT_EQ(lc::coverage(all[4], vault), Coverage::None) << "disjoint prefix";
+    EXPECT_EQ(lc::coverage(all[5], vault), Coverage::Partial) << "a subtree of the vault";
+    EXPECT_EQ(lc::coverage(all[6], vault), Coverage::Whole);
+
+    // Shortest whole-prefix expiration: the NewerNoncurrentVersions rule (14) beats ours (30) and the backup tool (90).
+    EXPECT_EQ(lc::effectiveNoncurrentDays(rules, vault), std::optional<unsigned int>(14));
+    EXPECT_EQ(lc::effectiveNoncurrentDays(rules, "other/"), std::optional<unsigned int>(90));
+    EXPECT_EQ(lc::effectiveNoncurrentDays(rules, "logs/x/"), std::optional<unsigned int>(3));
+
+    // Nothing that covers the vault prefix: no retention (versions are kept until something deletes them).
+    const std::vector<admin::LifecycleRule> narrow{rules[3], rules[4], rules[5], rules[2]};
+    EXPECT_EQ(lc::effectiveNoncurrentDays(narrow, vault), std::nullopt);
+    EXPECT_EQ(lc::effectiveNoncurrentDays({}, vault), std::nullopt);
+
+    // Our rule as mergeOwnedRule rebuilds it (no raw XML) is read from its fields.
+    const auto merged = lc::mergeOwnedRule({}, {.expire_noncurrent_days = 21, .prefix = std::string("vaults/")}, true);
+    EXPECT_EQ(lc::effectiveNoncurrentDays(merged.rules, vault), std::optional<unsigned int>(21));
+}
+
+TEST_F(UpstreamProviderTest, OwnedNoncurrentRuleKeepsForeignNoncurrentRulesVerbatim) {
+    namespace lc = vh::storage::upstream::lifecycle;
+    namespace d = admin::detail;
+    const auto current = d::parseLifecycle(std::string("<LifecycleConfiguration") + kUpVerNs + R"(>
+      <Rule><ID>keep-three-newest</ID><Filter><Prefix>vaults/</Prefix></Filter><Status>Enabled</Status>
+        <NoncurrentVersionExpiration><NoncurrentDays>14</NoncurrentDays><NewerNoncurrentVersions>3</NewerNoncurrentVersions></NoncurrentVersionExpiration></Rule>
+      <Rule><ID>markers</ID><Filter><Prefix></Prefix></Filter><Status>Enabled</Status>
+        <Expiration><ExpiredObjectDeleteMarker>true</ExpiredObjectDeleteMarker></Expiration></Rule>
+    </LifecycleConfiguration>)");
+    ASSERT_EQ(current.size(), 2u);
+
+    const auto merged = lc::mergeOwnedRule(current, {.expire_noncurrent_days = 30}, true);
+    EXPECT_TRUE(merged.changed);
+    EXPECT_TRUE(merged.destructive) << "a new noncurrent expiration deletes old versions";
+    const auto written = d::parseLifecycle(d::buildLifecycle(merged.rules, true));
+    ASSERT_EQ(written.size(), 3u);
+    EXPECT_EQ(written[0].raw_xml, current[0].raw_xml);
+    EXPECT_EQ(written[1].raw_xml, current[1].raw_xml);
+    EXPECT_NE(written[0].raw_xml.find("<NewerNoncurrentVersions>3</NewerNoncurrentVersions>"), std::string::npos);
+    EXPECT_NE(written[1].raw_xml.find("<ExpiredObjectDeleteMarker>true</ExpiredObjectDeleteMarker>"), std::string::npos);
+    EXPECT_FALSE(written[2].foreign);
+    EXPECT_EQ(written[2].expire_noncurrent_days, std::optional<unsigned int>(30));
+    EXPECT_EQ(lc::effectiveNoncurrentDays(written, "vaults/a/"), std::optional<unsigned int>(14));
+
+    // Lengthening ours is not destructive; R2 can't carry it at all.
+    EXPECT_FALSE(lc::mergeOwnedRule(written, {.expire_noncurrent_days = 60}, true).destructive);
+    EXPECT_THROW((void)lc::mergeOwnedRule(current, {.expire_noncurrent_days = 30}, false), std::invalid_argument);
 }

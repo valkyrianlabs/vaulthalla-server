@@ -74,6 +74,12 @@ std::optional<std::string> AwsAdmin::accountForGuard() {
     }
 }
 
+std::optional<std::string> AwsAdmin::expectedBucketOwner() const {
+    if (key_->provider_account_id && !key_->provider_account_id->empty()) return key_->provider_account_id;
+    if (identity_) return identity_->account_ref;
+    return std::nullopt;
+}
+
 std::string AwsAdmin::regionOf(const std::string& bucket) {
     if (const auto it = regions_.find(bucket); it != regions_.end()) return it->second;
     if (const auto region = headBucket(bucket)) return *region;
@@ -128,7 +134,9 @@ BucketConfiguration AwsAdmin::inspect(const std::string& bucket) {
     config.region = headBucket(bucket);
     if (!config.region) throw ProviderError("bucket '" + bucket + "' does not exist", "NoSuchBucket", 404);
 
-    config.versioning = getVersioning(bucket, config.warnings);
+    const auto versioning = getVersioning(bucket, config.warnings);
+    config.versioning = versioning.status;
+    config.mfa_delete = versioning.mfa_delete;
 
     const auto lock = bucketCall(bucket, detail::call("GET", {{"object-lock", ""}}), "get");
     if (lock.ok()) {
@@ -180,6 +188,9 @@ Capabilities AwsAdmin::probe() {
     caps.items.push_back({"lifecycle", true, false, "s3:Get/PutLifecycleConfiguration are checked on use"});
     caps.items.push_back({"events.notifications", true, false,
                           "s3:Get/PutBucketNotification are checked when events are enabled"});
+    caps.items.push_back({"versioning", true, false,
+                          "s3:GetBucketVersioning, s3:PutBucketVersioning, s3:ListBucketVersions and s3:GetObjectVersion "
+                          "are checked when provider versioning is used"});
 
     Capability queues{"events.queues", false, false, {}};
     try {

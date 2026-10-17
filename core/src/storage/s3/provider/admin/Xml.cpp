@@ -156,12 +156,35 @@ ObjectPage parseListObjectVersions(const std::string& xml) {
     return page;
 }
 
-Versioning parseVersioning(const std::string& xml) {
+Versioning parseVersioning(const std::string& xml) { return parseVersioningState(xml).status; }
+
+VersioningState parseVersioningState(const std::string& xml) {
     const auto doc = loadOrThrow(xml, "GetBucketVersioning");
-    const std::string status = doc.child("VersioningConfiguration").child_value("Status");
-    if (status == "Enabled") return Versioning::Enabled;
-    if (status == "Suspended") return Versioning::Suspended;
-    return Versioning::Unversioned;
+    const auto root = doc.child("VersioningConfiguration");
+    VersioningState state;
+    const std::string status = root.child_value("Status");
+    if (status == "Enabled") state.status = Versioning::Enabled;
+    else if (status == "Suspended") state.status = Versioning::Suspended;
+    else state.status = Versioning::Unversioned;
+    // The API reference spells the response element MfaDelete (request syntax) and MFADelete (field list).
+    auto mfa = root.child("MfaDelete");
+    if (!mfa) mfa = root.child("MFADelete");
+    if (mfa) {
+        const std::string value = mfa.text().get();
+        if (value == "Enabled") state.mfa_delete = true;
+        else if (value == "Disabled") state.mfa_delete = false;
+    }
+    return state;
+}
+
+std::string buildVersioning(const Versioning target) {
+    if (target != Versioning::Enabled && target != Versioning::Suspended)
+        throw std::invalid_argument("bucket versioning can only be set to enabled or suspended");
+    pugi::xml_document doc;
+    auto root = doc.append_child("VersioningConfiguration");
+    root.append_attribute("xmlns") = kS3Namespace;
+    root.append_child("Status").text().set(target == Versioning::Enabled ? "Enabled" : "Suspended");
+    return toString(doc);
 }
 
 std::optional<std::string> parseLocation(const std::string& xml) {
