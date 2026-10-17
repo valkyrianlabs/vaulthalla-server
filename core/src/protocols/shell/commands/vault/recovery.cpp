@@ -53,7 +53,7 @@ void vrAcknowledge(const CommandCall& call, bool& accepted, const std::string& w
 
 // Fetches and shows the disclosure, collects every acknowledgement it asks for, and puts its token on the request.
 // Returns the disclosure text when it was not shown at a terminal (so the output still carries it).
-std::string vrDisclose(const CommandCall& call, const uint32_t vaultId, vrrec::Update& req, const bool json) {
+std::string vrDisclose(const CommandCall& call, const uint32_t vaultId, vrrec::Update& req) {
     const auto disclosure = vrrec::versioningDisclosure(call.user, vaultId, req.provider_retention);
     const auto text = vrcli::formatDisclosure(disclosure);
     const bool interactive = call.io != nullptr;
@@ -88,7 +88,7 @@ std::string vrDisclose(const CommandCall& call, const uint32_t vaultId, vrrec::U
         throw;
     }
     req.disclosure_token = disclosure.token;
-    return interactive || json ? std::string() : text;
+    return interactive ? std::string() : text;
 }
 
 std::optional<uint64_t> vrSize(const CommandCall& call, const std::string& name) {
@@ -186,7 +186,7 @@ CommandResult vrSet(const CommandCall& call) {
         const auto vaultId = vrcli::vaultIdFrom(call, usage, prefix);
         auto req = vrUpdateFromOptions(call, vaultId);
         std::string disclosureText;
-        if (req.mode == vh::recovery::Mode::ProviderVersioning) disclosureText = vrDisclose(call, vaultId, req, json);
+        if (req.mode == vh::recovery::Mode::ProviderVersioning) disclosureText = vrDisclose(call, vaultId, req);
 
         // Whatever the op still asks for (a retention change on an already versioned bucket, adoption, …) is asked
         // here the same way: typed at a terminal, or the flag that gives it.
@@ -202,7 +202,7 @@ CommandResult vrSet(const CommandCall& call) {
             } catch (const ops::NeedsConfirmation& e) {
                 const std::string why = e.what();
                 if (e.code == vrrec::VERSIONING_DISCLOSURE && !req.disclosure_token) {
-                    disclosureText = vrDisclose(call, vaultId, req, json);
+                    disclosureText = vrDisclose(call, vaultId, req);
                 } else if (e.code == vrrec::VERSIONING_UNPRICED && !req.accept_unpriced) {
                     vrAcknowledge(call, req.accept_unpriced, why, kVrUnpricedWord, "--accept-unpriced");
                 } else if (e.code == vrrec::RETENTION_SHORTEN && !req.accept_retention_shortening) {
