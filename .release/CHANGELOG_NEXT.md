@@ -17,3 +17,8 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
 - File recovery surfaces: `vh snapshot create|list|delete`, `vh recovery list|inspect|plan|restore|delete|costs`,
   `vh vault recovery status|set|suspend|disclosure` and the ws `recovery.*` / `vault.recovery.*` commands over
   ops::recovery (restore previews and confirmation, provider-versioning cost disclosure and acknowledgements).
+- File recovery, provider versions: an index of object versions from Vaulthalla's own writes (with each generation's
+  IV and key version) and from metadata-only, request-budgeted listings; restore of a version by CopyObject (same key
+  and key version, ≤ 5 GiB) or by a verified GET + re-seal + PUT, under the vault's sync pass lease with a CAS on the
+  planned destination; cache vaults adopt the restored generation index-only, so nothing is uploaded twice.
+  Event write intents now record the stored object's ETag.
