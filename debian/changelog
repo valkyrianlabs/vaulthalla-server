@@ -1,3 +1,12 @@
+vaulthalla (1.14.1-1) unstable; urgency=high
+
+  * Depend on vaulthalla-archive-keyring, which owns
+    /usr/share/keyrings/vaulthalla.gpg (the signed-by= path install.sh writes)
+    so APT signing-key renewals reach existing installs through upgrades
+    (#121).
+
+ -- Cooper Larson <cooper@valkyrianlabs.com>  Fri, 16 Oct 2026 23:53:55 +0000
+
 vaulthalla (1.14.0-1) unstable; urgency=high
 
   * upstream: provider administration for AWS S3 and Cloudflare R2 API keys
