@@ -6,11 +6,14 @@
 #include "db/query/upstream/WriteIntent.hpp"
 #include "log/Registry.hpp"
 #include "preview/cache/Maintenance.hpp"
+#include "db/query/recovery/Plan.hpp"
+#include "recovery/local/Snapshots.hpp"
 #include "recovery/local/Versions.hpp"
 #include "share/Manager.hpp"
 
 #include <algorithm>
 #include <ctime>
+#include <utility>
 
 using namespace vh::config;
 
@@ -24,7 +27,24 @@ constexpr std::chrono::hours kUpstreamInboxRetention{24 * 7};
 // cache cadence; the recovery store's orphan sweep (crashed captures) runs at startup and then daily.
 constexpr std::chrono::hours kRecoveryStoreSweepInterval{24};
 
+// Finished and expired restore plans are kept this long (resume, diagnostics).
+constexpr std::chrono::hours kRecoveryPlanRetention{24 * 30};
+
 void maintainRecovery(const bool sweepStores) {
+    // Snapshots left `creating` by a crash: at the first run after startup nothing of this process is in flight.
+    static bool firstRun = true;
+    const auto minAge = std::exchange(firstRun, false) ? std::chrono::seconds(0) : std::chrono::seconds(3600);
+    if (sweepStores) {
+        if (const auto n = vh::recovery::local::snapshots::cleanupInterrupted(minAge))
+            log::Registry::vaulthalla()->warn("[DBSweeper] Recovery: {} interrupted snapshot(s) marked failed", n);
+    }
+    try {
+        const auto now = std::time(nullptr);
+        query::recovery::Plan::expire(now);
+        query::recovery::Plan::purgeOlderThan(now - std::chrono::duration_cast<std::chrono::seconds>(kRecoveryPlanRetention).count());
+    } catch (const std::exception& e) {
+        log::Registry::vaulthalla()->warn("[DBSweeper] Recovery plan expiry failed: {}", e.what());
+    }
     try {
         const auto r = vh::recovery::local::versions::maintain(std::time(nullptr), sweepStores);
         if (r.versions_removed || r.backlog_skipped || r.orphans_removed || r.unreferenced_removed)
