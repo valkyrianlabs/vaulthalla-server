@@ -807,16 +807,21 @@ void Filesystem::remove(const std::filesystem::path& path, const unsigned int us
     };
 
     // Local versioning keeps each removed file's last generation (linked before its row goes; the backing file is
-    // removed below, after the trash committed).
+    // removed below, after the trash committed). Under the file's content lock with the row re-read: a seal, overwrite
+    // or rotation that renamed new bytes over the backing file since `file` was read would otherwise be linked under
+    // the old IV. The cache entry goes under the lock too, so a seal that waited for it finds nothing to write back.
     const auto trash = [&](const File& file, const std::function<void(pqxx::work&)>& markTrashed) {
-        auto kept = engine ? recovery::local::versions::retain(*engine, file, recovery::local::Reason::Delete,
-                                                               {.actor = userId})
-                           : recovery::local::versions::Pending{};
+        std::scoped_lock contentLock(contentWriteMutex(file.id));
+        const auto current = engine ? db::query::fs::File::getFileById(file.id) : nullptr;
+        auto kept = current ? recovery::local::versions::retain(*engine, *current, recovery::local::Reason::Delete,
+                                                                {.actor = userId})
+                            : recovery::local::versions::Pending{};
         db::Transactions::exec("Filesystem::remove", [&](pqxx::work& txn) {
             kept.attach(txn);
             markTrashed(txn);
         });
         kept.committed();
+        if (!file.fuse_path.empty()) cache->evictPath(file.fuse_path);
     };
 
     if (entry->isDirectory()) {

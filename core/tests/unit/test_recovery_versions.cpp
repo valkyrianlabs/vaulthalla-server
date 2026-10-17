@@ -8,6 +8,7 @@
 #include "../helpers/versioned_bucket.hpp"
 
 #include "crypto/util/encrypt.hpp"
+#include "crypto/util/hash.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/fs/File.hpp"
 #include "db/query/recovery/Blob.hpp"
@@ -55,6 +56,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <functional>
 #include <iostream>
 #include <set>
 #include <string>
@@ -528,6 +530,52 @@ TEST_F(RecoveryVersionsTest, ABrokenVersionAttachSkipsTheVersionButNeverTheWrite
     write(engine, "/b.txt", "three");
     ASSERT_EQ(versionsOf(engine, "/b.txt").size(), 1u);
     EXPECT_EQ(decryptVersion(engine, versionsOf(engine, "/b.txt").at(0)), "Two");
+}
+
+// A delete links the backing file into the store. A seal (overwrite, rotation) that renames new bytes over it between
+// the delete reading the row and linking would leave a blob whose IV doesn't match its bytes. Deletes take the file's
+// content lock and re-read the row: here the "seal" holds the lock while the delete waits, and the kept version is the
+// sealed content, decryptable under its own IV.
+TEST_F(RecoveryVersionsTest, ADeleteRacingASealKeepsTheGenerationTheRowDescribes) {
+    const auto engine = localVault();
+    const std::vector<std::pair<std::string, std::function<void(const std::string&)>>> deletes{
+        {"Filesystem::remove", [&](const std::string& p) { fs::Filesystem::remove(engine->vaultPathToFusePath(p), superUser->id); }},
+        {"Engine::removeLocally", [&](const std::string& p) { engine->removeLocally(p); }},
+    };
+    for (const auto& [name, remove] : deletes) {
+        SCOPED_TRACE(name);
+        const auto path = "/race-" + tag() + ".txt";
+        const auto f = write(engine, path, "before the seal");
+        std::atomic<bool> done{false};
+        std::thread deleter;
+        {
+            std::unique_lock lock(fs::Filesystem::contentWriteMutex(f->id));
+            deleter = std::thread([&] {
+                remove(path);
+                done = true;
+            });
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            EXPECT_FALSE(done) << "the delete waits for the content lock";
+
+            // The seal's protocol, under the lock: sealed sidecar, row, rename over the backing file, cache.
+            auto staged = std::make_shared<fs::model::File>(*row(engine, path));
+            const auto sealed = engine->encryptionManager->encrypt(bytes("after the seal"), staged);
+            const auto sidecar = fs::ops::contentSidecarPath(staged->backing_path);
+            fs::ops::writeFileExclusive(sidecar, sealed);
+            staged->size_bytes = std::string("after the seal").size();
+            staged->content_hash = crypto::hash::blake2b(sidecar);
+            db::Transactions::exec("RecoveryVersionsTest::seal", [&](pqxx::work& txn) {
+                db::query::fs::File::updateFile(txn, staged);
+            });
+            sfs::rename(sidecar, staged->backing_path);
+            runtime::Deps::get().fsCache->updateEntry(staged);
+        }
+        deleter.join();
+        EXPECT_FALSE(row(engine, path));
+        const auto kept = versionsOf(engine, path);
+        ASSERT_EQ(kept.size(), 1u);
+        EXPECT_EQ(decryptVersion(engine, kept[0]), "after the seal") << "the blob's IV matches its bytes";
+    }
 }
 
 // ---- the upstream backlog ----------------------------------------------------------------------------------------------

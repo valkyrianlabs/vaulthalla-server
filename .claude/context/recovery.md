@@ -32,7 +32,9 @@ bucket: choosing `off`/`local_snapshots` does not suspend a bucket that is versi
   `rename` over the backing path (FUSE seal, `createFile` overwrite, rotation, copy), so the old inode is never written
   again. Retaining = `link(backing, blob)` *before* the rename (fsync blob dir). Deletes link the backing file in too
   and unlink the origin only after the transaction commits (`Capture::committed()`), so a crash before commit never
-  loses the live file. Fallbacks: reflink (FICLONE / macOS `clonefile`), then copy. A blob is immutable once linked.
+  loses the live file. Every delete path (FUSE unlink, `Filesystem::remove`, `Engine::removeLocally`,
+  `CloudEngine::indexAndDeleteFile`, `ObjectStore::purgeLocalObjectState`) retains under `Filesystem::contentWriteMutex`
+  with the row re-read, so a concurrent seal can't be linked under the old IV. Fallbacks: reflink (FICLONE / macOS `clonefile`), then copy. A blob is immutable once linked.
 - **Invariant this rests on: nothing writes a backing file in place.** A linked blob shares the live file's inode until
   the next rename-replace; an in-place writer would silently rewrite history. Every backing-file writer must replace
   by rename (or the capture must use `captureCopy`). Guard: `tools/contracts/test_backing_writers_contract.py` scans

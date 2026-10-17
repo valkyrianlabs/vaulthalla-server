@@ -359,12 +359,7 @@ std::shared_ptr<File> CloudEngine::indexAndDeleteFile(const std::shared_ptr<File
 
     const auto rel_path = makeAbsolute(remoteFile->path);
     auto indexed = db::query::fs::File::getFileByPath(vault->id, rel_path);
-    // The local copy this download replaces (cache strategy: index-only), when it holds other content.
-    std::optional<File> replaced;
-    if (indexed && !(remoteFile->encryption_iv == indexed->encryption_iv &&
-                     remoteFile->encrypted_with_key_version == indexed->encrypted_with_key_version))
-        replaced = *indexed;
-
+    const bool existed = indexed != nullptr;
     if (!indexed) {
         indexed = Filesystem::createFile({
             .path = rel_path,
@@ -375,6 +370,16 @@ std::shared_ptr<File> CloudEngine::indexAndDeleteFile(const std::shared_ptr<File
             .overwrite = true
         });
     }
+
+    // Under the file's content lock with the row re-read: a seal or overwrite that renamed new bytes over the backing
+    // file since the lookup would otherwise be retained (linked) under the old IV, then dropped as "index-only".
+    std::scoped_lock contentLock(Filesystem::contentWriteMutex(indexed->id));
+    if (auto fresh = db::query::fs::File::getFileById(indexed->id)) indexed = std::move(fresh);
+    // The local copy this download replaces (cache strategy: index-only), when it holds other content.
+    std::optional<File> replaced;
+    if (existed && !(remoteFile->encryption_iv == indexed->encryption_iv &&
+                     remoteFile->encrypted_with_key_version == indexed->encrypted_with_key_version))
+        replaced = *indexed;
 
     indexed->size_bytes = remoteFile->size_bytes;
     indexed->content_hash = remoteFile->content_hash;

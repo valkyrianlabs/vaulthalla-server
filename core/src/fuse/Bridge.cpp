@@ -799,10 +799,14 @@ void unlink(const fuse_req_t req, const fuse_ino_t parent, const char* name) {
 
     {
         // Local versioning keeps the file's last generation (a link, staged before the row goes); the backing file
-        // is unlinked only after the trash committed.
-        const auto& file = static_cast<const File&>(*entry);
-        auto kept = resolved.engine
-            ? vh::recovery::local::versions::retain(*resolved.engine, file, vh::recovery::local::Reason::Delete,
+        // is unlinked only after the trash committed. Under the file's content lock, with the row re-read: a seal
+        // (or overwrite, rotation) renaming new bytes over the backing file since the lookup would otherwise be linked
+        // under the old IV. The lock is held until the backing file and the cache entry are gone, so a seal that
+        // waited for it finds nothing to write back to.
+        std::scoped_lock contentLock(vh::fs::Filesystem::contentWriteMutex(entry->id));
+        const auto current = db::query::fs::File::getFileById(entry->id);
+        auto kept = resolved.engine && current
+            ? vh::recovery::local::versions::retain(*resolved.engine, *current, vh::recovery::local::Reason::Delete,
                                                     {.actor = resolved.user->id})
             : vh::recovery::local::versions::Pending{};
         vh::db::Transactions::exec("fuse::unlink", [&](pqxx::work& txn) {
@@ -811,15 +815,15 @@ void unlink(const fuse_req_t req, const fuse_ino_t parent, const char* name) {
                                                    entry->path, entry->backing_path);
         });
         kept.committed();
-    }
 
-    if (::unlink(entry->backing_path.c_str()) < 0)
-        log::Registry::fuse()->debug("[unlink] Failed to remove backing file: {}: {}", entry->backing_path.string(), strerror(errno));
+        if (::unlink(entry->backing_path.c_str()) < 0)
+            log::Registry::fuse()->debug("[unlink] Failed to remove backing file: {}: {}", entry->backing_path.string(), strerror(errno));
+        runtime::Deps::get().fsCache->evictPath(entry->fuse_path);
+    }
 
     // The file id ended with the trash: drop its sealed derived artifacts (best effort, never throws).
     if (resolved.engine) resolved.engine->purgeDerivedArtifacts(entry->id);
 
-    runtime::Deps::get().fsCache->evictPath(entry->fuse_path);
     // The folder stays (#168); its cached totals (what fs.dir.list shows) follow the delete.
     if (entry->parent_id) runtime::Deps::get().fsCache->refreshDirStats(*entry->parent_id);
     replyOk(req, timer);
