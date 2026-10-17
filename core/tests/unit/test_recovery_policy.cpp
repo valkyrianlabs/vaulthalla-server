@@ -563,6 +563,68 @@ TEST_F(RecoveryPolicyTest, ForeignRulesAreKeptAndAShorterOneIsReportedAsEffectiv
                                     [](const auto& w) { return w.find("sooner than Vaulthalla's retention") != std::string::npos; }));
 }
 
+// Costs are pricing statistics; the bucket's configuration is what a status refresh shows. A caller with sync view +
+// pricing but without admin.upstream.view / key View gets the figures and generic consequences, never the bucket's
+// lifecycle rule ids, object lock or MFA delete state, and causes no provider request.
+TEST_F(RecoveryPolicyTest, TheDisclosureShowsBucketConfigurationOnlyToThoseWhoMayReadIt) {
+    using KeyPerm = rbac::permission::admin::keys::APIPermissions;
+    using SyncPerm = rbac::permission::vault::sync::SyncConfigPermissions;
+    using UpPerm = rbac::permission::admin::UpstreamPermissions;
+    const auto v = managedVault();
+    // A built-in role that reads the vault's sync settings and pricing but may not read the bucket's configuration.
+    UserPtr owner;
+    for (const auto* role : {"unprivileged", "auditor", "support", "identity_admin", "security_admin", "platform_operator",
+                             "vault_admin", "admin", "key_custodian"}) {
+        const auto user = createUser(std::string("rp_cost_viewer_") + role, role);
+        const bool costs = rbac::resolver::Vault::has<SyncPerm>({.user = user, .permission = SyncPerm::View, .vault_id = v.id}) &&
+                           ops::stats::canViewVault(user, v.id);
+        const bool details =
+            rbac::resolver::Admin::has<UpPerm>({.user = user, .permission = UpPerm::View}) &&
+            rbac::resolver::Admin::has<KeyPerm>({.user = user, .permission = KeyPerm::View, .api_key_id = v.keyId});
+        if (costs && !details) {
+            owner = user;
+            break;
+        }
+    }
+    ASSERT_TRUE(owner) << "no built-in role reads costs without the bucket configuration permissions";
+
+    padmin::LifecycleRule expiring;
+    expiring.id = "secret-app-versions";
+    expiring.foreign = true;
+    expiring.expire_noncurrent_days = 7;
+    expiring.raw_xml = "<Rule><ID>secret-app-versions</ID><Filter><Prefix></Prefix></Filter><Status>Enabled</Status>"
+                       "<NoncurrentVersionExpiration><NoncurrentDays>7</NoncurrentDays></NoncurrentVersionExpiration></Rule>";
+    {
+        std::scoped_lock lock(cloud->mutex);
+        auto& b = cloud->buckets.at(v.bucket);
+        b.lifecycle = {expiring};
+        b.objectLock = true;
+        b.mfaDelete = true;
+    }
+    const auto mentions = [](const vh::recovery::Disclosure& d, const std::string& needle) {
+        return std::ranges::any_of(d.consequences, [&](const auto& c) { return c.find(needle) != std::string::npos; });
+    };
+
+    const auto calls = callsOn(v.bucket);
+    const auto viewer = rec::versioningDisclosure(owner, v.id, k30d);
+    EXPECT_EQ(callsOn(v.bucket), calls) << "no provider request for a cost-only caller";
+    EXPECT_TRUE(viewer.report.priced) << viewer.report.unpriced_reason.value_or("");
+    EXPECT_TRUE(viewer.report.pre_activation_monthly.expected.has_value()) << "the cost figures are there";
+    EXPECT_FALSE(viewer.token.empty());
+    EXPECT_FALSE(mentions(viewer, "secret-app-versions"));
+    EXPECT_FALSE(mentions(viewer, "Object lock"));
+    EXPECT_FALSE(mentions(viewer, "MFA delete is enabled"));
+    EXPECT_TRUE(mentions(viewer, "configuration (object lock, MFA delete, other applications' lifecycle rules) was not read"));
+    EXPECT_FALSE(nlohmann::json(viewer).dump().contains("secret-app-versions"));
+
+    const auto admin = rec::versioningDisclosure(superUser, v.id, k30d);
+    EXPECT_GT(callsOn(v.bucket), calls) << "the bucket is inspected";
+    EXPECT_TRUE(mentions(admin, "secret-app-versions"));
+    EXPECT_TRUE(mentions(admin, "Object lock"));
+    EXPECT_TRUE(mentions(admin, "MFA delete is enabled"));
+    EXPECT_FALSE(mentions(admin, "was not read"));
+}
+
 TEST_F(RecoveryPolicyTest, ProvisioningNeverEnablesVersioning) {
     const auto v = managedVault();
     std::scoped_lock lock(cloud->mutex);

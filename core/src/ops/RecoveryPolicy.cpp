@@ -174,6 +174,22 @@ PolProvider polAuthorizeProvider(const Actor& actor, const uint32_t vaultId, con
     return {.vb = std::move(*vb), .admin = std::move(admin)};
 }
 
+// Reading the bucket's configuration (versioning, object lock, MFA delete, other applications' lifecycle rules) is
+// what status(refresh) needs: admin.upstream.view and View on the vault's API key.
+bool polMayReadBucketConfig(const Actor& actor, const pol::VaultBucket& vb) {
+    return rbac::resolver::Admin::has<PolUpPerm>({.user = actor, .permission = PolUpPerm::View}) &&
+           rbac::resolver::Admin::has<PolKeyPerm>({.user = actor, .permission = PolKeyPerm::View, .api_key_id = vb.api_key_id});
+}
+
+// The bucket's versioning as Vaulthalla last recorded it (no request).
+padmin::Versioning polRecordedVersioning(const pol::VaultBucket& vb) {
+    const auto status = vb.versioning ? vb.versioning->status.value_or("") : std::string{};
+    if (status == "enabled") return padmin::Versioning::Enabled;
+    if (status == "suspended") return padmin::Versioning::Suspended;
+    if (status == "unversioned") return padmin::Versioning::Unversioned;
+    return padmin::Versioning::Unknown;
+}
+
 std::optional<vh::recovery::ProviderRetention> polRecordedRetention(const pol::VaultBucket& vb) {
     if (!vb.versioning) return std::nullopt;
     if (vb.versioning->retention_mode == "days" && vb.versioning->retention_days)
@@ -388,8 +404,7 @@ Status polBuildStatus(const Actor& actor, const uint32_t vaultId, const bool ref
 
     std::optional<pol::RetentionResult> lifecycleView;
     if (refreshProvider && polProviderGap(*vb).empty()) {
-        if (!rbac::resolver::Admin::has<PolUpPerm>({.user = actor, .permission = PolUpPerm::View}) ||
-            !rbac::resolver::Admin::has<PolKeyPerm>({.user = actor, .permission = PolKeyPerm::View, .api_key_id = vb->api_key_id}))
+        if (!polMayReadBucketConfig(actor, *vb))
             throw Denied("re-reading the bucket needs admin.upstream.view and view on the vault's API key");
         if (vb->isProtected()) {
             st.provider.warnings.emplace_back("the bucket is protected: its state was not re-read");
@@ -666,23 +681,32 @@ Disclosure versioningDisclosure(const Actor& actor, const uint32_t vaultId,
     auto ctx = polAuthorizeProvider(actor, vaultId, "recovery.disclosure", /*changes=*/false);
     const auto& vb = ctx.vb;
 
-    // The one admin request: versioning, object lock, MFA delete and lifecycle in one inspect.
-    const auto config = polMapped([&] { return ctx.admin->inspect(vb.bucket); });
-    polRecordCheck(vb, pol::to_string(config.versioning), config.mfa_delete, config.object_lock);
+    // Costs are pricing statistics (sync view + pricing). The bucket's configuration is what status(refresh) shows:
+    // only with admin.upstream.view + key View is the bucket inspected (the one admin request: versioning, object lock,
+    // MFA delete and lifecycle) and its details disclosed; otherwise the figures use the recorded versioning state and
+    // no request is made.
+    const bool bucketDetails = polMayReadBucketConfig(actor, vb);
+    std::optional<padmin::BucketConfiguration> config;
     std::optional<pol::RetentionResult> described;
-    if (config.lifecycle_readable) described = pol::describeRetention(config.lifecycle);
+    if (bucketDetails) {
+        config = polMapped([&] { return ctx.admin->inspect(vb.bucket); });
+        polRecordCheck(vb, pol::to_string(config->versioning), config->mfa_delete, config->object_lock);
+        if (config->lifecycle_readable) described = pol::describeRetention(config->lifecycle);
+    }
+    const auto versioning = config ? config->versioning : polRecordedVersioning(vb);
 
     const auto target = retention ? retention : polRecordedRetention(vb);
     const auto now = polNow();
     Disclosure d;
-    d.report = rcost::reportForVault(
-        vaultId, {.retention = target,
-                  .foreign_noncurrent_days = described ? described->foreign_whole_days : std::nullopt,
-                  .versioning_status = pol::to_string(config.versioning)}, now);
+    rcost::GatherOptions gather{.retention = target,
+                                .foreign_noncurrent_days = described ? described->foreign_whole_days : std::nullopt,
+                                .versioning_status = std::nullopt};
+    if (config) gather.versioning_status = pol::to_string(config->versioning);
+    d.report = rcost::reportForVault(vaultId, gather, now);
     rcost::noteAlert(d.report, now);
 
     auto& c = d.consequences;
-    if (config.versioning == padmin::Versioning::Enabled)
+    if (versioning == padmin::Versioning::Enabled)
         c.push_back("Bucket '" + vb.bucket + "' already keeps versions: Vaulthalla will not change that, only record it and "
                     "set the retention.");
     else
@@ -705,6 +729,10 @@ Disclosure versioningDisclosure(const Actor& actor, const uint32_t vaultId,
     c.push_back("Vaulthalla also expires old copies of its own index (" +
                 std::string(storage::upstream::lifecycle::kManifestRulePrefix) + ", rule '" +
                 std::string(storage::upstream::lifecycle::kManifestRuleId) + "') after 1 day.");
+    if (!bucketDetails)
+        c.emplace_back("The bucket's configuration (object lock, MFA delete, other applications' lifecycle rules) was not "
+                       "read: it needs admin.upstream.view and view on the vault's API key. The figures assume no other "
+                       "lifecycle rule expires old versions sooner.");
     if (described && !described->foreign_rules.empty())
         c.push_back("Other lifecycle rules on the bucket already expire noncurrent versions (" +
                     [&] {
@@ -712,10 +740,10 @@ Disclosure versioningDisclosure(const Actor& actor, const uint32_t vaultId,
                         for (const auto& r : described->foreign_rules) s += (s.empty() ? "" : ", ") + r;
                         return s;
                     }() + "); Vaulthalla keeps them unchanged, and the shortest one wins.");
-    if (config.object_lock && *config.object_lock)
+    if (config && config->object_lock && *config->object_lock)
         c.emplace_back("Object lock is enabled on this bucket: versioning can never be suspended and locked versions can't "
                        "be removed early.");
-    if (config.mfa_delete && *config.mfa_delete)
+    if (config && config->mfa_delete && *config->mfa_delete)
         c.emplace_back("MFA delete is enabled: only the root account with an MFA device can delete versions.");
     c.emplace_back("The figures are estimates computed on this host from the price catalog and this vault's own measured "
                    "usage, not an invoice: taxes, discounts and account-wide free tiers are not included.");
@@ -723,7 +751,7 @@ Disclosure versioningDisclosure(const Actor& actor, const uint32_t vaultId,
     d.required_acknowledgements.emplace_back(VERSIONING_DISCLOSURE);
     if (!d.report.priced) d.required_acknowledgements.emplace_back(VERSIONING_UNPRICED);
     if (vb.state() == "unmanaged") d.required_acknowledgements.emplace_back(BUCKET_ADOPTION);
-    if (target && polShortens(polCurrentRetention(vb, config.versioning), *target))
+    if (target && polShortens(polCurrentRetention(vb, versioning), *target))
         d.required_acknowledgements.emplace_back(RETENTION_SHORTEN);
 
     d.expires_at = now + std::chrono::duration_cast<std::chrono::seconds>(pol::kDisclosureLifetime).count();
@@ -732,7 +760,7 @@ Disclosure versioningDisclosure(const Actor& actor, const uint32_t vaultId,
                               d.expires_at);
     polAudit(actor, "recovery.disclosure", vb, PolOutcome::Ok,
              {{"retention", target ? target->str() : std::string("unset")}, {"priced", d.report.priced},
-              {"versioning", pol::to_string(config.versioning)}});
+              {"versioning", pol::to_string(versioning)}, {"bucket_details", bucketDetails}});
     return d;
 }
 

@@ -42,6 +42,9 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
 - Local versioning limits that delete retained versions sooner (a new or lower keep-last / max-age / quota, or turning
   versioning back on with limits) need the same explicit acceptance as a shorter provider retention, with a count of
   what the next retention run deletes; every recovery settings change is written to the audit log.
+- The versioning cost disclosure reveals the bucket's configuration (object lock, MFA delete, other applications'
+  lifecycle rules) only to callers with admin.upstream.view and view on the vault's API key, like a status refresh;
+  others get the cost figures without a provider request.
 
 ## Fixes
 

@@ -316,8 +316,11 @@ Implementation (`recovery/local/Backlog.*`, `storage/CloudEngineBacklog.cpp`, `r
 ### Policy, usage and costs as built (`recovery/{provider/Policy,usage,cost}`, `ops/RecoveryPolicy.cpp`)
 
 - **Who.** status: vault sync.config.view (refresh: + admin.upstream.view + key View). costs and versioningDisclosure:
-  sync.config.view + stats.vault.pricing (`ops::stats::canViewVault`); the disclosure's one inspect needs no key bit (the
-  enable re-checks everything and the token names the person). update: sync.config.edit; a provider change (entering
+  sync.config.view + stats.vault.pricing (`ops::stats::canViewVault`). The disclosure's one inspect, and the bucket
+  configuration it reveals (object lock, MFA delete, foreign lifecycle rule ids, the foreign-rule cap in the figures),
+  need what refresh needs (`polMayReadBucketConfig`); without it the disclosure is the cost report from the recorded
+  versioning state plus generic consequences and a line saying the configuration was not read, and no provider request
+  is made (the enable re-checks everything and the token names the person). update: sync.config.edit; a provider change (entering
   provider_versioning or a retention) + admin.upstream.configure + key Consume; adoption + admin.upstream.provision
   (through `ops::upstream::adoptPreflight`). suspend: like a provider change.
 - **Order of a provider change** (nothing is sent before the first five): vault/bucket → configure + key Consume →
