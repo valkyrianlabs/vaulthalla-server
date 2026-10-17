@@ -72,7 +72,8 @@ bucket: choosing `off`/`local_snapshots` does not suspend a bucket that is versi
   backlog of upstream vaults whose bucket status isn't `enabled` is marked `skipped`) and, at startup and then daily,
   `store::sweep` for every vault with a store directory (orphans of crashed captures, unreferenced rows). keep_last is
   also applied right after a capture, in its transaction (bounded: only once the file's version number exceeds it, at
-  most 64 rows); the freed blobs go after commit.
+  most 64 rows); the freed blobs go after commit, and after the content lock is released where one is held (FUSE
+  seal, createFile overwrite: `versions::DeferBlobFrees` scope declared before the lock).
 
 ### Local versioning: capture (`recovery/local/Versions.*`)
 
@@ -83,7 +84,10 @@ bucket: choosing `off`/`local_snapshots` does not suspend a bucket that is versi
   backing file only after `committed()`.
 - Off path: the per-vault policy is cached in memory (`recovery::local::versioningPolicy`, 60 s TTL as a safety net);
   whoever writes `vault_recovery_policy` calls `recovery::local::invalidatePolicy(vaultId)` after the commit. With
-  versioning off a write costs no query. A staging failure is logged/counted and never fails the write;
+  versioning off a write costs no query, and an upload no backlog query either: `local::mayHaveBacklog` checks the
+  vault once (EXISTS pending) and remembers "none" until the policy changes (`invalidatePolicy`, also each
+  maintenance run). The usage ledger's first-put/overwrite classification is one `(vault_id, object_key)` index
+  lookup per PUT/DELETE; the provider version hook does nothing for a PUT without a version id. A staging failure is logged/counted and never fails the write;
   neither does an attach failure: `Pending::attach` inserts its rows under a savepoint (`vh_recovery_version`), and a
   failure (a reused blob removed since `retain`, a constraint) rolls back only them (counted `failed`, version skipped).
 - Skipped (counted, no row): an empty generation, legacy plaintext (blobs are never plaintext), a cloud file without

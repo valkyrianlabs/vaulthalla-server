@@ -24,6 +24,8 @@
 #include <mutex>
 #include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
+#include <utility>
 
 namespace vh::recovery::local {
 
@@ -44,7 +46,11 @@ std::unordered_map<uint32_t, CachedPolicy> policyCache;
 // Bumped by every invalidation, so a load that raced with one never caches what it read.
 uint64_t policyEpoch = 0;
 
-std::atomic<uint64_t> retainedCount{0}, skippedCount{0}, failedCount{0}, policyLoadCount{0}, coalescedCount{0};
+std::atomic<uint64_t> retainedCount{0}, skippedCount{0}, failedCount{0}, policyLoadCount{0}, coalescedCount{0},
+    backlogCheckCount{0};
+
+// Vaults (versioning off) known to have no pending version; cleared with the policy cache.
+std::unordered_set<uint32_t> noBacklog;
 
 std::string vaultPathOf(const fs::model::File& f) {
     auto p = db::encoding::to_utf8_string(f.path.generic_u8string());
@@ -113,13 +119,35 @@ LocalVersioningPolicy versioningPolicy(const uint32_t vaultId) {
 void invalidatePolicy(const uint32_t vaultId) noexcept {
     std::scoped_lock lock(policyMutex);
     policyCache.erase(vaultId);
+    noBacklog.erase(vaultId);
     ++policyEpoch;
 }
 
 void invalidateAllPolicies() noexcept {
     std::scoped_lock lock(policyMutex);
     policyCache.clear();
+    noBacklog.clear();
     ++policyEpoch;
+}
+
+bool mayHaveBacklog(const uint32_t vaultId) {
+    if (versioningPolicy(vaultId).enabled) return true;
+    uint64_t epoch = 0;
+    {
+        std::scoped_lock lock(policyMutex);
+        if (noBacklog.contains(vaultId)) return false;
+        epoch = policyEpoch;
+    }
+    ++backlogCheckCount;
+    const bool any = db::Transactions::read("recovery::local::mayHaveBacklog", [&](pqxx::transaction_base& txn) {
+        return txn.exec("SELECT EXISTS (SELECT 1 FROM file_versions WHERE vault_id = $1 AND upstream_state = 'pending')",
+                        pqxx::params{vaultId}).one_row_ref()[0].as<bool>();
+    });
+    if (!any) {
+        std::scoped_lock lock(policyMutex);
+        if (epoch == policyEpoch) noBacklog.insert(vaultId);
+    }
+    return any;
 }
 
 }
@@ -138,6 +166,36 @@ std::function<void(pqxx::work&)>& attachHook() {
 }
 
 void setAttachHookForTesting(std::function<void(pqxx::work&)> hook) { attachHook() = std::move(hook); }
+
+namespace {
+
+struct DeferredFrees {
+    unsigned depth{0};
+    std::vector<std::pair<store::VaultRef, std::vector<int64_t>>> pending;
+};
+
+thread_local DeferredFrees deferredFrees;
+
+std::function<void()>& deferredFreeHook() {
+    static std::function<void()> hook;
+    return hook;
+}
+
+}
+
+void setDeferredFreeHookForTesting(std::function<void()> hook) { deferredFreeHook() = std::move(hook); }
+
+DeferBlobFrees::DeferBlobFrees() noexcept { ++deferredFrees.depth; }
+
+DeferBlobFrees::~DeferBlobFrees() {
+    if (--deferredFrees.depth > 0 || deferredFrees.pending.empty()) return;
+    auto work = std::exchange(deferredFrees.pending, {});
+    try {
+        if (deferredFreeHook()) deferredFreeHook()();
+    } catch (...) {
+    }
+    for (const auto& [vault, ids] : work) static_cast<void>(store::removeBlobs(vault, ids));
+}
 
 Pending::Pending(Pending&& other) noexcept
     : vault_(std::move(other.vault_)), capture_(std::move(other.capture_)), generation_(std::move(other.generation_)),
@@ -214,7 +272,9 @@ void Pending::committed() noexcept {
         coalesced_ = 0;
     }
     if (!freedBlobs_.empty()) {
-        static_cast<void>(store::removeBlobs(vault_, freedBlobs_));
+        // Inside a DeferBlobFrees scope (a content lock is held), the unlinks wait until the scope ends.
+        if (deferredFrees.depth > 0) deferredFrees.pending.emplace_back(vault_, std::move(freedBlobs_));
+        else static_cast<void>(store::removeBlobs(vault_, freedBlobs_));
         freedBlobs_.clear();
     }
 }
@@ -372,7 +432,8 @@ MaintenanceReport maintain(const std::time_t now, const bool sweepStores) {
 
 Counters counters() {
     return {.retained = retainedCount.load(), .skipped = skippedCount.load(), .failed = failedCount.load(),
-            .policy_loads = policyLoadCount.load(), .coalesced = coalescedCount.load()};
+            .policy_loads = policyLoadCount.load(), .coalesced = coalescedCount.load(),
+            .backlog_checks = backlogCheckCount.load()};
 }
 
 }

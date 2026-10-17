@@ -907,6 +907,8 @@ std::shared_ptr<File> Filesystem::createFile(const NewFileContext& ctx) {
 
         // Overwrites, FUSE seals and key rotation of one file are serialized (one lock per file id), so a conditional
         // write (expected_source_id) is a true compare-and-swap and rotation can't rename stale bytes over new ones.
+        // Blobs the version capture frees (keep_last) are unlinked after the content lock is released.
+        const recovery::local::versions::DeferBlobFrees deferFrees;
         std::scoped_lock contentLock(contentWriteMutex(f->id));
         if (cache->getEntry(ctx.fuse_path) != entry)
             throw ContentConflict("The file was replaced while it was being saved");

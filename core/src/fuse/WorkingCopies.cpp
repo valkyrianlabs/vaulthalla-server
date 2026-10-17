@@ -239,6 +239,8 @@ void WorkingCopies::seal(WorkingCopy& copy) const {
         return;
     }
 
+    // Blobs the version capture frees (keep_last) are unlinked after the content lock is released.
+    const recovery::local::versions::DeferBlobFrees deferFrees;
     std::unique_lock<std::mutex> contentLock;
     if (hooks_.lock) contentLock = hooks_.lock(entry->id);
 

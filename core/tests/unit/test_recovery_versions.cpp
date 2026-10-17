@@ -574,6 +574,46 @@ TEST_F(RecoveryVersionsTest, ABrokenVersionAttachSkipsTheVersionButNeverTheWrite
     EXPECT_EQ(decryptVersion(engine, versionsOf(engine, "/b.txt").at(0)), "Two");
 }
 
+// Off-path and critical-section costs: with local versioning off and nothing pending, uploads cost no backlog query
+// (one check per vault, remembered until the policy changes); blobs a capture frees are unlinked after the content
+// lock is released (FUSE seal, createFile overwrite), never inside it.
+TEST_F(RecoveryVersionsTest, BacklogChecksAndBlobFreesStayOffTheHotPaths) {
+    const auto off = cloudVault(sync::model::RemotePolicy::Strategy::Sync, true, std::nullopt);
+    const auto checksBefore = versions::counters().backlog_checks;
+    for (int i = 0; i < 3; ++i) {
+        write(off.engine, "/o" + std::to_string(i) + ".txt", "x");
+        ASSERT_TRUE(upload(off, "/o" + std::to_string(i) + ".txt"));
+    }
+    EXPECT_EQ(versions::counters().backlog_checks, checksBefore + 1) << "one check for the vault, not one per upload";
+    setPolicy(off.engine->vault->id, on());   // a policy change forgets it
+    setPolicy(off.engine->vault->id, {});
+    write(off.engine, "/o0.txt", "y");
+    ASSERT_TRUE(upload(off, "/o0.txt"));
+    EXPECT_EQ(versions::counters().backlog_checks, checksBefore + 2);
+
+    const auto engine = localVault(on(1));
+    const auto f = write(engine, "/k.txt", "1");
+    write(engine, "/k.txt", "2");
+    unsigned frees = 0;
+    versions::setDeferredFreeHookForTesting([&] {
+        auto& m = fs::Filesystem::contentWriteMutex(f->id);
+        EXPECT_TRUE(m.try_lock()) << "the content lock is released before the blobs go";
+        m.unlock();
+        ++frees;
+    });
+    write(engine, "/k.txt", "3");   // keep_last 1 prunes version "1" and frees its blob
+    EXPECT_EQ(frees, 1u);
+    fuse::WorkingCopies copies(scratch / ("wc_" + tag()), fuse::WorkingCopies::daemonHooks());
+    const auto cur = row(engine, "/k.txt");
+    auto h = copies.open(*cur->inode, cur, O_RDWR);
+    ASSERT_EQ(copies.write(h, "4", 1, 0, std::nullopt), 1);
+    copies.release(h);              // the seal prunes version "2"
+    versions::setDeferredFreeHookForTesting({});
+    EXPECT_EQ(frees, 2u);
+    EXPECT_EQ(blobsOf(engine->vault->id), 1u) << "the frees did happen";
+    EXPECT_EQ(decryptVersion(engine, versionsOf(engine, "/k.txt").at(0)), "3");
+}
+
 // A delete links the backing file into the store. A seal (overwrite, rotation) that renames new bytes over it between
 // the delete reading the row and linking would leave a blob whose IV doesn't match its bytes. Deletes take the file's
 // content lock and re-read the row: here the "seal" holds the lock while the delete waits, and the kept version is the

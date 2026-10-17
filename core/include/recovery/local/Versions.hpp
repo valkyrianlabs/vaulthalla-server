@@ -49,6 +49,11 @@ enum class Reason : unsigned char { Overwrite, Truncate, Delete, Download, Resto
 void invalidatePolicy(uint32_t vaultId) noexcept;
 void invalidateAllPolicies() noexcept;
 
+// Whether the vault may have an upstream backlog to replay. True while local versioning is on (its writes queue
+// one); with it off, one EXISTS query per vault, remembered until the policy changes (invalidatePolicy, also every
+// maintenance run): no new pending rows can appear while versioning is off, so uploads cost no backlog query.
+[[nodiscard]] bool mayHaveBacklog(uint32_t vaultId);
+
 }
 
 namespace vh::recovery::local::versions {
@@ -109,6 +114,20 @@ private:
     uint64_t coalesced_{};
 };
 
+// Keeps the blob removals of the Pending objects committed on this thread while it lives (outermost scope only) and
+// does them when it ends. Declared before a content lock, it moves those unlinks out of the lock's critical section
+// (the FUSE seal, createFile's overwrite): the scope ends after the lock is released. Never throws.
+class DeferBlobFrees {
+public:
+    DeferBlobFrees() noexcept;
+    ~DeferBlobFrees();
+    DeferBlobFrees(const DeferBlobFrees&) = delete;
+    DeferBlobFrees& operator=(const DeferBlobFrees&) = delete;
+};
+
+// Tests: runs right before deferred blob removals (DeferBlobFrees) are carried out. Empty = none.
+void setDeferredFreeHookForTesting(std::function<void()> hook);
+
 // Tests: runs at the start of every attach(), inside its savepoint (a seam to remove a reused blob, or fail a statement,
 // between retain() and attach()). Empty = none.
 void setAttachHookForTesting(std::function<void(pqxx::work&)> hook);
@@ -143,6 +162,7 @@ struct Counters {
     uint64_t failed{};            // staging failed (logged; the write went ahead)
     uint64_t policy_loads{};      // vault_recovery_policy reads (cache misses)
     uint64_t coalesced{};         // older pending versions skipped to bound a key's backlog
+    uint64_t backlog_checks{};    // backlog existence queries (mayHaveBacklog with versioning off)
 };
 [[nodiscard]] Counters counters();
 

@@ -9,6 +9,7 @@
 #include "fs/model/File.hpp"
 #include "log/Registry.hpp"
 #include "recovery/Store.hpp"
+#include "recovery/local/Versions.hpp"
 #include "recovery/provider/State.hpp"
 #include "storage/CloudEngine.hpp"
 #include "storage/PlaintextReader.hpp"
@@ -245,7 +246,7 @@ ReplayReport replayBeforeUpload(const storage::CloudEngine& engine, const fs::mo
         const auto vaultId = engine.vault->id;
         const auto vaultPath = backlogVaultPath(file.path);
         const auto key = backlogKey(file.path);
-        if (!anyPendingFor(vaultId, file.id, key)) return ReplayReport{};
+        if (!mayHaveBacklog(vaultId) || !anyPendingFor(vaultId, file.id, key)) return ReplayReport{};
 
         ReplayReport renamedAway;
         std::vector<rq::GenerationRow> rows;
@@ -273,7 +274,7 @@ ReplayReport replayBeforeRemoteDelete(const storage::CloudEngine& engine, const 
     if (!engine.vault) return {};
     return guarded("replay before remote delete", [&] {
         const auto key = backlogKey(vaultPath);
-        if (!anyPendingFor(engine.vault->id, std::nullopt, key)) return ReplayReport{};
+        if (!mayHaveBacklog(engine.vault->id) || !anyPendingFor(engine.vault->id, std::nullopt, key)) return ReplayReport{};
         return replay(engine, key, pendingUnderKey(engine.vault->id, backlogVaultPath(vaultPath), key), std::nullopt,
                       std::nullopt);
     });
