@@ -2,7 +2,6 @@
 #include "crypto/util/Gcm.hpp"
 #include "storage/PlaintextReader.hpp"
 
-#include <openssl/crypto.h>
 #include <sodium.h>
 
 #include <fcntl.h>
@@ -12,6 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <mutex>
 #include <stdexcept>
 #include <system_error>
 
@@ -66,6 +66,33 @@ void writeFully(const int fd, const std::span<const uint8_t> in) {
     }
 }
 
+std::mutex& wipeObserverMutex() {
+    static std::mutex m;
+    return m;
+}
+
+std::function<void(std::span<const uint8_t>)>& wipeObserver() {
+    static std::function<void(std::span<const uint8_t>)> f;
+    return f;
+}
+
+// Wipes a plaintext buffer on every way out of its scope (success, failed authentication, any exception). Declared
+// after the buffer it guards, so it runs before the buffer is released.
+class WipeOnExit {
+public:
+    explicit WipeOnExit(const std::span<uint8_t> bytes) : bytes_(bytes) {}
+    ~WipeOnExit() {
+        sodium_memzero(bytes_.data(), bytes_.size());
+        std::scoped_lock lock(wipeObserverMutex());
+        if (const auto& observe = wipeObserver()) observe(bytes_);
+    }
+    WipeOnExit(const WipeOnExit&) = delete;
+    WipeOnExit& operator=(const WipeOnExit&) = delete;
+
+private:
+    std::span<uint8_t> bytes_;
+};
+
 std::array<uint8_t, AES_IV_SIZE> decodeIv(const std::string& ivB64) {
     const auto raw = b64_decode(ivB64);
     if (raw.size() != AES_IV_SIZE) throw std::invalid_argument("Re-seal needs a 12-byte AES-GCM IV");
@@ -100,29 +127,25 @@ void resealInto(const std::filesystem::path& src, const SecretKey& oldKey, const
     std::array<uint8_t, kChunk> sealed{};
     std::array<uint8_t, kChunk> plain{};
     std::array<uint8_t, kChunk> resealed{};
-    try {
-        GcmStreamDecryptor decryptor(oldKey.bytes(), oldIv);
-        GcmStreamEncryptor encryptor(newKey.bytes(), newIv);
-        uint64_t offset = 0;
-        while (offset < bodySize) {
-            const auto want = static_cast<std::size_t>(std::min<uint64_t>(sealed.size(), bodySize - offset));
-            const std::span<uint8_t> chunk(sealed.data(), want);
-            if (preadFully(in.get(), chunk, offset) != want)
-                throw storage::IntegrityError("Sealed content shrank while it was being re-sealed: " + src.string());
-            decryptor.update(chunk, plain);
-            encryptor.update({plain.data(), want}, resealed);
-            writeFully(out.get(), {resealed.data(), want});
-            offset += want;
-        }
-        OPENSSL_cleanse(plain.data(), plain.size());
-        if (!decryptor.finish(oldTag))
-            throw storage::IntegrityError("Sealed content failed authentication; nothing was re-sealed: " + src.string());
-        writeFully(out.get(), encryptor.finish());
-        out.close();
-    } catch (...) {
-        OPENSSL_cleanse(plain.data(), plain.size());
-        throw;
+    // Only `plain` ever holds plaintext (unauthenticated until the tag verifies); sealed/resealed hold ciphertext.
+    const WipeOnExit wipePlain{plain};
+    GcmStreamDecryptor decryptor(oldKey.bytes(), oldIv);
+    GcmStreamEncryptor encryptor(newKey.bytes(), newIv);
+    uint64_t offset = 0;
+    while (offset < bodySize) {
+        const auto want = static_cast<std::size_t>(std::min<uint64_t>(sealed.size(), bodySize - offset));
+        const std::span<uint8_t> chunk(sealed.data(), want);
+        if (preadFully(in.get(), chunk, offset) != want)
+            throw storage::IntegrityError("Sealed content shrank while it was being re-sealed: " + src.string());
+        decryptor.update(chunk, plain);
+        encryptor.update({plain.data(), want}, resealed);
+        writeFully(out.get(), {resealed.data(), want});
+        offset += want;
     }
+    if (!decryptor.finish(oldTag))
+        throw storage::IntegrityError("Sealed content failed authentication; nothing was re-sealed: " + src.string());
+    writeFully(out.get(), encryptor.finish());
+    out.close();
 }
 
 }
@@ -152,6 +175,8 @@ std::vector<uint8_t> resealBuffer(const std::span<const uint8_t> sealed, const S
     const auto bodySize = sealed.size() - AES_TAG_SIZE;
 
     std::vector<uint8_t> plain(bodySize);
+    // gcmDecrypt fills `plain` before it knows whether the tag verifies: wiped on every path below.
+    const reseal_detail::WipeOnExit wipePlain{plain};
     if (!gcmDecrypt(oldKey.bytes(), GcmIv(oldIv.data(), AES_IV_SIZE), sealed.first(bodySize),
                     std::span<const uint8_t, AES_TAG_SIZE>(sealed.data() + bodySize, AES_TAG_SIZE), plain))
         throw storage::IntegrityError("Sealed content failed authentication; nothing was re-sealed");
@@ -159,18 +184,17 @@ std::vector<uint8_t> resealBuffer(const std::span<const uint8_t> sealed, const S
     std::vector<uint8_t> iv(AES_IV_SIZE);
     randombytes_buf(iv.data(), iv.size());
     std::vector<uint8_t> out(bodySize + AES_TAG_SIZE);
-    try {
-        GcmStreamEncryptor encryptor(newKey.bytes(), GcmIv(iv.data(), AES_IV_SIZE));
-        encryptor.update(plain, std::span<uint8_t>(out.data(), bodySize));
-        const auto tag = encryptor.finish();
-        std::ranges::copy(tag, out.begin() + static_cast<std::ptrdiff_t>(bodySize));
-    } catch (...) {
-        sodium_memzero(plain.data(), plain.size());
-        throw;
-    }
-    sodium_memzero(plain.data(), plain.size());
+    GcmStreamEncryptor encryptor(newKey.bytes(), GcmIv(iv.data(), AES_IV_SIZE));
+    encryptor.update(plain, std::span<uint8_t>(out.data(), bodySize));
+    const auto tag = encryptor.finish();
+    std::ranges::copy(tag, out.begin() + static_cast<std::ptrdiff_t>(bodySize));
     outIv = std::move(iv);
     return out;
+}
+
+void setPlaintextWipeObserverForTesting(std::function<void(std::span<const uint8_t>)> observer) {
+    std::scoped_lock lock(reseal_detail::wipeObserverMutex());
+    reseal_detail::wipeObserver() = std::move(observer);
 }
 
 }

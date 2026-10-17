@@ -34,6 +34,17 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
 - Historical keys: retired vault key versions are unsealed on demand for recovery reads only and kept while
   recoverable data needs them (trigger `recovery_guard_retired_vault_key`); key export includes them.
 - Backing files are never written in place (new files are created exclusively or replaced by rename; contract test).
+- Re-sealing a retained generation wipes the decrypted (still unauthenticated) plaintext on every path, and unsealed
+  retired keys leave memory once idle on a 30 s timer instead of waiting for the next recovery read.
+- Provider restore verifies what it restores: a plaintext version in a vault that encrypts upstream is refused (even
+  when unverified versions are accepted) unless the vault's event subscription imports foreign objects, and a version
+  Vaulthalla wrote must still match its recorded IV, key version and size.
+- Local versioning limits that delete retained versions sooner (a new or lower keep-last / max-age / quota, or turning
+  versioning back on with limits) need the same explicit acceptance as a shorter provider retention, with a count of
+  what the next retention run deletes; every recovery settings change is written to the audit log.
+- The versioning cost disclosure reveals the bucket's configuration (object lock, MFA delete, other applications'
+  lifecycle rules) only to callers with admin.upstream.view and view on the vault's API key, like a status refresh;
+  others get the cost figures without a provider request.
 
 ## Fixes
 

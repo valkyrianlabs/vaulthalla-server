@@ -15,10 +15,13 @@
 #include "../helpers/sync_conflict_harness.hpp"
 #include "../helpers/upstream_admin_fakes.hpp"
 
+#include "db/query/recovery/Generation.hpp"
 #include "db/query/recovery/Policy.hpp"
 #include "db/query/recovery/Usage.hpp"
 #include "db/query/upstream/Audit.hpp"
 #include "db/query/upstream/Bucket.hpp"
+#include "fs/Filesystem.hpp"
+#include "log/Registry.hpp"
 #include "ops/Recovery.hpp"
 #include "ops/RecoveryJson.hpp"
 #include "ops/Roles.hpp"
@@ -33,6 +36,7 @@
 #include "recovery/cost/Report.hpp"
 #include "recovery/provider/Policy.hpp"
 #include "recovery/usage/Ledger.hpp"
+#include "storage/Manager.hpp"
 #include "storage/s3/provider/admin/Admin.hpp"
 #include "storage/upstream/Guard.hpp"
 #include "storage/upstream/Lifecycle.hpp"
@@ -40,6 +44,7 @@
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
+#include <spdlog/sinks/ringbuffer_sink.h>
 
 #include <algorithm>
 
@@ -558,6 +563,68 @@ TEST_F(RecoveryPolicyTest, ForeignRulesAreKeptAndAShorterOneIsReportedAsEffectiv
                                     [](const auto& w) { return w.find("sooner than Vaulthalla's retention") != std::string::npos; }));
 }
 
+// Costs are pricing statistics; the bucket's configuration is what a status refresh shows. A caller with sync view +
+// pricing but without admin.upstream.view / key View gets the figures and generic consequences, never the bucket's
+// lifecycle rule ids, object lock or MFA delete state, and causes no provider request.
+TEST_F(RecoveryPolicyTest, TheDisclosureShowsBucketConfigurationOnlyToThoseWhoMayReadIt) {
+    using KeyPerm = rbac::permission::admin::keys::APIPermissions;
+    using SyncPerm = rbac::permission::vault::sync::SyncConfigPermissions;
+    using UpPerm = rbac::permission::admin::UpstreamPermissions;
+    const auto v = managedVault();
+    // A built-in role that reads the vault's sync settings and pricing but may not read the bucket's configuration.
+    UserPtr owner;
+    for (const auto* role : {"unprivileged", "auditor", "support", "identity_admin", "security_admin", "platform_operator",
+                             "vault_admin", "admin", "key_custodian"}) {
+        const auto user = createUser(std::string("rp_cost_viewer_") + role, role);
+        const bool costs = rbac::resolver::Vault::has<SyncPerm>({.user = user, .permission = SyncPerm::View, .vault_id = v.id}) &&
+                           ops::stats::canViewVault(user, v.id);
+        const bool details =
+            rbac::resolver::Admin::has<UpPerm>({.user = user, .permission = UpPerm::View}) &&
+            rbac::resolver::Admin::has<KeyPerm>({.user = user, .permission = KeyPerm::View, .api_key_id = v.keyId});
+        if (costs && !details) {
+            owner = user;
+            break;
+        }
+    }
+    ASSERT_TRUE(owner) << "no built-in role reads costs without the bucket configuration permissions";
+
+    padmin::LifecycleRule expiring;
+    expiring.id = "secret-app-versions";
+    expiring.foreign = true;
+    expiring.expire_noncurrent_days = 7;
+    expiring.raw_xml = "<Rule><ID>secret-app-versions</ID><Filter><Prefix></Prefix></Filter><Status>Enabled</Status>"
+                       "<NoncurrentVersionExpiration><NoncurrentDays>7</NoncurrentDays></NoncurrentVersionExpiration></Rule>";
+    {
+        std::scoped_lock lock(cloud->mutex);
+        auto& b = cloud->buckets.at(v.bucket);
+        b.lifecycle = {expiring};
+        b.objectLock = true;
+        b.mfaDelete = true;
+    }
+    const auto mentions = [](const vh::recovery::Disclosure& d, const std::string& needle) {
+        return std::ranges::any_of(d.consequences, [&](const auto& c) { return c.find(needle) != std::string::npos; });
+    };
+
+    const auto calls = callsOn(v.bucket);
+    const auto viewer = rec::versioningDisclosure(owner, v.id, k30d);
+    EXPECT_EQ(callsOn(v.bucket), calls) << "no provider request for a cost-only caller";
+    EXPECT_TRUE(viewer.report.priced) << viewer.report.unpriced_reason.value_or("");
+    EXPECT_TRUE(viewer.report.pre_activation_monthly.expected.has_value()) << "the cost figures are there";
+    EXPECT_FALSE(viewer.token.empty());
+    EXPECT_FALSE(mentions(viewer, "secret-app-versions"));
+    EXPECT_FALSE(mentions(viewer, "Object lock"));
+    EXPECT_FALSE(mentions(viewer, "MFA delete is enabled"));
+    EXPECT_TRUE(mentions(viewer, "configuration (object lock, MFA delete, other applications' lifecycle rules) was not read"));
+    EXPECT_FALSE(nlohmann::json(viewer).dump().contains("secret-app-versions"));
+
+    const auto admin = rec::versioningDisclosure(superUser, v.id, k30d);
+    EXPECT_GT(callsOn(v.bucket), calls) << "the bucket is inspected";
+    EXPECT_TRUE(mentions(admin, "secret-app-versions"));
+    EXPECT_TRUE(mentions(admin, "Object lock"));
+    EXPECT_TRUE(mentions(admin, "MFA delete is enabled"));
+    EXPECT_FALSE(mentions(admin, "was not read"));
+}
+
 TEST_F(RecoveryPolicyTest, ProvisioningNeverEnablesVersioning) {
     const auto v = managedVault();
     std::scoped_lock lock(cloud->mutex);
@@ -607,6 +674,106 @@ TEST_F(RecoveryPolicyTest, LocalFieldsAreValidatedAndNeedNoProvider) {
     const auto cleared = rec::update(superUser, v.id, clear);
     EXPECT_FALSE(cleared.cost_alert_monthly);
     EXPECT_FALSE(cleared.snapshot_quota_bytes);
+}
+
+// The audit logger's lines (info and above) for the life of the scope.
+struct AuditCapture {
+    std::shared_ptr<spdlog::logger> logger = log::Registry::audit();
+    std::shared_ptr<spdlog::sinks::ringbuffer_sink_mt> sink = std::make_shared<spdlog::sinks::ringbuffer_sink_mt>(256);
+    spdlog::level::level_enum previous = logger->level();
+    AuditCapture() {
+        sink->set_level(spdlog::level::info);
+        sink->set_pattern("[%l] %v");
+        logger->sinks().push_back(sink);
+        if (previous > spdlog::level::info) logger->set_level(spdlog::level::info);
+    }
+    ~AuditCapture() {
+        std::erase(logger->sinks(), std::static_pointer_cast<spdlog::sinks::sink>(sink));
+        logger->set_level(previous);
+    }
+    AuditCapture(const AuditCapture&) = delete;
+    AuditCapture& operator=(const AuditCapture&) = delete;
+    [[nodiscard]] bool has(const std::vector<std::string>& needles) const {
+        return std::ranges::any_of(sink->last_formatted(), [&](const std::string& line) {
+            return std::ranges::all_of(needles, [&](const auto& n) { return line.find(n) != std::string::npos; });
+        });
+    }
+};
+
+// Local versioning limits that delete retained versions sooner need the same explicit acceptance as a shorter provider
+// retention; looser limits, turning it off and vaults without versions don't. Every change is in the audit log.
+TEST_F(RecoveryPolicyTest, LocalVersioningCutsNeedAcceptanceAndEveryChangeIsAudited) {
+    const auto vault = ops::vaults::create(superUser, {.name = "rp_local_" + tag(), .type = vault::model::VaultType::Local});
+    const auto engine = runtime::Deps::get().storageManager->getEngine(vault->id);
+    const auto patch = [](std::optional<bool> enabled, std::optional<unsigned> keep, std::optional<unsigned> age,
+                          std::optional<uint64_t> quota) {
+        rec::Update u;
+        u.local_versioning = vh::recovery::LocalVersioningPatch{.enabled = enabled, .keep_last = keep,
+                                                                .max_age_days = age, .quota_bytes = quota};
+        return u;
+    };
+    const auto versions = [&] {
+        return db::query::recovery::Generation::listVersionsUnder(vault->id, "/", 1000).size();
+    };
+    const auto refusal = [&](const rec::Update& u) -> std::string {
+        try {
+            (void)rec::update(superUser, vault->id, u);
+        } catch (const ops::NeedsConfirmation& e) {
+            EXPECT_EQ(e.code, rec::RETENTION_SHORTEN);
+            return e.what();
+        }
+        return {};
+    };
+    AuditCapture audit;
+
+    // No versions yet: turning it on has no history to cut.
+    (void)rec::update(superUser, vault->id, patch(true, std::nullopt, std::nullopt, std::nullopt));
+    EXPECT_TRUE(audit.has({"changed the recovery settings of vault", "local_versioning off -> on"}));
+    for (int i = 0; i < 5; ++i)
+        (void)fs::Filesystem::createFile({.path = "/doc.txt", .fuse_path = engine->vaultPathToFusePath("/doc.txt"),
+                                          .buffer = bytes("content " + std::to_string(i)), .engine = engine,
+                                          .user = superUser, .overwrite = true});
+    ASSERT_EQ(versions(), 4u);
+
+    // keep_last 1 where there was no limit: three versions go at the next retention run.
+    const auto first = refusal(patch(std::nullopt, 1, std::nullopt, std::nullopt));
+    EXPECT_NE(first.find("keep_last no limit -> 1"), std::string::npos) << first;
+    EXPECT_NE(first.find("deletes 3 local version(s)"), std::string::npos) << first;
+    EXPECT_FALSE(db::query::recovery::Policy::get(vault->id).local_versioning.keep_last) << "nothing changed";
+    EXPECT_EQ(versions(), 4u);
+    auto accepted = patch(std::nullopt, 1, std::nullopt, std::nullopt);
+    accepted.accept_retention_shortening = true;
+    EXPECT_EQ(rec::update(superUser, vault->id, accepted).local_versioning.keep_last.value_or(0), 1u);
+    EXPECT_TRUE(audit.has({"[warning]", "keep_last none -> 1", "accepted: local versions are deleted sooner"}));
+
+    // Looser is free; tighter again (a new max age, a quota, a lower keep_last) asks, even when nothing goes at once.
+    EXPECT_EQ(rec::update(superUser, vault->id, patch(std::nullopt, 10, std::nullopt, std::nullopt)).local_versioning.keep_last,
+              10u);
+    EXPECT_TRUE(audit.has({"keep_last 1 -> 10"}));
+    const auto age = refusal(patch(std::nullopt, std::nullopt, 1, std::nullopt));
+    EXPECT_NE(age.find("Nothing that exists now is deleted at once"), std::string::npos) << age;
+    EXPECT_FALSE(refusal(patch(std::nullopt, std::nullopt, std::nullopt, 1)).empty()) << "a quota";
+    EXPECT_FALSE(refusal(patch(std::nullopt, 9, std::nullopt, std::nullopt)).empty()) << "a lower keep_last";
+    EXPECT_TRUE(refusal(patch(std::nullopt, 0, std::nullopt, std::nullopt)).empty()) << "removing a limit keeps more";
+
+    // Off keeps every version (retention only runs while it is on): no question. On again applies the limits to
+    // everything kept meanwhile: asked again.
+    EXPECT_FALSE(rec::update(superUser, vault->id, patch(false, 2, std::nullopt, std::nullopt)).local_versioning.enabled);
+    EXPECT_TRUE(audit.has({"local_versioning on -> off", "keep_last none -> 2"}));
+    EXPECT_EQ(versions(), 4u);
+    const auto reenable = refusal(patch(true, std::nullopt, std::nullopt, std::nullopt));
+    EXPECT_NE(reenable.find("keep_last off -> 2"), std::string::npos) << reenable;
+    auto again = patch(true, std::nullopt, std::nullopt, std::nullopt);
+    again.accept_retention_shortening = true;
+    EXPECT_TRUE(rec::update(superUser, vault->id, again).local_versioning.enabled);
+
+    // The other fields are audited too.
+    rec::Update other;
+    other.mode = Mode::LocalSnapshots;
+    other.snapshot_quota_bytes = 123456;
+    other.cost_alert_monthly = "5.00";
+    (void)rec::update(superUser, vault->id, other);
+    EXPECT_TRUE(audit.has({"mode off -> local_snapshots", "snapshot_quota_bytes none -> 123456", "cost_alert_monthly none -> 5.00"}));
 }
 
 TEST_F(RecoveryPolicyTest, PolicyChangesFollowSyncConfigUpstreamConfigureAndTheKey) {

@@ -101,12 +101,15 @@ bucket: choosing `off`/`local_snapshots` does not suspend a bucket that is versi
   copy does). Under an older key it is re-sealed: streaming GCM decrypt (old key) → encrypt (current key, fresh IV)
   into the sidecar; committed only after the old tag verifies. No plaintext touches disk.
 - API (`vault/EncryptionManager.hpp`): `historicalKeySnapshot(v)` (current / rotation-old from memory, else
-  `vault_keys_trashed[v]` unsealed and cached: ≤ 8 versions, LRU, dropped after 10 min unused, checked on access;
-  outstanding snapshots stay valid until released) throws `vault::KeyVersionUnavailable` for a version the vault
+  `vault_keys_trashed[v]` unsealed and cached: ≤ 8 versions, LRU, dropped after 10 min unused, checked on access
+  and by `evictIdleHistoricalKeys(now)` for every engine from `VaultRetentionService`'s 30 s loop, so an idle key
+  leaves memory without a later access; outstanding snapshots stay valid until released) throws `vault::KeyVersionUnavailable` for a version the vault
   doesn't hold (incl. 0). `retainedKeyVersions()`, `hasKeyVersion(v)`, `referencedHistoricalKeys()` (export).
   `resealFileToCurrent(src, iv, v, dst, f)` / `resealToCurrent(buf, …)` over `crypto::util::resealFile` /
   `resealBuffer` (`crypto/util/reseal.hpp`, 64 KiB chunks, `GcmStreamDecryptor` → `GcmStreamEncryptor`): a source
-  that fails authentication throws `storage::IntegrityError` and dst is removed (whatever it held). An empty
+  that fails authentication throws `storage::IntegrityError` and dst is removed (whatever it held). The plaintext
+  buffer (unauthenticated until the tag verifies) is wiped on every path, success or failure (`WipeOnExit`; tests
+  observe it through `setPlaintextWipeObserverForTesting`). An empty
   generation (empty IV, version 0, zero bytes) re-seals to an empty dst with empty IV/version 0 (how every empty file
   is stored); a non-empty source with an empty IV is plaintext and refused (`std::invalid_argument`). Same-version
   re-seal still draws a fresh IV (reuse the bytes instead if that is wanted).
@@ -171,6 +174,13 @@ bucket: choosing `off`/`local_snapshots` does not suspend a bucket that is versi
   current keys only → delete markers); mutate protected/unmanaged buckets; expose versions through the S3 gateway.
 - Shortening retention (indefinite→N, N→M<N) needs `accept_retention_shortening` from every caller. Suspension is
   its own explicit, confirmed op and deletes nothing.
+- Local versioning limits that delete retained versions sooner need the same acceptance (`RETENTION_SHORTEN`,
+  `polLocalShortening`): a limit added where none applied (or turning versioning back on, since retention only runs
+  while it is on, so limits apply to everything kept meanwhile) or lowered, and only when the vault has local
+  versions. The message counts what the next retention run deletes now (versions + plaintext bytes; one
+  `listPrunable` per side, minus what the previous limits delete anyway). Turning local versioning off deletes nothing
+  and asks nothing. With a provider change in the same update, the provider's shortening question carries this text
+  too (asked before anything is sent), so one acceptance never covers an unseen consequence.
 - Version index `upstream_object_version`: rows from our own PUT/COPY responses (`x-amz-version-id`, origin
   `vaulthalla`, with IV/key version/hash/sizes) and from on-demand `ListObjectVersions` for a path (metadata only, no
   bodies, request-budgeted; origin `observed`). `became_noncurrent_at` when superseded; `gone_at` when no longer listed.
@@ -218,7 +228,12 @@ bucket: choosing `off`/`local_snapshots` does not suspend a bucket that is versi
   deletes upstream → delete marker).
 - **Restore** (`restore(engine, item, expectedSourceId, {accept_unverified, user_id, hooks})`): order is CAS precheck
   (stale → `conflict`, already that generation → `skipped`) → origin check (`UnverifiedVersion`) → pass lease
-  (`PassBusy`) → price preflight (`recovery_restore`, worst case) → HEAD `?versionId` → copy or transfer. Every
+  (`PassBusy`) → price preflight (`recovery_restore`, worst case) → HEAD `?versionId` → verification → copy or
+  transfer. Verification: an origin `vaulthalla` row must match the HEAD (IV + key version when the row is sealed,
+  object size) or the item is `unavailable` ("the bucket's copy differs from what Vaulthalla wrote"); a plaintext
+  version (no `vh-encrypted`, or `false`) in an `encrypt_upstream` vault is `unavailable` unless it is our own recorded
+  plaintext write or the vault's active subscription has `foreign_objects=import` (`subscriptions::importsForeignObjects`,
+  the sync engine's rule) — `accept_unverified` does not override it (a bucket writer could inject content). Every
   request runs under the vault's request budget plus a per-step cap (HEAD 1, COPY 1, GET 1 + object bytes).
   Copy: `CloudEngine::copyObjectVersionAsOwnWrite` (intent + hook with the restored generation); an earlier attempt's
   copy that is already current is reused, never copied twice. Then `adoptIndexOnly` (files row = version metadata,
@@ -312,8 +327,11 @@ Implementation (`recovery/local/Backlog.*`, `storage/CloudEngineBacklog.cpp`, `r
 ### Policy, usage and costs as built (`recovery/{provider/Policy,usage,cost}`, `ops/RecoveryPolicy.cpp`)
 
 - **Who.** status: vault sync.config.view (refresh: + admin.upstream.view + key View). costs and versioningDisclosure:
-  sync.config.view + stats.vault.pricing (`ops::stats::canViewVault`); the disclosure's one inspect needs no key bit (the
-  enable re-checks everything and the token names the person). update: sync.config.edit; a provider change (entering
+  sync.config.view + stats.vault.pricing (`ops::stats::canViewVault`). The disclosure's one inspect, and the bucket
+  configuration it reveals (object lock, MFA delete, foreign lifecycle rule ids, the foreign-rule cap in the figures),
+  need what refresh needs (`polMayReadBucketConfig`); without it the disclosure is the cost report from the recorded
+  versioning state plus generic consequences and a line saying the configuration was not read, and no provider request
+  is made (the enable re-checks everything and the token names the person). update: sync.config.edit; a provider change (entering
   provider_versioning or a retention) + admin.upstream.configure + key Consume; adoption + admin.upstream.provision
   (through `ops::upstream::adoptPreflight`). suspend: like a provider change.
 - **Order of a provider change** (nothing is sent before the first five): vault/bucket → configure + key Consume →
@@ -324,8 +342,11 @@ Implementation (`recovery/local/Backlog.*`, `storage/CloudEngineBacklog.cpp`, `r
   `ops::upstream::detail::adoptBoundBucket`, audited `bucket.adopt`) → PutBucketVersioning Enabled only when not
   Enabled (`policy::putAndConfirm`: ≤ 6 reads, 250 ms doubling; unconfirmed = warning, still recorded enabled since the
   PUT succeeded) → `versioning_settles_at = now + 15 min` (only ever moved later; also for a bucket found Enabled,
-  `enabled_by_vaulthalla` false) → retention → `Policy::upsert` → `recovery::local::invalidatePolicy`. Audit actions:
-  `recovery.disclosure`, `recovery.versioning.enable`, `recovery.retention.set`, `recovery.versioning.suspend`.
+  `enabled_by_vaulthalla` false) → retention → `Policy::upsert` → `recovery::local::invalidatePolicy`. Audit actions
+  (`upstream_audit`, bucket-affecting): `recovery.disclosure`, `recovery.versioning.enable`, `recovery.retention.set`,
+  `recovery.versioning.suspend`. Every `update` also logs its changes field by field to the audit log
+  (`log::Registry::audit()`, like the other ops): mode, snapshot quota, cost alert, local versioning on/off and its
+  limits, provider retention; `warn` when a local retention cut was accepted.
 - **Retention on the bucket.** The owned rule `vaulthalla-managed` gets `NoncurrentDays` (indefinite: removed, the
   rule's other fields kept) plus `vaulthalla-manifest-versions` (prefix `.vaulthalla/`, NoncurrentDays 1, rebuilt from
   fields, `lifecycle::mergeManifestRule`). GET-merge-PUT-GET; every non-Vaulthalla rule id must come back, ours must say

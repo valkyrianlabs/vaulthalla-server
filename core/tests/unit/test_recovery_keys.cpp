@@ -33,6 +33,7 @@
 #include <paths.h>
 #include <sodium.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -41,6 +42,7 @@
 #include <iostream>
 #include <iterator>
 #include <memory>
+#include <span>
 #include <string>
 #include <thread>
 #include <vector>
@@ -257,6 +259,70 @@ TEST_F(RecoveryKeysTest, ResealInMemoryRoundTripsAndRefusesTampering) {
     auto g = std::make_shared<fs::model::File>();
     EXPECT_THROW((void)em->resealToCurrent(tampered, iv, 3, g), storage::IntegrityError);
     EXPECT_TRUE(g->encryption_iv.empty());
+}
+
+// The decrypted bytes (unauthenticated until the tag verifies) are wiped on success and on every failure, in memory
+// and while streaming a file.
+TEST_F(RecoveryKeysTest, ResealWipesThePlaintextOnEveryPath) {
+    struct Seen {
+        std::size_t calls{}, bytes{}, nonZero{};
+    } seen;
+    struct ObserverReset {
+        ~ObserverReset() { cu::setPlaintextWipeObserverForTesting({}); }
+    } const reset;
+    cu::setPlaintextWipeObserverForTesting([&](const std::span<const uint8_t> b) {
+        ++seen.calls;
+        seen.bytes += b.size();
+        seen.nonZero += static_cast<std::size_t>(std::ranges::count_if(b, [](const uint8_t c) { return c != 0; }));
+    });
+    const crypto::SecretKey oldKey(k3), newKey(k5);
+    const auto plaintext = randomBytes(5000);
+    const auto [sealed, ivB64] = seal(plaintext, k3);
+    const auto iv = cu::b64_decode(ivB64);
+
+    Bytes outIv;
+    (void)cu::resealBuffer(sealed, oldKey, iv, newKey, outIv);
+    EXPECT_EQ(seen.calls, 1u) << "success";
+    EXPECT_EQ(seen.bytes, plaintext.size());
+
+    auto tampered = sealed;
+    tampered[17] ^= 0x04;   // the body decrypts to (wrong) plaintext before the tag fails
+    EXPECT_THROW((void)cu::resealBuffer(tampered, oldKey, iv, newKey, outIv), storage::IntegrityError);
+    EXPECT_EQ(seen.calls, 2u) << "failed authentication";
+    auto wrongTag = sealed;
+    wrongTag.back() ^= 0x01;
+    EXPECT_THROW((void)cu::resealBuffer(wrongTag, crypto::SecretKey(k2), iv, newKey, outIv), storage::IntegrityError);
+    EXPECT_EQ(seen.calls, 3u) << "wrong key";
+
+    const auto big = randomBytes(2 * 64 * 1024 + 77);
+    const auto [bigSealed, bigIv] = seal(big, k3);
+    spit(dir / "blob", bigSealed);
+    (void)cu::resealFile(dir / "blob", oldKey, bigIv, dir / "out", newKey);
+    EXPECT_EQ(seen.calls, 4u) << "file, success";
+    auto bigTampered = bigSealed;
+    bigTampered[64 * 1024 + 5] ^= 0x10;
+    spit(dir / "blob", bigTampered);
+    EXPECT_THROW((void)cu::resealFile(dir / "blob", oldKey, bigIv, dir / "out", newKey), storage::IntegrityError);
+    EXPECT_EQ(seen.calls, 5u) << "file, failed authentication";
+    EXPECT_EQ(seen.nonZero, 0u) << "every plaintext buffer was zero when released";
+}
+
+// Unsealed retired keys leave memory once idle, on the service's timer, without another access to the cache.
+TEST_F(RecoveryKeysTest, IdleHistoricalKeysAreEvictedWithoutAnotherAccess) {
+    const auto em = manager();
+    const auto now = std::chrono::steady_clock::now();
+    em->cacheHistoricalKeyForTesting(11, randomBytes(32), now - EncryptionManager::kHistoricalCacheIdle - std::chrono::seconds(1));
+    em->cacheHistoricalKeyForTesting(12, randomBytes(32), now);
+    EXPECT_EQ(em->cachedHistoricalKeyCount(), 2u);
+    EXPECT_TRUE(em->hasKeyVersion(11));
+
+    EXPECT_EQ(em->evictIdleHistoricalKeys(now), 1u);
+    EXPECT_EQ(em->cachedHistoricalKeyCount(), 1u);
+    EXPECT_FALSE(em->hasKeyVersion(11)) << "gone from memory (a TPM-backed manager would unseal it again on demand)";
+    EXPECT_EQ(em->evictIdleHistoricalKeys(now), 0u);
+    EXPECT_EQ(em->evictIdleHistoricalKeys(now + EncryptionManager::kHistoricalCacheIdle + std::chrono::seconds(1)), 1u);
+    EXPECT_EQ(em->cachedHistoricalKeyCount(), 0u);
+    EXPECT_EQ(bytesOf(em->historicalKeySnapshot(3)), k3) << "test-held versions are unaffected";
 }
 
 // ---- against the test database, with the real (test vault master) EncryptionManager -------------------------------

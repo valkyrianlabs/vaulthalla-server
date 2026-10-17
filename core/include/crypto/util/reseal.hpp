@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <span>
 #include <string>
 #include <vector>
@@ -21,9 +22,14 @@ namespace vh::crypto::util {
                                      const SecretKey& newKey);
 
 // In-memory form of resealFile: body‖tag under oldKey/oldIv → body‖tag under newKey, the fresh IV in outIv.
-// Throws storage::IntegrityError (and leaves outIv untouched) when the old tag does not verify.
+// Throws storage::IntegrityError (and leaves outIv untouched) when the old tag does not verify. The decrypted (and,
+// until the tag verifies, unauthenticated) plaintext is wiped on every path, success or failure.
 [[nodiscard]] std::vector<uint8_t> resealBuffer(std::span<const uint8_t> sealed, const SecretKey& oldKey,
                                                 std::span<const uint8_t> oldIv, const SecretKey& newKey,
                                                 std::vector<uint8_t>& outIv);
+
+// Tests: called with each plaintext buffer right after resealFile/resealBuffer wiped it, while it is still allocated
+// (an empty function removes the observer).
+void setPlaintextWipeObserverForTesting(std::function<void(std::span<const uint8_t>)> observer);
 
 }

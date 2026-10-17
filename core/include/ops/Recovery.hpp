@@ -13,9 +13,14 @@
 // vault.recovery.* commands. The only authorizing boundary for recovery; see .claude/context/recovery.md.
 //
 // Who (all through the existing resolvers; no recovery-specific permission bits):
-//   status, costs, versioningDisclosure
-//                                      vault sync.config.view-equivalent: what reads a vault's sync settings and
-//                                      stats.vault.pricing (owner, or admin with vault view + view_stats)
+//   status                             vault sync.config.view
+//   status(refreshProvider)            + admin.upstream.view + View on the vault's API key (one admin inspect)
+//   costs, versioningDisclosure        vault sync.config.view-equivalent: what reads a vault's sync settings and
+//                                      stats.vault.pricing (owner, or admin with vault view + view_stats); the
+//                                      disclosure inspects the bucket and includes its configuration (object lock,
+//                                      MFA delete, foreign lifecycle rule ids) only for callers who may also refresh
+//                                      status; others get the cost report and generic consequences from the recorded
+//                                      state, and no provider request is made
 //   update (mode, quotas, alert,
 //           local versioning)          vault sync.config.edit
 //   provider versioning enable,

@@ -44,6 +44,7 @@
 #include <algorithm>
 #include <chrono>
 #include <regex>
+#include <unordered_set>
 
 namespace vh::ops::recovery {
 
@@ -173,6 +174,22 @@ PolProvider polAuthorizeProvider(const Actor& actor, const uint32_t vaultId, con
     return {.vb = std::move(*vb), .admin = std::move(admin)};
 }
 
+// Reading the bucket's configuration (versioning, object lock, MFA delete, other applications' lifecycle rules) is
+// what status(refresh) needs: admin.upstream.view and View on the vault's API key.
+bool polMayReadBucketConfig(const Actor& actor, const pol::VaultBucket& vb) {
+    return rbac::resolver::Admin::has<PolUpPerm>({.user = actor, .permission = PolUpPerm::View}) &&
+           rbac::resolver::Admin::has<PolKeyPerm>({.user = actor, .permission = PolKeyPerm::View, .api_key_id = vb.api_key_id});
+}
+
+// The bucket's versioning as Vaulthalla last recorded it (no request).
+padmin::Versioning polRecordedVersioning(const pol::VaultBucket& vb) {
+    const auto status = vb.versioning ? vb.versioning->status.value_or("") : std::string{};
+    if (status == "enabled") return padmin::Versioning::Enabled;
+    if (status == "suspended") return padmin::Versioning::Suspended;
+    if (status == "unversioned") return padmin::Versioning::Unversioned;
+    return padmin::Versioning::Unknown;
+}
+
 std::optional<vh::recovery::ProviderRetention> polRecordedRetention(const pol::VaultBucket& vb) {
     if (!vb.versioning) return std::nullopt;
     if (vb.versioning->retention_mode == "days" && vb.versioning->retention_days)
@@ -192,6 +209,81 @@ std::optional<vh::recovery::ProviderRetention> polCurrentRetention(const pol::Va
 bool polShortens(const std::optional<vh::recovery::ProviderRetention>& from, const vh::recovery::ProviderRetention& to) {
     if (!from || to.indefinite) return false;
     return from->indefinite || to.days < from->days;
+}
+
+// Local versioning: what in a change deletes retained local versions sooner ("" = nothing). Retention runs only while
+// local versioning is on (db::Janitor, keep_last right after a capture): turning it off deletes nothing and keeps
+// every version; turning it on (again) applies its limits to everything kept meanwhile. Tighter = a limit added where
+// there was none (or none was applied because versioning was off), or lowered. A vault without retained local versions
+// has no history to lose. The message says how much the next retention run would delete (one retention query; the
+// part the previous limits would have deleted anyway is not counted).
+std::string polLocalShortening(const uint32_t vaultId, const std::string& vaultName,
+                               const vh::recovery::LocalVersioningPolicy& from, const vh::recovery::LocalVersioningPolicy& to) {
+    if (!to.enabled) return {};
+    std::vector<std::string> cuts;
+    const auto limit = [&](const std::string& name, const auto& before, const auto& after) {
+        if (!after) return;
+        const bool applied = from.enabled && before;
+        if (applied && *after >= *before) return;
+        cuts.push_back(name + " " + (applied ? std::to_string(*before) : std::string(from.enabled ? "no limit" : "off")) +
+                       " -> " + std::to_string(*after));
+    };
+    limit("keep_last", from.keep_last, to.keep_last);
+    limit("max_age_days", from.max_age_days, to.max_age_days);
+    limit("quota_bytes", from.quota_bytes, to.quota_bytes);
+    if (cuts.empty()) return {};
+    if (rq::Generation::usage(vaultId).versions.count == 0) return {};
+
+    std::string cutText;
+    for (const auto& c : cuts) cutText += (cutText.empty() ? "" : ", ") + c;
+    std::string now;
+    try {
+        const auto t = polNow();
+        const auto rule = [](const vh::recovery::LocalVersioningPolicy& p) {
+            return rq::RetentionRule{.keep_last = p.keep_last, .max_age_days = p.max_age_days, .quota_bytes = p.quota_bytes};
+        };
+        std::unordered_set<int64_t> anyway;
+        if (from.enabled)
+            for (const auto& g : rq::Generation::listPrunable(vaultId, rule(from), t)) anyway.insert(g.id);
+        uint64_t versions = 0, bytes = 0;
+        for (const auto& g : rq::Generation::listPrunable(vaultId, rule(to), t))
+            if (!anyway.contains(g.id)) {
+                ++versions;
+                bytes += g.size_bytes;
+            }
+        now = versions ? "The next retention run (within 15 minutes) permanently deletes " + std::to_string(versions) +
+                             " local version(s) that exist now (" + std::to_string(bytes) + " bytes of file content)"
+                       : "Nothing that exists now is deleted at once";
+    } catch (const std::exception& e) {
+        log::Registry::storage()->warn("[ops::recovery] vault {}: local versions a retention change deletes not counted: {}",
+                                       vaultId, e.what());
+        now = "Existing local versions may be deleted at the next retention run (within 15 minutes)";
+    }
+    return "This local versioning change for vault '" + vaultName + "' deletes retained history sooner (" + cutText +
+           "). " + now + ", and from then on old versions are deleted sooner than before. Deleted versions can't be "
+           "recovered. Accept to apply it.";
+}
+
+std::string polOptText(const std::optional<uint64_t>& v) { return v ? std::to_string(*v) : std::string("none"); }
+std::string polOptText(const std::optional<unsigned int>& v) { return v ? std::to_string(*v) : std::string("none"); }
+
+// What a policy write changes, field by field ("name before -> after"), for the audit log.
+std::vector<std::string> polPolicyChanges(const rq::PolicyRow& a, const rq::PolicyRow& b) {
+    std::vector<std::string> out;
+    const auto diff = [&](const std::string& name, const std::string& x, const std::string& y) {
+        if (x != y) out.push_back(name + " " + x + " -> " + y);
+    };
+    const auto alert = [](const rq::PolicyRow& r) {
+        return r.cost_alert_monthly ? *r.cost_alert_monthly + " " + r.cost_alert_currency.value_or("") : std::string("none");
+    };
+    diff("mode", vh::recovery::to_string(a.mode), vh::recovery::to_string(b.mode));
+    diff("snapshot_quota_bytes", polOptText(a.snapshot_quota_bytes), polOptText(b.snapshot_quota_bytes));
+    diff("cost_alert_monthly", alert(a), alert(b));
+    diff("local_versioning", a.local_versioning.enabled ? "on" : "off", b.local_versioning.enabled ? "on" : "off");
+    diff("keep_last", polOptText(a.local_versioning.keep_last), polOptText(b.local_versioning.keep_last));
+    diff("max_age_days", polOptText(a.local_versioning.max_age_days), polOptText(b.local_versioning.max_age_days));
+    diff("quota_bytes", polOptText(a.local_versioning.quota_bytes), polOptText(b.local_versioning.quota_bytes));
+    return out;
 }
 
 void polRecordCheck(const pol::VaultBucket& vb, const std::string& status, const std::optional<bool> mfa,
@@ -312,8 +404,7 @@ Status polBuildStatus(const Actor& actor, const uint32_t vaultId, const bool ref
 
     std::optional<pol::RetentionResult> lifecycleView;
     if (refreshProvider && polProviderGap(*vb).empty()) {
-        if (!rbac::resolver::Admin::has<PolUpPerm>({.user = actor, .permission = PolUpPerm::View}) ||
-            !rbac::resolver::Admin::has<PolKeyPerm>({.user = actor, .permission = PolKeyPerm::View, .api_key_id = vb->api_key_id}))
+        if (!polMayReadBucketConfig(actor, *vb))
             throw Denied("re-reading the bucket needs admin.upstream.view and view on the vault's API key");
         if (vb->isProtected()) {
             st.provider.warnings.emplace_back("the bucket is protected: its state was not re-read");
@@ -372,6 +463,7 @@ Status update(const Actor& actor, const uint32_t vaultId, const Update& req) {
     polRequireSync(actor, vaultId, PolSyncPerm::Edit, vault->name);
 
     auto row = rq::Policy::get(vaultId);
+    const auto before = row;
     const auto previousMode = row.mode;
     const auto newMode = req.mode.value_or(row.mode);
 
@@ -390,12 +482,28 @@ Status update(const Actor& actor, const uint32_t vaultId, const Update& req) {
         if (lv.max_age_days && *lv.max_age_days > 36500)
             throw Invalid("local versioning max_age_days must be 1..36500 (0 = no limit)");
     }
+    auto nextLocal = row.local_versioning;
+    if (req.local_versioning) {
+        const auto& patch = *req.local_versioning;
+        if (patch.enabled) nextLocal.enabled = *patch.enabled;
+        if (patch.keep_last) nextLocal.keep_last = *patch.keep_last == 0 ? std::nullopt : patch.keep_last;
+        if (patch.max_age_days) nextLocal.max_age_days = *patch.max_age_days == 0 ? std::nullopt : patch.max_age_days;
+        if (patch.quota_bytes) nextLocal.quota_bytes = *patch.quota_bytes == 0 ? std::nullopt : patch.quota_bytes;
+    }
+    // Deleting local history sooner needs the same explicit acceptance as a shorter provider retention.
+    const auto localCut = polLocalShortening(vaultId, vault->name, row.local_versioning, nextLocal);
 
     std::vector<std::string> warnings;
     std::optional<std::string> catalogCurrency;
     const bool entering = newMode == vh::recovery::Mode::ProviderVersioning &&
                           previousMode != vh::recovery::Mode::ProviderVersioning;
     const bool retentionChange = newMode == vh::recovery::Mode::ProviderVersioning && req.provider_retention.has_value();
+    std::optional<std::string> providerRetentionSet;
+
+    // With a provider change the provider's shortening question (below, before anything is sent) carries this one too,
+    // so one acceptance never covers a consequence that wasn't shown.
+    if (!(entering || retentionChange) && !localCut.empty() && !req.accept_retention_shortening)
+        throw NeedsConfirmation(RETENTION_SHORTEN, localCut);
 
     if (entering || retentionChange) {
         auto ctx = polAuthorizeProvider(actor, vaultId, "recovery.versioning.enable");
@@ -434,11 +542,16 @@ Status update(const Actor& actor, const uint32_t vaultId, const Update& req) {
                 "Vaulthalla can't estimate what versioning will cost on bucket '" + vb.bucket + "' (" +
                 report.unpriced_reason.value_or("no price profile") + "). Accept to enable it without an estimate.");
         const auto current = polCurrentRetention(vb, state.status);
-        if (polShortens(current, *target) && !req.accept_retention_shortening)
-            throw NeedsConfirmation(RETENTION_SHORTEN,
-                "Shortening the retention of bucket '" + vb.bucket + "' from " + polRetentionText(current) + " to " +
-                polRetentionText(target) + " makes the provider permanently delete older noncurrent versions sooner, "
-                "including history that exists now. Accept to shorten it.");
+        const bool providerCut = polShortens(current, *target);
+        if ((providerCut || !localCut.empty()) && !req.accept_retention_shortening) {
+            std::string text = providerCut
+                ? "Shortening the retention of bucket '" + vb.bucket + "' from " + polRetentionText(current) + " to " +
+                      polRetentionText(target) + " makes the provider permanently delete older noncurrent versions "
+                      "sooner, including history that exists now. Accept to shorten it."
+                : std::string{};
+            if (!localCut.empty()) text += (text.empty() ? "" : " ") + localCut;
+            throw NeedsConfirmation(RETENTION_SHORTEN, text);
+        }
 
         if (unmanaged) {
             // The admission preflight (provision + key Consume), then the bucket is adopted for this vault.
@@ -494,6 +607,7 @@ Status update(const Actor& actor, const uint32_t vaultId, const Update& req) {
             if (applied.foreign_whole_days && (target->indefinite || *applied.foreign_whole_days < target->days))
                 warnings.push_back("another application's lifecycle rule deletes noncurrent versions after " +
                                    std::to_string(*applied.foreign_whole_days) + " days, sooner than the retention chosen");
+            providerRetentionSet = (current ? current->str() : std::string("unset")) + " -> " + target->str();
             polAudit(actor, "recovery.retention.set", vb, PolOutcome::Ok,
                      {{"retention", target->str()}, {"previous", current ? current->str() : std::string("unset")},
                       {"written", applied.written}, {"effective_days", applied.effective_days ? nlohmann::json(*applied.effective_days)
@@ -525,14 +639,7 @@ Status update(const Actor& actor, const uint32_t vaultId, const Update& req) {
             row.cost_alert_currency = catalogCurrency.value_or(row.cost_alert_currency.value_or("USD"));
         }
     }
-    if (req.local_versioning) {
-        const auto& patch = *req.local_versioning;
-        auto& lv = row.local_versioning;
-        if (patch.enabled) lv.enabled = *patch.enabled;
-        if (patch.keep_last) lv.keep_last = *patch.keep_last == 0 ? std::nullopt : patch.keep_last;
-        if (patch.max_age_days) lv.max_age_days = *patch.max_age_days == 0 ? std::nullopt : patch.max_age_days;
-        if (patch.quota_bytes) lv.quota_bytes = *patch.quota_bytes == 0 ? std::nullopt : patch.quota_bytes;
-    }
+    row.local_versioning = nextLocal;
     row.updated_by = actor->id;
     try {
         rq::Policy::upsert(row);
@@ -540,9 +647,21 @@ Status update(const Actor& actor, const uint32_t vaultId, const Update& req) {
         throw Invalid(std::string("the recovery settings are out of range: ") + e.what());
     }
     vh::recovery::local::invalidatePolicy(vaultId);   // the local versioning harness re-reads the policy
-    if (previousMode != newMode)
-        log::Registry::audit()->info("[ops::recovery] {} set the recovery mode of vault {} to {}", actor->name(), vaultId,
-                                     vh::recovery::to_string(newMode));
+
+    // Every change, field by field (bucket-affecting steps are also in upstream_audit, above).
+    auto changes = polPolicyChanges(before, row);
+    if (providerRetentionSet) changes.push_back("provider retention " + *providerRetentionSet);
+    if (!changes.empty()) {
+        std::string text;
+        for (const auto& c : changes) text += (text.empty() ? "" : ", ") + c;
+        if (!localCut.empty())
+            log::Registry::audit()->warn("[ops::recovery] {} changed the recovery settings of vault {} ('{}'): {} "
+                                         "(accepted: local versions are deleted sooner)", actor->name(), vaultId,
+                                         vault->name, text);
+        else
+            log::Registry::audit()->info("[ops::recovery] {} changed the recovery settings of vault {} ('{}'): {}",
+                                         actor->name(), vaultId, vault->name, text);
+    }
 
     auto st = polBuildStatus(actor, vaultId, false);
     for (auto& w : warnings) st.warnings.push_back(std::move(w));
@@ -562,23 +681,32 @@ Disclosure versioningDisclosure(const Actor& actor, const uint32_t vaultId,
     auto ctx = polAuthorizeProvider(actor, vaultId, "recovery.disclosure", /*changes=*/false);
     const auto& vb = ctx.vb;
 
-    // The one admin request: versioning, object lock, MFA delete and lifecycle in one inspect.
-    const auto config = polMapped([&] { return ctx.admin->inspect(vb.bucket); });
-    polRecordCheck(vb, pol::to_string(config.versioning), config.mfa_delete, config.object_lock);
+    // Costs are pricing statistics (sync view + pricing). The bucket's configuration is what status(refresh) shows:
+    // only with admin.upstream.view + key View is the bucket inspected (the one admin request: versioning, object lock,
+    // MFA delete and lifecycle) and its details disclosed; otherwise the figures use the recorded versioning state and
+    // no request is made.
+    const bool bucketDetails = polMayReadBucketConfig(actor, vb);
+    std::optional<padmin::BucketConfiguration> config;
     std::optional<pol::RetentionResult> described;
-    if (config.lifecycle_readable) described = pol::describeRetention(config.lifecycle);
+    if (bucketDetails) {
+        config = polMapped([&] { return ctx.admin->inspect(vb.bucket); });
+        polRecordCheck(vb, pol::to_string(config->versioning), config->mfa_delete, config->object_lock);
+        if (config->lifecycle_readable) described = pol::describeRetention(config->lifecycle);
+    }
+    const auto versioning = config ? config->versioning : polRecordedVersioning(vb);
 
     const auto target = retention ? retention : polRecordedRetention(vb);
     const auto now = polNow();
     Disclosure d;
-    d.report = rcost::reportForVault(
-        vaultId, {.retention = target,
-                  .foreign_noncurrent_days = described ? described->foreign_whole_days : std::nullopt,
-                  .versioning_status = pol::to_string(config.versioning)}, now);
+    rcost::GatherOptions gather{.retention = target,
+                                .foreign_noncurrent_days = described ? described->foreign_whole_days : std::nullopt,
+                                .versioning_status = std::nullopt};
+    if (config) gather.versioning_status = pol::to_string(config->versioning);
+    d.report = rcost::reportForVault(vaultId, gather, now);
     rcost::noteAlert(d.report, now);
 
     auto& c = d.consequences;
-    if (config.versioning == padmin::Versioning::Enabled)
+    if (versioning == padmin::Versioning::Enabled)
         c.push_back("Bucket '" + vb.bucket + "' already keeps versions: Vaulthalla will not change that, only record it and "
                     "set the retention.");
     else
@@ -601,6 +729,10 @@ Disclosure versioningDisclosure(const Actor& actor, const uint32_t vaultId,
     c.push_back("Vaulthalla also expires old copies of its own index (" +
                 std::string(storage::upstream::lifecycle::kManifestRulePrefix) + ", rule '" +
                 std::string(storage::upstream::lifecycle::kManifestRuleId) + "') after 1 day.");
+    if (!bucketDetails)
+        c.emplace_back("The bucket's configuration (object lock, MFA delete, other applications' lifecycle rules) was not "
+                       "read: it needs admin.upstream.view and view on the vault's API key. The figures assume no other "
+                       "lifecycle rule expires old versions sooner.");
     if (described && !described->foreign_rules.empty())
         c.push_back("Other lifecycle rules on the bucket already expire noncurrent versions (" +
                     [&] {
@@ -608,10 +740,10 @@ Disclosure versioningDisclosure(const Actor& actor, const uint32_t vaultId,
                         for (const auto& r : described->foreign_rules) s += (s.empty() ? "" : ", ") + r;
                         return s;
                     }() + "); Vaulthalla keeps them unchanged, and the shortest one wins.");
-    if (config.object_lock && *config.object_lock)
+    if (config && config->object_lock && *config->object_lock)
         c.emplace_back("Object lock is enabled on this bucket: versioning can never be suspended and locked versions can't "
                        "be removed early.");
-    if (config.mfa_delete && *config.mfa_delete)
+    if (config && config->mfa_delete && *config->mfa_delete)
         c.emplace_back("MFA delete is enabled: only the root account with an MFA device can delete versions.");
     c.emplace_back("The figures are estimates computed on this host from the price catalog and this vault's own measured "
                    "usage, not an invoice: taxes, discounts and account-wide free tiers are not included.");
@@ -619,7 +751,7 @@ Disclosure versioningDisclosure(const Actor& actor, const uint32_t vaultId,
     d.required_acknowledgements.emplace_back(VERSIONING_DISCLOSURE);
     if (!d.report.priced) d.required_acknowledgements.emplace_back(VERSIONING_UNPRICED);
     if (vb.state() == "unmanaged") d.required_acknowledgements.emplace_back(BUCKET_ADOPTION);
-    if (target && polShortens(polCurrentRetention(vb, config.versioning), *target))
+    if (target && polShortens(polCurrentRetention(vb, versioning), *target))
         d.required_acknowledgements.emplace_back(RETENTION_SHORTEN);
 
     d.expires_at = now + std::chrono::duration_cast<std::chrono::seconds>(pol::kDisclosureLifetime).count();
@@ -628,7 +760,7 @@ Disclosure versioningDisclosure(const Actor& actor, const uint32_t vaultId,
                               d.expires_at);
     polAudit(actor, "recovery.disclosure", vb, PolOutcome::Ok,
              {{"retention", target ? target->str() : std::string("unset")}, {"priced", d.report.priced},
-              {"versioning", pol::to_string(config.versioning)}});
+              {"versioning", pol::to_string(versioning)}, {"bucket_details", bucketDetails}});
     return d;
 }
 
