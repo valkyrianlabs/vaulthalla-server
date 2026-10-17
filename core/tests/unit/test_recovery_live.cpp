@@ -86,6 +86,9 @@ public:
         touch(bucket);
         return in_->headBucket(bucket);
     }
+    void setKnownRegion(const std::string& bucket, const std::string& region) override {
+        in_->setKnownRegion(bucket, region);
+    }
     void createBucket(const padmin::CreateBucketRequest& request) override {
         touch(request.name);
         in_->createBucket(request);

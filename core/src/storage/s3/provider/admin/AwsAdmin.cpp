@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <stdexcept>
+#include <vector>
 
 namespace vh::storage::s3::provider::admin {
 
@@ -86,31 +87,57 @@ std::string AwsAdmin::regionOf(const std::string& bucket) {
     return defaultRegion();
 }
 
+void AwsAdmin::setKnownRegion(const std::string& bucket, const std::string& region) {
+    if (storage::upstream::validAwsRegion(region)) knownRegions_[bucket] = region;
+}
+
+std::optional<std::string> AwsAdmin::knownRegion(const std::string& bucket) const {
+    if (const auto it = regions_.find(bucket); it != regions_.end()) return it->second;
+    if (const auto it = knownRegions_.find(bucket); it != knownRegions_.end()) return it->second;
+    // Buckets usually live where their key does (Vaulthalla creates them there).
+    if (!key_->region.empty() && key_->region != "auto" && storage::upstream::validAwsRegion(key_->region))
+        return key_->region;
+    return std::nullopt;
+}
+
 std::optional<std::string> AwsAdmin::headBucket(const std::string& bucket) {
     if (bucket.empty()) throw std::invalid_argument("bucket name is required");
     storage::upstream::requireValidBucketName(bucket);
     storage::upstream::guard::require(bucketIdentity(bucket));
 
-    // The global endpoint answers for every bucket: 200 here, or a redirect/400 naming its region.
+    // us-east-1 is the global endpoint, which answers for every bucket: 200 here, or a redirect/400 naming its region.
     const auto probe = [&](const std::string& region) {
         auto c = detail::call("HEAD", {}, "/" + bucket);
         return call({region == "us-east-1" ? std::string("s3.amazonaws.com") : s3Host(region), region, "s3"}, c, "head");
     };
-    auto response = probe("us-east-1");
-    if (response.transport_ok && response.status == 404) return std::nullopt;
-    auto region = response.header("x-amz-bucket-region");
-    if (region && !storage::upstream::validAwsRegion(*region)) region.reset();   // never route by a malformed header
-    if (response.ok()) {
-        regions_[bucket] = region.value_or("us-east-1");
-        return regions_[bucket];
-    }
-    if (region && *region != "us-east-1") {
-        response = probe(*region);
-        if (response.ok()) {
-            regions_[bucket] = *region;
-            return region;
-        }
+
+    // #247: straight to the known region (one HEAD when it is right). At most three HEADs: the known region, the
+    // region a response names, and the global endpoint when a redirect names none.
+    std::vector<std::string> tried;
+    auto target = knownRegion(bucket).value_or("us-east-1");
+    curl::http::Response response;
+    for (;;) {
+        tried.push_back(target);
+        response = probe(target);
         if (response.transport_ok && response.status == 404) return std::nullopt;
+        auto region = response.header("x-amz-bucket-region");
+        if (region && !storage::upstream::validAwsRegion(*region)) region.reset();   // never route by a malformed header
+        if (response.ok()) {
+            regions_[bucket] = region.value_or(target);
+            return regions_[bucket];
+        }
+        const auto triedAlready = [&](const std::string& r) { return std::ranges::find(tried, r) != tried.end(); };
+        if (region && !triedAlready(*region)) {
+            target = *region;
+            continue;
+        }
+        const bool redirect = response.transport_ok &&
+                              (response.status == 301 || response.status == 307 || response.status == 400);
+        if (!region && redirect && !triedAlready("us-east-1")) {
+            target = "us-east-1";
+            continue;
+        }
+        break;
     }
     throw detail::makeError("HeadBucket " + bucket, response, detail::s3Error(response), secrets());
 }

@@ -95,46 +95,49 @@ std::vector<std::shared_ptr<File>> vh::fs::model::filesFromS3XML(const std::u8st
         return {};
     }
 
-    pugi::xml_node root = doc.child("ListBucketResult");
-    if (!root) {
+    // Controller::listObjects concatenates one ListBucketResult per ListObjectsV2 page: read every page, not just
+    // the first (a bucket over 1000 objects used to index only its first page, #246).
+    if (!doc.child("ListBucketResult")) {
         log::Registry::types()->error("[File] [filesFromS3XML] No ListBucketResult node found in XML");
         return {};
     }
 
-    for (pugi::xml_node content : root.children("Contents")) {
-        auto keyNode = content.child("Key");
-        auto sizeNode = content.child("Size");
-        auto modifiedNode = content.child("LastModified");
+    for (pugi::xml_node root : doc.children("ListBucketResult")) {
+        for (pugi::xml_node content : root.children("Contents")) {
+            auto keyNode = content.child("Key");
+            auto sizeNode = content.child("Size");
+            auto modifiedNode = content.child("LastModified");
 
-        if (!keyNode || !sizeNode || !modifiedNode) {
-            log::Registry::types()->warn("[File] [filesFromS3XML] Skipping entry due to missing child elements");
-            continue;
+            if (!keyNode || !sizeNode || !modifiedNode) {
+                log::Registry::types()->warn("[File] [filesFromS3XML] Skipping entry due to missing child elements");
+                continue;
+            }
+
+            const std::u8string key = reinterpret_cast<const char8_t*>(keyNode.text().get());
+            if (vh::sync::model::remote_manifest::isVaulthallaManifestKey(
+                    std::string(reinterpret_cast<const char*>(key.c_str()))))
+                continue;
+
+            const std::string lastMod = modifiedNode.text().get();
+            const uint64_t size = std::stoull(sizeNode.text().get());
+
+            std::tm tm{};
+            std::istringstream ss(lastMod);
+            ss >> std::get_time(&tm, "%Y-%m-%dT%H:%M:%S");
+            std::time_t ts = ss.fail() ? std::time(nullptr) : timegm(&tm);
+
+            auto file = std::make_shared<File>(std::string(reinterpret_cast<const char*>(key.c_str())), size, ts);
+            if (const auto storageClassNode = content.child("StorageClass"))
+                file->remote_storage_class = storageClassNode.text().get();
+            if (const auto eTagNode = content.child("ETag"))
+                file->remote_etag = eTagNode.text().get();
+            if (const auto restoreStatusNode = content.child("RestoreStatus")) {
+                std::ostringstream restore;
+                restoreStatusNode.print(restore, "", pugi::format_raw);
+                file->remote_restore_status = restore.str();
+            }
+            files.push_back(file);
         }
-
-        const std::u8string key = reinterpret_cast<const char8_t*>(keyNode.text().get());
-        if (vh::sync::model::remote_manifest::isVaulthallaManifestKey(
-                std::string(reinterpret_cast<const char*>(key.c_str()))))
-            continue;
-
-        const std::string lastMod = modifiedNode.text().get();
-        const uint64_t size = std::stoull(sizeNode.text().get());
-
-        std::tm tm{};
-        std::istringstream ss(lastMod);
-        ss >> std::get_time(&tm, "%Y-%m-%dT%H:%M:%S");
-        std::time_t ts = ss.fail() ? std::time(nullptr) : timegm(&tm);
-
-        auto file = std::make_shared<File>(std::string(reinterpret_cast<const char*>(key.c_str())), size, ts);
-        if (const auto storageClassNode = content.child("StorageClass"))
-            file->remote_storage_class = storageClassNode.text().get();
-        if (const auto eTagNode = content.child("ETag"))
-            file->remote_etag = eTagNode.text().get();
-        if (const auto restoreStatusNode = content.child("RestoreStatus")) {
-            std::ostringstream restore;
-            restoreStatusNode.print(restore, "", pugi::format_raw);
-            file->remote_restore_status = restore.str();
-        }
-        files.push_back(file);
     }
 
     return files;

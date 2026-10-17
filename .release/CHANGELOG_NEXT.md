@@ -57,3 +57,16 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   selected `*` from `vault_keys_trashed`, which has no `updated_at`).
 - Deleting a folder (web console, ws `fs.entry.delete`) also drops its subfolders and symlinks from the filesystem
   metadata cache; recreating a path under the deleted folder failed.
+- S3 sync: a full bucket LIST throws when any page fails (transport error, 403/503, cut or non-XML body) instead of
+  returning the keys gathered so far, and every page of a listing reaches the remote index (buckets past 1,000
+  objects indexed only their first page) (#246).
+- Upstream admin (AWS): HeadBucket goes straight to the bucket's known region (cached, `upstream_bucket.region`, else
+  the key's region): one request instead of a global-endpoint probe plus a regional one; the global endpoint is
+  probed only when no region is known or a redirect names none (#247).
+- S3 sync: a pass publishes the remote index manifest once (a vault's first pass PUT it twice: after the full LIST
+  and again after its uploads); a pass that stops early still publishes the listed index; the expected 404 for a
+  missing manifest (and any absent object's HEAD) is logged at debug, not as an error (#248).
+- Local versioning: pending upstream versions of a deleted file whose key is never written again no longer stay
+  pending forever: maintenance replays them into a bucket that keeps history (under the sync pass lease,
+  price-preflighted, then deleted again so the file stays deleted) or marks them skipped (`orphaned`) when the bucket
+  keeps none or never had the file, so retention can free their blobs; live and trashed keys are left to sync (#249).

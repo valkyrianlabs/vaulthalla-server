@@ -4,6 +4,7 @@
 // indexes it, restores a chosen generation without a second upload and keeps no local duplicate. DB-backed.
 
 #include "../helpers/recovery_provider_harness.hpp"
+#include "sync/model/RemoteManifest.hpp"
 
 #include <gtest/gtest.h>
 
@@ -138,6 +139,111 @@ TEST_F(RecoverySmartCacheTest, HistoryStaysUpstreamAndARestoreIsOneCopyWithNoSec
     EXPECT_EQ(summary.unknown_size, 0u);
     EXPECT_EQ(summary.delete_markers, 0u);
     EXPECT_TRUE(summary.oldest_noncurrent_at.has_value());
+}
+
+
+// ---- the index manifest (#248) -------------------------------------------------------------------------------------
+
+namespace manifest = sync::model::remote_manifest;
+
+std::vector<std::string> manifestKeys(const VersionedBucket& bucket, const uint32_t vaultId) {
+    const auto current = bucket.current(manifest::INDEX_V1_KEY);
+    if (!current) return {};
+    std::vector<std::string> keys;
+    for (const auto& file : manifest::parseIndexV1(std::string(current->body.begin(), current->body.end()), vaultId))
+        keys.push_back(file->path.string());
+    std::ranges::sort(keys);
+    return keys;
+}
+
+// A vault's first pass (no manifest yet: full LIST, then uploads) used to PUT the manifest twice: right after the
+// LIST and again after the uploads (PUT 3 = object + 2 manifests). Now the pass publishes once, with its changes.
+TEST_F(RecoverySmartCacheTest, AVaultsFirstPassPublishesTheIndexManifestOnce) {
+    auto f = versionedVault(Strategy::Cache, false, Versioning::Enabled);
+    f.bucket->seed("already/there.txt", std::string("foreign object"));
+    put(f, "/first/report.txt", "the first file of a new vault");
+    f.bucket->resetCounters();
+
+    const auto plan = runPass(f);
+    ASSERT_EQ(transfers(plan), 1u);
+    EXPECT_EQ(manifestVersions(f), 1u) << "one manifest publish per pass";
+    const auto c = f.bucket->counters();
+    EXPECT_EQ(c.put, 2u) << "the object and one manifest";
+    EXPECT_EQ(c.list, 1u);
+    EXPECT_FALSE(f.engine->remoteIndexPublishPending());
+    // The one manifest carries both the LIST and the pass's upload, and its ETag is the one Vaulthalla recorded (the
+    // next pass must not reload it).
+    EXPECT_EQ(manifestKeys(*f.bucket, f.vault->id),
+              (std::vector<std::string>{"/already/there.txt", "/first/report.txt"}));
+    EXPECT_EQ(db::query::sync::RemoteObjectIndex::getManifestETag(f.vault->id, manifest::INDEX_V1_KEY),
+              std::optional<std::string>(f.bucket->current(manifest::INDEX_V1_KEY)->etag));
+
+    // Nothing changed: the next pass reads the manifest's HEAD and publishes nothing.
+    f.bucket->resetCounters();
+    const auto next = runPass(f);
+    EXPECT_EQ(transfers(next), 0u);
+    EXPECT_EQ(manifestVersions(f), 1u);
+    EXPECT_EQ(f.bucket->counters().put, 0u);
+    EXPECT_EQ(f.bucket->counters().list, 0u);
+}
+
+// A first pass that changes nothing still publishes the listed index (once), and one that stops before publishing
+// (failed operations, an error after the LIST) publishes it on the way out, never twice.
+TEST_F(RecoverySmartCacheTest, AListedIndexIsPublishedOnceEvenWhenThePassStopsEarly) {
+    {
+        auto f = versionedVault(Strategy::Cache, false, Versioning::Enabled);
+        f.bucket->seed("listed/only.txt", std::string("foreign object"));
+        f.bucket->resetCounters();
+        (void)runPass(f);
+        EXPECT_EQ(manifestVersions(f), 1u);
+        EXPECT_EQ(f.bucket->counters().put, 1u);
+        EXPECT_EQ(manifestKeys(*f.bucket, f.vault->id), (std::vector<std::string>{"/listed/only.txt"}));
+    }
+    {
+        auto f = versionedVault(Strategy::Cache, false, Versioning::Enabled);
+        f.bucket->seed("listed/only.txt", std::string("foreign object"));
+        auto cloud = std::make_shared<sync::Cloud>(f.engine);
+        cloud->event = std::make_shared<sync::model::Event>();
+        cloud->event->vault_id = f.vault->id;
+        cloud->event->timestamp_begin = std::time(nullptr);
+        db::query::sync::Event::create(cloud->event);
+        cloud->initBins();
+        EXPECT_EQ(manifestVersions(f), 0u) << "the LIST no longer publishes on its own";
+        EXPECT_TRUE(f.engine->remoteIndexPublishPending());
+        // Cloud::operator() after a pass that never reached applyRemoteIndexMutation:
+        f.engine->publishPendingRemoteIndexManifest();
+        EXPECT_EQ(manifestVersions(f), 1u);
+        EXPECT_FALSE(f.engine->remoteIndexPublishPending());
+        f.engine->publishPendingRemoteIndexManifest();
+        EXPECT_EQ(manifestVersions(f), 1u) << "nothing pending: no second publish";
+        cloud->clearBins();
+    }
+}
+
+// Invariant (upstream-control-plane.md): a stale manifest resurrects deleted objects. When another writer's manifest
+// appears between the LIST and the pass's publish, the listed index wins (ETag refreshed, overwritten), as the
+// post-LIST publish did; it is never reloaded from that manifest.
+TEST_F(RecoverySmartCacheTest, AManifestWrittenAfterTheListNeverReplacesTheListedIndex) {
+    auto f = versionedVault(Strategy::Cache, false, Versioning::Enabled);
+    f.bucket->seed("live/a.txt", std::string("still here"));
+    auto cloud = std::make_shared<sync::Cloud>(f.engine);
+    cloud->event = std::make_shared<sync::model::Event>();
+    cloud->event->vault_id = f.vault->id;
+    cloud->event->timestamp_begin = std::time(nullptr);
+    db::query::sync::Event::create(cloud->event);
+    cloud->initBins();
+
+    auto ghost = std::make_shared<fs::model::File>(std::string("ghost/deleted.txt"), 5, std::time(nullptr));
+    ghost->remote_etag = "\"ghost\"";
+    const auto stale = manifest::buildIndexV1(f.vault->id, {ghost});
+    (void)f.bucket->seed(manifest::INDEX_V1_KEY, std::vector<uint8_t>(stale.begin(), stale.end()));
+
+    f.engine->applyRemoteIndexMutation(cloud->planPass());
+    cloud->clearBins();
+    EXPECT_EQ(manifestKeys(*f.bucket, f.vault->id), (std::vector<std::string>{"/live/a.txt"}));
+    EXPECT_FALSE(db::query::sync::RemoteObjectIndex::getFile(f.vault->id, "/ghost/deleted.txt"));
+    EXPECT_TRUE(db::query::sync::RemoteObjectIndex::getFile(f.vault->id, "/live/a.txt"));
+    EXPECT_EQ(manifestVersions(f), 2u) << "the stale one + ours";
 }
 
 }

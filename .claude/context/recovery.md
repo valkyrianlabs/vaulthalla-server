@@ -68,8 +68,9 @@ bucket: choosing `off`/`local_snapshots` does not suspend a bucket that is versi
   quota does as a last resort (oldest first, marked `skipped` with `upstream_error = 'quota'`, logged, reported as
   `pending_dropped`); a blob still referenced
   by a snapshot is never deleted (refcount = referencing `file_versions` rows). `db::Janitor` runs
-  `recovery::local::versions::maintain` every 15 min (retention for vaults with local versioning on; the pending
-  backlog of upstream vaults whose bucket status isn't `enabled` is marked `skipped`) and, at startup and then daily,
+  `recovery::local::versions::maintain` every 15 min (retention for vaults with local versioning on; the orphaned
+  backlog is settled, below; the rest of the pending backlog of upstream vaults whose bucket status isn't `enabled` is
+  marked `skipped`) and, at startup and then daily,
   `store::sweep` for every vault with a store directory (orphans of crashed captures, unreferenced rows). keep_last is
   also applied right after a capture, in its transaction (bounded: only once the file's version number exceeds it, at
   most 64 rows); the freed blobs go after commit, and after the content lock is released where one is held (FUSE
@@ -269,13 +270,14 @@ bucket: choosing `off`/`local_snapshots` does not suspend a bucket that is versi
 - **Live acceptance on real AWS S3** (`test_recovery_live.cpp`, run per testing.md "Live provider tests"; passed
   2026-10-16, us-east-2, fresh test buckets): the same scenario through ops (disclosure → `update` with
   `accept_adoption` on a new bucket → list → plan → restore → costs), real `CloudEngine`, prices from the signed
-  fixture catalog. Measured: each upload pass PUT 2 (object + manifest; the vault's first pass PUTs the manifest
-  twice: PUT 3); listing 4 versions = LIST 1, 0 HEAD/GET; restore by copy = COPY 1, HEAD 2, PUT 1 (manifest), GET 0;
+  fixture catalog. Measured: each upload pass PUT 2 (object + manifest; the vault's first pass PUT the manifest
+  twice, PUT 3, until #248: now PUT 2 too); listing 4 versions = LIST 1, 0 HEAD/GET; restore by copy = COPY 1, HEAD 2, PUT 1 (manifest), GET 0;
   hydrate read = HEAD 1 + GET 1; next pass = HEAD 1 (manifest), 0 PUT; noncurrent 4 versions / 185 B exact; costs
   `active`, priced, month-to-date non-null. Across a key rotation: `provider_transfer`, GET 1 + PUT 2 (object +
   manifest), COPY 0, current object carries the new key version. Disclosure = 6 admin requests, enable (adoption +
-  versioning + retention) = 29 (HEAD 12: `AwsAdmin::headBucket` probes the global endpoint then the region, and
-  `inspect` re-HEADs even with the region cached). R2: refused with `kR2VersioningUnsupported`, 0 requests of any
+  versioning + retention) = 29 (HEAD 12: `AwsAdmin::headBucket` probed the global endpoint then the region on every
+  call; since #247 a known region (cache, `upstream_bucket.region`, else the key's region) is one HEAD, so the
+  enable should drop to ~23; not re-measured live). R2: refused with `kR2VersioningUnsupported`, 0 requests of any
   kind, local snapshot + restore on the same vault works. Nothing failed on real AWS that passed on the fake.
 
 ## Local versions as the upstream backlog
@@ -332,8 +334,16 @@ Implementation (`recovery/local/Backlog.*`, `storage/CloudEngineBacklog.cpp`, `r
   the plan's uploads and remote deletes, only while the bucket keeps history (`backlog::addPlannedReplays`).
   Request budgets apply to replay PUTs like any other request.
 - `backlog::summary(vaultId)` → `recovery::Backlog` (status).
-- Open: pending rows of a deleted file whose key Vaulthalla never writes or deletes again (versioned bucket, no new
-  file at the path) stay pending until the bucket loses history (bounded by the per-key cap and the version quota).
+- Orphaned backlog (#249, `backlog::settleOrphaned`, from `versions::maintain` only, ≤ 256 rows per vault per run):
+  pending rows whose key has no `fs_entry` at its path, no unpurged `files_trashed` entry, and no
+  `remote_object_index` row (the trash purge deletes upstream without replaying, or the key is never written again).
+  Rows of any other key stay a pass's. Bucket keeps history → under the vault's pass lease (busy: next run),
+  price-preflighted (`metering::PriceReservation`, operation `backlog_settle`), a strict HEAD confirms absence (present:
+  left alone), replay oldest first, then a DELETE (delete marker) so the key stays deleted and the index row the replay
+  added is removed; a key whose content the bucket never had (no non-delete-marker version known, nothing `sent`) is
+  skipped `'orphaned'` without a request. No history (status not `enabled`) → `'orphaned'`, no request. Propagating →
+  wait. A DELETE failing after a replay PUT leaves the replayed generation current and indexed (logged; a pass would
+  offer it as remote-only). The trash purge itself (`Local::removeTrashedFiles`) still deletes without replaying first.
 
 ## Costs (computed locally; nothing leaves the host)
 
@@ -479,7 +489,8 @@ are kept. `db::Janitor` expires plans and purges finished/expired ones after 30 
 
 Open, consolidated from the slices (the sections above keep the detail):
 
-- **Backlog:** pending rows of a deleted file whose key Vaulthalla never writes again stay pending; conflict keep_local
+- **Backlog:** pending rows of a deleted file are settled by maintenance since #249 (replayed + re-deleted, or
+  `'orphaned'`), up to 15 min late; the trash purge deletes upstream without replaying first; conflict keep_local
   uploads without replaying first (and its preflight doesn't price replays).
 - **Version index:** permanent deletes of noncurrent versions and our own delete markers are learned only from the next
   complete listing. Live event delivery on a versioned bucket is unproven.

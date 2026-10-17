@@ -119,6 +119,17 @@ std::unique_ptr<padmin::AdminClient> adminClient(const api_keys::APIKeyPtr& key)
     return client;
 }
 
+// The same, told the bucket's region as Vaulthalla last recorded it (upstream_bucket.region): AWS then sends one HEAD
+// to that region instead of probing the global endpoint first (#247). A wrong record costs one redirect, never a
+// wrong answer.
+std::unique_ptr<padmin::AdminClient> adminClient(const api_keys::APIKeyPtr& key, const BucketIdentity& id) {
+    auto client = adminClient(key);
+    if (id.account_ref)
+        if (const auto row = BucketQuery::getByIdentity(id.provider, *id.account_ref, id.bucket); row && row->region)
+            client->setKnownRegion(id.bucket, *row->region);
+    return client;
+}
+
 // A provisioning region becomes part of a host name (AWS) or a CreateBucket body: only real values.
 void requireValidRegion(const vault::model::APIKey& key, const std::string& region) {
     if (key.provider == vault::model::S3Provider::CloudflareR2) {
@@ -585,7 +596,7 @@ Inspection inspect(const Actor& actor, const KeyRef& ref, const std::string& buc
     auto key = authorize(actor, ref, UpPerm::View, KeyPerm::View);
     const auto id = identityOf(key, bucket);
     requireUnprotected(actor, id, "inspect", key->id);
-    auto client = adminClient(key);
+    auto client = adminClient(key, id);
     Inspection out;
     out.config = mapped([&] { return client->inspect(bucket); });
     out.bucket = rowFor(id, out.config.region);
@@ -626,7 +637,7 @@ Inspection setLifecycle(const Actor& actor, const KeyRef& ref, const std::string
                       "narrowing its prefix would leave part of the vault without it. Change the retention with "
                       "vh vault recovery set instead");
 
-    auto client = adminClient(key);
+    auto client = adminClient(key, id);
     const bool written = mapped([&] { return applyLifecycle(*client, *key, bucket, patch); });
     if (retentionTarget)
         BucketQuery::recordRetention(row->id, retentionTarget->indefinite ? "indefinite" : "days",
@@ -649,7 +660,7 @@ AdmissionReport adoptPreflight(const Actor& actor, const KeyRef& ref, const std:
     auto key = authorize(actor, ref, UpPerm::Provision, KeyPerm::Consume);
     const auto id = identityOf(key, bucket);
     requireUnprotected(actor, id, "adopt.preflight", key->id);
-    auto client = adminClient(key);
+    auto client = adminClient(key, id);
     const auto full = withSecrets(key);
 
     AdmissionReport r;
@@ -830,7 +841,7 @@ void detail::adoptBoundBucket(const Actor& actor, const unsigned int apiKeyId, c
         if (b.vault_id != vaultId)
             throw Conflict("bucket '" + bucket + "' is also used by vault '" + b.vault_name + "' (ID " +
                            std::to_string(b.vault_id) + "); Vaulthalla adopts a bucket for one vault only");
-    auto client = adminClient(key);
+    auto client = adminClient(key, id);
     const auto region = mapped([&] { return client->headBucket(bucket); });
     if (!region) throw NotFound("bucket '" + bucket + "' does not exist");
 
@@ -907,7 +918,7 @@ BucketRow detach(const Actor& actor, const KeyRef& ref, const std::string& bucke
                        std::string(row->provisioning_state == bmodel::ProvisioningState::Deleting ? "cleaned up" : "provisioned") +
                        " right now; try again when that has finished");
 
-    auto client = adminClient(key);
+    auto client = adminClient(key, id);
     bool lifecycleRemoved = false;
     try {
         LifecyclePatch clear;
@@ -976,7 +987,7 @@ CleanupPlan cleanupPreflight(const Actor& actor, const KeyRef& ref, const std::s
     plan.blockers = cleanupBlockers(id, row);
     if (!plan.blockers.empty()) return plan;   // nothing is listed for a bucket we may not delete
 
-    auto client = adminClient(key);
+    auto client = adminClient(key, id);
     const auto config = mapped([&] { return client->inspect(bucket); });
     plan.versioning = config.versioning;
     plan.object_lock = config.object_lock;
@@ -1018,7 +1029,7 @@ CleanupResult cleanup(const Actor& actor, const KeyRef& ref, const std::string& 
         auditRecord(actor, "cleanup", id, key->id, std::nullopt, bmodel::AuditOutcome::Refused, {{"blockers", blockers}});
         throw Conflict("bucket '" + bucket + "' can't be cleaned up: " + blockers.front());
     }
-    auto client = adminClient(key);
+    auto client = adminClient(key, id);
     const auto now = mapped([&] { return cleanupx::count(*client, bucket); });
     if (!cleanupx::sameAs(*seen, now)) {
         auditRecord(actor, "cleanup", id, key->id, std::nullopt, bmodel::AuditOutcome::Refused,

@@ -175,6 +175,10 @@ public:
     [[nodiscard]] virtual BucketPage listBuckets(const std::string& token = {}, unsigned int max = 1000) = 0;
     // nullopt = does not exist (404). Throws ProviderError on 403 (exists but not ours) and other failures.
     [[nodiscard]] virtual std::optional<std::string> headBucket(const std::string& bucket) = 0;
+    // The bucket's region as the caller last recorded it (upstream_bucket.region). A routing hint only: providers
+    // with regional endpoints (AWS) send their first HEAD there instead of the global endpoint; a stale hint costs a
+    // redirect, never a wrong answer. Invalid values are ignored.
+    virtual void setKnownRegion(const std::string& /*bucket*/, const std::string& /*region*/) {}
     // Throws ProviderError with code BucketAlreadyExists / BucketAlreadyOwnedByYou on collision. Never succeeds on a
     // bucket that already exists unless the provider hides it (AWS us-east-1); callers verify emptiness afterwards.
     virtual void createBucket(const CreateBucketRequest& request) = 0;

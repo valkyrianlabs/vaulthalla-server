@@ -5,7 +5,9 @@
 #include "storage/Fwd.hpp"
 #include "sync/Fwd.hpp"
 
+#include <cstddef>
 #include <cstdint>
+#include <ctime>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -50,5 +52,32 @@ void addPlannedReplays(uint32_t vaultId, const std::vector<sync::model::Action>&
                        sync::model::S3CostEstimate& estimate) noexcept;
 
 [[nodiscard]] Backlog summary(uint32_t vaultId);
+
+// ---- orphaned backlog (#249) ------------------------------------------------------------------------------------------
+
+struct SettleReport {
+    uint64_t keys{};              // orphaned keys looked at
+    uint64_t sent{}, already_upstream{}, skipped{}, released{}, failed{};
+    uint64_t orphaned{};          // skipped with upstream_error 'orphaned'
+    bool busy{false};             // the vault's sync pass held the lease: nothing done, next run
+    std::vector<std::string> errors;
+};
+
+// db::Janitor (versions::maintain) only, never on a FUSE or HTTP path. Pending generations whose key no write or
+// delete will ever replay: no live entry at the key's path, no trashed entry still waiting for its upstream delete,
+// and not in the remote index (the delete already reached the bucket, or the key never did). Rows of any other key are
+// never touched. At most maxRows rows per call (whole keys, oldest first).
+//   bucket keeps history (enabled, settled)  under the vault's sync pass lease, price-preflighted, after a HEAD
+//                                            confirms the key is absent (present: left to the next pass): the key's
+//                                            generations are replayed oldest first, then a delete marker puts the key
+//                                            back to deleted (the last replay had made it current again). A key the
+//                                            bucket never had (no provider version known, nothing ever sent) has no
+//                                            history to complete: skipped 'orphaned', no request
+//   no history (unversioned, suspended,     skipped 'orphaned' (no request)
+//   unknown, R2)
+//   versioning still propagating            left pending until it settles
+// Then retention (or smart-cache release) can drop the blobs. Provider errors stop the run (in errors); a database
+// error throws (maintain records it for the vault).
+SettleReport settleOrphaned(const storage::CloudEngine& engine, std::size_t maxRows, std::time_t now);
 
 }
