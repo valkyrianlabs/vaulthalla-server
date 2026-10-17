@@ -58,7 +58,9 @@ bucket: choosing `off`/`local_snapshots` does not suspend a bucket that is versi
   walk) and against `snapshot_quota_bytes` / `version_quota_bytes`. Vault purge removes `.vh-recovery/<alias>` with
   the backing dirs.
 - Retention: snapshots are kept until deleted. Local versions: `version_keep_last` per file, `version_max_age_days`,
-  `version_quota_bytes` (oldest first); a generation still `pending` upstream is never pruned; a blob still referenced
+  `version_quota_bytes` (oldest first); keep_last and max age never prune a generation still `pending` upstream, the
+  quota does as a last resort (oldest first, marked `skipped` with `upstream_error = 'quota'`, logged, reported as
+  `pending_dropped`); a blob still referenced
   by a snapshot is never deleted (refcount = referencing `file_versions` rows). `db::Janitor` runs
   `recovery::local::versions::maintain` every 15 min (retention for vaults with local versioning on; the pending
   backlog of upstream vaults whose bucket status isn't `enabled` is marked `skipped`) and, at startup and then daily,
@@ -245,6 +247,10 @@ For upstream vaults with local versioning on, retained generations are also the 
 `file_versions.upstream_state` `pending` → `sent` (provider version id recorded) | `skipped`.
 
 - When the provider doesn't respond, writes keep working locally and generations queue up in `version_number` order.
+  The backlog of one key is bounded: `Pending::attach` keeps at most keep_last (else `versions::kDefaultPendingCap` =
+  32) pending versions per `upstream_key`; older ones become `skipped` with `upstream_error = 'coalesced'` (not
+  replayed; still local versions under the normal retention, so with keep_last they are pruned in the same
+  transaction and their blobs freed). Counted in `versions::counters().coalesced` and logged.
 - When it responds again and the bucket has provider versioning enabled+settled, the upload of a file first replays
   its pending generations oldest-first (each PUT carries the generation's own IV/key-version metadata), then the
   current content, so the provider's history matches local history. Price preflight and request budgets cover the

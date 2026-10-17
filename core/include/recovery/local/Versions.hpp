@@ -53,6 +53,9 @@ void invalidateAllPolicies() noexcept;
 
 namespace vh::recovery::local::versions {
 
+// The upstream backlog a key keeps pending when the policy has no keep_last (with one, keep_last is the cap).
+inline constexpr unsigned int kDefaultPendingCap = 32;
+
 struct RetainOptions {
     std::optional<uint32_t> actor{};      // created_by
     // Queue the generation as upstream backlog ('pending') in an upstream-backed vault. retain() also turns it off
@@ -103,6 +106,7 @@ private:
     std::optional<unsigned int> keepLast_;
     std::optional<db::query::recovery::InsertedGeneration> inserted_;
     std::vector<int64_t> freedBlobs_;
+    uint64_t coalesced_{};
 };
 
 // Tests: runs at the start of every attach(), inside its savepoint (a seam to remove a reused blob, or fail a statement,
@@ -113,6 +117,7 @@ void setAttachHookForTesting(std::function<void(pqxx::work&)> hook);
 
 struct RetentionReport {
     uint64_t versions_removed{}, blobs_removed{};
+    uint64_t pending_dropped{};   // unsent versions the quota removed (skipped 'quota' first, logged)
 };
 
 // The policy's keep_last / max_age_days / quota_bytes for one vault (oldest first; never pending, never a blob a
@@ -120,7 +125,7 @@ struct RetentionReport {
 RetentionReport applyRetention(const store::VaultRef& vault, const LocalVersioningPolicy& policy, std::time_t now);
 
 struct MaintenanceReport {
-    uint64_t vaults{}, versions_removed{}, blobs_removed{}, backlog_skipped{};
+    uint64_t vaults{}, versions_removed{}, blobs_removed{}, backlog_skipped{}, pending_dropped{};
     uint64_t orphans_removed{}, unreferenced_removed{}, missing{};
     std::vector<std::string> errors{};
 };
@@ -137,6 +142,7 @@ struct Counters {
     uint64_t skipped{};           // nothing to keep: empty / legacy plaintext / no local bytes
     uint64_t failed{};            // staging failed (logged; the write went ahead)
     uint64_t policy_loads{};      // vault_recovery_policy reads (cache misses)
+    uint64_t coalesced{};         // older pending versions skipped to bound a key's backlog
 };
 [[nodiscard]] Counters counters();
 

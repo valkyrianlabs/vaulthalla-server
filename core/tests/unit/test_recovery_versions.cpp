@@ -728,6 +728,50 @@ TEST_F(RecoveryVersionsTest, AnInterruptedReplayIsFinishedByTheNextPassUnderEver
     }
 }
 
+// An autosave/append workload during an outage would queue one full blob per write, every one replayed. A key keeps at
+// most keep_last (else kDefaultPendingCap) pending versions; older ones are skipped ('coalesced'), and the version
+// quota reaches pending versions too, visibly (skipped 'quota', reported).
+TEST_F(RecoveryVersionsTest, TheUpstreamBacklogOfAKeyIsBoundedAndTheQuotaReachesIt) {
+    const auto pendingOf = [](const std::vector<rq::GenerationRow>& rows) {
+        return std::ranges::count_if(rows, [](const auto& g) { return g.upstream_state == rq::UpstreamState::Pending; });
+    };
+
+    // keep_last 3: the backlog is the newest three; older ones were coalesced and pruned with their blobs.
+    const auto c = cloudVault(sync::model::RemotePolicy::Strategy::Sync, true, on(3));
+    const auto coalescedBefore = versions::counters().coalesced;
+    for (int i = 0; i < 10; ++i) write(c.engine, "/auto.txt", "save " + std::to_string(i));
+    auto kept = versionsOf(c.engine, "/auto.txt");
+    EXPECT_EQ(pendingOf(kept), 3);
+    EXPECT_EQ(kept.size(), 3u) << "coalesced versions beyond keep_last are pruned";
+    EXPECT_EQ(blobsOf(c.engine->vault->id), 3u);
+    EXPECT_GE(versions::counters().coalesced, coalescedBefore + 6);
+    ASSERT_TRUE(upload(c, "/auto.txt"));
+    EXPECT_EQ(history(c, "/auto.txt"), (std::vector<std::string>{"save 6", "save 7", "save 8", "save 9"}))
+        << "three replays, then the current content";
+
+    // No keep_last: the default cap; the coalesced versions stay as local versions, skipped, with the reason.
+    const auto d = cloudVault(sync::model::RemotePolicy::Strategy::Sync);
+    const auto writes = versions::kDefaultPendingCap + 8;
+    for (unsigned i = 0; i < writes; ++i) write(d.engine, "/log.txt", "line " + std::to_string(i));
+    kept = versionsOf(d.engine, "/log.txt");
+    ASSERT_EQ(kept.size(), writes - 1);
+    EXPECT_EQ(pendingOf(kept), static_cast<long>(versions::kDefaultPendingCap));
+    EXPECT_EQ(backlog::summary(d.engine->vault->id).pending_versions, versions::kDefaultPendingCap);
+    EXPECT_EQ(kept.front().upstream_state, rq::UpstreamState::Skipped);
+    EXPECT_EQ(kept.front().upstream_error, "coalesced");
+    EXPECT_TRUE(kept.front().blob_id) << "still a local version";
+    EXPECT_EQ(kept.back().upstream_state, rq::UpstreamState::Pending);
+
+    // The version quota applies to pending versions too: dropped oldest first, skipped 'quota' first, reported.
+    recovery::LocalVersioningPolicy tight = on();
+    tight.quota_bytes = 0;
+    const auto report = versions::applyRetention(store::vaultRef(*d.engine->vault), tight, std::time(nullptr));
+    EXPECT_EQ(report.pending_dropped, versions::kDefaultPendingCap);
+    EXPECT_TRUE(versionsOf(d.engine, "/log.txt").empty());
+    EXPECT_EQ(backlog::summary(d.engine->vault->id).pending_versions, 0u);
+    EXPECT_EQ(blobsOf(d.engine->vault->id), 0u);
+}
+
 TEST_F(RecoveryVersionsTest, AReplayedGenerationKeepsItsOwnKeyVersionAcrossARotation) {
     for (const bool encryptUpstream : {true, false}) {
         SCOPED_TRACE(encryptUpstream ? "encrypted upstream" : "plaintext upstream");

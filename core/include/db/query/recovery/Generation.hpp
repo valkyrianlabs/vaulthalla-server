@@ -147,6 +147,13 @@ public:
     static bool markSent(pqxx::work& txn, int64_t id, const std::string& upstreamVersionId);
     // pending → skipped (superseded without replay). Returns how many changed.
     static uint64_t markSkipped(const std::vector<int64_t>& ids);
+    // pending → skipped with `reason` in upstream_error ('coalesced', 'quota'). Returns how many changed.
+    static uint64_t markSkipped(pqxx::work& txn, const std::vector<int64_t>& ids, const std::string& reason);
+    static uint64_t markSkipped(const std::vector<int64_t>& ids, const std::string& reason);
+    // Bounds one key's backlog: its pending versions beyond the newest `keep` become skipped ('coalesced'); returns
+    // their ids (at most 256 per call).
+    [[nodiscard]] static std::vector<int64_t> coalescePending(pqxx::work& txn, uint32_t vaultId,
+                                                              const std::string& upstreamKey, unsigned int keep);
     // A failed replay attempt: attempts + 1, error recorded, stays pending.
     static void recordFailure(int64_t id, const std::string& error);
     [[nodiscard]] static BacklogSummary backlog(uint32_t vaultId);
@@ -154,10 +161,11 @@ public:
     // ---- usage and retention ----
     [[nodiscard]] static GenerationUsage usage(uint32_t vaultId);
 
-    // Local versions the rule prunes, oldest first: never pending, never snapshot members. keep_last keeps the newest
-    // n per file key; max_age_days prunes older ones; quota_bytes prunes the oldest remaining until the physical bytes
-    // of version blobs (counting a blob as freed only when every row referencing it is pruned) fit. A rule with no
-    // limits prunes nothing.
+    // Local versions the rule prunes, oldest first, never snapshot members. keep_last keeps the newest n per file key
+    // and max_age_days prunes older ones (neither touches pending versions); quota_bytes prunes the oldest remaining
+    // until the physical bytes of version blobs (counting a blob as freed only when every row referencing it is
+    // pruned) fit, and then, if still over, pending versions oldest first (returned with upstream_state Pending: the
+    // caller marks them skipped, reason 'quota', before removeVersions). A rule with no limits prunes nothing.
     [[nodiscard]] static std::vector<GenerationRow> listPrunable(uint32_t vaultId, const RetentionRule& rule,
                                                                  std::time_t now);
     // Deletes those rows (origin 'version' and not pending only, re-checked). Returns the blob ids nothing references

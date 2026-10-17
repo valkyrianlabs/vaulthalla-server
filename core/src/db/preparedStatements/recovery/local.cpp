@@ -256,6 +256,21 @@ void vh::db::Connection::initPreparedRecoveryLocal() const {
                    "UPDATE file_versions SET upstream_state = 'skipped' "
                    "WHERE id = ANY($1::bigint[]) AND upstream_state = 'pending'");
 
+    conn_->prepare("recovery_generation_mark_skipped_reason",
+                   "UPDATE file_versions SET upstream_state = 'skipped', upstream_error = $2 "
+                   "WHERE id = ANY($1::bigint[]) AND upstream_state = 'pending'");
+
+    // Coalescing a key's backlog: its pending versions past the newest $3, oldest first, skipped (bounded per call).
+    conn_->prepare("recovery_generation_coalesce_pending", R"SQL(
+        UPDATE file_versions SET upstream_state = 'skipped', upstream_error = 'coalesced'
+        WHERE id IN (
+            SELECT id FROM file_versions
+            WHERE vault_id = $1 AND upstream_state = 'pending' AND upstream_key = $2 AND origin = 'version'
+            ORDER BY id DESC OFFSET $3 LIMIT 256
+        )
+        RETURNING id
+    )SQL");
+
     conn_->prepare("recovery_generation_record_failure",
                    "UPDATE file_versions SET upstream_attempts = upstream_attempts + 1, upstream_error = $2 "
                    "WHERE id = $1 AND upstream_state = 'pending'");

@@ -44,7 +44,7 @@ std::unordered_map<uint32_t, CachedPolicy> policyCache;
 // Bumped by every invalidation, so a load that raced with one never caches what it read.
 uint64_t policyEpoch = 0;
 
-std::atomic<uint64_t> retainedCount{0}, skippedCount{0}, failedCount{0}, policyLoadCount{0};
+std::atomic<uint64_t> retainedCount{0}, skippedCount{0}, failedCount{0}, policyLoadCount{0}, coalescedCount{0};
 
 std::string vaultPathOf(const fs::model::File& f) {
     auto p = db::encoding::to_utf8_string(f.path.generic_u8string());
@@ -141,7 +141,8 @@ void setAttachHookForTesting(std::function<void(pqxx::work&)> hook) { attachHook
 
 Pending::Pending(Pending&& other) noexcept
     : vault_(std::move(other.vault_)), capture_(std::move(other.capture_)), generation_(std::move(other.generation_)),
-      keepLast_(other.keepLast_), inserted_(other.inserted_), freedBlobs_(std::move(other.freedBlobs_)) {
+      keepLast_(other.keepLast_), inserted_(other.inserted_), freedBlobs_(std::move(other.freedBlobs_)),
+      coalesced_(other.coalesced_) {
     other.capture_.reset();
     other.inserted_.reset();
 }
@@ -167,6 +168,7 @@ void Pending::attach(pqxx::work& txn) {
         capture_.reset();
         inserted_.reset();
         freedBlobs_.clear();
+        coalesced_ = 0;
     }
 }
 
@@ -174,6 +176,16 @@ void Pending::attachRows(pqxx::work& txn) {
     if (attachHook()) attachHook()(txn);
     generation_.blob_id = capture_->attach(txn);
     inserted_ = rq::Generation::insertLocalVersion(txn, generation_);
+
+    // The key's backlog stays bounded: an autosave/append workload would otherwise queue a full blob per write, every
+    // one replayed upstream. Older pending versions beyond the cap (keep_last, else kDefaultPendingCap) are skipped
+    // ('coalesced'): not replayed, still local versions under the vault's retention (keep_last prunes them below).
+    if (generation_.upstream_state == rq::UpstreamState::Pending && generation_.upstream_key) {
+        const auto cap = keepLast_ && *keepLast_ > 0 ? *keepLast_ : kDefaultPendingCap;
+        if (const auto coalesced = rq::Generation::coalescePending(txn, vault_.id, *generation_.upstream_key, cap);
+            !coalesced.empty())
+            coalesced_ = coalesced.size();
+    }
 
     // keep_last per file, right here and bounded: only once the file has had more generations than it keeps (the
     // numbers only grow), and at most a page of the oldest unpinned ones. Retention catches up with the rest.
@@ -194,6 +206,13 @@ void Pending::committed() noexcept {
     if (!capture_) return;
     capture_->committed();
     if (inserted_) ++retainedCount;
+    if (coalesced_) {
+        coalescedCount += coalesced_;
+        log::Registry::storage()->info("[LocalVersions] Vault {}: {} older unsent version(s) of {} coalesced (the "
+                                       "upstream backlog keeps the newest {})", vault_.id, coalesced_, generation_.path,
+                                       keepLast_ && *keepLast_ > 0 ? *keepLast_ : kDefaultPendingCap);
+        coalesced_ = 0;
+    }
     if (!freedBlobs_.empty()) {
         static_cast<void>(store::removeBlobs(vault_, freedBlobs_));
         freedBlobs_.clear();
@@ -203,6 +222,7 @@ void Pending::committed() noexcept {
 void Pending::abort() noexcept {
     if (capture_) capture_->abort();
     inserted_.reset();
+    coalesced_ = 0;
     freedBlobs_.clear();
 }
 
@@ -275,8 +295,17 @@ RetentionReport applyRetention(const store::VaultRef& vault, const LocalVersioni
     const auto prunable = rq::Generation::listPrunable(vault.id, rule, now);
     constexpr std::size_t kChunk = 500;
     for (std::size_t i = 0; i < prunable.size(); i += kChunk) {
-        std::vector<int64_t> ids;
-        for (auto k = i; k < std::min(prunable.size(), i + kChunk); ++k) ids.push_back(prunable[k].id);
+        std::vector<int64_t> ids, pending;
+        for (auto k = i; k < std::min(prunable.size(), i + kChunk); ++k) {
+            ids.push_back(prunable[k].id);
+            if (prunable[k].upstream_state == rq::UpstreamState::Pending) pending.push_back(prunable[k].id);
+        }
+        // The version quota reaches unsent versions too: skipped visibly (reason 'quota', logged, reported) first.
+        if (!pending.empty()) {
+            report.pending_dropped += rq::Generation::markSkipped(pending, "quota");
+            log::Registry::storage()->warn("[LocalVersions] Vault {}: the version quota removed {} version(s) not yet "
+                                           "sent upstream; the provider will not get them", vault.id, pending.size());
+        }
         const auto freed = rq::Generation::removeVersions(vault.id, ids);
         report.versions_removed += ids.size();
         report.blobs_removed += store::removeBlobs(vault, freed);
@@ -309,6 +338,7 @@ MaintenanceReport maintain(const std::time_t now, const bool sweepStores) {
                 const auto r = applyRetention(ref, policy, now);
                 report.versions_removed += r.versions_removed;
                 report.blobs_removed += r.blobs_removed;
+                report.pending_dropped += r.pending_dropped;
             }
 
             // A bucket that keeps no history never gets the backlog replayed: only the latest content matters there.
@@ -342,7 +372,7 @@ MaintenanceReport maintain(const std::time_t now, const bool sweepStores) {
 
 Counters counters() {
     return {.retained = retainedCount.load(), .skipped = skippedCount.load(), .failed = failedCount.load(),
-            .policy_loads = policyLoadCount.load()};
+            .policy_loads = policyLoadCount.load(), .coalesced = coalescedCount.load()};
 }
 
 }
