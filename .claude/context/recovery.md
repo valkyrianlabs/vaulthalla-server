@@ -122,7 +122,7 @@ bucket: choosing `off`/`local_snapshots` does not suspend a bucket that is versi
 ## Local snapshots and restore (`recovery/local/{Snapshots,Restore,Points}`)
 
 - Trusted primitives (no RBAC): `snapshots::create(engine, actor, path, name, authorize)`,
-  `snapshots::cleanupInterrupted(minAge)` (wire at startup), `snapshots::remove(id)`, `local::removeVersion(id)`,
+  `snapshots::cleanupInterrupted(minAge)` (`db::Janitor`: first run min age 0, then with the daily store sweep, 1 h), `snapshots::remove(id)`, `local::removeVersion(id)`,
   `local::planFor(id, subPath, destination)`, `local::restore(engine, actor, item)`, `local::missingParents`,
   `points::{list,get,detail,fromSnapshot,fromGeneration}`. `ops::recovery::createSnapshot`
   (`ops/RecoverySnapshots.cpp`) authorizes List/Read on the root, then every entry (Read + Copy per file, List per
@@ -373,8 +373,8 @@ payload shape from its options and reads it with the same readers, so validation
   (`--accept-retention-shortening`, `--adopt-bucket`), also when the op raises them. `restore <recovery-id>` plans,
   previews, asks (type `RESTORE` when anything is overwritten or removed; y/N otherwise) and restores with the plan's
   token; `restore <plan-id> --token` is the scripted path; non-TTY without `--yes`/`--token` refuses. Exit 1 on a
-  partial/failed result or conflicts. `set` with only some local-versioning flags merges them into the stored policy
-  (reads `status` first; `--keep-last 0` / `--max-age-days 0` = no limit).
+  partial/failed result or conflicts. `set` sends local-versioning flags as a `LocalVersioningPatch` (absent =
+  unchanged; `--keep-last 0` / `--max-age-days 0` / `--version-quota 0` = no limit), no status read first.
 - ws (`protocols/ws/handler/Recovery.cpp`, book `core/usage/src/contract/ws/recovery.cpp`): `recovery.list` (120 s),
   `recovery.inspect` (30 s), `recovery.plan` (180 s), `recovery.plan.get`, `recovery.restore` (1800 s),
   `recovery.snapshot.create` (300 s), `recovery.point.delete` (60 s, `confirm`), `recovery.costs` (60 s),
@@ -398,3 +398,36 @@ payload shape from its options and reads it with the same readers, so validation
 | Provider recovery | `recovery/provider/{Versions,Restore}.*` |
 | Dispatch | `ops/RecoveryPoints.cpp` (list/inspect/plan/restore/deletePoint) — integrator |
 | Surfaces | `protocols/shell/commands/{snapshot,recovery}.cpp`, `vault/recovery.cpp`, usage books, ws handler + book |
+
+## Status / open items (2026-10-16)
+
+Built on `feat/recovery`: the three backends, the dispatcher, CLI/ws/web surfaces, operator docs
+(`docs/vaults/recovery.md`, `docs/web-console/recovery.md`, `docs/cli/command-reference.md#file-recovery`).
+
+Dispatcher as built (`ops/RecoveryPoints.cpp`): points are filtered by filesystem Read (+ List for directories; a path
+that is gone is judged on its nearest existing folder), a file's history drops the snapshots whose `lv-` members it
+already lists, plans keep only readable sources and show destination refusals as blockers. Plans are personal (someone
+else's = NotFound), live 30 min, and their token is returned only when the plan is made (`getPlan` clears it).
+`restore` saves each outcome as it goes and resumes a `running`/`partial` plan even after its 30 minutes; finished items
+are kept. `db::Janitor` expires plans and purges finished/expired ones after 30 days.
+
+Open, consolidated from the slices (the sections above keep the detail):
+
+- **Backlog:** pending rows of a deleted file whose key Vaulthalla never writes again stay pending; conflict keep_local
+  uploads without replaying first (and its preflight doesn't price replays).
+- **Version index:** permanent deletes of noncurrent versions and our own delete markers are learned only from the next
+  complete listing. Live event delivery on a versioned bucket is unproven.
+- **History retention shown per point** (`rpRetention`) uses the recorded state only: `days` shows Vaulthalla's days
+  even when a foreign rule is shorter, `indefinite` shows `unknown`. Status and the disclosure do report foreign rules.
+- **Lifecycle overlap:** `vh upstream lifecycle --expire-noncurrent-days` writes the same `vaulthalla-managed`
+  `NoncurrentDays` as recovery retention, without `recovery_retention_shorten` and without updating the recorded
+  retention. `ops::upstream::detach` clears only `vaulthalla-managed` (the manifest-versions rule stays) and its
+  foreign-rule check counts `vaulthalla-manifest-versions` as foreign.
+- **Keys:** a deleted vault's export (`vault_deletion_key`) carries no `historical_keys`.
+- **Lossy by design:** usage ledger deltas ≤ 60 s on a crash; disclosure tokens die with the process key on restart.
+- **CLI bug:** `vh recovery restore <plan-id>` without `--token` can never succeed (`getPlan` cleared the token, so
+  `rcRunPlan` sends "" → `recovery_restore`), although the usage book says `--yes` works there. Docs tell operators to
+  pass `--token`; fix by refusing early or re-planning.
+- **Web:** the point-in-time form is shown for folders of local vaults too; ops refuses it (Invalid).
+- **Proof gaps:** no Tier A/B harness scenario for recovery yet; `UpstreamLive.AwsVersioning` is opt-in
+  (`VH_LIVE_UPSTREAM=1`); no lab install of a recovery build.

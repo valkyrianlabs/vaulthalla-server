@@ -423,6 +423,7 @@ renders (`render/`: pdfium, turbojpeg, stb), the encrypted derived cache (`cache
 converter-helper runner/queue (`derive/`, below) · `protocols` · `rbac` roles/permissions/resolver/actor · `runtime` Manager · `share` link
 sharing · `stats` dashboard telemetry + snapshots · `storage` local + S3 backends, remote index · `sync`
 controller, strategies `cache|sync|mirror`, cost guardrails · `vault` vault model, slugs, FUSE names ·
+`recovery` file recovery: local snapshots/versions, provider versioning, usage ledger, cost model (below) ·
 `ops` actor-authorized operations shared by the CLI and ws handlers (below).
 
 **Config keys renamed or moved (#164).** `config.yaml` is never rewritten on upgrade, so `loadConfig` keeps reading
@@ -491,6 +492,24 @@ Tests: `test_derive_runner.cpp` (fake helper `core/tests/helpers/fake_derive_hel
   a finished key rotation (`sync::Local::handleVaultKeyRotation`) calls `Store::purgeRetiredKeys`.
 - Tests: `test_preview_store.cpp`, `test_derive_queue.cpp` (DB-backed, fake helper symlinked under both helper
   names; real CAD helper when built).
+
+### File recovery (`recovery/`)
+
+Local snapshots, opt-in local versioning and AWS provider versioning behind one model (`recovery/Model.hpp`) and one
+authorizing boundary (`ops::recovery`); migration 111. Design of record, as-built notes and open items:
+`recovery.md`. Where it hooks into the rest of the daemon:
+- **Writers:** every content write retains the prior generation through `recovery::local::versions::retain` before
+  its rename (createFile overwrite branch, FUSE seal, deletes, sync DeleteLocal, cache index-only downloads); blobs live
+  in `<backing>/.vh-recovery/<alias>`. Invariant: nothing writes a backing file in place
+  (`tools/contracts/test_backing_writers_contract.py`). `Engine::freeSpace` counts blob bytes.
+- **Upstream:** `CloudEngine::OwnWrite::done()` → `recovery::hooks::afterUpstreamWrite` (version index, usage ledger);
+  `sync::tasks::Upload`/`Delete` replay a file's pending local versions first (`backlog::replayBeforeUpload` /
+  `replayBeforeRemoteDelete`); the planner's price preflight adds them.
+- **Runtime:** `db::Janitor` runs `maintainRecovery` each loop (≤ 15 min: version retention, backlog skips for
+  unversioned buckets, plan expiry/purge) and, at startup then daily, the store sweep and interrupted-snapshot cleanup;
+  `VaultRetentionService`'s loop calls `recovery::usage::tick` (ledger flush every 60 s, cost alerts hourly);
+  `runtime::Manager::stopAll` flushes the ledger after every service stopped; vault purge removes the store directory
+  (`vault/Retention.cpp`).
 
 ### `ops/`: shared command operations
 

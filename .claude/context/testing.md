@@ -72,6 +72,32 @@ New families add a `test_ops_parity_<family>.cpp` on the same pattern.
 re-run `sudo tools/harness/bootstrap.sh` (it never rotates an existing role's password; remove the settings file first
 to re-key).
 
+## File recovery suites
+
+DB-backed ones skip without `VH_TEST_DB_*` (run them with `make test ARGS="--gtest_filter='Recovery*:S3Versioned*'"`).
+Design and invariants: `recovery.md`.
+
+| Suite (file) | Covers |
+|---|---|
+| `RecoveryKeysTest`, `RecoveryKeysDbTest` (`test_recovery_keys.cpp`) | historical key snapshots, streaming re-seal, retired-key guard, export `historical_keys`, mid-rotation key load |
+| `RecoveryModel`, `RecoveryJson`, `RecoveryDbTest` (`test_recovery_db.cpp`) | model text/JSON forms; every `db::query::recovery` query on migration 111 |
+| `RecoveryStoreNames`, `RecoveryStoreTest` (`test_recovery_store.cpp`) | blob layout, link capture, dedupe, abort/commit, orphan sweep, quota in `freeSpace`, purge |
+| `RecoveryVersionsTest` (`test_recovery_versions.cpp`) | local versioning capture/no-capture, off path, retention, upstream backlog replay order |
+| `RecoverySnapshotsTest` (`test_recovery_snapshots.cpp`) | snapshot capture/skips, mode gate, dedupe, quotas, RBAC, crash cleanup, deletion |
+| `RecoveryLocalRestoreTest` (`test_recovery_local_restore.cpp`) | local plans/restores: original and alternate destinations, conflicts, re-seal across rotations |
+| `RecoveryProviderTest` (`test_recovery_provider.cpp`) | version index, provider points, point-in-time plans, provider copy / bounded transfer |
+| `RecoverySmartCacheTest` (`test_recovery_smart_cache.cpp`) | release-blocking acceptance: cache vault, history only in the bucket, restore without a second upload |
+| `RecoveryPolicyTest`, `RecoveryDisclosureToken`, `RecoveryManifestRule` (`test_recovery_policy.cpp`) | status/update/disclosure/suspend/costs ordering, R2 refusal, protection, adoption, retention lifecycle |
+| `RecoveryCostModel`, `RecoveryCostCatalog` (`test_recovery_costs.cpp`) | golden decimals from the signed fixture `core/test-assets/pricing/versioning`, ranges, illustrative, unpriced |
+| `RecoveryUsageLedger`, `RecoveryUsageDbTest` (`test_recovery_usage.cpp`) | per-vault UTC-day counters, request tags, first put/overwrite/delete classification, failed flushes |
+| `RecoveryParityTest` (`test_ops_parity_recovery.cpp`) | CLI ↔ ws verdicts and state for `vh vault recovery` / `snapshot` / `recovery` |
+| `S3VersionedOps*`, `S3VersionedFake` (`test_s3_versioned_ops.cpp`) | the real `s3::Controller` versioned ops (signing, parsing, metering, lock) and the `VersionedBucket` fake (DB-free) |
+| `UpstreamLive.AwsVersioning` (`test_upstream_live.cpp`) | opt-in (`VH_LIVE_UPSTREAM=1`): a new AWS bucket through enable → retention → suspend |
+
+Helpers: `tests/helpers/{recovery_local,recovery_pricing,recovery_provider_harness,versioned_bucket}.hpp`. Contract:
+`tools/contracts/test_backing_writers_contract.py` (no in-place writer of vault backing files; `verify.sh packaging`).
+Web: `web/tests/e2e/recovery.spec.ts` (scripted ws answers; see `web-client.md`). No Tier A/B recovery scenario yet.
+
 ## Rich-preview / HTTP suites
 
 | Suite (file) | Covers | Needs |
