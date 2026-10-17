@@ -112,7 +112,7 @@ nlohmann::json vrLimit(const CommandCall& call, const std::string& name, const n
 }
 
 // CLI options → the ws payload shape, read by the same RecoveryJson reader (one validation for both surfaces).
-vrrec::Update vrUpdateFromOptions(const CommandCall& call, const uint32_t vaultId) {
+vrrec::Update vrUpdateFromOptions(const CommandCall& call) {
     nlohmann::json j = nlohmann::json::object();
     if (const auto mode = optVal(call, "mode")) j["mode"] = *mode;
     if (const auto retention = optVal(call, "retention")) j["provider_retention"] = *retention;
@@ -120,19 +120,16 @@ vrrec::Update vrUpdateFromOptions(const CommandCall& call, const uint32_t vaultI
     if (const auto alert = optVal(call, "cost-alert"))
         j["cost_alert_monthly"] = *alert == "none" || *alert == "off" ? std::string() : *alert;
 
-    const auto lvFlag = optVal(call, "local-versioning");
-    if (lvFlag || optVal(call, "keep-last") || optVal(call, "max-age-days") || optVal(call, "version-quota")) {
-        // The policy is replaced as a whole: start from what the vault has, change what was given.
-        auto lv = nlohmann::json(vrrec::status(call.user, vaultId).local_versioning);
-        if (lvFlag) {
-            if (*lvFlag != "on" && *lvFlag != "off") throw ops::Invalid("--local-versioning must be on or off");
-            lv["enabled"] = *lvFlag == "on";
-        }
-        lv["keep_last"] = vrLimit(call, "keep-last", lv["keep_last"]);
-        lv["max_age_days"] = vrLimit(call, "max-age-days", lv["max_age_days"]);
-        if (const auto q = vrSize(call, "version-quota")) lv["quota_bytes"] = *q ? nlohmann::json(*q) : nlohmann::json(nullptr);
-        j["local_versioning"] = lv;
+    // Local versioning is a patch: only the given settings change (0 = no limit).
+    nlohmann::json lv = nlohmann::json::object();
+    if (const auto lvFlag = optVal(call, "local-versioning")) {
+        if (*lvFlag != "on" && *lvFlag != "off") throw ops::Invalid("--local-versioning must be on or off");
+        lv["enabled"] = *lvFlag == "on";
     }
+    if (optVal(call, "keep-last")) lv["keep_last"] = vrLimit(call, "keep-last", nullptr);
+    if (optVal(call, "max-age-days")) lv["max_age_days"] = vrLimit(call, "max-age-days", nullptr);
+    if (const auto q = vrSize(call, "version-quota")) lv["quota_bytes"] = *q;
+    if (!lv.empty()) j["local_versioning"] = lv;
     if (j.empty()) throw ops::Invalid("nothing to change (see 'vh vault recovery set --help')");
 
     j["accept_unpriced"] = hasFlag(call, "accept-unpriced");
@@ -184,7 +181,7 @@ CommandResult vrSet(const CommandCall& call) {
     const std::string prefix = "vault recovery set";
     try {
         const auto vaultId = vrcli::vaultIdFrom(call, usage, prefix);
-        auto req = vrUpdateFromOptions(call, vaultId);
+        auto req = vrUpdateFromOptions(call);
         std::string disclosureText;
         if (req.mode == vh::recovery::Mode::ProviderVersioning) disclosureText = vrDisclose(call, vaultId, req);
 

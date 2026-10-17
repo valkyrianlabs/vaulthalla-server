@@ -278,8 +278,10 @@ CommandResult rcRunPlan(const CommandCall& call, const model::Plan& plan, const 
                     req.accept_unverified = true;
                     continue;
                 }
+                if (e.code == rec::PLAN_EXPIRED)
+                    return invalid(prefix + ": " + e.what() + "\nThe plan expired: plan again.");
                 if (e.code == rec::RESTORE_CONFIRM)
-                    return invalid(prefix + ": " + e.what() + "\nThe plan's token is missing or expired: plan again.");
+                    return invalid(prefix + ": " + e.what() + "\nThe plan's token is missing or wrong.");
                 throw;
             }
         }

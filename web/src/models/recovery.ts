@@ -144,6 +144,7 @@ export interface RecoveryRestoreResult {
   conflicts: number
   failed: number
   removed: number
+  unavailable: number
 }
 
 export interface ProviderRetention {
@@ -285,6 +286,7 @@ export interface CostAlert {
 }
 
 export interface RecoveryCostReport {
+  phase: 'pre_activation' | 'active'
   vault_id: number
   priced: boolean
   unpriced_reason: string | null

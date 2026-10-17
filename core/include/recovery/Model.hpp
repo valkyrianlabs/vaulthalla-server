@@ -142,7 +142,7 @@ struct RestoreResult {
     uint64_t plan_id{};
     std::string state;                     // done | partial | failed
     std::vector<ItemOutcome> items;
-    uint64_t restored{}, skipped{}, conflicts{}, failed{}, removed{};
+    uint64_t restored{}, skipped{}, conflicts{}, failed{}, removed{}, unavailable{};
 };
 
 // ---- policy and status ---------------------------------------------------------------------------------------------
@@ -162,6 +162,15 @@ struct LocalVersioningPolicy {
     std::optional<unsigned int> keep_last;       // per file
     std::optional<unsigned int> max_age_days;
     std::optional<uint64_t> quota_bytes;         // physical bytes of local versions
+};
+
+// A change to the local versioning policy: absent = unchanged; for the limits 0 = no limit.
+struct LocalVersioningPatch {
+    std::optional<bool> enabled;
+    std::optional<unsigned int> keep_last;
+    std::optional<unsigned int> max_age_days;
+    std::optional<uint64_t> quota_bytes;
+    [[nodiscard]] bool empty() const { return !enabled && !keep_last && !max_age_days && !quota_bytes; }
 };
 
 struct ProviderVersioningState {
@@ -238,6 +247,9 @@ struct Assumption {
 
 struct CostReport {
     uint32_t vault_id{};
+    // pre_activation: what enabling would add (pre_activation_monthly, scenarios). active: the bucket versions for this
+    // vault (current_month_to_date, current_month_projected, projected_monthly).
+    std::string phase{"pre_activation"};
     bool priced{false};                          // a verified-or-labelled catalog profile priced the storage class
     std::optional<std::string> unpriced_reason;
     std::optional<std::string> provider, bucket, region, storage_class, currency;

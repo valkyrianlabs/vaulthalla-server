@@ -62,6 +62,8 @@ void to_json(nlohmann::json& j, const PointDetail& v);
 [[nodiscard]] PlanRequest planRequestFromJson(const nlohmann::json& j);
 [[nodiscard]] RestoreRequest restoreRequestFromJson(const nlohmann::json& j);
 [[nodiscard]] LocalVersioningPolicy localVersioningPolicyFromJson(const nlohmann::json& j);
+// Patch reader: an absent member is unchanged; null or 0 clears a limit.
+[[nodiscard]] vh::recovery::LocalVersioningPatch localVersioningPatchFromJson(const nlohmann::json& j);
 [[nodiscard]] ProviderRetention providerRetentionFromJson(const nlohmann::json& j);
 
 // Stored plan items / results read back (recovery_plan.items, .result), as to_json wrote them.

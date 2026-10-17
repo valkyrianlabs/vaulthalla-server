@@ -84,7 +84,7 @@ std::vector<WsCommandUsage> recoveryCommands() {
         "or expired: plan again), 'recovery_unverified_version' (resend with accept_unverified).",
         {planId(), str("token").opt(), boolean("accept_unverified").opt()},
         {object("result", "RecoveryRestoreResult")},
-        recoveryRefusals({"recovery_restore", "recovery_unverified_version"}), 1800s, "recovery.restore"));
+        recoveryRefusals({"recovery_restore", "recovery_plan_expired", "recovery_unverified_version"}), 1800s, "recovery.restore"));
 
     // ---- costs and vault policy ----
     out.push_back(recoveryCommand("recovery.costs",
