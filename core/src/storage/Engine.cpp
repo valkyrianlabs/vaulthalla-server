@@ -213,13 +213,15 @@ namespace vh::storage {
         return vault->quota > usedWithReserve ? vault->quota - usedWithReserve : 0;
     }
 
-    // Retained generations (snapshots, local versions) count against the vault quota: their physical, deduplicated
-    // bytes from recovery_blob (no walk; cached briefly by the store). The store is outside backingVaultRoot, so
-    // getVaultSize never sees it. Without a quota the filesystem's free space already reflects them.
+    // Retained generations (snapshots, local versions) count against the vault quota: the deduplicated bytes of the
+    // blobs that are not a live file's current generation (from recovery_blob, no walk; cached briefly by the store).
+    // A blob linked from a live backing file shares its inode, which getVaultSize already counts. The store is outside
+    // backingVaultRoot, so getVaultSize never sees it. Without a quota the filesystem's free space already reflects
+    // them.
     uintmax_t Engine::getRecoverySize() const {
         if (!vault || vault->id == 0) return 0;
         try {
-            return recovery::store::physicalBytes(vault->id);
+            return recovery::store::chargedBytes(vault->id);
         } catch (const std::exception &e) {
             log::Registry::storage()->debug("[StorageEngine] Recovery store size of vault {} unavailable: {}", vault->id,
                                             e.what());

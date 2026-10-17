@@ -94,6 +94,7 @@ uint64_t storeFileSize(const sfs::path& p) {
 
 std::mutex usageMutex;
 std::unordered_map<uint32_t, std::pair<uint64_t, std::chrono::steady_clock::time_point>> usageCache;
+std::unordered_map<uint32_t, std::pair<uint64_t, std::chrono::steady_clock::time_point>> chargedCache;
 
 }
 
@@ -397,9 +398,23 @@ uint64_t physicalBytes(const uint32_t vaultId, const std::chrono::milliseconds m
     return bytes;
 }
 
+uint64_t chargedBytes(const uint32_t vaultId, const std::chrono::milliseconds maxAge) {
+    const auto now = std::chrono::steady_clock::now();
+    {
+        std::scoped_lock lock(usageMutex);
+        if (const auto it = chargedCache.find(vaultId); it != chargedCache.end() && now - it->second.second < maxAge)
+            return it->second.first;
+    }
+    const auto bytes = BlobQuery::chargedBytes(vaultId);
+    std::scoped_lock lock(usageMutex);
+    chargedCache[vaultId] = {bytes, now};
+    return bytes;
+}
+
 void invalidateUsage(const uint32_t vaultId) noexcept {
     std::scoped_lock lock(usageMutex);
     usageCache.erase(vaultId);
+    chargedCache.erase(vaultId);
 }
 
 // ---- maintenance ---------------------------------------------------------------------------------------------------

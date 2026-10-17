@@ -54,8 +54,14 @@ bucket: choosing `off`/`local_snapshots` does not suspend a bucket that is versi
   `restorable=false` ("blob missing"), never silently dropped (a later capture of the same generation recreates the
   file under the existing name). Removal deletes the row first, then the file: a crash leaves an orphan file for the
   sweep, never a row without its file.
-- Quota: blob bytes count against the vault quota (`Engine::freeSpace` adds `recovery_blob` bytes from the DB, no
-  walk) and against `snapshot_quota_bytes` / `version_quota_bytes`. Vault purge removes `.vh-recovery/<alias>` with
+- Quota: blob bytes count against the vault quota only where they are not a live file's bytes already:
+  `Engine::freeSpace` adds `store::chargedBytes` (`recovery_blob_charged_bytes`: blobs that are NOT the current
+  generation — same IV + key version — of a live file they were captured from, via `file_versions.file_id`; no walk,
+  no stat; cached 5 s). A blob linked from a live backing file shares its inode, which `getVaultSize` already counts;
+  once that file is replaced or deleted the blob is charged. Known approximations (under-count until the live file
+  next changes): a capture that fell back to copy/reflink while the generation is still live, and a `local_copy`
+  restore that reused a blob's IV with copied bytes. Also against `snapshot_quota_bytes` / `version_quota_bytes`
+  (those count the blobs' bytes). Vault purge removes `.vh-recovery/<alias>` with
   the backing dirs.
 - Retention: snapshots are kept until deleted. Local versions: `version_keep_last` per file, `version_max_age_days`,
   `version_quota_bytes` (oldest first); keep_last and max age never prune a generation still `pending` upstream, the
@@ -136,8 +142,9 @@ bucket: choosing `off`/`local_snapshots` does not suspend a bucket that is versi
   (`ops/RecoverySnapshots.cpp`) authorizes List/Read on the root, then every entry (Read + Copy per file, List per
   directory; symlinks are not captured) before anything is written; one denial refuses the whole snapshot.
 - Create: mode must be `local_snapshots` (`Invalid` names the mode). Plan = cache root + `Entry::listSubtree` (DB);
-  quota first (new physical bytes = generations without a blob yet, plus the hydrate copy for index-only cloud files)
-  against `snapshot_quota_bytes` and `Engine::freeSpace()` (`Conflict` with needed/left bytes). Per file under
+  quota first: `snapshot_quota_bytes` against the new blob bytes (generations without a blob yet), `Engine::freeSpace()`
+  against only what the capture newly allocates (the hydrate copy of an index-only cloud file; a copy when the backing
+  file is on another device than the store; a link costs nothing) (`Conflict` with needed/left bytes). Per file under
   `Filesystem::contentWriteMutex`: re-read the row, `captureLink` the backing file (empty file → empty blob),
   members inserted with their blob `attach` 64 per transaction. Captures the last **sealed** generation: an open FUSE
   working copy's unsealed changes are not in it. Skipped with a reason in `skipped_json`: `symlink`,

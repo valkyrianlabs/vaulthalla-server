@@ -67,6 +67,16 @@ void vh::db::Connection::initPreparedRecoveryLocal() const {
     conn_->prepare("recovery_blob_physical_bytes",
                    "SELECT COALESCE(sum(cipher_bytes), 0)::bigint FROM recovery_blob WHERE vault_id = $1");
 
+    // Blobs that are not the live generation of a file they were captured from (that file's inode is the blob's).
+    conn_->prepare("recovery_blob_charged_bytes", R"SQL(
+        SELECT COALESCE(sum(b.cipher_bytes), 0)::bigint FROM recovery_blob b
+        WHERE b.vault_id = $1
+          AND NOT (b.encryption_iv <> '' AND EXISTS (
+              SELECT 1 FROM file_versions fv JOIN files f ON f.fs_entry_id = fv.file_id
+              WHERE fv.blob_id = b.id AND f.encryption_iv = b.encryption_iv
+                AND f.encrypted_with_key_version = b.key_version))
+    )SQL");
+
     conn_->prepare("recovery_blob_usage", R"SQL(
         SELECT count(*) AS blobs, COALESCE(sum(cipher_bytes), 0)::bigint AS bytes,
                COALESCE(sum(plaintext_bytes), 0)::bigint AS plaintext_bytes,

@@ -190,7 +190,7 @@ TEST_F(RecoverySnapshotsTest, DeletingASnapshotCollectsOnlyBlobsNothingElseRefer
     EXPECT_THROW(local::snapshots::remove(first.snapshot_id), ops::NotFound);
 }
 
-TEST_F(RecoverySnapshotsTest, TheSnapshotQuotaAndTheVaultQuotaRefuseBeforeAnythingIsCaptured) {
+TEST_F(RecoverySnapshotsTest, TheSnapshotQuotaRefusesBeforeAnythingIsCaptured) {
     write("/big.bin", std::string(10000, 'b'));
     setMode(vaultId(), vh::recovery::Mode::LocalSnapshots, 5000);
     try {
@@ -203,21 +203,34 @@ TEST_F(RecoverySnapshotsTest, TheSnapshotQuotaAndTheVaultQuotaRefuseBeforeAnythi
     EXPECT_EQ(rq::Blob::usage(vaultId()).blobs, 0u);
 
     setMode(vaultId(), vh::recovery::Mode::LocalSnapshots, 1u << 20);
-    const auto quota = engine->vault->quota;
-    engine->vault->quota = engine->getVaultAndCacheTotalSize() + storage::Engine::MIN_FREE_SPACE + 100;
-    try {
-        (void)snapshot("/big.bin");
-        engine->vault->quota = quota;
-        FAIL() << "the vault quota must refuse";
-    } catch (const ops::Conflict& e) {
-        EXPECT_NE(std::string(e.what()).find("quota"), std::string::npos) << e.what();
-    }
-    engine->vault->quota = quota;
-    EXPECT_TRUE(rq::Snapshot::listByVault(vaultId(), 10).empty());
-
     const auto ok = snapshot("/big.bin");
     EXPECT_EQ(ok.file_count, 1u);
-    EXPECT_GE(engine->getRecoverySize(), 10016u) << "blob bytes count against the vault quota";
+}
+
+// A snapshot links the live backing files: the blobs share their inodes, which the vault size already counts. The
+// vault quota is charged nothing for it (no double counting, and the preflight doesn't refuse a zero-copy capture),
+// and the retained bytes are charged once the live file is replaced and the blob is their only copy.
+TEST_F(RecoverySnapshotsTest, AZeroCopySnapshotCostsNoQuotaUntilTheLiveFileIsReplaced) {
+    mkdir("/q");
+    write("/q/one.bin", std::string(10000, '1'));
+    write("/q/two.bin", std::string(6000, '2'));
+    setMode(vaultId(), vh::recovery::Mode::LocalSnapshots, 1u << 20);
+    const auto quota = engine->vault->quota;
+    engine->vault->quota = engine->getVaultAndCacheTotalSize() + storage::Engine::MIN_FREE_SPACE + 100;
+    store::invalidateUsage(vaultId());
+    const auto freeBefore = engine->freeSpace();
+
+    const auto whole = snapshot("/");
+    EXPECT_GE(whole.file_count, 2u) << "nothing to allocate: the tight quota doesn't refuse a link";
+    store::invalidateUsage(vaultId());
+    EXPECT_EQ(engine->getRecoverySize(), 0u) << "every blob is a live file's generation";
+    EXPECT_EQ(engine->freeSpace(), freeBefore) << "the whole-vault snapshot leaves free space unchanged";
+    EXPECT_GE(store::physicalBytes(vaultId(), std::chrono::milliseconds(0)), 16032u) << "the blobs exist all the same";
+
+    engine->vault->quota = quota;
+    write("/q/one.bin", "replaced");   // the snapshot now holds the only copy of the old bytes
+    store::invalidateUsage(vaultId());
+    EXPECT_EQ(engine->getRecoverySize(), 10016u) << "the retained bytes are charged after the overwrite";
 }
 
 TEST_F(RecoverySnapshotsTest, ACrashMidSnapshotIsMarkedFailedAndReleasedAtStartup) {
