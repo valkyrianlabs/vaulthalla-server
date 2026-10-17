@@ -11,6 +11,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <cerrno>
 #include <system_error>
 
@@ -85,6 +86,8 @@ void createPrivateExclusive(const std::filesystem::path& path) {
     ::close(fd);
 }
 
+std::atomic<uint64_t> exclusiveFsyncs{0};
+
 void writeAllToFd(const int fd, std::span<const uint8_t> bytes, const std::filesystem::path& path) {
     while (!bytes.empty()) {
         const auto written = ::write(fd, bytes.data(), bytes.size());
@@ -111,7 +114,12 @@ void writeFileExclusive(const std::filesystem::path& absPath, const std::span<co
         writeAllToFd(fd, bytes, absPath);
         // The umask may have narrowed the create mode: set exactly what was asked for.
         if (::fchmod(fd, mode) < 0) throwErrnoAt(errno, "chmod", absPath);
-        if (::fsync(fd) < 0) throwErrnoAt(errno, "fsync", absPath);
+        // An empty new inode has no data to flush (FUSE create, empty createFile): no fsync, as before these files
+        // were created exclusively. Callers that need the name durable fsync the directory.
+        if (!bytes.empty()) {
+            if (::fsync(fd) < 0) throwErrnoAt(errno, "fsync", absPath);
+            ++exclusiveFsyncs;
+        }
     } catch (...) {
         ::close(fd);
         std::error_code ec;
@@ -125,6 +133,8 @@ void writeFileExclusive(const std::filesystem::path& absPath, const std::span<co
         throwErrnoAt(err, "close", absPath);
     }
 }
+
+uint64_t writeFileExclusiveFsyncsForTesting() { return exclusiveFsyncs.load(); }
 
 void replaceFileAtomic(const std::filesystem::path& absPath,
                        const std::function<void(const std::filesystem::path& tempPath)>& produce) {
