@@ -232,6 +232,17 @@ bucket: choosing `off`/`local_snapshots` does not suspend a bucket that is versi
   Outcomes carry `retryable` and the request usage (source `recovery_restore`).
 - Tests: `RecoveryProviderTest*`, `RecoverySmartCacheTest*` (the acceptance scenario), harness
   `tests/helpers/recovery_provider_harness.hpp`.
+- **Live acceptance on real AWS S3** (`test_recovery_live.cpp`, run per testing.md "Live provider tests"; passed
+  2026-10-16, us-east-2, fresh test buckets): the same scenario through ops (disclosure → `update` with
+  `accept_adoption` on a new bucket → list → plan → restore → costs), real `CloudEngine`, prices from the signed
+  fixture catalog. Measured: each upload pass PUT 2 (object + manifest; the vault's first pass PUTs the manifest
+  twice: PUT 3); listing 4 versions = LIST 1, 0 HEAD/GET; restore by copy = COPY 1, HEAD 2, PUT 1 (manifest), GET 0;
+  hydrate read = HEAD 1 + GET 1; next pass = HEAD 1 (manifest), 0 PUT; noncurrent 4 versions / 185 B exact; costs
+  `active`, priced, month-to-date non-null. Across a key rotation: `provider_transfer`, GET 1 + PUT 2 (object +
+  manifest), COPY 0, current object carries the new key version. Disclosure = 6 admin requests, enable (adoption +
+  versioning + retention) = 29 (HEAD 12: `AwsAdmin::headBucket` probes the global endpoint then the region, and
+  `inspect` re-HEADs even with the region cached). R2: refused with `kR2VersioningUnsupported`, 0 requests of any
+  kind, local snapshot + restore on the same vault works. Nothing failed on real AWS that passed on the fake.
 
 ## Local versions as the upstream backlog
 
