@@ -30,13 +30,20 @@ bucket: choosing `off`/`local_snapshots` does not suspend a bucket that is versi
   version live in `recovery_blob`. Never plaintext.
 - Capturing a generation is zero-copy where possible: every content write in Vaulthalla is sidecar → fsync → row →
   `rename` over the backing path (FUSE seal, `createFile` overwrite, rotation, copy), so the old inode is never written
-  again. Retaining = `link(backing, blob)` *before* the rename (fsync blob dir). Deletes `rename(backing, blob)` instead
-  of unlinking. Fallbacks: reflink (FICLONE), then copy. A blob is immutable once linked.
+  again. Retaining = `link(backing, blob)` *before* the rename (fsync blob dir). Deletes link the backing file in too
+  and unlink the origin only after the transaction commits (`Capture::committed()`), so a crash before commit never
+  loses the live file. Fallbacks: reflink (FICLONE / macOS `clonefile`), then copy. A blob is immutable once linked.
+- **Invariant this rests on: nothing writes a backing file in place.** A linked blob shares the live file's inode until
+  the next rename-replace; an in-place writer would silently rewrite history. Every backing-file writer must replace
+  by rename (or the capture must use `captureCopy`). Guard: a contract test listing the writers (local versioning
+  slice).
 - Dedupe: unique `(vault_id, encryption_iv, key_version)` for non-empty IVs: the same generation captured twice
   (two snapshots of an unchanged file) is one blob. Physical accounting = sum of distinct blobs' `cipher_bytes`.
 - Crash safety: blob first (temp name + rename + dir fsync), then the DB rows in the same transaction as the files-row
   update; an orphan blob (no row, older than 1 h) is swept at startup; a row whose blob is missing is reported
-  `restorable=false` ("blob missing"), never silently dropped.
+  `restorable=false` ("blob missing"), never silently dropped (a later capture of the same generation recreates the
+  file under the existing name). Removal deletes the row first, then the file: a crash leaves an orphan file for the
+  sweep, never a row without its file.
 - Quota: blob bytes count against the vault quota (`Engine::freeSpace` adds `recovery_blob` bytes from the DB, no
   walk) and against `snapshot_quota_bytes` / `version_quota_bytes`. Vault purge removes `.vh-recovery/<alias>` with
   the backing dirs.
