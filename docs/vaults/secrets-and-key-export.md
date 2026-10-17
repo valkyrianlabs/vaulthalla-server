@@ -69,7 +69,7 @@ The existing fields don't change. `historical_keys` appears only when recoverabl
 
 An export is recorded against the current key version, so a rotation still makes it stale. Export again after a rotation: the new export carries the current key, and the retired one under `historical_keys` while recovery data needs it.
 
-A deleted vault's key stays exportable with the same command (use the vault id) until `vaults.tpm_retention_window` ends: `90d` by default, `180d` for S3 vaults. See [Deleting And Restoring Vaults](/vaults/deleting-vaults).
+A deleted vault's key stays exportable with the same command (use the vault id) until `vaults.tpm_retention_window` ends: `90d` by default, `180d` for S3 vaults. See [Deleting And Restoring Vaults](/vaults/deleting-vaults). That export carries the current key only, not `historical_keys`: export a vault with recovery data before you delete it. See [File Recovery](/vaults/recovery#keys-and-rotation).
 
 ## Export Internal Secrets
 

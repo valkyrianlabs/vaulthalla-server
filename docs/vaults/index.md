@@ -39,6 +39,12 @@ File bodies are stored according to the vault type:
 
 This split matters for backup. A usable disaster recovery plan needs PostgreSQL data, Vaulthalla config/state, and exported recovery material. See [Backup And Recovery](/vaults/backup-and-recovery).
 
+## File Recovery
+
+Earlier versions of files and folders can be restored from local snapshots, local versions kept on every change, or,
+for AWS S3 vaults, the bucket's own object versions. Each vault chooses its recovery mode, and provider versioning is
+turned on only after a cost disclosure. See [File Recovery](/vaults/recovery). File recovery doesn't replace a backup.
+
 ## FUSE Mount
 
 On Linux, the core daemon exposes vaults as a filesystem at:

@@ -283,9 +283,12 @@ class, current data, observed or illustrative write traffic, the estimated month
 12 months, retention, confidence and catalog freshness, what is not included, and the consequences, including that
 AWS can't return a bucket to unversioned, only suspend it). In a terminal you then type `ENABLE VERSIONING`, and when
 the cost can't be estimated you accept that separately (`ACCEPT UNPRICED`). Without a terminal it needs `--yes`, plus
-`--accept-unpriced` when unpriced. A shorter retention deletes history sooner and is asked separately
-(`--accept-retention-shortening`). Changing the mode never suspends a versioned bucket; `suspend` does, and it deletes
-nothing. `--keep-last 0` and `--max-age-days 0` remove the limit.
+`--accept-unpriced` when unpriced. A shorter retention deletes history sooner and is asked separately (`SHORTEN`, or
+`--accept-retention-shortening`), and so is adopting the vault's unmanaged bucket (`ADOPT`, or `--adopt-bucket`).
+`--retention` takes `30d`, `90d`, `365d`, `indefinite` or any number of days from 1 to 36500; there is no default.
+Changing the mode never suspends a versioned bucket; `suspend` does (type `SUSPEND`, or `--yes`), and it deletes
+nothing. Local versioning flags you leave out keep their stored values; `--keep-last 0`, `--max-age-days 0` and
+`--version-quota 0` remove the limit, and `--cost-alert none` clears the alert.
 
 Snapshots and recovery points:
 
@@ -300,7 +303,8 @@ vh recovery delete <recovery-id> [--yes]
 
 Snapshots need the mode `local-snapshots`. `recovery list` with a file path shows that file's history; `--refresh`
 lists the provider's versions of the path first (metadata only). You only see points you can read. `recovery delete`
-removes snapshots and local versions; provider versions are removed by the bucket's retention.
+removes snapshots and local versions (type `DELETE`, or `--yes`); provider versions are removed by the bucket's
+retention, and a local version still waiting to be uploaded can't be deleted.
 
 Restoring:
 
@@ -308,18 +312,22 @@ Restoring:
 vh recovery plan <recovery-id> [--to <path>] [--json]
 vh recovery plan <vault> <path> --at <ISO-8601 time> [--prune] [--to <path>] [--json]
 vh recovery restore <recovery-id> [--to <path>] [--yes] [--accept-unverified] [--json]
-vh recovery restore <plan-id> [--token <token>] [--yes] [--accept-unverified] [--json]
+vh recovery restore <plan-id> --token <token> [--accept-unverified] [--json]
 ```
 
 `plan` changes nothing: it shows what each item would do (create, overwrite, skip, conflict, remove, unavailable),
 the size and method, a provider request and cost estimate, warnings and blockers, and the plan id and token (valid 30
 minutes). A plan with `--at` is a timestamp-based reconstruction from each file's version history, not an atomic
-snapshot; only a local snapshot is taken in one pass. `--prune` also removes files that did not exist at that time.
+snapshot; only a local snapshot is taken in one pass. It needs an S3 vault with provider versions. `--prune` also
+removes files that did not exist at that time.
 
-`restore` shows the plan and asks before it runs; type `RESTORE` when anything is overwritten or removed. Without a
-terminal it needs `--yes`, or the plan's `--token`. Every item is authorized again, and a destination that changed
-after the plan was made is reported as a conflict and left alone. Provider versions Vaulthalla did not write need
-`--accept-unverified`. The exit status is `1` when anything was not restored; run the same restore again to resume.
+`restore <recovery-id>` plans, shows the plan and asks before it runs; type `RESTORE` when anything is overwritten or
+removed (a plain yes/no otherwise). `--yes` skips the question for scripts. A plan made with `vh recovery plan` runs
+with its id and the `--token` it printed, which is the confirmation. Every item is authorized again, and a destination
+that changed after the plan was made is reported as a conflict and left alone. Provider versions Vaulthalla did not
+write need `--accept-unverified` (or type `UNVERIFIED`). The exit status is `1` when anything was not restored and `2`
+when the restore was refused; run the plan again (`<plan-id> --token`) to resume an interrupted or partial restore.
+See [File Recovery](/vaults/recovery) for how each kind of history works and what it costs.
 
 Costs:
 
