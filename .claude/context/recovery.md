@@ -36,9 +36,11 @@ bucket: choosing `off`/`local_snapshots` does not suspend a bucket that is versi
 - **Invariant this rests on: nothing writes a backing file in place.** A linked blob shares the live file's inode until
   the next rename-replace; an in-place writer would silently rewrite history. Every backing-file writer must replace
   by rename (or the capture must use `captureCopy`). Guard: `tools/contracts/test_backing_writers_contract.py` scans
-  `core/src` for in-place-capable write primitives (ofstream, `O_TRUNC`, `open(O_WRONLY|O_RDWR)` without `O_EXCL`,
-  `pwrite`, `ftruncate`/`resize_file`, `fopen`, `writeFile(`) against a per-file, counted allowlist with the reason each
-  never touches vault bytes. Audit (2026-10-16): new files are created with `writeFileExclusive` (FUSE create, empty
+  `core/src` for in-place-capable write primitives (ofstream, `O_TRUNC`, `open`/`openat` that may write — flags
+  spelled `O_WRONLY|O_RDWR`, or not spelled out at all — without `O_EXCL`/`O_TMPFILE`, `creat`, `pwrite`,
+  `ftruncate`/`resize_file`, `fopen`/`fdopen`/`freopen`, `copy_file_range`, `copy_file`/`copy` with
+  `overwrite_existing`, `mmap` with `PROT_WRITE`, `writeFile(`), matched per statement across lines, against a
+  per-file, counted allowlist with the reason each never touches vault bytes. Audit (2026-10-16): new files are created with `writeFileExclusive` (FUSE create, empty
   `createFile`) or `writeFileAtomic`/`replaceFileAtomic` (buffer and source-path `createFile`, the slow rename path);
   `fs::ops::writeFile` (ofstream + truncate) is gone; seals, overwrites and rotation already rename a sidecar; the
   remaining primitives write sidecars/temps (`encryptFileToFile`, `resealFile*`, `decrypt_aes256_gcm_file`), working
