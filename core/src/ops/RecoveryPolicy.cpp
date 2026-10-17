@@ -22,6 +22,7 @@
 #include "recovery/cost/Alerts.hpp"
 #include "recovery/cost/Estimator.hpp"
 #include "recovery/cost/Report.hpp"
+#include "recovery/local/Versions.hpp"
 #include "recovery/provider/Policy.hpp"
 #include "runtime/Deps.hpp"
 #include "storage/CloudEngine.hpp"
@@ -72,6 +73,15 @@ void polRequireSync(const Actor& actor, const uint32_t vaultId, const PolSyncPer
     throw Denied(perm == PolSyncPerm::Edit
                      ? "changing the recovery settings of vault '" + vaultName + "' needs vault sync.config.edit"
                      : "you do not have permission to view the recovery settings of vault '" + vaultName + "'");
+}
+
+// costs and the disclosure: what reads the vault's sync settings, and its pricing statistics (stats.vault.pricing:
+// the owner, or an admin role with view + view_stats on the vault).
+void polRequireCosts(const Actor& actor, const uint32_t vaultId, const std::string& vaultName) {
+    polRequireSync(actor, vaultId, PolSyncPerm::View, vaultName);
+    if (!ops::stats::canViewVault(actor, vaultId))
+        throw Denied("the recovery costs of vault '" + vaultName + "' are pricing statistics: they need the vault's owner, "
+                     "or an admin role with view and view_stats on it");
 }
 
 // Adapter and primitive failures as ops refusals; anything else stays a fault.
@@ -130,13 +140,16 @@ struct PolProvider {
 
 // Provider changes: admin.upstream.configure + Consume on the vault's key, an administrative key, a provider that
 // versions, and a bucket that isn't protected. Nothing is sent to the provider before all of that holds.
-PolProvider polAuthorizeProvider(const Actor& actor, const uint32_t vaultId, const std::string& action) {
+// changes = false: the disclosure (read-only, authorized like costs by the caller): no upstream/key bits.
+PolProvider polAuthorizeProvider(const Actor& actor, const uint32_t vaultId, const std::string& action,
+                                 const bool changes = true) {
     auto vb = pol::bucketForVault(vaultId);
     if (!vb) throw Invalid("provider versioning applies to S3 vaults only");
-    if (!rbac::resolver::Admin::has<PolUpPerm>({.user = actor, .permission = PolUpPerm::Configure}))
+    if (changes && !rbac::resolver::Admin::has<PolUpPerm>({.user = actor, .permission = PolUpPerm::Configure}))
         throw Denied("provider versioning needs the admin.upstream.configure permission");
     if (!vb->key) throw Invalid("the vault's API key no longer exists");
-    if (!rbac::resolver::Admin::has<PolKeyPerm>({.user = actor, .permission = PolKeyPerm::Consume, .api_key_id = vb->api_key_id}))
+    if (changes &&
+        !rbac::resolver::Admin::has<PolKeyPerm>({.user = actor, .permission = PolKeyPerm::Consume, .api_key_id = vb->api_key_id}))
         throw Denied("you do not have permission to use the API key of this vault");
     if (const auto gap = polProviderGap(*vb); !gap.empty()) throw Invalid(gap);
     if (!padmin::supportsAdmin(*vb->key) || !vb->key->admin_enabled)
@@ -372,11 +385,10 @@ Status update(const Actor& actor, const uint32_t vaultId, const Update& req) {
         !std::regex_match(*req.cost_alert_monthly, polMoneyPattern()))
         throw Invalid("the cost alert is a decimal amount (up to 12 integer and 8 fraction digits), e.g. 25.00");
     if (req.local_versioning) {
-        const auto& lv = *req.local_versioning;
-        if (lv.keep_last && (*lv.keep_last < 1 || *lv.keep_last > 10000))
-            throw Invalid("local versioning keep_last must be 1..10000");
-        if (lv.max_age_days && (*lv.max_age_days < 1 || *lv.max_age_days > 36500))
-            throw Invalid("local versioning max_age_days must be 1..36500");
+        const auto& lv = *req.local_versioning;   // 0 clears a limit
+        if (lv.keep_last && *lv.keep_last > 10000) throw Invalid("local versioning keep_last must be 1..10000 (0 = no limit)");
+        if (lv.max_age_days && *lv.max_age_days > 36500)
+            throw Invalid("local versioning max_age_days must be 1..36500 (0 = no limit)");
     }
 
     std::vector<std::string> warnings;
@@ -513,15 +525,21 @@ Status update(const Actor& actor, const uint32_t vaultId, const Update& req) {
             row.cost_alert_currency = catalogCurrency.value_or(row.cost_alert_currency.value_or("USD"));
         }
     }
-    if (req.local_versioning) row.local_versioning = *req.local_versioning;
+    if (req.local_versioning) {
+        const auto& patch = *req.local_versioning;
+        auto& lv = row.local_versioning;
+        if (patch.enabled) lv.enabled = *patch.enabled;
+        if (patch.keep_last) lv.keep_last = *patch.keep_last == 0 ? std::nullopt : patch.keep_last;
+        if (patch.max_age_days) lv.max_age_days = *patch.max_age_days == 0 ? std::nullopt : patch.max_age_days;
+        if (patch.quota_bytes) lv.quota_bytes = *patch.quota_bytes == 0 ? std::nullopt : patch.quota_bytes;
+    }
     row.updated_by = actor->id;
     try {
         rq::Policy::upsert(row);
     } catch (const pqxx::check_violation& e) {
         throw Invalid(std::string("the recovery settings are out of range: ") + e.what());
     }
-    // Integrator: the local versioning slice's policy cache is invalidated here
-    // (vh::recovery::local::invalidatePolicy(vaultId)) once recovery/local/Versions lands on this branch.
+    vh::recovery::local::invalidatePolicy(vaultId);   // the local versioning harness re-reads the policy
     if (previousMode != newMode)
         log::Registry::audit()->info("[ops::recovery] {} set the recovery mode of vault {} to {}", actor->name(), vaultId,
                                      vh::recovery::to_string(newMode));
@@ -537,10 +555,11 @@ Disclosure versioningDisclosure(const Actor& actor, const uint32_t vaultId,
                                 const std::optional<ProviderRetention>& retention) {
     requireActor(actor);
     const auto vault = polRequireVault(vaultId);
-    polRequireSync(actor, vaultId, PolSyncPerm::Edit, vault->name);
+    polRequireCosts(actor, vaultId, vault->name);
     if (retention && !retention->indefinite && (retention->days < 1 || retention->days > 36500))
         throw Invalid("provider retention must be 1..36500 days or indefinite");
-    auto ctx = polAuthorizeProvider(actor, vaultId, "recovery.disclosure");
+    // Read-only: the enable re-checks admin.upstream.configure and the key; the token is bound to this person.
+    auto ctx = polAuthorizeProvider(actor, vaultId, "recovery.disclosure", /*changes=*/false);
     const auto& vb = ctx.vb;
 
     // The one admin request: versioning, object lock, MFA delete and lifecycle in one inspect.
@@ -662,10 +681,7 @@ Status suspendVersioning(const Actor& actor, const uint32_t vaultId, const bool 
 CostReport costs(const Actor& actor, const uint32_t vaultId) {
     requireActor(actor);
     const auto vault = polRequireVault(vaultId);
-    polRequireSync(actor, vaultId, PolSyncPerm::View, vault->name);
-    if (!ops::stats::canViewVault(actor, vaultId))
-        throw Denied("the recovery costs of vault '" + vault->name + "' are pricing statistics: they need the vault's owner, "
-                     "or an admin role with view and view_stats on it");
+    polRequireCosts(actor, vaultId, vault->name);
     const auto now = polNow();
     auto report = rcost::reportForVault(vaultId, {}, now);
     rcost::noteAlert(report, now);

@@ -112,6 +112,7 @@ TEST(RecoveryCostModel, GoldenFiguresForAMeasuredStandardBucket) {
     const auto r = cost::estimate(in);
 
     ASSERT_TRUE(r.priced) << r.unpriced_reason.value_or("");
+    EXPECT_EQ(r.phase, "pre_activation");
     EXPECT_EQ(r.currency.value_or(""), "USD");
     EXPECT_EQ(r.confidence, "high");
     EXPECT_TRUE(r.catalog.verified);
@@ -271,7 +272,9 @@ TEST(RecoveryCostModel, MonthToDateComesFromNoncurrentByteHours) {
     in.history.versions = 3;
     in.history.bytes = 1'000'000'000ull;
     in.month_to_date_byte_hours = "730000000000";   // 1 GB for a whole billing month
+    in.active = true;
     const auto r = cost::estimate(in);
+    EXPECT_EQ(r.phase, "active");
     ASSERT_TRUE(r.current_month_to_date.expected);
     EXPECT_EQ(r.current_month_to_date.expected->amount, "0.02300000");
     ASSERT_TRUE(r.current_month_projected.expected);

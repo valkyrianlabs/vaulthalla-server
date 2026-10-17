@@ -60,6 +60,8 @@ struct Inputs {
 
     std::string versioning_status{"unknown"};               // unversioned | enabled | suspended | unknown
     bool enabled_by_vaulthalla{false};
+    // Versioning is on for this vault: bucket Enabled and the vault's mode provider_versioning (phase "active").
+    bool active{false};
     // The retention the figures assume (chosen or recorded); nullopt = none chosen.
     std::optional<ProviderRetention> retention;
     // The shortest foreign NoncurrentDays over the whole vault (another application's lifecycle rule).

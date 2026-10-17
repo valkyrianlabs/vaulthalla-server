@@ -303,6 +303,7 @@ CostReport estimate(const Inputs& in) {
     out.region = in.region;
     out.storage_class = in.storage_class;
     out.computed_at = in.now;
+    out.phase = in.active ? "active" : "pre_activation";
     if (in.retention) out.retention = in.retention->str();
 
     // ---- catalog and rates ----

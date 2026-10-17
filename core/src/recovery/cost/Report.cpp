@@ -122,6 +122,7 @@ Inputs gather(const uint32_t vaultId, const GatherOptions& options, const std::t
 
     const auto policy = db::query::recovery::Policy::get(vaultId);
     in.alert_threshold = policy.cost_alert_monthly;
+    const bool providerMode = policy.mode == Mode::ProviderVersioning;
 
     const auto& deps = runtime::Deps::get();
     const auto vault = deps.storageManager ? deps.storageManager->getVault(vaultId) : nullptr;
@@ -162,6 +163,7 @@ Inputs gather(const uint32_t vaultId, const GatherOptions& options, const std::t
         }
     }
     if (options.versioning_status) in.versioning_status = *options.versioning_status;
+    in.active = providerMode && in.versioning_status == "enabled";
     if (in.versioning_status == "enabled" || in.versioning_status == "suspended")
         in.month_to_date_byte_hours =
             db::query::recovery::ObjectVersion::noncurrentByteHours(vaultId, costMonthStart(now), now).byte_hours;

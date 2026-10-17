@@ -22,6 +22,7 @@
 #include "ops/Recovery.hpp"
 #include "ops/RecoveryJson.hpp"
 #include "ops/Roles.hpp"
+#include "ops/Stats.hpp"
 #include "ops/Upstream.hpp"
 #include "rbac/permission/admin/Upstream.hpp"
 #include "rbac/permission/admin/keys/API.hpp"
@@ -262,6 +263,7 @@ TEST_F(RecoveryPolicyTest, EnablingNeedsTheDisclosureAndRecordsThePropagationWin
     EXPECT_TRUE(puts().empty()) << "nothing is enabled without the disclosure";
 
     const auto d = rec::versioningDisclosure(superUser, v.id, k30d);
+    EXPECT_EQ(d.report.phase, "pre_activation");
     EXPECT_TRUE(d.report.priced) << d.report.unpriced_reason.value_or("");
     EXPECT_TRUE(d.report.catalog.verified);
     EXPECT_EQ(d.report.retention.value_or(""), "30d");
@@ -570,14 +572,24 @@ TEST_F(RecoveryPolicyTest, LocalFieldsAreValidatedAndNeedNoProvider) {
     u.mode = Mode::LocalSnapshots;
     u.snapshot_quota_bytes = 1'000'000;
     u.cost_alert_monthly = "12.50";
-    u.local_versioning = vh::recovery::LocalVersioningPolicy{.enabled = true, .keep_last = 5, .max_age_days = 30,
-                                                             .quota_bytes = std::nullopt};
+    u.local_versioning = vh::recovery::LocalVersioningPatch{.enabled = true, .keep_last = 5, .max_age_days = 30,
+                                                            .quota_bytes = std::nullopt};
     const auto st = rec::update(superUser, v.id, u);
     EXPECT_EQ(st.mode, Mode::LocalSnapshots);
     EXPECT_EQ(st.snapshot_quota_bytes.value_or(0), 1'000'000u);
     ASSERT_TRUE(st.cost_alert_monthly);
     EXPECT_EQ(st.cost_alert_monthly->currency, "USD");
     EXPECT_TRUE(st.local_versioning.enabled);
+    EXPECT_EQ(st.local_versioning.keep_last.value_or(0), 5u);
+    // A patch: absent fields are unchanged, 0 clears a limit.
+    rec::Update patch;
+    patch.local_versioning = vh::recovery::LocalVersioningPatch{.enabled = std::nullopt, .keep_last = 0,
+                                                                .max_age_days = std::nullopt, .quota_bytes = 4096};
+    const auto patched = rec::update(superUser, v.id, patch);
+    EXPECT_TRUE(patched.local_versioning.enabled);
+    EXPECT_FALSE(patched.local_versioning.keep_last);
+    EXPECT_EQ(patched.local_versioning.max_age_days.value_or(0), 30u);
+    EXPECT_EQ(patched.local_versioning.quota_bytes.value_or(0), 4096u);
     EXPECT_EQ(callsOn(v.bucket), calls) << "local settings never reach the provider";
 
     for (const auto* bad : {"abc", "1.123456789", "-1", "1e3", "1234567890123"}) {
@@ -586,8 +598,8 @@ TEST_F(RecoveryPolicyTest, LocalFieldsAreValidatedAndNeedNoProvider) {
         EXPECT_THROW((void)rec::update(superUser, v.id, b), ops::Invalid) << bad;
     }
     rec::Update keep;
-    keep.local_versioning = vh::recovery::LocalVersioningPolicy{.enabled = true, .keep_last = 0, .max_age_days = std::nullopt,
-                                                                .quota_bytes = std::nullopt};
+    keep.local_versioning = vh::recovery::LocalVersioningPatch{.enabled = true, .keep_last = 10001, .max_age_days = std::nullopt,
+                                                               .quota_bytes = std::nullopt};
     EXPECT_THROW((void)rec::update(superUser, v.id, keep), ops::Invalid);
     rec::Update clear;
     clear.cost_alert_monthly = "";
@@ -627,7 +639,12 @@ TEST_F(RecoveryPolicyTest, PolicyChangesFollowSyncConfigUpstreamConfigureAndTheK
             }
         };
         const bool expected = sync && configure && key;
-        EXPECT_EQ(allowed([&] { (void)rec::versioningDisclosure(user, v.id, k30d); }), expected) << role;
+        // The disclosure reads like costs: sync settings + the vault's pricing statistics.
+        const bool readsCosts =
+            rbac::resolver::Vault::has<SyncPerm>({.user = user, .permission = SyncPerm::View, .vault_id = v.id}) &&
+            ops::stats::canViewVault(user, v.id);
+        EXPECT_EQ(allowed([&] { (void)rec::versioningDisclosure(user, v.id, k30d); }), readsCosts) << role;
+        EXPECT_EQ(allowed([&] { (void)rec::costs(user, v.id); }), readsCosts) << role;
         EXPECT_EQ(allowed([&] { (void)rec::update(user, v.id, enableRequest(k30d, "")); }), expected) << role;
         EXPECT_EQ(allowed([&] { (void)rec::suspendVersioning(user, v.id, false); }), expected) << role;
         EXPECT_EQ(allowed([&] { (void)rec::update(user, v.id, local); }), sync) << role;
@@ -649,11 +666,11 @@ TEST_F(RecoveryPolicyTest, PolicyChangesFollowSyncConfigUpstreamConfigureAndTheK
     const auto own = managedVault(configurer);
     EXPECT_TRUE(configurer->upstreamPerms().canConfigure());
     EXPECT_FALSE(rbac::resolver::Admin::has<KeyPerm>({.user = configurer, .permission = KeyPerm::Consume, .api_key_id = own.keyId}));
-    EXPECT_THROW((void)rec::versioningDisclosure(configurer, own.id, k30d), ops::Denied);
+    EXPECT_THROW((void)rec::update(configurer, own.id, enableRequest(k30d, "")), ops::Denied);
     const auto owner = createUser("rp_owner", "unprivileged");
     const auto owned = managedVault(owner);
     EXPECT_FALSE(owner->upstreamPerms().canConfigure());
-    EXPECT_THROW((void)rec::versioningDisclosure(owner, owned.id, k30d), ops::Denied);
+    EXPECT_THROW((void)rec::update(owner, owned.id, enableRequest(k30d, "")), ops::Denied);
     const bool ownerSync = rbac::resolver::Vault::has<SyncPerm>({.user = owner, .permission = SyncPerm::Edit, .vault_id = owned.id});
     bool ownerLocal = true;
     try {
@@ -680,6 +697,7 @@ TEST_F(RecoveryPolicyTest, CostsUseMeasuredUsageAndRaiseOneAlertPerDay) {
     (void)rec::update(superUser, v.id, alert);
 
     const auto r = rec::costs(superUser, v.id);
+    EXPECT_EQ(r.phase, "active");
     EXPECT_TRUE(r.priced);
     EXPECT_EQ(r.observation.window_days, 10u);
     EXPECT_EQ(r.retention.value_or(""), "30d");
