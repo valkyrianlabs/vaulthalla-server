@@ -1,4 +1,5 @@
 #include "ops/Recovery.hpp"
+#include "ops/RecoveryAccess.hpp"
 
 #include "fs/cache/Registry.hpp"
 #include "fs/model/Entry.hpp"
@@ -43,7 +44,13 @@ PointDetail createSnapshot(const Actor& actor, const uint32_t vaultId, const Sna
 
     // Nothing about the vault's recovery settings or the path's contents is revealed to someone who can't see it.
     const auto root = runtime::Deps::get().fsCache->getEntry(engine->vaultPathToFusePath(req.path));
-    if (!root) throw NotFound("no such path in the vault: " + req.path);
+    if (!root) {
+        // "No such path" only to someone who could see it there (the nearest existing folder lists for them).
+        access::Gate gate(actor, engine);
+        if (!gate.canRead(gate.existingAncestor(req.path), true))
+            throw Denied("permission denied: you can't snapshot " + req.path);
+        throw NotFound("no such path in the vault: " + req.path);
+    }
     if (!snapshotAllows(actor, *engine, req.path, root->isDirectory() ? SnapshotFsAction::List : SnapshotFsAction::Read))
         throw Denied("permission denied: you can't snapshot " + req.path);
 

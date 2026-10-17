@@ -5,6 +5,7 @@
 #include "ops/Recovery.hpp"
 
 #include "db/query/recovery/ObjectVersion.hpp"
+#include "ops/RecoveryAccess.hpp"
 #include "db/query/recovery/Plan.hpp"
 #include "db/query/upstream/Bucket.hpp"
 #include "fs/cache/Registry.hpp"
@@ -61,14 +62,7 @@ std::shared_ptr<storage::CloudEngine> rpCloud(const EnginePtr& engine) {
     return std::static_pointer_cast<storage::CloudEngine>(engine);
 }
 
-std::string rpNormalize(const std::string& path) {
-    if (path.empty()) return "/";
-    auto p = std::filesystem::path(path).lexically_normal().generic_string();
-    if (!p.starts_with('/')) p.insert(p.begin(), '/');
-    while (p.size() > 1 && p.ends_with('/')) p.pop_back();
-    if (p.find("/../") != std::string::npos || p.ends_with("/..")) throw Invalid("invalid path: " + path);
-    return p;
-}
+std::string rpNormalize(const std::string& path) { return access::normalize(path); }
 
 std::shared_ptr<fs::model::Entry> rpEntry(const storage::Engine& engine, const std::string& vaultPath) {
     const auto& cache = runtime::Deps::get().fsCache;
@@ -84,43 +78,7 @@ bool rpHas(const Actor& actor, const storage::Engine& engine, const std::string&
     });
 }
 
-// The nearest existing ancestor directory of a path (the vault root at worst).
-std::string rpExistingAncestor(const storage::Engine& engine, std::string path) {
-    while (path != "/") {
-        path = std::filesystem::path(path).parent_path().generic_string();
-        if (path.empty()) path = "/";
-        if (const auto e = rpEntry(engine, path); e && e->isDirectory()) return path;
-    }
-    return "/";
-}
-
-// Who may see (and restore from) a point at `vaultPath`: Read on the file (Read + List on a directory). A path that
-// no longer exists (deleted files keep their history) is judged like the HTTP lanes judge a missing path: Read + List
-// on the nearest existing ancestor directory, i.e. the caller could download that folder.
-class Visibility {
-public:
-    Visibility(Actor actor, EnginePtr engine) : actor_(std::move(actor)), engine_(std::move(engine)) {}
-
-    bool canRead(const std::string& vaultPath) {
-        const auto path = rpNormalize(vaultPath);
-        if (const auto it = cache_.find(path); it != cache_.end()) return it->second;
-        bool ok;
-        if (const auto entry = rpEntry(*engine_, path)) {
-            ok = rpHas(actor_, *engine_, path, FsAction::Read) &&
-                 (!entry->isDirectory() || rpHas(actor_, *engine_, path, FsAction::List));
-        } else {
-            const auto dir = rpExistingAncestor(*engine_, path);
-            ok = rpHas(actor_, *engine_, dir, FsAction::Read) && rpHas(actor_, *engine_, dir, FsAction::List);
-        }
-        cache_.emplace(path, ok);
-        return ok;
-    }
-
-private:
-    Actor actor_;
-    EnginePtr engine_;
-    std::map<std::string, bool> cache_;
-};
+using Visibility = access::Gate;
 
 prov::points::RetentionInfo rpRetention(const uint32_t vaultId) {
     try {
@@ -231,6 +189,19 @@ std::optional<std::string> rpDestinationRefusal(const Actor& actor, const storag
     return std::nullopt;
 }
 
+bool rpIsDirectoryItem(const rec::PlanItem& item) { return item.method == "none"; }
+
+// What restoring an item needs on its source: Read (or as it was, for a path that is gone); and Copy when it goes
+// somewhere else, since restoring elsewhere makes a copy (the rule createSnapshot applies to every file it keeps).
+std::optional<std::string> rpSourceRefusal(Visibility& gate, const rec::PlanItem& item) {
+    const bool directory = rpIsDirectoryItem(item);
+    if (!gate.canRead(item.source_path, directory)) return "you can't read " + item.source_path;
+    if (!directory && item.destination_path != item.source_path &&
+        !gate.allows(item.source_path, FsAction::Copy, false))
+        return "you need Copy on " + item.source_path + " to restore it to another place";
+    return std::nullopt;
+}
+
 nlohmann::json rpSummary(const rec::Plan& plan) {
     auto j = nlohmann::json(plan);
     j.erase("items");
@@ -291,8 +262,16 @@ std::vector<RecoveryPoint> list(const Actor& actor, const uint32_t vaultId, cons
     requireActor(actor);
     const auto engine = rpEngine(vaultId);
     const auto path = query.path ? std::optional(rpNormalize(*query.path)) : std::nullopt;
-    Visibility visible(actor, engine);
-    if (!visible.canRead(path.value_or("/"))) throw Denied("you cannot read " + path.value_or("/") + " in this vault");
+    const auto target = path.value_or("/");
+    Visibility gate(actor, engine);
+    const auto cloud = query.include_provider ? rpCloud(engine) : nullptr;
+
+    // Nothing is fetched, and no provider request is sent, for someone who can't see the path: as it is, or (gone)
+    // as the file or folder it was.
+    const bool existing = gate.exists(target);
+    const bool directory = existing ? rpIsDirectory(*engine, target) : false;
+    if (existing ? !gate.canRead(target, directory) : !(gate.canRead(target, false) || gate.canRead(target, true)))
+        throw Denied("you cannot read " + target + " in this vault");
 
     const auto limit = std::clamp(query.limit, 1u, 1000u);
     std::vector<RecoveryPoint> out;
@@ -301,27 +280,26 @@ std::vector<RecoveryPoint> list(const Actor& actor, const uint32_t vaultId, cons
                                                           .versions = query.include_versions, .limit = limit}))
             out.push_back(std::move(p));
     }
-    if (query.include_provider) {
-        if (const auto cloud = rpCloud(engine)) {
-            const auto target = path.value_or("/");
-            const bool directory = rpIsDirectory(*engine, target);
-            if (query.refresh_provider) {
-                const auto prefix = directory ? prov::versions::directoryPrefixOf(target)
-                                              : prov::versions::objectKeyOf(target);
-                const auto r = prov::versions::refresh(cloud, prefix);
-                if (!r.complete && r.stopped_reason)
-                    log::Registry::cloud()->info("[recovery] vault {}: version listing of '{}' stopped: {}", vaultId,
-                                                 prefix, *r.stopped_reason);
-            }
-            for (auto& p : prov::points::forPath(cloud, target, directory, rpRetention(vaultId), limit))
-                out.push_back(std::move(p));
+    if (cloud) {
+        const bool asDirectory = existing ? directory : prov::versions::objectKeyOf(target).empty();
+        if (query.refresh_provider) {
+            const auto prefix = asDirectory || target == "/" ? prov::versions::directoryPrefixOf(target)
+                                                            : prov::versions::objectKeyOf(target);
+            const auto r = prov::versions::refresh(cloud, prefix);
+            if (!r.complete && r.stopped_reason)
+                log::Registry::cloud()->info("[recovery] vault {}: version listing of '{}' stopped: {}", vaultId,
+                                             prefix, *r.stopped_reason);
         }
+        for (auto& p : prov::points::forPath(cloud, target, asDirectory || target == "/", rpRetention(vaultId), limit))
+            out.push_back(std::move(p));
     }
 
-    std::erase_if(out, [&](const RecoveryPoint& p) { return !visible.canRead(p.path); });
+    std::erase_if(out, [&](const RecoveryPoint& p) {
+        return !gate.canRead(p.path, p.kind == rec::PointKind::Directory);
+    });
     // A file's history lists its generations (a snapshot's member of that file is the restorable point); the
     // snapshots holding it are directory-level points and would only repeat them.
-    if (path && !rpIsDirectory(*engine, *path) &&
+    if (path && !directory &&
         std::ranges::any_of(out, [&](const RecoveryPoint& p) { return p.id.starts_with("lv-") && p.path == *path; }))
         std::erase_if(out, [](const RecoveryPoint& p) { return p.id.starts_with("snap-"); });
     std::ranges::stable_sort(out, [](const RecoveryPoint& a, const RecoveryPoint& b) { return a.created_at > b.created_at; });
@@ -329,53 +307,96 @@ std::vector<RecoveryPoint> list(const Actor& actor, const uint32_t vaultId, cons
     return out;
 }
 
+namespace {
+
+// The point behind an id, after the caller was found allowed to see it; one NotFound for every refusal before that
+// (no such id, another vault, a path the caller can't read), so nothing about it leaks.
+struct ResolvedPoint {
+    rec::RecoveryId id;
+    EnginePtr engine;
+    RecoveryPoint point;
+};
+
+ResolvedPoint rpResolveVisible(const Actor& actor, const std::string& recoveryId) {
+    const auto notFound = [&] { return NotFound("no such recovery point: " + recoveryId); };
+    const auto id = rpParseId(recoveryId);
+    std::optional<RecoveryPoint> point;
+    EnginePtr engine;
+    try {
+        engine = rpEngine(rpVaultOf(id));
+        if (id.type == rec::RecoveryId::Type::ProviderVersion) {
+            if (const auto cloud = rpCloud(engine)) point = prov::points::byId(cloud, id.id, rpRetention(engine->vault->id));
+        } else {
+            point = rec::local::points::get(id);
+        }
+    } catch (const NotFound&) {
+        throw notFound();
+    }
+    if (!point) throw notFound();
+    Visibility gate(actor, engine);
+    if (!gate.canRead(point->path, point->kind == rec::PointKind::Directory)) throw notFound();
+    return {id, engine, std::move(*point)};
+}
+
+}
+
 PointDetail inspect(const Actor& actor, const std::string& recoveryId) {
     requireActor(actor);
-    const auto id = rpParseId(recoveryId);
-    const auto vaultId = rpVaultOf(id);
-    const auto engine = rpEngine(vaultId);
-    Visibility visible(actor, engine);
+    auto resolved = rpResolveVisible(actor, recoveryId);
+    Visibility gate(actor, resolved.engine);
 
     PointDetail out;
-    if (id.type == rec::RecoveryId::Type::ProviderVersion) {
-        const auto cloud = rpCloud(engine);
-        const auto point = cloud ? prov::points::byId(cloud, id.id, rpRetention(vaultId)) : std::nullopt;
-        if (!point) throw NotFound("no such recovery point: " + recoveryId);
-        out.point = *point;
-    } else {
-        auto detail = rec::local::points::detail(id);
-        if (!detail) throw NotFound("no such recovery point: " + recoveryId);
-        out = std::move(*detail);
-        std::erase_if(out.members, [&](const RecoveryPoint& m) { return !visible.canRead(m.path); });
+    if (resolved.id.type == rec::RecoveryId::Type::ProviderVersion) {
+        out.point = std::move(resolved.point);
+        return out;
     }
-    if (!visible.canRead(out.point.path)) throw NotFound("no such recovery point: " + recoveryId);
+    auto detail = rec::local::points::detail(resolved.id);
+    if (!detail) throw NotFound("no such recovery point: " + recoveryId);
+    out = std::move(*detail);
+    std::erase_if(out.members, [&](const RecoveryPoint& m) {
+        return !gate.canRead(m.path, m.kind == rec::PointKind::Directory);
+    });
+    // "<path>: <reason>": only entries the caller could see.
+    std::erase_if(out.skipped, [&](const std::string& s) {
+        const auto colon = s.find(": ");
+        return colon == std::string::npos || !gate.canRead(s.substr(0, colon));
+    });
     return out;
 }
 
 void deletePoint(const Actor& actor, const std::string& recoveryId, const bool confirm) {
     requireActor(actor);
-    const auto id = rpParseId(recoveryId);
-    if (id.type == rec::RecoveryId::Type::ProviderVersion)
+    const auto resolved = rpResolveVisible(actor, recoveryId);
+    if (resolved.id.type == rec::RecoveryId::Type::ProviderVersion)
         throw Invalid("provider versions are kept by the bucket and removed by its retention, not by Vaulthalla");
-    const auto vaultId = rpVaultOf(id);
-    const auto engine = rpEngine(vaultId);
-    const auto point = rec::local::points::get(id);
-    if (!point) throw NotFound("no such recovery point: " + recoveryId);
-    Visibility visible(actor, engine);
-    if (!visible.canRead(point->path)) throw NotFound("no such recovery point: " + recoveryId);
+    Visibility gate(actor, resolved.engine);
 
-    // Delete on the point's path; a path that is gone is judged on its nearest existing folder.
-    const auto path = rpNormalize(point->path);
-    const auto target = rpEntry(*engine, path) ? path : rpExistingAncestor(*engine, path);
-    if (!rpHas(actor, *engine, target, FsAction::Delete)) throw Denied("you need Delete on " + target);
+    // Delete on everything the point holds (as it is, or as it was): a snapshot of a folder can't be destroyed by
+    // someone a path override keeps from deleting part of it.
+    const auto& point = resolved.point;
+    if (!gate.allows(point.path, FsAction::Delete, point.kind == rec::PointKind::Directory))
+        throw Denied("you need Delete on " + point.path);
+    if (resolved.id.type == rec::RecoveryId::Type::Snapshot) {
+        std::string after;
+        for (;;) {
+            const auto page = rec::local::points::detail(resolved.id, after, 500);
+            if (!page || page->members.empty()) break;
+            for (const auto& m : page->members)
+                if (!gate.allows(m.path, FsAction::Delete, false)) throw Denied("you need Delete on " + m.path);
+            if (!page->members_truncated) break;
+            after = page->members.back().path;
+            const auto root = point.path == "/" ? std::string() : point.path;
+            if (after.starts_with(root + "/")) after = after.substr(root.size() + 1);
+        }
+    }
 
     if (!confirm)
-        throw NeedsConfirmation(POINT_DELETE, "Delete recovery point " + recoveryId + " (" + point->path +
+        throw NeedsConfirmation(POINT_DELETE, "Delete recovery point " + recoveryId + " (" + point.path +
                                               ")? This permanently removes what it retained.");
-    if (id.type == rec::RecoveryId::Type::Snapshot) rec::local::snapshots::remove(static_cast<int64_t>(id.id));
-    else rec::local::removeVersion(static_cast<int64_t>(id.id));
+    if (resolved.id.type == rec::RecoveryId::Type::Snapshot) rec::local::snapshots::remove(static_cast<int64_t>(resolved.id.id));
+    else rec::local::removeVersion(static_cast<int64_t>(resolved.id.id));
     log::Registry::audit()->info("[ops::recovery] {} deleted recovery point {} ({}) in vault {}", actor->name(),
-                                 recoveryId, point->path, vaultId);
+                                 recoveryId, point.path, resolved.engine->vault->id);
 }
 
 // ---- plans ---------------------------------------------------------------------------------------------------------
@@ -387,23 +408,22 @@ Plan plan(const Actor& actor, const PlanRequest& req) {
     rec::Plan out;
     EnginePtr engine;
     if (req.recovery_id) {
-        const auto id = rpParseId(*req.recovery_id);
-        out.vault_id = rpVaultOf(id);
-        engine = rpEngine(out.vault_id);
-        if (id.type == rec::RecoveryId::Type::ProviderVersion) {
+        // Authorized before anything else happens (no listing request, no plan detail for an unreadable point).
+        const auto resolved = rpResolveVisible(actor, *req.recovery_id);
+        engine = resolved.engine;
+        if (resolved.id.type == rec::RecoveryId::Type::ProviderVersion) {
             const auto cloud = rpCloud(engine);
-            if (!cloud) throw NotFound("no such recovery point: " + *req.recovery_id);
-            const auto row = rq::ObjectVersion::get(static_cast<int64_t>(id.id));
+            const auto row = rq::ObjectVersion::get(static_cast<int64_t>(resolved.id.id));
             if (row && req.refresh_provider) {
                 // The plan compares against the current version: learn it first (metadata only).
                 (void)prov::versions::refresh(cloud, row->object_key, {.max_requests = 2});
             }
-            out = prov::planOne(cloud, id.id, destination);
-            out.source_label = id.str();
+            out = prov::planOne(cloud, resolved.id.id, destination);
+            out.source_label = resolved.id.str();
         } else {
-            const auto local = rec::local::planFor(id, req.path ? std::optional(rpNormalize(*req.path)) : std::nullopt,
+            const auto local = rec::local::planFor(resolved.id,
+                                                   req.path ? std::optional(rpNormalize(*req.path)) : std::nullopt,
                                                    destination);
-            out.vault_id = local.vault_id;
             out.source_label = local.source_label;
             out.atomic = local.atomic;
             out.consistency_note = local.consistency_note;
@@ -414,15 +434,25 @@ Plan plan(const Actor& actor, const PlanRequest& req) {
     } else {
         if (!req.vault_id || !req.path || !req.at)
             throw Invalid("a plan needs a recovery_id, or vault_id + path + at for a point in time");
-        engine = rpEngine(*req.vault_id);
+        const auto path = rpNormalize(*req.path);
+        const auto notFound = [&] { return NotFound("nothing to restore at " + path); };
+        try {
+            engine = rpEngine(*req.vault_id);
+        } catch (const NotFound&) {
+            throw notFound();
+        }
+        Visibility gate(actor, engine);
+        const bool existing = gate.exists(path);
+        if (existing ? !gate.canRead(path, rpIsDirectory(*engine, path))
+                     : !(gate.canRead(path, false) || gate.canRead(path, true)))
+            throw notFound();
         const auto cloud = rpCloud(engine);
         if (!cloud)
             throw Invalid("point-in-time restore uses provider versions; in a local vault restore a snapshot or a "
                           "local version");
-        const auto path = rpNormalize(*req.path);
         if (req.refresh_provider) {
-            const auto prefix = rpIsDirectory(*engine, path) ? prov::versions::directoryPrefixOf(path)
-                                                             : prov::versions::objectKeyOf(path);
+            const auto prefix = (!existing || rpIsDirectory(*engine, path)) ? prov::versions::directoryPrefixOf(path)
+                                                                             : prov::versions::objectKeyOf(path);
             const auto r = prov::versions::refresh(cloud, prefix);
             if (!r.complete)
                 out.warnings.push_back("the provider's version listing was incomplete (" +
@@ -431,7 +461,6 @@ Plan plan(const Actor& actor, const PlanRequest& req) {
         auto pit = prov::planAt(cloud, path, *req.at, destination, req.prune);
         pit.warnings.insert(pit.warnings.begin(), out.warnings.begin(), out.warnings.end());
         out = std::move(pit);
-        out.vault_id = *req.vault_id;
         out.point_in_time = true;
         out.at = req.at;
         out.prune = req.prune;
@@ -440,22 +469,17 @@ Plan plan(const Actor& actor, const PlanRequest& req) {
     out.vault_id = engine->vault->id;
     out.destination = destination;
 
-    // Sources: the caller must be able to read what it restores. Items it can't read are left out (no oracle about
-    // their existence); a single point it can't read is NotFound.
-    Visibility visible(actor, engine);
-    const auto before = out.items.size();
-    std::erase_if(out.items, [&](const rec::PlanItem& item) { return !visible.canRead(item.source_path); });
-    if (out.items.empty() && before > 0) {
-        if (req.recovery_id) throw NotFound("no such recovery point: " + *req.recovery_id);
-        throw Denied("you cannot read anything under " + rpNormalize(*req.path) + " at that time");
+    // Items the caller can't read are left out without a trace (no count, no oracle); restoring elsewhere also
+    // needs Copy on the source, and destinations need what writing there needs — shown now as blockers and checked
+    // again per item at restore.
+    Visibility gate(actor, engine);
+    std::erase_if(out.items, [&](const rec::PlanItem& item) {
+        return !gate.canRead(item.source_path, rpIsDirectoryItem(item));
+    });
+    for (const auto& item : out.items) {
+        if (const auto refusal = rpSourceRefusal(gate, item)) out.blockers.push_back(*refusal);
+        else if (const auto dest = rpDestinationRefusal(actor, *engine, item)) out.blockers.push_back(*dest);
     }
-    if (out.items.size() < before)
-        out.warnings.push_back(std::to_string(before - out.items.size()) +
-                               " item(s) you can't read were left out of this plan");
-
-    // Destinations: shown now as blockers, re-checked per item at restore.
-    for (const auto& item : out.items)
-        if (const auto refusal = rpDestinationRefusal(actor, *engine, item)) out.blockers.push_back(*refusal);
     if (out.consistency_note.empty())
         out.consistency_note = out.atomic ? "A local snapshot, taken in one pass under content locks."
                                           : "Each item is restored on its own; this is not an atomic snapshot.";
@@ -482,11 +506,11 @@ Plan plan(const Actor& actor, const PlanRequest& req) {
     return out;
 }
 
+// Plans are personal (someone else's is NotFound), so the person who made one gets it back with its token: the
+// token says "I saw this preview", not who may restore.
 Plan getPlan(const Actor& actor, const uint64_t planId) {
     requireActor(actor);
-    auto out = rpPlanFromRow(rpOwnPlan(actor, planId));
-    out.token.clear();   // the token is only handed out when the plan is made
-    return out;
+    return rpPlanFromRow(rpOwnPlan(actor, planId));
 }
 
 // ---- restore -------------------------------------------------------------------------------------------------------
@@ -531,7 +555,7 @@ RestoreResult restore(const Actor& actor, const RestoreRequest& req) {
         if (o.outcome == "restored" || o.outcome == "skipped" || o.outcome == "removed") finished[o.destination_path] = o;
     result.items.clear();
 
-    Visibility visible(actor, engine);
+    Visibility gate(actor, engine);
     for (const auto& item : plan.items) {
         if (const auto it = finished.find(item.destination_path); it != finished.end()) {
             result.items.push_back(it->second);
@@ -539,12 +563,10 @@ RestoreResult restore(const Actor& actor, const RestoreRequest& req) {
         }
         rec::ItemOutcome o{.destination_path = item.destination_path, .outcome = "failed", .error = std::nullopt};
         try {
-            if (!visible.canRead(item.source_path)) {
-                o.outcome = "failed";
-                o.error = "you can no longer read " + item.source_path;
-            } else if (const auto refusal = rpDestinationRefusal(actor, *engine, item)) {
-                o.outcome = "failed";
+            if (const auto refusal = rpSourceRefusal(gate, item)) {
                 o.error = *refusal;
+            } else if (const auto dest = rpDestinationRefusal(actor, *engine, item)) {
+                o.error = *dest;
             } else if (rpIsLocalItem(item)) {
                 o = rec::local::restore(engine, actor, item);
             } else if (!cloud) {
