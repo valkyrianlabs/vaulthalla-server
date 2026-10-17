@@ -57,3 +57,6 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   selected `*` from `vault_keys_trashed`, which has no `updated_at`).
 - Deleting a folder (web console, ws `fs.entry.delete`) also drops its subfolders and symlinks from the filesystem
   metadata cache; recreating a path under the deleted folder failed.
+- S3 sync: a full bucket LIST throws when any page fails (transport error, 403/503, cut or non-XML body) instead of
+  returning the keys gathered so far, and every page of a listing reaches the remote index (buckets past 1,000
+  objects indexed only their first page) (#246).

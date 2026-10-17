@@ -4,6 +4,7 @@
 // how answers are parsed, metering, the protection lock) and the legacy signer's canonical query.
 // S3VersionedFake*: the semantics of tests/helpers/versioned_bucket.hpp that later suites rely on.
 
+#include "fs/model/File.hpp"
 #include "storage/s3/Controller.hpp"
 #include "storage/s3/curl/Http.hpp"
 #include "storage/s3/curl/helpers.hpp"
@@ -13,6 +14,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -483,6 +485,138 @@ TEST_F(S3VersionedOpsTest, RequestBudgetsAndUsageCapturesRefuseBeforeSending) {
     EXPECT_EQ(0u, metrics.get_requests);
     EXPECT_EQ(0u, metrics.put_requests);
     EXPECT_EQ(0u, metrics.downloaded_bytes);
+}
+
+// ---- legacy whole-bucket listing (#246) ------------------------------------------------------------------------------
+
+// Controller::listObjects feeds full LISTs (Cloud::initBins -> RemoteObjectIndex::replaceFromListObjects, `vault sync
+// reconcile`): a failed page must throw, never end the loop with the keys gathered so far.
+class S3ListObjectsTest : public S3VersionedOpsTest {
+protected:
+    static std::string page(const std::vector<std::string>& keys, const std::string& nextToken) {
+        std::string xml = R"(<?xml version="1.0" encoding="UTF-8"?>
+<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>vh-recovery-bucket</Name>)";
+        for (const auto& k : keys)
+            xml += "<Contents><Key>" + k + "</Key><LastModified>2026-10-12T17:50:30.000Z</LastModified>"
+                   "<ETag>\"e-" + k + "\"</ETag><Size>1</Size><StorageClass>STANDARD</StorageClass></Contents>";
+        xml += nextToken.empty() ? std::string("<IsTruncated>false</IsTruncated>")
+                                 : "<IsTruncated>true</IsTruncated><NextContinuationToken>" + nextToken +
+                                       "</NextContinuationToken>";
+        return xml + "</ListBucketResult>";
+    }
+
+    // Page 1 always succeeds (token "1/+tok="); page 2 answers `second`.
+    void pageTwoAnswers(http::Response second) {
+        handler = [second = std::move(second)](const http::Request& r) {
+            if (queryOf(r.url).find("continuation-token=") == std::string::npos)
+                return answer(200, page({"a.txt", "b.txt"}, "1/+tok="));
+            return second;
+        };
+    }
+
+    void expectIncompleteListingThrows(const std::string& why, const std::string& mention = {}) {
+        sent.clear();
+        controller.resetRequestMetrics();
+        try {
+            (void)controller.listObjects();
+            ADD_FAILURE() << why << ": listObjects returned a partial listing";
+        } catch (const std::runtime_error& e) {
+            EXPECT_NE(std::string::npos, std::string(e.what()).find("page 2")) << why << ": " << e.what();
+            if (!mention.empty()) {
+                EXPECT_NE(std::string::npos, std::string(e.what()).find(mention)) << e.what();
+            }
+        }
+        EXPECT_EQ(2u, sent.size()) << why;
+        EXPECT_EQ(2u, controller.requestMetrics().list_requests) << why;
+    }
+};
+
+// The concatenation is several XML documents; the parser used to read only the first ListBucketResult, so a full LIST
+// of a bucket past 1000 objects indexed its first page only.
+TEST(S3ListObjectsParse, EveryConcatenatedPageReachesTheIndex) {
+    const std::string first = R"(<?xml version="1.0" encoding="UTF-8"?>
+<ListBucketResult><Contents><Key>a.txt</Key><LastModified>2026-10-12T17:50:30.000Z</LastModified><Size>1</Size></Contents>
+<IsTruncated>true</IsTruncated><NextContinuationToken>t</NextContinuationToken></ListBucketResult>)";
+    const std::string second = R"(<?xml version="1.0" encoding="UTF-8"?>
+<ListBucketResult><Contents><Key>b.txt</Key><LastModified>2026-10-12T17:50:30.000Z</LastModified><Size>2</Size></Contents>
+<IsTruncated>false</IsTruncated></ListBucketResult>)";
+    const auto joined = first + second;
+    const auto files = vh::fs::model::filesFromS3XML(std::u8string(joined.begin(), joined.end()));
+    ASSERT_EQ(2u, files.size());
+    EXPECT_EQ("/a.txt", files[0]->path.string());
+    EXPECT_EQ("/b.txt", files[1]->path.string());
+    EXPECT_EQ(2u, files[1]->size_bytes);
+}
+
+TEST_F(S3ListObjectsTest, PagesAreFollowedSignedAndEveryPageIsParsed) {
+    handler = [](const http::Request& r) {
+        if (queryOf(r.url).find("continuation-token=") == std::string::npos)
+            return answer(200, page({"a.txt", "dir/b.txt"}, "1/+tok="));
+        return answer(200, page({"dir/c.txt"}, {}));
+    };
+    const auto xml = controller.listObjects("dir/");
+    ASSERT_EQ(2u, sent.size());
+    EXPECT_EQ("GET", sent[0].method);
+    EXPECT_EQ("/vh-recovery-bucket", pathOf(sent[0].url));
+    EXPECT_EQ("list-type=2&prefix=dir%2F", queryOf(sent[0].url));
+    EXPECT_EQ("continuation-token=1%2F%2Btok%3D&list-type=2&prefix=dir%2F", queryOf(sent[1].url));
+    EXPECT_NE(std::string::npos, headerOf(sent[1], "authorization").find("/us-east-2/s3/aws4_request"));
+    EXPECT_EQ(2u, controller.requestMetrics().list_requests);
+
+    // Both pages reach the index, not only the first ListBucketResult of the concatenation.
+    std::vector<std::string> keys;
+    for (const auto& f : vh::fs::model::filesFromS3XML(xml)) keys.push_back(f->path.string());
+    std::ranges::sort(keys);
+    EXPECT_EQ((std::vector<std::string>{"/a.txt", "/dir/b.txt", "/dir/c.txt"}), keys);
+}
+
+TEST_F(S3ListObjectsTest, AFailedPageThrowsInsteadOfTruncatingTheListing) {
+    pageTwoAnswers(answer(403, "<Error><Code>SignatureDoesNotMatch</Code><Message>no</Message></Error>"));
+    expectIncompleteListingThrows("403", "SignatureDoesNotMatch");
+
+    pageTwoAnswers(answer(503, "<Error><Code>SlowDown</Code><Message>Please reduce your request rate.</Message></Error>"));
+    expectIncompleteListingThrows("503", "SlowDown");
+
+    pageTwoAnswers(answer(500));
+    expectIncompleteListingThrows("500 without a body", "HTTP 500");
+
+    http::Response down;
+    down.transport_ok = false;
+    down.transport_error = "Connection timed out";
+    pageTwoAnswers(down);
+    expectIncompleteListingThrows("transport failure", "Connection timed out");
+
+    auto cut = answer(200, page({"c.txt"}, {}));
+    cut.truncated = true;
+    pageTwoAnswers(cut);
+    expectIncompleteListingThrows("cut body");
+
+    pageTwoAnswers(answer(200, "<html>proxy error"));
+    expectIncompleteListingThrows("not XML");
+
+    pageTwoAnswers(answer(200, "<Error><Code>InternalError</Code></Error>"));
+    expectIncompleteListingThrows("200 carrying an error document");
+
+    pageTwoAnswers(answer(200, "<ListBucketResult><Contents><Key>c</Key><Size>1</Size>"
+                               "<LastModified>2026-10-12T17:50:30.000Z</LastModified></Contents>"
+                               "<IsTruncated>true</IsTruncated></ListBucketResult>"));
+    expectIncompleteListingThrows("truncated without a continuation token");
+
+    pageTwoAnswers(answer(200, page({"c.txt"}, "1/+tok=")));
+    expectIncompleteListingThrows("token that does not advance");
+}
+
+TEST_F(S3ListObjectsTest, AFailedFirstPageThrowsAndAProtectedBucketSendsNothing) {
+    handler = [](const http::Request&) {
+        return answer(403, "<Error><Code>ExpiredToken</Code><Message>expired</Message></Error>");
+    };
+    EXPECT_THROW((void)controller.listObjects(), std::runtime_error);
+    EXPECT_EQ(1u, sent.size());
+
+    sent.clear();
+    guard::setForTesting({vh::storage::upstream::identityFor(*awsKey(), "vh-recovery-bucket")});
+    EXPECT_THROW((void)controller.listObjects(), vh::storage::upstream::BucketProtected);
+    EXPECT_TRUE(sent.empty());
 }
 
 // ---- the versioned fake ----------------------------------------------------------------------------------------------

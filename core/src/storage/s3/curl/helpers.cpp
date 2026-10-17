@@ -95,15 +95,6 @@ namespace vh::storage::s3::curl {
         return size * nmemb;
     }
 
-    void parsePagination(const std::string &response, std::string &continuationToken, bool &moreResults) {
-        moreResults = std::regex_search(response, std::regex("<IsTruncated>true</IsTruncated>"));
-        std::smatch tokenMatch;
-        if (moreResults && std::regex_search(response, tokenMatch,
-                                             std::regex("<NextContinuationToken>([^<]+)</NextContinuationToken>")))
-            continuationToken = tokenMatch[1].str();
-        else moreResults = false;
-    }
-
     bool extractETag(const std::string &respHdr, std::string &etagOut) {
         auto pos = respHdr.find("ETag:");
         if (pos == std::string::npos) return false;

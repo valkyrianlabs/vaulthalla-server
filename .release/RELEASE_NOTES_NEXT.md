@@ -40,4 +40,6 @@ anywhere — and they are labelled as estimates, not invoices. You can set a mon
 notification and never blocks writes.
 
 **Fixes.** Editors can save over files on the mount again (renaming a temporary file over the original failed with an I/O error); with local versioning on, the version the save replaces is kept. Vault keys load again after a restart in the middle of a key rotation. S3 bucket listings past 1,000
-objects no longer fail their signature. Deleting a folder no longer leaves its subfolders cached.
+objects no longer fail their signature. Deleting a folder no longer leaves its subfolders cached. A sync pass whose
+bucket listing fails part-way now stops instead of working from a partial view, and S3 vaults with more than 1,000
+objects index all of them.

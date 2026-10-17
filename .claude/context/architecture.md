@@ -753,6 +753,13 @@ stage "Copy And Delete")
   `buildAuthorizationHeader` sorts the canonical query (it signed `list-type&…&continuation-token` unsorted).
   Test fake: `tests/helpers/versioned_bucket.hpp` (`VersionedBucket`: S3 versioning modes, delete markers, failure
   injection, body-GET counters).
+- **Listings are never partial (#246).** `Controller::listObjects` (the full LIST behind `Cloud::initBins` →
+  `RemoteObjectIndex::replaceFromListObjects` and `vault sync reconcile`) and `listObjectKeysPage` throw on any
+  transport error, non-2xx (403 SignatureDoesNotMatch, 503 SlowDown), cut/non-XML body, or a truncated page without
+  an advancing token; callers fail the pass and leave the index untouched. `listObjects` signs with `sigv4::sign` and
+  goes through `curl::http` (test transport: `S3ListObjects*`); its result is one ListBucketResult per page, and
+  `fs::model::filesFromS3XML` reads every one of them (it used to read only the first: buckets past 1000 objects
+  indexed page 1 only).
 - **Prefer the local ciphertext copy (D11).** Anything that reads a vault file's bytes goes through
   `Engine::openPlaintextReader`: a cloud file with a backing file reads it in place (zero S3 requests). The ws share
   download/preview lanes and the S3 gateway's file reads (`ObjectStore::readFileObject`, ranges read only their

@@ -24,7 +24,6 @@ std::string hmacSha256HexFromRaw(const std::string& rawKey, const std::string& d
 std::string escapeKeyPreserveSlashes(CURL* curl, const std::filesystem::path& p);
 std::string composeMultiPartUploadXMLBody(const std::vector<std::string>& etags);
 size_t writeToString(const char* ptr, size_t size, size_t nmemb, void* userdata);
-void parsePagination(const std::string& response, std::string& continuationToken, bool& moreResults);
 [[nodiscard]] bool extractETag(const std::string& respHdr, std::string& etagOut);
 // Legacy data-path signer. The query (after '?' in fullPath, or canonicalQuery) must already be RFC 3986 encoded the
 // way the URL carries it; it is put in SigV4 canonical order (sorted by name, then value; a bare "flag" → "flag=").

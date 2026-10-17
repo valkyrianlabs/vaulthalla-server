@@ -3,6 +3,7 @@
 #include "storage/ScopedS3RequestUsageCapture.hpp"
 #include "vault/model/APIKey.hpp"
 #include "storage/s3/curl/helpers.hpp"
+#include "storage/s3/curl/Http.hpp"
 #include "log/Registry.hpp"
 
 #include <algorithm>
@@ -11,6 +12,7 @@
 #include <fmt/format.h>
 #include <pugixml.hpp>
 #include <sstream>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -281,63 +283,55 @@ namespace vh::storage::s3 {
         return page;
     }
 
+    // The whole listing (every ListObjectsV2 page's XML, concatenated) or an exception: a failed page (transport
+    // error, any non-2xx such as 403 SignatureDoesNotMatch or 503 SlowDown, a cut or unparsable body) throws instead
+    // of ending the loop, so callers never mistake a partial listing for the bucket's contents (#246).
     std::u8string Controller::listObjects(const fs::path& prefix) const {
         std::u8string fullXmlResponse;
         std::string continuationToken;
-        bool moreResults = true;
+        const std::string prefixStr = prefix.string();
 
-        while (moreResults) {
+        for (unsigned int page = 1;; ++page) {
+            std::vector<std::pair<std::string, std::string>> query{{"list-type", "2"}};
+            if (!prefixStr.empty()) query.emplace_back("prefix", prefixStr);
+            if (!continuationToken.empty()) query.emplace_back("continuation-token", continuationToken);
+
             recordRequest(RequestKind::List);
+            const auto signedRequest = signObjectRequest("GET", {}, query, {});
+            curl::http::Request request;
+            request.method = signedRequest.method;
+            request.url = signedRequest.url;
+            request.headers = signedRequest.headers;
+            const auto response = curl::http::perform(request);
 
-            CURL* curl = curl_easy_init();
-            if (!curl) break;
-
-            std::string escapedPrefix;
-            if (!prefix.empty()) escapedPrefix = escapeKeyPreserveSlashes(curl, prefix);
-
-            std::ostringstream uri;
-            uri << "/" << bucket_ << "?list-type=2";
-            if (!escapedPrefix.empty()) uri << "&prefix=" << escapedPrefix;
-            if (!continuationToken.empty()) {
-                char* escapedToken = curl_easy_escape(curl, continuationToken.c_str(), static_cast<int>(continuationToken.size()));
-                if (!escapedToken) {
-                    curl_easy_cleanup(curl);
-                    break;
-                }
-                uri << "&continuation-token=" << escapedToken;
-                curl_free(escapedToken);
+            const auto fail = [&](const std::string& why) {
+                return std::runtime_error(fmt::format(
+                    "ListObjectsV2 failed for {} prefix '{}' on page {} ({}); the listing is incomplete",
+                    bucket_, prefixStr, page, why));
+            };
+            if (!response.transport_ok) throw fail("transport: " + response.transport_error);
+            if (response.status / 100 != 2) {
+                std::string code;
+                pugi::xml_document error;
+                if (!response.body.empty() && error.load_string(response.body.c_str()))
+                    code = error.child("Error").child_value("Code");
+                throw fail(code.empty() ? fmt::format("HTTP {}", response.status)
+                                        : fmt::format("HTTP {} {}", response.status, code));
             }
+            if (response.truncated) throw fail("response too large");
 
-            const std::string uriStr = uri.str();
-            const std::string url = apiKey_->endpoint + uriStr;
+            pugi::xml_document doc;
+            if (!doc.load_string(response.body.c_str())) throw fail("response is not XML");
+            const auto result = doc.child("ListBucketResult");
+            if (!result) throw fail("response has no ListBucketResult");
 
-            const std::string payloadHash = "UNSIGNED-PAYLOAD";
-            const auto hdrMap = buildHeaderMap(payloadHash);
-            const std::string authHeader =  buildAuthorizationHeader(apiKey_, "GET", uriStr, hdrMap, payloadHash);
+            fullXmlResponse += std::u8string(reinterpret_cast<const char8_t*>(response.body.data()), response.body.size());
 
-            HeaderList headers;
-            headers.add("Authorization: " + authHeader);
-            for (const auto& [k, v] : hdrMap) headers.add(k + ": " + v);
-
-            std::string response;
-            curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-            curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers.list);
-            curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeToString);
-            curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
-
-            const CURLcode res = curl_easy_perform(curl);
-            curl_easy_cleanup(curl);
-
-            if (res != CURLE_OK) {
-                log::Registry::cloud()->error("[S3Provider] listObjects failed: CURL={} Response:\n{}",
-                                            res, response);
-                break;
-            }
-
-            // Append raw XML as UTF-8
-            fullXmlResponse += std::u8string(reinterpret_cast<const char8_t*>(response.data()), response.size());
-
-            parsePagination(response, continuationToken, moreResults);
+            if (std::string_view(result.child_value("IsTruncated")) != "true") break;
+            std::string next = result.child_value("NextContinuationToken");
+            if (next.empty()) throw fail("truncated page without a continuation token");
+            if (next == continuationToken) throw fail("continuation token did not advance");
+            continuationToken = std::move(next);
         }
 
         return fullXmlResponse;
