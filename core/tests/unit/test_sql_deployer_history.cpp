@@ -575,4 +575,123 @@ TEST_F(SqlDeployerHistoryDb, UnknownChecksumStillFailsClosed) {
     });
 }
 
+// 111 (file recovery): on a 110-era database, file_versions' file_id cascade becomes SET NULL (retained generations
+// outlive the live file), the new tables/columns/trigger appear with defaults that change nothing, and re-running the
+// migration file is a no-op.
+namespace {
+
+void dropFileRecovery(pqxx::work& txn) {
+    txn.exec("DROP TRIGGER IF EXISTS recovery_guard_retired_vault_key ON vault_keys_trashed");
+    txn.exec("DROP FUNCTION IF EXISTS recovery_guard_retired_vault_key()");
+    txn.exec("DROP TABLE IF EXISTS recovery_plan, vault_upstream_usage_daily, upstream_object_version CASCADE");
+    txn.exec("DELETE FROM file_versions");
+    txn.exec(R"SQL(
+        ALTER TABLE file_versions
+            DROP COLUMN IF EXISTS vault_id, DROP COLUMN IF EXISTS snapshot_id, DROP COLUMN IF EXISTS blob_id,
+            DROP COLUMN IF EXISTS rel_path, DROP COLUMN IF EXISTS mode, DROP COLUMN IF EXISTS source_updated_at,
+            DROP COLUMN IF EXISTS origin, DROP COLUMN IF EXISTS reason, DROP COLUMN IF EXISTS upstream_state,
+            DROP COLUMN IF EXISTS upstream_key, DROP COLUMN IF EXISTS upstream_version_id,
+            DROP COLUMN IF EXISTS upstream_attempts, DROP COLUMN IF EXISTS upstream_error,
+            DROP COLUMN IF EXISTS upstream_sent_at
+    )SQL");
+    txn.exec("DROP TABLE IF EXISTS recovery_snapshot, recovery_blob, vault_recovery_policy CASCADE");
+    txn.exec("ALTER TABLE file_versions DROP CONSTRAINT IF EXISTS file_versions_file_id_fkey");
+    txn.exec("ALTER TABLE file_versions ADD CONSTRAINT file_versions_file_id_fkey FOREIGN KEY (file_id) "
+             "REFERENCES files (fs_entry_id) ON DELETE CASCADE");
+    txn.exec("ALTER TABLE file_versions ALTER COLUMN content_hash SET NOT NULL");
+    txn.exec(R"SQL(
+        ALTER TABLE upstream_bucket
+            DROP COLUMN IF EXISTS versioning_status, DROP COLUMN IF EXISTS versioning_checked_at,
+            DROP COLUMN IF EXISTS versioning_enabled_at, DROP COLUMN IF EXISTS versioning_enabled_by,
+            DROP COLUMN IF EXISTS versioning_enabled_by_vaulthalla, DROP COLUMN IF EXISTS versioning_settles_at,
+            DROP COLUMN IF EXISTS versioning_mfa_delete, DROP COLUMN IF EXISTS object_lock_enabled,
+            DROP COLUMN IF EXISTS noncurrent_retention_mode, DROP COLUMN IF EXISTS noncurrent_retention_days,
+            DROP COLUMN IF EXISTS noncurrent_retention_set_at, DROP COLUMN IF EXISTS noncurrent_retention_set_by
+    )SQL");
+    txn.exec("DELETE FROM schema_migrations WHERE filename = '111_file_recovery.sql'");
+}
+
+// The delete actions of the foreign keys on file_versions.file_id ('c' cascade, 'n' set null).
+std::vector<std::string> fileVersionFileIdActions(pqxx::work& txn) {
+    const auto res = txn.exec(R"SQL(
+        SELECT c.confdeltype::text FROM pg_constraint c
+        JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
+        WHERE c.conrelid = 'file_versions'::regclass AND c.contype = 'f' AND a.attname = 'file_id'
+        ORDER BY c.conname
+    )SQL");
+    std::vector<std::string> out;
+    for (const auto row : res) out.push_back(row[0].as<std::string>());
+    return out;
+}
+
+}
+
+TEST_F(SqlDeployerHistoryDb, FileRecoveryMigrationKeepsGenerationsWhenTheLiveFileGoes) {
+    inRolledBackTxn([](pqxx::work& txn) {
+        dropFileRecovery(txn);
+        ASSERT_EQ(fileVersionFileIdActions(txn), std::vector<std::string>{"c"});
+        ASSERT_FALSE(columnExists(txn, "file_versions", "blob_id"));
+
+        // A 110-era row (the table existed, unused): file_id cascades.
+        const auto userId = txn.exec("INSERT INTO users (name, password_hash) VALUES ('claude_test_111_user', 'x') "
+                                     "RETURNING id").one_field_ref().as<int>();
+        const auto vaultId = txn.exec("INSERT INTO vault (type, name, owner_id, mount_point) "
+                                      "VALUES ('local', 'claude_test_111_vault', $1, '0123456789ABCDEFGHJKMNPQRSTVWX111') "
+                                      "RETURNING id", pqxx::params{userId}).one_field_ref().as<int>();
+        const auto fileId = txn.exec("INSERT INTO fs_entry (vault_id, name, path) VALUES ($1, 'v.txt', '/v.txt') "
+                                     "RETURNING id", pqxx::params{vaultId}).one_field_ref().as<int>();
+        txn.exec("INSERT INTO files (fs_entry_id, size_bytes) VALUES ($1, 5)", pqxx::params{fileId});
+        const auto versionId = txn.exec("INSERT INTO file_versions (file_id, version_number, content_hash, size_bytes, path) "
+                                        "VALUES ($1, 1, 'h', 5, '/v.txt') RETURNING id",
+                                        pqxx::params{fileId}).one_field_ref().as<int>();
+
+        migseed::SqlDeployReport report;
+        ASSERT_NO_THROW(report = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(applied(report, "111_file_recovery.sql"));
+        EXPECT_EQ(recordedHash(txn, "111_file_recovery.sql"), currentHash("111_file_recovery.sql"));
+        EXPECT_EQ(fileVersionFileIdActions(txn), std::vector<std::string>{"n"}) << "exactly one FK, SET NULL";
+
+        // The old row keeps its meaning: a snapshot-origin generation outside any backlog.
+        const auto old = txn.exec("SELECT origin, upstream_state, upstream_attempts, vault_id IS NULL, blob_id IS NULL "
+                                  "FROM file_versions WHERE id = $1", pqxx::params{versionId}).one_row();
+        EXPECT_EQ(old[0].as<std::string>(), "snapshot");
+        EXPECT_EQ(old[1].as<std::string>(), "none");
+        EXPECT_EQ(old[2].as<int>(), 0);
+        EXPECT_TRUE(old[3].as<bool>());
+        EXPECT_TRUE(old[4].as<bool>());
+
+        // Deleting the live file keeps the generation.
+        txn.exec("DELETE FROM fs_entry WHERE id = $1", pqxx::params{fileId});
+        EXPECT_TRUE(txn.exec("SELECT file_id FROM file_versions WHERE id = $1", pqxx::params{versionId})
+                        .one_field_ref().is_null());
+
+        // Every vault starts without a policy; the trigger guards retired keys still needed by recoverable data.
+        EXPECT_EQ(txn.exec("SELECT count(*) FROM vault_recovery_policy").one_field_ref().as<int>(), 0);
+        EXPECT_EQ(txn.exec("SELECT count(*) FROM pg_trigger WHERE tgname = 'recovery_guard_retired_vault_key' "
+                           "AND tgrelid = 'vault_keys_trashed'::regclass").one_field_ref().as<int>(), 1);
+        txn.exec("INSERT INTO vault_keys_trashed (vault_id, version, encrypted_key, iv) VALUES ($1, 1, '\\x00', '\\x00')",
+                 pqxx::params{vaultId});
+        txn.exec("INSERT INTO recovery_blob (vault_id, storage_name, encryption_iv, key_version, cipher_bytes, "
+                 "plaintext_bytes) VALUES ($1, 'abcdefghijklmnopqrstuvwxyz012345', 'iv', 1, 16, 0)",
+                 pqxx::params{vaultId});
+        {
+            pqxx::subtransaction guarded(txn, "guarded");
+            EXPECT_THROW(guarded.exec("DELETE FROM vault_keys_trashed WHERE vault_id = $1", pqxx::params{vaultId}),
+                         pqxx::foreign_key_violation);
+        }
+        txn.exec("DELETE FROM vault WHERE id = $1", pqxx::params{vaultId});   // the vault's own deletion still cascades
+        EXPECT_EQ(txn.exec("SELECT count(*) FROM vault_keys_trashed WHERE vault_id = $1", pqxx::params{vaultId})
+                      .one_field_ref().as<int>(), 0);
+
+        // Applying again does nothing; executing the file again changes nothing either (idempotent on upgraded installs).
+        migseed::SqlDeployReport again;
+        ASSERT_NO_THROW(again = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(again.applied.empty());
+        ASSERT_NO_THROW(txn.exec(migseed::readFileToString(repoPsqlDir() / "111_file_recovery.sql")));
+        EXPECT_EQ(fileVersionFileIdActions(txn), std::vector<std::string>{"n"});
+        EXPECT_EQ(txn.exec("SELECT count(*) FROM pg_trigger WHERE tgname = 'recovery_guard_retired_vault_key'")
+                      .one_field_ref().as<int>(), 1);
+    });
+}
+
 } // namespace vh_sql_deployer_history_test

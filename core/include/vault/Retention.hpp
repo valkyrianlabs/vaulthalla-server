@@ -47,7 +47,8 @@ struct PathGuardError : std::runtime_error {
 // directory (never a symlink) whose resolved path is directly under the resolved root. Returns false when there is
 // nothing to remove. Throws PathGuardError on anything else.
 bool removeVaultDirectory(const std::filesystem::path& root, const std::string& alias);
-// The vault's backing directory and its cache directory, both through removeVaultDirectory.
+// The vault's backing directory, its cache directory and its recovery store (<backing>/.vh-recovery/<alias>), all
+// through removeVaultDirectory.
 void removeBackingData(const std::string& alias);
 
 // Marks the vault deleted and takes it off every live surface. `now` purges on the next pass instead of after the

@@ -289,7 +289,8 @@ void Manager::removeVault(const unsigned int vaultId) {
         evictCachedVault(vaultId, fuseRootOf(removed));
     }
 
-    // Its backing and cache directories too (#162), through the same path guard as the retention purge.
+    // Its backing and cache directories and its recovery store too (#162), through the same path guard as the
+    // retention purge.
     if (!backingAlias.empty()) {
         try {
             vault::retention::removeBackingData(backingAlias);
