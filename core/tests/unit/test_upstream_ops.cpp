@@ -434,6 +434,53 @@ TEST_F(UpstreamOpsTest, LifecycleIsManagedOnlyOnOurBucketsAndDestructiveRulesNee
     EXPECT_TRUE(std::ranges::any_of(inspection.config.lifecycle, [](const auto& r) { return r.id == "other-app"; }));
 }
 
+// File recovery keeps its noncurrent retention in the same owned rule and records it on the bucket: a noncurrent change
+// through `vh upstream lifecycle` is that retention. Shortening it (measured against the recorded retention, even when
+// the rule was edited outside Vaulthalla) needs the destructive acceptance, and the record follows every change.
+TEST_F(UpstreamOpsTest, NoncurrentExpirationOnABucketWithRecoveryRetentionIsTheRetention) {
+    const auto keyId = awsKey(superUser);
+    const auto name = bucketName();
+    (void)s3Vault(keyId, name, up::Provision{.mode = up::BucketMode::Create});
+    const auto rowId = rowOf(name)->id;
+    db::query::upstream::Bucket::recordRetention(rowId, "days", 90, superUser->id);
+    {
+        std::scoped_lock lock(cloud->mutex);
+        auto& rules = cloud->buckets.at(name).lifecycle;
+        std::erase_if(rules, [](const auto& r) { return r.id == storage::upstream::lifecycle::kOwnedRuleId; });
+        padmin::LifecycleRule ours;   // edited outside Vaulthalla: says 10 days, recovery recorded 90
+        ours.id = storage::upstream::lifecycle::kOwnedRuleId;
+        ours.foreign = false;
+        ours.expire_noncurrent_days = 10;
+        rules.push_back(ours);
+    }
+    const auto retention = [&] { return db::query::upstream::Bucket::getVersioning(rowId).value(); };
+
+    try {
+        (void)up::setLifecycle(superUser, keyId, name, {.expire_noncurrent_days = 30});
+        FAIL() << "90 -> 30 days shortens the recovery retention";
+    } catch (const ops::NeedsConfirmation& e) {
+        EXPECT_EQ(e.code, up::DESTRUCTIVE_LIFECYCLE);
+        EXPECT_NE(std::string(e.what()).find("90 days"), std::string::npos) << e.what();
+    }
+    EXPECT_EQ(retention().retention_days, 90u) << "nothing changed";
+
+    (void)up::setLifecycle(superUser, keyId, name, {.expire_noncurrent_days = 30, .accept_destructive = true});
+    EXPECT_EQ(retention().retention_mode, "days");
+    EXPECT_EQ(retention().retention_days, 30u) << "the recorded retention follows the rule";
+
+    (void)up::setLifecycle(superUser, keyId, name, {.expire_noncurrent_days = 0});   // lengthening: no consent needed
+    EXPECT_EQ(retention().retention_mode, "indefinite");
+    EXPECT_FALSE(retention().retention_days);
+
+    EXPECT_THROW((void)up::setLifecycle(superUser, keyId, name, {.expire_noncurrent_days = 45}), ops::NeedsConfirmation)
+        << "indefinite -> 45 days shortens it";
+    db::query::upstream::Bucket::recordRetention(rowId, "days", 45, superUser->id);
+    EXPECT_THROW((void)up::setLifecycle(superUser, keyId, name, {.prefix = std::string("photos/")}), ops::Invalid)
+        << "a narrower prefix would leave part of the vault without its retention";
+    (void)up::setLifecycle(superUser, keyId, name, {.abort_incomplete_multipart_days = 3});
+    EXPECT_EQ(retention().retention_days, 45u) << "other fields leave the retention alone";
+}
+
 // ---- cleanup -------------------------------------------------------------------------------------------------------
 
 TEST_F(UpstreamOpsTest, CleanupRefusesBucketsVaulthallaDoesNotOwnOrStillUses) {
@@ -533,6 +580,42 @@ TEST_F(UpstreamOpsTest, DetachRelinquishesOnlyUnusedBucketsAndKeepsTheData) {
     EXPECT_EQ(objectCount(name), 1u);
     std::scoped_lock lock(cloud->mutex);
     EXPECT_TRUE(cloud->buckets.at(name).lifecycle.empty()) << "our rule is gone, the data is not";
+}
+
+// File recovery adds a second Vaulthalla rule (vaulthalla-manifest-versions): detach relinquishes every vaulthalla-*
+// rule, never another application's.
+TEST_F(UpstreamOpsTest, DetachRemovesEveryVaulthallaLifecycleRuleAndKeepsForeignOnes) {
+    const auto keyId = awsKey(superUser);
+    const auto name = bucketName();
+    const auto ticket = up::beginProvision(superUser, keyId, "v", name, {.mode = up::BucketMode::Create,
+                                           .lifecycle = up::LifecyclePatch{.abort_incomplete_multipart_days = 2}});
+    (void)db::query::upstream::Bucket::setProvisioningState(ticket.upstream_bucket_id,
+                                                            storage::upstream::model::ProvisioningState::Ready,
+                                                            ticket.operation_token);
+    seedBucket(name, {{"kept", 4}});
+    {
+        std::scoped_lock lock(cloud->mutex);
+        auto& rules = cloud->buckets.at(name).lifecycle;
+        rules.clear();
+        padmin::LifecycleRule ours;
+        ours.id = storage::upstream::lifecycle::kOwnedRuleId;
+        ours.foreign = false;
+        ours.expire_noncurrent_days = 30;
+        rules.push_back(ours);
+        const auto manifest = storage::upstream::lifecycle::mergeManifestRule(rules, true, true);
+        rules = manifest.rules;
+        padmin::LifecycleRule foreign;
+        foreign.id = "backup-team-rule";
+        foreign.foreign = true;
+        foreign.abort_incomplete_multipart_days = 7;
+        rules.push_back(foreign);
+        ASSERT_EQ(rules.size(), 3u);
+    }
+    (void)up::detach(superUser, keyId, name);
+    std::scoped_lock lock(cloud->mutex);
+    const auto& left = cloud->buckets.at(name).lifecycle;
+    ASSERT_EQ(left.size(), 1u) << "vaulthalla-managed and vaulthalla-manifest-versions are gone";
+    EXPECT_EQ(left.front().id, "backup-team-rule");
 }
 
 // ---- admin credentials, keys ---------------------------------------------------------------------------------------

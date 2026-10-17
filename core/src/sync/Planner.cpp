@@ -6,6 +6,7 @@
 #include "sync/model/Baseline.hpp"
 #include "fs/model/File.hpp"
 #include "log/Registry.hpp"
+#include "recovery/local/Backlog.hpp"
 
 using namespace vh::sync;
 using namespace vh::sync::model;
@@ -85,6 +86,17 @@ std::vector<Action> Planner::build(
                     continue;
                 }
             }
+
+            // A backlog replay was interrupted (recovery/local/Backlog): the remote object is one of this file's own
+            // earlier generations that Vaulthalla put there, nobody changed it since, and the rest of the file's
+            // history and its current content are still to come. Finish publishing it, under every conflict policy:
+            // reading our own write as a remote change would be a spurious conflict, or overwrite the live file with
+            // the stale generation.
+            if (!ctx->hasOpenConflict(L->id))
+                if (const auto* base = ctx->baselineFor(L->id); base && base->publishing() && !remoteChangedSince(*R, *base)) {
+                    plan.push_back({ ActionType::Upload, k, L, R });
+                    continue;
+                }
 
             // Fast-path skip if equal content (let ctx decide via hashes, remoteHashMap, etc.)
             if (*L == *R) {
@@ -214,6 +226,15 @@ S3CostEstimate Planner::estimateS3Cost(const std::vector<Action>& plan) {
     if (mutatesRemoteIndex) {
         ++estimate.put_requests;
         estimate.head_requests += 2;
+    }
+
+    // Local versioning's backlog: the uploads and remote deletes above replay their keys' pending versions first.
+    for (const auto& action : plan) {
+        const auto& file = action.local ? action.local : action.remote;
+        if ((action.type != ActionType::Upload && action.type != ActionType::DeleteRemote) || !file || !file->vault_id)
+            continue;
+        vh::recovery::local::backlog::addPlannedReplays(static_cast<uint32_t>(*file->vault_id), plan, estimate);
+        break;
     }
 
     return estimate;

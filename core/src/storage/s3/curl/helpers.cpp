@@ -6,6 +6,7 @@
 #include <openssl/hmac.h>
 #include <openssl/sha.h>
 #include <algorithm>
+#include <cctype>
 #include <sstream>
 #include <iomanip>
 #include <regex>
@@ -136,6 +137,32 @@ namespace vh::storage::s3::curl {
             out += name + "=" + value;
         }
         return out;
+    }
+
+    std::optional<std::string> lastHeaderValue(const std::string &raw, const std::string_view name) {
+        std::optional<std::string> found;
+        std::istringstream lines(raw);
+        std::string line;
+        while (std::getline(lines, line)) {
+            if (line.starts_with("HTTP/")) {
+                found.reset();   // a new response block (redirect, 100-continue): only the final one counts
+                continue;
+            }
+            const auto colon = line.find(':');
+            if (colon == std::string::npos || colon != name.size()) continue;
+            bool same = true;
+            for (std::size_t i = 0; i < colon; ++i) {
+                if (std::tolower(static_cast<unsigned char>(line[i])) != std::tolower(static_cast<unsigned char>(name[i]))) {
+                    same = false;
+                    break;
+                }
+            }
+            if (!same) continue;
+            auto value = line.substr(colon + 1);
+            trimInPlace(value);
+            found = std::move(value);
+        }
+        return found;
     }
 
     std::string buildAuthorizationHeader(const std::shared_ptr<vault::model::APIKey> &api_key,

@@ -30,6 +30,12 @@ struct FakeCloud {
         std::vector<padmin::LifecycleRule> lifecycle;
         std::string region{"us-east-2"};
         std::set<std::string> locked;   // deletes of these fail (object lock)
+        // Provider versioning: what the bucket is, what reads still say while a change propagates.
+        padmin::Versioning versioning{padmin::Versioning::Unversioned};
+        padmin::Versioning previousVersioning{padmin::Versioning::Unversioned};
+        unsigned staleVersioningReads = 0;   // reads left that still answer previousVersioning
+        bool objectLock = false;             // Object Lock: versioning Enabled and can't be suspended
+        std::optional<bool> mfaDelete;       // MfaDelete as GetBucketVersioning reports it
     };
 
     std::mutex mutex;
@@ -43,6 +49,24 @@ struct FakeCloud {
     std::function<void(const std::string&)> beforeDeleteObjects;
     std::map<std::string, unsigned> bucketCalls;
     unsigned calls = 0, deleteBucketCalls = 0;
+
+    // Provider versioning. false = an R2-like provider (Unversioned, PutBucketVersioning refused locally).
+    bool versioningSupported = true;
+    std::set<std::string> putVersioningDenied;   // PutBucketVersioning answers 403 AccessDenied
+    std::set<std::string> getVersioningDenied;   // GetBucketVersioning answers 403 AccessDenied
+    // Eventual consistency: after a PutBucketVersioning, this many reads (versioning()/inspect) still see the old state.
+    unsigned staleReadsAfterPut = 0;
+    std::vector<std::pair<std::string, padmin::Versioning>> putVersioningCalls;   // (bucket, target), accepted or not
+    unsigned getVersioningCalls = 0;
+
+    // The status a read sees now (consumes one stale read). Caller holds the mutex.
+    static padmin::Versioning readVersioning(Bucket& b) {
+        if (b.staleVersioningReads > 0) {
+            --b.staleVersioningReads;
+            return b.previousVersioning;
+        }
+        return b.versioning;
+    }
 
     void touch(const std::string& bucket) {
         ++calls;
@@ -112,10 +136,11 @@ public:
         c_->touch(bucket);
         padmin::BucketConfiguration config;
         config.bucket = bucket;
-        const auto& b = c_->buckets.at(bucket);
+        auto& b = c_->buckets.at(bucket);
         config.region = b.region;
-        config.versioning = padmin::Versioning::Unversioned;
-        config.object_lock = false;
+        config.versioning = c_->versioningSupported ? FakeCloud::readVersioning(b) : padmin::Versioning::Unversioned;
+        config.object_lock = b.objectLock;
+        config.mfa_delete = b.mfaDelete;
         config.lifecycle = b.lifecycle;
         return config;
     }
@@ -124,6 +149,42 @@ public:
         std::scoped_lock lock(c_->mutex);
         c_->touch(bucket);
         c_->buckets.at(bucket).lifecycle = rules;
+    }
+    bool supportsVersioning() const override {
+        std::scoped_lock lock(c_->mutex);
+        return c_->versioningSupported;
+    }
+    padmin::VersioningState versioning(const std::string& bucket) override {
+        guard(bucket);
+        std::scoped_lock lock(c_->mutex);
+        if (!c_->versioningSupported) return {.status = padmin::Versioning::Unversioned, .mfa_delete = std::nullopt};
+        c_->touch(bucket);
+        ++c_->getVersioningCalls;
+        if (c_->getVersioningDenied.contains(bucket))
+            throw padmin::ProviderError("GetBucketVersioning denied", "AccessDenied", 403);
+        const auto it = c_->buckets.find(bucket);
+        if (it == c_->buckets.end()) throw padmin::ProviderError("no such bucket", "NoSuchBucket", 404);
+        return {.status = FakeCloud::readVersioning(it->second), .mfa_delete = it->second.mfaDelete};
+    }
+    void putVersioning(const std::string& bucket, const padmin::Versioning target) override {
+        if (target != padmin::Versioning::Enabled && target != padmin::Versioning::Suspended)
+            throw std::invalid_argument("bucket versioning can only be set to enabled or suspended");
+        guard(bucket);
+        std::scoped_lock lock(c_->mutex);
+        if (!c_->versioningSupported) throw padmin::CapabilityMissing("versioning", padmin::kR2VersioningUnsupported);
+        c_->touch(bucket);
+        c_->putVersioningCalls.emplace_back(bucket, target);
+        if (c_->putVersioningDenied.contains(bucket))
+            throw padmin::ProviderError("PutBucketVersioning denied", "AccessDenied", 403);
+        const auto it = c_->buckets.find(bucket);
+        if (it == c_->buckets.end()) throw padmin::ProviderError("no such bucket", "NoSuchBucket", 404);
+        auto& b = it->second;
+        if (b.objectLock && target == padmin::Versioning::Suspended)
+            throw padmin::ProviderError("An Object Lock configuration is present on this bucket, so the versioning "
+                                        "state cannot be changed.", "InvalidBucketState", 409);
+        if (b.staleVersioningReads == 0) b.previousVersioning = b.versioning;
+        b.versioning = target;
+        b.staleVersioningReads = c_->staleReadsAfterPut;
     }
     padmin::ObjectPage listObjects(const std::string& bucket, const std::string&, unsigned int max) override {
         guard(bucket);

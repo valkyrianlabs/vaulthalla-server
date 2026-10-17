@@ -47,7 +47,29 @@ If you omit `--recipient`, Vaulthalla warns and writes unencrypted JSON to the o
 
 Vaulthalla records every export of a vault's current key version. Deleting a vault whose key was never exported warns you, and deleting an S3 vault that keeps encrypted objects in its bucket asks you to accept that the data cannot be decrypted without the key. A key rotation makes earlier exports stale: export again.
 
-A deleted vault's key stays exportable with the same command (use the vault id) until `vaults.tpm_retention_window` ends: `90d` by default, `180d` for S3 vaults. See [Deleting And Restoring Vaults](/vaults/deleting-vaults).
+### Retired Keys For Recovery Data
+
+A key rotation re-encrypts a vault's live files, but never its recovery data: snapshots, local versions and provider object versions keep the key version they were sealed with. Vaulthalla keeps every retired key version sealed by the host, and refuses to delete one while recoverable data still references it.
+
+An export therefore also carries the retired key versions that recoverable data still needs, under `historical_keys`, in the same encoding as the current key:
+
+```json
+{
+    "vault_id": 12,
+    "vault_name": "archive",
+    "key": "<base64 current key>",
+    "key_info": { "key_version": 3, "...": "..." },
+    "historical_keys": [
+        { "key_version": 1, "key": "<base64>", "created_at": "...", "retired_at": "..." }
+    ]
+}
+```
+
+The existing fields don't change. `historical_keys` appears only when recoverable data references a retired version; a vault without recovery data exports exactly as before. If recovery data references a version the vault no longer holds, the export lists it under `missing_key_versions` instead of inventing a key.
+
+An export is recorded against the current key version, so a rotation still makes it stale. Export again after a rotation: the new export carries the current key, and the retired one under `historical_keys` while recovery data needs it.
+
+A deleted vault's key stays exportable with the same command (use the vault id) until `vaults.tpm_retention_window` ends: `90d` by default, `180d` for S3 vaults. See [Deleting And Restoring Vaults](/vaults/deleting-vaults). That export carries the current key only, not `historical_keys`: export a vault with recovery data before you delete it. See [File Recovery](/vaults/recovery#keys-and-rotation).
 
 ## Export Internal Secrets
 

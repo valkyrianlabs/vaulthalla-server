@@ -1,6 +1,7 @@
 'use client'
 
 import React, { useEffect, useMemo } from 'react'
+import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { FormProvider, useForm } from 'react-hook-form'
 import { useWs, useWsMutation } from '@/lib/query'
@@ -19,13 +20,18 @@ import { RequestGuardrailFields, SyncPolicyFields } from '@/features/vaults/sync
 import { Metric, MetricGrid, StatusBadge } from '@/features/vaults/overview/blocks'
 import type { PricingStats, SyncHealthStats } from '@/features/vaults/overview/types'
 
+const RecoveryCostPanel = dynamic(() => import('@/features/recovery/RecoveryCostPanel'), { ssr: false })
+
 export const VaultSync = () => {
   const vault = useCurrentVault()
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
       <div className="min-w-0 space-y-4">
         {vault.type === 's3' ? (
-          <SyncPolicyForm />
+          <>
+            <SyncPolicyForm />
+            <RecoveryCostPanel vaultId={vault.id} />
+          </>
         ) : (
           <div className="panel">
             <EmptyState

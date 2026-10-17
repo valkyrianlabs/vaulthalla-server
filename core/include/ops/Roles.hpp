@@ -3,6 +3,9 @@
 #include "ops/Actor.hpp"
 #include "db/model/ListQueryParams.hpp"
 #include "rbac/Fwd.hpp"
+// Vault-role overrides are returned by value: callers need the complete type (libc++ refuses a vector of an
+// incomplete one).
+#include "rbac/permission/Override.hpp"
 
 #include <memory>
 #include <optional>

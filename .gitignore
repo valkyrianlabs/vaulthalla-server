@@ -40,6 +40,8 @@ providers.env
 # macOS / misc
 .DS_Store
 *.pem
+# Public verification keys of test fixtures (no private keys are ever committed).
+!core/test-assets/**/public-key.pem
 
 # Debug logs (global)
 npm-debug.log*

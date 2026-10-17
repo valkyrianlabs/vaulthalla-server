@@ -18,6 +18,7 @@ void Controller::uploadLargeObject(const std::filesystem::path& key,
                                      const std::vector<uint8_t>& buffer,
                                      const uintmax_t partSize,
                                      const RequestOptions& options) const {
+    resetLastPutOutcome();   // set by completeMultipartUpload; an aborted upload leaves it empty
     if (buffer.empty())
         throw std::runtime_error("Buffer is empty, cannot perform multipart upload");
 
@@ -99,6 +100,7 @@ void Controller::uploadBufferWithMetadataConditional(
     const std::optional<std::string>& ifMatch,
     const std::optional<std::string>& ifNoneMatch) const
 {
+    resetLastPutOutcome();
     recordRequest(RequestKind::Put);
     recordUploadBytes(buffer.size());
 
@@ -173,6 +175,7 @@ void Controller::uploadBufferWithMetadataConditional(
 
     if (!resp.ok()) throw std::runtime_error(
         fmt::format("Failed to upload buffer to S3 (HTTP {}): {}", resp.http, resp.body));
+    recordPutResponse(resp.hdr);
 }
 
 void Controller::downloadToBuffer(const std::filesystem::path& key, std::vector<uint8_t>& outBuffer) const {

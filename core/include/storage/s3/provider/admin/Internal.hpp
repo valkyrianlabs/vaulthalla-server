@@ -79,6 +79,10 @@ struct ErrorInfo {
 [[nodiscard]] ObjectPage parseListObjectsV2(const std::string& xml);
 [[nodiscard]] ObjectPage parseListObjectVersions(const std::string& xml);
 [[nodiscard]] Versioning parseVersioning(const std::string& xml);
+// Status (absent = Unversioned) + MfaDelete (absent = nullopt).
+[[nodiscard]] VersioningState parseVersioningState(const std::string& xml);
+// The PutBucketVersioning body: Status only (never MfaDelete). Throws std::invalid_argument unless Enabled/Suspended.
+[[nodiscard]] std::string buildVersioning(Versioning target);
 [[nodiscard]] std::optional<std::string> parseLocation(const std::string& xml);   // "" (us-east-1) → "us-east-1"
 
 [[nodiscard]] std::vector<LifecycleRule> parseLifecycle(const std::string& xml);

@@ -1,6 +1,8 @@
 #pragma once
 
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <filesystem>
 #include <istream>
@@ -33,6 +35,8 @@ std::string buildAuthorizationHeader(const std::shared_ptr<vault::model::APIKey>
                                      const std::string& payloadHash, const std::string& canonicalQuery = "");
 // "b=2&a=1&flag" → "a=1&b=2&flag=": already-encoded parameters in SigV4 canonical order (no re-encoding).
 [[nodiscard]] std::string canonicalQueryString(const std::string& query);
+// Value of the last `name:` line (case-insensitive) of the final response block in raw curl header text.
+[[nodiscard]] std::optional<std::string> lastHeaderValue(const std::string& raw, std::string_view name);
 void trimInPlace(std::string& s);
 
 void ensureCurlGlobalInit();

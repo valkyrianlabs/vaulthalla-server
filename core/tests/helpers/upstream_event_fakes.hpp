@@ -40,6 +40,7 @@ struct FakeProviderState {
     std::vector<padmin::NotificationRule> foreignRules;
     std::map<std::string, std::vector<std::string>> ownedRules;   // bucket → our rule ids (the bucket's document)
     std::optional<uint64_t> dlqDepth;              // backlog() of the dead-letter queue ("dlq")
+    std::map<std::string, padmin::Versioning> versioning;   // bucket → provider versioning (absent: unversioned)
     std::atomic<bool> blockUnsubscribe{false};     // unsubscribe blocks until the HTTP layer reports cancellation
     std::atomic<bool> unsubscribeEntered{false};
     std::atomic<bool> blockPolls{false};          // poll blocks until the HTTP layer reports cancellation
@@ -78,9 +79,24 @@ public:
     padmin::BucketConfiguration inspect(const std::string& bucket) override {
         padmin::BucketConfiguration config;
         config.bucket = bucket;
+        std::scoped_lock lock(s_->mutex);
+        if (const auto it = s_->versioning.find(bucket); it != s_->versioning.end()) config.versioning = it->second;
         return config;
     }
     void putLifecycle(const std::string&, const std::vector<padmin::LifecycleRule>&) override {}
+    bool supportsVersioning() const override { return true; }
+    padmin::VersioningState versioning(const std::string& bucket) override {
+        std::scoped_lock lock(s_->mutex);
+        const auto it = s_->versioning.find(bucket);
+        return {.status = it == s_->versioning.end() ? padmin::Versioning::Unversioned : it->second,
+                .mfa_delete = std::nullopt};
+    }
+    void putVersioning(const std::string& bucket, const padmin::Versioning target) override {
+        if (target != padmin::Versioning::Enabled && target != padmin::Versioning::Suspended)
+            throw std::invalid_argument("bucket versioning can only be set to enabled or suspended");
+        std::scoped_lock lock(s_->mutex);
+        s_->versioning[bucket] = target;
+    }
     padmin::ObjectPage listObjects(const std::string&, const std::string&, unsigned int) override { return {}; }
     padmin::ObjectPage listObjectVersions(const std::string&, const std::string&, unsigned int) override { return {}; }
     std::vector<std::pair<std::string, std::string>> deleteObjects(const std::string&,

@@ -15,6 +15,7 @@ import { useIsFetching } from '@tanstack/react-query'
 import { Money, Section } from '@/features/cost/bits'
 import { AlertsSection, OverridesSection } from '@/features/cost/alerts'
 import { LedgerTable, TrendTable } from '@/features/cost/tables'
+import { ProviderVersioningCard } from '@/features/cost/ProviderVersioningCard'
 import {
   refreshPricing,
   useBudgetLedger,
@@ -129,6 +130,7 @@ export const CostPage = () => {
           </Section>
           <AlertsSection enabled={allowed} vaultName={lookup.name} />
           <OverridesSection enabled={allowed} vaultName={lookup.name} />
+          <ProviderVersioningCard vaults={lookup.s3} pending={lookup.pending} />
         </TabsContent>
 
         <TabsContent value="budgets">

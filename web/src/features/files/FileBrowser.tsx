@@ -19,6 +19,7 @@ import {
   ArrowsRotateIcon,
   ArrowsUpDownLeftRightIcon,
   ChevronRightIcon,
+  ClockIcon,
   CopyIcon,
   DownloadIcon,
   EllipsisIcon,
@@ -69,6 +70,8 @@ export interface FileBrowserProps {
   // Rendered left of the breadcrumbs (e.g. the vault switcher).
   leading?: React.ReactNode
   onShare?: (target: Entry) => void
+  // Console only (FilesPage): opens the recovery history of a file or folder. Share pages never pass it.
+  onRecoveryHistory?: (target: Entry) => void
   className?: string
 }
 
@@ -78,7 +81,7 @@ const ROW_HEIGHT = 52
 
 const countLabel = (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`
 
-export function FileBrowser({ source, path, onNavigate, leading, onShare, className }: FileBrowserProps) {
+export function FileBrowser({ source, path, onNavigate, leading, onShare, onRecoveryHistory, className }: FileBrowserProps) {
   const current = normalizePath(path)
   const listing = useQuery<Listing>({
     queryKey: listingKey(source, current),
@@ -234,6 +237,8 @@ export function FileBrowser({ source, path, onNavigate, leading, onShare, classN
         })
       if (!multi && source.caps.share && onShare)
         list.push({ key: 'share', label: 'Share link…', icon: ShareNodesIcon, onSelect: () => onShare(entry) })
+      if (!multi && onRecoveryHistory)
+        list.push({ key: 'history', label: 'Recovery history…', icon: ClockIcon, onSelect: () => onRecoveryHistory(entry) })
       if (source.caps.mutate) {
         list.push('separator')
         if (!multi)
@@ -268,7 +273,7 @@ export function FileBrowser({ source, path, onNavigate, leading, onShare, classN
       }
       return list
     },
-    [download, onShare, open, remove, source.caps.download, source.caps.mutate, source.caps.share],
+    [download, onRecoveryHistory, onShare, open, remove, source.caps.download, source.caps.mutate, source.caps.share],
   )
 
   // ---------- selection & keyboard ----------
@@ -782,6 +787,7 @@ export function FileBrowser({ source, path, onNavigate, leading, onShare, classN
           onSelect={setPreview}
           onDownload={download}
           onShare={onShare}
+          onRecoveryHistory={onRecoveryHistory}
         />
       : null}
 

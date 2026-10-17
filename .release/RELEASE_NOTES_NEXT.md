@@ -7,29 +7,37 @@ Format: the first line is "# <release title>" WITHOUT a version number (vlr adds
 Everything after the title is the Markdown release body. Describe the resulting behavior
 for users and operators; keep it representative of what actually ships.
 -->
-# Editor saves on the mount, vault keys after a restart mid-rotation, and large S3 listings
+# File recovery: snapshots, local versioning and provider versioning
 
-**Editors can save over files on the mount.** Renaming a file over an existing one through the FUSE mount (`mv new.txt existing.txt`, and the way vim, LibreOffice
-and most IDEs save: write a temporary file, then rename it over the original) failed with an I/O error. It now
-replaces the existing file the way `rename(2)` does: the old version goes to the vault's trash exactly as if it had
-been deleted (its previews are dropped, cloud vaults delete the remote copy on the next sync), and the renamed file
-takes its place in one step. Replacing a file needs permission to delete it, as deleting it would. A folder can
-replace an empty folder; renaming a file over a folder, a folder over a file or over a non-empty folder is refused
-with the usual errors.
+Vaulthalla can now bring back earlier versions of files and folders. Each vault chooses a recovery preference in
+**Vault settings → Recovery** or with `vh vault recovery set <vault> --mode …`:
 
-A rename that fails part-way now changes nothing. Before, a failed rename into another folder moved the file's bytes
-to the destination while its record stayed at the source, leaving the file unreadable.
+- **Local snapshots.** Explicit, named recovery points of a file or a whole folder, taken with **Recovery history →
+  Create snapshot** or `vh snapshot create <vault> <path> --name …`. Snapshots are stored encrypted, deduplicated (an
+  unchanged file costs nothing twice), count against an optional snapshot quota and the vault quota, and survive the
+  deletion of the files they captured. Nothing is ever snapshotted automatically.
+- **Provider versioning (AWS S3).** For S3 vaults, the bucket itself keeps every version. Vaulthalla turns versioning
+  on only after showing an estimate of what it will cost — **Provider Versioning — Estimated Monthly Cost** — and
+  after you acknowledge it (and, when costs can't be estimated, a separate acknowledgement of unpriced recurring
+  charges). AWS versioning can't be undone, only suspended; Vaulthalla says so before you enable it, never suspends it
+  on its own, and never deletes old versions when you remove a vault. You choose how long old versions are kept
+  (30, 90 or 365 days, or indefinitely). Cloudflare R2 doesn't support object versioning and is refused.
+- **Local versioning** (optional, any vault). Every change to a file keeps its previous version on this server, with
+  limits you set (keep the last N, a maximum age, a size quota). For S3 vaults these versions also queue up while the
+  provider is unreachable and are sent in order once it is back, so a versioned bucket ends up with the full history.
 
-The console and API keep refusing a rename or move onto an existing name.
+**Recovery history.** Right-click a file or folder in the web console (or `vh recovery list <vault> <path>`) to see
+its snapshots, local versions and provider versions. Restoring always shows a preview first — what will be created,
+overwritten or skipped, and what it costs — and asks you to type RESTORE before anything is overwritten. A folder can
+be restored to a point in time from provider versions; that is a reconstruction from each file's version timestamps,
+not an atomic snapshot, and the preview says so. Restoring from the provider in a smart-cache vault copies the old
+version inside the bucket: nothing is downloaded to list versions and nothing is uploaded twice.
 
-**Key rotation survives a restart.** A vault key rotation is prepared by `vh vault keys rotate` and finished by the
-next sync pass. If the daemon restarted in between, it could not load that vault's key at all (the log showed
-`Unknown column name: 'updated_at'`), so the vault stayed unreadable until the rotation was completed by hand. The
-daemon now loads both the new and the previous key after such a restart, files not yet re-encrypted stay readable,
-and the rotation finishes on the next pass as usual.
+**Costs you can see.** The cost panel in **Sync & cost** and `vh recovery costs <vault>` show the estimated monthly
+versioning surcharge, month to date, the 30-day forecast, how much history is retained, and what drives its growth.
+Estimates are computed on this server from its own measurements and the signed price catalog — no usage is sent
+anywhere — and they are labelled as estimates, not invoices. You can set a monthly threshold; going over it raises a
+notification and never blocks writes.
 
-**S3 listings beyond 1,000 objects.** Listing an AWS S3 vault, or a prefix in one, that holds more than 1,000 objects
-now returns every object. The second and later pages of a listing were signed with their query parameters in the
-wrong order, which AWS rejects with `SignatureDoesNotMatch`: the paged listing failed outright, and the older
-whole-bucket listing quietly stopped after the first 1,000 keys. Requests that were already in order sign exactly as
-before.
+**Fixes.** Editors can save over files on the mount again (renaming a temporary file over the original failed with an I/O error); with local versioning on, the version the save replaces is kept. Vault keys load again after a restart in the middle of a key rotation. S3 bucket listings past 1,000
+objects no longer fail their signature. Deleting a folder no longer leaves its subfolders cached.

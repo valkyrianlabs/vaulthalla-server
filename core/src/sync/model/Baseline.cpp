@@ -2,7 +2,20 @@
 
 #include "fs/model/File.hpp"
 
+#include <string_view>
+
 namespace vh::sync::model {
+
+namespace {
+
+// ETags arrive quoted (PUT/HEAD headers, LIST) or bare (event notifications): compare the value.
+std::string_view baselineUnquoted(const std::string& etag) {
+    std::string_view v(etag);
+    if (v.size() >= 2 && v.front() == '"' && v.back() == '"') v = v.substr(1, v.size() - 2);
+    return v;
+}
+
+}
 
 Baseline Baseline::agreed(const fs::model::File& local, const fs::model::File& remote) {
     return {
@@ -32,6 +45,20 @@ Baseline Baseline::afterDownload(const fs::model::File& local, const fs::model::
     return agreed(local, remote);
 }
 
+Baseline Baseline::afterReplay(const uint32_t fileId, const std::optional<std::string>& generationHash,
+                               const uint64_t generationSize, const std::optional<std::string>& etag) {
+    return {
+        .file_id = fileId,
+        .content_hash = std::string(kReplayMarker),
+        .size_bytes = generationSize,
+        .remote_content_hash = generationHash,
+        .remote_etag = etag && !etag->empty() ? etag : std::nullopt,
+        .remote_size_bytes = generationSize
+    };
+}
+
+bool Baseline::publishing() const { return content_hash && *content_hash == kReplayMarker; }
+
 bool Baseline::sameAs(const Baseline& other) const {
     return file_id == other.file_id && content_hash == other.content_hash && size_bytes == other.size_bytes &&
            remote_content_hash == other.remote_content_hash && remote_etag == other.remote_etag &&
@@ -45,7 +72,7 @@ bool localChangedSince(const fs::model::File& local, const Baseline& base) {
 
 bool remoteChangedSince(const fs::model::File& remote, const Baseline& base) {
     if (remote.content_hash && base.remote_content_hash) return *remote.content_hash != *base.remote_content_hash;
-    if (remote.remote_etag && base.remote_etag) return *remote.remote_etag != *base.remote_etag;
+    if (remote.remote_etag && base.remote_etag) return baselineUnquoted(*remote.remote_etag) != baselineUnquoted(*base.remote_etag);
     if (base.remote_size_bytes) return remote.size_bytes != *base.remote_size_bytes;
     return remote.size_bytes != base.size_bytes;
 }

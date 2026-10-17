@@ -34,6 +34,16 @@ struct Baseline {
     // After the remote object was downloaded (or index-refreshed) into `local`.
     [[nodiscard]] static Baseline afterDownload(const fs::model::File& local, const fs::model::File& remote);
 
+    // Local versioning's backlog replay (recovery/local/Backlog) PUT one of the file's earlier generations: the remote
+    // object is now that generation (its hash, ETag, plaintext size), and the local side is the file's unpublished
+    // history: kReplayMarker as the local hash never matches a file, so the local side reads as changed. While the
+    // remote side still is what the replay put, the publication is in progress (publishing()): the next pass uploads the
+    // rest under every conflict policy instead of reading Vaulthalla's own write as a remote change.
+    static constexpr const char* kReplayMarker = "vh-replay";
+    [[nodiscard]] static Baseline afterReplay(uint32_t fileId, const std::optional<std::string>& generationHash,
+                                              uint64_t generationSize, const std::optional<std::string>& etag);
+    [[nodiscard]] bool publishing() const;
+
     [[nodiscard]] bool sameAs(const Baseline& other) const;
 };
 

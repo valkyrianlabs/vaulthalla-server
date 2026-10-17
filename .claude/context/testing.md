@@ -72,6 +72,32 @@ New families add a `test_ops_parity_<family>.cpp` on the same pattern.
 re-run `sudo tools/harness/bootstrap.sh` (it never rotates an existing role's password; remove the settings file first
 to re-key).
 
+## File recovery suites
+
+DB-backed ones skip without `VH_TEST_DB_*` (run them with `make test ARGS="--gtest_filter='Recovery*:S3Versioned*'"`).
+Design and invariants: `recovery.md`.
+
+| Suite (file) | Covers |
+|---|---|
+| `RecoveryKeysTest`, `RecoveryKeysDbTest` (`test_recovery_keys.cpp`) | historical key snapshots, streaming re-seal, retired-key guard, export `historical_keys`, mid-rotation key load |
+| `RecoveryModel`, `RecoveryJson`, `RecoveryDbTest` (`test_recovery_db.cpp`) | model text/JSON forms; every `db::query::recovery` query on migration 111 |
+| `RecoveryStoreNames`, `RecoveryStoreTest` (`test_recovery_store.cpp`) | blob layout, link capture, dedupe, abort/commit, orphan sweep, quota in `freeSpace`, purge |
+| `RecoveryVersionsTest` (`test_recovery_versions.cpp`) | local versioning capture/no-capture, off path, retention, upstream backlog replay order |
+| `RecoverySnapshotsTest` (`test_recovery_snapshots.cpp`) | snapshot capture/skips, mode gate, dedupe, quotas, RBAC, crash cleanup, deletion |
+| `RecoveryLocalRestoreTest` (`test_recovery_local_restore.cpp`) | local plans/restores: original and alternate destinations, conflicts, re-seal across rotations |
+| `RecoveryProviderTest` (`test_recovery_provider.cpp`) | version index, provider points, point-in-time plans, provider copy / bounded transfer |
+| `RecoverySmartCacheTest` (`test_recovery_smart_cache.cpp`) | release-blocking acceptance: cache vault, history only in the bucket, restore without a second upload |
+| `RecoveryPolicyTest`, `RecoveryDisclosureToken`, `RecoveryManifestRule` (`test_recovery_policy.cpp`) | status/update/disclosure/suspend/costs ordering, R2 refusal, protection, adoption, retention lifecycle |
+| `RecoveryCostModel`, `RecoveryCostCatalog` (`test_recovery_costs.cpp`) | golden decimals from the signed fixture `core/test-assets/pricing/versioning`, ranges, illustrative, unpriced |
+| `RecoveryUsageLedger`, `RecoveryUsageDbTest` (`test_recovery_usage.cpp`) | per-vault UTC-day counters, request tags, first put/overwrite/delete classification, failed flushes |
+| `RecoveryParityTest` (`test_ops_parity_recovery.cpp`) | CLI ↔ ws verdicts and state for `vh vault recovery` / `snapshot` / `recovery` |
+| `S3VersionedOps*`, `S3VersionedFake` (`test_s3_versioned_ops.cpp`) | the real `s3::Controller` versioned ops (signing, parsing, metering, lock) and the `VersionedBucket` fake (DB-free) |
+| `UpstreamLive.AwsVersioning` (`test_upstream_live.cpp`) | opt-in (`VH_LIVE_UPSTREAM=1`): a new AWS bucket through enable → retention → suspend |
+
+Helpers: `tests/helpers/{recovery_local,recovery_pricing,recovery_provider_harness,versioned_bucket}.hpp`. Contract:
+`tools/contracts/test_backing_writers_contract.py` (no in-place writer of vault backing files; `verify.sh packaging`).
+Web: `web/tests/e2e/recovery.spec.ts` (scripted ws answers; see `web-client.md`). No Tier A/B recovery scenario yet.
+
 ## Rich-preview / HTTP suites
 
 | Suite (file) | Covers | Needs |
@@ -87,6 +113,8 @@ to re-key).
 | `PreviewCadHelperTest`, `PreviewMediaHelper`, `PreviewMediaBrowser` | the real helpers via the protocol | skip when the helper isn't built (media also skips without the `ffmpeg` CLI) |
 | `KeyRotationSafetyTest` (`test_key_rotation_safety.cpp`) | crash/failure-safe rotation, seam-injected | nothing |
 | `SyncConflictsTest`, `SyncConflictBaseline` (`test_sync_conflicts.cpp`), `ConflictParityTest` (`test_ops_parity_conflicts.cpp`) | #187: `ask` records a two-sided conflict once and syncs one-sided changes, converges on its own, keep_local / keep_remote through an in-memory bucket (`tests/helpers/sync_conflict_harness.hpp`: fake controller + real passes run inline), stale refusals, RBAC (no permission, no Overwrite, vault role, admin via vault globals), vault-role and group-role sync permissions through the shared resolver (#189), keep_remote/keep_newest not re-downloading an in-sync file (#190), the `/download/conflict` lane, CLI vs ws for every seeded admin role | test DB env |
+| `S3VersionedOpsSigning`, `S3VersionedOpsTest`, `S3VersionedFake` (`test_s3_versioned_ops.cpp`) | provider-version data plane: version-id encoding (URL = signed query), HEAD/list/copy parsing, delete markers, 200-with-`<Error>`, > 5 GiB copy refusal, metering kinds, protection lock and budgets before sending, PutOutcome; the `VersionedBucket` fake (`tests/helpers/versioned_bucket.hpp`) semantics | nothing |
+| `RecoveryVersionsTest` (`test_recovery_versions.cpp`) | local versioning: createFile overwrite and FUSE seal (`WorkingCopies::daemonHooks`) keep decryptable prior generations, deletes (file, folder) keep the last one, rename/copy/key rotation keep none, off path loads the policy once, empty generations skipped, concurrent writers, crash leftover swept, keep_last at capture, max age / quota, snapshot-held blob survives; upstream backlog through the `VersionedBucket` fake: outage → ordered replay (own IV/hash per version, a failed replay holds the upload back), key rotation between generations (encrypted and plaintext upstream), unversioned/propagating/suspended → skipped, smart-cache release, replays in `Planner::estimateS3Cost` | test DB env |
 | `VaultRetentionTest` (`test_vault_retention.cpp`) | safe deletion (#162): schedule → restore, purge after the window (injected pass clock), delete now, resumed purge, key tombstone + expiry, S3 key-loss gate, bounded upstream purge (fake controller), shared-bucket guard, path guard | test DB env |
 
 - **ThreadSanitizer** for the identity publication code: `meson setup build-tsan -Db_sanitize=thread
@@ -205,6 +233,22 @@ Dev mode requires both `VH_BUILD_MODE=dev` and the gitignored `enable_dev_mode` 
   `sudo -u postgres createdb -O <role> claude_burner_*`, then drop both afterwards.
 - The full `vh_unit_tests` binary against a real DB runs about 230s (S3CostSafety plus S3GatewayDb take about 185s),
   so `meson test` hits its 120s timeout. Run `./build/core/vh_unit_tests` directly for the DB-backed run.
+
+## Live provider tests (`UpstreamLive*`, never CI)
+
+- Skipped unless `VH_LIVE_UPSTREAM=1`. Credentials: `VH_AWS_ADMIN_{API_KEY,SECRET_KEY}` (IAM `vaulthalla-test-admin`,
+  us-east-2), `VH_R2_ADMIN_{ACCESS_KEY,SECRET_KEY,ENDPOINT}`, optional `VH_CF_API_TOKEN`, from the gitignored repo
+  `.bashrc` (source it, never print it). Helpers: `tests/helpers/upstream_live.hpp` (`liveTestName`, `LiveCleanup`,
+  `liveDestroyTestBucket` with every version + a retried DeleteBucket). Only NEW `vaulthalla-test-<unix>-<random>`
+  buckets, deleted again even on failure.
+- DB-free adapters: `(set -a; . ./.bashrc; set +a; VH_LIVE_UPSTREAM=1 build/core/vh_unit_tests --gtest_filter='UpstreamLive.Aws*')`.
+- DB-backed (`test_recovery_live.cpp`: `UpstreamLive.AwsRecoverySmartCache`, `UpstreamLive.AwsRecoveryAcrossKeyRotation`,
+  `UpstreamLive.R2VersioningRefused`) need the per-run DB, so they go through `bin/tests/run_unit.sh`, whose `env -i`
+  would drop the credentials. With `VH_LIVE_UPSTREAM=1` in the caller's environment it hands exactly
+  `LIVE_ENV_VARS` (the names above) through to the test process on a pipe (never argv, never a file):
+  `(set -a; . ./.bashrc; set +a; VH_LIVE_UPSTREAM=1 bash bin/tests/run_unit.sh --build-dir build -- --gtest_filter='UpstreamLive.AwsRecovery*:UpstreamLive.R2VersioningRefused')`
+  (~1 min, ~80 S3 requests per AWS case). Every admin client Vaulthalla opens goes through a tally
+  (`setFactoryForTesting`) that fails the test if it lists the account's buckets or names any other bucket.
 
 ## Provider test credentials (Phase 2 scaffold)
 

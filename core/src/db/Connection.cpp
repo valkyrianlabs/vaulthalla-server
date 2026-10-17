@@ -265,6 +265,10 @@ void Connection::initPrepared() {
     // Upstream control plane
     initPreparedUpstreamBuckets();
     initPreparedUpstreamEvents();
+
+    // File recovery
+    initPreparedRecoveryLocal();
+    initPreparedRecoveryProvider();
 }
 
 }

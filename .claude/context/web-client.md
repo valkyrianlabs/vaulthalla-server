@@ -52,7 +52,7 @@
   component. Areas: `files` (FileBrowser over an `FsSource` adapter — vault or share — with capability-driven UI,
   URL-addressed paths, virtualized list/grid, transfer manager), `shares`, `share` (anonymous recipient page),
   `health`, `vaults`, `access`, `account`, `credentials`, `cost`, `gateway`, `notifications`, `settings`, `auth`,
-  `syncConflicts`.
+  `syncConflicts`, `recovery`.
 
 ## Server-owned ws contract
 
@@ -139,6 +139,26 @@ page, accounts with a vault remove permission) lists `storage.vault.deleted.list
   before switching files or closing, and the text renderer adds a `beforeunload` guard.
 - Media elements are released on switch/close (pause, remove `src`, `load()`), so the ranged connection closes.
 
+## File recovery (`features/recovery`)
+
+Typed ws `recovery.*` / `vault.recovery.*` (`models/recovery.ts`, `RECOVERY_CODES` = the `NeedsConfirmation` codes of
+`core/include/ops/Recovery.hpp`); every piece is a `next/dynamic` import (no SSR), so it stays out of route budgets.
+- **History sheet** (`RecoveryHistorySheet`): FileBrowser's `onRecoveryHistory` ("Recovery history…" context-menu
+  item, passed only by `FilesPage`, never by share pages) and PreviewSheet's **History** button. Grouped by backend,
+  "Check provider for versions" (`refresh_provider`), snapshot create (mode local_snapshots), point delete, Restore…
+  with an alternate destination, and the folder point-in-time form (shown for every folder; ops refuses it in local
+  vaults).
+- **Restore preview** (`RestorePreviewDialog`): plan items/counts/consistency note/estimate/blockers; typed `RESTORE`
+  when anything is overwritten or removed; separate unverified acknowledgement; `recovery_plan_expired` re-plans and
+  shows the fresh plan before anything runs.
+- **Vault settings → Recovery** (`RecoveryPanel`, mounted by `VaultSettings`): mode, provider state, snapshots, local
+  versioning, backlog, retained keys, cost alert, suspend. `update.ts` `sendRecoveryUpdate` asks for retention
+  shortening / bucket adoption and resends; disclosure/unpriced go to `DisclosureDialog` (every acknowledgement ticked,
+  re-fetched when the token expired or the figures changed).
+- **Costs:** `RecoveryCostPanel` under the sync policy form on **Vault → Sync & cost** (`VaultSync`, anchor
+  `#recovery-costs`); the Cost page's `ProviderVersioningCard` only links to each S3 vault's panel (estimates are never
+  summed). Unknown money renders "not estimated"/"cannot be estimated", never $0.00 (`costParts.tsx`).
+
 ## Routes
 
 `/login`, `/files/[vaultId]/[...path]`, `/shares`, `/vaults` (+ `/new`, `/[id]` tabs: overview, access, shares,
@@ -200,7 +220,9 @@ saved|disabled" alerts on `/cost` before deleting the vaults it created. `previe
 PDF paging, ranged video/seek, audio, codec fallback, text edit/save and 412 conflict, markdown safety, 3D canvases,
 no 3D engine chunk on an image preview, preview-only vs download share links) with fixtures from
 `tests/e2e/fixtures/preview/generate.mjs`; a preview-only link is made by rewriting the `share.link.create` frame
-(`page.routeWebSocket`), since the share dialog only offers presets.
+(`page.routeWebSocket`), since the share dialog only offers presets. `recovery.spec.ts` scripts the `recovery.*` /
+`vault.recovery.*` answers on the console socket (`page.routeWebSocket`; everything else reaches the real daemon) and
+proves the console's own rules: history sheet, typed `RESTORE`, disclosure acknowledgements, unknown costs never $0.
 
 ## Packaging
 

@@ -27,6 +27,8 @@
 #include "identities/Manager.hpp"
 #include "db/query/upstream/WriteIntent.hpp"
 #include "sync/events/Subscriptions.hpp"
+#include "recovery/local/Versions.hpp"
+#include "db/Transactions.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -138,6 +140,7 @@ CloudEngine::CloudEngine(const std::shared_ptr<vh::vault::model::S3Vault>& vault
       key_(runtime::Deps::get().apiKeyManager->getAPIKey(vault->api_key_id)),
       s3Provider_(std::make_shared<s3::Controller>(key_, vault->bucket)) {
     resolveS3ProviderConfiguration();
+    s3Provider_->setUsageVault(vault->id);   // feeds the vault's local usage ledger (recovery cost estimates)
 }
 
 CloudEngine::CloudEngine(const std::shared_ptr<vh::vault::model::S3Vault>& vault, std::shared_ptr<s3::Controller> s3Provider)
@@ -145,6 +148,7 @@ CloudEngine::CloudEngine(const std::shared_ptr<vh::vault::model::S3Vault>& vault
       key_(runtime::Deps::get().apiKeyManager->getAPIKey(vault->api_key_id)),
       s3Provider_(std::move(s3Provider)) {
     resolveS3ProviderConfiguration();
+    if (s3Provider_ && vault) s3Provider_->setUsageVault(vault->id);
 }
 
 void CloudEngine::upload(const std::shared_ptr<File>& f) const {
@@ -160,7 +164,7 @@ void CloudEngine::upload(const std::shared_ptr<File>& f) const {
         if (ciphertext.empty()) {
             auto options = requestOptionsFor(s3::provider::RequestOperation::PutObject);
             options.metadata = getMetaMapFromFile(f);
-            auto own = noteOwnWrite(s3Key, false, 0);
+            auto own = noteOwnWrite(s3Key, false, 0, f);
             s3Provider_->uploadBufferWithMetadata(s3Key, {}, options);
             own.done();
             return;
@@ -175,7 +179,7 @@ void CloudEngine::upload(const std::shared_ptr<File>& f) const {
         const auto ciphertext = encryptionManager->encrypt({}, f);
         auto options = requestOptionsFor(s3::provider::RequestOperation::PutObject);
         options.metadata = getMetaMapFromFile(f);
-        auto own = noteOwnWrite(s3Key, false, ciphertext.size());
+        auto own = noteOwnWrite(s3Key, false, ciphertext.size(), f);
         s3Provider_->uploadBufferWithMetadata(s3Key, ciphertext, options);
         own.done();
         return;
@@ -185,7 +189,7 @@ void CloudEngine::upload(const std::shared_ptr<File>& f) const {
     const auto meta = getMetaMapFromFile(f);
     auto options = requestOptionsFor(s3::provider::RequestOperation::PutObject);
     options.metadata = meta;
-    auto own = noteOwnWrite(s3Key, false, backingSize);
+    auto own = noteOwnWrite(s3Key, false, backingSize, f);
 
     if (backingSize < s3::Controller::MIN_PART_SIZE)
         s3Provider_->uploadObjectWithMetadata(s3Key, backingPath, options);
@@ -209,7 +213,7 @@ void CloudEngine::upload(const std::shared_ptr<File>& f, const std::vector<uint8
         const auto plaintext = isCiphertext ? decrypt(f, buffer) : buffer;
         auto options = requestOptionsFor(s3::provider::RequestOperation::PutObject);
         options.metadata = getMetaMapFromFile(f);
-        auto own = noteOwnWrite(stripLeadingSlash(f->path), false, plaintext.size());
+        auto own = noteOwnWrite(stripLeadingSlash(f->path), false, plaintext.size(), f);
         s3Provider_->uploadBufferWithMetadata(stripLeadingSlash(f->path), plaintext, options);
         own.done();
         return;
@@ -219,7 +223,7 @@ void CloudEngine::upload(const std::shared_ptr<File>& f, const std::vector<uint8
     const auto meta = getMetaMapFromFile(f);
     auto options = requestOptionsFor(s3::provider::RequestOperation::PutObject);
     options.metadata = meta;
-    auto own = noteOwnWrite(s3Key, false, buffer.size());
+    auto own = noteOwnWrite(s3Key, false, buffer.size(), f);
 
     if (buffer.size() < s3::Controller::MIN_PART_SIZE) s3Provider_->uploadBufferWithMetadata(s3Key, buffer, options);
     else {
@@ -355,7 +359,7 @@ std::shared_ptr<File> CloudEngine::indexAndDeleteFile(const std::shared_ptr<File
 
     const auto rel_path = makeAbsolute(remoteFile->path);
     auto indexed = db::query::fs::File::getFileByPath(vault->id, rel_path);
-
+    const bool existed = indexed != nullptr;
     if (!indexed) {
         indexed = Filesystem::createFile({
             .path = rel_path,
@@ -367,6 +371,16 @@ std::shared_ptr<File> CloudEngine::indexAndDeleteFile(const std::shared_ptr<File
         });
     }
 
+    // Under the file's content lock with the row re-read: a seal or overwrite that renamed new bytes over the backing
+    // file since the lookup would otherwise be retained (linked) under the old IV, then dropped as "index-only".
+    std::scoped_lock contentLock(Filesystem::contentWriteMutex(indexed->id));
+    if (auto fresh = db::query::fs::File::getFileById(indexed->id)) indexed = std::move(fresh);
+    // The local copy this download replaces (cache strategy: index-only), when it holds other content.
+    std::optional<File> replaced;
+    if (existed && !(remoteFile->encryption_iv == indexed->encryption_iv &&
+                     remoteFile->encrypted_with_key_version == indexed->encrypted_with_key_version))
+        replaced = *indexed;
+
     indexed->size_bytes = remoteFile->size_bytes;
     indexed->content_hash = remoteFile->content_hash;
     indexed->remote_encrypted = remoteFile->remote_encrypted;
@@ -376,7 +390,13 @@ std::shared_ptr<File> CloudEngine::indexAndDeleteFile(const std::shared_ptr<File
         indexed->encrypted_with_key_version = remoteFile->encrypted_with_key_version;
     indexed->updated_at = remoteFile->updated_at;
     indexed->last_modified_by = vault->owner_id;
-    db::query::fs::File::updateFile(indexed);
+    auto kept = replaced ? vh::recovery::local::versions::retain(*this, *replaced, vh::recovery::local::Reason::Download)
+                         : vh::recovery::local::versions::Pending{};
+    vh::db::Transactions::exec("CloudEngine::indexAndDeleteFile", [&](pqxx::work& txn) {
+        kept.attach(txn);
+        db::query::fs::File::updateFile(txn, indexed);
+    });
+    kept.committed();
 
     if (!indexed->backing_path.empty() && fs::exists(indexed->backing_path))
         fs::remove(indexed->backing_path);
@@ -872,28 +892,53 @@ void CloudEngine::removeRemotely(const std::shared_ptr<file::Trashed>& f) const 
 }
 
 CloudEngine::OwnWrite CloudEngine::noteOwnWrite(const fs::path& key, const bool isDelete,
-                                               const std::optional<uint64_t> objectSize) const {
+                                               const std::optional<uint64_t> objectSize,
+                                               const std::shared_ptr<File>& file) const {
     if (!vault) return OwnWrite{};
+    auto write = recovery::hooks::UpstreamWrite{.vault_id = vault->id, .key = key.string(), .is_delete = isDelete,
+                                                .object_size = isDelete ? std::nullopt : objectSize,
+                                                .etag = std::nullopt, .version_id = std::nullopt,
+                                                .file = isDelete ? nullptr : file};
+    s3::Controller::resetLastPutOutcome();
     try {
-        if (!vh::sync::events::subscriptions::activeFor(vault->id)) return OwnWrite{};
+        if (!vh::sync::events::subscriptions::activeFor(vault->id)) return OwnWrite{std::nullopt, std::move(write)};
         return OwnWrite{db::query::upstream::WriteIntent::record(
-            vault->id, key.string(),
-            isDelete ? vh::storage::upstream::model::WriteOp::Delete : vh::storage::upstream::model::WriteOp::Put,
-            isDelete ? std::nullopt : objectSize)};
+                            vault->id, key.string(),
+                            isDelete ? vh::storage::upstream::model::WriteOp::Delete
+                                     : vh::storage::upstream::model::WriteOp::Put,
+                            isDelete ? std::nullopt : objectSize),
+                        std::move(write)};
     } catch (const std::exception& e) {
         log::Registry::cloud()->warn("[CloudStorageEngine] Vault {}: could not record a write intent for '{}': {}",
                                      vault->id, key.string(), e.what());
-        return OwnWrite{};
+        return OwnWrite{std::nullopt, std::move(write)};
     }
 }
 
 void CloudEngine::OwnWrite::done() {
-    if (!id_) return;
-    const auto id = *std::exchange(id_, std::nullopt);
-    try {
-        db::query::upstream::WriteIntent::complete(id);   // lives from completion, not from the start of the upload
-    } catch (const std::exception& e) {
-        log::Registry::cloud()->warn("[CloudStorageEngine] write intent {}: completion not recorded: {}", id, e.what());
+    if (id_) {
+        const auto id = *std::exchange(id_, std::nullopt);
+        // The stored object's ETag (unquoted, as notifications carry it), so the intent only matches the event of
+        // exactly this object (a restore's CopyObject included), never another writer's same-size object.
+        std::optional<std::string> etag;
+        if (write_ && !write_->is_delete) {
+            auto tag = s3::Controller::lastPutOutcome().etag;
+            if (tag.size() >= 2 && tag.front() == '"' && tag.back() == '"') tag = tag.substr(1, tag.size() - 2);
+            if (!tag.empty()) etag = std::move(tag);
+        }
+        try {
+            db::query::upstream::WriteIntent::complete(id, etag);   // lives from completion, not from the start of the upload
+        } catch (const std::exception& e) {
+            log::Registry::cloud()->warn("[CloudStorageEngine] write intent {}: completion not recorded: {}", id, e.what());
+        }
+    }
+    if (auto write = std::exchange(write_, std::nullopt)) {
+        if (!write->is_delete) {
+            const auto outcome = s3::Controller::lastPutOutcome();
+            if (!outcome.etag.empty()) write->etag = outcome.etag;
+            write->version_id = outcome.version_id;
+        }
+        recovery::hooks::afterUpstreamWrite(*write);
     }
 }
 
@@ -963,6 +1008,7 @@ s3::S3RequestMetrics CloudEngine::s3RequestMetrics() const {
 
 void CloudEngine::setS3ControllerForTesting(std::shared_ptr<s3::Controller> s3Provider) {
     s3Provider_ = std::move(s3Provider);
+    if (s3Provider_ && vault) s3Provider_->setUsageVault(vault->id);
 }
 
 void CloudEngine::setS3ProviderProfileForTesting(s3::provider::ProfilePtr profile) {

@@ -6,13 +6,29 @@
 
 #include <string>
 #include <vector>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <atomic>
+#include <chrono>
+#include <ctime>
 #include <span>
 #include <filesystem>
 #include <shared_mutex>
+#include <stdexcept>
 
 namespace vh::vault {
+
+// The vault does not hold this key version: it never existed, or it was never retained (version 0 = unencrypted).
+class KeyVersionUnavailable final : public std::runtime_error {
+public:
+    KeyVersionUnavailable(unsigned int vaultId, unsigned int version);
+    [[nodiscard]] unsigned int vaultId() const { return vaultId_; }
+    [[nodiscard]] unsigned int version() const { return version_; }
+
+private:
+    unsigned int vaultId_, version_;
+};
 
 class EncryptionManager {
 public:
@@ -22,6 +38,8 @@ public:
     struct ForTesting {};
     EncryptionManager(ForTesting, unsigned int vault_id, std::span<const uint8_t> key, unsigned int version,
                       std::span<const uint8_t> oldKey = {});
+    // Test-only (ForTesting managers): a retired version historicalKeySnapshot() serves without a database.
+    void addHistoricalKeyForTesting(unsigned int version, std::span<const uint8_t> key);
 
     // The current key and its version, read together (never a torn pair while rotation swaps them).
     struct CurrentKey {
@@ -32,7 +50,44 @@ public:
 
     // The key that decrypts data written under keyVersion (same rules as decrypt()). The snapshot stays valid
     // (and wiped only when released) even if rotation finishes meanwhile.
+    // Deliberately strict: live reads must never accept a retired key (an object claiming one must not decrypt).
     [[nodiscard]] crypto::SecretKeyPtr keySnapshot(unsigned int keyVersion) const;
+
+    // Recovery reads only: any version this vault still holds. The current and the mid-rotation old key come from
+    // memory; a retired one is unsealed from vault_keys_trashed under the vault master on demand and cached briefly
+    // (at most kHistoricalCacheSize versions, dropped after kHistoricalCacheIdle unused). Throws
+    // KeyVersionUnavailable for a version the vault doesn't hold.
+    [[nodiscard]] crypto::SecretKeyPtr historicalKeySnapshot(unsigned int keyVersion) const;
+
+    // Drops the cached retired keys unused for longer than kHistoricalCacheIdle as of `now`; returns how many. Runs on
+    // every historicalKeySnapshot() and from VaultRetentionService's loop (every 30 s) for every engine, so an idle
+    // key leaves memory without a later access (it is wiped once the last outstanding snapshot is released).
+    std::size_t evictIdleHistoricalKeys(std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now()) const;
+    // Test-only: puts a retired key into the cache as if unsealed and last used at lastUsed.
+    void cacheHistoricalKeyForTesting(unsigned int version, std::span<const uint8_t> key,
+                                      std::chrono::steady_clock::time_point lastUsed);
+    [[nodiscard]] std::size_t cachedHistoricalKeyCount() const;
+
+    // The current version and every retained (retired) one, ascending.
+    [[nodiscard]] std::vector<unsigned int> retainedKeyVersions() const;
+    [[nodiscard]] bool hasKeyVersion(unsigned int keyVersion) const;
+
+    // The retired versions recoverable data still references (recovery_blob, live provider object versions), unsealed
+    // and ascending, for key export; `missing` lists referenced versions the vault no longer holds. The current
+    // version is never included (export carries it already).
+    struct HistoricalKey {
+        unsigned int version{};
+        crypto::SecretKeyPtr key;
+        std::time_t created_at{}, retired_at{};
+    };
+    struct ReferencedHistoricalKeys {
+        std::vector<HistoricalKey> keys;
+        std::vector<unsigned int> missing;
+    };
+    [[nodiscard]] ReferencedHistoricalKeys referencedHistoricalKeys() const;
+
+    static constexpr std::size_t kHistoricalCacheSize = 8;
+    static constexpr std::chrono::minutes kHistoricalCacheIdle{10};
 
     // Must be called before encrypt/decrypt
     void load_key();
@@ -50,6 +105,19 @@ public:
     void encryptFileToFile(const std::filesystem::path& plaintextPath,
                            const std::filesystem::path& ciphertextPath,
                            const std::shared_ptr<fs::model::File>& f) const;
+
+    // Re-seals a retained generation (sealed under srcKeyVersion with srcIvB64) into dst under the current key with
+    // a fresh IV, streaming, and records the new IV and version on f like encryptFileToFile. dst holds the result
+    // only once this returns: a source that fails authentication throws storage::IntegrityError and leaves no dst.
+    // An unencrypted empty generation (empty IV, version 0, zero bytes) yields an empty dst and an empty IV/version
+    // 0 on f, as every empty file is stored; a non-empty unencrypted source is refused (std::invalid_argument).
+    void resealFileToCurrent(const std::filesystem::path& src, const std::string& srcIvB64, unsigned int srcKeyVersion,
+                             const std::filesystem::path& dst, const std::shared_ptr<fs::model::File>& f) const;
+
+    // In-memory form of resealFileToCurrent for a sealed buffer (body‖tag).
+    [[nodiscard]] std::vector<uint8_t> resealToCurrent(const std::vector<uint8_t>& ciphertext, const std::string& srcIvB64,
+                                                       unsigned int srcKeyVersion,
+                                                       const std::shared_ptr<fs::model::File>& f) const;
 
     // Decrypt using base64-encoded IV and ciphertext
     [[nodiscard]] std::vector<uint8_t> decrypt(const std::vector<uint8_t>& ciphertext,
@@ -77,6 +145,20 @@ private:
     mutable std::shared_mutex keyMutex_;
     unsigned int version_{};
     crypto::SecretKeyPtr key_, old_key_;
+
+    // Unsealed retired keys, by version. Separate from keyMutex_ so a slow unseal never blocks live reads.
+    struct CachedKey {
+        crypto::SecretKeyPtr key;
+        std::chrono::steady_clock::time_point lastUsed;
+    };
+    mutable std::mutex historicalMutex_;
+    mutable std::map<unsigned int, CachedKey> historicalCache_;
+    std::map<unsigned int, crypto::SecretKeyPtr> testHistorical_;  // ForTesting only; never evicted
+
+    [[nodiscard]] crypto::SecretKeyPtr liveKeyFor(unsigned int keyVersion) const;  // current/rotation-old or null
+    [[nodiscard]] crypto::SecretKeyPtr cachedHistoricalKey(unsigned int keyVersion) const;
+    void cacheHistoricalKey(unsigned int keyVersion, const crypto::SecretKeyPtr& key) const;
+    std::size_t evictIdleLocked(std::chrono::steady_clock::time_point now) const;  // historicalMutex_ held
 };
 
 }

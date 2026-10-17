@@ -260,6 +260,86 @@ vh vault keys rotate <vault-or-all> [--sync-now]
 
 Unencrypted key exports are dangerous. Prefer `--recipient` and `--output`.
 
+## File Recovery
+
+Earlier versions of files come from three places: local snapshots you take, local versions kept automatically when
+local versioning is on, and the provider's own object versions when an AWS S3 bucket has versioning enabled. Their
+ids are `snap-<id>`, `lv-<id>` and `pv-<id>`. Undeleting a whole vault is `vh vault restore`, not this.
+
+Vault settings:
+
+```bash
+vh vault recovery status <vault> [--refresh] [--json]
+vh vault recovery set <vault> [--mode off|local-snapshots|provider-versioning] [--retention 30d|90d|365d|indefinite]
+                              [--snapshot-quota <size>] [--cost-alert <amount>|none]
+                              [--local-versioning on|off] [--keep-last <n>] [--max-age-days <n>] [--version-quota <size>]
+                              [--accept-unpriced] [--accept-retention-shortening] [--adopt-bucket] [--yes]
+vh vault recovery disclosure <vault> [--retention <r>] [--json]
+vh vault recovery suspend <vault> [--yes]
+```
+
+`--mode provider-versioning` always fetches and prints the cost disclosure first (provider, bucket, region, storage
+class, current data, observed or illustrative write traffic, the estimated monthly additional storage, growth over
+12 months, retention, confidence and catalog freshness, what is not included, and the consequences, including that
+AWS can't return a bucket to unversioned, only suspend it). In a terminal you then type `ENABLE VERSIONING`, and when
+the cost can't be estimated you accept that separately (`ACCEPT UNPRICED`). Without a terminal it needs `--yes`, plus
+`--accept-unpriced` when unpriced. A shorter retention deletes history sooner and is asked separately (`SHORTEN`, or
+`--accept-retention-shortening`), and so is adopting the vault's unmanaged bucket (`ADOPT`, or `--adopt-bucket`).
+`--retention` takes `30d`, `90d`, `365d`, `indefinite` or any number of days from 1 to 36500; there is no default.
+Changing the mode never suspends a versioned bucket; `suspend` does (type `SUSPEND`, or `--yes`), and it deletes
+nothing. Local versioning flags you leave out keep their stored values; `--keep-last 0`, `--max-age-days 0` and
+`--version-quota 0` remove the limit, and `--cost-alert none` clears the alert.
+
+Snapshots and recovery points:
+
+```bash
+vh snapshot create <vault> <path> [--name <name>] [--json]
+vh snapshot list <vault> [path] [--json]
+vh snapshot delete <snap-id> [--yes]
+vh recovery list <vault> [path] [--refresh] [--snapshots-only|--versions-only|--provider-only] [--limit <n>] [--json]
+vh recovery inspect <recovery-id> [--json]
+vh recovery delete <recovery-id> [--yes]
+```
+
+Snapshots need the mode `local-snapshots`. `recovery list` with a file path shows that file's history; `--refresh`
+lists the provider's versions of the path first (metadata only). You only see points you can read. `recovery delete`
+removes snapshots and local versions (type `DELETE`, or `--yes`); provider versions are removed by the bucket's
+retention, and a local version still waiting to be uploaded can't be deleted.
+
+Restoring:
+
+```bash
+vh recovery plan <recovery-id> [--to <path>] [--json]
+vh recovery plan <vault> <path> --at <ISO-8601 time> [--prune] [--to <path>] [--json]
+vh recovery restore <recovery-id> [--to <path>] [--yes] [--accept-unverified] [--json]
+vh recovery restore <plan-id> --token <token> [--accept-unverified] [--json]
+```
+
+`plan` changes nothing: it shows what each item would do (create, overwrite, skip, conflict, remove, unavailable),
+the size and method, a provider request and cost estimate, warnings and blockers, and the plan id and token (valid 30
+minutes). A plan with `--at` is a timestamp-based reconstruction from each file's version history, not an atomic
+snapshot; only a local snapshot is taken in one pass. It needs an S3 vault with provider versions. `--prune` also
+removes files that did not exist at that time.
+
+`restore <recovery-id>` plans, shows the plan and asks before it runs; type `RESTORE` when anything is overwritten or
+removed (a plain yes/no otherwise). `--yes` skips the question for scripts. A plan made with `vh recovery plan` runs
+with its id and the `--token` it printed, which is the confirmation. Every item is authorized again, and a destination
+that changed after the plan was made is reported as a conflict and left alone. Provider versions Vaulthalla did not
+write need `--accept-unverified` (or type `UNVERIFIED`). The exit status is `1` when anything was not restored and `2`
+when the restore was refused; run the plan again (`<plan-id> --token`) to resume an interrupted or partial restore.
+See [File Recovery](/vaults/recovery) for how each kind of history works and what it costs.
+
+Costs:
+
+```bash
+vh recovery costs <vault> [--json]
+```
+
+Shows the versioning surcharge separately from the current object storage, the cost of recovery operations and what
+is not modelled, with ranges, the basis of each figure (observed, scenario or illustrative) and the price catalog's
+freshness. A figure that can't be estimated says so and why; it is never shown as zero. The figures are computed on
+the host and are estimates, not provider invoices.
+
 ## Internal Secrets
 
 ```bash

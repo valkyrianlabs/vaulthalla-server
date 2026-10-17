@@ -1,10 +1,34 @@
 #include "vault/RetentionService.hpp"
+#include "vault/EncryptionManager.hpp"
 #include "vault/Retention.hpp"
+#include "recovery/usage/Ledger.hpp"
 #include "log/Registry.hpp"
+#include "runtime/Deps.hpp"
+#include "storage/Engine.hpp"
+#include "storage/Manager.hpp"
 
 #include <thread>
 
 namespace vh::vault {
+
+namespace {
+
+// Retired vault keys unsealed for recovery leave memory once idle, whether or not anything asks for them again.
+void retentionEvictIdleKeys() noexcept {
+    try {
+        const auto& manager = runtime::Deps::get().storageManager;
+        if (!manager) return;
+        std::size_t evicted = 0;
+        for (const auto& engine : manager->getEngines())
+            if (engine && engine->encryptionManager) evicted += engine->encryptionManager->evictIdleHistoricalKeys();
+        if (evicted)
+            log::Registry::crypto()->debug("[VaultRetention] Dropped {} idle retired key(s) from memory", evicted);
+    } catch (const std::exception& e) {
+        log::Registry::vaulthalla()->warn("[VaultRetention] Idle key eviction failed: {}", e.what());
+    }
+}
+
+}
 
 RetentionService::RetentionService() : AsyncService("VaultRetentionService") {}
 
@@ -22,6 +46,10 @@ void RetentionService::runLoop() {
             // The database may be down; the next pass retries. Purges are resumable from any point.
             log::Registry::vaulthalla()->warn("[VaultRetention] Retention pass failed: {}", e.what());
         }
+
+        // File recovery's local usage ledger rides on this loop: flushed every 60 s, cost alerts at most hourly.
+        recovery::usage::tick(std::chrono::system_clock::now());
+        retentionEvictIdleKeys();
 
         for (auto waited = std::chrono::milliseconds(0); waited < kInterval && !shouldStop(); waited += tick) {
             if (retention::takePassRequest()) break;

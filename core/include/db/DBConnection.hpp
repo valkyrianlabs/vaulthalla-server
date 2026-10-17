@@ -117,6 +117,10 @@ class Connection {
     // Upstream control plane (#237, #96)
     void initPreparedUpstreamBuckets() const;
     void initPreparedUpstreamEvents() const;
+
+    // File recovery (migration 111)
+    void initPreparedRecoveryLocal() const;
+    void initPreparedRecoveryProvider() const;
 };
 
 struct PathPatterns {

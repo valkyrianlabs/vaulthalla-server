@@ -422,7 +422,8 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   session zone); columns a view depends on are skipped with a warning. New columns must be `TIMESTAMPTZ`. Text output
   is `YYYY-MM-DD HH:MM:SS[.ffffff]+00`, which `db::encoding::parsePostgresTimestamp` handles. Guard: `DbTimezoneTest`.
 - `db::Janitor` handles sweeps (DB cleanup every `services.db_sweeper.sweep_interval_minutes`, derived-artifact
-  eviction every 15 min). Stats rollups read from `file_activity`, `files_trashed`, `operations`, `share_*`.
+  eviction and local-version retention every 15 min, the recovery store's orphan sweep at startup and daily; see
+  `recovery.md`). Stats rollups read from `file_activity`, `files_trashed`, `operations`, `share_*`.
 
 ## Subsystem directory map (`core/src`, mirrored in `core/include`)
 
@@ -433,6 +434,7 @@ renders (`render/`: pdfium, turbojpeg, stb), the encrypted derived cache (`cache
 converter-helper runner/queue (`derive/`, below) · `protocols` · `rbac` roles/permissions/resolver/actor · `runtime` Manager · `share` link
 sharing · `stats` dashboard telemetry + snapshots · `storage` local + S3 backends, remote index · `sync`
 controller, strategies `cache|sync|mirror`, cost guardrails · `vault` vault model, slugs, FUSE names ·
+`recovery` file recovery: local snapshots/versions, provider versioning, usage ledger, cost model (below) ·
 `ops` actor-authorized operations shared by the CLI and ws handlers (below).
 
 **Config keys renamed or moved (#164).** `config.yaml` is never rewritten on upgrade, so `loadConfig` keeps reading
@@ -502,6 +504,24 @@ Tests: `test_derive_runner.cpp` (fake helper `core/tests/helpers/fake_derive_hel
 - Tests: `test_preview_store.cpp`, `test_derive_queue.cpp` (DB-backed, fake helper symlinked under both helper
   names; real CAD helper when built).
 
+### File recovery (`recovery/`)
+
+Local snapshots, opt-in local versioning and AWS provider versioning behind one model (`recovery/Model.hpp`) and one
+authorizing boundary (`ops::recovery`); migration 111. Design of record, as-built notes and open items:
+`recovery.md`. Where it hooks into the rest of the daemon:
+- **Writers:** every content write retains the prior generation through `recovery::local::versions::retain` before
+  its rename (createFile overwrite branch, FUSE seal, deletes, sync DeleteLocal, cache index-only downloads); blobs live
+  in `<backing>/.vh-recovery/<alias>`. Invariant: nothing writes a backing file in place
+  (`tools/contracts/test_backing_writers_contract.py`). `Engine::freeSpace` counts blob bytes.
+- **Upstream:** `CloudEngine::OwnWrite::done()` → `recovery::hooks::afterUpstreamWrite` (version index, usage ledger);
+  `sync::tasks::Upload`/`Delete` replay a file's pending local versions first (`backlog::replayBeforeUpload` /
+  `replayBeforeRemoteDelete`); the planner's price preflight adds them.
+- **Runtime:** `db::Janitor` runs `maintainRecovery` each loop (≤ 15 min: version retention, backlog skips for
+  unversioned buckets, plan expiry/purge) and, at startup then daily, the store sweep and interrupted-snapshot cleanup;
+  `VaultRetentionService`'s loop calls `recovery::usage::tick` (ledger flush every 60 s, cost alerts hourly);
+  `runtime::Manager::stopAll` flushes the ledger after every service stopped; vault purge removes the store directory
+  (`vault/Retention.cpp`).
+
 ### `ops/`: shared command operations
 
 `core/{include,src}/ops/` holds plain free functions with typed request structs, one file pair per family
@@ -524,7 +544,7 @@ policies), `config` (every settings write: one validation, one apply step that r
 `s3_gateway.enabled` changes), `stats` (authorization only, ws-only: there is no `vh` stats command; `vh status`
 is deliberately ungated, see Stats below), `conflicts` (sync conflicts, #187: ws `sync.conflicts.*`, `vh sync resolve` /
 `vh resolve`, the HTTP `/download/conflict` lane's authorization), `upstream` (S3/R2 bucket administration and event
-sync, #237/#96: ws `upstream.*`, `vh upstream …`; see `upstream-control-plane.md`). Still per-surface: the ws-only pricing preflight/override/notification endpoints,
+sync, #237/#96: ws `upstream.*`, `vh upstream …`; see `upstream-control-plane.md`), `recovery` (file recovery: ws `recovery.*` / `vault.recovery.*`, `vh snapshot|recovery …`, `vh vault recovery …`; see `recovery.md`). Still per-surface: the ws-only pricing preflight/override/notification endpoints,
 email test-send/history, vault keys/sync diagnostics, and lifecycle commands (`setup`, `teardown`, `secrets`).
 
 Rules the families hold (keep them in ops, never re-add them in a handler):
@@ -644,7 +664,9 @@ stage "Copy And Delete")
   (local hash/size; remote index hash, ETag, size), written on agreement (`Cloud::noteInSync`) and after every
   successful upload/download/index refresh (`sync::tasks::recordBaseline`) and resolution. `Baseline::classify`:
   LocalOnly → Upload, RemoteOnly → Download (archive tier skipped), InSync → nothing, Both or Unknown (no baseline) →
-  conflict. Every policy skips a file whose classification is InSync (#190: under `keep_remote`/`keep_newest` a file
+  conflict. A baseline written by local versioning's backlog replay (`Baseline::publishing()`, recovery.md) whose
+  remote side is unchanged plans an Upload under every policy (finishing an interrupted publication). Every policy
+  skips a file whose classification is InSync (#190: under `keep_remote`/`keep_newest` a file
   downloaded from another writer's object used to differ by hash on every pass and be downloaded again). Otherwise
   `keep_*` still treat any difference (one-sided included) as theirs to settle.
 - **Resolution** (`ConflictResolver::resolve`, trusted; `ops::conflicts::resolve` authorizes per item): the local row
@@ -720,7 +742,17 @@ stage "Copy And Delete")
   checked and records each request (`Controller::recordRequest`), so a hydrate's own cap inside a gateway request
   is still visible to the gateway's capture. `Controller::streamObject` is the metered streaming GET (optional
   signed `Range` and `If-Match`; 412 → `ConditionalRequestFailed`; the GET is metered before it is sent, body
-  bytes as they arrive); fakes override the protected `transportGet` seam and keep the metering.
+  bytes as they arrive); fakes override the protected `transportGet(key, versionId, headers, onBody)` seam and keep
+  the metering.
+- **Provider versions (data plane, `storage/s3/version.cpp`):** `listObjectVersionsPage` (List), `headObjectVersion`
+  (Head; 404 → nullopt, delete marker → `delete_marker`, outages throw), `streamObject` with
+  `GetObjectOptions::version_id`, `copyObjectVersion` (Copy, directive COPY keeps vh-iv/key-version/hash; > 5 GiB →
+  `ObjectTooLargeForCopy` before metering; a 200 carrying `<Error>` fails). They sign with `sigv4::sign` (sorted,
+  RFC 3986 query identical in URL and signature: version ids carry `+/=`) and send through `curl::http` (timeouts,
+  test transport). Every PUT path records the thread's `lastPutOutcome()` (ETag + `x-amz-version-id`). The legacy
+  `buildAuthorizationHeader` sorts the canonical query (it signed `list-type&…&continuation-token` unsorted).
+  Test fake: `tests/helpers/versioned_bucket.hpp` (`VersionedBucket`: S3 versioning modes, delete markers, failure
+  injection, body-GET counters).
 - **Prefer the local ciphertext copy (D11).** Anything that reads a vault file's bytes goes through
   `Engine::openPlaintextReader`: a cloud file with a backing file reads it in place (zero S3 requests). The ws share
   download/preview lanes and the S3 gateway's file reads (`ObjectStore::readFileObject`, ranges read only their

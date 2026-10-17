@@ -1,6 +1,8 @@
 #include "storage/s3/Controller.hpp"
+#include "recovery/usage/Ledger.hpp"
 #include "log/Registry.hpp"
 
+#include <pugixml.hpp>
 #include <regex>
 
 using namespace vh::storage::s3;
@@ -17,7 +19,10 @@ std::string Controller::initiateMultipartUpload(
 std::string Controller::initiateMultipartUpload(
     const std::filesystem::path& key,
     const RequestOptions& options) const {
-    recordRequest(RequestKind::Put);
+    {
+        const vh::recovery::usage::ScopedRequestTag tag(vh::recovery::usage::RequestTag::MultipartInitiate);
+        recordRequest(RequestKind::Put);
+    }
 
     CURL* curl = curl_easy_init();
     if (!curl) return "";
@@ -66,7 +71,10 @@ std::string Controller::initiateMultipartUpload(
 
 void Controller::uploadPart(const std::filesystem::path& key, const std::string& uploadId,
                              const int partNumber, const std::string& partData, std::string& etagOut) const {
-    recordRequest(RequestKind::Put);
+    {
+        const vh::recovery::usage::ScopedRequestTag tag(vh::recovery::usage::RequestTag::MultipartPart);
+        recordRequest(RequestKind::Put);
+    }
     recordUploadBytes(partData.size());
 
     CURL* curl = curl_easy_init();
@@ -108,6 +116,7 @@ void Controller::uploadPart(const std::filesystem::path& key, const std::string&
 
 void Controller::completeMultipartUpload(const std::filesystem::path& key, const std::string& uploadId,
                                          const std::vector<std::string>& etags) const {
+    resetLastPutOutcome();
     if (etags.empty()) throw std::runtime_error("No ETags provided to completeMultipartUpload");
     recordRequest(RequestKind::Put);
 
@@ -129,6 +138,7 @@ void Controller::completeMultipartUpload(const std::filesystem::path& key, const
     for (const auto& [k, v] : hdrMap) headers.add(k + ": " + v);
 
     std::string response;
+    std::string responseHeaders;
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "POST");
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers.list);
@@ -136,6 +146,8 @@ void Controller::completeMultipartUpload(const std::filesystem::path& key, const
     curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE_LARGE, static_cast<curl_off_t>(body.size()));
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeToString);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, writeToString);
+    curl_easy_setopt(curl, CURLOPT_HEADERDATA, &responseHeaders);
 
     CURLcode res = curl_easy_perform(curl);
     long httpCode = 0;
@@ -148,6 +160,22 @@ void Controller::completeMultipartUpload(const std::filesystem::path& key, const
         throw std::runtime_error(
             fmt::format("Failed to complete multipart upload to S3 (HTTP {}): {}", httpCode, response));
     }
+
+    // S3 answers 200 before it finishes combining the parts and reports a later failure in the body (<Error>).
+    pugi::xml_document doc;
+    const auto parsed = doc.load_string(response.c_str());
+    if (parsed && doc.child("Error")) {
+        log::Registry::cloud()->error("[S3Provider] completeMultipartUpload failed after HTTP 200: {}", response);
+        throw std::runtime_error(fmt::format("Failed to complete multipart upload to S3 ({}): {}",
+                                             doc.child("Error").child_value("Code"),
+                                             doc.child("Error").child_value("Message")));
+    }
+    std::optional<std::string> bodyEtag;
+    if (parsed) {
+        if (const std::string etag = doc.child("CompleteMultipartUploadResult").child_value("ETag"); !etag.empty())
+            bodyEtag = etag;
+    }
+    recordPutResponse(responseHeaders, bodyEtag);
 }
 
 void Controller::abortMultipartUpload(const std::filesystem::path& key, const std::string& uploadId) const {

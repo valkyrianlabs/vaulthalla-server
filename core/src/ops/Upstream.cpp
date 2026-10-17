@@ -13,6 +13,7 @@
 #include "rbac/permission/admin/Upstream.hpp"
 #include "rbac/permission/admin/keys/API.hpp"
 #include "rbac/resolver/admin/all.hpp"
+#include "recovery/Model.hpp"
 #include "runtime/Deps.hpp"
 #include "storage/s3/provider/admin/Admin.hpp"
 #include "storage/upstream/Cleanup.hpp"
@@ -286,16 +287,27 @@ std::string destructiveText(const std::string& bucket, const std::optional<bmode
            "Accept to apply it.";
 }
 
-// Applies our lifecycle rule (GET-merge-PUT); returns whether anything was written.
+// Every rule Vaulthalla ever writes is named vaulthalla-* (the owned rule, the manifest-versions rule).
+bool ownedLifecycleRuleId(const std::string& id) {
+    return lifecycle::isVaulthallaRule(id) || id.starts_with("vaulthalla-");
+}
+
+// Applies our lifecycle rule (GET-merge-PUT); returns whether anything was written. `dropEveryOwnedRule` (detach)
+// also removes the other vaulthalla-* rules (the manifest-versions rule file recovery writes), not only ours.
 bool applyLifecycle(padmin::AdminClient& admin, const vault::model::APIKey& key, const std::string& bucket,
-                    const LifecyclePatch& patch) {
+                    const LifecyclePatch& patch, const bool dropEveryOwnedRule = false) {
     const auto config = admin.inspect(bucket);
     if (!config.lifecycle_readable)
         throw Invalid("the lifecycle configuration of bucket '" + bucket + "' can't be read with this credential");
-    const auto merged = lifecycle::mergeOwnedRule(config.lifecycle, toChange(patch),
-                                                  key.provider == vault::model::S3Provider::AWS);
+    auto merged = lifecycle::mergeOwnedRule(config.lifecycle, toChange(patch),
+                                            key.provider == vault::model::S3Provider::AWS);
     if (merged.destructive && !patch.accept_destructive)
         throw NeedsConfirmation(DESTRUCTIVE_LIFECYCLE, destructiveText(bucket, std::nullopt));
+    if (dropEveryOwnedRule) {
+        const auto before = merged.rules.size();
+        std::erase_if(merged.rules, [](const padmin::LifecycleRule& r) { return ownedLifecycleRuleId(r.id); });
+        merged.changed = merged.changed || merged.rules.size() != before;
+    }
     if (!merged.changed) return false;
     admin.putLifecycle(bucket, merged.rules);
 
@@ -303,16 +315,21 @@ bool applyLifecycle(padmin::AdminClient& admin, const vault::model::APIKey& key,
     // as it was (the provider normalizes nothing we pass through raw, so a difference means something went wrong).
     const auto after = admin.inspect(bucket);
     if (after.lifecycle_readable) {
-        const auto foreignXml = [](const std::vector<padmin::LifecycleRule>& rules) {
+        const auto foreignXml = [&](const std::vector<padmin::LifecycleRule>& rules) {
             std::vector<std::string> out;
             for (const auto& r : rules)
-                if (r.id != lifecycle::kOwnedRuleId) out.push_back(r.id);
+                if (r.id != lifecycle::kOwnedRuleId && !(dropEveryOwnedRule && ownedLifecycleRuleId(r.id)))
+                    out.push_back(r.id);
             std::ranges::sort(out);
             return out;
         };
         if (foreignXml(after.lifecycle) != foreignXml(config.lifecycle))
             throw std::runtime_error("the lifecycle configuration of bucket '" + bucket + "' no longer holds the other "
                                      "rules it had before Vaulthalla's write; check it with the provider");
+        if (dropEveryOwnedRule && std::ranges::any_of(after.lifecycle, [](const padmin::LifecycleRule& r) {
+                return ownedLifecycleRuleId(r.id);
+            }))
+            throw std::runtime_error("bucket '" + bucket + "' still holds a Vaulthalla lifecycle rule after removing them");
     }
     return true;
 }
@@ -584,10 +601,40 @@ Inspection setLifecycle(const Actor& actor, const KeyRef& ref, const std::string
     if (!row || row->ownership == bmodel::Ownership::Unmanaged)
         throw Invalid("Vaulthalla manages lifecycle rules only on buckets it created or adopted; bucket '" + bucket +
                       "' is unmanaged");
+    // File recovery keeps its noncurrent retention in this same owned rule (NoncurrentDays) and records it on the
+    // bucket. A noncurrent change here is that retention: shortening it needs the same acceptance (measured against
+    // what recovery recorded, whatever the rule says now), and the record follows the write.
+    const auto recorded = BucketQuery::getVersioning(row->id);
+    const bool recoveryRetention = recorded && recorded->retention_mode != "unset";
+    std::optional<vh::recovery::ProviderRetention> retentionTarget;
+    if (recoveryRetention && (patch.clear || patch.expire_noncurrent_days)) {
+        retentionTarget = patch.clear || *patch.expire_noncurrent_days == 0
+            ? vh::recovery::ProviderRetention{.indefinite = true, .days = 0}
+            : vh::recovery::ProviderRetention{.indefinite = false, .days = *patch.expire_noncurrent_days};
+        const bool fromIndefinite = recorded->retention_mode == "indefinite" || !recorded->retention_days;
+        const bool shortens = !retentionTarget->indefinite &&
+                              (fromIndefinite || retentionTarget->days < *recorded->retention_days);
+        if (shortens && !patch.accept_destructive)
+            throw NeedsConfirmation(DESTRUCTIVE_LIFECYCLE,
+                "Bucket '" + bucket + "' keeps the vault's recovery history (noncurrent versions) for " +
+                (fromIndefinite ? std::string("as long as it exists") : std::to_string(*recorded->retention_days) + " days") +
+                ". Expiring noncurrent versions after " + std::to_string(retentionTarget->days) + " days makes the "
+                "provider permanently delete older versions sooner, including history that exists now. Accept to apply it.");
+    }
+    if (recoveryRetention && recorded->retention_mode == "days" && patch.prefix && !patch.prefix->empty() && !patch.clear)
+        throw Invalid("bucket '" + bucket + "' keeps the vault's recovery retention in Vaulthalla's lifecycle rule; "
+                      "narrowing its prefix would leave part of the vault without it. Change the retention with "
+                      "vh vault recovery set instead");
+
     auto client = adminClient(key);
     const bool written = mapped([&] { return applyLifecycle(*client, *key, bucket, patch); });
+    if (retentionTarget)
+        BucketQuery::recordRetention(row->id, retentionTarget->indefinite ? "indefinite" : "days",
+                                     retentionTarget->indefinite ? std::nullopt : std::make_optional(retentionTarget->days),
+                                     actor->id);
     auditRecord(actor, "lifecycle.set", id, key->id, row->vault_id, bmodel::AuditOutcome::Ok,
-                {{"patch", patchJson(patch)}, {"written", written}});
+                {{"patch", patchJson(patch)}, {"written", written},
+                 {"recovery_retention", retentionTarget ? nlohmann::json(retentionTarget->str()) : nlohmann::json(nullptr)}});
     Inspection out;
     out.config = mapped([&] { return client->inspect(bucket); });
     out.bucket = rowFor(id, out.config.region);
@@ -773,6 +820,52 @@ std::vector<std::string> finishProvision(const Actor& actor, const ProvisionTick
     return warnings;
 }
 
+void detail::adoptBoundBucket(const Actor& actor, const unsigned int apiKeyId, const unsigned int vaultId,
+                              const std::string& bucket) {
+    requireActor(actor);
+    const auto key = findKey(KeyRef{apiKeyId});
+    const auto id = identityOf(key, bucket);
+    requireUnprotected(actor, id, "bucket.adopt", key->id);
+    for (const auto& b : storage::upstream::bindingsFor(id))
+        if (b.vault_id != vaultId)
+            throw Conflict("bucket '" + bucket + "' is also used by vault '" + b.vault_name + "' (ID " +
+                           std::to_string(b.vault_id) + "); Vaulthalla adopts a bucket for one vault only");
+    auto client = adminClient(key);
+    const auto region = mapped([&] { return client->headBucket(bucket); });
+    if (!region) throw NotFound("bucket '" + bucket + "' does not exist");
+
+    const auto current = BucketQuery::getByIdentity(id.provider, *id.account_ref, id.bucket);
+    if (current && current->vault_id && *current->vault_id != vaultId)
+        throw Conflict("bucket '" + bucket + "' is recorded for vault " + std::to_string(*current->vault_id));
+    if (current && current->ownership != bmodel::Ownership::Unmanaged) return;   // already managed or adopted
+
+    std::optional<int64_t> rowId;
+    if (current && current->vault_id) {
+        // Recorded for this vault but unmanaged: adopt in place (the vault keeps its binding).
+        rowId = current->id;
+    } else {
+        const auto token = provision::newOperationToken();
+        const auto outcome = BucketQuery::upsertAdopted(id, region, key->id, token);
+        switch (outcome.result) {
+        case db::query::upstream::AdoptResult::Adopted: break;
+        case db::query::upstream::AdoptResult::Protected: throw Denied("bucket '" + bucket + "' is protected");
+        case db::query::upstream::AdoptResult::BoundElsewhere:
+            throw Conflict("bucket '" + bucket + "' is already bound to another vault");
+        case db::query::upstream::AdoptResult::Busy:
+            throw Conflict("another operation is working on bucket '" + bucket + "'; try again when it has finished");
+        }
+        if (!outcome.bucket) throw std::runtime_error("adoption returned no bucket row");
+        rowId = outcome.bucket->id;
+        if (!BucketQuery::setProvisioningState(*rowId, bmodel::ProvisioningState::Ready, token))
+            throw Conflict("bucket '" + bucket + "' was taken by another operation while it was being adopted");
+    }
+    BucketQuery::bindVault(*rowId, vaultId, bmodel::Ownership::Adopted);
+    auditRecord(actor, "bucket.adopt", id, key->id, vaultId, bmodel::AuditOutcome::Ok,
+                {{"vault_id", vaultId}, {"bound", true}, {"via", "recovery"}});
+    log::Registry::audit()->info("[ops::upstream] {} adopted bucket '{}' for vault {} ({})", actor->name(), bucket, vaultId,
+                                 id.toString());
+}
+
 void abortProvision(const ProvisionTicket& ticket, const std::string& reason) noexcept {
     if (!ticket.active()) return;
     try {
@@ -819,7 +912,8 @@ BucketRow detach(const Actor& actor, const KeyRef& ref, const std::string& bucke
     try {
         LifecyclePatch clear;
         clear.clear = true;
-        lifecycleRemoved = applyLifecycle(*client, *key, bucket, clear);
+        // Every vaulthalla-* rule goes: the owned rule and the manifest-versions rule file recovery manages.
+        lifecycleRemoved = applyLifecycle(*client, *key, bucket, clear, true);
     } catch (const NeedsConfirmation&) {
         throw;
     } catch (const std::exception& e) {
@@ -830,6 +924,14 @@ BucketRow detach(const Actor& actor, const KeyRef& ref, const std::string& bucke
                                    row->operation_token))
         throw Conflict("bucket '" + bucket + "' changed while it was being detached (another operation took it); "
                        "run the detach again");
+    // The recovery retention lived in the rules just removed: the record says so too.
+    try {
+        if (const auto v = BucketQuery::getVersioning(row->id); v && v->retention_mode != "unset")
+            BucketQuery::recordRetention(row->id, "unset", std::nullopt, actor->id);
+    } catch (const std::exception& e) {
+        log::Registry::storage()->warn("[ops::upstream] bucket '{}': recovery retention record not cleared: {}", bucket,
+                                       e.what());
+    }
     auditRecord(actor, "detach", id, key->id, std::nullopt, bmodel::AuditOutcome::Ok,
                 {{"previous_ownership", bmodel::to_string(row->ownership)}, {"lifecycle_rule_removed", lifecycleRemoved}});
     return rowFor(id);

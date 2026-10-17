@@ -19,7 +19,8 @@ std::vector<uint8_t> readFileToVector(const std::filesystem::path& path);
 
 std::string readFileToString(const std::filesystem::path& path);
 
-void writeFile(const std::filesystem::path& absPath, const std::vector<uint8_t>& ciphertext);
+// Backing files are never written in place (a retained generation may share the inode; recovery.md): create them
+// with writeFileExclusive or replace them with replaceFileAtomic / writeFileAtomic. tools/contracts guards this.
 
 // fsync(2) a file, or a directory (so a rename or create in it is durable). Throw std::system_error.
 // Every content replacement (overwrite, FUSE seal, key rotation) stages the new ciphertext here, commits the row,
@@ -32,8 +33,11 @@ void fsyncFile(const std::filesystem::path& path);
 void fsyncDirectory(const std::filesystem::path& dir);
 
 // Creates absPath (O_CREAT | O_EXCL, never following or reusing an existing name) with `mode`, writes `bytes` and
-// fsyncs the file. The directory entry is not fsynced. On failure nothing is left at absPath.
+// fsyncs the file when `bytes` is not empty (an empty inode has no data to flush). The directory entry is not
+// fsynced. On failure nothing is left at absPath.
 void writeFileExclusive(const std::filesystem::path& absPath, std::span<const uint8_t> bytes, mode_t mode = 0600);
+// How many file fsyncs writeFileExclusive issued in this process (tests: empty creates issue none).
+[[nodiscard]] uint64_t writeFileExclusiveFsyncsForTesting();
 
 // Durably replaces absPath: `produce` writes the new content to a private sibling temp file (created 0600, O_EXCL),
 // which is fsynced and renamed over absPath, then the directory is fsynced. Readers see the old file or the new

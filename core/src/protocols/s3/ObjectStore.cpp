@@ -36,6 +36,8 @@
 #include <iomanip>
 #include <openssl/md5.h>
 #include "crypto/util/digest.hpp"
+#include "db/Transactions.hpp"
+#include "recovery/local/Versions.hpp"
 #include <set>
 #include <sstream>
 #include <utility>
@@ -774,7 +776,18 @@ void ObjectStore::purgeLocalObjectState(
         oldInode = file->inode;
         oldId = file->id;
         oldBacking = file->backing_path;
-        db::query::fs::File::deleteFile(actorUserId, file);
+        // Local versioning keeps the purged object's last generation (the backing file goes after the commit), under
+        // the file's content lock with the row re-read, so a concurrent seal/overwrite can't be linked under the old IV.
+        std::scoped_lock contentLock(vh::fs::Filesystem::contentWriteMutex(file->id));
+        const auto current = db::query::fs::File::getFileById(file->id);
+        auto kept = current ? recovery::local::versions::retain(*engine, *current, recovery::local::Reason::Delete,
+                                                                {.actor = actorUserId})
+                            : recovery::local::versions::Pending{};
+        db::Transactions::exec("ObjectStore::purgeLocalObjectState", [&](pqxx::work& txn) {
+            kept.attach(txn);
+            db::query::fs::File::deleteFile(txn, actorUserId, file);
+        });
+        kept.committed();
     }
 
     if (const auto& cache = runtime::Deps::get().fsCache) {

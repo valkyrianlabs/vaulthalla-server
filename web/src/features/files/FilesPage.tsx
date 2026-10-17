@@ -14,6 +14,7 @@ import { normalizePath, type Entry } from '@/features/files/entries'
 import dynamic from 'next/dynamic'
 
 const ShareDialog = dynamic(() => import('@/features/shares/ShareDialog').then(m => m.ShareDialog), { ssr: false })
+const RecoveryHistorySheet = dynamic(() => import('@/features/recovery/RecoveryHistorySheet'), { ssr: false })
 import { useCan } from '@/lib/permissions'
 import { useSharingPolicy } from '@/features/shares/policy'
 import Link from 'next/link'
@@ -41,6 +42,7 @@ export function FilesPage() {
   const vaults = useWs('storage.vault.list', null, { staleTime: 60_000 })
   const canCreateVault = useCan({ anyOf: ['admin.vaults.self.create', 'admin.vaults.user.create', 'admin.vaults.admin.create'] })
   const [shareTarget, setShareTarget] = useState<Entry | null>(null)
+  const [historyTarget, setHistoryTarget] = useState<Entry | null>(null)
   // No "Share link…" while the operator allows no kind of link (sharing.*); the daemon would refuse it.
   const canShare = useSharingPolicy().modes.length > 0
 
@@ -119,8 +121,17 @@ export function FilesPage() {
         onNavigate={next => router.push(filesHref(vault.id, next))}
         leading={list.length > 1 ? switcher : null}
         onShare={canShare ? setShareTarget : undefined}
+        onRecoveryHistory={setHistoryTarget}
       />
       {shareTarget ? <ShareDialog vaultId={vault.id} target={shareTarget} onClose={() => setShareTarget(null)} /> : null}
+      {historyTarget ? (
+        <RecoveryHistorySheet
+          vaultId={vault.id}
+          isS3={vault.type === 's3'}
+          target={historyTarget}
+          onClose={() => setHistoryTarget(null)}
+        />
+      ) : null}
     </>
   )
 }

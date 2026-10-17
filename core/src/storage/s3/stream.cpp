@@ -1,4 +1,5 @@
 #include "storage/s3/Controller.hpp"
+#include "recovery/usage/Ledger.hpp"
 #include "storage/s3/curl/helpers.hpp"
 #include "storage/s3/curl/wrappers.hpp"
 
@@ -7,6 +8,7 @@
 #include <algorithm>
 #include <cctype>
 #include <exception>
+#include <optional>
 #include <sstream>
 #include <string_view>
 
@@ -14,29 +16,6 @@ namespace vh::storage::s3 {
 namespace stream_detail {
 
 constexpr std::size_t kMaxErrorBodyBytes = 4096;
-
-// Value of the last `name:` header line (redirects produce several header blocks; the final response wins).
-std::optional<std::string> lastResponseHeader(const std::string& raw, const std::string_view name) {
-    std::optional<std::string> found;
-    std::istringstream lines(raw);
-    std::string line;
-    while (std::getline(lines, line)) {
-        const auto colon = line.find(':');
-        if (colon == std::string::npos || colon != name.size()) continue;
-        bool same = true;
-        for (std::size_t i = 0; i < colon; ++i) {
-            if (std::tolower(static_cast<unsigned char>(line[i])) != std::tolower(static_cast<unsigned char>(name[i]))) {
-                same = false;
-                break;
-            }
-        }
-        if (!same) continue;
-        auto value = line.substr(colon + 1);
-        curl::trimInPlace(value);
-        found = std::move(value);
-    }
-    return found;
-}
 
 struct CurlBodyContext {
     CURL* handle{};
@@ -65,20 +44,29 @@ size_t curlBodyCallback(char* ptr, const size_t size, const size_t nmemb, void* 
 
 Controller::TransportResponse Controller::transportGet(
     const fs::path& key,
+    const std::optional<std::string>& versionId,
     const std::map<std::string, std::string>& extraHeaders,
     const TransportBodyFn& onBody) const {
     const CurlEasy easy;
     auto* handle = static_cast<CURL*>(easy);
 
-    const auto [canonicalPath, url] = constructPaths(handle, key);
-    const std::string payloadHash = "UNSIGNED-PAYLOAD";
-    auto hdrMap = buildHeaderMap(payloadHash);
-    for (const auto& [name, value] : extraHeaders) hdrMap[name] = value;
-    const auto authHeader = curl::buildAuthorizationHeader(apiKey_, "GET", canonicalPath, hdrMap, payloadHash);
-
+    std::string url;
     SList headers;
-    headers.add("Authorization: " + authHeader);
-    for (const auto& [name, value] : hdrMap) headers.add(name + ": " + value);
+    if (versionId) {
+        // Version ids may carry '+', '/', '=': sigv4::sign encodes the query once for the URL and the signature.
+        const auto request = signObjectRequest("GET", key.string(), {{"versionId", *versionId}}, extraHeaders);
+        url = request.url;
+        for (const auto& [name, value] : request.headers) headers.add(name + ": " + value);
+    } else {
+        const auto [canonicalPath, plainUrl] = constructPaths(handle, key);
+        url = plainUrl;
+        const std::string payloadHash = "UNSIGNED-PAYLOAD";
+        auto hdrMap = buildHeaderMap(payloadHash);
+        for (const auto& [name, value] : extraHeaders) hdrMap[name] = value;
+        const auto authHeader = curl::buildAuthorizationHeader(apiKey_, "GET", canonicalPath, hdrMap, payloadHash);
+        headers.add("Authorization: " + authHeader);
+        for (const auto& [name, value] : hdrMap) headers.add(name + ": " + value);
+    }
 
     TransportResponse response;
     stream_detail::CurlBodyContext ctx{handle, &onBody, false};
@@ -109,6 +97,12 @@ GetObjectResult Controller::streamObject(const fs::path& key, const GetObjectOpt
                                          const BodySink& sink) const {
     if (options.range && options.range->first > options.range->second)
         throw std::invalid_argument("S3 GET range is inverted for " + key.string());
+    if (options.version_id && options.version_id->empty())
+        throw std::invalid_argument("S3 GET version id is empty for " + key.string());
+
+    // A GET of a provider version is a restore transfer: its request and bytes count as such in the usage ledger.
+    std::optional<vh::recovery::usage::ScopedRequestTag> versionTag;
+    if (options.version_id) versionTag.emplace(vh::recovery::usage::RequestTag::VersionRestore);
 
     // Metered before anything is sent: a GET budget refusal costs nothing upstream.
     recordRequest(RequestKind::Get);
@@ -143,7 +137,7 @@ GetObjectResult Controller::streamObject(const fs::path& key, const GetObjectOpt
         }
     };
 
-    const auto response = transportGet(key, extra, onBody);
+    const auto response = transportGet(key, options.version_id, extra, onBody);
     if (failure) std::rethrow_exception(failure);
 
     result.http_status = response.http_status;
@@ -151,6 +145,9 @@ GetObjectResult Controller::streamObject(const fs::path& key, const GetObjectOpt
         throw ConditionalRequestFailed(fmt::format("S3 object {} changed (If-Match failed)", key.string()));
     if (response.http_status == 404)
         throw ObjectNotFound(fmt::format("S3 object not found: {}", key.string()));
+    // GET ?versionId= of a delete marker: 405 MethodNotAllowed (x-amz-delete-marker: true). There are no bytes.
+    if (options.version_id && response.http_status == 405)
+        throw ObjectNotFound(fmt::format("S3 version {} of {} is a delete marker", *options.version_id, key.string()));
     if (!response.transport_ok)
         throw std::runtime_error(fmt::format("S3 GET failed for {}: {}", key.string(), response.transport_error));
     if (response.http_status / 100 != 2)
@@ -158,8 +155,8 @@ GetObjectResult Controller::streamObject(const fs::path& key, const GetObjectOpt
     if (options.range && response.http_status != 206)
         throw std::runtime_error(fmt::format("S3 ignored the Range request for {} (HTTP {})", key.string(), response.http_status));
 
-    result.etag = stream_detail::lastResponseHeader(response.headers, "etag");
-    result.content_range = stream_detail::lastResponseHeader(response.headers, "content-range");
+    result.etag = curl::lastHeaderValue(response.headers, "etag");
+    result.content_range = curl::lastHeaderValue(response.headers, "content-range");
     return result;
 }
 

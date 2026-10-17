@@ -41,7 +41,7 @@ buckets it created. Other providers: plain storage, but protection locks still a
   right before deleting; object lock enabled = blocker, unreadable = warning (provider refusals → `partial`).
   Cleanup holds its own lease (`deleting`, fresh token; busy for adoption/provision/detach), re-checked per round;
   a mid-run provider error leaves the row failed + resumable. `delete_upstream` is refused for adopted buckets.
-- Lifecycle: only `vaulthalla-managed` is rebuilt from fields; every other rule round-trips raw and is re-verified;
+- Lifecycle: only `vaulthalla-managed` is rebuilt from fields (detach removes every `vaulthalla-*` rule); every other rule round-trips raw and is re-verified;
   an owned rule with unmodeled elements is refused rather than rewritten.
 - Only `vaulthalla-*` rules/statements/queues are ours. AWS notification config is replaced wholesale on PUT: always
   GET-merge-PUT and re-read. R2 DELETE always carries `ruleIds` (a bodyless DELETE removes every rule for the queue).
@@ -71,6 +71,17 @@ buckets it created. Other providers: plain storage, but protection locks still a
   provider token. R2 accepts any SigV4 region (`auto`, `wnam`, `us-east-1`). New R2 buckets carry a default
   "Default Multipart Abort Rule" (foreign). Collisions: 409 `BucketAlreadyOwnedByYou` on both providers.
 - Live tests: `VH_LIVE_UPSTREAM=1 … --gtest_filter='UpstreamLive*'` (only `vaulthalla-test-<ts>-*` names; cleans up).
+  The DB-backed file-recovery ones (`test_recovery_live.cpp`) run through `bin/tests/run_unit.sh` (testing.md, "Live
+  provider tests"); they proved adoption of a vault's own bucket + versioning enable + retention live (2026-10-16).
+  The test identity also lacks `s3:GetBucketObjectLockConfiguration` there (status warning only).
+- Provider versioning (file recovery, `AdminClient::{supportsVersioning,versioning,putVersioning}`; verified live
+  2026-10-16, `UpstreamLive.AwsVersioning`): PutBucketVersioning carries Content-MD5 (AWS requires an integrity
+  header) and `x-amz-expected-bucket-owner` when the account is known, Status only — never MfaDelete/`x-amz-mfa`.
+  The test identity has Get/PutBucketVersioning + ListBucketVersions; Enabled and Suspended read back on the first
+  GET (~130 ms), but AWS still asks for 15 min before relying on versioned writes. R2 has no versioning:
+  `versioning()` = Unversioned without a request, `putVersioning` = `CapabilityMissing("versioning")`, nothing sent.
+  Existing noncurrent retention (ours + foreign, incl. NewerNoncurrentVersions): `storage/upstream/Lifecycle`
+  `noncurrentExpirations` / `coverage` / `effectiveNoncurrentDays`.
 
 ## Tests
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -14,6 +15,7 @@
 #include "fuse/resolver/Resolved.hpp"
 #include "fs/Fwd.hpp"
 #include "identities/Fwd.hpp"
+#include "recovery/Fwd.hpp"
 #include "storage/Fwd.hpp"
 
 namespace vh::fs {
@@ -42,6 +44,20 @@ struct RenameContext {
     pqxx::work& txn;
 };
 
+// Content that is already sealed (recovery restores a retained generation): how the bytes a SealedWriter produced are
+// sealed. An empty IV (with key version 0) only for an empty file, as every empty file is stored.
+struct SealedContent {
+    std::string encryption_iv{};
+    unsigned int key_version{};
+    uint64_t plaintext_size{};
+    std::optional<std::string> mime_type{};   // nullopt: inferred from the path (sealed bytes can't be sniffed)
+};
+
+// Creates `dst` (the content sidecar on an overwrite, the new backing path otherwise) holding the sealed bytes
+// (AES-256-GCM body‖tag, or nothing) and says how they are sealed; createFile fsyncs and publishes them. Throws to
+// refuse; whatever it left at dst is removed.
+using SealedWriter = std::function<SealedContent(const std::filesystem::path& dst)>;
+
 struct NewFileContext {
     std::filesystem::path path{}, fuse_path{};
     std::vector<uint8_t> buffer{};
@@ -52,8 +68,16 @@ struct NewFileContext {
     mode_t mode = 0644;
     bool overwrite = false;
     // Conditional overwrite: only replace the content if it is still this generation (storage::Generation::sourceId)
-    // and not open through FUSE; otherwise ContentConflict.
+    // and not open through FUSE; otherwise ContentConflict. No generation has the id "": with overwrite, that means
+    // "create it only if it does not exist" (an existing file is a ContentConflict).
     std::optional<std::string> expected_source_id{};
+    // Why an overwrite replaces the content, as local versioning records the replaced generation (default overwrite):
+    // a sync download, a restore, a conflict resolution.
+    std::optional<recovery::local::Reason> version_reason{};
+    // Commits content that is already sealed instead of buffer/source_path (nothing is encrypted, no plaintext is
+    // produced) through the same overwrite and new-file branches: content lock, CAS, refusals, rows, cache. The
+    // writer runs under the content lock on an overwrite.
+    SealedWriter sealed{};
 };
 
 struct ContentConflict final : std::runtime_error {

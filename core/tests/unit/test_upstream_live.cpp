@@ -1,19 +1,23 @@
 // Live provider checks for the upstream admin/events adapters (#237, #96). Never part of CI: every test skips unless
 // VH_LIVE_UPSTREAM=1. They create ONLY buckets/queues named vaulthalla-test-<unix time>-<random> and remove them again,
-// even on failure. Nothing else in the accounts is read at object level, changed or deleted.
+// even on failure. Nothing else in the accounts is read at object level, changed or deleted. Credentials and helpers:
+// tests/helpers/upstream_live.hpp.
 //
-//   AWS:  VH_AWS_ADMIN_API_KEY, VH_AWS_ADMIN_SECRET_KEY            (buckets in us-east-2)
-//   R2:   VH_R2_ADMIN_ACCESS_KEY, VH_R2_ADMIN_SECRET_KEY, VH_R2_ADMIN_ENDPOINT, optional VH_CF_API_TOKEN (events)
-//
-// Run: (set -a; . ./.bashrc; VH_LIVE_UPSTREAM=1 build/core/vh_unit_tests --gtest_filter='UpstreamLive*')
+// Run: (set -a; . ./.bashrc; set +a; VH_LIVE_UPSTREAM=1 build/core/vh_unit_tests --gtest_filter='UpstreamLive*')
+// Versioning: UpstreamLive.AwsVersioning (a new bucket: unversioned → enabled → retention rule → suspended).
+// File recovery acceptance (DB-backed, through bin/tests/run_unit.sh): test_recovery_live.cpp.
+
+#include "../helpers/upstream_live.hpp"
 
 #include "storage/s3/Controller.hpp"
 #include "storage/s3/provider/admin/Adapters.hpp"
 #include "storage/upstream/Guard.hpp"
+#include "storage/upstream/Lifecycle.hpp"
 #include "vault/model/APIKey.hpp"
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -29,45 +33,13 @@ namespace admin = vh::storage::s3::provider::admin;
 using vh::vault::model::APIKey;
 using vh::vault::model::S3Provider;
 
-std::string liveEnv(const char* name) {
-    const auto* v = std::getenv(name);
-    return v ? std::string(v) : std::string{};
-}
-
-bool liveEnabled() { return liveEnv("VH_LIVE_UPSTREAM") == "1"; }
-
-std::string liveTestName(const std::string& suffix = {}) {
-    std::mt19937_64 rng(std::random_device{}());
-    char rand[9];
-    std::snprintf(rand, sizeof(rand), "%08x", static_cast<unsigned int>(rng()));
-    return "vaulthalla-test-" + std::to_string(std::time(nullptr)) + "-" + rand + suffix;
-}
-
-struct LiveCleanup {
-    std::function<void()> fn;
-    ~LiveCleanup() {
-        try {
-            if (fn) fn();
-        } catch (const std::exception& e) {
-            std::cerr << "[live cleanup] " << e.what() << std::endl;
-            ADD_FAILURE() << "cleanup failed: " << e.what();
-        }
-    }
-};
-
-// Empties and deletes a test bucket (all versions). Refuses any name that isn't ours.
-void liveDestroyTestBucket(admin::AdminClient& client, const std::string& bucket) {
-    if (!bucket.starts_with("vaulthalla-test-")) throw std::logic_error("refusing to delete a non-test bucket");
-    if (!client.headBucket(bucket)) return;
-    for (int round = 0; round < 20; ++round) {
-        const auto page = client.listObjectVersions(bucket, {}, 1000);
-        if (page.objects.empty()) break;
-        const auto failed = client.deleteObjects(bucket, page.objects);
-        if (!failed.empty()) throw std::runtime_error("could not delete " + std::to_string(failed.size()) + " test object(s)");
-    }
-    client.deleteBucket(bucket);
-    std::cout << "[live] deleted " << bucket << std::endl;
-}
+using vh::test_support::live::LiveCleanup;
+using vh::test_support::live::liveAwsKey;
+using vh::test_support::live::liveDestroyTestBucket;
+using vh::test_support::live::liveEnabled;
+using vh::test_support::live::liveEnv;
+using vh::test_support::live::liveR2Key;
+using vh::test_support::live::liveTestName;
 
 std::vector<admin::LifecycleRule> liveForeignRule() {
     return admin::detail::parseLifecycle(R"(<LifecycleConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
@@ -165,18 +137,6 @@ void liveExerciseBucket(admin::AdminClient& client, const std::shared_ptr<APIKey
     vh::storage::upstream::guard::clearForTesting();
 }
 
-std::shared_ptr<APIKey> liveAwsKey() {
-    return std::make_shared<APIKey>(0, "live-aws", S3Provider::AWS, liveEnv("VH_AWS_ADMIN_API_KEY"),
-                                    liveEnv("VH_AWS_ADMIN_SECRET_KEY"), "us-east-2", "https://s3.us-east-2.amazonaws.com");
-}
-
-std::shared_ptr<APIKey> liveR2Key() {
-    auto key = std::make_shared<APIKey>(0, "live-r2", S3Provider::CloudflareR2, liveEnv("VH_R2_ADMIN_ACCESS_KEY"),
-                                        liveEnv("VH_R2_ADMIN_SECRET_KEY"), "auto", liveEnv("VH_R2_ADMIN_ENDPOINT"));
-    key->provider_token = liveEnv("VH_CF_API_TOKEN");
-    return key;
-}
-
 void livePrintCapabilities(const admin::Capabilities& caps) {
     for (const auto& c : caps.items)
         std::cout << "[live] capability " << c.name << ": " << (c.ok ? "ok" : "MISSING") << (c.probed ? "" : " (not probed)")
@@ -207,6 +167,109 @@ TEST(UpstreamLive, R2Buckets) {
     livePrintCapabilities(r2.probe());
     EXPECT_FALSE(r2.listBuckets({}, 1000).buckets.empty());
     liveExerciseBucket(r2, key, std::nullopt, false);
+
+    // R2 has no object versioning: refused locally, nothing is sent (the name is a fresh test name, never created).
+    EXPECT_FALSE(r2.supportsVersioning());
+    const auto before = r2.metrics().requests;
+    EXPECT_THROW(r2.putVersioning(liveTestName(), admin::Versioning::Enabled), admin::CapabilityMissing);
+    EXPECT_EQ(r2.versioning(liveTestName()).status, admin::Versioning::Unversioned);
+    EXPECT_EQ(r2.metrics().requests, before);
+}
+
+namespace {
+
+// Re-reads GetBucketVersioning until it says `want` (AWS applies a change eventually). Returns the reads it took.
+int liveAwaitVersioning(admin::AdminClient& client, const std::string& bucket, const admin::Versioning want,
+                        const std::chrono::seconds limit) {
+    const auto start = std::chrono::steady_clock::now();
+    int reads = 0;
+    for (;;) {
+        ++reads;
+        if (client.versioning(bucket).status == want) {
+            std::cout << "[live] versioning settled after " << reads << " read(s), "
+                      << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count()
+                      << " ms" << std::endl;
+            return reads;
+        }
+        if (std::chrono::steady_clock::now() - start > limit) return -1;
+        std::this_thread::sleep_for(std::chrono::seconds{2});
+    }
+}
+
+}
+
+// Provider versioning on a NEW test bucket only: unversioned → enabled → retention lifecycle next to a foreign
+// noncurrent rule → versions listed → suspended; cleanup deletes every version and the bucket.
+TEST(UpstreamLive, AwsVersioning) {
+    if (!liveEnabled()) GTEST_SKIP() << "set VH_LIVE_UPSTREAM=1 to run live provider tests";
+    if (liveEnv("VH_AWS_ADMIN_API_KEY").empty()) GTEST_SKIP() << "VH_AWS_ADMIN_* not set";
+    const auto key = liveAwsKey();
+    admin::AwsAdmin aws(key);
+    key->provider_account_id = aws.identity().account_ref;
+    ASSERT_TRUE(aws.supportsVersioning());
+
+    const auto bucket = liveTestName();
+    std::cout << "[live] aws-s3 versioning test bucket " << bucket << std::endl;
+    LiveCleanup cleanup{[&] { liveDestroyTestBucket(aws, bucket); }};
+    ASSERT_EQ(aws.headBucket(bucket), std::nullopt);
+    aws.createBucket({.name = bucket, .region = std::string("us-east-2")});
+
+    const auto initial = aws.versioning(bucket);
+    EXPECT_EQ(initial.status, admin::Versioning::Unversioned);
+    EXPECT_EQ(initial.mfa_delete, std::nullopt);
+
+    aws.putVersioning(bucket, admin::Versioning::Enabled);
+    ASSERT_GT(liveAwaitVersioning(aws, bucket, admin::Versioning::Enabled, std::chrono::seconds{60}), 0)
+        << "versioning not Enabled within 60 s";
+    const auto config = aws.inspect(bucket);
+    for (const auto& w : config.warnings) std::cout << "[live] inspect warning: " << w << std::endl;
+    EXPECT_EQ(config.versioning, admin::Versioning::Enabled);
+    EXPECT_NE(config.mfa_delete, std::optional<bool>(true));
+
+    // Retention: a foreign noncurrent rule (with NewerNoncurrentVersions, outside our model) and our owned rule.
+    auto rules = config.lifecycle;
+    const auto foreign = admin::detail::parseLifecycle(R"(<LifecycleConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+      <Rule><ID>other-app-noncurrent</ID><Filter><Prefix>other/</Prefix></Filter><Status>Enabled</Status>
+      <NoncurrentVersionExpiration><NoncurrentDays>7</NoncurrentDays><NewerNoncurrentVersions>2</NewerNoncurrentVersions></NoncurrentVersionExpiration>
+      </Rule></LifecycleConfiguration>)");
+    rules.insert(rules.end(), foreign.begin(), foreign.end());
+    aws.putLifecycle(bucket, rules);
+    const auto withForeign = aws.inspect(bucket).lifecycle;
+    const auto findRule = [](const std::vector<admin::LifecycleRule>& rs, const std::string& id) {
+        return std::ranges::find_if(rs, [&](const auto& r) { return r.id == id; });
+    };
+    const auto theirs = findRule(withForeign, "other-app-noncurrent");
+    ASSERT_NE(theirs, withForeign.end());
+    EXPECT_TRUE(theirs->foreign);
+
+    const auto merged = vh::storage::upstream::lifecycle::mergeOwnedRule(withForeign, {.expire_noncurrent_days = 30}, true);
+    EXPECT_TRUE(merged.destructive);
+    aws.putLifecycle(bucket, merged.rules);
+    const auto after = aws.inspect(bucket).lifecycle;
+    ASSERT_EQ(after.size(), withForeign.size() + 1);
+    const auto theirsAfter = findRule(after, "other-app-noncurrent");
+    ASSERT_NE(theirsAfter, after.end());
+    EXPECT_EQ(theirsAfter->raw_xml, theirs->raw_xml) << "the foreign rule must round-trip unchanged";
+    const auto ours = findRule(after, "vaulthalla-managed");
+    ASSERT_NE(ours, after.end());
+    EXPECT_FALSE(ours->foreign);
+    EXPECT_EQ(ours->expire_noncurrent_days, std::optional<unsigned int>(30));
+    EXPECT_EQ(vh::storage::upstream::lifecycle::effectiveNoncurrentDays(after, "vault/"), std::optional<unsigned int>(30));
+    EXPECT_EQ(vh::storage::upstream::lifecycle::effectiveNoncurrentDays(after, "other/x/"), std::optional<unsigned int>(7));
+
+    // Two writes of one key are two versions.
+    vh::storage::s3::Controller data(key, bucket);
+    data.uploadBufferWithMetadata("v/one.txt", std::vector<uint8_t>{'1'}, std::unordered_map<std::string, std::string>{});
+    data.uploadBufferWithMetadata("v/one.txt", std::vector<uint8_t>{'2', '2'}, std::unordered_map<std::string, std::string>{});
+    const auto versions = aws.listObjectVersions(bucket, {}, 1000).objects;
+    EXPECT_EQ(versions.size(), 2u);
+    EXPECT_EQ(std::ranges::count_if(versions, [](const auto& o) { return o.latest; }), 1);
+    for (const auto& v : versions) EXPECT_TRUE(v.version_id && !v.version_id->empty() && *v.version_id != "null");
+
+    aws.putVersioning(bucket, admin::Versioning::Suspended);
+    EXPECT_GT(liveAwaitVersioning(aws, bucket, admin::Versioning::Suspended, std::chrono::seconds{60}), 0)
+        << "versioning not Suspended within 60 s";
+    EXPECT_THROW(aws.putVersioning(bucket, admin::Versioning::Unversioned), std::invalid_argument);
 }
 
 namespace {

@@ -19,6 +19,8 @@
 
 #include "vault/EncryptionManager.hpp"
 #include "crypto/encryptors/GPG.hpp"
+#include "crypto/util/encrypt.hpp"
+#include "db/encoding/timestamp.hpp"
 
 #include "vault/model/Vault.hpp"
 #include "vault/model/APIKey.hpp"
@@ -114,6 +116,32 @@ static CommandResult export_deleted_key(const CommandCall& call, const std::shar
     return result;
 }
 
+// Retired key versions recoverable data still needs (snapshots, local versions, provider object versions), so an
+// export keeps decrypting them after a rotation. Same encoding as the current key. Added only when something
+// references one, so an export without recovery data is unchanged.
+static void add_historical_keys(nlohmann::json& out, const std::shared_ptr<storage::Engine>& engine) {
+    const auto referenced = engine->encryptionManager->referencedHistoricalKeys();
+    if (!referenced.keys.empty()) {
+        nlohmann::json historical = nlohmann::json::array();
+        for (const auto& k : referenced.keys) {
+            std::vector<uint8_t> raw(k.key->bytes().begin(), k.key->bytes().end());
+            historical.push_back({
+                {"key_version", k.version},
+                {"key", crypto::util::b64_encode(raw)},
+                {"created_at", db::encoding::timestampToString(k.created_at)},
+                {"retired_at", db::encoding::timestampToString(k.retired_at)}
+            });
+            sodium_memzero(raw.data(), raw.size());
+        }
+        out["historical_keys"] = std::move(historical);
+    }
+    if (!referenced.missing.empty()) {
+        log::Registry::audit()->error("[shell::add_historical_keys] Recovery data of vault {} references key versions "
+                                      "the vault no longer holds", engine->vault->id);
+        out["missing_key_versions"] = referenced.missing;
+    }
+}
+
 static CommandResult export_one_key(const CommandCall& call, const std::shared_ptr<CommandUsage>& usage) {
     constexpr const auto* ERR = "vault keys export";
 
@@ -128,7 +156,8 @@ static CommandResult export_one_key(const CommandCall& call, const std::shared_p
     const auto vaultKey = db::query::vault::Key::getVaultKey(engine->vault->id);
     if (!vaultKey) return invalid("vault keys export: no key record found for vault ID " + std::to_string(engine->vault->id));
 
-    const auto out = generate_json_key_object(engine->vault, key, vaultKey, call.user->name());
+    auto out = generate_json_key_object(engine->vault, key, vaultKey, call.user->name());
+    add_historical_keys(out, engine);
     const auto result = handle_key_encrypt_and_response(call, out, usage);
     if (result.exit_code == 0) db::query::vault::Key::markExported(engine->vault->id, vaultKey->version);
     return result;
@@ -146,7 +175,9 @@ static CommandResult export_all_keys(const CommandCall& call, const std::shared_
         const auto& key = engine->encryptionManager->get_key(context);
         const auto vaultKey = db::query::vault::Key::getVaultKey(engine->vault->id);
         if (!vaultKey) return invalid("vault keys export: no key record found for vault ID " + std::to_string(engine->vault->id));
-        out.push_back(generate_json_key_object(engine->vault, key, vaultKey, call.user->name()));
+        auto item = generate_json_key_object(engine->vault, key, vaultKey, call.user->name());
+        add_historical_keys(item, engine);
+        out.push_back(std::move(item));
     }
 
     const auto result = handle_key_encrypt_and_response(call, out, usage);

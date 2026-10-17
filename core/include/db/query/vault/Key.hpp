@@ -3,6 +3,7 @@
 #include <ctime>
 #include <memory>
 #include <optional>
+#include <vector>
 
 #include "vault/Fwd.hpp"
 
@@ -21,6 +22,16 @@ public:
     static void markKeyRotationFinished(unsigned int vaultId);
     [[nodiscard]] static bool keyRotationInProgress(unsigned int vaultId);
     [[nodiscard]] static KeyPtr getRotationInProgressOldKey(unsigned int vaultId);
+
+    // Retired versions (vault_keys_trashed), still sealed under the vault master. Rotation never deletes them: data
+    // recovery keeps (local versions, snapshots, provider object versions) may still be sealed with any of them.
+    // updated_at of a retired key is when it was retired.
+    [[nodiscard]] static KeyPtr getRetiredVaultKey(unsigned int vaultId, unsigned int version);  // nullptr if none
+    [[nodiscard]] static std::vector<unsigned int> retiredKeyVersions(unsigned int vaultId);      // ascending
+    [[nodiscard]] static bool hasRetiredKeyVersion(unsigned int vaultId, unsigned int version);
+    // Key versions recoverable data still references (recovery_blob, live upstream_object_version rows), ascending:
+    // the same set trigger recovery_guard_retired_vault_key protects. Unencrypted data (version 0/NULL) is left out.
+    [[nodiscard]] static std::vector<unsigned int> recoveryReferencedKeyVersions(unsigned int vaultId);
     // Export tracking (#162): `vh vault keys export` records the version it exported. A rotation makes the current
     // version a new one, so an older export no longer counts.
     static void markExported(unsigned int vaultId, unsigned int version);

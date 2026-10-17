@@ -64,4 +64,22 @@ void vh::db::Connection::initPreparedVaultKeys() const {
     conn_->prepare("get_rotation_old_vault_key",
                    "SELECT vault_id, version, encrypted_key, iv, created_at, COALESCE(trashed_at, created_at) AS updated_at "
                    "FROM vault_keys_trashed WHERE vault_id = $1 AND rotation_completed_at IS NULL");
+
+    conn_->prepare("get_retired_vault_key",
+                   "SELECT vault_id, version, encrypted_key, iv, created_at, COALESCE(trashed_at, created_at) AS updated_at "
+                   "FROM vault_keys_trashed WHERE vault_id = $1 AND version = $2");
+
+    conn_->prepare("list_retired_vault_key_versions",
+                   "SELECT version FROM vault_keys_trashed WHERE vault_id = $1 ORDER BY version");
+
+    conn_->prepare("retired_vault_key_version_exists",
+                   "SELECT EXISTS(SELECT 1 FROM vault_keys_trashed WHERE vault_id = $1 AND version = $2)");
+
+    // Mirrors trigger recovery_guard_retired_vault_key (migration 111).
+    conn_->prepare("list_recovery_referenced_key_versions",
+                   "SELECT key_version FROM recovery_blob WHERE vault_id = $1 AND key_version > 0 "
+                   "UNION "
+                   "SELECT key_version FROM upstream_object_version "
+                   "WHERE vault_id = $1 AND gone_at IS NULL AND key_version IS NOT NULL AND key_version > 0 "
+                   "ORDER BY 1");
 }
