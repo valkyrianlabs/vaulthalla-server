@@ -49,8 +49,7 @@ BucketConfiguration R2Admin::inspect(const std::string& bucket) {
     config.bucket = bucket;
     if (!headBucket(bucket)) throw ProviderError("bucket '" + bucket + "' does not exist", "NoSuchBucket", 404);
     config.region = "auto";
-    config.versioning = getVersioning(bucket, config.warnings);
-    if (config.versioning == Versioning::Unknown) config.versioning = Versioning::Unversioned;   // R2 has no versioning
+    config.versioning = versioning(bucket).status;   // R2 has no versioning: Unversioned, no request
     config.object_lock = std::nullopt;   // R2 bucket locks live in the Cloudflare API; Vaulthalla does not manage them
 
     if (auto rules = getLifecycle(bucket)) {
@@ -90,6 +89,7 @@ Capabilities R2Admin::probe() {
     }
     caps.items.push_back({"buckets.create", true, false, "checked when a bucket is created (R2 token needs Object Read & Write + bucket admin)"});
     caps.items.push_back({"lifecycle", true, false, "checked on use"});
+    caps.items.push_back({"versioning", false, true, kR2VersioningUnsupported});
 
     if (key_->provider_token.empty()) {
         caps.items.push_back({"events.queues", false, true, kCloudflareTokenHint});

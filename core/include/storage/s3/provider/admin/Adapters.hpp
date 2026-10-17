@@ -26,6 +26,13 @@ public:
     void createBucket(const CreateBucketRequest& request) override;
     void deleteBucket(const std::string& bucket) override;
     void putLifecycle(const std::string& bucket, const std::vector<LifecycleRule>& rules) override;
+    // Versioning support follows allowNoncurrent(): a provider with noncurrent versions has versioning.
+    [[nodiscard]] bool supportsVersioning() const override { return allowNoncurrent(); }
+    // Unsupported: name + guard checked, then Unversioned without a request.
+    [[nodiscard]] VersioningState versioning(const std::string& bucket) override;
+    // Content-MD5 (AWS requires an integrity header on PutBucketVersioning) + x-amz-expected-bucket-owner when the
+    // account is known. Unsupported: target, name and guard checked, then CapabilityMissing; nothing is sent.
+    void putVersioning(const std::string& bucket, Versioning target) override;
     [[nodiscard]] ObjectPage listObjects(const std::string& bucket, const std::string& token, unsigned int max) override;
     [[nodiscard]] ObjectPage listObjectVersions(const std::string& bucket, const std::string& token,
                                                 unsigned int max) override;
@@ -35,6 +42,9 @@ public:
 
     // The protection identity of a bucket in this account.
     [[nodiscard]] storage::upstream::BucketIdentity bucketIdentity(const std::string& bucket);
+
+    // Bucket name validation + protection guard, nothing sent. Every bucket-scoped call runs it first.
+    void requireBucket(const std::string& bucket);
 
     // A signed S3 call against the bucket's endpoint (guarded, metered). Public for the events adapter.
     [[nodiscard]] curl::http::Response bucketCall(const std::string& bucket, detail::SignedCall call, const char* kind);
@@ -54,7 +64,10 @@ protected:
     void count(const char* kind);
     // GET ?lifecycle; NoSuchLifecycleConfiguration → empty; AccessDenied → nullopt.
     [[nodiscard]] std::optional<std::vector<LifecycleRule>> getLifecycle(const std::string& bucket);
-    [[nodiscard]] Versioning getVersioning(const std::string& bucket, std::vector<std::string>& warnings);
+    // GET ?versioning for inspect: NotImplemented → Unversioned; other failures → Unknown + a warning.
+    [[nodiscard]] VersioningState getVersioning(const std::string& bucket, std::vector<std::string>& warnings);
+    // The account that must own a bucket for a mutating call (x-amz-expected-bucket-owner); nullopt = not sent.
+    [[nodiscard]] virtual std::optional<std::string> expectedBucketOwner() const { return std::nullopt; }
 
     std::shared_ptr<vault::model::APIKey> key_;
     sigv4::Credentials credentials_;
@@ -85,6 +98,7 @@ protected:
     [[nodiscard]] bool allowNoncurrent() const override { return true; }
     [[nodiscard]] std::optional<std::string> locationConstraint(const CreateBucketRequest& request) const override;
     [[nodiscard]] std::optional<std::string> accountForGuard() override;
+    [[nodiscard]] std::optional<std::string> expectedBucketOwner() const override;
 
 private:
     std::optional<AccountIdentity> identity_;

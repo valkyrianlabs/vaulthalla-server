@@ -80,6 +80,19 @@ struct BucketPage {
 
 enum class Versioning { Unversioned, Enabled, Suspended, Unknown };
 
+// GetBucketVersioning. AWS: a bucket that was never configured has no status (Unversioned); once Enabled it can only
+// go to Suspended, never back to Unversioned. Object Lock implies Enabled and can't be suspended. MFA delete can only
+// be changed by the root account with an MFA token, so Vaulthalla reads it and never sets it.
+struct VersioningState {
+    Versioning status{Versioning::Unknown};
+    std::optional<bool> mfa_delete;              // nullopt: the bucket was never configured with MFA delete
+};
+
+// Why Cloudflare R2 refuses provider versioning (CapabilityMissing("versioning", …), probe detail).
+inline constexpr const char* kR2VersioningUnsupported =
+    "Cloudflare R2 has no object versioning (no version ids, noncurrent versions or delete markers); "
+    "use local snapshots or local versioning for file recovery on R2";
+
 // Provider-neutral lifecycle rule. Only the fields both a provider and Vaulthalla support are exposed; adapters refuse
 // (Invalid via std::invalid_argument) a field their provider lacks (R2 has no noncurrent versions; neither exposes
 // storage-class transitions through Vaulthalla).
@@ -114,6 +127,7 @@ struct BucketConfiguration {
     std::optional<std::string> region;
     Versioning versioning{Versioning::Unknown};
     std::optional<bool> object_lock;                 // nullopt: not readable with this credential
+    std::optional<bool> mfa_delete;                  // MfaDelete Enabled/Disabled; nullopt: never configured or unreadable
     std::vector<LifecycleRule> lifecycle;
     std::vector<NotificationRule> notifications;     // empty + notifications_readable=false when unknown
     bool lifecycle_readable{true};
@@ -170,6 +184,18 @@ public:
     [[nodiscard]] virtual BucketConfiguration inspect(const std::string& bucket) = 0;
     // Writes the full rule set: callers pass foreign rules back unchanged (merge happens in storage::upstream).
     virtual void putLifecycle(const std::string& bucket, const std::vector<LifecycleRule>& rules) = 0;
+
+    // Provider (native) object versioning. AWS: true. R2: false — it has none (kR2VersioningUnsupported).
+    [[nodiscard]] virtual bool supportsVersioning() const = 0;
+    // GetBucketVersioning (guarded). Throws ProviderError when the provider refuses (e.g. AccessDenied: the credential
+    // lacks s3:GetBucketVersioning). Providers without versioning answer Unversioned without sending a request; this
+    // never claims Enabled for a bucket the provider can't version.
+    [[nodiscard]] virtual VersioningState versioning(const std::string& bucket) = 0;
+    // PutBucketVersioning (guarded): `target` is Enabled or Suspended (std::invalid_argument otherwise: a bucket can
+    // never be put back to unversioned). Never sends MfaDelete. Enabling takes effect eventually: callers re-read
+    // until versioning() says Enabled, and AWS asks for 15 minutes before relying on it for writes. Providers without
+    // versioning throw CapabilityMissing("versioning", …) without sending anything.
+    virtual void putVersioning(const std::string& bucket, Versioning target) = 0;
 
     [[nodiscard]] virtual ObjectPage listObjects(const std::string& bucket, const std::string& token = {},
                                                  unsigned int max = 1000) = 0;

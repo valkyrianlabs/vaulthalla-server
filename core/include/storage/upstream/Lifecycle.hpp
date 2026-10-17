@@ -41,4 +41,35 @@ struct UnmodeledOwnedRule : std::runtime_error {
 [[nodiscard]] MergeResult mergeOwnedRule(const std::vector<s3::provider::admin::LifecycleRule>& current,
                                          const OwnedRuleChange& change, bool allowNoncurrent);
 
+// ---- noncurrent-version retention already on a bucket (ours and foreign) ---------------------------------------------
+
+// One rule's NoncurrentVersionExpiration, read from the rule's raw XML when it has one (foreign and unmodeled rules
+// carry elements the LifecycleRule fields don't), else from its fields (our rule as rebuilt by mergeOwnedRule).
+struct NoncurrentExpiration {
+    std::string rule_id;
+    bool foreign{true};
+    bool enabled{true};
+    std::string prefix;                                     // the rule's key prefix ("" = whole bucket)
+    // The rule also filters on tags or object size: it applies to some objects under `prefix`, not all of them.
+    bool conditional{false};
+    std::optional<unsigned int> days;                       // NoncurrentDays
+    std::optional<unsigned int> newer_noncurrent_versions;  // NewerNoncurrentVersions: that many newest stay
+};
+
+// Every rule with a NoncurrentVersionExpiration, in document order (disabled ones included, flagged).
+[[nodiscard]] std::vector<NoncurrentExpiration> noncurrentExpirations(
+    const std::vector<s3::provider::admin::LifecycleRule>& rules);
+
+enum class Coverage { None, Partial, Whole };
+// How much of a vault's key prefix an expiration reaches. Whole: enabled, unconditional and its prefix is a prefix of
+// `vaultPrefix` (every object of the vault). Partial: enabled and overlapping (a narrower prefix, or a tag/size
+// filter). None: disabled, without NoncurrentDays, or a disjoint prefix.
+[[nodiscard]] Coverage coverage(const NoncurrentExpiration& expiration, const std::string& vaultPrefix);
+
+// The shortest NoncurrentDays among the expirations that cover the whole vault prefix (nullopt: none does, versions
+// are kept until something else deletes them). A rule with NewerNoncurrentVersions still counts: past the newest N,
+// noncurrent versions go after its days. Partial rules are not counted; list them with noncurrentExpirations().
+[[nodiscard]] std::optional<unsigned int> effectiveNoncurrentDays(
+    const std::vector<s3::provider::admin::LifecycleRule>& rules, const std::string& vaultPrefix);
+
 }

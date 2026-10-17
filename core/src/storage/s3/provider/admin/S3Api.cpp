@@ -53,10 +53,14 @@ storage::upstream::BucketIdentity S3ApiAdmin::bucketIdentity(const std::string& 
     return {.provider = providerIdentity(*key_), .account_ref = accountForGuard(), .bucket = bucket};
 }
 
-curl::http::Response S3ApiAdmin::bucketCall(const std::string& bucket, detail::SignedCall signedCall, const char* kind) {
+void S3ApiAdmin::requireBucket(const std::string& bucket) {
     if (bucket.empty()) throw std::invalid_argument("bucket name is required");
     storage::upstream::requireValidBucketName(bucket);   // before the guard: the guard must see the real name
     storage::upstream::guard::require(bucketIdentity(bucket));
+}
+
+curl::http::Response S3ApiAdmin::bucketCall(const std::string& bucket, detail::SignedCall signedCall, const char* kind) {
+    requireBucket(bucket);
     signedCall.path = "/" + bucket + (signedCall.path == "/" ? std::string{} : signedCall.path);
     return call(bucketEndpoint(bucket), signedCall, kind);
 }
@@ -109,13 +113,38 @@ std::optional<std::vector<LifecycleRule>> S3ApiAdmin::getLifecycle(const std::st
     throw detail::makeError("GetBucketLifecycleConfiguration " + bucket, response, info, secrets());
 }
 
-Versioning S3ApiAdmin::getVersioning(const std::string& bucket, std::vector<std::string>& warnings) {
+VersioningState S3ApiAdmin::getVersioning(const std::string& bucket, std::vector<std::string>& warnings) {
     const auto response = bucketCall(bucket, detail::call("GET", {{"versioning", ""}}), "get");
-    if (response.ok()) return detail::parseVersioning(response.body);
+    if (response.ok()) return detail::parseVersioningState(response.body);
     const auto info = detail::s3Error(response);
-    if (info.code == "NotImplemented") return Versioning::Unversioned;
+    if (info.code == "NotImplemented") return {.status = Versioning::Unversioned, .mfa_delete = std::nullopt};
     warnings.push_back(detail::makeError("GetBucketVersioning", response, info, secrets()).what());
-    return Versioning::Unknown;
+    return {};
+}
+
+VersioningState S3ApiAdmin::versioning(const std::string& bucket) {
+    if (!supportsVersioning()) {
+        requireBucket(bucket);
+        return {.status = Versioning::Unversioned, .mfa_delete = std::nullopt};
+    }
+    const auto response = bucketCall(bucket, detail::call("GET", {{"versioning", ""}}), "get");
+    if (!response.ok())
+        throw detail::makeError("GetBucketVersioning " + bucket, response, detail::s3Error(response), secrets());
+    return detail::parseVersioningState(response.body);
+}
+
+void S3ApiAdmin::putVersioning(const std::string& bucket, const Versioning target) {
+    auto c = detail::call("PUT", {{"versioning", ""}});
+    c.body = detail::buildVersioning(target);   // throws for Unversioned/Unknown before anything else
+    requireBucket(bucket);
+    if (!supportsVersioning()) throw CapabilityMissing("versioning", kR2VersioningUnsupported);
+    c.headers["content-type"] = kXmlContentType;
+    // AWS rejects PutBucketVersioning without an integrity header (Content-MD5 or an x-amz-checksum-*).
+    c.headers["content-md5"] = detail::md5Base64(c.body);
+    if (const auto owner = expectedBucketOwner()) c.headers["x-amz-expected-bucket-owner"] = *owner;
+    const auto response = bucketCall(bucket, c, "put");
+    if (!response.ok())
+        throw detail::makeError("PutBucketVersioning " + bucket, response, detail::s3Error(response), secrets());
 }
 
 void S3ApiAdmin::putLifecycle(const std::string& bucket, const std::vector<LifecycleRule>& rules) {

@@ -83,6 +83,7 @@ void to_json(nlohmann::json& j, const BucketConfiguration& v) {
          {"region", optValue(v.region)},
          {"versioning", to_string(v.versioning)},
          {"object_lock", optValue(v.object_lock)},
+         {"mfa_delete", optValue(v.mfa_delete)},
          {"lifecycle", v.lifecycle},
          {"notifications", v.notifications},
          {"lifecycle_readable", v.lifecycle_readable},
