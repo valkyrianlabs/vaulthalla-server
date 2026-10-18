@@ -1,0 +1,159 @@
+[project]
+title = "Vaulthalla"
+description = "The final cloud: sovereign, encrypted storage on hardware you own. A native C++ daemon encrypts every file before it reaches a disk or a bucket, enforces one set of permissions across the web console, the vh CLI, an S3-compatible gateway and a FUSE filesystem mount, and syncs vaults to S3-compatible providers under cost limits you set."
+
+[[stack.languages]]
+name = "C++23"
+
+[[stack.languages]]
+name = "TypeScript"
+
+[[stack.languages]]
+name = "Python"
+
+[[stack.languages]]
+name = "SQL"
+
+[[stack.languages]]
+name = "Bash"
+
+[[stack.storage]]
+name = "FUSE 3"
+
+[[stack.storage]]
+name = "Amazon S3"
+
+[[stack.storage]]
+name = "Cloudflare R2"
+
+[[stack.databases]]
+name = "PostgreSQL"
+
+[[stack.security]]
+name = "TPM 2.0 (tpm2-tss)"
+
+[[stack.security]]
+name = "swtpm"
+
+[[stack.security]]
+name = "libsodium"
+
+[[stack.security]]
+name = "OpenSSL"
+
+[[stack.security]]
+name = "Landlock"
+
+[[stack.security]]
+name = "libseccomp"
+
+[[stack.libraries]]
+name = "libpqxx"
+
+[[stack.libraries]]
+name = "libcurl"
+
+[[stack.libraries]]
+name = "Boost"
+
+[[stack.libraries]]
+name = "spdlog"
+
+[[stack.libraries]]
+name = "fmt"
+
+[[stack.libraries]]
+name = "yaml-cpp"
+
+[[stack.libraries]]
+name = "pugixml"
+
+[[stack.libraries]]
+name = "zlib"
+
+[[stack.previews]]
+name = "PDFium"
+
+[[stack.previews]]
+name = "libjpeg-turbo"
+
+[[stack.previews]]
+name = "libmagic"
+
+[[stack.previews]]
+name = "FFmpeg"
+
+[[stack.previews]]
+name = "Open CASCADE"
+
+[[stack.frontend]]
+name = "Next.js"
+
+[[stack.frontend]]
+name = "React"
+
+[[stack.frontend]]
+name = "TanStack Query"
+
+[[stack.frontend]]
+name = "Tailwind CSS"
+
+[[stack.frontend]]
+name = "Radix UI"
+
+[[stack.frontend]]
+name = "Zod"
+
+[[stack.frontend]]
+name = "CodeMirror"
+
+[[stack.frontend]]
+name = "Babylon.js"
+
+[[stack.platforms]]
+name = "Linux"
+
+[[stack.platforms]]
+name = "macOS (Apple Silicon)"
+
+[[stack.platforms]]
+name = "systemd"
+
+[[stack.platforms]]
+name = "launchd"
+
+[[stack.infrastructure]]
+name = "Debian packages (APT)"
+
+[[stack.infrastructure]]
+name = "nginx"
+
+[[stack.infrastructure]]
+name = "Caddy"
+
+[[stack.infrastructure]]
+name = "Certbot"
+
+[[stack.infrastructure]]
+name = "Node.js"
+
+[[stack.tooling]]
+name = "Meson"
+
+[[stack.tooling]]
+name = "Ninja"
+
+[[stack.tooling]]
+name = "pnpm"
+
+[[stack.tooling]]
+name = "GoogleTest"
+
+[[stack.tooling]]
+name = "Playwright"
+
+[[stack.tooling]]
+name = "GitHub Actions"
+
+[[stack.tooling]]
+name = "Podman"

@@ -6,7 +6,8 @@ troubleshoot, and use. Keep implementation internals out unless they change an o
 
 Authoring rules come from the `payload-markdown` and `payload-markdown-docs` skills in `.claude/skills/`.
 Those are vendored by `pmdocs install skill --claude --docs-root ./docs --package-manager pnpm --force`, so
-don't hand-edit them; reinstall to upgrade.
+don't hand-edit them. `pmdocs skill check` reports drift (validate/plan also warn on stderr); `pmdocs skill update
+--agent claude` upgrades them in place.
 
 ## Project conventions
 
@@ -14,6 +15,10 @@ don't hand-edit them; reinstall to upgrade.
   Use `status: published` for complete pages and `draft` only when a page is intentionally incomplete.
 - Use root-relative route links (`/vaults/sync`), never `./sync.md`.
 - Long pages get a compact TOC after the intro: `:::toc[On this page]{depth="3" theme="compact"}` / `:::`.
+- `docs/stack.toml` is docs-set metadata (title, description, technology stack by category), synced as the manifest
+  `project`, never a page. Update it in the same change whenever a language, library, database, platform, service or
+  major tool is added, dropped or replaced (`core/meson.build`, `core/tools/*/meson.build`, `web/package.json`,
+  `debian/control`). Rules: `.claude/skills/payload-markdown-docs/reference/stack-toml.md`.
 - Never commit generated AI exports (`llms.txt`, `llms-full.txt`, `index.ai.yml|yaml`).
 - Validate with `python3 .claude/skills/payload-markdown/scripts/check_payload_markdown_doc.py <files>`,
   then `pmdocs validate --source docs`. CI's `docs-validate` job runs the latter, and `docs-publish` pushes it.

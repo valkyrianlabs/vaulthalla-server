@@ -36,7 +36,7 @@ Server component for Payload block data with `blockType: "vlMdBlock"`.
 ## Field Rendering
 
 ```tsx
-import { MarkdownRenderer } from '@valkyrianlabs/payload-markdown/server'
+import { MarkdownRenderer } from 'payload-markdown/server'
 
 export function PostBody({ content }: { content?: null | string }) {
   return (
@@ -57,7 +57,7 @@ Pass `collectionSlug` when collection-level `code`, `themes`, or `config` should
 ## Block Rendering
 
 ```tsx
-import { MarkdownBlockComponent } from '@valkyrianlabs/payload-markdown/server'
+import { MarkdownBlockComponent } from 'payload-markdown/server'
 
 export function RenderMarkdownBlock({ block }: { block: { blockType: 'vlMdBlock'; content: string } }) {
   return <MarkdownBlockComponent {...block} collectionSlug="pages" />
@@ -71,5 +71,5 @@ Pass block fields directly with `{...block}`. Do not wrap the data in a `block` 
 ## Fallbacks
 
 :::details[Empty and warning fallback behavior]
-`emptyFallback` renders when Markdown is empty or whitespace-only. `errorFallback` renders when compilation produces warnings and you prefer not to show the compiled HTML.
+`emptyFallback` renders when Markdown is empty or whitespace-only. `errorFallback` renders when compilation fails; non-fatal warnings still render the compiled HTML.
 :::
