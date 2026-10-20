@@ -17,10 +17,12 @@ CommandResult runWithWaiver(const CommandCall& call, const std::string_view pref
             return ok(op(acceptedByFlag));
         } catch (const ops::NeedsConfirmation& e) {
             // The op found existing data the encryption change affects. A person has to accept the waiver.
-            if (!call.io)
+            if (!call.io) {
+                noteConfirmationNeeded(e.code, {"--accept-overwrite-waiver", "--accept-decryption-waiver"});
                 return refused("this change requires accepting an encryption waiver: re-run in an interactive "
                                "terminal, or pass --accept-overwrite-waiver / --accept-decryption-waiver.\n" +
                                std::string(e.what()));
+            }
             if (call.io->prompt(e.what(), "I DO NOT ACCEPT") != "I ACCEPT")
                 return refused("the encryption waiver was not accepted; nothing was changed");
             return ok(op(true));

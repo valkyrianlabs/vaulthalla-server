@@ -24,5 +24,7 @@ void registerUpstreamCommands(const std::shared_ptr<Router>& r);
 void registerRecoveryCommands(const std::shared_ptr<Router>& r);
 void registerSnapshotCommands(const std::shared_ptr<Router>& r);
 void registerDeviceCommands(const std::shared_ptr<Router>& r);
+// `vh mcp`, `vh skill`: client-side commands (commands/client.cpp).
+void registerClientCommands(const std::shared_ptr<Router>& r);
 
 }

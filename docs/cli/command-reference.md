@@ -417,3 +417,15 @@ vh email history --limit 100
 ```
 
 See [Operator Emails](/admin/operator-emails).
+
+## AI Agents (MCP)
+
+```bash
+vh skill install --agent claude                    # skill + `claude mcp add --scope user vaulthalla -- vh mcp`
+vh skill install --agent codex --scope project     # ./.agents/skills/vaulthalla
+vh skill install --agent claude --no-register --force
+vh mcp                                             # the stdio MCP server an agent starts
+```
+
+Key and secret export, `secrets update`, `setup`, `teardown` and `fs get|put` are never available to agents. See
+[AI Agents And MCP](/admin/mcp-and-agents).

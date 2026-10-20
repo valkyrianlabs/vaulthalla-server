@@ -207,6 +207,7 @@ static const GroupedOptions s3VaultOpts("S3 Vault Options", {
 static std::shared_ptr<CommandUsage> create(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"create", "new", "add", "mk"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Create a new vault. Supports local and S3-backed vaults.";
     cmd->positionals = {vaultPos.withGen(contract::gen::freshName("vault_"))};
     cmd->required_flags = {vaultType};
@@ -232,6 +233,7 @@ static std::shared_ptr<CommandUsage> create(const std::weak_ptr<CommandUsage>& p
 static std::shared_ptr<CommandUsage> update(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"update", "set", "modify", "edit"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Update properties of an existing vault.";
     cmd->positionals = {vaultPos};
     cmd->optional = {descriptionOpt, quotaOpt, intervalOpt, owner};
@@ -271,6 +273,7 @@ static const auto acceptKeyLossFlag = Flag::Alias(
 static std::shared_ptr<CommandUsage> remove(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"delete", "remove", "del", "rm"};
+    cmd->effect = CommandEffect::Destructive;
     cmd->description = "Delete a vault. It disappears at once and can be restored (vh vault restore) until "
                        "vaults.retention_window ends; then its data is purged. Its encryption key is kept for the key "
                        "retention window. In a terminal it asks how to delete; S3 vaults are asked about their upstream data.";
@@ -289,6 +292,7 @@ static std::shared_ptr<CommandUsage> remove(const std::weak_ptr<CommandUsage>& p
 static std::shared_ptr<CommandUsage> restore(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"restore", "undelete"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Restore a deleted vault, exactly as it was, while it is pending deletion (until "
                        "vaults.retention_window ends and its purge starts).";
     cmd->positionals = {vaultPos};
@@ -303,6 +307,7 @@ static std::shared_ptr<CommandUsage> restore(const std::weak_ptr<CommandUsage>& 
 static std::shared_ptr<CommandUsage> deleted(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"deleted", "trash"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "List deleted vaults: pending (restorable), being purged, and purged ones whose encryption key "
                        "is still kept. Warns about encrypted upstream data whose key was never exported.";
     cmd->optional_flags = {jsonFlag};
@@ -316,6 +321,7 @@ static std::shared_ptr<CommandUsage> deleted(const std::weak_ptr<CommandUsage>& 
 static std::shared_ptr<CommandUsage> info(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"info", "show", "get"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "Display detailed information about a vault.";
     cmd->positionals = {vaultPos};
     cmd->optional = {owner};
@@ -329,6 +335,7 @@ static std::shared_ptr<CommandUsage> info(const std::weak_ptr<CommandUsage>& par
 static std::shared_ptr<CommandUsage> list(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"list", "ls"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "List all vaults accessible to the current user.";
     cmd->required_flags = {localFlag, s3Flag, jsonFlag};
     cmd->optional = listQueryOptions();
@@ -343,6 +350,7 @@ static std::shared_ptr<CommandUsage> list(const std::weak_ptr<CommandUsage>& par
 static std::shared_ptr<CommandUsage> role_assign(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"assign"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Assign a role to a user or group for a specific vault.";
     cmd->positionals = {vaultPos, roleId};
     cmd->required = {subjectOption};
@@ -358,6 +366,7 @@ static std::shared_ptr<CommandUsage> role_assign(const std::weak_ptr<CommandUsag
 static std::shared_ptr<CommandUsage> role_unassign(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"unassign", "remove", "rm-assn"};
+    cmd->effect = CommandEffect::Destructive;
     cmd->description = "Remove a role assignment from a user or group for a specific vault.";
     cmd->positionals = {vaultPos, roleId};
     cmd->required = {subjectOption};
@@ -374,6 +383,7 @@ static std::shared_ptr<CommandUsage> role_unassign(const std::weak_ptr<CommandUs
 static std::shared_ptr<CommandUsage> role_override_add(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"add", "new", "create", "mk"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Add path-scoped permission overrides (--allow-<perm> / --deny-<perm>, see 'vh permission vault') "
                        "to the vault role assigned to a user or group.";
     cmd->positionals = {vaultPos, roleId};
@@ -393,6 +403,7 @@ static std::shared_ptr<CommandUsage> role_override_add(const std::weak_ptr<Comma
 static std::shared_ptr<CommandUsage> role_override_update(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"update", "set", "modify", "edit"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Update an override (by ID) on the vault role assigned to a user or group.";
     cmd->positionals = {vaultPos, roleId, bitPosition};
     cmd->required = {subjectOption};
@@ -410,6 +421,7 @@ static std::shared_ptr<CommandUsage> role_override_update(const std::weak_ptr<Co
 static std::shared_ptr<CommandUsage> role_override_remove(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"remove", "del", "rm"};
+    cmd->effect = CommandEffect::Destructive;
     cmd->description = "Remove a permission override (by bit position) from a user or group in a specific vault role.";
     cmd->positionals = {vaultPos, roleId, bitPosition};
     cmd->required = {
@@ -432,6 +444,7 @@ static std::shared_ptr<CommandUsage> role_override_remove(const std::weak_ptr<Co
 static std::shared_ptr<CommandUsage> role_override_list(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"list", "ls"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "List permission overrides for a user or group in a specific vault role.";
     cmd->positionals = {vaultPos, roleId};
     cmd->required = {subjectOption};
@@ -467,6 +480,7 @@ static std::shared_ptr<CommandUsage> role_override(const std::weak_ptr<CommandUs
 static std::shared_ptr<CommandUsage> role_list(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"list", "ls"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "List all role assignments for a specific vault.";
     cmd->positionals = {vaultPos};
     cmd->optional = {owner};
@@ -504,6 +518,7 @@ static std::shared_ptr<CommandUsage> vrole(const std::weak_ptr<CommandUsage>& pa
 static std::shared_ptr<CommandUsage> key_export(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"export"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "Export an encryption key for a specific vault. --output is written by the daemon, so it must "
                        "be an absolute path; the file is created with mode 0600. Retired key versions that recoverable "
                        "data (snapshots, local versions, provider object versions) still needs are included under "
@@ -522,6 +537,7 @@ static std::shared_ptr<CommandUsage> key_export(const std::weak_ptr<CommandUsage
 static std::shared_ptr<CommandUsage> key_inspect(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"inspect", "info", "show"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "Show encryption key metadata (version, creation and rotation state) for a vault. "
                        "Never prints key material.";
     cmd->positionals = {vaultPos};
@@ -536,6 +552,7 @@ static std::shared_ptr<CommandUsage> key_inspect(const std::weak_ptr<CommandUsag
 static std::shared_ptr<CommandUsage> key_rotate(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"rotate", "renew"};
+    cmd->effect = CommandEffect::Destructive;
     cmd->description = "Start an encryption key rotation for a vault (or 'all'). Existing data is re-encrypted by "
                        "the next sync; a vault whose rotation is already pending is reported, not rotated again.";
     cmd->positionals = {vaultOrAll};
@@ -572,6 +589,7 @@ static std::shared_ptr<CommandUsage> key(const std::weak_ptr<CommandUsage>& pare
 static std::shared_ptr<CommandUsage> sync_info(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"info", "show", "get"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "Display the current synchronization settings for a specific vault.";
     cmd->positionals = {vaultPos};
     cmd->optional = {owner};
@@ -586,6 +604,7 @@ static std::shared_ptr<CommandUsage> sync_info(const std::weak_ptr<CommandUsage>
 static std::shared_ptr<CommandUsage> sync_set(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"set", "update", "modify", "edit"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Set or update synchronization settings for a specific vault.";
     cmd->positionals = {vaultPos};
     cmd->optional = {owner, intervalOpt};
@@ -619,6 +638,7 @@ static std::shared_ptr<CommandUsage> sync_set(const std::weak_ptr<CommandUsage>&
 static std::shared_ptr<CommandUsage> sync_reconcile(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"reconcile"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Refresh the remote S3 object index using an explicit ListObjectsV2 reconciliation pass.";
     cmd->positionals = {vaultPos};
     cmd->optional = {owner};
@@ -633,6 +653,7 @@ static std::shared_ptr<CommandUsage> sync_reconcile(const std::weak_ptr<CommandU
 static std::shared_ptr<CommandUsage> sync_dry_run(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"dry-run", "dryrun", "plan"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "Estimate S3 request and byte pressure for the next sync plan without executing file changes using the local remote index.";
     cmd->positionals = {vaultPos};
     cmd->optional = {owner};
@@ -651,6 +672,7 @@ static std::shared_ptr<CommandUsage> sync_dry_run(const std::weak_ptr<CommandUsa
 static std::shared_ptr<CommandUsage> sync_inventory(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"inventory", "import-inventory", "inventory-import"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Import a local S3 Inventory CSV into the remote object index without downloading object bodies.";
     cmd->positionals = {vaultPos};
     cmd->required = {inventoryFileOpt};
@@ -668,6 +690,7 @@ static std::shared_ptr<CommandUsage> sync_inventory(const std::weak_ptr<CommandU
 static std::shared_ptr<CommandUsage> sync_events(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"events", "ingest-events", "event"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Feed saved S3 Event Notifications JSON (or an SQS message dump) through the event pipeline: "
                        "stored in the durable inbox, applied to the remote object index, then synced by a pass scoped "
                        "to the affected keys.";

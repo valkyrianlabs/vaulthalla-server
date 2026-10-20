@@ -23,6 +23,7 @@ static const auto linuxGidOpt = Optional::ManyToOne("linux_group", "Linux GID fo
 static std::shared_ptr<CommandUsage> list(const std::weak_ptr<CommandUsage>& parent) {
     const auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"list", "ls"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "List all groups in the system.";
     cmd->optional_flags = { jsonFlag };
     cmd->optional = listQueryOptions();
@@ -33,6 +34,7 @@ static std::shared_ptr<CommandUsage> list(const std::weak_ptr<CommandUsage>& par
 static std::shared_ptr<CommandUsage> create(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"create", "new", "add", "mk"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Create a new group.";
     cmd->positionals = { namePos };
     cmd->optional = { descriptionOpt, linuxGidOpt };
@@ -46,6 +48,7 @@ static std::shared_ptr<CommandUsage> create(const std::weak_ptr<CommandUsage>& p
 static std::shared_ptr<CommandUsage> remove(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"delete", "remove", "del", "rm"};
+    cmd->effect = CommandEffect::Destructive;
     cmd->description = "Delete an existing group by name or ID.";
     cmd->positionals = { groupPos };
     cmd->examples = {
@@ -58,6 +61,7 @@ static std::shared_ptr<CommandUsage> remove(const std::weak_ptr<CommandUsage>& p
 static std::shared_ptr<CommandUsage> info(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"info", "show", "get"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "Display detailed information about a group.";
     cmd->positionals = { groupPos };
     cmd->examples = {
@@ -70,6 +74,7 @@ static std::shared_ptr<CommandUsage> info(const std::weak_ptr<CommandUsage>& par
 static std::shared_ptr<CommandUsage> update(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"update", "set", "mod", "modify"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Update properties of an existing group.";
     cmd->positionals = { groupPos };
     cmd->optional = { descriptionOpt, linuxGidOpt, nameOptional };
@@ -79,6 +84,7 @@ static std::shared_ptr<CommandUsage> update(const std::weak_ptr<CommandUsage>& p
 static std::shared_ptr<CommandUsage> user_list(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"list", "ls"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "List all users in a specific group.";
     cmd->pluralAliasImpliesList = true;
     cmd->positionals = { groupPos };
@@ -92,6 +98,7 @@ static std::shared_ptr<CommandUsage> user_list(const std::weak_ptr<CommandUsage>
 static std::shared_ptr<CommandUsage> user_add(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"add", "new", "mk"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Add a user to a specific group.";
     cmd->positionals = { groupPos, userPos };
     cmd->examples = {
@@ -104,6 +111,7 @@ static std::shared_ptr<CommandUsage> user_add(const std::weak_ptr<CommandUsage>&
 static std::shared_ptr<CommandUsage> user_remove(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"remove", "del", "rm"};
+    cmd->effect = CommandEffect::Destructive;
     cmd->description = "Remove a user from a specific group.";
     cmd->positionals = { groupPos, userPos };
     cmd->examples.push_back({"vh group user remove devs alice", "Remove user 'alice' from the 'devs' group."});

@@ -20,6 +20,7 @@ static std::shared_ptr<CommandUsage> base(const std::weak_ptr<CommandUsage>& par
     const auto cmd = std::make_shared<CommandUsage>();
     cmd->parent = parent;
     cmd->aliases = {"permission", "perm"};
+    cmd->effect = CommandEffect::Read;
     cmd->optional = { typeFilter };
     cmd->optional_flags = { userFlag, vaultFlag };
     cmd->description = "Display available permission flags for user and vault roles.";

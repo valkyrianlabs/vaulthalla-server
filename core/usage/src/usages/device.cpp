@@ -27,6 +27,7 @@ const auto codeOpt = Optional::ManyToOne("code", "The six-digit code the device 
 
 std::shared_ptr<CommandUsage> pair(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = build(parent);
+    cmd->effect = CommandEffect::Write;
     cmd->aliases = {"pair"};
     cmd->description = "Open a 10-minute pairing window for your account. Interactively, wait for a device and approve "
                        "it by the code it shows; otherwise approve with `vh device approve`.";
@@ -40,6 +41,7 @@ std::shared_ptr<CommandUsage> pair(const std::weak_ptr<CommandUsage>& parent) {
 
 std::shared_ptr<CommandUsage> pending(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = build(parent);
+    cmd->effect = CommandEffect::Read;
     cmd->aliases = {"pending", "requests"};
     cmd->description = "List the devices waiting in your pairing window, each with three codes to choose from.";
     cmd->optional_flags = {jsonFlag};
@@ -50,6 +52,7 @@ std::shared_ptr<CommandUsage> pending(const std::weak_ptr<CommandUsage>& parent)
 
 std::shared_ptr<CommandUsage> approve(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = build(parent);
+    cmd->effect = CommandEffect::Write;
     cmd->aliases = {"approve"};
     cmd->description = "Approve a pairing request with the code the device shows. Asks which of the three codes it "
                        "is; --code answers without asking. A wrong code denies the request.";
@@ -62,6 +65,7 @@ std::shared_ptr<CommandUsage> approve(const std::weak_ptr<CommandUsage>& parent)
 
 std::shared_ptr<CommandUsage> deny(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = build(parent);
+    cmd->effect = CommandEffect::Write;
     cmd->aliases = {"deny"};
     cmd->description = "Deny a pairing request; the device is told it was declined.";
     cmd->positionals = {requestPos};
@@ -71,6 +75,7 @@ std::shared_ptr<CommandUsage> deny(const std::weak_ptr<CommandUsage>& parent) {
 
 std::shared_ptr<CommandUsage> list(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = build(parent);
+    cmd->effect = CommandEffect::Read;
     cmd->aliases = {"list", "ls"};
     cmd->description = "List your paired devices (revoked ones included); --all lists every user's (super admins).";
     cmd->optional_flags = {Flag::WithAliases("all", "Every user's devices (super admins only)", {"all", "a"}), jsonFlag};
@@ -82,6 +87,7 @@ std::shared_ptr<CommandUsage> list(const std::weak_ptr<CommandUsage>& parent) {
 
 std::shared_ptr<CommandUsage> rename(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = build(parent);
+    cmd->effect = CommandEffect::Write;
     cmd->aliases = {"rename"};
     cmd->description = "Rename a device.";
     cmd->positionals = {devicePos, Positional::Alias("name", "The new name (1-64 characters)", "name",
@@ -92,6 +98,7 @@ std::shared_ptr<CommandUsage> rename(const std::weak_ptr<CommandUsage>& parent) 
 
 std::shared_ptr<CommandUsage> revoke(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = build(parent);
+    cmd->effect = CommandEffect::Destructive;
     cmd->aliases = {"revoke", "unpair"};
     cmd->description = "Unpair a device. Final: its open connections close now, and it has to pair again with a new "
                        "key.";
@@ -108,18 +115,21 @@ std::shared_ptr<CommandUsage> remote(const std::weak_ptr<CommandUsage>& parent) 
                        "listener then answers on loopback only.";
 
     auto status = build(cmd->weak_from_this());
+    status->effect = CommandEffect::Read;
     status->aliases = {"status"};
     status->description = "Show where the device listener listens and the server key's pin.";
     status->optional_flags = {jsonFlag};
     status->examples = {{"vh device remote status", "Loopback only or every interface, and whether it listens."}};
 
     auto enable = build(cmd->weak_from_this());
+    enable->effect = CommandEffect::Write;
     enable->aliases = {"enable", "on"};
     enable->description = "Let devices on other hosts connect: the listener rebinds to every interface now and stays "
                           "that way across restarts and upgrades.";
     enable->examples = {{"vh device remote enable", "Open the device listener (port 36972) to the network."}};
 
     auto disable = build(cmd->weak_from_this());
+    disable->effect = CommandEffect::Destructive;
     disable->aliases = {"disable", "off"};
     disable->description = "Back to loopback only; device sessions from other hosts close.";
     disable->examples = {{"vh device remote disable", "Close the device listener to the network."}};

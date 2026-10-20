@@ -14,6 +14,7 @@ std::shared_ptr<CommandUsage> build(const std::weak_ptr<CommandUsage>& parent) {
 std::shared_ptr<CommandUsage> status(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = build(parent);
     cmd->aliases = {"status"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "Show S3 gateway runtime status.";
     cmd->examples = {{"vh s3-gateway status", "Show endpoint, readiness, and request counters."}};
     return cmd;
@@ -22,6 +23,7 @@ std::shared_ptr<CommandUsage> status(const std::weak_ptr<CommandUsage>& parent) 
 std::shared_ptr<CommandUsage> enable(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = build(parent);
     cmd->aliases = {"enable"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Enable the S3 gateway in config and restart its runtime service.";
     cmd->examples = {{"vh s3-gateway enable", "Enable the gateway listener using the configured endpoint."}};
     return cmd;
@@ -30,6 +32,7 @@ std::shared_ptr<CommandUsage> enable(const std::weak_ptr<CommandUsage>& parent) 
 std::shared_ptr<CommandUsage> disable(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = build(parent);
     cmd->aliases = {"disable"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Disable the S3 gateway in config and restart its runtime service.";
     cmd->examples = {{"vh s3-gateway disable", "Disable the gateway listener without affecting bucket bindings."}};
     return cmd;
@@ -42,6 +45,7 @@ std::shared_ptr<CommandUsage> creds(const std::weak_ptr<CommandUsage>& parent) {
 
     auto create = build(cmd->weak_from_this());
     create->aliases = {"create", "new", "add"};
+    create->effect = CommandEffect::Write;
     create->positionals = {Positional::Alias("name", "Credential name", "name")};
     create->optional = {
         Optional::ManyToOne("user", "Principal user name or ID", {"user", "u"}, "user"),
@@ -71,12 +75,14 @@ std::shared_ptr<CommandUsage> creds(const std::weak_ptr<CommandUsage>& parent) {
 
     auto list = build(cmd->weak_from_this());
     list->aliases = {"list", "ls"};
+    list->effect = CommandEffect::Read;
     list->optional = {Optional::ManyToOne("user", "Filter by user name or ID", {"user", "u"}, "user")};
     list->optional_flags = {jsonFlag};
     list->examples = {{"vh s3-gateway creds list", "List gateway credentials visible to the caller."}};
 
     auto revoke = build(cmd->weak_from_this());
     revoke->aliases = {"revoke", "delete", "rm"};
+    revoke->effect = CommandEffect::Destructive;
     revoke->positionals = {Positional::Alias("access_key_or_name", "Access key ID or credential name", "access-key-or-name")};
     revoke->optional = {Optional::ManyToOne("user", "User name or ID when revoking by name", {"user", "u"}, "user")};
     revoke->examples = {{"vh s3-gateway creds revoke VH...", "Revoke a gateway credential."}};
@@ -88,11 +94,13 @@ std::shared_ptr<CommandUsage> creds(const std::weak_ptr<CommandUsage>& parent) {
 
     auto scopeShow = build(scope->weak_from_this());
     scopeShow->aliases = {"show"};
+    scopeShow->effect = CommandEffect::Read;
     scopeShow->optional_flags = {jsonFlag};
     scopeShow->examples = {{"vh s3-gateway creds scope backup show", "Show final credential policy for a credential."}};
 
     auto scopeSet = build(scope->weak_from_this());
     scopeSet->aliases = {"set"};
+    scopeSet->effect = CommandEffect::Write;
     scopeSet->optional = {
         Optional::ManyToOne("scope", "Scope: user-access, global, or vault-allowlist", {"scope"}, "scope"),
         Optional::ManyToOne("user", "Retarget principal user name or ID", {"user", "u"}, "user"),
@@ -114,6 +122,7 @@ std::shared_ptr<CommandUsage> creds(const std::weak_ptr<CommandUsage>& parent) {
 
     auto allowVault = build(scope->weak_from_this());
     allowVault->aliases = {"allow-vault"};
+    allowVault->effect = CommandEffect::Write;
     allowVault->positionals = {Positional::Alias("vault", "Vault ID or name to allow", "vault")};
     allowVault->optional_flags = {
         Flag::WithAliases("list", "Allow List operations", {"list"}),
@@ -129,6 +138,7 @@ std::shared_ptr<CommandUsage> creds(const std::weak_ptr<CommandUsage>& parent) {
 
     auto revokeVault = build(scope->weak_from_this());
     revokeVault->aliases = {"revoke-vault"};
+    revokeVault->effect = CommandEffect::Destructive;
     revokeVault->positionals = {Positional::Alias("vault", "Vault ID or name to revoke", "vault")};
     revokeVault->examples = {{"vh s3-gateway creds scope backup revoke-vault photos", "Remove one vault from the allowlist."}};
 
@@ -145,6 +155,7 @@ std::shared_ptr<CommandUsage> creds(const std::weak_ptr<CommandUsage>& parent) {
 
     auto roleList = build(role->weak_from_this());
     roleList->aliases = {"list", "ls"};
+    roleList->effect = CommandEffect::Read;
     roleList->description = "List a credential's per-vault role assignments.";
     roleList->positionals = {credentialPos};
     roleList->optional_flags = {jsonFlag};
@@ -152,6 +163,7 @@ std::shared_ptr<CommandUsage> creds(const std::weak_ptr<CommandUsage>& parent) {
 
     auto roleAssign = build(role->weak_from_this());
     roleAssign->aliases = {"assign"};
+    roleAssign->effect = CommandEffect::Write;
     roleAssign->description = "Assign a vault role to the credential on one vault.";
     roleAssign->positionals = {credentialPos};
     roleAssign->required = {roleVaultOpt, Option::Single("role", "Vault role name or ID", "role", "role")};
@@ -160,6 +172,7 @@ std::shared_ptr<CommandUsage> creds(const std::weak_ptr<CommandUsage>& parent) {
 
     auto roleRevoke = build(role->weak_from_this());
     roleRevoke->aliases = {"revoke"};
+    roleRevoke->effect = CommandEffect::Destructive;
     roleRevoke->description = "Remove the credential's role assignment on one vault.";
     roleRevoke->positionals = {credentialPos};
     roleRevoke->required = {roleVaultOpt};
@@ -171,6 +184,7 @@ std::shared_ptr<CommandUsage> creds(const std::weak_ptr<CommandUsage>& parent) {
 
     auto overrideList = build(roleOverride->weak_from_this());
     overrideList->aliases = {"list", "ls"};
+    overrideList->effect = CommandEffect::Read;
     overrideList->description = "List path overrides for the credential on one vault.";
     overrideList->positionals = {credentialPos};
     overrideList->required = {roleVaultOpt};
@@ -179,6 +193,7 @@ std::shared_ptr<CommandUsage> creds(const std::weak_ptr<CommandUsage>& parent) {
 
     auto overrideAdd = build(roleOverride->weak_from_this());
     overrideAdd->aliases = {"add"};
+    overrideAdd->effect = CommandEffect::Write;
     overrideAdd->description = "Add a path override (allow or deny one permission under a glob).";
     overrideAdd->positionals = {credentialPos};
     overrideAdd->required = {
@@ -197,6 +212,7 @@ std::shared_ptr<CommandUsage> creds(const std::weak_ptr<CommandUsage>& parent) {
 
     auto overrideRemove = build(roleOverride->weak_from_this());
     overrideRemove->aliases = {"remove", "rm"};
+    overrideRemove->effect = CommandEffect::Destructive;
     overrideRemove->description = "Remove a path override by ID.";
     overrideRemove->positionals = {credentialPos};
     overrideRemove->required = {roleVaultOpt};
@@ -217,11 +233,13 @@ std::shared_ptr<CommandUsage> bucket(const std::weak_ptr<CommandUsage>& parent) 
 
     auto list = build(cmd->weak_from_this());
     list->aliases = {"list", "ls"};
+    list->effect = CommandEffect::Read;
     list->optional_flags = {jsonFlag};
     list->examples = {{"vh s3-gateway bucket list", "List bound gateway buckets."}};
 
     auto bind = build(cmd->weak_from_this());
     bind->aliases = {"bind"};
+    bind->effect = CommandEffect::Write;
     bind->positionals = {Positional::Alias("bucket", "Gateway bucket name", "bucket")};
     bind->required = {Option::Single("vault", "Vault ID or name to expose", "vault", "vault")};
     bind->optional = {
@@ -233,11 +251,13 @@ std::shared_ptr<CommandUsage> bucket(const std::weak_ptr<CommandUsage>& parent) 
 
     auto unbind = build(cmd->weak_from_this());
     unbind->aliases = {"unbind"};
+    unbind->effect = CommandEffect::Destructive;
     unbind->positionals = {Positional::Alias("bucket", "Gateway bucket name", "bucket")};
     unbind->examples = {{"vh s3-gateway bucket unbind photos", "Remove a gateway bucket binding."}};
 
     auto createLocal = build(cmd->weak_from_this());
     createLocal->aliases = {"create-local"};
+    createLocal->effect = CommandEffect::Write;
     createLocal->positionals = {Positional::Alias("bucket", "Gateway bucket name", "bucket")};
     createLocal->optional = {
         Optional::ManyToOne("owner", "Owner name or ID", {"owner"}, "user"),
@@ -247,6 +267,7 @@ std::shared_ptr<CommandUsage> bucket(const std::weak_ptr<CommandUsage>& parent) 
 
     auto createRemoteCache = build(cmd->weak_from_this());
     createRemoteCache->aliases = {"create-remote-cache"};
+    createRemoteCache->effect = CommandEffect::Write;
     createRemoteCache->positionals = {Positional::Alias("bucket", "Gateway bucket name", "bucket")};
     createRemoteCache->required = {
         Option::Single("api_key", "Existing upstream S3/R2 API key name or ID", "api-key", "api-key"),
@@ -269,6 +290,7 @@ std::shared_ptr<CommandUsage> bucket(const std::weak_ptr<CommandUsage>& parent) 
 
     auto backfill = build(cmd->weak_from_this());
     backfill->aliases = {"backfill"};
+    backfill->effect = CommandEffect::Write;
     backfill->positionals = {Positional::Alias("bucket", "Gateway bucket name", "bucket")};
     backfill->optional_flags = {
         Flag::WithAliases("calculate_etags", "Read local object bodies to calculate plaintext MD5 ETags", {"calculate-etags"})
@@ -288,6 +310,7 @@ std::shared_ptr<CommandUsage> budget(const std::weak_ptr<CommandUsage>& parent) 
 
     auto setKey = build(cmd->weak_from_this());
     setKey->aliases = {"set-key"};
+    setKey->effect = CommandEffect::Write;
     setKey->positionals = {Positional::Alias("access_key_or_name", "Access key ID or credential name", "access-key-or-name")};
     setKey->required = {Option::Single("monthly", "Monthly cost cap", "monthly", "amount")};
     setKey->optional = {
@@ -302,6 +325,7 @@ std::shared_ptr<CommandUsage> budget(const std::weak_ptr<CommandUsage>& parent) 
 
     auto setKeyVault = build(cmd->weak_from_this());
     setKeyVault->aliases = {"set-key-vault"};
+    setKeyVault->effect = CommandEffect::Write;
     setKeyVault->positionals = {Positional::Alias("access_key_or_name", "Access key ID or credential name", "access-key-or-name")};
     setKeyVault->required = {
         Option::Single("vault", "Vault ID or name", "vault", "vault"),
@@ -322,6 +346,7 @@ std::shared_ptr<CommandUsage> budget(const std::weak_ptr<CommandUsage>& parent) 
 
     auto list = build(cmd->weak_from_this());
     list->aliases = {"list", "ls"};
+    list->effect = CommandEffect::Read;
     list->optional = {
         Optional::ManyToOne("key", "Access key ID or credential name", {"key"}, "access-key-or-name"),
         Optional::ManyToOne("vault", "Vault ID or name", {"vault"}, "vault")
@@ -331,17 +356,20 @@ std::shared_ptr<CommandUsage> budget(const std::weak_ptr<CommandUsage>& parent) 
 
     auto disableKey = build(cmd->weak_from_this());
     disableKey->aliases = {"disable-key"};
+    disableKey->effect = CommandEffect::Write;
     disableKey->positionals = {Positional::Alias("access_key_or_name", "Access key ID or credential name", "access-key-or-name")};
     disableKey->examples = {{"vh s3-gateway budget disable-key backup", "Disable the admin-managed per-key budget policy."}};
 
     auto disableKeyVault = build(cmd->weak_from_this());
     disableKeyVault->aliases = {"disable-key-vault"};
+    disableKeyVault->effect = CommandEffect::Write;
     disableKeyVault->positionals = {Positional::Alias("access_key_or_name", "Access key ID or credential name", "access-key-or-name")};
     disableKeyVault->required = {Option::Single("vault", "Vault ID or name", "vault", "vault")};
     disableKeyVault->examples = {{"vh s3-gateway budget disable-key-vault backup --vault photos", "Disable the key/vault budget policy."}};
 
     auto ledger = build(cmd->weak_from_this());
     ledger->aliases = {"ledger"};
+    ledger->effect = CommandEffect::Read;
     ledger->optional = {
         Optional::ManyToOne("key", "Access key ID or credential name", {"key"}, "access-key-or-name"),
         Optional::ManyToOne("vault", "Vault ID or name", {"vault"}, "vault"),
@@ -352,6 +380,7 @@ std::shared_ptr<CommandUsage> budget(const std::weak_ptr<CommandUsage>& parent) 
 
     auto status = build(cmd->weak_from_this());
     status->aliases = {"status"};
+    status->effect = CommandEffect::Read;
     status->optional = {
         Optional::ManyToOne("key", "Access key ID or credential name", {"key"}, "access-key-or-name"),
         Optional::ManyToOne("vault", "Vault ID or name", {"vault"}, "vault"),

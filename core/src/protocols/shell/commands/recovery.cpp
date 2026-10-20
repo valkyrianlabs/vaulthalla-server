@@ -246,9 +246,11 @@ CommandResult rcRunPlan(const CommandCall& call, const model::Plan& plan, const 
 
     const bool destructive = plan.overwrites + plan.removals > 0;
     if (!hasFlag(call, "yes")) {
-        if (!call.io)
+        if (!call.io) {
+            noteConfirmationNeeded(rec::RESTORE_CONFIRM, {"--yes"});
             return invalid(preview + prefix + ": not confirmed; nothing was restored. Re-run with --yes, or run " +
                            rcRestoreHint(plan));
+        }
         call.io->print(formatPlan(plan));
         if (destructive) {
             const auto what = std::to_string(plan.overwrites) + " file(s) will be overwritten and " +
@@ -271,7 +273,10 @@ CommandResult rcRunPlan(const CommandCall& call, const model::Plan& plan, const 
                 return out;
             } catch (const ops::NeedsConfirmation& e) {
                 if (e.code == rec::UNVERIFIED_VERSION && !req.accept_unverified) {
-                    if (!call.io) return invalid(prefix + ": " + e.what() + "\nRe-run with --accept-unverified.");
+                    if (!call.io) {
+                        noteConfirmationNeeded(e.code, {"--accept-unverified"});
+                        return invalid(prefix + ": " + e.what() + "\nRe-run with --accept-unverified.");
+                    }
                     if (call.io->prompt(std::string(e.what()) + "\nType UNVERIFIED to restore them anyway", "no") !=
                         "UNVERIFIED")
                         return invalid(prefix + ": not confirmed; nothing was restored");
@@ -380,7 +385,10 @@ CommandResult rcRestore(const CommandCall& call) {
         req.destination = optVal(call, "to");
         return rcRunPlan(call, rec::plan(call.user, req), json);
     } catch (const ops::NeedsConfirmation& e) {
-        if (e.code == rec::UNVERIFIED_VERSION) return invalid(prefix + ": " + e.what() + "\nRe-run with --accept-unverified.");
+        if (e.code == rec::UNVERIFIED_VERSION) {
+            noteConfirmationNeeded(e.code, {"--accept-unverified"});
+            return invalid(prefix + ": " + e.what() + "\nRe-run with --accept-unverified.");
+        }
         return invalid(prefix + ": " + e.what());
     } catch (const ops::Error& e) {
         return invalid(prefix + ": " + e.what());
@@ -717,7 +725,10 @@ CommandResult runConfirmedText(const CommandCall& call, const std::string& prefi
                 return ok(op(confirmed));
             } catch (const ops::NeedsConfirmation& e) {
                 if (e.code != code || confirmed) throw;
-                if (!call.io) return invalid(prefix + ": " + e.what() + "\nRe-run with --yes to confirm.");
+                if (!call.io) {
+                    noteConfirmationNeeded(e.code, {"--yes"});
+                    return invalid(prefix + ": " + e.what() + "\nRe-run with --yes to confirm.");
+                }
                 if (call.io->prompt(std::string(e.what()) + "\nType " + word + " to continue", "no") != word)
                     return invalid(prefix + ": not confirmed; nothing was changed");
                 confirmed = true;

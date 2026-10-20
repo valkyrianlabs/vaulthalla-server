@@ -26,6 +26,7 @@ static const auto limitOpt = Optional::ManyToOne("limit", "Limit ledger rows", {
 static std::shared_ptr<CommandUsage> budgetList(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = baseUsage(parent);
     cmd->aliases = {"list", "ls"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "List S3 price budget policies.";
     cmd->examples = {{"vh pricing budget list", "List configured S3 price budget policies."}};
     return cmd;
@@ -34,6 +35,7 @@ static std::shared_ptr<CommandUsage> budgetList(const std::weak_ptr<CommandUsage
 static std::shared_ptr<CommandUsage> budgetSetGlobal(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = baseUsage(parent);
     cmd->aliases = {"set-global"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Set the global S3 price budget policy.";
     cmd->optional = {modeOpt, currencyOpt, maxRunOpt, maxDailyOpt, maxMonthlyOpt, maxCatalogAgeOpt};
     cmd->optional_flags = {allowStaleFlag, noRequireVerifiedFlag};
@@ -44,6 +46,7 @@ static std::shared_ptr<CommandUsage> budgetSetGlobal(const std::weak_ptr<Command
 static std::shared_ptr<CommandUsage> budgetSetProvider(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = baseUsage(parent);
     cmd->aliases = {"set-provider"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Set a provider-scoped S3 price budget policy.";
     cmd->positionals = {providerPos};
     cmd->optional = {modeOpt, currencyOpt, maxRunOpt, maxDailyOpt, maxMonthlyOpt, maxCatalogAgeOpt};
@@ -55,6 +58,7 @@ static std::shared_ptr<CommandUsage> budgetSetProvider(const std::weak_ptr<Comma
 static std::shared_ptr<CommandUsage> budgetSetVault(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = baseUsage(parent);
     cmd->aliases = {"set-vault"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Set a vault-scoped S3 price budget policy.";
     cmd->positionals = {vaultPos};
     cmd->optional = {modeOpt, currencyOpt, maxRunOpt, maxDailyOpt, maxMonthlyOpt, maxCatalogAgeOpt};
@@ -66,6 +70,7 @@ static std::shared_ptr<CommandUsage> budgetSetVault(const std::weak_ptr<CommandU
 static std::shared_ptr<CommandUsage> budgetDisableGlobal(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = baseUsage(parent);
     cmd->aliases = {"disable-global"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Disable the global S3 price budget policy.";
     return cmd;
 }
@@ -73,6 +78,7 @@ static std::shared_ptr<CommandUsage> budgetDisableGlobal(const std::weak_ptr<Com
 static std::shared_ptr<CommandUsage> budgetDisableProvider(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = baseUsage(parent);
     cmd->aliases = {"disable-provider"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Disable a provider-scoped S3 price budget policy.";
     cmd->positionals = {providerPos};
     return cmd;
@@ -81,6 +87,7 @@ static std::shared_ptr<CommandUsage> budgetDisableProvider(const std::weak_ptr<C
 static std::shared_ptr<CommandUsage> budgetDisableVault(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = baseUsage(parent);
     cmd->aliases = {"disable-vault"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Disable a vault-scoped S3 price budget policy.";
     cmd->positionals = {vaultPos};
     return cmd;
@@ -89,6 +96,7 @@ static std::shared_ptr<CommandUsage> budgetDisableVault(const std::weak_ptr<Comm
 static std::shared_ptr<CommandUsage> budgetStatus(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = baseUsage(parent);
     cmd->aliases = {"status"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "Show S3 price budget policy and ledger status.";
     return cmd;
 }
@@ -96,6 +104,7 @@ static std::shared_ptr<CommandUsage> budgetStatus(const std::weak_ptr<CommandUsa
 static std::shared_ptr<CommandUsage> budgetLedger(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = baseUsage(parent);
     cmd->aliases = {"ledger"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "List recent S3 price budget ledger rows.";
     cmd->optional = {limitOpt};
     cmd->examples = {{"vh pricing budget ledger --limit 50", "Show the 50 most recent budget ledger rows."}};

@@ -41,6 +41,7 @@ static const auto caddyStatusFlag = Flag::WithAliases("status", "Show the config
 static std::shared_ptr<CommandUsage> caddy(const std::weak_ptr<CommandUsage>& parent) {
     const auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"caddy", "https"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "macOS: serve Vaulthalla over HTTPS through Caddy (the console, WebSockets, uploads and downloads, "
                        "and optionally the S3 gateway), with certificates handled automatically: Vaulthalla's own CA for "
                        "internal names, Let's Encrypt for public ones, Cloudflare DNS when the host isn't reachable from the "
@@ -63,6 +64,7 @@ static std::shared_ptr<CommandUsage> caddy(const std::weak_ptr<CommandUsage>& pa
 static std::shared_ptr<CommandUsage> db(const std::weak_ptr<CommandUsage>& parent) {
     const auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"db", "database", "postgres"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Bootstrap Vaulthalla local PostgreSQL integration (role/database) and hand off schema/migrations to normal runtime startup. Requires sudo.";
     cmd->examples = {
         {"sudo vh setup db", "Create/reuse local PostgreSQL role/database, seed runtime DB password handoff when needed, and restart/start runtime service."}
@@ -73,6 +75,7 @@ static std::shared_ptr<CommandUsage> db(const std::weak_ptr<CommandUsage>& paren
 static std::shared_ptr<CommandUsage> remote_db(const std::weak_ptr<CommandUsage>& parent) {
     const auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"remote-db", "remote_db", "remote", "rdb"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Configure Vaulthalla to use a remote PostgreSQL database. Requires sudo.";
     cmd->required = {dbHostReq, dbUserReq, dbNameReq, dbPassFileReq};
     cmd->optional = {dbPortOpt, dbPoolSizeOpt};
@@ -87,6 +90,7 @@ static std::shared_ptr<CommandUsage> remote_db(const std::weak_ptr<CommandUsage>
 static std::shared_ptr<CommandUsage> nginx(const std::weak_ptr<CommandUsage>& parent) {
     const auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"nginx", "proxy"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Generate/deploy Vaulthalla-managed nginx config from canonical runtime config, then validate and reload conservatively. Requires sudo. "
                        "TLS: --certbot issues a certificate for --domain over HTTP-01. --s3-domain needs --certbot-dns-cloudflare <credentials> instead, "
                        "which issues one certificate for both hostnames over Cloudflare DNS-01. Create the credentials file once with "
@@ -107,6 +111,7 @@ static std::shared_ptr<CommandUsage> nginx(const std::weak_ptr<CommandUsage>& pa
 static std::shared_ptr<CommandUsage> assign_admin(const std::weak_ptr<CommandUsage>& parent) {
     const auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"assign-admin", "assign_admin", "claim-admin"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Explicitly claim or verify initial CLI super-admin ownership for the current operator.";
     cmd->examples = {
         {"vh setup assign-admin", "Run the explicit admin-claim onboarding step and report whether ownership was newly bound or already configured."}
@@ -117,6 +122,7 @@ static std::shared_ptr<CommandUsage> assign_admin(const std::weak_ptr<CommandUsa
 static std::shared_ptr<CommandUsage> set_super_admin_password(const std::weak_ptr<CommandUsage>& parent) {
     const auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"set-super-admin-password", "super-admin-password"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Change the web console password of the built-in super-admin account ('admin'). Asks for the new "
                        "password. Only the Linux user bound as the Vaulthalla super admin (see 'vh setup assign-admin') may "
                        "run it; do not use sudo. Ends the account's web sessions and removes the initial password file "

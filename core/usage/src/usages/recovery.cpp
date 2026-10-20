@@ -37,6 +37,7 @@ namespace {
 std::shared_ptr<CommandUsage> snapshotCreate(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = rbNode(parent);
     cmd->aliases = {"create", "new", "take"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Take a named local snapshot of a file or directory tree. Needs the vault's recovery mode "
                        "local-snapshots; counts against the snapshot quota and the vault quota (deduplicated bytes).";
     cmd->positionals = {rbVaultPos, rbPathPos};
@@ -52,6 +53,7 @@ std::shared_ptr<CommandUsage> snapshotCreate(const std::weak_ptr<CommandUsage>& 
 std::shared_ptr<CommandUsage> snapshotList(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = rbNode(parent);
     cmd->aliases = {"list", "ls"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "List a vault's snapshots, or those taken of a path (the path is optional).";
     cmd->positionals = {rbVaultPos, rbPathPos};
     cmd->optional = {rbOwner};
@@ -64,6 +66,7 @@ std::shared_ptr<CommandUsage> snapshotList(const std::weak_ptr<CommandUsage>& pa
 std::shared_ptr<CommandUsage> snapshotDelete(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = rbNode(parent);
     cmd->aliases = {"delete", "remove", "rm"};
+    cmd->effect = CommandEffect::Destructive;
     cmd->description = "Delete a snapshot (filesystem Delete on its path). Asks for confirmation. Generations a local "
                        "version or another snapshot still uses are kept.";
     cmd->positionals = {Positional::WithAliases("snapshot_id", "Snapshot id (snap-<id>)", {"snapshot-id", "id"},
@@ -102,6 +105,7 @@ namespace {
 std::shared_ptr<CommandUsage> recoveryList(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = rbNode(parent);
     cmd->aliases = {"list", "ls", "history"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "Recovery points of a vault, or of one path (a file's history, or the points under a "
                        "directory): snapshots, local versions and provider versions. Points you can't read are left "
                        "out.";
@@ -123,6 +127,7 @@ std::shared_ptr<CommandUsage> recoveryList(const std::weak_ptr<CommandUsage>& pa
 std::shared_ptr<CommandUsage> recoveryInspect(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = rbNode(parent);
     cmd->aliases = {"inspect", "info", "show"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "Details of one recovery point: what it holds, its key version, retention and whether it can "
                        "be restored (and why not). A snapshot lists its members.";
     cmd->positionals = {rbRecoveryIdPos};
@@ -135,6 +140,7 @@ std::shared_ptr<CommandUsage> recoveryInspect(const std::weak_ptr<CommandUsage>&
 std::shared_ptr<CommandUsage> recoveryPlan(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = rbNode(parent);
     cmd->aliases = {"plan", "preview"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "Plan a restore without changing anything: per item create, overwrite, skip, conflict, remove "
                        "or unavailable, the method, a request/cost estimate, warnings and blockers. Give a recovery id, "
                        "or a vault, a path and --at for a point-in-time restore (a timestamp-based reconstruction, not "
@@ -159,6 +165,7 @@ std::shared_ptr<CommandUsage> recoveryPlan(const std::weak_ptr<CommandUsage>& pa
 std::shared_ptr<CommandUsage> recoveryRestore(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = rbNode(parent);
     cmd->aliases = {"restore", "apply"};
+    cmd->effect = CommandEffect::Destructive;
     cmd->description = "Run a restore plan, or plan and run one for a recovery id. Shows the plan and asks first (type "
                        "RESTORE when anything is overwritten or removed); without a terminal it needs --yes or the "
                        "plan's --token. Every item is authorized again; a destination that changed since the plan is "
@@ -182,6 +189,7 @@ std::shared_ptr<CommandUsage> recoveryRestore(const std::weak_ptr<CommandUsage>&
 std::shared_ptr<CommandUsage> recoveryDelete(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = rbNode(parent);
     cmd->aliases = {"delete", "remove", "rm"};
+    cmd->effect = CommandEffect::Destructive;
     cmd->description = "Delete a snapshot or a local version (filesystem Delete on its path). Provider versions belong "
                        "to the bucket's retention. A version still waiting to be sent upstream can't be deleted.";
     cmd->positionals = {rbRecoveryIdPos};
@@ -193,6 +201,7 @@ std::shared_ptr<CommandUsage> recoveryDelete(const std::weak_ptr<CommandUsage>& 
 std::shared_ptr<CommandUsage> recoveryCosts(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = rbNode(parent);
     cmd->aliases = {"costs", "cost"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "Estimated recovery costs for a vault: the provider versioning surcharge (separate from the "
                        "current object storage), recovery operations and what is not modelled, with ranges, basis and "
                        "catalog freshness. Computed on this host; estimates, not provider invoices.";
@@ -237,6 +246,7 @@ const auto rbRetention = Optional::Single("retention", "How long provider versio
 std::shared_ptr<CommandUsage> vaultRecoveryStatus(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = rbNode(parent);
     cmd->aliases = {"status", "info", "show"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "A vault's recovery mode, local versioning, snapshot and version storage, the upstream backlog "
                        "and the bucket's versioning state.";
     cmd->positionals = {rbVaultPos};
@@ -253,6 +263,7 @@ std::shared_ptr<CommandUsage> vaultRecoveryStatus(const std::weak_ptr<CommandUsa
 std::shared_ptr<CommandUsage> vaultRecoverySet(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = rbNode(parent);
     cmd->aliases = {"set", "update"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Change a vault's recovery settings. Turning on provider versioning first shows the cost "
                        "disclosure and asks you to type ENABLE VERSIONING (and to accept separately when the cost "
                        "can't be estimated). Without a terminal it needs --yes, plus --accept-unpriced when unpriced. "
@@ -300,6 +311,7 @@ std::shared_ptr<CommandUsage> vaultRecoverySet(const std::weak_ptr<CommandUsage>
 std::shared_ptr<CommandUsage> vaultRecoverySuspend(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = rbNode(parent);
     cmd->aliases = {"suspend"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Suspend versioning on the vault's bucket. Existing versions are kept and nothing is deleted; "
                        "a bucket can never return to unversioned. Asks for confirmation.";
     cmd->positionals = {rbVaultPos};
@@ -312,6 +324,7 @@ std::shared_ptr<CommandUsage> vaultRecoverySuspend(const std::weak_ptr<CommandUs
 std::shared_ptr<CommandUsage> vaultRecoveryDisclosure(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = rbNode(parent);
     cmd->aliases = {"disclosure", "estimate"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "Show the cost disclosure for turning on provider versioning (read-only: at most one admin "
                        "call, no object requests).";
     cmd->positionals = {rbVaultPos};

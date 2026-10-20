@@ -320,6 +320,11 @@ void Server::handleClient(const int cfd) {
             };
             if (!res.stdout_text.empty()) reply["stdout"] = res.stdout_text;
             if (!res.stderr_text.empty()) reply["stderr"] = res.stderr_text;
+            if (res.confirmation) {
+                reply["confirmation"] = {{"flags", res.confirmation->flags}};
+                if (!res.confirmation->code.empty()) reply["confirmation"]["code"] = res.confirmation->code;
+                if (!res.confirmation->flags.empty()) reply["confirmation"]["flag"] = res.confirmation->flags.front();
+            }
 
             (void)SocketIO::send_json(cfd, reply);
         } catch (const std::exception& e) {

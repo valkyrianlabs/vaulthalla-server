@@ -28,6 +28,9 @@ namespace status { std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandU
 namespace help { std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent); }
 namespace version { std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent); }
 namespace fs_book { std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent); }
+// `vh mcp`, `vh skill`: run in the vh client (usages/agents.cpp).
+namespace mcp_book { std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent); }
+namespace skill_book { std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent); }
 namespace upstream_book { std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent); }
 namespace device_book { std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent); }
 // File recovery: `vh recovery …` (get), `vh snapshot …` (getSnapshot) and the `vh vault recovery …` subtree.

@@ -45,7 +45,10 @@ struct VrRefusal {
 void vrAcknowledge(const CommandCall& call, bool& accepted, const std::string& why, const char* word,
                    const std::string& flagHint) {
     if (accepted) return;
-    if (!call.io) throw VrRefusal{why + "\nRe-run with " + flagHint + "."};
+    if (!call.io) {
+        noteConfirmationNeeded({}, {flagHint});
+        throw VrRefusal{why + "\nRe-run with " + flagHint + "."};
+    }
     if (call.io->prompt(why + "\nType " + word + " to continue", "no") != word)
         throw VrRefusal{"not confirmed; nothing was changed"};
     accepted = true;
@@ -61,10 +64,14 @@ std::string vrDisclose(const CommandCall& call, const uint32_t vaultId, vrrec::U
 
     try {
         bool enable = hasFlag(call, "yes");
-        if (!enable && !interactive)
+        if (!enable && !interactive) {
+            noteConfirmationNeeded(vrrec::VERSIONING_DISCLOSURE,
+                                   disclosure.report.priced ? std::vector<std::string>{"--yes"}
+                                                            : std::vector<std::string>{"--yes", "--accept-unpriced"});
             throw VrRefusal{"Turning on provider versioning needs your acknowledgement of the disclosure above. "
                                    "Re-run in a terminal, or with --yes" +
                             std::string(disclosure.report.priced ? "" : " --accept-unpriced") + "."};
+        }
         vrAcknowledge(call, enable, "Provider versioning keeps every overwritten and deleted version in the bucket and "
                                     "bills for it until retention removes it.", kVrEnableWord, "--yes");
 
