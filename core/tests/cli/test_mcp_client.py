@@ -49,7 +49,8 @@ def recv(conn: socket.socket) -> dict | None:
 
 
 class FakeDaemon:
-    """Answers every connection with `answer(request) -> result frame fields` and records the requests."""
+    """Answers every connection, each on its own thread, with `answer(request)`: the result frame's fields, or
+    {"stall": seconds} to send nothing for that long (recording whether the client hung up meanwhile)."""
 
     def __init__(self, tmp: Path, answer):
         self.path = str(tmp / "cli.sock")
@@ -59,8 +60,10 @@ class FakeDaemon:
         self.sock.settimeout(0.2)
         self.answer = answer
         self.requests: list[dict] = []
+        self.hung_up: list[str] = []  # lines whose client closed the connection while the daemon stalled
         self.error: BaseException | None = None
         self.stopping = False
+        self.threads: list[threading.Thread] = []
         self.thread = threading.Thread(target=self._serve, daemon=True)
         self.thread.start()
 
@@ -70,64 +73,112 @@ class FakeDaemon:
                 conn, _ = self.sock.accept()
             except socket.timeout:
                 continue
-            try:
-                with conn:
-                    conn.settimeout(20)
-                    send(conn, {"type": "hello", "version": "test"})
-                    req = recv(conn)
-                    self.requests.append(req)
-                    send(conn, {"type": "result", **self.answer(req)})
-            except BaseException as e:  # surfaced by the test
-                self.error = e
+            t = threading.Thread(target=self._one, args=(conn,), daemon=True)
+            t.start()
+            self.threads.append(t)
+
+    def _one(self, conn: socket.socket) -> None:
+        try:
+            with conn:
+                conn.settimeout(20)
+                send(conn, {"type": "hello", "version": "test"})
+                req = recv(conn)
+                self.requests.append(req)
+                reply = self.answer(req)
+                if "stall" in reply:
+                    conn.settimeout(reply["stall"])
+                    try:
+                        if conn.recv(1) == b"":
+                            self.hung_up.append(req["line"])
+                    except (socket.timeout, OSError):
+                        pass
+                    return
+                send(conn, {"type": "result", **reply})
+        except BaseException as e:  # surfaced by the test
+            self.error = e
 
     def stop(self) -> None:
         self.stopping = True
         self.thread.join(5)
+        for t in self.threads:
+            t.join(15)
         self.sock.close()
 
 
 class McpSession:
-    """One `vh mcp` process; call() sends a request and returns its response."""
+    """One `vh mcp` process. Responses can arrive out of order, so a reader thread files them by id."""
 
-    def __init__(self, sock: str):
-        env = dict(os.environ, VAULTHALLA_CLI_SOCKET=sock, VAULTHALLA_CLI_TIMEOUT="5")
+    def __init__(self, sock: str, extra_env: dict | None = None):
+        env = dict(os.environ, VAULTHALLA_CLI_SOCKET=sock, VAULTHALLA_CLI_TIMEOUT="5", **(extra_env or {}))
         self.proc = subprocess.Popen([VH, "mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                      env=env, text=True, bufsize=1)
         self.next_id = 0
+        self.responses: dict = {}
+        self.unexpected: list[str] = []
+        self.cv = threading.Condition()
+        self.reader = threading.Thread(target=self._read, daemon=True)
+        self.reader.start()
 
-    def raw(self, line: str) -> dict:
-        assert self.proc.stdin and self.proc.stdout
-        self.proc.stdin.write(line + "\n")
+    def _read(self) -> None:
+        assert self.proc.stdout
+        for line in self.proc.stdout:
+            msg = json.loads(line)  # anything else on stdout fails the test here
+            with self.cv:
+                if "id" in msg:
+                    self.responses[json.dumps(msg["id"])] = msg
+                else:
+                    self.unexpected.append(line)
+                self.cv.notify_all()
+
+    def send(self, msg: dict) -> None:
+        assert self.proc.stdin
+        self.proc.stdin.write(json.dumps(msg) + "\n")
         self.proc.stdin.flush()
-        out = self.proc.stdout.readline()
-        return json.loads(out)
 
-    def call(self, method: str, params: dict | None = None) -> dict:
+    def wait(self, id_, timeout: float = 30) -> dict | None:
+        key = json.dumps(id_)
+        with self.cv:
+            self.cv.wait_for(lambda: key in self.responses, timeout)
+            return self.responses.pop(key, None)
+
+    def start(self, method: str, params: dict | None = None):
         self.next_id += 1
         msg = {"jsonrpc": "2.0", "id": self.next_id, "method": method}
         if params is not None:
             msg["params"] = params
-        resp = self.raw(json.dumps(msg))
-        assert resp.get("id") == self.next_id, resp
+        self.send(msg)
+        return self.next_id
+
+    def call(self, method: str, params: dict | None = None) -> dict:
+        id_ = self.start(method, params)
+        resp = self.wait(id_)
+        assert resp is not None, f"no response to {method}"
         return resp
 
-    def notify(self, method: str) -> None:
+    def raw(self, line: str) -> dict:
         assert self.proc.stdin
-        self.proc.stdin.write(json.dumps({"jsonrpc": "2.0", "method": method}) + "\n")
+        self.proc.stdin.write(line + "\n")
         self.proc.stdin.flush()
+        resp = self.wait(None)
+        assert resp is not None
+        return resp
+
+    def notify(self, method: str, params: dict | None = None) -> None:
+        msg = {"jsonrpc": "2.0", "method": method}
+        if params is not None:
+            msg["params"] = params
+        self.send(msg)
 
     def tool(self, name: str, arguments: dict) -> dict:
-        resp = self.call("tools/call", {"name": name, "arguments": arguments})
-        self.last_tool = resp
-        return resp["result"]
+        return self.call("tools/call", {"name": name, "arguments": arguments})["result"]
 
     def close(self) -> tuple[str, str]:
         assert self.proc.stdin
         self.proc.stdin.close()
-        rest = self.proc.stdout.read() if self.proc.stdout else ""
+        self.proc.wait(30)
+        self.reader.join(5)
         err = self.proc.stderr.read() if self.proc.stderr else ""
-        self.proc.wait(10)
-        return rest, err
+        return "".join(self.unexpected), err
 
 
 def text_of(result: dict) -> str:
@@ -149,7 +200,7 @@ class McpServer(unittest.TestCase):
         rest, err = self.mcp.close()
         self.daemon.stop()
         self.assertIsNone(self.daemon.error)
-        self.assertEqual(rest, "", "stdout carries only responses to requests")
+        self.assertEqual(rest, "", "stdout carries only JSON-RPC responses to requests")
         self.assertEqual(self.mcp.proc.returncode, 0, err)
         for p in sorted(self.tmp.rglob("*"), reverse=True):
             p.unlink() if not p.is_dir() else p.rmdir()
@@ -207,23 +258,69 @@ class McpServer(unittest.TestCase):
         self.assertIn("exit 2", text_of(result))
         self.assertIn("named 'x' exists", text_of(result))
 
-    def test_confirmation_refusal_needs_the_human_then_confirm(self) -> None:
+    def test_destructive_then_command_confirmation_both_need_the_human(self) -> None:
         self.initialize()
-        self.answers.append({"ok": False, "exit_code": 2,
-                             "stderr": "user delete: bob owns 2 vaults; they are destroyed.\nRe-run with --yes to confirm."})
+        # 1. The MCP layer's own gate: nothing reaches the daemon without the acknowledgement.
         result = self.mcp.tool("users_delete", {"user": "bob"})
         self.assertTrue(result["isError"])
-        self.assertEqual(result["structuredContent"]["needs_confirmation"], "yes")
+        self.assertEqual(result["structuredContent"]["needs_confirmation"], "destructive")
         self.assertIn("explicitly approve", result["structuredContent"]["how_to_confirm"])
+        self.assertEqual(self.daemon.requests, [])
+
+        # 2. The command's own confirmation, from the result frame's structured signal (the text names no flag).
+        self.answers.append({"ok": False, "exit_code": 2, "stderr": "user delete: bob owns 2 vaults; they are destroyed.",
+                             "confirmation": {"code": "user_delete", "flag": "--yes", "flags": ["--yes"]}})
+        result = self.mcp.tool("users_delete", {"user": "bob", "confirm": {"destructive": True}})
+        self.assertTrue(result["isError"])
+        self.assertEqual(result["structuredContent"]["needs_confirmation"], "yes")
+        self.assertEqual(result["structuredContent"]["code"], "user_delete")
         self.assertEqual(self.daemon.requests[0]["line"], "user delete bob", "never --yes on its own")
 
-        result = self.mcp.tool("users_delete", {"user": "bob", "confirm": {"yes": True}})
+        # 3. Both given: the flag goes to the daemon.
+        result = self.mcp.tool("users_delete", {"user": "bob", "confirm": {"destructive": True, "yes": True}})
         self.assertFalse(result["isError"])
         self.assertEqual(self.daemon.requests[1]["line"], "user delete bob --yes")
 
+    def test_older_daemon_refusal_text_still_detected(self) -> None:
+        self.initialize()
+        self.answers.append({"ok": False, "exit_code": 2, "stderr": "vault update: re-run in an interactive terminal, "
+                             "or pass --accept-overwrite-waiver / --accept-decryption-waiver."})
+        result = self.mcp.tool("vh_run", {"command": "vault update 3 --quota 1G"})
+        self.assertEqual(result["structuredContent"]["needs_confirmation"], "accept-overwrite-waiver")
+
+    def test_vault_delete_and_key_rotate_are_gated_on_every_path(self) -> None:
+        self.initialize()
+        for tool, args in (("vaults_delete", {"vault": 3}), ("vh_run", {"command": "vault delete 3"}),
+                           ("vh_run", {"command": "vault keys rotate 3"})):
+            result = self.mcp.tool(tool, args)
+            self.assertEqual(result["structuredContent"]["needs_confirmation"], "destructive", (tool, args))
+        self.assertEqual(self.daemon.requests, [])
+        result = self.mcp.tool("vh_run", {"command": "vault keys rotate 3", "confirm": {"destructive": True}})
+        self.assertFalse(result["isError"])
+        self.assertEqual(self.daemon.requests[0]["line"], "vault keys rotate 3")
+
+    def test_ping_is_answered_while_a_call_runs_and_cancel_closes_it(self) -> None:
+        self.initialize()
+        self.answers.append({"stall": 15})
+        call_id = self.mcp.start("tools/call", {"name": "vh_read", "arguments": {"command": "vault list"}})
+        for _ in range(100):  # until the daemon has the request
+            if self.daemon.requests:
+                break
+            threading.Event().wait(0.05)
+        self.assertEqual(self.mcp.call("ping")["result"], {}, "not stuck behind the running call")
+        self.mcp.notify("notifications/cancelled", {"requestId": call_id, "reason": "test"})
+        for _ in range(100):
+            if self.daemon.hung_up:
+                break
+            threading.Event().wait(0.05)
+        self.assertEqual(self.daemon.hung_up, ["vault list --json"], "the cancelled call's connection is closed")
+        self.assertIsNone(self.mcp.wait(call_id, timeout=1), "a cancelled request gets no response")
+        self.assertEqual(self.mcp.call("ping")["result"], {})
+
     def test_confirmation_flags_in_a_command_are_refused(self) -> None:
         self.initialize()
-        for command in ("user delete bob --yes", "vault delete 3 --accept-key-loss", "upstream cleanup k b --confirm-token t"):
+        for command in ("user delete bob --yes", "vault delete 3 --accept-key-loss", "upstream cleanup k b --confirm-token t",
+                        "vault recovery set 3 --mode provider_versioning --adopt-bucket"):
             result = self.mcp.tool("vh_run", {"command": command})
             self.assertTrue(result["isError"], command)
             self.assertIn("confirm", text_of(result))
@@ -257,12 +354,45 @@ class McpServer(unittest.TestCase):
             self.assertNotIn(hidden, names)
         node = json.loads(text_of(self.mcp.tool("vh_help", {"path": "user delete"})))
         self.assertEqual(node["effect"], "destructive")
-        self.assertEqual(node["confirmations"]["names"], ["yes"])
+        self.assertEqual(node["confirmations"]["names"], ["destructive", "yes"])
+
+    def test_two_calls_run_at_once(self) -> None:
+        self.initialize()
+        self.answers.extend([{"stall": 2}, {"ok": True, "exit_code": 0, "stdout": "second"}])
+        first = self.mcp.start("tools/call", {"name": "vh_read", "arguments": {"command": "vault list"}})
+        for _ in range(100):
+            if self.daemon.requests:
+                break
+            threading.Event().wait(0.05)
+        second = self.mcp.tool("vh_read", {"command": "group list"})
+        self.assertIn("second", text_of(second), "answered while the first is still running")
+        self.mcp.notify("notifications/cancelled", {"requestId": first})
 
     def test_protocol_errors(self) -> None:
         self.assertEqual(self.mcp.raw("{not json")["error"]["code"], -32700)
         self.assertEqual(self.mcp.call("no/such/method")["error"]["code"], -32601)
         self.assertEqual(self.mcp.call("tools/call", {"name": "nope", "arguments": {}})["error"]["code"], -32602)
+
+
+@unittest.skipUnless(VH and os.access(VH, os.X_OK), "pass the vaulthalla-cli binary (argv[1] or VH_CLI)")
+class McpDeadline(unittest.TestCase):
+    def test_a_hung_command_is_abandoned_at_the_deadline(self) -> None:
+        tmp = Path(tempfile.mkdtemp(prefix="vhmcp-", dir="/tmp"))
+        daemon = FakeDaemon(tmp, lambda req: {"stall": 10})
+        mcp = McpSession(daemon.path, {"VAULTHALLA_MCP_TIMEOUT": "1"})
+        mcp.call("initialize", {"protocolVersion": "2025-11-25", "capabilities": {},
+                                "clientInfo": {"name": "t", "version": "1"}})
+        result = mcp.tool("vh_read", {"command": "status"})
+        self.assertTrue(result["isError"])
+        self.assertIn("exit 124", text_of(result))
+        self.assertIn("VAULTHALLA_MCP_TIMEOUT", text_of(result))
+        rest, _ = mcp.close()
+        self.assertEqual(rest, "")
+        daemon.stop()
+        self.assertEqual(daemon.hung_up, ["status"])
+        self.assertIsNone(daemon.error)
+        os.unlink(daemon.path)
+        tmp.rmdir()
 
 
 @unittest.skipUnless(VH and os.access(VH, os.X_OK), "pass the vaulthalla-cli binary (argv[1] or VH_CLI)")

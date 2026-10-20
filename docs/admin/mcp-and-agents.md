@@ -25,6 +25,10 @@ inside the limits below. `vh skill install` sets an agent up in one step.
 - **It acts as you.** Every tool call is an ordinary, non-interactive `vh` command over the local control socket, so
   the daemon maps it to your Vaulthalla account exactly as it maps your own `vh` commands. Your roles and permissions
   decide what works. An agent can't do anything your `vh` can't.
+- **Destructive commands always need your OK.** Anything marked destructive (deleting a vault or a user, rotating
+  keys, revoking a credential, restoring over files) is refused by the MCP server itself until the agent passes
+  `confirm: {"destructive": true}`, even where the command wouldn't ask at a terminal. The agent is told to show you
+  what will be affected and to pass it only after you approve.
 - **It asks before confirmations.** Commands that would ask you to confirm in a terminal (deleting a user or a vault,
   accepting an encryption waiver, restoring over files, a bucket cleanup) refuse the first time. The agent gets the
   refusal's message and is told to show it to you; it can only go ahead by passing a `confirm` value, and its skill
@@ -105,11 +109,17 @@ The skill (`SKILL.md`) tells the agent to read before it writes, to prefer typed
 without your explicit approval, to state the reason before a destructive action, never to handle keys or secrets,
 and to report what it changed. `references/commands.md` next to it lists every command available to agents.
 
+A tool call that gets no result within 10 minutes is abandoned (set `VAULTHALLA_MCP_TIMEOUT` in the server's
+environment to change it, in seconds; `0` turns the limit off), and an agent can cancel a call it no longer needs.
+The daemon may still finish a command whose call was abandoned, so check the state before retrying. Calls run side
+by side, so one slow command doesn't hold up the others.
+
 ## Troubleshooting
 
 | Symptom | Cause |
 | --- | --- |
 | Tools fail with exit 69 or 75 | The daemon isn't running or isn't responding. The server itself still starts; check the service. |
+| A tool fails with exit 124 | The command gave no result before the deadline (`VAULTHALLA_MCP_TIMEOUT`). |
 | Tools fail with exit 77 | The agent's user isn't in the `vaulthalla` group, or its login session predates joining it. |
 | "user not found: no Vaulthalla user is mapped to Linux UID …" | Map the account first (`vh setup assign-admin` for the first operator, or `--linux-uid` on `vh user update`). |
 | `vh skill install` says the skill already exists | You or an older version changed it. Re-run with `--force` to replace it. |

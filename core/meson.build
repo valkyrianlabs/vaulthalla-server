@@ -359,7 +359,7 @@ vh_cli = executable('vaulthalla-cli',
                  join_paths(core_root, 'main/cli_skill.cpp'), src / 'platform' / platform_os_dir / 'Fd.cpp'),
            include_directories: include_directories('vendor', 'include', 'usage/include'),
            link_with: lib_usage,
-           dependencies: fmt_dep,
+           dependencies: [fmt_dep, dependency('threads')],
            install: true
 )
 

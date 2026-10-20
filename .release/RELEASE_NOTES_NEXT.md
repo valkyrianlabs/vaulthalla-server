@@ -17,6 +17,9 @@ agents may run) and registers the server with the agent's CLI, or prints the com
 
 - **The agent acts as you.** Every tool call is an ordinary, non-interactive `vh` command, so your Vaulthalla roles
   and permissions decide what works.
+- **Destructive commands need your OK every time.** Deleting, revoking, purging, rotating keys or restoring over files
+  is refused by the MCP server until the agent passes an explicit destructive acknowledgement, which it is told to
+  give only after you approve, even where the command itself wouldn't ask without a terminal.
 - **Confirmations stay with you.** A command that would ask you to confirm (deleting a user or vault, an encryption
   waiver, a restore over files, a bucket cleanup) refuses first; the agent has to show you the message and may only
   pass the confirmation after you approve. The server never adds `--yes` or `--accept-*` itself.
@@ -25,6 +28,9 @@ agents may run) and registers the server with the agent's CLI, or prints the com
 - Tools: `vh_help` to browse commands, `vh_read` for read-only commands, `vh_run` for the rest, and typed tools such
   as `users_create`, `vaults_delete` and `recovery_restore`. Each is marked read, write or destructive, so clients
   can run read-only tools freely and ask before destructive ones.
+
+Calls run side by side, can be cancelled by the agent, and are abandoned after 10 minutes without a result
+(`VAULTHALLA_MCP_TIMEOUT`).
 
 See [AI Agents And MCP](https://vaulthalla.io/docs/admin/mcp-and-agents).
 

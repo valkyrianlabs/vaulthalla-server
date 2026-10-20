@@ -25,6 +25,8 @@
 #include <cerrno>
 #include <initializer_list>
 #include <cstddef>
+#include <chrono>
+#include <mutex>
 
 #include "cli_client.hpp"
 #include "platform/Fd.hpp"
@@ -398,6 +400,8 @@ constexpr int kProtocol = 76;     // EX_PROTOCOL: malformed/incomplete reply
 constexpr int kUnavailable = 69;  // EX_UNAVAILABLE: no daemon listening
 constexpr int kTempFail = 75;     // EX_TEMPFAIL: daemon not responding / busy
 constexpr int kNoPerm = 77;       // EX_NOPERM: not allowed to use the control socket
+constexpr int kDeadline = 124;    // vh mcp: no result before the call's deadline (as timeout(1))
+constexpr int kCancelled = 130;   // vh mcp: the agent cancelled the call
 }
 
 static constexpr const char* kDefaultSocketPath = VH_CLI_SOCKET_PATH;
@@ -793,14 +797,59 @@ static std::string frame_text(const nlohmann::json& frame, const char* key) {
 
 namespace vh::cli {
 
+// Cancels the call: its socket is shut down, so a read in progress returns at once (the fd is closed by the owner).
+void CallControl::cancel() {
+    std::scoped_lock lock(mutex);
+    cancelled = true;
+    if (fd >= 0) ::shutdown(fd, SHUT_RDWR);
+}
+
+namespace {
+
+// The socket of a captured call, registered with its CallControl while open.
+struct CapturedSocket {
+    int fd = -1;
+    CallControl* control = nullptr;
+
+    ~CapturedSocket() {
+        if (control) {
+            std::scoped_lock lock(control->mutex);
+            control->fd = -1;
+        }
+        if (fd >= 0) ::close(fd);
+    }
+};
+
+bool cancelled(const CallControl* control) {
+    if (!control) return false;
+    std::scoped_lock lock(control->mutex);
+    return control->cancelled;
+}
+
+}
+
 // One non-interactive command over the control socket, everything it prints captured (vh mcp's tool calls). Same
 // request as a plain `vh` run with stdin not a terminal, so the daemon authorizes it by peer UID exactly the same way.
-Reply runCaptured(const std::vector<std::string>& argv, const std::string& line) {
+// `control` lets another thread cancel it; `deadlineSeconds` (0: none) bounds the whole call.
+Reply runCaptured(const std::vector<std::string>& argv, const std::string& line, CallControl* control,
+                  const int deadlineSeconds) {
+    using clock = std::chrono::steady_clock;
+    const auto deadline = deadlineSeconds > 0 ? clock::now() + std::chrono::seconds(deadlineSeconds) : clock::time_point::max();
+    const auto cancelledReply = [] { return Reply{.exit_code = exit_code::kCancelled, .out = {},
+                                                  .err = "vh: the call was cancelled; the daemon may still finish the "
+                                                         "command, so check its state before retrying\n"}; };
     const int timeoutSeconds = connect_timeout_seconds();
     int err = 0;
     std::string message;
-    const int s = open_control_socket(timeoutSeconds, err, message);
-    if (s < 0) return err == 0 ? Reply{1, {}, message} : connect_failure(err, timeoutSeconds);
+    CapturedSocket sock{.fd = open_control_socket(timeoutSeconds, err, message), .control = nullptr};
+    if (sock.fd < 0) return err == 0 ? Reply{1, {}, message} : connect_failure(err, timeoutSeconds);
+    if (control) {
+        std::scoped_lock lock(control->mutex);
+        if (control->cancelled) return cancelledReply();
+        control->fd = sock.fd;
+        sock.control = control;
+    }
+    const int s = sock.fd;
 
     nlohmann::json request{{"cmd", argv.empty() ? std::string("help") : argv.front()},
                            {"args", argv.size() > 1 ? std::vector<std::string>(argv.begin() + 1, argv.end())
@@ -810,19 +859,36 @@ Reply runCaptured(const std::vector<std::string>& argv, const std::string& line)
                            {"interactive", false}};
     Reply reply;
     if (!send_json_frame(s, request)) {
-        ::close(s);
+        if (cancelled(control)) return cancelledReply();
         return {exit_code::kTempFail, {}, "vh: the vaulthalla daemon closed the connection before the command was sent\n"};
     }
     bool first = true;
     for (;;) {
         if (first && !wait_readable(s, timeoutSeconds)) {
-            ::close(s);
+            if (cancelled(control)) return cancelledReply();
             return {exit_code::kTempFail, {}, not_responding_message(timeoutSeconds)};
         }
         first = false;
+        // The deadline: wait for the next frame no longer than what is left, and bound a frame's own read too.
+        if (deadline != clock::time_point::max()) {
+            const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - clock::now()).count();
+            pollfd pfd{.fd = s, .events = POLLIN, .revents = 0};
+            int rc = 0;
+            do rc = left > 0 ? ::poll(&pfd, 1, static_cast<int>(std::min<long long>(left, 1LL << 30))) : 0;
+            while (rc < 0 && errno == EINTR);
+            if (rc == 0) {
+                reply.exit_code = exit_code::kDeadline;
+                reply.err += fmt::format("vh: no result within {}s (VAULTHALLA_MCP_TIMEOUT); the call was abandoned. "
+                                         "The daemon may still finish the command: check its state before retrying.\n",
+                                         deadlineSeconds);
+                return reply;
+            }
+            timeval tv{.tv_sec = std::max<long long>(1, left / 1000), .tv_usec = 0};
+            (void)::setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        }
         nlohmann::json frame;
         if (!recv_json_frame(s, frame)) {
-            ::close(s);
+            if (cancelled(control)) return cancelledReply();
             reply.exit_code = exit_code::kTempFail;
             reply.err += "vh: connection to the vaulthalla daemon closed before the command finished\n";
             return reply;
@@ -836,7 +902,6 @@ Reply runCaptured(const std::vector<std::string>& argv, const std::string& line)
         }
         if (type == "prompt") {
             // Never answered: the request is not interactive, so a prompt here is a daemon bug, not a question.
-            ::close(s);
             reply.exit_code = 1;
             reply.err += "vh: the command asked an interactive question, which agents can't answer: " +
                          frame.value("text", std::string{}) + "\n";
@@ -846,7 +911,15 @@ Reply runCaptured(const std::vector<std::string>& argv, const std::string& line)
             reply.out += frame_text(frame, "stdout");
             reply.err += frame_text(frame, "stderr");
             reply.exit_code = final_exit_code(frame);
-            ::close(s);
+            // Optional (newer daemons): the refusal was for want of a confirmation, and which flags give it.
+            if (const auto c = frame.find("confirmation"); c != frame.end() && c->is_object()) {
+                reply.confirmation = Confirmation{};
+                if (const auto code = c->find("code"); code != c->end() && code->is_string())
+                    reply.confirmation->code = code->get<std::string>();
+                if (const auto flags = c->find("flags"); flags != c->end() && flags->is_array())
+                    for (const auto& f : *flags)
+                        if (f.is_string()) reply.confirmation->flags.push_back(f.get<std::string>());
+            }
             return reply;
         }
     }

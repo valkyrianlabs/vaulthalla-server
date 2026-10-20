@@ -147,14 +147,23 @@ usage book and the operation catalog and no daemon types, so the client links it
   (`McpCatalog.RunLinesParseAsCheckedForEveryDocumentedExample`). Refused before running: unknown commands, groups,
   `--`, odd option spellings, confirmation flags in the command, and `mcp::exclusions()` (one list: `vault key export`,
   `secrets export|update`, `setup`, `teardown`, `fs get|put`, `mcp`, `skill`; also checked case-insensitively).
-- Confirmations: a leaf's gates are its flags spelled `yes`/`accept-*` and the `confirm-token` option. Tools never add
-  them on their own (typed bindings' `fixed` `flag:yes` is dropped) and the schema has `confirm` (`{"yes": true}`,
-  `{"confirm-token": "<t>"}`). A non-zero exit whose text says "re-run …/pass --<gate>" becomes `isError` +
-  `structuredContent {needs_confirmation, confirm_options, message, how_to_confirm}`. `--json` is appended where the
+- Confirmations: a leaf's gates are its flags spelled `yes`/`accept-*`/`adopt-bucket` and the `confirm-token` option.
+  Tools never add them on their own (typed bindings' `fixed` `flag:yes` is dropped) and the schema has `confirm`
+  (`{"yes": true}`, `{"confirm-token": "<t>"}`). Independently, every call that resolves to an `effect: destructive`
+  leaf (typed effect = stronger of op and leaf) is refused before execution without `confirm: {"destructive": true}`
+  (an MCP-layer acknowledgement, never rendered as a flag). Refusals for want of a confirmation: handlers call
+  `shell::noteConfirmationNeeded(code, flags)` (thread-local) right before refusing; `Router::executeLine` attaches it
+  to the failed `CommandResult::confirmation`, and `shell/Server.cpp` sends it as the result frame's optional
+  `confirmation {code, flag, flags}` (the CLI ignores it). `Catalog::finish` maps those flags to the leaf's gates; only
+  without the member (older daemons) does it fall back to the text ("re-run …/pass --<gate>"). Either way the result
+  is `isError` + `structuredContent {needs_confirmation, confirm_options, code?, message, how_to_confirm}`. `--json` is appended where the
   leaf has it; stdout is the text content; stderr and the exit code go into an `isError` result otherwise.
 - `vh mcp` (`core/main/cli_mcp.cpp`): newline-delimited JSON-RPC on stdin/stdout (stdout only protocol messages,
-  invalid UTF-8 replaced), each call one `vh::cli::runCaptured` (`interactive:false`, same peer-UID authorization;
-  69/75/77 come back as tool errors). `vh skill install` (`cli_skill.cpp`): `SKILL.md` (hand-written,
+  invalid UTF-8 replaced, writes serialized), each call one `vh::cli::runCaptured` (`interactive:false`, same peer-UID
+  authorization; 69/75/77 come back as tool errors). `tools/call` runs on its own thread (at most 8 in flight), so
+  ping/cancel/other requests are answered meanwhile; `notifications/cancelled` shuts the call's socket down
+  (`CallControl`) and its response is suppressed (exit 130 internally); `VAULTHALLA_MCP_TIMEOUT` (default 600 s, 0 =
+  none) abandons a call (exit 124). An abandoned or cancelled call is not undone in the daemon. `vh skill install` (`cli_skill.cpp`): `SKILL.md` (hand-written,
   `src/mcp/Skill.cpp`) + `references/commands.md` (`Catalog::commandReference`) into `~/.claude/skills/vaulthalla` /
   `~/.agents/skills/vaulthalla` (project: `.claude/skills`, `.agents/skills`); registers via `claude mcp add --scope
   user|project` / `codex mcp add` when on PATH, else prints it (Codex TOML stanza written only with `--force`);
