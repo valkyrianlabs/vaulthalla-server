@@ -13,6 +13,7 @@
 #include <string>
 #include <algorithm>
 #include <optional>
+#include <utility>
 
 using vh::identities::User;
 using vh::identities::Group;
@@ -20,6 +21,16 @@ using vh::identities::Group;
 using namespace vh::protocols::shell;
 
 namespace vh::protocols::shell {
+
+namespace {
+thread_local std::optional<ConfirmationNeeded> tlsConfirmationNeeded;
+}
+
+void noteConfirmationNeeded(std::string code, std::vector<std::string> flags) {
+    tlsConfirmationNeeded = ConfirmationNeeded{.code = std::move(code), .flags = std::move(flags)};
+}
+
+std::optional<ConfirmationNeeded> takeConfirmationNeeded() { return std::exchange(tlsConfirmationNeeded, std::nullopt); }
 
 // The command line for the debug log, with the values of credential options (--secret, --password, --token, …; see
 // ws::isSensitiveLogKey) replaced: `vh api-key create … --secret <value>` used to land in the log verbatim.
@@ -167,7 +178,12 @@ CommandResult Router::executeLine(const std::string& line, const std::shared_ptr
 
     const auto& info = commands_.at(canonical);
     if (const auto err = unknownOptionError(call, info.usage)) return invalid(*err);
-    return info.handler(call);
+    (void)takeConfirmationNeeded();
+    auto result = info.handler(call);
+    // Only a refusal carries it; a note left by a path that went on to succeed is dropped.
+    if (auto needed = takeConfirmationNeeded(); needed && result.exit_code != 0 && !result.confirmation)
+        result.confirmation = std::move(needed);
+    return result;
 }
 
 std::optional<std::string> Router::optionError(const std::string& line) const {

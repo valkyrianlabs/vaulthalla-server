@@ -75,7 +75,10 @@ CommandResult runConfirmed(const CommandCall& call, const std::string& prefix, c
                 return ok(format(op(confirmed)));
             } catch (const ops::NeedsConfirmation& e) {
                 if (e.code != code || confirmed) throw;
-                if (!call.io) return refused(std::string(e.what()) + "\nRe-run with --yes to confirm.");
+                if (!call.io) {
+                    noteConfirmationNeeded(e.code, {"--yes"});
+                    return refused(std::string(e.what()) + "\nRe-run with --yes to confirm.");
+                }
                 if (call.io->prompt(std::string(e.what()) + "\nType " + word + " to continue", "no") != word)
                     return refused("not confirmed; nothing was changed");
                 confirmed = true;
@@ -406,9 +409,11 @@ CommandResult cleanup(const CommandCall& call) {
             const auto planText = json ? asJson(plan) : formatCleanupPlan(plan);
             if (hasFlag(call, "preflight")) return ok(planText);
             if (!plan.blockers.empty()) return invalid(planText + prefix + ": refused (see the blockers above)");
-            if (!call.io)
+            if (!call.io) {
+                noteConfirmationNeeded("upstream_cleanup", {"--confirm-token"});
                 return invalid(planText + prefix + ": re-run with --confirm-token " + plan.confirm_token +
                                " to delete the bucket and everything in it");
+            }
             call.io->print(planText);
             if (call.io->prompt("Type the bucket name to delete it and everything in it", "") != bucket)
                 return invalid(prefix + ": not confirmed; nothing was deleted");

@@ -153,10 +153,13 @@ CommandResult runRemove(const CommandCall& call, ops::vaults::Remove req, const 
             return ok(describeDeletion(*ops::vaults::remove(call.user, req)));
         } catch (const ops::NeedsConfirmation& e) {
             const bool keyLoss = e.code == ops::vaults::VAULT_UPSTREAM_KEY_LOSS;
-            if (!interactive)
+            if (!interactive) {
+                noteConfirmationNeeded(e.code, keyLoss ? std::vector<std::string>{"--accept-key-loss"}
+                                                       : std::vector<std::string>{"--yes"});
                 return refused(std::string(e.what()) + (keyLoss ? "\nRe-run with --accept-key-loss to delete anyway, or "
                                                                   "--delete-upstream to delete the upstream data too."
                                                                 : "\nRe-run with --yes to confirm."));
+            }
             if (keyLoss) {
                 if (call.io->prompt(std::string(e.what()) + "\nType DELETE WITHOUT KEY to delete anyway:", "") != "DELETE WITHOUT KEY")
                     return refused("cancelled; nothing was deleted");

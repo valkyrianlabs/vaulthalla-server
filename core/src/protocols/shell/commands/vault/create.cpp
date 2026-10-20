@@ -263,8 +263,10 @@ namespace vh::protocols::shell::commands::vault {
                     return ops::vaults::create(call.user, attempt);
                 } catch (const ops::NeedsConfirmation& e) {
                     if (e.code != ops::upstream::ADOPTION_CONFIRM || acceptAdoption) throw;
-                    if (!call.io)
+                    if (!call.io) {
+                        noteConfirmationNeeded(e.code, {"--yes"});
                         throw ops::Invalid(std::string(e.what()) + "\nRe-run with --yes to adopt the bucket.");
+                    }
                     if (call.io->prompt(std::string(e.what()) + "\nType ADOPT to adopt this bucket", "no") != "ADOPT")
                         throw ops::Invalid("the adoption was not confirmed; nothing was changed");
                     acceptAdoption = true;
