@@ -13,12 +13,13 @@ semantics do **not** match `apt remove/purge`. Operator-facing detail lives in `
 
 ## Deploy assets (`deploy/`)
 
-- `config/config.yaml` (default runtime config, ports 36969/36970/39000; ws + preview bind `127.0.0.1`, S3 gateway
-  `0.0.0.0`), `config/config_template.yaml.in`. Meson installs both to `/usr/share/vaulthalla/config/`.
+- `config/config.yaml` (default runtime config, ports 36969/36970/36971/39000; ws + preview bind `127.0.0.1`, S3
+  gateway `0.0.0.0`, device listener loopback until `device_server.remote`, which only `vh device remote
+  enable|disable` writes; an upgraded config without the section gets those defaults), `config/config_template.yaml.in`. Meson installs both to `/usr/share/vaulthalla/config/`.
   A gitignored repo-root `config.yaml` is used only by source installs: `bin/setup/install_dirs.sh` copies it,
   and meson installs it to `/etc/vaulthalla` only with `-Dinstall_local_config_override=true` (default off,
   never set by `debian/rules`, option lives in `meson.options`).
-- `psql/000…107_*.sql`: schema + ordered migrations → `/usr/share/vaulthalla/psql`.
+- `psql/000…112_*.sql`: schema + ordered migrations → `/usr/share/vaulthalla/psql`.
 - `systemd/`: `vaulthalla.service.in` (server, user `vaulthalla`; `Wants=`+`After=postgresql.service`,
   `Restart=on-failure`, `RestartSec=10`, `StartLimitIntervalSec=600`/`StartLimitBurst=10`, `TimeoutStopSec=30s`,
   ExecStopPost lazy `fusermount3 -uz` guarded by `findmnt`; the daemon owns `/run/vaulthalla/cli.sock` and rebinds

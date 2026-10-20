@@ -1,6 +1,7 @@
 #include "protocols/shell/SocketIO.hpp"
 
 #include <nlohmann/json.hpp>
+#include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #include <netinet/in.h>
@@ -67,6 +68,18 @@ nlohmann::json SocketIO::recv_json(const int fd, const uint32_t maxBytes) {
     std::string body(len, '\0');
     if (!cliSocketReadAll(fd, body.data(), len)) throw std::runtime_error("EOF reading body");
     return nlohmann::json::parse(body);
+}
+
+bool SocketIO::peerConnected() const {
+    pollfd pfd{.fd = fd_, .events = POLLIN, .revents = 0};
+    const int rc = ::poll(&pfd, 1, 0);
+    if (rc < 0) return errno == EINTR;
+    if (rc == 0) return true;
+    if (pfd.revents & (POLLHUP | POLLERR | POLLNVAL)) return false;
+    // Readable with nothing to read is the client's EOF; a stray frame is not a hang-up.
+    char byte = 0;
+    const ssize_t n = ::recv(fd_, &byte, 1, MSG_PEEK | MSG_DONTWAIT);
+    return n > 0 || (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR));
 }
 
 std::string SocketIO::next_id() {

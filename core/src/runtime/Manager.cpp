@@ -8,6 +8,7 @@
 #include "log/RotationService.hpp"
 #include "notifications/OperatorEmailService.hpp"
 #include "protocols/ProtocolService.hpp"
+#include "protocols/device/Service.hpp"
 #include "protocols/s3/GatewayService.hpp"
 #include "protocols/shell/Server.hpp"
 #include "protocols/ws/ConnectionLifecycleManager.hpp"
@@ -43,11 +44,13 @@ constexpr std::array kBaseStartOrder{
     "OperatorEmailService",
     "ConnectionLifecycleManager",
     "ProtocolService",
+    "DeviceServer",
     "S3GatewayService"
 };
 
 constexpr std::array kBaseStopOrder{
     "S3GatewayService",
+    "DeviceServer",
     "ProtocolService",
     "ShellServer",
     "ConnectionLifecycleManager",
@@ -73,6 +76,7 @@ Manager::Manager()
       fuseService(fuse::makeService()),
       protocolService(std::make_shared<protocols::ProtocolService>()),
       s3GatewayService(std::make_shared<protocols::s3::GatewayService>()),
+      deviceServer(std::make_shared<protocols::device::Service>()),
       connectionLifecycleManager(std::make_shared<protocols::ws::ConnectionLifecycleManager>()),
       logRotationService(std::make_shared<log::RotationService>()),
       dbSweeperService(std::make_shared<db::Janitor>()),
@@ -86,6 +90,7 @@ Manager::Manager()
     if (fuseService) services_["FUSE"] = fuseService;  // null: built without the kernel FUSE bridge
     services_["ProtocolService"] = protocolService;
     services_["S3GatewayService"] = s3GatewayService;
+    services_["DeviceServer"] = deviceServer;
     services_["ConnectionLifecycleManager"] = connectionLifecycleManager;
     services_["LogRotationService"] = logRotationService;
     services_["DBJanitor"] = dbSweeperService;

@@ -573,6 +573,1106 @@
       "variants": []
     },
     {
+      "auth": "device",
+      "client_timeout_ms": 15000,
+      "command": "device.identity.rotate",
+      "description": "Replace this device's key: certificate is the new self-signed P-256 certificate (base64 DER), signature the old key's ECDSA-P256-SHA256 (base64 DER) over \"vh-device-rotate-v1\" ‖ new_spki_sha256 ‖ server_spki_sha256 ‖ UInt64BE(timestamp). The old key keeps working until the first connection with the new one. A retry from the old key naming the same new key succeeds again; another key is conflict.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "attrs": [
+              "certificate"
+            ],
+            "entity": "device.identity",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "certificate",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Unix seconds, within 300 s of the node's clock.",
+          "generator": {
+            "attrs": [
+              "timestamp"
+            ],
+            "entity": "device.identity",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "timestamp",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "signature"
+            ],
+            "entity": "device.identity",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "signature",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "invalid",
+        "conflict",
+        "device_unknown",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "description": "The new device id.",
+          "name": "device_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "device.list",
+      "description": "The caller's devices, revoked ones included; with all, every user's (super admins only).",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "kind": "bool"
+          },
+          "name": "all",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "items": "object",
+          "model": "Device",
+          "name": "devices",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "pairing",
+      "client_timeout_ms": 15000,
+      "command": "device.pair.confirm",
+      "description": "Reveal nonce_device. It must match the request's commitment (else the request is deleted: invalid); then the request is shown to the window's owner with its code. The daemon never sends the code to the device. Same key as the request only.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "From device.pair.request.",
+          "generator": {
+            "attrs": [
+              "request_id"
+            ],
+            "entity": "device.pairing_request",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "request_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "64 lowercase hex digits (a SHA-256 value).",
+          "generator": {
+            "attrs": [
+              "nonce_device"
+            ],
+            "entity": "device.pairing_request",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "nonce_device",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "invalid",
+        "not_found",
+        "conflict",
+        "no_pairing_window",
+        "rate_limited",
+        "device_unknown",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "enum": [
+            "pending"
+          ],
+          "name": "state",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "expires_at",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "pairing",
+      "client_timeout_ms": 15000,
+      "command": "device.pair.request",
+      "description": "Ask to pair this connection's key while a pairing window is open, committing to nonce_device (SHA-256(\"vh-pair-commit-v1\" ‖ device_spki_sha256 ‖ nonce_device)). Refused with no_pairing_window when none is open, rate_limited past 10 per minute per address or 5 per window, conflict for a key this node knows. One live request per key: a new one replaces it.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "1-64 characters.",
+          "generator": {
+            "kind": "pattern",
+            "pattern": "Mac {a}{a}{a}"
+          },
+          "name": "name",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "\"macOS\".",
+          "generator": {
+            "kind": "const",
+            "values": [
+              "macOS"
+            ]
+          },
+          "name": "platform",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "kind": "pattern",
+            "pattern": "1.{9}.{9}"
+          },
+          "name": "app_version",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "64 lowercase hex digits (a SHA-256 value).",
+          "generator": {
+            "attrs": [
+              "commitment"
+            ],
+            "entity": "device.pairing_request",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "commitment",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "invalid",
+        "not_found",
+        "conflict",
+        "no_pairing_window",
+        "rate_limited",
+        "device_unknown",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "name": "request_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "64 lowercase hex digits (a SHA-256 value).",
+          "name": "nonce_server",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "expires_at",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "pairing",
+      "client_timeout_ms": 15000,
+      "command": "device.pair.status",
+      "description": "How the request stands. Answered at once (no long poll): after pending, ask again in 2 s. Approved carries the node's id and name and the device id; the device then pins the server key and reconnects, which makes a Device session. Same key as the request only.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "From device.pair.request.",
+          "generator": {
+            "attrs": [
+              "request_id"
+            ],
+            "entity": "device.pairing_request",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "request_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "invalid",
+        "not_found",
+        "conflict",
+        "no_pairing_window",
+        "rate_limited",
+        "device_unknown",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "enum": [
+            "pending",
+            "approved",
+            "denied",
+            "expired"
+          ],
+          "name": "state",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "node_id",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "node_name",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "64 lowercase hex digits (a SHA-256 value).",
+          "name": "device_id",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "device.pairing.approve",
+      "description": "Approve a request with the code the device shows (number matching). Any other code denies the request (invalid). Creates the device for the caller's account.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "From device.pair.request.",
+          "generator": {
+            "attrs": [
+              "request_id"
+            ],
+            "entity": "device.pairing_request",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "request_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Six digits (spaces allowed).",
+          "generator": {
+            "attrs": [
+              "code"
+            ],
+            "entity": "device.pairing_request",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "code",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "description": "{id, device_id, user_id, user_name, name, platform, app_version, previous_device_id, approved_by, created_at, last_seen_at, last_ip, revoked_at, revoked}; times are Unix seconds or null.",
+          "model": "Device",
+          "name": "device",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "device.pairing.close",
+      "description": "Close the caller's pairing window (a super admin: anyone's); its requests expire.",
+      "input": "none",
+      "operation": null,
+      "payload": [],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "description": "False when no such window was open.",
+          "name": "closed",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "device.pairing.deny",
+      "description": "Deny a pending request; the device is told it was declined.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "From device.pair.request.",
+          "generator": {
+            "attrs": [
+              "request_id"
+            ],
+            "entity": "device.pairing_request",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "request_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "name": "denied",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "device.pairing.open",
+      "description": "Open a 10-minute pairing window owned by the caller (reopening extends it). One window per node: conflict while another user's is open.",
+      "input": "none",
+      "operation": null,
+      "payload": [],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "description": "The pairing window: its owner and Unix times. Requests go to its owner.",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "owner_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "opened_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "expires_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "window",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "device.pairing.pending",
+      "description": "The caller's open window and its confirmed requests. Each offers three code_choices (random order): one is the code the device shows, two are decoys fixed for the request. The real code is never returned on its own.",
+      "input": "none",
+      "operation": null,
+      "payload": [],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "description": "The pairing window: its owner and Unix times. Requests go to its owner.",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "owner_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "opened_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "expires_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "window",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "name": "request_id",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "platform",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "app_version",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "source_ip",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "64 lowercase hex digits (a SHA-256 value).",
+              "name": "device_id",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "items": "string",
+              "name": "code_choices",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "created_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "expires_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "items": "object",
+          "name": "requests",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "device.remote.disable",
+      "description": "Back to loopback only: the listener rebinds now and device sessions from other hosts close.",
+      "input": "none",
+      "operation": null,
+      "payload": [],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "description": "The device listener as configured and as it is.",
+          "fields": [
+            {
+              "name": "enabled",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "Every interface; else loopback only.",
+              "name": "remote",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "The configured port (36971 by default).",
+              "minimum": 0,
+              "name": "port",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "listening",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "Where it listens, host:port; null when it does not.",
+              "name": "address",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "Why it does not listen where configured (e.g. the port is taken).",
+              "name": "error",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "The server key's SPKI hash (the pin Desktop records).",
+              "name": "server_spki_sha256",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "Open device-listener connections.",
+              "minimum": 0,
+              "name": "connections",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "status",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "device.remote.enable",
+      "description": "Let devices on other hosts connect: the listener rebinds to every interface now, and stays that way across restarts and upgrades (device_server.remote in config.yaml).",
+      "input": "none",
+      "operation": null,
+      "payload": [],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "description": "The device listener as configured and as it is.",
+          "fields": [
+            {
+              "name": "enabled",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "Every interface; else loopback only.",
+              "name": "remote",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "The configured port (36971 by default).",
+              "minimum": 0,
+              "name": "port",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "listening",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "Where it listens, host:port; null when it does not.",
+              "name": "address",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "Why it does not listen where configured (e.g. the port is taken).",
+              "name": "error",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "The server key's SPKI hash (the pin Desktop records).",
+              "name": "server_spki_sha256",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "Open device-listener connections.",
+              "minimum": 0,
+              "name": "connections",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "status",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "device.remote.status",
+      "description": "The device listener: loopback only or every interface, and whether it listens.",
+      "input": "none",
+      "operation": null,
+      "payload": [],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "description": "The device listener as configured and as it is.",
+          "fields": [
+            {
+              "name": "enabled",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "Every interface; else loopback only.",
+              "name": "remote",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "The configured port (36971 by default).",
+              "minimum": 0,
+              "name": "port",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "listening",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "Where it listens, host:port; null when it does not.",
+              "name": "address",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "Why it does not listen where configured (e.g. the port is taken).",
+              "name": "error",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "The server key's SPKI hash (the pin Desktop records).",
+              "name": "server_spki_sha256",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "Open device-listener connections.",
+              "minimum": 0,
+              "name": "connections",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "status",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "device.rename",
+      "description": "Rename a device (its user, or a super admin).",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "The device id: the SHA-256 of its certificate's SubjectPublicKeyInfo (64 lowercase hex digits).",
+          "generator": {
+            "attrs": [
+              "device_id"
+            ],
+            "entity": "device",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "device_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "1-64 characters.",
+          "generator": {
+            "kind": "pattern",
+            "pattern": "Mac {a}{a}{a}"
+          },
+          "name": "name",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "description": "{id, device_id, user_id, user_name, name, platform, app_version, previous_device_id, approved_by, created_at, last_seen_at, last_ip, revoked_at, revoked}; times are Unix seconds or null.",
+          "model": "Device",
+          "name": "device",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "device.revoke",
+      "description": "Unpair a device (its user, a super admin, or the device itself). Final: its live sessions close at once and its key only ever gets pairing-only connections again.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "The device id: the SHA-256 of its certificate's SubjectPublicKeyInfo (64 lowercase hex digits).",
+          "generator": {
+            "attrs": [
+              "device_id"
+            ],
+            "entity": "device",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "device_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "description": "{id, device_id, user_id, user_name, name, platform, app_version, previous_device_id, approved_by, created_at, last_seen_at, last_ip, revoked_at, revoked}; times are Unix seconds or null.",
+          "model": "Device",
+          "name": "device",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "device",
+      "client_timeout_ms": 15000,
+      "command": "device.server.identity",
+      "description": "The server key's SPKI hash (the pin). A next key is never announced: a new server key means pairing again.",
+      "input": "none",
+      "operation": null,
+      "payload": [],
+      "refusal_codes": [
+        "device_unknown",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "description": "64 lowercase hex digits (a SHA-256 value).",
+          "name": "spki_sha256",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "fs.dir.create",
@@ -5362,5 +6462,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "5e94c9e36fee0c64c165bcb7d9992484ea5b834ff963e08521f0b8dafb920829"
+  "ws_hash": "5852115435589b8c232dab58960731c81dbf0ff3369b98bb66ec5076086d0a4a"
 }

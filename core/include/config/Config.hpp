@@ -33,6 +33,18 @@ struct HttpPreviewConfig {
     uintmax_t max_preview_size_bytes = MAX_PREVIEW_SIZE_BYTES;
 };
 
+// The device listener (Vaulthalla Desktop's mutual-TLS endpoint, docs/pairing.md). There is no host: it listens on
+// loopback until remote connections are turned on (`vh device remote enable`, ws device.remote.enable), then on every
+// interface. That switch is the only setting operators change, and they change it through those commands.
+inline constexpr uint16_t kDefaultDeviceServerPort = 36971;
+
+struct DeviceServerConfig {
+    bool enabled = true;
+    uint16_t port = kDefaultDeviceServerPort;
+    bool remote = false;
+    unsigned int max_connections = 256;
+};
+
 struct S3GatewayMultipartConfig {
     uint32_t min_part_size_mb = 5;
     uint32_t abort_after_days = 7;
@@ -329,6 +341,7 @@ struct Config {
     WebsocketConfig websocket;
     HttpPreviewConfig http_preview;
     S3GatewayConfig s3_gateway;
+    DeviceServerConfig device_server;
     CachingConfig caching;
     PreviewConfig preview;
     DatabaseConfig database;
@@ -382,6 +395,8 @@ void to_json(nlohmann::json& j, const WebsocketConfig& c);
 void from_json(const nlohmann::json& j, WebsocketConfig& c);
 void to_json(nlohmann::json& j, const HttpPreviewConfig& c);
 void from_json(const nlohmann::json& j, HttpPreviewConfig& c);
+void to_json(nlohmann::json& j, const DeviceServerConfig& c);
+void from_json(const nlohmann::json& j, DeviceServerConfig& c);
 void to_json(nlohmann::json& j, const S3GatewayMultipartConfig& c);
 void from_json(const nlohmann::json& j, S3GatewayMultipartConfig& c);
 void to_json(nlohmann::json& j, const S3GatewaySyntheticLocalRequestCostConfig& c);

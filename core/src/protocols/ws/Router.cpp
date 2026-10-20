@@ -9,6 +9,8 @@
 #include "protocols/ws/core/handler_templates.hpp"
 #include "runtime/Deps.hpp"
 #include "identities/User.hpp"
+#include "device/Peer.hpp"
+#include "log/AuditOrigin.hpp"
 
 #include <fmt/format.h>
 
@@ -40,8 +42,10 @@ vh::protocols::ws::ShareRateLimit& shareRateLimit() {
 }
 
 std::string refusalClient(const vh::protocols::ws::Session& session) {
-    if (!session.clientAddress.empty()) return session.clientAddress;
-    return session.ipAddress.empty() ? "unknown" : session.ipAddress;
+    const auto address = !session.clientAddress.empty() ? session.clientAddress
+                                                         : (session.ipAddress.empty() ? "unknown" : session.ipAddress);
+    if (const auto& peer = session.devicePeer()) return address + " (device " + peer->shortId() + ")";
+    return address;
 }
 
 // The command string is client-supplied: keep it short and printable before it reaches a log line.
@@ -199,7 +203,44 @@ bool Router::isAuthenticatedShareManagementCommand(const std::string_view comman
     return containsCommand(commands, command);
 }
 
+bool Router::isDevicePairCommand(const std::string_view command) {
+    constexpr std::array commands{
+        std::string_view{"device.pair.request"},
+        std::string_view{"device.pair.confirm"},
+        std::string_view{"device.pair.status"}
+    };
+    return containsCommand(commands, command);
+}
+
+bool Router::isDeviceOnlyCommand(const std::string_view command) {
+    constexpr std::array commands{
+        std::string_view{"device.identity.rotate"},
+        std::string_view{"device.server.identity"}
+    };
+    return containsCommand(commands, command);
+}
+
 Router::CommandAuthDecision Router::classifyCommand(const std::string_view command, const Session& session) {
+    // The device listener: who this is was decided at the TLS handshake, never by a token.
+    if (session.isDevicePairing()) {
+        if (isDevicePairCommand(command) || command == "meta.contract.get") return CommandAuthDecision::Allow;
+        return CommandAuthDecision::DenyDeviceUnknown;
+    }
+    if (session.isDeviceSession()) {
+        // The canonical user: deactivation, deletion and permission changes apply on the very next command.
+        if (session.closing() || !session.user || session.user->systemOnly() || !session.user->authorizing())
+            return CommandAuthDecision::Deny;
+        // No password sign-in, refresh tokens or account creation through a device; a device signs out by being
+        // unpaired (device.revoke).
+        if (isSessionLifecycleCommand(command) && command != "auth.isAuthenticated") return CommandAuthDecision::Deny;
+        if (command == "auth.register") return CommandAuthDecision::Deny;
+        if (isPublicShareCommand(command) || isShareFilesystemCommand(command) || isShareDownloadCommand(command) ||
+            isSharePreviewCommand(command) || isShareUploadCommand(command))
+            return CommandAuthDecision::Deny;
+        return CommandAuthDecision::Allow;
+    }
+    if (isDevicePairCommand(command) || isDeviceOnlyCommand(command)) return CommandAuthDecision::Deny;
+
     if (session.isSharePending()) {
         return isPublicShareCommand(command) ? CommandAuthDecision::Allow : CommandAuthDecision::Deny;
     }
@@ -240,6 +281,15 @@ void Router::routeMessage(json&& msg, const SessionPtr& session) {
 
         const auto decision = classifyCommand(command, *session);
 
+        if (decision == CommandAuthDecision::DenyDeviceUnknown) {
+            logRefusal(fmt::format("Unpaired device asked for {} from client {}", commandForLog(command),
+                                   refusalClient(*session)),
+                       "", fmt::format(" (command: {})", printableCommand(command)));
+            Response(std::move(command), std::move(msg), Status::ERROR, json{{"code", "device_unknown"}},
+                     "This device is not paired with this node.")(session);
+            return;
+        }
+
         if (decision == CommandAuthDecision::Deny ||
             (decision == CommandAuthDecision::RequireHumanAuth &&
              !runtime::Deps::get().sessionManager->validate(session, accessToken))) {
@@ -262,6 +312,17 @@ void Router::routeMessage(json&& msg, const SessionPtr& session) {
                             "Rate limit exceeded. Try again in " + std::to_string(rateLimit.retry_after.count()) +
                             "s.")(session);
             return;
+        }
+
+        // Everything a paired device does is attributed to it: audit lines written while its command runs carry the
+        // device id (the actor stays its user, for RBAC as for the log).
+        std::optional<log::AuditOrigin> origin;
+        if (const auto& peer = session->devicePeer(); peer && peer->paired()) {
+            ::vh::device::touch(*peer);
+            origin.emplace("device " + peer->shortId());
+            log::Registry::ws()->debug("[Router] device {} ({}) runs {}", peer->shortId(),
+                                       session->user ? session->user->name() : std::string{"-"},
+                                       commandForLog(command));
         }
 
         if (handlers_.contains(command)) handlers_[command](std::move(msg), session);

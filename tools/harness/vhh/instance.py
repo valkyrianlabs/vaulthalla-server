@@ -191,6 +191,7 @@ class Instance:
             "websocket_server: {enabled: true, host: 127.0.0.1, port: %d, max_connections: 4096}\n"
             "http_preview_server: {enabled: true, host: 127.0.0.1, port: %d, max_connections: 1024}\n"
             "s3_gateway: {enabled: false, host: 127.0.0.1, port: %d}\n"
+            "device_server: {enabled: false}\n"
             "email: {enabled: false}\n"
             "operator_emails: {enabled: false}\n"
             "dev: {enabled: false, init_r2_test_vault: false}\n" % (ws_port, http_port, _free_port()))

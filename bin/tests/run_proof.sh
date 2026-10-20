@@ -176,6 +176,8 @@ http_preview_server:
   port: $(free_port)
 s3_gateway:
   enabled: false
+device_server:
+  enabled: false
 email:
   enabled: false
 operator_emails:

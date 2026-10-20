@@ -40,6 +40,7 @@ import type {
   RecoveryUpdate,
 } from '@/models/recovery'
 import type { GroupRecord, UserRecord } from '@/features/access/types'
+import type { Device } from '@/models/device'
 import { Permission } from '@/models/role'
 import type { WsContract } from '@/util/generated/wsContract'
 import { ServerPolicy, Settings, SettingsSection } from '@/models/settings'
@@ -907,6 +908,30 @@ export interface WebSocketCommandMap {
   'stats.fs.cache': { payload: null; response: { stats: CacheStats } }
 
   'stats.http.cache': { payload: null; response: { stats: CacheStats } }
+
+  // Paired devices (Vaulthalla Desktop). The device's own side (device.pair.*, device.identity.rotate,
+  // device.server.identity) only answers on the device listener (mutual TLS, port 36971); the console never sends it,
+  // but every registered command is typed here.
+  'device.pair.request': WsContract['device.pair.request']
+  'device.pair.confirm': WsContract['device.pair.confirm']
+  'device.pair.status': WsContract['device.pair.status']
+  'device.identity.rotate': WsContract['device.identity.rotate']
+  'device.server.identity': WsContract['device.server.identity']
+  // Any signed-in user pairs devices to their own account: open a 10-minute window, then approve a request by picking
+  // the one of its three code_choices the device shows (a wrong pick denies the request).
+  'device.pairing.open': WsContract['device.pairing.open']
+  'device.pairing.close': WsContract['device.pairing.close']
+  'device.pairing.pending': WsContract['device.pairing.pending']
+  'device.pairing.approve': { payload: WsContract['device.pairing.approve']['payload']; response: { device: Device } }
+  'device.pairing.deny': WsContract['device.pairing.deny']
+  // `all` (every user's devices) is for super admins.
+  'device.list': { payload: WsContract['device.list']['payload']; response: { devices: Device[] } }
+  'device.rename': { payload: WsContract['device.rename']['payload']; response: { device: Device } }
+  'device.revoke': { payload: WsContract['device.revoke']['payload']; response: { device: Device } }
+  // Super admins: whether devices on other hosts may connect (the listener is loopback-only otherwise).
+  'device.remote.status': WsContract['device.remote.status']
+  'device.remote.enable': WsContract['device.remote.enable']
+  'device.remote.disable': WsContract['device.remote.disable']
 }
 
 export type WSCommandPayload<K extends keyof WebSocketCommandMap> = WebSocketCommandMap[K]['payload']

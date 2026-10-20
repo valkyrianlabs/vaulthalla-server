@@ -6,7 +6,7 @@
 export const WS_CONTRACT_VERSION = 1
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = '5e94c9e36fee0c64c165bcb7d9992484ea5b834ff963e08521f0b8dafb920829'
+export const WS_CONTRACT_HASH = '5852115435589b8c232dab58960731c81dbf0ff3369b98bb66ec5076086d0a4a'
 
 export interface WsContract {
   /**
@@ -102,6 +102,186 @@ export interface WsContract {
   'auth.users.list': {
     payload: null
     response: { users: object[] }
+  }
+  /**
+   * Replace this device's key: certificate is the new self-signed P-256 certificate (base64 DER), signature
+   * the old key's ECDSA-P256-SHA256 (base64 DER) over "vh-device-rotate-v1" ‖ new_spki_sha256 ‖
+   * server_spki_sha256 ‖ UInt64BE(timestamp). The old key keeps working until the first connection with the
+   * new one. A retry from the old key naming the same new key succeeds again; another key is conflict.
+   */
+  'device.identity.rotate': {
+    payload: { certificate: string; timestamp: number; signature: string }
+    response: { device_id: string }
+  }
+  /**
+   * The caller's devices, revoked ones included; with all, every user's (super admins only).
+   */
+  'device.list': {
+    payload: { all?: boolean }
+    response: { devices: object[] }
+  }
+  /**
+   * Reveal nonce_device. It must match the request's commitment (else the request is deleted: invalid); then
+   * the request is shown to the window's owner with its code. The daemon never sends the code to the device.
+   * Same key as the request only.
+   */
+  'device.pair.confirm': {
+    payload: { request_id: string; nonce_device: string }
+    response: { state: 'pending'; expires_at: number }
+  }
+  /**
+   * Ask to pair this connection's key while a pairing window is open, committing to nonce_device
+   * (SHA-256("vh-pair-commit-v1" ‖ device_spki_sha256 ‖ nonce_device)). Refused with no_pairing_window when
+   * none is open, rate_limited past 10 per minute per address or 5 per window, conflict for a key this node
+   * knows. One live request per key: a new one replaces it.
+   */
+  'device.pair.request': {
+    payload: { name: string; platform: string; app_version?: string; commitment: string }
+    response: { request_id: string; nonce_server: string; expires_at: number }
+  }
+  /**
+   * How the request stands. Answered at once (no long poll): after pending, ask again in 2 s. Approved
+   * carries the node's id and name and the device id; the device then pins the server key and reconnects,
+   * which makes a Device session. Same key as the request only.
+   */
+  'device.pair.status': {
+    payload: { request_id: string }
+    response: {
+      state: 'pending' | 'approved' | 'denied' | 'expired'
+      node_id?: string
+      node_name?: string
+      device_id?: string
+    }
+  }
+  /**
+   * Approve a request with the code the device shows (number matching). Any other code denies the request
+   * (invalid). Creates the device for the caller's account.
+   */
+  'device.pairing.approve': {
+    payload: { request_id: string; code: string }
+    response: { device: object }
+  }
+  /**
+   * Close the caller's pairing window (a super admin: anyone's); its requests expire.
+   */
+  'device.pairing.close': {
+    payload: null
+    response: { closed: boolean }
+  }
+  /**
+   * Deny a pending request; the device is told it was declined.
+   */
+  'device.pairing.deny': {
+    payload: { request_id: string }
+    response: { denied: boolean }
+  }
+  /**
+   * Open a 10-minute pairing window owned by the caller (reopening extends it). One window per node: conflict
+   * while another user's is open.
+   */
+  'device.pairing.open': {
+    payload: null
+    response: { window: { owner_id: number; opened_at: number; expires_at: number } }
+  }
+  /**
+   * The caller's open window and its confirmed requests. Each offers three code_choices (random order): one
+   * is the code the device shows, two are decoys fixed for the request. The real code is never returned on
+   * its own.
+   */
+  'device.pairing.pending': {
+    payload: null
+    response: {
+      window: { owner_id: number; opened_at: number; expires_at: number } | null
+      requests: {
+        request_id: string
+        name: string
+        platform: string
+        app_version: string
+        source_ip: string
+        device_id: string
+        code_choices: string[]
+        created_at: number
+        expires_at: number
+      }[]
+    }
+  }
+  /**
+   * Back to loopback only: the listener rebinds now and device sessions from other hosts close.
+   */
+  'device.remote.disable': {
+    payload: null
+    response: {
+      status: {
+        enabled: boolean
+        remote: boolean
+        port: number
+        listening: boolean
+        address: string | null
+        error: string | null
+        server_spki_sha256: string | null
+        connections: number
+      }
+    }
+  }
+  /**
+   * Let devices on other hosts connect: the listener rebinds to every interface now, and stays that way
+   * across restarts and upgrades (device_server.remote in config.yaml).
+   */
+  'device.remote.enable': {
+    payload: null
+    response: {
+      status: {
+        enabled: boolean
+        remote: boolean
+        port: number
+        listening: boolean
+        address: string | null
+        error: string | null
+        server_spki_sha256: string | null
+        connections: number
+      }
+    }
+  }
+  /**
+   * The device listener: loopback only or every interface, and whether it listens.
+   */
+  'device.remote.status': {
+    payload: null
+    response: {
+      status: {
+        enabled: boolean
+        remote: boolean
+        port: number
+        listening: boolean
+        address: string | null
+        error: string | null
+        server_spki_sha256: string | null
+        connections: number
+      }
+    }
+  }
+  /**
+   * Rename a device (its user, or a super admin).
+   */
+  'device.rename': {
+    payload: { device_id: string; name: string }
+    response: { device: object }
+  }
+  /**
+   * Unpair a device (its user, a super admin, or the device itself). Final: its live sessions close at once
+   * and its key only ever gets pairing-only connections again.
+   */
+  'device.revoke': {
+    payload: { device_id: string }
+    response: { device: object }
+  }
+  /**
+   * The server key's SPKI hash (the pin). A next key is never announced: a new server key means pairing
+   * again.
+   */
+  'device.server.identity': {
+    payload: null
+    response: { spki_sha256: string }
   }
   /**
    * Create a directory (Touch on the path).
@@ -731,6 +911,22 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'auth.user.get.byName',
   'auth.user.update',
   'auth.users.list',
+  'device.identity.rotate',
+  'device.list',
+  'device.pair.confirm',
+  'device.pair.request',
+  'device.pair.status',
+  'device.pairing.approve',
+  'device.pairing.close',
+  'device.pairing.deny',
+  'device.pairing.open',
+  'device.pairing.pending',
+  'device.remote.disable',
+  'device.remote.enable',
+  'device.remote.status',
+  'device.rename',
+  'device.revoke',
+  'device.server.identity',
   'fs.dir.create',
   'fs.dir.list',
   'fs.download.cancel',
@@ -811,6 +1007,22 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'auth.user.get.byName': 15000,
   'auth.user.update': 15000,
   'auth.users.list': 15000,
+  'device.identity.rotate': 15000,
+  'device.list': 15000,
+  'device.pair.confirm': 15000,
+  'device.pair.request': 15000,
+  'device.pair.status': 15000,
+  'device.pairing.approve': 15000,
+  'device.pairing.close': 15000,
+  'device.pairing.deny': 15000,
+  'device.pairing.open': 15000,
+  'device.pairing.pending': 15000,
+  'device.remote.disable': 15000,
+  'device.remote.enable': 15000,
+  'device.remote.status': 15000,
+  'device.rename': 15000,
+  'device.revoke': 15000,
+  'device.server.identity': 15000,
   'fs.dir.create': 15000,
   'fs.dir.list': 30000,
   'fs.download.cancel': 15000,

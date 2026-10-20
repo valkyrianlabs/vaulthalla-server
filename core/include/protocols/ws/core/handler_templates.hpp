@@ -18,7 +18,8 @@ namespace vh::protocols::ws::core {
     // What an ERROR response carries for the exception being handled (call only inside a catch block). An ops
     // refusal gets a stable machine-readable `data.code` so clients can render a typed state instead of matching
     // message text: Denied "denied", NotFound "not_found", Invalid "invalid", Conflict "conflict", and
-    // NeedsConfirmation its own code (the client asks, then resends with the acceptance set). Anything that is not
+    // NeedsConfirmation its own code (the client asks, then resends with the acceptance set), Refused its own code
+    // (device pairing: no_pairing_window, rate_limited, device_unknown). Anything that is not
     // an ops::Error is a fault: the message, no code.
     struct ErrorReply {
         std::string message;
@@ -29,6 +30,8 @@ namespace vh::protocols::ws::core {
         try {
             throw;
         } catch (const ops::NeedsConfirmation &e) {
+            return {e.what(), json{{"code", e.code}}};
+        } catch (const ops::Refused &e) {
             return {e.what(), json{{"code", e.code}}};
         } catch (const ops::Denied &e) {
             return {e.what(), json{{"code", "denied"}}};

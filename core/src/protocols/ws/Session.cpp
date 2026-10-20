@@ -14,6 +14,8 @@
 #include "protocols/cookie.hpp"
 #include "rbac/Actor.hpp"
 #include "share/Principal.hpp"
+#include "device/Peer.hpp"
+#include "protocols/ws/TlsTransport.hpp"
 
 #include <boost/beast/http.hpp>
 #include <boost/uuid/uuid.hpp>
@@ -46,6 +48,26 @@ using namespace vh::protocols;
 
 namespace vh::protocols::ws {
 
+// The websocket over plain TCP or over TLS. Session code is written once against either: visit() hands the concrete
+// websocket::stream to a generic lambda, and both stream types share Beast's async API.
+struct Session::Stream {
+    using Plain = websocket::stream<tcp::socket>;
+
+    std::shared_ptr<Plain> plain;
+    std::shared_ptr<TlsTransport> tls;
+
+    template<class F>
+    decltype(auto) visit(F&& f) {
+        if (tls) return std::forward<F>(f)(tls->ws);
+        return std::forward<F>(f)(*plain);
+    }
+
+    tcp::socket& socket() {
+        if (tls) return beast::get_lowest_layer(tls->ws);
+        return beast::get_lowest_layer(*plain);
+    }
+};
+
 Session::Session(const std::shared_ptr<Router>& router)
     : tokens(std::make_shared<auth::model::TokenPair>()), router_(router) {
     buffer_.max_size(kWebSocketReadBufferMaxBytes);
@@ -58,8 +80,8 @@ Session::~Session() {
 
 std::string Session::getIPAddress() const {
     try {
-        if (!ws_ || !ws_->next_layer().is_open()) return "unknown";
-        return ws_->next_layer().remote_endpoint().address().to_string();
+        if (!stream_ || !stream_->socket().is_open()) return "unknown";
+        return stream_->socket().remote_endpoint().address().to_string();
     } catch (...) {
         return "unknown";
     }
@@ -134,14 +156,15 @@ void Session::logFail(std::string_view where, const beast::error_code& ec) {
 void Session::accept(tcp::socket&& socket) {
     uploadHandler_ = std::make_shared<handler::fs::Upload>(shared_from_this());
 
-    ws_ = std::make_shared<websocket::stream<tcp::socket>>(std::move(socket));
-    strand_ = asio::make_strand(ws_->get_executor());
+    stream_ = std::make_shared<Stream>();
+    stream_->plain = std::make_shared<Stream::Plain>(std::move(socket));
+    strand_ = asio::make_strand(stream_->plain->get_executor());
 
     auto req = std::make_shared<RequestType>();
     auto self = shared_from_this();
 
     beast_http::async_read(
-        ws_->next_layer(),
+        stream_->plain->next_layer(),
         tmpBuffer_,
         *req,
         asio::bind_executor(
@@ -172,13 +195,55 @@ void Session::onHeadersRead(const std::shared_ptr<RequestType>& req, const beast
     if (closing_.load(std::memory_order_acquire)) return;  // closed during hydration (e.g. by the sweeper)
 
     auto self = shared_from_this();
-    ws_->async_accept(
+    stream_->plain->async_accept(
         *req,
         asio::bind_executor(
             strand_,
             [self](const beast::error_code& ec2) {
                 self->onHandshakeAccepted(ec2);
             }));
+}
+
+void Session::acceptDevice(std::shared_ptr<TlsTransport> transport, const RequestType& req,
+                           std::shared_ptr<const ::vh::device::Peer> peer, std::shared_ptr<identities::User> deviceUser) {
+    if (!transport || !peer) throw std::invalid_argument("device session needs its transport and peer");
+    if (deviceUser && deviceUser->systemOnly()) throw std::runtime_error("System-only users cannot own devices");
+
+    uploadHandler_ = std::make_shared<handler::fs::Upload>(shared_from_this());
+    stream_ = std::make_shared<Stream>();
+    stream_->tls = std::move(transport);
+    strand_ = asio::make_strand(stream_->tls->ws.get_executor());
+
+    // No cookies, tokens or forwarded headers here: who this is was settled by the client certificate.
+    handshakeRequest_ = req;
+    ipAddress = peer->address;
+    clientAddress = peer->address;
+    userAgent = getUserAgent();
+    devicePeer_ = std::move(peer);
+    user = std::move(deviceUser);
+    mode_ = user ? SessionMode::Device : SessionMode::DevicePairing;
+
+    auto& ws = stream_->tls->ws;
+    // A paired Desktop keeps its connection open indefinitely; pings find the dead ones.
+    auto timeouts = websocket::stream_base::timeout::suggested(beast::role_type::server);
+    timeouts.idle_timeout = std::chrono::minutes(2);
+    timeouts.keep_alive_pings = true;
+    ws.set_option(timeouts);
+    ws.set_option(websocket::stream_base::decorator([](websocket::response_type& res) {
+        res.set(beast_http::field::server, "Vaulthalla");
+    }));
+
+    if (const auto manager = runtime::Deps::get().sessionManager) manager->cache(shared_from_this());
+
+    auto self = shared_from_this();
+    asio::dispatch(strand_, [self, req = std::make_shared<RequestType>(req)] {
+        if (self->closing_.load(std::memory_order_acquire)) return self->closeOnStrand();
+        self->stream_->tls->ws.async_accept(
+            *req,
+            asio::bind_executor(self->strand_, [self, req](const beast::error_code& ec) {
+                self->onHandshakeAccepted(ec);
+            }));
+    });
 }
 
 void Session::hydrateFromRequest(const RequestType& req) {
@@ -245,12 +310,13 @@ void Session::installHandshakeDecorator() const {
         return;
     }
 
-    if (!ws_) return;
+    if (!stream_ || !stream_->plain) return;
+    const auto& ws = stream_->plain;
     const auto t = token->rawToken;
     const auto cookieName = shareHandshake_ ? std::string{"share_refresh"} : std::string{"refresh"};
     const bool secureCookie = externallyHttps_;
-    ws_->set_option(websocket::stream_base::timeout::suggested(beast::role_type::server));
-    ws_->set_option(websocket::stream_base::decorator(
+    ws->set_option(websocket::stream_base::timeout::suggested(beast::role_type::server));
+    ws->set_option(websocket::stream_base::decorator(
         [t, cookieName, secureCookie](websocket::response_type& res) {
             res.set(beast_http::field::server, "Vaulthalla");
 
@@ -308,21 +374,18 @@ void Session::close() {
     if (uploadHandler_)
         uploadHandler_->abortActiveUpload("websocket_session_closed");
 
-    auto ws = ws_;
-    if (!ws) {
+    auto stream = stream_;
+    if (!stream) {
         buffer_.consume(buffer_.size());
         return;
     }
 
     if (!self) {
+        // Destruction: nothing can be pending (every async op holds a reference), so the socket just goes.
         boost::system::error_code ec;
-        if (ws->is_open())
-            ws->close(websocket::close_code::normal, ec);
-
-        if (ec)
-            log::Registry::ws()->debug("[ws::Session] ws close error: {}", ec.message());
-
-        ws_.reset();
+        stream->socket().shutdown(tcp::socket::shutdown_both, ec);
+        stream->socket().close(ec);
+        stream_.reset();
         buffer_.consume(buffer_.size());
         return;
     }
@@ -333,6 +396,14 @@ void Session::close() {
         self->writeQueue_.clear();
         self->closeOnStrand();
     });
+}
+
+void Session::closeAfterReply() {
+    auto self = weak_from_this().lock();
+    if (!self || !stream_) return close();
+    // The handler's reply is posted to the strand after this returns; posting the close from a strand handler puts it
+    // behind that reply, and close() then waits for the write in flight (closeAfterWrite_).
+    asio::post(strand_, [self] { asio::post(self->strand_, [self] { self->close(); }); });
 }
 
 void Session::send(json message) {
@@ -352,7 +423,7 @@ void Session::send(json message) {
     auto self = shared_from_this();
 
     asio::post(strand_, [self, payload = std::move(payload)]() mutable {
-        if (self->closing_.load(std::memory_order_acquire) || !self->ws_) return;
+        if (self->closing_.load(std::memory_order_acquire) || !self->stream_) return;
         self->writeQueue_.push_back(std::move(payload));
         self->maybeStartWrite();
     });
@@ -362,7 +433,7 @@ void Session::closeOnStrand() {
     // The stream lives as long as the Session: pending async ops hold `self`, and resetting ws_ under
     // them left handlers dereferencing a null stream (vh-storage SIGSEGV in installHandshakeDecorator
     // under connection churn) and reads running on a destroyed socket.
-    if (!ws_ || closeStarted_) {
+    if (!stream_ || closeStarted_) {
         buffer_.consume(buffer_.size());
         return;
     }
@@ -372,12 +443,12 @@ void Session::closeOnStrand() {
     }
     closeStarted_ = true;
 
-    if (!handshakeDone_ || !ws_->is_open()) {
+    if (!handshakeDone_ || !stream_->visit([](auto& ws) { return ws.is_open(); })) {
         // No websocket session yet (still reading the upgrade request or mid-handshake): closing the TCP
         // socket cancels the pending op, whose handler sees closing_ and stops.
         beast::error_code ignored;
-        ws_->next_layer().shutdown(tcp::socket::shutdown_both, ignored);
-        ws_->next_layer().close(ignored);
+        stream_->socket().shutdown(tcp::socket::shutdown_both, ignored);
+        stream_->socket().close(ignored);
         buffer_.consume(buffer_.size());
         log::Registry::ws()->debug("[ws::Session] Closed pre-handshake connection for IP: {}", ipAddress);
         return;
@@ -387,15 +458,17 @@ void Session::closeOnStrand() {
     // racing this session's always-pending async_read and corrupting Beast's op locks (soft_mutex abort,
     // "server must not mask frames" in browsers). async_close is the one close op allowed alongside a
     // pending read; callers only get here once no write is in flight (closeAfterWrite_).
-    ws_->async_close(
-        websocket::close_code::normal,
-        asio::bind_executor(
-            strand_,
-            [self = shared_from_this()](const beast::error_code& ec) {
-                if (ec) log::Registry::ws()->debug("[ws::Session] ws close error: {}", ec.message());
-                self->buffer_.consume(self->buffer_.size());
-                log::Registry::ws()->debug("[ws::Session] Closed session for IP: {}", self->ipAddress);
-            }));
+    stream_->visit([this](auto& ws) {
+        ws.async_close(
+            websocket::close_code::normal,
+            asio::bind_executor(
+                strand_,
+                [self = shared_from_this()](const beast::error_code& ec) {
+                    if (ec) log::Registry::ws()->debug("[ws::Session] ws close error: {}", ec.message());
+                    self->buffer_.consume(self->buffer_.size());
+                    log::Registry::ws()->debug("[ws::Session] Closed session for IP: {}", self->ipAddress);
+                }));
+    });
 }
 
 void Session::maybeStartWrite() {
@@ -408,19 +481,21 @@ void Session::maybeStartWrite() {
 }
 
 void Session::doWrite() {
-    if (!ws_ || closeStarted_) {
+    if (!stream_ || closeStarted_) {
         writing_ = false;
         writeQueue_.clear();
         return;
     }
 
-    ws_->async_write(
-        asio::buffer(writeQueue_.front()),
-        asio::bind_executor(
-            strand_,
-            [self = shared_from_this()](const beast::error_code& ec, std::size_t bytesWritten) {
-                self->onWrite(ec, bytesWritten);
-            }));
+    stream_->visit([this](auto& ws) {
+        ws.async_write(
+            asio::buffer(writeQueue_.front()),
+            asio::bind_executor(
+                strand_,
+                [self = shared_from_this()](const beast::error_code& ec, std::size_t bytesWritten) {
+                    self->onWrite(ec, bytesWritten);
+                }));
+    });
 }
 
 void Session::onWrite(const beast::error_code& ec, std::size_t) {
@@ -449,15 +524,17 @@ void Session::onWrite(const beast::error_code& ec, std::size_t) {
 }
 
 void Session::doRead() {
-    if (!ws_) return;
+    if (!stream_) return;
 
-    ws_->async_read(
-        buffer_,
-        asio::bind_executor(
-            strand_,
-            [self = shared_from_this()](const beast::error_code& ec, const std::size_t bytesRead) {
-                self->onRead(ec, bytesRead);
-            }));
+    stream_->visit([this](auto& ws) {
+        ws.async_read(
+            buffer_,
+            asio::bind_executor(
+                strand_,
+                [self = shared_from_this()](const beast::error_code& ec, const std::size_t bytesRead) {
+                    self->onRead(ec, bytesRead);
+                }));
+    });
 }
 
 void Session::sendParseError(const std::string_view msg) {
@@ -490,7 +567,7 @@ void Session::onRead(const beast::error_code& ec, std::size_t) {
         return close();
     }
 
-    if (ws_->got_binary()) {
+    if (stream_->visit([](auto& ws) { return ws.got_binary(); })) {
         try {
             uploadHandler_->handleBinaryFrame(buffer_);
         } catch (const std::exception& ex) {

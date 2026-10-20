@@ -1,6 +1,7 @@
 #include "protocols/ws/Handler.hpp"
 #include "protocols/ws/Router.hpp"
 #include "protocols/ws/handler/Auth.hpp"
+#include "protocols/ws/handler/Devices.hpp"
 #include "protocols/ws/handler/fs/Storage.hpp"
 #include "protocols/ws/handler/rbac/Permissions.hpp"
 #include "protocols/ws/handler/Settings.hpp"
@@ -52,6 +53,7 @@ void Handler::registerAllHandlers(const std::shared_ptr<Router>& r) {
     registerShareDownloadHandlers(r);
     registerSharePreviewHandlers(r);
     registerShareUploadHandlers(r);
+    registerDeviceHandlers(r);
 
     log::Registry::ws()->debug("[WebSocketHandler] All handlers registered successfully.");
 }
@@ -69,6 +71,26 @@ void Handler::registerAuthHandlers(const std::shared_ptr<Router>& r) {
     r->registerSessionOnlyHandler("auth.users.list", &handler::Auth::listUsers);
     r->registerSessionOnlyHandler("auth.security.status", &handler::Auth::securityStatus);
     r->registerHandlerWithToken("auth.refresh", &handler::Auth::refreshToken);
+}
+
+// Paired devices (ops::devices). Which sessions reach which is the router's decision (classifyCommand).
+void Handler::registerDeviceHandlers(const std::shared_ptr<Router>& r) {
+    r->registerPayload("device.pair.request", &handler::Devices::pairRequest);
+    r->registerPayload("device.pair.confirm", &handler::Devices::pairConfirm);
+    r->registerPayload("device.pair.status", &handler::Devices::pairStatus);
+    r->registerPayload("device.identity.rotate", &handler::Devices::identityRotate);
+    r->registerSessionOnlyHandler("device.server.identity", &handler::Devices::serverIdentity);
+    r->registerSessionOnlyHandler("device.pairing.open", &handler::Devices::pairingOpen);
+    r->registerSessionOnlyHandler("device.pairing.close", &handler::Devices::pairingClose);
+    r->registerSessionOnlyHandler("device.pairing.pending", &handler::Devices::pairingPending);
+    r->registerPayload("device.pairing.approve", &handler::Devices::pairingApprove);
+    r->registerPayload("device.pairing.deny", &handler::Devices::pairingDeny);
+    r->registerPayload("device.list", &handler::Devices::list);
+    r->registerPayload("device.rename", &handler::Devices::rename);
+    r->registerPayload("device.revoke", &handler::Devices::revoke);
+    r->registerSessionOnlyHandler("device.remote.status", &handler::Devices::remoteStatus);
+    r->registerSessionOnlyHandler("device.remote.enable", &handler::Devices::remoteEnable);
+    r->registerSessionOnlyHandler("device.remote.disable", &handler::Devices::remoteDisable);
 }
 
 void Handler::registerMetaHandlers(const std::shared_ptr<Router>& r) {

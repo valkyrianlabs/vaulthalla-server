@@ -16,7 +16,9 @@ using json = nlohmann::json;
 
 class Router {
   public:
-    enum class CommandAuthDecision { Allow, RequireHumanAuth, Deny };
+    // DenyDeviceUnknown: a pairing-only connection on the device listener asked for anything but pairing; it is
+    // answered ERROR with data.code "device_unknown" (the same for unknown and revoked keys: no oracle).
+    enum class CommandAuthDecision { Allow, RequireHumanAuth, Deny, DenyDeviceUnknown };
 
     using SessionPtr = std::shared_ptr<Session>;
     using Handler = std::function<void(json&&, const SessionPtr&)>;
@@ -49,6 +51,10 @@ class Router {
     [[nodiscard]] static bool isShareUploadCommand(std::string_view command);
     [[nodiscard]] static bool isShareModeCommand(std::string_view command);
     [[nodiscard]] static bool isAuthenticatedShareManagementCommand(std::string_view command);
+    // device.pair.*: a device's side of pairing (pairing-only connections; a paired device may ask too).
+    [[nodiscard]] static bool isDevicePairCommand(std::string_view command);
+    // Commands only a paired device's own session may run (device.identity.rotate, device.server.identity).
+    [[nodiscard]] static bool isDeviceOnlyCommand(std::string_view command);
     [[nodiscard]] static CommandAuthDecision classifyCommand(std::string_view command, const Session& session);
 
     // ---------------------------

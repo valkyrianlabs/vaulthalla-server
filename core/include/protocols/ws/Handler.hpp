@@ -33,6 +33,7 @@ class Handler {
     static void registerShareDownloadHandlers(const std::shared_ptr<Router>& r);
     static void registerSharePreviewHandlers(const std::shared_ptr<Router>& r);
     static void registerShareUploadHandlers(const std::shared_ptr<Router>& r);
+    static void registerDeviceHandlers(const std::shared_ptr<Router>& r);
 };
 
 }

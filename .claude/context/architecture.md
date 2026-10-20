@@ -63,8 +63,9 @@ are detached; workers hold only shared state).
 a service after 500ms. Start order:
 
 ```
-FUSE → SyncController → DBJanitor → VaultRetentionService → LogRotationService → StatsSnapshotService →
-OperatorEmailService → ConnectionLifecycleManager → ProtocolService → S3GatewayService (+ ShellServer)
+FUSE → IdentityWatcher → SyncController → UpstreamEventService → DBJanitor → VaultRetentionService →
+LogRotationService → StatsSnapshotService → OperatorEmailService → ConnectionLifecycleManager → ProtocolService →
+DeviceServer → S3GatewayService (+ ShellServer)
 ```
 
 Stop order is the reverse, with the ShellServer stopped right after ProtocolService.
@@ -78,6 +79,7 @@ ShellServer is not created in test mode (`paths::testMode`).
 | HTTP preview/download/upload/auth | `http/Server.cpp`, `http/Session.cpp`, `http/Router.cpp`, `http/Access.cpp`, `http/handler/*`, `http/upload/Coordinator.cpp` | `0.0.0.0:36970` (fresh installs: `127.0.0.1`) |
 | S3 gateway (SigV4, multipart) | `s3/*` (`GatewayService`, `SigV4`, `ObjectStore`, `MultipartStore`, `CredentialManager`) | `0.0.0.0:39000`, disabled by default |
 | Shell/CLI control | `shell/Server.cpp`, `shell/Router.cpp`, `shell/commands/*` | unix socket `/run/vaulthalla/cli.sock` |
+| Device listener (Vaulthalla Desktop, mutual TLS) | `device/Service.cpp`, `device/Listener.cpp` (`/ws` → the ws Router) | `127.0.0.1:36971`; `0.0.0.0` once `device_server.remote` (absent section = these defaults) |
 
 > `core/include/config/Config.hpp` compiled-in defaults are **33369/33370**, but the shipped config,
 > web fallbacks, and Caddyfile all use **36969/36970**. Trust the config file, and treat that
@@ -135,7 +137,8 @@ lingering in the session manager until the lifecycle sweep.
 
 The web client builds `ws(s)://<host>/ws` in `web/src/util/getUrl.ts` (overridable with `NEXT_PUBLIC_VAULTHALLA_WS_ORIGIN`).
 `web/src/stores/useWebSocket.ts` handles reconnect, the pending-request map keyed by `requestId`, and token injection.
-Router allowlists are **exact and per session mode**: unauthenticated, human, pending-share, and ready-share.
+Router allowlists are **exact and per session mode**: unauthenticated, human, pending-share, ready-share, and on the
+device listener device and device-pairing (see "Device listener and pairing" below).
 Only the session-lifecycle commands (`auth.login`, `auth.logout`, `auth.refresh`, `auth.isAuthenticated`) skip
 access-token validation (`isSessionLifecycleCommand`, mirrored by the web's
 `SESSION_LIFECYCLE_COMMANDS`). Every other `auth.*` command (register, user update/delete/get/list, password change)
@@ -151,6 +154,66 @@ Refused requests (unauthorized, rate limited) warn once per client + command per
 (`RefusalLogThrottle`, bounded map + overflow bucket, summary "suppressed N more in Ns"); per-request detail is
 debug only, and client-invented command names share one label so they can't mint a warning each (#135).
 See `link-sharing.md`.
+
+### Device listener and pairing (Vaulthalla Desktop, S1a)
+
+Normative protocol: `docs/pairing.md` in `vaulthalla/desktop` (its §8 test vectors are asserted in
+`test_device_crypto.cpp`). Decisions D1-D3 in that repo's `docs/architecture.md` §8.
+- **Listener** (`protocols/device/`): runtime service `DeviceServer` (after ProtocolService) with its own io_context
+  (4 threads + work guard). Boost.Asio `ssl::stream`, TLS 1.3 only, no tickets/session cache, client certificate
+  required with a verify callback that accepts any chain (dates, EKU, self-signature unchecked: TLS 1.3
+  CertificateVerify proves possession), client sigalgs `ECDSA+SHA256`. After the handshake the leaf must be EC
+  P-256; its SPKI SHA-256 (DER exactly as in the certificate) is authorized **once, at handshake time**
+  (`device::authorize`): a live `devices` row (current or previous key) → Device session as that row's user (the
+  canonical `identities::Manager` object); anything else (unknown, revoked, owner gone) → pairing-only. A handshake
+  with a rotated device's new key clears `previous_spki_sha256`. Then the HTTP request is read and dispatched by path
+  in `Connection::dispatch`: `/ws` upgrades into `ws::Session::acceptDevice`, everything else is 404 (**S1b seam**:
+  `/preview`, `/download`, `/upload` and `/mcp` go there, with the same `Authorization`). Cap
+  `device_server.max_connections` (own `ConnectionSlot::Pool::Device`; over it the socket is closed, a TLS client
+  can't read a 503), 10 s handshake and request deadlines. A bind failure never stops the daemon: it is in
+  `listenerStatus()` and retried every 30 s.
+- **Server identity** (`device/ServerIdentity`): P-256 scalar sealed through `KeyProvider("device_tls")`
+  (`test_device_tls` in test mode), generated on first start; self-signed certificate (serverAuth, 20 years) kept as
+  `<state>/device_server_certificate.pem` and re-issued for the same key when missing or mismatched (the pin is the
+  key's SPKI hash, so that is invisible to clients). Server-key rotation (spec §5) is minimal: `device.server.identity`
+  returns the current SPKI only, never a next one.
+- **One `ws::Session` for both transports.** The websocket lives behind `Session::Stream` (a plain
+  `websocket::stream<tcp::socket>` or a `TlsTransport`, visited with a generic lambda), so every handler and the
+  Router are unchanged; `TlsTransport.hpp` keeps Asio's SSL headers out of `Session.hpp`. Chosen over a socketpair
+  handoff: no second hop, no out-of-band identity channel, and the session holds the device identity
+  (`devicePeer()`) itself.
+- **Session modes** `Device` / `DevicePairing` (`SessionMode`). Device: no tokens (`session::Manager::validate` is
+  true while the user is `authorizing()` and the session open), `rbacActor()` = `human(user)`, classify = the Human set
+  minus `auth.login|logout|refresh|register` and the share-recipient commands, plus `device.*`; deactivation or
+  deletion is seen on the next command. Pairing: only `device.pair.*` and `meta.contract.get`; anything else is ERROR
+  `data.code: device_unknown` (same for unknown and revoked keys). `device.identity.rotate` /
+  `device.server.identity` only in Device mode; `device.pair.*` never on console sessions. Contract auth levels
+  `pairing` and `device` (`human` commands also run in Device mode). The sweeper keeps Device sessions while their
+  user may sign in (no refresh token to expire) and closes pairing-only ones after 15 minutes (`DeviceEnded`).
+  `auth::Manager::revokeSessions` closes Device sessions (they have no token to revoke); revocation closes the
+  device's sessions (`protocols::device::closeDeviceSessions`; a device revoking itself gets its reply first,
+  `Session::closeAfterReply`). `last_seen_at/last_ip` are written at the handshake and at most every 5 min per
+  session (`device::touch`). Audit lines written while a device's command runs end with `[via device <id16>]`
+  (`log::AuditOrigin`, a thread-local read by the audit sink's `%*` flag).
+- **Pairing state is in memory** (`device::Pairing`, process singleton): windows (10 min, **one per node**, reopening
+  extends; another user's open is `conflict`), requests (commit-then-reveal; 5 min after confirm, never past the
+  window; one live request per key; ≤ 5 per window and ≤ 10/min per source IP → `rate_limited`), outcomes kept 10
+  min for `device.pair.status`. Nonces and codes never touch disk; a restart only makes Desktop start over. Number
+  matching: `pending` offers three codes (one SAS, two decoys fixed per request), `approve` compares in constant time
+  and any other code denies. No long poll on `device.pair.status` (answered at once).
+- **ops::devices** (`ops/Devices.cpp`): D3, no new permission bits: any signed-in user opens windows and approves for
+  their own account; list/rename/revoke own devices (others' are `not_found`); super admins list (`--all`) and revoke
+  every device. Rotation checks in the spec's order (current key, P-256 cert, never-seen key, ±300 s, signature under
+  the connection's key and this server's SPKI); a retry from the previous key naming the same new key succeeds
+  again, another key is `conflict`. Remote connections (D1): `ops::config::setDeviceRemote` (super admins, like
+  `settings.update`) writes `device_server.remote` through the settings commit, which calls
+  `DeviceServer::applyConfig()`: the listener rebinds in place, and turning remote off closes non-loopback device
+  sessions. `ops::Refused{code}` carries the pairing codes (`no_pairing_window`, `rate_limited`, `device_unknown`).
+- **Table** `devices` (migration 112): `spki_sha256` UNIQUE, previous key unique (partial index), `user_id` CASCADE,
+  `approved_by` SET NULL; revoked rows stay (a revoked key never pairs again). `device_node` holds the node id
+  Desktop records (created on first use).
+- **Known conflict:** the macOS package's bundled PostgreSQL listens on `127.0.0.1:36971`, the listener's default
+  port; on a packaged Mac the listener reports the port in use until one of them moves (maintainer decision).
 
 ### Super-admin initial credential
 
@@ -392,7 +455,7 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
 
 ## Database
 
-- PostgreSQL via libpqxx. The schema is `deploy/psql/000…110_*.sql`, applied in order (all in ONE transaction by `core/seed/include/SqlDeployer.hpp`) and installed to `/usr/share/vaulthalla/psql`.
+- PostgreSQL via libpqxx. The schema is `deploy/psql/000…112_*.sql`, applied in order (all in ONE transaction by `core/seed/include/SqlDeployer.hpp`) and installed to `/usr/share/vaulthalla/psql`.
   New migrations take the next number and must be idempotent against upgraded installs. SqlDeployer records sha256(raw bytes)
   per file and refuses to start on a mismatch, so **never edit a shipped migration**: 020/060/082 were edited in place and
   bricked upgrades (1.5.x→1.6.x crash loop on 060). Reviewed exceptions live in `kHistoricalMigrationChecksums` (accepted, recorded
@@ -435,7 +498,8 @@ converter-helper runner/queue (`derive/`, below) · `protocols` · `rbac` roles/
 sharing · `stats` dashboard telemetry + snapshots · `storage` local + S3 backends, remote index · `sync`
 controller, strategies `cache|sync|mirror`, cost guardrails · `vault` vault model, slugs, FUSE names ·
 `recovery` file recovery: local snapshots/versions, provider versioning, usage ledger, cost model (below) ·
-`ops` actor-authorized operations shared by the CLI and ws handlers (below).
+`ops` actor-authorized operations shared by the CLI and ws handlers (below) · `device` paired devices: protocol
+crypto, server identity, in-memory pairing, handshake authorization (the listener itself is `protocols/device`).
 
 **Config keys renamed or moved (#164).** `config.yaml` is never rewritten on upgrade, so `loadConfig` keeps reading
 the old spellings: `sharing.enable_public_links` → `sharing.enable_email_validated`, and
@@ -545,7 +609,8 @@ policies), `config` (every settings write: one validation, one apply step that r
 `s3_gateway.enabled` changes), `stats` (authorization only, ws-only: there is no `vh` stats command; `vh status`
 is deliberately ungated, see Stats below), `conflicts` (sync conflicts, #187: ws `sync.conflicts.*`, `vh sync resolve` /
 `vh resolve`, the HTTP `/download/conflict` lane's authorization), `upstream` (S3/R2 bucket administration and event
-sync, #237/#96: ws `upstream.*`, `vh upstream …`; see `upstream-control-plane.md`), `recovery` (file recovery: ws `recovery.*` / `vault.recovery.*`, `vh snapshot|recovery …`, `vh vault recovery …`; see `recovery.md`). Still per-surface: the ws-only pricing preflight/override/notification endpoints,
+sync, #237/#96: ws `upstream.*`, `vh upstream …`; see `upstream-control-plane.md`), `recovery` (file recovery: ws `recovery.*` / `vault.recovery.*`, `vh snapshot|recovery …`, `vh vault recovery …`; see `recovery.md`), `devices` (paired devices: ws `device.*`, `vh device …`; see "Device listener
+and pairing"). Still per-surface: the ws-only pricing preflight/override/notification endpoints,
 email test-send/history, vault keys/sync diagnostics, and lifecycle commands (`setup`, `teardown`, `secrets`).
 
 Rules the families hold (keep them in ops, never re-add them in a handler):

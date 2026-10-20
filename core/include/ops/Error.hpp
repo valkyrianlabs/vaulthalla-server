@@ -32,6 +32,14 @@ struct Conflict : Error {
     using Error::Error;
 };
 
+// A refusal with its own stable code where none of the kinds above says enough for the client to act on it (device
+// pairing: "no_pairing_window", "rate_limited", "device_unknown"). The ws data.code is `code`; the CLI treats it like
+// any other refusal.
+struct Refused : Error {
+    std::string code;
+    Refused(std::string code_, const std::string& text) : Error(text), code(std::move(code_)) {}
+};
+
 // The operation needs a person's explicit acceptance first (e.g. an encryption waiver over existing bucket data).
 // `code` is stable for clients; what() is the text to show. The caller asks, then repeats the request with the
 // acceptance set. Operations never prompt themselves.

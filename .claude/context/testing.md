@@ -117,6 +117,19 @@ Web: `web/tests/e2e/recovery.spec.ts` (scripted ws answers; see `web-client.md`)
 | `RecoveryVersionsTest` (`test_recovery_versions.cpp`) | local versioning: createFile overwrite and FUSE seal (`WorkingCopies::daemonHooks`) keep decryptable prior generations, deletes (file, folder) keep the last one, rename/copy/key rotation keep none, off path loads the policy once, empty generations skipped, concurrent writers, crash leftover swept, keep_last at capture, max age / quota, snapshot-held blob survives; upstream backlog through the `VersionedBucket` fake: outage → ordered replay (own IV/hash per version, a failed replay holds the upload back), key rotation between generations (encrypted and plaintext upstream), unversioned/propagating/suspended → skipped, smart-cache release, replays in `Planner::estimateS3Cost`, orphaned backlog of a deleted file settled by maintenance (#249: replayed + re-deleted / `orphaned`, live and trashed keys untouched, waits while propagating) | test DB env |
 | `VaultRetentionTest` (`test_vault_retention.cpp`) | safe deletion (#162): schedule → restore, purge after the window (injected pass clock), delete now, resumed purge, key tombstone + expiry, S3 key-loss gate, bounded upstream purge (fake controller), shared-bucket guard, path guard | test DB env |
 
+## Device listener and pairing suites
+
+| Suite (file) | Covers | Needs |
+|---|---|---|
+| `DeviceCryptoVectors`, `DeviceCryptoEncodings`, `DeviceNames`, `DeviceServerIdentity`, `DeviceAuditOrigin` (`test_device_crypto.cpp`) | every docs/pairing.md §8 vector (commitment, SAS, leading-zero code, generator SPKI, rotation message, the spec's signature and one made here), hex/base64, code input, names, certificate re-issue keeps the pin | nothing |
+| `DevicePairing` (`test_device_pairing.cpp`) | the in-memory state machine with an injected clock: one window per node, commit-then-reveal, three choices, wrong code denies, expiry, limits | nothing |
+| `DeviceListenerTest` (`test_device_listener.cpp`) | real TLS 1.3 against a `Listener` on 127.0.0.1:0 (`tests/helpers/device_client.hpp`): TLS profile (1.2, no cert, P-384 refused), pairing-only → `device_unknown`, the full pairing flow through the Router, revocation, rotation (replays, idempotent retry), RBAC/deactivation/`revokeSessions` on live sessions, sweeper, contract auth levels vs the Router, `DeviceServer` rebinding loopback ↔ every interface | test DB env |
+| `DeviceParityTest` (`test_ops_parity_devices.cpp`) | `vh device` vs ws `device.*`: windows, number matching, list/rename/revoke ownership, remote switch for every seeded admin role (settings written to a private config copy) | test DB env |
+
+On macOS, run DB suites on a private cluster when another checkout may be testing: `VH_TEST_PG_DIR=$TMPDIR/<name>
+VH_TEST_PG_PORT=<port> tools/macos/test-db.sh up` (two runs on one cluster drop each other's schema). Device tests
+never bind 36971 (port 0).
+
 - **ThreadSanitizer** for the identity publication code: `meson setup build-tsan -Db_sanitize=thread
   -Dbuild_unit_tests=true -Db_lundef=false && ninja -C build-tsan core/vh_unit_tests`, then run with ASLR off (TSan
   aborts with "unexpected memory mapping" on this kernel otherwise): `setarch -R ./build-tsan/core/vh_unit_tests

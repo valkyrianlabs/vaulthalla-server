@@ -20,6 +20,10 @@ Config saveSettings(const Actor& actor, const nlohmann::json& settings);
 // `vh s3-gateway enable|disable`: admin.s3_gateway.manage_service.
 Config setGatewayEnabled(const Actor& actor, bool enabled);
 
+// `vh device remote enable|disable` (ws device.remote.*): device_server.remote, super admins only (it changes the
+// daemon's network exposure; there is no device permission, D3). The device listener rebinds at once.
+Config setDeviceRemote(const Actor& actor, bool enabled);
+
 // Refuses an invalid document (throws ops::Invalid) without touching anything. preview.derive.helper_dir is
 // read-only: a document that changes it is invalid (config.yaml only).
 void validateSettings(const nlohmann::json& settings);

@@ -8,6 +8,7 @@
 #include "config/Registry.hpp"
 #include "auth/model/TokenPair.hpp"
 #include "auth/model/RefreshToken.hpp"
+#include "identities/User.hpp"
 
 using namespace vh::protocols::ws;
 using namespace vh::auth;
@@ -50,6 +51,11 @@ ConnectionLifecycleManager::SweepVerdict ConnectionLifecycleManager::verdict(
     const Session& session, const system_clock::time_point now, const seconds unauthenticatedTimeout) {
     const bool expired = session.connectionOpenedAt + unauthenticatedTimeout < now;
     if (!session.handshakeComplete()) return expired ? SweepVerdict::UnauthenticatedTimeout : SweepVerdict::Keep;
+    // The device listener's sessions have no refresh token (the client certificate authenticated them).
+    if (session.isDevicePairing())
+        return session.connectionOpenedAt + kDevicePairingLifetime < now ? SweepVerdict::DeviceEnded : SweepVerdict::Keep;
+    if (session.isDeviceSession())
+        return session.user && session.user->authorizing() ? SweepVerdict::Keep : SweepVerdict::DeviceEnded;
     if (!session.user && !session.isShareSession() && expired) return SweepVerdict::UnauthenticatedTimeout;
 
     const auto refreshToken = session.tokens
@@ -67,11 +73,15 @@ void ConnectionLifecycleManager::sweepActiveSessions() const {
         if (decision == SweepVerdict::Keep) continue;
         try {
             log::Registry::ws()->debug("[LifecycleManager] Closing {} session opened at {}",
-                                       decision == SweepVerdict::UnauthenticatedTimeout ? "unauthenticated" : "expired",
+                                       decision == SweepVerdict::UnauthenticatedTimeout ? "unauthenticated"
+                                       : decision == SweepVerdict::DeviceEnded          ? "device"
+                                                                                        : "expired",
                                        system_clock::to_time_t(session->connectionOpenedAt));
             model::Response::UNAUTHORIZED("unauthenticated_session_timeout",
                 decision == SweepVerdict::UnauthenticatedTimeout
                     ? "Session closed due to inactivity. Please authenticate to continue."
+                : decision == SweepVerdict::DeviceEnded
+                    ? "Session closed: this device's account can no longer sign in, or pairing took too long."
                     : "Session closed due to expired refresh token. Please re-authenticate to continue.")(session);
             runtime::Deps::get().sessionManager->invalidate(session);
         } catch (const std::exception& e) {

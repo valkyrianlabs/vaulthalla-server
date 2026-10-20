@@ -119,6 +119,7 @@ Config& Config::operator=(Config&&) noexcept = default;
         if (auto node = root["websocket_server"]) YAML::convert<WebsocketConfig>::decode(node, cfg.websocket);
         if (auto node = root["http_preview_server"]) YAML::convert<HttpPreviewConfig>::decode(node, cfg.http_preview);
         if (auto node = root["s3_gateway"]) YAML::convert<S3GatewayConfig>::decode(node, cfg.s3_gateway);
+        if (auto node = root["device_server"]) YAML::convert<DeviceServerConfig>::decode(node, cfg.device_server);
         if (auto node = root["caching"]) YAML::convert<CachingConfig>::decode(node, cfg.caching);
         if (auto node = root["preview"]) YAML::convert<PreviewConfig>::decode(node, cfg.preview);
         if (auto node = root["database"]) YAML::convert<DatabaseConfig>::decode(node, cfg.database);
@@ -170,6 +171,7 @@ Config& Config::operator=(Config&&) noexcept = default;
         put("websocket_server", websocket);
         put("http_preview_server", http_preview);
         put("s3_gateway", s3_gateway);
+        put("device_server", device_server);
         put("database", database);
         put("auth", auth);
         put("sync", sync);
@@ -203,6 +205,7 @@ Config& Config::operator=(Config&&) noexcept = default;
             {"websocket_server", c.websocket},
             {"http_preview_server", c.http_preview},
             {"s3_gateway", c.s3_gateway},
+            {"device_server", c.device_server},
             {"caching", c.caching},
             {"preview", c.preview},
             {"database", c.database},
@@ -225,6 +228,7 @@ Config& Config::operator=(Config&&) noexcept = default;
         j.at("websocket_server").get_to(c.websocket);
         j.at("http_preview_server").get_to(c.http_preview);
         if (j.contains("s3_gateway")) j.at("s3_gateway").get_to(c.s3_gateway);
+        if (j.contains("device_server")) j.at("device_server").get_to(c.device_server);
         j.at("caching").get_to(c.caching);
         if (j.contains("preview")) j.at("preview").get_to(c.preview);
         j.at("database").get_to(c.database);
@@ -290,6 +294,22 @@ Config& Config::operator=(Config&&) noexcept = default;
         c.port = j.value("port", 33370);
         c.max_connections = j.value("max_connections", 512);
         c.max_preview_size_bytes = j.value("max_preview_size_bytes", MAX_PREVIEW_SIZE_BYTES);
+    }
+
+    void to_json(nlohmann::json &j, const DeviceServerConfig &c) {
+        j = {
+            {"enabled", c.enabled},
+            {"port", c.port},
+            {"remote", c.remote},
+            {"max_connections", c.max_connections}
+        };
+    }
+
+    void from_json(const nlohmann::json &j, DeviceServerConfig &c) {
+        c.enabled = j.value("enabled", true);
+        c.port = j.value("port", kDefaultDeviceServerPort);
+        c.remote = j.value("remote", false);
+        c.max_connections = j.value("max_connections", 256u);
     }
 
     void to_json(nlohmann::json &j, const S3GatewayMultipartConfig &c) {
