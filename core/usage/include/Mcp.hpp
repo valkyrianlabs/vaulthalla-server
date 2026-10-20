@@ -46,9 +46,17 @@ struct Invocation {
     std::vector<std::string> confirmed{};  // the ones this call passes
 };
 
+// The result frame's `confirmation` member: the refusal was for want of a confirmation (ops::NeedsConfirmation code
+// when there is one, and the flags that give it).
+struct Confirmation {
+    std::string code{};
+    std::vector<std::string> flags{};
+};
+
 struct CommandOutput {
     int exit_code = 0;
     std::string out{}, err{};
+    std::optional<Confirmation> confirmation{};
 };
 
 class Catalog {

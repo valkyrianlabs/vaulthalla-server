@@ -11,6 +11,7 @@
 #include "protocols/shell/Token.hpp"
 #include "protocols/shell/commands/all.hpp"
 #include "runtime/Deps.hpp"
+#include "identities/User.hpp"
 
 #include <gtest/gtest.h>
 
@@ -296,6 +297,10 @@ TEST(McpCatalog, TypedToolLinesPassTheRoutersOptionValidation) {
         }
         for (const auto& r : t.at("inputSchema").value("required", json::array()))
             minimal[r.get<std::string>()] = all[r.get<std::string>()];
+        // The MCP-level acknowledgement only: the command's own confirmation flags must still not appear.
+        const bool destructive = t.at("annotations").at("destructiveHint").get<bool>();
+        if (destructive) minimal["confirm"] = {{"destructive", true}};
+        EXPECT_EQ(destructive, props.contains("confirm") && props["confirm"]["properties"].contains("destructive")) << name;
 
         for (const auto& args : {all, minimal}) {
             const auto inv = invocation(name, args);
@@ -305,7 +310,7 @@ TEST(McpCatalog, TypedToolLinesPassTheRoutersOptionValidation) {
             // The daemon sees the argv the catalog built, token for token.
             const auto call = daemonParse(inv.line);
             EXPECT_EQ(call.name, inv.argv.front()) << inv.line;
-            if (!args.contains("confirm")) {
+            if (!args.contains("confirm") || args["confirm"].size() == (args["confirm"].contains("destructive") ? 1u : 0u)) {
                 for (const auto& gate : inv.gates)
                     EXPECT_TRUE(std::ranges::none_of(call.options, [&](const auto& o) { return o.key == gate; }))
                         << name << " passes --" << gate << " without confirm: " << inv.line;
@@ -319,17 +324,18 @@ TEST(McpCatalog, TypedToolRendering) {
     EXPECT_EQ(inv.line, "vault role assign docs 3 --group \"dev ops\"");
     inv = invocation("vaults_create", {{"name", "team"}});
     EXPECT_EQ(inv.line, "vault create team --local");
-    inv = invocation("users_delete", {{"user", "bob"}});
+    inv = invocation("users_delete", {{"user", "bob"}, {"confirm", {{"destructive", true}}}});
     EXPECT_EQ(inv.line, "user delete bob");
     EXPECT_EQ(inv.gates, std::vector<std::string>{"yes"});
-    inv = invocation("users_delete", {{"user", "bob"}, {"confirm", {{"yes", true}}}});
+    inv = invocation("users_delete", {{"user", "bob"}, {"confirm", {{"destructive", true}, {"yes", true}}}});
     EXPECT_EQ(inv.line, "user delete bob --yes");
     inv = invocation("recovery_status", {{"vault", 4}, {"refresh", true}});
     EXPECT_EQ(inv.line, "vault recovery status 4 --refresh --json");
 
     EXPECT_NE(refusal("users_delete", json::object()).find("user is required"), std::string::npos);
     EXPECT_NE(refusal("users_delete", {{"user", "bob"}, {"nope", 1}}).find("unknown argument"), std::string::npos);
-    EXPECT_NE(refusal("users_delete", {{"user", "bob"}, {"confirm", {{"accept-key-loss", true}}}}).find("no confirmation"),
+    EXPECT_NE(refusal("users_delete", {{"user", "bob"}, {"confirm", {{"destructive", true}, {"accept-key-loss", true}}}})
+                  .find("no confirmation"),
               std::string::npos);
     EXPECT_NE(refusal("recovery_update", {{"vault", 1}, {"mode", "sometimes"}}).find("one of"), std::string::npos);
 }
@@ -342,7 +348,7 @@ TEST(McpCatalog, RunLinesParseAsCheckedForEveryDocumentedExample) {
             auto line = example.cmd;
             if (!line.starts_with("vh ")) continue;
             line = line.substr(3);
-            auto prepared = catalog().prepare("vh_run", {{"command", line}});
+            auto prepared = catalog().prepare("vh_run", {{"command", line}, {"confirm", {{"destructive", true}}}});
             if (std::holds_alternative<json>(prepared)) continue;  // excluded, a group, or a confirmation flag
             const auto& inv = std::get<mcp::Invocation>(prepared);
             ++checked;
@@ -383,7 +389,8 @@ TEST(McpCatalog, RunRefusesWhatItCannotCheck) {
     auto inv = invocation("vh_run", {{"command", "vh users"}});
     EXPECT_EQ(inv.command, "user list");
     EXPECT_EQ(inv.effect, CommandEffect::Read);
-    inv = invocation("vh_run", {{"command", "upstream cleanup key bucket"}, {"confirm", {{"confirm-token", "t 1"}}}});
+    inv = invocation("vh_run", {{"command", "upstream cleanup key bucket"},
+                                {"confirm", {{"destructive", true}, {"confirm-token", "t 1"}}}});
     EXPECT_EQ(inv.line, "upstream cleanup key bucket --confirm-token \"t 1\" --json");
     inv = invocation("vh_read", {{"command", "group list --json"}});
     EXPECT_EQ(inv.line, "group list --json") << "--json is not added twice";
@@ -394,13 +401,15 @@ TEST(McpCatalog, RunRefusesWhatItCannotCheck) {
 // ---- results ----------------------------------------------------------------------------------------------------
 
 TEST(McpCatalog, RefusalsNamingAConfirmationBecomeNeedsConfirmation) {
-    const auto inv = invocation("users_delete", {{"user", "bob"}});
+    const auto inv = invocation("users_delete", {{"user", "bob"}, {"confirm", {{"destructive", true}}}});
     auto r = catalog().finish(inv, {.exit_code = 2, .out = {},
                                     .err = "user delete: bob owns 2 vaults\nRe-run with --yes to confirm."});
     EXPECT_TRUE(r.at("isError").get<bool>());
     EXPECT_EQ(r.at("structuredContent").at("needs_confirmation"), "yes");
-    EXPECT_NE(r.at("structuredContent").at("how_to_confirm").get<std::string>().find("\"confirm\": {\"yes\": true}"),
-              std::string::npos);
+    EXPECT_NE(r.at("structuredContent").at("how_to_confirm").get<std::string>().find(
+                  "\"confirm\": {\"destructive\": true, \"yes\": true}"),
+              std::string::npos)
+        << "keeps the acknowledgement already given";
 
     // Usage text that merely documents --yes is an ordinary failure.
     r = catalog().finish(inv, {.exit_code = 2, .out = "Usage: vh user delete <user> [--yes]", .err = "user delete: no such user"});
@@ -408,11 +417,11 @@ TEST(McpCatalog, RefusalsNamingAConfirmationBecomeNeedsConfirmation) {
     EXPECT_NE(text(r).find("exit 2"), std::string::npos);
 
     // Already confirmed: the refusal is reported as it is.
-    const auto confirmed = invocation("users_delete", {{"user", "bob"}, {"confirm", {{"yes", true}}}});
+    const auto confirmed = invocation("users_delete", {{"user", "bob"}, {"confirm", {{"destructive", true}, {"yes", true}}}});
     r = catalog().finish(confirmed, {.exit_code = 2, .out = {}, .err = "user delete: Re-run with --yes to confirm."});
     EXPECT_FALSE(r.contains("structuredContent"));
 
-    const auto vault = invocation("vaults_delete", {{"vault", 3}});
+    const auto vault = invocation("vaults_delete", {{"vault", 3}, {"confirm", {{"destructive", true}}}});
     r = catalog().finish(vault, {.exit_code = 2, .out = {},
                                  .err = "vault delete: the key was never exported\nRe-run with --accept-key-loss to "
                                         "delete anyway, or --delete-upstream to delete the upstream data too."});
@@ -471,6 +480,106 @@ TEST(McpServer, LifecycleListAndCall) {
                        {"params", {{"name", "vh_run"}, {"arguments", {{"command", "secrets export jwt-secret"}}}}}});
     EXPECT_TRUE((*r)["result"]["isError"].get<bool>());
     EXPECT_EQ(ran, std::vector<std::string>{"group list --json"}) << "an excluded command never reaches the executor";
+}
+
+// ---- the MCP layer's destructive gate ---------------------------------------------------------------------------
+
+TEST(McpCatalog, DestructiveCommandsNeedTheAcknowledgementBeforeAnythingRuns) {
+    struct Case {
+        std::string tool;
+        json args;
+        std::string command;
+    };
+    const std::vector<Case> cases{
+        {"vh_run", {{"command", "vault delete 3"}}, "vault delete"},
+        {"vaults_delete", {{"vault", 3}}, "vault delete"},
+        {"vh_run", {{"command", "user delete bob --transfer-to alice"}}, "user delete"},
+        {"users_delete", {{"user", "bob"}}, "user delete"},
+        {"vh_run", {{"command", "vault keys rotate 3"}}, "vault key rotate"},
+        {"vh_run", {{"command", "vault key rotate all --now"}}, "vault key rotate"},
+    };
+    for (const auto& c : cases) {
+        auto prepared = catalog().prepare(c.tool, c.args);
+        ASSERT_TRUE(std::holds_alternative<json>(prepared)) << c.tool << " ran without the acknowledgement";
+        const auto& r = std::get<json>(prepared);
+        EXPECT_TRUE(r.at("isError").get<bool>());
+        const auto& sc = r.at("structuredContent");
+        EXPECT_EQ(sc.at("needs_confirmation"), "destructive") << c.tool;
+        EXPECT_EQ(sc.at("command"), "vh " + c.command);
+        EXPECT_NE(sc.at("message").get<std::string>().find("is destructive"), std::string::npos);
+        EXPECT_NE(sc.at("message").get<std::string>().find("Nothing was run"), std::string::npos);
+
+        auto acked = c.args;
+        acked["confirm"] = {{"destructive", true}};
+        const auto inv = invocation(c.tool, acked);
+        EXPECT_EQ(inv.command, c.command);
+        EXPECT_EQ(inv.effect, CommandEffect::Destructive);
+        EXPECT_TRUE(std::ranges::none_of(inv.argv, [](const auto& a) { return a == "--destructive"; }))
+            << "the acknowledgement is the MCP layer's, never a CLI flag: " << inv.line;
+    }
+    // false is no acknowledgement; write and read commands need none.
+    EXPECT_TRUE(std::holds_alternative<json>(
+        catalog().prepare("vaults_delete", {{"vault", 3}, {"confirm", {{"destructive", false}}}})));
+    EXPECT_FALSE(invocation("vh_run", {{"command", "group create devs"}}).line.empty());
+    EXPECT_FALSE(invocation("vh_read", {{"command", "vault list"}}).line.empty());
+
+    // Through the server: the executor never sees an unacknowledged destructive call.
+    std::vector<std::string> ran;
+    mcp::Server server(catalog(), [&](const mcp::Invocation& call) {
+        ran.push_back(call.line);
+        return mcp::CommandOutput{.exit_code = 0, .out = "ok", .err = {}, .confirmation = {}};
+    }, "test");
+    auto r = server.handle({{"jsonrpc", "2.0"}, {"id", 1}, {"method", "tools/call"},
+                            {"params", {{"name", "vaults_delete"}, {"arguments", {{"vault", 3}}}}}});
+    EXPECT_EQ((*r)["result"]["structuredContent"]["needs_confirmation"], "destructive");
+    EXPECT_TRUE(ran.empty());
+    r = server.handle({{"jsonrpc", "2.0"}, {"id", 2}, {"method", "tools/call"},
+                       {"params", {{"name", "vaults_delete"}, {"arguments", {{"vault", 3}, {"confirm", {{"destructive", true}}}}}}}});
+    EXPECT_FALSE((*r)["result"]["isError"].get<bool>());
+    EXPECT_EQ(ran, std::vector<std::string>{"vault delete 3"});
+}
+
+// ---- the daemon's structured confirmation signal ----------------------------------------------------------------
+
+TEST(McpCatalog, StructuredConfirmationSignalWinsOverTheText) {
+    const auto inv = invocation("users_delete", {{"user", "bob"}, {"confirm", {{"destructive", true}}}});
+    // The text names no flag at all: only the frame's `confirmation` says what is missing.
+    auto r = catalog().finish(inv, {.exit_code = 2, .out = {}, .err = "user delete: bob owns 2 vaults",
+                                    .confirmation = mcp::Confirmation{.code = "user_delete", .flags = {"--yes"}}});
+    EXPECT_EQ(r.at("structuredContent").at("needs_confirmation"), "yes");
+    EXPECT_EQ(r.at("structuredContent").at("code"), "user_delete");
+    // A flag the command doesn't take is not something an agent could confirm: an ordinary failure.
+    r = catalog().finish(inv, {.exit_code = 2, .out = {}, .err = "Re-run with --yes",
+                               .confirmation = mcp::Confirmation{.code = "x", .flags = {"--accept-nothing"}}});
+    EXPECT_FALSE(r.contains("structuredContent"));
+}
+
+TEST(McpCatalog, RouterAttachesTheConfirmationNoteToARefusal) {
+    using namespace protocols::shell;
+    (void)router();
+    Router r;
+    auto usage = std::make_shared<CommandUsage>();
+    usage->aliases = {"mcptestcmd"};
+    usage->optional_flags = {Flag::Alias("ok", "succeed", "ok")};
+    r.registerCommand(usage, [](const CommandCall& call) {
+        noteConfirmationNeeded("test_code", {"--yes"});
+        if (std::ranges::any_of(call.options, [](const auto& o) { return o.key == "ok"; })) return CommandResult{0, "done", ""};
+        return CommandResult{2, "", "refused: Re-run with --yes"};
+    });
+    identities::UserState state;
+    state.name = "mcp-test";
+    const auto user = identities::User::detached(1, std::move(state));
+
+    auto res = r.executeLine("mcptestcmd", user);
+    EXPECT_EQ(res.exit_code, 2);
+    ASSERT_TRUE(res.confirmation);
+    EXPECT_EQ(res.confirmation->code, "test_code");
+    EXPECT_EQ(res.confirmation->flags, std::vector<std::string>{"--yes"});
+
+    res = r.executeLine("mcptestcmd --ok", user);
+    EXPECT_EQ(res.exit_code, 0);
+    EXPECT_FALSE(res.confirmation) << "a success never carries it";
+    EXPECT_FALSE(takeConfirmationNeeded()) << "nothing left over for the next command";
 }
 
 // ---- skill ------------------------------------------------------------------------------------------------------

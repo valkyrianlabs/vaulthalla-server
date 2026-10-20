@@ -361,7 +361,13 @@ using detail::Typed;
 
 namespace {
 
-bool isGateSpelling(const std::string& a) { return a == "yes" || a.starts_with("accept-") || a == "confirm-token"; }
+// The spellings of a confirmation flag: --yes, --accept-*, --adopt-bucket, and the --confirm-token option.
+bool isGateSpelling(const std::string& a) {
+    return a == "yes" || a.starts_with("accept-") || a == "adopt-bucket" || a == "confirm-token";
+}
+
+// The MCP layer's own acknowledgement for a destructive command, independent of the command's prompts.
+constexpr std::string_view kDestructiveAck = "destructive";
 
 Leaf describeLeaf(const UsagePtr& node) {
     Leaf leaf{.node = node, .path = canonicalPath(*node)};
@@ -384,19 +390,51 @@ Leaf describeLeaf(const UsagePtr& node) {
 
 // ---- JSON Schema ------------------------------------------------------------------------------------------------
 
-Json confirmSchema(const Leaf& leaf) {
+Json confirmSchema(const Leaf& leaf, const CommandEffect effect) {
     Json props = Json::object();
+    if (effect == CommandEffect::Destructive)
+        props[std::string(kDestructiveAck)] = {
+            {"type", "boolean"}, {"const", true},
+            {"description", "Acknowledges that this destructive command may be run; required on every call."}};
     for (const auto& g : leaf.gates)
         props[g.name] = g.takesValue
                             ? Json{{"type", "string"}, {"minLength", 1},
                                    {"description", g.description + " (the token the refusal printed)"}}
                             : Json{{"type", "boolean"}, {"const", true}, {"description", g.description}};
     return {{"type", "object"},
-            {"description", "Confirmations, passed as --" + joinWords(leaf.gateNames(), " / --") +
-                                ". Set one ONLY after the human explicitly approved this exact action in this "
+            {"description", std::string(effect == CommandEffect::Destructive ? "destructive: the MCP acknowledgement every "
+                                                                               "call of this command needs. " : "") +
+                                (leaf.gates.empty() ? std::string{}
+                                                    : "Command confirmations, passed as --" +
+                                                          joinWords(leaf.gateNames(), " / --") + ". ") +
+                                "Set one ONLY after the human explicitly approved this exact action in this "
                                 "conversation, normally after a call without it returned needs_confirmation."},
             {"properties", props},
             {"additionalProperties", false}};
+}
+
+// The needs_confirmation result: nothing ran; the human has to approve before the agent may call again with confirm.
+Json needsConfirmation(const std::string& tool, const std::string& command, const std::vector<std::string>& named,
+                       const std::string& code, const std::string& message, const std::vector<std::string>& already) {
+    const auto& n = named.front();
+    std::string confirmJson = "{";
+    for (const auto& a : already)
+        if (a != "confirm-token") confirmJson += "\"" + a + "\": true, ";
+    confirmJson += "\"" + n + "\": " + (n == "confirm-token" ? "\"<token>\"" : "true") + "}";
+    Json structured{
+        {"needs_confirmation", n},
+        {"confirm_options", named},
+        {"command", "vh " + command},
+        {"message", message},
+        {"how_to_confirm",
+         "Nothing was changed. Show this message to the human and ask whether to go ahead. Only if they explicitly "
+         "approve, call " + tool + " again with the same arguments and \"confirm\": " + confirmJson +
+             (named.size() > 1 ? " (or another of confirm_options, as the message explains)" : "") +
+             ". Never set confirm without that approval."}};
+    if (!code.empty()) structured["code"] = code;
+    return {{"content", Json::array({{{"type", "text"}, {"text", structured.dump(2)}}})},
+            {"structuredContent", structured},
+            {"isError", true}};
 }
 
 Json runSchema(const std::string& what) {
@@ -410,7 +448,8 @@ Json runSchema(const std::string& what) {
                                     "--confirm-token: use confirm."}}},
               {"confirm",
                {{"type", "object"},
-                {"description", "Confirmation flags by name, e.g. {\"yes\": true} or {\"confirm-token\": \"<token>\"}. "
+                {"description", "Confirmations by name: {\"destructive\": true} for any destructive command, and the "
+                                "command's own flags, e.g. {\"yes\": true} or {\"confirm-token\": \"<token>\"}. "
                                 "Set them ONLY after the human explicitly approved this exact action in this "
                                 "conversation, normally after a call without them returned needs_confirmation."},
                 {"additionalProperties", {{"type", {"boolean", "string"}}}}}}}},
@@ -559,9 +598,12 @@ struct Catalog::Impl {
             props[f.name] = fieldSchema(f, entryDescription(*t.leaf->node, it->second));
             if (f.required) required.push_back(f.name);
         }
-        if (!t.leaf->gates.empty()) props["confirm"] = confirmSchema(*t.leaf);
+        const bool destructive = t.effect == CommandEffect::Destructive;
+        if (!t.leaf->gates.empty() || destructive) props["confirm"] = confirmSchema(*t.leaf, t.effect);
         std::string desc = t.op.description + "\nRuns: " + t.leaf->node->synopsisLine() + "\nEffect: " +
                            effectText(t.effect) + ".";
+        if (destructive)
+            desc += " Destructive: refused until the human approves and you call with confirm: {\"destructive\": true}.";
         if (!t.leaf->gates.empty())
             desc += " Asks for confirmation: a first call returns needs_confirmation; ask the human, then call again "
                     "with confirm.";
@@ -615,15 +657,25 @@ struct Catalog::Impl {
 
     // Adds confirmations and --json, renders the line. `error` is set when the call is refused.
     std::variant<Invocation, Json> finalize(const std::string& tool, const Leaf& leaf, std::vector<Tok> toks,
-                                            const Json& confirm, const bool help,
+                                            const Json& confirm, const bool help, const CommandEffect effect,
                                             const std::vector<std::pair<std::string, std::optional<std::string>>>& options) const {
         Invocation inv{.tool = tool, .command = leaf.command,
-                       .effect = help ? CommandEffect::Read : leaf.node->effect, .gates = leaf.gateNames()};
+                       .effect = help ? CommandEffect::Read : effect, .gates = leaf.gateNames()};
+        std::string spelled = "vh";
+        for (const auto& t : toks) spelled += " " + renderToken(t);
+        bool destructiveAck = false;
         if (!confirm.is_null()) {
             if (!confirm.is_object()) return errorResult("confirm must be an object, e.g. {\"yes\": true}");
             for (const auto& [key, value] : confirm.items()) {
                 auto name = key;
                 while (name.starts_with("-")) name.erase(name.begin());
+                if (name == kDestructiveAck) {
+                    if (value != Json(true) && value != Json(false))
+                        return errorResult("confirm.destructive must be true");
+                    destructiveAck = value == Json(true);
+                    if (destructiveAck) inv.confirmed.emplace_back(kDestructiveAck);
+                    continue;
+                }
                 const auto* gate = leaf.gate(name);
                 if (!gate)
                     return errorResult("vh " + leaf.command + " has no confirmation '" + key + "'" +
@@ -644,6 +696,12 @@ struct Catalog::Impl {
                 inv.confirmed.push_back(gate->name);
             }
         }
+        // The MCP layer's own gate: a destructive command never runs on an agent's say-so alone, whatever the
+        // command itself would ask (a non-interactive `vault delete` doesn't ask at all).
+        if (inv.effect == CommandEffect::Destructive && !destructiveAck)
+            return needsConfirmation(tool, leaf.command, {std::string(kDestructiveAck)}, {},
+                                     spelled + " is destructive: " + leaf.node->description +
+                                         " Nothing was run.", inv.confirmed);
         const bool hasJson = std::ranges::any_of(options, [&](const auto& o) {
             return std::ranges::find(leaf.jsonAliases, o.first) != leaf.jsonAliases.end();
         });
@@ -708,7 +766,7 @@ struct Catalog::Impl {
             }
             // Help on a group: read-only and gate-free; run it as the help leaf would.
             Leaf group{.node = node, .path = path, .command = joinWords(path)};
-            return finalize(tool, group, std::move(toks), Json(), true, call.options);
+            return finalize(tool, group, std::move(toks), Json(), true, CommandEffect::Read, call.options);
         }
 
         for (const auto& [key, value] : call.options)
@@ -723,7 +781,8 @@ struct Catalog::Impl {
                                (leaf->typedTools.empty() ? std::string("vh_run")
                                                          : "the typed tool " + leaf->typedTools.front() + " or vh_run") +
                                ".");
-        return finalize(tool, *leaf, std::move(toks), args.value("confirm", Json()), help, call.options);
+        return finalize(tool, *leaf, std::move(toks), args.value("confirm", Json()), help, leaf->node->effect,
+                        call.options);
     }
 
     std::variant<Invocation, Json> prepareTyped(const Typed& t, const Json& args) const {
@@ -823,7 +882,8 @@ struct Catalog::Impl {
         }
 
         Parsed parsed = parse(toks);
-        return finalize(t.name, *t.leaf, std::move(toks), args.value("confirm", Json()), false, parsed.options);
+        return finalize(t.name, *t.leaf, std::move(toks), args.value("confirm", Json()), false, t.effect,
+                        parsed.options);
     }
 
     // ---- vh_help ------------------------------------------------------------------------------------------------
@@ -862,8 +922,10 @@ struct Catalog::Impl {
             j["arguments"] = positionals;
             j["options"] = optionsJson(*node);
             j["flags"] = flagsJson(*node);
-            if (!leaf->gates.empty())
-                j["confirmations"] = {{"names", leaf->gateNames()},
+            auto names = leaf->gateNames();
+            if (node->effect == CommandEffect::Destructive) names.insert(names.begin(), std::string(kDestructiveAck));
+            if (!names.empty())
+                j["confirmations"] = {{"names", names},
                                       {"how", "Never in the command. A call without them returns needs_confirmation; "
                                               "show it to the human, and only after explicit approval call again "
                                               "with confirm: {\"<name>\": true} (confirm-token: the printed token)."}};
@@ -986,35 +1048,32 @@ Json Catalog::finish(const Invocation& call, const CommandOutput& output) const 
         return textResult(std::move(text), false);
     }
 
-    // A refusal that names one of the command's confirmations: nothing ran; a person has to agree first.
-    const auto combined = err + "\n" + out;
+    // A refusal for want of one of the command's confirmations: nothing ran; a person has to agree first. The
+    // daemon says so in the result frame (`confirmation`); a daemon older than that only says it in the text.
+    const auto combined = trimmed(err + "\n" + out);
     std::vector<std::string> named;
     const Leaf* leaf = nullptr;
     for (const auto& l : impl_->leaves)
         if (l.command == call.command) leaf = &l;
-    if (leaf)
-        for (const auto& g : leaf->gates) {
-            if (std::ranges::find(call.confirmed, g.name) != call.confirmed.end()) continue;
-            if (std::ranges::any_of(g.aliases, [&](const std::string& a) { return asksForOption(combined, a); }))
-                named.push_back(g.name);
+    const auto unconfirmed = [&](const Gate& g) {
+        return std::ranges::find(call.confirmed, g.name) == call.confirmed.end();
+    };
+    std::string code;
+    if (leaf && output.confirmation) {
+        code = output.confirmation->code;
+        for (auto flag : output.confirmation->flags) {
+            while (flag.starts_with("-")) flag.erase(flag.begin());
+            if (const auto* g = leaf->gate(flag); g && unconfirmed(*g) && std::ranges::find(named, g->name) == named.end())
+                named.push_back(g->name);
         }
+    } else if (leaf) {
+        for (const auto& g : leaf->gates)
+            if (unconfirmed(g) &&
+                std::ranges::any_of(g.aliases, [&](const std::string& a) { return asksForOption(combined, a); }))
+                named.push_back(g.name);
+    }
     if (!named.empty()) {
-        std::string confirmJson;
-        for (const auto& n : named)
-            if (confirmJson.empty()) confirmJson = "{\"" + n + "\": " + (n == "confirm-token" ? "\"<token>\"" : "true") + "}";
-        Json structured{
-            {"needs_confirmation", named.front()},
-            {"confirm_options", named},
-            {"command", "vh " + call.command},
-            {"message", trimmed(combined)},
-            {"how_to_confirm",
-             "Nothing was changed. Show this message to the human and ask whether to go ahead. Only if they "
-             "explicitly approve, call " + call.tool + " again with the same arguments plus \"confirm\": " +
-                 confirmJson + (named.size() > 1 ? " (or another of confirm_options, as the message explains)" : "") +
-                 ". Never set confirm without that approval."}};
-        return {{"content", Json::array({{{"type", "text"}, {"text", structured.dump(2)}}})},
-                {"structuredContent", structured},
-                {"isError", true}};
+        return needsConfirmation(call.tool, call.command, named, code, combined, call.confirmed);
     }
 
     std::string text = "vh " + call.command + " failed (exit " + std::to_string(output.exit_code) + ")";

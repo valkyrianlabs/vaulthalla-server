@@ -31,8 +31,9 @@ std::string instructions() {
            "apply. Read before you write: inspect with vh_read or a read-only typed tool first, and change only what "
            "was asked. Discover commands with vh_help; prefer typed tools, then vh_read (read-only), then vh_run. "
            "When a result says needs_confirmation, nothing happened: show the message to the human and set confirm "
-           "only after they explicitly approve that exact action in this conversation. Before a destructive tool, "
-           "state what will be affected and why. Keys and secrets are never handled by agents: for a key backup, ask "
+           "only after they explicitly approve that exact action in this conversation. Destructive commands are "
+           "refused until confirm carries \"destructive\": true: first state what will be affected and why, and "
+           "set it only with the human's approval. Keys and secrets are never handled by agents: for a key backup, ask "
            "the human to run `vh vault keys export <vault>` in their own terminal. Afterwards, report what changed.";
 }
 

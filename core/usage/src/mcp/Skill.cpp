@@ -37,9 +37,11 @@ refusal is final: report it, don't look for a way around it.
    message to the human and ask. Set `confirm` only after they explicitly approve that exact action in this
    conversation. Never set it pre-emptively, never carry an approval over to a different action, and never put
    `--yes`, `--accept-*` or `--confirm-token` in a command.
-3. **Destructive tools need a stated reason.** Before anything that deletes, revokes, purges, rotates keys,
-   restores over files or unprotects a bucket, tell the human the exact target and why. Prefer the reversible
-   option: a deleted vault stays restorable (`vault restore`) until its retention window ends.
+3. **Destructive tools need a stated reason and the human's OK.** Before anything that deletes, revokes, purges,
+   rotates keys, restores over files or unprotects a bucket, tell the human the exact target and why. These calls
+   are refused until `confirm` carries `"destructive": true`; set it only after the human approves that action.
+   Prefer the reversible option: a deleted vault stays restorable (`vault restore`) until its retention window
+   ends.
 4. **Keys and secrets are never handled by agents.** Vault key export, secret export, `secrets update`, `setup`,
    `teardown` and file transfer (`fs get`, `fs put`) are not available. When a key backup is needed, ask the human
    to run `vh vault keys export <vault>` in their own terminal and keep the output safe. Never ask them to paste
