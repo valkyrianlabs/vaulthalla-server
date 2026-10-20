@@ -24,7 +24,17 @@ deactivation refuses it, and a password reset or role change closes its open con
 `vh device list | rename | revoke` (super admins: `vh device list --all`). Revoking is final: the device's
 connections close immediately and its key is never accepted again.
 
-The web console's Devices page comes in a later release; the ws commands it will use (`device.*`) are available now.
+### In the web console
+
+**Devices** (in the main navigation and the account menu) lists your paired Macs with their platform, app version,
+when they were paired and last seen, the last address and the device id, and lets you rename or revoke them. **Pair a
+device** is one click: the dialog opens a pairing window, shows the Mac's request with three codes as large buttons,
+and you click the one the Mac shows. A wrong click declines the request; if another user is pairing on the node at
+the same time, the dialog says so and leaves their window alone. Closing the dialog closes your window.
+
+Super admins also get **Devices → All devices**: every user's devices with their owners, and a **Remote connections**
+card with the listener's live status (address, port, connections, any bind error, the server key fingerprint) and an
+on/off switch. Settings → Device listener links there.
 
 **macOS:** the package's bundled PostgreSQL uses port 36971, so the device listener doesn't start on macOS in this
 release.

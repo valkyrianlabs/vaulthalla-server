@@ -35,7 +35,26 @@ a browser cookie; each side pins the other's key instead.
 
 ## Pair a device
 
-Any signed-in user can pair devices to their own account.
+Any signed-in user can pair devices to their own account, from the web console or the CLI.
+
+### In the web console
+
+1. Open **Devices** (in the navigation, or **Your devices** in the account menu) and click **Pair a device**. The
+   dialog opens a pairing window for your account and counts down the time it stays open.
+2. In Vaulthalla Desktop, add this server and choose **Pair**. The Mac shows a six-digit code, for example
+   `482 913`.
+3. The dialog lists the Mac's request (its name, platform, app version and address) with three codes. Click the
+   one the Mac shows. The dialog says **Paired** and the Mac appears in your list; Desktop finishes connecting on
+   its own.
+
+A wrong click declines the request ("That code didn't match, so the request was declined"); start pairing again on
+the Mac and it shows a new code. **Deny** declines a request you didn't start. Closing the dialog closes your
+pairing window. If another user is pairing on the node at that moment, the dialog says so; try again when they're
+done.
+
+Super admins see the listener's address and port in the dialog, and a warning when remote connections are off.
+
+### With the CLI
 
 1. On the node, open a pairing window (it lasts 10 minutes):
 
@@ -72,6 +91,13 @@ you didn't start, and never pick a code the Mac isn't showing.
 
 ## Manage devices
 
+**Devices** in the web console lists your devices: name, platform, app version, when it was paired and last seen,
+its last address and its device id (the short form; the copy button copies all of it). Use the pencil to rename a
+device and the revoke button to unpair it. Revoked devices stay in the list behind **Show revoked**. Super admins
+also get **Devices → All devices**, which lists every user's devices with their owner.
+
+From the CLI:
+
 ```bash
 vh device list                      # your devices, revoked ones included
 vh device list --all                # every user's devices (super admins)
@@ -92,7 +118,11 @@ A device follows its account:
 
 ## Remote connections
 
-Remote connections are a node setting, changed by super admins:
+Remote connections are a node setting, changed by super admins. In the web console, **Devices → All devices →
+Remote connections** shows whether the listener is listening, its address and port, its open connections, any bind
+error and the server key fingerprint (the pin Desktop records), with an **Allow remote connections** switch. Off,
+only this machine can pair and connect; on, Macs on your network can pair and reconnect. **Settings → Device
+listener** links there. From the CLI:
 
 ```bash
 vh device remote status    # where the listener listens, and the node's key fingerprint (the pin)

@@ -24,3 +24,11 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   is written only by vh device remote enable|disable, which rebinds the listener without a restart.
 - auth revokeSessions closes live device sessions; device revocation closes them immediately.
 - Audit log lines written while a device's command runs end with "[via device <id>]".
+
+## Web console
+- Add Devices (/devices, any signed-in user): own devices with rename, revoke (confirm) and copyable ids, and the
+  lazy "Pair a device" dialog (device.pairing.open, device.pairing.pending polled every 2 s while visible, number
+  matching via device.pairing.approve, deny, countdown, device.pairing.close on dismiss; conflict shown, never closed).
+- Add /devices/all for super admins: device.list {all} with owners and the remote-connections card
+  (device.remote.status|enable|disable); Settings shows device_server as managed there.
+- Add tests/e2e/devices.spec.ts, which also runs with no daemon (VAULTHALLA_E2E_OFFLINE=1).
