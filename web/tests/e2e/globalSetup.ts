@@ -24,8 +24,15 @@ function decodeProvisionExports(exportsText: string, repoRoot: string) {
   return { user, password }
 }
 
+// VAULTHALLA_E2E_OFFLINE=1: specs that script every ws answer themselves (devices.spec.ts) run against `pnpm dev:e2e`
+// alone, with no daemon and no provisioned account.
+function offlineRequested() {
+  return process.env.VAULTHALLA_E2E_OFFLINE === '1' ||
+    process.env.VAULTHALLA_E2E_OFFLINE === 'true'
+}
+
 function globalSetup() {
-  if (explicitSkipRequested()) return
+  if (explicitSkipRequested() || offlineRequested()) return
 
   const repoRoot = resolve(__dirname, '../../..')
   const provisionScript = resolve(repoRoot, 'tools/e2e/provision_e2e_user.sh')
