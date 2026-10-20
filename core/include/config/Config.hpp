@@ -36,7 +36,7 @@ struct HttpPreviewConfig {
 // The device listener (Vaulthalla Desktop's mutual-TLS endpoint, docs/pairing.md). There is no host: it listens on
 // loopback until remote connections are turned on (`vh device remote enable`, ws device.remote.enable), then on every
 // interface. That switch is the only setting operators change, and they change it through those commands.
-inline constexpr uint16_t kDefaultDeviceServerPort = 36971;
+inline constexpr uint16_t kDefaultDeviceServerPort = 36972;
 
 struct DeviceServerConfig {
     bool enabled = true;

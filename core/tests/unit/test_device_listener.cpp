@@ -541,7 +541,7 @@ TEST_F(DeviceListenerTest, RemoteConnectionsRebindTheListenerLive) {
     const auto before = config::Registry::get();
     auto cfg = before;
     cfg.device_server.enabled = true;
-    cfg.device_server.port = 0;  // never the real 36971 (a packaged daemon may run on this host)
+    cfg.device_server.port = 0;  // never the real 36972 (a packaged daemon may run on this host)
     cfg.device_server.remote = false;
     config::Registry::set(cfg);
 

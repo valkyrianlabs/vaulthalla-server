@@ -55,7 +55,7 @@ The device listener serves Vaulthalla Desktop directly (TLS 1.3 with pinned keys
 ```yaml
 device_server:
   enabled: true
-  port: 36971
+  port: 36972
   remote: false
   max_connections: 256
 ```

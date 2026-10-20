@@ -33,7 +33,7 @@ SERVER=sh.vaulthalla.server
 WEB=sh.vaulthalla.web
 PG=sh.vaulthalla.postgres
 PKG_ID=sh.vaulthalla.server
-PORTS="36968 36969 36970 36971"
+PORTS="36968 36969 36970 36971 36972"
 TEST_MARK="Vaulthalla acceptance test identity"
 PROBE=vhtest_probe
 CADDY_NAME=acceptance.vaulthalla.test
@@ -186,6 +186,8 @@ phase_accept() {
   check "PostgreSQL listens on 127.0.0.1:36971 only" sh -c \
     "lsof -nP -iTCP:36971 -sTCP:LISTEN | awk 'NR>1 {print \$9}' | sort -u | grep -qx '127.0.0.1:36971'"
   check "web answers on 127.0.0.1:36968" wait_for 60 listening 36968
+  check "device listener on 127.0.0.1:36972 only (loopback until vh device remote enable)" wait_for 30 sh -c \
+    "lsof -nP -iTCP:36972 -sTCP:LISTEN | awk 'NR>1 {print \$9}' | sort -u | grep -qx '127.0.0.1:36972'"
   out=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 http://127.0.0.1:36968/ || true)
   check "web console responds over HTTP (got $out)" test "${out:0:1}" = 2 -o "${out:0:1}" = 3
 

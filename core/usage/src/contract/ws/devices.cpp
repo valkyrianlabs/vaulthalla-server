@@ -37,7 +37,7 @@ WsField windowObject() {
 WsField listenerStatus() {
     return object("status", "",
                   {boolean("enabled"), boolean("remote").desc("Every interface; else loopback only."),
-                   uinteger("port").desc("The configured port (36971 by default)."), boolean("listening"),
+                   uinteger("port").desc("The configured port (36972 by default)."), boolean("listening"),
                    str("address").nullable().desc("Where it listens, host:port; null when it does not."),
                    str("error").nullable().desc("Why it does not listen where configured (e.g. the port is taken)."),
                    hex64("server_spki_sha256").nullable().desc("The server key's SPKI hash (the pin Desktop records)."),

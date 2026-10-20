@@ -124,12 +124,11 @@ Everything that holds data belongs to the hidden `_vaulthalla` account.
 | WebSocket server | `127.0.0.1:36969` | both |
 | HTTP server (previews, downloads, uploads) | `127.0.0.1:36970` | both |
 | S3 gateway (disabled by default) | `0.0.0.0:39000` | both |
-| Device listener (Vaulthalla Desktop; every interface after `vh device remote enable`) | `127.0.0.1:36971` | Linux |
+| Device listener (Vaulthalla Desktop; every interface after `vh device remote enable`) | `127.0.0.1:36972` | both |
 | Bundled PostgreSQL | `127.0.0.1:36971` | macOS |
 | Caddy | `:80`, `:443` (after `vh setup caddy`) | macOS |
 | Software TPM | `127.0.0.1:2321` and `127.0.0.1:2322` | Linux |
 
 These listeners are intended for local service wiring and the HTTPS proxy, not direct public exposure; the device
 listener is the exception once remote connections are on (mutual TLS with pinned keys, see
-[Paired Devices](/admin/devices)). On macOS the bundled PostgreSQL holds port `36971` in this release, so the device
-listener does not start there yet. The isolated development instance adds 100 to the Vaulthalla ports.
+[Paired Devices](/admin/devices)). The isolated development instance adds 100 to the Vaulthalla ports.

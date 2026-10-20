@@ -14,7 +14,7 @@ tags:
 # Paired Devices
 
 Vaulthalla Desktop (the native macOS app) talks to a node through the **device listener**, a separate endpoint
-the daemon serves itself on port `36971`. A paired device acts as the account that approved it, with that account's
+the daemon serves itself on port `36972`. A paired device acts as the account that approved it, with that account's
 permissions: there are no device-specific permissions to manage. Pairing never asks for a password and never uses
 a browser cookie; each side pins the other's key instead.
 
@@ -43,7 +43,7 @@ Any signed-in user can pair devices to their own account.
    vh device pair
    ```
 
-2. In Vaulthalla Desktop, add the node (its address and port `36971`). The Mac shows a six-digit code, for
+2. In Vaulthalla Desktop, add the node (its address and port `36972`). The Mac shows a six-digit code, for
    example `482 913`.
 3. `vh device pair` lists the request with the Mac's name, platform and address, and offers three codes. Pick the
    one the Mac shows. A wrong pick **denies** the request; the Mac then starts over with a new code.
@@ -101,7 +101,7 @@ vh device remote disable   # back to loopback; connections from other hosts clos
 ```
 
 The listener moves at once, without restarting the daemon. The choice is saved in `config.yaml`
-(`device_server.remote`) and kept across restarts and upgrades. Before enabling it, make sure port `36971/tcp` is
+(`device_server.remote`) and kept across restarts and upgrades. Before enabling it, make sure port `36972/tcp` is
 reachable only from networks you trust (a firewall rule), even though every connection needs a paired key.
 
 ## Troubleshooting

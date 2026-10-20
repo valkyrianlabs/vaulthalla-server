@@ -79,7 +79,7 @@ ShellServer is not created in test mode (`paths::testMode`).
 | HTTP preview/download/upload/auth | `http/Server.cpp`, `http/Session.cpp`, `http/Router.cpp`, `http/Access.cpp`, `http/handler/*`, `http/upload/Coordinator.cpp` | `0.0.0.0:36970` (fresh installs: `127.0.0.1`) |
 | S3 gateway (SigV4, multipart) | `s3/*` (`GatewayService`, `SigV4`, `ObjectStore`, `MultipartStore`, `CredentialManager`) | `0.0.0.0:39000`, disabled by default |
 | Shell/CLI control | `shell/Server.cpp`, `shell/Router.cpp`, `shell/commands/*` | unix socket `/run/vaulthalla/cli.sock` |
-| Device listener (Vaulthalla Desktop, mutual TLS) | `device/Service.cpp`, `device/Listener.cpp` (`/ws` → the ws Router) | `127.0.0.1:36971`; `0.0.0.0` once `device_server.remote` (absent section = these defaults) |
+| Device listener (Vaulthalla Desktop, mutual TLS) | `device/Service.cpp`, `device/Listener.cpp` (`/ws` → the ws Router) | `127.0.0.1:36972`; `0.0.0.0` once `device_server.remote` (absent section = these defaults) |
 
 > `core/include/config/Config.hpp` compiled-in defaults are **33369/33370**, but the shipped config,
 > web fallbacks, and Caddyfile all use **36969/36970**. Trust the config file, and treat that
@@ -212,8 +212,7 @@ Normative protocol: `docs/pairing.md` in `vaulthalla/desktop` (its §8 test vect
 - **Table** `devices` (migration 112): `spki_sha256` UNIQUE, previous key unique (partial index), `user_id` CASCADE,
   `approved_by` SET NULL; revoked rows stay (a revoked key never pairs again). `device_node` holds the node id
   Desktop records (created on first use).
-- **Known conflict:** the macOS package's bundled PostgreSQL listens on `127.0.0.1:36971`, the listener's default
-  port; on a packaged Mac the listener reports the port in use until one of them moves (maintainer decision).
+- Port 36972 (36971 is the macOS package's bundled PostgreSQL; the dev instance shifts both by +100).
 
 ### Super-admin initial credential
 

@@ -117,7 +117,7 @@ std::shared_ptr<CommandUsage> remote(const std::weak_ptr<CommandUsage>& parent) 
     enable->aliases = {"enable", "on"};
     enable->description = "Let devices on other hosts connect: the listener rebinds to every interface now and stays "
                           "that way across restarts and upgrades.";
-    enable->examples = {{"vh device remote enable", "Open the device listener (port 36971) to the network."}};
+    enable->examples = {{"vh device remote enable", "Open the device listener (port 36972) to the network."}};
 
     auto disable = build(cmd->weak_from_this());
     disable->aliases = {"disable", "off"};

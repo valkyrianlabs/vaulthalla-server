@@ -25,7 +25,7 @@ struct ListenerStatus {
     bool remote = false;       // device_server.remote: every interface, else loopback only
     uint16_t port = 0;         // configured port
     bool listening = false;
-    std::string address{};     // where it actually listens ("127.0.0.1:36971"), empty when not
+    std::string address{};     // where it actually listens ("127.0.0.1:36972"), empty when not
     std::optional<std::string> error{};  // why it is not listening where configured (e.g. the port is taken)
     std::string server_spki_sha256{};    // the pin Desktop records; empty until the identity is loaded
     unsigned int connections = 0;

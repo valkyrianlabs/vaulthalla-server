@@ -33,7 +33,7 @@ http_preview_server:
 # as `remote`.
 device_server:
   enabled: true
-  port: 36971
+  port: 36972
   remote: false
   max_connections: 256         # Concurrent device connections; more are refused until one closes
 

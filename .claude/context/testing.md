@@ -128,7 +128,7 @@ Web: `web/tests/e2e/recovery.spec.ts` (scripted ws answers; see `web-client.md`)
 
 On macOS, run DB suites on a private cluster when another checkout may be testing: `VH_TEST_PG_DIR=$TMPDIR/<name>
 VH_TEST_PG_PORT=<port> tools/macos/test-db.sh up` (two runs on one cluster drop each other's schema). Device tests
-never bind 36971 (port 0).
+never bind 36972 (port 0).
 
 - **ThreadSanitizer** for the identity publication code: `meson setup build-tsan -Db_sanitize=thread
   -Dbuild_unit_tests=true -Db_lundef=false && ninja -C build-tsan core/vh_unit_tests`, then run with ASLR off (TSan

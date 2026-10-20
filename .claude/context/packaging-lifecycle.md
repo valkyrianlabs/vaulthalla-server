@@ -13,7 +13,7 @@ semantics do **not** match `apt remove/purge`. Operator-facing detail lives in `
 
 ## Deploy assets (`deploy/`)
 
-- `config/config.yaml` (default runtime config, ports 36969/36970/36971/39000; ws + preview bind `127.0.0.1`, S3
+- `config/config.yaml` (default runtime config, ports 36969/36970/36972/39000; ws + preview bind `127.0.0.1`, S3
   gateway `0.0.0.0`, device listener loopback until `device_server.remote`, which only `vh device remote
   enable|disable` writes; an upgraded config without the section gets those defaults), `config/config_template.yaml.in`. Meson installs both to `/usr/share/vaulthalla/config/`.
   A gitignored repo-root `config.yaml` is used only by source installs: `bin/setup/install_dirs.sh` copies it,

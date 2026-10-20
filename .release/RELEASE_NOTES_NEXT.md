@@ -11,7 +11,7 @@ for users and operators; keep it representative of what actually ships.
 
 ## Paired devices
 
-The daemon now serves Vaulthalla Desktop through its own **device listener** on port 36971: TLS 1.3 with a
+The daemon now serves Vaulthalla Desktop through its own **device listener** on port 36972: TLS 1.3 with a
 certificate on both sides, each side pinning the other's key. No browser cookie, nginx or certificate authority is
 involved. The listener answers on **loopback only** until a super admin runs `vh device remote enable`, which opens
 it to the network at once (no restart) and keeps it that way across restarts and upgrades; `vh device remote
@@ -25,6 +25,3 @@ deactivation refuses it, and a password reset or role change closes its open con
 connections close immediately and its key is never accepted again.
 
 The web console's Devices page comes in a later release; the ws commands it will use (`device.*`) are available now.
-
-**macOS:** the package's bundled PostgreSQL uses port 36971, so the device listener doesn't start on macOS in this
-release.

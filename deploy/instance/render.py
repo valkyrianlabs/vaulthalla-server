@@ -17,7 +17,7 @@ import sys
 
 PORT_OFFSET = 100
 # Every listener the daemon, the web console and swtpm bind (config.yaml and the units).
-PORTS = {36968: "web", 36969: "websocket", 36970: "http preview", 36971: "device listener", 39000: "s3 gateway",
+PORTS = {36968: "web", 36969: "websocket", 36970: "http preview", 36972: "device listener", 39000: "s3 gateway",
          2321: "swtpm", 2322: "swtpm ctrl"}
 
 
@@ -56,7 +56,7 @@ def render_config(text, instance, db_port=None):
     rendered = "".join(out)
     for key in ("websocket_server", "http_preview_server", "device_server", "s3_gateway"):
         block = re.search(rf"(?ms)^{key}:\n(.*?)(?=^\S)", rendered)
-        if block and re.search(r"(?m)^  port:\s*(36969|36970|36971|39000)\b", block.group(1)):
+        if block and re.search(r"(?m)^  port:\s*(36969|36970|36972|39000)\b", block.group(1)):
             raise SystemExit(f"render: {key}.port is still a production port")
     if re.search(r"(?m)^  (name|user):\s*vaulthalla\s", rendered):
         raise SystemExit("render: database name/user is still the production one")

@@ -8,7 +8,7 @@ Optional "## Section" headings group bullets; if used, every bullet must be unde
 One level of nested "  - " detail bullets is allowed. Consolidate; don't paste commit logs.
 -->
 ## Devices
-- Add the device listener (runtime service DeviceServer, port 36971): TLS 1.3 only, client certificate required,
+- Add the device listener (runtime service DeviceServer, port 36972): TLS 1.3 only, client certificate required,
   authorization by the client key's SPKI SHA-256 at handshake time; /ws reaches the ws router as a Device session
   (the device's user, no tokens) or a pairing-only session (device.pair.* and meta.contract.get; anything else
   answers data.code device_unknown).
