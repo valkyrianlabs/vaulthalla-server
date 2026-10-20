@@ -14,6 +14,7 @@
 #include <arpa/inet.h>
 #include <cstring>
 #include <fmt/core.h>
+#include <fmt/format.h>
 #include <algorithm>
 #include <ranges>
 #include <cctype>
@@ -25,6 +26,7 @@
 #include <initializer_list>
 #include <cstddef>
 
+#include "cli_client.hpp"
 #include "platform/Fd.hpp"
 #include "protocols/shell/Transfer.hpp"
 #include <paths.h>  // generated: VH_CLI_SOCKET_PATH, VH_LIFECYCLE_PATH, VH_HINT_*
@@ -419,45 +421,86 @@ static int connect_timeout_seconds() {
     return 10;
 }
 
-static int report_not_responding(const int seconds) {
+static std::string not_responding_message(const int seconds) {
     const std::string running = std::string("Is ") + VH_HINT_SERVICE_NAME + " running?";
-    fmt::print(stderr,
-               "vh: the vaulthalla daemon is not responding at {} (no reply within {}s).\n"
-               "    {}  {}\n"
-               "    {:<{}}{}\n"
-               "    (Set VAULTHALLA_CLI_TIMEOUT=<seconds> to wait longer.)\n",
-               socket_path(), seconds, running, VH_HINT_SERVICE_STATUS, "Recent daemon log:", running.size() + 3,
-               VH_HINT_SERVICE_LOG);
+    return fmt::format("vh: the vaulthalla daemon is not responding at {} (no reply within {}s).\n"
+                       "    {}  {}\n"
+                       "    {:<{}}{}\n"
+                       "    (Set VAULTHALLA_CLI_TIMEOUT=<seconds> to wait longer.)\n",
+                       socket_path(), seconds, running, VH_HINT_SERVICE_STATUS, "Recent daemon log:",
+                       running.size() + 3, VH_HINT_SERVICE_LOG);
+}
+
+static int report_not_responding(const int seconds) {
+    fmt::print(stderr, "{}", not_responding_message(seconds));
     return exit_code::kTempFail;
 }
 
-static int report_connect_error(const int err, const int seconds) {
+// Why connect() failed, as an exit code and the message to show.
+static vh::cli::Reply connect_failure(const int err, const int seconds) {
     switch (err) {
         case EACCES:
         case EPERM:
-            fmt::print(stderr,
-                       "vh: permission denied opening {}.\n"
-                       "    The control socket is restricted to the 'vaulthalla' group. Either run with sudo, or add\n"
-                       "    yourself to the group and start a new login session:\n"
-                       "      {}\n",
-                       socket_path(), VH_HINT_CLI_ENROLL);
-            return exit_code::kNoPerm;
+            return {exit_code::kNoPerm, {},
+                    fmt::format("vh: permission denied opening {}.\n"
+                                "    The control socket is restricted to the 'vaulthalla' group. Either run with sudo, or add\n"
+                                "    yourself to the group and start a new login session:\n"
+                                "      {}\n",
+                                socket_path(), VH_HINT_CLI_ENROLL)};
         case ENOENT:
         case ECONNREFUSED:
-            fmt::print(stderr,
-                       "vh: the vaulthalla daemon is not running (nothing is listening at {}).\n"
-                       "    Check the service:  {}\n"
-                       "    Recent daemon log:  {}\n",
-                       socket_path(), VH_HINT_SERVICE_STATUS, VH_HINT_SERVICE_LOG);
-            return exit_code::kUnavailable;
+            return {exit_code::kUnavailable, {},
+                    fmt::format("vh: the vaulthalla daemon is not running (nothing is listening at {}).\n"
+                                "    Check the service:  {}\n"
+                                "    Recent daemon log:  {}\n",
+                                socket_path(), VH_HINT_SERVICE_STATUS, VH_HINT_SERVICE_LOG)};
         case EAGAIN:
         case ETIMEDOUT:
         case EINPROGRESS:
-            return report_not_responding(seconds);
+            return {exit_code::kTempFail, {}, not_responding_message(seconds)};
         default:
-            fmt::print(stderr, "vh: cannot connect to {}: {}\n", socket_path(), std::strerror(err));
-            return exit_code::kUnavailable;
+            return {exit_code::kUnavailable, {},
+                    fmt::format("vh: cannot connect to {}: {}\n", socket_path(), std::strerror(err))};
     }
+}
+
+static int report_connect_error(const int err, const int seconds) {
+    const auto failure = connect_failure(err, seconds);
+    fmt::print(stderr, "{}", failure.err);
+    return failure.exit_code;
+}
+
+// Connects to the control socket: the fd, or -1 with `err` (an errno, or 0 with `message` set for a local problem).
+static int open_control_socket(const int timeoutSeconds, int& err, std::string& message) {
+    err = 0;
+    sockaddr_un addr{};
+    const std::string_view path = socket_path();
+    if (path.size() >= sizeof(addr.sun_path)) {
+        message = fmt::format("vh: control socket path is too long for a unix socket: {}\n", path);
+        return -1;
+    }
+
+    const int s = vh::platform::fd::socket(AF_UNIX, SOCK_STREAM, 0);
+    if (s < 0) {
+        message = fmt::format("vh: socket: {}\n", std::strerror(errno));
+        return -1;
+    }
+    vh::platform::fd::suppressSigpipe(s);
+
+    // Bounds connect() when the listener's backlog is full (a wedged daemon that stopped accepting).
+    timeval tv{.tv_sec = timeoutSeconds, .tv_usec = 0};
+    (void)::setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+    addr.sun_family = AF_UNIX;
+    std::memcpy(addr.sun_path, path.data(), path.size());
+    // offsetof, not sizeof(sa_family_t): BSD's sockaddr_un starts with sun_len (on Linux the two are equal).
+    const auto addrLen = static_cast<socklen_t>(offsetof(sockaddr_un, sun_path) + path.size() + 1);
+    if (::connect(s, reinterpret_cast<sockaddr*>(&addr), addrLen) != 0) {
+        err = errno;
+        ::close(s);
+        return -1;
+    }
+    return s;
 }
 
 // Waits up to `seconds` for the socket to become readable. False on timeout.
@@ -742,8 +785,81 @@ static int run_put(const int s, const PutSource& source, const int timeoutSecond
     }
 }
 
+static std::string frame_text(const nlohmann::json& frame, const char* key) {
+    if (!frame.contains(key) || frame[key].is_null()) return {};
+    const auto& v = frame[key];
+    return v.is_string() ? v.get<std::string>() : v.dump();
+}
+
+namespace vh::cli {
+
+// One non-interactive command over the control socket, everything it prints captured (vh mcp's tool calls). Same
+// request as a plain `vh` run with stdin not a terminal, so the daemon authorizes it by peer UID exactly the same way.
+Reply runCaptured(const std::vector<std::string>& argv, const std::string& line) {
+    const int timeoutSeconds = connect_timeout_seconds();
+    int err = 0;
+    std::string message;
+    const int s = open_control_socket(timeoutSeconds, err, message);
+    if (s < 0) return err == 0 ? Reply{1, {}, message} : connect_failure(err, timeoutSeconds);
+
+    nlohmann::json request{{"cmd", argv.empty() ? std::string("help") : argv.front()},
+                           {"args", argv.size() > 1 ? std::vector<std::string>(argv.begin() + 1, argv.end())
+                                                    : std::vector<std::string>{}},
+                           {"argv", argv},
+                           {"line", line},
+                           {"interactive", false}};
+    Reply reply;
+    if (!send_json_frame(s, request)) {
+        ::close(s);
+        return {exit_code::kTempFail, {}, "vh: the vaulthalla daemon closed the connection before the command was sent\n"};
+    }
+    bool first = true;
+    for (;;) {
+        if (first && !wait_readable(s, timeoutSeconds)) {
+            ::close(s);
+            return {exit_code::kTempFail, {}, not_responding_message(timeoutSeconds)};
+        }
+        first = false;
+        nlohmann::json frame;
+        if (!recv_json_frame(s, frame)) {
+            ::close(s);
+            reply.exit_code = exit_code::kTempFail;
+            reply.err += "vh: connection to the vaulthalla daemon closed before the command finished\n";
+            return reply;
+        }
+        const auto type = frame.value("type", std::string{});
+        if (type == "hello") continue;
+        if (type == "output") {
+            auto& sink = frame.value("stream", std::string{"stdout"}) == "stderr" ? reply.err : reply.out;
+            sink += ensureNewLine(frame.value("text", std::string{}));
+            continue;
+        }
+        if (type == "prompt") {
+            // Never answered: the request is not interactive, so a prompt here is a daemon bug, not a question.
+            ::close(s);
+            reply.exit_code = 1;
+            reply.err += "vh: the command asked an interactive question, which agents can't answer: " +
+                         frame.value("text", std::string{}) + "\n";
+            return reply;
+        }
+        if (type == "result" || !frame.contains("type")) {
+            reply.out += frame_text(frame, "stdout");
+            reply.err += frame_text(frame, "stderr");
+            reply.exit_code = final_exit_code(frame);
+            ::close(s);
+            return reply;
+        }
+    }
+}
+
+}
+
 int main(const int argc, char** argv) {
     std::vector<std::string> argv_norm = canonicalize_argv_norm(argc, argv);
+
+    // Client-side commands: the MCP server (it connects per tool call) and agent skill installation (no daemon).
+    if (argv_norm.front() == "mcp") return vh::cli::runMcp(argv_norm);
+    if (argv_norm.front() == "skill" || argv_norm.front() == "skills") return vh::cli::runSkill(argv_norm);
 
     // Legacy: vaulthalla-cli.service used to run `vaulthalla-cli --systemd` behind vaulthalla-cli.socket. That mode
     // never existed; the unit connected to its own socket and hung forever. The daemon owns the socket now.
@@ -796,30 +912,16 @@ int main(const int argc, char** argv) {
         }
     }
 
-    sockaddr_un addr{};
-    const std::string_view path = socket_path();
-    if (path.size() >= sizeof(addr.sun_path)) {
-        fmt::print(stderr, "vh: control socket path is too long for a unix socket: {}\n", path);
-        return 1;
-    }
-
-    const int s = vh::platform::fd::socket(AF_UNIX, SOCK_STREAM, 0);
-    if (s < 0) { perror("socket"); return 1; }
-    vh::platform::fd::suppressSigpipe(s);
-
-    // Bounds connect() when the listener's backlog is full (a wedged daemon that stopped accepting).
-    timeval tv{.tv_sec = timeoutSeconds, .tv_usec = 0};
-    (void)::setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-
-    addr.sun_family = AF_UNIX;
-    std::memcpy(addr.sun_path, path.data(), path.size());
-    // offsetof, not sizeof(sa_family_t): BSD's sockaddr_un starts with sun_len (on Linux the two are equal).
-    const auto addrLen = static_cast<socklen_t>(offsetof(sockaddr_un, sun_path) + path.size() + 1);
-    if (::connect(s, reinterpret_cast<sockaddr*>(&addr), addrLen) != 0) {
-        const int err = errno;
-        ::close(s);
+    int connectErr = 0;
+    std::string connectMessage;
+    const int s = open_control_socket(timeoutSeconds, connectErr, connectMessage);
+    if (s < 0) {
+        if (connectErr == 0) {
+            fmt::print(stderr, "{}", connectMessage);
+            return 1;
+        }
         if (lifecycleHelp && ::geteuid() == 0) return run_lifecycle_command(argv_norm);
-        return report_connect_error(err, timeoutSeconds);
+        return report_connect_error(connectErr, timeoutSeconds);
     }
 
     // Prepare request
