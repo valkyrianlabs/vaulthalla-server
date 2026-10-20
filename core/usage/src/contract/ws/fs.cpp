@@ -157,7 +157,7 @@ std::vector<WsCommandUsage> fsCommands() {
         .variants = {{.mode = "share",
                       .description = "In a share session.",
                       .payload = {str("upload_id").opt(), str("transfer_id").opt()},
-                      .response = {str("upload_id"), boolean("complete"), object("entry", "ShareEntry")}}},
+                      .response = {str("upload_id"), boolean("complete"), object("entry", "ShareUploadedFile")}}},
         .refusal_codes = {"unauthorized"},
         .untyped_refusals = {"denied"},
         .client_timeout = 180s,

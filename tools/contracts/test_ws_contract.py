@@ -27,6 +27,11 @@ CLIENT_TS = REPO_ROOT / "web" / "src" / "lib" / "ws" / "client.ts"
 HANDLER_CPP = REPO_ROOT / "core" / "src" / "protocols" / "ws" / "Handler.cpp"
 
 
+# Registered commands the book deliberately leaves out, with the reason (mirrors unbookedWsCommands() in
+# core/tests/unit/test_usage_contract.cpp). Keep it empty unless a command truly can't be described.
+UNBOOKED: dict[str, str] = {}
+
+
 def committed() -> dict:
     return json.loads(ws_contract.CONTRACT_JSON.read_text(encoding="utf-8"))
 
@@ -54,6 +59,15 @@ class WsContractTests(unittest.TestCase):
         missing = sorted(c["command"] for c in committed()["ws"] if c["command"] not in registered)
         self.assertFalse(missing, "in the ws book but not registered in core/src/protocols/ws: " + ", ".join(missing))
         self.assertIn("meta.contract.get", HANDLER_CPP.read_text(encoding="utf-8"))
+
+    def test_every_registered_command_is_in_the_contract(self) -> None:
+        booked = {c["command"] for c in committed()["ws"]}
+        registered = set(core_commands())
+        missing = sorted(registered - booked - set(UNBOOKED))
+        self.assertFalse(missing, "registered in core/src/protocols/ws but not in the ws book (core/usage/src/contract/ws): "
+                         + ", ".join(missing))
+        stale = sorted(name for name in UNBOOKED if name in booked or name not in registered)
+        self.assertFalse(stale, "UNBOOKED entries that are booked or no longer registered: " + ", ".join(stale))
 
     def test_every_contract_command_is_typed_in_the_web_command_map(self) -> None:
         typed = set(web_commands())

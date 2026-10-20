@@ -61,7 +61,9 @@
 - `web/src/util/generated/wsContract.{json,ts}` is generated from it: `python3 tools/contracts/ws_contract.py --write
   --vh-usage build/core/vh_usage`. Never edit by hand. `web/src/util/wsContractCheck.ts` type-checks
   `WebSocketCommandMap` against it, naming each mismatch in `pnpm typecheck` output.
-- `COMMAND_TIMEOUTS` = the server-declared `WS_CONTRACT_TIMEOUTS` plus local entries for commands not in the book.
+- The book covers every command the daemon registers (202; `UsageContract.EveryRegisteredWsCommandHasABookEntry` and
+  `test_ws_contract.py` fail on a registered command without an entry; an explicit, reasoned allowlist exists and is
+  empty), so `COMMAND_TIMEOUTS` is just the server-declared `WS_CONTRACT_TIMEOUTS`.
 - Drift fails the meson test `ws_contract_drift` and `tools/contracts/test_ws_contract.py` (which also checks every
   book command is registered in core and typed in the web map).
 - `meta.contract.get` (signed-in sessions only; no pre-login build fingerprinting) returns `{contract_version,

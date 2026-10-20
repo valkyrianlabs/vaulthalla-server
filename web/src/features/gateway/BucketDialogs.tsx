@@ -13,6 +13,7 @@ import { useCredentialList } from '@/features/credentials/useCredentials'
 import { BUCKET_MODES, bucketNameProblem } from '@/features/gateway/model'
 import { refreshBuckets, useVaultOptions } from '@/features/gateway/queries'
 import { CheckRow } from '@/features/gateway/CheckRow'
+import type { S3GatewayBucketBindMode } from '@/models/s3Gateway'
 
 export type BucketDialogKind = 'bind' | 'local' | 'remote'
 
@@ -67,8 +68,8 @@ const BindDialog = ({ onClose }: { onClose: () => void }) => {
   const [mode, setMode] = useState('')
   const [exclusive, setExclusive] = useState(false)
   const vault = vaults.list.find(v => String(v.id) === vaultId)
-  const modes = vault?.type === 's3' ? ['remote_cache', 'remote_proxy'] : ['local']
-  const chosenMode = modes.includes(mode) ? mode : modes[0]
+  const modes: S3GatewayBucketBindMode[] = vault?.type === 's3' ? ['remote_cache', 'remote_proxy'] : ['local']
+  const chosenMode = modes.find(m => m === mode) ?? modes[0]
   const nameProblem = bucketNameProblem(name.trim())
   return (
     <DialogContent

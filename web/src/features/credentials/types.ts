@@ -29,6 +29,9 @@ export const PROVIDERS = [
   'Other',
 ] as const
 
+// A provider name core accepts (storage.apiKey.add/update refuse anything else).
+export type ProviderName = (typeof PROVIDERS)[number]
+
 // Placeholders only — never defaults that get saved.
 export const PROVIDER_HINTS: Record<string, { endpoint: string; region: string }> = {
   AWS: { endpoint: 'https://s3.us-east-1.amazonaws.com', region: 'us-east-1' },

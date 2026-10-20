@@ -6,7 +6,7 @@
 export const WS_CONTRACT_VERSION = 1
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = '5e94c9e36fee0c64c165bcb7d9992484ea5b834ff963e08521f0b8dafb920829'
+export const WS_CONTRACT_HASH = '639edd11857092a96df1854d16dcb734b804c3a3cba1a822f75b97e49ff0d4e2'
 
 export interface WsContract {
   /**
@@ -102,6 +102,114 @@ export interface WsContract {
   'auth.users.list': {
     payload: null
     response: { users: object[] }
+  }
+  /**
+   * The caller's saved dashboard layout for a key; exists is false (empty layout) when none is saved. A
+   * non-object payload reads the default key.
+   */
+  'dashboard.preferences.get': {
+    payload: { preference_key?: string }
+    response: { preferences: object }
+  }
+  /**
+   * Delete the caller's saved layout for a key; deleted says whether one existed. A non-object payload resets
+   * the default key.
+   */
+  'dashboard.preferences.reset': {
+    payload: { preference_key?: string }
+    response: { reset: boolean; deleted: boolean }
+  }
+  /**
+   * Save the caller's dashboard layout for a key (insert or replace). The layout is validated (at most 64 KiB
+   * and 64 cards) and otherwise stored as sent.
+   */
+  'dashboard.preferences.update': {
+    payload: {
+      preference_key?: string
+      layout: {
+        cards?: {
+          id: string
+          size?: string | null
+          variant?: string | null
+          visible?: boolean | null
+          order?: number | null
+        }[]
+      }
+    }
+    response: { preferences: object }
+  }
+  /**
+   * The email provider settings, the operator email policy and which provider secrets are stored.
+   */
+  'email.config.get': {
+    payload: null
+    response: {
+      email: object
+      operator_emails: object
+      secrets: {
+        available: boolean
+        resend_api_key: boolean
+        ses_access_key_id: boolean
+        ses_secret_access_key: boolean
+      }
+    }
+  }
+  /**
+   * Merge-patch the email and operator_emails settings sections (RFC 7386; other sections are ignored) and
+   * save them through the same validation as settings.update.
+   */
+  'email.config.update': {
+    payload: { email?: object; operator_emails?: object }
+    response: {
+      email: object
+      operator_emails: object
+      secrets: {
+        available: boolean
+        resend_api_key: boolean
+        ses_access_key_id: boolean
+        ses_secret_access_key: boolean
+      }
+    }
+  }
+  /**
+   * Operator email delivery history, newest first.
+   */
+  'email.history': {
+    payload: { limit?: number }
+    response: { history: object[] }
+  }
+  /**
+   * Store provider credentials in the secrets manager: resend needs api_key; ses takes access_key_id and/or
+   * secret_access_key (at least one). Values are write-only.
+   */
+  'email.provider.secret.set': {
+    payload: { provider: 'resend' | 'ses'; api_key?: string; access_key_id?: string; secret_access_key?: string }
+    response: {
+      secrets: {
+        available: boolean
+        resend_api_key: boolean
+        ses_access_key_id: boolean
+        ses_secret_access_key: boolean
+      }
+    }
+  }
+  /**
+   * Send (or, with dry_run, only render and record) a test email. Without to, a dry run goes to the first
+   * alerts recipient. status says which happened; a disabled or failing provider is a refusal without a code,
+   * recorded in the history.
+   */
+  'email.test.send': {
+    payload: { to?: string; dry_run?: boolean }
+    response: {
+      status: 'dry_run' | 'sent'
+      to: string
+      subject: string
+      html_bytes?: number
+      text?: string
+      provider?: string
+      provider_message_id?: string | null
+      history_warning: string | null
+    }
   }
   /**
    * Create a directory (Touch on the path).
@@ -306,6 +414,160 @@ export interface WsContract {
     response: { contract_version: number; contract_hash: string; ws_hash: string }
   }
   /**
+   * One permission of the catalog by id.
+   */
+  'permission.get': {
+    payload: { id: number }
+    response: { permission: object }
+  }
+  /**
+   * One permission of the catalog by its qualified name.
+   */
+  'permission.get.byName': {
+    payload: { name: string }
+    response: { permission: object }
+  }
+  /**
+   * The whole permission catalog.
+   */
+  'permissions.list': {
+    payload: null
+    response: { permissions: object[] }
+  }
+  /**
+   * Reservation ledger rows, newest first. Non super admins must name a vault they can view or a gateway
+   * credential they own.
+   */
+  'pricing.budget.ledger.list': {
+    payload: { vault_id?: number | null; gateway_credential_id?: number | null; limit?: number }
+    response: { ledger: object[] }
+  }
+  /**
+   * Approve a pending override (super admins). A bare `id` is refused: send override_id.
+   */
+  'pricing.budget.override.approve': {
+    payload: { override_id: number }
+    response: { override: object }
+  }
+  /**
+   * Deny a pending override (super admins). A bare `id` is refused: send override_id.
+   */
+  'pricing.budget.override.deny': {
+    payload: { override_id: number; reason?: string | null }
+    response: { override: object }
+  }
+  /**
+   * Overrides, newest first. Super admins see all (or one vault's); others must name a vault they can view.
+   */
+  'pricing.budget.override.list': {
+    payload: { vault_id?: number | null; limit?: number; include_expired?: boolean }
+    response: { overrides: object[] }
+  }
+  /**
+   * Ask for a one-time override of exceeded enforce policies on a vault (vault sync Trigger permission).
+   */
+  'pricing.budget.override.request': {
+    payload: {
+      vault_id: number
+      policy_ids: number[]
+      run_uuid?: string | null
+      reason?: string | null
+      estimated_cost?: string | null
+      currency?: string
+      ttl_minutes?: number
+    }
+    response: { override: object }
+  }
+  /**
+   * Disable the policy of a scope (same authority as upsert). disabled is false when there was nothing to
+   * disable.
+   */
+  'pricing.budget.policy.disable': {
+    payload: {
+      scope: 'global' | 'provider' | 'vault' | 'gateway_credential' | 'gateway_credential_vault'
+      provider_key?: string | null
+      vault_id?: number | null
+      gateway_credential_id?: number | null
+    }
+    response: { disabled: boolean }
+  }
+  /**
+   * S3 price budget policies the caller may see: super admins every one; others the policies of vaults they
+   * can view and of gateway credentials they own. vault_id needs view access to that vault.
+   */
+  'pricing.budget.policy.list': {
+    payload: { vault_id?: number | null; gateway_credential_id?: number | null; include_inactive?: boolean }
+    response: { policies: object[] }
+  }
+  /**
+   * Create or replace the policy of a scope. global/provider: super admins; vault: vault Edit on an S3 vault;
+   * gateway scopes: admin.s3_gateway.manage_budgets. Costs are decimal strings (up to 8 fractional digits).
+   */
+  'pricing.budget.policy.upsert': {
+    payload: {
+      scope: 'global' | 'provider' | 'vault' | 'gateway_credential' | 'gateway_credential_vault'
+      provider_key?: string | null
+      vault_id?: number | null
+      gateway_credential_id?: number | null
+      mode?: 'off' | 'report' | 'warn' | 'enforce' | null
+      currency?: string | null
+      max_run_cost?: string | null
+      max_daily_cost?: string | null
+      max_monthly_cost?: string | null
+      require_verified_catalog?: boolean
+      allow_stale_catalog?: boolean
+      max_catalog_age_seconds?: number | null
+    }
+    response: { policy: object }
+  }
+  /**
+   * Dry-run budget decision for the next sync of an S3 vault: plans the sync from the remote index (refused
+   * when it is missing or stale) and prices it. Needs view access to the vault's budgets.
+   */
+  'pricing.budget.preflight': {
+    payload: { vault_id: number; run_uuid?: string }
+    response: {
+      decision: object
+      estimate: object
+      plan: {
+        upload: number
+        download: number
+        index_remote_only: number
+        delete_remote: number
+        delete_local: number
+      }
+    }
+  }
+  /**
+   * Policies, ledger, trends, open notifications and overrides for a vault, a credential, or (super admins)
+   * the whole system.
+   */
+  'pricing.budget.status': {
+    payload: {
+      vault_id?: number | null
+      gateway_credential_id?: number | null
+      limit?: number
+      include_inactive?: boolean
+    }
+    response: { policies: object[]; ledger: object[]; trends: object[]; notifications: object[]; overrides: object[] }
+  }
+  /**
+   * Acknowledge a cost alert. Non super admins must send the alert's vault_id and be able to view it. A bare
+   * `id` is refused: send notification_id.
+   */
+  'pricing.notifications.ack': {
+    payload: { notification_id: number; vault_id?: number | null }
+    response: { notification: object }
+  }
+  /**
+   * Cost alerts (operator notifications) the caller can see, newest first. summary always covers every OPEN
+   * alert in the same scope, whatever limit and include_acknowledged are.
+   */
+  'pricing.notifications.list': {
+    payload: { vault_id?: number | null; limit?: number; include_acknowledged?: boolean }
+    response: { notifications: object[]; summary: object }
+  }
+  /**
    * The vault's recovery cost panel: versioning surcharge (separate from current object storage), recovery
    * operations, what is not modelled, ranges, basis and catalog freshness. Unknown money is null.
    */
@@ -388,11 +650,66 @@ export interface WsContract {
     response: { detail: object }
   }
   /**
+   * Create an admin role. Nobody grants an admin permission they do not hold.
+   */
+  'role.admin.add': {
+    payload: { name: string; description?: string; permissions?: { qualified: string; value: boolean }[] }
+    response: { role: object }
+  }
+  /**
+   * Delete an admin role; the answer's role is the deleted role's id.
+   */
+  'role.admin.delete': {
+    payload: { id: number }
+    response: { role: number }
+  }
+  /**
+   * One admin role with its permissions.
+   */
+  'role.admin.get': {
+    payload: { id: number }
+    response: { role: object }
+  }
+  /**
+   * One admin role by name.
+   */
+  'role.admin.get.byName': {
+    payload: { name: string }
+    response: { role: object }
+  }
+  /**
+   * Patch an admin role (name, description; permissions as a complete snapshot). Core refuses edits to
+   * super_admin and to the caller's own role, and grants beyond the caller's own permissions.
+   */
+  'role.admin.update': {
+    payload: {
+      id: number
+      name?: string | null
+      description?: string | null
+      permissions?: { qualified: string; value: boolean }[]
+    }
+    response: { role: object }
+  }
+  /**
+   * Create a vault role definition (assigning it is role.vault.assign).
+   */
+  'role.vault.add': {
+    payload: { name: string; description?: string; permissions?: { qualified: string; value: boolean }[] }
+    response: { role: object }
+  }
+  /**
    * Assign a vault role to a user or group on a vault (one assignment per subject and vault).
    */
   'role.vault.assign': {
     payload: { vault_id: number; subject_type: 'user' | 'group'; subject_id: number; id: number }
     response: { assignment: object }
+  }
+  /**
+   * Delete a vault role definition.
+   */
+  'role.vault.delete': {
+    payload: { id: number }
+    response: { role_id: number }
   }
   /**
    * One vault role definition.
@@ -402,11 +719,80 @@ export interface WsContract {
     response: { role: object }
   }
   /**
+   * One vault role definition by name.
+   */
+  'role.vault.get.byName': {
+    payload: { name: string }
+    response: { role: object }
+  }
+  /**
+   * Add allow/deny overrides for a pattern on one assignment (same ops as `vh vault role override add`).
+   */
+  'role.vault.overrides.add': {
+    payload: {
+      vault_id: number
+      subject_type: 'user' | 'group'
+      subject_id: number
+      permissions?: { qualified: string; value: boolean }[]
+      pattern: string
+      enabled?: boolean
+    }
+    response: { overrides: object[] }
+  }
+  /**
+   * The path-scoped allow/deny overrides on one assignment (a subject's role on a vault).
+   */
+  'role.vault.overrides.list': {
+    payload: { vault_id: number; subject_type: 'user' | 'group'; subject_id: number }
+    response: { overrides: object[] }
+  }
+  /**
+   * Remove one override from an assignment.
+   */
+  'role.vault.overrides.remove': {
+    payload: { vault_id: number; subject_type: 'user' | 'group'; subject_id: number; override_id: number }
+    response: { removed: boolean }
+  }
+  /**
+   * Patch one override (effect, pattern, enabled; absent or null are unchanged).
+   */
+  'role.vault.overrides.update': {
+    payload: {
+      vault_id: number
+      subject_type: 'user' | 'group'
+      subject_id: number
+      override_id: number
+      effect?: 'allow' | 'deny' | null
+      pattern?: string | null
+      enabled?: boolean | null
+    }
+    response: { override: object }
+  }
+  /**
    * Remove a subject's vault role assignment on a vault.
    */
   'role.vault.unassign': {
     payload: { vault_id: number; subject_type: 'user' | 'group'; subject_id: number }
     response: { unassigned: boolean }
+  }
+  /**
+   * Patch a vault role definition (name, description; permissions as a complete snapshot).
+   */
+  'role.vault.update': {
+    payload: {
+      id: number
+      name?: string | null
+      description?: string | null
+      permissions?: { qualified: string; value: boolean }[]
+    }
+    response: { role: object }
+  }
+  /**
+   * Every admin role the caller may view.
+   */
+  'roles.admin.list': {
+    payload: null
+    response: { roles: object[] }
   }
   /**
    * Every vault role definition.
@@ -421,6 +807,639 @@ export interface WsContract {
   'roles.vault.list.assigned': {
     payload: { id: number }
     response: { assigned_roles: object[] }
+  }
+  /**
+   * Bind a vault to a gateway bucket name (default: the vault's slug). Local vaults use mode local, S3/R2
+   * vaults remote_cache or remote_proxy.
+   */
+  's3.gateway.buckets.bind': {
+    payload: {
+      vault_id?: number
+      vault_name?: string
+      vault?: string
+      owner_id?: number | null
+      bucket_name?: string
+      mode?: 'local' | 'remote_cache' | 'remote_proxy'
+      api_exclusive?: boolean
+    }
+    response: { bound: boolean }
+  }
+  /**
+   * Create a local vault and bind it as a bucket (bucket name defaults to the vault's slug).
+   */
+  's3.gateway.buckets.createLocal': {
+    payload: {
+      bucket_name?: string
+      owner_id?: number | null
+      quota_bytes?: number
+      name?: string | null
+      description?: string | null
+    }
+    response: { bucket: object }
+  }
+  /**
+   * Create an S3 vault (cache strategy) over an upstream bucket and bind it as an API-exclusive bucket. The
+   * key needs Consume; a refusal with data.code 'encryption_waiver' means the upstream bucket already holds
+   * data: resend with accept_encryption_waiver once the person accepts.
+   */
+  's3.gateway.buckets.createRemoteCache': {
+    payload: {
+      bucket_name?: string
+      owner_id?: number | null
+      api_key_id?: number | null
+      api_key?: string | null
+      upstream_bucket: string
+      encrypt_upstream?: boolean
+      name?: string | null
+      description?: string | null
+      accept_encryption_waiver?: boolean
+    }
+    response: { bucket: object }
+  }
+  /**
+   * Bucket bindings the caller may manage.
+   */
+  's3.gateway.buckets.list': {
+    payload: null
+    response: { buckets: object[] }
+  }
+  /**
+   * Remove a bucket binding (the vault stays).
+   */
+  's3.gateway.buckets.unbind': {
+    payload: { bucket_name: string }
+    response: { unbound: boolean }
+  }
+  /**
+   * Gateway credential budget ledger entries (newest first).
+   */
+  's3.gateway.budget.ledger.list': {
+    payload: {
+      gateway_credential_id?: number | null
+      vault_id?: number | null
+      include_inactive?: boolean
+      limit?: number
+    }
+    response: { ledger: object[] }
+  }
+  /**
+   * Disable a gateway credential (or credential + vault) budget policy.
+   */
+  's3.gateway.budget.policy.disable': {
+    payload: {
+      scope: 'gateway_credential' | 'gateway_credential_vault'
+      gateway_credential_id: number
+      vault_id?: number | null
+    }
+    response: { disabled: boolean }
+  }
+  /**
+   * Gateway credential budget policies the caller may see.
+   */
+  's3.gateway.budget.policy.list': {
+    payload: { gateway_credential_id?: number | null; vault_id?: number | null; include_inactive?: boolean }
+    response: { policies: object[] }
+  }
+  /**
+   * Create or replace a gateway credential (or credential + vault) budget policy. Limits are decimal strings.
+   */
+  's3.gateway.budget.policy.upsert': {
+    payload: {
+      scope: 'gateway_credential' | 'gateway_credential_vault'
+      gateway_credential_id: number
+      vault_id?: number | null
+      mode?: 'off' | 'report' | 'warn' | 'enforce' | null
+      currency?: string | null
+      max_run_cost?: string | null
+      max_daily_cost?: string | null
+      max_monthly_cost?: string | null
+      require_verified_catalog?: boolean
+      allow_stale_catalog?: boolean
+      max_catalog_age_seconds?: number | null
+    }
+    response: { policy: object }
+  }
+  /**
+   * Gateway credential budget policies, recent ledger entries and spend trends.
+   */
+  's3.gateway.budget.status': {
+    payload: {
+      gateway_credential_id?: number | null
+      vault_id?: number | null
+      include_inactive?: boolean
+      limit?: number
+    }
+    response: { policies: object[]; ledger: object[]; trends: object[] }
+  }
+  /**
+   * Create a gateway credential for a principal (the caller unless principal_user_id / user_id names
+   * another). The secret is returned once. scope_mode defaults to vault_allowlist when vaults are given, else
+   * user_access; global needs an admin principal and a default vault role.
+   */
+  's3.gateway.credentials.create': {
+    payload: {
+      name: string
+      principal_user_id?: number | null
+      user_id?: number | null
+      scope_mode?: 'user_access' | 'global' | 'vault_allowlist'
+      scope?: 'user_access' | 'global' | 'vault_allowlist'
+      description?: string | null
+      expires_at?: number | null
+      default_vault_role_id?: number | null
+      default_role_id?: number | null
+      vault_role_id?: number
+      role_id?: number
+      vault_role_name?: string
+      role_name?: string
+      role?: string
+      selected_vault_ids?: number[]
+      vault_ids?: number[]
+      vault_scopes?: {
+        vault_id: number
+        can_list?: boolean
+        can_read?: boolean
+        can_write?: boolean
+        can_delete?: boolean
+        can_admin?: boolean
+      }[]
+      enforce_budget_for_local_requests?: boolean
+    }
+    response: { credential: object; secret_access_key: string }
+  }
+  /**
+   * Remove a credential's default vault role.
+   */
+  's3.gateway.credentials.defaultRole.clear': {
+    payload: {
+      credential_id?: number
+      access_key?: string
+      credential_access_key?: string
+      name?: string
+      credential_name?: string
+      credential?: string
+    }
+    response: { cleared: boolean; credential: object }
+  }
+  /**
+   * A credential's default vault role, or null.
+   */
+  's3.gateway.credentials.defaultRole.get': {
+    payload: {
+      credential_id?: number
+      access_key?: string
+      credential_access_key?: string
+      name?: string
+      credential_name?: string
+      credential?: string
+    }
+    response: { credential: object; default_role: object | null }
+  }
+  /**
+   * Add a permission override to a credential's default vault role (needs a default role).
+   */
+  's3.gateway.credentials.defaultRole.overrides.add': {
+    payload: {
+      credential_id?: number
+      access_key?: string
+      credential_access_key?: string
+      name?: string
+      credential_name?: string
+      credential?: string
+      permission_id?: number
+      permission_qualified?: string
+      permission_name?: string
+      permission?: string
+      effect?: 'allow' | 'deny'
+      glob_path?: string
+      path?: string
+      enabled?: boolean
+    }
+    response: { override: object }
+  }
+  /**
+   * Permission overrides on a credential's default vault role.
+   */
+  's3.gateway.credentials.defaultRole.overrides.list': {
+    payload: {
+      credential_id?: number
+      access_key?: string
+      credential_access_key?: string
+      name?: string
+      credential_name?: string
+      credential?: string
+    }
+    response: { credential: object; default_role: object | null; overrides: object[] }
+  }
+  /**
+   * Remove a permission override from a credential's default vault role.
+   */
+  's3.gateway.credentials.defaultRole.overrides.remove': {
+    payload: {
+      credential_id?: number
+      access_key?: string
+      credential_access_key?: string
+      name?: string
+      credential_name?: string
+      credential?: string
+      override_id?: number
+    }
+    response: { removed: boolean; credential: object }
+  }
+  /**
+   * Set a credential's default vault role (refused for user-access credentials).
+   */
+  's3.gateway.credentials.defaultRole.set': {
+    payload: {
+      credential_id?: number
+      access_key?: string
+      credential_access_key?: string
+      name?: string
+      credential_name?: string
+      credential?: string
+      vault_role_id?: number
+      role_id?: number
+      vault_role_name?: string
+      role_name?: string
+      role?: string
+      enabled?: boolean
+    }
+    response: { credential: object; default_role: object }
+  }
+  /**
+   * Every credential the caller may see (their own, or all with admin.s3_gateway.manage_credentials).
+   */
+  's3.gateway.credentials.list': {
+    payload: { include_disabled?: boolean }
+    response: { credentials: object[] }
+  }
+  /**
+   * Revoke a credential by access key or name.
+   */
+  's3.gateway.credentials.revoke': {
+    payload: { access_key?: string; name?: string }
+    response: { revoked: boolean }
+  }
+  /**
+   * Assign a vault role to a credential on a vault (not for user-access credentials; the role may not exceed
+   * what the principal can do).
+   */
+  's3.gateway.credentials.roles.assign': {
+    payload: {
+      credential_id?: number
+      access_key?: string
+      credential_access_key?: string
+      name?: string
+      credential_name?: string
+      credential?: string
+      vault_id?: number
+      vault_name?: string
+      vault?: string
+      owner_id?: number | null
+      vault_role_id?: number
+      role_id?: number
+      vault_role_name?: string
+      role_name?: string
+      role?: string
+      enabled?: boolean
+    }
+    response: { assignment: object; role: object }
+  }
+  /**
+   * A credential's per-vault role assignments the caller may see.
+   */
+  's3.gateway.credentials.roles.list': {
+    payload: {
+      credential_id?: number
+      access_key?: string
+      credential_access_key?: string
+      name?: string
+      credential_name?: string
+      credential?: string
+    }
+    response: { credential: object; roles: object[]; assignments: object[] }
+  }
+  /**
+   * Add a permission override to a credential's grant on a vault (the vault must be selected and a default
+   * role set).
+   */
+  's3.gateway.credentials.roles.overrides.add': {
+    payload: {
+      credential_id?: number
+      access_key?: string
+      credential_access_key?: string
+      name?: string
+      credential_name?: string
+      credential?: string
+      vault_id?: number
+      vault_name?: string
+      vault?: string
+      owner_id?: number | null
+      permission_id?: number
+      permission_qualified?: string
+      permission_name?: string
+      permission?: string
+      effect?: 'allow' | 'deny'
+      glob_path?: string
+      path?: string
+      enabled?: boolean
+    }
+    response: { override: object }
+  }
+  /**
+   * Permission overrides on a credential's grant on one vault.
+   */
+  's3.gateway.credentials.roles.overrides.list': {
+    payload: {
+      credential_id?: number
+      access_key?: string
+      credential_access_key?: string
+      name?: string
+      credential_name?: string
+      credential?: string
+      vault_id?: number
+      vault_name?: string
+      vault?: string
+      owner_id?: number | null
+    }
+    response: { credential: object; vault: object | null; overrides: object[] }
+  }
+  /**
+   * Remove a permission override from a credential's vault grant.
+   */
+  's3.gateway.credentials.roles.overrides.remove': {
+    payload: {
+      credential_id?: number
+      access_key?: string
+      credential_access_key?: string
+      name?: string
+      credential_name?: string
+      credential?: string
+      vault_id?: number
+      vault_name?: string
+      vault?: string
+      owner_id?: number | null
+      override_id?: number
+    }
+    response: { removed: boolean; credential: object; vault: object | null }
+  }
+  /**
+   * Remove a credential's role on a vault.
+   */
+  's3.gateway.credentials.roles.revoke': {
+    payload: {
+      credential_id?: number
+      access_key?: string
+      credential_access_key?: string
+      name?: string
+      credential_name?: string
+      credential?: string
+      vault_id?: number
+      vault_name?: string
+      vault?: string
+      owner_id?: number | null
+    }
+    response: { revoked: boolean; credential: object; vault: object | null }
+  }
+  /**
+   * Change a credential's scope and settings; absent members stay as they are. Nothing to change is
+   * 'invalid'.
+   */
+  's3.gateway.credentials.scope.update': {
+    payload: {
+      credential_id?: number
+      access_key?: string
+      credential_access_key?: string
+      name?: string
+      credential_name?: string
+      credential?: string
+      scope_mode?: 'user_access' | 'global' | 'vault_allowlist'
+      principal_user_id?: number | null
+      description?: string | null
+      expires_at?: number | null
+      enforce_budget_for_local_requests?: boolean
+      vault_scopes?: {
+        vault_id: number
+        can_list?: boolean
+        can_read?: boolean
+        can_write?: boolean
+        can_delete?: boolean
+        can_admin?: boolean
+      }[]
+      selected_vault_ids?: number[]
+      vault_ids?: number[]
+      default_vault_role_id?: number | null
+      default_role_id?: number | null
+      vault_role_id?: number
+      role_id?: number
+      vault_role_name?: string
+      role_name?: string
+      role?: string
+    }
+    response: { credential: object }
+  }
+  /**
+   * Select one more vault for a vault-allowlist credential.
+   */
+  's3.gateway.credentials.selectedVaults.add': {
+    payload: {
+      credential_id?: number
+      access_key?: string
+      credential_access_key?: string
+      name?: string
+      credential_name?: string
+      credential?: string
+      vault_id?: number
+      vault_name?: string
+      vault?: string
+      owner_id?: number | null
+      enabled?: boolean
+    }
+    response: { credential: object; selected_vault: object }
+  }
+  /**
+   * The vaults selected for a credential.
+   */
+  's3.gateway.credentials.selectedVaults.list': {
+    payload: {
+      credential_id?: number
+      access_key?: string
+      credential_access_key?: string
+      name?: string
+      credential_name?: string
+      credential?: string
+    }
+    response: { credential: object; selected_vaults: object[]; vaults: object[] }
+  }
+  /**
+   * Drop a vault from a credential: its selection and any per-vault role.
+   */
+  's3.gateway.credentials.selectedVaults.remove': {
+    payload: {
+      credential_id?: number
+      access_key?: string
+      credential_access_key?: string
+      name?: string
+      credential_name?: string
+      credential?: string
+      vault_id?: number
+      vault_name?: string
+      vault?: string
+      owner_id?: number | null
+    }
+    response: { removed: boolean; credential: object; vault: object | null }
+  }
+  /**
+   * Replace a vault-allowlist credential's selected vaults (an empty or absent list clears them).
+   */
+  's3.gateway.credentials.selectedVaults.replace': {
+    payload: {
+      credential_id?: number
+      access_key?: string
+      credential_access_key?: string
+      name?: string
+      credential_name?: string
+      credential?: string
+      selected_vault_ids?: number[]
+      vault_ids?: number[]
+    }
+    response: { credential: object; selected_vaults: object[]; vaults: object[] }
+  }
+  /**
+   * S3 gateway runtime status: running/configured/ready, the listen endpoint and request counters.
+   */
+  's3.gateway.status': {
+    payload: null
+    response: {
+      status: {
+        running: boolean
+        configured: boolean
+        ready: boolean
+        host: string
+        port: number
+        endpoint: string
+        active_sessions: number
+        total_requests: number
+        failed_requests: number
+      }
+    }
+  }
+  /**
+   * The daemon's whole settings document (config.yaml as JSON, without secrets). Super admins only.
+   */
+  'settings.get': {
+    payload: null
+    response: { settings: object }
+  }
+  /**
+   * What any signed-in user may know of the server policy: the sharing switches and the vault defaults
+   * (vaults.s3.*).
+   */
+  'settings.policy.get': {
+    payload: null
+    response: { policy: { sharing: object; vaults: object } }
+  }
+  /**
+   * Change settings with a JSON merge patch (RFC 7386) onto the current document: send only the members that
+   * change; null removes an optional key. The merged document is validated as a whole and saved (a
+   * s3_gateway.enabled change restarts the gateway). Super admins only; preview.derive.helper_dir can't be
+   * changed here.
+   */
+  'settings.update': {
+    payload: {
+      websocket_server?: object
+      http_preview_server?: object
+      s3_gateway?: object
+      caching?: object
+      preview?: object
+      database?: object
+      auth?: object
+      sync?: object
+      pricing?: object
+      services?: object
+      stats_snapshots?: object
+      sharing?: object
+      vaults?: object
+      email?: object
+      operator_emails?: object
+      auditing?: object
+      logging?: object
+      dev?: object
+    }
+    response: { settings: object }
+  }
+  /**
+   * Share sessions: drop a download transfer.
+   */
+  'share.download.cancel': {
+    payload: { transfer_id: string }
+    response: { cancelled: boolean; transfer_id: string }
+  }
+  /**
+   * Share sessions: read the next chunk (base64). offset must be the previous next_offset; the target is
+   * re-authorized on every chunk and the transfer is dropped on any failure.
+   */
+  'share.download.chunk': {
+    payload: { transfer_id: string; offset: number; length?: number }
+    response: {
+      transfer_id: string
+      offset: number
+      bytes: number
+      data_base64: string
+      next_offset: number
+      complete: boolean
+    }
+  }
+  /**
+   * Share sessions: start a chunked download of a file inside the share (Download). At most 4 transfers per
+   * socket and 64 MiB per file.
+   */
+  'share.download.start': {
+    payload: { path?: string | null; vault_id?: number | null }
+    response: {
+      transfer_id: string
+      filename: string
+      path: string
+      size_bytes: number
+      mime_type: string | null
+      chunk_size: number
+    }
+  }
+  /**
+   * Confirm an email code. When verified the socket switches to share mode (status ready); session_id and
+   * session_token default to the socket's pending session.
+   */
+  'share.email.challenge.confirm': {
+    payload: { challenge_id: string; code: string; session_id?: string | null; session_token?: string | null }
+    response: { status: 'ready' | 'email_required'; verified: boolean; session_id: string }
+  }
+  /**
+   * Email-validated links: send a one-time code to a recipient email. Identifies the link by public_token
+   * (opens a pending session) or by session_token (the socket's pending session when neither is given).
+   * Refused once the session is verified.
+   */
+  'share.email.challenge.start': {
+    payload: { email: string; public_token?: string | null; session_token?: string | null }
+    response: {
+      status: 'challenge_created'
+      share: object
+      challenge_id: string
+      session_id: string
+      session_token?: string
+    }
+  }
+  /**
+   * Share sessions: list a directory inside the share (List); entries in the share view.
+   */
+  'share.fs.list': {
+    payload: { path?: string | null; vault_id?: number | null }
+    response: { path: string; entries: object[] }
+  }
+  /**
+   * Share sessions: one entry inside the share, reduced to the share view (Metadata).
+   */
+  'share.fs.metadata': {
+    payload: { path?: string | null; vault_id?: number | null }
+    response: { entry: object }
   }
   /**
    * Create a share link on a file or directory. The public token is returned once.
@@ -457,11 +1476,389 @@ export interface WsContract {
     response: { share: object; public_token: string; public_url_path: string }
   }
   /**
+   * One share link the caller may manage (no token material).
+   */
+  'share.link.get': {
+    payload: { id: string }
+    response: { share: object }
+  }
+  /**
+   * Share links: of one vault (vault_id, needs the vault's share-management permission) or created by the
+   * caller. offset is turned into a page when limit is given.
+   */
+  'share.link.list': {
+    payload: {
+      vault_id?: number | null
+      sort?: string | null
+      filter?: string | null
+      limit?: number | null
+      page?: number | null
+      offset?: number | null
+      direction?: 'asc' | 'desc' | null
+    }
+    response: { shares: object[] }
+  }
+  /**
    * Revoke a share link; its sessions end on their next request.
    */
   'share.link.revoke': {
     payload: { id: string }
     response: { revoked: boolean }
+  }
+  /**
+   * Issue a new public token (returned once); the old URL and every session of the link stop working.
+   */
+  'share.link.rotate_token': {
+    payload: { id: string }
+    response: { share: object; public_token: string; public_url_path: string }
+  }
+  /**
+   * Patch a share link: absent members are left alone, null clears an optional one.
+   * recipient_role_assignments (when present) replaces the recipients. vault_id, root_entry_id, root_path,
+   * target_type, counters and timestamps are immutable (refused).
+   */
+  'share.link.update': {
+    payload: {
+      id: string
+      link_type?: 'download' | 'upload' | 'access' | null
+      access_mode?: 'public' | 'email_validated' | null
+      allowed_ops?: number | ('metadata' | 'list' | 'preview' | 'download' | 'upload' | 'mkdir' | 'overwrite')[] | null
+      name?: string | null
+      public_label?: string | null
+      description?: string | null
+      expires_at?: string | number | null
+      max_downloads?: number | null
+      max_upload_files?: number | null
+      max_upload_size_bytes?: number | null
+      max_upload_total_bytes?: number | null
+      duplicate_policy?: 'reject' | 'rename' | 'overwrite' | null
+      allowed_mime_types?: string[] | null
+      blocked_mime_types?: string[] | null
+      allowed_extensions?: string[] | null
+      blocked_extensions?: string[] | null
+      metadata?: object
+      public_role_assignment?: { vault_role_id?: number; vault_role_name?: string; permission_overrides?: object[] } | null
+      recipient_role_assignments?: {
+        email: string
+        role_assignment: { vault_role_id?: number; vault_role_name?: string; permission_overrides?: object[] }
+      }[] | null
+    }
+    response: { share: object }
+  }
+  /**
+   * Share sessions: a JPEG preview of an image or PDF inside the share (Preview), base64. Sources over 16 MiB
+   * and remote-only bytes are refused; the console uses GET /preview?share=1.
+   */
+  'share.preview.get': {
+    payload: { path?: string | null; size?: number }
+    response: {
+      path: string
+      filename: string
+      source_mime_type: string
+      mime_type: 'image/jpeg'
+      size_bytes: number
+      data_base64: string
+    }
+  }
+  /**
+   * Open a share session from a public link token. A public link is ready at once (the socket switches to
+   * share mode); an email-validated link answers email_required with a pending session to verify through
+   * share.email.challenge.*. Reopening the socket's own ready share returns its session.
+   */
+  'share.session.open': {
+    payload: { public_token: string }
+    response: { status: 'ready' | 'email_required'; share: object; session_id: string; session_token: string }
+  }
+  /**
+   * Share sessions: abort an upload.
+   */
+  'share.upload.cancel': {
+    payload: { upload_id?: string; transfer_id?: string }
+    response: { cancelled: boolean; upload_id: string }
+  }
+  /**
+   * Share sessions: finish an upload after its last binary frame; the target is re-authorized and the file
+   * created.
+   */
+  'share.upload.finish': {
+    payload: { upload_id?: string; transfer_id?: string }
+    response: { upload_id: string; complete: boolean; entry: object }
+  }
+  /**
+   * Share sessions: start an upload of a new file into a directory of the share (Upload). The bytes follow as
+   * binary frames; an existing target is refused (duplicate policy reject).
+   */
+  'share.upload.start': {
+    payload: {
+      path?: string | null
+      filename: string
+      size_bytes?: number
+      size?: number
+      mime_type?: string | null
+      duplicate_policy?: 'reject' | null
+      vault_id?: number | null
+    }
+    response: {
+      upload_id: string
+      transfer_id: string
+      path: string
+      filename: string
+      size_bytes: number
+      chunk_size: number
+      duplicate_policy: 'reject'
+    }
+  }
+  /**
+   * The health dashboard: overall status, attention items, sections and the requested cards (all default
+   * cards when cards is empty). Needs admin.stats.view.
+   */
+  'stats.dashboard.overview': {
+    payload: { scope?: string; mode?: string; cards?: { id: string; variant?: string; size?: string }[] }
+    response: { stats: object }
+  }
+  /**
+   * The overall severity of the default overview cards without cards, sections or series (the console's
+   * health dot). Needs admin.stats.view.
+   */
+  'stats.dashboard.severity': {
+    payload: null
+    response: { stats: object }
+  }
+  /**
+   * Filesystem metadata cache counters. Fails (no data.code) when the cache has no stats. Needs
+   * admin.stats.view.
+   */
+  'stats.fs.cache': {
+    payload: null
+    response: { stats: object }
+  }
+  /**
+   * HTTP preview cache counters. Needs admin.stats.view.
+   */
+  'stats.http.cache': {
+    payload: null
+    response: { stats: object }
+  }
+  /**
+   * S3 price budget dashboard figures: system-wide without vault_id (needs admin.stats.view), one vault's
+   * with it (vault ownership or admin vault View/ViewStats). A non-object payload means system-wide.
+   */
+  'stats.pricing.budget': {
+    payload: { vault_id?: number | null }
+    response: { stats: object }
+  }
+  /**
+   * Live websocket and share connections. Needs admin.stats.view.
+   */
+  'stats.system.connections': {
+    payload: null
+    response: { stats: object }
+  }
+  /**
+   * Database size, connections and largest tables. Needs admin.stats.view.
+   */
+  'stats.system.db': {
+    payload: null
+    response: { stats: object | null }
+  }
+  /**
+   * FUSE operation counters, latencies and errno totals. Fails (no data.code) when the daemon has no FUSE
+   * stats. Needs admin.stats.view.
+   */
+  'stats.system.fuse': {
+    payload: null
+    response: { stats: object }
+  }
+  /**
+   * Runtime services, protocols, dependencies and a live bounded database probe. Needs admin.stats.view.
+   */
+  'stats.system.health': {
+    payload: null
+    response: { stats: object }
+  }
+  /**
+   * Filesystem operation queue and recent errors, all vaults. Needs admin.stats.view.
+   */
+  'stats.system.operations': {
+    payload: null
+    response: { stats: object | null }
+  }
+  /**
+   * System-wide S3 price budget dashboard figures. Needs admin.stats.view.
+   */
+  'stats.system.pricing': {
+    payload: null
+    response: { stats: object }
+  }
+  /**
+   * Retention figures for every vault. Needs admin.stats.view.
+   */
+  'stats.system.retention': {
+    payload: null
+    response: { stats: object | null }
+  }
+  /**
+   * Storage backend figures for every vault. Needs admin.stats.view.
+   */
+  'stats.system.storage': {
+    payload: null
+    response: { stats: object }
+  }
+  /**
+   * Thread pool queue depth and worker pressure. Needs admin.stats.view.
+   */
+  'stats.system.threadpools': {
+    payload: null
+    response: { stats: object }
+  }
+  /**
+   * System metric trend series from the stats rollups. Needs admin.stats.view.
+   */
+  'stats.system.trends': {
+    payload: { window_hours?: number }
+    response: { stats: object | null }
+  }
+  /**
+   * A vault's capacity and usage figures (computed on the stats thread pool). Needs vault ownership or the
+   * admin vault View/ViewStats permission on the vault.
+   */
+  'stats.vault': {
+    payload: { vault_id: number }
+    response: { stats: object }
+  }
+  /**
+   * A vault's recent activity: counts, top users and paths, recent events. Needs vault ownership or the admin
+   * vault View/ViewStats permission on the vault.
+   */
+  'stats.vault.activity': {
+    payload: { vault_id: number }
+    response: { stats: object | null }
+  }
+  /**
+   * A vault's filesystem operation queue and recent errors. Needs vault ownership or the admin vault
+   * View/ViewStats permission on the vault.
+   */
+  'stats.vault.operations': {
+    payload: { vault_id: number }
+    response: { stats: object | null }
+  }
+  /**
+   * A vault's S3 price budget dashboard figures. Needs vault ownership or the admin vault View/ViewStats
+   * permission on the vault.
+   */
+  'stats.vault.pricing': {
+    payload: { vault_id: number }
+    response: { stats: object }
+  }
+  /**
+   * A vault's recovery posture (keys, versions, trash). Needs vault ownership or the admin vault
+   * View/ViewStats permission on the vault.
+   */
+  'stats.vault.recovery': {
+    payload: { vault_id: number }
+    response: { stats: object | null }
+  }
+  /**
+   * A vault's retention (trash, versions, cleanup) figures. Needs vault ownership or the admin vault
+   * View/ViewStats permission on the vault.
+   */
+  'stats.vault.retention': {
+    payload: { vault_id: number }
+    response: { stats: object | null }
+  }
+  /**
+   * A vault's security posture. Needs vault ownership or the admin vault View/ViewStats permission on the
+   * vault.
+   */
+  'stats.vault.security': {
+    payload: { vault_id: number }
+    response: { stats: object | null }
+  }
+  /**
+   * A vault's share-link statistics. Needs vault ownership or the admin vault View/ViewStats permission on
+   * the vault.
+   */
+  'stats.vault.shares': {
+    payload: { vault_id: number }
+    response: { stats: object | null }
+  }
+  /**
+   * A vault's storage backend figures. Needs vault ownership or the admin vault View/ViewStats permission on
+   * the vault.
+   */
+  'stats.vault.storage': {
+    payload: { vault_id: number }
+    response: { stats: object }
+  }
+  /**
+   * A vault's sync health. Needs vault ownership or the admin vault View/ViewStats permission on the vault.
+   */
+  'stats.vault.sync': {
+    payload: { vault_id: number }
+    response: { stats: object | null }
+  }
+  /**
+   * A vault's metric trend series from the stats rollups. Needs vault ownership or the admin vault
+   * View/ViewStats permission on the vault.
+   */
+  'stats.vault.trends': {
+    payload: { vault_id: number; window_hours?: number }
+    response: { stats: object | null }
+  }
+  /**
+   * Store an upstream S3 API key after checking the credentials against the provider (skipped in test mode).
+   * owner_id defaults to the caller; creating one for someone else needs the users/admins keys permission.
+   */
+  'storage.apiKey.add': {
+    payload: {
+      name: string
+      provider: 'AWS' | 'Cloudflare R2' | 'Wasabi' | 'Backblaze B2' | 'DigitalOcean' | 'MinIO' | 'Ceph' | 'Storj' | 'Other'
+      access_key: string
+      secret_access_key: string
+      endpoint: string
+      region?: string
+      owner_id?: number | null
+    }
+    response: { api_key: object }
+  }
+  /**
+   * One API key's metadata.
+   */
+  'storage.apiKey.get': {
+    payload: { id: number }
+    response: { api_key: object }
+  }
+  /**
+   * The API keys the caller may view (metadata only).
+   */
+  'storage.apiKey.list': {
+    payload: null
+    response: { keys: object[] }
+  }
+  /**
+   * Delete a key. Refused (invalid, naming the vaults) while a vault uses it, and (conflict) while it
+   * operates an event subscription. The answer carries no data.
+   */
+  'storage.apiKey.remove': {
+    payload: { id: number }
+    response: Record<string, never>
+  }
+  /**
+   * Edit a key in place (same id, so bound vaults keep their binding; their engines are rebuilt). Absent or
+   * null members keep their value; an empty secret_access_key keeps the sealed secret. The resulting
+   * credentials are re-checked like add.
+   */
+  'storage.apiKey.update': {
+    payload: {
+      id: number
+      name?: string | null
+      provider?: 'AWS' | 'Cloudflare R2' | 'Wasabi' | 'Backblaze B2' | 'DigitalOcean' | 'MinIO' | 'Ceph' | 'Storj' | 'Other' | null
+      access_key?: string | null
+      secret_access_key?: string | null
+      endpoint?: string | null
+      region?: string | null
+    }
+    response: { api_key: object }
   }
   /**
    * Create a vault. owner_id, description and quota (bytes, 0 = unlimited) are optional; the daemon picks the
@@ -488,6 +1885,13 @@ export interface WsContract {
       provision?: object
     }
     response: { vault: object }
+  }
+  /**
+   * Deletions the caller could have made: pending, purging and purged tombstones, newest first.
+   */
+  'storage.vault.deleted.list': {
+    payload: null
+    response: { deleted: object[] }
   }
   /**
    * One vault with its owner's name (and sync policy for S3 vaults).
@@ -517,6 +1921,106 @@ export interface WsContract {
       accept_key_loss?: boolean
     }
     response: { deletion: object | null }
+  }
+  /**
+   * What deleting the vault would do (provider, bucket, key export state, the restore and key retention
+   * windows, the key export command). Changes nothing; needs vault Remove.
+   */
+  'storage.vault.remove.plan': {
+    payload: { id: number }
+    response: {
+      plan: {
+        vault_id: number
+        name: string
+        type: 'local' | 's3'
+        provider: string | null
+        bucket: string | null
+        encrypted_upstream: boolean
+        key_version: number
+        key_exported: boolean
+        key_exported_at: string | null
+        retention_window: string
+        retention_window_seconds: number
+        key_retention_window: string
+        key_retention_window_seconds: number
+        export_command: string
+      }
+    }
+  }
+  /**
+   * Restore a vault whose deletion is still pending (conflict once its purge has started).
+   */
+  'storage.vault.restore': {
+    payload: { id: number }
+    response: { vault: object }
+  }
+  /**
+   * Run the vault's sync now, or queue a rerun when one is already running.
+   */
+  'storage.vault.sync': {
+    payload: { id: number }
+    response: { status: 'started' | 'rerun_queued' }
+  }
+  /**
+   * Patch a vault (absent or null members are unchanged; a vault's type never changes). Owner reassignment
+   * also needs Create for the new owner, a key change needs Consume on the key, sync settings need vault
+   * sync.config.edit. A refusal with data.code 'encryption_waiver' means the bucket already holds data:
+   * resend with accept_encryption_waiver once the person accepts.
+   */
+  'storage.vault.update': {
+    payload: {
+      id: number
+      type?: 'local' | 's3'
+      name?: string | null
+      description?: string | null
+      quota?: number | null
+      owner_id?: number | null
+      slug?: string | null
+      fuse_name?: string | null
+      is_active?: boolean | null
+      api_key_id?: number | null
+      bucket?: string | null
+      storage_tier_id?: string | null
+      encrypt_upstream?: boolean | null
+      sync?: object
+      accept_encryption_waiver?: boolean
+    }
+    response: { vault: object }
+  }
+  /**
+   * Open sync conflicts, newest first, in every vault where the caller may resolve them, or in one vault
+   * (vault_id: denied when the caller may not, not_found when it doesn't exist).
+   */
+  'sync.conflicts.list': {
+    payload: { vault_id?: number | null }
+    response: { conflicts: object[] }
+  }
+  /**
+   * Resolve conflicts by keeping the local or the bucket copy (also accepted: local, remote, keep-local,
+   * keep-remote). Per item: each id gets its own status and one failure never stops the rest. 1 to 500 ids
+   * per call.
+   */
+  'sync.conflicts.resolve': {
+    payload: { resolution: 'keep_local' | 'keep_remote'; conflict_ids: number[] }
+    response: {
+      resolution: 'keep_local' | 'keep_remote'
+      resolved: number
+      failed: number
+      results: {
+        conflict_id: number
+        ok: boolean
+        status: 'resolved' | 'denied' | 'not_found' | 'conflict' | 'invalid' | 'unavailable' | 'error'
+        message: string | null
+      }[]
+    }
+  }
+  /**
+   * Open sync conflicts the caller can resolve: the total and a count per vault (vaults without conflicts are
+   * left out), sorted by vault name.
+   */
+  'sync.conflicts.summary': {
+    payload: null
+    response: { total: number; vaults: { vault_id: number; vault_name: string; count: number }[] }
   }
   /**
    * Turn provider administration off. Refused while an event subscription runs through the key.
@@ -731,6 +2235,14 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'auth.user.get.byName',
   'auth.user.update',
   'auth.users.list',
+  'dashboard.preferences.get',
+  'dashboard.preferences.reset',
+  'dashboard.preferences.update',
+  'email.config.get',
+  'email.config.update',
+  'email.history',
+  'email.provider.secret.set',
+  'email.test.send',
   'fs.dir.create',
   'fs.dir.list',
   'fs.download.cancel',
@@ -755,6 +2267,21 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'groups.list',
   'groups.list.byUser',
   'meta.contract.get',
+  'permission.get',
+  'permission.get.byName',
+  'permissions.list',
+  'pricing.budget.ledger.list',
+  'pricing.budget.override.approve',
+  'pricing.budget.override.deny',
+  'pricing.budget.override.list',
+  'pricing.budget.override.request',
+  'pricing.budget.policy.disable',
+  'pricing.budget.policy.list',
+  'pricing.budget.policy.upsert',
+  'pricing.budget.preflight',
+  'pricing.budget.status',
+  'pricing.notifications.ack',
+  'pricing.notifications.list',
   'recovery.costs',
   'recovery.inspect',
   'recovery.list',
@@ -763,17 +2290,120 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'recovery.point.delete',
   'recovery.restore',
   'recovery.snapshot.create',
+  'role.admin.add',
+  'role.admin.delete',
+  'role.admin.get',
+  'role.admin.get.byName',
+  'role.admin.update',
+  'role.vault.add',
   'role.vault.assign',
+  'role.vault.delete',
   'role.vault.get',
+  'role.vault.get.byName',
+  'role.vault.overrides.add',
+  'role.vault.overrides.list',
+  'role.vault.overrides.remove',
+  'role.vault.overrides.update',
   'role.vault.unassign',
+  'role.vault.update',
+  'roles.admin.list',
   'roles.vault.list',
   'roles.vault.list.assigned',
+  's3.gateway.buckets.bind',
+  's3.gateway.buckets.createLocal',
+  's3.gateway.buckets.createRemoteCache',
+  's3.gateway.buckets.list',
+  's3.gateway.buckets.unbind',
+  's3.gateway.budget.ledger.list',
+  's3.gateway.budget.policy.disable',
+  's3.gateway.budget.policy.list',
+  's3.gateway.budget.policy.upsert',
+  's3.gateway.budget.status',
+  's3.gateway.credentials.create',
+  's3.gateway.credentials.defaultRole.clear',
+  's3.gateway.credentials.defaultRole.get',
+  's3.gateway.credentials.defaultRole.overrides.add',
+  's3.gateway.credentials.defaultRole.overrides.list',
+  's3.gateway.credentials.defaultRole.overrides.remove',
+  's3.gateway.credentials.defaultRole.set',
+  's3.gateway.credentials.list',
+  's3.gateway.credentials.revoke',
+  's3.gateway.credentials.roles.assign',
+  's3.gateway.credentials.roles.list',
+  's3.gateway.credentials.roles.overrides.add',
+  's3.gateway.credentials.roles.overrides.list',
+  's3.gateway.credentials.roles.overrides.remove',
+  's3.gateway.credentials.roles.revoke',
+  's3.gateway.credentials.scope.update',
+  's3.gateway.credentials.selectedVaults.add',
+  's3.gateway.credentials.selectedVaults.list',
+  's3.gateway.credentials.selectedVaults.remove',
+  's3.gateway.credentials.selectedVaults.replace',
+  's3.gateway.status',
+  'settings.get',
+  'settings.policy.get',
+  'settings.update',
+  'share.download.cancel',
+  'share.download.chunk',
+  'share.download.start',
+  'share.email.challenge.confirm',
+  'share.email.challenge.start',
+  'share.fs.list',
+  'share.fs.metadata',
   'share.link.create',
+  'share.link.get',
+  'share.link.list',
   'share.link.revoke',
+  'share.link.rotate_token',
+  'share.link.update',
+  'share.preview.get',
+  'share.session.open',
+  'share.upload.cancel',
+  'share.upload.finish',
+  'share.upload.start',
+  'stats.dashboard.overview',
+  'stats.dashboard.severity',
+  'stats.fs.cache',
+  'stats.http.cache',
+  'stats.pricing.budget',
+  'stats.system.connections',
+  'stats.system.db',
+  'stats.system.fuse',
+  'stats.system.health',
+  'stats.system.operations',
+  'stats.system.pricing',
+  'stats.system.retention',
+  'stats.system.storage',
+  'stats.system.threadpools',
+  'stats.system.trends',
+  'stats.vault',
+  'stats.vault.activity',
+  'stats.vault.operations',
+  'stats.vault.pricing',
+  'stats.vault.recovery',
+  'stats.vault.retention',
+  'stats.vault.security',
+  'stats.vault.shares',
+  'stats.vault.storage',
+  'stats.vault.sync',
+  'stats.vault.trends',
+  'storage.apiKey.add',
+  'storage.apiKey.get',
+  'storage.apiKey.list',
+  'storage.apiKey.remove',
+  'storage.apiKey.update',
   'storage.vault.add',
+  'storage.vault.deleted.list',
   'storage.vault.get',
   'storage.vault.list',
   'storage.vault.remove',
+  'storage.vault.remove.plan',
+  'storage.vault.restore',
+  'storage.vault.sync',
+  'storage.vault.update',
+  'sync.conflicts.list',
+  'sync.conflicts.resolve',
+  'sync.conflicts.summary',
   'upstream.admin.disable',
   'upstream.admin.enable',
   'upstream.admin.status',
@@ -811,6 +2441,14 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'auth.user.get.byName': 15000,
   'auth.user.update': 15000,
   'auth.users.list': 15000,
+  'dashboard.preferences.get': 15000,
+  'dashboard.preferences.reset': 15000,
+  'dashboard.preferences.update': 15000,
+  'email.config.get': 15000,
+  'email.config.update': 15000,
+  'email.history': 15000,
+  'email.provider.secret.set': 15000,
+  'email.test.send': 60000,
   'fs.dir.create': 15000,
   'fs.dir.list': 30000,
   'fs.download.cancel': 15000,
@@ -835,6 +2473,21 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'groups.list': 15000,
   'groups.list.byUser': 15000,
   'meta.contract.get': 15000,
+  'permission.get': 15000,
+  'permission.get.byName': 15000,
+  'permissions.list': 15000,
+  'pricing.budget.ledger.list': 15000,
+  'pricing.budget.override.approve': 15000,
+  'pricing.budget.override.deny': 15000,
+  'pricing.budget.override.list': 15000,
+  'pricing.budget.override.request': 15000,
+  'pricing.budget.policy.disable': 15000,
+  'pricing.budget.policy.list': 15000,
+  'pricing.budget.policy.upsert': 15000,
+  'pricing.budget.preflight': 60000,
+  'pricing.budget.status': 15000,
+  'pricing.notifications.ack': 15000,
+  'pricing.notifications.list': 15000,
   'recovery.costs': 60000,
   'recovery.inspect': 30000,
   'recovery.list': 120000,
@@ -843,17 +2496,120 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'recovery.point.delete': 60000,
   'recovery.restore': 1800000,
   'recovery.snapshot.create': 300000,
+  'role.admin.add': 15000,
+  'role.admin.delete': 15000,
+  'role.admin.get': 15000,
+  'role.admin.get.byName': 15000,
+  'role.admin.update': 15000,
+  'role.vault.add': 15000,
   'role.vault.assign': 15000,
+  'role.vault.delete': 15000,
   'role.vault.get': 15000,
+  'role.vault.get.byName': 15000,
+  'role.vault.overrides.add': 15000,
+  'role.vault.overrides.list': 15000,
+  'role.vault.overrides.remove': 15000,
+  'role.vault.overrides.update': 15000,
   'role.vault.unassign': 15000,
+  'role.vault.update': 15000,
+  'roles.admin.list': 15000,
   'roles.vault.list': 15000,
   'roles.vault.list.assigned': 15000,
+  's3.gateway.buckets.bind': 15000,
+  's3.gateway.buckets.createLocal': 60000,
+  's3.gateway.buckets.createRemoteCache': 180000,
+  's3.gateway.buckets.list': 15000,
+  's3.gateway.buckets.unbind': 15000,
+  's3.gateway.budget.ledger.list': 15000,
+  's3.gateway.budget.policy.disable': 15000,
+  's3.gateway.budget.policy.list': 15000,
+  's3.gateway.budget.policy.upsert': 15000,
+  's3.gateway.budget.status': 15000,
+  's3.gateway.credentials.create': 15000,
+  's3.gateway.credentials.defaultRole.clear': 15000,
+  's3.gateway.credentials.defaultRole.get': 15000,
+  's3.gateway.credentials.defaultRole.overrides.add': 15000,
+  's3.gateway.credentials.defaultRole.overrides.list': 15000,
+  's3.gateway.credentials.defaultRole.overrides.remove': 15000,
+  's3.gateway.credentials.defaultRole.set': 15000,
+  's3.gateway.credentials.list': 15000,
+  's3.gateway.credentials.revoke': 15000,
+  's3.gateway.credentials.roles.assign': 15000,
+  's3.gateway.credentials.roles.list': 15000,
+  's3.gateway.credentials.roles.overrides.add': 15000,
+  's3.gateway.credentials.roles.overrides.list': 15000,
+  's3.gateway.credentials.roles.overrides.remove': 15000,
+  's3.gateway.credentials.roles.revoke': 15000,
+  's3.gateway.credentials.scope.update': 15000,
+  's3.gateway.credentials.selectedVaults.add': 15000,
+  's3.gateway.credentials.selectedVaults.list': 15000,
+  's3.gateway.credentials.selectedVaults.remove': 15000,
+  's3.gateway.credentials.selectedVaults.replace': 15000,
+  's3.gateway.status': 15000,
+  'settings.get': 15000,
+  'settings.policy.get': 15000,
+  'settings.update': 15000,
+  'share.download.cancel': 15000,
+  'share.download.chunk': 15000,
+  'share.download.start': 15000,
+  'share.email.challenge.confirm': 15000,
+  'share.email.challenge.start': 15000,
+  'share.fs.list': 30000,
+  'share.fs.metadata': 15000,
   'share.link.create': 15000,
+  'share.link.get': 15000,
+  'share.link.list': 15000,
   'share.link.revoke': 15000,
+  'share.link.rotate_token': 15000,
+  'share.link.update': 15000,
+  'share.preview.get': 30000,
+  'share.session.open': 15000,
+  'share.upload.cancel': 15000,
+  'share.upload.finish': 180000,
+  'share.upload.start': 30000,
+  'stats.dashboard.overview': 15000,
+  'stats.dashboard.severity': 15000,
+  'stats.fs.cache': 15000,
+  'stats.http.cache': 15000,
+  'stats.pricing.budget': 15000,
+  'stats.system.connections': 15000,
+  'stats.system.db': 15000,
+  'stats.system.fuse': 15000,
+  'stats.system.health': 15000,
+  'stats.system.operations': 15000,
+  'stats.system.pricing': 15000,
+  'stats.system.retention': 15000,
+  'stats.system.storage': 15000,
+  'stats.system.threadpools': 15000,
+  'stats.system.trends': 15000,
+  'stats.vault': 15000,
+  'stats.vault.activity': 15000,
+  'stats.vault.operations': 15000,
+  'stats.vault.pricing': 15000,
+  'stats.vault.recovery': 15000,
+  'stats.vault.retention': 15000,
+  'stats.vault.security': 15000,
+  'stats.vault.shares': 15000,
+  'stats.vault.storage': 15000,
+  'stats.vault.sync': 15000,
+  'stats.vault.trends': 15000,
+  'storage.apiKey.add': 60000,
+  'storage.apiKey.get': 15000,
+  'storage.apiKey.list': 15000,
+  'storage.apiKey.remove': 15000,
+  'storage.apiKey.update': 60000,
   'storage.vault.add': 180000,
+  'storage.vault.deleted.list': 15000,
   'storage.vault.get': 15000,
   'storage.vault.list': 15000,
   'storage.vault.remove': 15000,
+  'storage.vault.remove.plan': 15000,
+  'storage.vault.restore': 15000,
+  'storage.vault.sync': 15000,
+  'storage.vault.update': 60000,
+  'sync.conflicts.list': 15000,
+  'sync.conflicts.resolve': 600000,
+  'sync.conflicts.summary': 15000,
   'upstream.admin.disable': 15000,
   'upstream.admin.enable': 60000,
   'upstream.admin.status': 60000,

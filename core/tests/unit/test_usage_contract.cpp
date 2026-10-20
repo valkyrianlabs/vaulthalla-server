@@ -117,6 +117,33 @@ TEST(UsageContract, EveryWsBookCommandIsRegisteredByTheDaemon) {
     for (const auto& cmd : book) EXPECT_TRUE(router->hasHandler(cmd.command)) << cmd.command;
 }
 
+// Registered commands the book deliberately leaves out, each with the reason. Keep it empty unless a command truly
+// can't be described; tools/contracts/test_ws_contract.py holds the same list. An entry that is in the book or no
+// longer registered fails as well, so the list only shrinks.
+const std::map<std::string, std::string>& unbookedWsCommands() {
+    static const std::map<std::string, std::string> kUnbooked{};
+    return kUnbooked;
+}
+
+TEST(UsageContract, EveryRegisteredWsCommandHasABookEntry) {
+    const auto router = std::make_shared<protocols::ws::Router>();
+    protocols::ws::Handler::registerAllHandlers(router);
+    const auto book = contract::ws::commands();
+    const auto registered = router->commands();
+    ASSERT_GT(registered.size(), 150u) << "found too few registered ws commands; did registration move?";
+
+    for (const auto& command : registered)
+        if (!unbookedWsCommands().contains(command)) {
+            EXPECT_NE(wsCommand(book, command), nullptr)
+                << command << " is registered but has no WsCommandUsage entry (core/usage/src/contract/ws/*.cpp)";
+        }
+    for (const auto& [command, reason] : unbookedWsCommands()) {
+        EXPECT_FALSE(reason.empty()) << command;
+        EXPECT_TRUE(router->hasHandler(command)) << command << " is allowlisted but no longer registered";
+        EXPECT_EQ(wsCommand(book, command), nullptr) << command << " is allowlisted but now has a book entry";
+    }
+}
+
 TEST(UsageContract, WsBookCoversTheEngineAndConsoleCommands) {
     const auto book = contract::ws::commands();
     for (const auto* name : {"auth.login", "auth.logout", "auth.refresh", "auth.isAuthenticated", "auth.register",

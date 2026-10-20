@@ -32,7 +32,7 @@ export const PRICING_COMMANDS = [
 export const refreshPricing = () => invalidate(...PRICING_COMMANDS)
 
 export const useBudgetStats = (enabled: boolean) =>
-  useWs('stats.pricing.budget', null, { enabled, refetchInterval: 60_000, select: data => toStats(data.stats) })
+  useWs('stats.pricing.budget', {}, { enabled, refetchInterval: 60_000, select: data => toStats(data.stats) })
 
 export const useBudgetStatus = (enabled: boolean) =>
   useWs('pricing.budget.status', { limit: 50, include_inactive: true }, { enabled, select: data => toStatus(data) })

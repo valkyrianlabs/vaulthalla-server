@@ -14,6 +14,8 @@
 
 #include <algorithm>
 #include <array>
+#include <string>
+#include <vector>
 
 namespace {
 template<size_t N>
@@ -87,6 +89,14 @@ void Router::registerEmptyHandler(const std::string& cmd, RawEmpty fn) {
 
 void Router::registerHandler(const std::string& cmd, Handler h) {
     handlers_[cmd] = std::move(h);
+}
+
+std::vector<std::string> Router::commands() const {
+    std::vector<std::string> out;
+    out.reserve(handlers_.size());
+    for (const auto& [command, _] : handlers_) out.push_back(command);
+    std::ranges::sort(out);
+    return out;
 }
 
 void Router::logRefusal(const std::string& label, const std::string_view suffix, const std::string_view detail) {

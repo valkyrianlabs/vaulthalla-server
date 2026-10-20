@@ -42,22 +42,11 @@ const DEFAULT_TIMEOUT_MS = 15_000
 const BACKOFF_BASE_MS = 500
 const BACKOFF_MAX_MS = 15_000
 
-// Commands whose server-side work can legitimately take longer than the default. A timeout on these means "no
-// answer yet", not "failed": callers surface it as such and must not blindly resend. Commands in the server-owned
-// contract take the timeout the server declares (core/usage); the rest are listed here.
+// Per-command client timeouts. A timeout means "no answer yet", not "failed": callers surface it as such and must
+// not blindly resend. Every command the daemon registers is in the server-owned contract, which declares its timeout
+// (core/usage); a command not in the book would be listed here after the spread.
 const COMMAND_TIMEOUTS: Partial<Record<Command, number>> = {
   ...WS_CONTRACT_TIMEOUTS,
-  'share.upload.start': 30_000,
-  'share.upload.finish': 180_000,
-  'share.preview.get': 30_000,
-  'storage.vault.update': 60_000,
-  'storage.apiKey.add': 60_000,
-  'storage.apiKey.update': 60_000,
-  'email.test.send': 60_000,
-  's3.gateway.buckets.createRemoteCache': 180_000,
-  'pricing.budget.preflight': 60_000,
-  // Resolving uploads or downloads each file (price-preflighted, metered); a bulk run can take minutes.
-  'sync.conflicts.resolve': 600_000,
 }
 
 export const commandTimeout = (command: Command) => COMMAND_TIMEOUTS[command] ?? DEFAULT_TIMEOUT_MS

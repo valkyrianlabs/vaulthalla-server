@@ -795,7 +795,8 @@ stage "Copy And Delete")
   environment and are private (paths under `/tmp/`, a `vh_harness_*` or test database). Test mode then serves `vh` on
   that socket (`paths::getCliSocketPath()`); the client honours `VAULTHALLA_CLI_SOCKET`.
 - `core/usage` also holds the contract: `FieldGen` generators on CLI usage entries, `OperationSpec` catalog,
-  `WsCommandUsage` book, exported by `vh_usage --json`.
+  `WsCommandUsage` book (one file per area in `core/usage/src/contract/ws/`, every registered ws command), exported by
+  `vh_usage --json`.
 - `vh_fs_actor` (`core/tests/helpers/fs_actor.cpp`, `-Dintegration_tests=true`): a single-threaded helper that
   switches to a test uid at startup and serves filesystem ops as JSON lines; used by Tier A and `tools/harness`.
 

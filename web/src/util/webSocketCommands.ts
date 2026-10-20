@@ -12,7 +12,7 @@ import { VaultRecovery } from '@/models/stats/vaultRecovery'
 import { VaultSecurity } from '@/models/stats/vaultSecurity'
 import { VaultShareStats } from '@/models/stats/vaultShareStats'
 import { VaultSyncHealth } from '@/models/stats/vaultSyncHealth'
-import { APIKey, S3APIKey } from '@/models/apiKey'
+import { APIKey } from '@/models/apiKey'
 import type {
   AdminStatus,
   AdmissionReport,
@@ -40,6 +40,7 @@ import type {
   RecoveryUpdate,
 } from '@/models/recovery'
 import type { GroupRecord, UserRecord } from '@/features/access/types'
+import type { ProviderName } from '@/features/credentials/types'
 import { Permission } from '@/models/role'
 import type { WsContract } from '@/util/generated/wsContract'
 import { ServerPolicy, Settings, SettingsSection } from '@/models/settings'
@@ -104,6 +105,8 @@ import { PricingBudgetStats } from '@/models/stats/pricingBudgetStats'
 import {
   S3GatewayBucketBinding,
   S3GatewayBucketBindPayload,
+  S3GatewayBudgetPolicyDisablePayload,
+  S3GatewayBudgetPolicyPayload,
   S3GatewayCreateLocalBucketPayload,
   S3GatewayCreateRemoteCachePayload,
   S3GatewayCredential,
@@ -283,7 +286,7 @@ export interface WebSocketCommandMap {
   // Sync conflicts (#187): open conflicts recorded under the `ask` policy, only in vaults where the caller holds
   // vault.sync.action.resolve_conflicts. Resolving is per item (one failure never aborts the batch).
   'sync.conflicts.summary': { payload: null; response: SyncConflictSummary }
-  'sync.conflicts.list': { payload: { vault_id?: number } | null; response: { conflicts: SyncConflict[] } }
+  'sync.conflicts.list': { payload: { vault_id?: number | null }; response: { conflicts: SyncConflict[] } }
   'sync.conflicts.resolve': {
     payload: { resolution: SyncConflictResolution; conflict_ids: number[] }
     response: SyncConflictResolveResponse
@@ -295,7 +298,19 @@ export interface WebSocketCommandMap {
   // (features/credentials/types.ts).
   'storage.apiKey.list': { payload: null; response: { keys: string | APIKey[] } }
 
-  'storage.apiKey.add': { payload: Partial<S3APIKey>; response: { api_key: APIKey } }
+  // owner_id defaults to the caller; region to "auto". The credentials are checked against the provider first.
+  'storage.apiKey.add': {
+    payload: {
+      name: string
+      provider: ProviderName
+      access_key: string
+      secret_access_key: string
+      endpoint: string
+      region?: string
+      owner_id?: number | null
+    }
+    response: { api_key: APIKey }
+  }
 
   // Edit in place: same id, so vaults bound to the key keep their binding. Fields left out keep their value; an
   // empty or missing secret_access_key keeps the stored secret. Daemons before 1.9 answer "Unknown command".
@@ -303,7 +318,7 @@ export interface WebSocketCommandMap {
     payload: {
       id: number
       name?: string
-      provider?: string
+      provider?: ProviderName
       region?: string
       endpoint?: string
       access_key?: string
@@ -509,11 +524,11 @@ export interface WebSocketCommandMap {
 
   'email.test.send': { payload: OperatorEmailTestPayload; response: OperatorEmailTestResponse }
 
-  'email.history': { payload: { limit?: number } | null; response: { history: OperatorEmailHistoryRecord[] } }
+  'email.history': { payload: { limit?: number }; response: { history: OperatorEmailHistoryRecord[] } }
 
   // S3 price budget command center
   'pricing.budget.policy.list': {
-    payload: { vault_id?: number | null; gateway_credential_id?: number | null; include_inactive?: boolean } | null
+    payload: { vault_id?: number | null; gateway_credential_id?: number | null; include_inactive?: boolean }
     response: { policies: PriceBudgetPolicy[] }
   }
 
@@ -525,12 +540,12 @@ export interface WebSocketCommandMap {
   }
 
   'pricing.budget.ledger.list': {
-    payload: { vault_id?: number | null; gateway_credential_id?: number | null; limit?: number } | null
+    payload: { vault_id?: number | null; gateway_credential_id?: number | null; limit?: number }
     response: { ledger: PriceBudgetLedgerEntry[] }
   }
 
   'pricing.budget.status': {
-    payload: { vault_id?: number | null; gateway_credential_id?: number | null; limit?: number; include_inactive?: boolean } | null
+    payload: { vault_id?: number | null; gateway_credential_id?: number | null; limit?: number; include_inactive?: boolean }
     response: PriceBudgetStatus
   }
 
@@ -546,12 +561,12 @@ export interface WebSocketCommandMap {
   }
 
   'pricing.budget.override.list': {
-    payload: { vault_id?: number | null; limit?: number; include_expired?: boolean } | null
+    payload: { vault_id?: number | null; limit?: number; include_expired?: boolean }
     response: { overrides: PriceOverride[] }
   }
 
   'pricing.notifications.list': {
-    payload: { vault_id?: number | null; limit?: number; include_acknowledged?: boolean } | null
+    payload: { vault_id?: number | null; limit?: number; include_acknowledged?: boolean }
     // `summary` always covers every open alert in scope, whatever `limit` and `include_acknowledged` are.
     response: { notifications: PriceNotification[]; summary: PriceNotificationSummary }
   }
@@ -571,7 +586,7 @@ export interface WebSocketCommandMap {
   }
 
   's3.gateway.credentials.list': {
-    payload: { include_disabled?: boolean } | null
+    payload: { include_disabled?: boolean }
     response: { credentials: S3GatewayCredential[] }
   }
 
@@ -606,17 +621,17 @@ export interface WebSocketCommandMap {
   }
 
   's3.gateway.credentials.selectedVaults.replace': {
-    payload: S3GatewayCredentialSelectedVaultPayload
+    payload: Omit<S3GatewayCredentialSelectedVaultPayload, 'vault_id' | 'vault_name' | 'vault' | 'enabled'>
     response: { credential: S3GatewayCredential; selected_vaults: S3GatewayCredentialSelectedVault[]; vaults?: S3GatewayCredentialSelectedVault[] }
   }
 
   's3.gateway.credentials.selectedVaults.add': {
-    payload: S3GatewayCredentialSelectedVaultPayload
+    payload: Omit<S3GatewayCredentialSelectedVaultPayload, 'vault_ids' | 'selected_vault_ids'>
     response: { credential: S3GatewayCredential; selected_vault: S3GatewayCredentialSelectedVault }
   }
 
   's3.gateway.credentials.selectedVaults.remove': {
-    payload: S3GatewayCredentialSelectedVaultPayload
+    payload: Omit<S3GatewayCredentialSelectedVaultPayload, 'vault_ids' | 'selected_vault_ids' | 'enabled'>
     response: { removed: boolean; credential: S3GatewayCredential; vault?: { id: number; name: string } | null }
   }
 
@@ -626,12 +641,12 @@ export interface WebSocketCommandMap {
   }
 
   's3.gateway.credentials.defaultRole.overrides.add': {
-    payload: S3GatewayCredentialDefaultVaultRoleOverridePayload
+    payload: Omit<S3GatewayCredentialDefaultVaultRoleOverridePayload, 'override_id'>
     response: { override: S3GatewayCredentialDefaultVaultRoleOverride }
   }
 
   's3.gateway.credentials.defaultRole.overrides.remove': {
-    payload: S3GatewayCredentialDefaultVaultRoleOverridePayload
+    payload: Pick<S3GatewayCredentialDefaultVaultRoleOverridePayload, 'credential_id' | 'access_key' | 'name' | 'credential_name' | 'override_id'>
     response: { removed: boolean; credential: S3GatewayCredential }
   }
 
@@ -646,22 +661,28 @@ export interface WebSocketCommandMap {
   }
 
   's3.gateway.credentials.roles.revoke': {
-    payload: S3GatewayCredentialVaultRoleAssignmentPayload
+    payload: Omit<
+      S3GatewayCredentialVaultRoleAssignmentPayload,
+      'vault_role_id' | 'vault_role_name' | 'role_id' | 'role_name' | 'role' | 'enabled'
+    >
     response: { revoked: boolean; credential: S3GatewayCredential; vault?: { id: number; name: string } | null }
   }
 
   's3.gateway.credentials.roles.overrides.list': {
-    payload: S3GatewayCredentialVaultRoleOverridePayload
+    payload: Pick<S3GatewayCredentialVaultRoleOverridePayload, 'credential_id' | 'access_key' | 'name' | 'credential_name' | 'vault_id' | 'vault_name' | 'vault'>
     response: { credential: S3GatewayCredential; vault?: { id: number; name: string } | null; overrides: S3GatewayCredentialVaultRoleOverride[] }
   }
 
   's3.gateway.credentials.roles.overrides.add': {
-    payload: S3GatewayCredentialVaultRoleOverridePayload
+    payload: Omit<S3GatewayCredentialVaultRoleOverridePayload, 'override_id'>
     response: { override: S3GatewayCredentialVaultRoleOverride }
   }
 
   's3.gateway.credentials.roles.overrides.remove': {
-    payload: S3GatewayCredentialVaultRoleOverridePayload
+    payload: Pick<
+      S3GatewayCredentialVaultRoleOverridePayload,
+      'credential_id' | 'access_key' | 'name' | 'credential_name' | 'vault_id' | 'vault_name' | 'vault' | 'override_id'
+    >
     response: { removed: boolean; credential: S3GatewayCredential; vault?: { id: number; name: string } | null }
   }
 
@@ -682,31 +703,31 @@ export interface WebSocketCommandMap {
   }
 
   's3.gateway.budget.policy.list': {
-    payload: { gateway_credential_id?: number | null; vault_id?: number | null; include_inactive?: boolean } | null
+    payload: { gateway_credential_id?: number | null; vault_id?: number | null; include_inactive?: boolean }
     response: { policies: PriceBudgetPolicy[] }
   }
 
-  's3.gateway.budget.policy.upsert': { payload: PriceBudgetPolicyPayload; response: { policy: PriceBudgetPolicy } }
+  's3.gateway.budget.policy.upsert': { payload: S3GatewayBudgetPolicyPayload; response: { policy: PriceBudgetPolicy } }
 
-  's3.gateway.budget.policy.disable': { payload: PriceBudgetPolicyPayload; response: { disabled: boolean } }
+  's3.gateway.budget.policy.disable': { payload: S3GatewayBudgetPolicyDisablePayload; response: { disabled: boolean } }
 
   's3.gateway.budget.ledger.list': {
-    payload: { gateway_credential_id?: number | null; vault_id?: number | null; limit?: number } | null
+    payload: { gateway_credential_id?: number | null; vault_id?: number | null; limit?: number }
     response: { ledger: PriceBudgetLedgerEntry[] }
   }
 
   's3.gateway.budget.status': {
-    payload: { gateway_credential_id?: number | null; vault_id?: number | null; limit?: number } | null
-    response: PriceBudgetStatus
+    payload: { gateway_credential_id?: number | null; vault_id?: number | null; limit?: number }
+    response: Pick<PriceBudgetStatus, 'policies' | 'ledger' | 'trends'>
   }
 
   // Dashboard preferences
 
-  'dashboard.preferences.get': { payload: DashboardPreferencePayload | null; response: { preferences: DashboardPreference } }
+  'dashboard.preferences.get': { payload: DashboardPreferencePayload; response: { preferences: DashboardPreference } }
 
   'dashboard.preferences.update': { payload: DashboardPreferenceUpdatePayload; response: { preferences: DashboardPreference } }
 
-  'dashboard.preferences.reset': { payload: DashboardPreferencePayload | null; response: { reset: boolean; deleted?: boolean } }
+  'dashboard.preferences.reset': { payload: DashboardPreferencePayload; response: { reset: boolean; deleted?: boolean } }
 
   // Group commands
 
@@ -866,7 +887,7 @@ export interface WebSocketCommandMap {
 
   'stats.vault.pricing': { payload: { vault_id: number }; response: { stats: PricingBudgetStats } }
 
-  'stats.dashboard.overview': { payload: DashboardOverviewRequest | null; response: { stats: DashboardOverview } }
+  'stats.dashboard.overview': { payload: DashboardOverviewRequest; response: { stats: DashboardOverview } }
 
   // Cheap admin-only rollup of the default overview cards (no cards, sections or series). Daemons before 1.9 answer
   // "Unknown command".
@@ -882,7 +903,7 @@ export interface WebSocketCommandMap {
     }
   }
 
-  'stats.pricing.budget': { payload: { vault_id?: number | null } | null; response: { stats: PricingBudgetStats } }
+  'stats.pricing.budget': { payload: { vault_id?: number | null }; response: { stats: PricingBudgetStats } }
 
   'stats.system.health': { payload: null; response: { stats: SystemHealth } }
 

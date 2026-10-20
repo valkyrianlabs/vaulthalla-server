@@ -56,5 +56,15 @@ std::vector<WsCommandUsage> shareCommands();
 std::vector<WsCommandUsage> metaCommands();
 std::vector<WsCommandUsage> upstreamCommands();
 std::vector<WsCommandUsage> recoveryCommands();
+std::vector<WsCommandUsage> shareSessionCommands();
+std::vector<WsCommandUsage> syncCommands();
+std::vector<WsCommandUsage> apiKeyCommands();
+std::vector<WsCommandUsage> permissionCommands();
+std::vector<WsCommandUsage> statsCommands();
+std::vector<WsCommandUsage> dashboardCommands();
+std::vector<WsCommandUsage> s3GatewayCommands();
+std::vector<WsCommandUsage> pricingCommands();
+std::vector<WsCommandUsage> settingsCommands();
+std::vector<WsCommandUsage> emailCommands();
 
 }
