@@ -4,6 +4,7 @@
 
 #include <map>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <optional>
 #include <utility>
@@ -11,6 +12,22 @@
 #include <memory>
 
 namespace vh::protocols::shell {
+
+// What running a command does, declared on every leaf of the usage book (a unit test refuses a leaf without one):
+// Read changes nothing; Write changes state that can be changed back; Destructive deletes, purges, revokes, rotates
+// keys or does something else that can't be undone. Exported by vh_usage --json; the MCP catalog derives tool
+// annotations (readOnlyHint, destructiveHint) from it.
+enum class CommandEffect { Unset, Read, Write, Destructive };
+
+[[nodiscard]] constexpr std::string_view effectName(const CommandEffect e) {
+    switch (e) {
+        case CommandEffect::Read: return "read";
+        case CommandEffect::Write: return "write";
+        case CommandEffect::Destructive: return "destructive";
+        case CommandEffect::Unset: break;
+    }
+    return "";
+}
 
 struct Entry {
     std::string label;

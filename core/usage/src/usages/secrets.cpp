@@ -16,6 +16,7 @@ static const auto filePos = Positional::Alias("file", "Absolute path to a file c
 static std::shared_ptr<CommandUsage> set(const std::weak_ptr<CommandUsage>& parent) {
     const auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"update", "set", "modify", "edit"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Set or update an internal secret. db-password is refused: the PostgreSQL role password and the "
                        "sealed copy must change together (the command prints the rotation procedure).";
     cmd->positionals = { secretPos, filePos };
@@ -28,6 +29,7 @@ static std::shared_ptr<CommandUsage> set(const std::weak_ptr<CommandUsage>& pare
 static std::shared_ptr<CommandUsage> secret_export(const std::weak_ptr<CommandUsage>& parent) {
     const auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"export", "get", "download"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "Export an internal secret (to stdout, or to an --output file the daemon writes: absolute path, mode 0600)";
     cmd->positionals = { secretPos };
     cmd->optional = { gpgRecipient, outputFile };

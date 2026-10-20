@@ -132,6 +132,8 @@ Json commandJson(const CommandUsage& cmd) {
            {"option_prefixes", cmd.option_prefixes},
            {"plural_alias_implies_list", cmd.pluralAliasImpliesList},
            {"examples", examples},
+           {"effect", cmd.effect == protocols::shell::CommandEffect::Unset
+                          ? Json(nullptr) : Json(std::string(protocols::shell::effectName(cmd.effect)))},
            {"subcommands", subcommands}};
     if (cmd.synopsis) j["synopsis"] = *cmd.synopsis;
 

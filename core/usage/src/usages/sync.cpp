@@ -33,6 +33,7 @@ static std::shared_ptr<CommandUsage> resolve(const std::weak_ptr<CommandUsage>& 
     const auto cmd = std::make_shared<CommandUsage>();
     cmd->parent = parent;
     cmd->aliases = {"resolve"};
+    cmd->effect = CommandEffect::Destructive;
     cmd->description =
         "Resolve sync conflicts recorded under the 'ask' conflict policy (S3/R2 vaults). A conflict is a file that "
         "changed on both sides since they last agreed; it waits, while everything else keeps syncing, until you keep "
@@ -70,6 +71,7 @@ std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent) {
     book->root = std::make_shared<CommandUsage>();
     book->root->parent = parent;
     book->root->aliases = {"resolve"};
+    book->root->effect = CommandEffect::Destructive;
     book->root->description = "Shortcut for 'vh sync resolve': resolve sync conflicts recorded under the 'ask' policy.";
     sync_book::describeResolve(book->root);
     book->root->synopsis = "vh resolve [<conflict-id>...] [--keep-local | --keep-remote] [--list] [--vault <vault>] "

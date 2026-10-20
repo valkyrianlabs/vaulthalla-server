@@ -29,6 +29,8 @@ public:
     // Option families the command accepts beyond its declared options and validates itself, e.g. the generated
     // permission flags {"allow-", "deny-"} of role commands. Every other undeclared option is rejected.
     std::vector<std::string> option_prefixes;
+    // Leaves only: what running the command does (see CommandEffect).
+    CommandEffect effect = CommandEffect::Unset;
 
     int term_width = 100;  // target width for str()
     std::size_t max_key_col = 30; // cap left column width
@@ -42,6 +44,8 @@ public:
     [[nodiscard]] std::string str() const;
     [[nodiscard]] std::string basicStr() const;
     [[nodiscard]] std::string markdown() const;
+    // The plain one-line synopsis ("vh user delete <user> [--yes] ..."), without colors.
+    [[nodiscard]] std::string synopsisLine() const { return buildSynopsis_(); }
 
     [[nodiscard]] bool matches(const std::string& alias) const;
 
