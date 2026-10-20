@@ -2,6 +2,7 @@
 
 #include "protocols/ws/Session.hpp"
 #include "rbac/resolver/vault/all.hpp"
+#include "fs/Fwd.hpp"
 #include "fs/model/Path.hpp"
 #include "share/Fwd.hpp"
 
@@ -42,6 +43,10 @@ public:
     static json listDir(const json& payload, const std::shared_ptr<Session>& session);
 
     static json remove(const json& payload, const std::shared_ptr<Session>& session);
+
+    // A share session's view of an entry (share-relative path, no ownership or backing details): the ShareEntry the
+    // share-mode fs.* and share.fs.* commands return.
+    static json shareEntryJson(const vh::fs::model::Entry& entry, const vh::share::Principal& principal);
 
     static json shareCompatibilityMetadata(const json& payload, const std::shared_ptr<Session>& session);
 

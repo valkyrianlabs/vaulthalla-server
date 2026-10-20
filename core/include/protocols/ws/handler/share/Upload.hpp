@@ -39,6 +39,9 @@ public:
     static json nativeFinish(const json& payload, const std::shared_ptr<Session>& session);
     static json nativeCancel(const json& payload, const std::shared_ptr<Session>& session);
 
+    // The file a finished share upload created, as the share sees it (ShareUploadedFile).
+    static json uploadedFileJson(const vh::fs::model::File& file, const vh::share::Principal& principal);
+
     static void setManagerFactoryForTesting(ManagerFactory factory);
     static void resetManagerFactoryForTesting();
     static void setResolverFactoryForTesting(ResolverFactory factory);

@@ -15,9 +15,9 @@ std::vector<WsCommandUsage> syncCommands() {
         .description = "Open sync conflicts the caller can resolve: the total and a count per vault (vaults without "
                        "conflicts are left out), sorted by vault name.",
         .input = "none",
-        .response = {uinteger("total"),
-                     objectArray("vaults", "", {uinteger("vault_id"), str("vault_name"), uinteger("count")})},
+        .response = modelFields("SyncConflictSummary"),
         .refusal_codes = opsRefusals(),
+        .response_model = "SyncConflictSummary",
         .client_timeout = kDefaultTimeout,
     });
 
@@ -37,18 +37,12 @@ std::vector<WsCommandUsage> syncCommands() {
                        "keep-local, keep-remote). Per item: each id gets its own status and one failure never stops "
                        "the rest. 1 to 500 ids per call.",
         .payload = {str("resolution").oneOf({"keep_local", "keep_remote"}),
-                    WsField{.name = "conflict_ids", .types = {"array"}, .items = "integer"}
+                    intArray("conflict_ids")
                         .gen(gen::ref("sync_conflict", {"id"}))
                         .desc("Conflict ids (1 to 500).")},
-        .response = {str("resolution").oneOf({"keep_local", "keep_remote"}),
-                     uinteger("resolved"),
-                     uinteger("failed"),
-                     objectArray("results", "",
-                                 {uinteger("conflict_id"), boolean("ok"),
-                                  str("status").oneOf({"resolved", "denied", "not_found", "conflict", "invalid",
-                                                       "unavailable", "error"}),
-                                  str("message").nullable()})},
+        .response = modelFields("SyncConflictResolveResult"),
         .refusal_codes = opsRefusals(),
+        .response_model = "SyncConflictResolveResult",
         .client_timeout = 600s,
     });
 

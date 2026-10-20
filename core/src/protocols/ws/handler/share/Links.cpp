@@ -305,12 +305,7 @@ void rejectImmutableUpdateFields(const json& payload) {
     return params;
 }
 
-[[nodiscard]] json safeLinkJson(const vh::share::Link& link) {
-    auto out = link.toManagementJson();
-    out.erase("token_lookup_id");
-    out.erase("token_hash");
-    return out;
-}
+[[nodiscard]] json safeLinkJson(const vh::share::Link& link) { return Links::managementJson(link); }
 
 [[nodiscard]] json safeLinksJson(const std::vector<std::shared_ptr<vh::share::Link>>& links) {
     auto out = json::array();
@@ -318,6 +313,13 @@ void rejectImmutableUpdateFields(const json& payload) {
         if (link) out.push_back(safeLinkJson(*link));
     return out;
 }
+}
+
+json Links::managementJson(const vh::share::Link& link) {
+    auto out = link.toManagementJson();
+    out.erase("token_lookup_id");
+    out.erase("token_hash");
+    return out;
 }
 
 json Links::create(const json& payload, const std::shared_ptr<Session>& session) {

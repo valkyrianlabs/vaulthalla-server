@@ -122,11 +122,8 @@ void requireNonHumanShareBootstrap(const std::shared_ptr<Session>& session) {
     const vh::share::Principal* principal = nullptr
 ) {
     if (!link) return nullptr;
-    auto out = link->toPublicJson();
-    out.erase("token_lookup_id");
-    out.erase("token_hash");
-    if (principal) out["effective_allowed_ops"] = effectiveAllowedOps(*principal);
-    return out;
+    return Sessions::publicLinkJson(*link, principal ? std::optional<uint32_t>(effectiveAllowedOps(*principal))
+                                                     : std::nullopt);
 }
 
 void attachReadyPrincipal(
@@ -143,6 +140,14 @@ void attachReadyPrincipal(
 }
 }
 namespace detail = sessions_handler_detail;
+
+json Sessions::publicLinkJson(const vh::share::Link& link, const std::optional<uint32_t> effectiveAllowedOps) {
+    auto out = link.toPublicJson();
+    out.erase("token_lookup_id");
+    out.erase("token_hash");
+    if (effectiveAllowedOps) out["effective_allowed_ops"] = *effectiveAllowedOps;
+    return out;
+}
 
 json Sessions::open(const json& payload, const std::shared_ptr<Session>& session) {
     detail::requireNonHumanShareBootstrap(session);

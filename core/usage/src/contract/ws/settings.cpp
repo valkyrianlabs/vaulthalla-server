@@ -7,13 +7,11 @@ namespace vh::contract::ws::detail {
 
 namespace {
 
-// The top-level sections of the settings document (config::Config's to_json), each a partial object in a patch.
+// The top-level sections of the settings document (the Settings model), each a merge patch of its section model.
 std::vector<WsField> settingsPatchSections() {
     std::vector<WsField> out;
-    for (const auto* section : {"websocket_server", "http_preview_server", "s3_gateway", "caching", "preview",
-                                "database", "auth", "sync", "pricing", "services", "stats_snapshots", "sharing",
-                                "vaults", "email", "operator_emails", "auditing", "logging", "dev"})
-        out.push_back(object(section).opt().desc("Partial section: only the members to change."));
+    for (const auto& section : modelFields("Settings"))
+        out.push_back(section.opt().patch().desc("Partial section: only the members to change."));
     return out;
 }
 

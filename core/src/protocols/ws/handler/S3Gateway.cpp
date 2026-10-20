@@ -1,4 +1,5 @@
 #include "protocols/ws/handler/S3Gateway.hpp"
+#include "protocols/ws/handler/S3GatewayJson.hpp"
 
 #include "db/query/identities/User.hpp"
 #include "db/query/rbac/role/Vault.hpp"
@@ -26,6 +27,137 @@
 // ws s3.gateway.*: payload parsing and JSON shaping only. Who may do what, and what it changes, is
 // ops::s3_gateway, shared with `vh s3-gateway`.
 namespace vh::protocols::ws::handler {
+
+// ------------------------------------------------------------------------------------------------- shapes
+
+json S3GatewayJson::credential(const db::query::s3::GatewayCredential& credential,
+                               const std::shared_ptr<identities::User>& principal) {
+    json principalJson = nullptr;
+    if (principal) {
+        principalJson = {
+            {"id", principal->id},
+            {"name", principal->name()},
+            {"email", principal->email() ? json(*principal->email()) : json(nullptr)}
+        };
+    }
+
+    return {
+        {"id", credential.id},
+        {"user_id", credential.user_id},
+        {"principal_user_id", credential.principal_user_id},
+        {"principal_user", principalJson},
+        {"created_by", credential.created_by ? json(*credential.created_by) : json(nullptr)},
+        {"name", credential.name},
+        {"access_key", credential.access_key},
+        {"enabled", credential.enabled},
+        {"scope_mode", credential.scope_mode},
+        {"enforce_budget_for_local_requests", credential.enforce_budget_for_local_requests},
+        {"description", credential.description ? json(*credential.description) : json(nullptr)},
+        {"created_at", credential.created_at},
+        {"last_used_at", credential.last_used_at ? json(*credential.last_used_at) : json(nullptr)},
+        {"expires_at", credential.expires_at ? json(*credential.expires_at) : json(nullptr)}
+    };
+}
+
+json S3GatewayJson::vault(const std::shared_ptr<::vh::vault::model::Vault>& vault) {
+    if (!vault) return nullptr;
+    return {
+        {"id", vault->id},
+        {"name", vault->name},
+        {"slug", vault->slug},
+        {"fuse_name", vault->fuse_name ? json(*vault->fuse_name) : json(nullptr)},
+        {"effective_fuse_name", vault->effectiveFuseName()},
+        {"owner_id", vault->owner_id}
+    };
+}
+
+json S3GatewayJson::assignment(const db::query::s3::CredentialVaultRoleAssignment& assignment, json credential,
+                               json vault, json role) {
+    return {
+        {"id", assignment.id},
+        {"assignment_id", assignment.id},
+        {"credential_id", assignment.credential_id},
+        {"credential", std::move(credential)},
+        {"vault_id", assignment.vault_id},
+        {"vault", std::move(vault)},
+        {"vault_role_id", assignment.vault_role_id},
+        {"role", std::move(role)},
+        {"enabled", assignment.enabled},
+        {"created_by", assignment.created_by ? json(*assignment.created_by) : json(nullptr)},
+        {"created_at", assignment.created_at},
+        {"updated_at", assignment.updated_at}
+    };
+}
+
+json S3GatewayJson::defaultRole(const db::query::s3::CredentialDefaultVaultRole& defaultRole, json credential,
+                                json role) {
+    return {
+        {"id", defaultRole.id},
+        {"default_role_id", defaultRole.id},
+        {"credential_id", defaultRole.credential_id},
+        {"credential", std::move(credential)},
+        {"vault_role_id", defaultRole.vault_role_id},
+        {"role", std::move(role)},
+        {"enabled", defaultRole.enabled},
+        {"created_by", defaultRole.created_by ? json(*defaultRole.created_by) : json(nullptr)},
+        {"created_at", defaultRole.created_at},
+        {"updated_at", defaultRole.updated_at}
+    };
+}
+
+json S3GatewayJson::selectedVault(const db::query::s3::CredentialSelectedVault& selectedVault, json vault) {
+    return {
+        {"credential_id", selectedVault.credential_id},
+        {"vault_id", selectedVault.vault_id},
+        {"vault", std::move(vault)},
+        {"enabled", selectedVault.enabled},
+        {"created_by", selectedVault.created_by ? json(*selectedVault.created_by) : json(nullptr)},
+        {"created_at", selectedVault.created_at},
+        {"updated_at", selectedVault.updated_at}
+    };
+}
+
+json S3GatewayJson::roleOverride(const std::uint32_t credentialId, json credential, const json& vault,
+                                 const ::vh::rbac::permission::Override& overrideRule) {
+    return {
+        {"id", overrideRule.id},
+        {"override_id", overrideRule.id},
+        {"assignment_id", overrideRule.assignment_id},
+        {"credential_id", credentialId},
+        {"credential", std::move(credential)},
+        {"vault_id", vault.is_object() ? vault.at("id") : json(nullptr)},
+        {"vault", vault},
+        {"permission_id", overrideRule.permission.id},
+        {"permission_name", overrideRule.permission.qualified_name},
+        {"permission_qualified", overrideRule.permission.qualified_name},
+        {"permission", overrideRule.permission},
+        {"glob_path", overrideRule.glob_path()},
+        {"effect", ::vh::rbac::permission::to_string(overrideRule.effect)},
+        {"enabled", overrideRule.enabled}
+    };
+}
+
+json S3GatewayJson::defaultRoleOverride(const std::uint32_t credentialId, json credential,
+                                        const ::vh::rbac::permission::Override& overrideRule) {
+    auto out = roleOverride(credentialId, std::move(credential), nullptr, overrideRule);
+    out["default_role_id"] = overrideRule.assignment_id;
+    out["gateway_credential_default_role_id"] = overrideRule.assignment_id;
+    return out;
+}
+
+json S3GatewayJson::bucket(const db::query::s3::BucketBinding& bucket) {
+    return {
+        {"bucket_name", bucket.bucket_name},
+        {"bucket", bucket.bucket_name},
+        {"vault_id", bucket.vault_id},
+        {"mode", bucket.mode},
+        {"api_exclusive", bucket.api_exclusive},
+        {"created_by", bucket.created_by ? json(*bucket.created_by) : json(nullptr)},
+        {"created_at", bucket.created_at},
+        {"updated_at", bucket.updated_at}
+    };
+}
+
 namespace {
 
 namespace gw = ::vh::ops::s3_gateway;
@@ -53,45 +185,12 @@ std::uint32_t gwLimitFromPayload(const json& payload, const std::uint32_t fallba
 
 // ------------------------------------------------------------------------------------------------- JSON
 
+// The shapes are S3GatewayJson's (S3GatewayJson.hpp); these look up what they embed.
 json credentialJson(const db::query::s3::GatewayCredential& credential) {
-    json principalJson = nullptr;
-    if (const auto principal = vh::identities::manager().user(credential.principal_user_id)) {
-        principalJson = {
-            {"id", principal->id},
-            {"name", principal->name()},
-            {"email", principal->email() ? json(*principal->email()) : json(nullptr)}
-        };
-    }
-
-    return {
-        {"id", credential.id},
-        {"user_id", credential.user_id},
-        {"principal_user_id", credential.principal_user_id},
-        {"principal_user", principalJson},
-        {"created_by", credential.created_by ? json(*credential.created_by) : json(nullptr)},
-        {"name", credential.name},
-        {"access_key", credential.access_key},
-        {"enabled", credential.enabled},
-        {"scope_mode", credential.scope_mode},
-        {"enforce_budget_for_local_requests", credential.enforce_budget_for_local_requests},
-        {"description", credential.description ? json(*credential.description) : json(nullptr)},
-        {"created_at", credential.created_at},
-        {"last_used_at", credential.last_used_at ? json(*credential.last_used_at) : json(nullptr)},
-        {"expires_at", credential.expires_at ? json(*credential.expires_at) : json(nullptr)}
-    };
+    return S3GatewayJson::credential(credential, vh::identities::manager().user(credential.principal_user_id));
 }
 
-json vaultJson(const std::shared_ptr<::vh::vault::model::Vault>& vault) {
-    if (!vault) return nullptr;
-    return {
-        {"id", vault->id},
-        {"name", vault->name},
-        {"slug", vault->slug},
-        {"fuse_name", vault->fuse_name ? json(*vault->fuse_name) : json(nullptr)},
-        {"effective_fuse_name", vault->effectiveFuseName()},
-        {"owner_id", vault->owner_id}
-    };
-}
+json vaultJson(const std::shared_ptr<::vh::vault::model::Vault>& vault) { return S3GatewayJson::vault(vault); }
 
 json vaultJson(const std::uint32_t vaultId) { return vaultJson(db::query::vault::Vault::getVault(vaultId)); }
 
@@ -108,35 +207,14 @@ json credentialJsonById(const std::uint32_t credentialId) {
 }
 
 json assignmentJson(const db::query::s3::CredentialVaultRoleAssignment& assignment) {
-    return {
-        {"id", assignment.id},
-        {"assignment_id", assignment.id},
-        {"credential_id", assignment.credential_id},
-        {"credential", credentialJsonById(assignment.credential_id)},
-        {"vault_id", assignment.vault_id},
-        {"vault", vaultJson(assignment.vault_id)},
-        {"vault_role_id", assignment.vault_role_id},
-        {"role", roleJson(db::query::rbac::role::Vault::get(assignment.vault_role_id))},
-        {"enabled", assignment.enabled},
-        {"created_by", assignment.created_by ? json(*assignment.created_by) : json(nullptr)},
-        {"created_at", assignment.created_at},
-        {"updated_at", assignment.updated_at}
-    };
+    return S3GatewayJson::assignment(assignment, credentialJsonById(assignment.credential_id),
+                                     vaultJson(assignment.vault_id),
+                                     roleJson(db::query::rbac::role::Vault::get(assignment.vault_role_id)));
 }
 
 json defaultRoleJson(const db::query::s3::CredentialDefaultVaultRole& defaultRole) {
-    return {
-        {"id", defaultRole.id},
-        {"default_role_id", defaultRole.id},
-        {"credential_id", defaultRole.credential_id},
-        {"credential", credentialJsonById(defaultRole.credential_id)},
-        {"vault_role_id", defaultRole.vault_role_id},
-        {"role", roleJson(db::query::rbac::role::Vault::get(defaultRole.vault_role_id))},
-        {"enabled", defaultRole.enabled},
-        {"created_by", defaultRole.created_by ? json(*defaultRole.created_by) : json(nullptr)},
-        {"created_at", defaultRole.created_at},
-        {"updated_at", defaultRole.updated_at}
-    };
+    return S3GatewayJson::defaultRole(defaultRole, credentialJsonById(defaultRole.credential_id),
+                                      roleJson(db::query::rbac::role::Vault::get(defaultRole.vault_role_id)));
 }
 
 json optionalDefaultRoleJson(const std::optional<db::query::s3::CredentialDefaultVaultRole>& defaultRole) {
@@ -144,15 +222,7 @@ json optionalDefaultRoleJson(const std::optional<db::query::s3::CredentialDefaul
 }
 
 json selectedVaultJson(const db::query::s3::CredentialSelectedVault& selectedVault) {
-    return {
-        {"credential_id", selectedVault.credential_id},
-        {"vault_id", selectedVault.vault_id},
-        {"vault", vaultJson(selectedVault.vault_id)},
-        {"enabled", selectedVault.enabled},
-        {"created_by", selectedVault.created_by ? json(*selectedVault.created_by) : json(nullptr)},
-        {"created_at", selectedVault.created_at},
-        {"updated_at", selectedVault.updated_at}
-    };
+    return S3GatewayJson::selectedVault(selectedVault, vaultJson(selectedVault.vault_id));
 }
 
 json selectedVaultsJson(const std::vector<db::query::s3::CredentialSelectedVault>& selectedVaults) {
@@ -165,45 +235,16 @@ json overrideJson(
     const db::query::s3::GatewayCredential& credential,
     const json& vault,
     const ::vh::rbac::permission::Override& overrideRule) {
-    return {
-        {"id", overrideRule.id},
-        {"override_id", overrideRule.id},
-        {"assignment_id", overrideRule.assignment_id},
-        {"credential_id", credential.id},
-        {"credential", credentialJson(credential)},
-        {"vault_id", vault.is_object() ? vault.at("id") : json(nullptr)},
-        {"vault", vault},
-        {"permission_id", overrideRule.permission.id},
-        {"permission_name", overrideRule.permission.qualified_name},
-        {"permission_qualified", overrideRule.permission.qualified_name},
-        {"permission", overrideRule.permission},
-        {"glob_path", overrideRule.glob_path()},
-        {"effect", ::vh::rbac::permission::to_string(overrideRule.effect)},
-        {"enabled", overrideRule.enabled}
-    };
+    return S3GatewayJson::roleOverride(credential.id, credentialJson(credential), vault, overrideRule);
 }
 
 json defaultOverrideJson(
     const db::query::s3::GatewayCredential& credential,
     const ::vh::rbac::permission::Override& overrideRule) {
-    auto out = overrideJson(credential, nullptr, overrideRule);
-    out["default_role_id"] = overrideRule.assignment_id;
-    out["gateway_credential_default_role_id"] = overrideRule.assignment_id;
-    return out;
+    return S3GatewayJson::defaultRoleOverride(credential.id, credentialJson(credential), overrideRule);
 }
 
-json bucketJson(const db::query::s3::BucketBinding& bucket) {
-    return {
-        {"bucket_name", bucket.bucket_name},
-        {"bucket", bucket.bucket_name},
-        {"vault_id", bucket.vault_id},
-        {"mode", bucket.mode},
-        {"api_exclusive", bucket.api_exclusive},
-        {"created_by", bucket.created_by ? json(*bucket.created_by) : json(nullptr)},
-        {"created_at", bucket.created_at},
-        {"updated_at", bucket.updated_at}
-    };
-}
+json bucketJson(const db::query::s3::BucketBinding& bucket) { return S3GatewayJson::bucket(bucket); }
 
 // ------------------------------------------------------------------------------------------------- payload
 

@@ -15,6 +15,7 @@ struct Capacity {
     double encryption_overhead{}, decryption_overhead{}, compression_ratio{};
     std::array<std::pair<std::string, uintmax_t>, 10> top_file_extensions_by_size{};
 
+    Capacity() = default;  // empty figures (tests); the daemon measures a vault with the constructor below
     explicit Capacity(unsigned int vaultId);
 };
 

@@ -10,31 +10,57 @@ WsField vaultIdPayload() { return uinteger("id").gen(gen::ref("vault", {"id"})).
 
 WsField vaultObject() { return object("vault", "Vault"); }
 
-// What storage.vault.remove.plan answers (built inline by handler::Vaults::removalPlan).
-std::vector<WsField> vaultRemovalPlanFields() {
-    return {uinteger("vault_id"),
-            str("name"),
-            str("type").oneOf({"local", "s3"}),
-            str("provider").nullable().desc("S3: the API key's provider; null for local vaults."),
-            str("bucket").nullable().desc("S3: the bucket; null for local vaults."),
-            boolean("encrypted_upstream").desc("S3 objects are encrypted with the vault key."),
-            uinteger("key_version"),
-            boolean("key_exported").desc("Whether the current key version was ever exported."),
-            str("key_exported_at").nullable(),
-            str("retention_window").desc("The restore window as config text (\"30d\")."),
-            uinteger("retention_window_seconds"),
-            str("key_retention_window"),
-            uinteger("key_retention_window_seconds"),
-            str("export_command").desc("The CLI command that exports the vault key.")};
-}
-
 // The sync policy patch both storage.vault.add and storage.vault.update read (syncPatchFromPayload).
 WsField vaultSyncPatch() {
-    return object("sync").opt().desc("Sync policy patch (absent keys unchanged): interval (seconds or text such as "
-                                     "\"15m\"), enabled, strategy (S3: cache|sync|mirror), conflict_policy, "
-                                     "max_remote_index_age_seconds (S3, null clears), s3_request_budget (S3: "
-                                     "{list_requests, head_requests, get_requests, put_requests, copy_requests, "
-                                     "delete_requests, downloaded_bytes}, each a number or null).");
+    const auto budgetLimit = [](std::string name) {
+        return uinteger(std::move(name)).opt().nullable().desc("A per-pass limit; null = unlimited.");
+    };
+    return object("sync", "",
+                  {anyOf("interval", {"integer", "string"})
+                       .opt()
+                       .alternatives({alt({"integer"}).desc("Seconds."),
+                                      alt({"string"}).desc("Interval text: \"15m\", \"1h 30m\", \"1d\".")})
+                       .desc("How often the vault syncs (clamped to the minimum)."),
+                   boolean("enabled").opt(),
+                   str("strategy").opt().oneOf({"cache", "sync", "mirror"}).desc("S3 vaults only."),
+                   str("conflict_policy")
+                       .opt()
+                       .oneOf({"overwrite", "keep_both", "ask", "keep_local", "keep_remote", "keep_newest"})
+                       .desc("Local vaults: overwrite|keep_both|ask; S3 vaults: keep_local|keep_remote|keep_newest|ask."),
+                   uinteger("max_remote_index_age_seconds").opt().nullable().desc("S3 vaults only; null clears it."),
+                   object("s3_request_budget", "",
+                          {budgetLimit("list_requests"), budgetLimit("head_requests"), budgetLimit("get_requests"),
+                           budgetLimit("put_requests"), budgetLimit("copy_requests"), budgetLimit("delete_requests"),
+                           budgetLimit("downloaded_bytes")})
+                       .opt()
+                       .desc("S3 vaults only; absent members are unchanged.")})
+        .opt()
+        .desc("Sync policy patch: absent members are unchanged (handler::Vaults syncPatchFromPayload).");
+}
+
+// storage.vault.add's provision object (ops::upstream::provisionFromJson; null members read as absent).
+WsField vaultProvision() {
+    return object("provision", "",
+                  {str("mode").opt().nullable().oneOf({"existing", "create", "adopt"}).desc("Default existing."),
+                   str("region").opt().nullable().desc("AWS region or R2 location hint; default: the key's region."),
+                   boolean("generate_name").opt().nullable().desc("create: pick an available bucket name."),
+                   object("lifecycle", "",
+                          {uinteger("abort_incomplete_multipart_days").opt().nullable().desc("0 removes it."),
+                           uinteger("expire_current_days").opt().nullable().desc("0 removes it; destructive."),
+                           uinteger("expire_noncurrent_days").opt().nullable().desc("0 removes it; destructive."),
+                           str("prefix").opt().nullable(),
+                           boolean("clear").opt().nullable(),
+                           boolean("accept_destructive").opt().nullable()})
+                       .opt()
+                       .nullable()
+                       .desc("create/adopt: Vaulthalla's lifecycle rule."),
+                   boolean("events").opt().nullable().desc("Subscribe for event-driven sync."),
+                   str("events_prefix").opt().nullable(),
+                   boolean("accept_adoption").opt().nullable().desc("adopt: accepts 'upstream_adoption'.")})
+        .opt()
+        .nullable()
+        .desc("S3 vaults with an admin-enabled key (#237): create a managed bucket or adopt an existing one. Absent or "
+              "mode existing binds `bucket` as before; bucket may be empty with generate_name.");
 }
 
 }
@@ -63,9 +89,7 @@ std::vector<WsCommandUsage> vaultCommands() {
                     boolean("encrypt_upstream").opt(),
                     vaultSyncPatch(),
                     boolean("accept_encryption_waiver").opt(),
-                    object("provision").opt().desc("S3 vaults with an admin-enabled key (#237): {mode: existing|create|"
-                                                   "adopt, region, generate_name, lifecycle, events, events_prefix, "
-                                                   "accept_adoption}. bucket may be empty with generate_name.")},
+                    vaultProvision()},
         .response = {vaultObject()},
         .refusal_codes = {"denied", "invalid", "not_found", "conflict", "unauthorized", "encryption_waiver",
                           "upstream_adoption"},
@@ -141,7 +165,7 @@ std::vector<WsCommandUsage> vaultCommands() {
         .description = "What deleting the vault would do (provider, bucket, key export state, the restore and key "
                        "retention windows, the key export command). Changes nothing; needs vault Remove.",
         .payload = {vaultIdPayload()},
-        .response = {object("plan", "", vaultRemovalPlanFields())},
+        .response = {object("plan", "VaultRemovalPlan")},
         .refusal_codes = opsRefusals(),
         .client_timeout = kDefaultTimeout,
     });

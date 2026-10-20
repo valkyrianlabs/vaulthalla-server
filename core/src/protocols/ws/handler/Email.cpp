@@ -115,7 +115,9 @@ std::optional<std::string> recordSuppressed(
     return std::nullopt;
 }
 
-json recordToJson(const ::vh::email::DeliveryRecord& row) {
+}
+
+json Email::deliveryRecordJson(const ::vh::email::DeliveryRecord& row) {
     return {
         {"id", row.id},
         {"event_key", row.eventKey},
@@ -134,8 +136,6 @@ json recordToJson(const ::vh::email::DeliveryRecord& row) {
         {"sent_at", row.sentAt ? json(db::encoding::timestampToString(*row.sentAt)) : json(nullptr)},
         {"created_at", db::encoding::timestampToString(row.createdAt)}
     };
-}
-
 }
 
 json Email::config(const std::shared_ptr<Session>& session) {
@@ -308,7 +308,7 @@ json Email::history(const json& payload, const std::shared_ptr<Session>& session
 
     const auto rows = ::vh::notifications::OperatorNotificationState::history(limit);
     json records = json::array();
-    for (const auto& row : rows) records.push_back(recordToJson(row));
+    for (const auto& row : rows) records.push_back(deliveryRecordJson(row));
     return {{"history", records}};
 }
 

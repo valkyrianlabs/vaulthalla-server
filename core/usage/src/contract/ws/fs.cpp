@@ -12,7 +12,9 @@ namespace {
 std::vector<std::string> fsUntypedRefusals() { return {"denied", "not_found"}; }
 
 std::vector<WsField> fsListResponse() {
-    return {str("vault"), str("path"), object("entry", "FsEntry"), objectArray("files", "FsEntry")};
+    return {str("vault").desc("The vault's name."), str("path"),
+            object("entry", "FsEntryBase").desc("The listed directory itself (Entry base members only)."),
+            objectArray("files", "FsEntry")};
 }
 
 std::vector<WsField> fsMoveResponse() { return {str("from"), str("to")}; }
@@ -57,7 +59,8 @@ std::vector<WsCommandUsage> fsCommands() {
         .command = "fs.metadata",
         .description = "One entry's metadata (Lookup on the path).",
         .payload = {vaultId(), vaultPath("path").opt().desc("Defaults to \"/\".")},
-        .response = {str("vault"), str("path"), object("entry", "FsEntry")},
+        .response = {str("vault").desc("The vault's name."), str("path"),
+                     object("entry", "FsEntryBase").desc("Entry base members only (no type, mime_type or preview).")},
         .variants = {{.mode = "share",
                       .description = "In a share session: share-relative paths, entries reduced to the share view.",
                       .payload = {vaultId().opt().nullable(), shareRelativePath()},

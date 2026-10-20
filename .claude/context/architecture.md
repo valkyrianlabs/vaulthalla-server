@@ -795,8 +795,13 @@ stage "Copy And Delete")
   environment and are private (paths under `/tmp/`, a `vh_harness_*` or test database). Test mode then serves `vh` on
   that socket (`paths::getCliSocketPath()`); the client honours `VAULTHALLA_CLI_SOCKET`.
 - `core/usage` also holds the contract: `FieldGen` generators on CLI usage entries, `OperationSpec` catalog,
-  `WsCommandUsage` book (one file per area in `core/usage/src/contract/ws/`, every registered ws command), exported by
-  `vh_usage --json`.
+  `WsCommandUsage` book (one file per area in `core/usage/src/contract/ws/`, every registered ws command) and the
+  `WsModel` registry (`core/usage/src/contract/models/`, checked against the serializers by `ContractModels.*`),
+  exported by `vh_usage --json`. Serializers the contract tests call must be reachable without a database: handler
+  JSON builders are public statics taking looked-up inputs (`S3GatewayJson`, `Vaults::detailsJson`,
+  `Storage::shareEntryJson`, `Links::managementJson`, `Sessions::publicLinkJson`, `Email::deliveryRecordJson`,
+  `vault::model::statJson`). Known quirk the contract records: `fs.dir.list` / `fs.metadata` `entry` is the base
+  `Entry` JSON (`FsEntryBase`, no `type`/counts/`mime_type`); only `files[]` carries the full `FsEntry`.
 - `vh_fs_actor` (`core/tests/helpers/fs_actor.cpp`, `-Dintegration_tests=true`): a single-threaded helper that
   switches to a test uid at startup and serves filesystem ops as JSON lines; used by Tier A and `tools/harness`.
 

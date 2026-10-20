@@ -15,8 +15,16 @@ WsField recoveryId() {
 
 WsField planId() { return uinteger("plan_id").min(1).gen(gen::ref("recovery_plan", {"id"})).desc("Restore plan id."); }
 
+// ops::recovery::providerRetentionFromJson: null or absent leaves it unset.
 WsField retention() {
     return anyOf("provider_retention", {"string", "integer", "object"})
+        .nullable()
+        .alternatives({alt({"string"}).desc("\"<days>d\" or \"<days>\" (1..36500), or \"indefinite\"."),
+                       alt({"integer"}).min(1).max(36500).desc("Days."),
+                       WsField{.types = {"object"},
+                               .fields = {boolean("indefinite").opt().desc("true: keep noncurrent versions forever."),
+                                          uinteger("days").min(1).max(36500).opt().nullable().desc(
+                                              "Needed unless indefinite.")}}})
         .desc("Provider noncurrent-version retention: \"30d\", 30 (days), \"indefinite\" or {indefinite, days}.");
 }
 
@@ -73,7 +81,12 @@ std::vector<WsCommandUsage> recoveryCommands() {
         "atomic; see consistency_note). Returns the per-item preview, estimate, warnings, blockers and the token "
         "recovery.restore takes (stored 30 minutes).",
         {recoveryId().opt(), uinteger("vault_id").opt().gen(gen::ref("vault", {"id"})), vaultPath("path").opt(),
-         anyOf("at", {"string", "integer"}).opt().desc("ISO-8601 UTC time or epoch seconds."),
+         anyOf("at", {"string", "integer"})
+             .opt()
+             .nullable()
+             .alternatives({alt({"string"}).desc("ISO-8601 UTC time (\"2026-10-01T12:00:00Z\")."),
+                            alt({"integer"}).min(0).desc("Epoch seconds.")})
+             .desc("The point in time to reconstruct (with vault_id + path): ISO-8601 UTC time or epoch seconds."),
          vaultPath("destination").opt(), boolean("prune").opt(), boolean("refresh_provider").opt()},
         {object("plan", "RecoveryPlan")}, recoveryRefusals(), 180s, "recovery.plan"));
     out.push_back(recoveryCommand("recovery.plan.get", "A stored restore plan (its state, items and token).",

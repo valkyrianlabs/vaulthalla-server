@@ -152,27 +152,7 @@ void requireShareMode(const std::shared_ptr<vh::protocols::ws::Session>& session
     const vh::fs::model::Entry& entry,
     const vh::share::Principal& principal
 ) {
-    json out = {
-        {"id", entry.id},
-        {"name", entry.name},
-        {"path", vh::share::TargetResolver::shareRelativePath(principal, entry.path.string())},
-        {"type", entry.isDirectory() ? "directory" : "file"},
-        {"size_bytes", entry.size_bytes},
-        {"created_at", vh::db::encoding::timestampToString(entry.created_at)},
-        {"updated_at", vh::db::encoding::timestampToString(entry.updated_at)}
-    };
-
-    if (entry.isDirectory()) {
-        const auto& dir = static_cast<const vh::fs::model::Directory&>(entry);
-        out["file_count"] = dir.file_count;
-        out["subdirectory_count"] = dir.subdirectory_count;
-    } else {
-        const auto& file = static_cast<const vh::fs::model::File&>(entry);
-        out["mime_type"] = file.mime_type ? json(*file.mime_type) : json(nullptr);
-        // The same server-authoritative plan human listings carry; the share's capabilities still gate each lane.
-        out["preview"] = vh::preview::classify(file);
-    }
-    return out;
+    return Storage::shareEntryJson(entry, principal);
 }
 
 [[nodiscard]] ShareReadResult shareRead(
@@ -606,6 +586,30 @@ json Storage::remove(const json& payload, const std::shared_ptr<Session>& sessio
     runtime::Deps::get().syncController->runNow(vaultId);
 
     return {{"path", path.string()}};
+}
+
+json Storage::shareEntryJson(const vh::fs::model::Entry& entry, const vh::share::Principal& principal) {
+    json out = {
+        {"id", entry.id},
+        {"name", entry.name},
+        {"path", vh::share::TargetResolver::shareRelativePath(principal, entry.path.string())},
+        {"type", entry.isDirectory() ? "directory" : "file"},
+        {"size_bytes", entry.size_bytes},
+        {"created_at", vh::db::encoding::timestampToString(entry.created_at)},
+        {"updated_at", vh::db::encoding::timestampToString(entry.updated_at)}
+    };
+
+    if (entry.isDirectory()) {
+        const auto& dir = static_cast<const vh::fs::model::Directory&>(entry);
+        out["file_count"] = dir.file_count;
+        out["subdirectory_count"] = dir.subdirectory_count;
+    } else {
+        const auto& file = static_cast<const vh::fs::model::File&>(entry);
+        out["mime_type"] = file.mime_type ? json(*file.mime_type) : json(nullptr);
+        // The same server-authoritative plan human listings carry; the share's capabilities still gate each lane.
+        out["preview"] = vh::preview::classify(file);
+    }
+    return out;
 }
 
 json Storage::shareCompatibilityMetadata(const json& payload, const std::shared_ptr<Session>& session) {

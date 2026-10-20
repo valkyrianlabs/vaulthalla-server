@@ -440,6 +440,10 @@ void requireAcceptedDuplicatePolicy(const json& payload) {
 }
 namespace up_detail = share_upload_handler_detail;
 
+json Upload::uploadedFileJson(const vh::fs::model::File& file, const vh::share::Principal& principal) {
+    return up_detail::safeFileJson(file, principal);
+}
+
 json Upload::start(const json& payload, const std::shared_ptr<Session>& session) {
     return up_detail::startImpl(payload, session, up_detail::CommandSurface::Compatibility);
 }

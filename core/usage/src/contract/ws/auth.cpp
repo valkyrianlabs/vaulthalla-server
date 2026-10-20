@@ -8,6 +8,9 @@ namespace {
 
 WsField authUserObject(std::string name = "user") { return object(std::move(name), "User"); }
 
+// The session user (Auth::sessionUser): User with role permissions reduced to {qualified, value}.
+WsField authSessionUserObject() { return object("user", "SessionUser"); }
+
 WsField authUserId(std::string name = "id") { return uinteger(std::move(name)).gen(gen::ref("user", {"id"})); }
 
 }
@@ -22,7 +25,7 @@ std::vector<WsCommandUsage> authCommands() {
                        "(`token`), the refresh token as an HttpOnly cookie set at the handshake.",
         .auth = "session",
         .payload = {str("name").gen(gen::ref("user", {"name"})), str("password")},
-        .response = {authUserObject().desc("The signed-in user; role permissions reduced to {qualified, value}.")},
+        .response = {authSessionUserObject().desc("The signed-in user; role permissions reduced to {qualified, value}.")},
         .refusal_codes = {"error"},
         .operation = "auth.login",
         .client_timeout = 20s,
@@ -42,7 +45,7 @@ std::vector<WsCommandUsage> authCommands() {
         .description = "Issue a new access token from the envelope token or the refresh cookie.",
         .auth = "session",
         .input = "token",
-        .response = {authUserObject()},
+        .response = {authSessionUserObject()},
         .refusal_codes = {"error"},
         .client_timeout = kDefaultTimeout,
     });
@@ -52,7 +55,7 @@ std::vector<WsCommandUsage> authCommands() {
         .description = "Whether the envelope token is a valid session for this socket.",
         .auth = "session",
         .input = "token",
-        .response = {boolean("isAuthenticated"), authUserObject().opt().desc("Present when authenticated.")},
+        .response = {boolean("isAuthenticated"), authSessionUserObject().opt().desc("Present when authenticated.")},
         .client_timeout = kDefaultTimeout,
     });
 
@@ -128,7 +131,7 @@ std::vector<WsCommandUsage> authCommands() {
         .command = "auth.users.list",
         .description = "Users visible to the caller, slim projection (admin_role without permissions).",
         .input = "none",
-        .response = {objectArray("users", "User")},
+        .response = {objectArray("users", "UserSummary")},
         .refusal_codes = opsRefusals(),
         .client_timeout = kDefaultTimeout,
     });

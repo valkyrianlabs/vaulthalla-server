@@ -71,11 +71,18 @@ std::vector<WsField> s3gwDefaultRoleRef() {
     return out;
 }
 
+// Each element is a vault id; legacy clients send {vault_id} or {id} objects (anything else is skipped).
+WsField s3gwSelectedVaultElement() {
+    return alt({"integer", "object"})
+        .alternatives({alt({"integer"}).min(0).desc("A vault id."),
+                       WsField{.types = {"object"}, .fields = {uinteger("vault_id")}}.desc("Legacy: {vault_id}."),
+                       WsField{.types = {"object"}, .fields = {uinteger("id")}}.desc("Legacy: {id} (a vault id).")});
+}
+
 std::vector<WsField> s3gwSelectedVaultIds() {
-    WsField ids{.name = "selected_vault_ids", .types = {"array"}, .items = "integer"};
-    WsField legacy{.name = "vault_ids", .types = {"array"}, .items = "integer"};
-    return {ids.opt().desc("Vault ids selected for a vault-allowlist credential (legacy: objects with vault_id or id)."),
-            legacy.opt().desc("Legacy spelling of selected_vault_ids.")};
+    return {arrayOf("selected_vault_ids", s3gwSelectedVaultElement()).opt()
+                .desc("Vault ids selected for a vault-allowlist credential."),
+            arrayOf("vault_ids", s3gwSelectedVaultElement()).opt().desc("Legacy spelling of selected_vault_ids.")};
 }
 
 WsField s3gwVaultScopes() {

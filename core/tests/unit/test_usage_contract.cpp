@@ -15,6 +15,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <functional>
 #include <map>
 #include <memory>
 #include <set>
@@ -102,8 +103,11 @@ TEST(UsageContract, DocumentIsDeterministicAndCarriesItsOwnHashes) {
 
     // The hashes cover the canonical (compact, sorted-key) JSON; tools/contracts/ws_contract.py recomputes them.
     EXPECT_EQ(contract::sha256Hex(doc.at("ws").dump()), id.ws_hash);
+    EXPECT_EQ(doc.at("models_hash").get<std::string>(), id.models_hash);
+    EXPECT_EQ(contract::sha256Hex(doc.at("models").dump()), id.models_hash);
     doc.erase("contract_hash");
     doc.erase("ws_hash");
+    doc.erase("models_hash");
     EXPECT_EQ(contract::sha256Hex(doc.dump()), id.contract_hash);
 }
 
@@ -170,6 +174,139 @@ TEST(UsageContract, WsBookCoversTheEngineAndConsoleCommands) {
                     << cmd.command << "." << f.name << " is required but has no generator";
             }
         }
+    }
+}
+
+// ---- models and shapes ----------------------------------------------------------------------------------------
+
+using FieldVisitor = std::function<void(const contract::WsField&, const std::string&)>;
+
+// Visits every member at every depth: inline object members, map values (".*"), array elements ("[]") and union
+// alternatives (same path).
+void walkFields(const std::vector<contract::WsField>& fields, const std::string& path, const FieldVisitor& visit);
+
+void walkField(const contract::WsField& f, const std::string& path, const FieldVisitor& visit) {
+    visit(f, path);
+    walkFields(f.fields, f.items == "object" ? path + "[]" : path, visit);
+    for (const auto& v : f.values) walkField(v, path + ".*", visit);
+    for (const auto& e : f.element) walkField(e, path + "[]", visit);
+    for (const auto& a : f.one_of) walkField(a, path, visit);
+}
+
+void walkFields(const std::vector<contract::WsField>& fields, const std::string& path, const FieldVisitor& visit) {
+    for (const auto& f : fields) walkField(f, path + "." + f.name, visit);
+}
+
+// Every shape in the contract: each command's payload and response (and its session-mode variants), each model.
+void walkContract(const FieldVisitor& visit) {
+    for (const auto& c : contract::ws::commands()) {
+        walkFields(c.payload, c.command + " payload", visit);
+        walkFields(c.response, c.command + " response", visit);
+        for (const auto& v : c.variants) {
+            walkFields(v.payload, c.command + "[" + v.mode + "] payload", visit);
+            walkFields(v.response, c.command + "[" + v.mode + "] response", visit);
+        }
+    }
+    for (const auto& m : contract::ws::models()) walkFields(m.fields, m.name, visit);
+}
+
+// Objects (or arrays of objects) the contract leaves without a shape, each with the reason. Everything else is a
+// model, inline fields, a map or a union. Paths as walkContract prints them.
+const std::map<std::string, std::string>& opaqueObjects() {
+    static const std::map<std::string, std::string> kOpaque{
+        {"PriceBudgetNotification.metadata", "operator notification details stored as JSONB; each producer (budget preflight, gateway budgets, recovery cost alerts) records its own keys"},
+        {"SessionUser.vault_roles", "the {} alternative: Auth::sessionUser keeps the empty object User sends for a user without vault roles"},
+        {"ShareLink.metadata", "the link creator's free-form metadata, returned parsed"},
+        {"SharePublicLink.metadata", "the link creator's free-form metadata, returned parsed"},
+        {"SyncEvent.s3_price_breakdown", "price-estimate line items as the pricing engine (or the remote price bot) returned them, stored verbatim per sync run"},
+        {"UpstreamAuditEntry.detail", "free-form per audit action (what the action recorded); {raw} when the stored text is not JSON"},
+        {"User.vault_roles", "the {} alternative: identities::to_json(User) sends an empty object instead of [] for a user without vault roles"},
+        {"share.link.create payload.metadata", "the object alternative: the link creator's free-form metadata, stored as given"},
+        {"share.link.update payload.metadata", "the object alternative: the link creator's free-form metadata, stored as given"},
+    };
+    return kOpaque;
+}
+
+TEST(UsageContract, EveryModelReferenceResolvesAndEveryModelIsUsed) {
+    const auto models = contract::ws::models();
+    std::set<std::string> names;
+    for (const auto& m : models) {
+        EXPECT_TRUE(names.insert(m.name).second) << m.name;
+        EXPECT_FALSE(m.description.empty()) << m.name;
+        EXPECT_FALSE(m.fields.empty()) << m.name;
+    }
+
+    std::set<std::string> referenced;
+    walkContract([&](const contract::WsField& f, const std::string& path) {
+        if (f.model.empty()) return;
+        referenced.insert(f.model);
+        EXPECT_TRUE(names.contains(f.model)) << path << " names model " << f.model << ", which is not declared";
+    });
+    for (const auto& c : contract::ws::commands())
+        if (c.response_model) {
+            referenced.insert(*c.response_model);
+            EXPECT_TRUE(names.contains(*c.response_model)) << c.command << " response_model " << *c.response_model;
+        }
+    for (const auto& name : names) EXPECT_TRUE(referenced.contains(name)) << "model " << name << " is never referenced";
+}
+
+TEST(UsageContract, ResponseModelCommandsListThatModelsFields) {
+    for (const auto& c : contract::ws::commands()) {
+        if (!c.response_model) continue;
+        const auto fields = contract::ws::modelFields(*c.response_model);
+        ASSERT_EQ(c.response.size(), fields.size()) << c.command;
+        for (std::size_t i = 0; i < fields.size(); ++i) {
+            EXPECT_EQ(c.response[i].name, fields[i].name) << c.command;
+            EXPECT_EQ(c.response[i].types, fields[i].types) << c.command << "." << fields[i].name;
+            EXPECT_EQ(c.response[i].required, fields[i].required) << c.command << "." << fields[i].name;
+            EXPECT_EQ(c.response[i].model, fields[i].model) << c.command << "." << fields[i].name;
+        }
+    }
+}
+
+TEST(UsageContract, UnionsObjectsAndArraysAreSpelledOut) {
+    std::set<std::string> opaqueSeen;
+    walkContract([&](const contract::WsField& f, const std::string& path) {
+        std::vector<std::string> concrete;
+        for (const auto& t : f.types)
+            if (t != "null") concrete.push_back(t);
+        EXPECT_FALSE(concrete.empty()) << path << " has no concrete JSON type";
+
+        if (concrete.size() > 1) {
+            EXPECT_FALSE(f.one_of.empty()) << path << " is a union of " << concrete.size()
+                                           << " types: spell out its alternatives (one_of)";
+        }
+        if (!f.one_of.empty()) {
+            std::set<std::string> altTypes;
+            for (const auto& a : f.one_of) {
+                EXPECT_TRUE(a.name.empty()) << path << ": one_of alternatives are nameless";
+                for (const auto& t : a.types) altTypes.insert(t);
+            }
+            EXPECT_EQ(altTypes, std::set<std::string>(concrete.begin(), concrete.end()))
+                << path << ": the one_of alternatives must cover exactly the declared types";
+            return;  // the alternatives carry the shapes
+        }
+
+        const bool isObject = std::ranges::find(f.types, "object") != f.types.end();
+        if (f.partial) {
+            EXPECT_TRUE(isObject && (!f.model.empty() || !f.fields.empty()))
+                << path << ": only an object with a model or fields can be a partial (merge patch)";
+        }
+        const bool isArray = std::ranges::find(f.types, "array") != f.types.end();
+        bool opaque = isObject && f.model.empty() && f.fields.empty() && f.values.empty();
+        if (isArray) {
+            EXPECT_TRUE(!f.items.empty() || !f.element.empty()) << path << " is an array without an element type";
+            if (f.items == "object" && f.model.empty() && f.fields.empty()) opaque = true;
+        }
+        if (opaque) {
+            opaqueSeen.insert(path);
+            EXPECT_TRUE(opaqueObjects().contains(path)) << path << " is an object without a model, fields or map "
+                                                                     "values (or list it in opaqueObjects() with the reason)";
+        }
+    });
+    for (const auto& [path, reason] : opaqueObjects()) {
+        EXPECT_FALSE(reason.empty()) << path;
+        EXPECT_TRUE(opaqueSeen.contains(path)) << path << " is listed as opaque but is shaped (or gone)";
     }
 }
 
@@ -317,8 +454,10 @@ TEST(UsageContract, MetaContractGetReturnsTheBuiltContractIdentity) {
     EXPECT_EQ(reply.at("contract_version").get<int>(), contract::kVersion);
     EXPECT_EQ(reply.at("contract_hash").get<std::string>(), id.contract_hash);
     EXPECT_EQ(reply.at("ws_hash").get<std::string>(), id.ws_hash);
+    EXPECT_EQ(reply.at("models_hash").get<std::string>(), id.models_hash);
     EXPECT_EQ(id.ws_hash.size(), 64u);
-    EXPECT_EQ(reply.size(), 3u) << "no other (possibly sensitive) fields: " << reply.dump();
+    EXPECT_EQ(id.models_hash.size(), 64u);
+    EXPECT_EQ(reply.size(), 4u) << "no other (possibly sensitive) fields: " << reply.dump();
 }
 
 // The contract hash identifies the daemon build, so it is not handed to unauthenticated sockets (no version

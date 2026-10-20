@@ -129,15 +129,6 @@ namespace {
         return payload.value("accept_encryption_waiver", false);
     }
 
-    json vaultDetailsJson(const vh::ops::vaults::Details& details) {
-        json out;
-        if (details.vault->type == VaultType::S3) {
-            out = *std::static_pointer_cast<S3Vault>(details.vault);
-            if (const auto remote = std::dynamic_pointer_cast<RemotePolicy>(details.sync)) out["sync"] = *remote;
-        } else out = *details.vault;
-        out["owner"] = details.owner_name;
-        return out;
-    }
 }
 
 json Vaults::add(const json &payload, const std::shared_ptr<Session> &session) {
@@ -217,8 +208,11 @@ json Vaults::remove(const json &payload, const std::shared_ptr<Session> &session
 }
 
 json Vaults::removalPlan(const json &payload, const std::shared_ptr<Session> &session) {
-    const auto plan = vh::ops::vaults::removalPlan(session->user, payload.at("id").get<unsigned int>());
-    return {{"plan", {
+    return {{"plan", removalPlanJson(vh::ops::vaults::removalPlan(session->user, payload.at("id").get<unsigned int>()))}};
+}
+
+json Vaults::removalPlanJson(const vh::ops::vaults::RemovalPlan& plan) {
+    return {
         {"vault_id", plan.vault->id},
         {"name", plan.vault->name},
         {"type", to_string(plan.vault->type)},
@@ -233,7 +227,7 @@ json Vaults::removalPlan(const json &payload, const std::shared_ptr<Session> &se
         {"key_retention_window", vh::config::durationToString(plan.key_retention_window)},
         {"key_retention_window_seconds", plan.key_retention_window.count()},
         {"export_command", plan.export_command}
-    }}};
+    };
 }
 
 json Vaults::listDeleted(const std::shared_ptr<Session> &session) {
@@ -246,7 +240,17 @@ json Vaults::restore(const json &payload, const std::shared_ptr<Session> &sessio
 }
 
 json Vaults::get(const json &payload, const std::shared_ptr<Session> &session) {
-    return {{"vault", vaultDetailsJson(vh::ops::vaults::get(session->user, payload.at("id").get<unsigned int>()))}};
+    return {{"vault", detailsJson(vh::ops::vaults::get(session->user, payload.at("id").get<unsigned int>()))}};
+}
+
+json Vaults::detailsJson(const vh::ops::vaults::Details& details) {
+    json out;
+    if (details.vault->type == VaultType::S3) {
+        out = *std::static_pointer_cast<S3Vault>(details.vault);
+        if (const auto remote = std::dynamic_pointer_cast<RemotePolicy>(details.sync)) out["sync"] = *remote;
+    } else out = *details.vault;
+    out["owner"] = details.owner_name;
+    return out;
 }
 
 json Vaults::list(const std::shared_ptr<Session> &session) {

@@ -37,8 +37,9 @@ std::vector<WsCommandUsage> emailCommands() {
         .command = "email.config.update",
         .description = "Merge-patch the email and operator_emails settings sections (RFC 7386; other sections are "
                        "ignored) and save them through the same validation as settings.update.",
-        .payload = {object("email").opt().desc("Partial email section."),
-                    object("operator_emails").opt().desc("Partial operator_emails section.")},
+        .payload = {object("email", "EmailConfig").opt().patch().desc("Partial email section."),
+                    object("operator_emails", "OperatorEmailsConfig").opt().patch().desc(
+                        "Partial operator_emails section.")},
         .response = emailConfigResponse(),
         .refusal_codes = {"denied", "invalid", "unauthorized"},
         .untyped_refusals = {"invalid"},

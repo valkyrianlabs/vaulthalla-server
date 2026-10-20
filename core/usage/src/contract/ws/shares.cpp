@@ -7,11 +7,23 @@ namespace vh::contract::ws::detail {
 
 namespace {
 
+// One permission override of a share role assignment (parsePermissionOverride in share/Links.cpp).
+std::vector<WsField> sharePermissionOverrideFields() {
+    return {uinteger("permission_id").opt().nullable().desc("The permission by id; or name it with "
+                                                            "permission_qualified (or qualified)."),
+            str("permission_qualified").opt().nullable().desc("Qualified permission name."),
+            str("qualified").opt().nullable().desc("Alias of permission_qualified."),
+            str("effect").opt().oneOf({"allow", "deny"}).desc("Case-insensitive; default allow."),
+            str("glob_path").opt().desc("Path glob the override applies to; default \"/\"."),
+            str("pattern").opt().desc("Alias of glob_path."),
+            boolean("enabled").opt().nullable().desc("Default true.")};
+}
+
+// A vault role for the share's principal (parseRoleAssignment in share/Links.cpp): vault_role_id or vault_role_name.
 std::vector<WsField> shareRoleAssignmentFields() {
-    return {uinteger("vault_role_id").opt().gen(gen::ref("role.vault", {"id"})),
-            str("vault_role_name").opt(),
-            objectArray("permission_overrides", "").opt().desc(
-                "{permission_id | permission_qualified | qualified, effect, glob_path | pattern, enabled}")};
+    return {uinteger("vault_role_id").opt().nullable().gen(gen::ref("role.vault", {"id"})),
+            str("vault_role_name").opt().nullable(),
+            objectArray("permission_overrides", "", sharePermissionOverrideFields()).opt().nullable()};
 }
 
 WsField shareLinkObject() { return object("share", "ShareLink"); }
@@ -30,12 +42,28 @@ const std::vector<std::string>& shareLinkOps() {
     return ops;
 }
 
-// The members create and update share (update: absent leaves a field alone, null clears an optional one).
+// allowed_ops: a bitmask or the operation names (parseAllowedOps in share/Links.cpp).
+WsField shareLinkAllowedOps() {
+    return WsField{.name = "allowed_ops", .types = {"integer", "array"}, .generator = gen::oneOf({"metadata", "list",
+                                                                                                "download"})}
+        .alternatives({alt({"integer"}).min(0).desc("Bitmask, bit i = the i-th of metadata, list, preview, download, "
+                                                     "upload, mkdir, overwrite."),
+                       WsField{.types = {"array"}, .items = "string", .item_enum = shareLinkOps()}.desc(
+                           "Operation names.")})
+        .desc("A bitmask or a list of operation names.");
+}
+
+// The members create and update share (update: absent leaves a field alone, null clears an optional one; create:
+// null is the same as absent).
 std::vector<WsField> shareLinkMutableFields() {
     return {str("name").opt().nullable(),
             str("public_label").opt().nullable(),
             str("description").opt().nullable(),
-            anyOf("expires_at", {"string", "integer", "null"}).opt().desc("Timestamp string or epoch seconds; null clears."),
+            anyOf("expires_at", {"string", "integer", "null"})
+                .opt()
+                .alternatives({alt({"string"}).desc("Timestamp \"YYYY-MM-DD HH:MM:SS\" or ISO-8601, UTC."),
+                               alt({"integer"}).desc("Epoch seconds.")})
+                .desc("When the link stops working; null: never."),
             uinteger("max_downloads").opt().nullable(),
             uinteger("max_upload_files").opt().nullable(),
             uinteger("max_upload_size_bytes").opt().nullable(),
@@ -45,12 +73,21 @@ std::vector<WsField> shareLinkMutableFields() {
             strArray("blocked_mime_types").opt().nullable(),
             strArray("allowed_extensions").opt().nullable(),
             strArray("blocked_extensions").opt().nullable(),
-            object("metadata").opt().desc("Free-form JSON object stored with the link."),
-            object("public_role_assignment", "", shareRoleAssignmentFields()).opt().nullable(),
-            objectArray("recipient_role_assignments", "",
-                        {str("email"), object("role_assignment", "", shareRoleAssignmentFields())})
+            anyOf("metadata", {"object", "string"})
                 .opt()
-                .nullable()};
+                .alternatives({alt({"object"}).desc("Free-form JSON metadata, stored as given."),
+                               alt({"string"}).desc("JSON text, stored as-is (text that does not parse reads back as {}).")})
+                .desc("The link's free-form metadata; ShareLink.metadata returns it parsed."),
+            object("public_role_assignment", "", shareRoleAssignmentFields()).opt().nullable().desc(
+                "The vault role every share session gets."),
+            objectArray("recipient_role_assignments", "",
+                        {str("email"),
+                         object("role_assignment", "", shareRoleAssignmentFields()).opt().desc(
+                             "The recipient's role (required unless sent as `role`)."),
+                         object("role", "", shareRoleAssignmentFields()).opt().desc("Alias of role_assignment.")})
+                .opt()
+                .nullable()
+                .desc("Email-validated recipients with their role; on update, replaces the list.")};
 }
 
 }
@@ -58,36 +95,19 @@ std::vector<WsField> shareLinkMutableFields() {
 std::vector<WsCommandUsage> shareCommands() {
     std::vector<WsCommandUsage> out;
 
+    auto createPayload = std::vector<WsField>{
+        vaultId(),
+        uinteger("root_entry_id").gen(gen::ref("fs.entry", {"id"})),
+        str("root_path").gen(gen::ref("fs.entry", {"path"})),
+        str("target_type").oneOf({"file", "directory"}),
+        str("link_type").oneOf({"download", "upload", "access"}),
+        str("access_mode").oneOf({"public", "email_validated"}).gen(gen::constant("public")),
+        shareLinkAllowedOps()};
+    for (auto& f : shareLinkMutableFields()) createPayload.push_back(std::move(f));
     out.push_back({
         .command = "share.link.create",
         .description = "Create a share link on a file or directory. The public token is returned once.",
-        .payload = {vaultId(),
-                    uinteger("root_entry_id").gen(gen::ref("fs.entry", {"id"})),
-                    str("root_path").gen(gen::ref("fs.entry", {"path"})),
-                    str("target_type").oneOf({"file", "directory"}),
-                    str("link_type").oneOf({"download", "upload", "access"}),
-                    str("access_mode").oneOf({"public", "email_validated"}).gen(gen::constant("public")),
-                    WsField{.name = "allowed_ops", .types = {"integer", "array"}, .items = "string", .item_enum = shareLinkOps(),
-                            .generator = gen::oneOf({"metadata", "list", "download"})}
-                        .desc("A bitmask or a list of operation names."),
-                    str("name").opt().nullable(),
-                    str("public_label").opt().nullable(),
-                    str("description").opt().nullable(),
-                    anyOf("expires_at", {"string", "integer", "null"}).opt(),
-                    uinteger("max_downloads").opt().nullable(),
-                    uinteger("max_upload_files").opt().nullable(),
-                    uinteger("max_upload_size_bytes").opt().nullable(),
-                    uinteger("max_upload_total_bytes").opt().nullable(),
-                    str("duplicate_policy").opt().oneOf({"reject", "rename", "overwrite"}),
-                    strArray("allowed_mime_types").opt(),
-                    strArray("blocked_mime_types").opt(),
-                    strArray("allowed_extensions").opt(),
-                    strArray("blocked_extensions").opt(),
-                    object("metadata").opt(),
-                    object("public_role_assignment", "", shareRoleAssignmentFields()).opt().nullable(),
-                    objectArray("recipient_role_assignments", "",
-                                {str("email"), object("role_assignment", "", shareRoleAssignmentFields())})
-                        .opt()},
+        .payload = std::move(createPayload),
         .response = {shareLinkObject(), str("public_token"), str("public_url_path")},
         .refusal_codes = opsRefusals(),
         .untyped_refusals = shareLinkUntypedRefusals(),
@@ -126,10 +146,7 @@ std::vector<WsCommandUsage> shareCommands() {
         auto payload = std::vector<WsField>{shareLinkId(),
                                             str("link_type").opt().nullable().oneOf({"download", "upload", "access"}),
                                             str("access_mode").opt().nullable().oneOf({"public", "email_validated"}),
-                                            WsField{.name = "allowed_ops", .types = {"integer", "array", "null"},
-                                                    .required = false, .items = "string",
-                                                    .item_enum = shareLinkOps()}
-                                                .desc("A bitmask or a list of operation names.")};
+                                            shareLinkAllowedOps().opt().nullable()};
         for (auto& f : shareLinkMutableFields()) payload.push_back(std::move(f));
         out.push_back({
             .command = "share.link.update",
@@ -172,12 +189,12 @@ std::vector<WsCommandUsage> metaCommands() {
     return {{
         .command = "meta.contract.get",
         .description = "The contract this daemon was built from: contract_version, contract_hash (the whole "
-                       "document vh_usage --json publishes) and ws_hash (the ws command book, what the web console "
-                       "is generated from). Read-only, no secrets; needs a signed-in session (no build "
-                       "fingerprinting before login).",
+                       "document vh_usage --json publishes), ws_hash (the ws command book, what the web console "
+                       "is generated from) and models_hash (the model shapes the book refers to). Read-only, no "
+                       "secrets; needs a signed-in session (no build fingerprinting before login).",
         .auth = "session",
         .input = "none",
-        .response = {uinteger("contract_version"), str("contract_hash"), str("ws_hash")},
+        .response = {uinteger("contract_version"), str("contract_hash"), str("ws_hash"), str("models_hash")},
         .client_timeout = kDefaultTimeout,
     }};
 }
