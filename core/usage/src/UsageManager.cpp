@@ -42,6 +42,8 @@ UsageManager::UsageManager() {
     registerBook(setup::get(root_->weak_from_this()));
     registerBook(teardown::get(root_->weak_from_this()));
     registerBook(status::get(root_->weak_from_this()));
+    registerBook(mcp_book::get(root_->weak_from_this()));
+    registerBook(skill_book::get(root_->weak_from_this()));
     registerBook(help::get(root_->weak_from_this()));
     registerBook(version::get(root_->weak_from_this()));
 }
