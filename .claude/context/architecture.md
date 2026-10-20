@@ -20,7 +20,7 @@ core-backend, and protocol-map docs, with stale claims corrected.
   (`>=155.8059`, `<1000`) because the retired `20250629` fork snapshot sorts higher; `tools/contracts` pins both.
   libpqxx stays out of the -O0 PCH (GCC drops its `#pragma GCC diagnostic` fences there).
   It generates `paths.h` (config/runtime/mount/state/log/psql paths, lines ~35-44).
-- Artifacts: `vaulthalla-server`, `vaulthalla-cli`, `vh_usage` (manpage markdown generator),
+- Artifacts: `vaulthalla-server`, `vaulthalla-cli` (links `vhusage` for `vh mcp` / `vh skill`), `vh_usage` (manpage markdown generator),
   static libs `vaulthalla`, `vhseed`, `vhusage`, `vhusage-native`; tests `vh_unit_tests`, `vh_integration_tests`.
 - `meson.options`: `manpage` (true), `install_data` (true), `build_unit_tests` (false),
   `integration_tests` (false), `systemd_system_unit_dir` (`/lib/systemd/system`), `udev_rules_dir`, `tmpfiles_dir`.
@@ -100,6 +100,9 @@ ShellServer is not created in test mode (`paths::testMode`).
    subcommand name a handler dispatches on must be defined.
 5. Usage/help comes from `core/usage/*` (root alias hard-coded as `vh`). The same code drives the `vh_usage` manpage
    generator and the integration-test command models, so CLI UX changes ripple into man pages and tests.
+   Every leaf declares `effect` (`CommandEffect::Read|Write|Destructive`, `types.hpp`; destructive = deletes, purges,
+   revokes, rotates keys or can't be undone); `McpCatalog.EveryLeafDeclaresAnEffectAndOnlyLeaves` refuses a leaf
+   without one, and `vh_usage --json` exports it.
 
 Invariants: the **daemon owns `/run/vaulthalla/cli.sock`** (binds it itself; every ~1s it checks the path still points
 at its listener and rebinds if something replaced it). `deploy/systemd/vaulthalla-cli.{socket,service}` are obsolete
@@ -123,6 +126,41 @@ generation). The client reads/writes local files itself (get `-o` = temp sibling
 every byte; stdout via write(2), refused to a TTY without `-o -`); `planLocal` mirrors the daemon's tokenizer so both
 agree which positional is the local file. Tests: `test_cli_fs.cpp` (DB, socketpair), `core/tests/cli/test_fs_client.py`
 (meson `cli_fs_client`, real `vaulthalla-cli` against a scripted daemon).
+
+### MCP and agent skills (`vh mcp`, `vh skill`)
+
+One catalog, two transports. `core/usage/{include/Mcp.hpp,src/mcp/}` (`vh::mcp`) holds the tool catalog
+(`Catalog`), the JSON-RPC 2.0 handler (`Server`: initialize with version negotiation 2025-11-25 → 2025-06-18 →
+2025-03-26, ping, tools/list, tools/call) and the skill text. It lives in the usage module because it needs only the
+usage book and the operation catalog and no daemon types, so the client links it directly; the daemon links it too
+(remote `/mcp` will run `Invocation::line` through `Router::executeLine(line, deviceUser)`).
+- Compiled into `vaulthalla-cli` rather than fetched from the daemon: `tools/list` and `vh skill install` work with the
+  daemon down, there is no new socket command, and skew fails closed (an older daemon rejects options it doesn't
+  declare; `mcp`/`skill` reaching a daemon get "runs in the vh client", `commands/client.cpp`).
+- Tools: `vh_help {path}` (usage book as JSON), `vh_read {command, confirm?}` (read-effect leaves only, readOnlyHint),
+  `vh_run {command, confirm?}` (any agent-available leaf, destructiveHint: annotations are per tool, so the read/any
+  split is how a leaf's effect reaches the client), and one typed tool per `OperationSpec` with a CLI binding (name =
+  id with `_`, schema from `FieldSpec`s, line from `field_to_entry`/`fixed`, annotation = stronger of op `effect.kind`
+  and the leaf's effect).
+- `vh_run` commands are tokenized with a mirror of `Token.hpp`/`Parser.hpp`, resolved like the Router (plural → list,
+  positionals descend), checked, and re-rendered from the tokens, so the daemon parses exactly what was checked
+  (`McpCatalog.RunLinesParseAsCheckedForEveryDocumentedExample`). Refused before running: unknown commands, groups,
+  `--`, odd option spellings, confirmation flags in the command, and `mcp::exclusions()` (one list: `vault key export`,
+  `secrets export|update`, `setup`, `teardown`, `fs get|put`, `mcp`, `skill`; also checked case-insensitively).
+- Confirmations: a leaf's gates are its flags spelled `yes`/`accept-*` and the `confirm-token` option. Tools never add
+  them on their own (typed bindings' `fixed` `flag:yes` is dropped) and the schema has `confirm` (`{"yes": true}`,
+  `{"confirm-token": "<t>"}`). A non-zero exit whose text says "re-run …/pass --<gate>" becomes `isError` +
+  `structuredContent {needs_confirmation, confirm_options, message, how_to_confirm}`. `--json` is appended where the
+  leaf has it; stdout is the text content; stderr and the exit code go into an `isError` result otherwise.
+- `vh mcp` (`core/main/cli_mcp.cpp`): newline-delimited JSON-RPC on stdin/stdout (stdout only protocol messages,
+  invalid UTF-8 replaced), each call one `vh::cli::runCaptured` (`interactive:false`, same peer-UID authorization;
+  69/75/77 come back as tool errors). `vh skill install` (`cli_skill.cpp`): `SKILL.md` (hand-written,
+  `src/mcp/Skill.cpp`) + `references/commands.md` (`Catalog::commandReference`) into `~/.claude/skills/vaulthalla` /
+  `~/.agents/skills/vaulthalla` (project: `.claude/skills`, `.agents/skills`); registers via `claude mcp add --scope
+  user|project` / `codex mcp add` when on PATH, else prints it (Codex TOML stanza written only with `--force`);
+  identical skill = no-op, a changed one only with `--force`. Tests: `test_mcp_catalog.cpp` (DB-free),
+  `core/tests/cli/test_mcp_client.py` (meson `cli_mcp_client`: real client, scripted daemon, temp HOME).
+  Operator doc: `docs/admin/mcp-and-agents.md`.
 
 ### WebSocket flow
 
@@ -794,8 +832,8 @@ stage "Copy And Delete")
   (exit 78) unless the DB settings, backing/mount/log/runtime/config paths and `VH_TEST_CLI_SOCKET` all come from the
   environment and are private (paths under `/tmp/`, a `vh_harness_*` or test database). Test mode then serves `vh` on
   that socket (`paths::getCliSocketPath()`); the client honours `VAULTHALLA_CLI_SOCKET`.
-- `core/usage` also holds the contract: `FieldGen` generators on CLI usage entries, `OperationSpec` catalog,
-  `WsCommandUsage` book, exported by `vh_usage --json`.
+- `core/usage` also holds the contract: `FieldGen` generators on CLI usage entries, per-leaf `effect`, `OperationSpec`
+  catalog, `WsCommandUsage` book, exported by `vh_usage --json`; and the MCP catalog built from them (above).
 - `vh_fs_actor` (`core/tests/helpers/fs_actor.cpp`, `-Dintegration_tests=true`): a single-threaded helper that
   switches to a test uid at startup and serves filesystem ops as JSON lines; used by Tier A and `tools/harness`.
 
