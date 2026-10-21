@@ -132,17 +132,21 @@ std::vector<WsCommandUsage> deviceCommands() {
     out.push_back({
         .command = "device.pairing.open",
         .description = "Open a 10-minute pairing window owned by the caller (reopening extends it). One window per "
-                       "node: conflict while another user's is open.",
+                       "node: conflict while another user's is open. Also says what to type into Desktop: the "
+                       "listener's port and whether devices on other hosts can reach it (remote).",
         .input = "none",
-        .response = {windowObject()},
+        .response = {windowObject(), uinteger("server_time").desc("The node's clock (Unix seconds), to count down by."),
+                     uinteger("port").desc("The device listener's port."),
+                     boolean("remote").desc("Remote connections on; else only a Desktop on the node itself can pair.")},
         .refusal_codes = opsRefusals(),
         .client_timeout = kDefaultTimeout,
     });
 
     out.push_back({
         .command = "device.pairing.close",
-        .description = "Close the caller's pairing window (a super admin: anyone's); its requests expire.",
-        .input = "none",
+        .description = "Close the caller's own pairing window; its requests expire. any: whoever's window is open "
+                       "(super admins only).",
+        .payload = {boolean("any").opt().gen(gen::boolean())},
         .response = {boolean("closed").desc("False when no such window was open.")},
         .refusal_codes = opsRefusals(),
         .client_timeout = kDefaultTimeout,
@@ -158,7 +162,8 @@ std::vector<WsCommandUsage> deviceCommands() {
                      objectArray("requests", "",
                                  {str("request_id"), str("name"), str("platform"), str("app_version"),
                                   str("source_ip"), hex64("device_id"), strArray("code_choices"),
-                                  uinteger("created_at"), uinteger("expires_at")})},
+                                  uinteger("created_at"), uinteger("expires_at")}),
+                     uinteger("server_time").desc("The node's clock (Unix seconds), to count down by.")},
         .refusal_codes = opsRefusals(),
         .client_timeout = kDefaultTimeout,
     });

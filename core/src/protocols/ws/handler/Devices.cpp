@@ -6,6 +6,9 @@
 #include "ops/Error.hpp"
 #include "protocols/device/Service.hpp"
 #include "protocols/ws/Session.hpp"
+#include "config/Registry.hpp"
+
+#include <ctime>
 
 #include <nlohmann/json.hpp>
 
@@ -44,6 +47,9 @@ json windowJson(const vh::device::PairingWindow& w) {
     return {{"owner_id", w.owner_id}, {"opened_at", static_cast<int64_t>(w.opened_at)},
             {"expires_at", static_cast<int64_t>(w.expires_at)}};
 }
+
+// The node's clock, so a client counts a window down without trusting its own.
+int64_t serverTime() { return static_cast<int64_t>(std::time(nullptr)); }
 
 json statusJson(const protocols::device::ListenerStatus& s) {
     return {{"enabled", s.enabled},
@@ -102,11 +108,15 @@ json Devices::serverIdentity(const std::shared_ptr<Session>& session) {
 }
 
 json Devices::pairingOpen(const std::shared_ptr<Session>& session) {
-    return {{"window", windowJson(devices::openWindow(actorOf(session)))}};
+    const auto window = devices::openWindow(actorOf(session));
+    // What the person types into Desktop: the listener's port, and whether another host can reach it at all.
+    const auto cfg = config::Registry::get().device_server;
+    return {{"window", windowJson(window)}, {"server_time", serverTime()}, {"port", cfg.port}, {"remote", cfg.remote}};
 }
 
-json Devices::pairingClose(const std::shared_ptr<Session>& session) {
-    return {{"closed", devices::closeWindow(actorOf(session))}};
+json Devices::pairingClose(const json& payload, const std::shared_ptr<Session>& session) {
+    const bool any = payload.is_object() && payload.value("any", false);
+    return {{"closed", devices::closeWindow(actorOf(session), any)}};
 }
 
 json Devices::pairingPending(const std::shared_ptr<Session>& session) {
@@ -122,7 +132,8 @@ json Devices::pairingPending(const std::shared_ptr<Session>& session) {
                             {"code_choices", r.code_choices},
                             {"created_at", static_cast<int64_t>(r.created_at)},
                             {"expires_at", static_cast<int64_t>(r.expires_at)}});
-    return {{"window", list.window ? windowJson(*list.window) : json(nullptr)}, {"requests", std::move(requests)}};
+    return {{"window", list.window ? windowJson(*list.window) : json(nullptr)}, {"requests", std::move(requests)},
+            {"server_time", serverTime()}};
 }
 
 json Devices::pairingApprove(const json& payload, const std::shared_ptr<Session>& session) {

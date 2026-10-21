@@ -81,7 +81,7 @@ void Handler::registerDeviceHandlers(const std::shared_ptr<Router>& r) {
     r->registerPayload("device.identity.rotate", &handler::Devices::identityRotate);
     r->registerSessionOnlyHandler("device.server.identity", &handler::Devices::serverIdentity);
     r->registerSessionOnlyHandler("device.pairing.open", &handler::Devices::pairingOpen);
-    r->registerSessionOnlyHandler("device.pairing.close", &handler::Devices::pairingClose);
+    r->registerPayload("device.pairing.close", &handler::Devices::pairingClose);
     r->registerSessionOnlyHandler("device.pairing.pending", &handler::Devices::pairingPending);
     r->registerPayload("device.pairing.approve", &handler::Devices::pairingApprove);
     r->registerPayload("device.pairing.deny", &handler::Devices::pairingDeny);

@@ -123,9 +123,10 @@ vh::device::PairingWindow openWindow(const Actor& actor) {
     return window;
 }
 
-bool closeWindow(const Actor& actor) {
+bool closeWindow(const Actor& actor, const bool any) {
     requireUser(actor);
-    const bool closed = pairing().close(actor->id, actor->isSuperAdmin(), PairingClock::now());
+    if (any) requireSuperAdmin(actor, "close another user's pairing window");
+    const bool closed = pairing().close(actor->id, any, PairingClock::now());
     if (closed) log::Registry::audit()->info("[ops::devices] {} closed the pairing window", actor->name());
     return closed;
 }

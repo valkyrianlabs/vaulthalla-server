@@ -998,10 +998,21 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "device.pairing.close",
-      "description": "Close the caller's pairing window (a super admin: anyone's); its requests expire.",
-      "input": "none",
+      "description": "Close the caller's own pairing window; its requests expire. any: whoever's window is open (super admins only).",
+      "input": "payload",
       "operation": null,
-      "payload": [],
+      "payload": [
+        {
+          "generator": {
+            "kind": "bool"
+          },
+          "name": "any",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
       "refusal_codes": [
         "denied",
         "invalid",
@@ -1070,7 +1081,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "device.pairing.open",
-      "description": "Open a 10-minute pairing window owned by the caller (reopening extends it). One window per node: conflict while another user's is open.",
+      "description": "Open a 10-minute pairing window owned by the caller (reopening extends it). One window per node: conflict while another user's is open. Also says what to type into Desktop: the listener's port and whether devices on other hosts can reach it (remote).",
       "input": "none",
       "operation": null,
       "payload": [],
@@ -1114,6 +1125,32 @@
           "required": true,
           "types": [
             "object"
+          ]
+        },
+        {
+          "description": "The node's clock (Unix seconds), to count down by.",
+          "minimum": 0,
+          "name": "server_time",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The device listener's port.",
+          "minimum": 0,
+          "name": "port",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Remote connections on; else only a Desktop on the node itself can pair.",
+          "name": "remote",
+          "required": true,
+          "types": [
+            "boolean"
           ]
         }
       ],
@@ -1246,6 +1283,15 @@
           "required": true,
           "types": [
             "array"
+          ]
+        },
+        {
+          "description": "The node's clock (Unix seconds), to count down by.",
+          "minimum": 0,
+          "name": "server_time",
+          "required": true,
+          "types": [
+            "integer"
           ]
         }
       ],
@@ -6462,5 +6508,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "1c97f0677bee7ff52f4612ddb30d5630c7491e34ff5e1684c0182b63b837f37d"
+  "ws_hash": "ece949ad1c8ea0bb3e78e7c959fbf6838167d8861e05468cb71aebe4a2d060b3"
 }

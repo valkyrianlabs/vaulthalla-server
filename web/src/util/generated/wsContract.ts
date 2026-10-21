@@ -6,7 +6,7 @@
 export const WS_CONTRACT_VERSION = 1
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = '1c97f0677bee7ff52f4612ddb30d5630c7491e34ff5e1684c0182b63b837f37d'
+export const WS_CONTRACT_HASH = 'ece949ad1c8ea0bb3e78e7c959fbf6838167d8861e05468cb71aebe4a2d060b3'
 
 export interface WsContract {
   /**
@@ -162,10 +162,11 @@ export interface WsContract {
     response: { device: object }
   }
   /**
-   * Close the caller's pairing window (a super admin: anyone's); its requests expire.
+   * Close the caller's own pairing window; its requests expire. any: whoever's window is open (super admins
+   * only).
    */
   'device.pairing.close': {
-    payload: null
+    payload: { any?: boolean }
     response: { closed: boolean }
   }
   /**
@@ -177,11 +178,17 @@ export interface WsContract {
   }
   /**
    * Open a 10-minute pairing window owned by the caller (reopening extends it). One window per node: conflict
-   * while another user's is open.
+   * while another user's is open. Also says what to type into Desktop: the listener's port and whether
+   * devices on other hosts can reach it (remote).
    */
   'device.pairing.open': {
     payload: null
-    response: { window: { owner_id: number; opened_at: number; expires_at: number } }
+    response: {
+      window: { owner_id: number; opened_at: number; expires_at: number }
+      server_time: number
+      port: number
+      remote: boolean
+    }
   }
   /**
    * The caller's open window and its confirmed requests. Each offers three code_choices (random order): one
@@ -203,6 +210,7 @@ export interface WsContract {
         created_at: number
         expires_at: number
       }[]
+      server_time: number
     }
   }
   /**

@@ -21,7 +21,7 @@ struct Devices {
     static json serverIdentity(const std::shared_ptr<Session>& session);
     // The owner's side of pairing.
     static json pairingOpen(const std::shared_ptr<Session>& session);
-    static json pairingClose(const std::shared_ptr<Session>& session);
+    static json pairingClose(const json& payload, const std::shared_ptr<Session>& session);
     static json pairingPending(const std::shared_ptr<Session>& session);
     static json pairingApprove(const json& payload, const std::shared_ptr<Session>& session);
     static json pairingDeny(const json& payload, const std::shared_ptr<Session>& session);

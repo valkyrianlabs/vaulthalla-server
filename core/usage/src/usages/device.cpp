@@ -31,10 +31,13 @@ std::shared_ptr<CommandUsage> pair(const std::weak_ptr<CommandUsage>& parent) {
     cmd->aliases = {"pair"};
     cmd->description = "Open a 10-minute pairing window for your account. Interactively, wait for a device and approve "
                        "it by the code it shows; otherwise approve with `vh device approve`.";
-    cmd->optional_flags = {Flag::WithAliases("close", "Close your pairing window instead", {"close"})};
+    cmd->optional_flags = {Flag::WithAliases("close", "Close your pairing window instead", {"close"}),
+                           Flag::WithAliases("any", "With --close: close whoever's window is open (super admins)",
+                                             {"any"})};
     cmd->examples = {
         {"vh device pair", "Open a pairing window, then pick the code your Mac shows when it asks to pair."},
         {"vh device pair --close", "Close your pairing window; its requests expire."},
+        {"vh device pair --close --any", "Close another user's pairing window (super admins)."},
     };
     return cmd;
 }

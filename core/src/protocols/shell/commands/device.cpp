@@ -160,7 +160,8 @@ CommandResult waitAndApprove(const CommandCall& call) {
 CommandResult handlePair(const CommandCall& call) {
     validatePositionals(call, resolveUsage({"device", "pair"}));
     if (hasFlag(call, "close"))
-        return runOp("device pair", [&] { return devices::closeWindow(call.user); }, [](const bool closed) {
+        return runOp("device pair", [&] { return devices::closeWindow(call.user, hasFlag(call, "any")); },
+                     [](const bool closed) {
             return std::string(closed ? "Pairing window closed; its requests expired.\n"
                                       : "No pairing window of yours was open.\n");
         });

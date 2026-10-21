@@ -31,6 +31,7 @@
 #include <paths.h>
 
 #include <algorithm>
+#include <ctime>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -176,14 +177,30 @@ TEST_F(DeviceParityTest, PairingWindowsOnBothSurfaces) {
     // One window per node: another user is refused on both surfaces until it closes.
     EXPECT_NE(cli("device pair", bob).first, 0);
     EXPECT_FALSE(wsOk([&] { (void)handler::Devices::pairingOpen(ws(bob)); }));
-    EXPECT_FALSE(handler::Devices::pairingClose(ws(bob)).at("closed").get<bool>()) << "not bob's window";
+    EXPECT_FALSE(handler::Devices::pairingClose(json::object(), ws(bob)).at("closed").get<bool>()) << "not bob's window";
 
     EXPECT_EQ(cli("device pair --close", alice).first, 0);
     EXPECT_FALSE(ops::devices::pending(alice).window);
-    EXPECT_TRUE(wsOk([&] { (void)handler::Devices::pairingOpen(ws(bob)); }));
+    const auto opened = handler::Devices::pairingOpen(ws(bob));
     EXPECT_TRUE(ops::devices::pending(bob).window);
-    // A super admin may close anyone's window.
-    EXPECT_TRUE(handler::Devices::pairingClose(ws(superUser)).at("closed").get<bool>());
+    // The console counts down by the node's clock and shows what to type into Desktop.
+    const auto now = static_cast<int64_t>(std::time(nullptr));
+    EXPECT_NEAR(static_cast<double>(opened.at("server_time").get<int64_t>()), static_cast<double>(now), 5.0);
+    EXPECT_EQ(opened.at("port"), config::Registry::get().device_server.port);
+    EXPECT_EQ(opened.at("remote"), config::Registry::get().device_server.remote);
+    EXPECT_EQ(opened.at("window").at("expires_at").get<int64_t>() - opened.at("server_time").get<int64_t>(), 600);
+    EXPECT_TRUE(handler::Devices::pairingPending(ws(bob)).contains("server_time"));
+
+    // Closing is for the window's owner; forcing anyone's is explicit (any) and for super admins only.
+    EXPECT_FALSE(handler::Devices::pairingClose(json::object(), ws(superUser)).at("closed").get<bool>());
+    EXPECT_FALSE(wsOk([&] { (void)handler::Devices::pairingClose({{"any", true}}, ws(alice)); }));
+    EXPECT_NE(cli("device pair --close --any", alice).first, 0);
+    EXPECT_TRUE(ops::devices::pending(bob).window);
+    EXPECT_TRUE(handler::Devices::pairingClose({{"any", true}}, ws(superUser)).at("closed").get<bool>());
+    EXPECT_FALSE(ops::devices::pending(bob).window);
+    (void)handler::Devices::pairingOpen(ws(bob));
+    EXPECT_EQ(cli("device pair --close --any", superUser).first, 0);
+    EXPECT_FALSE(ops::devices::pending(bob).window);
 }
 
 TEST_F(DeviceParityTest, NumberMatchingOnBothSurfaces) {

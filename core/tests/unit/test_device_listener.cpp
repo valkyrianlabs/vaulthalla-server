@@ -145,10 +145,13 @@ protected:
     }
 
     // The daemon's side of a client's connection.
-    static std::shared_ptr<protocols::ws::Session> serverSession(const ClientIdentity& device) {
+    // `paired`: a Device session (else pairing-only); one key may have both kinds open at once.
+    static std::shared_ptr<protocols::ws::Session> serverSession(const ClientIdentity& device, const bool paired) {
         for (int i = 0; i < 50; ++i) {
             for (const auto& [_, s] : runtime::Deps::get().sessionManager->getActive())
-                if (s && s->devicePeer() && s->devicePeer()->spkiHex == device.deviceId() && !s->closing()) return s;
+                if (s && s->devicePeer() && s->devicePeer()->spkiHex == device.deviceId() && !s->closing() &&
+                    s->isDeviceSession() == paired)
+                    return s;
             std::this_thread::sleep_for(20ms);
         }
         return nullptr;
@@ -170,7 +173,7 @@ protected:
         const auto sas = crypto::sasCode(crypto::sasDigest(client.serverKey()->spkiSha256, device.publicKey().spkiSha256,
                                                            nonceDevice, nonceServer));
         const auto approved = handler::Devices::pairingApprove({{"request_id", requestId}, {"code", sas}}, console(owner));
-        (void)handler::Devices::pairingClose(console(owner));
+        (void)handler::Devices::pairingClose(json::object(), console(owner));
         return *db::query::device::Devices::byId(approved.at("device").at("id").get<uint32_t>());
     }
 };
@@ -240,7 +243,7 @@ TEST_F(DeviceListenerTest, AnUnknownKeyOnlyPairs) {
                                                         {"commitment", std::string(64, '0')}})),
               "no_pairing_window");
 
-    const auto session = serverSession(device);
+    const auto session = serverSession(device, false);
     ASSERT_TRUE(session);
     EXPECT_TRUE(session->isDevicePairing());
     EXPECT_FALSE(session->user);
@@ -336,7 +339,7 @@ TEST_F(DeviceListenerTest, PairingFlowEndToEnd) {
     EXPECT_EQ(code(paired.call("device.pair.request", {{"name", "Mac"}, {"platform", "macOS"},
                                                        {"commitment", std::string(64, '0')}})),
               "conflict") << "a paired key never pairs again";
-    const auto session = serverSession(device);
+    const auto session = serverSession(device, true);
     ASSERT_TRUE(session);
     EXPECT_TRUE(session->isDeviceSession());
     EXPECT_EQ(session->user.get(), identities::manager().user(owner->id).get()) << "the canonical user object";
@@ -367,7 +370,7 @@ TEST_F(DeviceListenerTest, RevocationClosesLiveSessionsAndTheKeyOnlyPairsAgain) 
     EXPECT_EQ(code(again.call("device.pair.request", {{"name", "Mac"}, {"platform", "macOS"},
                                                       {"commitment", std::string(64, '0')}})),
               "conflict") << "a revoked key can never be approved again";
-    (void)handler::Devices::pairingClose(console(owner));
+    (void)handler::Devices::pairingClose(json::object(), console(owner));
 
     // The device itself can unpair ("Unpair this Mac"); a super admin can revoke anyone's.
     const ClientIdentity second;
@@ -466,7 +469,7 @@ TEST_F(DeviceListenerTest, LiveDeviceSessionsFollowTheirUser) {
     // Deactivation: the next command is refused.
     (void)identities::manager().updateUser(owner->id, [](identities::UserState& s) { s.meta.is_active = false; });
     EXPECT_EQ(client.call("device.list")->value("status", ""), "UNAUTHORIZED");
-    const auto session = serverSession(device);
+    const auto session = serverSession(device, true);
     ASSERT_TRUE(session);
     EXPECT_EQ(protocols::ws::ConnectionLifecycleManager::verdict(*session, std::chrono::system_clock::now(), 60s),
               protocols::ws::ConnectionLifecycleManager::SweepVerdict::DeviceEnded);
@@ -502,8 +505,8 @@ TEST_F(DeviceListenerTest, SweeperAndContractAuthLevelsMatchTheRouter) {
     Client a(port, unpaired), b(port, paired);
     ASSERT_TRUE(a.connect());
     ASSERT_TRUE(b.connect());
-    const auto pairingSession = serverSession(unpaired);
-    const auto deviceSession = serverSession(paired);
+    const auto pairingSession = serverSession(unpaired, false);
+    const auto deviceSession = serverSession(paired, true);
     ASSERT_TRUE(pairingSession && deviceSession);
     const auto human = console(owner);
 

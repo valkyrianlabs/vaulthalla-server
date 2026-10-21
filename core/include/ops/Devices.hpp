@@ -25,8 +25,9 @@ using vh::device::Device;
 // ---- pairing, owner side
 
 [[nodiscard]] vh::device::PairingWindow openWindow(const Actor& actor);
-// Closes the caller's window (a super admin may close anyone's). False when no such window was open.
-bool closeWindow(const Actor& actor);
+// Closes the caller's own window. With `any`, whoever's window is open (super admins only; `vh device pair --close
+// --any`). False when no such window was open.
+bool closeWindow(const Actor& actor, bool any = false);
 
 struct PendingList {
     std::optional<vh::device::PairingWindow> window{};  // the caller's open window, if any
