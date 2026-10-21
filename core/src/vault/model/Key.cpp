@@ -14,7 +14,11 @@ Key::Key(pqxx::row_ref row)
       encrypted_key(from_hex_bytea(row["encrypted_key"].as<std::string>())),
       iv(from_hex_bytea(row["iv"].as<std::string>())),
       created_at(parsePostgresTimestamp(row["created_at"].as<std::string>())),
-      updated_at(parsePostgresTimestamp(row["updated_at"].as<std::string>())) {}
+      updated_at(parsePostgresTimestamp(row["updated_at"].as<std::string>())) {
+    if (const auto check = row["key_check"]; !check.is_null()) key_check = check.as<std::string>();
+    if (const auto id = row["attestation_key_id"]; !id.is_null()) attestation_key_id = id.as<unsigned int>();
+    if (const auto sig = row["attestation"]; !sig.is_null()) attestation = from_hex_bytea(sig.as<std::string>());
+}
 
 void vh::vault::model::to_json(nlohmann::json &j, const Key &vk) {
     j = nlohmann::json{

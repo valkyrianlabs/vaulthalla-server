@@ -77,10 +77,13 @@ Deletion::DeletionPtr Deletion::schedule(const Schedule& s) {
 
         // Every key version, still sealed by the TPM master key, outlives the vault row until key_retain_until.
         txn.exec(
-            "INSERT INTO vault_deletion_key (vault_id, version, encrypted_key, iv, created_at) "
-            "SELECT vault_id, version, encrypted_key, iv, created_at FROM vault_keys WHERE vault_id = $1 "
+            "INSERT INTO vault_deletion_key (vault_id, version, encrypted_key, iv, created_at, key_check, "
+            "                                attestation_key_id, attestation) "
+            "SELECT vault_id, version, encrypted_key, iv, created_at, key_check, attestation_key_id, attestation "
+            "FROM vault_keys WHERE vault_id = $1 "
             "UNION ALL "
-            "SELECT vault_id, version, encrypted_key, iv, created_at FROM vault_keys_trashed WHERE vault_id = $1 "
+            "SELECT vault_id, version, encrypted_key, iv, created_at, key_check, attestation_key_id, attestation "
+            "FROM vault_keys_trashed WHERE vault_id = $1 "
             "ON CONFLICT (vault_id, version) DO NOTHING",
             pqxx::params{s.vault_id});
 
@@ -217,7 +220,8 @@ std::vector<Deletion::KeyPtr> Deletion::retainedKeys(const unsigned int vaultId)
     return Transactions::exec("Deletion::retainedKeys", [&](pqxx::work& txn) {
         const auto res = txn.exec(
             "SELECT vault_id, version, encrypted_key, iv, COALESCE(created_at, NOW()) AS created_at, "
-            "       COALESCE(created_at, NOW()) AS updated_at "
+            "       COALESCE(created_at, NOW()) AS updated_at, key_check, "
+            "       attestation_key_id, attestation "
             "FROM vault_deletion_key WHERE vault_id = $1 ORDER BY version DESC",
             pqxx::params{vaultId});
         std::vector<KeyPtr> out;
