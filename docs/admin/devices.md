@@ -63,12 +63,20 @@ vh device pair --close                             # close your window early
 ```
 
 Only one pairing window is open on a node at a time; while another user's window is open, `vh device pair` says
-until when.
+until when. A super admin can close it early with `vh device pair --close --any`.
 
 :::callout[Compare the codes, every time]{variant="warning"}
 The code is what proves the Mac is talking to this node and not to something in between. Never approve a request
 you didn't start, and never pick a code the Mac isn't showing.
 :::
+
+## What a paired device can reach
+
+Over its connection to the device listener, a paired device can use the web console's operations (as its account),
+download, preview and upload files (the same permission checks as the web console; share links are not offered there)
+and, for AI agents on the Mac, remote MCP at `/mcp`: the same tools, limits and confirmations as `vh mcp` (see
+[AI Agents And MCP](/admin/mcp-and-agents)). An agent can never approve pairing requests, turn remote connections on
+or off, or export keys or secrets.
 
 ## Manage devices
 

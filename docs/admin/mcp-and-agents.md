@@ -36,7 +36,8 @@ inside the limits below. `vh skill install` sets an agent up in one step.
   `--confirm-token` on its own, and it rejects them inside a command.
 - **Keys and secrets stay with you.** These commands are never available to agents: `vh vault keys export`,
   `vh secrets export`, `vh secrets update`, every `vh setup` and `vh teardown` command (including
-  `vh setup set-super-admin-password`), and `vh fs get` / `vh fs put`. To back up a vault key, run
+  `vh setup set-super-admin-password`), and `vh fs get` / `vh fs put`. Neither are pairing decisions
+  (`vh device pair`, `approve`, `deny`) or `vh device remote enable|disable`. To back up a vault key, run
   `vh vault keys export <vault>` yourself in a terminal.
 
 :::callout[Your account, your blast radius]{variant="warning"}
@@ -113,6 +114,12 @@ A tool call that gets no result within 10 minutes is abandoned (set `VAULTHALLA_
 environment to change it, in seconds; `0` turns the limit off), and an agent can cancel a call it no longer needs.
 The daemon may still finish a command whose call was abandoned, so check the state before retrying. Calls run side
 by side, so one slow command doesn't hold up the others.
+
+## Remote MCP for a paired Mac
+
+A Mac paired with the node (see [Paired Devices](/admin/devices)) reaches the same MCP server remotely, at `/mcp` on
+the device listener (port `36972`), for clients that connect with the device's key over mutual TLS. It is the same catalog: the same tools, the same commands out of reach, the same `confirm` rules, acting as
+the account the Mac is paired with. Each call is abandoned after 10 minutes; the node may still finish it.
 
 ## Troubleshooting
 
