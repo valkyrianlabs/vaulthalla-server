@@ -47,7 +47,7 @@ export interface UpstreamApiKey {
 }
 
 export interface AdminStatus {
-  key: UpstreamApiKey | null
+  api_key: UpstreamApiKey | null
   supported: boolean
   enabled: boolean
   has_provider_token: boolean
@@ -74,7 +74,7 @@ export interface BucketRow {
 }
 
 export interface Inventory {
-  key: UpstreamApiKey | null
+  api_key_id: number | null
   provider: string
   account_ref: string
   buckets: BucketRow[]
@@ -217,7 +217,7 @@ export interface CleanupResult {
 
 export interface AuditEntry {
   id: number
-  at: string | number
+  at: string
   user_name: string | null
   action: string
   provider: string
@@ -226,7 +226,8 @@ export interface AuditEntry {
   outcome: 'ok' | 'refused' | 'failed' | 'partial' | string
   api_key_id: number | null
   vault_id: number | null
-  detail_json: string
+  // What the action recorded (free-form per action); { raw } when the stored text is not JSON.
+  detail: Record<string, unknown>
 }
 
 // Providers with an admin adapter (matches s3_provider_from_string spellings in core).

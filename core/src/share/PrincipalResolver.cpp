@@ -1,4 +1,5 @@
 #include "share/PrincipalResolver.hpp"
+#include "ops/Error.hpp"
 
 #include "share/Scope.hpp"
 
@@ -14,11 +15,11 @@ std::shared_ptr<Principal> PrincipalResolver::resolve(
 ) {
     if (link.id.empty()) throw std::runtime_error("share principal resolution failed: missing share id");
     if (session.id.empty()) throw std::runtime_error("share principal resolution failed: missing session id");
-    if (session.share_id != link.id) throw std::runtime_error("share principal resolution failed: session/share mismatch");
-    if (!link.isActive(options.now)) throw std::runtime_error("share principal resolution failed: share inactive");
-    if (!session.isActive(options.now)) throw std::runtime_error("share principal resolution failed: session inactive");
+    if (session.share_id != link.id) throw ops::Denied("share principal resolution failed: session/share mismatch");
+    if (!link.isActive(options.now)) throw ops::Denied("share principal resolution failed: share inactive");
+    if (!session.isActive(options.now)) throw ops::Denied("share principal resolution failed: session inactive");
     if (link.requiresEmail() && !session.isVerified())
-        throw std::runtime_error("share principal resolution failed: email verification required");
+        throw ops::Denied("share principal resolution failed: email verification required");
 
     auto grant = link.grant();
     grant.root_path = Scope::normalizeVaultPath(grant.root_path);

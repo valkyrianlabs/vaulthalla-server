@@ -7,6 +7,7 @@
 #include "protocols/ws/Router.hpp"
 #include "protocols/ws/ConnectionLimit.hpp"
 #include "protocols/ws/CookiePolicy.hpp"
+#include "protocols/ws/Envelope.hpp"
 #include "crypto/util/hash.hpp"
 #include "protocols/ws/handler/fs/Upload.hpp"
 #include "runtime/Deps.hpp"
@@ -563,20 +564,12 @@ void Session::doRead() {
     });
 }
 
-void Session::sendParseError(const std::string_view msg) {
-    send({
-        {"command", "error"},
-        {"status", "parse_error"},
-        {"message", std::string(msg)}
-    });
+void Session::sendParseError(const std::string_view msg, const json& requestId) {
+    send(envelope::parseError(msg, requestId));
 }
 
 void Session::sendInternalError() {
-    send({
-        {"command", "error"},
-        {"status", "internal_error"},
-        {"message", "An internal error occurred while processing your request."}
-    });
+    send(envelope::internalError());
 }
 
 void Session::onRead(const beast::error_code& ec, std::size_t) {
@@ -604,16 +597,32 @@ void Session::onRead(const beast::error_code& ec, std::size_t) {
             sendInternalError();
         }
     } else {
+        // A bad frame gets a parse_error answer (with the frame's requestId when it has one the client can match)
+        // and the session keeps reading.
+        json message;
+        bool parsed = false;
         try {
-            const auto text = beast::buffers_to_string(buffer_.data());
-            router_->routeMessage(json::parse(text), shared_from_this());
+            message = json::parse(beast::buffers_to_string(buffer_.data()));
+            parsed = true;
         } catch (const std::exception& ex) {
             log::Registry::ws()->debug("[ws::Session] Error parsing message: {}", ex.what());
             sendParseError(std::string("Failed to parse message: ") + ex.what());
-            // NOTE: we still continue reading (keeps session alive after a bad frame)
-        } catch (...) {
-            log::Registry::ws()->debug("[ws::Session] Unknown error while processing message");
-            sendInternalError();
+        }
+        if (parsed) {
+            if (const auto problem = envelope::problem(message)) {
+                log::Registry::ws()->debug("[ws::Session] Unroutable message: {}", *problem);
+                sendParseError(*problem, envelope::requestId(message));
+            } else {
+                try {
+                    router_->routeMessage(std::move(message), shared_from_this());
+                } catch (const std::exception& ex) {
+                    log::Registry::ws()->debug("[ws::Session] Error processing message: {}", ex.what());
+                    sendInternalError();
+                } catch (...) {
+                    log::Registry::ws()->debug("[ws::Session] Unknown error while processing message");
+                    sendInternalError();
+                }
+            }
         }
     }
 

@@ -34,6 +34,16 @@ void requireSuperAdmin(const std::shared_ptr<Session>& session) {
         throw vh::ops::Denied("Permission denied: operator email administration requires super-admin");
 }
 
+// A parser's std::invalid_argument on client input (an unknown provider, a malformed address) is a typed refusal.
+template <class Fn>
+auto invalidOnBadInput(Fn&& fn) {
+    try {
+        return fn();
+    } catch (const std::invalid_argument& e) {
+        throw vh::ops::Invalid(e.what());
+    }
+}
+
 std::string instanceName() {
     char host[256]{};
     if (::gethostname(host, sizeof(host) - 1) == 0 && host[0] != '\0')
@@ -115,7 +125,9 @@ std::optional<std::string> recordSuppressed(
     return std::nullopt;
 }
 
-json recordToJson(const ::vh::email::DeliveryRecord& row) {
+}
+
+json Email::deliveryRecordJson(const ::vh::email::DeliveryRecord& row) {
     return {
         {"id", row.id},
         {"event_key", row.eventKey},
@@ -136,8 +148,6 @@ json recordToJson(const ::vh::email::DeliveryRecord& row) {
     };
 }
 
-}
-
 json Email::config(const std::shared_ptr<Session>& session) {
     requireSuperAdmin(session);
     const auto& cfg = ::vh::config::Registry::get();
@@ -150,7 +160,7 @@ json Email::config(const std::shared_ptr<Session>& session) {
 
 json Email::updateConfig(const json& payload, const std::shared_ptr<Session>& session) {
     requireSuperAdmin(session);
-    if (!payload.is_object()) throw std::invalid_argument("email.config.update payload must be an object");
+    if (!payload.is_object()) throw vh::ops::Invalid("email.config.update payload must be an object");
 
     // Only the email sections, patched onto the current settings and saved through ops::config (the same
     // validation the CLI and settings.update get).
@@ -168,15 +178,17 @@ json Email::updateConfig(const json& payload, const std::shared_ptr<Session>& se
 
 json Email::setProviderSecret(const json& payload, const std::shared_ptr<Session>& session) {
     requireSuperAdmin(session);
-    if (!payload.is_object()) throw std::invalid_argument("email.provider.secret.set payload must be an object");
+    if (!payload.is_object()) throw vh::ops::Invalid("email.provider.secret.set payload must be an object");
 
     auto& deps = runtime::Deps::get();
     if (!deps.secretsManager) throw std::runtime_error("secrets manager is unavailable");
 
-    const auto provider = ::vh::config::emailProviderKindFromString(payload.at("provider").get<std::string>());
+    const auto provider = invalidOnBadInput([&] {
+        return ::vh::config::emailProviderKindFromString(payload.at("provider").get<std::string>());
+    });
     if (provider == ::vh::config::EmailProviderKind::Resend) {
         const auto apiKey = payload.at("api_key").get<std::string>();
-        if (apiKey.empty()) throw std::invalid_argument("Resend API key cannot be empty");
+        if (apiKey.empty()) throw vh::ops::Invalid("Resend API key cannot be empty");
         deps.secretsManager->setSecret(::vh::email::providers::ResendProvider::kApiKeySecret, apiKey);
     } else if (provider == ::vh::config::EmailProviderKind::Ses) {
         bool wrote = false;
@@ -194,9 +206,9 @@ json Email::setProviderSecret(const json& payload, const std::shared_ptr<Session
             );
             wrote = true;
         }
-        if (!wrote) throw std::invalid_argument("SES secret update requires access_key_id or secret_access_key");
+        if (!wrote) throw vh::ops::Invalid("SES secret update requires access_key_id or secret_access_key");
     } else {
-        throw std::invalid_argument("provider secrets are only supported for resend and ses");
+        throw vh::ops::Invalid("provider secrets are only supported for resend and ses");
     }
 
     return {{"secrets", secretStatus()}};
@@ -204,17 +216,17 @@ json Email::setProviderSecret(const json& payload, const std::shared_ptr<Session
 
 json Email::testSend(const json& payload, const std::shared_ptr<Session>& session) {
     requireSuperAdmin(session);
-    if (!payload.is_object()) throw std::invalid_argument("email.test.send payload must be an object");
+    if (!payload.is_object()) throw vh::ops::Invalid("email.test.send payload must be an object");
 
     const auto& cfg = ::vh::config::Registry::get();
     const auto dryRun = payload.value("dry_run", false);
     std::string recipient = payload.value("to", std::string{});
     if (dryRun && recipient.empty() && !cfg.operator_emails.recipients.alerts.empty())
         recipient = cfg.operator_emails.recipients.alerts.front();
-    if (recipient.empty()) throw std::invalid_argument("email.test.send requires to");
+    if (recipient.empty()) throw vh::ops::Invalid("email.test.send requires to");
 
     const auto from = ::vh::email::parseAddress(cfg.email.from);
-    const auto to = ::vh::email::parseAddress(recipient);
+    const auto to = invalidOnBadInput([&] { return ::vh::email::parseAddress(recipient); });
     const auto rendered = ::vh::email::templates::renderTestEmail({
         .provider = ::vh::config::emailProviderKindToString(cfg.email.provider),
         .instance = instanceName(),
@@ -260,11 +272,11 @@ json Email::testSend(const json& payload, const std::shared_ptr<Session>& sessio
 
     if (!cfg.email.enabled) {
         recordSuppressed(notification, ::vh::config::emailProviderKindToString(cfg.email.provider), 1, "email.enabled is false");
-        throw std::runtime_error("email.enabled is false");
+        throw vh::ops::Conflict("email.enabled is false");
     }
     if (cfg.email.provider == ::vh::config::EmailProviderKind::None) {
         recordSuppressed(notification, "none", 1, "email.provider is none");
-        throw std::runtime_error("email.provider is none");
+        throw vh::ops::Conflict("email.provider is none");
     }
     if (!runtime::Deps::get().secretsManager) {
         recordFailed(notification, ::vh::config::emailProviderKindToString(cfg.email.provider), 1, "secrets manager is unavailable");
@@ -308,7 +320,7 @@ json Email::history(const json& payload, const std::shared_ptr<Session>& session
 
     const auto rows = ::vh::notifications::OperatorNotificationState::history(limit);
     json records = json::array();
-    for (const auto& row : rows) records.push_back(recordToJson(row));
+    for (const auto& row : rows) records.push_back(deliveryRecordJson(row));
     return {{"history", records}};
 }
 

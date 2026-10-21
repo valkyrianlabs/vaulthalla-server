@@ -177,6 +177,10 @@ Json wsFieldJson(const WsField& f) {
     if (f.minimum) j["minimum"] = *f.minimum;
     if (f.maximum) j["maximum"] = *f.maximum;
     if (f.generator) j["generator"] = genJson(f.generator);
+    if (!f.one_of.empty()) j["one_of"] = wsFieldsJson(f.one_of);
+    if (!f.values.empty()) j["values"] = wsFieldJson(f.values.front());
+    if (!f.element.empty()) j["element"] = wsFieldJson(f.element.front());
+    if (f.partial) j["partial"] = true;
     return j;
 }
 
@@ -189,6 +193,15 @@ Json wsFieldsJson(const std::vector<WsField>& fields) {
 Json wsJson() {
     Json out = Json::array();
     for (const auto& c : ws::commands()) {
+        Json confirmations = Json::array();
+        auto legacyCodes = c.refusal_codes;
+        for (const auto& confirmation : c.confirmations) {
+            confirmations.push_back(
+                {{"code", confirmation.code},
+                 {"accept_field", confirmation.accept_field.empty() ? Json(nullptr) : Json(confirmation.accept_field)},
+                 {"description", confirmation.description}});
+            legacyCodes.push_back(confirmation.code);
+        }
         Json variants = Json::array();
         for (const auto& v : c.variants)
             variants.push_back({{"mode", v.mode}, {"description", v.description},
@@ -200,11 +213,21 @@ Json wsJson() {
                        {"payload", wsFieldsJson(c.payload)},
                        {"response", wsFieldsJson(c.response)},
                        {"variants", variants},
-                       {"refusal_codes", c.refusal_codes},
+                       {"refusal_codes", legacyCodes},
+                       {"refusal_kinds", c.refusal_codes},
+                       {"confirmations", confirmations},
                        {"untyped_refusals", c.untyped_refusals},
                        {"operation", c.operation ? Json(*c.operation) : Json(nullptr)},
+                       {"response_model", c.response_model ? Json(*c.response_model) : Json(nullptr)},
                        {"client_timeout_ms", c.client_timeout.count()}});
     }
+    return out;
+}
+
+Json modelsJson() {
+    Json out = Json::array();
+    for (const auto& m : ws::models())
+        out.push_back({{"name", m.name}, {"description", m.description}, {"fields", wsFieldsJson(m.fields)}});
     return out;
 }
 
@@ -269,13 +292,20 @@ struct Built {
 };
 
 Built build() {
-    Json body{{"contract_version", kVersion}, {"cli", cliJson()}, {"ws", wsJson()}, {"operations", operationsJson()}};
+    const auto frames = ws::envelope();
+    Json envelope{{"request", wsFieldsJson(frames.request)},
+                  {"response", wsFieldsJson(frames.response)},
+                  {"error_frame", wsFieldsJson(frames.error_frame)}};
+    Json body{{"contract_version", kVersion}, {"cli", cliJson()}, {"ws", wsJson()}, {"models", modelsJson()},
+              {"envelope", std::move(envelope)}, {"operations", operationsJson()}};
     Built b;
     b.identity.version = kVersion;
     b.identity.contract_hash = sha256Hex(body.dump());
     b.identity.ws_hash = sha256Hex(body.at("ws").dump());
+    b.identity.models_hash = sha256Hex(body.at("models").dump());
     body["contract_hash"] = b.identity.contract_hash;
     body["ws_hash"] = b.identity.ws_hash;
+    body["models_hash"] = b.identity.models_hash;
     b.document = std::move(body);
     return b;
 }

@@ -104,10 +104,19 @@ void requireSuperAdmin(const std::shared_ptr<Session>& session, const char* mess
     if (!session->user || !session->user->isSuperAdmin()) throw vh::ops::Denied(message);
 }
 
+// An unknown scope is the caller's mistake: the parser's std::invalid_argument becomes a typed refusal.
+PriceBudgetScope pricingScopeFromPayload(const json& payload) {
+    try {
+        return priceBudgetScopeFromString(payload.at("scope").get<std::string>());
+    } catch (const std::invalid_argument& e) {
+        throw ::vh::ops::Invalid(e.what());
+    }
+}
+
 // The payload as ops::pricing's request and filter.
 vh::ops::pricing::PolicySpec specFromPayload(const json& payload) {
     vh::ops::pricing::PolicySpec spec{
-        .scope = priceBudgetScopeFromString(payload.at("scope").get<std::string>()),
+        .scope = pricingScopeFromPayload(payload),
         .provider_key = optionalStringPayload(payload, "provider_key"),
         .vault_id = optionalUIntPayload(payload, "vault_id"),
         .gateway_credential_id = optionalUIntPayload(payload, "gateway_credential_id"),
@@ -139,9 +148,9 @@ std::vector<std::uint32_t> policyIdsFromPayload(const json& payload) {
 
 std::shared_ptr<vh::storage::CloudEngine> requireCloudEngine(const std::uint32_t vaultId) {
     const auto engine = vh::runtime::Deps::get().storageManager->getEngine(vaultId);
-    if (!engine) throw std::runtime_error("Vault engine is not available.");
+    if (!engine) throw ::vh::ops::NotFound("Vault engine is not available.");
     if (engine->type() != vh::storage::StorageType::Cloud)
-        throw std::runtime_error("S3 price budget preflight is only available for S3 vaults.");
+        throw ::vh::ops::Invalid("S3 price budget preflight is only available for S3 vaults.");
     return std::static_pointer_cast<vh::storage::CloudEngine>(engine);
 }
 
@@ -151,9 +160,9 @@ json buildPreflight(const json& payload) {
     const auto policy = cloud->remote_policy();
     const auto summary = vh::db::query::sync::RemoteObjectIndex::summaryForVault(vaultId);
     if (summary.object_count == 0)
-        throw std::runtime_error("No remote index is available for S3 price budget preflight.");
+        throw ::vh::ops::Conflict("No remote index is available for S3 price budget preflight.");
     if (summary.isStale(policy->max_remote_index_age))
-        throw std::runtime_error("Remote index is stale; refresh it before S3 price budget preflight.");
+        throw ::vh::ops::Conflict("Remote index is stale; refresh it before S3 price budget preflight.");
 
     auto ctx = std::make_shared<vh::sync::Cloud>(cloud);
     ctx->event = std::make_shared<vh::sync::model::Event>();
@@ -222,7 +231,7 @@ json Pricing::policyUpsert(const json& payload, const std::shared_ptr<Session>& 
 json Pricing::policyDisable(const json& payload, const std::shared_ptr<Session>& session) {
     return {{"disabled", vh::ops::pricing::disablePolicy(
         session->user,
-        priceBudgetScopeFromString(payload.at("scope").get<std::string>()),
+        pricingScopeFromPayload(payload),
         optionalStringPayload(payload, "provider_key"),
         optionalUIntPayload(payload, "vault_id"),
         optionalUIntPayload(payload, "gateway_credential_id"))}};
@@ -286,7 +295,7 @@ json Pricing::overrideList(const json& payload, const std::shared_ptr<Session>& 
     const auto body = payload.is_object() ? payload : json::object();
     auto vaultId = optionalVaultId(body);
     if (!session->user->isSuperAdmin()) {
-        if (!vaultId) throw std::runtime_error("Vault-scoped override access requires vault_id.");
+        if (!vaultId) throw vh::ops::Invalid("Vault-scoped override access requires vault_id.");
         requireVaultBudgetView(session, *vaultId);
     } else if (vaultId) {
         requireVaultBudgetView(session, *vaultId);
@@ -332,11 +341,11 @@ json Pricing::notificationsAck(const json& payload, const std::shared_ptr<Sessio
     PriceBudgetService service;
 
     if (!session->user->isSuperAdmin()) {
-        if (!vaultId) throw std::runtime_error("Vault-scoped notification acknowledgement requires vault_id.");
+        if (!vaultId) throw vh::ops::Invalid("Vault-scoped notification acknowledgement requires vault_id.");
         requireVaultBudgetView(session, *vaultId);
         const auto visible = service.listNotifications(500, vaultId, true);
         if (std::ranges::none_of(visible, [id](const auto& notification) { return notification.id == id; }))
-            throw std::runtime_error("Operator notification is not visible for this vault.");
+            throw vh::ops::NotFound("Operator notification is not visible for this vault.");
     }
 
     return {{"notification", service.acknowledgeNotification(id, session->user->id)}};

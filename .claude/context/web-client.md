@@ -60,12 +60,40 @@
   `vh_usage --json` publishes them (`build/core/usage.json`).
 - `web/src/util/generated/wsContract.{json,ts}` is generated from it: `python3 tools/contracts/ws_contract.py --write
   --vh-usage build/core/vh_usage`. Never edit by hand. `web/src/util/wsContractCheck.ts` type-checks
-  `WebSocketCommandMap` against it, naming each mismatch in `pnpm typecheck` output.
-- `COMMAND_TIMEOUTS` = the server-declared `WS_CONTRACT_TIMEOUTS` plus local entries for commands not in the book.
+  `WebSocketCommandMap` against it, naming each mismatch in `pnpm typecheck` output (payloads deep, responses by
+  top-level member: nested models are typed in `WsModels` but not compared with the web's own model classes).
+- **Models (contract_version 2):** `models[]` (name → fields, `models_hash`) holds every named shape the book
+  references (163: users and roles, vaults, fs entries, shares, stats, recovery, upstream, S3 gateway, pricing,
+  settings sections ...), declared in `core/usage/src/contract/models/<area>.cpp`. Fields may carry `one_of` (a union
+  spelled out), `values` (map objects), `element` (array element shape) and `partial` (a merge-patch payload such as
+  `settings.update`); `response_model` names a command whose `data` is one model. `ContractModels.*`
+  (`core/tests/unit/contract/models_<area>.cpp` + `core/tests/helpers/contract_model_check.hpp`) serializes seeded
+  instances with the real serializers and fails on an undeclared key, a missing required one, a wrong JSON type or
+  enum value, or a declared field no instance produces. `UsageContract.UnionsObjectsAndArraysAreSpelledOut` fails on
+  an unspelled union or a shapeless object outside `opaqueObjects()` (free-form user/operator JSON only, each with
+  its reason). The generated TS has `WsModels` and `WsPartial`.
+- The book covers every command the daemon registers (202; `UsageContract.EveryRegisteredWsCommandHasABookEntry` and
+  `test_ws_contract.py` fail on a registered command without an entry; an explicit, reasoned allowlist exists and is
+  empty), so `COMMAND_TIMEOUTS` is just the server-declared `WS_CONTRACT_TIMEOUTS`.
 - Drift fails the meson test `ws_contract_drift` and `tools/contracts/test_ws_contract.py` (which also checks every
   book command is registered in core and typed in the web map).
+- **Refusals:** each command lists `refusal_kinds` (`denied`, `not_found`, `invalid`, `conflict` as data.code;
+  `unauthorized` = status UNAUTHORIZED; `error` = no code by design) and `confirmations` (`{code, accept_field,
+  description}`: the NeedsConfirmation codes and the payload member, dotted, a resend sets; e.g. `encryption_waiver`
+  → `accept_encryption_waiver`, `upstream_adoption` → `provision.accept_adoption`). `refusal_codes` stays their
+  union for older consumers. `WS_CONTRACT_CONFIRMATIONS` in the generated TS mirrors them. fs/share/pricing/email/
+  settings/S3 gateway/vault/dashboard refusals are typed (`untyped_refusals` is left only on `fs.entry.copy` quota
+  exhaustion and `fs.upload.finish` final-move failure); message texts are unchanged, so `DENIED_TEXT` in
+  `lib/ws/errors.ts` only matters for older daemons. `UsageContract.RefusalsSplitGenericKindsFromConfirmations`
+  keeps kinds and confirmations apart and checks every `accept_field` against the payload.
+- **Envelope:** `envelope` in the snapshot documents the frames. Request `{command, payload?, requestId?, token?}`
+  (a payload command without `payload` reads `{}`); answer `{command: "<cmd>.response", status: OK | ERROR |
+  UNAUTHORIZED, requestId?, data?, error?}`, `data` omitted when empty (read as `{}`); internal faults answer the
+  request's own command as ERROR without a code (never `UNKNOWN` / `Unknown.response`); an unroutable frame gets
+  `{command: "error", status: "parse_error", error, message, requestId?}` (`message` kept for old clients).
+  `core/include/protocols/ws/Envelope.hpp` + `WsEnvelope.*` tests.
 - `meta.contract.get` (signed-in sessions only; no pre-login build fingerprinting) returns `{contract_version,
-  contract_hash, ws_hash}`. The console checks `ws_hash` after login/refresh and on reconnects of a signed-in page,
+  contract_hash, ws_hash, models_hash}`. The console checks `ws_hash` after login/refresh and on reconnects of a signed-in page,
   and shows one "server was upgraded, reload" notice per server contract.
 
 ## Sync conflicts (#187)

@@ -1,4 +1,6 @@
 #include "protocols/ws/handler/share/Links.hpp"
+#include "protocols/ws/handler/RequestErrors.hpp"
+#include "ops/Error.hpp"
 
 #include "db/encoding/timestamp.hpp"
 #include "db/model/ListQueryParams.hpp"
@@ -46,7 +48,7 @@ namespace {
 
 [[nodiscard]] vh::rbac::Actor actorFromSession(const std::shared_ptr<Session>& session) {
     if (!session || !session->user)
-        throw std::runtime_error("Share management requires an authenticated user");
+        throw vh::ops::Denied("Share management requires an authenticated user");
     return vh::rbac::Actor::human(session->user);
 }
 
@@ -305,12 +307,7 @@ void rejectImmutableUpdateFields(const json& payload) {
     return params;
 }
 
-[[nodiscard]] json safeLinkJson(const vh::share::Link& link) {
-    auto out = link.toManagementJson();
-    out.erase("token_lookup_id");
-    out.erase("token_hash");
-    return out;
-}
+[[nodiscard]] json safeLinkJson(const vh::share::Link& link) { return Links::managementJson(link); }
 
 [[nodiscard]] json safeLinksJson(const std::vector<std::shared_ptr<vh::share::Link>>& links) {
     auto out = json::array();
@@ -320,7 +317,14 @@ void rejectImmutableUpdateFields(const json& payload) {
 }
 }
 
-json Links::create(const json& payload, const std::shared_ptr<Session>& session) {
+json Links::managementJson(const vh::share::Link& link) {
+    auto out = link.toManagementJson();
+    out.erase("token_lookup_id");
+    out.erase("token_hash");
+    return out;
+}
+
+json Links::create(const json& payload, const std::shared_ptr<Session>& session) try {
     const auto& body = objectPayload(payload);
     const auto actor = actorFromSession(session);
     auto mgr = manager();
@@ -334,17 +338,21 @@ json Links::create(const json& payload, const std::shared_ptr<Session>& session)
         {"public_token", result.public_token},
         {"public_url_path", result.public_url_path}
     };
+} catch (...) {
+    rethrowRequestErrorsAsInvalid();
 }
 
-json Links::get(const json& payload, const std::shared_ptr<Session>& session) {
+json Links::get(const json& payload, const std::shared_ptr<Session>& session) try {
     const auto& body = objectPayload(payload);
     const auto actor = actorFromSession(session);
     auto mgr = manager();
     const auto link = mgr->getLinkForManagement(actor, requiredString(body, "id"));
     return {{"share", safeLinkJson(*link)}};
+} catch (...) {
+    rethrowRequestErrorsAsInvalid();
 }
 
-json Links::list(const json& payload, const std::shared_ptr<Session>& session) {
+json Links::list(const json& payload, const std::shared_ptr<Session>& session) try {
     const auto& body = objectPayload(payload);
     const auto actor = actorFromSession(session);
     auto mgr = manager();
@@ -353,9 +361,11 @@ json Links::list(const json& payload, const std::shared_ptr<Session>& session) {
         return {{"shares", safeLinksJson(mgr->listLinksForVault(actor, body.at("vault_id").get<uint32_t>(), params))}};
     }
     return {{"shares", safeLinksJson(mgr->listLinksForUser(actor, params))}};
+} catch (...) {
+    rethrowRequestErrorsAsInvalid();
 }
 
-json Links::update(const json& payload, const std::shared_ptr<Session>& session) {
+json Links::update(const json& payload, const std::shared_ptr<Session>& session) try {
     const auto& body = objectPayload(payload);
     rejectImmutableUpdateFields(body);
     const auto actor = actorFromSession(session);
@@ -375,17 +385,21 @@ json Links::update(const json& payload, const std::shared_ptr<Session>& session)
         .recipients = std::move(recipients)
     });
     return {{"share", safeLinkJson(*saved)}};
+} catch (...) {
+    rethrowRequestErrorsAsInvalid();
 }
 
-json Links::revoke(const json& payload, const std::shared_ptr<Session>& session) {
+json Links::revoke(const json& payload, const std::shared_ptr<Session>& session) try {
     const auto& body = objectPayload(payload);
     const auto actor = actorFromSession(session);
     auto mgr = manager();
     mgr->revokeLink(actor, requiredString(body, "id"));
     return {{"revoked", true}};
+} catch (...) {
+    rethrowRequestErrorsAsInvalid();
 }
 
-json Links::rotateToken(const json& payload, const std::shared_ptr<Session>& session) {
+json Links::rotateToken(const json& payload, const std::shared_ptr<Session>& session) try {
     const auto& body = objectPayload(payload);
     const auto actor = actorFromSession(session);
     auto mgr = manager();
@@ -395,6 +409,8 @@ json Links::rotateToken(const json& payload, const std::shared_ptr<Session>& ses
         {"public_token", result.public_token},
         {"public_url_path", result.public_url_path}
     };
+} catch (...) {
+    rethrowRequestErrorsAsInvalid();
 }
 
 void Links::setManagerFactoryForTesting(ManagerFactory factory) {

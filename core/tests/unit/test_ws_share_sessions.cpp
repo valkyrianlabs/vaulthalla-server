@@ -732,12 +732,12 @@ TEST_F(WsShareSessionsTest, ChallengeFlowRejectsInvalidStates) {
     auto ready = publicSession();
     Sessions::open({{"public_token", publicShare.public_token}}, ready);
 
-    EXPECT_THROW(Sessions::startEmailChallenge({{"email", "email@example.com"}}, ready), std::runtime_error);
-    EXPECT_THROW(Sessions::open({{"public_token", publicShare.public_token}}, humanSession()), std::runtime_error);
+    EXPECT_THROW(Sessions::startEmailChallenge({{"email", "email@example.com"}}, ready), vh::ops::Conflict);
+    EXPECT_THROW(Sessions::open({{"public_token", publicShare.public_token}}, humanSession()), vh::ops::Denied);
     EXPECT_THROW(Sessions::confirmEmailChallenge({
         {"challenge_id", uuidFor(999)},
         {"code", std::string(kChallengeCode)}
-    }, publicSession()), std::invalid_argument);
+    }, publicSession()), vh::ops::Invalid);
 }
 
 }

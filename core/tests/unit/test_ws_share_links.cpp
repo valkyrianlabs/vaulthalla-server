@@ -346,17 +346,17 @@ TEST_F(WsShareLinksTest, UpdateAndRevokeCallManagerAndReturnSafeResponses) {
 }
 
 TEST_F(WsShareLinksTest, MalformedRequestsRejected) {
-    EXPECT_THROW(Links::create({{"vault_id", 42}}, session), std::invalid_argument);
+    EXPECT_THROW(Links::create({{"vault_id", 42}}, session), vh::ops::Invalid);
 
     const auto created = createShare();
     const auto id = created.at("share").at("id").get<std::string>();
-    EXPECT_THROW(Links::update({{"id", id}, {"vault_id", 99}}, session), std::invalid_argument);
-    EXPECT_THROW(Links::list({{"direction", "sideways"}}, session), std::invalid_argument);
+    EXPECT_THROW(Links::update({{"id", id}, {"vault_id", 99}}, session), vh::ops::Invalid);
+    EXPECT_THROW(Links::list({{"direction", "sideways"}}, session), vh::ops::Invalid);
 }
 
 TEST_F(WsShareLinksTest, ManagerErrorsSurfaceAsHandlerErrors) {
     authorizer->allow_create = false;
-    EXPECT_THROW(Links::create(createPayload(), session), std::runtime_error);
+    EXPECT_THROW(Links::create(createPayload(), session), vh::ops::Denied);
 
     authorizer->allow_create = true;
     const auto created = createShare();

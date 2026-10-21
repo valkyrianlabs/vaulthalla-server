@@ -1,4 +1,4 @@
-// ws book: storage.vault.* lifecycle (core/src/protocols/ws/handler/vault/Vaults.cpp).
+// ws book: storage.vault.* lifecycle (core/src/protocols/ws/handler/vault/Vaults.cpp → ops::vaults).
 
 #include "fields.hpp"
 
@@ -9,6 +9,59 @@ namespace {
 WsField vaultIdPayload() { return uinteger("id").gen(gen::ref("vault", {"id"})).desc("Vault id."); }
 
 WsField vaultObject() { return object("vault", "Vault"); }
+
+// The sync policy patch both storage.vault.add and storage.vault.update read (syncPatchFromPayload).
+WsField vaultSyncPatch() {
+    const auto budgetLimit = [](std::string name) {
+        return uinteger(std::move(name)).opt().nullable().desc("A per-pass limit; null = unlimited.");
+    };
+    return object("sync", "",
+                  {anyOf("interval", {"integer", "string"})
+                       .opt()
+                       .alternatives({alt({"integer"}).desc("Seconds."),
+                                      alt({"string"}).desc("Interval text: \"15m\", \"1h 30m\", \"1d\".")})
+                       .desc("How often the vault syncs (clamped to the minimum)."),
+                   boolean("enabled").opt(),
+                   str("strategy").opt().oneOf({"cache", "sync", "mirror"}).desc("S3 vaults only."),
+                   str("conflict_policy")
+                       .opt()
+                       .oneOf({"overwrite", "keep_both", "ask", "keep_local", "keep_remote", "keep_newest"})
+                       .desc("Local vaults: overwrite|keep_both|ask; S3 vaults: keep_local|keep_remote|keep_newest|ask."),
+                   uinteger("max_remote_index_age_seconds").opt().nullable().desc("S3 vaults only; null clears it."),
+                   object("s3_request_budget", "",
+                          {budgetLimit("list_requests"), budgetLimit("head_requests"), budgetLimit("get_requests"),
+                           budgetLimit("put_requests"), budgetLimit("copy_requests"), budgetLimit("delete_requests"),
+                           budgetLimit("downloaded_bytes")})
+                       .opt()
+                       .desc("S3 vaults only; absent members are unchanged.")})
+        .opt()
+        .desc("Sync policy patch: absent members are unchanged (handler::Vaults syncPatchFromPayload).");
+}
+
+// storage.vault.add's provision object (ops::upstream::provisionFromJson; null members read as absent).
+WsField vaultProvision() {
+    return object("provision", "",
+                  {str("mode").opt().nullable().oneOf({"existing", "create", "adopt"}).desc("Default existing."),
+                   str("region").opt().nullable().desc("AWS region or R2 location hint; default: the key's region."),
+                   boolean("generate_name").opt().nullable().desc("create: pick an available bucket name."),
+                   object("lifecycle", "",
+                          {uinteger("abort_incomplete_multipart_days").opt().nullable().desc("0 removes it."),
+                           uinteger("expire_current_days").opt().nullable().desc("0 removes it; destructive."),
+                           uinteger("expire_noncurrent_days").opt().nullable().desc("0 removes it; destructive."),
+                           str("prefix").opt().nullable(),
+                           boolean("clear").opt().nullable(),
+                           boolean("accept_destructive").opt().nullable()})
+                       .opt()
+                       .nullable()
+                       .desc("create/adopt: Vaulthalla's lifecycle rule."),
+                   boolean("events").opt().nullable().desc("Subscribe for event-driven sync."),
+                   str("events_prefix").opt().nullable(),
+                   boolean("accept_adoption").opt().nullable().desc("adopt: accepts 'upstream_adoption'.")})
+        .opt()
+        .nullable()
+        .desc("S3 vaults with an admin-enabled key (#237): create a managed bucket or adopt an existing one. Absent or "
+              "mode existing binds `bucket` as before; bucket may be empty with generate_name.");
+}
 
 }
 
@@ -34,15 +87,20 @@ std::vector<WsCommandUsage> vaultCommands() {
                     str("bucket").opt().desc("S3 vaults: required."),
                     str("storage_tier_id").opt().nullable(),
                     boolean("encrypt_upstream").opt(),
-                    object("sync").opt().desc("Sync policy patch: interval, enabled, strategy, conflict_policy, "
-                                              "max_remote_index_age_seconds, s3_request_budget."),
+                    vaultSyncPatch(),
                     boolean("accept_encryption_waiver").opt(),
-                    object("provision").opt().desc("S3 vaults with an admin-enabled key (#237): {mode: existing|create|"
-                                                   "adopt, region, generate_name, lifecycle, events, events_prefix, "
-                                                   "accept_adoption}. bucket may be empty with generate_name.")},
+                    vaultProvision()},
         .response = {vaultObject()},
-        .refusal_codes = {"denied", "invalid", "not_found", "conflict", "unauthorized", "encryption_waiver",
-                          "upstream_adoption"},
+        .refusal_codes = opsRefusals(),
+        .confirmations = {{.code = "encryption_waiver",
+                           .accept_field = "accept_encryption_waiver",
+                           .description = "The bucket already holds data Vaulthalla did not write (or encryption "
+                                          "is being switched on over it): resend with accept_encryption_waiver once "
+                                          "the person accepts."},
+                          {.code = "upstream_adoption",
+                           .accept_field = "provision.accept_adoption",
+                           .description = "provision mode adopt (or an existing unmanaged bucket) needs consent to "
+                                          "adopt the bucket: resend with provision.accept_adoption."}},
         .operation = "vaults.create",
         .client_timeout = 180s,
     });
@@ -58,8 +116,14 @@ std::vector<WsCommandUsage> vaultCommands() {
                     boolean("confirm_now").opt(),
                     boolean("accept_key_loss").opt()},
         .response = {object("deletion", "VaultDeletion").nullable()},
-        .refusal_codes = {"denied", "invalid", "not_found", "conflict", "unauthorized", "vault_upstream_key_loss",
-                          "vault_delete_now"},
+        .refusal_codes = opsRefusals(),
+        .confirmations = {{.code = "vault_upstream_key_loss",
+                           .accept_field = "accept_key_loss",
+                           .description = "The vault key was never exported and its S3 data would become "
+                                          "unreadable: resend with accept_key_loss once the person accepts."},
+                          {.code = "vault_delete_now",
+                           .accept_field = "confirm_now",
+                           .description = "Deleting now skips the restore window: resend with confirm_now."}},
         .operation = "vaults.delete",
         .client_timeout = kDefaultTimeout,
     });
@@ -78,6 +142,74 @@ std::vector<WsCommandUsage> vaultCommands() {
         .description = "Vaults visible to the caller; each row carries the owner's name.",
         .input = "none",
         .response = {objectArray("vaults", "Vault")},
+        .refusal_codes = opsRefusals(),
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "storage.vault.update",
+        .description = "Patch a vault (absent or null members are unchanged; a vault's type never changes). Owner "
+                       "reassignment also needs Create for the new owner, a key change needs Consume on the key, sync "
+                       "settings need vault sync.config.edit. A refusal with data.code 'encryption_waiver' means the "
+                       "bucket already holds data: resend with accept_encryption_waiver once the person accepts.",
+        .payload = {vaultIdPayload(),
+                    str("type").opt().oneOf({"local", "s3"}).desc("Must equal the vault's current type."),
+                    str("name").opt().nullable(),
+                    str("description").opt().nullable(),
+                    uinteger("quota").opt().nullable().desc("Bytes, 0 = unlimited."),
+                    uinteger("owner_id").opt().nullable().gen(gen::ref("user", {"id"})),
+                    str("slug").opt().nullable(),
+                    str("fuse_name").opt().nullable().desc("null or \"\" clears it."),
+                    boolean("is_active").opt().nullable(),
+                    uinteger("api_key_id").opt().nullable().gen(gen::ref("api_key", {"id"})).desc("S3 vaults."),
+                    str("bucket").opt().nullable().desc("S3 vaults."),
+                    str("storage_tier_id").opt().nullable().desc("S3 vaults; null clears it."),
+                    boolean("encrypt_upstream").opt().nullable().desc("S3 vaults."),
+                    vaultSyncPatch(),
+                    boolean("accept_encryption_waiver").opt()},
+        .response = {vaultObject()},
+        .refusal_codes = opsRefusals(),
+        .confirmations = {{.code = "encryption_waiver",
+                           .accept_field = "accept_encryption_waiver",
+                           .description = "The bucket already holds data Vaulthalla did not write (or encryption "
+                                          "is being switched on over it): resend with accept_encryption_waiver once "
+                                          "the person accepts."}},
+        .client_timeout = 60s,
+    });
+
+    out.push_back({
+        .command = "storage.vault.remove.plan",
+        .description = "What deleting the vault would do (provider, bucket, key export state, the restore and key "
+                       "retention windows, the key export command). Changes nothing; needs vault Remove.",
+        .payload = {vaultIdPayload()},
+        .response = {object("plan", "VaultRemovalPlan")},
+        .refusal_codes = opsRefusals(),
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "storage.vault.deleted.list",
+        .description = "Deletions the caller could have made: pending, purging and purged tombstones, newest first.",
+        .input = "none",
+        .response = {objectArray("deleted", "VaultDeletion")},
+        .refusal_codes = opsRefusals(),
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "storage.vault.restore",
+        .description = "Restore a vault whose deletion is still pending (conflict once its purge has started).",
+        .payload = {vaultIdPayload()},
+        .response = {vaultObject()},
+        .refusal_codes = opsRefusals(),
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "storage.vault.sync",
+        .description = "Run the vault's sync now, or queue a rerun when one is already running.",
+        .payload = {vaultIdPayload()},
+        .response = {str("status").oneOf({"started", "rerun_queued"})},
         .refusal_codes = opsRefusals(),
         .client_timeout = kDefaultTimeout,
     });

@@ -13,11 +13,7 @@ namespace {
 
 WsField hex64(std::string name) { return str(std::move(name)).desc("64 lowercase hex digits (a SHA-256 value)."); }
 
-WsField deviceObject(std::string name = "device") {
-    return object(std::move(name), "Device")
-        .desc("{id, device_id, user_id, user_name, name, platform, app_version, previous_device_id, approved_by, "
-              "created_at, last_seen_at, last_ip, revoked_at, revoked}; times are Unix seconds or null.");
-}
+WsField deviceObject() { return object("device", "Device"); }
 
 WsField deviceIdField() {
     return hex64("device_id")
@@ -45,9 +41,9 @@ WsField listenerStatus() {
         .desc("The device listener as configured and as it is.");
 }
 
-std::vector<std::string> pairingRefusals() {
-    return {"invalid", "not_found", "conflict", "no_pairing_window", "rate_limited", "device_unknown", "unauthorized"};
-}
+// The device's side answers ops::Refused codes of its own besides the generic kinds: no_pairing_window and
+// rate_limited (pairing), device_unknown (the command reached a session without a device identity, or the key is not
+// a live device). The router refuses device.pair.* and the device-only commands on console sessions (unauthorized).
 
 }
 
@@ -68,7 +64,7 @@ std::vector<WsCommandUsage> deviceCommands() {
                     str("app_version").opt().gen(gen::pattern("1.{9}.{9}")),
                     hex64("commitment").gen(gen::ref("device.pairing_request", {"commitment"}))},
         .response = {str("request_id"), hex64("nonce_server"), uinteger("expires_at")},
-        .refusal_codes = pairingRefusals(),
+        .refusal_codes = {"invalid", "conflict", "no_pairing_window", "rate_limited", "device_unknown", "unauthorized"},
         .client_timeout = kDefaultTimeout,
     });
 
@@ -80,7 +76,7 @@ std::vector<WsCommandUsage> deviceCommands() {
         .auth = "pairing",
         .payload = {requestIdField(), hex64("nonce_device").gen(gen::ref("device.pairing_request", {"nonce_device"}))},
         .response = {str("state").oneOf({"pending"}), uinteger("expires_at")},
-        .refusal_codes = pairingRefusals(),
+        .refusal_codes = {"invalid", "not_found", "conflict", "device_unknown", "unauthorized"},
         .client_timeout = kDefaultTimeout,
     });
 
@@ -93,7 +89,7 @@ std::vector<WsCommandUsage> deviceCommands() {
         .payload = {requestIdField()},
         .response = {str("state").oneOf({"pending", "approved", "denied", "expired"}),
                      str("node_id").opt(), str("node_name").opt(), hex64("device_id").opt()},
-        .refusal_codes = pairingRefusals(),
+        .refusal_codes = {"invalid", "not_found", "device_unknown", "unauthorized"},
         .client_timeout = kDefaultTimeout,
     });
 

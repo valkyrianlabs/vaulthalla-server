@@ -99,10 +99,10 @@ json Auth::updateUser(const json &payload, const std::shared_ptr<Session> &sessi
         throw vh::ops::Denied("linux_uid can only be changed by an administrator through the local CLI");
     if (payload.contains("updated_by") || payload.contains("protected") || payload.contains("is_protected") ||
         payload.contains("system_only"))
-        throw std::runtime_error("Unsupported field in user update");
+        throw vh::ops::Invalid("Unsupported field in user update");
     if (payload.contains("password") && payload.at("password").is_string() &&
         !payload.at("password").get<std::string>().empty())
-        throw std::runtime_error("Use auth.user.change_password to change or reset a password");
+        throw vh::ops::Invalid("Use auth.user.change_password to change or reset a password");
 
     // The web edit form targets payload.id; without one the caller edits themselves.
     ops::users::Update req{

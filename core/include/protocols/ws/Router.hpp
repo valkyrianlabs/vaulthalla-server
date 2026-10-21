@@ -7,6 +7,7 @@
 #include <string_view>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 #include "protocols/ws/Fwd.hpp"
 #include "protocols/ws/RefusalLogThrottle.hpp"
 
@@ -43,6 +44,9 @@ class Router {
 
     // Whether a handler is registered for `command` (the ws contract test checks the usage book against it).
     [[nodiscard]] bool hasHandler(const std::string& command) const { return handlers_.contains(command); }
+
+    // Every registered command name, sorted (the ws contract test checks each one has a usage book entry).
+    [[nodiscard]] std::vector<std::string> commands() const;
 
     [[nodiscard]] static bool isPublicShareCommand(std::string_view command);
     [[nodiscard]] static bool isShareFilesystemCommand(std::string_view command);

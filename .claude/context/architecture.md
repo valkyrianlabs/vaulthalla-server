@@ -184,6 +184,12 @@ refused count. The session holds the slot and gives it back on its first `close(
 that fail before the websocket handshake (header read, hydration, handshake error) now `close()` at once instead of
 lingering in the session manager until the lifecycle sweep.
 
+**Envelope.** `ws::Session` checks each text frame before routing (`protocols/ws/Envelope.hpp`): unparsable text or
+a frame without a non-empty string `command` (or with a non-string `token`) is answered `parse_error` with `error`,
+`message` and the frame's requestId when it has one. Answers (`model::Response::frame()`) echo a string or integer
+requestId and omit empty `data`; a fault escaping the router answers `<command>.response` with status ERROR and no
+code. Payload handlers read a missing `payload` as `{}`. The contract publishes these rules as `envelope`.
+
 The web client builds `ws(s)://<host>/ws` in `web/src/util/getUrl.ts` (overridable with `NEXT_PUBLIC_VAULTHALLA_WS_ORIGIN`).
 `web/src/stores/useWebSocket.ts` handles reconnect, the pending-request map keyed by `requestId`, and token injection.
 Router allowlists are **exact and per session mode**: unauthenticated, human, pending-share, ready-share, and on the
@@ -665,7 +671,11 @@ handler parses with `CommandUsage` and calls the op through `shell::runOp`, whic
 waiver prompts go through `shell::commands::vault::runWithWaiver`). The ws handler maps its payload to the request,
 and every ws handler template (`protocols/ws/core/handler_templates.hpp`, `describeCurrentError`) turns the exception into
 an `ERROR` response whose `data.code` is stable: `denied`, `not_found`, `invalid`, `conflict`, or the `NeedsConfirmation`
-code (the web asks and resends with `accept_encryption_waiver`); a non-`ops::Error` fault has no code. Handler-level
+code (the web asks and resends with `accept_encryption_waiver`; the contract names the field per code in
+`confirmations`); a non-`ops::Error` fault has no code. The fs/share ws handlers (and share `Manager`,
+`TargetResolver`, `PrincipalResolver`) throw ops types for refusals too, and their handlers turn malformed-payload
+errors (`std::invalid_argument`, JSON access) into `ops::Invalid` via `handler/RequestErrors.hpp`; HTTP share lanes
+still classify by message, unchanged. Handler-level
 gates (settings/email/pricing admin checks, share upload scope) throw `ops::Denied` so they carry `denied`; every
 `stats.*` command authorizes through `ops::stats` (below). Rules: RBAC for an operation lives in the op, never in the frontend as well; code beneath
 `ops::` (managers, `db::query`) never authorizes; internal callers use those primitives directly, not ops; no
@@ -928,7 +938,14 @@ stage "Copy And Delete")
   environment and are private (paths under `/tmp/`, a `vh_harness_*` or test database). Test mode then serves `vh` on
   that socket (`paths::getCliSocketPath()`); the client honours `VAULTHALLA_CLI_SOCKET`.
 - `core/usage` also holds the contract: `FieldGen` generators on CLI usage entries, per-leaf `effect`, `OperationSpec`
-  catalog, `WsCommandUsage` book, exported by `vh_usage --json`; and the MCP catalog built from them (above).
+  catalog, `WsCommandUsage` book (one file per area in `core/usage/src/contract/ws/`, every registered ws command) and
+  the `WsModel` registry (`core/usage/src/contract/models/`, checked against the serializers by `ContractModels.*`),
+  exported by `vh_usage --json`; and the MCP catalog built from them (above). Serializers the contract tests call must
+  be reachable without a database: handler JSON builders are public statics taking looked-up inputs (`S3GatewayJson`,
+  `Vaults::detailsJson`, `Storage::shareEntryJson`, `Links::managementJson`, `Sessions::publicLinkJson`,
+  `Email::deliveryRecordJson`, `vault::model::statJson`). Known quirk the contract records: `fs.dir.list` /
+  `fs.metadata` `entry` is the base `Entry` JSON (`FsEntryBase`, no `type`/counts/`mime_type`); only `files[]` carries
+  the full `FsEntry`.
 - `vh_fs_actor` (`core/tests/helpers/fs_actor.cpp`, `-Dintegration_tests=true`): a single-threaded helper that
   switches to a test uid at startup and serves filesystem ops as JSON lines; used by Tier A and `tools/harness`.
 

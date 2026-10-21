@@ -14,6 +14,8 @@ import {
 
 export type S3GatewayCredentialScopeMode = 'user_access' | 'global' | 'vault_allowlist'
 export type S3GatewayBucketMode = 'local' | 'remote_cache' | 'remote_proxy' | string
+// What s3.gateway.buckets.bind accepts (the server refuses any other mode).
+export type S3GatewayBucketBindMode = 'local' | 'remote_cache' | 'remote_proxy'
 export type S3GatewayCredentialVaultRoleOverrideEffect = 'allow' | 'deny'
 
 export interface S3GatewayVaultRef {
@@ -344,7 +346,6 @@ export interface S3GatewayCredentialDefaultVaultRolePayload {
   access_key?: string
   name?: string
   credential_name?: string
-  default_vault_role_id?: number
   vault_role_id?: number
   role_id?: number
   vault_role_name?: string
@@ -447,7 +448,7 @@ export class S3GatewayBucketBinding {
 export interface S3GatewayBucketBindPayload {
   bucket_name?: string
   vault_id: number
-  mode?: S3GatewayBucketMode
+  mode?: S3GatewayBucketBindMode
   api_exclusive?: boolean
 }
 
@@ -456,7 +457,7 @@ export interface S3GatewayCreateLocalBucketPayload {
   name?: string
   description?: string | null
   owner_id?: number | null
-  quota_bytes?: number | null
+  quota_bytes?: number
 }
 
 export interface S3GatewayCreateRemoteCachePayload {
@@ -470,7 +471,13 @@ export interface S3GatewayCreateRemoteCachePayload {
   encrypt_upstream?: boolean
 }
 
-export type S3GatewayBudgetPolicyPayload = PriceBudgetPolicyPayload
+// s3.gateway.budget.policy.upsert: gateway credential budgets only; provider_key is not read.
+export type S3GatewayBudgetPolicyPayload = Omit<PriceBudgetPolicyPayload, 'scope' | 'provider_key' | 'gateway_credential_id'> & {
+  scope: 'gateway_credential' | 'gateway_credential_vault'
+  gateway_credential_id: number
+}
+// s3.gateway.budget.policy.disable reads only the policy's identity.
+export type S3GatewayBudgetPolicyDisablePayload = Pick<S3GatewayBudgetPolicyPayload, 'scope' | 'gateway_credential_id' | 'vault_id'>
 export type S3GatewayBudgetPolicy = PriceBudgetPolicy
 export type S3GatewayBudgetStatus = PriceBudgetStatus
 export type S3GatewayBudgetLedgerEntry = PriceBudgetLedgerEntry

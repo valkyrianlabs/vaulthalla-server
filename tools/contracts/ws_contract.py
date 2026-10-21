@@ -4,9 +4,11 @@
 The ws command book lives in core/usage (core/usage/src/contract/ws/*.cpp) and is published by
 `vh_usage --json` (build/core/usage.json). This tool turns its `ws` section into
 
-  web/src/util/generated/wsContract.json   the ws book + its hash (reviewable; what the TS is generated from)
-  web/src/util/generated/wsContract.ts     TypeScript: per-command payload/response types (`WsContract`), command
-                                           names, client timeouts, contract version and hash
+  web/src/util/generated/wsContract.json   the ws book and the models it names, with their hashes (reviewable; what
+                                           the TS is generated from, and what other clients vendor)
+  web/src/util/generated/wsContract.ts     TypeScript: per-command payload/response types (`WsContract`), the model
+                                           shapes (`WsModels`), command names, client timeouts, contract version and
+                                           hashes
 
 `web/src/util/wsContractCheck.ts` type-checks the hand-written `WebSocketCommandMap` against `WsContract`, so a
 server-side change breaks `pnpm typecheck` until the files are regenerated and the map follows.
@@ -48,13 +50,17 @@ def sha256_hex(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+SNAPSHOT_KEYS = ("contract_version", "ws_hash", "ws", "models_hash", "models", "envelope")
+
+
 def ws_snapshot(usage: dict[str, Any]) -> dict[str, Any]:
-    """The part of vh_usage --json the web console depends on."""
-    ws = usage["ws"]
-    snapshot = {"contract_version": usage["contract_version"], "ws_hash": usage["ws_hash"], "ws": ws}
-    computed = sha256_hex(canonical(ws))
-    if computed != usage["ws_hash"]:
-        raise SystemExit(f"usage contract ws_hash {usage['ws_hash']} does not match its ws section ({computed})")
+    """The part of vh_usage --json the web console (and any other ws client) depends on."""
+    snapshot = {key: usage[key] for key in SNAPSHOT_KEYS}
+    for section in ("ws", "models"):
+        computed = sha256_hex(canonical(usage[section]))
+        if computed != usage[f"{section}_hash"]:
+            raise SystemExit(f"usage contract {section}_hash {usage[f'{section}_hash']} does not match its {section} "
+                             f"section ({computed})")
     return snapshot
 
 
@@ -76,8 +82,24 @@ def literal_union(values: list[str]) -> str:
     return " | ".join(ts_string(v) for v in values)
 
 
+# The model names the snapshot being rendered declares. A name it doesn't declare renders as `object` (the C++ and
+# Python contract tests fail on such a name, so committed output never has one; it keeps a half-built book typable).
+DECLARED_MODELS: set[str] = set()
+
+
+def ts_model(name: str) -> str:
+    return f"WsModels[{ts_string(name)}]" if name in DECLARED_MODELS else "object"
+
+
 def ts_field_type(field: dict[str, Any], indent: int) -> str:
     parts: list[str] = []
+    if field.get("one_of"):
+        # A spelled-out union: each alternative renders on its own; null stays on the field itself.
+        for alternative in field["one_of"]:
+            parts.append(ts_field_type({**alternative, "name": field.get("name", "")}, indent))
+        if "null" in field["types"]:
+            parts.append("null")
+        return " | ".join(dict.fromkeys(parts))
     for t in field["types"]:
         if t == "string":
             parts.append(literal_union(field["enum"]) if field.get("enum") else "string")
@@ -88,13 +110,28 @@ def ts_field_type(field: dict[str, Any], indent: int) -> str:
         elif t == "null":
             parts.append("null")
         elif t == "object":
-            parts.append(ts_object(field["fields"], indent) if field.get("fields") else "object")
+            if field.get("partial") and (field.get("model") or field.get("fields")):
+                shape = ts_model(field["model"]) if field.get("model") else ts_object(field["fields"], indent)
+                parts.append(f"WsPartial<{shape}>")
+            elif field.get("model"):
+                parts.append(ts_model(field["model"]))
+            elif field.get("fields"):
+                parts.append(ts_object(field["fields"], indent))
+            elif field.get("values"):
+                parts.append(f"Record<string, {ts_field_type(field['values'], indent)}>")
+            else:
+                parts.append("object")
         elif t == "array":
             items = field.get("items", "")
-            if items == "string":
+            if field.get("element"):
+                element = f"({ts_field_type(field['element'], indent)})"
+            elif items == "string":
                 element = f"({literal_union(field['item_enum'])})" if field.get("item_enum") else "string"
             elif items == "object":
-                element = ts_object(field["fields"], indent) if field.get("fields") else "object"
+                if field.get("model"):
+                    element = ts_model(field["model"])
+                else:
+                    element = ts_object(field["fields"], indent) if field.get("fields") else "object"
             elif items in ("integer", "number"):
                 element = "number"
             elif items == "boolean":
@@ -155,6 +192,8 @@ def doc_comment(text: str, indent: int) -> str:
 
 def generate_ts(snapshot: dict[str, Any]) -> str:
     commands = snapshot["ws"]
+    DECLARED_MODELS.clear()
+    DECLARED_MODELS.update(m["name"] for m in snapshot.get("models", []))
     out: list[str] = [
         "// Generated by tools/contracts/ws_contract.py from the ws command book in core/usage",
         "// (core/usage/src/contract/ws/*.cpp, published by `vh_usage --json`). Do not edit: change the book, rebuild,",
@@ -166,8 +205,20 @@ def generate_ts(snapshot: dict[str, Any]) -> str:
         "// What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.",
         f"export const WS_CONTRACT_HASH = {ts_string(snapshot['ws_hash'])}",
         "",
-        "export interface WsContract {",
+        "// What meta.contract.get answers as models_hash when the daemon's model shapes are these.",
+        f"export const WS_MODELS_HASH = {ts_string(snapshot['models_hash'])}",
+        "",
+        "// A merge patch (payload members marked `partial`): any subset of the members, at any depth.",
+        "export type WsPartial<T> = { [K in keyof T]?: T[K] extends readonly unknown[] ? T[K] : T[K] extends object "
+        "? WsPartial<T[K]> : T[K] }",
+        "",
+        "// The server models the book names (core/usage/src/contract/models), checked against their serializers.",
+        "export interface WsModels {",
     ]
+    for m in snapshot["models"]:
+        out.append(doc_comment(m["description"], 2).rstrip("\n"))
+        out.append(f"  {ts_string(m['name'])}: {ts_object(m['fields'], 2)}")
+    out += ["}", "", "export interface WsContract {"]
     for c in commands:
         out.append(doc_comment(c["description"], 2).rstrip("\n"))
         payload = ts_union([ts_payload(c, c["payload"], 4)] + [ts_payload(c, v["payload"], 4) for v in c["variants"]])
@@ -183,6 +234,27 @@ def generate_ts(snapshot: dict[str, Any]) -> str:
     out.append("export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [")
     out.extend(f"  {ts_string(c['command'])}," for c in commands)
     out.append("]")
+    out.append("")
+    out.append("// The NeedsConfirmation refusals per command: data.code, and the payload member (dotted path) a resend sets to")
+    out.append("// accept it (null: no resend accepts it; the description says what to do instead).")
+    out.append("export const WS_CONTRACT_CONFIRMATIONS: Readonly<")
+    out.append("  Partial<Record<WsContractCommand, readonly { code: string; accept_field: string | null }[]>>")
+    out.append("> = {")
+    for c in commands:
+        if c.get("confirmations"):
+            items = ", ".join("{ code: %s, accept_field: %s }" % (ts_string(x["code"]),
+                              ts_string(x["accept_field"]) if x["accept_field"] else "null")
+                              for x in c["confirmations"])
+            line = f"  {ts_string(c['command'])}: [{items}],"
+            if len(line) <= LINE_LIMIT:
+                out.append(line)
+            else:
+                out.append(f"  {ts_string(c['command'])}: [")
+                for x in c["confirmations"]:
+                    out.append("    { code: %s, accept_field: %s }," % (ts_string(x["code"]),
+                               ts_string(x["accept_field"]) if x["accept_field"] else "null"))
+                out.append("  ],")
+    out.append("}")
     out.append("")
     out.append("// Client timeouts the server declares per command (a timeout means \"no answer yet\", never \"failed\").")
     out.append("export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> = {")
@@ -219,8 +291,10 @@ def drift(usage: dict[str, Any] | None) -> list[str]:
     committed_json = CONTRACT_JSON.read_text(encoding="utf-8")
     committed = json.loads(committed_json)
 
-    if sha256_hex(canonical(committed["ws"])) != committed["ws_hash"]:
-        problems.append(f"{CONTRACT_JSON.relative_to(REPO_ROOT)} was edited by hand: its ws_hash does not match its ws book")
+    for section in ("ws", "models"):
+        if section not in committed or sha256_hex(canonical(committed[section])) != committed.get(f"{section}_hash"):
+            problems.append(f"{CONTRACT_JSON.relative_to(REPO_ROOT)} was edited by hand: its {section}_hash does not "
+                            f"match its {section} section")
 
     if usage is not None:
         expected_json = snapshot_text(ws_snapshot(usage))
