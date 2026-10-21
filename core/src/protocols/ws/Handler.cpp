@@ -101,6 +101,7 @@ void Handler::registerVaultKeyHandlers(const std::shared_ptr<Router>& r) {
     r->registerPayload("vault.keys.status", &handler::VaultKeys::status);
     r->registerPayload("vault.keys.export", &handler::VaultKeys::exportKeys);
     r->registerPayload("vault.keys.export.confirm", &handler::VaultKeys::confirmExport);
+    r->registerPayload("vault.keys.import", &handler::VaultKeys::importKeys);
 }
 
 void Handler::registerMetaHandlers(const std::shared_ptr<Router>& r) {

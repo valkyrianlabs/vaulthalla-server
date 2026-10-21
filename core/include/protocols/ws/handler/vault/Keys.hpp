@@ -14,6 +14,7 @@ struct VaultKeys {
     static json status(const json& payload, const std::shared_ptr<Session>& session);
     static json exportKeys(const json& payload, const std::shared_ptr<Session>& session);
     static json confirmExport(const json& payload, const std::shared_ptr<Session>& session);
+    static json importKeys(const json& payload, const std::shared_ptr<Session>& session);
 };
 
 }

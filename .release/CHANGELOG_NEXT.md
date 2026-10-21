@@ -42,6 +42,15 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   (it used to be omitted mid-rotation), recovery-referenced retired keys, and for deleted vaults too.
 - vault.keys.export and .export.confirm answer only paired device sessions (data.code export_requires_device for any
   other session); confirm records the export only while the version is current and the key check matches.
+- Add `vh vault keys import <vault> --file <path|-> [--confirm-name] [--json]` and ws vault.keys.import (paired
+  devices only, import_requires_device elsewhere): restores key versions this host can't unseal or doesn't hold
+  (live vaults and restorable deleted vaults), after verifying each against its key check and a GCM tag check of
+  up to 16 local files and 16 recovery blobs sealed under it; refuses a key the host still unseals with other bytes
+  (conflict), a key that authenticates nothing it checked (invalid); skips versions with nothing to verify against;
+  NeedsConfirmation vault_key_import until the vault's name is given; one transaction under the rotation lock; then
+  reloads or starts the vault's engine.
+- The vh client reads the import file itself and attaches it to the request (`input` member, at most 512 KiB); the
+  daemon never opens a caller-named path for it.
 - MCP: key commands refuse when run for an MCP client (remote /mcp, or a vh mcp request marked agent), in addition
   to the catalog exclusions.
 

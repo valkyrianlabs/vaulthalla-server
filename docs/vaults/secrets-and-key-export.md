@@ -102,7 +102,7 @@ The output is 16 bytes, written as 32 lowercase hex digits. `vault_id` is the va
 
 A Mac paired with Vaulthalla Desktop can back vault keys up to 1Password over its paired connection. It reads the key status, exports the keys it needs, and confirms each backup by its key check after 1Password stored it; only then does the server record the vault as exported. A confirmation is refused when the vault rotated its key in the meantime, so a backup is never recorded for a key it doesn't hold.
 
-Keys leave the server only through the local `vh` CLI or a paired device. The web console never receives key material, and AI agents (MCP) can read key status but never export or import keys. A paired device needs the same permission to export keys as the CLI.
+Keys leave and enter the server only through the local `vh` CLI or a paired device. The web console never receives or sends key material, and AI agents (MCP) can read key status but never export or import keys. A paired device needs the same permission to export keys as the CLI.
 
 ## Export Internal Secrets
 
@@ -153,6 +153,31 @@ Use these rules for recovery material:
 - Do not store key exports in the same bucket they protect unless additional independent encryption is applied.
 - Document which export belongs to which Vaulthalla version and database backup.
 
-## Import Boundary
+## Restore Vault Keys
 
-The current operator-facing CLI documents export and rotation flows. Do not assume a one-command vault-key import workflow exists for disaster recovery. Keep database backups, Vaulthalla state, TPM or `swtpm` state, and encrypted exports together as a recovery set, and test the restore path before relying on it.
+`vh vault keys import` puts a vault's keys back from an export (or a Vaulthalla Desktop backup) when this host can no longer use them:
+
+- the host's master key was lost or replaced, for example after restoring the database onto a new host or reinstalling the TPM or `swtpm` state, so the vault's sealed keys no longer unseal and the vault can't start;
+- the database was restored from a backup older than a key rotation, so a key version the vault's files still need is missing;
+- a deleted vault that can still be restored (pending deletion).
+
+The vault itself (its database records and its encrypted files on this host) must still exist. Restoring a vault from its encrypted files alone, after the database is lost, is not possible: file names, folders and the per-file encryption details live only in the database. Restore the database first, then import the keys.
+
+```bash
+vh vault keys import archive --file archive-keys.json
+gpg --decrypt archive-keys.json.gpg | vh vault keys import archive --file - --confirm-name archive
+```
+
+`vh` reads the file on your side and sends its contents; the server never opens a path you name. Decrypt a GPG export first, ideally into a pipe as above so the keys never touch disk.
+
+Before anything is written, every key version in the export is verified:
+
+1. When the export carries a [key check](#key-checks) for the version, the key must match it.
+2. The key must decrypt this vault's data: Vaulthalla authenticates a sample of the vault's files sealed under that version (all of them when there are few) with the key. A key that decrypts none of them is refused, and nothing is written.
+3. A version with nothing on this host sealed under it can't be verified and is skipped.
+
+A key that this host can still unseal is never replaced: if the export holds different bytes for it, the import is refused (is the export from another node?). Importing a key the host already holds unchanged does nothing. Verified keys are re-sealed under this host's master key in one step, and the vault starts again. A rotation that was under way continues.
+
+Writing asks you to type the vault's name; without a terminal, pass it with `--confirm-name`. The import needs the same permission as export. A Mac paired with Vaulthalla Desktop restores keys from 1Password the same way over its paired connection. Neither the web console nor AI agents can import keys.
+
+Test the restore path before relying on it: keep database backups, Vaulthalla state, TPM or `swtpm` state, and encrypted key exports together as a recovery set.

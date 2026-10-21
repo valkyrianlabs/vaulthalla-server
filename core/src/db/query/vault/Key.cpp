@@ -3,6 +3,10 @@
 #include "vault/model/Key.hpp"
 #include "db/encoding/bytea.hpp"
 #include "db/encoding/timestamp.hpp"
+#include "fs/model/File.hpp"
+#include "ops/Error.hpp"
+
+#include <string>
 
 namespace vh::db::query::vault {
 
@@ -108,6 +112,92 @@ std::vector<unsigned int> Key::rotationPendingKeyVersions(const unsigned int vau
                                         pqxx::params{vaultId}))
             out.push_back(row[0].as<unsigned int>());
         return out;
+    });
+}
+
+void Key::writeImported(const unsigned int vaultId, const std::vector<SealedWrite>& writes) {
+    Transactions::exec("Key::writeImported", [&](pqxx::work& txn) {
+        txn.exec("SELECT pg_advisory_xact_lock($1::bigint)", pqxx::params{vaultId});
+        for (const auto& w : writes) {
+            const auto key = to_hex_bytea(w.encrypted_key), iv = to_hex_bytea(w.iv);
+            pqxx::result res;
+            if (w.expected) {
+                const auto oldKey = to_hex_bytea(w.expected->first), oldIv = to_hex_bytea(w.expected->second);
+                const pqxx::params p{vaultId, w.version, key, iv, oldKey, oldIv};
+                switch (w.table) {
+                    case SealedTable::Current:
+                        res = txn.exec("UPDATE vault_keys SET encrypted_key = $3, iv = $4 WHERE vault_id = $1 AND "
+                                       "version = $2 AND encrypted_key = $5 AND iv = $6", p);
+                        break;
+                    case SealedTable::Retired:
+                        res = txn.exec("UPDATE vault_keys_trashed SET encrypted_key = $3, iv = $4 WHERE vault_id = $1 "
+                                       "AND version = $2 AND encrypted_key = $5 AND iv = $6", p);
+                        break;
+                    case SealedTable::DeletionCopy:
+                        res = txn.exec("UPDATE vault_deletion_key SET encrypted_key = $3, iv = $4 WHERE vault_id = $1 "
+                                       "AND version = $2 AND encrypted_key = $5 AND iv = $6", p);
+                        break;
+                }
+            } else {
+                switch (w.table) {
+                    case SealedTable::Current:
+                        res = txn.exec("INSERT INTO vault_keys (vault_id, encrypted_key, iv, version) VALUES ($1, $3, $4, $2) "
+                                       "ON CONFLICT (vault_id) DO NOTHING",
+                                       pqxx::params{vaultId, w.version, key, iv});
+                        break;
+                    case SealedTable::Retired:
+                        res = txn.exec("INSERT INTO vault_keys_trashed (vault_id, version, encrypted_key, iv, created_at, "
+                                       "trashed_at, rotation_completed_at) VALUES ($1, $2, $3, $4, NOW(), NOW(), "
+                                       "CASE WHEN $5 THEN NULL ELSE NOW() END) ON CONFLICT (vault_id, version) DO NOTHING",
+                                       pqxx::params{vaultId, w.version, key, iv, w.rotation_pending});
+                        break;
+                    case SealedTable::DeletionCopy:
+                        res = txn.exec("INSERT INTO vault_deletion_key (vault_id, version, encrypted_key, iv) "
+                                       "VALUES ($1, $2, $3, $4) ON CONFLICT (vault_id, version) DO NOTHING",
+                                       pqxx::params{vaultId, w.version, key, iv});
+                        break;
+                }
+            }
+            if (res.affected_rows() != 1)
+                throw ops::Conflict("key version " + std::to_string(w.version) + " of vault " + std::to_string(vaultId) +
+                                    " changed while it was being imported; nothing was written, try again");
+        }
+    });
+}
+
+std::vector<Key::SealedSample> Key::sampleSealedFiles(const unsigned int vaultId, const unsigned int version,
+                                                      const unsigned int limit) {
+    return Transactions::exec("Key::sampleSealedFiles", [&](pqxx::work& txn) {
+        const auto res = txn.exec(
+            "SELECT fs.*, f.* FROM files f JOIN fs_entry fs ON f.fs_entry_id = fs.id "
+            "WHERE fs.vault_id = $1 AND f.encrypted_with_key_version = $2 AND f.encryption_iv IS NOT NULL "
+            "AND f.encryption_iv <> '' ORDER BY f.size_bytes, fs.id LIMIT $3",
+            pqxx::params{vaultId, version, limit});
+        std::vector<SealedSample> out;
+        for (const auto& file : vh::fs::model::files_from_pq_res(res))
+            out.push_back({.path = file->backing_path.string(), .iv = file->encryption_iv});
+        return out;
+    });
+}
+
+std::vector<Key::SealedSample> Key::sampleRecoveryBlobs(const unsigned int vaultId, const unsigned int version,
+                                                        const unsigned int limit) {
+    return Transactions::exec("Key::sampleRecoveryBlobs", [&](pqxx::work& txn) {
+        std::vector<SealedSample> out;
+        for (const auto& row : txn.exec("SELECT storage_name, encryption_iv FROM recovery_blob WHERE vault_id = $1 AND "
+                                        "key_version = $2 AND encryption_iv <> '' ORDER BY cipher_bytes, id LIMIT $3",
+                                        pqxx::params{vaultId, version, limit}))
+            out.push_back({.path = row[0].as<std::string>(), .iv = row[1].as<std::string>()});
+        return out;
+    });
+}
+
+bool Key::filesSealedUnder(const unsigned int vaultId, const unsigned int version) {
+    return Transactions::exec("Key::filesSealedUnder", [&](pqxx::work& txn) {
+        return txn.exec("SELECT EXISTS(SELECT 1 FROM files f JOIN fs_entry fs ON f.fs_entry_id = fs.id WHERE "
+                        "fs.vault_id = $1 AND f.encrypted_with_key_version = $2 AND f.encryption_iv <> '')",
+                        pqxx::params{vaultId, version})
+            .one_field_ref().as<bool>();
     });
 }
 

@@ -30,6 +30,7 @@
 
 #include "cli_client.hpp"
 #include "platform/Fd.hpp"
+#include "protocols/shell/ClientInput.hpp"
 #include "protocols/shell/Transfer.hpp"
 #include <paths.h>  // generated: VH_CLI_SOCKET_PATH, VH_LIFECYCLE_PATH, VH_HINT_*
 
@@ -187,6 +188,47 @@ static bool is_interactive_allowed(const std::vector<std::string>& argv_norm) {
         return false;
     // Avoid interactivity if stdin isn't a TTY
     return ::isatty(STDIN_FILENO) == 1;
+}
+
+// `vh vault keys import --file <path|->`: the caller's file, read here with the caller's own access (the daemon never
+// opens a path the caller names). At most client_input::kMaxBytes.
+static std::optional<std::string> read_client_input(const std::string& path, std::string& error) {
+    namespace ci = vh::protocols::shell::client_input;
+    const bool fromStdin = path == "-";
+    const int fd = fromStdin ? STDIN_FILENO : ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd < 0) {
+        error = fmt::format("can't open {}: {}", path, std::strerror(errno));
+        return std::nullopt;
+    }
+    struct stat st{};
+    if (!fromStdin && (::fstat(fd, &st) != 0 || !S_ISREG(st.st_mode))) {
+        ::close(fd);
+        error = path + " is not a regular file";
+        return std::nullopt;
+    }
+    std::string text;
+    std::array<char, 16384> buf{};
+    for (;;) {
+        const auto n = ::read(fd, buf.data(), buf.size());
+        if (n < 0 && errno == EINTR) continue;
+        if (n < 0) {
+            error = fmt::format("can't read {}: {}", path, std::strerror(errno));
+            text.clear();
+            break;
+        }
+        if (n == 0) break;
+        text.append(buf.data(), static_cast<std::size_t>(n));
+        if (text.size() > ci::kMaxBytes) {
+            error = fmt::format("{} is larger than {} KiB; is it a key export?", path, ci::kMaxBytes / 1024);
+            break;
+        }
+    }
+    if (!fromStdin) ::close(fd);
+    if (!error.empty()) {
+        std::fill(text.begin(), text.end(), '\0');
+        return std::nullopt;
+    }
+    return text;
 }
 
 static std::string read_line_from_stdin() {
@@ -966,6 +1008,23 @@ int main(const int argc, char** argv) {
         fmt::print(stderr, "vh: {}\n", plan.error);
         return tx::exitcode::kUsage;
     }
+    // `vh vault keys import --file`: the key file is read here, before connecting.
+    namespace ci = vh::protocols::shell::client_input;
+    const auto inputPlan = is_help_request(argv_norm) ? ci::Plan{} : ci::plan(argv_norm);
+    std::optional<std::string> attached;
+    if (inputPlan.active) {
+        if (!inputPlan.error.empty()) {
+            fmt::print(stderr, "vh: {}\n", inputPlan.error);
+            return tx::exitcode::kUsage;
+        }
+        std::string error;
+        attached = read_client_input(inputPlan.path, error);
+        if (!attached) {
+            fmt::print(stderr, "vh: {}\n", error);
+            return tx::exitcode::kNoInput;
+        }
+    }
+
     GetSink sink;
     PutSource source;
     if (plan.kind == tx::LocalPlan::Kind::Get) {
@@ -1018,8 +1077,17 @@ int main(const int argc, char** argv) {
         if (plan.kind == tx::LocalPlan::Kind::Put) j["transfer"]["put_size"] = source.size;
     }
 
+    if (attached) {
+        j["input"] = {{"v", ci::kVersion}, {"text", *attached}};
+        std::fill(attached->begin(), attached->end(), '\0');
+    }
+
     // Send request
     (void)send_json_frame(s, j);
+    if (j.contains("input")) {
+        auto& text = j["input"]["text"].get_ref<std::string&>();
+        std::fill(text.begin(), text.end(), '\0');
+    }
 
     if (plan.kind == tx::LocalPlan::Kind::Get) {
         const int rc = run_get(s, sink, timeoutSeconds);

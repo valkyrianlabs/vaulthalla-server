@@ -6528,6 +6528,178 @@
     },
     {
       "auth": "human",
+      "client_timeout_ms": 120000,
+      "command": "vault.keys.import",
+      "description": "Restore the vault's keys from a backup (`keys`: an export, one vault object or an `all` array) when this host can't unseal or doesn't hold them. Every version is verified before anything is written (its key_check, then a GCM tag check of files sealed under it); a key this host can unseal is never replaced (conflict), identical bytes are unchanged, versions with nothing to verify against are skipped (unverifiable). Writing needs confirm_name = the vault's name, else data.code vault_key_import with what would be written. Paired devices only (import_requires_device otherwise); the encryption-key Export permission.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The export document, as vault.keys.export returns it (or the CLI's `all` array).",
+          "generator": {
+            "attrs": [
+              "export"
+            ],
+            "entity": "vault.key",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "keys",
+          "required": true,
+          "types": [
+            "object",
+            "array"
+          ]
+        },
+        {
+          "description": "The vault's name: the person confirmed the import.",
+          "name": "confirm_name",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "import_requires_device",
+        "vault_key_import"
+      ],
+      "response": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "vault_name",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "deleted",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "name": "written",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "The vault runs on this host now (a deleted vault needs a restore).",
+          "name": "key_available",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "name": "note",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "version",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "enum": [
+                "restored",
+                "unchanged",
+                "unverifiable"
+              ],
+              "name": "outcome",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "detail",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "verified_files",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "failed_files",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "items": "object",
+          "name": "versions",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
       "client_timeout_ms": 15000,
       "command": "vault.keys.status",
       "description": "Key backup state of every vault the caller may inspect (the encryption-key View permission; deleted vaults within key retention for callers who may remove them), or of vault_id. Never key bytes: each key version is identified by its key_check. Read-only; safe for any session.",
@@ -7048,5 +7220,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "50eab1bc3a146562745b8a083300a9f2822f33332d76872531b3fdfaf088b018"
+  "ws_hash": "ce15c926c30ea66950915c381c56c5430305fdaedc645aefa798c6ac293640dd"
 }

@@ -31,7 +31,7 @@ off, or export keys or secrets.
 
 The web console's Devices page comes in a later release; the ws commands it will use (`device.*`) are available now.
 
-## Vault key backup status, and complete key exports
+## Vault key backup, status and restore
 
 `vh vault keys status` shows each vault's key backup state without printing key material: the current key version
 and its **key check** (a public fingerprint that identifies a key without revealing it), the last exported version,
@@ -45,6 +45,15 @@ used to omit the previous key, which still decrypts the files not yet re-encrypt
 versions the vault needs (the current key, an unfinished rotation's previous key, and retired keys recovery data
 uses), each with its key check, and a deleted vault's export carries them too. Keys still leave the server only
 through the local `vh` CLI or a paired device, never the web console or an AI agent.
+
+**Restoring keys.** `vh vault keys import <vault> --file <export>` puts a vault's keys back when this host can no
+longer use them: after the master key was lost or replaced (for example a database restored onto a new host), after a
+database restore that predates a key rotation, or for a deleted vault that can still be restored. `vh` reads the
+export on your side (`--file -` reads standard input, so a GPG export can be decrypted into a pipe). Every key version
+is verified first, against its key check and by decrypting files sealed under it; a key that decrypts none of the
+vault's files is refused, and a key the host can still use is never replaced. Writing asks you to type the vault's
+name (`--confirm-name` without a terminal); the vault starts again right away. A paired Vaulthalla Desktop restores
+from 1Password the same way.
 
 See [Secrets And Key Export](https://vaulthalla.io/docs/vaults/secrets-and-key-export).
 

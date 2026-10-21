@@ -146,7 +146,7 @@ TEST(McpCatalog, ExclusionListIsExactlyTheAgreedOne) {
         ASSERT_TRUE(node) << p;
         EXPECT_EQ(node->primary(), ex.path.back()) << p;
     }
-    const std::vector<std::string> expected{"vault key export", "secrets export", "secrets update", "setup",
+    const std::vector<std::string> expected{"vault key export", "vault key import", "secrets export", "secrets update", "setup",
                                             "setup set-super-admin-password", "teardown", "fs get", "fs put", "mcp",
                                             "skill", "device pair", "device approve", "device deny",
                                             "device remote enable", "device remote disable"};
@@ -157,7 +157,7 @@ TEST(McpCatalog, ExcludedCommandsAreNeitherListedNorRunnable) {
     std::set<std::string> excluded;
     for (const auto& l : catalog().leaves())
         if (l.excluded) excluded.insert(l.command);
-    for (const auto* c : {"vault key export", "secrets export", "secrets update", "setup db", "setup caddy",
+    for (const auto* c : {"vault key export", "vault key import", "secrets export", "secrets update", "setup db", "setup caddy",
                           "setup set-super-admin-password", "teardown db", "fs get", "fs put", "mcp", "skill install",
                           "device pair", "device approve", "device deny", "device remote enable",
                           "device remote disable"})
@@ -165,12 +165,13 @@ TEST(McpCatalog, ExcludedCommandsAreNeitherListedNorRunnable) {
 
     // No typed tool binds one, and nothing in a tool definition offers it.
     const auto tools = catalog().tools().dump();
-    for (const auto* needle : {"vault key export", "secrets export", "fs get", "fs put", "set-super-admin-password"})
+    for (const auto* needle : {"vault key export", "vault key import", "secrets export", "fs get", "fs put", "set-super-admin-password"})
         EXPECT_EQ(tools.find(needle), std::string::npos) << needle;
 
     // Every spelling an agent might use is refused before anything runs.
     for (const auto* command : {"vault keys export 3", "vault k export 3 --output /tmp/x", "VAULT KEY EXPORT 3",
-                                "vaults key export 3", "secret export jwt-secret", "secrets get db-password",
+                                "vaults key export 3", "vault keys import 3 --file k.json",
+                                "VAULT K IMPORT 3 --file - --confirm-name a", "secret export jwt-secret", "secrets get db-password",
                                 "secret set jwt-secret /tmp/x", "setup db", "setup database", "teardown nginx",
                                 "setup super-admin-password", "fs get 3 /a", "files download 3 /a", "fs put 3 a /a",
                                 "fs upload 3 a /a", "mcp", "skills install --agent claude", "device pair",

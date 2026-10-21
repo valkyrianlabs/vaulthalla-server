@@ -6,7 +6,7 @@
 export const WS_CONTRACT_VERSION = 1
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = '50eab1bc3a146562745b8a083300a9f2822f33332d76872531b3fdfaf088b018'
+export const WS_CONTRACT_HASH = 'ce15c926c30ea66950915c381c56c5430305fdaedc645aefa798c6ac293640dd'
 
 export interface WsContract {
   /**
@@ -898,6 +898,33 @@ export interface WsContract {
     response: { vault_id: number; version: number; exported_at: number }
   }
   /**
+   * Restore the vault's keys from a backup (`keys`: an export, one vault object or an `all` array) when this
+   * host can't unseal or doesn't hold them. Every version is verified before anything is written (its
+   * key_check, then a GCM tag check of files sealed under it); a key this host can unseal is never replaced
+   * (conflict), identical bytes are unchanged, versions with nothing to verify against are skipped
+   * (unverifiable). Writing needs confirm_name = the vault's name, else data.code vault_key_import with what
+   * would be written. Paired devices only (import_requires_device otherwise); the encryption-key Export
+   * permission.
+   */
+  'vault.keys.import': {
+    payload: { vault_id: number; keys: object | unknown[]; confirm_name?: string }
+    response: {
+      vault_id: number
+      vault_name: string
+      deleted: boolean
+      written: boolean
+      key_available: boolean
+      note: string | null
+      versions: {
+        version: number
+        outcome: 'restored' | 'unchanged' | 'unverifiable'
+        detail: string
+        verified_files: number
+        failed_files: number
+      }[]
+    }
+  }
+  /**
    * Key backup state of every vault the caller may inspect (the encryption-key View permission; deleted
    * vaults within key retention for callers who may remove them), or of vault_id. Never key bytes: each key
    * version is identified by its key_check. Read-only; safe for any session.
@@ -1067,6 +1094,7 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'upstream.events.status',
   'vault.keys.export',
   'vault.keys.export.confirm',
+  'vault.keys.import',
   'vault.keys.status',
   'vault.recovery.disclosure',
   'vault.recovery.status',
@@ -1166,6 +1194,7 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'upstream.events.status': 15000,
   'vault.keys.export': 15000,
   'vault.keys.export.confirm': 15000,
+  'vault.keys.import': 120000,
   'vault.keys.status': 15000,
   'vault.recovery.disclosure': 60000,
   'vault.recovery.status': 60000,

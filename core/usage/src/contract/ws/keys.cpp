@@ -95,6 +95,30 @@ std::vector<WsCommandUsage> vaultKeyCommands() {
         .client_timeout = kDefaultTimeout,
     });
 
+    out.push_back({
+        .command = "vault.keys.import",
+        .description = "Restore the vault's keys from a backup (`keys`: an export, one vault object or an `all` "
+                       "array) when this host can't unseal or doesn't hold them. Every version is verified before "
+                       "anything is written (its key_check, then a GCM tag check of files sealed under it); a key "
+                       "this host can unseal is never replaced (conflict), identical bytes are unchanged, versions "
+                       "with nothing to verify against are skipped (unverifiable). Writing needs confirm_name = the "
+                       "vault's name, else data.code vault_key_import with what would be written. Paired devices only "
+                       "(import_requires_device otherwise); the encryption-key Export permission.",
+        .payload = {vaultId(),
+                    anyOf("keys", {"object", "array"}).gen(gen::ref("vault.key", {"export"}))
+                        .desc("The export document, as vault.keys.export returns it (or the CLI's `all` array)."),
+                    str("confirm_name").opt().desc("The vault's name: the person confirmed the import.")},
+        .response = {vaultId(), str("vault_name"), boolean("deleted"), boolean("written"),
+                     boolean("key_available").desc("The vault runs on this host now (a deleted vault needs a restore)."),
+                     str("note").nullable(),
+                     objectArray("versions", "",
+                                 {uinteger("version"), str("outcome").oneOf({"restored", "unchanged", "unverifiable"}),
+                                  str("detail"), uinteger("verified_files"), uinteger("failed_files")})},
+        .refusal_codes = {"denied", "invalid", "not_found", "conflict", "unauthorized", "import_requires_device",
+                          "vault_key_import"},
+        .client_timeout = std::chrono::milliseconds(120'000),
+    });
+
     return out;
 }
 

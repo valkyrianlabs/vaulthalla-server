@@ -50,6 +50,19 @@ json VaultKeys::exportKeys(const json& payload, const std::shared_ptr<Session>& 
     return keys::toJson(exported, session->user->name());
 }
 
+json VaultKeys::importKeys(const json& payload, const std::shared_ptr<Session>& session) {
+    const auto channel = channelOf(session);
+    const auto vaultId = requiredVaultId(payload);
+    if (!payload.contains("keys") || !(payload.at("keys").is_object() || payload.at("keys").is_array()))
+        throw ops::Invalid("keys is required: the key export (one vault object, or the array of an `all` export)");
+    std::optional<std::string> confirmName;
+    if (payload.contains("confirm_name") && payload.at("confirm_name").is_string())
+        confirmName = payload.at("confirm_name").get<std::string>();
+    return keys::toJson(keys::importKeys(actorOf(session),
+                                         {.vault_id = vaultId, .keys = &payload.at("keys"), .confirm_name = confirmName},
+                                         channel));
+}
+
 json VaultKeys::confirmExport(const json& payload, const std::shared_ptr<Session>& session) {
     const auto channel = channelOf(session);
     const auto vaultId = requiredVaultId(payload);

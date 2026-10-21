@@ -150,6 +150,86 @@ static CommandResult handle_export_vault_keys(const CommandCall& call) {
     }
 }
 
+// Best effort: the parsed export's key strings are zeroed once the import is done with them.
+static void wipe_keys(nlohmann::json& j) {
+    if (j.is_array()) {
+        for (auto& e : j) wipe_keys(e);
+    } else if (j.is_object()) {
+        for (auto it = j.begin(); it != j.end(); ++it) {
+            if (it.key() == "key" && it->is_string()) {
+                auto& text = it->get_ref<std::string&>();
+                std::fill(text.begin(), text.end(), '\0');
+            } else {
+                wipe_keys(*it);
+            }
+        }
+    }
+}
+
+static std::string import_text(const keys_ops::ImportResult& r) {
+    std::string out = fmt::format("Vault {} ('{}'){}: {}\n", r.vault_id, r.vault_name, r.deleted ? " [deleted]" : "",
+                                  r.written ? "keys restored" : "nothing written");
+    for (const auto& v : r.versions)
+        out += fmt::format("  version {}: {} ({})\n", v.version, keys_ops::to_string(v.outcome), v.detail);
+    out += r.key_available ? "  the vault's key is available on this host\n" : "";
+    if (r.note) out += "  " + *r.note + "\n";
+    return out;
+}
+
+static CommandResult handle_vault_keys_import(const CommandCall& call) {
+    constexpr const auto* ERR = "vault keys import";
+    const auto usage = resolveUsage({"vault", "keys", "import"});
+    validatePositionals(call, usage);
+    if (!call.input)
+        return invalid(std::string(ERR) + ": no key file came with the request. vh reads --file on your side and sends "
+                       "its contents; the daemon never opens it (is vh older than the daemon?)");
+    nlohmann::json doc;
+    try {
+        doc = nlohmann::json::parse(*call.input);
+    } catch (const std::exception&) {
+        return invalid(std::string(ERR) + ": the file is not a JSON key export. Decrypt a GPG export first: gpg "
+                       "--decrypt <file> | vh vault keys import <vault> --file - --confirm-name <vault name>");
+    }
+    struct Wipe {
+        nlohmann::json& j;
+        ~Wipe() { wipe_keys(j); }
+    } wipe{doc};
+
+    std::string error;
+    const auto vaultId = resolve_key_vault(call, usage, ERR, error);
+    if (!vaultId) return invalid(error);
+    const bool json = hasFlag(call, usage->resolveFlag("json_output")->aliases);
+    const auto confirmName = optVal(call, "confirm-name");
+    const auto run = [&](const std::optional<std::string>& name) {
+        return keys_ops::importKeys(call.user, {.vault_id = *vaultId, .keys = &doc, .confirm_name = name}, cli_channel());
+    };
+
+    try {
+        keys_ops::ImportResult result;
+        try {
+            result = run(confirmName);
+        } catch (const ops::NeedsConfirmation& e) {
+            if (confirmName)
+                return invalid(std::string(ERR) + ": --confirm-name is not the vault's name; nothing was written");
+            if (!call.io) {
+                noteConfirmationNeeded(e.code, {"--confirm-name"});
+                return invalid(std::string(ERR) + ": " + e.what() +
+                               "\nRe-run in a terminal, or pass --confirm-name <vault name>.");
+            }
+            const auto typed = call.io->prompt(std::string(e.what()) + "\nVault name: ", "");
+            try {
+                result = run(typed);
+            } catch (const ops::NeedsConfirmation&) {
+                return invalid(std::string(ERR) + ": that is not the vault's name; nothing was written");
+            }
+        }
+        if (json) return ok(keys_ops::toJson(result).dump(4));
+        return ok(import_text(result));
+    } catch (const ops::Error& e) {
+        return invalid(std::string(ERR) + ": " + e.what());
+    }
+}
+
 static std::string status_text(const keys_ops::KeyStatus& s) {
     std::string out = fmt::format("Vault {} ('{}'){}\n", s.vault_id, s.vault_name, s.deleted ? " [deleted]" : "");
     out += fmt::format("  key version:   {}\n", s.version);
@@ -296,7 +376,8 @@ CommandResult commands::vault::handle_vault_keys(const CommandCall& call) {
     if (isVaultKeysMatch("rotate", subcommand)) return handle_rotate_vault_keys(subcall);
     if (isVaultKeysMatch("inspect", subcommand)) return handle_inspect_vault_key(subcall);
     if (isVaultKeysMatch("status", subcommand)) return handle_vault_keys_status(subcall);
+    if (isVaultKeysMatch("import", subcommand)) return handle_vault_keys_import(subcall);
 
     return invalid("vault keys: unknown subcommand '" + std::string(subcommand) +
-                   "'. Use: status | export | rotate | inspect");
+                   "'. Use: status | export | import | rotate | inspect");
 }

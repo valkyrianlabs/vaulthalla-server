@@ -106,4 +106,44 @@ struct Confirmed {
 [[nodiscard]] Confirmed confirmExport(const Actor& actor, unsigned int vaultId, unsigned int version,
                                       const std::string& keyCheck, Channel channel);
 
+// ---- import (S6, D7): restoring keys from a backup. Design: .claude/context/key-backup.md "Key import".
+//
+// Same permission and channels as export (the console gets import_requires_device). `keys` is an export: one vault
+// object or the `all` array; the entry for vault_id is used. Every version is verified before anything is written
+// (key check when present, then a GCM tag check of local ciphertext sealed under it); a key this host can unseal is
+// never replaced with other bytes (Conflict); identical bytes are a no-op. Writing needs `confirm_name` = the vault's
+// name, else NeedsConfirmation "vault_key_import" says what would be written.
+struct ImportRequest {
+    unsigned int vault_id{};
+    nlohmann::json const* keys{};  // the export document (not owned)
+    std::optional<std::string> confirm_name{};
+};
+
+enum class ImportOutcome {
+    Restored,      // verified and re-sealed under this host's vault master
+    Unchanged,     // this host already holds exactly these bytes
+    Unverifiable,  // nothing local is sealed under it (or newer than the vault's current version): skipped
+};
+[[nodiscard]] std::string to_string(ImportOutcome outcome);
+
+struct ImportedVersion {
+    unsigned int version{};
+    ImportOutcome outcome{ImportOutcome::Unchanged};
+    std::string detail{};
+    unsigned int verified_files{}, failed_files{};
+};
+
+struct ImportResult {
+    unsigned int vault_id{};
+    std::string vault_name{};
+    bool deleted{false};
+    bool written{false};
+    bool key_available{false};  // the vault's engine runs (live vaults); a deleted vault needs a restore first
+    std::optional<std::string> note{};
+    std::vector<ImportedVersion> versions{};
+};
+
+[[nodiscard]] ImportResult importKeys(const Actor& actor, const ImportRequest& request, Channel channel);
+[[nodiscard]] nlohmann::json toJson(const ImportResult& result);
+
 }

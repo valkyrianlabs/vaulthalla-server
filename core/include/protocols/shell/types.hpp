@@ -39,6 +39,9 @@ struct CommandCall {
     std::shared_ptr<identities::User> user;
     SocketIO* io = nullptr; // if set, command was run interactively
     std::optional<TransferPeer> transfer;
+    // A document the vh client read on the caller's side and attached (protocols/shell/ClientInput.hpp); the daemon
+    // never opens the path the caller named.
+    std::optional<std::string> input;
 
     // owns any strings you create at runtime (JSON, rewrites, etc.)
     std::vector<std::string> arena;

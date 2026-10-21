@@ -1,6 +1,7 @@
 #include "ops/VaultKeys.hpp"
 
 #include "crypto/secrets/KeyProvider.hpp"
+#include "crypto/util/Gcm.hpp"
 #include "crypto/util/encrypt.hpp"
 #include "db/encoding/timestamp.hpp"
 #include "db/query/vault/Deletion.hpp"
@@ -10,6 +11,7 @@
 #include "log/Registry.hpp"
 #include "ops/Vaults.hpp"
 #include "rbac/permission/admin/Keys.hpp"
+#include "recovery/Store.hpp"
 #include "runtime/Deps.hpp"
 #include "storage/Engine.hpp"
 #include "storage/Manager.hpp"
@@ -20,12 +22,17 @@
 #include "vault/model/Key.hpp"
 #include "vault/model/Vault.hpp"
 
+#include <fcntl.h>
 #include <paths.h>
 #include <sodium.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include <fmt/format.h>
 
 #include <algorithm>
+#include <cstdint>
+#include <filesystem>
 #include <map>
 #include <mutex>
 #include <tuple>
@@ -116,6 +123,19 @@ public:
         auto key = std::make_shared<const crypto::SecretKey>(raw);
         sodium_memzero(raw.data(), raw.size());
         return key;
+    }
+
+    // Seals key bytes under this host's vault master with a fresh IV: {encrypted_key, iv}.
+    std::pair<std::vector<uint8_t>, std::vector<uint8_t>> seal(const crypto::SecretKey& key) {
+        if (!provider_) {
+            provider_.emplace(paths::testMode ? "test_vault_master" : "vault_master");
+            provider_->init();
+        }
+        std::vector<uint8_t> raw(key.bytes().begin(), key.bytes().end());
+        std::vector<uint8_t> iv;
+        auto sealed = crypto::util::encrypt_aes256_gcm(raw, provider_->getMasterKey(), iv);
+        sodium_memzero(raw.data(), raw.size());
+        return {std::move(sealed), std::move(iv)};
     }
 
     std::optional<std::string> check(const unsigned int vaultId, const vault::model::Key& rec) {
@@ -484,6 +504,393 @@ Confirmed confirmExport(const Actor& actor, const unsigned int vaultId, const un
     log::Registry::audit()->info("[ops::vault_keys] {} confirmed a backup of vault {} ('{}'), key version {}, through {}",
                                  actor->name(), vaultId, source.vault_name, version, channelName(channel));
     return {.vault_id = vaultId, .version = version, .exported_at = at};
+}
+
+namespace {
+
+constexpr std::size_t kSamplePerSource = 16;
+
+struct Candidate {
+    unsigned int version{};
+    crypto::SecretKeyPtr key{};
+    std::optional<std::string> backup_check{};
+};
+
+std::optional<std::vector<uint8_t>> decodeKey(const nlohmann::json& v) {
+    if (!v.is_string()) return std::nullopt;
+    const auto& text = v.get_ref<const std::string&>();
+    std::vector<uint8_t> out(text.size());
+    std::size_t len = 0;
+    if (sodium_base642bin(out.data(), out.size(), text.data(), text.size(), nullptr, &len, nullptr,
+                          sodium_base64_VARIANT_ORIGINAL) != 0)
+        return std::nullopt;
+    out.resize(len);
+    return out;
+}
+
+unsigned int versionOf(const nlohmann::json& v, const char* what) {
+    if (!v.is_number_unsigned() || v.get<uint64_t>() == 0 || v.get<uint64_t>() > UINT32_MAX)
+        throw Invalid(std::string(what) + " must be a positive integer");
+    return v.get<unsigned int>();
+}
+
+// The entry for `vaultId` in an export (one object, or the `all` array), as candidate versions.
+std::vector<Candidate> candidatesFrom(const nlohmann::json& keys, const unsigned int vaultId) {
+    const nlohmann::json* entry = nullptr;
+    const auto matches = [&](const nlohmann::json& e) {
+        return e.is_object() && e.contains("vault_id") && e.at("vault_id").is_number_unsigned() &&
+               e.at("vault_id").get<uint64_t>() == vaultId;
+    };
+    if (keys.is_array()) {
+        for (const auto& e : keys)
+            if (matches(e)) {
+                if (entry) throw Invalid("the export lists vault " + std::to_string(vaultId) + " twice");
+                entry = &e;
+            }
+    } else if (matches(keys)) {
+        entry = &keys;
+    }
+    if (!entry) throw Invalid("the export has no entry for vault " + std::to_string(vaultId) +
+                              " (keys are imported into the vault they were exported from)");
+
+    std::vector<Candidate> out;
+    const auto add = [&](const nlohmann::json& keyField, const unsigned int version, const nlohmann::json* check) {
+        auto bytes = decodeKey(keyField);
+        if (!bytes || bytes->size() != crypto::util::AES_KEY_SIZE) {
+            if (bytes) sodium_memzero(bytes->data(), bytes->size());
+            throw Invalid("key version " + std::to_string(version) + " is not a base64 32-byte key");
+        }
+        auto key = std::make_shared<const crypto::SecretKey>(*bytes);
+        sodium_memzero(bytes->data(), bytes->size());
+        std::optional<std::string> backupCheck;
+        if (check && check->is_string()) backupCheck = check->get<std::string>();
+        for (const auto& c : out)
+            if (c.version == version) {
+                if (sodium_memcmp(c.key->bytes().data(), key->bytes().data(), crypto::util::AES_KEY_SIZE) != 0)
+                    throw Invalid("the export holds two different keys for version " + std::to_string(version));
+                return;
+            }
+        out.push_back({.version = version, .key = std::move(key), .backup_check = std::move(backupCheck)});
+    };
+
+    if (!entry->contains("key") || !entry->contains("key_info") || !entry->at("key_info").is_object() ||
+        !entry->at("key_info").contains("key_version"))
+        throw Invalid("the export entry needs key and key_info.key_version");
+    const auto* topCheck = entry->contains("key_check") ? &entry->at("key_check")
+                         : entry->at("key_info").contains("key_check") ? &entry->at("key_info").at("key_check") : nullptr;
+    add(entry->at("key"), versionOf(entry->at("key_info").at("key_version"), "key_info.key_version"), topCheck);
+    if (entry->contains("historical_keys")) {
+        if (!entry->at("historical_keys").is_array()) throw Invalid("historical_keys must be an array");
+        for (const auto& h : entry->at("historical_keys")) {
+            if (!h.is_object() || !h.contains("key") || !h.contains("key_version"))
+                throw Invalid("every historical_keys entry needs key and key_version");
+            add(h.at("key"), versionOf(h.at("key_version"), "historical_keys[].key_version"),
+                h.contains("key_check") ? &h.at("key_check") : nullptr);
+        }
+    }
+    std::ranges::sort(out, {}, &Candidate::version);
+    return out;
+}
+
+struct Sample {
+    unsigned int verified{}, failed{};
+};
+
+// Authenticates `path` (body ‖ tag) under key/IV without keeping any plaintext. nullopt: nothing to check there.
+std::optional<bool> authenticates(const std::filesystem::path& path, const crypto::SecretKey& key,
+                                  const std::string& ivB64) {
+    std::vector<uint8_t> iv;
+    try {
+        iv = crypto::util::b64_decode(ivB64);
+    } catch (const std::exception&) {
+        return std::nullopt;
+    }
+    if (iv.size() != crypto::util::AES_IV_SIZE) return std::nullopt;
+    const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (fd < 0) return std::nullopt;
+    struct stat st{};
+    if (::fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size < static_cast<off_t>(crypto::util::AES_TAG_SIZE)) {
+        ::close(fd);
+        return std::nullopt;
+    }
+    bool ok = false;
+    try {
+        ok = crypto::util::gcmVerifyFd(fd, 0, static_cast<uint64_t>(st.st_size) - crypto::util::AES_TAG_SIZE, key.bytes(),
+                                       crypto::util::GcmIv(iv.data(), crypto::util::AES_IV_SIZE));
+    } catch (const std::exception&) {
+        ::close(fd);
+        return std::nullopt;
+    }
+    ::close(fd);
+    return ok;
+}
+
+
+// Where an import writes: the vault's live key rows (while its vault row exists) and, for a deleted vault, its
+// retained copies.
+struct ImportTarget {
+    unsigned int vault_id{};
+    std::string name{};
+    std::string alias{};  // backing alias (recovery blobs)
+    bool deleted{false};
+    bool live_rows{false};
+    std::optional<unsigned int> current{};
+    KeyRecord current_row{};
+    std::map<unsigned int, KeyRecord> retired{};
+    std::map<unsigned int, KeyRecord> copies{};
+};
+
+ImportTarget importTarget(const Actor& actor, const unsigned int vaultId) {
+    if (vaultId == 0) throw Invalid("vault ID must be a positive integer");
+    ImportTarget t{.vault_id = vaultId};
+    if (const auto vault = db::query::vault::Vault::getVault(vaultId)) {
+        t.name = vault->name;
+        t.alias = vault->mount_point.string();
+        t.live_rows = true;
+    } else if (const auto d = DeletionQ::get(vaultId)) {
+        try {
+            (void)ops::vaults::findDeleted(actor, std::to_string(vaultId), std::nullopt);
+        } catch (const NotFound&) {
+            throw NotFound("no vault with ID " + std::to_string(vaultId));
+        }
+        if (!d->keyRetained())
+            throw Conflict("the key of deleted vault '" + d->vault_name + "' was destroyed when its key retention "
+                           "window ended");
+        if (!d->restorable())
+            throw Conflict("deleted vault '" + d->vault_name + "' is being or has been purged: its files are gone, so "
+                           "nothing on this host can verify a key for it");
+        t.name = d->vault_name;
+        t.alias = d->backing_alias;
+        t.deleted = true;
+        t.live_rows = DeletionQ::getDeletedVault(vaultId) != nullptr;
+        t.current = d->key_version;
+        for (const auto& rec : DeletionQ::retainedKeys(vaultId)) t.copies[rec->version] = rec;
+    } else {
+        throw NotFound("no vault with ID " + std::to_string(vaultId));
+    }
+    if (t.live_rows) {
+        t.current_row = KeyQ::getVaultKey(vaultId);
+        if (t.current_row) t.current = t.current_row->version;
+        for (const auto v : KeyQ::retiredKeyVersions(vaultId))
+            if (const auto rec = KeyQ::getRetiredVaultKey(vaultId, v)) t.retired[v] = rec;
+    }
+    if (!t.current)
+        throw Conflict("vault '" + t.name + "' has no key record to restore into");
+    return t;
+}
+
+struct Slot {
+    KeyQ::SealedTable table{};
+    KeyRecord row{};  // null: no row yet
+};
+
+bool sameKey(const crypto::SecretKey& a, const crypto::SecretKey& b) {
+    return sodium_memcmp(a.bytes().data(), b.bytes().data(), crypto::util::AES_KEY_SIZE) == 0;
+}
+
+std::string versionList(const std::vector<unsigned int>& versions) {
+    std::string out;
+    for (const auto v : versions) out += (out.empty() ? "" : ", ") + std::to_string(v);
+    return out;
+}
+
+}
+
+std::string to_string(const ImportOutcome outcome) {
+    switch (outcome) {
+        case ImportOutcome::Restored: return "restored";
+        case ImportOutcome::Unchanged: return "unchanged";
+        case ImportOutcome::Unverifiable: return "unverifiable";
+    }
+    return "unchanged";
+}
+
+ImportResult importKeys(const Actor& actor, const ImportRequest& request, const Channel channel) {
+    requireExport(actor);
+    if (channel == Channel::Console)
+        throw Refused("import_requires_device",
+                      "vault keys are imported only from a paired device (Vaulthalla Desktop) or the local vh CLI, "
+                      "never through the browser");
+    requireKeyChannel(channel);
+    if (!request.keys) throw Invalid("keys (the export document) is required");
+
+    const auto target = importTarget(actor, request.vault_id);
+    const auto candidates = candidatesFrom(*request.keys, target.vault_id);
+    ImportResult result{.vault_id = target.vault_id, .vault_name = target.name, .deleted = target.deleted};
+    Unsealer unsealer;
+    std::vector<KeyQ::SealedWrite> writes;
+    unsigned int verifiedTotal = 0;
+    const auto current = *target.current;
+
+    for (const auto& c : candidates) {
+        ImportedVersion out{.version = c.version};
+        // 1. The backup's own key check (a damaged backup is refused, whatever else it holds).
+        if (c.backup_check && !vault::keyCheckEquals(*c.backup_check, vault::keyCheck(c.key->bytes(), target.vault_id, c.version)))
+            throw Invalid(fmt::format("key version {} in the backup does not match its own key check: the backup is "
+                                      "damaged or belongs to another vault; nothing was written", c.version));
+
+        // Where this version lives on this host.
+        std::vector<Slot> slots;
+        if (c.version > current) {
+            out.outcome = ImportOutcome::Unverifiable;
+            out.detail = fmt::format("newer than the vault's current key version {}: the database is older than the "
+                                     "backup", current);
+            result.versions.push_back(std::move(out));
+            continue;
+        }
+        if (target.live_rows) {
+            if (c.version == current) slots.push_back({KeyQ::SealedTable::Current, target.current_row});
+            else {
+                const auto it = target.retired.find(c.version);
+                slots.push_back({KeyQ::SealedTable::Retired, it == target.retired.end() ? nullptr : it->second});
+            }
+        }
+        if (target.deleted) {
+            const auto it = target.copies.find(c.version);
+            slots.push_back({KeyQ::SealedTable::DeletionCopy, it == target.copies.end() ? nullptr : it->second});
+        }
+
+        // 2. What this host holds: never replace a key it can unseal with other bytes; identical bytes are a no-op.
+        bool identical = false;
+        std::vector<const Slot*> toWrite;
+        for (const auto& slot : slots) {
+            if (!slot.row) {
+                toWrite.push_back(&slot);
+                continue;
+            }
+            crypto::SecretKeyPtr held;
+            try {
+                held = unsealer.unseal(*slot.row);
+            } catch (const std::exception&) {
+                toWrite.push_back(&slot);  // doesn't unseal here: the verified backup replaces it
+                continue;
+            }
+            if (!sameKey(*held, *c.key))
+                throw Conflict(fmt::format("this host holds a different key version {} for vault '{}' and can still "
+                                           "unseal it; an import never replaces a working key (is the backup from "
+                                           "another node or vault?). Nothing was written", c.version, target.name));
+            identical = true;
+        }
+        if (toWrite.empty()) {
+            out.outcome = ImportOutcome::Unchanged;
+            out.detail = "this host already holds this key";
+            result.versions.push_back(std::move(out));
+            continue;
+        }
+
+        // 3. Real ciphertext: the key must authenticate data sealed under it (or match a copy that still unseals).
+        if (!identical) {
+            std::vector<std::filesystem::path> paths;
+            std::vector<std::string> ivs;
+            for (const auto& f : KeyQ::sampleSealedFiles(target.vault_id, c.version, kSamplePerSource)) {
+                paths.emplace_back(f.path);
+                ivs.push_back(f.iv);
+            }
+            for (const auto& b : KeyQ::sampleRecoveryBlobs(target.vault_id, c.version, kSamplePerSource)) {
+                try {
+                    paths.push_back(recovery::store::blobPath({.id = target.vault_id, .alias = target.alias}, b.path));
+                    ivs.push_back(b.iv);
+                } catch (const std::exception&) {}
+            }
+            for (std::size_t i = 0; i < paths.size(); ++i) {
+                const auto verdict = authenticates(paths[i], *c.key, ivs[i]);
+                if (!verdict) continue;
+                if (*verdict) ++out.verified_files;
+                else ++out.failed_files;
+            }
+            if (out.verified_files == 0 && out.failed_files > 0)
+                throw Invalid(fmt::format("key version {} does not decrypt vault '{}' ({} sealed file(s) checked): it is "
+                                          "not this vault's key. Nothing was written", c.version, target.name,
+                                          out.failed_files));
+            if (out.verified_files == 0) {
+                out.outcome = ImportOutcome::Unverifiable;
+                out.detail = fmt::format("nothing on this host is sealed under version {}, so it can't be verified; "
+                                         "skipped", c.version);
+                result.versions.push_back(std::move(out));
+                continue;
+            }
+            verifiedTotal += out.verified_files;
+        }
+
+        // Verified: re-seal under this host's vault master.
+        const bool pendingRotation = c.version + 1 == current && KeyQ::filesSealedUnder(target.vault_id, c.version) &&
+                                     KeyQ::rotationPendingKeyVersions(target.vault_id).empty();
+        for (const auto* slot : toWrite) {
+            auto [sealed, iv] = unsealer.seal(*c.key);
+            KeyQ::SealedWrite w{.table = slot->table, .version = c.version, .encrypted_key = std::move(sealed),
+                                .iv = std::move(iv)};
+            if (slot->row) w.expected = std::make_pair(slot->row->encrypted_key, slot->row->iv);
+            else w.rotation_pending = slot->table == KeyQ::SealedTable::Retired && pendingRotation;
+            writes.push_back(std::move(w));
+        }
+        out.outcome = ImportOutcome::Restored;
+        out.detail = identical ? "re-sealed a copy that no longer unsealed (the key matches one this host holds)"
+                               : fmt::format("verified against {} sealed file(s)", out.verified_files);
+        if (out.failed_files > 0)
+            out.detail += fmt::format("; {} file(s) sealed under it failed authentication (damaged)", out.failed_files);
+        result.versions.push_back(std::move(out));
+    }
+
+    std::vector<unsigned int> restored, skipped;
+    for (const auto& v : result.versions) {
+        if (v.outcome == ImportOutcome::Restored) restored.push_back(v.version);
+        if (v.outcome == ImportOutcome::Unverifiable) skipped.push_back(v.version);
+    }
+
+    if (!writes.empty()) {
+        if (!request.confirm_name || *request.confirm_name != target.name) {
+            std::string text = fmt::format("Importing keys into vault '{}' (ID {}) writes key version(s) {}, re-sealed "
+                                           "under this host's vault master", target.name, target.vault_id,
+                                           versionList(restored));
+            if (verifiedTotal > 0) text += fmt::format(" (verified against {} sealed file(s))", verifiedTotal);
+            text += ".";
+            if (!skipped.empty()) text += " Skipped, can't be verified: " + versionList(skipped) + ".";
+            text += " Confirm by typing the vault's name.";
+            throw NeedsConfirmation("vault_key_import", text);
+        }
+        KeyQ::writeImported(target.vault_id, writes);
+        result.written = true;
+        log::Registry::audit()->warn("[ops::vault_keys] {} imported key version(s) {} of vault {} ('{}'{}) through {}",
+                                     actor->name(), versionList(restored), target.vault_id, target.name,
+                                     target.deleted ? ", deleted" : "", channelName(channel));
+    }
+
+    if (target.deleted) {
+        result.note = "the vault is deleted: restore it (vh vault restore) to use it again";
+    } else if (const auto engine = engineFor(target.vault_id)) {
+        // A running engine reloads its keys, so a restored outgoing key (an unfinished rotation) takes effect now.
+        if (result.written) {
+            try {
+                engine->encryptionManager->load_key();
+            } catch (const std::exception& e) {
+                result.note = std::string("the keys were written, but the running vault could not reload them: ") +
+                              e.what();
+            }
+        }
+        result.key_available = true;
+    } else if (result.written) {
+        try {
+            (void)runtime::Deps::get().storageManager->reinstateVault(target.vault_id);
+            result.key_available = engineFor(target.vault_id) != nullptr;
+        } catch (const std::exception& e) {
+            result.note = std::string("the keys were written, but the vault still doesn't start: ") + e.what();
+            log::Registry::crypto()->warn("[ops::vault_keys] vault {} did not start after a key import: {}",
+                                          target.vault_id, e.what());
+        }
+    } else {
+        result.note = "the vault isn't running on this host: it still needs key versions this import didn't restore";
+    }
+    return result;
+}
+
+nlohmann::json toJson(const ImportResult& r) {
+    auto versions = nlohmann::json::array();
+    for (const auto& v : r.versions)
+        versions.push_back({{"version", v.version}, {"outcome", to_string(v.outcome)}, {"detail", v.detail},
+                            {"verified_files", v.verified_files}, {"failed_files", v.failed_files}});
+    return {{"vault_id", r.vault_id}, {"vault_name", r.vault_name}, {"deleted", r.deleted}, {"written", r.written},
+            {"key_available", r.key_available}, {"note", r.note ? nlohmann::json(*r.note) : nlohmann::json(nullptr)},
+            {"versions", std::move(versions)}};
 }
 
 }

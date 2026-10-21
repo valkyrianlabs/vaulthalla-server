@@ -148,7 +148,7 @@ usage book and the operation catalog and no daemon types, so the client links it
 - `vh_run` commands are tokenized with a mirror of `Token.hpp`/`Parser.hpp`, resolved like the Router (plural → list,
   positionals descend), checked, and re-rendered from the tokens, so the daemon parses exactly what was checked
   (`McpCatalog.RunLinesParseAsCheckedForEveryDocumentedExample`). Refused before running: unknown commands, groups,
-  `--`, odd option spellings, confirmation flags in the command, and `mcp::exclusions()` (one list: `vault key export`,
+  `--`, odd option spellings, confirmation flags in the command, and `mcp::exclusions()` (one list: `vault key export|import`,
   `secrets export|update`, `setup`, `teardown`, `fs get|put`, `mcp`, `skill`, `device pair|approve|deny`,
   `device remote enable|disable`; also checked case-insensitively). Defense in depth for key material:
   `protocols::shell::AgentCallScope` marks a command run for an MCP client (`/mcp`'s executor; a `vh mcp` request
@@ -257,8 +257,8 @@ Normative protocol: `docs/pairing.md` in `vaulthalla/desktop` (its §8 test vect
   deletion is seen on the next command. Pairing: only `device.pair.*` and `meta.contract.get`; anything else is ERROR
   `data.code: device_unknown` (same for unknown and revoked keys). `device.identity.rotate` /
   `device.server.identity` only in Device mode; `device.pair.*` never on console sessions. Key material
-  (`vault.keys.export|export.confirm`) reaches the handler from any signed-in session but `ops::vault_keys` answers
-  only Device sessions (`export_requires_device` otherwise, D4). Contract auth levels
+  (`vault.keys.export|export.confirm|import`) reaches the handler from any signed-in session but `ops::vault_keys` answers
+  only Device sessions (`export_requires_device` / `import_requires_device` otherwise, D4). Contract auth levels
   `pairing` and `device` (`human` commands also run in Device mode). The sweeper keeps Device sessions while their
   user may sign in (no refresh token to expire) and closes pairing-only ones after 15 minutes (`DeviceEnded`).
   `auth::Manager::revokeSessions` closes Device sessions (they have no token to revoke); revocation closes the
@@ -682,8 +682,8 @@ policies), `config` (every settings write: one validation, one apply step that r
 is deliberately ungated, see Stats below), `conflicts` (sync conflicts, #187: ws `sync.conflicts.*`, `vh sync resolve` /
 `vh resolve`, the HTTP `/download/conflict` lane's authorization), `upstream` (S3/R2 bucket administration and event
 sync, #237/#96: ws `upstream.*`, `vh upstream …`; see `upstream-control-plane.md`), `recovery` (file recovery: ws `recovery.*` / `vault.recovery.*`, `vh snapshot|recovery …`, `vh vault recovery …`; see `recovery.md`), `devices` (paired devices: ws `device.*`, `vh device …`; see "Device listener
-and pairing"), `vault_keys` (key backup: ws `vault.keys.status|export|export.confirm`, `vh vault keys
-status|export`; export only to the CLI or a paired device, D4; see `key-backup.md`). Still per-surface: the ws-only
+and pairing"), `vault_keys` (key backup and restoration: ws `vault.keys.status|export|export.confirm|import`, `vh vault keys
+status|export|import`; key material only through the CLI or a paired device, D4; see `key-backup.md`). Still per-surface: the ws-only
 pricing preflight/override/notification endpoints, email test-send/history, `vh vault keys inspect|rotate`, sync
 diagnostics, and lifecycle commands (`setup`, `teardown`, `secrets`).
 

@@ -3,6 +3,8 @@
 #include <ctime>
 #include <memory>
 #include <optional>
+#include <string>
+#include <utility>
 #include <vector>
 
 #include "vault/Fwd.hpp"
@@ -49,6 +51,33 @@ public:
     // Retired versions whose rotation has not finished re-encrypting the vault (rotation_completed_at IS NULL),
     // ascending: the outgoing key still decrypts files the sync pass hasn't reached.
     [[nodiscard]] static std::vector<unsigned int> rotationPendingKeyVersions(unsigned int vaultId);
+
+    // ---- key import (vh vault keys import, ws vault.keys.import; .claude/context/key-backup.md)
+
+    enum class SealedTable { Current, Retired, DeletionCopy };
+    // One sealed row an import writes: re-sealed bytes for `version` in `table`.
+    struct SealedWrite {
+        SealedTable table{SealedTable::Current};
+        unsigned int version{};
+        std::vector<uint8_t> encrypted_key{}, iv{};
+        // What the row held when the import was planned (encrypted_key, iv); nullopt = there was no row (insert).
+        std::optional<std::pair<std::vector<uint8_t>, std::vector<uint8_t>>> expected{};
+        bool rotation_pending{false};  // a new retired row whose rotation hasn't finished re-encrypting the vault
+    };
+    // Every write in one transaction under the vault's rotation lock (the advisory lock rotate_vault_key takes).
+    // Existing rows keep their version, created_at, export marks and rotation state. Throws ops::Conflict, writing
+    // nothing, when any row no longer holds what the plan read.
+    static void writeImported(unsigned int vaultId, const std::vector<SealedWrite>& writes);
+    // Local ciphertext sealed under `version`, smallest first: files rows (with backing paths) and recovery blobs.
+    struct SealedSample {
+        std::string path{};  // files: the backing path; blobs: the storage name
+        std::string iv{};    // base64
+    };
+    [[nodiscard]] static std::vector<SealedSample> sampleSealedFiles(unsigned int vaultId, unsigned int version,
+                                                                     unsigned int limit);
+    [[nodiscard]] static std::vector<SealedSample> sampleRecoveryBlobs(unsigned int vaultId, unsigned int version,
+                                                                       unsigned int limit);
+    [[nodiscard]] static bool filesSealedUnder(unsigned int vaultId, unsigned int version);
 };
 
 }

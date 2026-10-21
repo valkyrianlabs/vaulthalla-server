@@ -1,4 +1,5 @@
 #include "protocols/shell/Server.hpp"
+#include "protocols/shell/ClientInput.hpp"
 #include "protocols/shell/Transfer.hpp"
 #include "protocols/shell/Router.hpp"
 #include "protocols/shell/Parser.hpp"
@@ -304,6 +305,18 @@ void Server::handleClient(const int cfd) {
                                                               : std::nullopt};
         }
 
+        // A document the client read on its side (vh vault keys import --file); never a path the daemon opens.
+        std::optional<std::string> input;
+        if (req.contains("input")) {
+            const auto& in = req["input"];
+            if (!in.is_object() || in.value("v", 0) != client_input::kVersion || !in.contains("text") ||
+                !in["text"].is_string() || in["text"].get_ref<const std::string&>().size() > client_input::kMaxBytes) {
+                sendCliError(cfd, 2, "invalid attached input (is vh newer than the daemon?)");
+                return;
+            }
+            input = in["text"].get<std::string>();
+        }
+
         std::unique_ptr<SocketIO> io;
         if (!peer && req.value("interactive", false)) {
             io = std::make_unique<SocketIO>(cfd);
@@ -314,7 +327,7 @@ void Server::handleClient(const int cfd) {
             // `vh mcp` marks its tool calls; key material refuses them (D4).
             std::optional<AgentCallScope> agent;
             if (req.value("agent", false)) agent.emplace();
-            const auto res = router_->executeLine(line, user, io.get(), std::move(peer));
+            const auto res = router_->executeLine(line, user, io.get(), std::move(peer), std::move(input));
 
             json reply{
                 {"type", "result"},

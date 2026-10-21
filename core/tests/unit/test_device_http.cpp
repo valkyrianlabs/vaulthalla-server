@@ -320,7 +320,7 @@ TEST_F(DeviceHttpTest, McpOverStreamableHttp) {
     EXPECT_NE(toolText(list).get<std::string>().find(row.spki_sha256), std::string::npos);
 
     // D4: key and secret export are unreachable, however they are spelled; pairing and exposure stay human.
-    for (const auto* command : {"vault keys export 1", "secrets export jwt-secret", "device approve abc --code 123456",
+    for (const auto* command : {"vault keys export 1", "vault keys import 1 --file keys.json", "secrets export jwt-secret", "device approve abc --code 123456",
                                 "device remote enable"}) {
         const auto refused = http.mcp({{"jsonrpc", "2.0"}, {"id", 4}, {"method", "tools/call"},
                                        {"params", {{"name", "vh_run"}, {"arguments", {{"command", command}}}}}}, v);
@@ -416,6 +416,7 @@ TEST_F(DeviceHttpTest, VaultKeyExportOnlyOnAPairedDevice) {
     EXPECT_NE(text.find(check), std::string::npos);
     EXPECT_EQ(text.find("\"key\""), std::string::npos);
     for (const auto& command : {"vault keys export " + std::to_string(vaultId), std::string("vault k export all"),
+                                "vault keys import " + std::to_string(vaultId) + " --file keys.json --confirm-name x",
                                 "VAULT KEYS EXPORT " + std::to_string(vaultId)}) {
         const auto refused = http.mcp({{"jsonrpc", "2.0"}, {"id", 3}, {"method", "tools/call"},
                                        {"params", {{"name", "vh_run"}, {"arguments", {{"command", command}}}}}}, v);

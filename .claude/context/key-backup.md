@@ -35,6 +35,7 @@ constant time (`keyCheckEquals`).
 | status | `vh vault keys status <vault\|all> [--json]` | `vault.keys.status {vault_id?}` | encryption-key View (super admins) | any session, MCP too: never key bytes |
 | export | `vh vault keys export <vault\|all> [--recipient --output]` | `vault.keys.export {vault_id}` | encryption-key Export | CLI or a paired device's session |
 | confirm | (the CLI marks on export, as before) | `vault.keys.export.confirm {vault_id, version, key_check}` | encryption-key Export | paired device |
+| import | `vh vault keys import <vault> --file <path\|-> [--confirm-name] [--json]` | `vault.keys.import {vault_id, keys, confirm_name?}` | encryption-key Export | CLI or a paired device (`import_requires_device` elsewhere) |
 
 - Channels: `Cli`, `Device` (`ws::Session::isDeviceSession()` with a peer), `Console` (any other ws session: refused
   with `ops::Refused{"export_requires_device"}`, so data.code `export_requires_device`), `Agent` (refused, Denied).
@@ -70,4 +71,103 @@ constant time (`keyCheckEquals`).
 Tests: `test_vault_keys.cpp` (`VaultKeyCheck`, `VaultKeysDbTest`: status incl. rotation/recovery/missing, export
 D4 + mid-rotation versions, confirm incl. a rotation in between, deleted vaults, CLI ↔ ws for every seeded admin
 role), `DeviceHttpTest.VaultKeyExportOnlyOnAPairedDevice` (real TLS, `/mcp` reads status but reaches no export),
-`McpCatalog` exclusions.
+`McpCatalog` exclusions. Import: `VaultKeysDbTest.Import*` (a key that no longer unseals restored and files read
+through `openPlaintextReader`; wrong key, damaged backup, other vault, a key the host unseals refused; partial version
+sets mid-rotation and a missing retired row re-inserted with the rotation resumed; a deleted vault restored after
+import), `cli_fs_client` (`vh` reads the file itself, `-` = stdin, never connects without it).
+
+## Key import (S6, D7): design
+
+Written before the code; the as-built notes below it say where the code differs.
+
+**Scenarios supported.** The vault's metadata (its `vault` row, `files` rows) and backing ciphertext exist on this
+host, but key versions are unusable:
+1. Sealed rows that no longer unseal: `vault_master` lost or replaced (a database restored onto a new host or a
+   reinstalled TPM/`swtpm` state), or a damaged `encrypted_key`/`iv`. The engine fails to start (`load_key` throws), so
+   the whole vault is unreadable; import re-seals the backed-up bytes under this host's `vault_master` and starts it.
+2. Missing rows: a retired version (`vault_keys_trashed`) that files still sealed under it (an unfinished rotation) or
+   recovery data need, e.g. after restoring a database backup older than the rotation; import inserts it.
+3. A deleted vault within key retention whose purge hasn't started (pending: rows and backing files still exist):
+   import re-seals its `vault_keys`/`vault_keys_trashed` rows and its `vault_deletion_key` copies, so a restore works.
+4. Any subset of versions (a partial backup): each version stands alone; the engine starts once every version it
+   needs to load (current, plus the outgoing key while rotating) unseals.
+
+**Out of scope, and why.**
+- Rebuilding a vault from backing files alone after total database loss. Backing files are named by random base32
+  aliases; the IV, key version, plaintext size, name, folder, owner, RBAC, shares and sync state of each exist only in
+  the database (`files`, `fs_entry`). A key alone can't say which file is which or even which IV to use. Restore the
+  database backup first (`backup-and-recovery.md`), then import keys.
+- A purged deleted vault: its files are gone, so nothing on this host can verify a key (refused as unverifiable).
+- Replacing a key this host can unseal with different bytes (that would be a rotation, or a wrong backup), and
+  importing into another vault id (entries are matched by `vault_id`, which the key check binds).
+- A current version newer than the database knows (backup newer than the restored database): no `files` row is sealed
+  under it, so it is unverifiable and refused.
+- Known hazard, not changed here: when a vault's `vault_keys` row is missing at startup, `load_key` mints a fresh key
+  (version 1). That key unseals, so import refuses to replace it ("never replace a key the daemon can unseal").
+  Policy question for the maintainer (reported with S6): should `load_key` refuse instead of minting when the vault
+  already has sealed files?
+
+**Input.** The export JSON (`vh vault keys export` / `vault.keys.export`): one vault object or the `all` array; the
+entry whose `vault_id` is the target vault; its versions are `key` + `key_info.key_version` and every
+`historical_keys[]` entry (base64, 32 bytes). The CLI `vh vault keys import <vault> --file <path|->` reads the file
+**client-side** (`vh`, or stdin with `-`) and sends its text in the request frame (`"input": {"v": 1, "text": ...}`,
+at most 512 KiB); the daemon never opens a path the caller names (`--file` is only a label there). A GPG-encrypted
+export is decrypted by the operator first (`gpg -d keys.json.gpg | vh vault keys import 12 --file - --confirm-name
+archive`). ws `vault.keys.import {vault_id, keys, confirm_name?}` on paired device sessions only (D4;
+`import_requires_device` elsewhere, Denied for agents; excluded from MCP).
+
+**Verification before anything is written** (per version):
+1. Shape: base64 of exactly 32 bytes, version > 0, no duplicate version with other bytes.
+2. Key check: when the backup carries one for the version, it must equal `keyCheck(bytes, vault_id, version)`, else
+   the backup is damaged: refused (`invalid`).
+3. Same bytes as this host: a sealed row that unseals here is compared in constant time: identical → `unchanged`
+   (no write, no verification needed); different → the whole import is refused (`conflict`), nothing written.
+4. Ciphertext: a streaming GCM tag check (`gcmVerifyFd`, no plaintext kept) of up to 16 local ciphertexts sealed
+   under the version, smallest first (all when fewer): `files` rows with that `encrypted_with_key_version` and an IV
+   whose backing file exists here (local vaults and cloud vaults' local copies), then `recovery_blob` rows with that
+   `key_version`. Verified when at least one authenticates (a 128-bit tag under the key is conclusive); others that
+   fail are reported as damaged files. None authenticates → not this vault's key: whole import refused (`invalid`).
+   Nothing to check against → that version is `unverifiable` and skipped; the others proceed. Never "trust the user".
+
+**Safety rules.** Never replace a key this host can unseal with different bytes (above); same bytes are a no-op.
+Writes happen in one transaction under the vault's rotation lock (`pg_advisory_xact_lock(vault_id)`, as
+`rotate_vault_key`), after re-reading every sealed row it evaluated (`FOR UPDATE`) and refusing (`conflict`) if one
+changed meanwhile. Each restored version is re-sealed under the current `vault_master` with a fresh IV: `UPDATE
+vault_keys` / `UPDATE vault_keys_trashed` keep version, created_at, export marks and `rotation_completed_at`; a new
+retired row is inserted with `rotation_completed_at` NULL only when it is the version just below current and live
+files are still sealed under it (an unfinished rotation), else completed. A deleted vault's `vault_deletion_key`
+copies are updated or inserted the same way. Rotation state is never changed otherwise. After commit: cached key
+checks for the vault are dropped; a live vault without an engine gets one (`storage::Manager::reinstateVault`, which
+also refreshes sync), and the result says whether it started. Audit: who, which vault, which versions, through which
+channel (device id via `AuditOrigin`).
+
+**Confirmation.** The op plans first. Nothing to write → `unchanged`, no confirmation. Otherwise it throws
+`NeedsConfirmation{"vault_key_import"}` (text: what will be written) unless `confirm_name` equals the vault's name.
+The CLI asks at a terminal ("type the vault name"), or takes `--confirm-name <name>` non-interactively.
+
+**Permissions.** Same as export: super admins or the encryption-key Export permission; a deleted vault only for
+callers who may remove it (ops::vaults' rule).
+
+**Desktop (restore milestone 3).** Reveal the item's versions from 1Password (`item.reveal`), build the export shape
+(`{vault_id, key, key_check, key_info: {key_version}, historical_keys: [{key_version, key, key_check}]}`), send
+`vault.keys.import {vault_id, keys}` over the paired connection, show the `vault_key_import` confirmation text, ask the
+user to type the vault name, resend with `confirm_name`, then poll `vault.keys.status` (`key_available`).
+
+**As built** (`ops::vault_keys::importKeys`, `VaultKeys.cpp`; `db::query::vault::Key::writeImported`,
+`sampleSealedFiles`, `sampleRecoveryBlobs`; ws `handler::VaultKeys::importKeys`; CLI `handle_vault_keys_import`):
+- Client side: `protocols/shell/ClientInput.hpp` (`client_input::plan`, mirrored aliases `vault|vaults|v` +
+  `key|keys|k` + `import`), `cli.cpp read_client_input` (regular file or stdin, ≤ 512 KiB, buffers zeroed after
+  sending); the server validates `input` and passes it as `CommandCall::input` (`Router::executeLine`'s new last
+  parameter). An unrecognized spelling reaches the daemon without input and is refused.
+- Plan per version: shape and key check (`invalid`, whole import) → versions newer than current are `unverifiable` →
+  slots (`vault_keys` for the current version, `vault_keys_trashed` for older ones while the vault row exists,
+  `vault_deletion_key` for a deleted vault) → a slot that unseals to other bytes is `conflict` (whole import), to the
+  same bytes makes the version verified by identity (no sampling) → otherwise up to 16 `files` + 16 `recovery_blob`
+  samples, smallest first, `gcmVerifyFd` (O_NOFOLLOW, regular files only): none authenticates but some were checked →
+  `invalid` (whole import); none checked → `unverifiable` (skipped).
+- `writeImported` re-checks every updated row's sealed bytes in its WHERE clause (and `ON CONFLICT DO NOTHING` for
+  inserts), so a concurrent change is `conflict` with nothing written.
+- After writing: a running engine reloads its keys (`EncryptionManager::load_key`, so a re-inserted outgoing key and
+  the resumed rotation take effect); a live vault without an engine is started with `storage::Manager::reinstateVault`;
+  a deleted vault reports that it needs a restore. `key_available` says whether the vault runs now.
+- Deleted vaults: only while restorable (pending); purging/purged are `conflict` (no ciphertext left to verify).
