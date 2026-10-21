@@ -134,7 +134,7 @@ public:
     void uploadBufferWithMetadata(const std::filesystem::path& key, const std::vector<uint8_t>& buffer,
                                   const storage::s3::RequestOptions& options) const override {
         std::scoped_lock lock(mutex_);
-        Object object{.body = buffer, .etag = "\"etag-" + std::to_string(++puts_ + 100) + "\""};
+        Object object{.body = buffer, .etag = "\"etag-" + std::to_string(++puts_ + 100) + "\"", .meta = {}};
         for (const auto& [name, value] : options.metadata) object.meta["x-amz-meta-" + name] = value;
         objects_[key.string()] = std::move(object);
     }
