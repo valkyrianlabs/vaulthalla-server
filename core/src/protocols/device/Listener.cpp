@@ -5,6 +5,8 @@
 #include "device/Peer.hpp"
 #include "device/ServerIdentity.hpp"
 #include "log/Registry.hpp"
+#include "protocols/device/Mcp.hpp"
+#include "protocols/http/Session.hpp"
 #include "protocols/ws/ConnectionLimit.hpp"
 #include "protocols/ws/Session.hpp"
 #include "protocols/ws/TlsTransport.hpp"
@@ -22,12 +24,14 @@
 
 #include <algorithm>
 #include <atomic>
+#include <limits>
+#include <thread>
 #include <string_view>
 
 namespace vh::protocols::device {
 
 namespace beast = boost::beast;
-namespace http = beast::http;
+namespace bhttp = beast::http;
 namespace ssl = asio::ssl;
 
 namespace {
@@ -50,6 +54,15 @@ void warnRefused(const unsigned int limit) {
 
 bool isPath(const std::string_view target, const std::string_view path) {
     return target == path || (target.starts_with(path) && target.size() > path.size() && target[path.size()] == '?');
+}
+
+// The HTTP routes served on the listener: the lanes nginx forwards on the web side, and MCP.
+bool isHttpLane(const std::string_view target) {
+    for (const std::string_view prefix : {"/preview", "/download", "/upload"})
+        if (target.starts_with(prefix) && (target.size() == prefix.size() || target[prefix.size()] == '/' ||
+                                           target[prefix.size()] == '?'))
+            return true;
+    return isPath(target, "/mcp");
 }
 
 // One accepted TCP connection until it is a ws::Session (or refused): TLS handshake, authorization by the client
@@ -107,9 +120,13 @@ private:
             return abort("authorization failed");
         }
 
-        request_ = std::make_shared<RequestType>();
-        http::async_read(transport_->ws.next_layer(), buffer_, *request_,
-                         [self = shared_from_this()](const beast::error_code& ec2, std::size_t) { self->onRequest(ec2); });
+        // The header only: an upload's body is the HTTP session's to stream.
+        parser_ = std::make_unique<protocols::http::HeaderParser>();
+        parser_->body_limit(std::numeric_limits<uint64_t>::max());
+        bhttp::async_read_header(transport_->ws.next_layer(), buffer_, *parser_,
+                                [self = shared_from_this()](const beast::error_code& ec2, std::size_t) {
+                                    self->onRequest(ec2);
+                                });
     }
 
     void onRequest(const beast::error_code& ec) {
@@ -118,29 +135,52 @@ private:
         dispatch();
     }
 
-    // The one place a path picks its handler. S1b adds /preview, /download, /upload (the HTTP lanes with this
-    // connection's device actor) and /mcp here.
+    // The one place a path picks its handler: /ws (the console's Router), the HTTP lanes and /mcp (an HTTP session
+    // on its own thread, as the device's user). A pairing-only connection gets only /ws.
     void dispatch() {
-        const std::string_view target{request_->target().data(), request_->target().size()};
+        const auto& header = parser_->get();
+        const std::string target{header.target()};
         if (isPath(target, "/ws")) {
-            if (!beast::websocket::is_upgrade(*request_)) return respond(http::status::upgrade_required, "websocket only");
+            request_ = std::make_shared<RequestType>(header.method(), header.target(), header.version());
+            for (const auto& f : header) request_->insert(f.name_string(), f.value());
+            if (!beast::websocket::is_upgrade(*request_)) return respond(bhttp::status::upgrade_required, "websocket only");
             const auto session = std::make_shared<ws::Session>(router_);
             session->holdConnectionSlot(std::move(slot_));
             session->acceptDevice(transport_, *request_, authorization_.peer, authorization_.user);
             return;
         }
-        respond(http::status::not_found, "not found");
+        if (isHttpLane(target)) {
+            if (!authorization_.user) return respond(bhttp::status::forbidden, "device_unknown");
+            auto session = protocols::http::Session::openDevice(
+                protocols::http::DeviceConnection{.transport = transport_, .peer = authorization_.peer,
+                                                  .user = authorization_.user, .slot = std::move(slot_),
+                                                  .mcp = &protocols::device::mcp::handle},
+                std::move(parser_), std::move(buffer_));
+            try {
+                std::thread([session = std::move(session)] {
+                    try {
+                        session->run();
+                    } catch (const std::exception& e) {
+                        log::Registry::http()->error("[DeviceServer] HTTP session ended: {}", e.what());
+                    }
+                }).detach();
+            } catch (const std::exception& e) {
+                log::Registry::http()->error("[DeviceServer] Could not start a connection thread: {}", e.what());
+            }
+            return;
+        }
+        respond(bhttp::status::not_found, "not found");
     }
 
-    void respond(const http::status status, const std::string_view body) {
-        auto res = std::make_shared<http::response<http::string_body>>(status, request_->version());
-        res->set(http::field::server, "Vaulthalla");
-        res->set(http::field::content_type, "text/plain");
+    void respond(const bhttp::status status, const std::string_view body) {
+        auto res = std::make_shared<bhttp::response<bhttp::string_body>>(status, parser_->get().version());
+        res->set(bhttp::field::server, "Vaulthalla");
+        res->set(bhttp::field::content_type, "text/plain");
         res->keep_alive(false);
         res->body() = std::string(body);
         res->prepare_payload();
         armTimer();
-        http::async_write(transport_->ws.next_layer(), *res,
+        bhttp::async_write(transport_->ws.next_layer(), *res,
                           [self = shared_from_this(), res](const beast::error_code&, std::size_t) {
                               self->transport_->ws.next_layer().async_shutdown(
                                   [self](const beast::error_code&) { self->abort("response sent"); });
@@ -151,7 +191,8 @@ private:
     asio::steady_timer timer_;
     std::shared_ptr<ws::Router> router_;
     std::unique_ptr<ws::ConnectionSlot> slot_;
-    beast::flat_buffer buffer_{8192};
+    beast::flat_buffer buffer_{16384};
+    std::unique_ptr<protocols::http::HeaderParser> parser_;
     std::shared_ptr<RequestType> request_;
     std::string address_{"unknown"};
     vh::device::Authorization authorization_;

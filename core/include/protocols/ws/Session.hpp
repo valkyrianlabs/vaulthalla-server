@@ -12,6 +12,7 @@
 #include "share/Fwd.hpp"
 
 #include <atomic>
+#include <functional>
 #include <deque>
 #include <memory>
 #include <mutex>
@@ -67,6 +68,12 @@ public:
     // session, null a pairing-only one.
     void acceptDevice(std::shared_ptr<TlsTransport> transport, const RequestType& req,
                       std::shared_ptr<const ::vh::device::Peer> peer, std::shared_ptr<identities::User> deviceUser);
+    // A Device session with no websocket: the principal of a device-listener HTTP connection (/preview, /download,
+    // /upload, /mcp). It is registered with the session manager like any device session, so revocation,
+    // revokeSessions and the sweeper close it; `onClose` then ends the HTTP connection.
+    [[nodiscard]] static std::shared_ptr<Session> devicePrincipal(std::shared_ptr<const ::vh::device::Peer> peer,
+                                                                  std::shared_ptr<identities::User> deviceUser,
+                                                                  std::function<void()> onClose);
     void send(json message);
     void close();
     // Closes once the reply to the command being handled has gone out (a device unpairing itself gets its answer).
@@ -144,6 +151,7 @@ private:
     std::string shareSessionToken_;
     bool shareHandshake_{false};
     std::shared_ptr<const ::vh::device::Peer> devicePeer_;
+    std::function<void()> onClose_;  // run once by the first close() (device HTTP principals)
 
     std::atomic_bool closing_{false};
     std::unique_ptr<ConnectionSlot> connectionSlot_;  // set before accept(); reset by the first close()

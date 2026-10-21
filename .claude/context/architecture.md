@@ -135,7 +135,8 @@ One catalog, two transports. `core/usage/{include/Mcp.hpp,src/mcp/}` (`vh::mcp`)
 (`Catalog`), the JSON-RPC 2.0 handler (`Server`: initialize with version negotiation 2025-11-25 → 2025-06-18 →
 2025-03-26, ping, tools/list, tools/call) and the skill text. It lives in the usage module because it needs only the
 usage book and the operation catalog and no daemon types, so the client links it directly; the daemon links it too
-(remote `/mcp` will run `Invocation::line` through `Router::executeLine(line, deviceUser)`).
+(remote `/mcp` on the device listener runs `Invocation::line` through `Router::executeLine(line, deviceUser)`; see
+"Device listener and pairing").
 - Compiled into `vaulthalla-cli` rather than fetched from the daemon: `tools/list` and `vh skill install` work with the
   daemon down, there is no new socket command, and skew fails closed (an older daemon rejects options it doesn't
   declare; `mcp`/`skill` reaching a daemon get "runs in the vh client", `commands/client.cpp`).
@@ -148,7 +149,8 @@ usage book and the operation catalog and no daemon types, so the client links it
   positionals descend), checked, and re-rendered from the tokens, so the daemon parses exactly what was checked
   (`McpCatalog.RunLinesParseAsCheckedForEveryDocumentedExample`). Refused before running: unknown commands, groups,
   `--`, odd option spellings, confirmation flags in the command, and `mcp::exclusions()` (one list: `vault key export`,
-  `secrets export|update`, `setup`, `teardown`, `fs get|put`, `mcp`, `skill`; also checked case-insensitively).
+  `secrets export|update`, `setup`, `teardown`, `fs get|put`, `mcp`, `skill`, `device pair|approve|deny`,
+  `device remote enable|disable`; also checked case-insensitively).
 - Confirmations: a leaf's gates are its flags spelled `yes`/`accept-*`/`adopt-bucket` and the `confirm-token` option.
   Tools never add them on their own (typed bindings' `fixed` `flag:yes` is dropped) and the schema has `confirm`
   (`{"yes": true}`, `{"confirm-token": "<t>"}`). Independently, every call that resolves to an `effect: destructive`
@@ -214,11 +216,29 @@ Normative protocol: `docs/pairing.md` in `vaulthalla/desktop` (its §8 test vect
   (`device::authorize`): a live `devices` row (current or previous key) → Device session as that row's user (the
   canonical `identities::Manager` object); anything else (unknown, revoked, owner gone) → pairing-only. A handshake
   with a rotated device's new key clears `previous_spki_sha256`. Then the HTTP request is read and dispatched by path
-  in `Connection::dispatch`: `/ws` upgrades into `ws::Session::acceptDevice`, everything else is 404 (**S1b seam**:
-  `/preview`, `/download`, `/upload` and `/mcp` go there, with the same `Authorization`). Cap
+  in `Connection::dispatch` (only the header is read; an upload body is the session's): `/ws` upgrades into
+  `ws::Session::acceptDevice`; `/preview*`, `/download*`, `/upload*` and `/mcp` hand the TLS stream to an
+  `http::Session` (below); anything else is 404. Cap
   `device_server.max_connections` (own `ConnectionSlot::Pool::Device`; over it the socket is closed, a TLS client
   can't read a 503), 10 s handshake and request deadlines. A bind failure never stops the daemon: it is in
   `listenerStatus()` and retried every 30 s.
+- **HTTP lanes and remote MCP (S1b).** `http::Session` runs over a `ByteStream`: `TimedStream` (the plain socket,
+  poll + deadline) or `TlsStream` (the device TLS stream: each blocking call starts one async op on the stream's strand
+  and waits against the deadline, cancelling the socket's I/O when it passes; bytes go through op-owned buffers so an
+  abandoned op never touches freed memory). A device connection runs on its own thread like the web side's, holds its
+  `ConnectionSlot` (device pool), and serves only `/preview*`, `/download*`, `/upload*` and `/mcp` (pairing-only
+  connections get 403 `device_unknown`). Its principal is a stream-less Device `ws::Session`
+  (`Session::devicePrincipal`) registered with the session manager, so revocation, `revokeSessions`, remote-off and
+  the sweeper close it; its close hook cancels the HTTP session, which also stops between requests and between
+  chunks. Requests run under `access::DevicePrincipalScope` (thread-local): `access::authenticate` and the upload
+  coordinator take the principal instead of a cookie, refuse the share lanes (`?share=1`: 403), and the usual
+  `Need` → RBAC mapping applies as the device's user; audit lines carry `[via device <id16>]`. `/mcp`
+  (`protocols/device/Mcp.cpp`): Streamable HTTP, POST only (GET/DELETE 405: no SSE, no MCP session id), JSON
+  responses (202 for notifications), `Origin` present → 403, unknown `MCP-Protocol-Version` → 400, JSON content type
+  required, batches refused; the `vh mcp` catalog and `mcp::Server` with an executor running
+  `shell::Router::executeLine(line, deviceUser, nullptr)` on its own thread, abandoned after 10 min (the command is
+  not interrupted). Same exclusions (key/secret export unreachable, D4), destructive gate and structured confirmation.
+  DeviceServer shutdown waits up to 3 s for device HTTP sessions before stopping its io_context (else keeps it).
 - **Server identity** (`device/ServerIdentity`): P-256 scalar sealed through `KeyProvider("device_tls")`
   (`test_device_tls` in test mode), generated on first start; self-signed certificate (serverAuth, 20 years) kept as
   `<state>/device_server_certificate.pem` and re-issued for the same key when missing or mismatched (the pin is the
@@ -243,7 +263,9 @@ Normative protocol: `docs/pairing.md` in `vaulthalla/desktop` (its §8 test vect
   session (`device::touch`). Audit lines written while a device's command runs end with `[via device <id16>]`
   (`log::AuditOrigin`, a thread-local read by the audit sink's `%*` flag).
 - **Pairing state is in memory** (`device::Pairing`, process singleton): windows (10 min, **one per node**, reopening
-  extends; another user's open is `conflict`), requests (commit-then-reveal; 5 min after confirm, never past the
+  extends; another user's open is `conflict`; closing is the owner's, `{any: true}` / `vh device pair --close --any`
+  lets a super admin close anyone's; `open` and `pending` carry `server_time`, `open` the listener's `port` and
+  `remote`), requests (commit-then-reveal; 5 min after confirm, never past the
   window; one live request per key; ≤ 5 per window and ≤ 10/min per source IP → `rate_limited`), outcomes kept 10
   min for `device.pair.status`. Nonces and codes never touch disk; a restart only makes Desktop start over. Number
   matching: `pending` offers three codes (one SAS, two decoys fixed per request), `approve` compares in constant time

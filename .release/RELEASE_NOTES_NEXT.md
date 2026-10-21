@@ -24,6 +24,11 @@ deactivation refuses it, and a password reset or role change closes its open con
 `vh device list | rename | revoke` (super admins: `vh device list --all`). Revoking is final: the device's
 connections close immediately and its key is never accepted again.
 
+A paired Mac also downloads, previews and uploads files over the same connection, with the same permission checks
+as the web console (share links aren't offered there), and its AI agents can use **remote MCP** at `/mcp`: the same
+tools, limits and confirmations as `vh mcp`. Agents can never approve pairing requests, turn remote connections on or
+off, or export keys or secrets.
+
 The web console's Devices page comes in a later release; the ws commands it will use (`device.*`) are available now.
 
 ## Let Claude Code or Codex operate Vaulthalla

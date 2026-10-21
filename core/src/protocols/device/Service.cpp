@@ -7,6 +7,8 @@
 #include "device/ServerIdentity.hpp"
 #include "log/Registry.hpp"
 #include "protocols/device/Listener.hpp"
+#include "protocols/http/Session.hpp"
+#include "protocols/SessionLifetimes.hpp"
 #include "protocols/ws/ConnectionLimit.hpp"
 #include "protocols/ws/Handler.hpp"
 #include "protocols/ws/Router.hpp"
@@ -31,6 +33,7 @@ constexpr unsigned kIoThreads = 4;
 constexpr auto kRetryBind = std::chrono::seconds(30);
 // Close frames of the sessions closed at shutdown get this long to go out before the io_context stops.
 constexpr auto kCloseGrace = std::chrono::milliseconds(200);
+constexpr auto kHttpDrainTimeout = std::chrono::seconds(3);
 
 using WorkGuard = asio::executor_work_guard<asio::io_context::executor_type>;
 
@@ -220,12 +223,19 @@ void Service::shutdown() noexcept {
         listener_.reset();
         boundAddress_.clear();
         if (ioc_) {
-            closeAllDeviceListenerSessions();
+            closeAllDeviceListenerSessions();  // HTTP connections end with their principals
             std::this_thread::sleep_for(kCloseGrace);
+            // HTTP sessions run on their own threads with sockets on this io_context: it outlives every one of them.
+            const bool drained = protocols::http::Session::waitUntilNoDeviceSessionsAlive(kHttpDrainTimeout);
             ioc_->stop();
             for (auto& t : threads_)
                 if (t.joinable()) t.join();
             threads_.clear();
+            if (!drained) {
+                log::Registry::runtime()->error("[DeviceServer] HTTP sessions still running {}s after shutdown; keeping "
+                                                "their io_context", kHttpDrainTimeout.count());
+                retainForProcessLifetime(std::move(ioc_));
+            }
             ioc_.reset();
         }
     } catch (const std::exception& e) {

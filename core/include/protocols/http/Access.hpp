@@ -69,7 +69,25 @@ struct Target {
 [[nodiscard]] Params parseQuery(std::string_view target);
 [[nodiscard]] bool isShareLane(const Params& params);
 
-// Resolves the session behind the request's cookie (`refresh`, or `share_refresh` on the ?share=1 lane).
+// The device listener's HTTP lanes authenticate by the connection's client key, never by a cookie: while a scope is
+// alive on a thread, every request that thread serves is the device's principal (a Device ws::Session holding the
+// canonical user), and the share lanes (?share=1) are refused.
+class DevicePrincipalScope {
+public:
+    explicit DevicePrincipalScope(std::shared_ptr<ws::Session> principal);
+    ~DevicePrincipalScope();
+    DevicePrincipalScope(const DevicePrincipalScope&) = delete;
+    DevicePrincipalScope& operator=(const DevicePrincipalScope&) = delete;
+
+    [[nodiscard]] static const std::shared_ptr<ws::Session>* current() noexcept;
+
+private:
+    std::shared_ptr<ws::Session> principal_;
+    const std::shared_ptr<ws::Session>* previous_;
+};
+
+// Resolves the session behind the request's cookie (`refresh`, or `share_refresh` on the ?share=1 lane), or the
+// device principal in scope.
 [[nodiscard]] Caller authenticate(const Request& req, const Params& params);
 
 // Resolves the addressed entry and enforces `need`. Throws Unauthorized/Forbidden/NotFound/BadRequest.

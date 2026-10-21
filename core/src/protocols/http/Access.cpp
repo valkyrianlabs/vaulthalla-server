@@ -276,9 +276,30 @@ bool isShareLane(const Params& params) {
     return it != params.end() && it->second == "1";
 }
 
+namespace {
+thread_local const std::shared_ptr<ws::Session>* devicePrincipal = nullptr;
+}
+
+DevicePrincipalScope::DevicePrincipalScope(std::shared_ptr<ws::Session> principal)
+    : principal_(std::move(principal)), previous_(devicePrincipal) {
+    devicePrincipal = &principal_;
+}
+
+DevicePrincipalScope::~DevicePrincipalScope() { devicePrincipal = previous_; }
+
+const std::shared_ptr<ws::Session>* DevicePrincipalScope::current() noexcept { return devicePrincipal; }
+
 Caller authenticate(const Request& req, const Params& params) {
     Caller caller;
     caller.share = isShareLane(params);
+    if (const auto* device = DevicePrincipalScope::current()) {
+        // A paired device is its user: the human lanes only, never a share link's.
+        if (caller.share) throw Forbidden("share links are not served on the device listener");
+        if (!*device || !(*device)->user || (*device)->closing() || !(*device)->user->authorizing())
+            throw Unauthorized("Unauthorized: this device session has ended");
+        caller.session = *device;
+        return caller;
+    }
     try {
         caller.session = hooks::sessionResolver()(req);
     } catch (const std::exception& e) {

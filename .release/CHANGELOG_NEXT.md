@@ -24,6 +24,14 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   is written only by vh device remote enable|disable, which rebinds the listener without a restart.
 - auth revokeSessions closes live device sessions; device revocation closes them immediately.
 - Audit log lines written while a device's command runs end with "[via device <id>]".
+- Serve /preview*, /download* and /upload* on the device listener over TLS as the device's user (no cookies, no
+  share lanes) and remote MCP at /mcp (Streamable HTTP: POST, JSON responses, Origin and MCP-Protocol-Version
+  checks, the vh mcp catalog run through the CLI router, 10-minute call deadline). The HTTP session runs over a
+  plain or TLS byte stream; device HTTP connections end on revocation, revokeSessions or remote-off.
+- MCP never offers vh device pair|approve|deny or vh device remote enable|disable; every vh device leaf declares
+  its effect.
+- device.pairing.close closes only the caller's window unless a super admin passes any (CLI: vh device pair --close
+  --any); device.pairing.open and .pending return server_time, and .open the listener's port and remote.
 
 ## CLI
 - Add `vh mcp`: an MCP server (JSON-RPC 2.0 over stdio, protocol 2025-11-25, also 2025-06-18 and 2025-03-26).

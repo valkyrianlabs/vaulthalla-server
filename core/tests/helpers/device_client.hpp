@@ -12,6 +12,7 @@
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/ssl.hpp>
 #include <boost/beast/core.hpp>
+#include <boost/beast/http.hpp>
 #include <boost/beast/websocket.hpp>
 #include <boost/beast/websocket/ssl.hpp>
 #include <nlohmann/json.hpp>
@@ -165,6 +166,72 @@ private:
     beast::flat_buffer buffer_;
     std::optional<vh::device::crypto::PublicKey> serverSpki_;
     int counter_ = 0;
+};
+
+// HTTP/1.1 over the same TLS profile (the device listener's /preview, /download, /upload and /mcp lanes), keep-alive.
+class HttpClient {
+public:
+    using Response = beast::http::response<beast::http::string_body>;
+
+    HttpClient(const uint16_t port, const ClientIdentity& identity) : port_(port), tls_(ssl::context::tls_client) {
+        SSL_CTX* native = tls_.native_handle();
+        SSL_CTX_set_verify(native, SSL_VERIFY_NONE, nullptr);
+        SSL_CTX_use_certificate(native, identity.id->certificate());
+        SSL_CTX_use_PrivateKey(native, identity.id->key());
+        stream_ = std::make_unique<ssl::stream<tcp::socket>>(ioc_, tls_);
+    }
+
+    bool connect() {
+        beast::error_code ec;
+        stream_->lowest_layer().connect(tcp::endpoint(asio::ip::make_address("127.0.0.1"), port_), ec);
+        if (ec) return false;
+        bool ok = false;
+        stream_->async_handshake(ssl::stream_base::client, [&](const beast::error_code& e) { ok = !e; });
+        return run() && ok;
+    }
+
+    // nullopt when the connection fails or closes before a full response.
+    std::optional<Response> request(const beast::http::verb method, const std::string& target, std::string body = {},
+                                    const std::vector<std::pair<std::string, std::string>>& headers = {}) {
+        beast::http::request<beast::http::string_body> req{method, target, 11};
+        req.set(beast::http::field::host, "127.0.0.1");
+        for (const auto& [k, v] : headers) req.set(k, v);
+        req.body() = std::move(body);
+        req.prepare_payload();
+        bool ok = false;
+        beast::http::async_write(*stream_, req, [&](const beast::error_code& e, std::size_t) { ok = !e; });
+        if (!run() || !ok) return std::nullopt;
+        Response res;
+        ok = false;
+        beast::http::response_parser<beast::http::string_body> parser;
+        parser.body_limit(64u * 1024u * 1024u);
+        if (method == beast::http::verb::head) parser.skip(true);
+        beast::http::async_read(*stream_, buffer_, parser, [&](const beast::error_code& e, std::size_t) { ok = !e; });
+        if (!run() || !ok) return std::nullopt;
+        return parser.release();
+    }
+
+    std::optional<json> mcp(const json& message, const std::vector<std::pair<std::string, std::string>>& extra = {}) {
+        std::vector<std::pair<std::string, std::string>> headers{{"Content-Type", "application/json"},
+                                                                 {"Accept", "application/json, text/event-stream"}};
+        headers.insert(headers.end(), extra.begin(), extra.end());
+        const auto res = request(beast::http::verb::post, "/mcp", message.dump(), headers);
+        if (!res || res->body().empty()) return std::nullopt;
+        return json::parse(res->body(), nullptr, false);
+    }
+
+private:
+    bool run(const std::chrono::milliseconds timeout = std::chrono::seconds(20)) {
+        ioc_.restart();
+        ioc_.run_for(timeout);
+        return ioc_.stopped();
+    }
+
+    uint16_t port_;
+    asio::io_context ioc_;
+    ssl::context tls_;
+    std::unique_ptr<ssl::stream<tcp::socket>> stream_;
+    beast::flat_buffer buffer_;
 };
 
 }

@@ -246,6 +246,24 @@ void Session::acceptDevice(std::shared_ptr<TlsTransport> transport, const Reques
     });
 }
 
+std::shared_ptr<Session> Session::devicePrincipal(std::shared_ptr<const ::vh::device::Peer> peer,
+                                                  std::shared_ptr<identities::User> deviceUser,
+                                                  std::function<void()> onClose) {
+    if (!peer || !deviceUser) throw std::invalid_argument("a device principal needs a paired device and its user");
+    if (deviceUser->systemOnly()) throw std::runtime_error("System-only users cannot own devices");
+    auto session = std::make_shared<Session>(std::make_shared<Router>());
+    session->ipAddress = peer->address;
+    session->clientAddress = peer->address;
+    session->userAgent = "device-http";
+    session->devicePeer_ = std::move(peer);
+    session->user = std::move(deviceUser);
+    session->mode_ = SessionMode::Device;
+    session->onClose_ = std::move(onClose);
+    session->handshakeComplete_.store(true, std::memory_order_release);  // nothing to hand-shake: the sweeper may judge it
+    if (const auto manager = runtime::Deps::get().sessionManager) manager->cache(session);
+    return session;
+}
+
 void Session::hydrateFromRequest(const RequestType& req) {
     log::Registry::ws()->debug("[ws::Session] Handshake request received from IP: {}", getIPAddress());
 
@@ -364,6 +382,14 @@ void Session::close() {
     if (closing_.exchange(true)) return;
     // Only the first close() gets here: give the connection-cap slot back now, not when the last handler lets go.
     connectionSlot_.reset();
+    if (onClose_) {
+        const auto hook = std::move(onClose_);
+        try {
+            hook();
+        } catch (...) {
+            log::Registry::ws()->debug("[ws::Session] close hook failed");
+        }
+    }
 
     auto self = weak_from_this().lock();
     if (self) {
