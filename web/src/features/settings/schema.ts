@@ -162,6 +162,15 @@ export const SECTIONS: SectionDef[] = [
     ],
   },
   {
+    // device_server.remote is the only switch operators change (ws device.remote.enable|disable); it is managed with the
+    // listener's live status on the Devices page, so this editor never writes the section (port included).
+    key: 'device_server',
+    label: 'Device listener',
+    description: 'Vaulthalla Desktop’s mutual-TLS endpoint: remote connections, listener status and the server key.',
+    managedAt: { href: '/devices/all#remote-connections', label: 'Devices' },
+    fields: [],
+  },
+  {
     key: 'caching',
     label: 'Cache & thumbnails',
     description: 'Local cache size and thumbnail generation.',

@@ -33,6 +33,15 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
 - device.pairing.close closes only the caller's window unless a super admin passes any (CLI: vh device pair --close
   --any); device.pairing.open and .pending return server_time, and .open the listener's port and remote.
 
+## Web console
+- Add Devices (/devices, any signed-in user): own devices with rename, revoke (confirm) and copyable ids, and the
+  lazy "Pair a device" dialog (device.pairing.open, device.pairing.pending polled every 2 s while visible, number
+  matching via device.pairing.approve, deny, a countdown by the node's clock (server_time), the listener port
+  from device.pairing.open, device.pairing.close on dismiss; another user's window is shown, never closed).
+- Add /devices/all for super admins: device.list {all} with owners and the remote-connections card
+  (device.remote.status|enable|disable); Settings shows device_server as managed there.
+- Add tests/e2e/devices.spec.ts, which also runs with no daemon (VAULTHALLA_E2E_OFFLINE=1).
+
 ## CLI
 - Add `vh mcp`: an MCP server (JSON-RPC 2.0 over stdio, protocol 2025-11-25, also 2025-06-18 and 2025-03-26).
   - Tools: `vh_help` (usage book), `vh_read` (read-only commands), `vh_run` (any agent-available command) and one

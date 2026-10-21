@@ -29,7 +29,18 @@ as the web console (share links aren't offered there), and its AI agents can use
 tools, limits and confirmations as `vh mcp`. Agents can never approve pairing requests, turn remote connections on or
 off, or export keys or secrets.
 
-The web console's Devices page comes in a later release; the ws commands it will use (`device.*`) are available now.
+### In the web console
+
+**Devices** (in the main navigation and the account menu) lists your paired Macs with their platform, app version,
+when they were paired and last seen, the last address and the device id, and lets you rename or revoke them. **Pair a
+device** is one click: the dialog opens a pairing window, shows the Mac's request with three codes as large buttons,
+and you click the one the Mac shows. A wrong click declines the request; if another user is pairing on the node at
+the same time, the dialog says so and leaves their window alone. The dialog shows the address and port to enter
+in Desktop and counts down by the server's clock. Closing the dialog closes your window.
+
+Super admins also get **Devices → All devices**: every user's devices with their owners, and a **Remote connections**
+card with the listener's live status (address, port, connections, any bind error, the server key fingerprint) and an
+on/off switch. Settings → Device listener links there.
 
 ## Let Claude Code or Codex operate Vaulthalla
 
