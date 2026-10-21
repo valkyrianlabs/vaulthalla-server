@@ -35,6 +35,25 @@ inline WsField anyOf(std::string name, std::vector<std::string> types) {
     return {.name = std::move(name), .types = std::move(types)};
 }
 
+// A nameless alternative of a union (WsField::one_of).
+inline WsField alt(std::vector<std::string> types) { return {.types = std::move(types)}; }
+
+// An object used as a map: arbitrary keys, each value shaped like `value` (its name is ignored).
+inline WsField mapOf(std::string name, WsField value) {
+    return {.name = std::move(name), .types = {"object"}, .values = {std::move(value)}};
+}
+
+// An array whose elements `items` can't describe (arrays, unions, nullable elements).
+inline WsField arrayOf(std::string name, WsField element) {
+    return {.name = std::move(name), .types = {"array"}, .element = {std::move(element)}};
+}
+
+inline WsField integer(std::string name) { return {.name = std::move(name), .types = {"integer"}}; }
+
+inline WsField number(std::string name) { return {.name = std::move(name), .types = {"number"}}; }
+
+inline WsField intArray(std::string name) { return {.name = std::move(name), .types = {"array"}, .items = "integer"}; }
+
 // Common shapes.
 inline WsField vaultId() { return uinteger("vault_id").gen(gen::ref("vault", {"id"})).desc("Vault id."); }
 
@@ -56,5 +75,17 @@ std::vector<WsCommandUsage> shareCommands();
 std::vector<WsCommandUsage> metaCommands();
 std::vector<WsCommandUsage> upstreamCommands();
 std::vector<WsCommandUsage> recoveryCommands();
+std::vector<WsCommandUsage> shareSessionCommands();
+std::vector<WsCommandUsage> syncCommands();
+std::vector<WsCommandUsage> apiKeyCommands();
+std::vector<WsCommandUsage> permissionCommands();
+std::vector<WsCommandUsage> statsCommands();
+std::vector<WsCommandUsage> dashboardCommands();
+std::vector<WsCommandUsage> s3GatewayCommands();
+std::vector<WsCommandUsage> pricingCommands();
+std::vector<WsCommandUsage> settingsCommands();
+std::vector<WsCommandUsage> emailCommands();
+std::vector<WsCommandUsage> deviceCommands();
+std::vector<WsCommandUsage> vaultKeyCommands();
 
 }

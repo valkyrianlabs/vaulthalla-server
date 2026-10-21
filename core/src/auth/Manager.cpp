@@ -133,6 +133,9 @@ void Manager::revokeSessions(const uint32_t userId) {
         for (const auto& session : sessions->getSessionsByUserId(userId)) {
             try {
                 sessions->invalidate(session);
+                // A paired device's session has no token to revoke: it ends now, and its next connection is
+                // authorized afresh (or refused) at the TLS handshake.
+                if (session->isDeviceSession()) session->close();
             } catch (const std::exception& e) {
                 log::Registry::auth()->error("[AuthManager] Failed to invalidate a session of user id {}: {}", userId, e.what());
             }

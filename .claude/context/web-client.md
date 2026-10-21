@@ -52,7 +52,7 @@
   component. Areas: `files` (FileBrowser over an `FsSource` adapter — vault or share — with capability-driven UI,
   URL-addressed paths, virtualized list/grid, transfer manager), `shares`, `share` (anonymous recipient page),
   `health`, `vaults`, `access`, `account`, `credentials`, `cost`, `gateway`, `notifications`, `settings`, `auth`,
-  `syncConflicts`, `recovery`.
+  `syncConflicts`, `recovery`, `devices`.
 
 ## Server-owned ws contract
 
@@ -60,12 +60,40 @@
   `vh_usage --json` publishes them (`build/core/usage.json`).
 - `web/src/util/generated/wsContract.{json,ts}` is generated from it: `python3 tools/contracts/ws_contract.py --write
   --vh-usage build/core/vh_usage`. Never edit by hand. `web/src/util/wsContractCheck.ts` type-checks
-  `WebSocketCommandMap` against it, naming each mismatch in `pnpm typecheck` output.
-- `COMMAND_TIMEOUTS` = the server-declared `WS_CONTRACT_TIMEOUTS` plus local entries for commands not in the book.
+  `WebSocketCommandMap` against it, naming each mismatch in `pnpm typecheck` output (payloads deep, responses by
+  top-level member: nested models are typed in `WsModels` but not compared with the web's own model classes).
+- **Models (contract_version 2):** `models[]` (name → fields, `models_hash`) holds every named shape the book
+  references (169: users and roles, vaults, fs entries, shares, stats, recovery, upstream, S3 gateway, pricing,
+  settings sections ...), declared in `core/usage/src/contract/models/<area>.cpp`. Fields may carry `one_of` (a union
+  spelled out), `values` (map objects), `element` (array element shape) and `partial` (a merge-patch payload such as
+  `settings.update`); `response_model` names a command whose `data` is one model. `ContractModels.*`
+  (`core/tests/unit/contract/models_<area>.cpp` + `core/tests/helpers/contract_model_check.hpp`) serializes seeded
+  instances with the real serializers and fails on an undeclared key, a missing required one, a wrong JSON type or
+  enum value, or a declared field no instance produces. `UsageContract.UnionsObjectsAndArraysAreSpelledOut` fails on
+  an unspelled union or a shapeless object outside `opaqueObjects()` (free-form user/operator JSON only, each with
+  its reason). The generated TS has `WsModels` and `WsPartial`.
+- The book covers every command the daemon registers (222; `UsageContract.EveryRegisteredWsCommandHasABookEntry` and
+  `test_ws_contract.py` fail on a registered command without an entry; an explicit, reasoned allowlist exists and is
+  empty), so `COMMAND_TIMEOUTS` is just the server-declared `WS_CONTRACT_TIMEOUTS`.
 - Drift fails the meson test `ws_contract_drift` and `tools/contracts/test_ws_contract.py` (which also checks every
   book command is registered in core and typed in the web map).
+- **Refusals:** each command lists `refusal_kinds` (`denied`, `not_found`, `invalid`, `conflict` as data.code;
+  `unauthorized` = status UNAUTHORIZED; `error` = no code by design) and `confirmations` (`{code, accept_field,
+  description}`: the NeedsConfirmation codes and the payload member, dotted, a resend sets; e.g. `encryption_waiver`
+  → `accept_encryption_waiver`, `upstream_adoption` → `provision.accept_adoption`). `refusal_codes` stays their
+  union for older consumers. `WS_CONTRACT_CONFIRMATIONS` in the generated TS mirrors them. fs/share/pricing/email/
+  settings/S3 gateway/vault/dashboard refusals are typed (`untyped_refusals` is left only on `fs.entry.copy` quota
+  exhaustion and `fs.upload.finish` final-move failure); message texts are unchanged, so `DENIED_TEXT` in
+  `lib/ws/errors.ts` only matters for older daemons. `UsageContract.RefusalsSplitGenericKindsFromConfirmations`
+  keeps kinds and confirmations apart and checks every `accept_field` against the payload.
+- **Envelope:** `envelope` in the snapshot documents the frames. Request `{command, payload?, requestId?, token?}`
+  (a payload command without `payload` reads `{}`); answer `{command: "<cmd>.response", status: OK | ERROR |
+  UNAUTHORIZED, requestId?, data?, error?}`, `data` omitted when empty (read as `{}`); internal faults answer the
+  request's own command as ERROR without a code (never `UNKNOWN` / `Unknown.response`); an unroutable frame gets
+  `{command: "error", status: "parse_error", error, message, requestId?}` (`message` kept for old clients).
+  `core/include/protocols/ws/Envelope.hpp` + `WsEnvelope.*` tests.
 - `meta.contract.get` (signed-in sessions only; no pre-login build fingerprinting) returns `{contract_version,
-  contract_hash, ws_hash}`. The console checks `ws_hash` after login/refresh and on reconnects of a signed-in page,
+  contract_hash, ws_hash, models_hash}`. The console checks `ws_hash` after login/refresh and on reconnects of a signed-in page,
   and shows one "server was upgraded, reload" notice per server contract.
 
 ## Sync conflicts (#187)
@@ -90,6 +118,38 @@ Overwrite, reported per row as `can_overwrite`).
   are ≤ 2 MiB and strict UTF-8; other types metadata only. The remote side is metered: it loads with the sheet only
   when ≤ 2 MiB, larger copies need a "Load the bucket copy" click, and anything over the daemon's 32 MiB cap is not
   requested. 409/413/503 from the lane become messages.
+
+## Paired devices (`features/devices`)
+
+Vaulthalla Desktop pairing over ws `device.*` (typed in `WebSocketCommandMap`, `models/device.ts`; protocol
+`docs/pairing.md` in vaulthalla/desktop, daemon side in architecture.md "Device listener and pairing"). No new
+permission bits (D3): any signed-in user, super-admin parts gated with `useCan({superAdmin: true})`.
+- **Routes:** `/devices` (nav item "Devices" in the first section, everyone; also "Your devices" in the user menu) and
+  `/devices/all` (super admins; `DevicesShell` shows the `LinkTabs` only to them, others get the typed denied state).
+  `DevicesShell` (route layout) owns the header's **Pair a device** button and the dialog (`useOpenPairing()` for the
+  empty state). Settings shows `device_server` as `managedAt` `/devices/all#remote-connections`, so the generic
+  editor never writes that section.
+- **Tables** (`DeviceTable`): `device.list {}` / `{all: true}` (owner column), revoked rows behind "Show revoked",
+  rename (`RenameDeviceDialog`, lazy), revoke behind `confirm()` ("This Mac loses access immediately and must pair
+  again"), short device id (12 hex) with a copy-all button. Every change invalidates `device.list`.
+- **Pair dialog** (`PairDeviceDialog`, `next/dynamic`, mounted only while open): sends `device.pairing.open` on
+  mount and polls `device.pairing.pending` every 2 s (`refetchInterval`, paused in hidden tabs) while the window is
+  open. Each request shows name, platform, app version, source IP, short device id and its three `code_choices` as
+  large "482 913" buttons; a click sends `device.pairing.approve {request_id, code}` (digits only). Outcomes:
+  success → "Paired" view + `device.list` refresh; `invalid` → "That code didn't match, so the request was declined.
+  Start pairing again on the Mac."; `not_found` → expired. Deny sends `device.pairing.deny`. Countdown from the
+  window's `expires_at` against the node's clock: open and pending carry `server_time`, and the dialog keeps the
+  offset from the latest answer (never the browser's clock alone); a pending answer with `window: null` (or the
+  countdown reaching 0) shows "Open again". `conflict` on open → plain "someone else is pairing" state with the daemon's text and Try again.
+  **`device.pairing.close {}` is sent on unmount only if this dialog opened the window and it hasn't expired** (the
+  daemon closes only the caller's own window without `any`; a dialog that got `conflict` has none); the close is
+  deferred one tick so React's dev double-invoke keeps the window. The instructions show `host:port` with the `port`
+  from `device.pairing.open` and warn when its `remote` is off (any user; super admins get a link to turn it on and,
+  from `device.remote.status`, a warning when the listener isn't listening).
+- **Remote connections** (`RemoteConnectionsCard`, `/devices/all#remote-connections`): `device.remote.status` (30 s
+  poll) → status badge, bind address, port (always the daemon's, never a console constant), connections, bind error,
+  server key fingerprint (grouped, copyable); `Switch` → `confirm()` → `device.remote.enable|disable`, whose answer
+  replaces the cached status.
 
 ## Vault deletion (#162)
 
@@ -164,7 +224,7 @@ Typed ws `recovery.*` / `vault.recovery.*` (`models/recovery.ts`, `RECOVERY_CODE
 `/login`, `/files/[vaultId]/[...path]`, `/shares`, `/vaults` (+ `/new`, `/[id]` tabs: overview, access, shares,
 sync, gateway, settings), `/users` (+ `/new`, `/[name]`), `/groups`, `/roles` (+ `/new?type=`, `/[type]/[id]`),
 `/credentials` (+ `/new`, `/[id]`), `/cost`, `/s3-gateway`, `/health` (+ runtime, filesystem, storage, activity),
-`/notifications`, `/settings`, `/sync-conflicts`, `/account`, `/share/[token]/[...path]` (public, no shell). Old URLs (`/fs`,
+`/notifications`, `/settings`, `/sync-conflicts`, `/account`, `/devices` (+ `/all`), `/share/[token]/[...path]` (public, no shell). Old URLs (`/fs`,
 `/dashboard/*`, `/api-keys/*`, `/pricing-budget`, `/operator-email`, `/users/add`, `/vaults/:id/edit|assign`,
 `/roles/admin|vault/*`) redirect (`next.config.ts`).
 
@@ -223,6 +283,12 @@ no 3D engine chunk on an image preview, preview-only vs download share links) wi
 (`page.routeWebSocket`), since the share dialog only offers presets. `recovery.spec.ts` scripts the `recovery.*` /
 `vault.recovery.*` answers on the console socket (`page.routeWebSocket`; everything else reaches the real daemon) and
 proves the console's own rules: history sheet, typed `RESTORE`, disclosure acknowledgements, unknown costs never $0.
+`devices.spec.ts` scripts `device.*` the same way (list/rename/revoke, number matching right and wrong code, conflict
+never closed, countdown by `server_time`, the open's port in the instructions, super-admin remote switch with a
+non-default port) and patches the `auth.refresh` user to a super admin
+where needed (UI gating only). With `VAULTHALLA_E2E_OFFLINE=1` it needs no daemon at all: `globalSetup` skips
+provisioning, a dummy `refresh` cookie passes the middleware, `auth.refresh` is answered with a scripted user and every
+other command is refused (`pnpm exec playwright test tests/e2e/devices.spec.ts` starts `pnpm dev:e2e`).
 
 ## Packaging
 

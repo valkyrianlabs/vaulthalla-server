@@ -267,5 +267,44 @@ class FsClient(unittest.TestCase):
         self.assertEqual(r.returncode, 64, r.stderr)
 
 
+    # ------------------------------------------------------------------------------------- vault keys import ----
+
+    def serve_result(self, stdout: str = "imported"):
+        def script(d, conn, req):
+            send(conn, {"type": "result", "ok": True, "exit_code": 0, "stdout": stdout})
+        return FakeDaemon(self.tmp, script)
+
+    def test_key_import_attaches_the_file_read_on_the_callers_side(self) -> None:
+        export = b'{"vault_id": 12, "key": "AAAA", "key_info": {"key_version": 1}}'
+        src = self.tmp / "keys.json"
+        src.write_bytes(export)
+        d = self.serve_result()
+        r = run_vh(["vault", "keys", "import", "12", "--file", str(src), "--confirm-name", "a"], d.path)
+        d.join()
+        self.assertIsNone(d.error)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(d.request["input"], {"v": 1, "text": export.decode()})
+        self.assertIn("--file", d.request["line"])  # a label for the daemon, which never opens it
+
+        d = self.serve_result()
+        r = run_vh(["v", "k", "import", "12", "-f", "-", "--confirm-name", "a"], d.path, stdin=export)
+        d.join()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(d.request["input"]["text"], export.decode())
+
+    def test_key_import_without_a_readable_file_never_connects(self) -> None:
+        nobody = str(self.tmp / "nobody.sock")
+        r = run_vh(["vault", "keys", "import", "12", "--file", str(self.tmp / "missing.json")], nobody)
+        self.assertEqual(r.returncode, 66, r.stderr)
+        r = run_vh(["vault", "keys", "import", "12", "--file", str(self.tmp)], nobody)
+        self.assertEqual(r.returncode, 66, r.stderr)
+        r = run_vh(["vault", "keys", "import", "12"], nobody)
+        self.assertEqual(r.returncode, 64, r.stderr)
+        big = self.tmp / "big.json"
+        big.write_bytes(b" " * (512 * 1024 + 1))
+        r = run_vh(["vault", "keys", "import", "12", "--file", str(big)], nobody)
+        self.assertEqual(r.returncode, 66, r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

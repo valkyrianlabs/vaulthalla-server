@@ -13,6 +13,7 @@
 #include <string>
 #include <algorithm>
 #include <optional>
+#include <utility>
 
 using vh::identities::User;
 using vh::identities::Group;
@@ -20,6 +21,23 @@ using vh::identities::Group;
 using namespace vh::protocols::shell;
 
 namespace vh::protocols::shell {
+
+namespace {
+thread_local std::optional<ConfirmationNeeded> tlsConfirmationNeeded;
+thread_local bool tlsAgentCall = false;
+}
+
+AgentCallScope::AgentCallScope() : previous_(std::exchange(tlsAgentCall, true)) {}
+
+AgentCallScope::~AgentCallScope() { tlsAgentCall = previous_; }
+
+bool AgentCallScope::active() noexcept { return tlsAgentCall; }
+
+void noteConfirmationNeeded(std::string code, std::vector<std::string> flags) {
+    tlsConfirmationNeeded = ConfirmationNeeded{.code = std::move(code), .flags = std::move(flags)};
+}
+
+std::optional<ConfirmationNeeded> takeConfirmationNeeded() { return std::exchange(tlsConfirmationNeeded, std::nullopt); }
 
 // The command line for the debug log, with the values of credential options (--secret, --password, --token, …; see
 // ws::isSensitiveLogKey) replaced: `vh api-key create … --secret <value>` used to land in the log verbatim.
@@ -136,7 +154,7 @@ std::string Router::canonicalFor(const std::string& nameOrAlias) const {
 }
 
 CommandResult Router::executeLine(const std::string& line, const std::shared_ptr<User>& user, SocketIO* io,
-                                  std::optional<TransferPeer> transfer) const {
+                                  std::optional<TransferPeer> transfer, std::optional<std::string> input) const {
     log::Registry::shell()->debug("[Router] Executing line: '{}'", redactLineForLog(line));
 
     auto call = parseTokens(tokenize(line));
@@ -144,6 +162,7 @@ CommandResult Router::executeLine(const std::string& line, const std::shared_ptr
     call.user = user;
     call.io = io;
     call.transfer = std::move(transfer);
+    call.input = std::move(input);
 
     if (call.name.empty()) return invalid("No command provided.");
 
@@ -167,7 +186,12 @@ CommandResult Router::executeLine(const std::string& line, const std::shared_ptr
 
     const auto& info = commands_.at(canonical);
     if (const auto err = unknownOptionError(call, info.usage)) return invalid(*err);
-    return info.handler(call);
+    (void)takeConfirmationNeeded();
+    auto result = info.handler(call);
+    // Only a refusal carries it; a note left by a path that went on to succeed is dropped.
+    if (auto needed = takeConfirmationNeeded(); needed && result.exit_code != 0 && !result.confirmation)
+        result.confirmation = std::move(needed);
+    return result;
 }
 
 std::optional<std::string> Router::optionError(const std::string& line) const {

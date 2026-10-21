@@ -294,13 +294,10 @@ export class PriceBudgetTrendStats {
   }
 }
 
+// What pricing.budget.preflight reads: the vault and an optional run id (the daemon plans the sync itself).
 export interface PriceBudgetPreflightPayload {
   vault_id: number
   run_uuid?: string
-  gateway_credential_id?: number | null
-  request_uuid?: string | null
-  operation?: string | null
-  object_key?: string | null
 }
 
 export class PriceBudgetPreflightResult {

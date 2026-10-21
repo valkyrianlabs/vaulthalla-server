@@ -1,7 +1,9 @@
 #pragma once
 
 #include "protocols/ws/Session.hpp"
+#include "ops/Error.hpp"
 #include "rbac/resolver/vault/all.hpp"
+#include "fs/Fwd.hpp"
 #include "fs/model/Path.hpp"
 #include "share/Fwd.hpp"
 
@@ -43,6 +45,10 @@ public:
 
     static json remove(const json& payload, const std::shared_ptr<Session>& session);
 
+    // A share session's view of an entry (share-relative path, no ownership or backing details): the ShareEntry the
+    // share-mode fs.* and share.fs.* commands return.
+    static json shareEntryJson(const vh::fs::model::Entry& entry, const vh::share::Principal& principal);
+
     static json shareCompatibilityMetadata(const json& payload, const std::shared_ptr<Session>& session);
 
     static json shareCompatibilityList(const json& payload, const std::shared_ptr<Session>& session);
@@ -70,7 +76,7 @@ private:
             .permission = permission,
             .vault_id = engine->vault->id,
             .path = engine->vaultPathToFusePath(path)
-        })) throw std::runtime_error(std::string(error));
+        })) throw vh::ops::Denied(std::string(error));
     }
 
     template<typename EnumT, typename... EnumTs>
@@ -95,7 +101,7 @@ private:
                 .vault_id = engine->vault->id,
                 .path = path
             }...
-        )) throw std::runtime_error("Permission denied: Required permission not granted");
+        )) throw vh::ops::Denied("Permission denied: Required permission not granted");
     }
 };
 

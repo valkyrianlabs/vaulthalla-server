@@ -36,6 +36,7 @@ static const auto apiKeyPos = Positional::WithAliases("api_key", "ID of the API 
 static std::shared_ptr<CommandUsage> list(const std::weak_ptr<CommandUsage>& parent) {
     const auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"list", "ls"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "List all API keys in the system.";
     cmd->optional_flags = { jsonFlag };
     cmd->optional = listQueryOptions();
@@ -51,6 +52,7 @@ static std::shared_ptr<CommandUsage> list(const std::weak_ptr<CommandUsage>& par
 std::shared_ptr<CommandUsage> create(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"create", "new", "add", "mk"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Create a new API key for accessing S3 storage.";
     cmd->positionals = { keyNamePos };
     cmd->required = { accessKey, secretKey, provider, endpoint };
@@ -67,6 +69,7 @@ std::shared_ptr<CommandUsage> create(const std::weak_ptr<CommandUsage>& parent) 
 std::shared_ptr<CommandUsage> remove(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"delete", "remove", "del", "rm"};
+    cmd->effect = CommandEffect::Destructive;
     cmd->description = "Delete an existing API key by ID.";
     cmd->positionals = { apiKeyPos };
     cmd->examples = {
@@ -79,6 +82,7 @@ std::shared_ptr<CommandUsage> remove(const std::weak_ptr<CommandUsage>& parent) 
 std::shared_ptr<CommandUsage> info(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"info", "show", "get"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "Display detailed information about an API key.";
     cmd->positionals = { apiKeyPos };
     cmd->examples = {

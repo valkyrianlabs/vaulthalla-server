@@ -33,6 +33,7 @@ static const auto overwriteFlag = Flag::WithAliases(
 static std::shared_ptr<CommandUsage> lsCmd(const std::weak_ptr<CommandUsage>& parent) {
     const auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"ls", "list"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "List a directory in a vault (or show one file). Needs the List permission on the path.";
     cmd->positionals = {vaultPos, pathPos};
     cmd->optional = {owner};
@@ -46,6 +47,7 @@ static std::shared_ptr<CommandUsage> lsCmd(const std::weak_ptr<CommandUsage>& pa
 static std::shared_ptr<CommandUsage> getCmd(const std::weak_ptr<CommandUsage>& parent) {
     const auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"get", "download"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "Download a file from a vault. Needs the Read permission on it. Without --output the bytes go "
                        "to stdout (not to a terminal unless you pass -o -). Exit status: 0 only if every byte "
                        "arrived and authenticated; 66 not found, 77 permission denied, 75 busy, 65 a damaged transfer.";
@@ -61,6 +63,7 @@ static std::shared_ptr<CommandUsage> getCmd(const std::weak_ptr<CommandUsage>& p
 static std::shared_ptr<CommandUsage> putCmd(const std::weak_ptr<CommandUsage>& parent) {
     const auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"put", "upload"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Upload a local file into a vault, encrypted like a web upload. Needs the Write permission on "
                        "the path (missing folders are created); replacing an existing file needs --overwrite and the "
                        "Overwrite permission, and fails if the file changes meanwhile. Nothing is stored unless every "

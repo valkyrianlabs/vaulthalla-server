@@ -11,6 +11,8 @@ http_preview_server: {}
 
 s3_gateway: {}
 
+device_server: {}
+
 
 # === 🐘 DATABASE SETTINGS ===
 database: {}

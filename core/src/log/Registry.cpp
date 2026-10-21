@@ -1,6 +1,8 @@
 #include "log/Registry.hpp"
 #include "config/Registry.hpp"
+#include "log/AuditOrigin.hpp"
 
+#include <spdlog/pattern_formatter.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/sinks/rotating_file_sink.h>
 #include <spdlog/sinks/basic_file_sink.h>
@@ -10,6 +12,30 @@
 namespace vh::log {
 
 namespace {
+
+// `%*` in the audit sink's pattern: " [via <origin>]" while an AuditOrigin is alive on the logging thread (the
+// audit logger is synchronous, so that is the thread that wrote the line).
+class AuditOriginFlag final : public spdlog::custom_flag_formatter {
+public:
+    void format(const spdlog::details::log_msg&, const std::tm&, spdlog::memory_buf_t& dest) override {
+        const auto* origin = AuditOrigin::current();
+        if (!origin) return;
+        constexpr std::string_view open{" [via "};
+        dest.append(open.data(), open.data() + open.size());
+        dest.append(origin->data(), origin->data() + origin->size());
+        dest.push_back(']');
+    }
+
+    [[nodiscard]] std::unique_ptr<custom_flag_formatter> clone() const override {
+        return std::make_unique<AuditOriginFlag>();
+    }
+};
+
+std::unique_ptr<spdlog::formatter> auditFormatter(const std::string& pattern) {
+    auto formatter = std::make_unique<spdlog::pattern_formatter>();
+    formatter->add_flag<AuditOriginFlag>('*').set_pattern(pattern + "%*");
+    return formatter;
+}
 
 // Kept so reopenMainLog()/reopenAuditLog() can swap them after rotation.
 std::shared_ptr<spdlog::sinks::stdout_color_sink_mt> console_sink_;
@@ -105,6 +131,7 @@ void Registry::init() {
     {
         audit_file_sink_ = std::make_shared<spdlog::sinks::basic_file_sink_mt>(
             audit_log_path_.string(), /*truncate=*/false);
+        audit_file_sink_->set_formatter(auditFormatter("%+"));
         std::vector<spdlog::sink_ptr> sinks = { audit_file_sink_ };
         const auto logger = std::make_shared<spdlog::logger>("audit", sinks.begin(), sinks.end());
         logger->set_level(spdlog::level::info);
@@ -151,7 +178,7 @@ void Registry::reopenAuditLog() {
     auto fresh = std::make_shared<spdlog::sinks::basic_file_sink_mt>(
         audit_log_path_.string(), /*truncate=*/false);
     fresh->set_level(audit_file_sink_->level());
-    fresh->set_pattern(FILE_LOG_FORMAT);
+    fresh->set_formatter(auditFormatter(FILE_LOG_FORMAT));
 
     // Swap on the audit logger (and any others that might have it)
     replaceSinkEverywhere(audit_file_sink_, fresh);

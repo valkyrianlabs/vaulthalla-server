@@ -30,6 +30,21 @@ private:
     unsigned int vaultId_, version_;
 };
 
+// The vault's keys can't be loaded on this host, and minting a new one would orphan sealed data (load_key). The vault
+// stays unavailable until `vh vault keys import` restores them. code: "key_missing" (no vault_keys row while sealed
+// content exists), "key_unsealable" (a needed row doesn't unseal under this host's vault master), "version_missing"
+// (a pending rotation's outgoing key, or a version live files are sealed under, isn't held). what() says what to run.
+class KeyUnavailable final : public std::runtime_error {
+public:
+    KeyUnavailable(unsigned int vaultId, std::string code, const std::string& what);
+    [[nodiscard]] unsigned int vaultId() const { return vaultId_; }
+    [[nodiscard]] const std::string& code() const { return code_; }
+
+private:
+    unsigned int vaultId_;
+    std::string code_;
+};
+
 class EncryptionManager {
 public:
     explicit EncryptionManager(unsigned int vault_id);
@@ -89,7 +104,8 @@ public:
     static constexpr std::size_t kHistoricalCacheSize = 8;
     static constexpr std::chrono::minutes kHistoricalCacheIdle{10};
 
-    // Must be called before encrypt/decrypt
+    // Must be called before encrypt/decrypt. Mints the vault's first key only when the vault has no sealed content;
+    // otherwise a missing or unusable key throws KeyUnavailable (see there).
     void load_key();
 
     void prepare_key_rotation();

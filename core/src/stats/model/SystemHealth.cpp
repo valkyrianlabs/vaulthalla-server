@@ -9,6 +9,7 @@
 #include "protocols/shell/Server.hpp"
 #include "runtime/Deps.hpp"
 #include "runtime/Manager.hpp"
+#include "storage/Manager.hpp"
 
 #include <algorithm>
 #include <array>
@@ -112,6 +113,7 @@ SystemHealthStatus computeOverallStatus(const SystemHealth& health) {
         return SystemHealthStatus::Critical;
 
     const bool ok = health.runtime.allRunning
+        && health.vaultsUnavailable.empty()
         && health.database->brokenIdle == 0
         && protocolsHealthy(health.protocols, health.s3Gateway)
         && depsHealthy(health.deps, health.summary);
@@ -213,6 +215,11 @@ SystemHealth SystemHealth::snapshot() {
         };
         probeDatabase(*pool, *out.database);
     }
+
+    if (const auto& storage = runtime::Deps::get().storageManager)
+        for (const auto& v : storage->unavailableVaults())
+            out.vaultsUnavailable.push_back({.vaultId = v.vault_id, .vaultName = v.vault_name, .reason = v.reason,
+                                             .detail = v.detail});
 
     const auto [protocolsReady, protocolsTotal] = protocolReadySummary(out.protocols, out.s3Gateway);
     out.summary = {
@@ -340,6 +347,15 @@ void to_json(nlohmann::json& j, const HealthSummary& health) {
     };
 }
 
+void to_json(nlohmann::json& j, const VaultUnavailableHealth& health) {
+    j = nlohmann::json{
+        {"vault_id", health.vaultId},
+        {"vault_name", health.vaultName},
+        {"reason", health.reason},
+        {"detail", health.detail},
+    };
+}
+
 void to_json(nlohmann::json& j, const SystemHealth& health) {
     j = nlohmann::json{
         {"overall_status", to_string(health.overallStatus)},
@@ -349,6 +365,7 @@ void to_json(nlohmann::json& j, const SystemHealth& health) {
         {"deps", health.deps},
         {"shell", health.shell},
         {"database", health.database ? nlohmann::json(*health.database) : nlohmann::json(nullptr)},
+        {"vaults_unavailable", health.vaultsUnavailable},
         {"summary", health.summary},
     };
 }

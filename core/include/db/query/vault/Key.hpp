@@ -3,6 +3,8 @@
 #include <ctime>
 #include <memory>
 #include <optional>
+#include <string>
+#include <utility>
 #include <vector>
 
 #include "vault/Fwd.hpp"
@@ -37,6 +39,67 @@ public:
     static void markExported(unsigned int vaultId, unsigned int version);
     // When the current key version was exported, or nullopt if it never was (or no export was recorded).
     [[nodiscard]] static std::optional<std::time_t> currentKeyExportedAt(unsigned int vaultId);
+    // The last recorded export (any version; stale when it isn't the current one).
+    struct ExportRecord {
+        std::optional<unsigned int> version{};
+        std::optional<std::time_t> at{};
+    };
+    [[nodiscard]] static ExportRecord exportRecord(unsigned int vaultId);
+    // Marks `version` exported only while it is still the current version (one statement, so a rotation in between
+    // wins). Returns when it was recorded, or nullopt when the version is no longer current.
+    [[nodiscard]] static std::optional<std::time_t> markExportedIfCurrent(unsigned int vaultId, unsigned int version);
+    // Retired versions whose rotation has not finished re-encrypting the vault (rotation_completed_at IS NULL),
+    // ascending: the outgoing key still decrypts files the sync pass hasn't reached.
+    [[nodiscard]] static std::vector<unsigned int> rotationPendingKeyVersions(unsigned int vaultId);
+
+    // ---- key import (vh vault keys import, ws vault.keys.import; .claude/context/key-backup.md)
+
+    enum class SealedTable { Current, Retired, DeletionCopy };
+    // One sealed row an import writes: re-sealed bytes for `version` in `table`.
+    struct SealedWrite {
+        SealedTable table{SealedTable::Current};
+        unsigned int version{};
+        std::vector<uint8_t> encrypted_key{}, iv{};
+        // What the row held when the import was planned (encrypted_key, iv); nullopt = there was no row (insert).
+        std::optional<std::pair<std::vector<uint8_t>, std::vector<uint8_t>>> expected{};
+        bool rotation_pending{false};  // a new retired row whose rotation hasn't finished re-encrypting the vault
+    };
+    // Every write in one transaction under the vault's rotation lock (the advisory lock rotate_vault_key takes).
+    // Existing rows keep their version, created_at, export marks and rotation state. Throws ops::Conflict, writing
+    // nothing, when any row no longer holds what the plan read.
+    static void writeImported(unsigned int vaultId, const std::vector<SealedWrite>& writes);
+    // Local ciphertext sealed under `version`, smallest first: files rows (with backing paths) and recovery blobs.
+    struct SealedSample {
+        std::string path{};  // files: the backing path; blobs: the storage name
+        std::string iv{};    // base64
+        std::string vault_path{};   // files only: the vault path (the object key upstream, without its leading slash)
+        uint64_t plaintext_bytes{};  // files only
+    };
+    [[nodiscard]] static std::vector<SealedSample> sampleSealedFiles(unsigned int vaultId, unsigned int version,
+                                                                     unsigned int limit);
+    [[nodiscard]] static std::vector<SealedSample> sampleRecoveryBlobs(unsigned int vaultId, unsigned int version,
+                                                                       unsigned int limit);
+    [[nodiscard]] static bool filesSealedUnder(unsigned int vaultId, unsigned int version);
+
+    // ---- what the vault's data is sealed under (load_key's refusal to mint, import's "no ciphertext anywhere")
+
+    // A short description of the sealed content the vault has ("3 files, 1 recovery blob"), or nullopt when it has
+    // none: files rows with an IV, recovery blobs, live provider object versions, encrypted remote index entries.
+    [[nodiscard]] static std::optional<std::string> sealedContentSummary(unsigned int vaultId);
+    // Distinct key versions live files rows are sealed under (rows with an IV), ascending.
+    [[nodiscard]] static std::vector<unsigned int> liveFileKeyVersions(unsigned int vaultId);
+    // Every key version any of those sources records, ascending.
+    [[nodiscard]] static std::vector<unsigned int> dataKeyVersions(unsigned int vaultId);
+    [[nodiscard]] static bool ciphertextExistsUnder(unsigned int vaultId, unsigned int version);
+    // The smallest object recorded upstream under `version`: object key, stored size, IV (base64). Encrypted
+    // remote_object_index rows first, else files rows (the caller skips those with a local copy).
+    struct RemoteSample {
+        std::string object_key{};
+        uint64_t stored_bytes{};
+        std::string iv{};
+    };
+    [[nodiscard]] static std::vector<RemoteSample> remoteSamples(unsigned int vaultId, unsigned int version,
+                                                                 unsigned int limit);
 };
 
 }

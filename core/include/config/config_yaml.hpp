@@ -103,6 +103,27 @@ struct convert<S3GatewaySyntheticLocalRequestCostConfig> {
 };
 
 template<>
+struct convert<DeviceServerConfig> {
+    static Node encode(const DeviceServerConfig& rhs) {
+        Node node;
+        node["enabled"] = rhs.enabled;
+        node["port"] = rhs.port;
+        node["remote"] = rhs.remote;
+        node["max_connections"] = rhs.max_connections;
+        return node;
+    }
+
+    static bool decode(const Node& node, DeviceServerConfig& rhs) {
+        if (!node.IsMap()) return false;
+        rhs.enabled = node["enabled"].as<bool>(true);
+        rhs.port = node["port"].as<uint16_t>(kDefaultDeviceServerPort);
+        rhs.remote = node["remote"].as<bool>(false);
+        rhs.max_connections = node["max_connections"].as<unsigned int>(256);
+        return true;
+    }
+};
+
+template<>
 struct convert<S3GatewayConfig> {
     static Node encode(const S3GatewayConfig& rhs) {
         Node node;

@@ -25,7 +25,8 @@ export interface PriceOverrideRequestPayload {
   vault_id: number
   run_uuid?: string | null
   reason?: string | null
-  policy_ids?: number[]
+  // The enforce policies to override; the server refuses an empty or missing list.
+  policy_ids: number[]
   estimated_cost?: string | null
   currency?: string
   ttl_minutes?: number

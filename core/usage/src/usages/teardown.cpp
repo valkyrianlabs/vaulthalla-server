@@ -13,6 +13,7 @@ static std::shared_ptr<CommandUsage> buildBaseUsage(const std::weak_ptr<CommandU
 static std::shared_ptr<CommandUsage> nginx(const std::weak_ptr<CommandUsage>& parent) {
     const auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"nginx", "proxy"};
+    cmd->effect = CommandEffect::Destructive;
     cmd->description = "Disable/remove Vaulthalla-managed nginx site integration only. Requires sudo.";
     cmd->examples = {
         {"sudo vh teardown nginx", "Disable Vaulthalla nginx site integration without touching unrelated nginx config."}
@@ -25,6 +26,7 @@ static const auto caddyPurgeFlag = Flag::WithAliases("purge", "Also delete the c
 static std::shared_ptr<CommandUsage> caddy(const std::weak_ptr<CommandUsage>& parent) {
     const auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"caddy", "https"};
+    cmd->effect = CommandEffect::Destructive;
     cmd->description = "macOS: stop and remove Vaulthalla's Caddy HTTPS front end. Keeps certificates and the internal CA "
                        "unless --purge. Requires sudo.";
     cmd->optional_flags = {caddyPurgeFlag};
@@ -37,6 +39,7 @@ static std::shared_ptr<CommandUsage> caddy(const std::weak_ptr<CommandUsage>& pa
 static std::shared_ptr<CommandUsage> db(const std::weak_ptr<CommandUsage>& parent) {
     const auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"db", "database", "postgres"};
+    cmd->effect = CommandEffect::Destructive;
     cmd->description = "Disable/remove Vaulthalla local PostgreSQL integration (role/database). Requires sudo.";
     cmd->examples = {
         {"sudo vh teardown db", "Drop Vaulthalla local PostgreSQL role/database integration."}

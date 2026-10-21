@@ -35,6 +35,7 @@ UsageManager::UsageManager() {
     registerBook(s3gateway::get(root_->weak_from_this()));
     registerBook(aku::get(root_->weak_from_this()));
     registerBook(upstream_book::get(root_->weak_from_this()));
+    registerBook(device_book::get(root_->weak_from_this()));
     registerBook(recovery_book::get(root_->weak_from_this()));
     registerBook(recovery_book::getSnapshot(root_->weak_from_this()));
     registerBook(role::get(root_->weak_from_this()));
@@ -42,6 +43,8 @@ UsageManager::UsageManager() {
     registerBook(setup::get(root_->weak_from_this()));
     registerBook(teardown::get(root_->weak_from_this()));
     registerBook(status::get(root_->weak_from_this()));
+    registerBook(mcp_book::get(root_->weak_from_this()));
+    registerBook(skill_book::get(root_->weak_from_this()));
     registerBook(help::get(root_->weak_from_this()));
     registerBook(version::get(root_->weak_from_this()));
 }

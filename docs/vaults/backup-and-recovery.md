@@ -108,7 +108,7 @@ Do not rely only on the provider bucket as a complete Vaulthalla backup. You sti
 
 ## Hardware TPM Recovery
 
-Hardware TPM-sealed material is tied to the original TPM context. For host replacement, exported vault keys and internal secrets are the portable recovery material. Plan migration and restore testing before a hardware failure.
+Hardware TPM-sealed material is tied to the original TPM context. For host replacement, exported vault keys and internal secrets are the portable recovery material: after restoring the database on the new host, `vh vault keys import` re-seals each vault's keys under the new host's TPM (see [Restore Vault Keys](/vaults/secrets-and-key-export#restore-vault-keys)). Plan migration and restore testing before a hardware failure.
 
 ## Software TPM Recovery
 
@@ -129,7 +129,7 @@ Use this as a cautious outline, not a blind script:
 5. Restore PostgreSQL from the dump.
 6. Reseed or verify the database password secret if the database connection changed.
 7. Start services.
-8. Run `vh status`.
+8. Run `vh status` and `vh vault keys status all`. A vault whose key shows as unavailable (the TPM or master key wasn't restored with it, or the database predates a key rotation) doesn't start, and `vh status` lists it; it needs its keys back: `vh vault keys import <vault> --file <export>`.
 9. Run `vh vault sync info <vault>` for S3/R2 vaults.
 10. Test read access to a known file in each vault.
 

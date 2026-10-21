@@ -7,6 +7,7 @@
 #include "rbac/PolicyEpoch.hpp"
 #include "rbac/permission/admin/S3Gateway.hpp"
 #include "rbac/resolver/admin/all.hpp"
+#include "protocols/device/Service.hpp"
 #include "runtime/Manager.hpp"
 
 #include <algorithm>
@@ -75,6 +76,7 @@ void validateEmail(const Config& cfg) {
 // `restartGateway`: restart it even if s3_gateway.enabled is unchanged (the explicit enable/disable commands).
 Config commit(const Config& next, const bool restartGateway = false) {
     const bool gatewayWas = vh::config::Registry::get().s3_gateway.enabled;
+    const auto deviceServerWas = nlohmann::json(vh::config::Registry::get().device_server);
     const bool sharingChanged = nlohmann::json(vh::config::Registry::get().sharing) != nlohmann::json(next.sharing);
     next.save();
     vh::config::Registry::set(next);
@@ -88,6 +90,11 @@ Config commit(const Config& next, const bool restartGateway = false) {
         // Only a daemon that runs the gateway restarts it; elsewhere the change applies on the next start.
         if (runtime.getS3GatewayService()) runtime.restartService("S3GatewayService");
         log::Registry::audit()->info("[ops::config] s3_gateway.enabled -> {}", next.s3_gateway.enabled);
+    }
+    // The device listener rebinds in place (remote connections on/off); nothing else restarts.
+    if (nlohmann::json(next.device_server) != deviceServerWas) {
+        if (const auto deviceServer = runtime::Manager::instance().getDeviceServer()) (void)deviceServer->applyConfig();
+        log::Registry::audit()->info("[ops::config] device_server -> {}", nlohmann::json(next.device_server).dump());
     }
     return next;
 }
@@ -129,6 +136,14 @@ Config saveSettings(const Actor& actor, const nlohmann::json& settings) {
     if (!actor->isSuperAdmin()) throw Denied("only super admins may change settings");
     validateSettings(settings);
     return commit(Config(settings));
+}
+
+Config setDeviceRemote(const Actor& actor, const bool enabled) {
+    requireActor(actor);
+    if (!actor->isSuperAdmin()) throw Denied("only super admins may turn remote device connections on or off");
+    auto next = vh::config::Registry::get();
+    next.device_server.remote = enabled;
+    return commit(next);
 }
 
 Config setGatewayEnabled(const Actor& actor, const bool enabled) {

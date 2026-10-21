@@ -39,6 +39,9 @@ struct CommandCall {
     std::shared_ptr<identities::User> user;
     SocketIO* io = nullptr; // if set, command was run interactively
     std::optional<TransferPeer> transfer;
+    // A document the vh client read on the caller's side and attached (protocols/shell/ClientInput.hpp); the daemon
+    // never opens the path the caller named.
+    std::optional<std::string> input;
 
     // owns any strings you create at runtime (JSON, rewrites, etc.)
     std::vector<std::string> arena;
@@ -67,10 +70,40 @@ struct CommandCall {
     }
 };
 
+// A refusal for want of a confirmation a person must give (the terminal prompt, or the flag that gives it): the
+// ops::NeedsConfirmation code when there is one, and the flags that would confirm it ("--yes", "--accept-key-loss").
+// Sent as the result frame's optional `confirmation` member, so a client such as `vh mcp` needn't parse the text.
+struct ConfirmationNeeded {
+    std::string code{};
+    std::vector<std::string> flags{};
+};
+
 struct CommandResult {
     int exit_code = 0;                 // 0 = success
-    std::string stdout_text;           // CLI stdout
-    std::string stderr_text;           // CLI stderr
+    std::string stdout_text{};         // CLI stdout
+    std::string stderr_text{};         // CLI stderr
+    std::optional<ConfirmationNeeded> confirmation{};  // set by Router::executeLine (noteConfirmationNeeded)
+};
+
+// Called where a command refuses because nobody confirmed (no terminal, no flag), right before it returns or throws
+// that refusal. Router::executeLine attaches it to the failed result; one per running command (thread-local).
+void noteConfirmationNeeded(std::string code, std::vector<std::string> flags);
+[[nodiscard]] std::optional<ConfirmationNeeded> takeConfirmationNeeded();
+
+// Set on the thread while a command runs for an MCP client: the device listener's /mcp, or a `vh mcp` client that says
+// so in its request. Commands that hand out or take in key material refuse under it (D4), so a gap in the MCP layer's
+// exclusions (mcp::exclusions()) still can't reach them. A local agent that runs `vh` itself is the terminal's user.
+class AgentCallScope {
+public:
+    AgentCallScope();
+    ~AgentCallScope();
+    AgentCallScope(const AgentCallScope&) = delete;
+    AgentCallScope& operator=(const AgentCallScope&) = delete;
+
+    [[nodiscard]] static bool active() noexcept;
+
+private:
+    bool previous_;
 };
 
 using CommandHandler = std::function<CommandResult(const CommandCall&)>;

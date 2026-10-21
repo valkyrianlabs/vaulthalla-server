@@ -409,6 +409,12 @@ bool Manager::validate(const std::shared_ptr<Session>& session, const std::strin
     try {
         if (!session) throw std::invalid_argument("Invalid session for validation");
 
+        // A paired device has no tokens: it was authenticated by its key at the TLS handshake, and stays valid while
+        // its user may sign in and the connection is open (revocation closes it).
+        if (session->onDeviceListener())
+            return session->isDeviceSession() && !session->closing() && session->user &&
+                   !session->user->systemOnly() && session->user->authorizing();
+
         if (!session->user) {
             Validator::validateRefreshToken(session);
             Issuer::accessToken(session);

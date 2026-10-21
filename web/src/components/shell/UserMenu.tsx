@@ -4,7 +4,7 @@ import React from 'react'
 import { useRouter } from 'next/navigation'
 import { useSession, logout } from '@/lib/session'
 import { DropdownMenu } from '@/components/ui/Menu'
-import { RightFromBracketIcon, UserIcon } from '@/components/ui/icons'
+import { LinkIcon, RightFromBracketIcon, UserIcon } from '@/components/ui/icons'
 import { titleCase } from '@/lib/format'
 
 export const Avatar = ({ name, className = '' }: { name: string; className?: string }) => (
@@ -36,6 +36,7 @@ export const UserMenu = () => {
       }
       entries={[
         { key: 'account', label: 'Your account', icon: UserIcon, onSelect: () => router.push('/account') },
+        { key: 'devices', label: 'Your devices', icon: LinkIcon, onSelect: () => router.push('/devices') },
         'separator',
         { key: 'logout', label: 'Log out', icon: RightFromBracketIcon, onSelect: () => void logout() },
       ]}

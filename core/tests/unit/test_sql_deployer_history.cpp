@@ -694,4 +694,53 @@ TEST_F(SqlDeployerHistoryDb, FileRecoveryMigrationKeepsGenerationsWhenTheLiveFil
     });
 }
 
+// 112 (paired devices): on a 111-era database the devices and device_node tables appear empty, a device dies with its
+// user (ON DELETE CASCADE) while approved_by only lets go (SET NULL), keys are unique as current and as previous, and
+// re-running the file changes nothing.
+TEST_F(SqlDeployerHistoryDb, DevicesMigrationIsAdditiveAndCascadesWithTheUser) {
+    inRolledBackTxn([](pqxx::work& txn) {
+        txn.exec("DROP TABLE IF EXISTS devices, device_node CASCADE");
+        txn.exec("DELETE FROM schema_migrations WHERE filename = '112_devices.sql'");
+
+        migseed::SqlDeployReport report;
+        ASSERT_NO_THROW(report = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(applied(report, "112_devices.sql"));
+        EXPECT_EQ(recordedHash(txn, "112_devices.sql"), currentHash("112_devices.sql"));
+        EXPECT_EQ(txn.exec("SELECT count(*) FROM devices").one_field_ref().as<int>(), 0);
+        EXPECT_EQ(txn.exec("SELECT count(*) FROM device_node").one_field_ref().as<int>(), 0);
+
+        const auto owner = txn.exec("INSERT INTO users (name, password_hash) VALUES ('claude_test_112_owner', 'x') "
+                                    "RETURNING id").one_field_ref().as<int>();
+        const auto approver = txn.exec("INSERT INTO users (name, password_hash) VALUES ('claude_test_112_approver', 'x') "
+                                       "RETURNING id").one_field_ref().as<int>();
+        const std::string key(64, 'a'), other(64, 'b');
+        const auto device = txn.exec("INSERT INTO devices (user_id, approved_by, name, platform, spki_sha256) "
+                                     "VALUES ($1, $2, 'Mac', 'macOS', $3) RETURNING id",
+                                     pqxx::params{owner, approver, key}).one_field_ref().as<int>();
+        {
+            pqxx::subtransaction dup(txn, "dup");
+            EXPECT_THROW(dup.exec("INSERT INTO devices (user_id, name, platform, spki_sha256) VALUES ($1, 'x', 'macOS', $2)",
+                                  pqxx::params{owner, key}), pqxx::unique_violation);
+        }
+        {
+            pqxx::subtransaction bad(txn, "bad");
+            EXPECT_THROW(bad.exec("INSERT INTO devices (user_id, name, platform, spki_sha256) VALUES ($1, 'x', 'macOS', 'XYZ')",
+                                  pqxx::params{owner}), pqxx::check_violation);
+        }
+        txn.exec("UPDATE devices SET previous_spki_sha256 = spki_sha256, spki_sha256 = $2 WHERE id = $1",
+                 pqxx::params{device, other});
+
+        txn.exec("DELETE FROM users WHERE id = $1", pqxx::params{approver});
+        EXPECT_TRUE(txn.exec("SELECT approved_by FROM devices WHERE id = $1", pqxx::params{device})
+                        .one_field_ref().is_null());
+        txn.exec("DELETE FROM users WHERE id = $1", pqxx::params{owner});
+        EXPECT_EQ(txn.exec("SELECT count(*) FROM devices WHERE id = $1", pqxx::params{device}).one_field_ref().as<int>(), 0);
+
+        migseed::SqlDeployReport again;
+        ASSERT_NO_THROW(again = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(again.applied.empty());
+        ASSERT_NO_THROW(txn.exec(migseed::readFileToString(repoPsqlDir() / "112_devices.sql")));
+    });
+}
+
 } // namespace vh_sql_deployer_history_test

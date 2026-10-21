@@ -24,7 +24,7 @@ json Settings::policy(const std::shared_ptr<Session>& session) {
 
 json Settings::update(const json& payload, const std::shared_ptr<Session>& session) {
     if (!session || !session->user) throw std::runtime_error("User not authenticated");
-    if (!payload.is_object()) throw std::runtime_error("settings.update expects an object of settings sections");
+    if (!payload.is_object()) throw vh::ops::Invalid("settings.update expects an object of settings sections");
 
     // Partial update: merge the payload onto the current settings so sections/fields the client didn't send
     // (or doesn't model) keep their values instead of being reset or rejected. Secrets are not part of this

@@ -17,7 +17,10 @@ class ConnectionLifecycleManager final : public concurrency::AsyncService {
     [[nodiscard]] std::uint64_t unauthenticatedSessionTimeoutSeconds() const noexcept;
     [[nodiscard]] std::uint64_t idleTimeoutMinutes() const noexcept;
 
-    enum class SweepVerdict { Keep, UnauthenticatedTimeout, InvalidRefreshToken };
+    // DeviceEnded: a paired device whose user can no longer sign in, or a pairing-only connection past
+    // kDevicePairingLifetime (a pairing window lasts 10 minutes).
+    enum class SweepVerdict { Keep, UnauthenticatedTimeout, InvalidRefreshToken, DeviceEnded };
+    static constexpr std::chrono::minutes kDevicePairingLifetime{15};
     // What the sweeper does with a session. One still in its handshake is only timed out: it is indexed at TCP
     // accept, before it has tokens, and closing it there made nginx answer 502 to a healthy connection.
     [[nodiscard]] static SweepVerdict verdict(const Session& session, std::chrono::system_clock::time_point now,

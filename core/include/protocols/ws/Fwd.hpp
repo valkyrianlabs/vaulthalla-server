@@ -6,4 +6,5 @@ namespace vh::protocols::ws {
     class Session;
     class Router;
     class ConnectionSlot;
+    struct TlsTransport;
 }

@@ -54,6 +54,12 @@ namespace vh::storage {
 
         ~CloudEngine() override = default;
 
+        // Key import (ops::vault_keys): an engine for a vault whose keys don't load here, only to verify a candidate
+        // key against one upstream object (verifyRemoteObjectWithKey). No encryption manager; never registered with
+        // the storage manager, so nothing else ever reads or writes through it.
+        [[nodiscard]] static std::shared_ptr<CloudEngine> forKeyVerification(
+            const std::shared_ptr<vault::model::S3Vault> &vault);
+
         explicit CloudEngine(const std::shared_ptr<vault::model::S3Vault> &vault);
         explicit CloudEngine(const std::shared_ptr<vault::model::S3Vault> &vault,
                              std::shared_ptr<s3::Controller> s3Provider);
@@ -150,6 +156,15 @@ namespace vh::storage {
         // (the object failed authentication: nothing is kept), or std::runtime_error/std::system_error.
         // The copy stays local afterwards: the Cache strategy has no eviction yet.
         std::shared_ptr<vh::fs::model::File> hydrate(const std::shared_ptr<vh::fs::model::File> &f) const;
+
+        // Key import: authenticates `key` against the whole object at `objectKey` (sealed under `keyVersion`, `ivB64`),
+        // through the metered remote-read path: price preflight (operation "key_import_verify"), a capture of one
+        // HEAD + one GET + the object's bytes, the HEAD (which must still name that key version and IV), then one GET
+        // with If-Match on its ETag, verified in memory: nothing is written anywhere. True when the tag authenticates.
+        // Throws ContentUnavailable when the read was refused or the object is missing, archived or changed.
+        [[nodiscard]] bool verifyRemoteObjectWithKey(const std::string &objectKey, uint64_t storedBytes,
+                                                     const std::string &ivB64, unsigned int keyVersion,
+                                                     std::span<const uint8_t> key) const;
 
         // What one HEAD says about a remote object.
         struct RemoteObjectHead {

@@ -10,28 +10,36 @@
 namespace vh::protocols::ws {
 
 namespace {
-std::atomic<unsigned int> activeSlots{0};
-std::atomic<uint64_t> refusedConnections{0};
+struct Counters {
+    std::atomic<unsigned int> active{0};
+    std::atomic<uint64_t> refused{0};
+};
+
+Counters& counters(const ConnectionSlot::Pool pool) {
+    static Counters webSocket, device;
+    return pool == ConnectionSlot::Pool::Device ? device : webSocket;
+}
 }
 
-std::unique_ptr<ConnectionSlot> ConnectionSlot::tryAcquire(const unsigned int limit) {
+std::unique_ptr<ConnectionSlot> ConnectionSlot::tryAcquire(const unsigned int limit, const Pool pool) {
+    auto& c = counters(pool);
     const auto cap = std::max(1u, limit);
-    auto current = activeSlots.load(std::memory_order_relaxed);
+    auto current = c.active.load(std::memory_order_relaxed);
     do {
         if (current >= cap) {
-            refusedConnections.fetch_add(1, std::memory_order_relaxed);
+            c.refused.fetch_add(1, std::memory_order_relaxed);
             return nullptr;
         }
-    } while (!activeSlots.compare_exchange_weak(current, current + 1, std::memory_order_acq_rel,
-                                                std::memory_order_relaxed));
-    return std::unique_ptr<ConnectionSlot>(new ConnectionSlot());
+    } while (!c.active.compare_exchange_weak(current, current + 1, std::memory_order_acq_rel,
+                                             std::memory_order_relaxed));
+    return std::unique_ptr<ConnectionSlot>(new ConnectionSlot(pool));
 }
 
-unsigned int ConnectionSlot::active() noexcept { return activeSlots.load(std::memory_order_relaxed); }
+unsigned int ConnectionSlot::active(const Pool pool) noexcept { return counters(pool).active.load(std::memory_order_relaxed); }
 
-uint64_t ConnectionSlot::refused() noexcept { return refusedConnections.load(std::memory_order_relaxed); }
+uint64_t ConnectionSlot::refused(const Pool pool) noexcept { return counters(pool).refused.load(std::memory_order_relaxed); }
 
-ConnectionSlot::~ConnectionSlot() { activeSlots.fetch_sub(1, std::memory_order_acq_rel); }
+ConnectionSlot::~ConnectionSlot() { counters(pool_).active.fetch_sub(1, std::memory_order_acq_rel); }
 
 void refuseOverCapacity(boost::asio::ip::tcp::socket& socket) {
     static constexpr std::string_view kBusy =

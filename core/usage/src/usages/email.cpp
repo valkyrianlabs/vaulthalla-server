@@ -15,6 +15,7 @@ std::shared_ptr<CommandUsage> baseUsage(const std::weak_ptr<CommandUsage>& paren
 std::shared_ptr<CommandUsage> providerResendSet(const std::weak_ptr<CommandUsage>& parent) {
     const auto cmd = baseUsage(parent);
     cmd->aliases = {"set"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Set the encrypted Resend API key using a hidden prompt.";
     cmd->optional_flags = {
         Flag::Alias("api_key", "Prompt for the Resend API key", "api-key"),
@@ -42,6 +43,7 @@ std::shared_ptr<CommandUsage> providerResend(const std::weak_ptr<CommandUsage>& 
 std::shared_ptr<CommandUsage> providerSesSet(const std::weak_ptr<CommandUsage>& parent) {
     const auto cmd = baseUsage(parent);
     cmd->aliases = {"set"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Set encrypted SES credentials using hidden prompts.";
     cmd->optional_flags = {
         Flag::Alias("access", "Prompt only for the SES access key ID", "access"),
@@ -71,6 +73,7 @@ std::shared_ptr<CommandUsage> providerSes(const std::weak_ptr<CommandUsage>& par
 std::shared_ptr<CommandUsage> providerUse(const std::weak_ptr<CommandUsage>& parent) {
     const auto cmd = baseUsage(parent);
     cmd->aliases = {"use"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Select the active email provider.";
     cmd->positionals = {
         Positional::Same("provider", "Provider name: none, resend, or ses")
@@ -96,6 +99,7 @@ std::shared_ptr<CommandUsage> provider(const std::weak_ptr<CommandUsage>& parent
 std::shared_ptr<CommandUsage> set(const std::weak_ptr<CommandUsage>& parent) {
     const auto cmd = baseUsage(parent);
     cmd->aliases = {"set"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Set core operator email config values.";
     cmd->positionals = {
         Positional::Same("field", "Field: enabled, operator-enabled, from, reply-to, base-url, resend-endpoint, ses-region, or ses-endpoint"),
@@ -113,6 +117,7 @@ std::shared_ptr<CommandUsage> set(const std::weak_ptr<CommandUsage>& parent) {
 std::shared_ptr<CommandUsage> recipients(const std::weak_ptr<CommandUsage>& parent) {
     const auto cmd = baseUsage(parent);
     cmd->aliases = {"recipients"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "List or update operator email recipient groups.";
     cmd->positionals = {
         Positional::Same("group", "Recipient group: alerts, weekly, or security"),
@@ -130,6 +135,7 @@ std::shared_ptr<CommandUsage> recipients(const std::weak_ptr<CommandUsage>& pare
 std::shared_ptr<CommandUsage> weekly(const std::weak_ptr<CommandUsage>& parent) {
     const auto cmd = baseUsage(parent);
     cmd->aliases = {"weekly"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Manage weekly recap email preferences.";
     cmd->positionals = {
         Positional::Same("action", "Action: show or set"),
@@ -148,6 +154,7 @@ std::shared_ptr<CommandUsage> weekly(const std::weak_ptr<CommandUsage>& parent) 
 std::shared_ptr<CommandUsage> security(const std::weak_ptr<CommandUsage>& parent) {
     const auto cmd = baseUsage(parent);
     cmd->aliases = {"security"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Manage operator security alert preferences.";
     cmd->positionals = {
         Positional::Same("action", "Action: show or set"),
@@ -164,6 +171,7 @@ std::shared_ptr<CommandUsage> security(const std::weak_ptr<CommandUsage>& parent
 std::shared_ptr<CommandUsage> alerting(const std::weak_ptr<CommandUsage>& parent) {
     const auto cmd = baseUsage(parent);
     cmd->aliases = {"alerting"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Manage watchdog alerting policy for operator emails.";
     cmd->positionals = {
         Positional::Same("action", "Action: show or set"),
@@ -181,6 +189,7 @@ std::shared_ptr<CommandUsage> alerting(const std::weak_ptr<CommandUsage>& parent
 std::shared_ptr<CommandUsage> doctor(const std::weak_ptr<CommandUsage>& parent) {
     const auto cmd = baseUsage(parent);
     cmd->aliases = {"doctor"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "Inspect operator email configuration without exposing secrets.";
     cmd->examples = {
         {"vh email doctor", "Show configured provider, sender, recipient counts, and secret presence."}
@@ -191,6 +200,7 @@ std::shared_ptr<CommandUsage> doctor(const std::weak_ptr<CommandUsage>& parent) 
 std::shared_ptr<CommandUsage> test(const std::weak_ptr<CommandUsage>& parent) {
     const auto cmd = baseUsage(parent);
     cmd->aliases = {"test"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Render or send a test operator email.";
     cmd->optional_flags = {
         Flag::Alias("dry_run", "Render and validate without sending", "dry-run"),
@@ -210,6 +220,7 @@ std::shared_ptr<CommandUsage> test(const std::weak_ptr<CommandUsage>& parent) {
 std::shared_ptr<CommandUsage> history(const std::weak_ptr<CommandUsage>& parent) {
     const auto cmd = baseUsage(parent);
     cmd->aliases = {"history"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "Show recent operator email delivery records.";
     cmd->optional = {
         Optional::ManyToOne("limit", "Maximum records to display", {"limit"}, "count")

@@ -20,6 +20,9 @@ struct Links {
     static json revoke(const json& payload, const std::shared_ptr<Session>& session);
     static json rotateToken(const json& payload, const std::shared_ptr<Session>& session);
 
+    // A link as its managers see it: the management JSON without token material (ShareLink).
+    static json managementJson(const vh::share::Link& link);
+
     static void setManagerFactoryForTesting(ManagerFactory factory);
     static void resetManagerFactoryForTesting();
 };

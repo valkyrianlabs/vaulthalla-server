@@ -27,6 +27,17 @@ http_preview_server:
   max_preview_size_mb: 512
 
 
+# === 🖥️ Device listener (Vaulthalla Desktop) ===
+# Mutual TLS for paired devices (self-signed certificates, pinned on both sides; no browser, nginx or cookie
+# involved). Loopback only until `vh device remote enable` opens it to every interface; that switch is saved here
+# as `remote`.
+device_server:
+  enabled: true
+  port: 36972
+  remote: false
+  max_connections: 256         # Concurrent device connections; more are refused until one closes
+
+
 # === 🪣 S3-Compatible Gateway ===
 # Disabled by default. When enabled, exposes Vaulthalla vaults as S3-compatible
 # buckets on an independent Watchdog-supervised runtime service.

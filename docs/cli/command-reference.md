@@ -340,6 +340,23 @@ is not modelled, with ranges, the basis of each figure (observed, scenario or il
 freshness. A figure that can't be estimated says so and why; it is never shown as zero. The figures are computed on
 the host and are estimates, not provider invoices.
 
+## Devices
+
+```bash
+vh device pair                                   # open a 10-minute pairing window and approve by number matching
+vh device pending
+vh device approve 7f3a9c1d2e4b6a80 --code 482913
+vh device deny 7f3a9c1d2e4b6a80
+vh device list [--all] [--json]
+vh device rename 3 "Studio Mac"
+vh device revoke 3
+vh device remote status
+vh device remote enable
+vh device remote disable
+```
+
+A paired device acts as your account. `--all` and `remote` are for super admins. See [Paired Devices](/admin/devices).
+
 ## Internal Secrets
 
 ```bash
@@ -400,3 +417,15 @@ vh email history --limit 100
 ```
 
 See [Operator Emails](/admin/operator-emails).
+
+## AI Agents (MCP)
+
+```bash
+vh skill install --agent claude                    # skill + `claude mcp add --scope user vaulthalla -- vh mcp`
+vh skill install --agent codex --scope project     # ./.agents/skills/vaulthalla
+vh skill install --agent claude --no-register --force
+vh mcp                                             # the stdio MCP server an agent starts
+```
+
+Key and secret export, `secrets update`, `setup`, `teardown` and `fs get|put` are never available to agents. See
+[AI Agents And MCP](/admin/mcp-and-agents).

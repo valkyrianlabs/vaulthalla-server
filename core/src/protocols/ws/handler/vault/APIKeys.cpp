@@ -25,12 +25,20 @@ std::optional<std::string> optionalApiKeyField(const json& payload, const char* 
 }
 
 json APIKeys::add(const json& payload, const std::shared_ptr<Session>& session) {
+    // An unknown provider name is the caller's input: Invalid (data.code "invalid"), s3_provider_from_string's text.
+    vh::vault::model::S3Provider provider{};
+    try {
+        provider = vh::vault::model::s3_provider_from_string(payload.at("provider").get<std::string>());
+    } catch (const std::invalid_argument& e) {
+        throw vh::ops::Invalid(e.what());
+    }
+
     std::optional<vh::ops::api_keys::Ref> owner;
     if (payload.contains("owner_id") && !payload.at("owner_id").is_null()) owner = payload.at("owner_id").get<uint32_t>();
 
     const auto key = vh::ops::api_keys::create(session->user, {
         .name = payload.at("name").get<std::string>(),
-        .provider = vh::vault::model::s3_provider_from_string(payload.at("provider").get<std::string>()),
+        .provider = provider,
         .access_key = payload.at("access_key").get<std::string>(),
         .secret_access_key = payload.at("secret_access_key").get<std::string>(),
         .endpoint = payload.at("endpoint").get<std::string>(),

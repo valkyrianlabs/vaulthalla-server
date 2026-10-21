@@ -6,11 +6,13 @@
 #include <boost/beast/websocket.hpp>
 
 #include "rbac/Actor.hpp"
+#include "device/Fwd.hpp"
 #include "identities/Fwd.hpp"
 #include "protocols/ws/Fwd.hpp"
 #include "share/Fwd.hpp"
 
 #include <atomic>
+#include <functional>
 #include <deque>
 #include <memory>
 #include <mutex>
@@ -39,7 +41,10 @@ namespace asio      = boost::asio;
 using tcp           = asio::ip::tcp;
 using json          = nlohmann::json;
 
-enum class SessionMode { Unauthenticated, Human, SharePending, Share };
+// Device and DevicePairing exist only on the device listener (mutual TLS, docs/pairing.md): a Device session is a
+// paired device acting as its user (no tokens; authorized at the TLS handshake), a DevicePairing one a connection
+// whose key is not a live device and may only pair.
+enum class SessionMode { Unauthenticated, Human, SharePending, Share, Device, DevicePairing };
 
 class Session : public std::enable_shared_from_this<Session> {
 public:
@@ -59,8 +64,20 @@ public:
     ~Session();
 
     void accept(tcp::socket&& socket);
+    // The device listener's /ws: TLS is up and the upgrade request read. `user` (the canonical object) makes a Device
+    // session, null a pairing-only one.
+    void acceptDevice(std::shared_ptr<TlsTransport> transport, const RequestType& req,
+                      std::shared_ptr<const ::vh::device::Peer> peer, std::shared_ptr<identities::User> deviceUser);
+    // A Device session with no websocket: the principal of a device-listener HTTP connection (/preview, /download,
+    // /upload, /mcp). It is registered with the session manager like any device session, so revocation,
+    // revokeSessions and the sweeper close it; `onClose` then ends the HTTP connection.
+    [[nodiscard]] static std::shared_ptr<Session> devicePrincipal(std::shared_ptr<const ::vh::device::Peer> peer,
+                                                                  std::shared_ptr<identities::User> deviceUser,
+                                                                  std::function<void()> onClose);
     void send(json message);
     void close();
+    // Closes once the reply to the command being handled has gone out (a device unpairing itself gets its answer).
+    void closeAfterReply();
 
     void setAuthenticatedUser(const std::shared_ptr<identities::User>& u);
     void setPendingShareSession(std::string sessionId, std::string sessionToken);
@@ -77,6 +94,14 @@ public:
     [[nodiscard]] bool isSharePending() const noexcept { return mode_ == SessionMode::SharePending; }
     [[nodiscard]] bool isShareMode() const noexcept { return mode_ == SessionMode::Share; }
     [[nodiscard]] bool isShareSession() const noexcept { return isSharePending() || isShareMode(); }
+    [[nodiscard]] bool isDeviceSession() const noexcept { return mode_ == SessionMode::Device; }
+    [[nodiscard]] bool isDevicePairing() const noexcept { return mode_ == SessionMode::DevicePairing; }
+    // Either of the device listener's modes.
+    [[nodiscard]] bool onDeviceListener() const noexcept { return isDeviceSession() || isDevicePairing(); }
+    // The connection's device identity (device listener only, else null).
+    [[nodiscard]] const std::shared_ptr<const ::vh::device::Peer>& devicePeer() const noexcept { return devicePeer_; }
+    // True from the first close() on: nothing more is run for this session.
+    [[nodiscard]] bool closing() const noexcept { return closing_.load(std::memory_order_acquire); }
     [[nodiscard]] std::shared_ptr<vh::share::Principal> sharePrincipal() const noexcept { return sharePrincipal_; }
     [[nodiscard]] vh::rbac::Actor rbacActor() const;
     [[nodiscard]] const std::string& shareSessionId() const noexcept { return shareSessionId_; }
@@ -103,12 +128,14 @@ private:
 
     // ---- misc helpers
     static void logFail(std::string_view where, const beast::error_code& ec);
-    void sendParseError(std::string_view msg);
+    void sendParseError(std::string_view msg, const json& requestId = nullptr);
     void sendInternalError();
     [[nodiscard]] std::string getUserAgent() const;
     [[nodiscard]] std::string getIPAddress() const;
 
-    std::shared_ptr<websocket::stream<tcp::socket>> ws_;
+    // The websocket, over TCP (ws::Server) or TLS (the device listener); Session.cpp defines it.
+    struct Stream;
+    std::shared_ptr<Stream> stream_;
     asio::any_io_executor strand_;
 
     beast::flat_buffer buffer_{8192};
@@ -123,6 +150,8 @@ private:
     std::string shareSessionId_;
     std::string shareSessionToken_;
     bool shareHandshake_{false};
+    std::shared_ptr<const ::vh::device::Peer> devicePeer_;
+    std::function<void()> onClose_;  // run once by the first close() (device HTTP principals)
 
     std::atomic_bool closing_{false};
     std::unique_ptr<ConnectionSlot> connectionSlot_;  // set before accept(); reset by the first close()

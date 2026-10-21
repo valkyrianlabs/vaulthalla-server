@@ -93,8 +93,10 @@ CommandResult deleteUser(const CommandCall& call) {
     try {
         return ok(format(ops::users::remove(call.user, req)));
     } catch (const ops::NeedsConfirmation& e) {
-        if (!call.io)
+        if (!call.io) {
+            noteConfirmationNeeded(e.code, {"--yes"});
             return invalid("user delete: " + std::string(e.what()) + "\nRe-run with --yes to confirm.");
+        }
         if (!call.io->confirm(std::string(e.what()) + "\nDelete this user? [no]", true))
             return invalid("user delete: cancelled; nothing was changed");
         req.confirmed = true;

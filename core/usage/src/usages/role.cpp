@@ -33,6 +33,7 @@ static const auto vaultInheritFrom = inheritFromFor("role.vault");
 static std::shared_ptr<CommandUsage> admin_list(const std::weak_ptr<CommandUsage>& parent) {
     const auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"list", "ls"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "List all admin roles in the system.";
     cmd->optional_flags = { jsonFlag };
     cmd->optional = listQueryOptions();
@@ -44,6 +45,7 @@ static std::shared_ptr<CommandUsage> admin_list(const std::weak_ptr<CommandUsage
 static std::shared_ptr<CommandUsage> admin_info(const std::weak_ptr<CommandUsage>& parent) {
     const auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"info", "show", "get"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "Display detailed information about a specific admin role.";
     cmd->positionals = { adminRolePos };
     cmd->examples.push_back({"vh role admin info super_admin", "Show information for the admin role named 'super_admin'."});
@@ -54,6 +56,7 @@ static std::shared_ptr<CommandUsage> admin_info(const std::weak_ptr<CommandUsage
 static std::shared_ptr<CommandUsage> admin_create(const std::weak_ptr<CommandUsage>& parent) {
     const auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"create", "new", "add", "mk"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Create a new admin role with specified permissions.";
     cmd->positionals = { newRolePos };
     cmd->optional = { descriptionOpt, adminInheritFrom };
@@ -70,6 +73,7 @@ static std::shared_ptr<CommandUsage> admin_create(const std::weak_ptr<CommandUsa
 static std::shared_ptr<CommandUsage> admin_update(const std::weak_ptr<CommandUsage>& parent) {
     const auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"update", "set", "modify", "edit"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Update properties and permissions of an existing admin role.";
     cmd->positionals = { adminRolePos };
     cmd->optional = { descriptionOpt, roleNameOpt };
@@ -90,6 +94,7 @@ static std::shared_ptr<CommandUsage> admin_update(const std::weak_ptr<CommandUsa
 static std::shared_ptr<CommandUsage> admin_remove(const std::weak_ptr<CommandUsage>& parent) {
     const auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"delete", "remove", "del", "rm"};
+    cmd->effect = CommandEffect::Destructive;
     cmd->description = "Delete an existing admin role by ID or name.";
     cmd->positionals = { adminRolePos };
     cmd->examples.push_back({"vh role admin delete audit_reader", "Delete the admin role named 'audit_reader'."});
@@ -100,6 +105,7 @@ static std::shared_ptr<CommandUsage> admin_remove(const std::weak_ptr<CommandUsa
 static std::shared_ptr<CommandUsage> vault_list(const std::weak_ptr<CommandUsage>& parent) {
     const auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"list", "ls"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "List all vault roles in the system.";
     cmd->optional_flags = { jsonFlag };
     cmd->optional = listQueryOptions();
@@ -111,6 +117,7 @@ static std::shared_ptr<CommandUsage> vault_list(const std::weak_ptr<CommandUsage
 static std::shared_ptr<CommandUsage> vault_info(const std::weak_ptr<CommandUsage>& parent) {
     const auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"info", "show", "get"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "Display detailed information about a specific vault role.";
     cmd->positionals = { vaultRolePos };
     cmd->examples.push_back({"vh role vault info power_user", "Show information for the vault role named 'power_user'."});
@@ -121,6 +128,7 @@ static std::shared_ptr<CommandUsage> vault_info(const std::weak_ptr<CommandUsage
 static std::shared_ptr<CommandUsage> vault_create(const std::weak_ptr<CommandUsage>& parent) {
     const auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"create", "new", "add", "mk"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Create a new vault role with specified permissions.";
     cmd->positionals = { newRolePos };
     cmd->optional = { descriptionOpt, vaultInheritFrom };
@@ -137,6 +145,7 @@ static std::shared_ptr<CommandUsage> vault_create(const std::weak_ptr<CommandUsa
 static std::shared_ptr<CommandUsage> vault_update(const std::weak_ptr<CommandUsage>& parent) {
     const auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"update", "set", "modify", "edit"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Update properties and permissions of an existing vault role.";
     cmd->positionals = { vaultRolePos };
     cmd->optional = { descriptionOpt, roleNameOpt };
@@ -153,6 +162,7 @@ static std::shared_ptr<CommandUsage> vault_update(const std::weak_ptr<CommandUsa
 static std::shared_ptr<CommandUsage> vault_remove(const std::weak_ptr<CommandUsage>& parent) {
     const auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"delete", "remove", "del", "rm"};
+    cmd->effect = CommandEffect::Destructive;
     cmd->description = "Delete an existing vault role by ID or name.";
     cmd->positionals = { vaultRolePos };
     cmd->examples.push_back({"vh role vault delete uploader", "Delete the vault role named 'uploader'."});

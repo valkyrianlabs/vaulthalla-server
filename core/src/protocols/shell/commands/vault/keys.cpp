@@ -7,6 +7,7 @@
 #include "db/query/vault/Deletion.hpp"
 #include "db/query/vault/Key.hpp"
 #include "ops/Vaults.hpp"
+#include "ops/VaultKeys.hpp"
 #include "vault/Retention.hpp"
 #include "vault/model/Deletion.hpp"
 #include "vault/model/Key.hpp"
@@ -88,123 +89,192 @@ static CommandResult handle_key_encrypt_and_response(const CommandCall& call,
 }
 
 
-// A deleted vault's key stays exportable for the key retention window (#162), from the sealed copy kept with the
-// deletion record. Same permission as a live export; the exported_at mark stops the delete flows' warnings.
-static CommandResult export_deleted_key(const CommandCall& call, const std::shared_ptr<CommandUsage>& usage,
-                                        const std::string& notFound) {
-    std::shared_ptr<::vh::vault::model::Deletion> deletion;
+namespace keys_ops = vh::ops::vault_keys;
+
+// D4: the local CLI may take key bytes; an MCP client (/mcp or a `vh mcp` call) may not.
+static keys_ops::Channel cli_channel() {
+    return AgentCallScope::active() ? keys_ops::Channel::Agent : keys_ops::Channel::Cli;
+}
+
+// The vault a key command names: a live vault (with or without a running engine), else a deleted one within its key
+// retention window (by id or name, #162). Empty with `error` set when neither matches.
+static std::optional<unsigned int> resolve_key_vault(const CommandCall& call, const std::shared_ptr<CommandUsage>& usage,
+                                                     const std::string& errPrefix, std::string& error) {
+    const auto& arg = call.positionals[0];
+    const auto lookup = resolveVault(call, arg, usage, errPrefix);
+    if (lookup && lookup.ptr) return lookup.ptr->id;
     try {
         std::optional<unsigned int> ownerId;
         if (optVal(call, usage->resolveOptional("owner")->option_tokens)) ownerId = resolveOwner(call, usage)->id;
-        deletion = ops::vaults::findDeleted(call.user, call.positionals[0], ownerId);
+        return ops::vaults::findDeleted(call.user, arg, ownerId)->vault_id;
     } catch (const std::exception&) {
-        return invalid(notFound);
-    }
-    if (!deletion->keyRetained())
-        return invalid("vault keys export: the key of deleted vault '" + deletion->vault_name + "' was destroyed when its key "
-                       "retention window ended");
-
-    auto retained = ::vh::vault::retention::retainedKey(deletion->vault_id);
-    auto v = std::make_shared<::vh::vault::model::Vault>();
-    v->id = deletion->vault_id;
-    v->name = deletion->vault_name;
-    auto out = generate_json_key_object(v, retained.key, retained.record, call.user->name());
-    sodium_memzero(retained.key.data(), retained.key.size());
-    out["deleted_vault"] = true;
-    const auto result = handle_key_encrypt_and_response(call, out, usage);
-    if (result.exit_code == 0) db::query::vault::Deletion::markKeyExported(deletion->vault_id);
-    return result;
-}
-
-// Retired key versions recoverable data still needs (snapshots, local versions, provider object versions), so an
-// export keeps decrypting them after a rotation. Same encoding as the current key. Added only when something
-// references one, so an export without recovery data is unchanged.
-static void add_historical_keys(nlohmann::json& out, const std::shared_ptr<storage::Engine>& engine) {
-    const auto referenced = engine->encryptionManager->referencedHistoricalKeys();
-    if (!referenced.keys.empty()) {
-        nlohmann::json historical = nlohmann::json::array();
-        for (const auto& k : referenced.keys) {
-            std::vector<uint8_t> raw(k.key->bytes().begin(), k.key->bytes().end());
-            historical.push_back({
-                {"key_version", k.version},
-                {"key", crypto::util::b64_encode(raw)},
-                {"created_at", db::encoding::timestampToString(k.created_at)},
-                {"retired_at", db::encoding::timestampToString(k.retired_at)}
-            });
-            sodium_memzero(raw.data(), raw.size());
-        }
-        out["historical_keys"] = std::move(historical);
-    }
-    if (!referenced.missing.empty()) {
-        log::Registry::audit()->error("[shell::add_historical_keys] Recovery data of vault {} references key versions "
-                                      "the vault no longer holds", engine->vault->id);
-        out["missing_key_versions"] = referenced.missing;
+        error = lookup.error;
+        return std::nullopt;
     }
 }
 
 static CommandResult export_one_key(const CommandCall& call, const std::shared_ptr<CommandUsage>& usage) {
-    constexpr const auto* ERR = "vault keys export";
-
-    const auto vaultArg = call.positionals[0];
-
-    const auto engLkp = resolveEngine(call, vaultArg, usage, ERR);
-    if (!engLkp || !engLkp.ptr) return export_deleted_key(call, usage, engLkp.error);
-    const auto engine = engLkp.ptr;
-
-    const auto context = fmt::format("User: {} -> {}", call.user->name(), __func__);
-    const auto& key = engine->encryptionManager->get_key(context);
-    const auto vaultKey = db::query::vault::Key::getVaultKey(engine->vault->id);
-    if (!vaultKey) return invalid("vault keys export: no key record found for vault ID " + std::to_string(engine->vault->id));
-
-    auto out = generate_json_key_object(engine->vault, key, vaultKey, call.user->name());
-    add_historical_keys(out, engine);
-    const auto result = handle_key_encrypt_and_response(call, out, usage);
-    if (result.exit_code == 0) db::query::vault::Key::markExported(engine->vault->id, vaultKey->version);
+    std::string error;
+    const auto vaultId = resolve_key_vault(call, usage, "vault keys export", error);
+    if (!vaultId) return invalid(error);
+    const auto exported = keys_ops::exportVault(call.user, *vaultId, cli_channel());
+    const auto result = handle_key_encrypt_and_response(call, keys_ops::toJson(exported, call.user->name()), usage);
+    if (result.exit_code == 0) keys_ops::recordExport(exported);
     return result;
 }
 
-
 static CommandResult export_all_keys(const CommandCall& call, const std::shared_ptr<CommandUsage>& usage) {
-    const auto engines = runtime::Deps::get().storageManager->getEngines();
-    if (engines.empty()) return invalid("vault keys export: no vaults found");
+    const auto all = keys_ops::exportAll(call.user, cli_channel());
+    if (all.vaults.empty() && all.skipped.empty()) return invalid("vault keys export: no vaults found");
 
     nlohmann::json out = nlohmann::json::array();
-
-    const auto context = fmt::format("User: {} -> {}", call.user->name(), __func__);
-    for (const auto& engine : engines) {
-        const auto& key = engine->encryptionManager->get_key(context);
-        const auto vaultKey = db::query::vault::Key::getVaultKey(engine->vault->id);
-        if (!vaultKey) return invalid("vault keys export: no key record found for vault ID " + std::to_string(engine->vault->id));
-        auto item = generate_json_key_object(engine->vault, key, vaultKey, call.user->name());
-        add_historical_keys(item, engine);
-        out.push_back(std::move(item));
-    }
-
-    const auto result = handle_key_encrypt_and_response(call, out, usage);
+    for (const auto& exported : all.vaults) out.push_back(keys_ops::toJson(exported, call.user->name()));
+    auto result = handle_key_encrypt_and_response(call, out, usage);
     if (result.exit_code == 0)
-        for (const auto& item : out)
-            db::query::vault::Key::markExported(item.at("vault_id").get<unsigned int>(),
-                                                item.at("key_info").at("key_version").get<unsigned int>());
+        for (const auto& exported : all.vaults) keys_ops::recordExport(exported);
+    for (const auto& skipped : all.skipped)
+        result.stderr_text += "\nWARNING: not exported, the key can't be read on this host: " + skipped;
+    if (!all.skipped.empty()) result.stderr_text += "\nRestore those keys with `vh vault keys import`.\n";
     return result;
 }
 
 
 static CommandResult handle_export_vault_keys(const CommandCall& call) {
-    if (!call.user->isSuperAdmin()) {
-        if (!call.user->encryptionKeysPerms().canExport()) return invalid(
-            "vault keys export: only super admins or users with export encryption keys permission can export vault keys");
-
-        log::Registry::audit()->warn(
-            "\n[shell::handle_export_vault_keys] User {} called to export vault keys without super admin privileges\n"
-            "WARNING: It is extremely dangerous to assign this permission to non super-admin users, proceed at your own risk.\n",
-            call.user->name());
-    }
-
     const auto usage = resolveUsage({"vault", "keys", "export"});
     validatePositionals(call, usage);
+    try {
+        if (call.positionals[0] == "all") return export_all_keys(call, usage);
+        return export_one_key(call, usage);
+    } catch (const ops::Error& e) {
+        return invalid(std::string("vault keys export: ") + e.what());
+    }
+}
 
-    if (call.positionals[0] == "all") return export_all_keys(call, usage);
-    return export_one_key(call, usage);
+// Best effort: the parsed export's key strings are zeroed once the import is done with them.
+static void wipe_keys(nlohmann::json& j) {
+    if (j.is_array()) {
+        for (auto& e : j) wipe_keys(e);
+    } else if (j.is_object()) {
+        for (auto it = j.begin(); it != j.end(); ++it) {
+            if (it.key() == "key" && it->is_string()) {
+                auto& text = it->get_ref<std::string&>();
+                std::fill(text.begin(), text.end(), '\0');
+            } else {
+                wipe_keys(*it);
+            }
+        }
+    }
+}
+
+static std::string import_text(const keys_ops::ImportResult& r) {
+    std::string out = fmt::format("Vault {} ('{}'){}: {}\n", r.vault_id, r.vault_name, r.deleted ? " [deleted]" : "",
+                                  r.written ? "keys restored" : "nothing written");
+    for (const auto& v : r.versions)
+        out += fmt::format("  version {}: {} ({})\n", v.version, keys_ops::to_string(v.outcome), v.detail);
+    out += r.key_available ? "  the vault's key is available on this host\n" : "";
+    if (r.note) out += "  " + *r.note + "\n";
+    return out;
+}
+
+static CommandResult handle_vault_keys_import(const CommandCall& call) {
+    constexpr const auto* ERR = "vault keys import";
+    const auto usage = resolveUsage({"vault", "keys", "import"});
+    validatePositionals(call, usage);
+    if (!call.input)
+        return invalid(std::string(ERR) + ": no key file came with the request. vh reads --file on your side and sends "
+                       "its contents; the daemon never opens it (is vh older than the daemon?)");
+    nlohmann::json doc;
+    try {
+        doc = nlohmann::json::parse(*call.input);
+    } catch (const std::exception&) {
+        return invalid(std::string(ERR) + ": the file is not a JSON key export. Decrypt a GPG export first: gpg "
+                       "--decrypt <file> | vh vault keys import <vault> --file - --confirm-name <vault name>");
+    }
+    struct Wipe {
+        nlohmann::json& j;
+        ~Wipe() { wipe_keys(j); }
+    } wipe{doc};
+
+    std::string error;
+    const auto vaultId = resolve_key_vault(call, usage, ERR, error);
+    if (!vaultId) return invalid(error);
+    const bool json = hasFlag(call, usage->resolveFlag("json_output")->aliases);
+    const auto confirmName = optVal(call, "confirm-name");
+    const auto run = [&](const std::optional<std::string>& name) {
+        return keys_ops::importKeys(call.user, {.vault_id = *vaultId, .keys = &doc, .confirm_name = name}, cli_channel());
+    };
+
+    try {
+        keys_ops::ImportResult result;
+        try {
+            result = run(confirmName);
+        } catch (const ops::NeedsConfirmation& e) {
+            if (confirmName)
+                return invalid(std::string(ERR) + ": --confirm-name is not the vault's name; nothing was written");
+            if (!call.io) {
+                noteConfirmationNeeded(e.code, {"--confirm-name"});
+                return invalid(std::string(ERR) + ": " + e.what() +
+                               "\nRe-run in a terminal, or pass --confirm-name <vault name>.");
+            }
+            const auto typed = call.io->prompt(std::string(e.what()) + "\nVault name: ", "");
+            try {
+                result = run(typed);
+            } catch (const ops::NeedsConfirmation&) {
+                return invalid(std::string(ERR) + ": that is not the vault's name; nothing was written");
+            }
+        }
+        if (json) return ok(keys_ops::toJson(result).dump(4));
+        return ok(import_text(result));
+    } catch (const ops::Error& e) {
+        return invalid(std::string(ERR) + ": " + e.what());
+    }
+}
+
+static std::string status_text(const keys_ops::KeyStatus& s) {
+    std::string out = fmt::format("Vault {} ('{}'){}\n", s.vault_id, s.vault_name, s.deleted ? " [deleted]" : "");
+    out += fmt::format("  key version:   {}\n", s.version);
+    out += fmt::format("  key check:     {}\n", s.key_check.value_or("unavailable"));
+    if (s.unavailable_reason)
+        out += "  unavailable:   " + *s.unavailable_reason + " (" + s.unavailable_detail.value_or("") + ")\n";
+    if (s.exported_version)
+        out += fmt::format("  exported:      version {}{}{}\n", *s.exported_version,
+                           s.exported_at ? " at " + db::encoding::timestampToString(*s.exported_at) : std::string{},
+                           *s.exported_version == s.version ? "" : " (stale: export the current version)");
+    else
+        out += "  exported:      never\n";
+    out += fmt::format("  rotation:      {}\n", s.rotation_in_progress ? "in progress" : "none");
+    for (const auto& n : s.needed_versions)
+        out += fmt::format("  needed:        version {} ({}) {}\n", n.version, keys_ops::to_string(n.reason),
+                           n.key_check.value_or("MISSING"));
+    if (s.key_retain_until)
+        out += "  key kept until " + db::encoding::timestampToString(*s.key_retain_until) + "\n";
+    return out;
+}
+
+static CommandResult handle_vault_keys_status(const CommandCall& call) {
+    const auto usage = resolveUsage({"vault", "keys", "status"});
+    validatePositionals(call, usage);
+    const bool json = hasFlag(call, usage->resolveFlag("json_output")->aliases);
+    try {
+        std::optional<unsigned int> vaultId;
+        if (call.positionals[0] != "all") {
+            std::string error;
+            vaultId = resolve_key_vault(call, usage, "vault keys status", error);
+            if (!vaultId) return invalid(error);
+        }
+        const auto statuses = keys_ops::status(call.user, vaultId);
+        if (json) {
+            nlohmann::json out = nlohmann::json::array();
+            for (const auto& s : statuses) out.push_back(keys_ops::toJson(s));
+            return ok(nlohmann::json{{"vaults", out}}.dump(4));
+        }
+        if (statuses.empty()) return ok("No vaults.");
+        std::string out;
+        for (const auto& s : statuses) out += status_text(s);
+        return ok(out);
+    } catch (const ops::Error& e) {
+        return invalid(std::string("vault keys status: ") + e.what());
+    }
 }
 
 
@@ -306,6 +376,9 @@ CommandResult commands::vault::handle_vault_keys(const CommandCall& call) {
     if (isVaultKeysMatch("export", subcommand)) return handle_export_vault_keys(subcall);
     if (isVaultKeysMatch("rotate", subcommand)) return handle_rotate_vault_keys(subcall);
     if (isVaultKeysMatch("inspect", subcommand)) return handle_inspect_vault_key(subcall);
+    if (isVaultKeysMatch("status", subcommand)) return handle_vault_keys_status(subcall);
+    if (isVaultKeysMatch("import", subcommand)) return handle_vault_keys_import(subcall);
 
-    return invalid("vault keys: unknown subcommand '" + std::string(subcommand) + "'. Use: export | rotate | inspect");
+    return invalid("vault keys: unknown subcommand '" + std::string(subcommand) +
+                   "'. Use: status | export | import | rotate | inspect");
 }

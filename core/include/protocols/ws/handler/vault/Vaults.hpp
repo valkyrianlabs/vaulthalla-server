@@ -3,6 +3,7 @@
 #include <nlohmann/json_fwd.hpp>
 #include <memory>
 #include "protocols/ws/Fwd.hpp"
+#include "ops/Vaults.hpp"
 
 namespace vh::protocols::ws::handler {
 
@@ -19,6 +20,11 @@ struct Vaults {
     static json restore(const json& payload, const std::shared_ptr<Session>& session);
     static json get(const json& payload, const std::shared_ptr<Session>& session);
     static json sync(const json& payload, const std::shared_ptr<Session>& session);
+
+    // The JSON storage.vault.get and storage.vault.remove.plan answer with (the contract's Vault and VaultRemovalPlan
+    // models; core/tests/unit/contract/models_vaults.cpp checks them).
+    static json detailsJson(const ops::vaults::Details& details);
+    static json removalPlanJson(const ops::vaults::RemovalPlan& plan);
 };
 
 } // namespace vh::websocket

@@ -7,6 +7,7 @@ import {
   FolderIcon,
   GaugeHighIcon,
   KeySkeletonIcon,
+  LinkIcon,
   PeopleGroupIcon,
   SackDollarIcon,
   ShareNodesIcon,
@@ -46,6 +47,8 @@ export const NAV: NavSection[] = [
         requires: { anyOf: ['admin.vaults.self.view', 'admin.vaults.user.view', 'admin.vaults.admin.view'] },
         keywords: 'storage buckets local s3',
       },
+      // Everyone pairs Vaulthalla Desktop to their own account; super admins also see /devices/all.
+      { label: 'Devices', href: '/devices', icon: LinkIcon, keywords: 'pair paired desktop mac revoke remote' },
     ],
   },
   {

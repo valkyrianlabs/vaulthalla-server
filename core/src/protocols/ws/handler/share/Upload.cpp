@@ -1,4 +1,5 @@
 #include "protocols/ws/handler/share/Upload.hpp"
+#include "protocols/ws/handler/RequestErrors.hpp"
 #include "ops/Error.hpp"
 
 #include "fs/Filesystem.hpp"
@@ -46,7 +47,7 @@ public:
         if (!engine) throw std::runtime_error("Share upload storage engine is unavailable");
         if (!engine->paths) throw std::runtime_error("Share upload storage paths are unavailable");
         if (bytes.size() > engine->freeSpace())
-            throw std::runtime_error("Share upload exceeds available vault storage");
+            throw vh::ops::Conflict("Share upload exceeds available vault storage");
 
         const auto vaultPath = std::filesystem::path(finalVaultPath);
         const auto fusePath = engine->vaultPathToFusePath(vaultPath);
@@ -114,9 +115,9 @@ public:
 
 void requireShareMode(const std::shared_ptr<Session>& session) {
     if (!session) throw std::runtime_error("Share upload commands require websocket session");
-    if (session->user) throw std::runtime_error("Share upload commands require share mode");
-    if (!session->isShareMode()) throw std::runtime_error("Share upload commands require verified share mode");
-    if (session->shareSessionToken().empty()) throw std::runtime_error("Share session token is missing");
+    if (session->user) throw vh::ops::Denied("Share upload commands require share mode");
+    if (!session->isShareMode()) throw vh::ops::Denied("Share upload commands require verified share mode");
+    if (session->shareSessionToken().empty()) throw vh::ops::Denied("Share session token is missing");
 }
 
 [[nodiscard]] std::shared_ptr<vh::share::Principal> refreshPrincipal(
@@ -140,7 +141,7 @@ void requireShareMode(const std::shared_ptr<Session>& session) {
     if (!payload.contains("path") || payload.at("path").is_null()) return "/";
     auto path = payload.at("path").get<std::string>();
     if (path.empty()) return "/";
-    if (hasDuplicateSlash(path)) throw std::runtime_error("Share upload path contains duplicate slash");
+    if (hasDuplicateSlash(path)) throw vh::ops::Invalid("Share upload path contains duplicate slash");
     return path;
 }
 
@@ -232,8 +233,8 @@ void ensureNoExistingTarget(
     const auto principal = actor.sharePrincipal();
     if (!principal) throw std::runtime_error("Share upload actor principal is missing");
     if (principal->grant.duplicate_policy == vh::share::DuplicatePolicy::Reject)
-        throw std::runtime_error("Share upload target already exists");
-    throw std::runtime_error("Share upload duplicate policy is not supported in this pass");
+        throw vh::ops::Conflict("Share upload target already exists");
+    throw vh::ops::Invalid("Share upload duplicate policy is not supported in this pass");
 }
 
 [[nodiscard]] json safeFileJson(const vh::fs::model::File& file, const vh::share::Principal& principal) {
@@ -250,7 +251,7 @@ void ensureNoExistingTarget(
 void requireAcceptedDuplicatePolicy(const json& payload) {
     if (!payload.contains("duplicate_policy") || payload.at("duplicate_policy").is_null()) return;
     const auto policy = payload.at("duplicate_policy").get<std::string>();
-    if (policy != "reject") throw std::runtime_error("Share upload duplicate policy is not supported in this pass");
+    if (policy != "reject") throw vh::ops::Invalid("Share upload duplicate policy is not supported in this pass");
 }
 
 [[nodiscard]] std::string uploadIdFromPayload(
@@ -440,28 +441,44 @@ void requireAcceptedDuplicatePolicy(const json& payload) {
 }
 namespace up_detail = share_upload_handler_detail;
 
-json Upload::start(const json& payload, const std::shared_ptr<Session>& session) {
+json Upload::uploadedFileJson(const vh::fs::model::File& file, const vh::share::Principal& principal) {
+    return up_detail::safeFileJson(file, principal);
+}
+
+json Upload::start(const json& payload, const std::shared_ptr<Session>& session) try {
     return up_detail::startImpl(payload, session, up_detail::CommandSurface::Compatibility);
+} catch (...) {
+    rethrowRequestErrorsAsInvalid();
 }
 
-json Upload::finish(const json& payload, const std::shared_ptr<Session>& session) {
+json Upload::finish(const json& payload, const std::shared_ptr<Session>& session) try {
     return up_detail::finishImpl(payload, session);
+} catch (...) {
+    rethrowRequestErrorsAsInvalid();
 }
 
-json Upload::cancel(const json& payload, const std::shared_ptr<Session>& session) {
+json Upload::cancel(const json& payload, const std::shared_ptr<Session>& session) try {
     return up_detail::cancelImpl(payload, session);
+} catch (...) {
+    rethrowRequestErrorsAsInvalid();
 }
 
-json Upload::nativeStart(const json& payload, const std::shared_ptr<Session>& session) {
+json Upload::nativeStart(const json& payload, const std::shared_ptr<Session>& session) try {
     return up_detail::startImpl(payload, session, up_detail::CommandSurface::Native);
+} catch (...) {
+    rethrowRequestErrorsAsInvalid();
 }
 
-json Upload::nativeFinish(const json& payload, const std::shared_ptr<Session>& session) {
+json Upload::nativeFinish(const json& payload, const std::shared_ptr<Session>& session) try {
     return up_detail::finishImpl(payload, session);
+} catch (...) {
+    rethrowRequestErrorsAsInvalid();
 }
 
-json Upload::nativeCancel(const json& payload, const std::shared_ptr<Session>& session) {
+json Upload::nativeCancel(const json& payload, const std::shared_ptr<Session>& session) try {
     return up_detail::cancelImpl(payload, session);
+} catch (...) {
+    rethrowRequestErrorsAsInvalid();
 }
 
 void Upload::setManagerFactoryForTesting(ManagerFactory factory) {

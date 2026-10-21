@@ -8,6 +8,7 @@ static std::shared_ptr<CommandUsage> help_base(const std::weak_ptr<CommandUsage>
     const auto cmd = std::make_shared<CommandUsage>();
     cmd->parent = parent;
     cmd->aliases = {"help", "-h", "--h", "--help"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "Explicitly show help about a command or namespace (optional).";
     cmd->examples = {
         {"vh help", "Show general help information."},
@@ -21,6 +22,7 @@ static std::shared_ptr<CommandUsage> version_base(const std::weak_ptr<CommandUsa
     const auto cmd = std::make_shared<CommandUsage>();
     cmd->parent = parent;
     cmd->aliases = {"version", "-v", "--v", "--version"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "Show version information about Vaulthalla.";
     cmd->examples.push_back({"vh version", "Show the current version of Vaulthalla."});
     return cmd;
@@ -30,6 +32,7 @@ static std::shared_ptr<CommandUsage> status_base(const std::weak_ptr<CommandUsag
     const auto cmd = std::make_shared<CommandUsage>();
     cmd->parent = parent;
     cmd->aliases = {"status"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "Show a concise Vaulthalla runtime status snapshot, including a live database round trip. "
                        "Exit status: 0 healthy, 1 degraded, 2 critical (e.g. database unreachable); "
                        "69 daemon not running, 75 daemon not responding, 77 not permitted to use the control socket.";

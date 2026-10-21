@@ -30,6 +30,7 @@ static const auto enableFlag = Flag::WithAliases("enable", "Reactivate a deactiv
 static std::shared_ptr<CommandUsage> list(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"list", "ls"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "List all users in the system.";
     cmd->optional = listQueryOptions();
     cmd->examples = {
@@ -43,6 +44,7 @@ static std::shared_ptr<CommandUsage> list(const std::weak_ptr<CommandUsage>& par
 static std::shared_ptr<CommandUsage> create(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"create", "new", "add", "mk"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Create a new user.";
     cmd->positionals = {namePos};
     cmd->required = {role};
@@ -60,6 +62,7 @@ static std::shared_ptr<CommandUsage> create(const std::weak_ptr<CommandUsage>& p
 static std::shared_ptr<CommandUsage> remove(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"delete", "remove", "rm"};
+    cmd->effect = CommandEffect::Destructive;
     cmd->description = "Delete an existing user by username. The user's vaults are destroyed unless ownership is "
                        "transferred with --transfer-to; you are asked to confirm either way.";
     cmd->positionals = {userPos};
@@ -79,6 +82,7 @@ static std::shared_ptr<CommandUsage> remove(const std::weak_ptr<CommandUsage>& p
 static std::shared_ptr<CommandUsage> info(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"info", "show", "get"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "Get information about a specific user by username.";
     cmd->positionals = {userPos};
     cmd->examples = {
@@ -92,6 +96,7 @@ static std::shared_ptr<CommandUsage> info(const std::weak_ptr<CommandUsage>& par
 static std::shared_ptr<CommandUsage> update(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"update", "set", "modify", "edit"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Update properties of an existing user.";
     cmd->positionals = {userPos};
     cmd->optional = {nameOpt, emailOpt, Optional(role), linuxUidOpt};

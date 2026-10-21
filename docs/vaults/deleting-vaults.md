@@ -84,7 +84,7 @@ Open the vault, then **Settings → Delete vault**. One dialog shows how long th
 
 The **Deleted vaults** panel on the Vaults page lists pending and purged deletions with **Restore** and **Purge now**.
 
-Keys are never exported through the browser. Run the export command on the server.
+Keys are never exported through the browser. Run the export command on the server, or back the key up from a Mac paired with Vaulthalla Desktop.
 
 ## Export A Key, Before Or After Deletion
 

@@ -20,7 +20,7 @@ core-backend, and protocol-map docs, with stale claims corrected.
   (`>=155.8059`, `<1000`) because the retired `20250629` fork snapshot sorts higher; `tools/contracts` pins both.
   libpqxx stays out of the -O0 PCH (GCC drops its `#pragma GCC diagnostic` fences there).
   It generates `paths.h` (config/runtime/mount/state/log/psql paths, lines ~35-44).
-- Artifacts: `vaulthalla-server`, `vaulthalla-cli`, `vh_usage` (manpage markdown generator),
+- Artifacts: `vaulthalla-server`, `vaulthalla-cli` (links `vhusage` for `vh mcp` / `vh skill`), `vh_usage` (manpage markdown generator),
   static libs `vaulthalla`, `vhseed`, `vhusage`, `vhusage-native`; tests `vh_unit_tests`, `vh_integration_tests`.
 - `meson.options`: `manpage` (true), `install_data` (true), `build_unit_tests` (false),
   `integration_tests` (false), `systemd_system_unit_dir` (`/lib/systemd/system`), `udev_rules_dir`, `tmpfiles_dir`.
@@ -63,8 +63,9 @@ are detached; workers hold only shared state).
 a service after 500ms. Start order:
 
 ```
-FUSE → SyncController → DBJanitor → VaultRetentionService → LogRotationService → StatsSnapshotService →
-OperatorEmailService → ConnectionLifecycleManager → ProtocolService → S3GatewayService (+ ShellServer)
+FUSE → IdentityWatcher → SyncController → UpstreamEventService → DBJanitor → VaultRetentionService →
+LogRotationService → StatsSnapshotService → OperatorEmailService → ConnectionLifecycleManager → ProtocolService →
+DeviceServer → S3GatewayService (+ ShellServer)
 ```
 
 Stop order is the reverse, with the ShellServer stopped right after ProtocolService.
@@ -78,6 +79,7 @@ ShellServer is not created in test mode (`paths::testMode`).
 | HTTP preview/download/upload/auth | `http/Server.cpp`, `http/Session.cpp`, `http/Router.cpp`, `http/Access.cpp`, `http/handler/*`, `http/upload/Coordinator.cpp` | `0.0.0.0:36970` (fresh installs: `127.0.0.1`) |
 | S3 gateway (SigV4, multipart) | `s3/*` (`GatewayService`, `SigV4`, `ObjectStore`, `MultipartStore`, `CredentialManager`) | `0.0.0.0:39000`, disabled by default |
 | Shell/CLI control | `shell/Server.cpp`, `shell/Router.cpp`, `shell/commands/*` | unix socket `/run/vaulthalla/cli.sock` |
+| Device listener (Vaulthalla Desktop, mutual TLS) | `device/Service.cpp`, `device/Listener.cpp` (`/ws` → the ws Router) | `127.0.0.1:36972`; `0.0.0.0` once `device_server.remote` (absent section = these defaults) |
 
 > `core/include/config/Config.hpp` compiled-in defaults are **33369/33370**, but the shipped config,
 > web fallbacks, and Caddyfile all use **36969/36970**. Trust the config file, and treat that
@@ -100,6 +102,9 @@ ShellServer is not created in test mode (`paths::testMode`).
    subcommand name a handler dispatches on must be defined.
 5. Usage/help comes from `core/usage/*` (root alias hard-coded as `vh`). The same code drives the `vh_usage` manpage
    generator and the integration-test command models, so CLI UX changes ripple into man pages and tests.
+   Every leaf declares `effect` (`CommandEffect::Read|Write|Destructive`, `types.hpp`; destructive = deletes, purges,
+   revokes, rotates keys or can't be undone); `McpCatalog.EveryLeafDeclaresAnEffectAndOnlyLeaves` refuses a leaf
+   without one, and `vh_usage --json` exports it.
 
 Invariants: the **daemon owns `/run/vaulthalla/cli.sock`** (binds it itself; every ~1s it checks the path still points
 at its listener and rebinds if something replaced it). `deploy/systemd/vaulthalla-cli.{socket,service}` are obsolete
@@ -124,6 +129,54 @@ every byte; stdout via write(2), refused to a TTY without `-o -`); `planLocal` m
 agree which positional is the local file. Tests: `test_cli_fs.cpp` (DB, socketpair), `core/tests/cli/test_fs_client.py`
 (meson `cli_fs_client`, real `vaulthalla-cli` against a scripted daemon).
 
+### MCP and agent skills (`vh mcp`, `vh skill`)
+
+One catalog, two transports. `core/usage/{include/Mcp.hpp,src/mcp/}` (`vh::mcp`) holds the tool catalog
+(`Catalog`), the JSON-RPC 2.0 handler (`Server`: initialize with version negotiation 2025-11-25 → 2025-06-18 →
+2025-03-26, ping, tools/list, tools/call) and the skill text. It lives in the usage module because it needs only the
+usage book and the operation catalog and no daemon types, so the client links it directly; the daemon links it too
+(remote `/mcp` on the device listener runs `Invocation::line` through `Router::executeLine(line, deviceUser)`; see
+"Device listener and pairing").
+- Compiled into `vaulthalla-cli` rather than fetched from the daemon: `tools/list` and `vh skill install` work with the
+  daemon down, there is no new socket command, and skew fails closed (an older daemon rejects options it doesn't
+  declare; `mcp`/`skill` reaching a daemon get "runs in the vh client", `commands/client.cpp`).
+- Tools: `vh_help {path}` (usage book as JSON), `vh_read {command, confirm?}` (read-effect leaves only, readOnlyHint),
+  `vh_run {command, confirm?}` (any agent-available leaf, destructiveHint: annotations are per tool, so the read/any
+  split is how a leaf's effect reaches the client), and one typed tool per `OperationSpec` with a CLI binding (name =
+  id with `_`, schema from `FieldSpec`s, line from `field_to_entry`/`fixed`, annotation = stronger of op `effect.kind`
+  and the leaf's effect).
+- `vh_run` commands are tokenized with a mirror of `Token.hpp`/`Parser.hpp`, resolved like the Router (plural → list,
+  positionals descend), checked, and re-rendered from the tokens, so the daemon parses exactly what was checked
+  (`McpCatalog.RunLinesParseAsCheckedForEveryDocumentedExample`). Refused before running: unknown commands, groups,
+  `--`, odd option spellings, confirmation flags in the command, and `mcp::exclusions()` (one list: `vault key export|import`,
+  `secrets export|update`, `setup`, `teardown`, `fs get|put`, `mcp`, `skill`, `device pair|approve|deny`,
+  `device remote enable|disable`; also checked case-insensitively). Defense in depth for key material:
+  `protocols::shell::AgentCallScope` marks a command run for an MCP client (`/mcp`'s executor; a `vh mcp` request
+  carries `"agent": true`), and the vault key handlers refuse under it (`key-backup.md`).
+- Confirmations: a leaf's gates are its flags spelled `yes`/`accept-*`/`adopt-bucket` and the `confirm-token` option.
+  Tools never add them on their own (typed bindings' `fixed` `flag:yes` is dropped) and the schema has `confirm`
+  (`{"yes": true}`, `{"confirm-token": "<t>"}`). Independently, every call that resolves to an `effect: destructive`
+  leaf (typed effect = stronger of op and leaf) is refused before execution without `confirm: {"destructive": true}`
+  (an MCP-layer acknowledgement, never rendered as a flag). Refusals for want of a confirmation: handlers call
+  `shell::noteConfirmationNeeded(code, flags)` (thread-local) right before refusing; `Router::executeLine` attaches it
+  to the failed `CommandResult::confirmation`, and `shell/Server.cpp` sends it as the result frame's optional
+  `confirmation {code, flag, flags}` (the CLI ignores it). `Catalog::finish` maps those flags to the leaf's gates; only
+  without the member (older daemons) does it fall back to the text ("re-run …/pass --<gate>"). Either way the result
+  is `isError` + `structuredContent {needs_confirmation, confirm_options, code?, message, how_to_confirm}`. `--json` is appended where the
+  leaf has it; stdout is the text content; stderr and the exit code go into an `isError` result otherwise.
+- `vh mcp` (`core/main/cli_mcp.cpp`): newline-delimited JSON-RPC on stdin/stdout (stdout only protocol messages,
+  invalid UTF-8 replaced, writes serialized), each call one `vh::cli::runCaptured` (`interactive:false`, same peer-UID
+  authorization; 69/75/77 come back as tool errors). `tools/call` runs on its own thread (at most 8 in flight), so
+  ping/cancel/other requests are answered meanwhile; `notifications/cancelled` shuts the call's socket down
+  (`CallControl`) and its response is suppressed (exit 130 internally); `VAULTHALLA_MCP_TIMEOUT` (default 600 s, 0 =
+  none) abandons a call (exit 124). An abandoned or cancelled call is not undone in the daemon. `vh skill install` (`cli_skill.cpp`): `SKILL.md` (hand-written,
+  `src/mcp/Skill.cpp`) + `references/commands.md` (`Catalog::commandReference`) into `~/.claude/skills/vaulthalla` /
+  `~/.agents/skills/vaulthalla` (project: `.claude/skills`, `.agents/skills`); registers via `claude mcp add --scope
+  user|project` / `codex mcp add` when on PATH, else prints it (Codex TOML stanza written only with `--force`);
+  identical skill = no-op, a changed one only with `--force`. Tests: `test_mcp_catalog.cpp` (DB-free),
+  `core/tests/cli/test_mcp_client.py` (meson `cli_mcp_client`: real client, scripted daemon, temp HOME).
+  Operator doc: `docs/admin/mcp-and-agents.md`.
+
 ### WebSocket flow
 
 **Connection cap (#164).** `ws::Server::onAccept` takes a `ConnectionSlot` (`protocols/ws/ConnectionLimit.hpp`)
@@ -133,9 +186,16 @@ refused count. The session holds the slot and gives it back on its first `close(
 that fail before the websocket handshake (header read, hydration, handshake error) now `close()` at once instead of
 lingering in the session manager until the lifecycle sweep.
 
+**Envelope.** `ws::Session` checks each text frame before routing (`protocols/ws/Envelope.hpp`): unparsable text or
+a frame without a non-empty string `command` (or with a non-string `token`) is answered `parse_error` with `error`,
+`message` and the frame's requestId when it has one. Answers (`model::Response::frame()`) echo a string or integer
+requestId and omit empty `data`; a fault escaping the router answers `<command>.response` with status ERROR and no
+code. Payload handlers read a missing `payload` as `{}`. The contract publishes these rules as `envelope`.
+
 The web client builds `ws(s)://<host>/ws` in `web/src/util/getUrl.ts` (overridable with `NEXT_PUBLIC_VAULTHALLA_WS_ORIGIN`).
 `web/src/stores/useWebSocket.ts` handles reconnect, the pending-request map keyed by `requestId`, and token injection.
-Router allowlists are **exact and per session mode**: unauthenticated, human, pending-share, and ready-share.
+Router allowlists are **exact and per session mode**: unauthenticated, human, pending-share, ready-share, and on the
+device listener device and device-pairing (see "Device listener and pairing" below).
 Only the session-lifecycle commands (`auth.login`, `auth.logout`, `auth.refresh`, `auth.isAuthenticated`) skip
 access-token validation (`isSessionLifecycleCommand`, mirrored by the web's
 `SESSION_LIFECYCLE_COMMANDS`). Every other `auth.*` command (register, user update/delete/get/list, password change)
@@ -151,6 +211,87 @@ Refused requests (unauthorized, rate limited) warn once per client + command per
 (`RefusalLogThrottle`, bounded map + overflow bucket, summary "suppressed N more in Ns"); per-request detail is
 debug only, and client-invented command names share one label so they can't mint a warning each (#135).
 See `link-sharing.md`.
+
+### Device listener and pairing (Vaulthalla Desktop, S1a)
+
+Normative protocol: `docs/pairing.md` in `vaulthalla/desktop` (its §8 test vectors are asserted in
+`test_device_crypto.cpp`). Decisions D1-D3 in that repo's `docs/architecture.md` §8.
+- **Listener** (`protocols/device/`): runtime service `DeviceServer` (after ProtocolService) with its own io_context
+  (4 threads + work guard). Boost.Asio `ssl::stream`, TLS 1.3 only, no tickets/session cache, client certificate
+  required with a verify callback that accepts any chain (dates, EKU, self-signature unchecked: TLS 1.3
+  CertificateVerify proves possession), client sigalgs `ECDSA+SHA256`. After the handshake the leaf must be EC
+  P-256; its SPKI SHA-256 (DER exactly as in the certificate) is authorized **once, at handshake time**
+  (`device::authorize`): a live `devices` row (current or previous key) → Device session as that row's user (the
+  canonical `identities::Manager` object); anything else (unknown, revoked, owner gone) → pairing-only. A handshake
+  with a rotated device's new key clears `previous_spki_sha256`. Then the HTTP request is read and dispatched by path
+  in `Connection::dispatch` (only the header is read; an upload body is the session's): `/ws` upgrades into
+  `ws::Session::acceptDevice`; `/preview*`, `/download*`, `/upload*` and `/mcp` hand the TLS stream to an
+  `http::Session` (below); anything else is 404. Cap
+  `device_server.max_connections` (own `ConnectionSlot::Pool::Device`; over it the socket is closed, a TLS client
+  can't read a 503), 10 s handshake and request deadlines. A bind failure never stops the daemon: it is in
+  `listenerStatus()` and retried every 30 s.
+- **HTTP lanes and remote MCP (S1b).** `http::Session` runs over a `ByteStream`: `TimedStream` (the plain socket,
+  poll + deadline) or `TlsStream` (the device TLS stream: each blocking call starts one async op on the stream's strand
+  and waits against the deadline, cancelling the socket's I/O when it passes; bytes go through op-owned buffers so an
+  abandoned op never touches freed memory). A device connection runs on its own thread like the web side's, holds its
+  `ConnectionSlot` (device pool), and serves only `/preview*`, `/download*`, `/upload*` and `/mcp` (pairing-only
+  connections get 403 `device_unknown`). Its principal is a stream-less Device `ws::Session`
+  (`Session::devicePrincipal`) registered with the session manager, so revocation, `revokeSessions`, remote-off and
+  the sweeper close it; its close hook cancels the HTTP session, which also stops between requests and between
+  chunks. Requests run under `access::DevicePrincipalScope` (thread-local): `access::authenticate` and the upload
+  coordinator take the principal instead of a cookie, refuse the share lanes (`?share=1`: 403), and the usual
+  `Need` → RBAC mapping applies as the device's user; audit lines carry `[via device <id16>]`. `/mcp`
+  (`protocols/device/Mcp.cpp`): Streamable HTTP, POST only (GET/DELETE 405: no SSE, no MCP session id), JSON
+  responses (202 for notifications), `Origin` present → 403, unknown `MCP-Protocol-Version` → 400, JSON content type
+  required, batches refused; the `vh mcp` catalog and `mcp::Server` with an executor running
+  `shell::Router::executeLine(line, deviceUser, nullptr)` on its own thread, abandoned after 10 min (the command is
+  not interrupted). Same exclusions (key/secret export unreachable, D4), destructive gate and structured confirmation.
+  DeviceServer shutdown waits up to 3 s for device HTTP sessions before stopping its io_context (else keeps it).
+- **Server identity** (`device/ServerIdentity`): P-256 scalar sealed through `KeyProvider("device_tls")`
+  (`test_device_tls` in test mode), generated on first start; self-signed certificate (serverAuth, 20 years) kept as
+  `<state>/device_server_certificate.pem` and re-issued for the same key when missing or mismatched (the pin is the
+  key's SPKI hash, so that is invisible to clients). Server-key rotation (spec §5) is minimal: `device.server.identity`
+  returns the current SPKI only, never a next one.
+- **One `ws::Session` for both transports.** The websocket lives behind `Session::Stream` (a plain
+  `websocket::stream<tcp::socket>` or a `TlsTransport`, visited with a generic lambda), so every handler and the
+  Router are unchanged; `TlsTransport.hpp` keeps Asio's SSL headers out of `Session.hpp`. Chosen over a socketpair
+  handoff: no second hop, no out-of-band identity channel, and the session holds the device identity
+  (`devicePeer()`) itself.
+- **Session modes** `Device` / `DevicePairing` (`SessionMode`). Device: no tokens (`session::Manager::validate` is
+  true while the user is `authorizing()` and the session open), `rbacActor()` = `human(user)`, classify = the Human set
+  minus `auth.login|logout|refresh|register` and the share-recipient commands, plus `device.*`; deactivation or
+  deletion is seen on the next command. Pairing: only `device.pair.*` and `meta.contract.get`; anything else is ERROR
+  `data.code: device_unknown` (same for unknown and revoked keys). `device.identity.rotate` /
+  `device.server.identity` only in Device mode; `device.pair.*` never on console sessions. Key material
+  (`vault.keys.export|export.confirm|import`) reaches the handler from any signed-in session but `ops::vault_keys` answers
+  only Device sessions (`export_requires_device` / `import_requires_device` otherwise, D4). Contract auth levels
+  `pairing` and `device` (`human` commands also run in Device mode). The sweeper keeps Device sessions while their
+  user may sign in (no refresh token to expire) and closes pairing-only ones after 15 minutes (`DeviceEnded`).
+  `auth::Manager::revokeSessions` closes Device sessions (they have no token to revoke); revocation closes the
+  device's sessions (`protocols::device::closeDeviceSessions`; a device revoking itself gets its reply first,
+  `Session::closeAfterReply`). `last_seen_at/last_ip` are written at the handshake and at most every 5 min per
+  session (`device::touch`). Audit lines written while a device's command runs end with `[via device <id16>]`
+  (`log::AuditOrigin`, a thread-local read by the audit sink's `%*` flag).
+- **Pairing state is in memory** (`device::Pairing`, process singleton): windows (10 min, **one per node**, reopening
+  extends; another user's open is `conflict`; closing is the owner's, `{any: true}` / `vh device pair --close --any`
+  lets a super admin close anyone's; `open` and `pending` carry `server_time`, `open` the listener's `port` and
+  `remote`), requests (commit-then-reveal; 5 min after confirm, never past the
+  window; one live request per key; ≤ 5 per window and ≤ 10/min per source IP → `rate_limited`), outcomes kept 10
+  min for `device.pair.status`. Nonces and codes never touch disk; a restart only makes Desktop start over. Number
+  matching: `pending` offers three codes (one SAS, two decoys fixed per request), `approve` compares in constant time
+  and any other code denies. No long poll on `device.pair.status` (answered at once).
+- **ops::devices** (`ops/Devices.cpp`): D3, no new permission bits: any signed-in user opens windows and approves for
+  their own account; list/rename/revoke own devices (others' are `not_found`); super admins list (`--all`) and revoke
+  every device. Rotation checks in the spec's order (current key, P-256 cert, never-seen key, ±300 s, signature under
+  the connection's key and this server's SPKI); a retry from the previous key naming the same new key succeeds
+  again, another key is `conflict`. Remote connections (D1): `ops::config::setDeviceRemote` (super admins, like
+  `settings.update`) writes `device_server.remote` through the settings commit, which calls
+  `DeviceServer::applyConfig()`: the listener rebinds in place, and turning remote off closes non-loopback device
+  sessions. `ops::Refused{code}` carries the pairing codes (`no_pairing_window`, `rate_limited`, `device_unknown`).
+- **Table** `devices` (migration 112): `spki_sha256` UNIQUE, previous key unique (partial index), `user_id` CASCADE,
+  `approved_by` SET NULL; revoked rows stay (a revoked key never pairs again). `device_node` holds the node id
+  Desktop records (created on first use).
+- Port 36972 (36971 is the macOS package's bundled PostgreSQL; the dev instance shifts both by +100).
 
 ### Super-admin initial credential
 
@@ -357,6 +498,12 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   existing name hit UNIQUE(parent_id, name)) stranded the bytes and corrupted the cache. RENAME_EXCHANGE is still
   refused (EINVAL). `Filesystem::repairAtRest` (first sync pass per vault per start) seals plaintext left by older
   builds and corrects ciphertext-length sizes.
+- **No key is minted over sealed data (`EncryptionManager::load_key`, `key-backup.md`).** A vault without a
+  `vault_keys` row gets a fresh key only when nothing is sealed under any key (no files row with an IV, recovery blob,
+  live provider version or encrypted remote index entry). Otherwise, and when a needed row doesn't unseal or a version
+  live files (or a pending rotation) need isn't held, `load_key` throws `vault::KeyUnavailable{key_missing |
+  key_unsealable | version_missing}` naming `vh vault keys import`; the engine doesn't start, `storage::Manager`
+  records it (`unavailableVaults()`), and `stats.system.health` (`vaults_unavailable`) / `vh status` turn degraded.
 - **Vault key rotation is failure- and crash-safe (`sync/rotation/`).** `vh vault keys rotate` only prepares a new
   key; the sync pass re-encrypts. Per file: new ciphertext → `<backing>.vh-rotate` (O_EXCL, fsync file + dir) →
   (cloud, encrypt upstream) PUT with its own IV/version metadata → compare-and-set the `files` row on the old
@@ -392,7 +539,7 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
 
 ## Database
 
-- PostgreSQL via libpqxx. The schema is `deploy/psql/000…110_*.sql`, applied in order (all in ONE transaction by `core/seed/include/SqlDeployer.hpp`) and installed to `/usr/share/vaulthalla/psql`.
+- PostgreSQL via libpqxx. The schema is `deploy/psql/000…112_*.sql`, applied in order (all in ONE transaction by `core/seed/include/SqlDeployer.hpp`) and installed to `/usr/share/vaulthalla/psql`.
   New migrations take the next number and must be idempotent against upgraded installs. SqlDeployer records sha256(raw bytes)
   per file and refuses to start on a mismatch, so **never edit a shipped migration**: 020/060/082 were edited in place and
   bricked upgrades (1.5.x→1.6.x crash loop on 060). Reviewed exceptions live in `kHistoricalMigrationChecksums` (accepted, recorded
@@ -435,7 +582,8 @@ converter-helper runner/queue (`derive/`, below) · `protocols` · `rbac` roles/
 sharing · `stats` dashboard telemetry + snapshots · `storage` local + S3 backends, remote index · `sync`
 controller, strategies `cache|sync|mirror`, cost guardrails · `vault` vault model, slugs, FUSE names ·
 `recovery` file recovery: local snapshots/versions, provider versioning, usage ledger, cost model (below) ·
-`ops` actor-authorized operations shared by the CLI and ws handlers (below).
+`ops` actor-authorized operations shared by the CLI and ws handlers (below) · `device` paired devices: protocol
+crypto, server identity, in-memory pairing, handshake authorization (the listener itself is `protocols/device`).
 
 **Config keys renamed or moved (#164).** `config.yaml` is never rewritten on upgrade, so `loadConfig` keeps reading
 the old spellings: `sharing.enable_public_links` → `sharing.enable_email_validated`, and
@@ -533,7 +681,11 @@ handler parses with `CommandUsage` and calls the op through `shell::runOp`, whic
 waiver prompts go through `shell::commands::vault::runWithWaiver`). The ws handler maps its payload to the request,
 and every ws handler template (`protocols/ws/core/handler_templates.hpp`, `describeCurrentError`) turns the exception into
 an `ERROR` response whose `data.code` is stable: `denied`, `not_found`, `invalid`, `conflict`, or the `NeedsConfirmation`
-code (the web asks and resends with `accept_encryption_waiver`); a non-`ops::Error` fault has no code. Handler-level
+code (the web asks and resends with `accept_encryption_waiver`; the contract names the field per code in
+`confirmations`); a non-`ops::Error` fault has no code. The fs/share ws handlers (and share `Manager`,
+`TargetResolver`, `PrincipalResolver`) throw ops types for refusals too, and their handlers turn malformed-payload
+errors (`std::invalid_argument`, JSON access) into `ops::Invalid` via `handler/RequestErrors.hpp`; HTTP share lanes
+still classify by message, unchanged. Handler-level
 gates (settings/email/pricing admin checks, share upload scope) throw `ops::Denied` so they carry `denied`; every
 `stats.*` command authorizes through `ops::stats` (below). Rules: RBAC for an operation lives in the op, never in the frontend as well; code beneath
 `ops::` (managers, `db::query`) never authorizes; internal callers use those primitives directly, not ops; no
@@ -545,8 +697,11 @@ policies), `config` (every settings write: one validation, one apply step that r
 `s3_gateway.enabled` changes), `stats` (authorization only, ws-only: there is no `vh` stats command; `vh status`
 is deliberately ungated, see Stats below), `conflicts` (sync conflicts, #187: ws `sync.conflicts.*`, `vh sync resolve` /
 `vh resolve`, the HTTP `/download/conflict` lane's authorization), `upstream` (S3/R2 bucket administration and event
-sync, #237/#96: ws `upstream.*`, `vh upstream …`; see `upstream-control-plane.md`), `recovery` (file recovery: ws `recovery.*` / `vault.recovery.*`, `vh snapshot|recovery …`, `vh vault recovery …`; see `recovery.md`). Still per-surface: the ws-only pricing preflight/override/notification endpoints,
-email test-send/history, vault keys/sync diagnostics, and lifecycle commands (`setup`, `teardown`, `secrets`).
+sync, #237/#96: ws `upstream.*`, `vh upstream …`; see `upstream-control-plane.md`), `recovery` (file recovery: ws `recovery.*` / `vault.recovery.*`, `vh snapshot|recovery …`, `vh vault recovery …`; see `recovery.md`), `devices` (paired devices: ws `device.*`, `vh device …`; see "Device listener
+and pairing"), `vault_keys` (key backup and restoration: ws `vault.keys.status|export|export.confirm|import`, `vh vault keys
+status|export|import`; key material only through the CLI or a paired device, D4; see `key-backup.md`). Still per-surface: the ws-only
+pricing preflight/override/notification endpoints, email test-send/history, `vh vault keys inspect|rotate`, sync
+diagnostics, and lifecycle commands (`setup`, `teardown`, `secrets`).
 
 Rules the families hold (keep them in ops, never re-add them in a handler):
 - **Users:** an account is an *admin identity* when its admin role grants anything outside the self scopes
@@ -643,7 +798,7 @@ stage "Copy And Delete")
   `key_retain_until` passes; the tombstone row stays. "Delete now" never shortens the key window.
 - RBAC: delete, delete now, restore and listing need vault Remove; a deleted vault has no engine, so the admin resolver
   takes `admin::Context::vault` (built from the record's owner). Export tracking: `vault_keys.exported_version/at`
-  (set by `vh vault keys export`; a rotation makes it stale). NeedsConfirmation codes `vault_upstream_key_loss` (S3,
+  (set by `vh vault keys export` or a device's `vault.keys.export.confirm`; a rotation makes it stale). NeedsConfirmation codes `vault_upstream_key_loss` (S3,
   encrypted objects kept, key never exported) and `vault_delete_now`. `storage::Manager::removeVault` stays the
   immediate hard delete (create rollbacks, empty S3-gateway buckets) and now removes the backing dirs too.
 - An account whose API keys are bound to any vault (deleted ones included, until purged) cannot be deleted.
@@ -794,8 +949,15 @@ stage "Copy And Delete")
   (exit 78) unless the DB settings, backing/mount/log/runtime/config paths and `VH_TEST_CLI_SOCKET` all come from the
   environment and are private (paths under `/tmp/`, a `vh_harness_*` or test database). Test mode then serves `vh` on
   that socket (`paths::getCliSocketPath()`); the client honours `VAULTHALLA_CLI_SOCKET`.
-- `core/usage` also holds the contract: `FieldGen` generators on CLI usage entries, `OperationSpec` catalog,
-  `WsCommandUsage` book, exported by `vh_usage --json`.
+- `core/usage` also holds the contract: `FieldGen` generators on CLI usage entries, per-leaf `effect`, `OperationSpec`
+  catalog, `WsCommandUsage` book (one file per area in `core/usage/src/contract/ws/`, every registered ws command) and
+  the `WsModel` registry (`core/usage/src/contract/models/`, checked against the serializers by `ContractModels.*`),
+  exported by `vh_usage --json`; and the MCP catalog built from them (above). Serializers the contract tests call must
+  be reachable without a database: handler JSON builders are public statics taking looked-up inputs (`S3GatewayJson`,
+  `Vaults::detailsJson`, `Storage::shareEntryJson`, `Links::managementJson`, `Sessions::publicLinkJson`,
+  `Email::deliveryRecordJson`, `vault::model::statJson`). Known quirk the contract records: `fs.dir.list` /
+  `fs.metadata` `entry` is the base `Entry` JSON (`FsEntryBase`, no `type`/counts/`mime_type`); only `files[]` carries
+  the full `FsEntry`.
 - `vh_fs_actor` (`core/tests/helpers/fs_actor.cpp`, `-Dintegration_tests=true`): a single-threaded helper that
   switches to a test uid at startup and serves filesystem ops as JSON lines; used by Tier A and `tools/harness`.
 

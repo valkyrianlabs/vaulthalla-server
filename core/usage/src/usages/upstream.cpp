@@ -26,6 +26,7 @@ static const auto yesFlag = Flag::Alias("yes", "Don't ask: confirm the action (f
 static std::shared_ptr<CommandUsage> adminEnable(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = node(parent);
     cmd->aliases = {"enable", "on"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Turn on provider administration (AWS S3, Cloudflare R2) for an upstream API key. Probes what the "
                        "credential can do first. Run again to store or clear the Cloudflare API token.";
     cmd->positionals = {apiKeyPos};
@@ -43,6 +44,7 @@ static std::shared_ptr<CommandUsage> adminEnable(const std::weak_ptr<CommandUsag
 static std::shared_ptr<CommandUsage> adminDisable(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = node(parent);
     cmd->aliases = {"disable", "off"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Turn provider administration off (refused while an event subscription runs through the key).";
     cmd->positionals = {apiKeyPos};
     cmd->examples = {{"vh upstream admin disable aws-admin", "Use 'aws-admin' as a plain storage credential again."}};
@@ -52,6 +54,7 @@ static std::shared_ptr<CommandUsage> adminDisable(const std::weak_ptr<CommandUsa
 static std::shared_ptr<CommandUsage> adminStatus(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = node(parent);
     cmd->aliases = {"status", "info", "show"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "Show administration status and the credential's capabilities.";
     cmd->positionals = {apiKeyPos};
     cmd->optional_flags = {Flag::Alias("probe", "Check the credential against the provider again", "probe"), jsonFlag};
@@ -74,6 +77,7 @@ static std::shared_ptr<CommandUsage> admin(const std::weak_ptr<CommandUsage>& pa
 static std::shared_ptr<CommandUsage> buckets(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = node(parent);
     cmd->aliases = {"buckets", "inventory", "bucket-list"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "List the account's buckets with what Vaulthalla knows about them (managed, adopted, unmanaged, "
                        "protected). Account-level listing only: no bucket or object calls.";
     cmd->positionals = {apiKeyPos};
@@ -95,6 +99,7 @@ static std::shared_ptr<CommandUsage> buckets(const std::weak_ptr<CommandUsage>& 
 static std::shared_ptr<CommandUsage> protect(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = node(parent);
     cmd->aliases = {"protect", "lock"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Lock a bucket: Vaulthalla will never probe, adopt, bind, configure, sync, empty or delete it. "
                        "The lock belongs to the bucket (provider, account, name), not to the key. Audited.";
     cmd->positionals = {apiKeyPos, bucketPos};
@@ -108,6 +113,7 @@ static std::shared_ptr<CommandUsage> protect(const std::weak_ptr<CommandUsage>& 
 static std::shared_ptr<CommandUsage> unprotect(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = node(parent);
     cmd->aliases = {"unprotect", "unlock"};
+    cmd->effect = CommandEffect::Destructive;
     cmd->description = "Remove a bucket lock (admin.upstream.unprotect). Asks for confirmation; audited.";
     cmd->positionals = {apiKeyPos, bucketPos};
     cmd->optional_flags = {yesFlag};
@@ -118,6 +124,7 @@ static std::shared_ptr<CommandUsage> unprotect(const std::weak_ptr<CommandUsage>
 static std::shared_ptr<CommandUsage> inspect(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = node(parent);
     cmd->aliases = {"inspect", "describe"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "Show a bucket's region, versioning, object lock, lifecycle and event rules (Vaulthalla's and "
                        "other applications').";
     cmd->positionals = {apiKeyPos, bucketPos};
@@ -129,6 +136,7 @@ static std::shared_ptr<CommandUsage> inspect(const std::weak_ptr<CommandUsage>& 
 static std::shared_ptr<CommandUsage> lifecycle(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = node(parent);
     cmd->aliases = {"lifecycle"};
+    cmd->effect = CommandEffect::Destructive;
     cmd->description = "Set or clear Vaulthalla's lifecycle rule on a managed or adopted bucket; other rules are kept. "
                        "0 removes a setting. Expiration deletes data and asks for confirmation.";
     cmd->positionals = {apiKeyPos, bucketPos};
@@ -152,6 +160,7 @@ static std::shared_ptr<CommandUsage> lifecycle(const std::weak_ptr<CommandUsage>
 static std::shared_ptr<CommandUsage> adoptCheck(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = node(parent);
     cmd->aliases = {"adopt-check", "admission"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "Read-only admission check of an existing bucket before adopting it into a vault: object counts, "
                        "encryption of a sample, versioning, object lock, blockers.";
     cmd->positionals = {apiKeyPos, bucketPos};
@@ -168,6 +177,7 @@ static std::shared_ptr<CommandUsage> adoptCheck(const std::weak_ptr<CommandUsage
 static std::shared_ptr<CommandUsage> detach(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = node(parent);
     cmd->aliases = {"detach"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Give a managed or adopted bucket that no vault uses back: Vaulthalla removes its own rules and "
                        "stops managing it. Data is untouched.";
     cmd->positionals = {apiKeyPos, bucketPos};
@@ -178,6 +188,7 @@ static std::shared_ptr<CommandUsage> detach(const std::weak_ptr<CommandUsage>& p
 static std::shared_ptr<CommandUsage> cleanup(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = node(parent);
     cmd->aliases = {"cleanup"};
+    cmd->effect = CommandEffect::Destructive;
     cmd->description = "Delete a bucket Vaulthalla created and every object version in it. Prints a preflight first and "
                        "asks for the bucket name; --confirm-token (from a preflight, valid 10 minutes) runs it without a "
                        "prompt. Refused for protected, adopted, unmanaged or bound buckets.";
@@ -197,6 +208,7 @@ static std::shared_ptr<CommandUsage> cleanup(const std::weak_ptr<CommandUsage>& 
 static std::shared_ptr<CommandUsage> eventsEnable(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = node(parent);
     cmd->aliases = {"enable", "on"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Subscribe an S3 vault's bucket for event-driven sync (AWS S3 → SQS, Cloudflare R2 → Queues).";
     cmd->positionals = {vaultPos};
     cmd->optional = {owner,
@@ -214,6 +226,7 @@ static std::shared_ptr<CommandUsage> eventsEnable(const std::weak_ptr<CommandUsa
 static std::shared_ptr<CommandUsage> eventsDisable(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = node(parent);
     cmd->aliases = {"disable", "off"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Remove the vault's event subscription (Vaulthalla's rule, and the queue when unused).";
     cmd->positionals = {vaultPos};
     cmd->optional = {owner};
@@ -224,6 +237,7 @@ static std::shared_ptr<CommandUsage> eventsDisable(const std::weak_ptr<CommandUs
 static std::shared_ptr<CommandUsage> eventsRepair(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = node(parent);
     cmd->aliases = {"repair"};
+    cmd->effect = CommandEffect::Write;
     cmd->description = "Re-create whatever is missing for the vault's subscription and re-arm it. Safe to repeat.";
     cmd->positionals = {vaultPos};
     cmd->optional = {owner};
@@ -234,6 +248,7 @@ static std::shared_ptr<CommandUsage> eventsRepair(const std::weak_ptr<CommandUsa
 static std::shared_ptr<CommandUsage> eventsStatus(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = node(parent);
     cmd->aliases = {"status", "info"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "Event subscription, queue health and inbox counts for one vault, or for every S3 vault you may "
                        "view when no vault is given.";
     cmd->positionals = {vaultPos};
@@ -259,6 +274,7 @@ static std::shared_ptr<CommandUsage> events(const std::weak_ptr<CommandUsage>& p
 static std::shared_ptr<CommandUsage> audit(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = node(parent);
     cmd->aliases = {"audit"};
+    cmd->effect = CommandEffect::Read;
     cmd->description = "The upstream control-plane audit log, newest first.";
     cmd->optional = {Optional::Single("bucket", "Only entries for this bucket", "bucket", "name"),
                      Optional::Single("limit", "At most N entries (default 100)", "limit", "n")

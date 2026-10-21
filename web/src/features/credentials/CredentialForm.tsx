@@ -16,7 +16,7 @@ import { DefinitionList, PageHeader, Panel } from '@/components/ui/Panel'
 import { InlineError, QueryState } from '@/components/ui/State'
 import { notify } from '@/components/ui/Toast'
 import { ArrowLeftIcon, EyeIcon, EyeSlashIcon, TrashIcon } from '@/components/ui/icons'
-import { PROVIDERS, PROVIDER_HINTS, type ProviderCredential } from '@/features/credentials/types'
+import { PROVIDERS, PROVIDER_HINTS, type ProviderCredential, type ProviderName } from '@/features/credentials/types'
 import {
   updateCredential,
   useCredential,
@@ -94,7 +94,7 @@ const CredentialFields = ({
         // Send only what changed: the daemon keeps everything left out, and an empty secret keeps the stored one.
         const payload: Parameters<typeof updateCredential>[0] = { id: initial.api_key_id }
         if (values.name.trim() !== initial.name) payload.name = values.name.trim()
-        if (values.provider !== initial.provider) payload.provider = values.provider
+        if (values.provider !== initial.provider) payload.provider = values.provider as ProviderName
         if (values.endpoint.trim() !== initial.endpoint) payload.endpoint = values.endpoint.trim()
         if (values.region.trim() !== initial.region) payload.region = values.region.trim()
         if (values.access_key.trim() !== initial.access_key) payload.access_key = values.access_key.trim()
@@ -109,7 +109,7 @@ const CredentialFields = ({
       } else {
         await api.send('storage.apiKey.add', {
           name: values.name.trim(),
-          provider: values.provider,
+          provider: values.provider as ProviderName,
           endpoint: values.endpoint.trim(),
           region: values.region.trim() || 'auto',
           access_key: values.access_key.trim(),

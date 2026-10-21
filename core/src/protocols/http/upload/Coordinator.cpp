@@ -9,6 +9,7 @@
 #include "fs/model/File.hpp"
 #include "fs/model/Path.hpp"
 #include "fs/ops/file.hpp"
+#include "protocols/http/Access.hpp"
 #include "protocols/http/upload/Staging.hpp"
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
@@ -185,10 +186,27 @@ void touchUploadSession(UploadSessionState& session) noexcept {
     return vh::runtime::Deps::get().storageManager->getEngine(vaultId);
 }
 
-[[nodiscard]] vh::protocols::http::upload::Coordinator::SessionResolver& sessionResolver() {
+[[nodiscard]] vh::protocols::http::upload::Coordinator::SessionResolver& sessionResolverHook() {
     static vh::protocols::http::upload::Coordinator::SessionResolver value = defaultSessionResolver;
     return value;
 }
+
+// The request's session: the device principal on the device listener (never a cookie, never a share upload), else
+// the cookie's (or a test's resolver).
+struct SessionResolverCall {
+    std::shared_ptr<vh::protocols::ws::Session> operator()(const request& req) const {
+        if (const auto* device = vh::protocols::http::access::DevicePrincipalScope::current()) {
+            if (isShareModeRequestTarget(std::string_view{req.target().data(), req.target().size()}))
+                throw std::runtime_error("share uploads are not served on the device listener");
+            if (!*device || !(*device)->user || (*device)->closing())
+                throw std::runtime_error("Unauthorized: this device session has ended");
+            return *device;
+        }
+        return sessionResolverHook()(req);
+    }
+};
+
+[[nodiscard]] SessionResolverCall sessionResolver() { return {}; }
 
 [[nodiscard]] vh::protocols::http::upload::Coordinator::ShareManagerFactory& shareManagerFactory() {
     static vh::protocols::http::upload::Coordinator::ShareManagerFactory value = defaultShareManager;
@@ -1046,10 +1064,10 @@ void Coordinator::abortAll(std::string reason) noexcept {
 
 void Coordinator::setSessionResolverForTesting(SessionResolver resolver) {
     if (!resolver) throw std::invalid_argument("Upload session resolver is required");
-    sessionResolver() = std::move(resolver);
+    sessionResolverHook() = std::move(resolver);
 }
 
-void Coordinator::resetSessionResolverForTesting() { sessionResolver() = defaultSessionResolver; }
+void Coordinator::resetSessionResolverForTesting() { sessionResolverHook() = defaultSessionResolver; }
 
 void Coordinator::setShareManagerFactoryForTesting(ShareManagerFactory factory) {
     if (!factory) throw std::invalid_argument("Share upload manager factory is required");

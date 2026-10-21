@@ -27,6 +27,11 @@ CLIENT_TS = REPO_ROOT / "web" / "src" / "lib" / "ws" / "client.ts"
 HANDLER_CPP = REPO_ROOT / "core" / "src" / "protocols" / "ws" / "Handler.cpp"
 
 
+# Registered commands the book deliberately leaves out, with the reason (mirrors unbookedWsCommands() in
+# core/tests/unit/test_usage_contract.cpp). Keep it empty unless a command truly can't be described.
+UNBOOKED: dict[str, str] = {}
+
+
 def committed() -> dict:
     return json.loads(ws_contract.CONTRACT_JSON.read_text(encoding="utf-8"))
 
@@ -54,6 +59,15 @@ class WsContractTests(unittest.TestCase):
         missing = sorted(c["command"] for c in committed()["ws"] if c["command"] not in registered)
         self.assertFalse(missing, "in the ws book but not registered in core/src/protocols/ws: " + ", ".join(missing))
         self.assertIn("meta.contract.get", HANDLER_CPP.read_text(encoding="utf-8"))
+
+    def test_every_registered_command_is_in_the_contract(self) -> None:
+        booked = {c["command"] for c in committed()["ws"]}
+        registered = set(core_commands())
+        missing = sorted(registered - booked - set(UNBOOKED))
+        self.assertFalse(missing, "registered in core/src/protocols/ws but not in the ws book (core/usage/src/contract/ws): "
+                         + ", ".join(missing))
+        stale = sorted(name for name in UNBOOKED if name in booked or name not in registered)
+        self.assertFalse(stale, "UNBOOKED entries that are booked or no longer registered: " + ", ".join(stale))
 
     def test_every_contract_command_is_typed_in_the_web_command_map(self) -> None:
         typed = set(web_commands())
@@ -87,14 +101,61 @@ class WsContractTests(unittest.TestCase):
         tampered["ws"][0]["description"] += " (edited)"
         with self.assertRaises(SystemExit):
             ws_contract.ws_snapshot(tampered)
+        tampered = copy.deepcopy(committed())
+        tampered["models"][0]["description"] += " (edited)"
+        with self.assertRaises(SystemExit):
+            ws_contract.ws_snapshot(tampered)
+
+    def test_snapshot_carries_the_envelope(self) -> None:
+        envelope = committed()["envelope"]
+        self.assertEqual({f["name"] for f in envelope["request"]}, {"command", "payload", "requestId", "token"})
+        data = next(f for f in envelope["response"] if f["name"] == "data")
+        self.assertFalse(data["required"], "a missing data reads as {}")
+
+    def test_models_named_by_the_book_are_in_the_snapshot(self) -> None:
+        snapshot = committed()
+        names = {m["name"] for m in snapshot["models"]}
+
+        def walk(fields: list) -> None:
+            for f in fields:
+                if f.get("model"):
+                    self.assertIn(f["model"], names, f"{f['name']} names an undeclared model")
+                walk(f.get("fields", []))
+                walk(f.get("one_of", []))
+                walk([f[k] for k in ("values", "element") if k in f])
+
+        for c in snapshot["ws"]:
+            walk(c["payload"])
+            walk(c["response"])
+        for m in snapshot["models"]:
+            walk(m["fields"])
 
     def test_typescript_rendering(self) -> None:
+        ws_contract.DECLARED_MODELS.update({"VaultDeletion", "User", "AuthConfig"})
         field = {"name": "allowed_ops", "types": ["integer", "array"], "required": False, "items": "string",
                  "item_enum": ["list", "download"]}
         self.assertEqual(ws_contract.ts_field_type(field, 4), "number | ('list' | 'download')[]")
         self.assertEqual(ws_contract.ts_object([], 4), "Record<string, never>")
         nullable = {"name": "deletion", "types": ["object", "null"], "required": True, "model": "VaultDeletion"}
-        self.assertEqual(ws_contract.ts_object([nullable], 4), "{ deletion: object | null }")
+        self.assertEqual(ws_contract.ts_object([nullable], 4), "{ deletion: WsModels['VaultDeletion'] | null }")
+        union = {"name": "retention", "types": ["string", "integer", "object", "null"], "required": False,
+                 "one_of": [{"name": "", "types": ["string"], "required": True},
+                            {"name": "", "types": ["integer"], "required": True},
+                            {"name": "", "types": ["object"], "required": True,
+                             "fields": [{"name": "days", "types": ["integer"], "required": False}]}]}
+        self.assertEqual(ws_contract.ts_field_type(union, 4), "string | number | { days?: number } | null")
+        counts = {"name": "counts", "types": ["object"], "required": True,
+                  "values": {"name": "", "types": ["integer"], "required": True}}
+        self.assertEqual(ws_contract.ts_field_type(counts, 4), "Record<string, number>")
+        points = {"name": "points", "types": ["array"], "required": True,
+                  "element": {"name": "", "types": ["array"], "required": True, "items": "number"}}
+        self.assertEqual(ws_contract.ts_field_type(points, 4), "(number[])[]")
+        users = {"name": "users", "types": ["array"], "required": True, "items": "object", "model": "User"}
+        self.assertEqual(ws_contract.ts_field_type(users, 4), "WsModels['User'][]")
+        patch = {"name": "auth", "types": ["object"], "required": False, "model": "AuthConfig", "partial": True}
+        self.assertEqual(ws_contract.ts_field_type(patch, 4), "WsPartial<WsModels['AuthConfig']>")
+        ws_contract.DECLARED_MODELS.discard("NotDeclaredAnywhere")
+        self.assertEqual(ws_contract.ts_field_type({**users, "model": "NotDeclaredAnywhere"}, 4), "object[]")
         command = {"input": "none"}
         self.assertEqual(ws_contract.ts_payload(command, [], 4), "null")
 

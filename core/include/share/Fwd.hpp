@@ -4,6 +4,7 @@
 
 namespace vh::share {
     class Manager;
+    struct Link;
     class TargetResolver;
     struct ResolvedTarget;
     struct Principal;

@@ -691,7 +691,6 @@ const BudgetEditor = ({ credential }: { credential: GatewayCredential }) => {
           scope,
           gateway_credential_id: id,
           vault_id: vault,
-          provider_key: null,
           mode,
           currency: 'USD',
           max_run_cost: null,
@@ -719,15 +718,7 @@ const BudgetEditor = ({ credential }: { credential: GatewayCredential }) => {
     if (!ok) return
     await run(
       () =>
-        api.send('s3.gateway.budget.policy.disable', {
-          scope,
-          gateway_credential_id: id,
-          vault_id: vault,
-          mode,
-          currency: 'USD',
-          require_verified_catalog: true,
-          allow_stale_catalog: false,
-        }),
+        api.send('s3.gateway.budget.policy.disable', { scope, gateway_credential_id: id, vault_id: vault }),
       refreshGatewayBudgets,
       'Could not disable the budget',
     )

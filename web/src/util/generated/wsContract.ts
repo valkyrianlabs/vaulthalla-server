@@ -3,10 +3,2557 @@
 // then run: python3 tools/contracts/ws_contract.py --write --vh-usage build/core/vh_usage
 // web/src/util/wsContractCheck.ts checks WebSocketCommandMap against these types.
 
-export const WS_CONTRACT_VERSION = 1
+export const WS_CONTRACT_VERSION = 2
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = '5e94c9e36fee0c64c165bcb7d9992484ea5b834ff963e08521f0b8dafb920829'
+export const WS_CONTRACT_HASH = 'e7f86f48e7d314240589511804acb5a5c8c0aedaed224a09194bf6a3b50f2153'
+
+// What meta.contract.get answers as models_hash when the daemon's model shapes are these.
+export const WS_MODELS_HASH = 'b88548f68f153d6bc8f93c6a2ebcb00344107aed747eff6594714161cabc6680'
+
+// A merge patch (payload members marked `partial`): any subset of the members, at any depth.
+export type WsPartial<T> = { [K in keyof T]?: T[K] extends readonly unknown[] ? T[K] : T[K] extends object ? WsPartial<T[K]> : T[K] }
+
+// The server models the book names (core/usage/src/contract/models), checked against their serializers.
+export interface WsModels {
+  /**
+   * An upstream S3 API key's metadata; the secret is never sent (vault::model::to_json(APIKey),
+   * core/src/vault/model/APIKey.cpp).
+   */
+  'APIKey': {
+    api_key_id: number
+    user_id: number
+    name: string
+    created_at: string
+    provider: 'AWS' | 'Cloudflare R2' | 'Wasabi' | 'Backblaze B2' | 'DigitalOcean' | 'MinIO' | 'Ceph' | 'Storj' | 'Other'
+    access_key: string
+    region: string
+    endpoint: string
+    admin_enabled: boolean
+    provider_account_id: string | null
+    has_provider_token: boolean
+    admin_validated_at: string | null
+  }
+  /**
+   * An admin role (rbac::role::to_json(Admin), core/src/rbac/role/Admin.cpp): its identity, every admin
+   * permission with its value, and the S3 gateway capability summary.
+   */
+  'AdminRole': {
+    id: number
+    name: string
+    description: string
+    created_at: number
+    updated_at: number
+    assigned_at: number | null
+    user_id: number | null
+    permissions: WsModels['Permission'][]
+    s3_gateway: {
+      view: boolean
+      manage_service: boolean
+      manage_credentials: boolean
+      assign_principal: boolean
+      manage_buckets: boolean
+      manage_budgets: boolean
+    }
+  }
+  /**
+   * auditing.* (Config.cpp to_json(AuditConfig)).
+   */
+  'AuditConfig': {
+    audit_log: WsModels['AuditLogConfig']
+    encryption_waivers: WsModels['EncryptionWaiverConfig']
+    files_trashed: WsModels['FilesTrashedConfig']
+  }
+  /**
+   * auditing.audit_log.* (Config.cpp to_json(AuditLogConfig)). Sizes are "<n>MB"/"<n>GB", the interval
+   * "<n>h"/"<n>d".
+   */
+  'AuditLogConfig': {
+    retention_days: number
+    rotate_max_size: string
+    rotate_interval: string
+    compression: 'none' | 'gzip' | 'zstd'
+    max_retained_logs_size: string
+    strict_retention: boolean
+  }
+  /**
+   * auth.* (Config.cpp to_json(AuthConfig)); the JWT secret is never part of it.
+   */
+  'AuthConfig': { access_token_expiry_minutes: number; refresh_token_expiry_days: number }
+  /**
+   * Cache counters (core/src/stats/model/CacheStats.cpp to_json(CacheStatsSnapshot)).
+   */
+  'CacheStatsSnapshot': {
+    hits: number
+    misses: number
+    evictions: number
+    inserts: number
+    invalidations: number
+    bytes_read: number
+    bytes_written: number
+    used_bytes: number
+    capacity_bytes: number | null
+    free_bytes: number | null
+    op: { count: number; total_us: number; max_us: number; avg_ms: number; max_ms: number }
+  }
+  /**
+   * caching.* (Config.cpp to_json(CachingConfig)).
+   */
+  'CachingConfig': { thumbnails: WsModels['ThumbnailsConfig']; max_size_mb: number }
+  /**
+   * services.connection_lifecycle_manager.* (Config.cpp to_json(ConnectionLifecycleManagerConfig)).
+   */
+  'ConnectionLifecycleManagerConfig': { idle_timeout_minutes: number; unauthenticated_timeout_seconds: number; sweep_interval_seconds: number }
+  /**
+   * Live websocket sessions (core/src/stats/model/ConnectionStats.cpp to_json).
+   */
+  'ConnectionStats': {
+    status: 'healthy' | 'warning' | 'critical' | 'unknown'
+    active_ws_sessions_total: number
+    active_human_sessions: number
+    active_share_sessions: number
+    active_share_pending_sessions: number
+    active_unauthenticated_sessions: number
+    oldest_session_age_seconds: number | null
+    oldest_unauthenticated_session_age_seconds: number | null
+    idle_timeout_minutes: number
+    unauthenticated_timeout_seconds: number
+    sweep_interval_seconds: number
+    sessions_swept_24h: number | null
+    connections_opened_24h: number | null
+    connections_closed_24h: number | null
+    connection_errors_24h: number | null
+    sessions_by_mode: Record<string, number>
+    top_user_agents: string[]
+    top_user_agents_available: boolean
+    top_remote_ips_limited: string[]
+    top_remote_ips_available: boolean
+    checked_at: number
+  }
+  /**
+   * services.db_sweeper.* (Config.cpp to_json(DBSweeperConfig)).
+   */
+  'DBSweeperConfig': { sweep_interval_minutes: number }
+  /**
+   * One dashboard card (core/src/stats/model/DashboardOverview.cpp to_json).
+   */
+  'DashboardCardSummary': {
+    id: string
+    section_id: string
+    title: string
+    description: string
+    href: string
+    variant: string
+    size: string
+    severity: string
+    available: boolean
+    unavailable_reason: string | null
+    summary: string
+    metrics: WsModels['DashboardMetricSummary'][]
+    series: {
+      key: string
+      label: string
+      unit: string
+      tone: string
+      points: { created_at: number; value: number }[]
+    }[]
+    warnings: WsModels['DashboardIssueSummary'][]
+    errors: WsModels['DashboardIssueSummary'][]
+    checked_at: number
+  }
+  /**
+   * A warning or error of a dashboard card or section (core/src/stats/model/DashboardOverview.cpp to_json).
+   */
+  'DashboardIssueSummary': { code: string; severity: string; message: string; href: string | null; metric_key: string | null }
+  /**
+   * One metric of a dashboard card or section (core/src/stats/model/DashboardOverview.cpp to_json).
+   */
+  'DashboardMetricSummary': {
+    key: string
+    label: string
+    value: string
+    unit: string | null
+    tone: string
+    numeric_value: number | null
+    href: string | null
+  }
+  /**
+   * The health dashboard (core/src/stats/model/DashboardOverview.cpp to_json).
+   */
+  'DashboardOverview': {
+    overall_status: string
+    warning_count: number
+    error_count: number
+    checked_at: number
+    attention: {
+      code: string
+      severity: string
+      card_id: string
+      title: string
+      message: string
+      href: string | null
+      metric_key: string | null
+    }[]
+    sections: WsModels['DashboardSectionSummary'][]
+    cards: WsModels['DashboardCardSummary'][]
+  }
+  /**
+   * A user's saved dashboard layout (core/src/stats/model/DashboardPreferences.cpp to_json).
+   */
+  'DashboardPreference': {
+    id: number | null
+    user_id: number
+    preference_key: string
+    layout: {
+      cards?: {
+        id: string
+        size?: string | null
+        variant?: string | null
+        visible?: boolean | null
+        order?: number | null
+      }[]
+    }
+    created_at: number | null
+    updated_at: number | null
+    exists: boolean
+  }
+  /**
+   * One dashboard section (core/src/stats/model/DashboardOverview.cpp to_json).
+   */
+  'DashboardSectionSummary': {
+    id: string
+    title: string
+    description: string
+    href: string
+    severity: string
+    warning_count: number
+    error_count: number
+    summary: string
+    metrics: WsModels['DashboardMetricSummary'][]
+    warnings: WsModels['DashboardIssueSummary'][]
+    errors: WsModels['DashboardIssueSummary'][]
+    checked_at: number
+  }
+  /**
+   * The overview's overall severity only (core/src/stats/model/DashboardOverview.cpp dashboardSeverityJson).
+   */
+  'DashboardSeverity': { overall_status: string; error_count: number; warning_count: number; checked_at: number }
+  /**
+   * database.* (Config.cpp to_json(DatabaseConfig)); the password is never part of it.
+   */
+  'DatabaseConfig': { host: string; port: number; name: string; user: string; pool_size: number }
+  /**
+   * Database figures (core/src/stats/model/DbStats.cpp to_json).
+   */
+  'DbStats': {
+    connected: boolean
+    status: string
+    error: string | null
+    database_name: string | null
+    db_size_bytes: number
+    connections_active: number
+    connections_idle: number
+    connections_idle_in_transaction: number
+    connections_total: number
+    connections_max: number | null
+    cache_hit_ratio: number | null
+    pg_stat_statements_enabled: boolean
+    slow_query_count: number | null
+    deadlocks: number
+    temp_bytes: number
+    oldest_transaction_age_seconds: number | null
+    largest_tables: {
+      table_name: string
+      total_bytes: number
+      table_bytes: number
+      index_bytes: number
+      row_estimate: number
+    }[]
+    checked_at: number
+  }
+  /**
+   * dev.* (Config.cpp to_json(DevConfig)).
+   */
+  'DevConfig': { enabled: boolean; init_r2_test_vault: boolean }
+  /**
+   * A paired device (a devices row, migration 112): device::to_json(Device), core/src/device/Device.cpp.
+   */
+  'Device': {
+    id: number
+    device_id: string
+    user_id: number
+    user_name: string
+    name: string
+    platform: string
+    app_version: string
+    previous_device_id: string | null
+    approved_by: number | null
+    created_at: number
+    last_seen_at: number | null
+    last_ip: string | null
+    revoked_at: number | null
+    revoked: boolean
+  }
+  /**
+   * device_server.* (Config.cpp to_json(DeviceServerConfig)): the device listener. remote is changed with
+   * device.remote.enable|disable; a settings.update that changes the section rebinds the listener in place.
+   */
+  'DeviceServerConfig': { enabled: boolean; port: number; remote: boolean; max_connections: number }
+  /**
+   * email.*: the outbound email provider (Config.cpp to_json(EmailConfig)).
+   */
+  'EmailConfig': {
+    enabled: boolean
+    provider: 'none' | 'resend' | 'ses'
+    from: string
+    reply_to: string | null
+    base_url: string | null
+    resend: WsModels['ResendEmailConfig']
+    ses: WsModels['SesEmailConfig']
+  }
+  /**
+   * One operator email delivery (Email::deliveryRecordJson, protocols/ws/handler/Email.cpp). Times are
+   * ISO-8601 UTC ("2026-10-20T12:00:00Z").
+   */
+  'EmailDeliveryRecord': {
+    id: number
+    event_key: string
+    event_type: string
+    severity: string
+    provider: string
+    subject: string
+    recipient_group: string | null
+    recipient_count: number
+    provider_message_id: string | null
+    status: 'queued' | 'sent' | 'failed' | 'suppressed' | 'dry_run'
+    error_summary: string | null
+    fingerprint: string
+    first_seen_at: string
+    last_seen_at: string
+    sent_at: string | null
+    created_at: string
+  }
+  /**
+   * auditing.encryption_waivers.* (Config.cpp to_json(EncryptionWaiverConfig)).
+   */
+  'EncryptionWaiverConfig': { retention_days: number }
+  /**
+   * auditing.files_trashed.* (Config.cpp to_json(FilesTrashedConfig)).
+   */
+  'FilesTrashedConfig': { retention_days: number }
+  /**
+   * A directory listing's entry: fs::model::to_json(std::vector<std::shared_ptr<Entry>>) dispatches to the
+   * File, Directory or Symlink serializer (core/src/fs/model/*.cpp), so `type` says which members follow.
+   */
+  'FsEntry': {
+    id: number
+    name: string
+    path: string
+    abs_path: string
+    size_bytes: number
+    is_hidden: boolean
+    is_system: boolean
+    created_at: string
+    updated_at: string
+    parent_id?: number
+    vault_id?: number
+    created_by?: number
+    last_modified_by?: number
+    owner_uid?: number
+    group_gid?: number
+    inode?: number
+    mode?: number
+    type: 'file' | 'directory' | 'symlink'
+    mime_type?: string | null
+    preview?: WsModels['PreviewPlan']
+    file_count?: number
+    subdirectory_count?: number
+    target?: string
+  }
+  /**
+   * The listed directory or looked-up entry itself (`entry` of fs.dir.list / fs.metadata):
+   * fs::model::to_json(Entry) on the Entry base (core/src/fs/model/Entry.cpp), so it carries no type,
+   * mime_type, preview or counts.
+   */
+  'FsEntryBase': {
+    id: number
+    name: string
+    path: string
+    abs_path: string
+    size_bytes: number
+    is_hidden: boolean
+    is_system: boolean
+    created_at: string
+    updated_at: string
+    parent_id?: number
+    vault_id?: number
+    created_by?: number
+    last_modified_by?: number
+    owner_uid?: number
+    group_gid?: number
+    inode?: number
+    mode?: number
+  }
+  /**
+   * FUSE operation counters (core/src/stats/model/FuseStats.cpp to_json).
+   */
+  'FuseStatsSnapshot': {
+    total_ops: number
+    total_successes: number
+    total_errors: number
+    expected_errors: number
+    alertable_errors: number
+    error_rate: number
+    expected_error_rate: number
+    alertable_error_rate: number
+    read_bytes: number
+    write_bytes: number
+    open_handles_current: number
+    open_handles_peak: number
+    ops: {
+      op: string
+      count: number
+      successes: number
+      errors: number
+      expected_errors: number
+      alertable_errors: number
+      bytes_read: number
+      bytes_written: number
+      total_us: number
+      max_us: number
+      avg_ms: number
+      max_ms: number
+      error_rate: number
+      expected_error_rate: number
+      alertable_error_rate: number
+    }[]
+    top_errors: { errno_value: number; name: string; count: number; alertable_count: number }[]
+    alertable_errno_types: number
+    checked_at: number
+  }
+  /**
+   * A group with its members (identities::to_json(Group, members), core/src/identities/Group.cpp).
+   */
+  'Group': {
+    id: number
+    name: string
+    description: string | null
+    created_at: string
+    members: WsModels['GroupMember'][]
+    gid?: number
+    updated_at?: string
+  }
+  /**
+   * A group membership (identities::to_json(GroupMember), core/src/identities/Group.cpp).
+   */
+  'GroupMember': { user: WsModels['PublicUser'] | null; joined_at: string }
+  /**
+   * http_preview_server.* (Config.cpp to_json(HttpPreviewConfig)).
+   */
+  'HttpPreviewServerConfig': { enabled: boolean; host: string; port: number; max_connections: number; max_preview_size_bytes: number }
+  /**
+   * logging.levels.* (Config.cpp to_json(LogLevelsConfig)).
+   */
+  'LogLevelsConfig': {
+    console_log_level: number
+    file_log_level: number
+    subsystem_levels: WsModels['SubsystemLogLevelsConfig']
+  }
+  /**
+   * logging.* (Config.cpp to_json(LoggingConfig)).
+   */
+  'LoggingConfig': { levels: WsModels['LogLevelsConfig'] }
+  /**
+   * Filesystem operation queue and share upload figures, one vault or the system
+   * (core/src/stats/model/OperationStats.cpp to_json).
+   */
+  'OperationStats': {
+    vault_id: number | null
+    scope: 'system' | 'vault'
+    overall_status: 'healthy' | 'warning' | 'critical'
+    stale_threshold_seconds: number
+    pending_operations: number
+    in_progress_operations: number
+    failed_operations_24h: number
+    cancelled_operations_24h: number
+    stalled_operations: number
+    oldest_pending_operation_age_seconds: number | null
+    oldest_in_progress_operation_age_seconds: number | null
+    operations_by_type: Record<string, number>
+    operations_by_status: Record<string, number>
+    active_share_uploads: number
+    stalled_share_uploads: number
+    failed_share_uploads_24h: number
+    upload_bytes_expected_active: number
+    upload_bytes_received_active: number
+    oldest_active_upload_age_seconds: number | null
+    recent_operation_errors: {
+      source: string
+      operation: string
+      status: string
+      target: string
+      path: string
+      error: string | null
+      occurred_at: number | null
+    }[]
+    checked_at: number
+  }
+  /**
+   * operator_emails.alerting.* (Config.cpp to_json(OperatorEmailAlertingConfig)).
+   */
+  'OperatorEmailAlertingConfig': {
+    enabled: boolean
+    min_severity: string
+    dedupe_window_minutes: number
+    repeat_after_hours: number
+    send_recovery: boolean
+    health_poll_seconds: number
+  }
+  /**
+   * operator_emails.weekly_digest.* (Config.cpp to_json(OperatorEmailDigestConfig)).
+   */
+  'OperatorEmailDigestConfig': { enabled: boolean; weekday: string; hour_local: number; timezone: string }
+  /**
+   * operator_emails.recipients.*: addresses per mail kind (Config.cpp
+   * to_json(OperatorEmailRecipientsConfig)).
+   */
+  'OperatorEmailRecipientsConfig': { alerts: string[]; weekly: string[]; security: string[] }
+  /**
+   * operator_emails.security_alerts.* (Config.cpp to_json(OperatorEmailSecurityAlertsConfig)).
+   */
+  'OperatorEmailSecurityAlertsConfig': { enabled: boolean; admin_role_changes: boolean }
+  /**
+   * operator_emails.*: who gets operator email and when (Config.cpp to_json(OperatorEmailsConfig)).
+   */
+  'OperatorEmailsConfig': {
+    enabled: boolean
+    recipients: WsModels['OperatorEmailRecipientsConfig']
+    alerting: WsModels['OperatorEmailAlertingConfig']
+    weekly_digest: WsModels['OperatorEmailDigestConfig']
+    security_alerts: WsModels['OperatorEmailSecurityAlertsConfig']
+  }
+  /**
+   * One permission (rbac::permission::to_json(Permission), core/src/rbac/permission/Permission.cpp).
+   */
+  'Permission': { bit_position: number; qualified: string; description: string; slug: string; id?: number; value?: boolean }
+  /**
+   * A path-scoped allow/deny override on a vault role assignment (rbac::permission::to_json(Override),
+   * core/src/rbac/permission/Override.cpp).
+   */
+  'PermissionOverride': {
+    id: number
+    permission: WsModels['Permission']
+    effect: 'allow' | 'deny'
+    assignment_id: number
+    enabled: boolean
+    glob_path: string
+  }
+  /**
+   * preview.* (Config.cpp to_json(PreviewConfig)).
+   */
+  'PreviewConfig': {
+    media: WsModels['PreviewMediaConfig']
+    derive: WsModels['PreviewDeriveConfig']
+    text: WsModels['PreviewTextConfig']
+    max_render_pixels: number
+  }
+  /**
+   * preview.derive.* (Config.cpp to_json(PreviewDeriveConfig)). helper_dir is read-only through the API.
+   */
+  'PreviewDeriveConfig': {
+    helper_dir: string
+    max_concurrency: number
+    max_queue: number
+    max_ram_mb: number
+    max_cpu_seconds: number
+    wall_timeout_seconds: number
+    max_output_mb: number
+    failure_ttl_hours: number
+  }
+  /**
+   * preview.media.* (Config.cpp to_json(PreviewMediaConfig)).
+   */
+  'PreviewMediaConfig': {
+    integrity: 'optimistic' | 'strict'
+    remote: 'hydrate' | 'ranged' | 'off'
+    hwaccel: 'auto' | 'software' | 'vaapi' | 'qsv' | 'nvenc'
+    transcode: 'off' | 'on_demand'
+  }
+  /**
+   * How a file can be consumed, decided by the server (preview::to_json(PreviewPlan),
+   * core/src/preview/Plan.cpp).
+   */
+  'PreviewPlan': {
+    kind: 'rendered_image' | 'native_media' | 'client_model' | 'text_document' | 'derived_artifact' | 'unsupported'
+    renderer: 'image' | 'pdf' | 'svg' | 'image-native' | 'video' | 'audio' | 'text' | 'markdown' | 'model:glb' | 'model:gltf' | 'model:stl' | 'model:obj' | 'derived:step-glb' | 'none'
+    requires: 'preview' | 'download'
+    thumbnail: boolean
+    derived?: string[]
+  }
+  /**
+   * preview.text.* (Config.cpp to_json(PreviewTextConfig)).
+   */
+  'PreviewTextConfig': { max_edit_bytes: number }
+  /**
+   * The price budget dashboard (PriceBudget.cpp to_json(PriceBudgetDashboardStats)). The monthly spends are
+   * null when no monthly budget window (or projection) exists: not measured, never a fake zero.
+   */
+  'PriceBudgetDashboardStats': {
+    active_policies: number
+    blocked_syncs_24h: number
+    warning_notifications: number
+    critical_notifications: number
+    unacknowledged_notifications: number
+    pending_overrides: number
+    current_monthly_spend: string | null
+    projected_monthly_spend: string | null
+    currency: string
+    trends: WsModels['PriceBudgetTrendStats'][]
+    active_notifications: WsModels['PriceBudgetNotification'][]
+    recent_overrides: WsModels['PriceBudgetOverride'][]
+  }
+  /**
+   * A price budget preflight decision (PriceBudget.cpp to_json(PriceBudgetDecision)). The exceeded_* and
+   * primary_blocking_* strings are empty when nothing blocks.
+   */
+  'PriceBudgetDecision': {
+    allowed: boolean
+    stalled: boolean
+    warnings: string[]
+    exceeded_policy_id: number | null
+    exceeded_scope: string
+    limit: string
+    used_before: string
+    remaining_before: string
+    requested: string
+    currency: string
+    reason: string
+    policies: WsModels['PriceBudgetPolicy'][]
+    checks: WsModels['PriceBudgetWindowCheck'][]
+    blocking_checks: WsModels['PriceBudgetWindowCheck'][]
+    blocking_policy_ids: number[]
+    primary_blocking_check: WsModels['PriceBudgetWindowCheck'] | null
+    primary_blocking_scope: string
+    primary_blocking_window: string
+  }
+  /**
+   * A budget reservation ledger row (PriceBudget.cpp to_json(PriceBudgetLedgerEntry)).
+   */
+  'PriceBudgetLedgerEntry': {
+    id: number
+    policy_id: number
+    run_uuid: string
+    vault_id: number
+    gateway_credential_id: number | null
+    request_uuid: string | null
+    operation: string | null
+    object_key: string | null
+    estimated_cost: string | null
+    usage_source: string | null
+    synthetic: boolean
+    provider_key: string
+    currency: string
+    window: 'per_run' | 'daily' | 'monthly'
+    window_start: string
+    window_end: string
+    reserved_cost: string
+    committed_cost: string | null
+    status: 'reserved' | 'committed' | 'released' | 'expired'
+    created_at: string
+  }
+  /**
+   * An operator (cost alert) notification (PriceBudget.cpp to_json(PriceBudgetNotification)).
+   */
+  'PriceBudgetNotification': {
+    id: number
+    type: string
+    severity: 'info' | 'warning' | 'error' | 'critical'
+    title: string
+    message: string
+    scope: string | null
+    vault_id: number | null
+    provider_key: string | null
+    policy_id: number | null
+    run_uuid: string | null
+    metadata: object
+    acknowledged_at: string | null
+    acknowledged_by: number | null
+    created_at: string
+    expires_at: string | null
+  }
+  /**
+   * Open (unacknowledged, unexpired) alerts in scope (PriceBudget.cpp
+   * to_json(PriceBudgetNotificationSummary)); worst_severity is null when nothing is open.
+   */
+  'PriceBudgetNotificationSummary': { open_count: number; worst_severity: 'info' | 'warning' | 'error' | 'critical' | null }
+  /**
+   * A one-time budget override request (PriceBudget.cpp to_json(PriceBudgetOverride)).
+   */
+  'PriceBudgetOverride': {
+    id: number
+    run_uuid: string | null
+    vault_id: number
+    requested_by: number | null
+    approved_by: number | null
+    status: 'requested' | 'approved' | 'denied' | 'expired' | 'used' | 'cancelled'
+    reason: string | null
+    scope: string
+    policy_ids: number[]
+    estimated_cost: string | null
+    currency: string
+    expires_at: string
+    created_at: string
+    decided_at: string | null
+    used_at: string | null
+  }
+  /**
+   * An S3 price budget policy (PriceBudget.cpp to_json(PriceBudgetPolicy)). Costs are decimal strings; null
+   * means no limit for that window.
+   */
+  'PriceBudgetPolicy': {
+    id: number
+    scope: 'global' | 'provider' | 'vault' | 'gateway_credential' | 'gateway_credential_vault'
+    provider_key: string | null
+    vault_id: number | null
+    gateway_credential_id: number | null
+    mode: 'off' | 'report' | 'warn' | 'enforce'
+    currency: string
+    max_run_cost: string | null
+    max_daily_cost: string | null
+    max_monthly_cost: string | null
+    require_verified_catalog: boolean
+    allow_stale_catalog: boolean
+    max_catalog_age_seconds: number | null
+    is_active: boolean
+  }
+  /**
+   * Spend and projection for one policy window (PriceBudget.cpp to_json(PriceBudgetTrendStats)).
+   */
+  'PriceBudgetTrendStats': {
+    scope: string
+    provider_key: string | null
+    vault_id: number | null
+    gateway_credential_id: number | null
+    policy_id: number
+    currency: string
+    window_type: 'per_run' | 'daily' | 'monthly'
+    window_start: string
+    window_end: string
+    committed_cost: string
+    reserved_cost: string
+    total_cost: string
+    limit: string | null
+    remaining: string | null
+    percent_used: number
+    projected_window_cost: string | null
+    projected_overage: string | null
+    predicted_exhaustion_at: string | null
+    confidence: string
+    recent_daily_average: string
+    recent_7d_average: string
+    recent_30d_average: string
+    warnings: string[]
+  }
+  /**
+   * One policy window evaluated by a budget decision (PriceBudget.cpp to_json(PriceBudgetWindowCheck)).
+   */
+  'PriceBudgetWindowCheck': {
+    policy_id: number
+    scope: 'global' | 'provider' | 'vault' | 'gateway_credential' | 'gateway_credential_vault'
+    mode: 'off' | 'report' | 'warn' | 'enforce'
+    window: 'per_run' | 'daily' | 'monthly'
+    currency: string
+    limit: string | null
+    used_before: string
+    remaining_before: string
+    requested: string
+    exceeded: boolean
+  }
+  /**
+   * One metered line of an estimate (LocalEstimator.cpp makeBreakdown). Quantities, rates and cost are
+   * decimal strings. (A daemon configured with pricing.storage_rates_api.use_remote_estimator_for_debug
+   * passes the remote estimator's lines through instead.)
+   */
+  'PriceEstimateBreakdownItem': {
+    meter_key: string
+    quantity: string
+    billable_quantity: string
+    unit: string
+    rate: string
+    rate_unit: string
+    cost: string
+    notes: string[]
+  }
+  /**
+   * An S3 cost estimate (PriceBotModels.cpp to_json(PriceEstimateReport)). estimated_cost and currency are
+   * null unless available; unavailable_reason says why not.
+   */
+  'PriceEstimateReport': {
+    available: boolean
+    supported: boolean
+    stale: boolean
+    target: WsModels['PriceProfileTarget']
+    estimated_cost: string | null
+    currency: string | null
+    price_profile_id: string | null
+    catalog_version: string | null
+    catalog_source: string | null
+    catalog_verified: boolean
+    catalog_age_seconds: number | null
+    confidence_level: string | null
+    estimate_mode: string | null
+    free_tier_policy: string | null
+    free_tiers_applied: boolean | null
+    unknowns: string[]
+    breakdown: WsModels['PriceEstimateBreakdownItem'][]
+    unavailable_reason: string | null
+  }
+  /**
+   * The price profile an estimate rates against (PriceBotModels.cpp to_json(PriceProfileTarget)).
+   */
+  'PriceProfileTarget': { provider: string; region: string; storage_class: string; profile_id: string }
+  /**
+   * pricing.* (Config.cpp to_json(PricingConfig)).
+   */
+  'PricingConfig': { enabled: boolean; storage_rates_api: WsModels['StorageRatesApiConfig'] }
+  /**
+   * A user's public identity (identities::to_public_json, core/src/identities/User.cpp).
+   */
+  'PublicUser': { id: number; name: string; email: string | null; is_active: boolean }
+  /**
+   * Noncurrent storage growth one month after activation (to_json(recovery::AccumulationPoint)).
+   */
+  'RecoveryAccumulationPoint': { month: number; noncurrent_bytes: number; monthly_cost: WsModels['RecoveryCostFigure'] }
+  /**
+   * One assumption behind the cost figures (to_json(recovery::Assumption)).
+   */
+  'RecoveryAssumption': { kind: string; text: string }
+  /**
+   * Local versions waiting to reach the provider (to_json(recovery::Backlog)).
+   */
+  'RecoveryBacklog': {
+    pending_versions: number
+    pending_bytes: number
+    oldest_pending_at: string | null
+    failing: number
+    last_error: string | null
+  }
+  /**
+   * The vault's monthly cost alert (to_json(CostReport::Alert)).
+   */
+  'RecoveryCostAlert': { threshold: WsModels['RecoveryMoney'] | null; exceeded: boolean }
+  /**
+   * The price catalog the figures come from (to_json(CostReport::Catalog)).
+   */
+  'RecoveryCostCatalog': {
+    version: string | null
+    source: string | null
+    verified: boolean
+    stale: boolean
+    age_seconds: number | null
+    note: string | null
+  }
+  /**
+   * The vault's current objects (to_json(CostReport::Current)).
+   */
+  'RecoveryCostCurrent': { objects: number; bytes: number; monthly_storage: WsModels['RecoveryMoney'] | null }
+  /**
+   * A labelled amount with an uncertainty range (to_json(recovery::CostFigure)).
+   */
+  'RecoveryCostFigure': {
+    expected: WsModels['RecoveryMoney'] | null
+    low: WsModels['RecoveryMoney'] | null
+    high: WsModels['RecoveryMoney'] | null
+    basis: string
+    reason: string | null
+  }
+  /**
+   * Noncurrent history known in the bucket (to_json(CostReport::History)).
+   */
+  'RecoveryCostHistory': {
+    known_noncurrent_versions: number
+    known_noncurrent_bytes: number
+    delete_markers: number
+    unknown_size_versions: number
+    unaccounted_history: boolean
+    inventoried_at: string | null
+  }
+  /**
+   * Measured usage the figures are based on (to_json(CostReport::Observation)).
+   */
+  'RecoveryCostObservation': {
+    window_days: number
+    first_day: string | null
+    last_day: string | null
+    sufficient: boolean
+    put_requests: number
+    copy_requests: number
+    delete_requests: number
+    get_requests: number
+    list_requests: number
+    first_put_objects: number
+    overwrite_objects: number
+    deleted_objects: number
+    overwritten_bytes: number
+    deleted_bytes: number
+    uploaded_bytes: number
+    overwritten_bytes_per_day: string
+  }
+  /**
+   * A vault's recovery cost panel: versioning surcharge, recovery operations, ranges, basis and catalog
+   * freshness (to_json(recovery::CostReport)). Unknown money is null, never zero.
+   */
+  'RecoveryCostReport': {
+    vault_id: number
+    phase: string
+    priced: boolean
+    unpriced_reason: string | null
+    provider: string | null
+    bucket: string | null
+    region: string | null
+    storage_class: string | null
+    currency: string | null
+    catalog: WsModels['RecoveryCostCatalog']
+    confidence: string
+    confidence_reasons: string[]
+    observation: WsModels['RecoveryCostObservation']
+    current: WsModels['RecoveryCostCurrent']
+    history: WsModels['RecoveryCostHistory']
+    pre_activation_monthly: WsModels['RecoveryCostFigure']
+    current_month_to_date: WsModels['RecoveryCostFigure']
+    current_month_projected: WsModels['RecoveryCostFigure']
+    projected_monthly: WsModels['RecoveryCostFigure']
+    accumulation: WsModels['RecoveryAccumulationPoint'][]
+    scenarios: WsModels['RecoveryRetentionScenario'][]
+    recovery_per_gb: WsModels['RecoveryCostFigure']
+    recovery_per_object: WsModels['RecoveryCostFigure']
+    unmodeled: string[]
+    assumptions: WsModels['RecoveryAssumption'][]
+    retention: string | null
+    alert: WsModels['RecoveryCostAlert']
+    computed_at: string | null
+  }
+  /**
+   * What a person must see and accept before provider versioning is enabled (to_json(recovery::Disclosure)).
+   */
+  'RecoveryDisclosure': {
+    report: WsModels['RecoveryCostReport']
+    consequences: string[]
+    required_acknowledgements: string[]
+    token: string
+    expires_at: string | null
+  }
+  /**
+   * How a recovery point's content is encrypted (to_json(EncryptionContext)).
+   */
+  'RecoveryEncryption': { encrypted: boolean; key_version: number; key_available: boolean; key_current: boolean }
+  /**
+   * What happened to one restore item (to_json(recovery::ItemOutcome)).
+   */
+  'RecoveryItemOutcome': { destination_path: string; outcome: string; error: string | null }
+  /**
+   * A vault's local versioning policy (to_json(recovery::LocalVersioningPolicy)).
+   */
+  'RecoveryLocalVersioningPolicy': { enabled: boolean; keep_last: number | null; max_age_days: number | null; quota_bytes: number | null }
+  /**
+   * An amount of money (to_json(recovery::Money)).
+   */
+  'RecoveryMoney': { amount: string; currency: string }
+  /**
+   * A restore plan: per-item preview, counts, estimate, warnings, blockers and the token recovery.restore
+   * takes (to_json(recovery::Plan)).
+   */
+  'RecoveryPlan': {
+    id: number
+    vault_id: number
+    token: string
+    source_label: string
+    point_in_time: boolean
+    at: string | null
+    atomic: boolean
+    consistency_note: string
+    destination: string | null
+    prune: boolean
+    items: WsModels['RecoveryPlanItem'][]
+    creates: number
+    overwrites: number
+    skips: number
+    conflicts: number
+    removals: number
+    unavailable: number
+    estimate: WsModels['RecoveryRequestEstimate']
+    warnings: string[]
+    blockers: string[]
+    created_at: string | null
+    expires_at: string | null
+    state: string
+  }
+  /**
+   * One item of a restore plan (to_json(recovery::PlanItem)).
+   */
+  'RecoveryPlanItem': {
+    source_id: string
+    source_path: string
+    destination_path: string
+    action: 'create' | 'overwrite' | 'skip' | 'conflict' | 'remove' | 'unavailable'
+    size_bytes: number | null
+    destination_source_id: string | null
+    method: string
+    notes: string[]
+  }
+  /**
+   * One recovery point: a local snapshot, a retained local version or a provider object version
+   * (to_json(recovery::RecoveryPoint)).
+   */
+  'RecoveryPoint': {
+    id: string
+    backend: 'local_snapshot' | 'local_version' | 'provider_version'
+    vault_id: number
+    path: string
+    original_entry_id: number | null
+    kind: 'file' | 'directory'
+    name: string | null
+    created_at: string | null
+    valid_from: string | null
+    valid_until: string | null
+    size_bytes: number | null
+    content_hash: string | null
+    encryption: WsModels['RecoveryEncryption']
+    retention: WsModels['RecoveryRetention']
+    estimated_monthly_cost: WsModels['RecoveryMoney'] | null
+    is_current: boolean
+    is_delete_marker: boolean
+    origin: string | null
+    reason: string | null
+    upstream_state: string | null
+    storage_class: string | null
+    file_count: number | null
+    restorable: boolean
+    unavailable_reason: string | null
+  }
+  /**
+   * One recovery point with its details (to_json(ops::recovery::PointDetail)).
+   */
+  'RecoveryPointDetail': {
+    point: WsModels['RecoveryPoint']
+    members: WsModels['RecoveryPoint'][]
+    members_truncated: boolean
+    created_by: string | null
+    skipped: string[]
+  }
+  /**
+   * The vault bucket's provider versioning state (to_json(recovery::ProviderVersioningState)).
+   */
+  'RecoveryProviderVersioningState': {
+    supported: boolean
+    unsupported_reason: string
+    provider: string | null
+    bucket: string | null
+    region: string | null
+    storage_class: string | null
+    bucket_state: string
+    status: string
+    enabled_by_vaulthalla: boolean
+    enabled_at: string | null
+    settles_at: string | null
+    checked_at: string | null
+    settled: boolean
+    object_lock: boolean | null
+    mfa_delete: boolean | null
+    retention_mode: string
+    retention_days: number | null
+    foreign_noncurrent_rules: string[]
+    effective_noncurrent_days: number | null
+    warnings: string[]
+  }
+  /**
+   * The provider requests and transfer a restore plan needs (to_json(recovery::RequestEstimate)).
+   */
+  'RecoveryRequestEstimate': {
+    get_requests: number
+    head_requests: number
+    put_requests: number
+    copy_requests: number
+    list_requests: number
+    download_bytes: number
+    upload_bytes: number
+    cost: WsModels['RecoveryMoney'] | null
+    unpriced_reason: string | null
+  }
+  /**
+   * The result of running a restore plan (to_json(RestoreResult)).
+   */
+  'RecoveryRestoreResult': {
+    plan_id: number
+    state: string
+    items: WsModels['RecoveryItemOutcome'][]
+    restored: number
+    skipped: number
+    conflicts: number
+    failed: number
+    removed: number
+    unavailable: number
+  }
+  /**
+   * How long a recovery point is kept (to_json(recovery::Retention)).
+   */
+  'RecoveryRetention': { policy: string; expires_at: string | null; note: string | null }
+  /**
+   * The steady-state cost under one retention (to_json(recovery::RetentionScenario)).
+   */
+  'RecoveryRetentionScenario': {
+    retention: string
+    steady_noncurrent_bytes: number
+    monthly_cost: WsModels['RecoveryCostFigure']
+    notes: string[]
+  }
+  /**
+   * A vault's recovery settings and state (to_json(recovery::Status)).
+   */
+  'RecoveryStatus': {
+    vault_id: number
+    mode: 'off' | 'local_snapshots' | 'provider_versioning'
+    snapshot_quota_bytes: number | null
+    cost_alert_monthly: WsModels['RecoveryMoney'] | null
+    local_versioning: WsModels['RecoveryLocalVersioningPolicy']
+    provider: WsModels['RecoveryProviderVersioningState']
+    snapshots: WsModels['RecoveryStoreUsage']
+    versions: WsModels['RecoveryStoreUsage']
+    backlog: WsModels['RecoveryBacklog']
+    retained_key_versions: number[]
+    warnings: string[]
+  }
+  /**
+   * Local recovery store usage (to_json(recovery::StoreUsage)).
+   */
+  'RecoveryStoreUsage': { count: number; stored_bytes: number; plaintext_bytes: number }
+  /**
+   * An S3 vault's sync policy (sync::model::to_json(RemotePolicy), core/src/sync/model/RemotePolicy.cpp, over
+   * to_json(Policy) in Policy.cpp).
+   */
+  'RemoteSyncPolicy': {
+    id: number
+    vault_id: number
+    interval: string
+    enabled: boolean
+    last_sync_at: string
+    last_success_at: string
+    created_at: string
+    updated_at: string
+    strategy: 'cache' | 'sync' | 'mirror'
+    conflict_policy: 'keep_local' | 'keep_remote' | 'keep_newest' | 'ask'
+    s3_request_budget: {
+      list_requests: number | null
+      head_requests: number | null
+      get_requests: number | null
+      put_requests: number | null
+      copy_requests: number | null
+      delete_requests: number | null
+      downloaded_bytes: number | null
+    }
+    max_remote_index_age_seconds: number | null
+  }
+  /**
+   * email.resend.* (Config.cpp to_json(ResendEmailConfig)); the API key lives in the secrets manager.
+   */
+  'ResendEmailConfig': { endpoint: string }
+  /**
+   * Retention (trash, sync events, audit log, cache) figures, one vault or the system
+   * (core/src/stats/model/RetentionStats.cpp to_json).
+   */
+  'RetentionStats': {
+    vault_id: number | null
+    scope: 'system' | 'vault'
+    cleanup_status: 'healthy' | 'warning' | 'overdue' | 'unknown'
+    trash_retention_days: number
+    sync_event_retention_days: number
+    sync_event_max_entries: number
+    audit_log_retention_days: number
+    cache_expiry_days: number
+    cache_max_size_bytes: number
+    trashed_files_count: number
+    trashed_bytes_total: number
+    oldest_trashed_age_seconds: number | null
+    trashed_files_past_retention_count: number
+    trashed_bytes_past_retention: number
+    sync_events_total: number
+    sync_events_past_retention_count: number
+    audit_log_entries_total: number
+    oldest_audit_log_age_seconds: number | null
+    audit_log_entries_past_retention_count: number
+    share_access_events_total: number
+    oldest_share_access_event_age_seconds: number | null
+    cache_entries_total: number
+    cache_bytes_total: number
+    cache_eviction_candidates: number
+    cache_entries_expired: number
+    checked_at: number
+  }
+  /**
+   * A role's identity without its permissions (identities::to_list_json's roleSummary).
+   */
+  'RoleSummary': {
+    id: number
+    name: string
+    description: string
+    type: 'admin' | 'vault'
+    assigned_at: number | null
+    assignment?: WsModels['VaultRoleAssignment']
+  }
+  /**
+   * A gateway bucket bound to a vault. S3GatewayJson::bucket (ws/handler/S3Gateway.cpp).
+   */
+  'S3GatewayBucket': {
+    bucket_name: string
+    bucket: string
+    vault_id: number
+    mode: 'local' | 'remote_cache' | 'remote_proxy'
+    api_exclusive: boolean
+    created_by: number | null
+    created_at: number
+    updated_at: number
+  }
+  /**
+   * s3_gateway.* (Config.cpp to_json(S3GatewayConfig)).
+   */
+  'S3GatewayConfig': {
+    enabled: boolean
+    host: string
+    port: number
+    max_connections: number
+    max_body_size_bytes: number
+    require_sigv4: boolean
+    allow_path_style: boolean
+    allow_virtual_hosted_style: boolean
+    default_bucket_mode: string
+    default_api_exclusive: boolean
+    multipart: WsModels['S3GatewayMultipartConfig']
+    synthetic_local_request_cost_usd: WsModels['S3GatewaySyntheticLocalRequestCostConfig']
+  }
+  /**
+   * An S3 gateway credential (never its secret). S3GatewayJson::credential (ws/handler/S3Gateway.cpp).
+   */
+  'S3GatewayCredential': {
+    id: number
+    user_id: number
+    principal_user_id: number
+    principal_user: { id: number; name: string; email: string | null } | null
+    created_by: number | null
+    name: string
+    access_key: string
+    enabled: boolean
+    scope_mode: 'user_access' | 'global' | 'vault_allowlist'
+    enforce_budget_for_local_requests: boolean
+    description: string | null
+    created_at: number
+    last_used_at: number | null
+    expires_at: number | null
+  }
+  /**
+   * A credential's default vault role (global and vault-allowlist credentials). S3GatewayJson::defaultRole
+   * (ws/handler/S3Gateway.cpp).
+   */
+  'S3GatewayDefaultRole': {
+    id: number
+    default_role_id: number
+    credential_id: number
+    credential: WsModels['S3GatewayCredential'] | null
+    vault_role_id: number
+    role: WsModels['VaultRole'] | null
+    enabled: boolean
+    created_by: number | null
+    created_at: number
+    updated_at: number
+  }
+  /**
+   * A permission override on a credential's default vault role. S3GatewayJson::defaultRoleOverride
+   * (ws/handler/S3Gateway.cpp).
+   */
+  'S3GatewayDefaultRoleOverride': {
+    id: number
+    override_id: number
+    assignment_id: number
+    credential_id: number
+    credential: WsModels['S3GatewayCredential']
+    permission_id: number
+    permission_name: string
+    permission_qualified: string
+    permission: WsModels['Permission']
+    glob_path: string
+    effect: 'allow' | 'deny'
+    enabled: boolean
+    vault_id: number | null
+    vault: WsModels['S3GatewayVaultRef'] | null
+    default_role_id: number
+    gateway_credential_default_role_id: number
+  }
+  /**
+   * s3_gateway.multipart.* (Config.cpp to_json(S3GatewayMultipartConfig)).
+   */
+  'S3GatewayMultipartConfig': { min_part_size_mb: number; abort_after_days: number }
+  /**
+   * A vault role granted to a credential on one vault. S3GatewayJson::assignment (ws/handler/S3Gateway.cpp).
+   */
+  'S3GatewayRoleAssignment': {
+    id: number
+    assignment_id: number
+    credential_id: number
+    credential: WsModels['S3GatewayCredential'] | null
+    vault_id: number
+    vault: WsModels['S3GatewayVaultRef'] | null
+    vault_role_id: number
+    role: WsModels['VaultRole'] | null
+    enabled: boolean
+    created_by: number | null
+    created_at: number
+    updated_at: number
+  }
+  /**
+   * A permission override on a credential's role on one vault. S3GatewayJson::roleOverride
+   * (ws/handler/S3Gateway.cpp).
+   */
+  'S3GatewayRoleOverride': {
+    id: number
+    override_id: number
+    assignment_id: number
+    credential_id: number
+    credential: WsModels['S3GatewayCredential']
+    permission_id: number
+    permission_name: string
+    permission_qualified: string
+    permission: WsModels['Permission']
+    glob_path: string
+    effect: 'allow' | 'deny'
+    enabled: boolean
+    vault_id: number | null
+    vault: WsModels['S3GatewayVaultRef'] | null
+  }
+  /**
+   * A vault selected for a vault-allowlist credential. S3GatewayJson::selectedVault
+   * (ws/handler/S3Gateway.cpp).
+   */
+  'S3GatewaySelectedVault': {
+    credential_id: number
+    vault_id: number
+    vault: WsModels['S3GatewayVaultRef'] | null
+    enabled: boolean
+    created_by: number | null
+    created_at: number
+    updated_at: number
+  }
+  /**
+   * s3_gateway.synthetic_local_request_cost_usd.*: USD decimal strings per request kind and per GB
+   * (Config.cpp to_json(S3GatewaySyntheticLocalRequestCostConfig)).
+   */
+  'S3GatewaySyntheticLocalRequestCostConfig': {
+    list: string
+    head: string
+    get: string
+    put: string
+    delete: string
+    copy: string
+    downloaded_gb: string
+    uploaded_gb: string
+  }
+  /**
+   * A vault as s3.gateway.* names it. S3GatewayJson::vault (ws/handler/S3Gateway.cpp).
+   */
+  'S3GatewayVaultRef': {
+    id: number
+    name: string
+    slug: string
+    fuse_name: string | null
+    effective_fuse_name: string
+    owner_id: number
+  }
+  /**
+   * services.* (Config.cpp to_json(ServicesConfig)).
+   */
+  'ServicesConfig': {
+    db_sweeper: WsModels['DBSweeperConfig']
+    connection_lifecycle_manager: WsModels['ConnectionLifecycleManagerConfig']
+  }
+  /**
+   * email.ses.* (Config.cpp to_json(SesEmailConfig)); the credentials live in the secrets manager.
+   */
+  'SesEmailConfig': { region: string; endpoint: string | null }
+  /**
+   * AdminRole as the session user carries it: permissions reduced to {qualified, value}
+   * (protocols::ws::handler::Auth::sessionUser).
+   */
+  'SessionAdminRole': {
+    id: number
+    name: string
+    description: string
+    created_at: number
+    updated_at: number
+    assigned_at: number | null
+    user_id: number | null
+    permissions: { qualified: string; value: boolean }[]
+    s3_gateway: {
+      view: boolean
+      manage_service: boolean
+      manage_credentials: boolean
+      assign_principal: boolean
+      manage_buckets: boolean
+      manage_budgets: boolean
+    }
+  }
+  /**
+   * The signed-in user as auth.login / auth.refresh / auth.isAuthenticated send it: User with every role's
+   * permissions reduced to {qualified, value} (protocols::ws::handler::Auth::sessionUser).
+   */
+  'SessionUser': {
+    id: number
+    name: string
+    email: string | null
+    is_protected: boolean
+    system_only: boolean
+    is_active: boolean
+    created_at: string
+    updated_at: string
+    last_login: string | null
+    password_changed_at: string | null
+    deactivated_at: string | null
+    linux_uid?: number
+    created_by?: number
+    updated_by?: number
+    admin_role: WsModels['SessionAdminRole']
+    vault_roles: WsModels['SessionVaultRole'][] | object
+  }
+  /**
+   * VaultRole as the session user carries it: permissions reduced to {qualified, value} (Auth::sessionUser).
+   */
+  'SessionVaultRole': {
+    id: number
+    name: string
+    description: string
+    created_at: number
+    updated_at: number
+    assigned_at: number | null
+    permissions: { qualified: string; value: boolean }[]
+    assignment?: WsModels['VaultRoleAssignment']
+  }
+  /**
+   * The daemon's settings document: config.yaml as JSON without secrets (config::Config, Config.cpp to_json).
+   */
+  'Settings': {
+    websocket_server: WsModels['WebsocketServerConfig']
+    http_preview_server: WsModels['HttpPreviewServerConfig']
+    s3_gateway: WsModels['S3GatewayConfig']
+    device_server: WsModels['DeviceServerConfig']
+    caching: WsModels['CachingConfig']
+    preview: WsModels['PreviewConfig']
+    database: WsModels['DatabaseConfig']
+    auth: WsModels['AuthConfig']
+    sync: WsModels['SyncConfig']
+    pricing: WsModels['PricingConfig']
+    services: WsModels['ServicesConfig']
+    stats_snapshots: WsModels['StatsSnapshotsConfig']
+    sharing: WsModels['SharingConfig']
+    vaults: WsModels['VaultsConfig']
+    email: WsModels['EmailConfig']
+    operator_emails: WsModels['OperatorEmailsConfig']
+    auditing: WsModels['AuditConfig']
+    logging: WsModels['LoggingConfig']
+    dev: WsModels['DevConfig']
+  }
+  /**
+   * A file or directory inside a share, as the share session sees it (share-relative path, no ownership):
+   * protocols::ws::handler::fs::Storage::shareEntryJson.
+   */
+  'ShareEntry': {
+    id: number
+    name: string
+    path: string
+    type: 'file' | 'directory'
+    size_bytes: number
+    created_at: string
+    updated_at: string
+    file_count?: number
+    subdirectory_count?: number
+    mime_type?: string | null
+    preview?: WsModels['PreviewPlan']
+  }
+  /**
+   * A share link as its managers see it: share::Link::toManagementJson() (core/src/share/Link.cpp) without
+   * token_lookup_id, via protocols::ws::handler::share::Links::managementJson.
+   */
+  'ShareLink': {
+    id: string
+    vault_id: number
+    root_entry_id: number
+    root_path: string
+    target_type: 'file' | 'directory'
+    link_type: 'download' | 'upload' | 'access'
+    access_mode: 'public' | 'email_validated'
+    allowed_ops: number
+    name: string | null
+    public_label: string | null
+    description: string | null
+    created_by: number
+    updated_by: number | null
+    revoked_by: number | null
+    created_at: string
+    updated_at: string
+    expires_at: string | null
+    revoked_at: string | null
+    disabled_at: string | null
+    last_accessed_at: string | null
+    access_count: number
+    download_count: number
+    upload_count: number
+    max_downloads: number | null
+    max_upload_files: number | null
+    max_upload_size_bytes: number | null
+    max_upload_total_bytes: number | null
+    duplicate_policy: 'reject' | 'rename' | 'overwrite'
+    allowed_mime_types: string[]
+    blocked_mime_types: string[]
+    allowed_extensions: string[]
+    blocked_extensions: string[]
+    metadata: object
+  }
+  /**
+   * A share link's public view, what a share session sees: share::Link::toPublicJson()
+   * (core/src/share/Link.cpp) via protocols::ws::handler::share::Sessions::publicLinkJson.
+   */
+  'SharePublicLink': {
+    id: string
+    root_path: string
+    target_type: 'file' | 'directory'
+    link_type: 'download' | 'upload' | 'access'
+    access_mode: 'public' | 'email_validated'
+    allowed_ops: number
+    public_label: string | null
+    expires_at: string | null
+    metadata: object
+    effective_allowed_ops?: number
+  }
+  /**
+   * The file a finished share upload created, as the share sees it:
+   * protocols::ws::handler::share::Upload::uploadedFileJson.
+   */
+  'ShareUploadedFile': { id: number; name: string; path: string; type: 'file'; size_bytes: number; mime_type: string | null }
+  /**
+   * sharing.*: the share-link switches (Config.cpp to_json(SharingConfig)). enabled gates every link;
+   * enable_anonymous gates access_mode public, enable_email_validated access_mode email_validated.
+   */
+  'SharingConfig': { enabled: boolean; enable_anonymous: boolean; enable_email_validated: boolean }
+  /**
+   * stats_snapshots.* (Config.cpp to_json(StatsSnapshotsConfig)).
+   */
+  'StatsSnapshotsConfig': {
+    enabled: boolean
+    runtime_interval_seconds: number
+    gauge_observation_interval_seconds: number
+    vault_interval_seconds: number
+    retention_days: number
+  }
+  /**
+   * Metric trend series from the stats rollups (core/src/stats/model/StatsTrends.cpp to_json).
+   */
+  'StatsTrends': {
+    scope: 'system' | 'vault'
+    vault_id: number | null
+    window_hours: number
+    series: {
+      key: string
+      label: string
+      unit: string
+      snapshot_type: string
+      points: { created_at: number; value: number }[]
+    }[]
+    checked_at: number
+  }
+  /**
+   * Storage backend figures for every vault or one (core/src/stats/model/StorageBackendStats.cpp to_json).
+   */
+  'StorageBackendStats': {
+    overall_status: string
+    vault_count_total: number
+    local_vault_count: number
+    s3_vault_count: number
+    active_vault_count: number
+    inactive_vault_count: number
+    degraded_vault_count: number
+    error_vault_count: number
+    vaults: WsModels['StorageVaultBackendStats'][]
+    checked_at: number
+  }
+  /**
+   * pricing.storage_rates_api.* (Config.cpp to_json(StorageRatesApiConfig)).
+   */
+  'StorageRatesApiConfig': {
+    remote_refresh_enabled: boolean
+    base_url: string
+    timeout_ms: number
+    cache_ttl_seconds: number
+    refresh_interval_seconds: number
+    fail_open: boolean
+    signature_warning_only: boolean
+    signature_public_key_path: string | null
+    fallback_artifact_base_urls: string[]
+    prefer_full_catalog: boolean
+    use_remote_estimator_for_debug: boolean
+  }
+  /**
+   * One vault's storage backend figures (core/src/stats/model/StorageBackendStats.cpp to_json).
+   */
+  'StorageVaultBackendStats': {
+    vault_id: number
+    vault_name: string
+    type: string
+    active: boolean
+    allow_fs_write: boolean
+    quota_bytes: number
+    free_space_bytes: number | null
+    cache_size_bytes: number | null
+    vault_size_bytes: number | null
+    backend_status: string
+    min_free_space_ok: boolean | null
+    upstream_encryption_enabled: boolean | null
+    bucket: string | null
+    provider_ops_total: number | null
+    provider_errors_total: number | null
+    provider_error_rate: number | null
+    provider_latency_avg_ms: number | null
+    provider_latency_max_ms: number | null
+    last_provider_error: string | null
+    last_provider_success_at: number | null
+  }
+  /**
+   * logging.levels.subsystem_levels.*: per-subsystem log levels (Config.cpp
+   * to_json(SubsystemLogLevelsConfig)).
+   */
+  'SubsystemLogLevelsConfig': {
+    vaulthalla: number
+    filesystem: number
+    crypto: number
+    cloud: number
+    auth: number
+    websocket: number
+    http: number
+    shell: number
+    db: number
+    sync: number
+    thumb: number
+    storage: number
+    types: number
+    runtime: number
+  }
+  /**
+   * sync.* (Config.cpp to_json(SyncConfig)).
+   */
+  'SyncConfig': { event_audit_retention_days: number; event_audit_max_entries: number }
+  /**
+   * An open sync conflict the caller may resolve: ops::conflicts::to_json(ConflictView).
+   */
+  'SyncConflict': {
+    id: number
+    vault_id: number
+    vault_name: string
+    file_id: number
+    path: string
+    name: string
+    type: string
+    reasons: { code: string; message: string }[]
+    created_at: string | null
+    updated_at: string | null
+    local: WsModels['SyncConflictSide']
+    remote: WsModels['SyncConflictSide']
+    can_overwrite: boolean
+    preview: WsModels['PreviewPlan']
+  }
+  /**
+   * A resolve batch's outcome, item by item: ops::conflicts::to_json(ResolveResult).
+   */
+  'SyncConflictResolveResult': {
+    resolution: 'keep_local' | 'keep_remote'
+    resolved: number
+    failed: number
+    results: {
+      conflict_id: number
+      ok: boolean
+      status: 'resolved' | 'denied' | 'not_found' | 'conflict' | 'invalid' | 'unavailable' | 'error'
+      message: string | null
+    }[]
+  }
+  /**
+   * One side of a sync conflict: the local copy or the bucket copy (sideJson in core/src/ops/Conflicts.cpp).
+   */
+  'SyncConflictSide': {
+    size_bytes: number
+    mime_type: string | null
+    content_hash: string | null
+    modified_at: string | null
+    etag: string | null
+    encrypted: boolean | null
+  }
+  /**
+   * Open sync conflicts the caller can resolve, counted: ops::conflicts::to_json(Summary).
+   */
+  'SyncConflictSummary': { total: number; vaults: { vault_id: number; vault_name: string; count: number }[] }
+  /**
+   * One sync run (core/src/sync/model/Event.cpp to_json).
+   */
+  'SyncEvent': {
+    id: number
+    vault_id: number
+    run_uuid: string
+    timestamp_begin: number
+    timestamp_end: number
+    heartbeat_at: number
+    status: 'pending' | 'running' | 'success' | 'stalled' | 'error' | 'cancelled'
+    trigger: 'schedule' | 'manual' | 'startup' | 'webhook' | 'retry'
+    retry_attempt: number
+    stall_reason: string
+    error_code: string
+    error_message: string
+    num_ops_total: number
+    num_failed_ops: number
+    num_conflicts: number
+    bytes_up: number
+    bytes_down: number
+    s3_list_requests: number
+    s3_head_requests: number
+    s3_get_requests: number
+    s3_put_requests: number
+    s3_copy_requests: number
+    s3_delete_requests: number
+    s3_downloaded_bytes: number
+    s3_estimated_list_requests: number
+    s3_estimated_head_requests: number
+    s3_estimated_get_requests: number
+    s3_estimated_put_requests: number
+    s3_estimated_copy_requests: number
+    s3_estimated_delete_requests: number
+    s3_estimated_body_download_bytes: number
+    s3_estimated_upload_bytes: number
+    s3_remote_index_objects: number
+    s3_archive_downloads_skipped: number
+    s3_estimated_cost: string | null
+    s3_estimated_cost_currency: string | null
+    s3_price_profile_id: string | null
+    s3_price_catalog_version: string | null
+    s3_price_confidence_level: string | null
+    s3_price_estimate_mode: string | null
+    s3_price_free_tier_policy: string | null
+    s3_budget_estimated_cost: string | null
+    s3_budget_estimated_cost_currency: string | null
+    s3_budget_estimate_mode: string | null
+    s3_budget_free_tier_policy: string | null
+    s3_price_free_tiers_applied: boolean | null
+    s3_budget_free_tiers_applied: boolean | null
+    s3_price_unknowns: string[]
+    s3_price_breakdown: object[]
+    conflicts: WsModels['SyncRunConflict'][]
+    throughputs: WsModels['SyncThroughput'][]
+    divergence_detected: boolean
+    local_state_hash: string
+    remote_state_hash: string
+    config_hash: string
+  }
+  /**
+   * A conflict recorded by a sync run (core/src/sync/model/Conflict.cpp to_json).
+   */
+  'SyncRunConflict': {
+    id: number
+    event_id: number
+    file_id: number
+    type: 'mismatch' | 'encryption' | 'both'
+    resolution: 'unresolved' | 'kept_local' | 'kept_remote' | 'kept_both' | 'overwritten' | 'fixed_remote_encryption'
+    resolved_at: number
+    created_at: number
+    artifacts: { local: WsModels['SyncRunConflictArtifact']; upstream: WsModels['SyncRunConflictArtifact'] }
+    reasons: { code: string; message: string }[]
+  }
+  /**
+   * One side of a sync run conflict (core/src/sync/model/Artifact.cpp to_json).
+   */
+  'SyncRunConflictArtifact': { id: number; conflict_id: number; side: 'local' | 'upstream' | 'unknown'; file: WsModels['FsEntry'] }
+  /**
+   * One metric bucket of a sync run (core/src/sync/model/Throughput.cpp to_json).
+   */
+  'SyncThroughput': {
+    id: number
+    run_uuid: string
+    num_ops: number
+    failed_ops: number
+    size_bytes: number
+    duration_ms: number
+    metric_type: 'upload' | 'download' | 'index' | 'rename' | 'copy' | 'delete' | 'unknown'
+  }
+  /**
+   * Runtime services, protocols, dependencies and the database pool (core/src/stats/model/SystemHealth.cpp
+   * to_json).
+   */
+  'SystemHealth': {
+    overall_status: 'healthy' | 'degraded' | 'critical'
+    runtime: {
+      all_running: boolean
+      service_count: number
+      services: { entry_name: string; service_name: string; running: boolean; interrupted: boolean }[]
+    }
+    protocols: {
+      running: boolean
+      io_context_initialized: boolean
+      websocket_configured: boolean
+      websocket_ready: boolean
+      http_preview_configured: boolean
+      http_preview_ready: boolean
+    }
+    s3_gateway: {
+      running: boolean
+      configured: boolean
+      ready: boolean
+      host: string
+      port: number
+      active_sessions: number
+      total_requests: number
+      failed_requests: number
+    }
+    deps: {
+      storage_manager: boolean
+      api_key_manager: boolean
+      auth_manager: boolean
+      session_manager: boolean
+      secrets_manager: boolean
+      sync_controller: boolean
+      fs_cache: boolean
+      shell_usage_manager: boolean
+      http_cache_stats: boolean
+      fuse_session: boolean
+      fuse_mount: string
+      mount_state: string
+      mount_backend: string
+      mount_isolation: string
+      mount_detail: string | null
+      secrets_backend: string
+    }
+    shell: { admin_uid_bound: boolean | null }
+    database: {
+      pool_size: number
+      idle: number
+      in_use: number
+      broken_idle: number
+      reconnects: number
+      reconnect_failures: number
+      consecutive_reconnect_failures: number
+      acquire_timeouts: number
+      reachable: boolean
+      probe_latency_ms: number
+      probe_error: string | null
+    } | null
+    vaults_unavailable: {
+      vault_id: number
+      vault_name: string
+      reason: 'key_missing' | 'key_unsealable' | 'version_missing' | 'engine_failed'
+      detail: string
+    }[]
+    summary: {
+      services_ready: number
+      services_total: number
+      deps_ready: number
+      deps_total: number
+      protocols_ready: number
+      protocols_total: number
+      checked_at: number
+    }
+  }
+  /**
+   * Every thread pool (core/src/stats/model/ThreadPoolStats.cpp to_json).
+   */
+  'ThreadPoolManagerSnapshot': {
+    overall_status: string
+    total_worker_count: number
+    total_queue_depth: number
+    total_idle_worker_count: number
+    max_pressure_ratio: number
+    pressured_pool_count: number
+    saturated_pool_count: number
+    checked_at: number
+    pools: WsModels['ThreadPoolSnapshot'][]
+  }
+  /**
+   * One thread pool (core/src/stats/model/ThreadPoolStats.cpp to_json).
+   */
+  'ThreadPoolSnapshot': {
+    name: string
+    queue_depth: number
+    worker_count: number
+    idle_worker_count: number
+    busy_worker_count: number
+    has_idle_worker: boolean
+    stopped: boolean
+    pressure_ratio: number
+    status: string
+  }
+  /**
+   * caching.thumbnails.* (Config.cpp to_json(ThumbnailsConfig)).
+   */
+  'ThumbnailsConfig': { formats: string[]; sizes: number[]; expiry_days: number }
+  /**
+   * The provider account behind an API key (storage::s3::provider::admin::to_json(AccountIdentity)).
+   */
+  'UpstreamAccountIdentity': { provider: string; account_ref: string; principal: string }
+  /**
+   * Provider administration status of an API key (ops::upstream::to_json(AdminStatus)).
+   */
+  'UpstreamAdminStatus': {
+    api_key: WsModels['APIKey'] | null
+    supported: boolean
+    enabled: boolean
+    has_provider_token: boolean
+    account_ref: string | null
+    capabilities: WsModels['UpstreamCapabilities'] | null
+    unsupported_reason: string
+  }
+  /**
+   * The read-only adoption check of an existing bucket (ops::upstream::to_json(AdmissionReport)).
+   */
+  'UpstreamAdmissionReport': {
+    bucket: WsModels['UpstreamBucketRow']
+    objects_scanned: number
+    bytes_scanned: number
+    truncated: boolean
+    has_vaulthalla_manifest: boolean
+    manifest_vault_id: number | null
+    sampled: number
+    sampled_vaulthalla_encrypted: number
+    sampled_plaintext: number
+    sample_keys: string[]
+    versioning: 'unversioned' | 'enabled' | 'suspended' | 'unknown'
+    object_lock: boolean | null
+    blockers: string[]
+    warnings: string[]
+    recommended_encrypt_upstream: boolean | null
+  }
+  /**
+   * One upstream control-plane audit record (ops::upstream::to_json(AuditEntry)).
+   */
+  'UpstreamAuditEntry': {
+    id: number
+    at: string
+    user_name: string | null
+    action: string
+    provider: string
+    account_ref: string
+    bucket: string
+    outcome: 'ok' | 'refused' | 'failed' | 'partial'
+    api_key_id: number | null
+    vault_id: number | null
+    detail: object
+  }
+  /**
+   * A bucket's configuration as the provider reports it (admin::to_json(BucketConfiguration)).
+   */
+  'UpstreamBucketConfiguration': {
+    bucket: string
+    region: string | null
+    versioning: 'unversioned' | 'enabled' | 'suspended' | 'unknown'
+    object_lock: boolean | null
+    mfa_delete: boolean | null
+    lifecycle: WsModels['UpstreamLifecycleRule'][]
+    notifications: WsModels['UpstreamNotificationRule'][]
+    lifecycle_readable: boolean
+    notifications_readable: boolean
+    warnings: string[]
+  }
+  /**
+   * One bucket of the account merged with what Vaulthalla knows (ops::upstream::to_json(BucketRow)).
+   */
+  'UpstreamBucketRow': {
+    name: string
+    region: string | null
+    state: 'managed' | 'adopted' | 'unmanaged' | 'protected'
+    ownership: 'managed' | 'adopted' | 'unmanaged'
+    provisioning_state: 'none' | 'creating' | 'configuring' | 'ready' | 'failed' | 'detached' | 'deleting' | 'deleted'
+    is_protected: boolean
+    protection_reason: string | null
+    protected_by: string | null
+    protected_at: string | null
+    vault_id: number | null
+    vault_name: string | null
+    events_state: 'none' | 'pending' | 'active' | 'failed' | 'removing' | 'removed' | null
+    listed: boolean
+    last_seen_at: string | null
+  }
+  /**
+   * The last capability probe of an API key (admin::to_json(Capabilities)).
+   */
+  'UpstreamCapabilities': {
+    identity: WsModels['UpstreamAccountIdentity']
+    items: WsModels['UpstreamCapability'][]
+    checked_at: string | null
+  }
+  /**
+   * One probed provider capability (admin::to_json(Capability)).
+   */
+  'UpstreamCapability': { name: string; ok: boolean; probed: boolean; detail: string }
+  /**
+   * The queue an event subscription drains (ops::upstream::to_json(ChannelStatus)). account_ref is empty and
+   * last_error null for callers who may not view the API key operating the queue.
+   */
+  'UpstreamChannelStatus': {
+    provider: string
+    account_ref: string
+    region: string
+    queue_name: string
+    state: 'provisioning' | 'active' | 'degraded' | 'failed' | 'removed'
+    last_poll_at: string | null
+    last_message_at: string | null
+    last_error_at: string | null
+    last_error: string | null
+    backlog: number | null
+    consecutive_failures: number
+  }
+  /**
+   * What a bucket cleanup would delete, with its confirm token (ops::upstream::to_json(CleanupPlan)).
+   */
+  'UpstreamCleanupPlan': {
+    bucket: WsModels['UpstreamBucketRow']
+    objects: number
+    versions: number
+    delete_markers: number
+    bytes: number
+    truncated: boolean
+    versioning: 'unversioned' | 'enabled' | 'suspended' | 'unknown'
+    object_lock: boolean | null
+    sample_keys: string[]
+    blockers: string[]
+    warnings: string[]
+    confirm_token: string
+    expires_at: string | null
+  }
+  /**
+   * The outcome of a bucket cleanup (ops::upstream::to_json(CleanupResult)).
+   */
+  'UpstreamCleanupResult': {
+    outcome: 'deleted' | 'emptied' | 'partial'
+    deleted: number
+    failed: number
+    bucket_deleted: boolean
+    errors: string[]
+  }
+  /**
+   * A vault's event subscription, queue health and inbox counts (ops::upstream::to_json(EventStatus)). A
+   * vault without a subscription reports state "none".
+   */
+  'UpstreamEventStatus': {
+    vault_id: number
+    vault_name: string
+    bucket: string
+    supported: boolean
+    unsupported_reason: string
+    state: 'none' | 'pending' | 'active' | 'failed' | 'removing' | 'removed'
+    baseline_state: 'none' | 'pending' | 'running' | 'done'
+    foreign_objects: 'import' | 'ignore'
+    last_error: string | null
+    rule_ids: string[]
+    foreign_rules: number
+    channel: WsModels['UpstreamChannelStatus'] | null
+    inbox_pending: number
+    inbox_applied: number
+    inbox_failed: number
+    inbox_done_24h: number
+    inbox_self_24h: number
+    last_event_at: string | null
+  }
+  /**
+   * A bucket with its configuration (ops::upstream::to_json(Inspection)).
+   */
+  'UpstreamInspection': {
+    bucket: WsModels['UpstreamBucketRow']
+    config: WsModels['UpstreamBucketConfiguration']
+    supported_lifecycle_fields: ('abort_incomplete_multipart_days' | 'expire_current_days' | 'expire_noncurrent_days' | 'prefix')[]
+  }
+  /**
+   * One page of an account's buckets (ops::upstream::to_json(Inventory)).
+   */
+  'UpstreamInventory': {
+    api_key_id: number | null
+    provider: string
+    account_ref: string
+    buckets: WsModels['UpstreamBucketRow'][]
+    next_token: string
+  }
+  /**
+   * One lifecycle rule on a bucket (admin::to_json(LifecycleRule)). Vaulthalla's own rules are
+   * "vaulthalla-*".
+   */
+  'UpstreamLifecycleRule': {
+    id: string
+    enabled: boolean
+    prefix: string
+    abort_incomplete_multipart_days: number | null
+    expire_current_days: number | null
+    expire_noncurrent_days: number | null
+    foreign: boolean
+    destructive: boolean
+  }
+  /**
+   * One event notification rule on a bucket (admin::to_json(NotificationRule)).
+   */
+  'UpstreamNotificationRule': {
+    id: string
+    destination: string
+    destination_name: string
+    events: string[]
+    prefix: string
+    suffix: string
+    foreign: boolean
+  }
+  /**
+   * A user with its full roles and permissions (identities::to_json(User), core/src/identities/User.cpp).
+   */
+  'User': {
+    id: number
+    name: string
+    email: string | null
+    is_protected: boolean
+    system_only: boolean
+    is_active: boolean
+    created_at: string
+    updated_at: string
+    last_login: string | null
+    password_changed_at: string | null
+    deactivated_at: string | null
+    linux_uid?: number
+    created_by?: number
+    updated_by?: number
+    admin_role: WsModels['AdminRole']
+    vault_roles: WsModels['VaultRole'][] | object
+  }
+  /**
+   * The slim user list projection (identities::to_list_json, core/src/identities/User.cpp): the user fields
+   * of User, roles as RoleSummary.
+   */
+  'UserSummary': {
+    id: number
+    name: string
+    email: string | null
+    is_protected: boolean
+    system_only: boolean
+    is_active: boolean
+    created_at: string
+    updated_at: string
+    last_login: string | null
+    password_changed_at: string | null
+    deactivated_at: string | null
+    linux_uid?: number
+    created_by?: number
+    updated_by?: number
+    admin_role: WsModels['RoleSummary'] | null
+    vault_roles: WsModels['RoleSummary'][]
+  }
+  /**
+   * A vault (vault::model::to_json(Vault), core/src/vault/model/Vault.cpp). S3 vaults add their upstream
+   * members (to_json(S3Vault)) where the vault is serialized as its dynamic type: storage.vault.list rows and
+   * storage.vault.get. storage.vault.list and storage.vault.get add `owner`; storage.vault.get adds an S3
+   * vault's `sync` (handler::Vaults::detailsJson). storage.vault.add/update/restore send the base members
+   * only.
+   */
+  'Vault': {
+    id: number
+    name: string
+    slug: string
+    fuse_name: string | null
+    effective_fuse_name: string
+    type: 'local' | 's3'
+    description: string
+    quota: number
+    owner_id: number
+    mount_point: string
+    allow_fs_write: boolean
+    is_active: boolean
+    created_at: string
+    api_key_id?: number
+    bucket?: string
+    storage_tier_id?: string | null
+    encrypt_upstream?: boolean
+    owner?: string
+    sync?: WsModels['RemoteSyncPolicy']
+  }
+  /**
+   * A vault's recent activity (core/src/stats/model/VaultActivity.cpp to_json).
+   */
+  'VaultActivity': {
+    vault_id: number
+    last_activity_at: number | null
+    last_activity_action: string | null
+    uploads_24h: number
+    uploads_7d: number
+    deletes_24h: number
+    deletes_7d: number
+    renames_24h: number
+    renames_7d: number
+    moves_24h: number
+    moves_7d: number
+    copies_24h: number
+    copies_7d: number
+    restores_24h: number
+    restores_7d: number
+    bytes_added_24h: number
+    bytes_removed_24h: number
+    top_active_users: { user_id: number | null; user_name: string | null; count: number }[]
+    top_touched_paths: { path: string; action: string; count: number; bytes: number }[]
+    recent_activity: {
+      source: string
+      action: string
+      path: string
+      user_id: number | null
+      user_name: string | null
+      status: string | null
+      error: string | null
+      bytes: number
+      occurred_at: number
+    }[]
+    checked_at: number
+  }
+  /**
+   * A vault's capacity figures (core/src/vault/model/Capacity.cpp to_json).
+   */
+  'VaultCapacity': {
+    capacity: number
+    logical_size: number
+    physical_size: number
+    free_space: number
+    cache_size: number
+    file_count: number
+    directory_count: number
+    average_file_size: number
+    largest_file_size: number
+    top_file_extensions: Record<string, number>
+  }
+  /**
+   * A scheduled, running or finished vault deletion (vault::model::to_json(Deletion),
+   * core/src/vault/model/Deletion.cpp).
+   */
+  'VaultDeletion': {
+    vault_id: number
+    vault_name: string
+    owner_id: number | null
+    owner: string
+    type: 'local' | 's3'
+    provider: string | null
+    bucket: string | null
+    encrypt_upstream: boolean | null
+    delete_upstream: boolean
+    deleted_by: number | null
+    deleted_at: string
+    purge_after: string
+    key_retain_until: string
+    key_version: number | null
+    key_exported_at: string | null
+    key_retained: boolean
+    upstream_key_at_risk: boolean
+    export_command: string
+    state: 'pending' | 'purging' | 'purged'
+    restorable: boolean
+    purge_started_at: string | null
+    upstream_purged_at: string | null
+    purged_at: string | null
+    key_purged_at: string | null
+    next_attempt_at: string | null
+    attempts: number
+    last_error: string | null
+  }
+  /**
+   * One vault's export document: ops::vault_keys::toJson(VaultExport) (core/src/ops/VaultKeys.cpp), the CLI's
+   * `vh vault keys export` shape (vault::model::generate_json_key_object) plus key_check and every needed
+   * version. vault.keys.import (and `vh vault keys import`) takes it back, alone or in an `all` array.
+   */
+  'VaultKeyExport': {
+    vault_id: number
+    vault_name: string
+    key: string
+    key_check: string
+    key_info: {
+      type: string
+      key_size: number
+      key_version: number
+      iv_size: number
+      tag_size: number
+      iv_gen: string
+      cipher_impl: string
+      hardware_accel: string
+      aad: boolean
+      files_hashed_with: string
+      sealed_by: string
+      created_at: string
+      exported_by: string
+      exported_at: string
+      key_check: string
+    }
+    historical_keys?: {
+      key_version: number
+      key: string
+      key_check: string
+      reason: 'current' | 'rotation' | 'recovery'
+      created_at: string | null
+      retired_at: string | null
+    }[]
+    missing_key_versions?: number[]
+    deleted_vault?: boolean
+  }
+  /**
+   * What a key import did: ops::vault_keys::toJson(ImportResult) (core/src/ops/VaultKeys.cpp; also `vh vault
+   * keys import --json`).
+   */
+  'VaultKeyImportResult': {
+    vault_id: number
+    vault_name: string
+    deleted: boolean
+    written: boolean
+    key_available: boolean
+    note: string | null
+    versions: {
+      version: number
+      outcome: 'restored' | 'unchanged' | 'unverifiable'
+      detail: string
+      verified_files: number
+      failed_files: number
+    }[]
+  }
+  /**
+   * A key version still needed to decrypt the vault's data, identified by its key check (never key bytes):
+   * ops::vault_keys::toJson(KeyStatus) needed_versions[] (core/src/ops/VaultKeys.cpp).
+   */
+  'VaultKeyNeededVersion': { version: number; key_check: string | null; reason: 'current' | 'rotation' | 'recovery' }
+  /**
+   * One vault's key backup state: ops::vault_keys::toJson(KeyStatus) (core/src/ops/VaultKeys.cpp; also `vh
+   * vault keys status --json`). Never key bytes.
+   */
+  'VaultKeyStatus': {
+    vault_id: number
+    vault_name: string
+    deleted: boolean
+    key_retain_until: number | null
+    version: number
+    key_check: string | null
+    key_available: boolean
+    unavailable_reason: 'key_missing' | 'key_unsealable' | 'version_missing' | null
+    unavailable_detail: string | null
+    exported_version: number | null
+    exported_at: number | null
+    rotation_in_progress: boolean
+    needed_versions: WsModels['VaultKeyNeededVersion'][]
+    missing_versions: number[]
+  }
+  /**
+   * A vault's backup/recovery posture (core/src/stats/model/VaultRecovery.cpp to_json; C++
+   * stats::model::VaultRecovery).
+   */
+  'VaultRecoveryStats': {
+    vault_id: number
+    backup_policy_present: boolean
+    backup_enabled: boolean
+    backup_status: string
+    backup_interval_seconds: number
+    retention_seconds: number | null
+    last_backup_at: number | null
+    last_success_at: number | null
+    last_success_age_seconds: number | null
+    next_expected_backup_at: number | null
+    backup_stale: boolean | null
+    missed_backup_count_estimate: number | null
+    retry_count: number
+    last_error: string | null
+    recovery_readiness: 'ready' | 'stale' | 'failing' | 'unknown'
+    time_since_last_verified_good_state: number | null
+    checked_at: number
+  }
+  /**
+   * What deleting a vault would do (protocols::ws::handler::Vaults::removalPlanJson over
+   * ops::vaults::RemovalPlan).
+   */
+  'VaultRemovalPlan': {
+    vault_id: number
+    name: string
+    type: 'local' | 's3'
+    provider: string | null
+    bucket: string | null
+    encrypted_upstream: boolean
+    key_version: number
+    key_exported: boolean
+    key_exported_at: string | null
+    retention_window: string
+    retention_window_seconds: number
+    key_retention_window: string
+    key_retention_window_seconds: number
+    export_command: string
+  }
+  /**
+   * A vault role (rbac::role::to_json(Vault), core/src/rbac/role/Vault.cpp): a definition, or an assignment
+   * of one (then `assignment` and `assigned_at` are set).
+   */
+  'VaultRole': {
+    id: number
+    name: string
+    description: string
+    created_at: number
+    updated_at: number
+    assigned_at: number | null
+    permissions: WsModels['Permission'][]
+    assignment?: WsModels['VaultRoleAssignment']
+  }
+  /**
+   * Who holds a vault role where (rbac::role::to_json(Vault::AssignmentInfo), core/src/rbac/role/Vault.cpp).
+   */
+  'VaultRoleAssignment': { subject_id: string; vault_id: string; subject_type: string }
+  /**
+   * A vault's security posture (core/src/stats/model/VaultSecurity.cpp to_json).
+   */
+  'VaultSecurity': {
+    vault_id: number
+    overall_status: string
+    encryption_status: string
+    current_key_version: number | null
+    key_created_at: number | null
+    key_age_days: number | null
+    trashed_key_versions_count: number
+    file_count: number
+    files_current_key_version: number
+    files_legacy_key_version: number
+    files_unknown_key_version: number
+    unauthorized_access_attempts_24h: number
+    rate_limited_attempts_24h: number
+    last_denied_access_at: number | null
+    last_denied_access_reason: string | null
+    last_permission_change_at: number | null
+    last_share_policy_change_at: number | null
+    integrity_check_status: string
+    last_integrity_check_at: number | null
+    checksum_mismatch_count: number | null
+    checked_at: number
+  }
+  /**
+   * A vault's share-link statistics (core/src/stats/model/VaultShareStats.cpp to_json).
+   */
+  'VaultShareStats': {
+    vault_id: number
+    active_links: number
+    expired_links: number
+    revoked_links: number
+    links_created_24h: number
+    links_revoked_24h: number
+    public_links: number
+    email_validated_links: number
+    downloads_24h: number
+    uploads_24h: number
+    denied_attempts_24h: number
+    rate_limited_attempts_24h: number
+    failed_attempts_24h: number
+    top_links_by_access: {
+      share_id: string
+      label: string
+      root_path: string
+      link_type: string
+      access_mode: string
+      access_count: number
+      download_count: number
+      upload_count: number
+      last_accessed_at: number | null
+    }[]
+    recent_share_events: {
+      id: number
+      share_id: string | null
+      event_type: string
+      status: string
+      target_path: string | null
+      bytes_transferred: number
+      error_code: string | null
+      error_message: string | null
+      created_at: number
+    }[]
+    checked_at: number
+  }
+  /**
+   * stats.vault: capacity plus the vault engine's latest sync run (core/src/vault/model/Stat.cpp to_json).
+   */
+  'VaultStat': { capacity: WsModels['VaultCapacity']; latest_sync_event: WsModels['SyncEvent'] | null }
+  /**
+   * A vault's sync health (core/src/stats/model/VaultSyncHealth.cpp to_json).
+   */
+  'VaultSyncHealth': {
+    vault_id: number
+    overall_status: 'healthy' | 'syncing' | 'warning' | 'stalled' | 'error' | 'diverged' | 'unknown'
+    current_state: 'idle' | 'pending' | 'running' | 'stalled' | 'error' | 'cancelled' | 'success' | 'diverged' | 'unknown'
+    sync_enabled: boolean
+    sync_interval_seconds: number
+    configured_strategy: string | null
+    conflict_policy: string | null
+    s3_budget_list_requests: number | null
+    s3_budget_head_requests: number | null
+    s3_budget_get_requests: number | null
+    s3_budget_put_requests: number | null
+    s3_budget_copy_requests: number | null
+    s3_budget_delete_requests: number | null
+    s3_budget_downloaded_bytes: number | null
+    s3_budget_unlimited_legacy: boolean
+    s3_budget_warning: string | null
+    max_remote_index_age_seconds: number | null
+    latest_event: WsModels['SyncEvent'] | null
+    latest_event_id: number | null
+    latest_run_uuid: string | null
+    last_sync_at: number | null
+    last_success_at: number | null
+    last_success_age_seconds: number | null
+    active_run_count: number
+    pending_run_count: number
+    running_run_count: number
+    stalled_run_count: number
+    oldest_active_age_seconds: number | null
+    latest_heartbeat_age_seconds: number | null
+    error_count_24h: number
+    error_count_7d: number
+    failed_ops_24h: number
+    failed_ops_7d: number
+    retry_count_24h: number
+    retry_count_7d: number
+    conflict_count_open: number
+    conflict_count_24h: number
+    conflict_count_7d: number
+    bytes_up_24h: number
+    bytes_down_24h: number
+    bytes_total_24h: number
+    bytes_up_7d: number
+    bytes_down_7d: number
+    bytes_total_7d: number
+    avg_throughput_bytes_per_sec_24h: number
+    peak_throughput_bytes_per_sec_24h: number
+    divergence_detected: boolean
+    local_state_hash: string | null
+    remote_state_hash: string | null
+    hash_mismatch: boolean
+    remote_index_object_count: number
+    remote_index_source: string | null
+    remote_index_indexed_at: number | null
+    remote_index_stale: boolean
+    last_error_code: string | null
+    last_error_message: string | null
+    last_stall_reason: string | null
+    checked_at: number
+  }
+  /**
+   * vaults.*: deleted-vault retention and S3 vault defaults (Config.cpp to_json(VaultsConfig)). Durations are
+   * config duration strings ("30s", "5m", "12h", "90d", "2w").
+   */
+  'VaultsConfig': { retention_window: string; tpm_retention_window: string; s3: WsModels['VaultsS3Config'] }
+  /**
+   * vaults.s3.*: defaults for new S3/R2 vaults (Config.cpp to_json(VaultsS3Config)).
+   */
+  'VaultsS3Config': {
+    default_remote_sync_strategy: string
+    default_remote_conflict_policy: string
+    tpm_retention_window: string
+  }
+  /**
+   * websocket_server.* (Config.cpp to_json(WebsocketConfig)).
+   */
+  'WebsocketServerConfig': { enabled: boolean; host: string; port: number; max_connections: number; max_upload_size_bytes: number }
+}
 
 export interface WsContract {
   /**
@@ -14,7 +2561,7 @@ export interface WsContract {
    */
   'auth.isAuthenticated': {
     payload: null
-    response: { isAuthenticated: boolean; user?: object }
+    response: { isAuthenticated: boolean; user?: WsModels['SessionUser'] }
   }
   /**
    * Sign in with a username and password. The access token comes back in the response envelope (`token`), the
@@ -22,7 +2569,7 @@ export interface WsContract {
    */
   'auth.login': {
     payload: { name: string; password: string }
-    response: { user: object }
+    response: { user: WsModels['SessionUser'] }
   }
   /**
    * End the session (access and refresh tokens).
@@ -36,14 +2583,14 @@ export interface WsContract {
    */
   'auth.refresh': {
     payload: null
-    response: { user: object }
+    response: { user: WsModels['SessionUser'] }
   }
   /**
    * Create a user. role is an admin role name or id; the password is required (only the CLI generates one).
    */
   'auth.register': {
     payload: { name: string; email?: string; password: string; is_active?: boolean; role: string }
-    response: { user: object }
+    response: { user: WsModels['User'] }
   }
   /**
    * Security posture warning for the signed-in account: the super admin's initial password file while the
@@ -58,7 +2605,7 @@ export interface WsContract {
    */
   'auth.user.change_password': {
     payload: { id: number; old_password?: string; new_password: string }
-    response: { user: object }
+    response: { user: WsModels['User'] }
   }
   /**
    * Delete a user. Without confirm the reply is a refusal with data.code 'user_delete' and the question to
@@ -73,14 +2620,14 @@ export interface WsContract {
    */
   'auth.user.get': {
     payload: { id: number }
-    response: { user: object }
+    response: { user: WsModels['User'] }
   }
   /**
    * One user by name.
    */
   'auth.user.get.byName': {
     payload: { name: string }
-    response: { user: object }
+    response: { user: WsModels['User'] }
   }
   /**
    * Patch a user (the caller when id is absent). Role changes and deactivation end the account's sessions.
@@ -94,14 +2641,313 @@ export interface WsContract {
       role?: string
       is_active?: boolean | null
     }
-    response: { user: object }
+    response: { user: WsModels['User'] }
   }
   /**
    * Users visible to the caller, slim projection (admin_role without permissions).
    */
   'auth.users.list': {
     payload: null
-    response: { users: object[] }
+    response: { users: WsModels['UserSummary'][] }
+  }
+  /**
+   * The caller's saved dashboard layout for a key; exists is false (empty layout) when none is saved. A
+   * non-object payload reads the default key.
+   */
+  'dashboard.preferences.get': {
+    payload: { preference_key?: string }
+    response: { preferences: WsModels['DashboardPreference'] }
+  }
+  /**
+   * Delete the caller's saved layout for a key; deleted says whether one existed. A non-object payload resets
+   * the default key.
+   */
+  'dashboard.preferences.reset': {
+    payload: { preference_key?: string }
+    response: { reset: boolean; deleted: boolean }
+  }
+  /**
+   * Save the caller's dashboard layout for a key (insert or replace). The layout is validated (at most 64 KiB
+   * and 64 cards) and otherwise stored as sent.
+   */
+  'dashboard.preferences.update': {
+    payload: {
+      preference_key?: string
+      layout: {
+        cards?: {
+          id: string
+          size?: string | null
+          variant?: string | null
+          visible?: boolean | null
+          order?: number | null
+        }[]
+      }
+    }
+    response: { preferences: WsModels['DashboardPreference'] }
+  }
+  /**
+   * Replace this device's key: certificate is the new self-signed P-256 certificate (base64 DER), signature
+   * the old key's ECDSA-P256-SHA256 (base64 DER) over "vh-device-rotate-v1" ‖ new_spki_sha256 ‖
+   * server_spki_sha256 ‖ UInt64BE(timestamp). The old key keeps working until the first connection with the
+   * new one. A retry from the old key naming the same new key succeeds again; another key is conflict.
+   */
+  'device.identity.rotate': {
+    payload: { certificate: string; timestamp: number; signature: string }
+    response: { device_id: string }
+  }
+  /**
+   * The caller's devices, revoked ones included; with all, every user's (super admins only).
+   */
+  'device.list': {
+    payload: { all?: boolean }
+    response: { devices: WsModels['Device'][] }
+  }
+  /**
+   * Reveal nonce_device. It must match the request's commitment (else the request is deleted: invalid); then
+   * the request is shown to the window's owner with its code. The daemon never sends the code to the device.
+   * Same key as the request only.
+   */
+  'device.pair.confirm': {
+    payload: { request_id: string; nonce_device: string }
+    response: { state: 'pending'; expires_at: number }
+  }
+  /**
+   * Ask to pair this connection's key while a pairing window is open, committing to nonce_device
+   * (SHA-256("vh-pair-commit-v1" ‖ device_spki_sha256 ‖ nonce_device)). Refused with no_pairing_window when
+   * none is open, rate_limited past 10 per minute per address or 5 per window, conflict for a key this node
+   * knows. One live request per key: a new one replaces it.
+   */
+  'device.pair.request': {
+    payload: { name: string; platform: string; app_version?: string; commitment: string }
+    response: { request_id: string; nonce_server: string; expires_at: number }
+  }
+  /**
+   * How the request stands. Answered at once (no long poll): after pending, ask again in 2 s. Approved
+   * carries the node's id and name and the device id; the device then pins the server key and reconnects,
+   * which makes a Device session. Same key as the request only.
+   */
+  'device.pair.status': {
+    payload: { request_id: string }
+    response: {
+      state: 'pending' | 'approved' | 'denied' | 'expired'
+      node_id?: string
+      node_name?: string
+      device_id?: string
+    }
+  }
+  /**
+   * Approve a request with the code the device shows (number matching). Any other code denies the request
+   * (invalid). Creates the device for the caller's account.
+   */
+  'device.pairing.approve': {
+    payload: { request_id: string; code: string }
+    response: { device: WsModels['Device'] }
+  }
+  /**
+   * Close the caller's own pairing window; its requests expire. any: whoever's window is open (super admins
+   * only).
+   */
+  'device.pairing.close': {
+    payload: { any?: boolean }
+    response: { closed: boolean }
+  }
+  /**
+   * Deny a pending request; the device is told it was declined.
+   */
+  'device.pairing.deny': {
+    payload: { request_id: string }
+    response: { denied: boolean }
+  }
+  /**
+   * Open a 10-minute pairing window owned by the caller (reopening extends it). One window per node: conflict
+   * while another user's is open. Also says what to type into Desktop: the listener's port and whether
+   * devices on other hosts can reach it (remote).
+   */
+  'device.pairing.open': {
+    payload: null
+    response: {
+      window: { owner_id: number; opened_at: number; expires_at: number }
+      server_time: number
+      port: number
+      remote: boolean
+    }
+  }
+  /**
+   * The caller's open window and its confirmed requests. Each offers three code_choices (random order): one
+   * is the code the device shows, two are decoys fixed for the request. The real code is never returned on
+   * its own.
+   */
+  'device.pairing.pending': {
+    payload: null
+    response: {
+      window: { owner_id: number; opened_at: number; expires_at: number } | null
+      requests: {
+        request_id: string
+        name: string
+        platform: string
+        app_version: string
+        source_ip: string
+        device_id: string
+        code_choices: string[]
+        created_at: number
+        expires_at: number
+      }[]
+      server_time: number
+    }
+  }
+  /**
+   * Back to loopback only: the listener rebinds now and device sessions from other hosts close.
+   */
+  'device.remote.disable': {
+    payload: null
+    response: {
+      status: {
+        enabled: boolean
+        remote: boolean
+        port: number
+        listening: boolean
+        address: string | null
+        error: string | null
+        server_spki_sha256: string | null
+        connections: number
+      }
+    }
+  }
+  /**
+   * Let devices on other hosts connect: the listener rebinds to every interface now, and stays that way
+   * across restarts and upgrades (device_server.remote in config.yaml).
+   */
+  'device.remote.enable': {
+    payload: null
+    response: {
+      status: {
+        enabled: boolean
+        remote: boolean
+        port: number
+        listening: boolean
+        address: string | null
+        error: string | null
+        server_spki_sha256: string | null
+        connections: number
+      }
+    }
+  }
+  /**
+   * The device listener: loopback only or every interface, and whether it listens.
+   */
+  'device.remote.status': {
+    payload: null
+    response: {
+      status: {
+        enabled: boolean
+        remote: boolean
+        port: number
+        listening: boolean
+        address: string | null
+        error: string | null
+        server_spki_sha256: string | null
+        connections: number
+      }
+    }
+  }
+  /**
+   * Rename a device (its user, or a super admin).
+   */
+  'device.rename': {
+    payload: { device_id: string; name: string }
+    response: { device: WsModels['Device'] }
+  }
+  /**
+   * Unpair a device (its user, a super admin, or the device itself). Final: its live sessions close at once
+   * and its key only ever gets pairing-only connections again.
+   */
+  'device.revoke': {
+    payload: { device_id: string }
+    response: { device: WsModels['Device'] }
+  }
+  /**
+   * The server key's SPKI hash (the pin). A next key is never announced: a new server key means pairing
+   * again.
+   */
+  'device.server.identity': {
+    payload: null
+    response: { spki_sha256: string }
+  }
+  /**
+   * The email provider settings, the operator email policy and which provider secrets are stored.
+   */
+  'email.config.get': {
+    payload: null
+    response: {
+      email: WsModels['EmailConfig']
+      operator_emails: WsModels['OperatorEmailsConfig']
+      secrets: {
+        available: boolean
+        resend_api_key: boolean
+        ses_access_key_id: boolean
+        ses_secret_access_key: boolean
+      }
+    }
+  }
+  /**
+   * Merge-patch the email and operator_emails settings sections (RFC 7386; other sections are ignored) and
+   * save them through the same validation as settings.update.
+   */
+  'email.config.update': {
+    payload: {
+      email?: WsPartial<WsModels['EmailConfig']>
+      operator_emails?: WsPartial<WsModels['OperatorEmailsConfig']>
+    }
+    response: {
+      email: WsModels['EmailConfig']
+      operator_emails: WsModels['OperatorEmailsConfig']
+      secrets: {
+        available: boolean
+        resend_api_key: boolean
+        ses_access_key_id: boolean
+        ses_secret_access_key: boolean
+      }
+    }
+  }
+  /**
+   * Operator email delivery history, newest first.
+   */
+  'email.history': {
+    payload: { limit?: number }
+    response: { history: WsModels['EmailDeliveryRecord'][] }
+  }
+  /**
+   * Store provider credentials in the secrets manager: resend needs api_key; ses takes access_key_id and/or
+   * secret_access_key (at least one). Values are write-only.
+   */
+  'email.provider.secret.set': {
+    payload: { provider: 'resend' | 'ses'; api_key?: string; access_key_id?: string; secret_access_key?: string }
+    response: {
+      secrets: {
+        available: boolean
+        resend_api_key: boolean
+        ses_access_key_id: boolean
+        ses_secret_access_key: boolean
+      }
+    }
+  }
+  /**
+   * Send (or, with dry_run, only render and record) a test email. Without to, a dry run goes to the first
+   * alerts recipient. status says which happened. Email disabled or provider none is a 'conflict'; a failing
+   * provider answers without a code. Both are recorded in the history.
+   */
+  'email.test.send': {
+    payload: { to?: string; dry_run?: boolean }
+    response: {
+      status: 'dry_run' | 'sent'
+      to: string
+      subject: string
+      html_bytes?: number
+      text?: string
+      provider?: string
+      provider_message_id?: string | null
+      history_warning: string | null
+    }
   }
   /**
    * Create a directory (Touch on the path).
@@ -115,7 +2961,7 @@ export interface WsContract {
    */
   'fs.dir.list': {
     payload: { vault_id: number; path?: string }
-    response: { vault: string; path: string; entry: object; files: object[] }
+    response: { vault: string; path: string; entry: WsModels['FsEntryBase']; files: WsModels['FsEntry'][] }
   }
   /**
    * Share sessions only: drop a transfer.
@@ -186,14 +3032,14 @@ export interface WsContract {
    */
   'fs.list': {
     payload: { vault_id: number; path?: string } | { vault_id?: number | null; path?: string }
-    response: { vault: string; path: string; entry: object; files: object[] } | { path: string; entry: object; files: object[] }
+    response: { vault: string; path: string; entry: WsModels['FsEntryBase']; files: WsModels['FsEntry'][] } | { path: string; entry: WsModels['ShareEntry']; files: WsModels['ShareEntry'][] }
   }
   /**
    * One entry's metadata (Lookup on the path).
    */
   'fs.metadata': {
     payload: { vault_id: number; path?: string } | { vault_id?: number | null; path?: string }
-    response: { vault: string; path: string; entry: object } | { path: string; entry: object }
+    response: { vault: string; path: string; entry: WsModels['FsEntryBase'] } | { path: string; entry: WsModels['ShareEntry'] }
   }
   /**
    * Abort the session's active ws upload.
@@ -207,7 +3053,7 @@ export interface WsContract {
    */
   'fs.upload.finish': {
     payload: { vault_id: number; path: string } | { upload_id?: string; transfer_id?: string }
-    response: { path: string } | { upload_id: string; complete: boolean; entry: object }
+    response: { path: string } | { upload_id: string; complete: boolean; entry: WsModels['ShareUploadedFile'] }
   }
   /**
    * Start a chunked ws upload (Write on the path). The console uploads over HTTP instead (POST
@@ -238,35 +3084,35 @@ export interface WsContract {
    */
   'group.add': {
     payload: { name: string; description?: string; linux_gid?: number | null }
-    response: { name: string; group: object }
+    response: { name: string; group: WsModels['Group'] }
   }
   /**
    * One group by id.
    */
   'group.get': {
     payload: { id: number }
-    response: { group: object }
+    response: { group: WsModels['Group'] }
   }
   /**
    * One group by name.
    */
   'group.get.byName': {
     payload: { name: string }
-    response: { group: object }
+    response: { group: WsModels['Group'] }
   }
   /**
    * Add a user to a group.
    */
   'group.member.add': {
     payload: { group_id: number; user_id: number }
-    response: { group: object; group_id: number; user_id: number }
+    response: { group: WsModels['Group']; group_id: number; user_id: number }
   }
   /**
    * Remove a user from a group.
    */
   'group.member.remove': {
     payload: { group_id: number; user_id: number }
-    response: { group: object; group_id: number; user_id: number }
+    response: { group: WsModels['Group']; group_id: number; user_id: number }
   }
   /**
    * Delete a group.
@@ -280,30 +3126,194 @@ export interface WsContract {
    */
   'group.update': {
     payload: { id: number; name?: string | null; description?: string | null; linux_gid?: number | null }
-    response: { id: number; name: string; group: object }
+    response: { id: number; name: string; group: WsModels['Group'] }
   }
   /**
    * Every group for group viewers; otherwise only the caller's own groups.
    */
   'groups.list': {
     payload: null
-    response: { groups: object[] }
+    response: { groups: WsModels['Group'][] }
   }
   /**
    * The groups a user belongs to.
    */
   'groups.list.byUser': {
     payload: { user_id: number }
-    response: { groups: object[] }
+    response: { groups: WsModels['Group'][] }
   }
   /**
    * The contract this daemon was built from: contract_version, contract_hash (the whole document vh_usage
-   * --json publishes) and ws_hash (the ws command book, what the web console is generated from). Read-only,
-   * no secrets; needs a signed-in session (no build fingerprinting before login).
+   * --json publishes), ws_hash (the ws command book, what the web console is generated from) and models_hash
+   * (the model shapes the book refers to). Read-only, no secrets; needs a signed-in session (no build
+   * fingerprinting before login).
    */
   'meta.contract.get': {
     payload: null
-    response: { contract_version: number; contract_hash: string; ws_hash: string }
+    response: { contract_version: number; contract_hash: string; ws_hash: string; models_hash: string }
+  }
+  /**
+   * One permission of the catalog by id.
+   */
+  'permission.get': {
+    payload: { id: number }
+    response: { permission: WsModels['Permission'] }
+  }
+  /**
+   * One permission of the catalog by its qualified name.
+   */
+  'permission.get.byName': {
+    payload: { name: string }
+    response: { permission: WsModels['Permission'] }
+  }
+  /**
+   * The whole permission catalog.
+   */
+  'permissions.list': {
+    payload: null
+    response: { permissions: WsModels['Permission'][] }
+  }
+  /**
+   * Reservation ledger rows, newest first. Non super admins must name a vault they can view or a gateway
+   * credential they own.
+   */
+  'pricing.budget.ledger.list': {
+    payload: { vault_id?: number | null; gateway_credential_id?: number | null; limit?: number }
+    response: { ledger: WsModels['PriceBudgetLedgerEntry'][] }
+  }
+  /**
+   * Approve a pending override (super admins). A bare `id` is refused: send override_id.
+   */
+  'pricing.budget.override.approve': {
+    payload: { override_id: number }
+    response: { override: WsModels['PriceBudgetOverride'] }
+  }
+  /**
+   * Deny a pending override (super admins). A bare `id` is refused: send override_id.
+   */
+  'pricing.budget.override.deny': {
+    payload: { override_id: number; reason?: string | null }
+    response: { override: WsModels['PriceBudgetOverride'] }
+  }
+  /**
+   * Overrides, newest first. Super admins see all (or one vault's); others must name a vault they can view.
+   */
+  'pricing.budget.override.list': {
+    payload: { vault_id?: number | null; limit?: number; include_expired?: boolean }
+    response: { overrides: WsModels['PriceBudgetOverride'][] }
+  }
+  /**
+   * Ask for a one-time override of exceeded enforce policies on a vault (vault sync Trigger permission).
+   */
+  'pricing.budget.override.request': {
+    payload: {
+      vault_id: number
+      policy_ids: number[]
+      run_uuid?: string | null
+      reason?: string | null
+      estimated_cost?: string | null
+      currency?: string
+      ttl_minutes?: number
+    }
+    response: { override: WsModels['PriceBudgetOverride'] }
+  }
+  /**
+   * Disable the policy of a scope (same authority as upsert). disabled is false when there was nothing to
+   * disable.
+   */
+  'pricing.budget.policy.disable': {
+    payload: {
+      scope: 'global' | 'provider' | 'vault' | 'gateway_credential' | 'gateway_credential_vault'
+      provider_key?: string | null
+      vault_id?: number | null
+      gateway_credential_id?: number | null
+    }
+    response: { disabled: boolean }
+  }
+  /**
+   * S3 price budget policies the caller may see: super admins every one; others the policies of vaults they
+   * can view and of gateway credentials they own. vault_id needs view access to that vault.
+   */
+  'pricing.budget.policy.list': {
+    payload: { vault_id?: number | null; gateway_credential_id?: number | null; include_inactive?: boolean }
+    response: { policies: WsModels['PriceBudgetPolicy'][] }
+  }
+  /**
+   * Create or replace the policy of a scope. global/provider: super admins; vault: vault Edit on an S3 vault;
+   * gateway scopes: admin.s3_gateway.manage_budgets. Costs are decimal strings (up to 8 fractional digits).
+   */
+  'pricing.budget.policy.upsert': {
+    payload: {
+      scope: 'global' | 'provider' | 'vault' | 'gateway_credential' | 'gateway_credential_vault'
+      provider_key?: string | null
+      vault_id?: number | null
+      gateway_credential_id?: number | null
+      mode?: 'off' | 'report' | 'warn' | 'enforce' | null
+      currency?: string | null
+      max_run_cost?: string | null
+      max_daily_cost?: string | null
+      max_monthly_cost?: string | null
+      require_verified_catalog?: boolean
+      allow_stale_catalog?: boolean
+      max_catalog_age_seconds?: number | null
+    }
+    response: { policy: WsModels['PriceBudgetPolicy'] }
+  }
+  /**
+   * Dry-run budget decision for the next sync of an S3 vault: plans the sync from the remote index (refused
+   * when it is missing or stale) and prices it. Needs view access to the vault's budgets.
+   */
+  'pricing.budget.preflight': {
+    payload: { vault_id: number; run_uuid?: string }
+    response: {
+      decision: WsModels['PriceBudgetDecision']
+      estimate: WsModels['PriceEstimateReport']
+      plan: {
+        upload: number
+        download: number
+        index_remote_only: number
+        delete_remote: number
+        delete_local: number
+      }
+    }
+  }
+  /**
+   * Policies, ledger, trends, open notifications and overrides for a vault, a credential, or (super admins)
+   * the whole system.
+   */
+  'pricing.budget.status': {
+    payload: {
+      vault_id?: number | null
+      gateway_credential_id?: number | null
+      limit?: number
+      include_inactive?: boolean
+    }
+    response: {
+      policies: WsModels['PriceBudgetPolicy'][]
+      ledger: WsModels['PriceBudgetLedgerEntry'][]
+      trends: WsModels['PriceBudgetTrendStats'][]
+      notifications: WsModels['PriceBudgetNotification'][]
+      overrides: WsModels['PriceBudgetOverride'][]
+    }
+  }
+  /**
+   * Acknowledge a cost alert. Non super admins must send the alert's vault_id and be able to view it. A bare
+   * `id` is refused: send notification_id.
+   */
+  'pricing.notifications.ack': {
+    payload: { notification_id: number; vault_id?: number | null }
+    response: { notification: WsModels['PriceBudgetNotification'] }
+  }
+  /**
+   * Cost alerts (operator notifications) the caller can see, newest first. summary always covers every OPEN
+   * alert in the same scope, whatever limit and include_acknowledged are.
+   */
+  'pricing.notifications.list': {
+    payload: { vault_id?: number | null; limit?: number; include_acknowledged?: boolean }
+    response: {
+      notifications: WsModels['PriceBudgetNotification'][]
+      summary: WsModels['PriceBudgetNotificationSummary']
+    }
   }
   /**
    * The vault's recovery cost panel: versioning surcharge (separate from current object storage), recovery
@@ -311,7 +3321,7 @@ export interface WsContract {
    */
   'recovery.costs': {
     payload: { vault_id: number }
-    response: { costs: object }
+    response: { costs: WsModels['RecoveryCostReport'] }
   }
   /**
    * One recovery point with its details; a snapshot lists its members (first page). A point the caller can't
@@ -319,7 +3329,7 @@ export interface WsContract {
    */
   'recovery.inspect': {
     payload: { recovery_id: string }
-    response: { detail: object }
+    response: { detail: WsModels['RecoveryPointDetail'] }
   }
   /**
    * Recovery points of a vault, or of one path (a file's history or the points under a directory): local
@@ -336,7 +3346,7 @@ export interface WsContract {
       include_provider?: boolean
       limit?: number
     }
-    response: { points: object[] }
+    response: { points: WsModels['RecoveryPoint'][] }
   }
   /**
    * Plan a restore (read-only): recovery_id, or vault_id + path + at for a point-in-time reconstruction
@@ -348,19 +3358,19 @@ export interface WsContract {
       recovery_id?: string
       vault_id?: number
       path?: string
-      at?: string | number
+      at?: string | number | null
       destination?: string
       prune?: boolean
       refresh_provider?: boolean
     }
-    response: { plan: object }
+    response: { plan: WsModels['RecoveryPlan'] }
   }
   /**
    * A stored restore plan (its state, items and token).
    */
   'recovery.plan.get': {
     payload: { plan_id: number }
-    response: { plan: object }
+    response: { plan: WsModels['RecoveryPlan'] }
   }
   /**
    * Delete a snapshot or a local version (filesystem Delete on its path). A refusal with data.code
@@ -377,7 +3387,7 @@ export interface WsContract {
    */
   'recovery.restore': {
     payload: { plan_id: number; token?: string; accept_unverified?: boolean }
-    response: { result: object }
+    response: { result: WsModels['RecoveryRestoreResult'] }
   }
   /**
    * Take a named local snapshot of a file or directory tree (vault mode local_snapshots). Needs Read + Copy
@@ -385,21 +3395,126 @@ export interface WsContract {
    */
   'recovery.snapshot.create': {
     payload: { vault_id: number; path: string; name?: string }
-    response: { detail: object }
+    response: { detail: WsModels['RecoveryPointDetail'] }
+  }
+  /**
+   * Create an admin role. Nobody grants an admin permission they do not hold.
+   */
+  'role.admin.add': {
+    payload: { name: string; description?: string; permissions?: { qualified: string; value: boolean }[] }
+    response: { role: WsModels['AdminRole'] }
+  }
+  /**
+   * Delete an admin role; the answer's role is the deleted role's id.
+   */
+  'role.admin.delete': {
+    payload: { id: number }
+    response: { role: number }
+  }
+  /**
+   * One admin role with its permissions.
+   */
+  'role.admin.get': {
+    payload: { id: number }
+    response: { role: WsModels['AdminRole'] }
+  }
+  /**
+   * One admin role by name.
+   */
+  'role.admin.get.byName': {
+    payload: { name: string }
+    response: { role: WsModels['AdminRole'] }
+  }
+  /**
+   * Patch an admin role (name, description; permissions as a complete snapshot). Core refuses edits to
+   * super_admin and to the caller's own role, and grants beyond the caller's own permissions.
+   */
+  'role.admin.update': {
+    payload: {
+      id: number
+      name?: string | null
+      description?: string | null
+      permissions?: { qualified: string; value: boolean }[]
+    }
+    response: { role: WsModels['AdminRole'] }
+  }
+  /**
+   * Create a vault role definition (assigning it is role.vault.assign).
+   */
+  'role.vault.add': {
+    payload: { name: string; description?: string; permissions?: { qualified: string; value: boolean }[] }
+    response: { role: WsModels['VaultRole'] }
   }
   /**
    * Assign a vault role to a user or group on a vault (one assignment per subject and vault).
    */
   'role.vault.assign': {
     payload: { vault_id: number; subject_type: 'user' | 'group'; subject_id: number; id: number }
-    response: { assignment: object }
+    response: { assignment: WsModels['VaultRole'] }
+  }
+  /**
+   * Delete a vault role definition.
+   */
+  'role.vault.delete': {
+    payload: { id: number }
+    response: { role_id: number }
   }
   /**
    * One vault role definition.
    */
   'role.vault.get': {
     payload: { id: number }
-    response: { role: object }
+    response: { role: WsModels['VaultRole'] }
+  }
+  /**
+   * One vault role definition by name.
+   */
+  'role.vault.get.byName': {
+    payload: { name: string }
+    response: { role: WsModels['VaultRole'] }
+  }
+  /**
+   * Add allow/deny overrides for a pattern on one assignment (same ops as `vh vault role override add`).
+   */
+  'role.vault.overrides.add': {
+    payload: {
+      vault_id: number
+      subject_type: 'user' | 'group'
+      subject_id: number
+      permissions?: { qualified: string; value: boolean }[]
+      pattern: string
+      enabled?: boolean
+    }
+    response: { overrides: WsModels['PermissionOverride'][] }
+  }
+  /**
+   * The path-scoped allow/deny overrides on one assignment (a subject's role on a vault).
+   */
+  'role.vault.overrides.list': {
+    payload: { vault_id: number; subject_type: 'user' | 'group'; subject_id: number }
+    response: { overrides: WsModels['PermissionOverride'][] }
+  }
+  /**
+   * Remove one override from an assignment.
+   */
+  'role.vault.overrides.remove': {
+    payload: { vault_id: number; subject_type: 'user' | 'group'; subject_id: number; override_id: number }
+    response: { removed: boolean }
+  }
+  /**
+   * Patch one override (effect, pattern, enabled; absent or null are unchanged).
+   */
+  'role.vault.overrides.update': {
+    payload: {
+      vault_id: number
+      subject_type: 'user' | 'group'
+      subject_id: number
+      override_id: number
+      effect?: 'allow' | 'deny' | null
+      pattern?: string | null
+      enabled?: boolean | null
+    }
+    response: { override: WsModels['PermissionOverride'] }
   }
   /**
    * Remove a subject's vault role assignment on a vault.
@@ -409,18 +3524,707 @@ export interface WsContract {
     response: { unassigned: boolean }
   }
   /**
+   * Patch a vault role definition (name, description; permissions as a complete snapshot).
+   */
+  'role.vault.update': {
+    payload: {
+      id: number
+      name?: string | null
+      description?: string | null
+      permissions?: { qualified: string; value: boolean }[]
+    }
+    response: { role: WsModels['VaultRole'] }
+  }
+  /**
+   * Every admin role the caller may view.
+   */
+  'roles.admin.list': {
+    payload: null
+    response: { roles: WsModels['AdminRole'][] }
+  }
+  /**
    * Every vault role definition.
    */
   'roles.vault.list': {
     payload: null
-    response: { roles: object[] }
+    response: { roles: WsModels['VaultRole'][] }
   }
   /**
    * The role assignments on one vault (id is the vault id).
    */
   'roles.vault.list.assigned': {
     payload: { id: number }
-    response: { assigned_roles: object[] }
+    response: { assigned_roles: WsModels['VaultRole'][] }
+  }
+  /**
+   * Bind a vault to a gateway bucket name (default: the vault's slug). Local vaults use mode local, S3/R2
+   * vaults remote_cache or remote_proxy.
+   */
+  's3.gateway.buckets.bind': {
+    payload: {
+      vault_id?: number
+      vault_name?: string
+      vault?: string
+      owner_id?: number | null
+      bucket_name?: string
+      mode?: 'local' | 'remote_cache' | 'remote_proxy'
+      api_exclusive?: boolean
+    }
+    response: { bound: boolean }
+  }
+  /**
+   * Create a local vault and bind it as a bucket (bucket name defaults to the vault's slug).
+   */
+  's3.gateway.buckets.createLocal': {
+    payload: {
+      bucket_name?: string
+      owner_id?: number | null
+      quota_bytes?: number
+      name?: string | null
+      description?: string | null
+    }
+    response: { bucket: WsModels['S3GatewayBucket'] }
+  }
+  /**
+   * Create an S3 vault (cache strategy) over an upstream bucket and bind it as an API-exclusive bucket. The
+   * key needs Consume; a refusal with data.code 'encryption_waiver' means the upstream bucket already holds
+   * data: resend with accept_encryption_waiver once the person accepts.
+   */
+  's3.gateway.buckets.createRemoteCache': {
+    payload: {
+      bucket_name?: string
+      owner_id?: number | null
+      api_key_id?: number | null
+      api_key?: string | null
+      upstream_bucket: string
+      encrypt_upstream?: boolean
+      name?: string | null
+      description?: string | null
+      accept_encryption_waiver?: boolean
+    }
+    response: { bucket: WsModels['S3GatewayBucket'] }
+  }
+  /**
+   * Bucket bindings the caller may manage.
+   */
+  's3.gateway.buckets.list': {
+    payload: null
+    response: { buckets: WsModels['S3GatewayBucket'][] }
+  }
+  /**
+   * Remove a bucket binding (the vault stays).
+   */
+  's3.gateway.buckets.unbind': {
+    payload: { bucket_name: string }
+    response: { unbound: boolean }
+  }
+  /**
+   * Gateway credential budget ledger entries (newest first).
+   */
+  's3.gateway.budget.ledger.list': {
+    payload: {
+      gateway_credential_id?: number | null
+      vault_id?: number | null
+      include_inactive?: boolean
+      limit?: number
+    }
+    response: { ledger: WsModels['PriceBudgetLedgerEntry'][] }
+  }
+  /**
+   * Disable a gateway credential (or credential + vault) budget policy.
+   */
+  's3.gateway.budget.policy.disable': {
+    payload: {
+      scope: 'gateway_credential' | 'gateway_credential_vault'
+      gateway_credential_id: number
+      vault_id?: number | null
+    }
+    response: { disabled: boolean }
+  }
+  /**
+   * Gateway credential budget policies the caller may see.
+   */
+  's3.gateway.budget.policy.list': {
+    payload: { gateway_credential_id?: number | null; vault_id?: number | null; include_inactive?: boolean }
+    response: { policies: WsModels['PriceBudgetPolicy'][] }
+  }
+  /**
+   * Create or replace a gateway credential (or credential + vault) budget policy. Limits are decimal strings.
+   */
+  's3.gateway.budget.policy.upsert': {
+    payload: {
+      scope: 'gateway_credential' | 'gateway_credential_vault'
+      gateway_credential_id: number
+      vault_id?: number | null
+      mode?: 'off' | 'report' | 'warn' | 'enforce' | null
+      currency?: string | null
+      max_run_cost?: string | null
+      max_daily_cost?: string | null
+      max_monthly_cost?: string | null
+      require_verified_catalog?: boolean
+      allow_stale_catalog?: boolean
+      max_catalog_age_seconds?: number | null
+    }
+    response: { policy: WsModels['PriceBudgetPolicy'] }
+  }
+  /**
+   * Gateway credential budget policies, recent ledger entries and spend trends.
+   */
+  's3.gateway.budget.status': {
+    payload: {
+      gateway_credential_id?: number | null
+      vault_id?: number | null
+      include_inactive?: boolean
+      limit?: number
+    }
+    response: {
+      policies: WsModels['PriceBudgetPolicy'][]
+      ledger: WsModels['PriceBudgetLedgerEntry'][]
+      trends: WsModels['PriceBudgetTrendStats'][]
+    }
+  }
+  /**
+   * Create a gateway credential for a principal (the caller unless principal_user_id / user_id names
+   * another). The secret is returned once. scope_mode defaults to vault_allowlist when vaults are given, else
+   * user_access; global needs an admin principal and a default vault role.
+   */
+  's3.gateway.credentials.create': {
+    payload: {
+      name: string
+      principal_user_id?: number | null
+      user_id?: number | null
+      scope_mode?: 'user_access' | 'global' | 'vault_allowlist'
+      scope?: 'user_access' | 'global' | 'vault_allowlist'
+      description?: string | null
+      expires_at?: number | null
+      default_vault_role_id?: number | null
+      default_role_id?: number | null
+      vault_role_id?: number
+      role_id?: number
+      vault_role_name?: string
+      role_name?: string
+      role?: string
+      selected_vault_ids?: (number | { vault_id: number } | { id: number })[]
+      vault_ids?: (number | { vault_id: number } | { id: number })[]
+      vault_scopes?: {
+        vault_id: number
+        can_list?: boolean
+        can_read?: boolean
+        can_write?: boolean
+        can_delete?: boolean
+        can_admin?: boolean
+      }[]
+      enforce_budget_for_local_requests?: boolean
+    }
+    response: { credential: WsModels['S3GatewayCredential']; secret_access_key: string }
+  }
+  /**
+   * Remove a credential's default vault role.
+   */
+  's3.gateway.credentials.defaultRole.clear': {
+    payload: {
+      credential_id?: number
+      access_key?: string
+      credential_access_key?: string
+      name?: string
+      credential_name?: string
+      credential?: string
+    }
+    response: { cleared: boolean; credential: WsModels['S3GatewayCredential'] }
+  }
+  /**
+   * A credential's default vault role, or null.
+   */
+  's3.gateway.credentials.defaultRole.get': {
+    payload: {
+      credential_id?: number
+      access_key?: string
+      credential_access_key?: string
+      name?: string
+      credential_name?: string
+      credential?: string
+    }
+    response: { credential: WsModels['S3GatewayCredential']; default_role: WsModels['S3GatewayDefaultRole'] | null }
+  }
+  /**
+   * Add a permission override to a credential's default vault role (needs a default role).
+   */
+  's3.gateway.credentials.defaultRole.overrides.add': {
+    payload: {
+      credential_id?: number
+      access_key?: string
+      credential_access_key?: string
+      name?: string
+      credential_name?: string
+      credential?: string
+      permission_id?: number
+      permission_qualified?: string
+      permission_name?: string
+      permission?: string
+      effect?: 'allow' | 'deny'
+      glob_path?: string
+      path?: string
+      enabled?: boolean
+    }
+    response: { override: WsModels['S3GatewayDefaultRoleOverride'] }
+  }
+  /**
+   * Permission overrides on a credential's default vault role.
+   */
+  's3.gateway.credentials.defaultRole.overrides.list': {
+    payload: {
+      credential_id?: number
+      access_key?: string
+      credential_access_key?: string
+      name?: string
+      credential_name?: string
+      credential?: string
+    }
+    response: {
+      credential: WsModels['S3GatewayCredential']
+      default_role: WsModels['S3GatewayDefaultRole'] | null
+      overrides: WsModels['S3GatewayDefaultRoleOverride'][]
+    }
+  }
+  /**
+   * Remove a permission override from a credential's default vault role.
+   */
+  's3.gateway.credentials.defaultRole.overrides.remove': {
+    payload: {
+      credential_id?: number
+      access_key?: string
+      credential_access_key?: string
+      name?: string
+      credential_name?: string
+      credential?: string
+      override_id?: number
+    }
+    response: { removed: boolean; credential: WsModels['S3GatewayCredential'] }
+  }
+  /**
+   * Set a credential's default vault role (refused for user-access credentials).
+   */
+  's3.gateway.credentials.defaultRole.set': {
+    payload: {
+      credential_id?: number
+      access_key?: string
+      credential_access_key?: string
+      name?: string
+      credential_name?: string
+      credential?: string
+      vault_role_id?: number
+      role_id?: number
+      vault_role_name?: string
+      role_name?: string
+      role?: string
+      enabled?: boolean
+    }
+    response: { credential: WsModels['S3GatewayCredential']; default_role: WsModels['S3GatewayDefaultRole'] }
+  }
+  /**
+   * Every credential the caller may see (their own, or all with admin.s3_gateway.manage_credentials).
+   */
+  's3.gateway.credentials.list': {
+    payload: { include_disabled?: boolean }
+    response: { credentials: WsModels['S3GatewayCredential'][] }
+  }
+  /**
+   * Revoke a credential by access key or name.
+   */
+  's3.gateway.credentials.revoke': {
+    payload: { access_key?: string; name?: string }
+    response: { revoked: boolean }
+  }
+  /**
+   * Assign a vault role to a credential on a vault (not for user-access credentials; the role may not exceed
+   * what the principal can do).
+   */
+  's3.gateway.credentials.roles.assign': {
+    payload: {
+      credential_id?: number
+      access_key?: string
+      credential_access_key?: string
+      name?: string
+      credential_name?: string
+      credential?: string
+      vault_id?: number
+      vault_name?: string
+      vault?: string
+      owner_id?: number | null
+      vault_role_id?: number
+      role_id?: number
+      vault_role_name?: string
+      role_name?: string
+      role?: string
+      enabled?: boolean
+    }
+    response: { assignment: WsModels['S3GatewayRoleAssignment']; role: WsModels['S3GatewayRoleAssignment'] }
+  }
+  /**
+   * A credential's per-vault role assignments the caller may see.
+   */
+  's3.gateway.credentials.roles.list': {
+    payload: {
+      credential_id?: number
+      access_key?: string
+      credential_access_key?: string
+      name?: string
+      credential_name?: string
+      credential?: string
+    }
+    response: {
+      credential: WsModels['S3GatewayCredential']
+      roles: WsModels['S3GatewayRoleAssignment'][]
+      assignments: WsModels['S3GatewayRoleAssignment'][]
+    }
+  }
+  /**
+   * Add a permission override to a credential's grant on a vault (the vault must be selected and a default
+   * role set).
+   */
+  's3.gateway.credentials.roles.overrides.add': {
+    payload: {
+      credential_id?: number
+      access_key?: string
+      credential_access_key?: string
+      name?: string
+      credential_name?: string
+      credential?: string
+      vault_id?: number
+      vault_name?: string
+      vault?: string
+      owner_id?: number | null
+      permission_id?: number
+      permission_qualified?: string
+      permission_name?: string
+      permission?: string
+      effect?: 'allow' | 'deny'
+      glob_path?: string
+      path?: string
+      enabled?: boolean
+    }
+    response: { override: WsModels['S3GatewayRoleOverride'] }
+  }
+  /**
+   * Permission overrides on a credential's grant on one vault.
+   */
+  's3.gateway.credentials.roles.overrides.list': {
+    payload: {
+      credential_id?: number
+      access_key?: string
+      credential_access_key?: string
+      name?: string
+      credential_name?: string
+      credential?: string
+      vault_id?: number
+      vault_name?: string
+      vault?: string
+      owner_id?: number | null
+    }
+    response: {
+      credential: WsModels['S3GatewayCredential']
+      vault: WsModels['S3GatewayVaultRef'] | null
+      overrides: WsModels['S3GatewayRoleOverride'][]
+    }
+  }
+  /**
+   * Remove a permission override from a credential's vault grant.
+   */
+  's3.gateway.credentials.roles.overrides.remove': {
+    payload: {
+      credential_id?: number
+      access_key?: string
+      credential_access_key?: string
+      name?: string
+      credential_name?: string
+      credential?: string
+      vault_id?: number
+      vault_name?: string
+      vault?: string
+      owner_id?: number | null
+      override_id?: number
+    }
+    response: {
+      removed: boolean
+      credential: WsModels['S3GatewayCredential']
+      vault: WsModels['S3GatewayVaultRef'] | null
+    }
+  }
+  /**
+   * Remove a credential's role on a vault.
+   */
+  's3.gateway.credentials.roles.revoke': {
+    payload: {
+      credential_id?: number
+      access_key?: string
+      credential_access_key?: string
+      name?: string
+      credential_name?: string
+      credential?: string
+      vault_id?: number
+      vault_name?: string
+      vault?: string
+      owner_id?: number | null
+    }
+    response: {
+      revoked: boolean
+      credential: WsModels['S3GatewayCredential']
+      vault: WsModels['S3GatewayVaultRef'] | null
+    }
+  }
+  /**
+   * Change a credential's scope and settings; absent members stay as they are. Nothing to change is
+   * 'invalid'.
+   */
+  's3.gateway.credentials.scope.update': {
+    payload: {
+      credential_id?: number
+      access_key?: string
+      credential_access_key?: string
+      name?: string
+      credential_name?: string
+      credential?: string
+      scope_mode?: 'user_access' | 'global' | 'vault_allowlist'
+      principal_user_id?: number | null
+      description?: string | null
+      expires_at?: number | null
+      enforce_budget_for_local_requests?: boolean
+      vault_scopes?: {
+        vault_id: number
+        can_list?: boolean
+        can_read?: boolean
+        can_write?: boolean
+        can_delete?: boolean
+        can_admin?: boolean
+      }[]
+      selected_vault_ids?: (number | { vault_id: number } | { id: number })[]
+      vault_ids?: (number | { vault_id: number } | { id: number })[]
+      default_vault_role_id?: number | null
+      default_role_id?: number | null
+      vault_role_id?: number
+      role_id?: number
+      vault_role_name?: string
+      role_name?: string
+      role?: string
+    }
+    response: { credential: WsModels['S3GatewayCredential'] }
+  }
+  /**
+   * Select one more vault for a vault-allowlist credential.
+   */
+  's3.gateway.credentials.selectedVaults.add': {
+    payload: {
+      credential_id?: number
+      access_key?: string
+      credential_access_key?: string
+      name?: string
+      credential_name?: string
+      credential?: string
+      vault_id?: number
+      vault_name?: string
+      vault?: string
+      owner_id?: number | null
+      enabled?: boolean
+    }
+    response: { credential: WsModels['S3GatewayCredential']; selected_vault: WsModels['S3GatewaySelectedVault'] }
+  }
+  /**
+   * The vaults selected for a credential.
+   */
+  's3.gateway.credentials.selectedVaults.list': {
+    payload: {
+      credential_id?: number
+      access_key?: string
+      credential_access_key?: string
+      name?: string
+      credential_name?: string
+      credential?: string
+    }
+    response: {
+      credential: WsModels['S3GatewayCredential']
+      selected_vaults: WsModels['S3GatewaySelectedVault'][]
+      vaults: WsModels['S3GatewaySelectedVault'][]
+    }
+  }
+  /**
+   * Drop a vault from a credential: its selection and any per-vault role.
+   */
+  's3.gateway.credentials.selectedVaults.remove': {
+    payload: {
+      credential_id?: number
+      access_key?: string
+      credential_access_key?: string
+      name?: string
+      credential_name?: string
+      credential?: string
+      vault_id?: number
+      vault_name?: string
+      vault?: string
+      owner_id?: number | null
+    }
+    response: {
+      removed: boolean
+      credential: WsModels['S3GatewayCredential']
+      vault: WsModels['S3GatewayVaultRef'] | null
+    }
+  }
+  /**
+   * Replace a vault-allowlist credential's selected vaults (an empty or absent list clears them).
+   */
+  's3.gateway.credentials.selectedVaults.replace': {
+    payload: {
+      credential_id?: number
+      access_key?: string
+      credential_access_key?: string
+      name?: string
+      credential_name?: string
+      credential?: string
+      selected_vault_ids?: (number | { vault_id: number } | { id: number })[]
+      vault_ids?: (number | { vault_id: number } | { id: number })[]
+    }
+    response: {
+      credential: WsModels['S3GatewayCredential']
+      selected_vaults: WsModels['S3GatewaySelectedVault'][]
+      vaults: WsModels['S3GatewaySelectedVault'][]
+    }
+  }
+  /**
+   * S3 gateway runtime status: running/configured/ready, the listen endpoint and request counters.
+   */
+  's3.gateway.status': {
+    payload: null
+    response: {
+      status: {
+        running: boolean
+        configured: boolean
+        ready: boolean
+        host: string
+        port: number
+        endpoint: string
+        active_sessions: number
+        total_requests: number
+        failed_requests: number
+      }
+    }
+  }
+  /**
+   * The daemon's whole settings document (config.yaml as JSON, without secrets). Super admins only.
+   */
+  'settings.get': {
+    payload: null
+    response: { settings: WsModels['Settings'] }
+  }
+  /**
+   * What any signed-in user may know of the server policy: the sharing switches and the vault defaults
+   * (vaults.s3.*).
+   */
+  'settings.policy.get': {
+    payload: null
+    response: { policy: { sharing: WsModels['SharingConfig']; vaults: WsModels['VaultsConfig'] } }
+  }
+  /**
+   * Change settings with a JSON merge patch (RFC 7386) onto the current document: send only the members that
+   * change; null removes an optional key. The merged document is validated as a whole and saved (a
+   * s3_gateway.enabled change restarts the gateway). Super admins only; preview.derive.helper_dir can't be
+   * changed here.
+   */
+  'settings.update': {
+    payload: {
+      websocket_server?: WsPartial<WsModels['WebsocketServerConfig']>
+      http_preview_server?: WsPartial<WsModels['HttpPreviewServerConfig']>
+      s3_gateway?: WsPartial<WsModels['S3GatewayConfig']>
+      device_server?: WsPartial<WsModels['DeviceServerConfig']>
+      caching?: WsPartial<WsModels['CachingConfig']>
+      preview?: WsPartial<WsModels['PreviewConfig']>
+      database?: WsPartial<WsModels['DatabaseConfig']>
+      auth?: WsPartial<WsModels['AuthConfig']>
+      sync?: WsPartial<WsModels['SyncConfig']>
+      pricing?: WsPartial<WsModels['PricingConfig']>
+      services?: WsPartial<WsModels['ServicesConfig']>
+      stats_snapshots?: WsPartial<WsModels['StatsSnapshotsConfig']>
+      sharing?: WsPartial<WsModels['SharingConfig']>
+      vaults?: WsPartial<WsModels['VaultsConfig']>
+      email?: WsPartial<WsModels['EmailConfig']>
+      operator_emails?: WsPartial<WsModels['OperatorEmailsConfig']>
+      auditing?: WsPartial<WsModels['AuditConfig']>
+      logging?: WsPartial<WsModels['LoggingConfig']>
+      dev?: WsPartial<WsModels['DevConfig']>
+    }
+    response: { settings: WsModels['Settings'] }
+  }
+  /**
+   * Share sessions: drop a download transfer.
+   */
+  'share.download.cancel': {
+    payload: { transfer_id: string }
+    response: { cancelled: boolean; transfer_id: string }
+  }
+  /**
+   * Share sessions: read the next chunk (base64). offset must be the previous next_offset; the target is
+   * re-authorized on every chunk and the transfer is dropped on any failure.
+   */
+  'share.download.chunk': {
+    payload: { transfer_id: string; offset: number; length?: number }
+    response: {
+      transfer_id: string
+      offset: number
+      bytes: number
+      data_base64: string
+      next_offset: number
+      complete: boolean
+    }
+  }
+  /**
+   * Share sessions: start a chunked download of a file inside the share (Download). At most 4 transfers per
+   * socket and 64 MiB per file.
+   */
+  'share.download.start': {
+    payload: { path?: string | null; vault_id?: number | null }
+    response: {
+      transfer_id: string
+      filename: string
+      path: string
+      size_bytes: number
+      mime_type: string | null
+      chunk_size: number
+    }
+  }
+  /**
+   * Confirm an email code. When verified the socket switches to share mode (status ready); session_id and
+   * session_token default to the socket's pending session.
+   */
+  'share.email.challenge.confirm': {
+    payload: { challenge_id: string; code: string; session_id?: string | null; session_token?: string | null }
+    response: { status: 'ready' | 'email_required'; verified: boolean; session_id: string }
+  }
+  /**
+   * Email-validated links: send a one-time code to a recipient email. Identifies the link by public_token
+   * (opens a pending session) or by session_token (the socket's pending session when neither is given).
+   * Refused once the session is verified.
+   */
+  'share.email.challenge.start': {
+    payload: { email: string; public_token?: string | null; session_token?: string | null }
+    response: {
+      status: 'challenge_created'
+      share: WsModels['SharePublicLink']
+      challenge_id: string
+      session_id: string
+      session_token?: string
+    }
+  }
+  /**
+   * Share sessions: list a directory inside the share (List); entries in the share view.
+   */
+  'share.fs.list': {
+    payload: { path?: string | null; vault_id?: number | null }
+    response: { path: string; entries: WsModels['ShareEntry'][] }
+  }
+  /**
+   * Share sessions: one entry inside the share, reduced to the share view (Metadata).
+   */
+  'share.fs.metadata': {
+    payload: { path?: string | null; vault_id?: number | null }
+    response: { entry: WsModels['ShareEntry'] }
   }
   /**
    * Create a share link on a file or directory. The public token is returned once.
@@ -442,19 +4246,79 @@ export interface WsContract {
       max_upload_files?: number | null
       max_upload_size_bytes?: number | null
       max_upload_total_bytes?: number | null
-      duplicate_policy?: 'reject' | 'rename' | 'overwrite'
-      allowed_mime_types?: string[]
-      blocked_mime_types?: string[]
-      allowed_extensions?: string[]
-      blocked_extensions?: string[]
-      metadata?: object
-      public_role_assignment?: { vault_role_id?: number; vault_role_name?: string; permission_overrides?: object[] } | null
+      duplicate_policy?: 'reject' | 'rename' | 'overwrite' | null
+      allowed_mime_types?: string[] | null
+      blocked_mime_types?: string[] | null
+      allowed_extensions?: string[] | null
+      blocked_extensions?: string[] | null
+      metadata?: object | string
+      public_role_assignment?: {
+        vault_role_id?: number | null
+        vault_role_name?: string | null
+        permission_overrides?: {
+          permission_id?: number | null
+          permission_qualified?: string | null
+          qualified?: string | null
+          effect?: 'allow' | 'deny'
+          glob_path?: string
+          pattern?: string
+          enabled?: boolean | null
+        }[] | null
+      } | null
       recipient_role_assignments?: {
         email: string
-        role_assignment: { vault_role_id?: number; vault_role_name?: string; permission_overrides?: object[] }
-      }[]
+        role_assignment?: {
+          vault_role_id?: number | null
+          vault_role_name?: string | null
+          permission_overrides?: {
+            permission_id?: number | null
+            permission_qualified?: string | null
+            qualified?: string | null
+            effect?: 'allow' | 'deny'
+            glob_path?: string
+            pattern?: string
+            enabled?: boolean | null
+          }[] | null
+        }
+        role?: {
+          vault_role_id?: number | null
+          vault_role_name?: string | null
+          permission_overrides?: {
+            permission_id?: number | null
+            permission_qualified?: string | null
+            qualified?: string | null
+            effect?: 'allow' | 'deny'
+            glob_path?: string
+            pattern?: string
+            enabled?: boolean | null
+          }[] | null
+        }
+      }[] | null
     }
-    response: { share: object; public_token: string; public_url_path: string }
+    response: { share: WsModels['ShareLink']; public_token: string; public_url_path: string }
+  }
+  /**
+   * One share link the caller may manage (no token material).
+   */
+  'share.link.get': {
+    payload: { id: string }
+    response: { share: WsModels['ShareLink'] }
+  }
+  /**
+   * Share links: of one vault (vault_id, needs the vault's share-management permission) or created by the
+   * caller. offset is turned into a page when limit is given.
+   */
+  'share.link.list': {
+    payload: {
+      vault_id?: number | null
+      sort?: string | null
+      filter?: string | null
+      limit?: number | null
+      page?: number | null
+      offset?: number | null
+      direction?: 'asc' | 'desc' | null
+    }
+    response: { shares: WsModels['ShareLink'][] }
   }
   /**
    * Revoke a share link; its sessions end on their next request.
@@ -462,6 +4326,403 @@ export interface WsContract {
   'share.link.revoke': {
     payload: { id: string }
     response: { revoked: boolean }
+  }
+  /**
+   * Issue a new public token (returned once); the old URL and every session of the link stop working.
+   */
+  'share.link.rotate_token': {
+    payload: { id: string }
+    response: { share: WsModels['ShareLink']; public_token: string; public_url_path: string }
+  }
+  /**
+   * Patch a share link: absent members are left alone, null clears an optional one.
+   * recipient_role_assignments (when present) replaces the recipients. vault_id, root_entry_id, root_path,
+   * target_type, counters and timestamps are immutable (refused).
+   */
+  'share.link.update': {
+    payload: {
+      id: string
+      link_type?: 'download' | 'upload' | 'access' | null
+      access_mode?: 'public' | 'email_validated' | null
+      allowed_ops?: number | ('metadata' | 'list' | 'preview' | 'download' | 'upload' | 'mkdir' | 'overwrite')[] | null
+      name?: string | null
+      public_label?: string | null
+      description?: string | null
+      expires_at?: string | number | null
+      max_downloads?: number | null
+      max_upload_files?: number | null
+      max_upload_size_bytes?: number | null
+      max_upload_total_bytes?: number | null
+      duplicate_policy?: 'reject' | 'rename' | 'overwrite' | null
+      allowed_mime_types?: string[] | null
+      blocked_mime_types?: string[] | null
+      allowed_extensions?: string[] | null
+      blocked_extensions?: string[] | null
+      metadata?: object | string
+      public_role_assignment?: {
+        vault_role_id?: number | null
+        vault_role_name?: string | null
+        permission_overrides?: {
+          permission_id?: number | null
+          permission_qualified?: string | null
+          qualified?: string | null
+          effect?: 'allow' | 'deny'
+          glob_path?: string
+          pattern?: string
+          enabled?: boolean | null
+        }[] | null
+      } | null
+      recipient_role_assignments?: {
+        email: string
+        role_assignment?: {
+          vault_role_id?: number | null
+          vault_role_name?: string | null
+          permission_overrides?: {
+            permission_id?: number | null
+            permission_qualified?: string | null
+            qualified?: string | null
+            effect?: 'allow' | 'deny'
+            glob_path?: string
+            pattern?: string
+            enabled?: boolean | null
+          }[] | null
+        }
+        role?: {
+          vault_role_id?: number | null
+          vault_role_name?: string | null
+          permission_overrides?: {
+            permission_id?: number | null
+            permission_qualified?: string | null
+            qualified?: string | null
+            effect?: 'allow' | 'deny'
+            glob_path?: string
+            pattern?: string
+            enabled?: boolean | null
+          }[] | null
+        }
+      }[] | null
+    }
+    response: { share: WsModels['ShareLink'] }
+  }
+  /**
+   * Share sessions: a JPEG preview of an image or PDF inside the share (Preview), base64. Sources over 16 MiB
+   * and remote-only bytes are refused; the console uses GET /preview?share=1.
+   */
+  'share.preview.get': {
+    payload: { path?: string | null; size?: number }
+    response: {
+      path: string
+      filename: string
+      source_mime_type: string
+      mime_type: 'image/jpeg'
+      size_bytes: number
+      data_base64: string
+    }
+  }
+  /**
+   * Open a share session from a public link token. A public link is ready at once (the socket switches to
+   * share mode); an email-validated link answers email_required with a pending session to verify through
+   * share.email.challenge.*. Reopening the socket's own ready share returns its session.
+   */
+  'share.session.open': {
+    payload: { public_token: string }
+    response: {
+      status: 'ready' | 'email_required'
+      share: WsModels['SharePublicLink']
+      session_id: string
+      session_token: string
+    }
+  }
+  /**
+   * Share sessions: abort an upload.
+   */
+  'share.upload.cancel': {
+    payload: { upload_id?: string; transfer_id?: string }
+    response: { cancelled: boolean; upload_id: string }
+  }
+  /**
+   * Share sessions: finish an upload after its last binary frame; the target is re-authorized and the file
+   * created.
+   */
+  'share.upload.finish': {
+    payload: { upload_id?: string; transfer_id?: string }
+    response: { upload_id: string; complete: boolean; entry: WsModels['ShareUploadedFile'] }
+  }
+  /**
+   * Share sessions: start an upload of a new file into a directory of the share (Upload). The bytes follow as
+   * binary frames; an existing target is refused (duplicate policy reject).
+   */
+  'share.upload.start': {
+    payload: {
+      path?: string | null
+      filename: string
+      size_bytes?: number
+      size?: number
+      mime_type?: string | null
+      duplicate_policy?: 'reject' | null
+      vault_id?: number | null
+    }
+    response: {
+      upload_id: string
+      transfer_id: string
+      path: string
+      filename: string
+      size_bytes: number
+      chunk_size: number
+      duplicate_policy: 'reject'
+    }
+  }
+  /**
+   * The health dashboard: overall status, attention items, sections and the requested cards (all default
+   * cards when cards is empty). Needs admin.stats.view.
+   */
+  'stats.dashboard.overview': {
+    payload: { scope?: string; mode?: string; cards?: { id: string; variant?: string; size?: string }[] }
+    response: { stats: WsModels['DashboardOverview'] }
+  }
+  /**
+   * The overall severity of the default overview cards without cards, sections or series (the console's
+   * health dot). Needs admin.stats.view.
+   */
+  'stats.dashboard.severity': {
+    payload: null
+    response: { stats: WsModels['DashboardSeverity'] }
+  }
+  /**
+   * Filesystem metadata cache counters. Fails (no data.code) when the cache has no stats. Needs
+   * admin.stats.view.
+   */
+  'stats.fs.cache': {
+    payload: null
+    response: { stats: WsModels['CacheStatsSnapshot'] }
+  }
+  /**
+   * HTTP preview cache counters. Needs admin.stats.view.
+   */
+  'stats.http.cache': {
+    payload: null
+    response: { stats: WsModels['CacheStatsSnapshot'] }
+  }
+  /**
+   * S3 price budget dashboard figures: system-wide without vault_id (needs admin.stats.view), one vault's
+   * with it (vault ownership or admin vault View/ViewStats). A non-object payload means system-wide.
+   */
+  'stats.pricing.budget': {
+    payload: { vault_id?: number | null }
+    response: { stats: WsModels['PriceBudgetDashboardStats'] }
+  }
+  /**
+   * Live websocket and share connections. Needs admin.stats.view.
+   */
+  'stats.system.connections': {
+    payload: null
+    response: { stats: WsModels['ConnectionStats'] }
+  }
+  /**
+   * Database size, connections and largest tables. Needs admin.stats.view.
+   */
+  'stats.system.db': {
+    payload: null
+    response: { stats: WsModels['DbStats'] | null }
+  }
+  /**
+   * FUSE operation counters, latencies and errno totals. Fails (no data.code) when the daemon has no FUSE
+   * stats. Needs admin.stats.view.
+   */
+  'stats.system.fuse': {
+    payload: null
+    response: { stats: WsModels['FuseStatsSnapshot'] }
+  }
+  /**
+   * Runtime services, protocols, dependencies and a live bounded database probe. Needs admin.stats.view.
+   */
+  'stats.system.health': {
+    payload: null
+    response: { stats: WsModels['SystemHealth'] }
+  }
+  /**
+   * Filesystem operation queue and recent errors, all vaults. Needs admin.stats.view.
+   */
+  'stats.system.operations': {
+    payload: null
+    response: { stats: WsModels['OperationStats'] | null }
+  }
+  /**
+   * System-wide S3 price budget dashboard figures. Needs admin.stats.view.
+   */
+  'stats.system.pricing': {
+    payload: null
+    response: { stats: WsModels['PriceBudgetDashboardStats'] }
+  }
+  /**
+   * Retention figures for every vault. Needs admin.stats.view.
+   */
+  'stats.system.retention': {
+    payload: null
+    response: { stats: WsModels['RetentionStats'] | null }
+  }
+  /**
+   * Storage backend figures for every vault. Needs admin.stats.view.
+   */
+  'stats.system.storage': {
+    payload: null
+    response: { stats: WsModels['StorageBackendStats'] }
+  }
+  /**
+   * Thread pool queue depth and worker pressure. Needs admin.stats.view.
+   */
+  'stats.system.threadpools': {
+    payload: null
+    response: { stats: WsModels['ThreadPoolManagerSnapshot'] }
+  }
+  /**
+   * System metric trend series from the stats rollups. Needs admin.stats.view.
+   */
+  'stats.system.trends': {
+    payload: { window_hours?: number }
+    response: { stats: WsModels['StatsTrends'] | null }
+  }
+  /**
+   * A vault's capacity and usage figures (computed on the stats thread pool). Needs vault ownership or the
+   * admin vault View/ViewStats permission on the vault.
+   */
+  'stats.vault': {
+    payload: { vault_id: number }
+    response: { stats: WsModels['VaultStat'] }
+  }
+  /**
+   * A vault's recent activity: counts, top users and paths, recent events. Needs vault ownership or the admin
+   * vault View/ViewStats permission on the vault.
+   */
+  'stats.vault.activity': {
+    payload: { vault_id: number }
+    response: { stats: WsModels['VaultActivity'] | null }
+  }
+  /**
+   * A vault's filesystem operation queue and recent errors. Needs vault ownership or the admin vault
+   * View/ViewStats permission on the vault.
+   */
+  'stats.vault.operations': {
+    payload: { vault_id: number }
+    response: { stats: WsModels['OperationStats'] | null }
+  }
+  /**
+   * A vault's S3 price budget dashboard figures. Needs vault ownership or the admin vault View/ViewStats
+   * permission on the vault.
+   */
+  'stats.vault.pricing': {
+    payload: { vault_id: number }
+    response: { stats: WsModels['PriceBudgetDashboardStats'] }
+  }
+  /**
+   * A vault's recovery posture (keys, versions, trash). Needs vault ownership or the admin vault
+   * View/ViewStats permission on the vault.
+   */
+  'stats.vault.recovery': {
+    payload: { vault_id: number }
+    response: { stats: WsModels['VaultRecoveryStats'] | null }
+  }
+  /**
+   * A vault's retention (trash, versions, cleanup) figures. Needs vault ownership or the admin vault
+   * View/ViewStats permission on the vault.
+   */
+  'stats.vault.retention': {
+    payload: { vault_id: number }
+    response: { stats: WsModels['RetentionStats'] | null }
+  }
+  /**
+   * A vault's security posture. Needs vault ownership or the admin vault View/ViewStats permission on the
+   * vault.
+   */
+  'stats.vault.security': {
+    payload: { vault_id: number }
+    response: { stats: WsModels['VaultSecurity'] | null }
+  }
+  /**
+   * A vault's share-link statistics. Needs vault ownership or the admin vault View/ViewStats permission on
+   * the vault.
+   */
+  'stats.vault.shares': {
+    payload: { vault_id: number }
+    response: { stats: WsModels['VaultShareStats'] | null }
+  }
+  /**
+   * A vault's storage backend figures. Needs vault ownership or the admin vault View/ViewStats permission on
+   * the vault.
+   */
+  'stats.vault.storage': {
+    payload: { vault_id: number }
+    response: { stats: WsModels['StorageBackendStats'] }
+  }
+  /**
+   * A vault's sync health. Needs vault ownership or the admin vault View/ViewStats permission on the vault.
+   */
+  'stats.vault.sync': {
+    payload: { vault_id: number }
+    response: { stats: WsModels['VaultSyncHealth'] | null }
+  }
+  /**
+   * A vault's metric trend series from the stats rollups. Needs vault ownership or the admin vault
+   * View/ViewStats permission on the vault.
+   */
+  'stats.vault.trends': {
+    payload: { vault_id: number; window_hours?: number }
+    response: { stats: WsModels['StatsTrends'] | null }
+  }
+  /**
+   * Store an upstream S3 API key after checking the credentials against the provider (skipped in test mode).
+   * owner_id defaults to the caller; creating one for someone else needs the users/admins keys permission.
+   */
+  'storage.apiKey.add': {
+    payload: {
+      name: string
+      provider: 'AWS' | 'Cloudflare R2' | 'Wasabi' | 'Backblaze B2' | 'DigitalOcean' | 'MinIO' | 'Ceph' | 'Storj' | 'Other'
+      access_key: string
+      secret_access_key: string
+      endpoint: string
+      region?: string
+      owner_id?: number | null
+    }
+    response: { api_key: WsModels['APIKey'] }
+  }
+  /**
+   * One API key's metadata.
+   */
+  'storage.apiKey.get': {
+    payload: { id: number }
+    response: { api_key: WsModels['APIKey'] }
+  }
+  /**
+   * The API keys the caller may view (metadata only).
+   */
+  'storage.apiKey.list': {
+    payload: null
+    response: { keys: WsModels['APIKey'][] }
+  }
+  /**
+   * Delete a key. Refused (invalid, naming the vaults) while a vault uses it, and (conflict) while it
+   * operates an event subscription. The answer carries no data.
+   */
+  'storage.apiKey.remove': {
+    payload: { id: number }
+    response: Record<string, never>
+  }
+  /**
+   * Edit a key in place (same id, so bound vaults keep their binding; their engines are rebuilt). Absent or
+   * null members keep their value; an empty secret_access_key keeps the sealed secret. The resulting
+   * credentials are re-checked like add.
+   */
+  'storage.apiKey.update': {
+    payload: {
+      id: number
+      name?: string | null
+      provider?: 'AWS' | 'Cloudflare R2' | 'Wasabi' | 'Backblaze B2' | 'DigitalOcean' | 'MinIO' | 'Ceph' | 'Storj' | 'Other' | null
+      access_key?: string | null
+      secret_access_key?: string | null
+      endpoint?: string | null
+      region?: string | null
+    }
+    response: { api_key: WsModels['APIKey'] }
   }
   /**
    * Create a vault. owner_id, description and quota (bytes, 0 = unlimited) are optional; the daemon picks the
@@ -483,25 +4744,62 @@ export interface WsContract {
       bucket?: string
       storage_tier_id?: string | null
       encrypt_upstream?: boolean
-      sync?: object
+      sync?: {
+        interval?: number | string
+        enabled?: boolean
+        strategy?: 'cache' | 'sync' | 'mirror'
+        conflict_policy?: 'overwrite' | 'keep_both' | 'ask' | 'keep_local' | 'keep_remote' | 'keep_newest'
+        max_remote_index_age_seconds?: number | null
+        s3_request_budget?: {
+          list_requests?: number | null
+          head_requests?: number | null
+          get_requests?: number | null
+          put_requests?: number | null
+          copy_requests?: number | null
+          delete_requests?: number | null
+          downloaded_bytes?: number | null
+        }
+      }
       accept_encryption_waiver?: boolean
-      provision?: object
+      provision?: {
+        mode?: 'existing' | 'create' | 'adopt' | null
+        region?: string | null
+        generate_name?: boolean | null
+        lifecycle?: {
+          abort_incomplete_multipart_days?: number | null
+          expire_current_days?: number | null
+          expire_noncurrent_days?: number | null
+          prefix?: string | null
+          clear?: boolean | null
+          accept_destructive?: boolean | null
+        } | null
+        events?: boolean | null
+        events_prefix?: string | null
+        accept_adoption?: boolean | null
+      } | null
     }
-    response: { vault: object }
+    response: { vault: WsModels['Vault'] }
+  }
+  /**
+   * Deletions the caller could have made: pending, purging and purged tombstones, newest first.
+   */
+  'storage.vault.deleted.list': {
+    payload: null
+    response: { deleted: WsModels['VaultDeletion'][] }
   }
   /**
    * One vault with its owner's name (and sync policy for S3 vaults).
    */
   'storage.vault.get': {
     payload: { id: number }
-    response: { vault: object }
+    response: { vault: WsModels['Vault'] }
   }
   /**
    * Vaults visible to the caller; each row carries the owner's name.
    */
   'storage.vault.list': {
     payload: null
-    response: { vaults: object[] }
+    response: { vaults: WsModels['Vault'][] }
   }
   /**
    * Delete a vault: restorable until the retention window ends, or purged on the next pass with `now`.
@@ -516,14 +4814,112 @@ export interface WsContract {
       confirm_now?: boolean
       accept_key_loss?: boolean
     }
-    response: { deletion: object | null }
+    response: { deletion: WsModels['VaultDeletion'] | null }
+  }
+  /**
+   * What deleting the vault would do (provider, bucket, key export state, the restore and key retention
+   * windows, the key export command). Changes nothing; needs vault Remove.
+   */
+  'storage.vault.remove.plan': {
+    payload: { id: number }
+    response: { plan: WsModels['VaultRemovalPlan'] }
+  }
+  /**
+   * Restore a vault whose deletion is still pending (conflict once its purge has started).
+   */
+  'storage.vault.restore': {
+    payload: { id: number }
+    response: { vault: WsModels['Vault'] }
+  }
+  /**
+   * Run the vault's sync now, or queue a rerun when one is already running.
+   */
+  'storage.vault.sync': {
+    payload: { id: number }
+    response: { status: 'started' | 'rerun_queued' }
+  }
+  /**
+   * Patch a vault (absent or null members are unchanged; a vault's type never changes). Owner reassignment
+   * also needs Create for the new owner, a key change needs Consume on the key, sync settings need vault
+   * sync.config.edit. A refusal with data.code 'encryption_waiver' means the bucket already holds data:
+   * resend with accept_encryption_waiver once the person accepts.
+   */
+  'storage.vault.update': {
+    payload: {
+      id: number
+      type?: 'local' | 's3'
+      name?: string | null
+      description?: string | null
+      quota?: number | null
+      owner_id?: number | null
+      slug?: string | null
+      fuse_name?: string | null
+      is_active?: boolean | null
+      api_key_id?: number | null
+      bucket?: string | null
+      storage_tier_id?: string | null
+      encrypt_upstream?: boolean | null
+      sync?: {
+        interval?: number | string
+        enabled?: boolean
+        strategy?: 'cache' | 'sync' | 'mirror'
+        conflict_policy?: 'overwrite' | 'keep_both' | 'ask' | 'keep_local' | 'keep_remote' | 'keep_newest'
+        max_remote_index_age_seconds?: number | null
+        s3_request_budget?: {
+          list_requests?: number | null
+          head_requests?: number | null
+          get_requests?: number | null
+          put_requests?: number | null
+          copy_requests?: number | null
+          delete_requests?: number | null
+          downloaded_bytes?: number | null
+        }
+      }
+      accept_encryption_waiver?: boolean
+    }
+    response: { vault: WsModels['Vault'] }
+  }
+  /**
+   * Open sync conflicts, newest first, in every vault where the caller may resolve them, or in one vault
+   * (vault_id: denied when the caller may not, not_found when it doesn't exist).
+   */
+  'sync.conflicts.list': {
+    payload: { vault_id?: number | null }
+    response: { conflicts: WsModels['SyncConflict'][] }
+  }
+  /**
+   * Resolve conflicts by keeping the local or the bucket copy (also accepted: local, remote, keep-local,
+   * keep-remote). Per item: each id gets its own status and one failure never stops the rest. 1 to 500 ids
+   * per call.
+   */
+  'sync.conflicts.resolve': {
+    payload: { resolution: 'keep_local' | 'keep_remote'; conflict_ids: number[] }
+    response: {
+      resolution: 'keep_local' | 'keep_remote'
+      resolved: number
+      failed: number
+      results: {
+        conflict_id: number
+        ok: boolean
+        status: 'resolved' | 'denied' | 'not_found' | 'conflict' | 'invalid' | 'unavailable' | 'error'
+        message: string | null
+      }[]
+    }
+  }
+  /**
+   * Open sync conflicts the caller can resolve: the total and a count per vault (vaults without conflicts are
+   * left out), sorted by vault name.
+   */
+  'sync.conflicts.summary': {
+    payload: null
+    response: { total: number; vaults: { vault_id: number; vault_name: string; count: number }[] }
   }
   /**
    * Turn provider administration off. Refused while an event subscription runs through the key.
    */
   'upstream.admin.disable': {
     payload: { api_key_id: number }
-    response: { admin: object }
+    response: { admin: WsModels['UpstreamAdminStatus'] }
   }
   /**
    * Turn on provider administration (AWS S3, Cloudflare R2) for an upstream API key after probing it, or
@@ -531,30 +4927,30 @@ export interface WsContract {
    * edit.
    */
   'upstream.admin.enable': {
-    payload: { api_key_id: number; provider_token?: string; clear_provider_token?: boolean }
-    response: { admin: object }
+    payload: { api_key_id: number; provider_token?: string | null; clear_provider_token?: boolean | null }
+    response: { admin: WsModels['UpstreamAdminStatus'] }
   }
   /**
    * Administration status and the last capability probe; probe=true re-checks the credential (configure).
    */
   'upstream.admin.status': {
-    payload: { api_key_id: number; probe?: boolean }
-    response: { admin: object }
+    payload: { api_key_id: number; probe?: boolean | null }
+    response: { admin: WsModels['UpstreamAdminStatus'] }
   }
   /**
    * Upstream control-plane audit log (newest first): locks, creations, adoptions, lifecycle, events, cleanup.
    */
   'upstream.audit.list': {
-    payload: { bucket?: string; limit?: number }
-    response: { entries: object[] }
+    payload: { bucket?: string | null; limit?: number | null }
+    response: { entries: WsModels['UpstreamAuditEntry'][] }
   }
   /**
    * Read-only admission check of an existing bucket before adoption: object counts, encryption of a sample,
    * versioning, object lock, Vaulthalla manifest, blockers.
    */
   'upstream.bucket.adopt.preflight': {
-    payload: { api_key_id: number; bucket: string; max_objects?: number; sample_heads?: number }
-    response: { report: object }
+    payload: { api_key_id: number; bucket: string; max_objects?: number | null; sample_heads?: number | null }
+    response: { report: WsModels['UpstreamAdmissionReport'] }
   }
   /**
    * Delete every object version of a bucket Vaulthalla created and (delete_bucket, default) the bucket. Every
@@ -562,8 +4958,8 @@ export interface WsContract {
    * or no longer matches the bucket: run the preflight again.
    */
   'upstream.bucket.cleanup': {
-    payload: { api_key_id: number; bucket: string; confirm_token: string; delete_bucket?: boolean }
-    response: { result: object }
+    payload: { api_key_id: number; bucket: string; confirm_token: string; delete_bucket?: boolean | null }
+    response: { result: WsModels['UpstreamCleanupResult'] }
   }
   /**
    * What cleanup would delete (objects, versions, delete markers, bytes) and anything that blocks it, with a
@@ -571,14 +4967,14 @@ export interface WsContract {
    */
   'upstream.bucket.cleanup.preflight': {
     payload: { api_key_id: number; bucket: string }
-    response: { plan: object }
+    response: { plan: WsModels['UpstreamCleanupPlan'] }
   }
   /**
    * Give a managed or adopted bucket that no vault uses back: Vaulthalla removes its own rules; data stays.
    */
   'upstream.bucket.detach': {
     payload: { api_key_id: number; bucket: string }
-    response: { bucket: object }
+    response: { bucket: WsModels['UpstreamBucketRow'] }
   }
   /**
    * Bucket configuration: region, versioning, object lock, lifecycle and notification rules (ours vs
@@ -586,7 +4982,7 @@ export interface WsContract {
    */
   'upstream.bucket.inspect': {
     payload: { api_key_id: number; bucket: string }
-    response: { inspection: object }
+    response: { inspection: WsModels['UpstreamInspection'] }
   }
   /**
    * Set or clear Vaulthalla's lifecycle rule on a managed or adopted bucket; foreign rules are preserved.
@@ -597,14 +4993,14 @@ export interface WsContract {
     payload: {
       api_key_id: number
       bucket: string
-      abort_incomplete_multipart_days?: number
-      expire_current_days?: number
-      expire_noncurrent_days?: number
-      prefix?: string
-      clear?: boolean
-      accept_destructive?: boolean
+      abort_incomplete_multipart_days?: number | null
+      expire_current_days?: number | null
+      expire_noncurrent_days?: number | null
+      prefix?: string | null
+      clear?: boolean | null
+      accept_destructive?: boolean | null
     }
-    response: { inspection: object }
+    response: { inspection: WsModels['UpstreamInspection'] }
   }
   /**
    * One page of the account's buckets (ListBuckets) merged with what Vaulthalla knows: managed, adopted,
@@ -613,64 +5009,158 @@ export interface WsContract {
   'upstream.bucket.list': {
     payload: {
       api_key_id: number
-      token?: string
-      max?: number
-      state?: 'managed' | 'adopted' | 'unmanaged' | 'protected'
-      filter?: string
+      token?: string | null
+      max?: number | null
+      state?: 'managed' | 'adopted' | 'unmanaged' | 'protected' | null
+      filter?: string | null
     }
-    response: { inventory: object }
+    response: { inventory: WsModels['UpstreamInventory'] }
   }
   /**
    * Lock a bucket: Vaulthalla will not probe, adopt, bind, configure, sync, empty or delete it. Audited.
    */
   'upstream.bucket.protect': {
     payload: { api_key_id: number; bucket: string; reason: string }
-    response: { bucket: object }
+    response: { bucket: WsModels['UpstreamBucketRow'] }
   }
   /**
    * Remove a bucket lock (admin.upstream.unprotect). A refusal with data.code 'upstream_unprotect' asks for
    * confirmation: resend with confirm.
    */
   'upstream.bucket.unprotect': {
-    payload: { api_key_id: number; bucket: string; confirm?: boolean }
-    response: { bucket: object }
+    payload: { api_key_id: number; bucket: string; confirm?: boolean | null }
+    response: { bucket: WsModels['UpstreamBucketRow'] }
   }
   /**
    * Remove the vault's event rule (and the queue when nothing else uses it and Vaulthalla created it).
    */
   'upstream.events.disable': {
     payload: { vault_id: number }
-    response: { events: object }
+    response: { events: WsModels['UpstreamEventStatus'] }
   }
   /**
    * Subscribe an S3 vault's bucket for event-driven sync (AWS S3 → SQS, Cloudflare R2 → Queues).
    */
   'upstream.events.enable': {
-    payload: { vault_id: number; prefix?: string; foreign_objects?: 'import' | 'ignore' }
-    response: { events: object }
+    payload: { vault_id: number; prefix?: string | null; foreign_objects?: 'import' | 'ignore' | null }
+    response: { events: WsModels['UpstreamEventStatus'] }
   }
   /**
    * Re-create whatever is missing for the vault's subscription and re-arm it. Safe to repeat.
    */
   'upstream.events.repair': {
     payload: { vault_id: number }
-    response: { events: object }
+    response: { events: WsModels['UpstreamEventStatus'] }
   }
   /**
    * Event subscription, queue health and inbox counts for one vault (vault_id) or every S3 vault the caller
    * may view. A vault without a subscription reports state 'none'.
    */
   'upstream.events.status': {
-    payload: { vault_id?: number }
-    response: { events: object[] }
+    payload: { vault_id?: number | null }
+    response: { events: WsModels['UpstreamEventStatus'][] }
+  }
+  /**
+   * The vault's keys in `vh vault keys export`'s JSON shape plus every needed version with its key_check.
+   * Paired devices only: any other session is refused with export_requires_device (D4). Needs the
+   * encryption-key Export permission. Not recorded as exported: confirm with vault.keys.export.confirm once
+   * the key is stored.
+   */
+  'vault.keys.export': {
+    payload: { vault_id: number }
+    response: {
+      vault_id: number
+      vault_name: string
+      key: string
+      key_check: string
+      key_info: {
+        type: string
+        key_size: number
+        key_version: number
+        iv_size: number
+        tag_size: number
+        iv_gen: string
+        cipher_impl: string
+        hardware_accel: string
+        aad: boolean
+        files_hashed_with: string
+        sealed_by: string
+        created_at: string
+        exported_by: string
+        exported_at: string
+        key_check: string
+      }
+      historical_keys?: {
+        key_version: number
+        key: string
+        key_check: string
+        reason: 'current' | 'rotation' | 'recovery'
+        created_at: string | null
+        retired_at: string | null
+      }[]
+      missing_key_versions?: number[]
+      deleted_vault?: boolean
+    }
+  }
+  /**
+   * Record that the device stored key `version` of the vault. Succeeds only while that version is still
+   * current and key_check matches the daemon's key, else conflict (e.g. a rotation in between). Paired
+   * devices only (export_requires_device otherwise).
+   */
+  'vault.keys.export.confirm': {
+    payload: { vault_id: number; version: number; key_check: string }
+    response: { vault_id: number; version: number; exported_at: number }
+  }
+  /**
+   * Restore the vault's keys from a backup (`keys`: an export, one vault object or an `all` array) when this
+   * host can't unseal or doesn't hold them. Every version is verified before anything is written (its
+   * key_check, then a GCM tag check of files sealed under it); a key this host can unseal is never replaced
+   * (conflict), identical bytes are unchanged, versions with nothing to verify against are skipped
+   * (unverifiable). Writing needs confirm_name = the vault's name, else data.code vault_key_import with what
+   * would be written. Paired devices only (import_requires_device otherwise); the encryption-key Export
+   * permission.
+   */
+  'vault.keys.import': {
+    payload: {
+      vault_id: number
+      keys: WsModels['VaultKeyExport'] | WsModels['VaultKeyExport'][]
+      confirm_name?: string
+    }
+    response: {
+      vault_id: number
+      vault_name: string
+      deleted: boolean
+      written: boolean
+      key_available: boolean
+      note: string | null
+      versions: {
+        version: number
+        outcome: 'restored' | 'unchanged' | 'unverifiable'
+        detail: string
+        verified_files: number
+        failed_files: number
+      }[]
+    }
+  }
+  /**
+   * Key backup state of every vault the caller may inspect (the encryption-key View permission; deleted
+   * vaults within key retention for callers who may remove them), or of vault_id. Never key bytes: each key
+   * version is identified by its key_check. Read-only; safe for any session.
+   */
+  'vault.keys.status': {
+    payload: { vault_id?: number | null }
+    response: { vaults: WsModels['VaultKeyStatus'][] }
   }
   /**
    * The cost disclosure a person must see before provider versioning is enabled, with the token
    * vault.recovery.update needs (10 minutes). Read-only: at most one admin inspect, no object requests.
    */
   'vault.recovery.disclosure': {
-    payload: { vault_id: number; provider_retention?: string | number | object }
-    response: { disclosure: object }
+    payload: {
+      vault_id: number
+      provider_retention?: string | number | { indefinite?: boolean; days?: number | null } | null
+    }
+    response: { disclosure: WsModels['RecoveryDisclosure'] }
   }
   /**
    * A vault's recovery mode, local versioning, store usage, upstream backlog and provider versioning state;
@@ -678,7 +5168,7 @@ export interface WsContract {
    */
   'vault.recovery.status': {
     payload: { vault_id: number; refresh_provider?: boolean }
-    response: { status: object }
+    response: { status: WsModels['RecoveryStatus'] }
   }
   /**
    * Suspend versioning on the vault's bucket; existing versions are kept and nothing is deleted. A refusal
@@ -686,7 +5176,7 @@ export interface WsContract {
    */
   'vault.recovery.suspend': {
     payload: { vault_id: number; confirm?: boolean }
-    response: { status: object }
+    response: { status: WsModels['RecoveryStatus'] }
   }
   /**
    * Change a vault's recovery settings. mode provider_versioning needs disclosure_token from
@@ -698,7 +5188,7 @@ export interface WsContract {
     payload: {
       vault_id: number
       mode?: 'off' | 'local_snapshots' | 'provider_versioning'
-      provider_retention?: string | number | object
+      provider_retention?: string | number | { indefinite?: boolean; days?: number | null } | null
       snapshot_quota_bytes?: number
       cost_alert_monthly?: string
       local_versioning?: {
@@ -712,7 +5202,7 @@ export interface WsContract {
       accept_retention_shortening?: boolean
       accept_adoption?: boolean
     }
-    response: { status: object }
+    response: { status: WsModels['RecoveryStatus'] }
   }
 }
 
@@ -731,6 +5221,30 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'auth.user.get.byName',
   'auth.user.update',
   'auth.users.list',
+  'dashboard.preferences.get',
+  'dashboard.preferences.reset',
+  'dashboard.preferences.update',
+  'device.identity.rotate',
+  'device.list',
+  'device.pair.confirm',
+  'device.pair.request',
+  'device.pair.status',
+  'device.pairing.approve',
+  'device.pairing.close',
+  'device.pairing.deny',
+  'device.pairing.open',
+  'device.pairing.pending',
+  'device.remote.disable',
+  'device.remote.enable',
+  'device.remote.status',
+  'device.rename',
+  'device.revoke',
+  'device.server.identity',
+  'email.config.get',
+  'email.config.update',
+  'email.history',
+  'email.provider.secret.set',
+  'email.test.send',
   'fs.dir.create',
   'fs.dir.list',
   'fs.download.cancel',
@@ -755,6 +5269,21 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'groups.list',
   'groups.list.byUser',
   'meta.contract.get',
+  'permission.get',
+  'permission.get.byName',
+  'permissions.list',
+  'pricing.budget.ledger.list',
+  'pricing.budget.override.approve',
+  'pricing.budget.override.deny',
+  'pricing.budget.override.list',
+  'pricing.budget.override.request',
+  'pricing.budget.policy.disable',
+  'pricing.budget.policy.list',
+  'pricing.budget.policy.upsert',
+  'pricing.budget.preflight',
+  'pricing.budget.status',
+  'pricing.notifications.ack',
+  'pricing.notifications.list',
   'recovery.costs',
   'recovery.inspect',
   'recovery.list',
@@ -763,17 +5292,120 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'recovery.point.delete',
   'recovery.restore',
   'recovery.snapshot.create',
+  'role.admin.add',
+  'role.admin.delete',
+  'role.admin.get',
+  'role.admin.get.byName',
+  'role.admin.update',
+  'role.vault.add',
   'role.vault.assign',
+  'role.vault.delete',
   'role.vault.get',
+  'role.vault.get.byName',
+  'role.vault.overrides.add',
+  'role.vault.overrides.list',
+  'role.vault.overrides.remove',
+  'role.vault.overrides.update',
   'role.vault.unassign',
+  'role.vault.update',
+  'roles.admin.list',
   'roles.vault.list',
   'roles.vault.list.assigned',
+  's3.gateway.buckets.bind',
+  's3.gateway.buckets.createLocal',
+  's3.gateway.buckets.createRemoteCache',
+  's3.gateway.buckets.list',
+  's3.gateway.buckets.unbind',
+  's3.gateway.budget.ledger.list',
+  's3.gateway.budget.policy.disable',
+  's3.gateway.budget.policy.list',
+  's3.gateway.budget.policy.upsert',
+  's3.gateway.budget.status',
+  's3.gateway.credentials.create',
+  's3.gateway.credentials.defaultRole.clear',
+  's3.gateway.credentials.defaultRole.get',
+  's3.gateway.credentials.defaultRole.overrides.add',
+  's3.gateway.credentials.defaultRole.overrides.list',
+  's3.gateway.credentials.defaultRole.overrides.remove',
+  's3.gateway.credentials.defaultRole.set',
+  's3.gateway.credentials.list',
+  's3.gateway.credentials.revoke',
+  's3.gateway.credentials.roles.assign',
+  's3.gateway.credentials.roles.list',
+  's3.gateway.credentials.roles.overrides.add',
+  's3.gateway.credentials.roles.overrides.list',
+  's3.gateway.credentials.roles.overrides.remove',
+  's3.gateway.credentials.roles.revoke',
+  's3.gateway.credentials.scope.update',
+  's3.gateway.credentials.selectedVaults.add',
+  's3.gateway.credentials.selectedVaults.list',
+  's3.gateway.credentials.selectedVaults.remove',
+  's3.gateway.credentials.selectedVaults.replace',
+  's3.gateway.status',
+  'settings.get',
+  'settings.policy.get',
+  'settings.update',
+  'share.download.cancel',
+  'share.download.chunk',
+  'share.download.start',
+  'share.email.challenge.confirm',
+  'share.email.challenge.start',
+  'share.fs.list',
+  'share.fs.metadata',
   'share.link.create',
+  'share.link.get',
+  'share.link.list',
   'share.link.revoke',
+  'share.link.rotate_token',
+  'share.link.update',
+  'share.preview.get',
+  'share.session.open',
+  'share.upload.cancel',
+  'share.upload.finish',
+  'share.upload.start',
+  'stats.dashboard.overview',
+  'stats.dashboard.severity',
+  'stats.fs.cache',
+  'stats.http.cache',
+  'stats.pricing.budget',
+  'stats.system.connections',
+  'stats.system.db',
+  'stats.system.fuse',
+  'stats.system.health',
+  'stats.system.operations',
+  'stats.system.pricing',
+  'stats.system.retention',
+  'stats.system.storage',
+  'stats.system.threadpools',
+  'stats.system.trends',
+  'stats.vault',
+  'stats.vault.activity',
+  'stats.vault.operations',
+  'stats.vault.pricing',
+  'stats.vault.recovery',
+  'stats.vault.retention',
+  'stats.vault.security',
+  'stats.vault.shares',
+  'stats.vault.storage',
+  'stats.vault.sync',
+  'stats.vault.trends',
+  'storage.apiKey.add',
+  'storage.apiKey.get',
+  'storage.apiKey.list',
+  'storage.apiKey.remove',
+  'storage.apiKey.update',
   'storage.vault.add',
+  'storage.vault.deleted.list',
   'storage.vault.get',
   'storage.vault.list',
   'storage.vault.remove',
+  'storage.vault.remove.plan',
+  'storage.vault.restore',
+  'storage.vault.sync',
+  'storage.vault.update',
+  'sync.conflicts.list',
+  'sync.conflicts.resolve',
+  'sync.conflicts.summary',
   'upstream.admin.disable',
   'upstream.admin.enable',
   'upstream.admin.status',
@@ -791,11 +5423,54 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'upstream.events.enable',
   'upstream.events.repair',
   'upstream.events.status',
+  'vault.keys.export',
+  'vault.keys.export.confirm',
+  'vault.keys.import',
+  'vault.keys.status',
   'vault.recovery.disclosure',
   'vault.recovery.status',
   'vault.recovery.suspend',
   'vault.recovery.update',
 ]
+
+// The NeedsConfirmation refusals per command: data.code, and the payload member (dotted path) a resend sets to
+// accept it (null: no resend accepts it; the description says what to do instead).
+export const WS_CONTRACT_CONFIRMATIONS: Readonly<
+  Partial<Record<WsContractCommand, readonly { code: string; accept_field: string | null }[]>>
+> = {
+  'auth.user.delete': [{ code: 'user_delete', accept_field: 'confirm' }],
+  'recovery.point.delete': [{ code: 'recovery_point_delete', accept_field: 'confirm' }],
+  'recovery.restore': [
+    { code: 'recovery_restore', accept_field: 'token' },
+    { code: 'recovery_plan_expired', accept_field: null },
+    { code: 'recovery_unverified_version', accept_field: 'accept_unverified' },
+  ],
+  's3.gateway.buckets.createRemoteCache': [
+    { code: 'encryption_waiver', accept_field: 'accept_encryption_waiver' },
+  ],
+  'storage.vault.add': [
+    { code: 'encryption_waiver', accept_field: 'accept_encryption_waiver' },
+    { code: 'upstream_adoption', accept_field: 'provision.accept_adoption' },
+  ],
+  'storage.vault.remove': [
+    { code: 'vault_upstream_key_loss', accept_field: 'accept_key_loss' },
+    { code: 'vault_delete_now', accept_field: 'confirm_now' },
+  ],
+  'storage.vault.update': [{ code: 'encryption_waiver', accept_field: 'accept_encryption_waiver' }],
+  'upstream.bucket.cleanup': [{ code: 'upstream_cleanup', accept_field: 'confirm_token' }],
+  'upstream.bucket.lifecycle.set': [
+    { code: 'upstream_destructive_lifecycle', accept_field: 'accept_destructive' },
+  ],
+  'upstream.bucket.unprotect': [{ code: 'upstream_unprotect', accept_field: 'confirm' }],
+  'vault.keys.import': [{ code: 'vault_key_import', accept_field: 'confirm_name' }],
+  'vault.recovery.suspend': [{ code: 'recovery_versioning_suspend', accept_field: 'confirm' }],
+  'vault.recovery.update': [
+    { code: 'recovery_versioning_disclosure', accept_field: 'disclosure_token' },
+    { code: 'recovery_versioning_unpriced', accept_field: 'accept_unpriced' },
+    { code: 'recovery_retention_shorten', accept_field: 'accept_retention_shortening' },
+    { code: 'upstream_adoption', accept_field: 'accept_adoption' },
+  ],
+}
 
 // Client timeouts the server declares per command (a timeout means "no answer yet", never "failed").
 export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> = {
@@ -811,6 +5486,30 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'auth.user.get.byName': 15000,
   'auth.user.update': 15000,
   'auth.users.list': 15000,
+  'dashboard.preferences.get': 15000,
+  'dashboard.preferences.reset': 15000,
+  'dashboard.preferences.update': 15000,
+  'device.identity.rotate': 15000,
+  'device.list': 15000,
+  'device.pair.confirm': 15000,
+  'device.pair.request': 15000,
+  'device.pair.status': 15000,
+  'device.pairing.approve': 15000,
+  'device.pairing.close': 15000,
+  'device.pairing.deny': 15000,
+  'device.pairing.open': 15000,
+  'device.pairing.pending': 15000,
+  'device.remote.disable': 15000,
+  'device.remote.enable': 15000,
+  'device.remote.status': 15000,
+  'device.rename': 15000,
+  'device.revoke': 15000,
+  'device.server.identity': 15000,
+  'email.config.get': 15000,
+  'email.config.update': 15000,
+  'email.history': 15000,
+  'email.provider.secret.set': 15000,
+  'email.test.send': 60000,
   'fs.dir.create': 15000,
   'fs.dir.list': 30000,
   'fs.download.cancel': 15000,
@@ -835,6 +5534,21 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'groups.list': 15000,
   'groups.list.byUser': 15000,
   'meta.contract.get': 15000,
+  'permission.get': 15000,
+  'permission.get.byName': 15000,
+  'permissions.list': 15000,
+  'pricing.budget.ledger.list': 15000,
+  'pricing.budget.override.approve': 15000,
+  'pricing.budget.override.deny': 15000,
+  'pricing.budget.override.list': 15000,
+  'pricing.budget.override.request': 15000,
+  'pricing.budget.policy.disable': 15000,
+  'pricing.budget.policy.list': 15000,
+  'pricing.budget.policy.upsert': 15000,
+  'pricing.budget.preflight': 60000,
+  'pricing.budget.status': 15000,
+  'pricing.notifications.ack': 15000,
+  'pricing.notifications.list': 15000,
   'recovery.costs': 60000,
   'recovery.inspect': 30000,
   'recovery.list': 120000,
@@ -843,17 +5557,120 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'recovery.point.delete': 60000,
   'recovery.restore': 1800000,
   'recovery.snapshot.create': 300000,
+  'role.admin.add': 15000,
+  'role.admin.delete': 15000,
+  'role.admin.get': 15000,
+  'role.admin.get.byName': 15000,
+  'role.admin.update': 15000,
+  'role.vault.add': 15000,
   'role.vault.assign': 15000,
+  'role.vault.delete': 15000,
   'role.vault.get': 15000,
+  'role.vault.get.byName': 15000,
+  'role.vault.overrides.add': 15000,
+  'role.vault.overrides.list': 15000,
+  'role.vault.overrides.remove': 15000,
+  'role.vault.overrides.update': 15000,
   'role.vault.unassign': 15000,
+  'role.vault.update': 15000,
+  'roles.admin.list': 15000,
   'roles.vault.list': 15000,
   'roles.vault.list.assigned': 15000,
+  's3.gateway.buckets.bind': 15000,
+  's3.gateway.buckets.createLocal': 60000,
+  's3.gateway.buckets.createRemoteCache': 180000,
+  's3.gateway.buckets.list': 15000,
+  's3.gateway.buckets.unbind': 15000,
+  's3.gateway.budget.ledger.list': 15000,
+  's3.gateway.budget.policy.disable': 15000,
+  's3.gateway.budget.policy.list': 15000,
+  's3.gateway.budget.policy.upsert': 15000,
+  's3.gateway.budget.status': 15000,
+  's3.gateway.credentials.create': 15000,
+  's3.gateway.credentials.defaultRole.clear': 15000,
+  's3.gateway.credentials.defaultRole.get': 15000,
+  's3.gateway.credentials.defaultRole.overrides.add': 15000,
+  's3.gateway.credentials.defaultRole.overrides.list': 15000,
+  's3.gateway.credentials.defaultRole.overrides.remove': 15000,
+  's3.gateway.credentials.defaultRole.set': 15000,
+  's3.gateway.credentials.list': 15000,
+  's3.gateway.credentials.revoke': 15000,
+  's3.gateway.credentials.roles.assign': 15000,
+  's3.gateway.credentials.roles.list': 15000,
+  's3.gateway.credentials.roles.overrides.add': 15000,
+  's3.gateway.credentials.roles.overrides.list': 15000,
+  's3.gateway.credentials.roles.overrides.remove': 15000,
+  's3.gateway.credentials.roles.revoke': 15000,
+  's3.gateway.credentials.scope.update': 15000,
+  's3.gateway.credentials.selectedVaults.add': 15000,
+  's3.gateway.credentials.selectedVaults.list': 15000,
+  's3.gateway.credentials.selectedVaults.remove': 15000,
+  's3.gateway.credentials.selectedVaults.replace': 15000,
+  's3.gateway.status': 15000,
+  'settings.get': 15000,
+  'settings.policy.get': 15000,
+  'settings.update': 15000,
+  'share.download.cancel': 15000,
+  'share.download.chunk': 15000,
+  'share.download.start': 15000,
+  'share.email.challenge.confirm': 15000,
+  'share.email.challenge.start': 15000,
+  'share.fs.list': 30000,
+  'share.fs.metadata': 15000,
   'share.link.create': 15000,
+  'share.link.get': 15000,
+  'share.link.list': 15000,
   'share.link.revoke': 15000,
+  'share.link.rotate_token': 15000,
+  'share.link.update': 15000,
+  'share.preview.get': 30000,
+  'share.session.open': 15000,
+  'share.upload.cancel': 15000,
+  'share.upload.finish': 180000,
+  'share.upload.start': 30000,
+  'stats.dashboard.overview': 15000,
+  'stats.dashboard.severity': 15000,
+  'stats.fs.cache': 15000,
+  'stats.http.cache': 15000,
+  'stats.pricing.budget': 15000,
+  'stats.system.connections': 15000,
+  'stats.system.db': 15000,
+  'stats.system.fuse': 15000,
+  'stats.system.health': 15000,
+  'stats.system.operations': 15000,
+  'stats.system.pricing': 15000,
+  'stats.system.retention': 15000,
+  'stats.system.storage': 15000,
+  'stats.system.threadpools': 15000,
+  'stats.system.trends': 15000,
+  'stats.vault': 15000,
+  'stats.vault.activity': 15000,
+  'stats.vault.operations': 15000,
+  'stats.vault.pricing': 15000,
+  'stats.vault.recovery': 15000,
+  'stats.vault.retention': 15000,
+  'stats.vault.security': 15000,
+  'stats.vault.shares': 15000,
+  'stats.vault.storage': 15000,
+  'stats.vault.sync': 15000,
+  'stats.vault.trends': 15000,
+  'storage.apiKey.add': 60000,
+  'storage.apiKey.get': 15000,
+  'storage.apiKey.list': 15000,
+  'storage.apiKey.remove': 15000,
+  'storage.apiKey.update': 60000,
   'storage.vault.add': 180000,
+  'storage.vault.deleted.list': 15000,
   'storage.vault.get': 15000,
   'storage.vault.list': 15000,
   'storage.vault.remove': 15000,
+  'storage.vault.remove.plan': 15000,
+  'storage.vault.restore': 15000,
+  'storage.vault.sync': 15000,
+  'storage.vault.update': 60000,
+  'sync.conflicts.list': 15000,
+  'sync.conflicts.resolve': 600000,
+  'sync.conflicts.summary': 15000,
   'upstream.admin.disable': 15000,
   'upstream.admin.enable': 60000,
   'upstream.admin.status': 60000,
@@ -871,6 +5688,10 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'upstream.events.enable': 120000,
   'upstream.events.repair': 120000,
   'upstream.events.status': 15000,
+  'vault.keys.export': 15000,
+  'vault.keys.export.confirm': 15000,
+  'vault.keys.import': 120000,
+  'vault.keys.status': 15000,
   'vault.recovery.disclosure': 60000,
   'vault.recovery.status': 60000,
   'vault.recovery.suspend': 60000,

@@ -50,6 +50,20 @@ http_preview_server:
 
 The web service itself is managed by `vaulthalla-web.service` and normally listens on localhost for Nginx proxying.
 
+The device listener serves Vaulthalla Desktop directly (TLS 1.3 with pinned keys on both sides; no Nginx):
+
+```yaml
+device_server:
+  enabled: true
+  port: 36972
+  remote: false
+  max_connections: 256
+```
+
+It listens on loopback until `remote` is on. Change `remote` with `vh device remote enable|disable` (super admins),
+which rebinds the listener at once and writes the value here; there is no host setting. See
+[Paired Devices](/admin/devices).
+
 The S3-compatible gateway is a separate runtime service and is disabled by default:
 
 ```yaml
