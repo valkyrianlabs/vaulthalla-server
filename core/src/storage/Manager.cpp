@@ -107,7 +107,7 @@ void Manager::initStorageEngines() {
     unavailable_.clear();
 
     try {
-        for (auto& vault : db::query::vault::Vault::listVaults()) {
+        for (auto& vault : db::query::vault::Vault::listLiveVaults()) {
             try {
                 log::Registry::storage()->debug("[StorageManager] Initializing StorageEngine for Vault {} (ID: {}, Type: {})",
                                               vault->name, vault->id, to_string(vault->type));

@@ -129,6 +129,11 @@ static const auto regexPattern = Optional::Single("regex_pattern",
 
 static const auto localFlag = Flag::Alias("local_filter", "Show only local vaults", "local");
 static const auto s3Flag = Flag::Alias("s3_filter", "Show only S3-backed vaults", "s3");
+static const auto accessibleFlag = Flag::Alias("accessible",
+                                               "Every vault you can reach (as owner, through a vault role of yours or "
+                                               "a group's, or your admin role) with what you can do there: browse "
+                                               "(open its files) and manage (its settings). Takes no filters or paging",
+                                               "accessible");
 
 static const auto apiKeyOpt = Optional::OneToMany("s3_api_key", "Name or ID of the API key to access the S3 bucket",
                                                   "api-key", {"name", "id"})
@@ -336,13 +341,16 @@ static std::shared_ptr<CommandUsage> list(const std::weak_ptr<CommandUsage>& par
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"list", "ls"};
     cmd->effect = CommandEffect::Read;
-    cmd->description = "List all vaults accessible to the current user.";
+    cmd->description = "List the vaults your admin role lets you view (--accessible: every vault you can reach).";
     cmd->required_flags = {localFlag, s3Flag, jsonFlag};
+    cmd->optional_flags = {accessibleFlag};
     cmd->optional = listQueryOptions();
     cmd->examples = {
-        {"vh vaults", "List all vaults accessible to the current user."},
+        {"vh vaults", "List the vaults your admin role lets you view."},
         {"vh vaults --local", "List only local vaults."},
-        {"vh vaults --s3 --limit 5", "List up to 5 S3-backed vaults."}
+        {"vh vaults --s3 --limit 5", "List up to 5 S3-backed vaults."},
+        {"vh vault list --accessible", "Every vault you can reach, how, and whether you can browse or manage it."},
+        {"vh vault list --accessible --json", "The same as JSON (storage.vault.accessible.list's rows)."}
     };
     return cmd;
 }

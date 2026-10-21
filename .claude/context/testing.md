@@ -62,7 +62,7 @@ make test ARGS="--gtest_filter='RoleParity*'"           # or: bash bin/tests/run
 The tests run as you (not root), with the role's settings only in the test process's environment.
 
 CLI ↔ ws parity for families migrated to `core/ops/`:
-`--gtest_filter='*Parity*:OpsGroups*:AuthPasswordChange*'` (groups, roles, API keys, vaults, users, S3 gateway,
+`--gtest_filter='*Parity*:OpsGroups*:AuthPasswordChange*'` (groups, roles, API keys, vaults and the accessible-vaults list, users, S3 gateway,
 pricing/config, sync conflicts). The whole binary takes ~7 minutes against a local DB; meson's test timeout is 30 minutes (#123). A parity case
 runs one logical operation through `shell::Router::executeLine` and through the ws handler, for every seeded admin
 role, and compares allow/deny (against an oracle from the role's permission bits) and resulting DB state, never text.

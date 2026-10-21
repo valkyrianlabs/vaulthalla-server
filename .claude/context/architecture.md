@@ -692,7 +692,7 @@ gates (settings/email/pricing admin checks, share upload scope) throw `ops::Deni
 registry, base class or transport abstraction. Parity is proven by `test_ops_parity_groups.cpp`, which runs each
 group operation through both surfaces for every seeded admin role and compares verdicts and DB state.
 Migrated families (each with `test_ops_parity_<family>.cpp`): `groups`, `roles`, `api_keys`, `vaults` (lifecycle,
-safe deletion/restore, sync policy), `users`, `s3_gateway` (credentials, grants, buckets, credential budgets), `pricing` (price budget
+safe deletion/restore, sync policy, accessible list), `users`, `s3_gateway` (credentials, grants, buckets, credential budgets), `pricing` (price budget
 policies), `config` (every settings write: one validation, one apply step that restarts the S3 gateway when
 `s3_gateway.enabled` changes), `stats` (authorization only, ws-only: there is no `vh` stats command; `vh status`
 is deliberately ungated, see Stats below), `conflicts` (sync conflicts, #187: ws `sync.conflicts.*`, `vh sync resolve` /
@@ -720,6 +720,20 @@ Rules the families hold (keep them in ops, never re-add them in a handler):
 - **Vaults:** every change goes through `storage::Manager::updateVault` so the live engine (RBAC's source of the owner)
   follows; owner reassignment needs Create for the new owner; a key change needs Consume; sync settings need vault
   `sync.config.edit`.
+- **Accessible vaults** (`ops::vaults::listAccessible`; ws `storage.vault.accessible.list`, `vh vault list
+  --accessible`, MCP `vaults_accessible_list`; `VaultAccessParityTest`): `list` (storage.vault.list, `vh vault list`)
+  follows the admin role's `admin.vaults.<scope>.view` only, so an owner or vault-role holder without it sees nothing
+  there; this list answers "where can I go" and is deliberately separate (global admin policies on others' vaults are
+  no local role either). Candidates: `Vault::listLiveVaults()` (one unpaginated read; `listVaults` stops at a
+  100-row page, which is why every "all vaults" caller uses `listLiveVaults`). Per vault, with one `authz()` view:
+  `browse` = `rbac::resolver::Vault::has<FilesystemAction>(List, path = engine->vaultPathToFusePath("/"))` (exactly
+  fs.dir.list `/`), `manage` = `Admin::has<VaultPermissions>(View)` (exactly storage.vault.get); no engine → neither.
+  `via` (in order): owner; vault_role / group_role (an assignment in the user's or a live group's `roles.vaults`,
+  whatever it grants); admin_policy (not super admin, and manage, or browse with no vault role, i.e. the evaluator's
+  globals stage decided); super_admin. Listed iff `via` is non-empty, so an unprivileged owner is listed with neither
+  flag (owning grants nothing by itself) and a non-authorizing account gets `[]`. Probing runs under
+  `QuietFilesystemDenials` (no auth warning per denied vault). The row is a summary (`toJson`, model
+  AccessibleVault): no mount_point, bucket or key; those stay behind manage in storage.vault.get.
 - **S3 gateway:** the scope rule that was `CredentialManager::validateScopeMutation` is `requireScopeMutation` in ops;
   `CredentialManager` and `db::query::s3::Gateway` are trusted primitives. Vault names resolve owner-scoped or uniquely,
   never to the first match. Overrides need an explicit effect and pattern. Remote-cache buckets are created through
@@ -747,6 +761,11 @@ subject's assignment; both `vh vault role override ...` and ws `role.vault.overr
   path convert it with `engine->vaultPathToFusePath()` first; `share::Manager` once didn't, so only share root `/`
   ever passed and a vault path equal to another vault's FUSE root resolved to that vault. The evaluator refuses an
   entry whose `vault_id` differs from the request's vault (`EntryVaultMismatch`).
+- **Known gap (2026-10-21, unfixed):** the evaluator's last stage (global vault filesystem policy,
+  `Evaluator::evaluate` step 3) loops `self, admin, user` but `resolveStage` always matches on base permissions, so
+  only `self` is ever consulted, for any vault; `rbac::resolver::Vault::grantedByGlobals` picks the scope by owner
+  (self / admin-owned / user-owned). Invisible with the seeded roles (identical scopes) but a global policy whose
+  scopes differ grants filesystem access by its `self` bits on every vault without a vault role.
 - The FS cache is keyed by FUSE path and can only re-hydrate a vault root through `mkVault` (or the rename path in
   `storage::Manager::updateVault`). `storage::Manager` calls `fs::cache::Registry::evictVault` on remove, on rename
   (old and new root, then re-caches the root) and in `addVault` *before* the engine creates the root. Evicting after

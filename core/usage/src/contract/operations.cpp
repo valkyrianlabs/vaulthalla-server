@@ -251,6 +251,18 @@ std::vector<OperationSpec> operations() {
         .refusals = opsRefusalMap(),
     });
 
+    out.push_back({
+        .id = "vaults.accessible.list",
+        .description = "Every vault the actor reaches (owner, vault role, group role, admin policy, super admin) with "
+                       "browse and manage as the resolvers decide them.",
+        .requires_any = {"owner", "vault.fs.directories.list", "admin.vaults.self.view", "admin.vaults.user.view",
+                         "admin.vaults.admin.view"},
+        .effect = {.kind = "read", .entity = "vault"},
+        .cli = CliBinding{.usage_path = {"vault", "list"}, .fixed = {{"flag:accessible", ""}}},
+        .ws = WsBinding{.command = "storage.vault.accessible.list"},
+        .refusals = opsRefusalMap(),
+    });
+
     // ---- filesystem -------------------------------------------------------------------------------------------
 
     out.push_back({

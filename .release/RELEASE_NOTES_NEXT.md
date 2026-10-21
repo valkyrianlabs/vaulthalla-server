@@ -75,6 +75,20 @@ command. New and empty vaults still get their first key automatically.
 
 See [Secrets And Key Export](https://vaulthalla.io/docs/vaults/secrets-and-key-export).
 
+## See every vault you can reach
+
+`vh vault list --accessible` lists every vault you can reach and how: as its owner, through a vault role assigned to
+you or to one of your groups, through your admin role, or as a super admin. Each vault says whether you can browse its
+files and whether you can manage it, decided by the same permission checks that apply when you open it. `vh vault
+list` is unchanged and still shows only the vaults your admin role lets you view, so an account whose access comes
+from a vault role or from owning a vault finds those vaults with `--accessible`. Vaulthalla Desktop's file browser
+uses the same list (ws `storage.vault.accessible.list`), and AI agents get it as the read-only tool
+`vaults_accessible_list`.
+
+**More than 100 vaults.** At startup the daemon brought up only the first 100 vaults (by id): after a restart, any
+vault beyond those was unreachable on every surface until it was changed. `vh vault keys status all`, `vh vault keys
+export all` and resolving an S3 gateway vault by name also stopped at 100. They all cover every vault now.
+
 ## Let Claude Code or Codex operate Vaulthalla
 
 `vh mcp` is a Model Context Protocol server built into the `vh` CLI, and `vh skill install --agent claude|codex`
@@ -108,13 +122,13 @@ Each `vh` command declares whether it reads, writes or is destructive. The machi
 ## Every ws command is in the published contract
 
 The ws contract the daemon publishes (`vh_usage --json`, identified by `meta.contract.get`) now describes every
-command it answers on `/ws`: 222 commands, up from 76. File management, vaults and API keys, roles and permissions,
+command it answers on `/ws`: 223 commands, up from 76. File management, vaults and API keys, roles and permissions,
 shares and share sessions, stats and dashboards, sync conflicts, pricing budgets, the S3 gateway, settings,
 operator email, paired devices and vault key backup are covered, each with its payload, response, session
 requirement, refusals and client timeout. Native clients can be generated from it, and the web console now takes
 every command's timeout from the server.
 
-The contract also publishes the shape of every object those commands send: 169 named models (users and roles,
+The contract also publishes the shape of every object those commands send: 170 named models (users and roles,
 vaults, devices, vault key status and exports, files and folders, share links, stats, recovery plans, upstream
 buckets, S3 gateway credentials, budgets, settings sections and more), with unions and patch payloads spelled out.
 A daemon unit test serializes each model with the real code and fails if the published shape and what is sent ever

@@ -13,6 +13,7 @@
 #include "db/query/vault/Key.hpp"
 #include "db/query/vault/Vault.hpp"
 #include "db/query/vault/Waiver.hpp"
+#include "identities/Group.hpp"
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
@@ -38,11 +39,13 @@
 #include "vault/model/S3Vault.hpp"
 #include "vault/terms/waiver.hpp"
 
+#include <nlohmann/json.hpp>
 #include <paths.h>
 
 #include <algorithm>
 #include <cctype>
 #include <mutex>
+#include <unordered_map>
 #include <utility>
 
 namespace vh::ops::vaults {
@@ -590,6 +593,97 @@ std::vector<VaultPtr> list(const Actor& actor, db::model::ListQueryParams params
     auto vaults = db::query::vault::Vault::listVaults(type, std::move(params));
     std::erase_if(vaults, [&](const VaultPtr& v) { return !v || !canOnVault(actor, VaultPerm::View, v->id); });
     return vaults;
+}
+
+const char* to_string(const AccessVia via) {
+    switch (via) {
+        case AccessVia::Owner: return "owner";
+        case AccessVia::VaultRole: return "vault_role";
+        case AccessVia::GroupRole: return "group_role";
+        case AccessVia::AdminPolicy: return "admin_policy";
+        case AccessVia::SuperAdmin: return "super_admin";
+    }
+    return "unknown";
+}
+
+std::vector<AccessibleVault> listAccessible(const Actor& actor) {
+    requireActor(actor);
+    // One coherent version of the account and its groups for the relationships; a deactivated or deleted account
+    // reaches nothing (the resolvers below would deny it everything too).
+    const auto view = actor->authz();
+    if (!view.authorizing()) return {};
+    const bool superAdmin = view.isSuperAdmin();
+
+    const auto heldBy = [](const auto& roles, const uint32_t vaultId) {
+        const auto it = roles.find(vaultId);
+        return it != roles.end() && it->second != nullptr;
+    };
+
+    using FsAction = rbac::permission::vault::FilesystemAction;
+    const rbac::resolver::vault::QuietFilesystemDenials quiet;  // a "no" per vault is an answer here, not a refusal
+    const auto& storage = runtime::Deps::get().storageManager;
+    std::unordered_map<uint32_t, std::string> owners;
+    std::vector<AccessibleVault> out;
+
+    for (const auto& vault : db::query::vault::Vault::listLiveVaults()) {
+        if (!vault) continue;
+        AccessibleVault entry{.vault = vault, .owner_name = {}, .browse = false, .manage = false, .via = {}};
+
+        // The enforcing resolvers, against the live engine (a vault without one, e.g. its key is unavailable on this
+        // host, grants nothing on any surface).
+        if (const auto engine = storage->getEngine(vault->id)) {
+            entry.browse = rbac::resolver::Vault::has<FsAction>(
+                {.user = actor, .permission = FsAction::List, .vault_id = vault->id,
+                 .path = engine->vaultPathToFusePath("/")});
+            entry.manage = canOnVault(actor, VaultPerm::View, vault->id);
+        }
+
+        const bool direct = heldBy(view.user->roles.vaults, vault->id);
+        const bool group = std::ranges::any_of(view.groups, [&](const auto& g) {
+            return g && !g->deleted && heldBy(g->roles.vaults, vault->id);
+        });
+
+        if (vault->owner_id == actor->id) entry.via.push_back(AccessVia::Owner);
+        if (direct) entry.via.push_back(AccessVia::VaultRole);
+        if (group) entry.via.push_back(AccessVia::GroupRole);
+        // The admin role grants here: its vault permissions (manage), or its global vault filesystem policy, the
+        // evaluator's last stage, which decides browse only when no vault role (own or group) applies.
+        if (!superAdmin && (entry.manage || (entry.browse && !direct && !group)))
+            entry.via.push_back(AccessVia::AdminPolicy);
+        if (superAdmin) entry.via.push_back(AccessVia::SuperAdmin);
+        if (entry.via.empty()) continue;
+
+        auto it = owners.find(vault->owner_id);
+        if (it == owners.end()) {
+            const auto owner = vh::identities::manager().user(vault->owner_id);
+            it = owners.emplace(vault->owner_id, owner ? owner->name() : std::string{}).first;
+        }
+        entry.owner_name = it->second;
+        out.push_back(std::move(entry));
+    }
+    return out;
+}
+
+nlohmann::json toJson(const AccessibleVault& entry) {
+    const auto& v = *entry.vault;
+    auto via = nlohmann::json::array();
+    for (const auto reason : entry.via) via.push_back(to_string(reason));
+    return {
+        {"id", v.id},
+        {"name", v.name},
+        {"slug", v.slug},
+        {"effective_fuse_name", v.effectiveFuseName()},
+        {"type", vault::model::to_string(v.type)},
+        {"description", v.description},
+        {"quota", v.quota},
+        {"owner_id", v.owner_id},
+        {"owner", entry.owner_name},
+        {"is_active", v.is_active},
+        {"created_at", db::encoding::timestampToString(v.created_at)},
+        {"browse", entry.browse},
+        {"manage", entry.manage},
+        {"via", std::move(via)},
+    };
 }
 
 PolicyPtr updateSync(const Actor& actor, const unsigned int vaultId, const SyncPatch& patch) {

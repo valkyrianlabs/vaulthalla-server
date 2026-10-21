@@ -7,6 +7,8 @@
 #include "vault/model/Vault.hpp"
 #include "sync/Fwd.hpp"
 
+#include <nlohmann/json_fwd.hpp>
+
 #include <chrono>
 #include <cstdint>
 #include <ctime>
@@ -152,5 +154,43 @@ void requireRemovable(const Actor& actor, unsigned int vaultId);
                                          std::optional<vault::model::VaultType> type = std::nullopt);
 [[nodiscard]] PolicyPtr updateSync(const Actor& actor, unsigned int vaultId, const SyncPatch& patch);
 SyncStart triggerSync(const Actor& actor, unsigned int vaultId);
+
+// ---- vaults the actor can reach (Vaulthalla Desktop's file browser) ----
+//
+// list() follows the actor's admin vault policy (admin.vaults.<scope>.view), so an account that only owns a vault or
+// holds a vault role on it (its own or a group's) sees nothing there. listAccessible() answers "where can I go":
+// every live vault the actor reaches by any path, with what the enforcing resolvers grant at the vault root.
+
+// Why the actor reaches a vault. Several can hold at once; they are reported in this order.
+enum class AccessVia : uint8_t {
+    Owner,        // the actor owns the vault
+    VaultRole,    // a vault role assigned to the actor on this vault
+    GroupRole,    // a vault role assigned to one of the actor's groups on this vault
+    AdminPolicy,  // the actor's admin role grants here: admin.vaults.<scope>.view, or its global vault filesystem policy
+    SuperAdmin,   // super admin: everything
+};
+
+[[nodiscard]] const char* to_string(AccessVia via);
+
+struct AccessibleVault {
+    VaultPtr vault;
+    std::string owner_name;         // "" when the owner no longer resolves
+    // rbac::resolver::Vault::has<FilesystemAction>(List) at the vault root's FUSE path: what fs.dir.list {path: "/"}
+    // enforces, so the file browser can open the vault.
+    bool browse = false;
+    // rbac::resolver::Admin::has<VaultPermissions>(View): what storage.vault.get enforces (vault settings, stats).
+    bool manage = false;
+    std::vector<AccessVia> via;     // never empty
+};
+
+// Every live (not deleted) vault where the actor is the owner, holds a vault role (directly or through a group), or
+// where the super-admin role or the admin role's vault policies grant browse or manage. browse and manage are decided
+// by the same resolvers that enforce them; via says which paths exist. A deactivated or deleted account gets an empty
+// list. One read of the live vaults, then memory only (engines, the canonical identity state), sorted by id.
+[[nodiscard]] std::vector<AccessibleVault> listAccessible(const Actor& actor);
+
+// The ws/`--json` shape of one entry (the contract's AccessibleVault model): a summary of the vault (no backing or
+// upstream details: those are storage.vault.get's, behind manage) plus browse, manage and via.
+[[nodiscard]] nlohmann::json toJson(const AccessibleVault& entry);
 
 }

@@ -75,6 +75,19 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   VaultKeyImportResult, checked against their serializers); import declares the vault_key_import confirmation
   (accept_field confirm_name) and SystemHealth declares vaults_unavailable.
 
+## Vaults
+- Add ops::vaults::listAccessible with ws storage.vault.accessible.list (human and device sessions) and
+  `vh vault list --accessible [--json]` (operation vaults.accessible.list, MCP tool vaults_accessible_list): every
+  live vault the actor reaches as owner, by a vault role of its own or a group's, by its admin role, or as super
+  admin. Rows carry a vault summary (model AccessibleVault) plus browse (rbac::resolver::Vault, FilesystemAction::List
+  at the root's FUSE path, as fs.dir.list enforces it), manage (admin vault View, as storage.vault.get) and via
+  (owner | vault_role | group_role | admin_policy | super_admin). A deactivated account gets an empty list.
+- Filesystem denials found while listing are not logged (rbac::resolver::vault::QuietFilesystemDenials); refused
+  requests still are.
+- Add db::query::vault::Vault::listLiveVaults (unpaginated). Storage engine startup, vault key status/export of all
+  vaults and S3 gateway vault name resolution used listVaults' default 100-row page and silently skipped later
+  vaults.
+
 ## CLI
 - Add `vh mcp`: an MCP server (JSON-RPC 2.0 over stdio, protocol 2025-11-25, also 2025-06-18 and 2025-03-26).
   - Tools: `vh_help` (usage book), `vh_read` (read-only commands), `vh_run` (any agent-available command) and one
@@ -97,11 +110,11 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
 - Every CLI leaf declares its effect (`read`, `write`, `destructive`), exported as `effect` by `vh_usage --json`.
 
 ## WS contract
-- ws contract: the usage book (`core/usage/src/contract/ws`) declares every registered ws command (222, was 76).
+- ws contract: the usage book (`core/usage/src/contract/ws`) declares every registered ws command (223, was 76).
   `UsageContract.EveryRegisteredWsCommandHasABookEntry` and `test_ws_contract.py` fail on a command without one.
 - web: client timeouts come only from the contract; WebSocketCommandMap payload types follow the server (no `null`
   payloads, no members the handlers never read).
-- ws contract version 2: `models[]` and `models_hash` (169 named model shapes, `core/usage/src/contract/models`),
+- ws contract version 2: `models[]` and `models_hash` (170 named model shapes, `core/usage/src/contract/models`),
   field `one_of` / `values` / `element` / `partial`, command `response_model`; `meta.contract.get` answers
   `models_hash`. `ContractModels.*` checks every model against its serializer with seeded instances;
   `UsageContract.UnionsObjectsAndArraysAreSpelledOut` keeps unions and objects typed (free-form JSON is an explicit

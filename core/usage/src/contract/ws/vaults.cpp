@@ -147,6 +147,23 @@ std::vector<WsCommandUsage> vaultCommands() {
     });
 
     out.push_back({
+        .command = "storage.vault.accessible.list",
+        .description = "Every live vault the caller reaches, by any path: as its owner, through a vault role of its "
+                       "own or of one of its groups, or through its admin role (admin.vaults.<scope>.view, or the "
+                       "global vault filesystem policy); a super admin reaches all of them. Each row is a vault summary "
+                       "plus what the enforcing resolvers grant: browse (filesystem List at the vault root, what "
+                       "fs.dir.list {path: \"/\"} needs), manage (admin vault View, what storage.vault.get needs) and "
+                       "via (owner, vault_role, group_role, admin_policy, super_admin; at least one). Unlike "
+                       "storage.vault.list it does not follow the admin role alone. A deactivated account gets an "
+                       "empty list. Read-only; also answers paired devices (`vh vault list --accessible`).",
+        .input = "none",
+        .response = {objectArray("vaults", "AccessibleVault").desc("By vault id.")},
+        .refusal_codes = {"denied", "unauthorized"},
+        .operation = "vaults.accessible.list",
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
         .command = "storage.vault.update",
         .description = "Patch a vault (absent or null members are unchanged; a vault's type never changes). Owner "
                        "reassignment also needs Create for the new owner, a key change needs Consume on the key, sync "

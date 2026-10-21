@@ -6,10 +6,10 @@
 export const WS_CONTRACT_VERSION = 2
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = 'e7f86f48e7d314240589511804acb5a5c8c0aedaed224a09194bf6a3b50f2153'
+export const WS_CONTRACT_HASH = 'da663f0abff78adb72d11244417140be18560f6affe9cf83899fe00ab4e3017b'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = 'b88548f68f153d6bc8f93c6a2ebcb00344107aed747eff6594714161cabc6680'
+export const WS_MODELS_HASH = 'e3177682637fff82e7987a8e53cd5755df8c1c869645f32ca2781a119dc0ea8d'
 
 // A merge patch (payload members marked `partial`): any subset of the members, at any depth.
 export type WsPartial<T> = { [K in keyof T]?: T[K] extends readonly unknown[] ? T[K] : T[K] extends object ? WsPartial<T[K]> : T[K] }
@@ -33,6 +33,28 @@ export interface WsModels {
     provider_account_id: string | null
     has_provider_token: boolean
     admin_validated_at: string | null
+  }
+  /**
+   * A vault the caller reaches (ops::vaults::toJson(AccessibleVault), core/src/ops/Vaults.cpp): a summary of
+   * the vault (no backing directory or upstream details; storage.vault.get has them, behind manage) and what
+   * the resolvers that enforce access grant at its root. storage.vault.accessible.list rows, `vh vault list
+   * --accessible --json`.
+   */
+  'AccessibleVault': {
+    id: number
+    name: string
+    slug: string
+    effective_fuse_name: string
+    type: 'local' | 's3'
+    description: string
+    quota: number
+    owner_id: number
+    owner: string
+    is_active: boolean
+    created_at: string
+    browse: boolean
+    manage: boolean
+    via: ('owner' | 'vault_role' | 'group_role' | 'admin_policy' | 'super_admin')[]
   }
   /**
    * An admin role (rbac::role::to_json(Admin), core/src/rbac/role/Admin.cpp): its identity, every admin
@@ -4725,6 +4747,20 @@ export interface WsContract {
     response: { api_key: WsModels['APIKey'] }
   }
   /**
+   * Every live vault the caller reaches, by any path: as its owner, through a vault role of its own or of one
+   * of its groups, or through its admin role (admin.vaults.<scope>.view, or the global vault filesystem
+   * policy); a super admin reaches all of them. Each row is a vault summary plus what the enforcing resolvers
+   * grant: browse (filesystem List at the vault root, what fs.dir.list {path: "/"} needs), manage (admin
+   * vault View, what storage.vault.get needs) and via (owner, vault_role, group_role, admin_policy,
+   * super_admin; at least one). Unlike storage.vault.list it does not follow the admin role alone. A
+   * deactivated account gets an empty list. Read-only; also answers paired devices (`vh vault list
+   * --accessible`).
+   */
+  'storage.vault.accessible.list': {
+    payload: null
+    response: { vaults: WsModels['AccessibleVault'][] }
+  }
+  /**
    * Create a vault. owner_id, description and quota (bytes, 0 = unlimited) are optional; the daemon picks the
    * backing directory. S3 vaults also need api_key_id and bucket. A refusal with data.code
    * 'encryption_waiver' means the bucket already holds data: resend with accept_encryption_waiver once the
@@ -5394,6 +5430,7 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'storage.apiKey.list',
   'storage.apiKey.remove',
   'storage.apiKey.update',
+  'storage.vault.accessible.list',
   'storage.vault.add',
   'storage.vault.deleted.list',
   'storage.vault.get',
@@ -5659,6 +5696,7 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'storage.apiKey.list': 15000,
   'storage.apiKey.remove': 15000,
   'storage.apiKey.update': 60000,
+  'storage.vault.accessible.list': 15000,
   'storage.vault.add': 180000,
   'storage.vault.deleted.list': 15000,
   'storage.vault.get': 15000,

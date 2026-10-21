@@ -127,6 +127,7 @@ void Handler::registerFileSystemHandlers(const std::shared_ptr<Router>& r) {
 
 void Handler::registerStorageHandlers(const std::shared_ptr<Router>& r) {
     r->registerSessionOnlyHandler("storage.vault.list", &handler::Vaults::list);
+    r->registerSessionOnlyHandler("storage.vault.accessible.list", &handler::Vaults::listAccessible);
     r->registerPayload("storage.vault.add", &handler::Vaults::add);
     r->registerPayload("storage.vault.update", &handler::Vaults::update);
     r->registerPayload("storage.vault.remove", &handler::Vaults::remove);

@@ -383,7 +383,7 @@ std::vector<KeyStatus> status(const Actor& actor, const std::optional<unsigned i
         out.push_back(statusOf(sourceFor(actor, *vaultId), unsealer));
         return out;
     }
-    for (const auto& vault : db::query::vault::Vault::listVaults()) {
+    for (const auto& vault : db::query::vault::Vault::listLiveVaults()) {
         try {
             out.push_back(statusOf(liveSource(vault), unsealer));
         } catch (const Conflict& e) {
@@ -439,7 +439,7 @@ ExportAll exportAll(const Actor& actor, const Channel channel) {
     requireExport(actor);
     requireKeyChannel(channel);
     ExportAll out;
-    for (const auto& vault : db::query::vault::Vault::listVaults()) {
+    for (const auto& vault : db::query::vault::Vault::listLiveVaults()) {
         try {
             out.vaults.push_back(exportFrom(liveSource(vault)));
             log::Registry::audit()->warn("[ops::vault_keys] {} exported {} and {} other needed version(s) through {}",

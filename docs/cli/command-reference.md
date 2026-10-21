@@ -148,11 +148,14 @@ vh vaults
 vh vaults --local
 vh vaults --s3 --limit 5
 vh vaults --json
+vh vault list --accessible [--json]
 vh vault info <id-or-name> [--owner <user-or-id>]
 vh vault delete <id-or-name> [--owner <user-or-id>] [--now] [--delete-upstream | --keep-upstream] [--accept-key-loss] [--yes]
 vh vault deleted [--json]
 vh vault restore <id-or-name> [--owner <user-or-id>]
 ```
+
+`vh vaults` lists the vaults your admin role lets you view. `vault list --accessible` lists every vault you can reach and how: as its owner, through a vault role assigned to you or to one of your groups, through your admin role, or as a super admin. Each row says whether you can browse the vault's files and whether you can manage its settings, decided by the same permission checks that apply when you open it. An account whose only access is owning a vault or holding a vault role sees nothing in `vh vaults`, and those vaults here. Owning a vault opens nothing by itself: without a vault role or an admin role that grants it, its row shows neither browse nor manage. `--accessible` takes no filters or paging.
 
 `vault delete` schedules the deletion: the vault disappears at once and `vault restore` brings it back until `vaults.retention_window` ends (default `5m`); then its data is purged. `--now` purges right away and needs `--yes` (or a typed confirmation in a terminal). For S3 vaults, `--delete-upstream` also deletes the bucket's objects at purge time; the default keeps them, and keeping encrypted objects whose key was never exported needs `--accept-key-loss`. In a terminal, without `--yes`, the command asks instead. `vault deleted` lists pending, purging and purged vaults whose key is still kept. See [Deleting And Restoring Vaults](/vaults/deleting-vaults).
 

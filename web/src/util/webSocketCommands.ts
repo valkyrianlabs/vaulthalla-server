@@ -226,6 +226,10 @@ export interface WebSocketCommandMap {
 
   'storage.vault.list': { payload: null; response: { vaults: Vault[] } }
 
+  // Every vault the caller reaches (owner, vault role, group role, admin policy, super admin), with browse/manage as
+  // the server's resolvers decide them. Vaulthalla Desktop's file browser reads it; the console doesn't yet.
+  'storage.vault.accessible.list': WsContract['storage.vault.accessible.list']
+
   // owner_id, description and quota (bytes, 0 = unlimited) are optional on both types. There is no mount point
   // input: the daemon picks a vault's backing directory itself.
   'storage.vault.add': {
