@@ -108,7 +108,7 @@ Do not rely only on the provider bucket as a complete Vaulthalla backup. You sti
 
 ## Hardware TPM Recovery
 
-Hardware TPM-sealed material is tied to the original TPM context. For host replacement, exported vault keys and internal secrets are the portable recovery material: after restoring the database on the new host, `vh vault keys import` re-seals each vault's keys under the new host's TPM (see [Restore Vault Keys](/vaults/secrets-and-key-export#restore-vault-keys)). Plan migration and restore testing before a hardware failure.
+Hardware TPM-sealed material is tied to the original TPM context. For host replacement, exported vault keys and internal secrets are the portable recovery material: after restoring the database on the new host, `vh vault keys import` re-seals each vault's keys under the new host's TPM (see [Restore Vault Keys](/vaults/secrets-and-key-export#restore-vault-keys)). The exports' attestations stay valid there: they are checked against public keys kept in the restored database, so take exports from a current Vaulthalla (older exports carry none and can only be salvaged). Plan migration and restore testing before a hardware failure.
 
 ## Software TPM Recovery
 

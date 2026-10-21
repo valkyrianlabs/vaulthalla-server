@@ -58,8 +58,16 @@ json VaultKeys::importKeys(const json& payload, const std::shared_ptr<Session>& 
     std::optional<std::string> confirmName;
     if (payload.contains("confirm_name") && payload.at("confirm_name").is_string())
         confirmName = payload.at("confirm_name").get<std::string>();
+    auto mode = keys::ImportMode::Recover;
+    if (payload.contains("mode") && !payload.at("mode").is_null()) {
+        const auto& m = payload.at("mode");
+        if (!m.is_string() || (m.get<std::string>() != "recover" && m.get<std::string>() != "salvage"))
+            throw ops::Invalid("mode must be \"recover\" or \"salvage\"");
+        if (m.get<std::string>() == "salvage") mode = keys::ImportMode::Salvage;
+    }
     return keys::toJson(keys::importKeys(actorOf(session),
-                                         {.vault_id = vaultId, .keys = &payload.at("keys"), .confirm_name = confirmName},
+                                         {.vault_id = vaultId, .keys = &payload.at("keys"), .confirm_name = confirmName,
+                                          .mode = mode},
                                          channel));
 }
 

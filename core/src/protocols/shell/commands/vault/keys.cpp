@@ -168,9 +168,16 @@ static void wipe_keys(nlohmann::json& j) {
 
 static std::string import_text(const keys_ops::ImportResult& r) {
     std::string out = fmt::format("Vault {} ('{}'){}: {}\n", r.vault_id, r.vault_name, r.deleted ? " [deleted]" : "",
-                                  r.written ? "keys restored" : "nothing written");
+                                  r.salvage ? "salvaged" : r.written ? "keys restored" : "nothing written");
     for (const auto& v : r.versions)
         out += fmt::format("  version {}: {} ({})\n", v.version, keys_ops::to_string(v.outcome), v.detail);
+    if (const auto& s = r.salvage) {
+        out += fmt::format("  salvage: {} file(s) re-encrypted under new key version {}, {} unrecoverable, {} skipped "
+                           "(remote), {} deferred, {} failed\n", s->salvaged, s->new_version.value_or(0),
+                           s->unrecoverable, s->skipped_remote, s->deferred, s->failed);
+        for (const auto& f : s->failures)
+            out += fmt::format("    {} {} (version {}): {}\n", f.kind, f.path, f.version, f.reason);
+    }
     out += r.key_available ? "  the vault's key is available on this host\n" : "";
     if (r.note) out += "  " + *r.note + "\n";
     return out;
@@ -200,8 +207,11 @@ static CommandResult handle_vault_keys_import(const CommandCall& call) {
     if (!vaultId) return invalid(error);
     const bool json = hasFlag(call, usage->resolveFlag("json_output")->aliases);
     const auto confirmName = optVal(call, "confirm-name");
+    const auto mode = hasFlag(call, usage->resolveFlag("salvage")->aliases) ? keys_ops::ImportMode::Salvage
+                                                                            : keys_ops::ImportMode::Recover;
     const auto run = [&](const std::optional<std::string>& name) {
-        return keys_ops::importKeys(call.user, {.vault_id = *vaultId, .keys = &doc, .confirm_name = name}, cli_channel());
+        return keys_ops::importKeys(call.user, {.vault_id = *vaultId, .keys = &doc, .confirm_name = name, .mode = mode},
+                                    cli_channel());
     };
 
     try {

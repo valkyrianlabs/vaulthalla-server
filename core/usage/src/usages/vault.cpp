@@ -571,13 +571,18 @@ static std::shared_ptr<CommandUsage> key_import(const std::weak_ptr<CommandUsage
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"import"};
     cmd->effect = CommandEffect::Destructive;
-    cmd->description = "Restore a vault's keys from a key export (vh vault keys export, or a Vaulthalla Desktop backup) "
+    cmd->description = "Recover a vault's keys from a key export (vh vault keys export, or a Vaulthalla Desktop backup) "
                        "when this host can no longer unseal them or no longer holds them: after the vault master was "
-                       "lost or replaced, or a database restored from an older backup. The file is read by vh on your "
-                       "side (--file -: standard input; decrypt a GPG export first). Every key version is verified "
-                       "against files sealed under it before anything is written; a key this host can still unseal is "
-                       "never replaced. Writing asks you to type the vault's name (--confirm-name without a terminal). "
-                       "Deleted vaults that are still restorable work too.";
+                       "lost or replaced, or a database restored from an older backup. Import is a recovery mechanism, "
+                       "never a way to set a key: it restores only key versions the vault had, proven by this node's "
+                       "signed attestation in the export (or a key this host still holds); a key this host can still "
+                       "unseal is never replaced, and a version the vault has no record of is refused. A version that "
+                       "can't be proven (an export from before attestations, another node's key) is reported as "
+                       "needing salvage: --salvage re-encrypts every file the supplied key decrypts under a fresh key "
+                       "this host creates and reports the rest as unrecoverable; the supplied key is never stored. The "
+                       "file is read by vh on your side (--file -: standard input; decrypt a GPG export first). "
+                       "Writing asks you to type the vault's name (--confirm-name without a terminal). Deleted vaults "
+                       "that are still restorable can be recovered (not salvaged).";
     cmd->positionals = {vaultPos};
     cmd->required = {Option::Multi("key_file", "The key export to read (on your side; - for standard input)",
                                    {"file", "f"}, {"path"})
@@ -585,11 +590,17 @@ static std::shared_ptr<CommandUsage> key_import(const std::weak_ptr<CommandUsage
     cmd->optional = {owner,
                      Optional::ManyToOne("confirm_name", "The vault's name, confirming the import without a terminal",
                                          {"confirm-name"}, "name")};
-    cmd->optional_flags = {jsonFlag};
+    cmd->optional_flags = {jsonFlag,
+                           Flag::Alias("salvage",
+                                       "Best effort for versions that can't be proven: re-encrypt what their key "
+                                       "decrypts under a fresh key; never store the supplied key",
+                                       "salvage")};
     cmd->examples = {
-        {"vh vault keys import 12 --file vault-12-keys.json", "Restore vault 12's keys from an export (asks to confirm)."},
+        {"vh vault keys import 12 --file vault-12-keys.json", "Recover vault 12's keys from an export (asks to confirm)."},
         {"vh vault keys import archive --owner alice --file - --confirm-name archive",
-         "Read the export from standard input (e.g. piped from gpg --decrypt, so the keys never touch disk)."}
+         "Read the export from standard input (e.g. piped from gpg --decrypt, so the keys never touch disk)."},
+        {"vh vault keys import 12 --file old-export.json --salvage",
+         "Salvage vault 12's files with keys this node can't attest (asks to confirm; prints a report)."}
     };
     return cmd;
 }
