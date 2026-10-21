@@ -103,7 +103,7 @@ private:
 
     // ---- misc helpers
     static void logFail(std::string_view where, const beast::error_code& ec);
-    void sendParseError(std::string_view msg);
+    void sendParseError(std::string_view msg, const json& requestId = nullptr);
     void sendInternalError();
     [[nodiscard]] std::string getUserAgent() const;
     [[nodiscard]] std::string getIPAddress() const;
