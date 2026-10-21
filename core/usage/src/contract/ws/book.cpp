@@ -14,7 +14,7 @@ std::vector<WsCommandUsage> commands() {
                         detail::syncCommands(), detail::apiKeyCommands(), detail::permissionCommands(),
                         detail::statsCommands(), detail::dashboardCommands(), detail::s3GatewayCommands(),
                         detail::pricingCommands(), detail::settingsCommands(), detail::emailCommands(),
-                        detail::deviceCommands()})
+                        detail::deviceCommands(), detail::vaultKeyCommands()})
         all.insert(all.end(), std::make_move_iterator(part.begin()), std::make_move_iterator(part.end()));
 
     std::ranges::sort(all, {}, &WsCommandUsage::command);

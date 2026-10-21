@@ -21,8 +21,10 @@
 #include "preview/cache/Store.hpp"
 #include "sync/Controller.hpp"
 #include "vault/Retention.hpp"
+#include "vault/EncryptionManager.hpp"
 
 #include <paths.h>
+#include <ranges>
 #include <string>
 
 using namespace vh::storage;
@@ -59,7 +61,29 @@ void evictCachedVault(const unsigned int vaultId, const std::filesystem::path& f
 
 }
 
+namespace {
+// What the health surfaces say about a vault whose engine failed to start.
+Manager::UnavailableVault unavailableFrom(const vh::vault::model::Vault& vault, const std::exception& e) {
+    Manager::UnavailableVault out{.vault_id = vault.id, .vault_name = vault.name, .reason = "engine_failed",
+                                  .detail = e.what()};
+    if (const auto* keys = dynamic_cast<const vh::vault::KeyUnavailable*>(&e)) out.reason = keys->code();
+    return out;
+}
+}
+
 Manager::Manager() = default;
+
+void Manager::noteEngineFailure(const vh::vault::model::Vault& vault, const std::exception& e) {
+    std::scoped_lock lock(mutex_);
+    unavailable_[vault.id] = unavailableFrom(vault, e);
+}
+
+std::vector<Manager::UnavailableVault> Manager::unavailableVaults() const {
+    std::scoped_lock lock(mutex_);
+    std::vector<UnavailableVault> out;
+    for (const auto& v : unavailable_ | std::views::values) out.push_back(v);
+    return out;
+}
 
 void Manager::initStorageEngines() {
     log::Registry::storage()->debug("[StorageManager] Initializing storage engines...");
@@ -80,6 +104,7 @@ void Manager::initStorageEngines() {
     }
 
     engines_.clear();
+    unavailable_.clear();
 
     try {
         for (auto& vault : db::query::vault::Vault::listVaults()) {
@@ -101,11 +126,16 @@ void Manager::initStorageEngines() {
                 if (!engine) continue;
                 engines_[enginePathKey(engine)] = engine;
                 vaultToEngine_[vault->id] = engine;
+                unavailable_.erase(vault->id);
             } catch (const std::exception& e) {
                 log::Registry::storage()->error("[StorageManager] Skipping vault {} (ID: {}) after engine initialization failed: {}",
                                                 vault ? vault->name : "<null>",
                                                 vault ? vault->id : 0,
                                                 e.what());
+                if (vault) {
+                    vaultToEngine_.erase(vault->id);
+                    unavailable_[vault->id] = unavailableFrom(*vault, e);
+                }
             }
         }
     } catch (const std::exception& e) {
@@ -249,12 +279,18 @@ void Manager::reloadEngine(const unsigned int vaultId) {
     if (!vault) return;
 
     std::shared_ptr<Engine> engine;
-    if (vault->type == VaultType::S3) engine = std::make_shared<CloudEngine>(std::static_pointer_cast<S3Vault>(vault));
-    else engine = std::make_shared<Engine>(vault);
+    try {
+        if (vault->type == VaultType::S3) engine = std::make_shared<CloudEngine>(std::static_pointer_cast<S3Vault>(vault));
+        else engine = std::make_shared<Engine>(vault);
+    } catch (const std::exception& e) {
+        noteEngineFailure(*vault, e);
+        throw;
+    }
 
     std::scoped_lock lock(mutex_);
     if (const auto it = vaultToEngine_.find(vaultId); it != vaultToEngine_.end())
         eraseEnginePathEntry(engines_, it->second);
+    unavailable_.erase(vaultId);
     vaultToEngine_[vaultId] = engine;
     engines_[enginePathKey(engine)] = engine;
     log::Registry::storage()->info("[StorageManager] Reloaded engine for vault with ID: {}", vaultId);
@@ -286,6 +322,7 @@ void Manager::removeVault(const unsigned int vaultId) {
         db::query::vault::Vault::removeVault(vaultId);
 
         vaultToEngine_.erase(vaultId);
+        unavailable_.erase(vaultId);
         evictCachedVault(vaultId, fuseRootOf(removed));
     }
 
@@ -311,6 +348,7 @@ void Manager::retireVault(const unsigned int vaultId) {
             eraseEnginePathEntry(engines_, retired);
             vaultToEngine_.erase(it);
         }
+        unavailable_.erase(vaultId);
     }
     evictCachedVault(vaultId, fuseRootOf(retired));
     // Derived artifacts are a disposable cache; a restored vault regenerates them on demand.
@@ -334,8 +372,13 @@ std::shared_ptr<Vault> Manager::reinstateVault(const unsigned int vaultId) {
     if (!vault) throw std::runtime_error("vault " + std::to_string(vaultId) + " is not live; cannot reinstate it");
 
     std::shared_ptr<Engine> engine;
-    if (vault->type == VaultType::S3) engine = std::make_shared<CloudEngine>(std::static_pointer_cast<S3Vault>(vault));
-    else engine = std::make_shared<Engine>(vault);
+    try {
+        if (vault->type == VaultType::S3) engine = std::make_shared<CloudEngine>(std::static_pointer_cast<S3Vault>(vault));
+        else engine = std::make_shared<Engine>(vault);
+    } catch (const std::exception& e) {
+        noteEngineFailure(*vault, e);
+        throw;
+    }
 
     const auto fuseRoot = fuseRootOf(engine);
     // Nothing of an earlier vault at this FUSE name may linger, then the root comes back (its inode was dropped at
@@ -357,6 +400,7 @@ std::shared_ptr<Vault> Manager::reinstateVault(const unsigned int vaultId) {
         if (const auto it = vaultToEngine_.find(vaultId); it != vaultToEngine_.end()) eraseEnginePathEntry(engines_, it->second);
         vaultToEngine_[vaultId] = engine;
         engines_[enginePathKey(engine)] = engine;
+        unavailable_.erase(vaultId);
     }
     if (const auto& sync = runtime::Deps::get().syncController) sync->refreshEngines();
     sync::events::subscriptions::onVaultReinstated(vaultId);

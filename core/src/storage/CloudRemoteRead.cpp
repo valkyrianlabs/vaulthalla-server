@@ -19,6 +19,7 @@
 #include "storage/ScopedS3RequestUsageCapture.hpp"
 #include "storage/s3/Controller.hpp"
 #include "vault/EncryptionManager.hpp"
+#include "vault/APIKeyManager.hpp"
 #include "vault/model/S3Vault.hpp"
 
 #include <fmt/format.h>
@@ -383,6 +384,101 @@ std::shared_ptr<vh::fs::model::File> CloudEngine::hydrateNow(const std::shared_p
     } catch (const s3::ObjectNotFound&) {
         settle();
         throw ContentUnavailable("Remote object not found: " + f->path.string());
+    } catch (...) {
+        settle();
+        throw;
+    }
+}
+
+std::shared_ptr<CloudEngine> CloudEngine::forKeyVerification(const std::shared_ptr<vh::vault::model::S3Vault>& vault) {
+    if (!vault) throw std::invalid_argument("a key verification engine needs a vault");
+    auto engine = std::make_shared<CloudEngine>();
+    engine->vault = vault;
+    engine->key_ = runtime::Deps::get().apiKeyManager->getAPIKey(vault->api_key_id);
+    if (!engine->key_) throw ContentUnavailable("the vault's S3 API key is gone");
+    engine->s3Provider_ = std::make_shared<s3::Controller>(engine->key_, vault->bucket);
+    engine->resolveS3ProviderConfiguration();
+    engine->s3Provider_->setUsageVault(vault->id);
+    return engine;
+}
+
+bool CloudEngine::verifyRemoteObjectWithKey(const std::string& objectKey, const uint64_t storedBytes,
+                                            const std::string& ivB64, const unsigned int keyVersion,
+                                            const std::span<const uint8_t> key) const {
+    namespace detail = cloud_remote_read_detail;
+    constexpr const char* kOperation = "key_import_verify";
+    if (!s3Provider_) throw std::runtime_error("Cloud engine has no S3 controller");
+    if (key.size() != crypto::util::AES_KEY_SIZE) throw std::invalid_argument("a vault key is 32 bytes");
+    const std::filesystem::path path = "/" + objectKey;
+    const auto iv = detail::decodeIv(ivB64, path);
+
+    auto reservation = reserveRemoteFetch({.path = path, .operation = kOperation, .head_requests = 1,
+                                           .get_requests = 1, .download_bytes = storedBytes});
+    s3::S3RequestBudget cap;
+    cap.max_head_requests = 1;
+    cap.max_get_requests = 1;
+    cap.max_downloaded_bytes = storedBytes + detail::kErrorBodySlack;
+    std::optional<ScopedS3RequestUsageCapture> capture(std::in_place, *this, cap);
+    const auto settle = [&] {
+        if (!capture) return;
+        auto used = capture->usage();
+        used.source = kOperation;
+        capture.reset();
+        if (reservation) reservation->commit(used);
+    };
+
+    try {
+        const auto head = headRemoteObject(path);
+        if (!head) throw ContentUnavailable("Remote object not found: " + objectKey);
+        if (head->requires_restore)
+            throw ContentUnavailable("Remote object is in an archive tier and must be restored first: " + objectKey);
+        if (!head->encrypted || head->key_version != keyVersion || (!head->iv_b64.empty() && head->iv_b64 != ivB64))
+            throw ContentUnavailable("Remote object " + objectKey + " is no longer sealed under key version " +
+                                     std::to_string(keyVersion) + " as indexed; sync the vault");
+        const uint64_t length = head->content_length.value_or(storedBytes);
+        if (length < crypto::util::AES_TAG_SIZE || length > storedBytes)
+            throw ContentUnavailable(fmt::format("Remote object {} is {} bytes but the index expects {}", objectKey,
+                                                 length, storedBytes));
+
+        crypto::util::GcmStreamVerifier verifier(key.first<crypto::util::AES_KEY_SIZE>(),
+                                                 crypto::util::GcmIv(iv.data(), iv.size()));
+        const uint64_t body = length - crypto::util::AES_TAG_SIZE;
+        uint64_t seen = 0;
+        std::array<uint8_t, crypto::util::AES_TAG_SIZE> tag{};
+        s3::GetObjectOptions options;
+        if (!head->etag.empty()) options.if_match = head->etag;
+        options.max_body_bytes = length;
+        const auto result = s3Provider_->streamObject(objectKey, options, [&](std::span<const uint8_t> bytes) {
+            // The body goes through the verifier; the last 16 bytes are the tag.
+            while (!bytes.empty()) {
+                if (seen < body) {
+                    const auto n = static_cast<std::size_t>(std::min<uint64_t>(bytes.size(), body - seen));
+                    verifier.update(bytes.first(n));
+                    bytes = bytes.subspan(n);
+                    seen += n;
+                } else {
+                    const auto at = static_cast<std::size_t>(seen - body);
+                    const auto n = std::min(bytes.size(), tag.size() - at);
+                    std::copy_n(bytes.begin(), n, tag.begin() + static_cast<std::ptrdiff_t>(at));
+                    bytes = bytes.subspan(n);
+                    seen += n;
+                }
+            }
+        });
+        settle();
+        if (result.body_bytes != length)
+            throw ContentUnavailable(fmt::format("Remote object {} returned {} of {} bytes", objectKey,
+                                                 result.body_bytes, length));
+        return verifier.finish(tag);
+    } catch (const s3::RequestBudgetExceeded& e) {
+        settle();
+        throw ContentUnavailable(fmt::format("S3 request budget refused verifying {}: {}", objectKey, e.what()));
+    } catch (const s3::ConditionalRequestFailed&) {
+        settle();
+        throw ContentUnavailable("Remote object changed while it was being verified: " + objectKey);
+    } catch (const s3::ObjectNotFound&) {
+        settle();
+        throw ContentUnavailable("Remote object not found: " + objectKey);
     } catch (...) {
         settle();
         throw;

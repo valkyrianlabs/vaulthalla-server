@@ -24,7 +24,14 @@ namespace vh::protocols::shell {
 
 namespace {
 thread_local std::optional<ConfirmationNeeded> tlsConfirmationNeeded;
+thread_local bool tlsAgentCall = false;
 }
+
+AgentCallScope::AgentCallScope() : previous_(std::exchange(tlsAgentCall, true)) {}
+
+AgentCallScope::~AgentCallScope() { tlsAgentCall = previous_; }
+
+bool AgentCallScope::active() noexcept { return tlsAgentCall; }
 
 void noteConfirmationNeeded(std::string code, std::vector<std::string> flags) {
     tlsConfirmationNeeded = ConfirmationNeeded{.code = std::move(code), .flags = std::move(flags)};
@@ -147,7 +154,7 @@ std::string Router::canonicalFor(const std::string& nameOrAlias) const {
 }
 
 CommandResult Router::executeLine(const std::string& line, const std::shared_ptr<User>& user, SocketIO* io,
-                                  std::optional<TransferPeer> transfer) const {
+                                  std::optional<TransferPeer> transfer, std::optional<std::string> input) const {
     log::Registry::shell()->debug("[Router] Executing line: '{}'", redactLineForLog(line));
 
     auto call = parseTokens(tokenize(line));
@@ -155,6 +162,7 @@ CommandResult Router::executeLine(const std::string& line, const std::shared_ptr
     call.user = user;
     call.io = io;
     call.transfer = std::move(transfer);
+    call.input = std::move(input);
 
     if (call.name.empty()) return invalid("No command provided.");
 

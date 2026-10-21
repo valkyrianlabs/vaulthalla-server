@@ -549,6 +549,51 @@ static std::shared_ptr<CommandUsage> key_inspect(const std::weak_ptr<CommandUsag
     return cmd;
 }
 
+static std::shared_ptr<CommandUsage> key_status(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = buildBaseUsage(parent);
+    cmd->aliases = {"status"};
+    cmd->effect = CommandEffect::Read;
+    cmd->description = "Show each vault's key backup state: the current key version and its key check (a public "
+                       "fingerprint, never key material), the last exported version, whether a rotation is under way, "
+                       "and every key version the vault still needs (current, an unfinished rotation's outgoing key, "
+                       "retired versions recovery data references). Deleted vaults within key retention are included.";
+    cmd->positionals = {vaultOrAll};
+    cmd->optional = {owner};
+    cmd->optional_flags = {jsonFlag};
+    cmd->examples = {
+        {"vh vault keys status all", "Key backup state of every vault."},
+        {"vh vault keys status 42 --json", "The same for the vault with ID 42, as JSON."}
+    };
+    return cmd;
+}
+
+static std::shared_ptr<CommandUsage> key_import(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = buildBaseUsage(parent);
+    cmd->aliases = {"import"};
+    cmd->effect = CommandEffect::Destructive;
+    cmd->description = "Restore a vault's keys from a key export (vh vault keys export, or a Vaulthalla Desktop backup) "
+                       "when this host can no longer unseal them or no longer holds them: after the vault master was "
+                       "lost or replaced, or a database restored from an older backup. The file is read by vh on your "
+                       "side (--file -: standard input; decrypt a GPG export first). Every key version is verified "
+                       "against files sealed under it before anything is written; a key this host can still unseal is "
+                       "never replaced. Writing asks you to type the vault's name (--confirm-name without a terminal). "
+                       "Deleted vaults that are still restorable work too.";
+    cmd->positionals = {vaultPos};
+    cmd->required = {Option::Multi("key_file", "The key export to read (on your side; - for standard input)",
+                                   {"file", "f"}, {"path"})
+                         .withGen("path", contract::gen::constant("keys.json"))};
+    cmd->optional = {owner,
+                     Optional::ManyToOne("confirm_name", "The vault's name, confirming the import without a terminal",
+                                         {"confirm-name"}, "name")};
+    cmd->optional_flags = {jsonFlag};
+    cmd->examples = {
+        {"vh vault keys import 12 --file vault-12-keys.json", "Restore vault 12's keys from an export (asks to confirm)."},
+        {"vh vault keys import archive --owner alice --file - --confirm-name archive",
+         "Read the export from standard input (e.g. piped from gpg --decrypt, so the keys never touch disk)."}
+    };
+    return cmd;
+}
+
 static std::shared_ptr<CommandUsage> key_rotate(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"rotate", "renew"};
@@ -579,7 +624,9 @@ static std::shared_ptr<CommandUsage> key(const std::weak_ptr<CommandUsage>& pare
          "Rotate the encryption key for the vault named 'myvault' owned by 'alice'."}
     };
     cmd->subcommands = {
+        key_status(cmd->weak_from_this()),
         key_export(cmd->weak_from_this()),
+        key_import(cmd->weak_from_this()),
         key_rotate(cmd->weak_from_this()),
         key_inspect(cmd->weak_from_this())
     };

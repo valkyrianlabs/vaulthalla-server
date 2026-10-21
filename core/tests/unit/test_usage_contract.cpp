@@ -333,14 +333,23 @@ bool payloadDeclares(const contract::WsCommandUsage& cmd, const std::string& dot
 
 TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
     static const std::set<std::string> kKinds{"denied", "not_found", "invalid", "conflict", "unauthorized", "error"};
-    // ops::Refused codes (core/include/ops/Error.hpp): device pairing only.
-    static const std::set<std::string> kRefusedCodes{"no_pairing_window", "rate_limited", "device_unknown"};
+    // ops::Refused codes (core/include/ops/Error.hpp), each allowed only on the commands that send it: device
+    // pairing's, and the vault key commands' D4 channel refusals (a session that isn't a paired device's).
+    static const std::map<std::string, std::set<std::string>> kRefusedCodes{
+        {"no_pairing_window", {}}, {"rate_limited", {}}, {"device_unknown", {}},
+        {"export_requires_device", {"vault.keys.export", "vault.keys.export.confirm"}},
+        {"import_requires_device", {"vault.keys.import"}}};
+    const auto refusedCodeAllowed = [](const std::string& code, const std::string& command) {
+        const auto it = kRefusedCodes.find(code);
+        if (it == kRefusedCodes.end()) return false;
+        return it->second.empty() ? command.starts_with("device.") : it->second.contains(command);
+    };
     int confirmations = 0;
     for (const auto& cmd : contract::ws::commands()) {
         for (const auto& kind : cmd.refusal_codes) {
-            EXPECT_TRUE(kKinds.contains(kind) || (kRefusedCodes.contains(kind) && cmd.command.starts_with("device.")))
-                << cmd.command << ": refusal_codes holds generic kinds and the device pairing codes only; '" << kind
-                << "' belongs in confirmations";
+            EXPECT_TRUE(kKinds.contains(kind) || refusedCodeAllowed(kind, cmd.command))
+                << cmd.command << ": refusal_codes holds generic kinds and the ops::Refused codes of the commands "
+                << "that send them only; '" << kind << "' belongs in confirmations";
         }
         for (const auto& kind : cmd.untyped_refusals)
             EXPECT_TRUE(kKinds.contains(kind)) << cmd.command << ": untyped refusal '" << kind << "'";

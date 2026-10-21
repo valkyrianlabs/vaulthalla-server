@@ -42,6 +42,39 @@ Super admins also get **Devices → All devices**: every user's devices with the
 card with the listener's live status (address, port, connections, any bind error, the server key fingerprint) and an
 on/off switch. Settings → Device listener links there.
 
+## Vault key backup, status and restore
+
+`vh vault keys status` shows each vault's key backup state without printing key material: the current key version
+and its **key check** (a public fingerprint that identifies a key without revealing it), the last exported version,
+whether a rotation is under way, and every key version the vault still needs. Deleted vaults whose key is still
+retained are included. A paired Vaulthalla Desktop uses the same information to back keys up to 1Password: it exports
+over its paired connection and confirms each backup by its key check, and the server records the backup only if the
+key is still current.
+
+Key exports are now complete during a rotation: an export taken before the rotation finished re-encrypting the vault
+used to omit the previous key, which still decrypts the files not yet re-encrypted. Every export now carries all
+versions the vault needs (the current key, an unfinished rotation's previous key, and retired keys recovery data
+uses), each with its key check, and a deleted vault's export carries them too. Keys still leave the server only
+through the local `vh` CLI or a paired device, never the web console or an AI agent.
+
+**Restoring keys.** `vh vault keys import <vault> --file <export>` puts a vault's keys back when this host can no
+longer use them: after the master key was lost or replaced (for example a database restored onto a new host), after a
+database restore that predates a key rotation, or for a deleted vault that can still be restored. `vh` reads the
+export on your side (`--file -` reads standard input, so a GPG export can be decrypted into a pipe). Every key version
+is verified first, against its key check and by decrypting files sealed under it; a key that decrypts none of the
+vault's files is refused, and a key the host can still use is never replaced. Writing asks you to type the vault's
+name (`--confirm-name` without a terminal); the vault starts again right away. An S3 vault without a local copy of
+its data is verified against one object downloaded from its bucket (within its price budget, never written to disk).
+A paired Vaulthalla Desktop restores from 1Password the same way.
+
+**No new key over encrypted data (behavior change).** Vaulthalla used to create a fresh key at startup for a vault whose
+key record was missing, even when the vault held encrypted files that key could never decrypt. Now such a vault (or one
+whose key doesn't unseal, or whose files need a key version that is gone) does not start: `vh status` reports degraded and
+names it, the console's health turns degraded, `vh vault keys status` says why, and the log names the import
+command. New and empty vaults still get their first key automatically.
+
+See [Secrets And Key Export](https://vaulthalla.io/docs/vaults/secrets-and-key-export).
+
 ## Let Claude Code or Codex operate Vaulthalla
 
 `vh mcp` is a Model Context Protocol server built into the `vh` CLI, and `vh skill install --agent claude|codex`
@@ -75,17 +108,17 @@ Each `vh` command declares whether it reads, writes or is destructive. The machi
 ## Every ws command is in the published contract
 
 The ws contract the daemon publishes (`vh_usage --json`, identified by `meta.contract.get`) now describes every
-command it answers on `/ws`: 218 commands, up from 76. File management, vaults and API keys, roles and permissions,
+command it answers on `/ws`: 222 commands, up from 76. File management, vaults and API keys, roles and permissions,
 shares and share sessions, stats and dashboards, sync conflicts, pricing budgets, the S3 gateway, settings,
-operator email and paired devices are covered, each with its payload, response, session requirement, refusals and
-client timeout. Native clients can be generated from it, and the web console now takes every command's timeout from
-the server.
+operator email, paired devices and vault key backup are covered, each with its payload, response, session
+requirement, refusals and client timeout. Native clients can be generated from it, and the web console now takes
+every command's timeout from the server.
 
-The contract also publishes the shape of every object those commands send: 165 named models (users and roles,
-vaults, devices, files and folders, share links, stats, recovery plans, upstream buckets, S3 gateway credentials,
-budgets, settings sections and more), with unions and patch payloads spelled out. A daemon unit test serializes
-each model with the real code and fails if the published shape and what is sent ever differ. `meta.contract.get`
-adds `models_hash`.
+The contract also publishes the shape of every object those commands send: 169 named models (users and roles,
+vaults, devices, vault key status and exports, files and folders, share links, stats, recovery plans, upstream
+buckets, S3 gateway credentials, budgets, settings sections and more), with unions and patch payloads spelled out.
+A daemon unit test serializes each model with the real code and fails if the published shape and what is sent ever
+differ. `meta.contract.get` adds `models_hash`.
 
 Refusals are now machine-readable almost everywhere: file, share, pricing, email, settings, S3 gateway, vault and
 dashboard commands answer refusals with a `data.code` (`denied`, `not_found`, `invalid`, `conflict`) instead of

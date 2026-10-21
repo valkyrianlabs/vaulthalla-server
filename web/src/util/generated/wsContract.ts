@@ -6,10 +6,10 @@
 export const WS_CONTRACT_VERSION = 2
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = '6ce95d5ce30adf91c5e3f5b8b0264e286e0e0dc7f1ee8153e1a62ef52f78e552'
+export const WS_CONTRACT_HASH = 'e7f86f48e7d314240589511804acb5a5c8c0aedaed224a09194bf6a3b50f2153'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = '8fe71105a27f928773db20d7ed7b9c1cf7a63021b924d494988b0da2cc7322bb'
+export const WS_MODELS_HASH = 'b88548f68f153d6bc8f93c6a2ebcb00344107aed747eff6594714161cabc6680'
 
 // A merge patch (payload members marked `partial`): any subset of the members, at any depth.
 export type WsPartial<T> = { [K in keyof T]?: T[K] extends readonly unknown[] ? T[K] : T[K] extends object ? WsPartial<T[K]> : T[K] }
@@ -1845,6 +1845,12 @@ export interface WsModels {
       probe_latency_ms: number
       probe_error: string | null
     } | null
+    vaults_unavailable: {
+      vault_id: number
+      vault_name: string
+      reason: 'key_missing' | 'key_unsealable' | 'version_missing' | 'engine_failed'
+      detail: string
+    }[]
     summary: {
       services_ready: number
       services_total: number
@@ -2252,6 +2258,88 @@ export interface WsModels {
     next_attempt_at: string | null
     attempts: number
     last_error: string | null
+  }
+  /**
+   * One vault's export document: ops::vault_keys::toJson(VaultExport) (core/src/ops/VaultKeys.cpp), the CLI's
+   * `vh vault keys export` shape (vault::model::generate_json_key_object) plus key_check and every needed
+   * version. vault.keys.import (and `vh vault keys import`) takes it back, alone or in an `all` array.
+   */
+  'VaultKeyExport': {
+    vault_id: number
+    vault_name: string
+    key: string
+    key_check: string
+    key_info: {
+      type: string
+      key_size: number
+      key_version: number
+      iv_size: number
+      tag_size: number
+      iv_gen: string
+      cipher_impl: string
+      hardware_accel: string
+      aad: boolean
+      files_hashed_with: string
+      sealed_by: string
+      created_at: string
+      exported_by: string
+      exported_at: string
+      key_check: string
+    }
+    historical_keys?: {
+      key_version: number
+      key: string
+      key_check: string
+      reason: 'current' | 'rotation' | 'recovery'
+      created_at: string | null
+      retired_at: string | null
+    }[]
+    missing_key_versions?: number[]
+    deleted_vault?: boolean
+  }
+  /**
+   * What a key import did: ops::vault_keys::toJson(ImportResult) (core/src/ops/VaultKeys.cpp; also `vh vault
+   * keys import --json`).
+   */
+  'VaultKeyImportResult': {
+    vault_id: number
+    vault_name: string
+    deleted: boolean
+    written: boolean
+    key_available: boolean
+    note: string | null
+    versions: {
+      version: number
+      outcome: 'restored' | 'unchanged' | 'unverifiable'
+      detail: string
+      verified_files: number
+      failed_files: number
+    }[]
+  }
+  /**
+   * A key version still needed to decrypt the vault's data, identified by its key check (never key bytes):
+   * ops::vault_keys::toJson(KeyStatus) needed_versions[] (core/src/ops/VaultKeys.cpp).
+   */
+  'VaultKeyNeededVersion': { version: number; key_check: string | null; reason: 'current' | 'rotation' | 'recovery' }
+  /**
+   * One vault's key backup state: ops::vault_keys::toJson(KeyStatus) (core/src/ops/VaultKeys.cpp; also `vh
+   * vault keys status --json`). Never key bytes.
+   */
+  'VaultKeyStatus': {
+    vault_id: number
+    vault_name: string
+    deleted: boolean
+    key_retain_until: number | null
+    version: number
+    key_check: string | null
+    key_available: boolean
+    unavailable_reason: 'key_missing' | 'key_unsealable' | 'version_missing' | null
+    unavailable_detail: string | null
+    exported_version: number | null
+    exported_at: number | null
+    rotation_in_progress: boolean
+    needed_versions: WsModels['VaultKeyNeededVersion'][]
+    missing_versions: number[]
   }
   /**
    * A vault's backup/recovery posture (core/src/stats/model/VaultRecovery.cpp to_json; C++
@@ -4973,6 +5061,97 @@ export interface WsContract {
     response: { events: WsModels['UpstreamEventStatus'][] }
   }
   /**
+   * The vault's keys in `vh vault keys export`'s JSON shape plus every needed version with its key_check.
+   * Paired devices only: any other session is refused with export_requires_device (D4). Needs the
+   * encryption-key Export permission. Not recorded as exported: confirm with vault.keys.export.confirm once
+   * the key is stored.
+   */
+  'vault.keys.export': {
+    payload: { vault_id: number }
+    response: {
+      vault_id: number
+      vault_name: string
+      key: string
+      key_check: string
+      key_info: {
+        type: string
+        key_size: number
+        key_version: number
+        iv_size: number
+        tag_size: number
+        iv_gen: string
+        cipher_impl: string
+        hardware_accel: string
+        aad: boolean
+        files_hashed_with: string
+        sealed_by: string
+        created_at: string
+        exported_by: string
+        exported_at: string
+        key_check: string
+      }
+      historical_keys?: {
+        key_version: number
+        key: string
+        key_check: string
+        reason: 'current' | 'rotation' | 'recovery'
+        created_at: string | null
+        retired_at: string | null
+      }[]
+      missing_key_versions?: number[]
+      deleted_vault?: boolean
+    }
+  }
+  /**
+   * Record that the device stored key `version` of the vault. Succeeds only while that version is still
+   * current and key_check matches the daemon's key, else conflict (e.g. a rotation in between). Paired
+   * devices only (export_requires_device otherwise).
+   */
+  'vault.keys.export.confirm': {
+    payload: { vault_id: number; version: number; key_check: string }
+    response: { vault_id: number; version: number; exported_at: number }
+  }
+  /**
+   * Restore the vault's keys from a backup (`keys`: an export, one vault object or an `all` array) when this
+   * host can't unseal or doesn't hold them. Every version is verified before anything is written (its
+   * key_check, then a GCM tag check of files sealed under it); a key this host can unseal is never replaced
+   * (conflict), identical bytes are unchanged, versions with nothing to verify against are skipped
+   * (unverifiable). Writing needs confirm_name = the vault's name, else data.code vault_key_import with what
+   * would be written. Paired devices only (import_requires_device otherwise); the encryption-key Export
+   * permission.
+   */
+  'vault.keys.import': {
+    payload: {
+      vault_id: number
+      keys: WsModels['VaultKeyExport'] | WsModels['VaultKeyExport'][]
+      confirm_name?: string
+    }
+    response: {
+      vault_id: number
+      vault_name: string
+      deleted: boolean
+      written: boolean
+      key_available: boolean
+      note: string | null
+      versions: {
+        version: number
+        outcome: 'restored' | 'unchanged' | 'unverifiable'
+        detail: string
+        verified_files: number
+        failed_files: number
+      }[]
+    }
+  }
+  /**
+   * Key backup state of every vault the caller may inspect (the encryption-key View permission; deleted
+   * vaults within key retention for callers who may remove them), or of vault_id. Never key bytes: each key
+   * version is identified by its key_check. Read-only; safe for any session.
+   */
+  'vault.keys.status': {
+    payload: { vault_id?: number | null }
+    response: { vaults: WsModels['VaultKeyStatus'][] }
+  }
+  /**
    * The cost disclosure a person must see before provider versioning is enabled, with the token
    * vault.recovery.update needs (10 minutes). Read-only: at most one admin inspect, no object requests.
    */
@@ -5244,6 +5423,10 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'upstream.events.enable',
   'upstream.events.repair',
   'upstream.events.status',
+  'vault.keys.export',
+  'vault.keys.export.confirm',
+  'vault.keys.import',
+  'vault.keys.status',
   'vault.recovery.disclosure',
   'vault.recovery.status',
   'vault.recovery.suspend',
@@ -5279,6 +5462,7 @@ export const WS_CONTRACT_CONFIRMATIONS: Readonly<
     { code: 'upstream_destructive_lifecycle', accept_field: 'accept_destructive' },
   ],
   'upstream.bucket.unprotect': [{ code: 'upstream_unprotect', accept_field: 'confirm' }],
+  'vault.keys.import': [{ code: 'vault_key_import', accept_field: 'confirm_name' }],
   'vault.recovery.suspend': [{ code: 'recovery_versioning_suspend', accept_field: 'confirm' }],
   'vault.recovery.update': [
     { code: 'recovery_versioning_disclosure', accept_field: 'disclosure_token' },
@@ -5504,6 +5688,10 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'upstream.events.enable': 120000,
   'upstream.events.repair': 120000,
   'upstream.events.status': 15000,
+  'vault.keys.export': 15000,
+  'vault.keys.export.confirm': 15000,
+  'vault.keys.import': 120000,
+  'vault.keys.status': 15000,
   'vault.recovery.disclosure': 60000,
   'vault.recovery.status': 60000,
   'vault.recovery.suspend': 60000,

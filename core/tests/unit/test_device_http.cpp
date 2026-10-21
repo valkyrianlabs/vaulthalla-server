@@ -17,6 +17,7 @@
 #include "identities/User.hpp"
 #include "ops/Devices.hpp"
 #include "ops/Roles.hpp"
+#include "ops/Error.hpp"
 #include "ops/Vaults.hpp"
 #include "protocols/device/Listener.hpp"
 #include "protocols/device/Mcp.hpp"
@@ -25,11 +26,15 @@
 #include "protocols/http/Session.hpp"
 #include "protocols/ws/Handler.hpp"
 #include "protocols/ws/Router.hpp"
+#include "protocols/ws/Session.hpp"
+#include "protocols/ws/handler/vault/Keys.hpp"
 #include "runtime/Deps.hpp"
 #include "seed/include/init_db_tables.hpp"
 #include "seed/include/seed_db.hpp"
 #include "storage/Engine.hpp"
 #include "storage/Manager.hpp"
+#include "vault/EncryptionManager.hpp"
+#include "vault/KeyCheck.hpp"
 #include "vault/model/Vault.hpp"
 
 #include <boost/asio/io_context.hpp>
@@ -315,7 +320,7 @@ TEST_F(DeviceHttpTest, McpOverStreamableHttp) {
     EXPECT_NE(toolText(list).get<std::string>().find(row.spki_sha256), std::string::npos);
 
     // D4: key and secret export are unreachable, however they are spelled; pairing and exposure stay human.
-    for (const auto* command : {"vault keys export 1", "secrets export jwt-secret", "device approve abc --code 123456",
+    for (const auto* command : {"vault keys export 1", "vault keys import 1 --file keys.json", "secrets export jwt-secret", "device approve abc --code 123456",
                                 "device remote enable"}) {
         const auto refused = http.mcp({{"jsonrpc", "2.0"}, {"id", 4}, {"method", "tools/call"},
                                        {"params", {{"name", "vh_run"}, {"arguments", {{"command", command}}}}}}, v);
@@ -349,6 +354,76 @@ TEST_F(DeviceHttpTest, McpOverStreamableHttp) {
     ASSERT_TRUE(late);
     EXPECT_TRUE(late->at("result").value("isError", false));
     EXPECT_NE(late->dump().find("did not finish"), std::string::npos);
+}
+
+// D4 over the real listener: a paired device exports a vault key and confirms it; a browser session gets
+// export_requires_device for the same command; a device acts with its user's permission; and /mcp reads key status
+// (key checks only) but reaches no export.
+TEST_F(DeviceHttpTest, VaultKeyExportOnlyOnAPairedDevice) {
+    const auto vaultId = engine->vault->id;
+    const auto [key, version] = engine->encryptionManager->currentKey();
+    const auto check = vault::keyCheck(key->bytes(), vaultId, version);
+
+    const ClientIdentity device;
+    (void)paired(device, admin);
+    Client client(port, device);
+    ASSERT_TRUE(client.connect());
+    const auto exported = client.call("vault.keys.export", {{"vault_id", vaultId}});
+    ASSERT_TRUE(exported && exported->value("status", "") == "OK") << (exported ? exported->dump() : "no reply");
+    EXPECT_EQ(exported->at("data").at("key_check"), check);
+    EXPECT_EQ(exported->at("data").at("key_info").at("key_version"), version);
+    const auto confirmed = client.call("vault.keys.export.confirm",
+                                       {{"vault_id", vaultId}, {"version", version}, {"key_check", check}});
+    ASSERT_TRUE(confirmed && confirmed->value("status", "") == "OK") << (confirmed ? confirmed->dump() : "no reply");
+    const auto status = client.call("vault.keys.status", {{"vault_id", vaultId}});
+    ASSERT_TRUE(status && status->value("status", "") == "OK");
+    EXPECT_EQ(status->at("data").at("vaults").at(0).at("exported_version"), version);
+
+    // The same command from a browser session.
+    auto console = std::make_shared<protocols::ws::Session>(std::make_shared<protocols::ws::Router>());
+    console->user = admin;
+    try {
+        (void)protocols::ws::handler::VaultKeys::exportKeys({{"vault_id", vaultId}}, console);
+        ADD_FAILURE() << "a browser session got key material";
+    } catch (const ops::Refused& e) {
+        EXPECT_EQ(e.code, "export_requires_device");
+    }
+
+    // A device is its user: without the Export permission it is denied.
+    const ClientIdentity theirs;
+    (void)paired(theirs, stranger);
+    Client other(port, theirs);
+    ASSERT_TRUE(other.connect());
+    const auto denied = other.call("vault.keys.export", {{"vault_id", vaultId}});
+    ASSERT_TRUE(denied);
+    EXPECT_EQ(denied->value("status", ""), "ERROR");
+    EXPECT_EQ(denied->at("data").value("code", ""), "denied");
+
+    // /mcp: status is readable (key checks, never keys); no spelling of export or import runs.
+    HttpClient http(port, device);
+    ASSERT_TRUE(http.connect());
+    ASSERT_TRUE(http.mcp({{"jsonrpc", "2.0"}, {"id", 1}, {"method", "initialize"},
+                          {"params", {{"protocolVersion", "2025-11-25"}, {"capabilities", json::object()},
+                                      {"clientInfo", {{"name", "test"}, {"version", "1"}}}}}}));
+    const std::vector<std::pair<std::string, std::string>> v{{"MCP-Protocol-Version", "2025-11-25"}};
+    const auto read = http.mcp({{"jsonrpc", "2.0"}, {"id", 2}, {"method", "tools/call"},
+                                {"params", {{"name", "vh_read"},
+                                            {"arguments", {{"command", "vault keys status " + std::to_string(vaultId) +
+                                                                           " --json"}}}}}}, v);
+    ASSERT_TRUE(read);
+    EXPECT_FALSE(read->at("result").value("isError", false)) << read->dump();
+    const auto text = toolText(read).get<std::string>();
+    EXPECT_NE(text.find(check), std::string::npos);
+    EXPECT_EQ(text.find("\"key\""), std::string::npos);
+    for (const auto& command : {"vault keys export " + std::to_string(vaultId), std::string("vault k export all"),
+                                "vault keys import " + std::to_string(vaultId) + " --file keys.json --confirm-name x",
+                                "VAULT KEYS EXPORT " + std::to_string(vaultId)}) {
+        const auto refused = http.mcp({{"jsonrpc", "2.0"}, {"id", 3}, {"method", "tools/call"},
+                                       {"params", {{"name", "vh_run"}, {"arguments", {{"command", command}}}}}}, v);
+        ASSERT_TRUE(refused) << command;
+        EXPECT_NE(toolText(refused).get<std::string>().find("not available to agents"), std::string::npos) << command;
+        EXPECT_EQ(refused->dump().find(exported->at("data").at("key").get<std::string>()), std::string::npos);
+    }
 }
 
 TEST_F(DeviceHttpTest, McpTransportChecks) {

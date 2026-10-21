@@ -379,6 +379,13 @@ std::vector<WsModel> statsSystemModels() {
                  integer("probe_latency_ms"), statsNullable(str("probe_error"))})
              .nullable()
              .desc("null until the pool exists (critical)."),
+         objectArray("vaults_unavailable", "",
+                     {uinteger("vault_id"), str("vault_name"),
+                      str("reason").oneOf({"key_missing", "key_unsealable", "version_missing", "engine_failed"})
+                          .desc("vault::KeyUnavailable's code (restore with vh vault keys import), or engine_failed."),
+                      str("detail")})
+             .desc("Live vaults whose storage engine did not start (storage::Manager::unavailableVaults): their data "
+                   "can't be read. Any entry makes the node at least degraded; empty when every vault runs."),
          object("summary", "",
                 {statsUint("services_ready"), statsUint("services_total"), statsUint("deps_ready"),
                  statsUint("deps_total"), statsUint("protocols_ready"), statsUint("protocols_total"),

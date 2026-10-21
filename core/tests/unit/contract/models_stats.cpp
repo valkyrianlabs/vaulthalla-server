@@ -324,6 +324,10 @@ void checkSystemStats(vh::test::contract_models::Checker& c) {
     health.shell.adminUidBound = true;
     health.database = sm::DatabaseHealth{.poolSize = 4, .reachable = true, .probeLatencyMs = 1, .probeError = "slow"};
     c.check(json(health), "SystemHealth", "healthy system");
+    health.overallStatus = sm::SystemHealthStatus::Degraded;
+    health.vaultsUnavailable.push_back({.vaultId = 12, .vaultName = "archive", .reason = "key_unsealable",
+                                        .detail = "restore it with `vh vault keys import 12 --file <export.json>`"});
+    c.check(json(health), "SystemHealth", "a vault whose key doesn't unseal here");
     c.check(json(sm::SystemHealth{}), "SystemHealth", "system before the pool exists");
 }
 

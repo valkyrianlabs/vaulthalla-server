@@ -528,12 +528,13 @@ versions keep the key version they were sealed with. Vaulthalla keeps every reti
 refuses to delete one while recovery data references it. `vh vault recovery status` lists the key versions recovery
 data still needs, and history marks points sealed under an **older key**, or whose key is **unavailable**.
 
-[Vault key exports](/vaults/secrets-and-key-export#retired-keys-for-recovery-data) include those retired versions under
-`historical_keys`. Export again after a rotation.
+[Vault key exports](/vaults/secrets-and-key-export#every-key-version-a-vault-still-needs) include those retired
+versions under `historical_keys`. Export again after a rotation.
 
-:::callout[Export keys before deleting a vault whose bucket keeps versions]{variant="warning"}
-The export of an already deleted vault carries its current key only, not the retired versions its provider versions
-may need. Export the vault's keys before you delete it.
+:::callout[Export keys before a deleted vault is purged]{variant="warning"}
+While a deleted vault can still be restored, its export carries the retired versions its recovery data needs. Once it
+is purged, the export carries its current key only, not the retired versions its provider versions may need. Export the
+vault's keys before you delete it.
 :::
 
 ## Troubleshooting

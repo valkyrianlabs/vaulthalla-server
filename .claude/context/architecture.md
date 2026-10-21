@@ -148,9 +148,11 @@ usage book and the operation catalog and no daemon types, so the client links it
 - `vh_run` commands are tokenized with a mirror of `Token.hpp`/`Parser.hpp`, resolved like the Router (plural → list,
   positionals descend), checked, and re-rendered from the tokens, so the daemon parses exactly what was checked
   (`McpCatalog.RunLinesParseAsCheckedForEveryDocumentedExample`). Refused before running: unknown commands, groups,
-  `--`, odd option spellings, confirmation flags in the command, and `mcp::exclusions()` (one list: `vault key export`,
+  `--`, odd option spellings, confirmation flags in the command, and `mcp::exclusions()` (one list: `vault key export|import`,
   `secrets export|update`, `setup`, `teardown`, `fs get|put`, `mcp`, `skill`, `device pair|approve|deny`,
-  `device remote enable|disable`; also checked case-insensitively).
+  `device remote enable|disable`; also checked case-insensitively). Defense in depth for key material:
+  `protocols::shell::AgentCallScope` marks a command run for an MCP client (`/mcp`'s executor; a `vh mcp` request
+  carries `"agent": true`), and the vault key handlers refuse under it (`key-backup.md`).
 - Confirmations: a leaf's gates are its flags spelled `yes`/`accept-*`/`adopt-bucket` and the `confirm-token` option.
   Tools never add them on their own (typed bindings' `fixed` `flag:yes` is dropped) and the schema has `confirm`
   (`{"yes": true}`, `{"confirm-token": "<t>"}`). Independently, every call that resolves to an `effect: destructive`
@@ -260,7 +262,9 @@ Normative protocol: `docs/pairing.md` in `vaulthalla/desktop` (its §8 test vect
   minus `auth.login|logout|refresh|register` and the share-recipient commands, plus `device.*`; deactivation or
   deletion is seen on the next command. Pairing: only `device.pair.*` and `meta.contract.get`; anything else is ERROR
   `data.code: device_unknown` (same for unknown and revoked keys). `device.identity.rotate` /
-  `device.server.identity` only in Device mode; `device.pair.*` never on console sessions. Contract auth levels
+  `device.server.identity` only in Device mode; `device.pair.*` never on console sessions. Key material
+  (`vault.keys.export|export.confirm|import`) reaches the handler from any signed-in session but `ops::vault_keys` answers
+  only Device sessions (`export_requires_device` / `import_requires_device` otherwise, D4). Contract auth levels
   `pairing` and `device` (`human` commands also run in Device mode). The sweeper keeps Device sessions while their
   user may sign in (no refresh token to expire) and closes pairing-only ones after 15 minutes (`DeviceEnded`).
   `auth::Manager::revokeSessions` closes Device sessions (they have no token to revoke); revocation closes the
@@ -494,6 +498,12 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   existing name hit UNIQUE(parent_id, name)) stranded the bytes and corrupted the cache. RENAME_EXCHANGE is still
   refused (EINVAL). `Filesystem::repairAtRest` (first sync pass per vault per start) seals plaintext left by older
   builds and corrects ciphertext-length sizes.
+- **No key is minted over sealed data (`EncryptionManager::load_key`, `key-backup.md`).** A vault without a
+  `vault_keys` row gets a fresh key only when nothing is sealed under any key (no files row with an IV, recovery blob,
+  live provider version or encrypted remote index entry). Otherwise, and when a needed row doesn't unseal or a version
+  live files (or a pending rotation) need isn't held, `load_key` throws `vault::KeyUnavailable{key_missing |
+  key_unsealable | version_missing}` naming `vh vault keys import`; the engine doesn't start, `storage::Manager`
+  records it (`unavailableVaults()`), and `stats.system.health` (`vaults_unavailable`) / `vh status` turn degraded.
 - **Vault key rotation is failure- and crash-safe (`sync/rotation/`).** `vh vault keys rotate` only prepares a new
   key; the sync pass re-encrypts. Per file: new ciphertext → `<backing>.vh-rotate` (O_EXCL, fsync file + dir) →
   (cloud, encrypt upstream) PUT with its own IV/version metadata → compare-and-set the `files` row on the old
@@ -688,8 +698,10 @@ policies), `config` (every settings write: one validation, one apply step that r
 is deliberately ungated, see Stats below), `conflicts` (sync conflicts, #187: ws `sync.conflicts.*`, `vh sync resolve` /
 `vh resolve`, the HTTP `/download/conflict` lane's authorization), `upstream` (S3/R2 bucket administration and event
 sync, #237/#96: ws `upstream.*`, `vh upstream …`; see `upstream-control-plane.md`), `recovery` (file recovery: ws `recovery.*` / `vault.recovery.*`, `vh snapshot|recovery …`, `vh vault recovery …`; see `recovery.md`), `devices` (paired devices: ws `device.*`, `vh device …`; see "Device listener
-and pairing"). Still per-surface: the ws-only pricing preflight/override/notification endpoints,
-email test-send/history, vault keys/sync diagnostics, and lifecycle commands (`setup`, `teardown`, `secrets`).
+and pairing"), `vault_keys` (key backup and restoration: ws `vault.keys.status|export|export.confirm|import`, `vh vault keys
+status|export|import`; key material only through the CLI or a paired device, D4; see `key-backup.md`). Still per-surface: the ws-only
+pricing preflight/override/notification endpoints, email test-send/history, `vh vault keys inspect|rotate`, sync
+diagnostics, and lifecycle commands (`setup`, `teardown`, `secrets`).
 
 Rules the families hold (keep them in ops, never re-add them in a handler):
 - **Users:** an account is an *admin identity* when its admin role grants anything outside the self scopes
@@ -786,7 +798,7 @@ stage "Copy And Delete")
   `key_retain_until` passes; the tombstone row stays. "Delete now" never shortens the key window.
 - RBAC: delete, delete now, restore and listing need vault Remove; a deleted vault has no engine, so the admin resolver
   takes `admin::Context::vault` (built from the record's owner). Export tracking: `vault_keys.exported_version/at`
-  (set by `vh vault keys export`; a rotation makes it stale). NeedsConfirmation codes `vault_upstream_key_loss` (S3,
+  (set by `vh vault keys export` or a device's `vault.keys.export.confirm`; a rotation makes it stale). NeedsConfirmation codes `vault_upstream_key_loss` (S3,
   encrypted objects kept, key never exported) and `vault_delete_now`. `storage::Manager::removeVault` stays the
   immediate hard delete (create rollbacks, empty S3-gateway buckets) and now removes the backing dirs too.
 - An account whose API keys are bound to any vault (deleted ones included, until purged) cannot be deleted.

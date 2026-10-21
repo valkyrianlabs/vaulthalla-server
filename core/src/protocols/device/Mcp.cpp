@@ -94,6 +94,7 @@ vh::mcp::CommandOutput execute(const vh::mcp::Invocation& call, const std::share
         vh::mcp::CommandOutput out;
         try {
             const log::AuditOrigin scope(origin);
+            const protocols::shell::AgentCallScope agent;
             const auto result = shellRouter()->executeLine(line, user, nullptr);
             out.exit_code = result.exit_code;
             out.out = result.stdout_text;

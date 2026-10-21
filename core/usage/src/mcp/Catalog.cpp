@@ -36,6 +36,7 @@ constexpr std::string_view kKeysReason =
 const std::vector<Exclusion>& exclusions() {
     static const std::vector<Exclusion> list{
         {{"vault", "key", "export"}, kKeysReason},
+        {{"vault", "key", "import"}, kKeysReason},
         {{"secrets", "export"}, kKeysReason},
         {{"secrets", "update"}, "internal secrets are changed by the operator, never by an agent"},
         {{"setup"}, "installation and lifecycle commands need root and a human at the terminal (this includes "

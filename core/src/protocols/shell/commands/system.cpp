@@ -79,6 +79,13 @@ CommandResult handleStatus(const CommandCall& call) {
         << ", requests=" << health.s3Gateway.totalRequests
         << ", failed=" << health.s3Gateway.failedRequests << "\n";
 
+    if (!health.vaultsUnavailable.empty()) {
+        out << "vaults unavailable (their data can't be read on this host):\n";
+        for (const auto& v : health.vaultsUnavailable)
+            out << "  - " << v.vaultName << " (ID " << v.vaultId << "): " << v.reason << " — " << v.detail << "\n";
+        out << "  check: vh vault keys status all; restore keys: vh vault keys import <vault> --file <export.json>\n";
+    }
+
     if (health.database) {
         const auto& pool = *health.database;
         out << "database pool:\n";

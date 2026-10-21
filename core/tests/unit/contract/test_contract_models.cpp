@@ -40,6 +40,7 @@ TEST(ContractModels, Admin) { runSuite(test::contract_models::checkAdminModels);
 TEST(ContractModels, Recovery) { runSuite(test::contract_models::checkRecoveryModels); }
 TEST(ContractModels, Upstream) { runSuite(test::contract_models::checkUpstreamModels); }
 TEST(ContractModels, Devices) { runSuite(test::contract_models::checkDeviceModels); }
+TEST(ContractModels, VaultKeys) { runSuite(test::contract_models::checkVaultKeyModels); }
 
 TEST(ContractModels, EveryDeclaredModelIsCheckedAgainstItsSerializer) {
     Checker c;
@@ -48,7 +49,7 @@ TEST(ContractModels, EveryDeclaredModelIsCheckedAgainstItsSerializer) {
                              test::contract_models::checkSyncModels, test::contract_models::checkStatsModels,
                              test::contract_models::checkS3GatewayModels, test::contract_models::checkAdminModels,
                              test::contract_models::checkRecoveryModels, test::contract_models::checkUpstreamModels,
-                             test::contract_models::checkDeviceModels})
+                             test::contract_models::checkDeviceModels, test::contract_models::checkVaultKeyModels})
         suite(c);
     std::vector<std::string> unchecked;
     for (const auto& m : contract::ws::models())

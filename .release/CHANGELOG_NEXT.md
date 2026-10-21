@@ -42,6 +42,39 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   (device.remote.status|enable|disable); Settings shows device_server as managed there.
 - Add tests/e2e/devices.spec.ts, which also runs with no daemon (VAULTHALLA_E2E_OFFLINE=1).
 
+## Vault keys
+- Add ops::vault_keys with ws vault.keys.status, vault.keys.export and vault.keys.export.confirm and the CLI
+  `vh vault keys status <vault|all> [--json]`; `vh vault keys export` goes through the same op.
+- Key check: BLAKE2b-128 (crypto_generichash) keyed by the vault key over "vh-key-check-v1" ‖ vault_id (ASCII
+  decimal) ‖ UInt32BE(version), lowercase hex; status and exports carry it per version, never key bytes in status.
+- Exports carry every needed version under historical_keys (key_check, reason): an unfinished rotation's outgoing key
+  (it used to be omitted mid-rotation), recovery-referenced retired keys, and for deleted vaults too.
+- vault.keys.export and .export.confirm answer only paired device sessions (data.code export_requires_device for any
+  other session); confirm records the export only while the version is current and the key check matches.
+- Add `vh vault keys import <vault> --file <path|-> [--confirm-name] [--json]` and ws vault.keys.import (paired
+  devices only, import_requires_device elsewhere): restores key versions this host can't unseal or doesn't hold
+  (live vaults and restorable deleted vaults), after verifying each against its key check and a GCM tag check of
+  up to 16 local files and 16 recovery blobs sealed under it; refuses a key the host still unseals with other bytes
+  (conflict), a key that authenticates nothing it checked (invalid); skips versions with nothing to verify against;
+  NeedsConfirmation vault_key_import until the vault's name is given; one transaction under the rotation lock; then
+  reloads or starts the vault's engine.
+- EncryptionManager::load_key no longer mints a key for a vault with sealed content (files with an IV, recovery
+  blobs, live provider versions, encrypted remote index entries): a missing vault_keys row, a row that doesn't
+  unseal, or a missing version live files or a pending rotation need throws vault::KeyUnavailable (key_missing |
+  key_unsealable | version_missing); the engine stays down, storage::Manager records the vault, stats.system.health
+  gains vaults_unavailable (degraded) and vh status lists it; vault.keys.status reports the code as
+  unavailable_reason plus unavailable_detail.
+- Import verifies a cloud vault's version without local ciphertext against its smallest upstream object (price
+  preflight key_import_verify, 1 HEAD + 1 GET capture, If-Match, authenticated in memory), and accepts a version no
+  ciphertext is sealed under on the backup's key check alone.
+- The vh client reads the import file itself and attaches it to the request (`input` member, at most 512 KiB); the
+  daemon never opens a caller-named path for it.
+- MCP: key commands refuse when run for an MCP client (remote /mcp, or a vh mcp request marked agent), in addition
+  to the catalog exclusions.
+- ws contract: vault.keys.* responses are models (VaultKeyStatus, VaultKeyNeededVersion, VaultKeyExport,
+  VaultKeyImportResult, checked against their serializers); import declares the vault_key_import confirmation
+  (accept_field confirm_name) and SystemHealth declares vaults_unavailable.
+
 ## CLI
 - Add `vh mcp`: an MCP server (JSON-RPC 2.0 over stdio, protocol 2025-11-25, also 2025-06-18 and 2025-03-26).
   - Tools: `vh_help` (usage book), `vh_read` (read-only commands), `vh_run` (any agent-available command) and one
@@ -64,20 +97,21 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
 - Every CLI leaf declares its effect (`read`, `write`, `destructive`), exported as `effect` by `vh_usage --json`.
 
 ## WS contract
-- ws contract: the usage book (`core/usage/src/contract/ws`) declares every registered ws command (218, was 76).
+- ws contract: the usage book (`core/usage/src/contract/ws`) declares every registered ws command (222, was 76).
   `UsageContract.EveryRegisteredWsCommandHasABookEntry` and `test_ws_contract.py` fail on a command without one.
 - web: client timeouts come only from the contract; WebSocketCommandMap payload types follow the server (no `null`
   payloads, no members the handlers never read).
-- ws contract version 2: `models[]` and `models_hash` (165 named model shapes, `core/usage/src/contract/models`),
+- ws contract version 2: `models[]` and `models_hash` (169 named model shapes, `core/usage/src/contract/models`),
   field `one_of` / `values` / `element` / `partial`, command `response_model`; `meta.contract.get` answers
   `models_hash`. `ContractModels.*` checks every model against its serializer with seeded instances;
   `UsageContract.UnionsObjectsAndArraysAreSpelledOut` keeps unions and objects typed (free-form JSON is an explicit
   allowlist).
 - Handler JSON builders the contract tests need are public and database-free (S3 gateway, vault details and removal
   plan, share entries and links, email history, vault stats); their output is unchanged.
-- ws contract: commands list `refusal_kinds` and `confirmations` (`{code, accept_field, description}`, 19 codes);
+- ws contract: commands list `refusal_kinds` and `confirmations` (`{code, accept_field, description}`, 20 codes);
   `refusal_codes` stays their union. Kinds are the generic ones plus the device pairing codes
-  (`no_pairing_window`, `rate_limited`, `device_unknown`). Generated TS exports `WS_CONTRACT_CONFIRMATIONS`.
+  (`no_pairing_window`, `rate_limited`, `device_unknown`) and, on the vault key commands only,
+  `export_requires_device` / `import_requires_device`. Generated TS exports `WS_CONTRACT_CONFIRMATIONS`.
 - ws: fs, share, pricing, email, settings, S3 gateway, vault/API key, permission and dashboard-preference refusals
   carry `data.code` (untyped refusals: 61 commands, now 2); messages unchanged. Share Manager, TargetResolver and
   PrincipalResolver throw ops refusal types; HTTP share lanes are unaffected.
