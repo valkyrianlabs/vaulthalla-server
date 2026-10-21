@@ -3,6 +3,7 @@
 #include "auth/session/Manager.hpp"
 #include "log/Registry.hpp"
 #include "config/Config.hpp"
+#include "protocols/ws/Envelope.hpp"
 #include "protocols/ws/LogRedaction.hpp"
 #include "protocols/ws/Session.hpp"
 #include "protocols/ws/ShareRateLimit.hpp"
@@ -237,6 +238,11 @@ Router::CommandAuthDecision Router::classifyCommand(const std::string_view comma
 }
 
 void Router::routeMessage(json&& msg, const SessionPtr& session) {
+    // Taken before anything can move `msg`: a fault answers the request's own command with its requestId.
+    std::string faultCommand = msg.is_object() && msg.contains("command") && msg.at("command").is_string()
+                                   ? msg.at("command").get<std::string>()
+                                   : std::string("error");
+    json faultRequest{{"requestId", envelope::requestId(msg)}};
     try {
         if (!session) {
             log::Registry::ws()->error("[Router] Cannot route message: session is null");
@@ -245,8 +251,10 @@ void Router::routeMessage(json&& msg, const SessionPtr& session) {
 
         log::Registry::ws()->debug("[Router] Routing message: {}", redactForLog(msg).dump());
 
+        if (const auto problem = envelope::problem(msg)) throw std::invalid_argument(*problem);
         auto command = msg.at("command").get<std::string>();
-        const std::string accessToken = msg.value("token", "");
+        const auto token = msg.find("token");
+        const std::string accessToken = token != msg.end() && token->is_string() ? token->get<std::string>() : "";
 
         const auto decision = classifyCommand(command, *session);
 
@@ -281,7 +289,7 @@ void Router::routeMessage(json&& msg, const SessionPtr& session) {
         }
     } catch (const std::exception& e) {
         log::Registry::ws()->error("[Router] Error routing message: {}", e.what());
-        if (session) Response::INTERNAL_ERROR(std::move(msg), e.what())(session);
+        if (session) Response::INTERNAL_ERROR(std::move(faultCommand), std::move(faultRequest), e.what())(session);
     }
 }
 
