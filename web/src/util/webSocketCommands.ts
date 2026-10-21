@@ -932,6 +932,13 @@ export interface WebSocketCommandMap {
   'device.remote.status': WsContract['device.remote.status']
   'device.remote.enable': WsContract['device.remote.enable']
   'device.remote.disable': WsContract['device.remote.disable']
+
+  // Vault key backup (Vaulthalla Desktop). Status is key_checks only, never key bytes. Export and its confirmation
+  // answer only a paired device's session (data.code export_requires_device anywhere else): the console never asks
+  // for key material, so vault keys never pass through the browser. Typed here because every command is.
+  'vault.keys.status': WsContract['vault.keys.status']
+  'vault.keys.export': WsContract['vault.keys.export']
+  'vault.keys.export.confirm': WsContract['vault.keys.export.confirm']
 }
 
 export type WSCommandPayload<K extends keyof WebSocketCommandMap> = WebSocketCommandMap[K]['payload']

@@ -37,6 +37,18 @@ public:
     static void markExported(unsigned int vaultId, unsigned int version);
     // When the current key version was exported, or nullopt if it never was (or no export was recorded).
     [[nodiscard]] static std::optional<std::time_t> currentKeyExportedAt(unsigned int vaultId);
+    // The last recorded export (any version; stale when it isn't the current one).
+    struct ExportRecord {
+        std::optional<unsigned int> version{};
+        std::optional<std::time_t> at{};
+    };
+    [[nodiscard]] static ExportRecord exportRecord(unsigned int vaultId);
+    // Marks `version` exported only while it is still the current version (one statement, so a rotation in between
+    // wins). Returns when it was recorded, or nullopt when the version is no longer current.
+    [[nodiscard]] static std::optional<std::time_t> markExportedIfCurrent(unsigned int vaultId, unsigned int version);
+    // Retired versions whose rotation has not finished re-encrypting the vault (rotation_completed_at IS NULL),
+    // ascending: the outgoing key still decrypts files the sync pass hasn't reached.
+    [[nodiscard]] static std::vector<unsigned int> rotationPendingKeyVersions(unsigned int vaultId);
 };
 
 }

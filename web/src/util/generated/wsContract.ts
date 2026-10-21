@@ -6,7 +6,7 @@
 export const WS_CONTRACT_VERSION = 1
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = 'ece949ad1c8ea0bb3e78e7c959fbf6838167d8861e05468cb71aebe4a2d060b3'
+export const WS_CONTRACT_HASH = '50eab1bc3a146562745b8a083300a9f2822f33332d76872531b3fdfaf088b018'
 
 export interface WsContract {
   /**
@@ -853,6 +853,76 @@ export interface WsContract {
     response: { events: object[] }
   }
   /**
+   * The vault's keys in `vh vault keys export`'s JSON shape plus every needed version with its key_check.
+   * Paired devices only: any other session is refused with export_requires_device (D4). Needs the
+   * encryption-key Export permission. Not recorded as exported: confirm with vault.keys.export.confirm once
+   * the key is stored.
+   */
+  'vault.keys.export': {
+    payload: { vault_id: number }
+    response: {
+      vault_id: number
+      vault_name: string
+      key: string
+      key_check: string
+      key_info: {
+        type: string
+        key_size: number
+        key_version: number
+        iv_size: number
+        tag_size: number
+        created_at: string
+        exported_by: string
+        exported_at: string
+        key_check: string
+      }
+      historical_keys?: {
+        key_version: number
+        key: string
+        key_check: string
+        reason: 'current' | 'rotation' | 'recovery'
+        created_at: string | null
+        retired_at: string | null
+      }[]
+      missing_key_versions?: number[]
+      deleted_vault?: boolean
+    }
+  }
+  /**
+   * Record that the device stored key `version` of the vault. Succeeds only while that version is still
+   * current and key_check matches the daemon's key, else conflict (e.g. a rotation in between). Paired
+   * devices only (export_requires_device otherwise).
+   */
+  'vault.keys.export.confirm': {
+    payload: { vault_id: number; version: number; key_check: string }
+    response: { vault_id: number; version: number; exported_at: number }
+  }
+  /**
+   * Key backup state of every vault the caller may inspect (the encryption-key View permission; deleted
+   * vaults within key retention for callers who may remove them), or of vault_id. Never key bytes: each key
+   * version is identified by its key_check. Read-only; safe for any session.
+   */
+  'vault.keys.status': {
+    payload: { vault_id?: number | null }
+    response: {
+      vaults: {
+        vault_id: number
+        vault_name: string
+        deleted: boolean
+        key_retain_until: number | null
+        version: number
+        key_check: string | null
+        key_available: boolean
+        unavailable_reason: string | null
+        exported_version: number | null
+        exported_at: number | null
+        rotation_in_progress: boolean
+        needed_versions: { version: number; key_check: string | null; reason: 'current' | 'rotation' | 'recovery' }[]
+        missing_versions: number[]
+      }[]
+    }
+  }
+  /**
    * The cost disclosure a person must see before provider versioning is enabled, with the token
    * vault.recovery.update needs (10 minutes). Read-only: at most one admin inspect, no object requests.
    */
@@ -995,6 +1065,9 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'upstream.events.enable',
   'upstream.events.repair',
   'upstream.events.status',
+  'vault.keys.export',
+  'vault.keys.export.confirm',
+  'vault.keys.status',
   'vault.recovery.disclosure',
   'vault.recovery.status',
   'vault.recovery.suspend',
@@ -1091,6 +1164,9 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'upstream.events.enable': 120000,
   'upstream.events.repair': 120000,
   'upstream.events.status': 15000,
+  'vault.keys.export': 15000,
+  'vault.keys.export.confirm': 15000,
+  'vault.keys.status': 15000,
   'vault.recovery.disclosure': 60000,
   'vault.recovery.status': 60000,
   'vault.recovery.suspend': 60000,

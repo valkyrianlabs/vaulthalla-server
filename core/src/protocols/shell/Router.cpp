@@ -24,7 +24,14 @@ namespace vh::protocols::shell {
 
 namespace {
 thread_local std::optional<ConfirmationNeeded> tlsConfirmationNeeded;
+thread_local bool tlsAgentCall = false;
 }
+
+AgentCallScope::AgentCallScope() : previous_(std::exchange(tlsAgentCall, true)) {}
+
+AgentCallScope::~AgentCallScope() { tlsAgentCall = previous_; }
+
+bool AgentCallScope::active() noexcept { return tlsAgentCall; }
 
 void noteConfirmationNeeded(std::string code, std::vector<std::string> flags) {
     tlsConfirmationNeeded = ConfirmationNeeded{.code = std::move(code), .flags = std::move(flags)};

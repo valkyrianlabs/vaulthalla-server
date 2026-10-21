@@ -6186,6 +6186,546 @@
     },
     {
       "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "vault.keys.export",
+      "description": "The vault's keys in `vh vault keys export`'s JSON shape plus every needed version with its key_check. Paired devices only: any other session is refused with export_requires_device (D4). Needs the encryption-key Export permission. Not recorded as exported: confirm with vault.keys.export.confirm once the key is stored.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "export_requires_device"
+      ],
+      "response": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "vault_name",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The current key, base64 (32 bytes).",
+          "name": "key",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The current key's key check.",
+          "name": "key_check",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Key metadata as `vh vault keys export` writes it (plus key_check).",
+          "fields": [
+            {
+              "name": "type",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "key_size",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "key_version",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "iv_size",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "tag_size",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "created_at",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "exported_by",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "exported_at",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "32 lowercase hex digits: BLAKE2b-128 keyed by the 32-byte key over \"vh-key-check-v1\" ‖ vault_id (ASCII decimal) ‖ UInt32BE(version).",
+              "name": "key_check",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "name": "key_info",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "Every other version still needed: an unfinished rotation's outgoing key (reason rotation) and retired versions recovery data references (reason recovery). Absent when there are none.",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "key_version",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "base64",
+              "name": "key",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "32 lowercase hex digits: BLAKE2b-128 keyed by the 32-byte key over \"vh-key-check-v1\" ‖ vault_id (ASCII decimal) ‖ UInt32BE(version).",
+              "name": "key_check",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "current",
+                "rotation",
+                "recovery"
+              ],
+              "name": "reason",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "created_at",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "name": "retired_at",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            }
+          ],
+          "items": "object",
+          "name": "historical_keys",
+          "required": false,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "Needed versions this host no longer holds.",
+          "items": "integer",
+          "name": "missing_key_versions",
+          "required": false,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "A deleted vault within its key retention window.",
+          "name": "deleted_vault",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "vault.keys.export.confirm",
+      "description": "Record that the device stored key `version` of the vault. Succeeds only while that version is still current and key_check matches the daemon's key, else conflict (e.g. a rotation in between). Paired devices only (export_requires_device otherwise).",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "version"
+            ],
+            "entity": "vault.key",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "version",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "32 lowercase hex digits: BLAKE2b-128 keyed by the 32-byte key over \"vh-key-check-v1\" ‖ vault_id (ASCII decimal) ‖ UInt32BE(version).",
+          "generator": {
+            "attrs": [
+              "key_check"
+            ],
+            "entity": "vault.key",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "key_check",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "export_requires_device"
+      ],
+      "response": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "version",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "minimum": 0,
+          "name": "exported_at",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "vault.keys.status",
+      "description": "Key backup state of every vault the caller may inspect (the encryption-key View permission; deleted vaults within key retention for callers who may remove them), or of vault_id. Never key bytes: each key version is identified by its key_check. Read-only; safe for any session.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "One vault; absent for all.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": false,
+          "types": [
+            "integer",
+            "null"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "fields": [
+            {
+              "description": "Vault id.",
+              "generator": {
+                "attrs": [
+                  "id"
+                ],
+                "entity": "vault",
+                "kind": "ref",
+                "scope": "any"
+              },
+              "minimum": 0,
+              "name": "vault_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "vault_name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "deleted",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "Deleted vaults: when the retained key is destroyed.",
+              "minimum": 0,
+              "name": "key_retain_until",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "description": "The current key version.",
+              "minimum": 0,
+              "name": "version",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Null when the key can't be read on this host.",
+              "name": "key_check",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "name": "key_available",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "name": "unavailable_reason",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "The last version recorded as exported.",
+              "minimum": 0,
+              "name": "exported_version",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "description": "Unix seconds.",
+              "minimum": 0,
+              "name": "exported_at",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "rotation_in_progress",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "Every version still needed to decrypt the vault's data, current first.",
+              "fields": [
+                {
+                  "minimum": 0,
+                  "name": "version",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "description": "32 lowercase hex digits: BLAKE2b-128 keyed by the 32-byte key over \"vh-key-check-v1\" ‖ vault_id (ASCII decimal) ‖ UInt32BE(version).",
+                  "name": "key_check",
+                  "required": true,
+                  "types": [
+                    "string",
+                    "null"
+                  ]
+                },
+                {
+                  "enum": [
+                    "current",
+                    "rotation",
+                    "recovery"
+                  ],
+                  "name": "reason",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "items": "object",
+              "name": "needed_versions",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            },
+            {
+              "description": "Needed versions this host can't read.",
+              "items": "integer",
+              "name": "missing_versions",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            }
+          ],
+          "items": "object",
+          "name": "vaults",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        }
+      ],
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
       "client_timeout_ms": 60000,
       "command": "vault.recovery.disclosure",
       "description": "The cost disclosure a person must see before provider versioning is enabled, with the token vault.recovery.update needs (10 minutes). Read-only: at most one admin inspect, no object requests.",
@@ -6508,5 +7048,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "ece949ad1c8ea0bb3e78e7c959fbf6838167d8861e05468cb71aebe4a2d060b3"
+  "ws_hash": "50eab1bc3a146562745b8a083300a9f2822f33332d76872531b3fdfaf088b018"
 }

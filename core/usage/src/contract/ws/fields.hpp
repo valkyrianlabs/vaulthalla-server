@@ -57,5 +57,6 @@ std::vector<WsCommandUsage> metaCommands();
 std::vector<WsCommandUsage> upstreamCommands();
 std::vector<WsCommandUsage> recoveryCommands();
 std::vector<WsCommandUsage> deviceCommands();
+std::vector<WsCommandUsage> vaultKeyCommands();
 
 }

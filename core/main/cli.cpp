@@ -856,7 +856,8 @@ Reply runCaptured(const std::vector<std::string>& argv, const std::string& line,
                                                     : std::vector<std::string>{}},
                            {"argv", argv},
                            {"line", line},
-                           {"interactive", false}};
+                           {"interactive", false},
+                           {"agent", true}};  // the daemon refuses key material to agents (D4)
     Reply reply;
     if (!send_json_frame(s, request)) {
         if (cancelled(control)) return cancelledReply();

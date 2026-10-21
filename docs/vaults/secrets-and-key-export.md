@@ -47,29 +47,62 @@ If you omit `--recipient`, Vaulthalla warns and writes unencrypted JSON to the o
 
 Vaulthalla records every export of a vault's current key version. Deleting a vault whose key was never exported warns you, and deleting an S3 vault that keeps encrypted objects in its bucket asks you to accept that the data cannot be decrypted without the key. A key rotation makes earlier exports stale: export again.
 
-### Retired Keys For Recovery Data
+### Every Key Version A Vault Still Needs
 
-A key rotation re-encrypts a vault's live files, but never its recovery data: snapshots, local versions and provider object versions keep the key version they were sealed with. Vaulthalla keeps every retired key version sealed by the host, and refuses to delete one while recoverable data still references it.
+An export carries every key version the vault still needs, not only the current one:
 
-An export therefore also carries the retired key versions that recoverable data still needs, under `historical_keys`, in the same encoding as the current key:
+- **The outgoing key of an unfinished rotation.** `vh vault keys rotate` switches new writes to a new key at once, but the sync pass re-encrypts existing files gradually. Until it has finished, the previous key still decrypts the files it hasn't reached.
+- **Retired keys that recovery data references.** A rotation re-encrypts a vault's live files, but never its recovery data: snapshots, local versions and provider object versions keep the key version they were sealed with. Vaulthalla keeps every retired key version sealed by the host, and refuses to delete one while recoverable data still references it.
+
+Those versions are listed under `historical_keys`, in the same encoding as the current key, each with its [key check](#key-checks) and the reason it is needed (`rotation` or `recovery`):
 
 ```json
 {
     "vault_id": 12,
     "vault_name": "archive",
     "key": "<base64 current key>",
-    "key_info": { "key_version": 3, "...": "..." },
+    "key_check": "3d1f…",
+    "key_info": { "key_version": 3, "key_check": "3d1f…", "...": "..." },
     "historical_keys": [
-        { "key_version": 1, "key": "<base64>", "created_at": "...", "retired_at": "..." }
+        { "key_version": 2, "key": "<base64>", "key_check": "9a07…", "reason": "rotation", "created_at": "...", "retired_at": "..." },
+        { "key_version": 1, "key": "<base64>", "key_check": "c4e2…", "reason": "recovery", "created_at": "...", "retired_at": "..." }
     ]
 }
 ```
 
-The existing fields don't change. `historical_keys` appears only when recoverable data references a retired version; a vault without recovery data exports exactly as before. If recovery data references a version the vault no longer holds, the export lists it under `missing_key_versions` instead of inventing a key.
+`historical_keys` appears only when a vault needs more than its current key. If the vault needs a version it no longer holds, the export lists it under `missing_key_versions` instead of inventing a key.
 
-An export is recorded against the current key version, so a rotation still makes it stale. Export again after a rotation: the new export carries the current key, and the retired one under `historical_keys` while recovery data needs it.
+An export is recorded against the current key version, so a rotation makes it stale. Export again after a rotation.
 
-A deleted vault's key stays exportable with the same command (use the vault id) until `vaults.tpm_retention_window` ends: `90d` by default, `180d` for S3 vaults. See [Deleting And Restoring Vaults](/vaults/deleting-vaults). That export carries the current key only, not `historical_keys`: export a vault with recovery data before you delete it. See [File Recovery](/vaults/recovery#keys-and-rotation).
+A deleted vault's key stays exportable with the same command (use the vault id) until `vaults.tpm_retention_window` ends: `90d` by default, `180d` for S3 vaults. See [Deleting And Restoring Vaults](/vaults/deleting-vaults). That export carries the versions the vault still needs as well. See [File Recovery](/vaults/recovery#keys-and-rotation).
+
+## Check Key Backup Status
+
+`vh vault keys status` shows, for every vault (or one), whether its key is backed up, without printing any key material:
+
+```bash
+vh vault keys status all
+vh vault keys status archive --json
+```
+
+For each vault it reports the current key version and its key check, the last exported version and when (stale after a rotation), whether a rotation is under way, and every version the vault still needs with its key check. Deleted vaults whose key is still retained are included and marked. It needs the permission to view encryption keys, the same as `vh vault keys inspect`.
+
+### Key Checks
+
+A key check identifies one key version without revealing it, so you can verify that a backup holds the key the server uses: compute the check from the backed-up key and compare it with the server's.
+
+```text
+key_check = BLAKE2b-128(key = the 32 key bytes,
+                        message = "vh-key-check-v1" ‖ vault_id ‖ UInt32BE(version))
+```
+
+The output is 16 bytes, written as 32 lowercase hex digits. `vault_id` is the vault's numeric id written as ASCII decimal (`42`), and the version is the last 4 bytes, big-endian. This is libsodium's `crypto_generichash` with a 16-byte output, or `hashlib.blake2b(message, digest_size=16, key=key)` in Python. Test vector: with the key bytes `00 01 02 … 1f`, vault 42 and version 3, the key check is `72e4c8b7f8ab43b8ed8869a57cef1703`.
+
+## Back Up Keys With Vaulthalla Desktop
+
+A Mac paired with Vaulthalla Desktop can back vault keys up to 1Password over its paired connection. It reads the key status, exports the keys it needs, and confirms each backup by its key check after 1Password stored it; only then does the server record the vault as exported. A confirmation is refused when the vault rotated its key in the meantime, so a backup is never recorded for a key it doesn't hold.
+
+Keys leave the server only through the local `vh` CLI or a paired device. The web console never receives key material, and AI agents (MCP) can read key status but never export or import keys. A paired device needs the same permission to export keys as the CLI.
 
 ## Export Internal Secrets
 

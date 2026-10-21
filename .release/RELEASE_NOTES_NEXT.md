@@ -31,6 +31,23 @@ off, or export keys or secrets.
 
 The web console's Devices page comes in a later release; the ws commands it will use (`device.*`) are available now.
 
+## Vault key backup status, and complete key exports
+
+`vh vault keys status` shows each vault's key backup state without printing key material: the current key version
+and its **key check** (a public fingerprint that identifies a key without revealing it), the last exported version,
+whether a rotation is under way, and every key version the vault still needs. Deleted vaults whose key is still
+retained are included. A paired Vaulthalla Desktop uses the same information to back keys up to 1Password: it exports
+over its paired connection and confirms each backup by its key check, and the server records the backup only if the
+key is still current.
+
+Key exports are now complete during a rotation: an export taken before the rotation finished re-encrypting the vault
+used to omit the previous key, which still decrypts the files not yet re-encrypted. Every export now carries all
+versions the vault needs (the current key, an unfinished rotation's previous key, and retired keys recovery data
+uses), each with its key check, and a deleted vault's export carries them too. Keys still leave the server only
+through the local `vh` CLI or a paired device, never the web console or an AI agent.
+
+See [Secrets And Key Export](https://vaulthalla.io/docs/vaults/secrets-and-key-export).
+
 ## Let Claude Code or Codex operate Vaulthalla
 
 `vh mcp` is a Model Context Protocol server built into the `vh` CLI, and `vh skill install --agent claude|codex`

@@ -311,6 +311,9 @@ void Server::handleClient(const int cfd) {
         }
 
         try {
+            // `vh mcp` marks its tool calls; key material refuses them (D4).
+            std::optional<AgentCallScope> agent;
+            if (req.value("agent", false)) agent.emplace();
             const auto res = router_->executeLine(line, user, io.get(), std::move(peer));
 
             json reply{

@@ -132,11 +132,13 @@ bucket: choosing `off`/`local_snapshots` does not suspend a bucket that is versi
   generation (empty IV, version 0, zero bytes) re-seals to an empty dst with empty IV/version 0 (how every empty file
   is stored); a non-empty source with an empty IV is plaintext and refused (`std::invalid_argument`). Same-version
   re-seal still draws a fresh IV (reuse the bytes instead if that is wanted).
-- Key export (`vh vault keys export`) adds, per vault, `historical_keys: [{key_version, key (base64), created_at,
-  retired_at}]` for the retired versions `recovery_blob` / live `upstream_object_version` rows reference (never the
-  current one), and `missing_key_versions` when a referenced version is gone. Both fields are omitted when empty, so
-  exports without recovery data are byte-identical to before. Export tracking (`exported_version`) still records the
-  current version only. A deleted vault's export (from `vault_deletion_key`) does not add historical keys yet.
+- Key export (`vh vault keys export`, ws `vault.keys.export`; `ops::vault_keys`, `key-backup.md`) adds, per vault,
+  `historical_keys: [{key_version, key (base64), key_check, reason, created_at, retired_at}]` for every other needed
+  version: the retired versions `recovery_blob` / live `upstream_object_version` rows reference (`recovery`) and an
+  unfinished rotation's outgoing key (`rotation`), never the current one; and `missing_key_versions` when a needed
+  version is gone. Both are omitted when empty. Every export carries the current key's `key_check`. Export tracking
+  (`exported_version`) records the current version only. A deleted vault's export (from `vault_deletion_key`) carries
+  its needed versions too.
 - `get_rotation_old_vault_key` used to `SELECT *` from `vault_keys_trashed`, which has no `updated_at` column, so
   `vault::model::Key(row)` threw and a restart mid-rotation could not load the vault key. Retired-key reads now alias
   `trashed_at AS updated_at` (pinned by `RecoveryKeysDbTest`).

@@ -33,6 +33,18 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
 - device.pairing.close closes only the caller's window unless a super admin passes any (CLI: vh device pair --close
   --any); device.pairing.open and .pending return server_time, and .open the listener's port and remote.
 
+## Vault keys
+- Add ops::vault_keys with ws vault.keys.status, vault.keys.export and vault.keys.export.confirm and the CLI
+  `vh vault keys status <vault|all> [--json]`; `vh vault keys export` goes through the same op.
+- Key check: BLAKE2b-128 (crypto_generichash) keyed by the vault key over "vh-key-check-v1" ‖ vault_id (ASCII
+  decimal) ‖ UInt32BE(version), lowercase hex; status and exports carry it per version, never key bytes in status.
+- Exports carry every needed version under historical_keys (key_check, reason): an unfinished rotation's outgoing key
+  (it used to be omitted mid-rotation), recovery-referenced retired keys, and for deleted vaults too.
+- vault.keys.export and .export.confirm answer only paired device sessions (data.code export_requires_device for any
+  other session); confirm records the export only while the version is current and the key check matches.
+- MCP: key commands refuse when run for an MCP client (remote /mcp, or a vh mcp request marked agent), in addition
+  to the catalog exclusions.
+
 ## CLI
 - Add `vh mcp`: an MCP server (JSON-RPC 2.0 over stdio, protocol 2025-11-25, also 2025-06-18 and 2025-03-26).
   - Tools: `vh_help` (usage book), `vh_read` (read-only commands), `vh_run` (any agent-available command) and one

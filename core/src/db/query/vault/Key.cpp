@@ -76,6 +76,41 @@ std::optional<std::time_t> Key::currentKeyExportedAt(const unsigned int vaultId)
     });
 }
 
+Key::ExportRecord Key::exportRecord(const unsigned int vaultId) {
+    return Transactions::exec("Key::exportRecord", [&](pqxx::work& txn) -> ExportRecord {
+        const auto res = txn.exec("SELECT exported_version, exported_at FROM vault_keys WHERE vault_id = $1",
+                                  pqxx::params{vaultId});
+        if (res.empty()) return {};
+        const auto row = res.one_row_ref();
+        ExportRecord out;
+        if (!row[0].is_null()) out.version = row[0].as<unsigned int>();
+        if (!row[1].is_null()) out.at = db::encoding::parsePostgresTimestamp(row[1].c_str());
+        return out;
+    });
+}
+
+std::optional<std::time_t> Key::markExportedIfCurrent(const unsigned int vaultId, const unsigned int version) {
+    return Transactions::exec("Key::markExportedIfCurrent", [&](pqxx::work& txn) -> std::optional<std::time_t> {
+        const auto res = txn.exec(
+            "UPDATE vault_keys SET exported_version = $2, exported_at = NOW() WHERE vault_id = $1 AND version = $2 "
+            "RETURNING exported_at",
+            pqxx::params{vaultId, version});
+        if (res.empty()) return std::nullopt;
+        return db::encoding::parsePostgresTimestamp(res.one_field_ref().c_str());
+    });
+}
+
+std::vector<unsigned int> Key::rotationPendingKeyVersions(const unsigned int vaultId) {
+    return Transactions::exec("Key::rotationPendingKeyVersions", [&](pqxx::work& txn) {
+        std::vector<unsigned int> out;
+        for (const auto& row : txn.exec("SELECT version FROM vault_keys_trashed WHERE vault_id = $1 AND "
+                                        "rotation_completed_at IS NULL ORDER BY version",
+                                        pqxx::params{vaultId}))
+            out.push_back(row[0].as<unsigned int>());
+        return out;
+    });
+}
+
 Key::KeyPtr Key::getRotationInProgressOldKey(unsigned int vaultId) {
     return Transactions::exec("Key::getRotationInProgressOldKey", [&](pqxx::work& txn) -> KeyPtr {
         const auto res = txn.exec(pqxx::prepped{"get_rotation_old_vault_key"}, vaultId);

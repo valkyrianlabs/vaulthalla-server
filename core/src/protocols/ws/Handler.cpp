@@ -17,6 +17,7 @@
 #include "protocols/ws/handler/rbac/roles/Vault.hpp"
 #include "protocols/ws/handler/vault/Vaults.hpp"
 #include "protocols/ws/handler/vault/APIKeys.hpp"
+#include "protocols/ws/handler/vault/Keys.hpp"
 #include "protocols/ws/handler/Upstream.hpp"
 #include "protocols/ws/handler/Recovery.hpp"
 #include "protocols/ws/handler/share/Download.hpp"
@@ -54,6 +55,7 @@ void Handler::registerAllHandlers(const std::shared_ptr<Router>& r) {
     registerSharePreviewHandlers(r);
     registerShareUploadHandlers(r);
     registerDeviceHandlers(r);
+    registerVaultKeyHandlers(r);
 
     log::Registry::ws()->debug("[WebSocketHandler] All handlers registered successfully.");
 }
@@ -91,6 +93,14 @@ void Handler::registerDeviceHandlers(const std::shared_ptr<Router>& r) {
     r->registerSessionOnlyHandler("device.remote.status", &handler::Devices::remoteStatus);
     r->registerSessionOnlyHandler("device.remote.enable", &handler::Devices::remoteEnable);
     r->registerSessionOnlyHandler("device.remote.disable", &handler::Devices::remoteDisable);
+}
+
+// Vault key backup (ops::vault_keys). Export, confirm and import answer only a paired device's session; the ops
+// refuse any other with data.code export_requires_device / import_requires_device (D4).
+void Handler::registerVaultKeyHandlers(const std::shared_ptr<Router>& r) {
+    r->registerPayload("vault.keys.status", &handler::VaultKeys::status);
+    r->registerPayload("vault.keys.export", &handler::VaultKeys::exportKeys);
+    r->registerPayload("vault.keys.export.confirm", &handler::VaultKeys::confirmExport);
 }
 
 void Handler::registerMetaHandlers(const std::shared_ptr<Router>& r) {

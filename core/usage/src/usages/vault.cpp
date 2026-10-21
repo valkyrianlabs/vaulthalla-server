@@ -549,6 +549,24 @@ static std::shared_ptr<CommandUsage> key_inspect(const std::weak_ptr<CommandUsag
     return cmd;
 }
 
+static std::shared_ptr<CommandUsage> key_status(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = buildBaseUsage(parent);
+    cmd->aliases = {"status"};
+    cmd->effect = CommandEffect::Read;
+    cmd->description = "Show each vault's key backup state: the current key version and its key check (a public "
+                       "fingerprint, never key material), the last exported version, whether a rotation is under way, "
+                       "and every key version the vault still needs (current, an unfinished rotation's outgoing key, "
+                       "retired versions recovery data references). Deleted vaults within key retention are included.";
+    cmd->positionals = {vaultOrAll};
+    cmd->optional = {owner};
+    cmd->optional_flags = {jsonFlag};
+    cmd->examples = {
+        {"vh vault keys status all", "Key backup state of every vault."},
+        {"vh vault keys status 42 --json", "The same for the vault with ID 42, as JSON."}
+    };
+    return cmd;
+}
+
 static std::shared_ptr<CommandUsage> key_rotate(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"rotate", "renew"};
@@ -579,6 +597,7 @@ static std::shared_ptr<CommandUsage> key(const std::weak_ptr<CommandUsage>& pare
          "Rotate the encryption key for the vault named 'myvault' owned by 'alice'."}
     };
     cmd->subcommands = {
+        key_status(cmd->weak_from_this()),
         key_export(cmd->weak_from_this()),
         key_rotate(cmd->weak_from_this()),
         key_inspect(cmd->weak_from_this())

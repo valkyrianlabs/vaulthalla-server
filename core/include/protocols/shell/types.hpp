@@ -87,6 +87,22 @@ struct CommandResult {
 void noteConfirmationNeeded(std::string code, std::vector<std::string> flags);
 [[nodiscard]] std::optional<ConfirmationNeeded> takeConfirmationNeeded();
 
+// Set on the thread while a command runs for an MCP client: the device listener's /mcp, or a `vh mcp` client that says
+// so in its request. Commands that hand out or take in key material refuse under it (D4), so a gap in the MCP layer's
+// exclusions (mcp::exclusions()) still can't reach them. A local agent that runs `vh` itself is the terminal's user.
+class AgentCallScope {
+public:
+    AgentCallScope();
+    ~AgentCallScope();
+    AgentCallScope(const AgentCallScope&) = delete;
+    AgentCallScope& operator=(const AgentCallScope&) = delete;
+
+    [[nodiscard]] static bool active() noexcept;
+
+private:
+    bool previous_;
+};
+
 using CommandHandler = std::function<CommandResult(const CommandCall&)>;
 
 struct CommandInfo {
