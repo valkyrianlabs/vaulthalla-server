@@ -95,7 +95,11 @@ std::vector<WsCommandUsage> authCommands() {
                        "question to ask. The user's vaults are destroyed unless transfer_to names who gets them.",
         .payload = {authUserId(), boolean("confirm").opt(), authUserId("transfer_to").opt().nullable()},
         .response = {uinteger("user_id")},
-        .refusal_codes = {"denied", "invalid", "not_found", "conflict", "unauthorized", "user_delete"},
+        .refusal_codes = opsRefusals(),
+        .confirmations = {{.code = "user_delete",
+                           .accept_field = "confirm",
+                           .description = "The account (and the vaults it owns unless transfer_to is set) would be "
+                                          "deleted: resend with confirm once the person agrees."}},
         .operation = "users.delete",
         .client_timeout = kDefaultTimeout,
     });

@@ -17,6 +17,7 @@
 #include "storage/s3/provider/Registry.hpp"
 #include "protocols/ws/Session.hpp"
 #include "ops/Vaults.hpp"
+#include "ops/Error.hpp"
 #include "ops/UpstreamJson.hpp"
 #include "config/util.hpp"
 #include "db/encoding/timestamp.hpp"
@@ -52,11 +53,22 @@ namespace {
         return value.empty() ? std::optional<std::string>{} : std::make_optional(value);
     }
 
+    std::chrono::seconds parsePolicyIntervalText(const std::string& raw);
+
+    // A malformed interval is the caller's input: a typed Invalid (data.code "invalid"), same text.
     std::chrono::seconds parsePolicyInterval(const json& value) {
         if (value.is_number_integer()) return Policy::clampInterval(std::chrono::seconds(value.get<int64_t>()));
-        if (!value.is_string()) throw std::runtime_error("sync.interval must be a string or number of seconds");
+        if (!value.is_string()) throw vh::ops::Invalid("sync.interval must be a string or number of seconds");
+        try {
+            return parsePolicyIntervalText(value.get<std::string>());
+        } catch (const vh::ops::Error&) {
+            throw;
+        } catch (const std::exception& e) {
+            throw vh::ops::Invalid(e.what());
+        }
+    }
 
-        const auto raw = value.get<std::string>();
+    std::chrono::seconds parsePolicyIntervalText(const std::string& raw) {
         try {
             return Policy::clampInterval(vh::db::encoding::parseSyncInterval(raw));
         } catch (const std::exception&) {
@@ -77,9 +89,9 @@ namespace {
     std::optional<uint64_t> parseBudgetValue(const json& value) {
         if (value.is_null()) return std::nullopt;
         if (!value.is_number_unsigned() && !value.is_number_integer())
-            throw std::runtime_error("S3 request budget values must be numbers or null");
+            throw vh::ops::Invalid("S3 request budget values must be numbers or null");
         if (value.is_number_integer() && value.get<int64_t>() < 0)
-            throw std::runtime_error("S3 request budget values cannot be negative");
+            throw vh::ops::Invalid("S3 request budget values cannot be negative");
         return value.get<uint64_t>();
     }
 
@@ -101,13 +113,13 @@ namespace {
             if (v.is_null()) patch.max_remote_index_age = std::optional<std::chrono::seconds>{};
             else {
                 const auto seconds = v.get<int64_t>();
-                if (seconds < 0) throw std::runtime_error("sync.max_remote_index_age_seconds cannot be negative");
+                if (seconds < 0) throw vh::ops::Invalid("sync.max_remote_index_age_seconds cannot be negative");
                 patch.max_remote_index_age = std::optional<std::chrono::seconds>{std::chrono::seconds(seconds)};
             }
         }
         if (sync.contains("s3_request_budget")) {
             const auto& budget = sync.at("s3_request_budget");
-            if (!budget.is_object()) throw std::runtime_error("sync.s3_request_budget must be an object");
+            if (!budget.is_object()) throw vh::ops::Invalid("sync.s3_request_budget must be an object");
             patch.s3_budget.list = budgetField(budget, "list_requests");
             patch.s3_budget.head = budgetField(budget, "head_requests");
             patch.s3_budget.get = budgetField(budget, "get_requests");
@@ -133,7 +145,7 @@ namespace {
 
 json Vaults::add(const json &payload, const std::shared_ptr<Session> &session) {
     const auto typeName = boost::algorithm::to_lower_copy(payload.at("type").get<std::string>());
-    if (typeName != "local" && typeName != "s3") throw std::runtime_error("Unsupported vault type: " + typeName);
+    if (typeName != "local" && typeName != "s3") throw vh::ops::Invalid("Unsupported vault type: " + typeName);
     const auto type = typeName == "s3" ? VaultType::S3 : VaultType::Local;
 
     vh::ops::vaults::Create req{
@@ -169,8 +181,13 @@ json Vaults::update(const json &payload, const std::shared_ptr<Session> &session
     const auto id = payload.at("id").get<unsigned int>();
     if (payload.contains("type")) {
         const auto current = vh::ops::vaults::get(session->user, id).vault->type;
-        if (from_string(payload.at("type").get<std::string>()) != current)
-            throw std::runtime_error("A vault's type cannot be changed");
+        VaultType requested{};
+        try {
+            requested = from_string(payload.at("type").get<std::string>());
+        } catch (const std::invalid_argument& e) {
+            throw vh::ops::Invalid(e.what());
+        }
+        if (requested != current) throw vh::ops::Invalid("A vault's type cannot be changed");
     }
 
     vh::ops::vaults::Update req{

@@ -48,7 +48,6 @@ std::vector<WsCommandUsage> settingsCommands() {
         .payload = settingsPatchSections(),
         .response = {object("settings", "Settings")},
         .refusal_codes = {"denied", "invalid", "unauthorized"},
-        .untyped_refusals = {"invalid"},
         .client_timeout = kDefaultTimeout,
     });
 

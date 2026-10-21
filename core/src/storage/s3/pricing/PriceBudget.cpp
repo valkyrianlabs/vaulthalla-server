@@ -5,6 +5,7 @@
 #include "db/Transactions.hpp"
 #include "email/RenderedEmail.hpp"
 #include "notifications/OperatorNotificationBus.hpp"
+#include "ops/Error.hpp"
 #include "storage/s3/provider/Registry.hpp"
 #include "vault/model/APIKey.hpp"
 
@@ -1511,20 +1512,20 @@ PriceBudgetNotification PriceBudgetService::acknowledgeNotification(
             "UPDATE operator_notification "
             "SET acknowledged_at = CURRENT_TIMESTAMP, acknowledged_by = " + std::to_string(userId) + " "
             "WHERE id = " + std::to_string(notificationId) + " RETURNING *");
-        if (result.empty()) throw std::runtime_error("operator notification not found");
+        if (result.empty()) throw ::vh::ops::NotFound("operator notification not found");
         return notificationFromRow(result.one_row_ref());
     });
 }
 
 PriceBudgetOverride PriceBudgetService::requestOverride(const PriceBudgetOverrideRequest& request) const {
-    if (request.vault_id == 0) throw std::invalid_argument("override request requires vault_id");
-    if (request.requested_by == 0) throw std::invalid_argument("override request requires requested_by");
-    if (request.policy_ids.empty()) throw std::invalid_argument("override request requires policy_ids");
+    if (request.vault_id == 0) throw ::vh::ops::Invalid("override request requires vault_id");
+    if (request.requested_by == 0) throw ::vh::ops::Invalid("override request requires requested_by");
+    if (request.policy_ids.empty()) throw ::vh::ops::Invalid("override request requires policy_ids");
     if (request.estimated_cost && !isValidPriceBudgetDecimal(*request.estimated_cost))
-        throw std::invalid_argument("invalid override estimated cost: " + *request.estimated_cost);
+        throw ::vh::ops::Invalid("invalid override estimated cost: " + *request.estimated_cost);
     const auto ttlMinutes = std::clamp<std::uint32_t>(request.ttl_minutes == 0 ? 30 : request.ttl_minutes, 1, 120);
     const auto currency = normalizePriceBudgetCurrency(request.currency.empty() ? "USD" : request.currency);
-    if (!isValidPriceBudgetCurrency(currency)) throw std::invalid_argument("invalid override currency: " + currency);
+    if (!isValidPriceBudgetCurrency(currency)) throw ::vh::ops::Invalid("invalid override currency: " + currency);
 
     auto saved = db::Transactions::exec("PriceBudgetService::requestOverride", [&](pqxx::work& txn) {
         const auto result = txn.exec(
@@ -1578,7 +1579,7 @@ PriceBudgetOverride PriceBudgetService::approveOverride(const std::uint32_t over
             "AND status = 'requested' "
             "AND expires_at > CURRENT_TIMESTAMP "
             "RETURNING *");
-        if (result.empty()) throw std::runtime_error("S3 price budget override is not pending or has expired");
+        if (result.empty()) throw ::vh::ops::Conflict("S3 price budget override is not pending or has expired");
         return overrideFromRow(result.one_row_ref());
     });
 
@@ -1611,7 +1612,7 @@ PriceBudgetOverride PriceBudgetService::denyOverride(
             "WHERE id = " + std::to_string(overrideId) + " "
             "AND status = 'requested' "
             "RETURNING *");
-        if (result.empty()) throw std::runtime_error("S3 price budget override is not pending");
+        if (result.empty()) throw ::vh::ops::Conflict("S3 price budget override is not pending");
         return overrideFromRow(result.one_row_ref());
     });
 

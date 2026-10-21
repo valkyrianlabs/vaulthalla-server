@@ -70,7 +70,11 @@ std::vector<WsCommandUsage> upstreamCommands() {
         "Remove a bucket lock (admin.upstream.unprotect). A refusal with data.code 'upstream_unprotect' asks for "
         "confirmation: resend with confirm.",
         {apiKeyId(), bucketName(), boolean("confirm").opt().nullable()},
-        {object("bucket", "UpstreamBucketRow")}, refusals({"upstream_unprotect"})));
+        {object("bucket", "UpstreamBucketRow")}, refusals()));
+    out.back().confirmations = {{.code = "upstream_unprotect",
+                                 .accept_field = "confirm",
+                                 .description = "Removing a bucket lock lets Vaulthalla act on the bucket again: "
+                                                "resend with confirm."}};
 
     // ---- configuration ----
     out.push_back(command("upstream.bucket.inspect",
@@ -85,7 +89,11 @@ std::vector<WsCommandUsage> upstreamCommands() {
          uinteger("expire_noncurrent_days").opt().nullable().desc("0 removes it; destructive; AWS only."),
          str("prefix").opt().nullable(), boolean("clear").opt().nullable().desc("Drop Vaulthalla's rule entirely."),
          boolean("accept_destructive").opt().nullable()},
-        {object("inspection", "UpstreamInspection")}, refusals({"upstream_destructive_lifecycle"}), 60s));
+        {object("inspection", "UpstreamInspection")}, refusals(), 60s));
+    out.back().confirmations = {{.code = "upstream_destructive_lifecycle",
+                                 .accept_field = "accept_destructive",
+                                 .description = "Expiration deletes objects: resend with accept_destructive once "
+                                                "the person accepts."}};
 
     // ---- adoption, detach, cleanup ----
     out.push_back(command("upstream.bucket.adopt.preflight",
@@ -106,7 +114,12 @@ std::vector<WsCommandUsage> upstreamCommands() {
         "no longer matches the bucket: run the preflight again.",
         {apiKeyId(), bucketName(), str("confirm_token").gen(gen::pattern("{a}{a}{a}{a}{9}{9}{9}{9}")),
          boolean("delete_bucket").opt().nullable()},
-        {object("result", "UpstreamCleanupResult")}, refusals({"upstream_cleanup"}), 600s));
+        {object("result", "UpstreamCleanupResult")}, refusals(), 600s));
+    out.back().confirmations = {{.code = "upstream_cleanup",
+                                 .accept_field = "confirm_token",
+                                 .description = "The confirm_token is missing, expired or no longer matches the "
+                                                "bucket: run upstream.bucket.cleanup.preflight again and resend "
+                                                "its confirm_token."}};
 
     // ---- events ----
     out.push_back(command("upstream.events.enable",

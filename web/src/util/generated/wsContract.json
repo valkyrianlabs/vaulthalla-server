@@ -15643,11 +15643,13 @@
       "auth": "session",
       "client_timeout_ms": 15000,
       "command": "auth.isAuthenticated",
+      "confirmations": [],
       "description": "Whether the envelope token is a valid session for this socket.",
       "input": "token",
       "operation": null,
       "payload": [],
       "refusal_codes": [],
+      "refusal_kinds": [],
       "response": [
         {
           "name": "isAuthenticated",
@@ -15674,6 +15676,7 @@
       "auth": "session",
       "client_timeout_ms": 20000,
       "command": "auth.login",
+      "confirmations": [],
       "description": "Sign in with a username and password. The access token comes back in the response envelope (`token`), the refresh token as an HttpOnly cookie set at the handshake.",
       "input": "payload",
       "operation": "auth.login",
@@ -15704,6 +15707,9 @@
       "refusal_codes": [
         "error"
       ],
+      "refusal_kinds": [
+        "error"
+      ],
       "response": [
         {
           "description": "The signed-in user; role permissions reduced to {qualified, value}.",
@@ -15723,11 +15729,13 @@
       "auth": "session",
       "client_timeout_ms": 15000,
       "command": "auth.logout",
+      "confirmations": [],
       "description": "End the session (access and refresh tokens).",
       "input": "none",
       "operation": null,
       "payload": [],
       "refusal_codes": [],
+      "refusal_kinds": [],
       "response": [],
       "response_model": null,
       "untyped_refusals": [],
@@ -15737,11 +15745,15 @@
       "auth": "session",
       "client_timeout_ms": 15000,
       "command": "auth.refresh",
+      "confirmations": [],
       "description": "Issue a new access token from the envelope token or the refresh cookie.",
       "input": "token",
       "operation": null,
       "payload": [],
       "refusal_codes": [
+        "error"
+      ],
+      "refusal_kinds": [
         "error"
       ],
       "response": [
@@ -15762,6 +15774,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "auth.register",
+      "confirmations": [],
       "description": "Create a user. role is an admin role name or id; the password is required (only the CLI generates one).",
       "input": "payload",
       "operation": "users.create",
@@ -15831,6 +15844,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "User",
@@ -15849,11 +15869,15 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "auth.security.status",
+      "confirmations": [],
       "description": "Security posture warning for the signed-in account: the super admin's initial password file while the generated password is still in use, else null.",
       "input": "none",
       "operation": null,
       "payload": [],
       "refusal_codes": [
+        "unauthorized"
+      ],
+      "refusal_kinds": [
         "unauthorized"
       ],
       "response": [
@@ -15874,6 +15898,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "auth.user.change_password",
+      "confirmations": [],
       "description": "Change (own, with old_password) or reset (another user's) a password.",
       "input": "payload",
       "operation": null,
@@ -15921,6 +15946,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "User",
@@ -15939,6 +15971,13 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "auth.user.delete",
+      "confirmations": [
+        {
+          "accept_field": "confirm",
+          "code": "user_delete",
+          "description": "The account (and the vaults it owns unless transfer_to is set) would be deleted: resend with confirm once the person agrees."
+        }
+      ],
       "description": "Delete a user. Without confirm the reply is a refusal with data.code 'user_delete' and the question to ask. The user's vaults are destroyed unless transfer_to names who gets them.",
       "input": "payload",
       "operation": "users.delete",
@@ -15992,6 +16031,13 @@
         "unauthorized",
         "user_delete"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "minimum": 0,
@@ -16010,6 +16056,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "auth.user.get",
+      "confirmations": [],
       "description": "One user with its full roles and permissions.",
       "input": "payload",
       "operation": null,
@@ -16038,6 +16085,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "User",
@@ -16056,6 +16110,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "auth.user.get.byName",
+      "confirmations": [],
       "description": "One user by name.",
       "input": "payload",
       "operation": null,
@@ -16083,6 +16138,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "User",
@@ -16101,6 +16163,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "auth.user.update",
+      "confirmations": [],
       "description": "Patch a user (the caller when id is absent). Role changes and deactivation end the account's sessions. linux_uid, updated_by, protected, is_protected, system_only and password are refused.",
       "input": "payload",
       "operation": "users.update",
@@ -16178,6 +16241,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "User",
@@ -16196,11 +16266,19 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "auth.users.list",
+      "confirmations": [],
       "description": "Users visible to the caller, slim projection (admin_role without permissions).",
       "input": "none",
       "operation": null,
       "payload": [],
       "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
@@ -16226,6 +16304,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "dashboard.preferences.get",
+      "confirmations": [],
       "description": "The caller's saved dashboard layout for a key; exists is false (empty layout) when none is saved. A non-object payload reads the default key.",
       "input": "payload",
       "operation": null,
@@ -16240,7 +16319,12 @@
         }
       ],
       "refusal_codes": [
-        "unauthorized"
+        "unauthorized",
+        "invalid"
+      ],
+      "refusal_kinds": [
+        "unauthorized",
+        "invalid"
       ],
       "response": [
         {
@@ -16253,15 +16337,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "invalid"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "dashboard.preferences.reset",
+      "confirmations": [],
       "description": "Delete the caller's saved layout for a key; deleted says whether one existed. A non-object payload resets the default key.",
       "input": "payload",
       "operation": null,
@@ -16276,7 +16359,12 @@
         }
       ],
       "refusal_codes": [
-        "unauthorized"
+        "unauthorized",
+        "invalid"
+      ],
+      "refusal_kinds": [
+        "unauthorized",
+        "invalid"
       ],
       "response": [
         {
@@ -16296,15 +16384,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "invalid"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "dashboard.preferences.update",
+      "confirmations": [],
       "description": "Save the caller's dashboard layout for a key (insert or replace). The layout is validated (at most 64 KiB and 64 cards) and otherwise stored as sent.",
       "input": "payload",
       "operation": null,
@@ -16388,7 +16475,12 @@
         }
       ],
       "refusal_codes": [
-        "unauthorized"
+        "unauthorized",
+        "invalid"
+      ],
+      "refusal_kinds": [
+        "unauthorized",
+        "invalid"
       ],
       "response": [
         {
@@ -16401,20 +16493,23 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "invalid"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "email.config.get",
+      "confirmations": [],
       "description": "The email provider settings, the operator email policy and which provider secrets are stored.",
       "input": "none",
       "operation": null,
       "payload": [],
       "refusal_codes": [
+        "denied",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
         "denied",
         "unauthorized"
       ],
@@ -16482,6 +16577,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "email.config.update",
+      "confirmations": [],
       "description": "Merge-patch the email and operator_emails settings sections (RFC 7386; other sections are ignored) and save them through the same validation as settings.update.",
       "input": "payload",
       "operation": null,
@@ -16508,6 +16604,11 @@
         }
       ],
       "refusal_codes": [
+        "denied",
+        "invalid",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
         "denied",
         "invalid",
         "unauthorized"
@@ -16569,15 +16670,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "invalid"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "email.history",
+      "confirmations": [],
       "description": "Operator email delivery history, newest first.",
       "input": "payload",
       "operation": null,
@@ -16593,6 +16693,10 @@
         }
       ],
       "refusal_codes": [
+        "denied",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
         "denied",
         "unauthorized"
       ],
@@ -16615,6 +16719,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "email.provider.secret.set",
+      "confirmations": [],
       "description": "Store provider credentials in the secrets manager: resend needs api_key; ses takes access_key_id and/or secret_access_key (at least one). Values are write-only.",
       "input": "payload",
       "operation": null,
@@ -16657,6 +16762,12 @@
       ],
       "refusal_codes": [
         "denied",
+        "invalid",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
         "unauthorized"
       ],
       "response": [
@@ -16700,16 +16811,15 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "invalid"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "human",
       "client_timeout_ms": 60000,
       "command": "email.test.send",
-      "description": "Send (or, with dry_run, only render and record) a test email. Without to, a dry run goes to the first alerts recipient. status says which happened; a disabled or failing provider is a refusal without a code, recorded in the history.",
+      "confirmations": [],
+      "description": "Send (or, with dry_run, only render and record) a test email. Without to, a dry run goes to the first alerts recipient. status says which happened. Email disabled or provider none is a 'conflict'; a failing provider answers without a code. Both are recorded in the history.",
       "input": "payload",
       "operation": null,
       "payload": [
@@ -16734,6 +16844,15 @@
       ],
       "refusal_codes": [
         "denied",
+        "invalid",
+        "conflict",
+        "unauthorized",
+        "error"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "conflict",
         "unauthorized",
         "error"
       ],
@@ -16808,15 +16927,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "invalid"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "fs.dir.create",
+      "confirmations": [],
       "description": "Create a directory (Touch on the path).",
       "input": "payload",
       "operation": "fs.mkdir",
@@ -16852,7 +16970,18 @@
         }
       ],
       "refusal_codes": [
-        "unauthorized"
+        "unauthorized",
+        "denied",
+        "not_found",
+        "conflict",
+        "invalid"
+      ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied",
+        "not_found",
+        "conflict",
+        "invalid"
       ],
       "response": [
         {
@@ -16864,16 +16993,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "denied",
-        "conflict"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "human",
       "client_timeout_ms": 30000,
       "command": "fs.dir.list",
+      "confirmations": [],
       "description": "List a directory (List on the path).",
       "input": "payload",
       "operation": "fs.list",
@@ -16909,7 +17036,16 @@
         }
       ],
       "refusal_codes": [
-        "unauthorized"
+        "unauthorized",
+        "denied",
+        "not_found",
+        "invalid"
+      ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied",
+        "not_found",
+        "invalid"
       ],
       "response": [
         {
@@ -16947,16 +17083,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "denied",
-        "not_found"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "share",
       "client_timeout_ms": 15000,
       "command": "fs.download.cancel",
+      "confirmations": [],
       "description": "Share sessions only: drop a transfer.",
       "input": "payload",
       "operation": null,
@@ -16979,7 +17113,18 @@
         }
       ],
       "refusal_codes": [
-        "unauthorized"
+        "unauthorized",
+        "denied",
+        "not_found",
+        "conflict",
+        "invalid"
+      ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied",
+        "not_found",
+        "conflict",
+        "invalid"
       ],
       "response": [
         {
@@ -17005,6 +17150,7 @@
       "auth": "share",
       "client_timeout_ms": 15000,
       "command": "fs.download.chunk",
+      "confirmations": [],
       "description": "Share sessions only: read the next chunk (base64).",
       "input": "payload",
       "operation": null,
@@ -17049,7 +17195,18 @@
         }
       ],
       "refusal_codes": [
-        "unauthorized"
+        "unauthorized",
+        "denied",
+        "not_found",
+        "conflict",
+        "invalid"
+      ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied",
+        "not_found",
+        "conflict",
+        "invalid"
       ],
       "response": [
         {
@@ -17099,15 +17256,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "invalid"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "share",
       "client_timeout_ms": 15000,
       "command": "fs.download.start",
+      "confirmations": [],
       "description": "Share sessions only: start a chunked download of a file inside the share.",
       "input": "payload",
       "operation": null,
@@ -17140,7 +17296,18 @@
         }
       ],
       "refusal_codes": [
-        "unauthorized"
+        "unauthorized",
+        "denied",
+        "not_found",
+        "conflict",
+        "invalid"
+      ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied",
+        "not_found",
+        "conflict",
+        "invalid"
       ],
       "response": [
         {
@@ -17190,16 +17357,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "denied",
-        "not_found"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "human",
       "client_timeout_ms": 180000,
       "command": "fs.entry.copy",
+      "confirmations": [],
       "description": "Copy an entry or tree: Copy on every source, Read on source files, Write (files) or Touch (directories) at each destination, all checked before anything is written.",
       "input": "payload",
       "operation": "fs.copy",
@@ -17248,7 +17413,17 @@
       ],
       "refusal_codes": [
         "unauthorized",
-        "not_found"
+        "denied",
+        "not_found",
+        "conflict",
+        "invalid"
+      ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied",
+        "not_found",
+        "conflict",
+        "invalid"
       ],
       "response": [
         {
@@ -17268,7 +17443,7 @@
       ],
       "response_model": null,
       "untyped_refusals": [
-        "denied"
+        "conflict"
       ],
       "variants": []
     },
@@ -17276,6 +17451,7 @@
       "auth": "human",
       "client_timeout_ms": 180000,
       "command": "fs.entry.delete",
+      "confirmations": [],
       "description": "Delete a file or directory tree (Delete on the path).",
       "input": "payload",
       "operation": "fs.delete",
@@ -17311,7 +17487,16 @@
         }
       ],
       "refusal_codes": [
-        "unauthorized"
+        "unauthorized",
+        "denied",
+        "not_found",
+        "invalid"
+      ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied",
+        "not_found",
+        "invalid"
       ],
       "response": [
         {
@@ -17323,16 +17508,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "denied",
-        "not_found"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "human",
       "client_timeout_ms": 180000,
       "command": "fs.entry.move",
+      "confirmations": [],
       "description": "Move an entry (Move on the source).",
       "input": "payload",
       "operation": null,
@@ -17381,7 +17564,17 @@
       ],
       "refusal_codes": [
         "unauthorized",
-        "not_found"
+        "denied",
+        "not_found",
+        "conflict",
+        "invalid"
+      ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied",
+        "not_found",
+        "conflict",
+        "invalid"
       ],
       "response": [
         {
@@ -17400,15 +17593,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "denied"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "human",
       "client_timeout_ms": 60000,
       "command": "fs.entry.rename",
+      "confirmations": [],
       "description": "Rename an entry (Rename on the source).",
       "input": "payload",
       "operation": "fs.rename",
@@ -17457,7 +17649,17 @@
       ],
       "refusal_codes": [
         "unauthorized",
-        "not_found"
+        "denied",
+        "not_found",
+        "conflict",
+        "invalid"
+      ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied",
+        "not_found",
+        "conflict",
+        "invalid"
       ],
       "response": [
         {
@@ -17476,15 +17678,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "denied"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "human",
       "client_timeout_ms": 30000,
       "command": "fs.list",
+      "confirmations": [],
       "description": "fs.dir.list for console sessions; in a share session the share's view of the directory.",
       "input": "payload",
       "operation": "fs.list",
@@ -17520,7 +17721,18 @@
         }
       ],
       "refusal_codes": [
-        "unauthorized"
+        "unauthorized",
+        "denied",
+        "not_found",
+        "conflict",
+        "invalid"
+      ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied",
+        "not_found",
+        "conflict",
+        "invalid"
       ],
       "response": [
         {
@@ -17558,10 +17770,7 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "denied",
-        "not_found"
-      ],
+      "untyped_refusals": [],
       "variants": [
         {
           "description": "In a share session: share-relative paths, entries reduced to the share view.",
@@ -17627,6 +17836,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "fs.metadata",
+      "confirmations": [],
       "description": "One entry's metadata (Lookup on the path).",
       "input": "payload",
       "operation": null,
@@ -17662,7 +17872,18 @@
         }
       ],
       "refusal_codes": [
-        "unauthorized"
+        "unauthorized",
+        "denied",
+        "not_found",
+        "conflict",
+        "invalid"
+      ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied",
+        "not_found",
+        "conflict",
+        "invalid"
       ],
       "response": [
         {
@@ -17691,10 +17912,7 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "denied",
-        "not_found"
-      ],
+      "untyped_refusals": [],
       "variants": [
         {
           "description": "In a share session: share-relative paths, entries reduced to the share view.",
@@ -17751,12 +17969,24 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "fs.upload.cancel",
+      "confirmations": [],
       "description": "Abort the session's active ws upload.",
       "input": "payload",
       "operation": null,
       "payload": [],
       "refusal_codes": [
-        "unauthorized"
+        "unauthorized",
+        "denied",
+        "not_found",
+        "conflict",
+        "invalid"
+      ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied",
+        "not_found",
+        "conflict",
+        "invalid"
       ],
       "response": [
         {
@@ -17812,6 +18042,7 @@
       "auth": "human",
       "client_timeout_ms": 180000,
       "command": "fs.upload.finish",
+      "confirmations": [],
       "description": "Finish the session's active ws upload.",
       "input": "payload",
       "operation": null,
@@ -17847,7 +18078,18 @@
         }
       ],
       "refusal_codes": [
-        "unauthorized"
+        "unauthorized",
+        "denied",
+        "not_found",
+        "conflict",
+        "invalid"
+      ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied",
+        "not_found",
+        "conflict",
+        "invalid"
       ],
       "response": [
         {
@@ -17860,7 +18102,7 @@
       ],
       "response_model": null,
       "untyped_refusals": [
-        "denied"
+        "conflict"
       ],
       "variants": [
         {
@@ -17913,6 +18155,7 @@
       "auth": "human",
       "client_timeout_ms": 30000,
       "command": "fs.upload.start",
+      "confirmations": [],
       "description": "Start a chunked ws upload (Write on the path). The console uploads over HTTP instead (POST /upload/session); this is the native ws transfer.",
       "input": "payload",
       "operation": "fs.write",
@@ -17961,7 +18204,18 @@
         }
       ],
       "refusal_codes": [
-        "unauthorized"
+        "unauthorized",
+        "denied",
+        "not_found",
+        "conflict",
+        "invalid"
+      ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied",
+        "not_found",
+        "conflict",
+        "invalid"
       ],
       "response": [
         {
@@ -17973,9 +18227,7 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "denied"
-      ],
+      "untyped_refusals": [],
       "variants": [
         {
           "description": "In a share session: the share upload surface (target resolved inside the share).",
@@ -18109,6 +18361,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "group.add",
+      "confirmations": [],
       "description": "Create a group.",
       "input": "payload",
       "operation": "groups.create",
@@ -18160,6 +18413,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "name": "name",
@@ -18185,6 +18445,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "group.get",
+      "confirmations": [],
       "description": "One group by id.",
       "input": "payload",
       "operation": null,
@@ -18213,6 +18474,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "Group",
@@ -18231,6 +18499,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "group.get.byName",
+      "confirmations": [],
       "description": "One group by name.",
       "input": "payload",
       "operation": null,
@@ -18258,6 +18527,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "Group",
@@ -18276,6 +18552,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "group.member.add",
+      "confirmations": [],
       "description": "Add a user to a group.",
       "input": "payload",
       "operation": "groups.add_user",
@@ -18322,6 +18599,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "Group",
@@ -18357,6 +18641,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "group.member.remove",
+      "confirmations": [],
       "description": "Remove a user from a group.",
       "input": "payload",
       "operation": "groups.remove_user",
@@ -18403,6 +18688,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "Group",
@@ -18438,6 +18730,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "group.remove",
+      "confirmations": [],
       "description": "Delete a group.",
       "input": "payload",
       "operation": "groups.delete",
@@ -18466,6 +18759,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "minimum": 0,
@@ -18484,6 +18784,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "group.update",
+      "confirmations": [],
       "description": "Patch a group: name, description and linux_gid are each optional.",
       "input": "payload",
       "operation": null,
@@ -18553,6 +18854,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "minimum": 0,
@@ -18586,11 +18894,19 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "groups.list",
+      "confirmations": [],
       "description": "Every group for group viewers; otherwise only the caller's own groups.",
       "input": "none",
       "operation": null,
       "payload": [],
       "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
@@ -18616,6 +18932,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "groups.list.byUser",
+      "confirmations": [],
       "description": "The groups a user belongs to.",
       "input": "payload",
       "operation": null,
@@ -18644,6 +18961,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "items": "object",
@@ -18663,11 +18987,13 @@
       "auth": "session",
       "client_timeout_ms": 15000,
       "command": "meta.contract.get",
+      "confirmations": [],
       "description": "The contract this daemon was built from: contract_version, contract_hash (the whole document vh_usage --json publishes), ws_hash (the ws command book, what the web console is generated from) and models_hash (the model shapes the book refers to). Read-only, no secrets; needs a signed-in session (no build fingerprinting before login).",
       "input": "none",
       "operation": null,
       "payload": [],
       "refusal_codes": [],
+      "refusal_kinds": [],
       "response": [
         {
           "minimum": 0,
@@ -18707,6 +19033,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "permission.get",
+      "confirmations": [],
       "description": "One permission of the catalog by id.",
       "input": "payload",
       "operation": null,
@@ -18729,6 +19056,11 @@
         }
       ],
       "refusal_codes": [
+        "not_found",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "not_found",
         "unauthorized"
       ],
       "response": [
@@ -18742,15 +19074,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "not_found"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "permission.get.byName",
+      "confirmations": [],
       "description": "One permission of the catalog by its qualified name.",
       "input": "payload",
       "operation": null,
@@ -18772,6 +19103,11 @@
         }
       ],
       "refusal_codes": [
+        "not_found",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "not_found",
         "unauthorized"
       ],
       "response": [
@@ -18785,20 +19121,22 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "not_found"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "permissions.list",
+      "confirmations": [],
       "description": "The whole permission catalog.",
       "input": "none",
       "operation": null,
       "payload": [],
       "refusal_codes": [
+        "unauthorized"
+      ],
+      "refusal_kinds": [
         "unauthorized"
       ],
       "response": [
@@ -18820,6 +19158,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "pricing.budget.ledger.list",
+      "confirmations": [],
       "description": "Reservation ledger rows, newest first. Non super admins must name a vault they can view or a gateway credential they own.",
       "input": "payload",
       "operation": null,
@@ -18875,6 +19214,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "items": "object",
@@ -18894,6 +19240,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "pricing.budget.override.approve",
+      "confirmations": [],
       "description": "Approve a pending override (super admins). A bare `id` is refused: send override_id.",
       "input": "payload",
       "operation": null,
@@ -18918,6 +19265,13 @@
       "refusal_codes": [
         "denied",
         "invalid",
+        "conflict",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "conflict",
         "unauthorized"
       ],
       "response": [
@@ -18931,15 +19285,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "conflict"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "pricing.budget.override.deny",
+      "confirmations": [],
       "description": "Deny a pending override (super admins). A bare `id` is refused: send override_id.",
       "input": "payload",
       "operation": null,
@@ -18972,6 +19325,13 @@
       "refusal_codes": [
         "denied",
         "invalid",
+        "conflict",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "conflict",
         "unauthorized"
       ],
       "response": [
@@ -18985,15 +19345,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "conflict"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "pricing.budget.override.list",
+      "confirmations": [],
       "description": "Overrides, newest first. Super admins see all (or one vault's); others must name a vault they can view.",
       "input": "payload",
       "operation": null,
@@ -19035,6 +19394,12 @@
       ],
       "refusal_codes": [
         "denied",
+        "invalid",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
         "unauthorized"
       ],
       "response": [
@@ -19049,15 +19414,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "invalid"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "pricing.budget.override.request",
+      "confirmations": [],
       "description": "Ask for a one-time override of exceeded enforce policies on a vault (vault sync Trigger permission).",
       "input": "payload",
       "operation": null,
@@ -19141,6 +19505,12 @@
       ],
       "refusal_codes": [
         "denied",
+        "invalid",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
         "unauthorized"
       ],
       "response": [
@@ -19154,15 +19524,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "invalid"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "pricing.budget.policy.disable",
+      "confirmations": [],
       "description": "Disable the policy of a scope (same authority as upsert). disabled is false when there was nothing to disable.",
       "input": "payload",
       "operation": null,
@@ -19232,6 +19601,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "name": "disabled",
@@ -19242,15 +19618,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "invalid"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "pricing.budget.policy.list",
+      "confirmations": [],
       "description": "S3 price budget policies the caller may see: super admins every one; others the policies of vaults they can view and of gateway credentials they own. vault_id needs view access to that vault.",
       "input": "payload",
       "operation": null,
@@ -19305,6 +19680,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "items": "object",
@@ -19324,6 +19706,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "pricing.budget.policy.upsert",
+      "confirmations": [],
       "description": "Create or replace the policy of a scope. global/provider: super admins; vault: vault Edit on an S3 vault; gateway scopes: admin.s3_gateway.manage_budgets. Costs are decimal strings (up to 8 fractional digits).",
       "input": "payload",
       "operation": null,
@@ -19470,6 +19853,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "PriceBudgetPolicy",
@@ -19481,15 +19871,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "invalid"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "human",
       "client_timeout_ms": 60000,
       "command": "pricing.budget.preflight",
+      "confirmations": [],
       "description": "Dry-run budget decision for the next sync of an S3 vault: plans the sync from the remote index (refused when it is missing or stale) and prices it. Needs view access to the vault's budgets.",
       "input": "payload",
       "operation": null,
@@ -19522,6 +19911,16 @@
       ],
       "refusal_codes": [
         "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
         "unauthorized"
       ],
       "response": [
@@ -19593,15 +19992,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "invalid"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "pricing.budget.status",
+      "confirmations": [],
       "description": "Policies, ledger, trends, open notifications and overrides for a vault, a credential, or (super admins) the whole system.",
       "input": "payload",
       "operation": null,
@@ -19665,6 +20063,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "items": "object",
@@ -19720,6 +20125,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "pricing.notifications.ack",
+      "confirmations": [],
       "description": "Acknowledge a cost alert. Non super admins must send the alert's vault_id and be able to view it. A bare `id` is refused: send notification_id.",
       "input": "payload",
       "operation": null,
@@ -19761,6 +20167,13 @@
       "refusal_codes": [
         "denied",
         "invalid",
+        "not_found",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
         "unauthorized"
       ],
       "response": [
@@ -19774,16 +20187,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "invalid",
-        "not_found"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "pricing.notifications.list",
+      "confirmations": [],
       "description": "Cost alerts (operator notifications) the caller can see, newest first. summary always covers every OPEN alert in the same scope, whatever limit and include_acknowledged are.",
       "input": "payload",
       "operation": null,
@@ -19827,6 +20238,10 @@
         "denied",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "unauthorized"
+      ],
       "response": [
         {
           "items": "object",
@@ -19854,6 +20269,7 @@
       "auth": "human",
       "client_timeout_ms": 60000,
       "command": "recovery.costs",
+      "confirmations": [],
       "description": "The vault's recovery cost panel: versioning surcharge (separate from current object storage), recovery operations, what is not modelled, ranges, basis and catalog freshness. Unknown money is null.",
       "input": "payload",
       "operation": "recovery.costs",
@@ -19883,6 +20299,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "RecoveryCostReport",
@@ -19901,6 +20324,7 @@
       "auth": "human",
       "client_timeout_ms": 30000,
       "command": "recovery.inspect",
+      "confirmations": [],
       "description": "One recovery point with its details; a snapshot lists its members (first page). A point the caller can't read is not_found.",
       "input": "payload",
       "operation": "recovery.inspect",
@@ -19929,6 +20353,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "RecoveryPointDetail",
@@ -19947,6 +20378,7 @@
       "auth": "human",
       "client_timeout_ms": 120000,
       "command": "recovery.list",
+      "confirmations": [],
       "description": "Recovery points of a vault, or of one path (a file's history or the points under a directory): local snapshots, local versions and provider versions. Points the caller can't read are omitted. refresh_provider lists the provider's versions first (metadata only, request-budgeted).",
       "input": "payload",
       "operation": "recovery.list",
@@ -20024,6 +20456,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "items": "object",
@@ -20043,6 +20482,7 @@
       "auth": "human",
       "client_timeout_ms": 180000,
       "command": "recovery.plan",
+      "confirmations": [],
       "description": "Plan a restore (read-only): recovery_id, or vault_id + path + at for a point-in-time reconstruction (never atomic; see consistency_note). Returns the per-item preview, estimate, warnings, blockers and the token recovery.restore takes (stored 30 minutes).",
       "input": "payload",
       "operation": "recovery.plan",
@@ -20154,6 +20594,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "RecoveryPlan",
@@ -20172,6 +20619,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "recovery.plan.get",
+      "confirmations": [],
       "description": "A stored restore plan (its state, items and token).",
       "input": "payload",
       "operation": null,
@@ -20201,6 +20649,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "RecoveryPlan",
@@ -20219,6 +20674,13 @@
       "auth": "human",
       "client_timeout_ms": 60000,
       "command": "recovery.point.delete",
+      "confirmations": [
+        {
+          "accept_field": "confirm",
+          "code": "recovery_point_delete",
+          "description": "Deleting a snapshot or local version can't be undone: resend with confirm."
+        }
+      ],
       "description": "Delete a snapshot or a local version (filesystem Delete on its path). A refusal with data.code 'recovery_point_delete' asks for confirmation: resend with confirm.",
       "input": "payload",
       "operation": "recovery.point.delete",
@@ -20255,6 +20717,13 @@
         "unauthorized",
         "recovery_point_delete"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "name": "recovery_id",
@@ -20272,6 +20741,23 @@
       "auth": "human",
       "client_timeout_ms": 1800000,
       "command": "recovery.restore",
+      "confirmations": [
+        {
+          "accept_field": "token",
+          "code": "recovery_restore",
+          "description": "The plan's token is missing or wrong: resend with the token recovery.plan returned (shown with the plan's create / overwrite / remove counts)."
+        },
+        {
+          "accept_field": null,
+          "code": "recovery_plan_expired",
+          "description": "The plan expired (30 minutes): plan again with recovery.plan and restore the new plan."
+        },
+        {
+          "accept_field": "accept_unverified",
+          "code": "recovery_unverified_version",
+          "description": "Some versions were found in the bucket, not written by Vaulthalla: resend with accept_unverified only if the person trusts them."
+        }
+      ],
       "description": "Run a restore plan: every item is re-authorized and restored as a new current generation; a destination that changed since the plan is a 'conflict' outcome. Resumable. Refusals: 'recovery_restore' (token missing or expired: plan again), 'recovery_unverified_version' (resend with accept_unverified).",
       "input": "payload",
       "operation": "recovery.restore",
@@ -20318,6 +20804,13 @@
         "recovery_plan_expired",
         "recovery_unverified_version"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "RecoveryRestoreResult",
@@ -20336,6 +20829,7 @@
       "auth": "human",
       "client_timeout_ms": 300000,
       "command": "recovery.snapshot.create",
+      "confirmations": [],
       "description": "Take a named local snapshot of a file or directory tree (vault mode local_snapshots). Needs Read + Copy on every file and List on every directory of the subtree.",
       "input": "payload",
       "operation": "recovery.snapshot.create",
@@ -20384,6 +20878,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "RecoveryPointDetail",
@@ -20402,6 +20903,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "role.admin.add",
+      "confirmations": [],
       "description": "Create an admin role. Nobody grants an admin permission they do not hold.",
       "input": "payload",
       "operation": null,
@@ -20463,6 +20965,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "AdminRole",
@@ -20481,6 +20990,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "role.admin.delete",
+      "confirmations": [],
       "description": "Delete an admin role; the answer's role is the deleted role's id.",
       "input": "payload",
       "operation": null,
@@ -20509,6 +21019,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "description": "The deleted role's id.",
@@ -20528,6 +21045,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "role.admin.get",
+      "confirmations": [],
       "description": "One admin role with its permissions.",
       "input": "payload",
       "operation": null,
@@ -20556,6 +21074,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "AdminRole",
@@ -20574,6 +21099,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "role.admin.get.byName",
+      "confirmations": [],
       "description": "One admin role by name.",
       "input": "payload",
       "operation": null,
@@ -20601,6 +21127,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "AdminRole",
@@ -20619,6 +21152,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "role.admin.update",
+      "confirmations": [],
       "description": "Patch an admin role (name, description; permissions as a complete snapshot). Core refuses edits to super_admin and to the caller's own role, and grants beyond the caller's own permissions.",
       "input": "payload",
       "operation": null,
@@ -20694,6 +21228,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "AdminRole",
@@ -20712,6 +21253,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "role.vault.add",
+      "confirmations": [],
       "description": "Create a vault role definition (assigning it is role.vault.assign).",
       "input": "payload",
       "operation": null,
@@ -20773,6 +21315,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "VaultRole",
@@ -20791,6 +21340,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "role.vault.assign",
+      "confirmations": [],
       "description": "Assign a vault role to a user or group on a vault (one assignment per subject and vault).",
       "input": "payload",
       "operation": "roles.vault.assign",
@@ -20865,6 +21415,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "VaultRole",
@@ -20883,6 +21440,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "role.vault.delete",
+      "confirmations": [],
       "description": "Delete a vault role definition.",
       "input": "payload",
       "operation": null,
@@ -20911,6 +21469,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "minimum": 0,
@@ -20929,6 +21494,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "role.vault.get",
+      "confirmations": [],
       "description": "One vault role definition.",
       "input": "payload",
       "operation": null,
@@ -20957,6 +21523,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "VaultRole",
@@ -20975,6 +21548,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "role.vault.get.byName",
+      "confirmations": [],
       "description": "One vault role definition by name.",
       "input": "payload",
       "operation": null,
@@ -21002,6 +21576,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "VaultRole",
@@ -21020,6 +21601,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "role.vault.overrides.add",
+      "confirmations": [],
       "description": "Add allow/deny overrides for a pattern on one assignment (same ops as `vh vault role override add`).",
       "input": "payload",
       "operation": null,
@@ -21125,6 +21707,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "description": "The overrides created.",
@@ -21145,6 +21734,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "role.vault.overrides.list",
+      "confirmations": [],
       "description": "The path-scoped allow/deny overrides on one assignment (a subject's role on a vault).",
       "input": "payload",
       "operation": null,
@@ -21202,6 +21792,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "items": "object",
@@ -21221,6 +21818,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "role.vault.overrides.remove",
+      "confirmations": [],
       "description": "Remove one override from an assignment.",
       "input": "payload",
       "operation": null,
@@ -21295,6 +21893,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "name": "removed",
@@ -21312,6 +21917,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "role.vault.overrides.update",
+      "confirmations": [],
       "description": "Patch one override (effect, pattern, enabled; absent or null are unchanged).",
       "input": "payload",
       "operation": null,
@@ -21414,6 +22020,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "PermissionOverride",
@@ -21432,6 +22045,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "role.vault.unassign",
+      "confirmations": [],
       "description": "Remove a subject's vault role assignment on a vault.",
       "input": "payload",
       "operation": "roles.vault.unassign",
@@ -21489,6 +22103,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "name": "unassigned",
@@ -21506,6 +22127,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "role.vault.update",
+      "confirmations": [],
       "description": "Patch a vault role definition (name, description; permissions as a complete snapshot).",
       "input": "payload",
       "operation": null,
@@ -21581,6 +22203,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "VaultRole",
@@ -21599,11 +22228,19 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "roles.admin.list",
+      "confirmations": [],
       "description": "Every admin role the caller may view.",
       "input": "none",
       "operation": null,
       "payload": [],
       "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
@@ -21629,11 +22266,19 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "roles.vault.list",
+      "confirmations": [],
       "description": "Every vault role definition.",
       "input": "none",
       "operation": null,
       "payload": [],
       "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
@@ -21659,6 +22304,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "roles.vault.list.assigned",
+      "confirmations": [],
       "description": "The role assignments on one vault (id is the vault id).",
       "input": "payload",
       "operation": null,
@@ -21688,6 +22334,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "items": "object",
@@ -21707,6 +22360,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "s3.gateway.buckets.bind",
+      "confirmations": [],
       "description": "Bind a vault to a gateway bucket name (default: the vault's slug). Local vaults use mode local, S3/R2 vaults remote_cache or remote_proxy.",
       "input": "payload",
       "operation": null,
@@ -21796,6 +22450,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "name": "bound",
@@ -21806,15 +22467,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "invalid"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "human",
       "client_timeout_ms": 60000,
       "command": "s3.gateway.buckets.createLocal",
+      "confirmations": [],
       "description": "Create a local vault and bind it as a bucket (bucket name defaults to the vault's slug).",
       "input": "payload",
       "operation": null,
@@ -21876,6 +22536,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "S3GatewayBucket",
@@ -21894,6 +22561,13 @@
       "auth": "human",
       "client_timeout_ms": 180000,
       "command": "s3.gateway.buckets.createRemoteCache",
+      "confirmations": [
+        {
+          "accept_field": "accept_encryption_waiver",
+          "code": "encryption_waiver",
+          "description": "The upstream bucket already holds data Vaulthalla did not write: resend with accept_encryption_waiver once the person accepts."
+        }
+      ],
       "description": "Create an S3 vault (cache strategy) over an upstream bucket and bind it as an API-exclusive bucket. The key needs Consume; a refusal with data.code 'encryption_waiver' means the upstream bucket already holds data: resend with accept_encryption_waiver once the person accepts.",
       "input": "payload",
       "operation": null,
@@ -22000,6 +22674,13 @@
         "unauthorized",
         "encryption_waiver"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "S3GatewayBucket",
@@ -22011,20 +22692,26 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "not_found"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "s3.gateway.buckets.list",
+      "confirmations": [],
       "description": "Bucket bindings the caller may manage.",
       "input": "none",
       "operation": null,
       "payload": [],
       "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
@@ -22050,6 +22737,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "s3.gateway.buckets.unbind",
+      "confirmations": [],
       "description": "Remove a bucket binding (the vault stays).",
       "input": "payload",
       "operation": null,
@@ -22077,6 +22765,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "name": "unbound",
@@ -22094,6 +22789,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "s3.gateway.budget.ledger.list",
+      "confirmations": [],
       "description": "Gateway credential budget ledger entries (newest first).",
       "input": "payload",
       "operation": null,
@@ -22158,6 +22854,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "items": "object",
@@ -22177,6 +22880,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "s3.gateway.budget.policy.disable",
+      "confirmations": [],
       "description": "Disable a gateway credential (or credential + vault) budget policy.",
       "input": "payload",
       "operation": null,
@@ -22235,6 +22939,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "description": "Whether an active policy was disabled.",
@@ -22246,15 +22957,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "invalid"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "s3.gateway.budget.policy.list",
+      "confirmations": [],
       "description": "Gateway credential budget policies the caller may see.",
       "input": "payload",
       "operation": null,
@@ -22310,6 +23020,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "items": "object",
@@ -22329,6 +23046,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "s3.gateway.budget.policy.upsert",
+      "confirmations": [],
       "description": "Create or replace a gateway credential (or credential + vault) budget policy. Limits are decimal strings.",
       "input": "payload",
       "operation": null,
@@ -22462,6 +23180,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "PriceBudgetPolicy",
@@ -22473,15 +23198,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "invalid"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "s3.gateway.budget.status",
+      "confirmations": [],
       "description": "Gateway credential budget policies, recent ledger entries and spend trends.",
       "input": "payload",
       "operation": null,
@@ -22546,6 +23270,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "items": "object",
@@ -22583,6 +23314,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "s3.gateway.credentials.create",
+      "confirmations": [],
       "description": "Create a gateway credential for a principal (the caller unless principal_user_id / user_id names another). The secret is returned once. scope_mode defaults to vault_allowlist when vaults are given, else user_access; global needs an admin principal and a default vault role.",
       "input": "payload",
       "operation": null,
@@ -22947,6 +23679,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "S3GatewayCredential",
@@ -22973,6 +23712,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "s3.gateway.credentials.defaultRole.clear",
+      "confirmations": [],
       "description": "Remove a credential's default vault role.",
       "input": "payload",
       "operation": null,
@@ -23042,6 +23782,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "description": "Whether there was one.",
@@ -23068,6 +23815,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "s3.gateway.credentials.defaultRole.get",
+      "confirmations": [],
       "description": "A credential's default vault role, or null.",
       "input": "payload",
       "operation": null,
@@ -23137,6 +23885,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "S3GatewayCredential",
@@ -23164,6 +23919,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "s3.gateway.credentials.defaultRole.overrides.add",
+      "confirmations": [],
       "description": "Add a permission override to a credential's default vault role (needs a default role).",
       "input": "payload",
       "operation": null,
@@ -23307,6 +24063,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "S3GatewayDefaultRoleOverride",
@@ -23325,6 +24088,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "s3.gateway.credentials.defaultRole.overrides.list",
+      "confirmations": [],
       "description": "Permission overrides on a credential's default vault role.",
       "input": "payload",
       "operation": null,
@@ -23394,6 +24158,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "S3GatewayCredential",
@@ -23430,6 +24201,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "s3.gateway.credentials.defaultRole.overrides.remove",
+      "confirmations": [],
       "description": "Remove a permission override from a credential's default vault role.",
       "input": "payload",
       "operation": null,
@@ -23516,6 +24288,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "name": "removed",
@@ -23541,6 +24320,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "s3.gateway.credentials.defaultRole.set",
+      "confirmations": [],
       "description": "Set a credential's default vault role (refused for user-access credentials).",
       "input": "payload",
       "operation": null,
@@ -23668,6 +24448,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "S3GatewayCredential",
@@ -23687,16 +24474,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "invalid",
-        "not_found"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "s3.gateway.credentials.list",
+      "confirmations": [],
       "description": "Every credential the caller may see (their own, or all with admin.s3_gateway.manage_credentials).",
       "input": "payload",
       "operation": null,
@@ -23711,6 +24496,13 @@
         }
       ],
       "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
@@ -23736,6 +24528,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "s3.gateway.credentials.revoke",
+      "confirmations": [],
       "description": "Revoke a credential by access key or name.",
       "input": "payload",
       "operation": null,
@@ -23763,6 +24556,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "name": "revoked",
@@ -23780,6 +24580,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "s3.gateway.credentials.roles.assign",
+      "confirmations": [],
       "description": "Assign a vault role to a credential on a vault (not for user-access credentials; the role may not exceed what the principal can do).",
       "input": "payload",
       "operation": null,
@@ -23958,6 +24759,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "S3GatewayRoleAssignment",
@@ -23978,16 +24786,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "invalid",
-        "not_found"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "s3.gateway.credentials.roles.list",
+      "confirmations": [],
       "description": "A credential's per-vault role assignments the caller may see.",
       "input": "payload",
       "operation": null,
@@ -24057,6 +24863,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "S3GatewayCredential",
@@ -24094,6 +24907,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "s3.gateway.credentials.roles.overrides.add",
+      "confirmations": [],
       "description": "Add a permission override to a credential's grant on a vault (the vault must be selected and a default role set).",
       "input": "payload",
       "operation": null,
@@ -24288,6 +25102,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "S3GatewayRoleOverride",
@@ -24299,15 +25120,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "invalid"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "s3.gateway.credentials.roles.overrides.list",
+      "confirmations": [],
       "description": "Permission overrides on a credential's grant on one vault.",
       "input": "payload",
       "operation": null,
@@ -24428,6 +25248,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "S3GatewayCredential",
@@ -24458,15 +25285,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "invalid"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "s3.gateway.credentials.roles.overrides.remove",
+      "confirmations": [],
       "description": "Remove a permission override from a credential's vault grant.",
       "input": "payload",
       "operation": null,
@@ -24604,6 +25430,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "name": "removed",
@@ -24632,15 +25465,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "invalid"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "s3.gateway.credentials.roles.revoke",
+      "confirmations": [],
       "description": "Remove a credential's role on a vault.",
       "input": "payload",
       "operation": null,
@@ -24761,6 +25593,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "name": "revoked",
@@ -24789,15 +25628,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "invalid"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "s3.gateway.credentials.scope.update",
+      "confirmations": [],
       "description": "Change a credential's scope and settings; absent members stay as they are. Nothing to change is 'invalid'.",
       "input": "payload",
       "operation": null,
@@ -25184,6 +26022,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "S3GatewayCredential",
@@ -25202,6 +26047,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "s3.gateway.credentials.selectedVaults.add",
+      "confirmations": [],
       "description": "Select one more vault for a vault-allowlist credential.",
       "input": "payload",
       "operation": null,
@@ -25330,6 +26176,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "S3GatewayCredential",
@@ -25349,15 +26202,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "invalid"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "s3.gateway.credentials.selectedVaults.list",
+      "confirmations": [],
       "description": "The vaults selected for a credential.",
       "input": "payload",
       "operation": null,
@@ -25427,6 +26279,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "S3GatewayCredential",
@@ -25464,6 +26323,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "s3.gateway.credentials.selectedVaults.remove",
+      "confirmations": [],
       "description": "Drop a vault from a credential: its selection and any per-vault role.",
       "input": "payload",
       "operation": null,
@@ -25584,6 +26444,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "name": "removed",
@@ -25612,15 +26479,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "invalid"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "s3.gateway.credentials.selectedVaults.replace",
+      "confirmations": [],
       "description": "Replace a vault-allowlist credential's selected vaults (an empty or absent list clears them).",
       "input": "payload",
       "operation": null,
@@ -25816,6 +26682,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "S3GatewayCredential",
@@ -25853,11 +26726,19 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "s3.gateway.status",
+      "confirmations": [],
       "description": "S3 gateway runtime status: running/configured/ready, the listen endpoint and request counters.",
       "input": "none",
       "operation": null,
       "payload": [],
       "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
@@ -25951,11 +26832,16 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "settings.get",
+      "confirmations": [],
       "description": "The daemon's whole settings document (config.yaml as JSON, without secrets). Super admins only.",
       "input": "none",
       "operation": null,
       "payload": [],
       "refusal_codes": [
+        "denied",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
         "denied",
         "unauthorized"
       ],
@@ -25977,11 +26863,15 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "settings.policy.get",
+      "confirmations": [],
       "description": "What any signed-in user may know of the server policy: the sharing switches and the vault defaults (vaults.s3.*).",
       "input": "none",
       "operation": null,
       "payload": [],
       "refusal_codes": [
+        "unauthorized"
+      ],
+      "refusal_kinds": [
         "unauthorized"
       ],
       "response": [
@@ -26019,6 +26909,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "settings.update",
+      "confirmations": [],
       "description": "Change settings with a JSON merge patch (RFC 7386) onto the current document: send only the members that change; null removes an optional key. The merged document is validated as a whole and saved (a s3_gateway.enabled change restarts the gateway). Super admins only; preview.derive.helper_dir can't be changed here.",
       "input": "payload",
       "operation": null,
@@ -26209,6 +27100,11 @@
         "invalid",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "Settings",
@@ -26220,15 +27116,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "invalid"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "share",
       "client_timeout_ms": 15000,
       "command": "share.download.cancel",
+      "confirmations": [],
       "description": "Share sessions: drop a download transfer.",
       "input": "payload",
       "operation": null,
@@ -26252,7 +27147,17 @@
       ],
       "refusal_codes": [
         "unauthorized",
-        "denied"
+        "denied",
+        "not_found",
+        "invalid",
+        "conflict"
+      ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied",
+        "not_found",
+        "invalid",
+        "conflict"
       ],
       "response": [
         {
@@ -26271,17 +27176,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "denied",
-        "not_found",
-        "invalid"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "share",
       "client_timeout_ms": 15000,
       "command": "share.download.chunk",
+      "confirmations": [],
       "description": "Share sessions: read the next chunk (base64). offset must be the previous next_offset; the target is re-authorized on every chunk and the transfer is dropped on any failure.",
       "input": "payload",
       "operation": null,
@@ -26328,7 +27230,17 @@
       ],
       "refusal_codes": [
         "unauthorized",
-        "denied"
+        "denied",
+        "not_found",
+        "invalid",
+        "conflict"
+      ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied",
+        "not_found",
+        "invalid",
+        "conflict"
       ],
       "response": [
         {
@@ -26378,17 +27290,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "denied",
-        "not_found",
-        "invalid"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "share",
       "client_timeout_ms": 15000,
       "command": "share.download.start",
+      "confirmations": [],
       "description": "Share sessions: start a chunked download of a file inside the share (Download). At most 4 transfers per socket and 64 MiB per file.",
       "input": "payload",
       "operation": null,
@@ -26423,7 +27332,17 @@
       ],
       "refusal_codes": [
         "unauthorized",
-        "denied"
+        "denied",
+        "not_found",
+        "invalid",
+        "conflict"
+      ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied",
+        "not_found",
+        "invalid",
+        "conflict"
       ],
       "response": [
         {
@@ -26475,17 +27394,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "denied",
-        "not_found",
-        "invalid"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "public",
       "client_timeout_ms": 15000,
       "command": "share.email.challenge.confirm",
+      "confirmations": [],
       "description": "Confirm an email code. When verified the socket switches to share mode (status ready); session_id and session_token default to the socket's pending session.",
       "input": "payload",
       "operation": null,
@@ -26536,7 +27452,17 @@
       ],
       "refusal_codes": [
         "unauthorized",
-        "denied"
+        "denied",
+        "not_found",
+        "invalid",
+        "conflict"
+      ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied",
+        "not_found",
+        "invalid",
+        "conflict"
       ],
       "response": [
         {
@@ -26566,17 +27492,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "denied",
-        "not_found",
-        "invalid"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "public",
       "client_timeout_ms": 15000,
       "command": "share.email.challenge.start",
+      "confirmations": [],
       "description": "Email-validated links: send a one-time code to a recipient email. Identifies the link by public_token (opens a pending session) or by session_token (the socket's pending session when neither is given). Refused once the session is verified.",
       "input": "payload",
       "operation": null,
@@ -26610,7 +27533,17 @@
       ],
       "refusal_codes": [
         "unauthorized",
-        "denied"
+        "denied",
+        "not_found",
+        "invalid",
+        "conflict"
+      ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied",
+        "not_found",
+        "invalid",
+        "conflict"
       ],
       "response": [
         {
@@ -26656,17 +27589,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "denied",
-        "not_found",
-        "invalid"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "share",
       "client_timeout_ms": 30000,
       "command": "share.fs.list",
+      "confirmations": [],
       "description": "Share sessions: list a directory inside the share (List); entries in the share view.",
       "input": "payload",
       "operation": null,
@@ -26701,7 +27631,17 @@
       ],
       "refusal_codes": [
         "unauthorized",
-        "denied"
+        "denied",
+        "not_found",
+        "invalid",
+        "conflict"
+      ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied",
+        "not_found",
+        "invalid",
+        "conflict"
       ],
       "response": [
         {
@@ -26723,17 +27663,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "denied",
-        "not_found",
-        "invalid"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "share",
       "client_timeout_ms": 15000,
       "command": "share.fs.metadata",
+      "confirmations": [],
       "description": "Share sessions: one entry inside the share, reduced to the share view (Metadata).",
       "input": "payload",
       "operation": null,
@@ -26768,7 +27705,17 @@
       ],
       "refusal_codes": [
         "unauthorized",
-        "denied"
+        "denied",
+        "not_found",
+        "invalid",
+        "conflict"
+      ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied",
+        "not_found",
+        "invalid",
+        "conflict"
       ],
       "response": [
         {
@@ -26781,17 +27728,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "denied",
-        "not_found",
-        "invalid"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "share.link.create",
+      "confirmations": [],
       "description": "Create a share link on a file or directory. The public token is returned once.",
       "input": "payload",
       "operation": "shares.create",
@@ -27455,6 +28399,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "ShareLink",
@@ -27480,17 +28431,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "denied",
-        "not_found",
-        "invalid"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "share.link.get",
+      "confirmations": [],
       "description": "One share link the caller may manage (no token material).",
       "input": "payload",
       "operation": null,
@@ -27514,6 +28462,14 @@
       ],
       "refusal_codes": [
         "denied",
+        "not_found",
+        "invalid",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "not_found",
+        "invalid",
         "unauthorized"
       ],
       "response": [
@@ -27527,17 +28483,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "denied",
-        "not_found",
-        "invalid"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "share.link.list",
+      "confirmations": [],
       "description": "Share links: of one vault (vault_id, needs the vault's share-management permission) or created by the caller. offset is turned into a page when limit is given.",
       "input": "payload",
       "operation": null,
@@ -27619,6 +28572,14 @@
       ],
       "refusal_codes": [
         "denied",
+        "not_found",
+        "invalid",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "not_found",
+        "invalid",
         "unauthorized"
       ],
       "response": [
@@ -27633,17 +28594,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "denied",
-        "not_found",
-        "invalid"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "share.link.revoke",
+      "confirmations": [],
       "description": "Revoke a share link; its sessions end on their next request.",
       "input": "payload",
       "operation": "shares.revoke",
@@ -27671,6 +28629,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "name": "revoked",
@@ -27688,6 +28653,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "share.link.rotate_token",
+      "confirmations": [],
       "description": "Issue a new public token (returned once); the old URL and every session of the link stop working.",
       "input": "payload",
       "operation": null,
@@ -27711,6 +28677,14 @@
       ],
       "refusal_codes": [
         "denied",
+        "not_found",
+        "invalid",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "not_found",
+        "invalid",
         "unauthorized"
       ],
       "response": [
@@ -27738,17 +28712,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "denied",
-        "not_found",
-        "invalid"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "share.link.update",
+      "confirmations": [],
       "description": "Patch a share link: absent members are left alone, null clears an optional one. recipient_role_assignments (when present) replaces the recipients. vault_id, root_entry_id, root_path, target_type, counters and timestamps are immutable (refused).",
       "input": "payload",
       "operation": null,
@@ -28361,6 +29332,14 @@
       ],
       "refusal_codes": [
         "denied",
+        "not_found",
+        "invalid",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "not_found",
+        "invalid",
         "unauthorized"
       ],
       "response": [
@@ -28374,17 +29353,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "denied",
-        "not_found",
-        "invalid"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "share",
       "client_timeout_ms": 30000,
       "command": "share.preview.get",
+      "confirmations": [],
       "description": "Share sessions: a JPEG preview of an image or PDF inside the share (Preview), base64. Sources over 16 MiB and remote-only bytes are refused; the console uses GET /preview?share=1.",
       "input": "payload",
       "operation": null,
@@ -28410,7 +29386,17 @@
       ],
       "refusal_codes": [
         "unauthorized",
-        "denied"
+        "denied",
+        "not_found",
+        "invalid",
+        "conflict"
+      ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied",
+        "not_found",
+        "invalid",
+        "conflict"
       ],
       "response": [
         {
@@ -28462,17 +29448,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "denied",
-        "not_found",
-        "invalid"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "public",
       "client_timeout_ms": 15000,
       "command": "share.session.open",
+      "confirmations": [],
       "description": "Open a share session from a public link token. A public link is ready at once (the socket switches to share mode); an email-validated link answers email_required with a pending session to verify through share.email.challenge.*. Reopening the socket's own ready share returns its session.",
       "input": "payload",
       "operation": null,
@@ -28496,7 +29479,17 @@
       ],
       "refusal_codes": [
         "unauthorized",
-        "denied"
+        "denied",
+        "not_found",
+        "invalid",
+        "conflict"
+      ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied",
+        "not_found",
+        "invalid",
+        "conflict"
       ],
       "response": [
         {
@@ -28536,17 +29529,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "denied",
-        "not_found",
-        "invalid"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "share",
       "client_timeout_ms": 15000,
       "command": "share.upload.cancel",
+      "confirmations": [],
       "description": "Share sessions: abort an upload.",
       "input": "payload",
       "operation": null,
@@ -28570,7 +29560,17 @@
       ],
       "refusal_codes": [
         "unauthorized",
-        "denied"
+        "denied",
+        "not_found",
+        "invalid",
+        "conflict"
+      ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied",
+        "not_found",
+        "invalid",
+        "conflict"
       ],
       "response": [
         {
@@ -28589,17 +29589,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "denied",
-        "not_found",
-        "invalid"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "share",
       "client_timeout_ms": 180000,
       "command": "share.upload.finish",
+      "confirmations": [],
       "description": "Share sessions: finish an upload after its last binary frame; the target is re-authorized and the file created.",
       "input": "payload",
       "operation": null,
@@ -28623,7 +29620,17 @@
       ],
       "refusal_codes": [
         "unauthorized",
-        "denied"
+        "denied",
+        "not_found",
+        "invalid",
+        "conflict"
+      ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied",
+        "not_found",
+        "invalid",
+        "conflict"
       ],
       "response": [
         {
@@ -28650,18 +29657,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "denied",
-        "not_found",
-        "invalid",
-        "conflict"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "share",
       "client_timeout_ms": 30000,
       "command": "share.upload.start",
+      "confirmations": [],
       "description": "Share sessions: start an upload of a new file into a directory of the share (Upload). The bytes follow as binary frames; an existing target is refused (duplicate policy reject).",
       "input": "payload",
       "operation": null,
@@ -28745,7 +29748,17 @@
       ],
       "refusal_codes": [
         "unauthorized",
-        "denied"
+        "denied",
+        "not_found",
+        "invalid",
+        "conflict"
+      ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied",
+        "not_found",
+        "invalid",
+        "conflict"
       ],
       "response": [
         {
@@ -28807,18 +29820,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "denied",
-        "not_found",
-        "invalid",
-        "conflict"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "stats.dashboard.overview",
+      "confirmations": [],
       "description": "The health dashboard: overall status, attention items, sections and the requested cards (all default cards when cards is empty). Needs admin.stats.view.",
       "input": "payload",
       "operation": null,
@@ -28876,6 +29885,10 @@
         "unauthorized",
         "denied"
       ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied"
+      ],
       "response": [
         {
           "model": "DashboardOverview",
@@ -28894,11 +29907,16 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "stats.dashboard.severity",
+      "confirmations": [],
       "description": "The overall severity of the default overview cards without cards, sections or series (the console's health dot). Needs admin.stats.view.",
       "input": "none",
       "operation": null,
       "payload": [],
       "refusal_codes": [
+        "unauthorized",
+        "denied"
+      ],
+      "refusal_kinds": [
         "unauthorized",
         "denied"
       ],
@@ -28920,11 +29938,16 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "stats.fs.cache",
+      "confirmations": [],
       "description": "Filesystem metadata cache counters. Fails (no data.code) when the cache has no stats. Needs admin.stats.view.",
       "input": "none",
       "operation": null,
       "payload": [],
       "refusal_codes": [
+        "unauthorized",
+        "denied"
+      ],
+      "refusal_kinds": [
         "unauthorized",
         "denied"
       ],
@@ -28946,11 +29969,16 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "stats.http.cache",
+      "confirmations": [],
       "description": "HTTP preview cache counters. Needs admin.stats.view.",
       "input": "none",
       "operation": null,
       "payload": [],
       "refusal_codes": [
+        "unauthorized",
+        "denied"
+      ],
+      "refusal_kinds": [
         "unauthorized",
         "denied"
       ],
@@ -28972,6 +30000,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "stats.pricing.budget",
+      "confirmations": [],
       "description": "S3 price budget dashboard figures: system-wide without vault_id (needs admin.stats.view), one vault's with it (vault ownership or admin vault View/ViewStats). A non-object payload means system-wide.",
       "input": "payload",
       "operation": null,
@@ -28999,6 +30028,10 @@
         "unauthorized",
         "denied"
       ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied"
+      ],
       "response": [
         {
           "model": "PriceBudgetDashboardStats",
@@ -29017,11 +30050,16 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "stats.system.connections",
+      "confirmations": [],
       "description": "Live websocket and share connections. Needs admin.stats.view.",
       "input": "none",
       "operation": null,
       "payload": [],
       "refusal_codes": [
+        "unauthorized",
+        "denied"
+      ],
+      "refusal_kinds": [
         "unauthorized",
         "denied"
       ],
@@ -29043,11 +30081,16 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "stats.system.db",
+      "confirmations": [],
       "description": "Database size, connections and largest tables. Needs admin.stats.view.",
       "input": "none",
       "operation": null,
       "payload": [],
       "refusal_codes": [
+        "unauthorized",
+        "denied"
+      ],
+      "refusal_kinds": [
         "unauthorized",
         "denied"
       ],
@@ -29071,11 +30114,16 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "stats.system.fuse",
+      "confirmations": [],
       "description": "FUSE operation counters, latencies and errno totals. Fails (no data.code) when the daemon has no FUSE stats. Needs admin.stats.view.",
       "input": "none",
       "operation": null,
       "payload": [],
       "refusal_codes": [
+        "unauthorized",
+        "denied"
+      ],
+      "refusal_kinds": [
         "unauthorized",
         "denied"
       ],
@@ -29097,11 +30145,16 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "stats.system.health",
+      "confirmations": [],
       "description": "Runtime services, protocols, dependencies and a live bounded database probe. Needs admin.stats.view.",
       "input": "none",
       "operation": null,
       "payload": [],
       "refusal_codes": [
+        "unauthorized",
+        "denied"
+      ],
+      "refusal_kinds": [
         "unauthorized",
         "denied"
       ],
@@ -29123,11 +30176,16 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "stats.system.operations",
+      "confirmations": [],
       "description": "Filesystem operation queue and recent errors, all vaults. Needs admin.stats.view.",
       "input": "none",
       "operation": null,
       "payload": [],
       "refusal_codes": [
+        "unauthorized",
+        "denied"
+      ],
+      "refusal_kinds": [
         "unauthorized",
         "denied"
       ],
@@ -29151,11 +30209,16 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "stats.system.pricing",
+      "confirmations": [],
       "description": "System-wide S3 price budget dashboard figures. Needs admin.stats.view.",
       "input": "none",
       "operation": null,
       "payload": [],
       "refusal_codes": [
+        "unauthorized",
+        "denied"
+      ],
+      "refusal_kinds": [
         "unauthorized",
         "denied"
       ],
@@ -29177,11 +30240,16 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "stats.system.retention",
+      "confirmations": [],
       "description": "Retention figures for every vault. Needs admin.stats.view.",
       "input": "none",
       "operation": null,
       "payload": [],
       "refusal_codes": [
+        "unauthorized",
+        "denied"
+      ],
+      "refusal_kinds": [
         "unauthorized",
         "denied"
       ],
@@ -29205,11 +30273,16 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "stats.system.storage",
+      "confirmations": [],
       "description": "Storage backend figures for every vault. Needs admin.stats.view.",
       "input": "none",
       "operation": null,
       "payload": [],
       "refusal_codes": [
+        "unauthorized",
+        "denied"
+      ],
+      "refusal_kinds": [
         "unauthorized",
         "denied"
       ],
@@ -29231,11 +30304,16 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "stats.system.threadpools",
+      "confirmations": [],
       "description": "Thread pool queue depth and worker pressure. Needs admin.stats.view.",
       "input": "none",
       "operation": null,
       "payload": [],
       "refusal_codes": [
+        "unauthorized",
+        "denied"
+      ],
+      "refusal_kinds": [
         "unauthorized",
         "denied"
       ],
@@ -29257,6 +30335,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "stats.system.trends",
+      "confirmations": [],
       "description": "System metric trend series from the stats rollups. Needs admin.stats.view.",
       "input": "payload",
       "operation": null,
@@ -29280,6 +30359,10 @@
         "unauthorized",
         "denied"
       ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied"
+      ],
       "response": [
         {
           "description": "null while there is no data yet.",
@@ -29300,6 +30383,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "stats.vault",
+      "confirmations": [],
       "description": "A vault's capacity and usage figures (computed on the stats thread pool). Needs vault ownership or the admin vault View/ViewStats permission on the vault.",
       "input": "payload",
       "operation": null,
@@ -29326,6 +30410,10 @@
         "unauthorized",
         "denied"
       ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied"
+      ],
       "response": [
         {
           "model": "VaultStat",
@@ -29344,6 +30432,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "stats.vault.activity",
+      "confirmations": [],
       "description": "A vault's recent activity: counts, top users and paths, recent events. Needs vault ownership or the admin vault View/ViewStats permission on the vault.",
       "input": "payload",
       "operation": null,
@@ -29370,6 +30459,10 @@
         "unauthorized",
         "denied"
       ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied"
+      ],
       "response": [
         {
           "description": "null while there is no data for the vault yet.",
@@ -29390,6 +30483,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "stats.vault.operations",
+      "confirmations": [],
       "description": "A vault's filesystem operation queue and recent errors. Needs vault ownership or the admin vault View/ViewStats permission on the vault.",
       "input": "payload",
       "operation": null,
@@ -29416,6 +30510,10 @@
         "unauthorized",
         "denied"
       ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied"
+      ],
       "response": [
         {
           "description": "null while there is no data for the vault yet.",
@@ -29436,6 +30534,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "stats.vault.pricing",
+      "confirmations": [],
       "description": "A vault's S3 price budget dashboard figures. Needs vault ownership or the admin vault View/ViewStats permission on the vault.",
       "input": "payload",
       "operation": null,
@@ -29462,6 +30561,10 @@
         "unauthorized",
         "denied"
       ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied"
+      ],
       "response": [
         {
           "model": "PriceBudgetDashboardStats",
@@ -29480,6 +30583,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "stats.vault.recovery",
+      "confirmations": [],
       "description": "A vault's recovery posture (keys, versions, trash). Needs vault ownership or the admin vault View/ViewStats permission on the vault.",
       "input": "payload",
       "operation": null,
@@ -29506,6 +30610,10 @@
         "unauthorized",
         "denied"
       ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied"
+      ],
       "response": [
         {
           "description": "null while there is no data for the vault yet.",
@@ -29526,6 +30634,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "stats.vault.retention",
+      "confirmations": [],
       "description": "A vault's retention (trash, versions, cleanup) figures. Needs vault ownership or the admin vault View/ViewStats permission on the vault.",
       "input": "payload",
       "operation": null,
@@ -29552,6 +30661,10 @@
         "unauthorized",
         "denied"
       ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied"
+      ],
       "response": [
         {
           "description": "null while there is no data for the vault yet.",
@@ -29572,6 +30685,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "stats.vault.security",
+      "confirmations": [],
       "description": "A vault's security posture. Needs vault ownership or the admin vault View/ViewStats permission on the vault.",
       "input": "payload",
       "operation": null,
@@ -29598,6 +30712,10 @@
         "unauthorized",
         "denied"
       ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied"
+      ],
       "response": [
         {
           "description": "null while there is no data for the vault yet.",
@@ -29618,6 +30736,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "stats.vault.shares",
+      "confirmations": [],
       "description": "A vault's share-link statistics. Needs vault ownership or the admin vault View/ViewStats permission on the vault.",
       "input": "payload",
       "operation": null,
@@ -29644,6 +30763,10 @@
         "unauthorized",
         "denied"
       ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied"
+      ],
       "response": [
         {
           "description": "null while there is no data for the vault yet.",
@@ -29664,6 +30787,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "stats.vault.storage",
+      "confirmations": [],
       "description": "A vault's storage backend figures. Needs vault ownership or the admin vault View/ViewStats permission on the vault.",
       "input": "payload",
       "operation": null,
@@ -29690,6 +30814,10 @@
         "unauthorized",
         "denied"
       ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied"
+      ],
       "response": [
         {
           "model": "StorageBackendStats",
@@ -29708,6 +30836,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "stats.vault.sync",
+      "confirmations": [],
       "description": "A vault's sync health. Needs vault ownership or the admin vault View/ViewStats permission on the vault.",
       "input": "payload",
       "operation": null,
@@ -29734,6 +30863,10 @@
         "unauthorized",
         "denied"
       ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied"
+      ],
       "response": [
         {
           "description": "null while there is no data for the vault yet.",
@@ -29754,6 +30887,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "stats.vault.trends",
+      "confirmations": [],
       "description": "A vault's metric trend series from the stats rollups. Needs vault ownership or the admin vault View/ViewStats permission on the vault.",
       "input": "payload",
       "operation": null,
@@ -29794,6 +30928,10 @@
         "unauthorized",
         "denied"
       ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied"
+      ],
       "response": [
         {
           "description": "null while there is no data for the vault yet.",
@@ -29814,6 +30952,7 @@
       "auth": "human",
       "client_timeout_ms": 60000,
       "command": "storage.apiKey.add",
+      "confirmations": [],
       "description": "Store an upstream S3 API key after checking the credentials against the provider (skipped in test mode). owner_id defaults to the caller; creating one for someone else needs the users/admins keys permission.",
       "input": "payload",
       "operation": null,
@@ -29923,6 +31062,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "description": "Metadata only: the secret is never returned.",
@@ -29935,15 +31081,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "invalid"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "storage.apiKey.get",
+      "confirmations": [],
       "description": "One API key's metadata.",
       "input": "payload",
       "operation": null,
@@ -29973,6 +31118,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "description": "Metadata only: the secret is never returned.",
@@ -29992,11 +31144,19 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "storage.apiKey.list",
+      "confirmations": [],
       "description": "The API keys the caller may view (metadata only).",
       "input": "none",
       "operation": null,
       "payload": [],
       "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
@@ -30022,6 +31182,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "storage.apiKey.remove",
+      "confirmations": [],
       "description": "Delete a key. Refused (invalid, naming the vaults) while a vault uses it, and (conflict) while it operates an event subscription. The answer carries no data.",
       "input": "payload",
       "operation": null,
@@ -30051,6 +31212,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [],
       "response_model": null,
       "untyped_refusals": [],
@@ -30060,6 +31228,7 @@
       "auth": "human",
       "client_timeout_ms": 60000,
       "command": "storage.apiKey.update",
+      "confirmations": [],
       "description": "Edit a key in place (same id, so bound vaults keep their binding; their engines are rebuilt). Absent or null members keep their value; an empty secret_access_key keeps the sealed secret. The resulting credentials are re-checked like add.",
       "input": "payload",
       "operation": null,
@@ -30148,6 +31317,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "description": "Metadata only: the secret is never returned.",
@@ -30167,6 +31343,18 @@
       "auth": "human",
       "client_timeout_ms": 180000,
       "command": "storage.vault.add",
+      "confirmations": [
+        {
+          "accept_field": "accept_encryption_waiver",
+          "code": "encryption_waiver",
+          "description": "The bucket already holds data Vaulthalla did not write (or encryption is being switched on over it): resend with accept_encryption_waiver once the person accepts."
+        },
+        {
+          "accept_field": "provision.accept_adoption",
+          "code": "upstream_adoption",
+          "description": "provision mode adopt (or an existing unmanaged bucket) needs consent to adopt the bucket: resend with provision.accept_adoption."
+        }
+      ],
       "description": "Create a vault. owner_id, description and quota (bytes, 0 = unlimited) are optional; the daemon picks the backing directory. S3 vaults also need api_key_id and bucket. A refusal with data.code 'encryption_waiver' means the bucket already holds data: resend with accept_encryption_waiver once the person accepts. With provision (#237) the daemon creates a managed bucket or adopts an existing one; 'upstream_adoption' asks for provision.accept_adoption.",
       "input": "payload",
       "operation": "vaults.create",
@@ -30611,6 +31799,13 @@
         "encryption_waiver",
         "upstream_adoption"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "Vault",
@@ -30622,20 +31817,26 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "invalid"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "storage.vault.deleted.list",
+      "confirmations": [],
       "description": "Deletions the caller could have made: pending, purging and purged tombstones, newest first.",
       "input": "none",
       "operation": null,
       "payload": [],
       "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
@@ -30661,6 +31862,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "storage.vault.get",
+      "confirmations": [],
       "description": "One vault with its owner's name (and sync policy for S3 vaults).",
       "input": "payload",
       "operation": null,
@@ -30690,6 +31892,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "Vault",
@@ -30708,11 +31917,19 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "storage.vault.list",
+      "confirmations": [],
       "description": "Vaults visible to the caller; each row carries the owner's name.",
       "input": "none",
       "operation": null,
       "payload": [],
       "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
@@ -30738,6 +31955,18 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "storage.vault.remove",
+      "confirmations": [
+        {
+          "accept_field": "accept_key_loss",
+          "code": "vault_upstream_key_loss",
+          "description": "The vault key was never exported and its S3 data would become unreadable: resend with accept_key_loss once the person accepts."
+        },
+        {
+          "accept_field": "confirm_now",
+          "code": "vault_delete_now",
+          "description": "Deleting now skips the restore window: resend with confirm_now."
+        }
+      ],
       "description": "Delete a vault: restorable until the retention window ends, or purged on the next pass with `now`. Refusals with data.code 'vault_upstream_key_loss' (resend with accept_key_loss) or 'vault_delete_now' (resend with confirm_now).",
       "input": "payload",
       "operation": "vaults.delete",
@@ -30798,6 +32027,13 @@
         "vault_upstream_key_loss",
         "vault_delete_now"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "VaultDeletion",
@@ -30817,6 +32053,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "storage.vault.remove.plan",
+      "confirmations": [],
       "description": "What deleting the vault would do (provider, bucket, key export state, the restore and key retention windows, the key export command). Changes nothing; needs vault Remove.",
       "input": "payload",
       "operation": null,
@@ -30846,6 +32083,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "VaultRemovalPlan",
@@ -30864,6 +32108,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "storage.vault.restore",
+      "confirmations": [],
       "description": "Restore a vault whose deletion is still pending (conflict once its purge has started).",
       "input": "payload",
       "operation": null,
@@ -30893,6 +32138,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "Vault",
@@ -30911,6 +32163,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "storage.vault.sync",
+      "confirmations": [],
       "description": "Run the vault's sync now, or queue a rerun when one is already running.",
       "input": "payload",
       "operation": null,
@@ -30940,6 +32193,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "enum": [
@@ -30961,6 +32221,13 @@
       "auth": "human",
       "client_timeout_ms": 60000,
       "command": "storage.vault.update",
+      "confirmations": [
+        {
+          "accept_field": "accept_encryption_waiver",
+          "code": "encryption_waiver",
+          "description": "The bucket already holds data Vaulthalla did not write (or encryption is being switched on over it): resend with accept_encryption_waiver once the person accepts."
+        }
+      ],
       "description": "Patch a vault (absent or null members are unchanged; a vault's type never changes). Owner reassignment also needs Create for the new owner, a key change needs Consume on the key, sync settings need vault sync.config.edit. A refusal with data.code 'encryption_waiver' means the bucket already holds data: resend with accept_encryption_waiver once the person accepts.",
       "input": "payload",
       "operation": null,
@@ -31286,6 +32553,13 @@
         "unauthorized",
         "encryption_waiver"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "Vault",
@@ -31297,15 +32571,14 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [
-        "invalid"
-      ],
+      "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "sync.conflicts.list",
+      "confirmations": [],
       "description": "Open sync conflicts, newest first, in every vault where the caller may resolve them, or in one vault (vault_id: denied when the caller may not, not_found when it doesn't exist).",
       "input": "payload",
       "operation": null,
@@ -31335,6 +32608,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "items": "object",
@@ -31354,6 +32634,7 @@
       "auth": "human",
       "client_timeout_ms": 600000,
       "command": "sync.conflicts.resolve",
+      "confirmations": [],
       "description": "Resolve conflicts by keeping the local or the bucket copy (also accepted: local, remote, keep-local, keep-remote). Per item: each id gets its own status and one failure never stops the rest. 1 to 500 ids per call.",
       "input": "payload",
       "operation": null,
@@ -31388,6 +32669,13 @@
         }
       ],
       "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
@@ -31480,11 +32768,19 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "sync.conflicts.summary",
+      "confirmations": [],
       "description": "Open sync conflicts the caller can resolve: the total and a count per vault (vaults without conflicts are left out), sorted by vault name.",
       "input": "none",
       "operation": null,
       "payload": [],
       "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
@@ -31543,6 +32839,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "upstream.admin.disable",
+      "confirmations": [],
       "description": "Turn provider administration off. Refused while an event subscription runs through the key.",
       "input": "payload",
       "operation": null,
@@ -31572,6 +32869,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "UpstreamAdminStatus",
@@ -31590,6 +32894,7 @@
       "auth": "human",
       "client_timeout_ms": 60000,
       "command": "upstream.admin.enable",
+      "confirmations": [],
       "description": "Turn on provider administration (AWS S3, Cloudflare R2) for an upstream API key after probing it, or store / clear the Cloudflare API token R2 events need. Idempotent. Needs admin.upstream.configure + key edit.",
       "input": "payload",
       "operation": null,
@@ -31636,6 +32941,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "UpstreamAdminStatus",
@@ -31654,6 +32966,7 @@
       "auth": "human",
       "client_timeout_ms": 60000,
       "command": "upstream.admin.status",
+      "confirmations": [],
       "description": "Administration status and the last capability probe; probe=true re-checks the credential (configure).",
       "input": "payload",
       "operation": null,
@@ -31691,6 +33004,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "UpstreamAdminStatus",
@@ -31709,6 +33029,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "upstream.audit.list",
+      "confirmations": [],
       "description": "Upstream control-plane audit log (newest first): locks, creations, adoptions, lifecycle, events, cleanup.",
       "input": "payload",
       "operation": null,
@@ -31739,6 +33060,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "items": "object",
@@ -31758,6 +33086,7 @@
       "auth": "human",
       "client_timeout_ms": 180000,
       "command": "upstream.bucket.adopt.preflight",
+      "confirmations": [],
       "description": "Read-only admission check of an existing bucket before adoption: object counts, encryption of a sample, versioning, object lock, Vaulthalla manifest, blockers.",
       "input": "payload",
       "operation": null,
@@ -31817,6 +33146,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "UpstreamAdmissionReport",
@@ -31835,6 +33171,13 @@
       "auth": "human",
       "client_timeout_ms": 600000,
       "command": "upstream.bucket.cleanup",
+      "confirmations": [
+        {
+          "accept_field": "confirm_token",
+          "code": "upstream_cleanup",
+          "description": "The confirm_token is missing, expired or no longer matches the bucket: run upstream.bucket.cleanup.preflight again and resend its confirm_token."
+        }
+      ],
       "description": "Delete every object version of a bucket Vaulthalla created and (delete_bucket, default) the bucket. Every check runs again first. A refusal with data.code 'upstream_cleanup' means the token is missing, expired or no longer matches the bucket: run the preflight again.",
       "input": "payload",
       "operation": null,
@@ -31896,6 +33239,13 @@
         "unauthorized",
         "upstream_cleanup"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "UpstreamCleanupResult",
@@ -31914,6 +33264,7 @@
       "auth": "human",
       "client_timeout_ms": 180000,
       "command": "upstream.bucket.cleanup.preflight",
+      "confirmations": [],
       "description": "What cleanup would delete (objects, versions, delete markers, bytes) and anything that blocks it, with a confirm_token valid for 10 minutes. Nothing changes.",
       "input": "payload",
       "operation": null,
@@ -31955,6 +33306,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "UpstreamCleanupPlan",
@@ -31973,6 +33331,7 @@
       "auth": "human",
       "client_timeout_ms": 60000,
       "command": "upstream.bucket.detach",
+      "confirmations": [],
       "description": "Give a managed or adopted bucket that no vault uses back: Vaulthalla removes its own rules; data stays.",
       "input": "payload",
       "operation": null,
@@ -32014,6 +33373,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "UpstreamBucketRow",
@@ -32032,6 +33398,7 @@
       "auth": "human",
       "client_timeout_ms": 60000,
       "command": "upstream.bucket.inspect",
+      "confirmations": [],
       "description": "Bucket configuration: region, versioning, object lock, lifecycle and notification rules (ours vs foreign).",
       "input": "payload",
       "operation": null,
@@ -32073,6 +33440,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "UpstreamInspection",
@@ -32091,6 +33465,13 @@
       "auth": "human",
       "client_timeout_ms": 60000,
       "command": "upstream.bucket.lifecycle.set",
+      "confirmations": [
+        {
+          "accept_field": "accept_destructive",
+          "code": "upstream_destructive_lifecycle",
+          "description": "Expiration deletes objects: resend with accept_destructive once the person accepts."
+        }
+      ],
       "description": "Set or clear Vaulthalla's lifecycle rule on a managed or adopted bucket; foreign rules are preserved. Expiration is destructive: a refusal with data.code 'upstream_destructive_lifecycle' asks for accept_destructive.",
       "input": "payload",
       "operation": null,
@@ -32188,6 +33569,13 @@
         "unauthorized",
         "upstream_destructive_lifecycle"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "UpstreamInspection",
@@ -32206,6 +33594,7 @@
       "auth": "human",
       "client_timeout_ms": 60000,
       "command": "upstream.bucket.list",
+      "confirmations": [],
       "description": "One page of the account's buckets (ListBuckets) merged with what Vaulthalla knows: managed, adopted, unmanaged or protected. No bucket-level or object calls.",
       "input": "payload",
       "operation": null,
@@ -32277,6 +33666,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "UpstreamInventory",
@@ -32295,6 +33691,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "upstream.bucket.protect",
+      "confirmations": [],
       "description": "Lock a bucket: Vaulthalla will not probe, adopt, bind, configure, sync, empty or delete it. Audited.",
       "input": "payload",
       "operation": null,
@@ -32347,6 +33744,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "UpstreamBucketRow",
@@ -32365,6 +33769,13 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "upstream.bucket.unprotect",
+      "confirmations": [
+        {
+          "accept_field": "confirm",
+          "code": "upstream_unprotect",
+          "description": "Removing a bucket lock lets Vaulthalla act on the bucket again: resend with confirm."
+        }
+      ],
       "description": "Remove a bucket lock (admin.upstream.unprotect). A refusal with data.code 'upstream_unprotect' asks for confirmation: resend with confirm.",
       "input": "payload",
       "operation": null,
@@ -32415,6 +33826,13 @@
         "unauthorized",
         "upstream_unprotect"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "UpstreamBucketRow",
@@ -32433,6 +33851,7 @@
       "auth": "human",
       "client_timeout_ms": 120000,
       "command": "upstream.events.disable",
+      "confirmations": [],
       "description": "Remove the vault's event rule (and the queue when nothing else uses it and Vaulthalla created it).",
       "input": "payload",
       "operation": null,
@@ -32462,6 +33881,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "UpstreamEventStatus",
@@ -32480,6 +33906,7 @@
       "auth": "human",
       "client_timeout_ms": 120000,
       "command": "upstream.events.enable",
+      "confirmations": [],
       "description": "Subscribe an S3 vault's bucket for event-driven sync (AWS S3 → SQS, Cloudflare R2 → Queues).",
       "input": "payload",
       "operation": null,
@@ -32530,6 +33957,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "UpstreamEventStatus",
@@ -32548,6 +33982,7 @@
       "auth": "human",
       "client_timeout_ms": 120000,
       "command": "upstream.events.repair",
+      "confirmations": [],
       "description": "Re-create whatever is missing for the vault's subscription and re-arm it. Safe to repeat.",
       "input": "payload",
       "operation": null,
@@ -32577,6 +34012,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "UpstreamEventStatus",
@@ -32595,6 +34037,7 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "upstream.events.status",
+      "confirmations": [],
       "description": "Event subscription, queue health and inbox counts for one vault (vault_id) or every S3 vault the caller may view. A vault without a subscription reports state 'none'.",
       "input": "payload",
       "operation": null,
@@ -32625,6 +34068,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "items": "object",
@@ -32644,6 +34094,7 @@
       "auth": "human",
       "client_timeout_ms": 60000,
       "command": "vault.recovery.disclosure",
+      "confirmations": [],
       "description": "The cost disclosure a person must see before provider versioning is enabled, with the token vault.recovery.update needs (10 minutes). Read-only: at most one admin inspect, no object requests.",
       "input": "payload",
       "operation": "recovery.disclosure",
@@ -32732,6 +34183,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "RecoveryDisclosure",
@@ -32750,6 +34208,7 @@
       "auth": "human",
       "client_timeout_ms": 60000,
       "command": "vault.recovery.status",
+      "confirmations": [],
       "description": "A vault's recovery mode, local versioning, store usage, upstream backlog and provider versioning state; refresh_provider re-reads the bucket (one admin round trip).",
       "input": "payload",
       "operation": "recovery.status",
@@ -32786,6 +34245,13 @@
         "conflict",
         "unauthorized"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "RecoveryStatus",
@@ -32804,6 +34270,13 @@
       "auth": "human",
       "client_timeout_ms": 60000,
       "command": "vault.recovery.suspend",
+      "confirmations": [
+        {
+          "accept_field": "confirm",
+          "code": "recovery_versioning_suspend",
+          "description": "Suspending versioning on the bucket: resend with confirm (existing versions are kept)."
+        }
+      ],
       "description": "Suspend versioning on the vault's bucket; existing versions are kept and nothing is deleted. A refusal with data.code 'recovery_versioning_suspend' asks for confirmation: resend with confirm.",
       "input": "payload",
       "operation": "recovery.suspend",
@@ -32841,6 +34314,13 @@
         "unauthorized",
         "recovery_versioning_suspend"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "RecoveryStatus",
@@ -32859,6 +34339,28 @@
       "auth": "human",
       "client_timeout_ms": 180000,
       "command": "vault.recovery.update",
+      "confirmations": [
+        {
+          "accept_field": "disclosure_token",
+          "code": "recovery_versioning_disclosure",
+          "description": "Provider versioning needs the cost disclosure: show vault.recovery.disclosure and resend its disclosure_token (valid 10 minutes, and only while the figures are unchanged)."
+        },
+        {
+          "accept_field": "accept_unpriced",
+          "code": "recovery_versioning_unpriced",
+          "description": "Some costs can't be priced: resend with accept_unpriced once the person accepts unknown costs."
+        },
+        {
+          "accept_field": "accept_retention_shortening",
+          "code": "recovery_retention_shorten",
+          "description": "A shorter retention deletes history sooner: resend with accept_retention_shortening."
+        },
+        {
+          "accept_field": "accept_adoption",
+          "code": "upstream_adoption",
+          "description": "The vault's bucket is not managed by Vaulthalla yet: resend with accept_adoption to adopt it."
+        }
+      ],
       "description": "Change a vault's recovery settings. mode provider_versioning needs disclosure_token from vault.recovery.disclosure ('recovery_versioning_disclosure'); unpriced costs need accept_unpriced ('recovery_versioning_unpriced'); a shorter retention needs accept_retention_shortening ('recovery_retention_shorten'); the vault's unmanaged bucket needs accept_adoption ('upstream_adoption').",
       "input": "payload",
       "operation": "recovery.update",
@@ -33051,6 +34553,13 @@
         "recovery_retention_shorten",
         "upstream_adoption"
       ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
       "response": [
         {
           "model": "RecoveryStatus",
@@ -33066,5 +34575,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "6f81b4ef9a35400ad5fbf45fc7989f4a0dc5b26c71c1e8a523e970f9bef6f0c7"
+  "ws_hash": "95a3efeee05a1304eceaf7214d5c6b8620a579de69de522bf20f0f778843a5bc"
 }

@@ -4,6 +4,7 @@
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
 #include "fs/Filesystem.hpp"
+#include "ops/Error.hpp"
 
 #include <filesystem>
 #include <stdexcept>
@@ -25,11 +26,11 @@ namespace vh::protocols::ws::handler::fs {
                                  args.fuseFrom.string(), args.fuseTo.string(), args.expectedSize);
 
         auto session = session_.lock();
-        if (uploadInProgress()) throw std::runtime_error("Upload already in progress");
+        if (uploadInProgress()) throw vh::ops::Conflict("Upload already in progress");
         if (!session || !session->user) throw std::runtime_error("Authenticated user upload requires a human session");
 
         if (std::filesystem::is_directory(args.finalPath))
-            throw std::runtime_error("Upload final path is a directory — filename must be provided");
+            throw vh::ops::Invalid("Upload final path is a directory — filename must be provided");
 
         if (const auto err = Filesystem::mkdir({
                 .path = args.fuseFrom.parent_path(),
@@ -45,14 +46,14 @@ namespace vh::protocols::ws::handler::fs {
         log::Registry::ws()->debug("[UploadHandler] Starting share upload (uploadId: {}, shareSessionId: {}, expectedSize: {})",
                                   args.uploadId, args.shareSessionId, args.expectedSize);
 
-        if (uploadInProgress()) throw std::runtime_error("Upload already in progress");
+        if (uploadInProgress()) throw vh::ops::Conflict("Upload already in progress");
         if (args.uploadId.empty()) throw std::invalid_argument("Share upload id is required");
         if (args.shareId.empty()) throw std::invalid_argument("Share upload share id is required");
         if (args.shareSessionId.empty()) throw std::invalid_argument("Share upload session id is required");
         if (args.websocketSessionUuid.empty()) throw std::invalid_argument("Share upload websocket session id is required");
         auto session = session_.lock();
         if (!session || session->uuid != args.websocketSessionUuid)
-            throw std::runtime_error("Share upload websocket session mismatch");
+            throw vh::ops::Denied("Share upload websocket session mismatch");
         if (!args.onChunk || !args.onFinish || !args.onCancel || !args.onFail)
             throw std::invalid_argument("Share upload callbacks are required");
 
@@ -87,7 +88,7 @@ namespace vh::protocols::ws::handler::fs {
             }
         }
 
-        if (!currentUpload_) throw std::runtime_error("No upload in progress");
+        if (!currentUpload_) throw vh::ops::Conflict("No upload in progress");
 
         auto& upload = *currentUpload_;
         const auto data = static_cast<const char*>(buffer.data().data());
@@ -164,14 +165,14 @@ namespace vh::protocols::ws::handler::fs {
     }
 
     void Upload::finishUpload() {
-        if (!currentUpload_) throw std::runtime_error("No upload in progress");
+        if (!currentUpload_) throw vh::ops::Conflict("No upload in progress");
 
         auto& upload = *currentUpload_;
         upload.file.close();
 
         if (upload.bytesReceived != upload.expectedSize) {
             abortHumanUpload("upload_size_mismatch");
-            throw std::runtime_error("Upload size mismatch");
+            throw vh::ops::Invalid("Upload size mismatch");
         }
 
         auto session = session_.lock();
@@ -192,12 +193,12 @@ namespace vh::protocols::ws::handler::fs {
         const std::string& uploadId,
         const std::string& shareSessionId
     ) {
-        if (!currentShareUpload_) throw std::runtime_error("No share upload in progress");
+        if (!currentShareUpload_) throw vh::ops::Conflict("No share upload in progress");
 
         auto& upload = *currentShareUpload_;
-        if (upload.uploadId != uploadId) throw std::runtime_error("Share upload id mismatch");
-        if (upload.shareSessionId != shareSessionId) throw std::runtime_error("Share upload session mismatch");
-        if (upload.bytesReceived != upload.expectedSize) throw std::runtime_error("Upload size mismatch");
+        if (upload.uploadId != uploadId) throw vh::ops::NotFound("Share upload id mismatch");
+        if (upload.shareSessionId != shareSessionId) throw vh::ops::Denied("Share upload session mismatch");
+        if (upload.bytesReceived != upload.expectedSize) throw vh::ops::Invalid("Upload size mismatch");
 
         auto onFinish = upload.onFinish;
         auto buffer = std::move(upload.buffer);
@@ -206,11 +207,11 @@ namespace vh::protocols::ws::handler::fs {
     }
 
     void Upload::cancelShareUpload(const std::string& uploadId, const std::string& shareSessionId) {
-        if (!currentShareUpload_) throw std::runtime_error("No share upload in progress");
+        if (!currentShareUpload_) throw vh::ops::Conflict("No share upload in progress");
 
         auto& upload = *currentShareUpload_;
-        if (upload.uploadId != uploadId) throw std::runtime_error("Share upload id mismatch");
-        if (upload.shareSessionId != shareSessionId) throw std::runtime_error("Share upload session mismatch");
+        if (upload.uploadId != uploadId) throw vh::ops::NotFound("Share upload id mismatch");
+        if (upload.shareSessionId != shareSessionId) throw vh::ops::Denied("Share upload session mismatch");
 
         auto onCancel = upload.onCancel;
         currentShareUpload_.reset();

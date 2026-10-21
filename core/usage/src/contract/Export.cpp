@@ -191,6 +191,15 @@ Json wsFieldsJson(const std::vector<WsField>& fields) {
 Json wsJson() {
     Json out = Json::array();
     for (const auto& c : ws::commands()) {
+        Json confirmations = Json::array();
+        auto legacyCodes = c.refusal_codes;
+        for (const auto& confirmation : c.confirmations) {
+            confirmations.push_back(
+                {{"code", confirmation.code},
+                 {"accept_field", confirmation.accept_field.empty() ? Json(nullptr) : Json(confirmation.accept_field)},
+                 {"description", confirmation.description}});
+            legacyCodes.push_back(confirmation.code);
+        }
         Json variants = Json::array();
         for (const auto& v : c.variants)
             variants.push_back({{"mode", v.mode}, {"description", v.description},
@@ -202,7 +211,9 @@ Json wsJson() {
                        {"payload", wsFieldsJson(c.payload)},
                        {"response", wsFieldsJson(c.response)},
                        {"variants", variants},
-                       {"refusal_codes", c.refusal_codes},
+                       {"refusal_codes", legacyCodes},
+                       {"refusal_kinds", c.refusal_codes},
+                       {"confirmations", confirmations},
                        {"untyped_refusals", c.untyped_refusals},
                        {"operation", c.operation ? Json(*c.operation) : Json(nullptr)},
                        {"response_model", c.response_model ? Json(*c.response_model) : Json(nullptr)},

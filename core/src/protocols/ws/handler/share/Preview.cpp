@@ -1,4 +1,6 @@
 #include "protocols/ws/handler/share/Preview.hpp"
+#include "protocols/ws/handler/RequestErrors.hpp"
+#include "ops/Error.hpp"
 
 #include "fs/model/File.hpp"
 #include "preview/image.hpp"
@@ -34,13 +36,13 @@ public:
 
     std::vector<uint8_t> readFile(const vh::share::ResolvedTarget& target) const override {
         if (!target.entry || target.target_type != vh::share::TargetType::File)
-            throw std::runtime_error("Share preview target is not a file");
+            throw vh::ops::Invalid("Share preview target is not a file");
 
         auto file = std::dynamic_pointer_cast<vh::fs::model::File>(target.entry);
         if (!file) throw std::runtime_error("Share preview target file is unavailable");
         if (file->size_bytes == 0) return {};
         if (file->size_bytes > kMaxPreviewInputBytes)
-            throw std::runtime_error("Share preview source exceeds maximum render size");
+            throw vh::ops::Invalid("Share preview source exceeds maximum render size");
 
         const auto engine = resolver_ ? resolver_(target.vault_id)
                                       : runtime::Deps::get().storageManager->getEngine(target.vault_id);
@@ -51,7 +53,7 @@ public:
         try {
             return vh::storage::readAll(*reader, kMaxPreviewInputBytes);
         } catch (const std::length_error&) {
-            throw std::runtime_error("Share preview source exceeds maximum render size");
+            throw vh::ops::Invalid("Share preview source exceeds maximum render size");
         }
     }
 
@@ -117,9 +119,9 @@ private:
 
 void requireShareMode(const std::shared_ptr<Session>& session) {
     if (!session) throw std::runtime_error("Share preview commands require websocket session");
-    if (session->user) throw std::runtime_error("Share preview commands require share mode");
-    if (!session->isShareMode()) throw std::runtime_error("Share preview commands require verified share mode");
-    if (session->shareSessionToken().empty()) throw std::runtime_error("Share session token is missing");
+    if (session->user) throw vh::ops::Denied("Share preview commands require share mode");
+    if (!session->isShareMode()) throw vh::ops::Denied("Share preview commands require verified share mode");
+    if (session->shareSessionToken().empty()) throw vh::ops::Denied("Share session token is missing");
 }
 
 [[nodiscard]] std::shared_ptr<vh::share::Principal> refreshPrincipal(
@@ -157,16 +159,16 @@ void requireShareMode(const std::shared_ptr<Session>& session) {
     const std::string& sourceMime,
     const unsigned size
 ) {
-    if (input.empty()) throw std::runtime_error("Share preview source file is empty");
+    if (input.empty()) throw vh::ops::Invalid("Share preview source file is empty");
     if (input.size() > kMaxPreviewInputBytes)
-        throw std::runtime_error("Share preview source exceeds maximum render size");
+        throw vh::ops::Invalid("Share preview source exceeds maximum render size");
 
     const auto maxSize = std::make_optional(std::to_string(size));
     if (sourceMime.starts_with("image/"))
         return vh::preview::image::resize_and_compress_buffer(input.data(), input.size(), std::nullopt, maxSize);
     if (sourceMime == "application/pdf")
         return vh::preview::pdf::resize_and_compress_buffer(input.data(), input.size(), std::nullopt, maxSize);
-    throw std::runtime_error("Unsupported share preview type: " + sourceMime);
+    throw vh::ops::Invalid("Unsupported share preview type: " + sourceMime);
 }
 
 [[nodiscard]] std::string base64Encode(const std::vector<uint8_t>& bytes) {
@@ -194,7 +196,7 @@ std::shared_ptr<PreviewReader> makeDefaultPreviewReader(SharePreviewEngineResolv
     return std::make_shared<preview_detail::DefaultPreviewReader>(std::move(resolver));
 }
 
-json Preview::get(const json& payload, const std::shared_ptr<Session>& session) {
+json Preview::get(const json& payload, const std::shared_ptr<Session>& session) try {
     preview_detail::requireShareMode(session);
     const auto& body = preview_detail::objectPayload(payload);
 
@@ -208,10 +210,10 @@ json Preview::get(const json& payload, const std::shared_ptr<Session>& session) 
     });
 
     const auto file = std::dynamic_pointer_cast<vh::fs::model::File>(target.entry);
-    if (!file) throw std::runtime_error("Share preview target is not a file");
-    if (!file->mime_type) throw std::runtime_error("Share preview target has no mime type");
+    if (!file) throw vh::ops::Invalid("Share preview target is not a file");
+    if (!file->mime_type) throw vh::ops::Invalid("Share preview target has no mime type");
     if (!preview_detail::supportedMime(*file->mime_type))
-        throw std::runtime_error("Unsupported share preview type: " + *file->mime_type);
+        throw vh::ops::Invalid("Unsupported share preview type: " + *file->mime_type);
 
     const auto size = preview_detail::previewSize(body);
     std::vector<uint8_t> preview;
@@ -245,6 +247,8 @@ json Preview::get(const json& payload, const std::shared_ptr<Session>& session) 
         {"size_bytes", preview.size()},
         {"data_base64", preview_detail::base64Encode(preview)}
     };
+} catch (...) {
+    rethrowRequestErrorsAsInvalid();
 }
 
 void Preview::setManagerFactoryForTesting(ManagerFactory factory) {

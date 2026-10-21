@@ -217,8 +217,7 @@ std::vector<WsCommandUsage> s3GatewayCommands() {
         "Set a credential's default vault role (refused for user-access credentials).",
         s3gwWith(s3gwWith(s3gwCredentialRef(), s3gwRoleRef("The vault role (or one of its name members) is required.")),
                  {boolean("enabled").opt().desc("Defaults to true.")}),
-        {s3gwCredential(), object("default_role", "S3GatewayDefaultRole")},
-        {"invalid", "not_found"}));
+        {s3gwCredential(), object("default_role", "S3GatewayDefaultRole")}));
 
     out.push_back(s3gwCommand(
         "s3.gateway.credentials.defaultRole.clear", "Remove a credential's default vault role.",
@@ -242,15 +241,13 @@ std::vector<WsCommandUsage> s3GatewayCommands() {
     out.push_back(s3gwCommand(
         "s3.gateway.credentials.selectedVaults.add", "Select one more vault for a vault-allowlist credential.",
         s3gwWith(s3gwWith(s3gwCredentialRef(), s3gwVaultRef()), {boolean("enabled").opt().desc("Defaults to true.")}),
-        {s3gwCredential(), object("selected_vault", "S3GatewaySelectedVault")},
-        {"invalid"}));
+        {s3gwCredential(), object("selected_vault", "S3GatewaySelectedVault")}));
 
     out.push_back(s3gwCommand(
         "s3.gateway.credentials.selectedVaults.remove",
         "Drop a vault from a credential: its selection and any per-vault role.",
         s3gwWith(s3gwCredentialRef(), s3gwVaultRef()),
-        {boolean("removed"), s3gwCredential(), s3gwVault()},
-        {"invalid"}));
+        {boolean("removed"), s3gwCredential(), s3gwVault()}));
 
     // ---- default role overrides ----
     out.push_back(s3gwCommand(
@@ -289,35 +286,31 @@ std::vector<WsCommandUsage> s3GatewayCommands() {
             s3gwWith(s3gwWith(s3gwWith(s3gwCredentialRef(), s3gwVaultRef()),
                               s3gwRoleRef("The vault role (or one of its name members) is required.")),
                      {boolean("enabled").opt().desc("Defaults to true.")}),
-            assignment, {"invalid", "not_found"}));
+            assignment));
     }
 
     out.push_back(s3gwCommand(
         "s3.gateway.credentials.roles.revoke", "Remove a credential's role on a vault.",
         s3gwWith(s3gwCredentialRef(), s3gwVaultRef()),
-        {boolean("revoked"), s3gwCredential(), s3gwVault()},
-        {"invalid"}));
+        {boolean("revoked"), s3gwCredential(), s3gwVault()}));
 
     // ---- per-vault role overrides ----
     out.push_back(s3gwCommand(
         "s3.gateway.credentials.roles.overrides.list", "Permission overrides on a credential's grant on one vault.",
         s3gwWith(s3gwCredentialRef(), s3gwVaultRef()),
-        {s3gwCredential(), s3gwVault(), objectArray("overrides", "S3GatewayRoleOverride")},
-        {"invalid"}));
+        {s3gwCredential(), s3gwVault(), objectArray("overrides", "S3GatewayRoleOverride")}));
 
     out.push_back(s3gwCommand(
         "s3.gateway.credentials.roles.overrides.add",
         "Add a permission override to a credential's grant on a vault (the vault must be selected and a default role "
         "set).",
         s3gwWith(s3gwWith(s3gwCredentialRef(), s3gwVaultRef()), s3gwPermissionRef()),
-        {object("override", "S3GatewayRoleOverride")},
-        {"invalid"}));
+        {object("override", "S3GatewayRoleOverride")}));
 
     out.push_back(s3gwCommand(
         "s3.gateway.credentials.roles.overrides.remove", "Remove a permission override from a credential's vault grant.",
         s3gwWith(s3gwWith(s3gwCredentialRef(), s3gwVaultRef()), {s3gwOverrideId()}),
-        {boolean("removed"), s3gwCredential(), s3gwVault()},
-        {"invalid"}));
+        {boolean("removed"), s3gwCredential(), s3gwVault()}));
 
     // ---- buckets ----
     {
@@ -334,8 +327,7 @@ std::vector<WsCommandUsage> s3GatewayCommands() {
         s3gwWith(s3gwVaultRef(),
                  {str("bucket_name").opt(), str("mode").opt().oneOf({"local", "remote_cache", "remote_proxy"}),
                   boolean("api_exclusive").opt()}),
-        {boolean("bound")},
-        {"invalid"}));
+        {boolean("bound")}));
 
     out.push_back(s3gwCommand(
         "s3.gateway.buckets.unbind", "Remove a bucket binding (the vault stays).",
@@ -365,8 +357,11 @@ std::vector<WsCommandUsage> s3GatewayCommands() {
              boolean("encrypt_upstream").opt().desc("Defaults to true."), str("name").opt().nullable(),
              str("description").opt().nullable(), boolean("accept_encryption_waiver").opt()},
             {object("bucket", "S3GatewayBucket")},
-            {"not_found"}, 180s);
-        remote.refusal_codes.emplace_back("encryption_waiver");
+            {}, 180s);
+        remote.confirmations = {{.code = "encryption_waiver",
+                                 .accept_field = "accept_encryption_waiver",
+                                 .description = "The upstream bucket already holds data Vaulthalla did not write: "
+                                                "resend with accept_encryption_waiver once the person accepts."}};
         out.push_back(std::move(remote));
     }
 
@@ -389,15 +384,13 @@ std::vector<WsCommandUsage> s3GatewayCommands() {
          boolean("require_verified_catalog").opt().desc("Default true."),
          boolean("allow_stale_catalog").opt().desc("Default false."),
          uinteger("max_catalog_age_seconds").opt().nullable().desc("Default 43200.")},
-        {object("policy", "PriceBudgetPolicy")},
-        {"invalid"}));
+        {object("policy", "PriceBudgetPolicy")}));
 
     out.push_back(s3gwCommand(
         "s3.gateway.budget.policy.disable", "Disable a gateway credential (or credential + vault) budget policy.",
         {s3gwBudgetScope(), s3gwBudgetCredentialId(true),
          uinteger("vault_id").opt().nullable().gen(gen::ref("vault", {"id"}))},
-        {boolean("disabled").desc("Whether an active policy was disabled.")},
-        {"invalid"}));
+        {boolean("disabled").desc("Whether an active policy was disabled.")}));
 
     out.push_back(s3gwCommand(
         "s3.gateway.budget.ledger.list", "Gateway credential budget ledger entries (newest first).",

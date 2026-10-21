@@ -6,7 +6,7 @@
 export const WS_CONTRACT_VERSION = 2
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = '6f81b4ef9a35400ad5fbf45fc7989f4a0dc5b26c71c1e8a523e970f9bef6f0c7'
+export const WS_CONTRACT_HASH = '95a3efeee05a1304eceaf7214d5c6b8620a579de69de522bf20f0f778843a5bc'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
 export const WS_MODELS_HASH = 'c904d80541989f2425701f4d1b357f2a48f83399eee5c536ec1423851f7e7dc7'
@@ -2632,8 +2632,8 @@ export interface WsContract {
   }
   /**
    * Send (or, with dry_run, only render and record) a test email. Without to, a dry run goes to the first
-   * alerts recipient. status says which happened; a disabled or failing provider is a refusal without a code,
-   * recorded in the history.
+   * alerts recipient. status says which happened. Email disabled or provider none is a 'conflict'; a failing
+   * provider answers without a code. Both are recorded in the history.
    */
   'email.test.send': {
     payload: { to?: string; dry_run?: boolean }
@@ -5019,6 +5019,44 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'vault.recovery.suspend',
   'vault.recovery.update',
 ]
+
+// The NeedsConfirmation refusals per command: data.code, and the payload member (dotted path) a resend sets to
+// accept it (null: no resend accepts it; the description says what to do instead).
+export const WS_CONTRACT_CONFIRMATIONS: Readonly<
+  Partial<Record<WsContractCommand, readonly { code: string; accept_field: string | null }[]>>
+> = {
+  'auth.user.delete': [{ code: 'user_delete', accept_field: 'confirm' }],
+  'recovery.point.delete': [{ code: 'recovery_point_delete', accept_field: 'confirm' }],
+  'recovery.restore': [
+    { code: 'recovery_restore', accept_field: 'token' },
+    { code: 'recovery_plan_expired', accept_field: null },
+    { code: 'recovery_unverified_version', accept_field: 'accept_unverified' },
+  ],
+  's3.gateway.buckets.createRemoteCache': [
+    { code: 'encryption_waiver', accept_field: 'accept_encryption_waiver' },
+  ],
+  'storage.vault.add': [
+    { code: 'encryption_waiver', accept_field: 'accept_encryption_waiver' },
+    { code: 'upstream_adoption', accept_field: 'provision.accept_adoption' },
+  ],
+  'storage.vault.remove': [
+    { code: 'vault_upstream_key_loss', accept_field: 'accept_key_loss' },
+    { code: 'vault_delete_now', accept_field: 'confirm_now' },
+  ],
+  'storage.vault.update': [{ code: 'encryption_waiver', accept_field: 'accept_encryption_waiver' }],
+  'upstream.bucket.cleanup': [{ code: 'upstream_cleanup', accept_field: 'confirm_token' }],
+  'upstream.bucket.lifecycle.set': [
+    { code: 'upstream_destructive_lifecycle', accept_field: 'accept_destructive' },
+  ],
+  'upstream.bucket.unprotect': [{ code: 'upstream_unprotect', accept_field: 'confirm' }],
+  'vault.recovery.suspend': [{ code: 'recovery_versioning_suspend', accept_field: 'confirm' }],
+  'vault.recovery.update': [
+    { code: 'recovery_versioning_disclosure', accept_field: 'disclosure_token' },
+    { code: 'recovery_versioning_unpriced', accept_field: 'accept_unpriced' },
+    { code: 'recovery_retention_shorten', accept_field: 'accept_retention_shortening' },
+    { code: 'upstream_adoption', accept_field: 'accept_adoption' },
+  ],
+}
 
 // Client timeouts the server declares per command (a timeout means "no answer yet", never "failed").
 export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> = {

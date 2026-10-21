@@ -310,6 +310,50 @@ TEST(UsageContract, UnionsObjectsAndArraysAreSpelledOut) {
     }
 }
 
+// A member path ("provision.accept_adoption") the command's payload (or a session-mode variant's) declares.
+bool payloadDeclares(const contract::WsCommandUsage& cmd, const std::string& dotted) {
+    const auto inFields = [&](const std::vector<contract::WsField>& top) {
+        const std::vector<contract::WsField>* fields = &top;
+        std::string rest = dotted;
+        while (true) {
+            const auto dot = rest.find('.');
+            const auto name = rest.substr(0, dot);
+            const auto it = std::ranges::find(*fields, name, &contract::WsField::name);
+            if (it == fields->end()) return false;
+            if (dot == std::string::npos) return true;
+            fields = &it->fields;
+            rest = rest.substr(dot + 1);
+        }
+    };
+    if (inFields(cmd.payload)) return true;
+    return std::ranges::any_of(cmd.variants, [&](const contract::WsVariant& v) { return inFields(v.payload); });
+}
+
+TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
+    static const std::set<std::string> kKinds{"denied", "not_found", "invalid", "conflict", "unauthorized", "error"};
+    int confirmations = 0;
+    for (const auto& cmd : contract::ws::commands()) {
+        for (const auto& kind : cmd.refusal_codes)
+            EXPECT_TRUE(kKinds.contains(kind)) << cmd.command << ": refusal_codes holds generic kinds only; '" << kind
+                                               << "' belongs in confirmations";
+        for (const auto& kind : cmd.untyped_refusals)
+            EXPECT_TRUE(kKinds.contains(kind)) << cmd.command << ": untyped refusal '" << kind << "'";
+        std::set<std::string> codes;
+        for (const auto& c : cmd.confirmations) {
+            ++confirmations;
+            EXPECT_FALSE(kKinds.contains(c.code)) << cmd.command << ": " << c.code << " is a generic kind";
+            EXPECT_TRUE(codes.insert(c.code).second) << cmd.command << " lists " << c.code << " twice";
+            EXPECT_FALSE(c.description.empty()) << cmd.command << " " << c.code;
+            if (!c.accept_field.empty()) {
+                EXPECT_TRUE(payloadDeclares(cmd, c.accept_field))
+                    << cmd.command << ": " << c.code << " is accepted by " << c.accept_field
+                    << ", which its payload doesn't declare";
+            }
+        }
+    }
+    EXPECT_GE(confirmations, 15) << "the NeedsConfirmation codes left the book";
+}
+
 // ---- operation catalog ----------------------------------------------------------------------------------------
 
 TEST(UsageContract, OperationBindingsResolveAgainstTheBooks) {

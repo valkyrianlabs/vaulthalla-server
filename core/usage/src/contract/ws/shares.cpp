@@ -30,11 +30,9 @@ WsField shareLinkObject() { return object("share", "ShareLink"); }
 
 WsField shareLinkId() { return str("id").gen(gen::ref("share", {"id"})).desc("Share link id."); }
 
-// share::Manager refuses with std::runtime_error / std::invalid_argument (no data.code): "Share link not found",
-// "Share <op> denied: <reason>", "Missing required share field: ...". Sharing switched off is ops::Denied ("denied").
-std::vector<std::string> shareLinkUntypedRefusals() { return {"denied", "not_found", "invalid"}; }
-
-std::vector<std::string> shareLinkRefusals() { return {"denied", "unauthorized"}; }
+// Typed refusals (data.code): share::Manager and the handler refuse with ops::Denied (no permission, sharing off),
+// ops::NotFound (no such link) and ops::Invalid (malformed request).
+std::vector<std::string> shareLinkRefusals() { return {"denied", "not_found", "invalid", "unauthorized"}; }
 
 const std::vector<std::string>& shareLinkOps() {
     static const std::vector<std::string> ops = {"metadata", "list", "preview", "download", "upload", "mkdir",
@@ -110,7 +108,6 @@ std::vector<WsCommandUsage> shareCommands() {
         .payload = std::move(createPayload),
         .response = {shareLinkObject(), str("public_token"), str("public_url_path")},
         .refusal_codes = opsRefusals(),
-        .untyped_refusals = shareLinkUntypedRefusals(),
         .operation = "shares.create",
         .client_timeout = kDefaultTimeout,
     });
@@ -121,7 +118,6 @@ std::vector<WsCommandUsage> shareCommands() {
         .payload = {shareLinkId()},
         .response = {shareLinkObject()},
         .refusal_codes = shareLinkRefusals(),
-        .untyped_refusals = shareLinkUntypedRefusals(),
         .client_timeout = kDefaultTimeout,
     });
 
@@ -138,7 +134,6 @@ std::vector<WsCommandUsage> shareCommands() {
                     str("direction").opt().nullable().oneOf({"asc", "desc"}).desc("Case-insensitive.")},
         .response = {objectArray("shares", "ShareLink")},
         .refusal_codes = shareLinkRefusals(),
-        .untyped_refusals = shareLinkUntypedRefusals(),
         .client_timeout = kDefaultTimeout,
     });
 
@@ -156,8 +151,7 @@ std::vector<WsCommandUsage> shareCommands() {
             .payload = std::move(payload),
             .response = {shareLinkObject()},
             .refusal_codes = shareLinkRefusals(),
-            .untyped_refusals = shareLinkUntypedRefusals(),
-            .client_timeout = kDefaultTimeout,
+                .client_timeout = kDefaultTimeout,
         });
     }
 
@@ -168,7 +162,6 @@ std::vector<WsCommandUsage> shareCommands() {
         .payload = {shareLinkId()},
         .response = {shareLinkObject(), str("public_token"), str("public_url_path")},
         .refusal_codes = shareLinkRefusals(),
-        .untyped_refusals = shareLinkUntypedRefusals(),
         .client_timeout = kDefaultTimeout,
     });
 

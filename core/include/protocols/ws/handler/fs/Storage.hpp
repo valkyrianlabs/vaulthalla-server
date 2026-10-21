@@ -1,6 +1,7 @@
 #pragma once
 
 #include "protocols/ws/Session.hpp"
+#include "ops/Error.hpp"
 #include "rbac/resolver/vault/all.hpp"
 #include "fs/Fwd.hpp"
 #include "fs/model/Path.hpp"
@@ -75,7 +76,7 @@ private:
             .permission = permission,
             .vault_id = engine->vault->id,
             .path = engine->vaultPathToFusePath(path)
-        })) throw std::runtime_error(std::string(error));
+        })) throw vh::ops::Denied(std::string(error));
     }
 
     template<typename EnumT, typename... EnumTs>
@@ -100,7 +101,7 @@ private:
                 .vault_id = engine->vault->id,
                 .path = path
             }...
-        )) throw std::runtime_error("Permission denied: Required permission not granted");
+        )) throw vh::ops::Denied("Permission denied: Required permission not granted");
     }
 };
 

@@ -533,7 +533,11 @@ handler parses with `CommandUsage` and calls the op through `shell::runOp`, whic
 waiver prompts go through `shell::commands::vault::runWithWaiver`). The ws handler maps its payload to the request,
 and every ws handler template (`protocols/ws/core/handler_templates.hpp`, `describeCurrentError`) turns the exception into
 an `ERROR` response whose `data.code` is stable: `denied`, `not_found`, `invalid`, `conflict`, or the `NeedsConfirmation`
-code (the web asks and resends with `accept_encryption_waiver`); a non-`ops::Error` fault has no code. Handler-level
+code (the web asks and resends with `accept_encryption_waiver`; the contract names the field per code in
+`confirmations`); a non-`ops::Error` fault has no code. The fs/share ws handlers (and share `Manager`,
+`TargetResolver`, `PrincipalResolver`) throw ops types for refusals too, and their handlers turn malformed-payload
+errors (`std::invalid_argument`, JSON access) into `ops::Invalid` via `handler/RequestErrors.hpp`; HTTP share lanes
+still classify by message, unchanged. Handler-level
 gates (settings/email/pricing admin checks, share upload scope) throw `ops::Denied` so they carry `denied`; every
 `stats.*` command authorizes through `ops::stats` (below). Rules: RBAC for an operation lives in the op, never in the frontend as well; code beneath
 `ops::` (managers, `db::query`) never authorizes; internal callers use those primitives directly, not ops; no

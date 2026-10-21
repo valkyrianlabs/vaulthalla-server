@@ -76,13 +76,13 @@ std::vector<WsCommandUsage> pricingCommands() {
          boolean("allow_stale_catalog").opt().desc("Default false."),
          WsField{.name = "max_catalog_age_seconds", .types = {"integer", "null"}, .required = false,
                  .minimum = 1}.desc("Default 43200.")},
-        {object("policy", "PriceBudgetPolicy")}, pricingRefusals(), {"invalid"}));
+        {object("policy", "PriceBudgetPolicy")}, pricingRefusals()));
 
     out.push_back(pricingCommand("pricing.budget.policy.disable",
         "Disable the policy of a scope (same authority as upsert). disabled is false when there was nothing to "
         "disable.",
         {pricingScope(), str("provider_key").opt().nullable(), pricingVaultFilter(), pricingCredentialFilter()},
-        {boolean("disabled")}, pricingRefusals(), {"invalid"}));
+        {boolean("disabled")}, pricingRefusals()));
 
     out.push_back(pricingCommand("pricing.budget.ledger.list",
         "Reservation ledger rows, newest first. Non super admins must name a vault they can view or a gateway "
@@ -109,7 +109,7 @@ std::vector<WsCommandUsage> pricingCommands() {
          object("plan", "", {uinteger("upload"), uinteger("download"), uinteger("index_remote_only"),
                              uinteger("delete_remote"), uinteger("delete_local")})
              .desc("Planned action counts.")},
-        {"denied", "unauthorized"}, {"invalid"}, 60s));
+        {"denied", "invalid", "not_found", "conflict", "unauthorized"}, {}, 60s));
 
     out.push_back(pricingCommand("pricing.budget.override.request",
         "Ask for a one-time override of exceeded enforce policies on a vault (vault sync Trigger permission).",
@@ -122,23 +122,23 @@ std::vector<WsCommandUsage> pricingCommands() {
          str("estimated_cost").opt().nullable().desc("Decimal string."),
          str("currency").opt().desc("Default USD."),
          uinteger("ttl_minutes").opt().desc("Default 30.")},
-        {object("override", "PriceBudgetOverride")}, {"denied", "unauthorized"}, {"invalid"}));
+        {object("override", "PriceBudgetOverride")}, {"denied", "invalid", "unauthorized"}));
 
     out.push_back(pricingCommand("pricing.budget.override.approve",
         "Approve a pending override (super admins). A bare `id` is refused: send override_id.",
         {uinteger("override_id").min(1).gen(gen::ref("price_budget_override", {"id"}))},
-        {object("override", "PriceBudgetOverride")}, {"denied", "invalid", "unauthorized"}, {"conflict"}));
+        {object("override", "PriceBudgetOverride")}, {"denied", "invalid", "conflict", "unauthorized"}));
 
     out.push_back(pricingCommand("pricing.budget.override.deny",
         "Deny a pending override (super admins). A bare `id` is refused: send override_id.",
         {uinteger("override_id").min(1).gen(gen::ref("price_budget_override", {"id"})),
          str("reason").opt().nullable()},
-        {object("override", "PriceBudgetOverride")}, {"denied", "invalid", "unauthorized"}, {"conflict"}));
+        {object("override", "PriceBudgetOverride")}, {"denied", "invalid", "conflict", "unauthorized"}));
 
     out.push_back(pricingCommand("pricing.budget.override.list",
         "Overrides, newest first. Super admins see all (or one vault's); others must name a vault they can view.",
         {pricingVaultFilter(), pricingLimit("50"), boolean("include_expired").opt().desc("Default false.")},
-        {objectArray("overrides", "PriceBudgetOverride")}, {"denied", "unauthorized"}, {"invalid"}));
+        {objectArray("overrides", "PriceBudgetOverride")}, {"denied", "invalid", "unauthorized"}));
 
     // ---- operator notifications ----
     out.push_back(pricingCommand("pricing.notifications.list",
@@ -153,8 +153,8 @@ std::vector<WsCommandUsage> pricingCommands() {
         "`id` is refused: send notification_id.",
         {uinteger("notification_id").min(1).gen(gen::ref("price_budget_notification", {"id"})),
          pricingVaultFilter()},
-        {object("notification", "PriceBudgetNotification")}, {"denied", "invalid", "unauthorized"},
-        {"invalid", "not_found"}));
+        {object("notification", "PriceBudgetNotification")},
+        {"denied", "invalid", "not_found", "unauthorized"}));
 
     return out;
 }

@@ -9,13 +9,11 @@ namespace vh::contract::ws::detail {
 
 namespace {
 
-// Share manager and target resolver refusals are std::runtime_error / std::invalid_argument (no data.code):
-// "Share ... denied: ...", "Share link is inactive", "Share filesystem target not found", "Invalid share session token".
-std::vector<std::string> shareSessionUntypedRefusals() { return {"denied", "not_found", "invalid"}; }
-
-// The router refuses these in a console (human) session with UNAUTHORIZED; sharing switched off by the operator is
-// ops::Denied ("denied").
-std::vector<std::string> shareSessionRefusals() { return {"unauthorized", "denied"}; }
+// Every refusal is typed (data.code): the router refuses these in a console (human) session with UNAUTHORIZED;
+// sharing switched off, a revoked/expired link or session, a scope or role refusal is "denied"; a missing link,
+// challenge, transfer or target "not_found"; a malformed request "invalid"; a state that doesn't allow it ("already
+// verified", "target already exists", "transfer target changed") "conflict".
+std::vector<std::string> shareSessionRefusals() { return {"unauthorized", "denied", "not_found", "invalid", "conflict"}; }
 
 WsField shareSessionCompatPath(std::string what) {
     return str("path").opt().nullable().desc("Vault-relative " + std::move(what) +
@@ -63,7 +61,6 @@ std::vector<WsCommandUsage> shareSessionCommands() {
                      str("session_id"),
                      str("session_token").desc("The share session token (keep it to resume the session).")},
         .refusal_codes = shareSessionRefusals(),
-        .untyped_refusals = shareSessionUntypedRefusals(),
         .client_timeout = kDefaultTimeout,
     });
 
@@ -82,7 +79,6 @@ std::vector<WsCommandUsage> shareSessionCommands() {
                      str("session_id"),
                      str("session_token").opt().desc("Present when this call opened the session (public_token).")},
         .refusal_codes = shareSessionRefusals(),
-        .untyped_refusals = shareSessionUntypedRefusals(),
         .client_timeout = kDefaultTimeout,
     });
 
@@ -97,7 +93,6 @@ std::vector<WsCommandUsage> shareSessionCommands() {
                     str("session_token").opt().nullable()},
         .response = {str("status").oneOf({"ready", "email_required"}), boolean("verified"), str("session_id")},
         .refusal_codes = shareSessionRefusals(),
-        .untyped_refusals = shareSessionUntypedRefusals(),
         .client_timeout = kDefaultTimeout,
     });
 
@@ -109,7 +104,6 @@ std::vector<WsCommandUsage> shareSessionCommands() {
         .payload = {shareSessionCompatPath("path"), shareSessionVaultId()},
         .response = {object("entry", "ShareEntry")},
         .refusal_codes = shareSessionRefusals(),
-        .untyped_refusals = shareSessionUntypedRefusals(),
         .client_timeout = kDefaultTimeout,
     });
 
@@ -121,7 +115,6 @@ std::vector<WsCommandUsage> shareSessionCommands() {
         .response = {str("path").desc("Share-relative path of the listed directory."),
                      objectArray("entries", "ShareEntry")},
         .refusal_codes = shareSessionRefusals(),
-        .untyped_refusals = shareSessionUntypedRefusals(),
         .client_timeout = 30s,
     });
 
@@ -136,7 +129,6 @@ std::vector<WsCommandUsage> shareSessionCommands() {
                      uinteger("size_bytes"), str("mime_type").nullable(),
                      uinteger("chunk_size").desc("Suggested chunk length (64 KiB).")},
         .refusal_codes = shareSessionRefusals(),
-        .untyped_refusals = shareSessionUntypedRefusals(),
         .client_timeout = kDefaultTimeout,
     });
 
@@ -151,7 +143,6 @@ std::vector<WsCommandUsage> shareSessionCommands() {
         .response = {str("transfer_id"), uinteger("offset"), uinteger("bytes"), str("data_base64"),
                      uinteger("next_offset"), boolean("complete")},
         .refusal_codes = shareSessionRefusals(),
-        .untyped_refusals = shareSessionUntypedRefusals(),
         .client_timeout = kDefaultTimeout,
     });
 
@@ -162,7 +153,6 @@ std::vector<WsCommandUsage> shareSessionCommands() {
         .payload = {shareSessionTransferId()},
         .response = {boolean("cancelled"), str("transfer_id")},
         .refusal_codes = shareSessionRefusals(),
-        .untyped_refusals = shareSessionUntypedRefusals(),
         .client_timeout = kDefaultTimeout,
     });
 
@@ -177,7 +167,6 @@ std::vector<WsCommandUsage> shareSessionCommands() {
         .response = {str("path").desc("Share-relative path."), str("filename"), str("source_mime_type"),
                      str("mime_type").oneOf({"image/jpeg"}), uinteger("size_bytes"), str("data_base64")},
         .refusal_codes = shareSessionRefusals(),
-        .untyped_refusals = shareSessionUntypedRefusals(),
         .client_timeout = 30s,
     });
 
@@ -199,7 +188,6 @@ std::vector<WsCommandUsage> shareSessionCommands() {
                      uinteger("size_bytes"), uinteger("chunk_size").desc("Largest binary frame accepted."),
                      str("duplicate_policy").oneOf({"reject"})},
         .refusal_codes = shareSessionRefusals(),
-        .untyped_refusals = {"denied", "not_found", "invalid", "conflict"},
         .client_timeout = 30s,
     });
 
@@ -211,7 +199,6 @@ std::vector<WsCommandUsage> shareSessionCommands() {
         .payload = {shareSessionUploadId("upload_id"), shareSessionUploadId("transfer_id")},
         .response = {str("upload_id"), boolean("complete"), object("entry", "ShareUploadedFile")},
         .refusal_codes = shareSessionRefusals(),
-        .untyped_refusals = {"denied", "not_found", "invalid", "conflict"},
         .client_timeout = 180s,
     });
 
@@ -222,7 +209,6 @@ std::vector<WsCommandUsage> shareSessionCommands() {
         .payload = {shareSessionUploadId("upload_id"), shareSessionUploadId("transfer_id")},
         .response = {boolean("cancelled"), str("upload_id")},
         .refusal_codes = shareSessionRefusals(),
-        .untyped_refusals = shareSessionUntypedRefusals(),
         .client_timeout = kDefaultTimeout,
     });
 

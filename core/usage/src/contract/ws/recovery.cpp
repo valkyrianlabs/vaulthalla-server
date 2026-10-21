@@ -73,7 +73,11 @@ std::vector<WsCommandUsage> recoveryCommands() {
         "Delete a snapshot or a local version (filesystem Delete on its path). A refusal with data.code "
         "'recovery_point_delete' asks for confirmation: resend with confirm.",
         {recoveryId(), boolean("confirm").opt()}, {str("recovery_id")},
-        recoveryRefusals({"recovery_point_delete"}), 60s, "recovery.point.delete"));
+        recoveryRefusals(), 60s, "recovery.point.delete"));
+    out.back().confirmations = {{.code = "recovery_point_delete",
+                                 .accept_field = "confirm",
+                                 .description = "Deleting a snapshot or local version can't be undone: resend with "
+                                                "confirm."}};
 
     // ---- restore ----
     out.push_back(recoveryCommand("recovery.plan",
@@ -97,7 +101,21 @@ std::vector<WsCommandUsage> recoveryCommands() {
         "or expired: plan again), 'recovery_unverified_version' (resend with accept_unverified).",
         {planId(), str("token").opt(), boolean("accept_unverified").opt()},
         {object("result", "RecoveryRestoreResult")},
-        recoveryRefusals({"recovery_restore", "recovery_plan_expired", "recovery_unverified_version"}), 1800s, "recovery.restore"));
+        recoveryRefusals(), 1800s, "recovery.restore"));
+    out.back().confirmations = {{.code = "recovery_restore",
+                                 .accept_field = "token",
+                                 .description = "The plan's token is missing or wrong: resend with the token "
+                                                "recovery.plan returned (shown with the plan's create / overwrite "
+                                                "/ remove counts)."},
+                                {.code = "recovery_plan_expired",
+                                 .accept_field = "",
+                                 .description = "The plan expired (30 minutes): plan again with recovery.plan and "
+                                                "restore the new plan."},
+                                {.code = "recovery_unverified_version",
+                                 .accept_field = "accept_unverified",
+                                 .description = "Some versions were found in the bucket, not written by "
+                                                "Vaulthalla: resend with accept_unverified only if the person "
+                                                "trusts them."}};
 
     // ---- costs and vault policy ----
     out.push_back(recoveryCommand("recovery.costs",
@@ -123,9 +141,25 @@ std::vector<WsCommandUsage> recoveryCommands() {
          str("disclosure_token").opt(), boolean("accept_unpriced").opt(), boolean("accept_retention_shortening").opt(),
          boolean("accept_adoption").opt()},
         {object("status", "RecoveryStatus")},
-        recoveryRefusals({"recovery_versioning_disclosure", "recovery_versioning_unpriced", "recovery_retention_shorten",
-                          "upstream_adoption"}),
+        recoveryRefusals(),
         180s, "recovery.update"));
+    out.back().confirmations = {{.code = "recovery_versioning_disclosure",
+                                 .accept_field = "disclosure_token",
+                                 .description = "Provider versioning needs the cost disclosure: show "
+                                                "vault.recovery.disclosure and resend its disclosure_token (valid "
+                                                "10 minutes, and only while the figures are unchanged)."},
+                                {.code = "recovery_versioning_unpriced",
+                                 .accept_field = "accept_unpriced",
+                                 .description = "Some costs can't be priced: resend with accept_unpriced once the "
+                                                "person accepts unknown costs."},
+                                {.code = "recovery_retention_shorten",
+                                 .accept_field = "accept_retention_shortening",
+                                 .description = "A shorter retention deletes history sooner: resend with "
+                                                "accept_retention_shortening."},
+                                {.code = "upstream_adoption",
+                                 .accept_field = "accept_adoption",
+                                 .description = "The vault's bucket is not managed by Vaulthalla yet: resend with "
+                                                "accept_adoption to adopt it."}};
     out.push_back(recoveryCommand("vault.recovery.disclosure",
         "The cost disclosure a person must see before provider versioning is enabled, with the token "
         "vault.recovery.update needs (10 minutes). Read-only: at most one admin inspect, no object requests.",
@@ -135,7 +169,11 @@ std::vector<WsCommandUsage> recoveryCommands() {
         "Suspend versioning on the vault's bucket; existing versions are kept and nothing is deleted. A refusal with "
         "data.code 'recovery_versioning_suspend' asks for confirmation: resend with confirm.",
         {vaultId(), boolean("confirm").opt()}, {object("status", "RecoveryStatus")},
-        recoveryRefusals({"recovery_versioning_suspend"}), 60s, "recovery.suspend"));
+        recoveryRefusals(), 60s, "recovery.suspend"));
+    out.back().confirmations = {{.code = "recovery_versioning_suspend",
+                                 .accept_field = "confirm",
+                                 .description = "Suspending versioning on the bucket: resend with confirm "
+                                                "(existing versions are kept)."}};
 
     return out;
 }

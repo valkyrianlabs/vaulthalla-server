@@ -7,9 +7,11 @@ namespace vh::contract::ws::detail {
 
 namespace {
 
-// enforcePermission() throws std::runtime_error("Permission denied: ..."): no data.code, the client classifies the
-// text. Missing paths are runtime errors as well.
-std::vector<std::string> fsUntypedRefusals() { return {"denied", "not_found"}; }
+// Typed refusals (data.code): enforcePermission() is ops::Denied, a missing vault or path ops::NotFound, a malformed
+// payload ops::Invalid (handler/RequestErrors.hpp); the share-session forms add the share resolvers' kinds.
+std::vector<std::string> fsReadRefusals() { return {"unauthorized", "denied", "not_found", "invalid"}; }
+
+std::vector<std::string> fsWriteRefusals() { return {"unauthorized", "denied", "not_found", "conflict", "invalid"}; }
 
 std::vector<WsField> fsListResponse() {
     return {str("vault").desc("The vault's name."), str("path"),
@@ -38,8 +40,7 @@ std::vector<WsCommandUsage> fsCommands() {
         .description = "Create a directory (Touch on the path).",
         .payload = {vaultId(), vaultPath("path")},
         .response = {str("path")},
-        .refusal_codes = {"unauthorized"},
-        .untyped_refusals = {"denied", "conflict"},
+        .refusal_codes = fsWriteRefusals(),
         .operation = "fs.mkdir",
         .client_timeout = kDefaultTimeout,
     });
@@ -49,8 +50,7 @@ std::vector<WsCommandUsage> fsCommands() {
         .description = "List a directory (List on the path).",
         .payload = {vaultId(), vaultPath("path").opt().desc("Defaults to \"/\".")},
         .response = fsListResponse(),
-        .refusal_codes = {"unauthorized"},
-        .untyped_refusals = fsUntypedRefusals(),
+        .refusal_codes = fsReadRefusals(),
         .operation = "fs.list",
         .client_timeout = 30s,
     });
@@ -65,8 +65,7 @@ std::vector<WsCommandUsage> fsCommands() {
                       .description = "In a share session: share-relative paths, entries reduced to the share view.",
                       .payload = {vaultId().opt().nullable(), shareRelativePath()},
                       .response = {str("path"), object("entry", "ShareEntry")}}},
-        .refusal_codes = {"unauthorized"},
-        .untyped_refusals = fsUntypedRefusals(),
+        .refusal_codes = fsWriteRefusals(),
         .client_timeout = kDefaultTimeout,
     });
 
@@ -79,8 +78,7 @@ std::vector<WsCommandUsage> fsCommands() {
                       .description = "In a share session: share-relative paths, entries reduced to the share view.",
                       .payload = {vaultId().opt().nullable(), shareRelativePath()},
                       .response = {str("path"), object("entry", "ShareEntry"), objectArray("files", "ShareEntry")}}},
-        .refusal_codes = {"unauthorized"},
-        .untyped_refusals = fsUntypedRefusals(),
+        .refusal_codes = fsWriteRefusals(),
         .operation = "fs.list",
         .client_timeout = 30s,
     });
@@ -90,8 +88,7 @@ std::vector<WsCommandUsage> fsCommands() {
         .description = "Delete a file or directory tree (Delete on the path).",
         .payload = {vaultId(), vaultPath("path")},
         .response = {str("path")},
-        .refusal_codes = {"unauthorized"},
-        .untyped_refusals = fsUntypedRefusals(),
+        .refusal_codes = fsReadRefusals(),
         .operation = "fs.delete",
         .client_timeout = 180s,
     });
@@ -101,8 +98,7 @@ std::vector<WsCommandUsage> fsCommands() {
         .description = "Move an entry (Move on the source).",
         .payload = fsMovePayload(),
         .response = fsMoveResponse(),
-        .refusal_codes = {"unauthorized", "not_found"},
-        .untyped_refusals = {"denied"},
+        .refusal_codes = fsWriteRefusals(),
         .client_timeout = 180s,
     });
 
@@ -111,8 +107,7 @@ std::vector<WsCommandUsage> fsCommands() {
         .description = "Rename an entry (Rename on the source).",
         .payload = fsMovePayload(),
         .response = fsMoveResponse(),
-        .refusal_codes = {"unauthorized", "not_found"},
-        .untyped_refusals = {"denied"},
+        .refusal_codes = fsWriteRefusals(),
         .operation = "fs.rename",
         .client_timeout = 60s,
     });
@@ -123,8 +118,8 @@ std::vector<WsCommandUsage> fsCommands() {
                        "(directories) at each destination, all checked before anything is written.",
         .payload = fsMovePayload(),
         .response = fsMoveResponse(),
-        .refusal_codes = {"unauthorized", "not_found"},
-        .untyped_refusals = {"denied"},
+        .refusal_codes = fsWriteRefusals(),
+        .untyped_refusals = {"conflict"},
         .operation = "fs.copy",
         .client_timeout = 180s,
     });
@@ -146,8 +141,7 @@ std::vector<WsCommandUsage> fsCommands() {
                                   str("duplicate_policy").opt().oneOf({"reject"})},
                       .response = {str("upload_id"), str("transfer_id"), str("path"), str("filename"),
                                    uinteger("size_bytes"), uinteger("chunk_size"), str("duplicate_policy")}}},
-        .refusal_codes = {"unauthorized"},
-        .untyped_refusals = {"denied"},
+        .refusal_codes = fsWriteRefusals(),
         .operation = "fs.write",
         .client_timeout = 30s,
     });
@@ -161,8 +155,8 @@ std::vector<WsCommandUsage> fsCommands() {
                       .description = "In a share session.",
                       .payload = {str("upload_id").opt(), str("transfer_id").opt()},
                       .response = {str("upload_id"), boolean("complete"), object("entry", "ShareUploadedFile")}}},
-        .refusal_codes = {"unauthorized"},
-        .untyped_refusals = {"denied"},
+        .refusal_codes = fsWriteRefusals(),
+        .untyped_refusals = {"conflict"},
         .client_timeout = 180s,
     });
 
@@ -175,7 +169,7 @@ std::vector<WsCommandUsage> fsCommands() {
                       .description = "In a share session.",
                       .payload = {str("upload_id").opt(), str("transfer_id").opt()},
                       .response = {boolean("cancelled"), str("upload_id")}}},
-        .refusal_codes = {"unauthorized"},
+        .refusal_codes = fsWriteRefusals(),
         .client_timeout = kDefaultTimeout,
     });
 
@@ -187,8 +181,7 @@ std::vector<WsCommandUsage> fsCommands() {
         .payload = {shareRelativePath(), vaultId().opt().nullable()},
         .response = {str("transfer_id"), str("filename"), str("path"), uinteger("size_bytes"),
                      str("mime_type").opt().nullable(), uinteger("chunk_size")},
-        .refusal_codes = {"unauthorized"},
-        .untyped_refusals = {"denied", "not_found"},
+        .refusal_codes = fsWriteRefusals(),
         .client_timeout = kDefaultTimeout,
     });
 
@@ -200,8 +193,7 @@ std::vector<WsCommandUsage> fsCommands() {
                     uinteger("length").opt()},
         .response = {str("transfer_id"), uinteger("offset"), uinteger("bytes"), str("data_base64"),
                      uinteger("next_offset"), boolean("complete")},
-        .refusal_codes = {"unauthorized"},
-        .untyped_refusals = {"invalid"},
+        .refusal_codes = fsWriteRefusals(),
         .client_timeout = kDefaultTimeout,
     });
 
@@ -211,7 +203,7 @@ std::vector<WsCommandUsage> fsCommands() {
         .auth = "share",
         .payload = {fsTransferId()},
         .response = {boolean("cancelled"), str("transfer_id")},
-        .refusal_codes = {"unauthorized"},
+        .refusal_codes = fsWriteRefusals(),
         .client_timeout = kDefaultTimeout,
     });
 

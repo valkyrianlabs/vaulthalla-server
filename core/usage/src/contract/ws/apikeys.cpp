@@ -34,7 +34,6 @@ std::vector<WsCommandUsage> apiKeyCommands() {
                     uinteger("owner_id").opt().nullable().gen(gen::ref("user", {"id"}))},
         .response = {apiKeyObject()},
         .refusal_codes = opsRefusals(),
-        .untyped_refusals = {"invalid"},
         .client_timeout = 60s,
     });
 

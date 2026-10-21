@@ -1,4 +1,6 @@
 #include "protocols/ws/handler/share/Sessions.hpp"
+#include "protocols/ws/handler/RequestErrors.hpp"
+#include "ops/Error.hpp"
 
 #include "protocols/ws/Session.hpp"
 #include "rbac/fs/policy/Share.hpp"
@@ -64,7 +66,7 @@ namespace sessions_handler_detail {
 
 void requireNonHumanShareBootstrap(const std::shared_ptr<Session>& session) {
     if (!session) throw std::runtime_error("Share session requires websocket session");
-    if (session->user) throw std::runtime_error("Share session commands require a public websocket session");
+    if (session->user) throw vh::ops::Denied("Share session commands require a public websocket session");
 }
 
 [[nodiscard]] vh::share::TargetType capabilityTargetType(
@@ -149,7 +151,7 @@ json Sessions::publicLinkJson(const vh::share::Link& link, const std::optional<u
     return out;
 }
 
-json Sessions::open(const json& payload, const std::shared_ptr<Session>& session) {
+json Sessions::open(const json& payload, const std::shared_ptr<Session>& session) try {
     detail::requireNonHumanShareBootstrap(session);
     const auto& body = detail::objectPayload(payload);
     const auto publicToken = detail::requiredString(body, "public_token");
@@ -186,12 +188,14 @@ json Sessions::open(const json& payload, const std::shared_ptr<Session>& session
         {"session_id", result.session ? result.session->id : ""},
         {"session_token", result.session_token}
     };
+} catch (...) {
+    rethrowRequestErrorsAsInvalid();
 }
 
-json Sessions::startEmailChallenge(const json& payload, const std::shared_ptr<Session>& session) {
+json Sessions::startEmailChallenge(const json& payload, const std::shared_ptr<Session>& session) try {
     detail::requireNonHumanShareBootstrap(session);
     if (session->isShareMode())
-        throw std::runtime_error("Share session is already verified");
+        throw vh::ops::Conflict("Share session is already verified");
 
     const auto& body = detail::objectPayload(payload);
     auto publicToken = detail::optionalString(body, "public_token");
@@ -222,12 +226,14 @@ json Sessions::startEmailChallenge(const json& payload, const std::shared_ptr<Se
     };
     if (!result.session_token.empty()) response["session_token"] = result.session_token;
     return response;
+} catch (...) {
+    rethrowRequestErrorsAsInvalid();
 }
 
-json Sessions::confirmEmailChallenge(const json& payload, const std::shared_ptr<Session>& session) {
+json Sessions::confirmEmailChallenge(const json& payload, const std::shared_ptr<Session>& session) try {
     detail::requireNonHumanShareBootstrap(session);
     if (session->isShareMode())
-        throw std::runtime_error("Share session is already verified");
+        throw vh::ops::Conflict("Share session is already verified");
 
     const auto& body = detail::objectPayload(payload);
     const auto sessionId = detail::optionalString(body, "session_id").value_or(session->shareSessionId());
@@ -253,6 +259,8 @@ json Sessions::confirmEmailChallenge(const json& payload, const std::shared_ptr<
         {"verified", result.verified},
         {"session_id", result.session ? result.session->id : sessionId}
     };
+} catch (...) {
+    rethrowRequestErrorsAsInvalid();
 }
 
 void Sessions::setManagerFactoryForTesting(ManagerFactory factory) {

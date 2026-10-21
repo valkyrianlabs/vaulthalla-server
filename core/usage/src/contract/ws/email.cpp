@@ -42,7 +42,6 @@ std::vector<WsCommandUsage> emailCommands() {
                         "Partial operator_emails section.")},
         .response = emailConfigResponse(),
         .refusal_codes = {"denied", "invalid", "unauthorized"},
-        .untyped_refusals = {"invalid"},
         .client_timeout = kDefaultTimeout,
     });
 
@@ -55,16 +54,15 @@ std::vector<WsCommandUsage> emailCommands() {
                     str("access_key_id").opt().desc("ses."),
                     str("secret_access_key").opt().desc("ses.")},
         .response = {emailSecretStatus()},
-        .refusal_codes = {"denied", "unauthorized"},
-        .untyped_refusals = {"invalid"},
+        .refusal_codes = {"denied", "invalid", "unauthorized"},
         .client_timeout = kDefaultTimeout,
     });
 
     out.push_back({
         .command = "email.test.send",
         .description = "Send (or, with dry_run, only render and record) a test email. Without to, a dry run goes to "
-                       "the first alerts recipient. status says which happened; a disabled or failing provider is a "
-                       "refusal without a code, recorded in the history.",
+                       "the first alerts recipient. status says which happened. Email disabled or provider none is a "
+                       "'conflict'; a failing provider answers without a code. Both are recorded in the history.",
         .payload = {str("to").opt().gen(gen::email()).desc("Recipient address; required unless dry_run has a "
                                                             "configured alerts recipient."),
                     boolean("dry_run").opt()},
@@ -76,8 +74,7 @@ std::vector<WsCommandUsage> emailCommands() {
                      str("provider").opt().desc("sent only."),
                      str("provider_message_id").opt().nullable().desc("sent only."),
                      str("history_warning").nullable().desc("Why the delivery history could not be recorded.")},
-        .refusal_codes = {"denied", "unauthorized", "error"},
-        .untyped_refusals = {"invalid"},
+        .refusal_codes = {"denied", "invalid", "conflict", "unauthorized", "error"},
         .client_timeout = 60s,
     });
 

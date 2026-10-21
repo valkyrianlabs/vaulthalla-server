@@ -13,8 +13,8 @@ WsField dashboardPreferenceKey() {
         .desc("Default \"dashboard.home\" (also for \"\"); at most 64 characters.");
 }
 
-// Layout validation throws std::invalid_argument: an ERROR without data.code.
-std::vector<std::string> dashboardUntypedRefusals() { return {"invalid"}; }
+// An invalid key, payload or layout answers data.code "invalid" (the handler types the validation's refusals).
+std::vector<std::string> dashboardRefusals() { return {"unauthorized", "invalid"}; }
 
 }
 
@@ -27,8 +27,7 @@ std::vector<WsCommandUsage> dashboardCommands() {
                        "saved. A non-object payload reads the default key.",
         .payload = {dashboardPreferenceKey()},
         .response = {object("preferences", "DashboardPreference")},
-        .refusal_codes = {"unauthorized"},
-        .untyped_refusals = dashboardUntypedRefusals(),
+        .refusal_codes = dashboardRefusals(),
         .client_timeout = kDefaultTimeout,
     });
 
@@ -49,8 +48,7 @@ std::vector<WsCommandUsage> dashboardCommands() {
                         .gen(gen::constant("{\"cards\":[]}"))
                         .desc("Other members of the layout are stored as sent.")},
         .response = {object("preferences", "DashboardPreference")},
-        .refusal_codes = {"unauthorized"},
-        .untyped_refusals = dashboardUntypedRefusals(),
+        .refusal_codes = dashboardRefusals(),
         .client_timeout = kDefaultTimeout,
     });
 
@@ -60,8 +58,7 @@ std::vector<WsCommandUsage> dashboardCommands() {
                        "payload resets the default key.",
         .payload = {dashboardPreferenceKey()},
         .response = {boolean("reset").desc("Always true."), boolean("deleted")},
-        .refusal_codes = {"unauthorized"},
-        .untyped_refusals = dashboardUntypedRefusals(),
+        .refusal_codes = dashboardRefusals(),
         .client_timeout = kDefaultTimeout,
     });
 

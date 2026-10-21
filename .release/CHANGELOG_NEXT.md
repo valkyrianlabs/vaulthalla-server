@@ -18,3 +18,9 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   allowlist).
 - Handler JSON builders the contract tests need are public and database-free (S3 gateway, vault details and removal
   plan, share entries and links, email history, vault stats); their output is unchanged.
+- ws contract: commands list `refusal_kinds` and `confirmations` (`{code, accept_field, description}`, 19 codes);
+  `refusal_codes` stays their union. Generated TS exports `WS_CONTRACT_CONFIRMATIONS`.
+- ws: fs, share, pricing, email, settings, S3 gateway, vault/API key, permission and dashboard-preference refusals
+  carry `data.code` (untyped refusals: 61 commands, now 2); messages unchanged. Share Manager, TargetResolver and
+  PrincipalResolver throw ops refusal types; HTTP share lanes are unaffected.
+

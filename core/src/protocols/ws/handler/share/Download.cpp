@@ -1,4 +1,6 @@
 #include "protocols/ws/handler/share/Download.hpp"
+#include "protocols/ws/handler/RequestErrors.hpp"
+#include "ops/Error.hpp"
 
 #include "fs/model/File.hpp"
 #include "protocols/ws/Session.hpp"
@@ -55,14 +57,14 @@ public:
 
     std::vector<uint8_t> readFile(const vh::share::ResolvedTarget& target) const override {
         if (!target.entry || target.target_type != vh::share::TargetType::File)
-            throw std::runtime_error("Share download target is not a file");
+            throw vh::ops::Invalid("Share download target is not a file");
 
         auto file = std::dynamic_pointer_cast<vh::fs::model::File>(target.entry);
         if (!file) throw std::runtime_error("Share download target file is unavailable");
         if (file->size_bytes == 0) return {};
         // Refuse before any read (or remote fetch) rather than after buffering it.
         if (file->size_bytes > kMaxTransferSize)
-            throw std::runtime_error("Share download exceeds maximum in-memory transfer size");
+            throw vh::ops::Invalid("Share download exceeds maximum in-memory transfer size");
 
         const auto engine = resolver_ ? resolver_(target.vault_id)
                                       : runtime::Deps::get().storageManager->getEngine(target.vault_id);
@@ -73,7 +75,7 @@ public:
         try {
             return vh::storage::readAll(*reader, kMaxTransferSize);
         } catch (const std::length_error&) {
-            throw std::runtime_error("Share download exceeds maximum in-memory transfer size");
+            throw vh::ops::Invalid("Share download exceeds maximum in-memory transfer size");
         }
     }
 
@@ -143,9 +145,9 @@ std::unordered_map<std::string, TransferContext>& transfers() {
 
 void requireShareMode(const std::shared_ptr<Session>& session) {
     if (!session) throw std::runtime_error("Share download commands require websocket session");
-    if (session->user) throw std::runtime_error("Share download commands require share mode");
-    if (!session->isShareMode()) throw std::runtime_error("Share download commands require verified share mode");
-    if (session->shareSessionToken().empty()) throw std::runtime_error("Share session token is missing");
+    if (session->user) throw vh::ops::Denied("Share download commands require share mode");
+    if (!session->isShareMode()) throw vh::ops::Denied("Share download commands require verified share mode");
+    if (session->shareSessionToken().empty()) throw vh::ops::Denied("Share session token is missing");
 }
 
 [[nodiscard]] std::shared_ptr<vh::share::Principal> refreshPrincipal(
@@ -169,7 +171,7 @@ void requireShareMode(const std::shared_ptr<Session>& session) {
     if (!payload.contains("path") || payload.at("path").is_null()) return "/";
     auto path = payload.at("path").get<std::string>();
     if (path.empty()) return "/";
-    if (hasDuplicateSlash(path)) throw std::runtime_error("Share download path contains duplicate slash");
+    if (hasDuplicateSlash(path)) throw vh::ops::Invalid("Share download path contains duplicate slash");
     return path;
 }
 
@@ -244,7 +246,7 @@ void registerTransfer(TransferContext transfer) {
         return item.second.websocket_session_uuid == transfer.websocket_session_uuid;
     });
     if (activeForSession >= kMaxTransfersPerSession)
-        throw std::runtime_error("Too many active share download transfers for this session");
+        throw vh::ops::Conflict("Too many active share download transfers for this session");
 
     registry.emplace(transfer.transfer_id, std::move(transfer));
 }
@@ -257,11 +259,11 @@ void registerTransfer(TransferContext transfer) {
     std::scoped_lock lock(transferMutex());
     const auto& registry = transfers();
     const auto it = registry.find(transferId);
-    if (it == registry.end()) throw std::runtime_error("Share download transfer not found");
+    if (it == registry.end()) throw vh::ops::NotFound("Share download transfer not found");
     if (it->second.websocket_session_uuid != session->uuid)
-        throw std::runtime_error("Share download transfer does not belong to this websocket session");
+        throw vh::ops::Denied("Share download transfer does not belong to this websocket session");
     if (it->second.share_session_id != session->shareSessionId())
-        throw std::runtime_error("Share download transfer does not belong to this share session");
+        throw vh::ops::Denied("Share download transfer does not belong to this share session");
     return it->second;
 }
 
@@ -284,22 +286,22 @@ struct ChunkResult {
     const uint64_t length
 ) {
     if (length == 0) throw std::invalid_argument("Share download chunk length is required");
-    if (length > kMaxChunkSize) throw std::runtime_error("Share download chunk length exceeds maximum");
+    if (length > kMaxChunkSize) throw vh::ops::Invalid("Share download chunk length exceeds maximum");
 
     std::scoped_lock lock(transferMutex());
     auto& registry = transfers();
     const auto it = registry.find(transferId);
-    if (it == registry.end()) throw std::runtime_error("Share download transfer not found");
+    if (it == registry.end()) throw vh::ops::NotFound("Share download transfer not found");
     auto& transfer = it->second;
     if (transfer.websocket_session_uuid != session->uuid)
-        throw std::runtime_error("Share download transfer does not belong to this websocket session");
+        throw vh::ops::Denied("Share download transfer does not belong to this websocket session");
     if (transfer.share_session_id != session->shareSessionId())
-        throw std::runtime_error("Share download transfer does not belong to this share session");
+        throw vh::ops::Denied("Share download transfer does not belong to this share session");
     if (!transfer.bytes) throw std::runtime_error("Share download transfer data is unavailable");
     if (offset != transfer.bytes_sent)
-        throw std::runtime_error("Share download chunk offset is not the next expected offset");
+        throw vh::ops::Invalid("Share download chunk offset is not the next expected offset");
     if (offset > transfer.bytes->size())
-        throw std::runtime_error("Share download chunk range exceeds transfer size");
+        throw vh::ops::Invalid("Share download chunk range exceeds transfer size");
 
     const auto remaining = static_cast<uint64_t>(transfer.bytes->size()) - offset;
     const auto actualLength = std::min(length, remaining);
@@ -334,7 +336,7 @@ void revalidateTransferTarget(
     const auto principal = actor.sharePrincipal();
     if (!principal) throw std::runtime_error("Share download transfer principal is missing");
     if (principal->share_id != transfer.share_id || principal->share_session_id != transfer.share_session_id)
-        throw std::runtime_error("Share download transfer principal mismatch");
+        throw vh::ops::Denied("Share download transfer principal mismatch");
 
     const auto target = resolver.resolve(actor, {
         .path = transfer.vault_path,
@@ -344,7 +346,7 @@ void revalidateTransferTarget(
         .vault_id = transfer.vault_id
     });
     if (!target.entry || target.entry->id != transfer.target_entry_id || target.vault_path != transfer.vault_path)
-        throw std::runtime_error("Share download target changed");
+        throw vh::ops::Conflict("Share download target changed");
 }
 
 [[nodiscard]] json startImpl(
@@ -372,11 +374,11 @@ void revalidateTransferTarget(
     });
 
     const auto file = std::dynamic_pointer_cast<vh::fs::model::File>(target.entry);
-    if (!file) throw std::runtime_error("Share download target is not a file");
+    if (!file) throw vh::ops::Invalid("Share download target is not a file");
 
     auto bytes = std::make_shared<std::vector<uint8_t>>(reader()->readFile(target));
     if (bytes->size() > kMaxTransferSize)
-        throw std::runtime_error("Share download exceeds maximum in-memory transfer size");
+        throw vh::ops::Invalid("Share download exceeds maximum in-memory transfer size");
 
     const auto transferId = Session::generateUUIDv4();
     TransferContext transfer{
@@ -417,7 +419,7 @@ void revalidateTransferTarget(
 [[nodiscard]] json chunkImpl(const json& payload, const std::shared_ptr<Session>& session) {
     requireShareMode(session);
     const auto& body = objectPayload(payload);
-    if (body.contains("path")) throw std::runtime_error("Share download chunk cannot change path");
+    if (body.contains("path")) throw vh::ops::Invalid("Share download chunk cannot change path");
 
     const auto transferId = body.at("transfer_id").get<std::string>();
     const auto offset = body.at("offset").get<uint64_t>();
@@ -465,7 +467,7 @@ void revalidateTransferTarget(
     auto transfer = transferForSession(transferId, session);
     auto principal = refreshPrincipal(session, *mgr);
     if (principal->share_id != transfer.share_id || principal->share_session_id != transfer.share_session_id)
-        throw std::runtime_error("Share download transfer principal mismatch");
+        throw vh::ops::Denied("Share download transfer principal mismatch");
 
     eraseTransfer(transferId);
     appendAudit(*mgr, *principal, "share.download.cancel", auditTarget(transfer),
@@ -479,28 +481,40 @@ std::shared_ptr<DownloadReader> makeDefaultDownloadReader(ShareEngineResolver re
     return std::make_shared<dl_detail::DefaultDownloadReader>(std::move(resolver));
 }
 
-json Download::start(const json& payload, const std::shared_ptr<Session>& session) {
+json Download::start(const json& payload, const std::shared_ptr<Session>& session) try {
     return dl_detail::startImpl(payload, session, dl_detail::CommandSurface::Compatibility);
+} catch (...) {
+    rethrowRequestErrorsAsInvalid();
 }
 
-json Download::chunk(const json& payload, const std::shared_ptr<Session>& session) {
+json Download::chunk(const json& payload, const std::shared_ptr<Session>& session) try {
     return dl_detail::chunkImpl(payload, session);
+} catch (...) {
+    rethrowRequestErrorsAsInvalid();
 }
 
-json Download::cancel(const json& payload, const std::shared_ptr<Session>& session) {
+json Download::cancel(const json& payload, const std::shared_ptr<Session>& session) try {
     return dl_detail::cancelImpl(payload, session);
+} catch (...) {
+    rethrowRequestErrorsAsInvalid();
 }
 
-json Download::nativeStart(const json& payload, const std::shared_ptr<Session>& session) {
+json Download::nativeStart(const json& payload, const std::shared_ptr<Session>& session) try {
     return dl_detail::startImpl(payload, session, dl_detail::CommandSurface::Native);
+} catch (...) {
+    rethrowRequestErrorsAsInvalid();
 }
 
-json Download::nativeChunk(const json& payload, const std::shared_ptr<Session>& session) {
+json Download::nativeChunk(const json& payload, const std::shared_ptr<Session>& session) try {
     return dl_detail::chunkImpl(payload, session);
+} catch (...) {
+    rethrowRequestErrorsAsInvalid();
 }
 
-json Download::nativeCancel(const json& payload, const std::shared_ptr<Session>& session) {
+json Download::nativeCancel(const json& payload, const std::shared_ptr<Session>& session) try {
     return dl_detail::cancelImpl(payload, session);
+} catch (...) {
+    rethrowRequestErrorsAsInvalid();
 }
 
 void Download::setManagerFactoryForTesting(ManagerFactory factory) {

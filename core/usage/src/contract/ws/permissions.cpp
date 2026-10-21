@@ -13,9 +13,7 @@ std::vector<WsCommandUsage> permissionCommands() {
         .description = "One permission of the catalog by id.",
         .payload = {uinteger("id").gen(gen::ref("permission", {"id"}))},
         .response = {object("permission", "Permission")},
-        .refusal_codes = {"unauthorized"},
-        // db::query::rbac::Permission returns nothing: std::runtime_error("Permission not found").
-        .untyped_refusals = {"not_found"},
+        .refusal_codes = {"not_found", "unauthorized"},
         .client_timeout = kDefaultTimeout,
     });
 
@@ -24,8 +22,7 @@ std::vector<WsCommandUsage> permissionCommands() {
         .description = "One permission of the catalog by its qualified name.",
         .payload = {str("name").gen(gen::ref("permission", {"name"}))},
         .response = {object("permission", "Permission")},
-        .refusal_codes = {"unauthorized"},
-        .untyped_refusals = {"not_found"},
+        .refusal_codes = {"not_found", "unauthorized"},
         .client_timeout = kDefaultTimeout,
     });
 

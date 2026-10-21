@@ -1,4 +1,5 @@
 #include "share/Manager.hpp"
+#include "ops/Error.hpp"
 #include "rbac/PolicyEpoch.hpp"
 
 #include "db/query/fs/Entry.hpp"
@@ -487,12 +488,12 @@ void setDenied(AuditEvent& event, std::string code, std::string message = {}) {
 
 void requireAllowed(const AuthorizationDecision& decision, const std::string_view operation) {
     if (!decision.allowed)
-        throw std::runtime_error("Share " + std::string(operation) + " denied: " + decision.reason);
+        throw ops::Denied("Share " + std::string(operation) + " denied: " + decision.reason);
 }
 
 template<typename T>
 [[nodiscard]] std::shared_ptr<T> requirePtr(const std::shared_ptr<T>& value, const std::string_view reason) {
-    if (!value) throw std::runtime_error(std::string(reason));
+    if (!value) throw ops::NotFound(std::string(reason));
     return value;
 }
 
@@ -601,7 +602,7 @@ void attachScopedVaultRole(ShareStore& store, const Link& link, const Session& s
             if (legacy && !legacy->assignment) role = std::move(legacy);
         }
     } else if (link.requiresEmail()) {
-        throw std::runtime_error("Share recipient is not verified");
+        throw ops::Denied("Share recipient is not verified");
     } else {
         role = store.getVaultRoleForShare(link.id);
     }
@@ -647,24 +648,24 @@ void attachScopedVaultRole(ShareStore& store, const Link& link, const Session& s
     const Principal& principal,
     const ManagerOptions& options
 ) {
-    if (!principal.isActive(now(options))) throw std::runtime_error("Share principal is inactive");
+    if (!principal.isActive(now(options))) throw ops::Denied("Share principal is inactive");
 
     auto link = requirePtr(store.getLink(principal.share_id), "Share link not found");
-    if (!link->isActive(now(options))) throw std::runtime_error("Share link is inactive");
+    if (!link->isActive(now(options))) throw ops::Denied("Share link is inactive");
     if (link->vault_id != principal.vault_id || link->root_entry_id != principal.root_entry_id)
-        throw std::runtime_error("Share principal link mismatch");
+        throw ops::Denied("Share principal link mismatch");
 
     auto session = requirePtr(store.getSession(principal.share_session_id), "Share session not found");
-    if (!session->isActive(now(options))) throw std::runtime_error("Share session is inactive");
-    if (session->share_id != link->id) throw std::runtime_error("Share session link mismatch");
+    if (!session->isActive(now(options))) throw ops::Denied("Share session is inactive");
+    if (session->share_id != link->id) throw ops::Denied("Share session link mismatch");
 
     return {link, session};
 }
 
 void requireUploadAllowedByGrant(const Link& link, const StartUploadRequest& request, const ManagerOptions& options) {
-    if (!link.grant().allows(Operation::Upload)) throw std::runtime_error("Share upload denied: missing_upload_operation");
+    if (!link.grant().allows(Operation::Upload)) throw ops::Denied("Share upload denied: missing_upload_operation");
     if (link.target_type != TargetType::Directory)
-        throw std::runtime_error("Share upload denied: target is not directory-compatible");
+        throw ops::Denied("Share upload denied: target is not directory-compatible");
     if (request.target_parent_entry_id == 0) throw std::invalid_argument("Share upload target parent is required");
     if (request.target_path.empty() || request.target_path.front() != '/')
         throw std::invalid_argument("Share upload target path must be absolute");
@@ -673,34 +674,34 @@ void requireUploadAllowedByGrant(const Link& link, const StartUploadRequest& req
 
     const auto maxSize = link.max_upload_size_bytes.value_or(options.default_max_upload_size_bytes);
     if (request.expected_size_bytes > maxSize)
-        throw std::runtime_error("Share upload denied: file size exceeds maximum");
+        throw ops::Denied("Share upload denied: file size exceeds maximum");
 
     if (!request.mime_type && !link.allowed_mime_types.empty())
-        throw std::runtime_error("Share upload denied: MIME type is required");
+        throw ops::Denied("Share upload denied: MIME type is required");
     if (request.mime_type && containsInsensitive(link.blocked_mime_types, *request.mime_type))
-        throw std::runtime_error("Share upload denied: MIME type is blocked");
+        throw ops::Denied("Share upload denied: MIME type is blocked");
     if (request.mime_type && !link.allowed_mime_types.empty() &&
         !containsInsensitive(link.allowed_mime_types, *request.mime_type))
-        throw std::runtime_error("Share upload denied: MIME type is not allowed");
+        throw ops::Denied("Share upload denied: MIME type is not allowed");
 
     const auto ext = extensionOf(request.resolved_filename);
     if (!ext.empty() && containsExtension(link.blocked_extensions, ext))
-        throw std::runtime_error("Share upload denied: extension is blocked");
+        throw ops::Denied("Share upload denied: extension is blocked");
     if (!link.allowed_extensions.empty()) {
-        if (ext.empty()) throw std::runtime_error("Share upload denied: extension is required");
+        if (ext.empty()) throw ops::Denied("Share upload denied: extension is required");
         if (!containsExtension(link.allowed_extensions, ext))
-            throw std::runtime_error("Share upload denied: extension is not allowed");
+            throw ops::Denied("Share upload denied: extension is not allowed");
     }
 }
 
 void requireUploadQuota(ShareStore& store, const Link& link, const uint64_t expectedSize) {
     if (link.max_upload_files && store.countCompletedUploadFiles(link.id) >= *link.max_upload_files)
-        throw std::runtime_error("Share upload denied: file count limit reached");
+        throw ops::Denied("Share upload denied: file count limit reached");
     if (link.max_upload_total_bytes) {
         const auto completedBytes = store.sumCompletedUploadBytes(link.id);
         if (expectedSize > *link.max_upload_total_bytes ||
             completedBytes > *link.max_upload_total_bytes - expectedSize)
-            throw std::runtime_error("Share upload denied: total byte limit exceeded");
+            throw ops::Denied("Share upload denied: total byte limit exceeded");
     }
 }
 
@@ -712,7 +713,7 @@ void requireUploadQuota(ShareStore& store, const Link& link, const uint64_t expe
     if (uploadId.empty()) throw std::invalid_argument("Share upload id is required");
     auto upload = requirePtr(store.getUpload(uploadId), "Share upload not found");
     if (upload->share_id != principal.share_id || upload->share_session_id != principal.share_session_id)
-        throw std::runtime_error("Share upload does not belong to this share session");
+        throw ops::Denied("Share upload does not belong to this share session");
     return upload;
 }
 
@@ -727,8 +728,8 @@ void requireUploadQuota(ShareStore& store, const Link& link, const uint64_t expe
 
     auto link = store.getLinkByLookupId(parsed.lookup_id);
     if (!link || !Token::verify(link->token_hash, TokenKind::PublicShare, parsed.secret))
-        throw std::runtime_error("Invalid public share token");
-    if (!link->isActive(current)) throw std::runtime_error("Share link is inactive");
+        throw ops::Denied("Invalid public share token");
+    if (!link->isActive(current)) throw ops::Denied("Share link is inactive");
     policy::requireEnabled(link->access_mode);
 
     return link;
@@ -762,8 +763,8 @@ void requireUploadQuota(ShareStore& store, const Link& link, const uint64_t expe
 
     auto session = store.getSessionByLookupId(parsed.lookup_id);
     if (!session || !Token::verify(session->session_token_hash, TokenKind::ShareSession, parsed.secret))
-        throw std::runtime_error("Invalid share session token");
-    if (!session->isActive(current)) throw std::runtime_error("Share session is inactive");
+        throw ops::Denied("Invalid share session token");
+    if (!session->isActive(current)) throw ops::Denied("Share session is inactive");
 
     return session;
 }
@@ -829,7 +830,7 @@ std::vector<std::shared_ptr<Link>> Manager::listLinksForUser(
     const db::model::ListQueryParams& params
 ) {
     const auto user = humanUser(actor);
-    if (!user) throw std::runtime_error("Share list denied: share_management_requires_human_user");
+    if (!user) throw ops::Denied("Share list denied: share_management_requires_human_user");
     return store_->listLinksForUser(user->id, params);
 }
 
@@ -977,9 +978,9 @@ StartEmailChallengeResult Manager::startEmailChallenge(StartEmailChallengeReques
         store_->appendAuditEvent(sessionAudit);
     }
 
-    if (!link->requiresEmail()) throw std::runtime_error("Share link does not require email verification");
-    if (!link->isActive(now(options_))) throw std::runtime_error("Share link is inactive");
-    if (!session->isActive(now(options_))) throw std::runtime_error("Share session is inactive");
+    if (!link->requiresEmail()) throw ops::Conflict("Share link does not require email verification");
+    if (!link->isActive(now(options_))) throw ops::Denied("Share link is inactive");
+    if (!session->isActive(now(options_))) throw ops::Denied("Share session is inactive");
 
     const auto normalizedEmail = EmailChallenge::normalizeEmail(request.email);
     const auto emailHash = EmailChallenge::hashEmail(normalizedEmail);
@@ -1014,14 +1015,14 @@ StartEmailChallengeResult Manager::startEmailChallenge(StartEmailChallengeReques
 
 ConfirmEmailChallengeResult Manager::confirmEmailChallenge(ConfirmEmailChallengeRequest request) {
     auto loadedChallenge = store_->getEmailChallenge(request.challenge_id);
-    if (!loadedChallenge) throw std::runtime_error("Share email challenge not found");
+    if (!loadedChallenge) throw ops::NotFound("Share email challenge not found");
 
     if (request.session_id.empty()) throw std::invalid_argument("Share session id is required");
     if (request.session_token.empty()) throw std::invalid_argument("Share session token is required");
 
     auto loadedSession = sessionFromToken(*store_, request.session_token, now(options_));
     if (loadedSession->id != request.session_id)
-        throw std::runtime_error("Share session token does not match session");
+        throw ops::Denied("Share session token does not match session");
 
     auto link = requirePtr(store_->getLink(loadedChallenge->share_id), "Share link not found");
     auto audit = auditEvent(std::string(kChallengeConfirm), AuditStatus::Success, link->id, loadedSession->id);
@@ -1032,22 +1033,22 @@ ConfirmEmailChallengeResult Manager::confirmEmailChallenge(ConfirmEmailChallenge
 
     try {
         policy::requireEnabled(link->access_mode);
-        if (!link->requiresEmail()) throw std::runtime_error("Share link does not require email verification");
-        if (!link->isActive(now(options_))) throw std::runtime_error("Share link is inactive");
-        if (!loadedSession->isActive(now(options_))) throw std::runtime_error("Share session is inactive");
+        if (!link->requiresEmail()) throw ops::Conflict("Share link does not require email verification");
+        if (!link->isActive(now(options_))) throw ops::Denied("Share link is inactive");
+        if (!loadedSession->isActive(now(options_))) throw ops::Denied("Share session is inactive");
         if (loadedChallenge->share_id != loadedSession->share_id)
-            throw std::runtime_error("Share email challenge does not belong to session share");
+            throw ops::Denied("Share email challenge does not belong to session share");
         if (loadedChallenge->share_session_id && *loadedChallenge->share_session_id != loadedSession->id)
-            throw std::runtime_error("Share email challenge session mismatch");
+            throw ops::Denied("Share email challenge session mismatch");
         if (!store_->getRecipientVaultRoleForShare(link->id, loadedChallenge->email_hash))
-            throw std::runtime_error("Share email recipient is not authorized");
+            throw ops::Denied("Share email recipient is not authorized");
         if (!loadedChallenge->canAttempt(now(options_)))
-            throw std::runtime_error("Share email challenge cannot be attempted");
+            throw ops::Conflict("Share email challenge cannot be attempted");
 
         if (!EmailChallenge::verifyCode(loadedChallenge->code_hash, request.code)) {
             store_->recordEmailChallengeAttempt(loadedChallenge->id);
             setDenied(*audit, "share_email_code_invalid");
-            throw std::runtime_error("Share email challenge code is invalid");
+            throw ops::Denied("Share email challenge code is invalid");
         }
 
         store_->consumeEmailChallenge(loadedChallenge->id);
@@ -1232,8 +1233,8 @@ void Manager::recordUploadChunk(const Principal& principal, const std::string& u
     if (bytes == 0) throw std::invalid_argument("Share upload chunk bytes are required");
     auto [link, session] = requireActiveShareContext(*store_, principal, options_);
     auto upload = requireUploadForPrincipal(*store_, principal, uploadId);
-    if (upload->isTerminal()) throw std::runtime_error("Share upload is already complete");
-    if (upload->exceedsExpectedSize(bytes)) throw std::runtime_error("Share upload exceeds expected size");
+    if (upload->isTerminal()) throw ops::Conflict("Share upload is already complete");
+    if (upload->exceedsExpectedSize(bytes)) throw ops::Invalid("Share upload exceeds expected size");
 
     auto audit = auditEvent(std::string(kUploadChunk), AuditStatus::Success, link->id, session->id);
     attachPrincipal(*audit, principal);
@@ -1254,9 +1255,9 @@ void Manager::recordUploadChunk(const Principal& principal, const std::string& u
 void Manager::finishUpload(FinishUploadRequest request) {
     auto [link, session] = requireActiveShareContext(*store_, request.principal, options_);
     auto upload = requireUploadForPrincipal(*store_, request.principal, request.upload_id);
-    if (upload->isTerminal()) throw std::runtime_error("Share upload is already complete");
+    if (upload->isTerminal()) throw ops::Conflict("Share upload is already complete");
     if (upload->received_size_bytes != upload->expected_size_bytes)
-        throw std::runtime_error("Share upload size mismatch");
+        throw ops::Invalid("Share upload size mismatch");
     if (request.created_entry_id == 0) throw std::invalid_argument("Share upload created entry id is required");
 
     auto audit = auditEvent(std::string(kUploadFinish), AuditStatus::Success, link->id, session->id);

@@ -71,6 +71,16 @@ struct WsVariant {
     std::vector<WsField> payload{}, response{};
 };
 
+// A NeedsConfirmation refusal: the command answered ERROR with data.code `code` because a person must accept
+// something first. The client asks (error text), then resends with `accept_field` set: a payload member path, dotted
+// for nested members ("provision.accept_adoption"); a boolean flag unless its declaration says otherwise (a token from
+// another command). Empty when no resend accepts it (the description says what to do instead, e.g. plan again).
+struct WsConfirmation {
+    std::string code{};
+    std::string accept_field{};
+    std::string description{};
+};
+
 struct WsCommandUsage {
     std::string command{};      // "fs.dir.list"
     std::string description{};
@@ -82,9 +92,12 @@ struct WsCommandUsage {
     std::string input = "payload";
     std::vector<WsField> payload{}, response{};
     std::vector<WsVariant> variants{};
-    // Refusals it can answer with, as the console's WsError kinds ("denied", "not_found", "invalid", "conflict",
-    // "unauthorized") plus NeedsConfirmation codes ("user_delete", "encryption_waiver", ...).
+    // The generic refusal kinds it can answer with: "denied", "not_found", "invalid", "conflict" (ERROR with that
+    // data.code), "unauthorized" (status UNAUTHORIZED: the router refused) and "error" (ERROR without a code, when
+    // the command refuses that way by design, e.g. a failed login). Exported as `refusal_kinds`; the exported
+    // `refusal_codes` is these plus the confirmation codes (the pre-version-2 shape).
     std::vector<std::string> refusal_codes{};
+    std::vector<WsConfirmation> confirmations{};
     // Refusals sent without a data.code (classified by message text on the client): a gap to close in core.
     std::vector<std::string> untyped_refusals{};
     std::optional<std::string> operation{};  // OperationSpec id
@@ -182,7 +195,8 @@ std::vector<WsField> modelFields(const std::string& name);
 std::vector<OperationSpec> operations();
 
 // Bumped when the JSON document's own shape changes (not when its content does: that is what the hashes are for).
-// 2: `models` (+ `models_hash`), WsField `one_of`/`values`/`element`/`partial`, command `response_model`.
+// 2: `models` (+ `models_hash`), WsField `one_of`/`values`/`element`/`partial`, command `response_model`,
+//    `refusal_kinds` and `confirmations` (`refusal_codes` stays their union).
 inline constexpr int kVersion = 2;
 
 // The whole document: {contract_version, contract_hash, ws_hash, models_hash, cli, ws, models, operations}, keys

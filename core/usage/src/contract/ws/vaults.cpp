@@ -91,9 +91,16 @@ std::vector<WsCommandUsage> vaultCommands() {
                     boolean("accept_encryption_waiver").opt(),
                     vaultProvision()},
         .response = {vaultObject()},
-        .refusal_codes = {"denied", "invalid", "not_found", "conflict", "unauthorized", "encryption_waiver",
-                          "upstream_adoption"},
-        .untyped_refusals = {"invalid"},
+        .refusal_codes = opsRefusals(),
+        .confirmations = {{.code = "encryption_waiver",
+                           .accept_field = "accept_encryption_waiver",
+                           .description = "The bucket already holds data Vaulthalla did not write (or encryption "
+                                          "is being switched on over it): resend with accept_encryption_waiver once "
+                                          "the person accepts."},
+                          {.code = "upstream_adoption",
+                           .accept_field = "provision.accept_adoption",
+                           .description = "provision mode adopt (or an existing unmanaged bucket) needs consent to "
+                                          "adopt the bucket: resend with provision.accept_adoption."}},
         .operation = "vaults.create",
         .client_timeout = 180s,
     });
@@ -109,8 +116,14 @@ std::vector<WsCommandUsage> vaultCommands() {
                     boolean("confirm_now").opt(),
                     boolean("accept_key_loss").opt()},
         .response = {object("deletion", "VaultDeletion").nullable()},
-        .refusal_codes = {"denied", "invalid", "not_found", "conflict", "unauthorized", "vault_upstream_key_loss",
-                          "vault_delete_now"},
+        .refusal_codes = opsRefusals(),
+        .confirmations = {{.code = "vault_upstream_key_loss",
+                           .accept_field = "accept_key_loss",
+                           .description = "The vault key was never exported and its S3 data would become "
+                                          "unreadable: resend with accept_key_loss once the person accepts."},
+                          {.code = "vault_delete_now",
+                           .accept_field = "confirm_now",
+                           .description = "Deleting now skips the restore window: resend with confirm_now."}},
         .operation = "vaults.delete",
         .client_timeout = kDefaultTimeout,
     });
@@ -155,8 +168,12 @@ std::vector<WsCommandUsage> vaultCommands() {
                     vaultSyncPatch(),
                     boolean("accept_encryption_waiver").opt()},
         .response = {vaultObject()},
-        .refusal_codes = {"denied", "invalid", "not_found", "conflict", "unauthorized", "encryption_waiver"},
-        .untyped_refusals = {"invalid"},
+        .refusal_codes = opsRefusals(),
+        .confirmations = {{.code = "encryption_waiver",
+                           .accept_field = "accept_encryption_waiver",
+                           .description = "The bucket already holds data Vaulthalla did not write (or encryption "
+                                          "is being switched on over it): resend with accept_encryption_waiver once "
+                                          "the person accepts."}},
         .client_timeout = 60s,
     });
 

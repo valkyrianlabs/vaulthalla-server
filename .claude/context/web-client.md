@@ -77,6 +77,15 @@
   empty), so `COMMAND_TIMEOUTS` is just the server-declared `WS_CONTRACT_TIMEOUTS`.
 - Drift fails the meson test `ws_contract_drift` and `tools/contracts/test_ws_contract.py` (which also checks every
   book command is registered in core and typed in the web map).
+- **Refusals:** each command lists `refusal_kinds` (`denied`, `not_found`, `invalid`, `conflict` as data.code;
+  `unauthorized` = status UNAUTHORIZED; `error` = no code by design) and `confirmations` (`{code, accept_field,
+  description}`: the NeedsConfirmation codes and the payload member, dotted, a resend sets; e.g. `encryption_waiver`
+  → `accept_encryption_waiver`, `upstream_adoption` → `provision.accept_adoption`). `refusal_codes` stays their
+  union for older consumers. `WS_CONTRACT_CONFIRMATIONS` in the generated TS mirrors them. fs/share/pricing/email/
+  settings/S3 gateway/vault/dashboard refusals are typed (`untyped_refusals` is left only on `fs.entry.copy` quota
+  exhaustion and `fs.upload.finish` final-move failure); message texts are unchanged, so `DENIED_TEXT` in
+  `lib/ws/errors.ts` only matters for older daemons. `UsageContract.RefusalsSplitGenericKindsFromConfirmations`
+  keeps kinds and confirmations apart and checks every `accept_field` against the payload.
 - `meta.contract.get` (signed-in sessions only; no pre-login build fingerprinting) returns `{contract_version,
   contract_hash, ws_hash, models_hash}`. The console checks `ws_hash` after login/refresh and on reconnects of a signed-in page,
   and shows one "server was upgraded, reload" notice per server contract.

@@ -280,7 +280,7 @@ std::uint32_t vaultIdFromPayload(const std::shared_ptr<Session>& session, const 
     if (const auto id = optionalUInt(payload, "vault_id")) return *id;
     auto name = optionalString(payload, "vault_name");
     if (!name) name = optionalString(payload, "vault");
-    if (!name) throw std::runtime_error("vault_id or vault_name is required");
+    if (!name) throw ::vh::ops::Invalid("vault_id or vault_name is required");
     return gw::vaultIdByName(gwActor(session), *name, optionalUInt(payload, "owner_id"));
 }
 
@@ -291,9 +291,9 @@ std::uint32_t vaultRoleIdFromPayload(const json& payload) {
     auto roleName = optionalString(payload, "vault_role_name");
     if (!roleName) roleName = optionalString(payload, "role_name");
     if (!roleName) roleName = optionalString(payload, "role");
-    if (!roleName) throw std::runtime_error("vault_role_id or vault_role_name is required");
+    if (!roleName) throw ::vh::ops::Invalid("vault_role_id or vault_role_name is required");
     const auto role = db::query::rbac::role::Vault::get(*roleName);
-    if (!role) throw std::runtime_error("vault role not found");
+    if (!role) throw ::vh::ops::NotFound("vault role not found");
     return role->id;
 }
 
@@ -371,12 +371,12 @@ gw::BudgetScope budgetScopeFromPayload(const json& payload) {
     const auto scope = payload.at("scope").get<std::string>();
     if (scope == "gateway_credential") return gw::BudgetScope::Key;
     if (scope == "gateway_credential_vault") return gw::BudgetScope::KeyVault;
-    throw std::runtime_error("S3 gateway budget endpoints only manage gateway credential budget policies.");
+    throw ::vh::ops::Invalid("S3 gateway budget endpoints only manage gateway credential budget policies.");
 }
 
 gw::BudgetSpec budgetSpecFromPayload(const json& payload) {
     const auto credentialId = optionalUInt(payload, "gateway_credential_id");
-    if (!credentialId) throw std::runtime_error("gateway_credential_id is required");
+    if (!credentialId) throw ::vh::ops::Invalid("gateway_credential_id is required");
     gw::BudgetSpec spec{
         .scope = budgetScopeFromPayload(payload),
         .credential_id = *credentialId,
@@ -644,7 +644,7 @@ json S3Gateway::bucketsCreateRemoteCache(const json& payload, const std::shared_
     std::shared_ptr<::vh::vault::model::APIKey> apiKey;
     if (const auto id = optionalUInt(payload, "api_key_id")) apiKey = db::query::vault::APIKey::getAPIKey(*id);
     else if (const auto name = optionalString(payload, "api_key")) apiKey = db::query::vault::APIKey::getAPIKey(*name);
-    if (!apiKey) throw std::runtime_error("Upstream API key not found.");
+    if (!apiKey) throw ::vh::ops::NotFound("Upstream API key not found.");
     const auto bucket = gw::createRemoteCacheBucket(gwActor(session), {
         .bucket_name = optionalString(payload, "bucket_name"),
         .owner_id = optionalUInt(payload, "owner_id"),
@@ -668,7 +668,7 @@ json S3Gateway::budgetPolicyUpsert(const json& payload, const std::shared_ptr<Se
 
 json S3Gateway::budgetPolicyDisable(const json& payload, const std::shared_ptr<Session>& session) {
     const auto credentialId = optionalUInt(payload, "gateway_credential_id");
-    if (!credentialId) throw std::runtime_error("gateway_credential_id is required");
+    if (!credentialId) throw ::vh::ops::Invalid("gateway_credential_id is required");
     return {{"disabled", gw::disableBudget(gwActor(session), budgetScopeFromPayload(payload), *credentialId,
                                            optionalUInt(payload, "vault_id"))}};
 }

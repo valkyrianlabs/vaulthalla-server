@@ -235,6 +235,27 @@ def generate_ts(snapshot: dict[str, Any]) -> str:
     out.extend(f"  {ts_string(c['command'])}," for c in commands)
     out.append("]")
     out.append("")
+    out.append("// The NeedsConfirmation refusals per command: data.code, and the payload member (dotted path) a resend sets to")
+    out.append("// accept it (null: no resend accepts it; the description says what to do instead).")
+    out.append("export const WS_CONTRACT_CONFIRMATIONS: Readonly<")
+    out.append("  Partial<Record<WsContractCommand, readonly { code: string; accept_field: string | null }[]>>")
+    out.append("> = {")
+    for c in commands:
+        if c.get("confirmations"):
+            items = ", ".join("{ code: %s, accept_field: %s }" % (ts_string(x["code"]),
+                              ts_string(x["accept_field"]) if x["accept_field"] else "null")
+                              for x in c["confirmations"])
+            line = f"  {ts_string(c['command'])}: [{items}],"
+            if len(line) <= LINE_LIMIT:
+                out.append(line)
+            else:
+                out.append(f"  {ts_string(c['command'])}: [")
+                for x in c["confirmations"]:
+                    out.append("    { code: %s, accept_field: %s }," % (ts_string(x["code"]),
+                               ts_string(x["accept_field"]) if x["accept_field"] else "null"))
+                out.append("  ],")
+    out.append("}")
+    out.append("")
     out.append("// Client timeouts the server declares per command (a timeout means \"no answer yet\", never \"failed\").")
     out.append("export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> = {")
     out.extend(f"  {ts_string(c['command'])}: {c['client_timeout_ms']}," for c in commands)

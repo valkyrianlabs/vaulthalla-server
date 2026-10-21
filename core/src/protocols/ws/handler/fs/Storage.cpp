@@ -1,4 +1,5 @@
 #include "protocols/ws/handler/fs/Storage.hpp"
+#include "protocols/ws/handler/RequestErrors.hpp"
 #include "db/encoding/timestamp.hpp"
 #include "db/query/sync/Operation.hpp"
 #include "protocols/ws/Session.hpp"
@@ -98,9 +99,9 @@ struct ShareReadResult {
 
 void requireShareMode(const std::shared_ptr<vh::protocols::ws::Session>& session) {
     if (!session) throw std::runtime_error("Share filesystem commands require websocket session");
-    if (session->user) throw std::runtime_error("Share filesystem commands require share mode");
-    if (!session->isShareMode()) throw std::runtime_error("Share filesystem commands require verified share mode");
-    if (session->shareSessionToken().empty()) throw std::runtime_error("Share session token is missing");
+    if (session->user) throw vh::ops::Denied("Share filesystem commands require share mode");
+    if (!session->isShareMode()) throw vh::ops::Denied("Share filesystem commands require verified share mode");
+    if (session->shareSessionToken().empty()) throw vh::ops::Denied("Share session token is missing");
 }
 
 [[nodiscard]] std::shared_ptr<vh::share::Principal> refreshSharePrincipal(
@@ -124,7 +125,7 @@ void requireShareMode(const std::shared_ptr<vh::protocols::ws::Session>& session
     if (!payload.contains("path") || payload.at("path").is_null()) return "/";
     auto path = payload.at("path").get<std::string>();
     if (path.empty()) return "/";
-    if (hasDuplicateSlash(path)) throw std::runtime_error("Share filesystem path contains duplicate slash");
+    if (hasDuplicateSlash(path)) throw vh::ops::Invalid("Share filesystem path contains duplicate slash");
     return path;
 }
 
@@ -271,7 +272,7 @@ void finishMutationOperation(
 }
 }
 
-json Storage::startUpload(const json& payload, const std::shared_ptr<Session>& session) {
+json Storage::startUpload(const json& payload, const std::shared_ptr<Session>& session) try {
     if (session && session->isShareMode())
         return vh::protocols::ws::handler::share::Upload::nativeStart(payload, session);
 
@@ -279,7 +280,7 @@ json Storage::startUpload(const json& payload, const std::shared_ptr<Session>& s
     const auto path = std::filesystem::path(payload.at("path").get<std::string>());
 
     const auto engine = runtime::Deps::get().storageManager->getEngine(vaultId);
-    if (!engine) throw std::runtime_error("Unknown storage engine");
+    if (!engine) throw vh::ops::NotFound("Unknown storage engine");
 
     const auto uploadId = Session::generateUUIDv4();
     const auto absPath = engine->paths->absPath(path, PathType::VAULT_ROOT);
@@ -304,9 +305,11 @@ json Storage::startUpload(const json& payload, const std::shared_ptr<Session>& s
     });
 
     return {{"upload_id", uploadId}};
+} catch (...) {
+    rethrowRequestErrorsAsInvalid();
 }
 
-json Storage::finishUpload(const json& payload, const std::shared_ptr<Session>& session) {
+json Storage::finishUpload(const json& payload, const std::shared_ptr<Session>& session) try {
     if (session && session->isShareMode())
         return vh::protocols::ws::handler::share::Upload::nativeFinish(payload, session);
 
@@ -314,7 +317,7 @@ json Storage::finishUpload(const json& payload, const std::shared_ptr<Session>& 
     const auto path = std::filesystem::path(payload.at("path").get<std::string>());
 
     const auto engine = runtime::Deps::get().storageManager->getEngine(vaultId);
-    if (!engine) throw std::runtime_error("Unknown storage engine");
+    if (!engine) throw vh::ops::NotFound("Unknown storage engine");
 
     enforcePermission(
         session,
@@ -326,23 +329,27 @@ json Storage::finishUpload(const json& payload, const std::shared_ptr<Session>& 
 
     session->getUploadHandler()->finishUpload();
     return {{"path", path.string()}};
+} catch (...) {
+    rethrowRequestErrorsAsInvalid();
 }
 
-json Storage::cancelUpload(const json& payload, const std::shared_ptr<Session>& session) {
+json Storage::cancelUpload(const json& payload, const std::shared_ptr<Session>& session) try {
     if (session && session->isShareMode())
         return vh::protocols::ws::handler::share::Upload::nativeCancel(payload, session);
 
     if (!session || !session->user) throw std::runtime_error("Unauthorized");
     session->getUploadHandler()->abortActiveUpload("upload_cancelled");
     return {{"cancelled", true}};
+} catch (...) {
+    rethrowRequestErrorsAsInvalid();
 }
 
-json Storage::mkdir(const json& payload, const std::shared_ptr<Session>& session) {
+json Storage::mkdir(const json& payload, const std::shared_ptr<Session>& session) try {
     const auto vaultId = payload.at("vault_id").get<uint32_t>();
     const auto path = std::filesystem::path(payload.at("path").get<std::string>());
 
     const auto engine = runtime::Deps::get().storageManager->getEngine(vaultId);
-    if (!engine) throw std::runtime_error("No storage engine found for vault with ID: " + std::to_string(vaultId));
+    if (!engine) throw vh::ops::NotFound("No storage engine found for vault with ID: " + std::to_string(vaultId));
 
     enforcePermission(
         session,
@@ -352,10 +359,18 @@ json Storage::mkdir(const json& payload, const std::shared_ptr<Session>& session
         "Permission denied: User does not have create-directory permission for this path in the vault"
     );
 
+    // The engine refuses both with one untyped error; tell them apart first (same text) so the answer is typed.
+    if (Filesystem::exists(engine->vaultPathToFusePath(path)))
+        throw vh::ops::Conflict("Failed to create directory: " + path.string());
+    if (const auto parent = path.parent_path(); !parent.empty() && !Filesystem::exists(engine->vaultPathToFusePath(parent)))
+        throw vh::ops::NotFound("Failed to create directory: " + path.string());
+
     engine->mkdir(path, session->user);
     runtime::Deps::get().syncController->runNow(vaultId);
 
     return {{"path", path.string()}};
+} catch (...) {
+    rethrowRequestErrorsAsInvalid();
 }
 
 namespace {
@@ -373,15 +388,28 @@ void requireTransferEndpoints(const std::shared_ptr<Engine>& engine, const std::
         throw vh::ops::NotFound("destination folder does not exist: " + parent.string());
 }
 
+// The engine reports a taken destination (EEXIST) and a folder moved or copied into itself (EINVAL) with the same
+// untyped error as a fault. Once it has failed (nothing changed), tell those refusals apart and rethrow them typed,
+// with the engine's text unchanged; anything else (an ops refusal from the copy authorizer included) as it was.
+[[noreturn]] void rethrowTransferRefusal(const std::shared_ptr<Engine>& engine, const std::filesystem::path& from,
+                                         const std::filesystem::path& to, const std::exception& e) {
+    if (dynamic_cast<const vh::ops::Error*>(&e)) throw;
+    const auto source = from.lexically_normal().string();
+    const auto destination = to.lexically_normal().string();
+    if (destination != source && Filesystem::exists(engine->vaultPathToFusePath(to))) throw vh::ops::Conflict(e.what());
+    if (destination.starts_with(source.ends_with('/') ? source : source + "/")) throw vh::ops::Invalid(e.what());
+    throw;
 }
 
-json Storage::move(const json& payload, const std::shared_ptr<Session>& session) {
+}
+
+json Storage::move(const json& payload, const std::shared_ptr<Session>& session) try {
     const auto vaultId = payload.at("vault_id").get<uint32_t>();
     const auto from = std::filesystem::path(payload.at("from").get<std::string>());
     const auto to = std::filesystem::path(payload.at("to").get<std::string>());
 
     const auto engine = runtime::Deps::get().storageManager->getEngine(vaultId);
-    if (!engine) throw std::runtime_error("No storage engine found for vault with ID: " + std::to_string(vaultId));
+    if (!engine) throw vh::ops::NotFound("No storage engine found for vault with ID: " + std::to_string(vaultId));
 
     enforcePermission(
         session,
@@ -398,7 +426,7 @@ json Storage::move(const json& payload, const std::shared_ptr<Session>& session)
         finishMutationOperation(operation, SyncOperation::Status::Success);
     } catch (const std::exception& e) {
         finishMutationOperation(operation, SyncOperation::Status::Failed, e.what());
-        throw;
+        rethrowTransferRefusal(engine, from, to, e);
     }
     runtime::Deps::get().syncController->runNow(vaultId);
 
@@ -406,15 +434,17 @@ json Storage::move(const json& payload, const std::shared_ptr<Session>& session)
         {"from", from.string()},
         {"to", to.string()}
     };
+} catch (...) {
+    rethrowRequestErrorsAsInvalid();
 }
 
-json Storage::rename(const json& payload, const std::shared_ptr<Session>& session) {
+json Storage::rename(const json& payload, const std::shared_ptr<Session>& session) try {
     const auto vaultId = payload.at("vault_id").get<uint32_t>();
     const auto from = std::filesystem::path(payload.at("from").get<std::string>());
     const auto to = std::filesystem::path(payload.at("to").get<std::string>());
 
     const auto engine = runtime::Deps::get().storageManager->getEngine(vaultId);
-    if (!engine) throw std::runtime_error("No storage engine found for vault with ID: " + std::to_string(vaultId));
+    if (!engine) throw vh::ops::NotFound("No storage engine found for vault with ID: " + std::to_string(vaultId));
 
     enforcePermission(
         session,
@@ -431,7 +461,7 @@ json Storage::rename(const json& payload, const std::shared_ptr<Session>& sessio
         finishMutationOperation(operation, SyncOperation::Status::Success);
     } catch (const std::exception& e) {
         finishMutationOperation(operation, SyncOperation::Status::Failed, e.what());
-        throw;
+        rethrowTransferRefusal(engine, from, to, e);
     }
     runtime::Deps::get().syncController->runNow(vaultId);
 
@@ -439,15 +469,17 @@ json Storage::rename(const json& payload, const std::shared_ptr<Session>& sessio
         {"from", from.string()},
         {"to", to.string()}
     };
+} catch (...) {
+    rethrowRequestErrorsAsInvalid();
 }
 
-json Storage::copy(const json& payload, const std::shared_ptr<Session>& session) {
+json Storage::copy(const json& payload, const std::shared_ptr<Session>& session) try {
     const auto vaultId = payload.at("vault_id").get<uint32_t>();
     const auto from = std::filesystem::path(payload.at("from").get<std::string>());
     const auto to = std::filesystem::path(payload.at("to").get<std::string>());
 
     const auto engine = runtime::Deps::get().storageManager->getEngine(vaultId);
-    if (!engine) throw std::runtime_error("No storage engine found for vault with ID: " + std::to_string(vaultId));
+    if (!engine) throw vh::ops::NotFound("No storage engine found for vault with ID: " + std::to_string(vaultId));
 
     enforcePermission(
         session,
@@ -480,7 +512,7 @@ json Storage::copy(const json& payload, const std::shared_ptr<Session>& session)
         finishMutationOperation(operation, SyncOperation::Status::Success);
     } catch (const std::exception& e) {
         finishMutationOperation(operation, SyncOperation::Status::Failed, e.what());
-        throw;
+        rethrowTransferRefusal(engine, from, to, e);
     }
     runtime::Deps::get().syncController->runNow(vaultId);
 
@@ -488,9 +520,11 @@ json Storage::copy(const json& payload, const std::shared_ptr<Session>& session)
         {"from", from.string()},
         {"to", to.string()}
     };
+} catch (...) {
+    rethrowRequestErrorsAsInvalid();
 }
 
-json Storage::metadata(const json& payload, const std::shared_ptr<Session>& session) {
+json Storage::metadata(const json& payload, const std::shared_ptr<Session>& session) try {
     if (session && session->isShareMode())
         return shareMetadataResponse(payload, session, ShareReadPathStyle::Native);
 
@@ -499,7 +533,7 @@ json Storage::metadata(const json& payload, const std::shared_ptr<Session>& sess
     if (path.empty()) path = std::filesystem::path("/");
 
     const auto engine = runtime::Deps::get().storageManager->getEngine(vaultId);
-    if (!engine) throw std::runtime_error("No storage engine found for vault with ID: " + std::to_string(vaultId));
+    if (!engine) throw vh::ops::NotFound("No storage engine found for vault with ID: " + std::to_string(vaultId));
 
     enforcePermission(
         session,
@@ -510,32 +544,36 @@ json Storage::metadata(const json& payload, const std::shared_ptr<Session>& sess
     );
 
     const auto fusePath = engine->vaultPathToFusePath(path);
-    if (!Filesystem::exists(fusePath)) throw std::runtime_error("Path does not exist: " + fusePath.string());
+    if (!Filesystem::exists(fusePath)) throw vh::ops::NotFound("Path does not exist: " + fusePath.string());
 
     const auto entry = runtime::Deps::get().fsCache->getEntry(fusePath);
-    if (!entry) throw std::runtime_error("No entry found for path: " + fusePath.string());
+    if (!entry) throw vh::ops::NotFound("No entry found for path: " + fusePath.string());
 
     return {
         {"vault", engine->vault->name},
         {"path", path.string()},
         {"entry", *entry}
     };
+} catch (...) {
+    rethrowRequestErrorsAsInvalid();
 }
 
-json Storage::list(const json& payload, const std::shared_ptr<Session>& session) {
+json Storage::list(const json& payload, const std::shared_ptr<Session>& session) try {
     if (session && session->isShareMode())
         return shareListResponse(payload, session, ShareReadPathStyle::Native);
 
     return listDir(payload, session);
+} catch (...) {
+    rethrowRequestErrorsAsInvalid();
 }
 
-json Storage::listDir(const json& payload, const std::shared_ptr<Session>& session) {
+json Storage::listDir(const json& payload, const std::shared_ptr<Session>& session) try {
     const auto vaultId = payload.at("vault_id").get<uint32_t>();
     auto path = std::filesystem::path(payload.value("path", "/"));
     if (path.empty()) path = std::filesystem::path("/");
 
     const auto engine = runtime::Deps::get().storageManager->getEngine(vaultId);
-    if (!engine) throw std::runtime_error("No storage engine found for vault with ID: " + std::to_string(vaultId));
+    if (!engine) throw vh::ops::NotFound("No storage engine found for vault with ID: " + std::to_string(vaultId));
 
     enforcePermission(
         session,
@@ -546,10 +584,10 @@ json Storage::listDir(const json& payload, const std::shared_ptr<Session>& sessi
     );
 
     const auto fusePath = engine->vaultPathToFusePath(path);
-    if (!Filesystem::exists(fusePath)) throw std::runtime_error("Path does not exist: " + fusePath.string());
+    if (!Filesystem::exists(fusePath)) throw vh::ops::NotFound("Path does not exist: " + fusePath.string());
 
     const auto entry = runtime::Deps::get().fsCache->getEntry(fusePath);
-    if (!entry) throw std::runtime_error("No entry found for path: " + fusePath.string());
+    if (!entry) throw vh::ops::NotFound("No entry found for path: " + fusePath.string());
 
     const auto entries = runtime::Deps::get().fsCache->listDir(entry->id, false);
 
@@ -559,9 +597,11 @@ json Storage::listDir(const json& payload, const std::shared_ptr<Session>& sessi
         {"entry", *entry},
         {"files", entries}
     };
+} catch (...) {
+    rethrowRequestErrorsAsInvalid();
 }
 
-json Storage::remove(const json& payload, const std::shared_ptr<Session>& session) {
+json Storage::remove(const json& payload, const std::shared_ptr<Session>& session) try {
     const auto user = session->user;
     if (!user) throw std::runtime_error("User not authenticated");
 
@@ -572,7 +612,7 @@ json Storage::remove(const json& payload, const std::shared_ptr<Session>& sessio
     const auto path = std::filesystem::path(payload.at("path").get<std::string>());
 
     const auto engine = runtime::Deps::get().storageManager->getEngine(vaultId);
-    if (!engine) throw std::runtime_error("No storage engine found for vault with ID: " + std::to_string(vaultId));
+    if (!engine) throw vh::ops::NotFound("No storage engine found for vault with ID: " + std::to_string(vaultId));
 
     enforcePermission(
         session,
@@ -586,6 +626,8 @@ json Storage::remove(const json& payload, const std::shared_ptr<Session>& sessio
     runtime::Deps::get().syncController->runNow(vaultId);
 
     return {{"path", path.string()}};
+} catch (...) {
+    rethrowRequestErrorsAsInvalid();
 }
 
 json Storage::shareEntryJson(const vh::fs::model::Entry& entry, const vh::share::Principal& principal) {
@@ -612,17 +654,21 @@ json Storage::shareEntryJson(const vh::fs::model::Entry& entry, const vh::share:
     return out;
 }
 
-json Storage::shareCompatibilityMetadata(const json& payload, const std::shared_ptr<Session>& session) {
+json Storage::shareCompatibilityMetadata(const json& payload, const std::shared_ptr<Session>& session) try {
     auto response = shareMetadataResponse(payload, session, ShareReadPathStyle::Compatibility);
     return {{"entry", std::move(response.at("entry"))}};
+} catch (...) {
+    rethrowRequestErrorsAsInvalid();
 }
 
-json Storage::shareCompatibilityList(const json& payload, const std::shared_ptr<Session>& session) {
+json Storage::shareCompatibilityList(const json& payload, const std::shared_ptr<Session>& session) try {
     auto response = shareListResponse(payload, session, ShareReadPathStyle::Compatibility);
     return {
         {"path", std::move(response.at("path"))},
         {"entries", std::move(response.at("files"))}
     };
+} catch (...) {
+    rethrowRequestErrorsAsInvalid();
 }
 
 void Storage::setShareManagerFactoryForTesting(ShareManagerFactory factory) {
