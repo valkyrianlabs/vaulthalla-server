@@ -2,6 +2,7 @@
 
 #include "protocols/ws/Router.hpp"
 #include "protocols/ws/model/Response.hpp"
+#include "protocols/ws/Envelope.hpp"
 #include "ops/Error.hpp"
 #include "protocols/ws/Fwd.hpp"
 
@@ -69,7 +70,7 @@ namespace vh::protocols::ws::core {
         return [cmd = std::move(cmd), fn = std::forward<Fn>(fn)]
         (json &&msg, const std::shared_ptr<Session> &session) mutable {
             try {
-                const json &payload = msg.at("payload");
+                const json &payload = envelope::payloadOf(msg);  // no payload reads as {}
                 json data = std::invoke(fn, payload, session);
                 model::Response::SUCCESS(std::string(cmd), std::move(msg), std::move(data))(session);
             } catch (...) {
@@ -83,7 +84,7 @@ namespace vh::protocols::ws::core {
         return [cmd = std::move(cmd), fn = std::forward<Fn>(fn)]
         (json &&msg, const std::shared_ptr<Session> &session) mutable {
             try {
-                const json& payload = msg.at("payload");
+                const json& payload = envelope::payloadOf(msg);  // no payload reads as {}
                 json data = std::invoke(fn, payload);
                 model::Response::SUCCESS(std::string(cmd), std::move(msg), std::move(data))(session);
             } catch (...) {

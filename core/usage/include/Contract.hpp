@@ -107,6 +107,13 @@ struct WsCommandUsage {
     std::chrono::milliseconds client_timeout{15'000};
 };
 
+// The frames every command travels in (the same for all commands; core/include/protocols/ws/Envelope.hpp and the
+// handler templates enforce them): the request, the answer, and the frame that answers a message the daemon can't
+// route.
+struct WsEnvelope {
+    std::vector<WsField> request{}, response{}, error_frame{};
+};
+
 // ---------------------------------------------------------------------------------------------------------------
 // Operation catalog
 // ---------------------------------------------------------------------------------------------------------------
@@ -190,18 +197,19 @@ std::vector<WsCommandUsage> commands();
 std::vector<WsModel> models();
 // The declared fields of one model (throws std::out_of_range for an unknown name).
 std::vector<WsField> modelFields(const std::string& name);
+WsEnvelope envelope();
 }
 
 std::vector<OperationSpec> operations();
 
 // Bumped when the JSON document's own shape changes (not when its content does: that is what the hashes are for).
 // 2: `models` (+ `models_hash`), WsField `one_of`/`values`/`element`/`partial`, command `response_model`,
-//    `refusal_kinds` and `confirmations` (`refusal_codes` stays their union).
+//    `refusal_kinds` and `confirmations` (`refusal_codes` stays their union), `envelope`.
 inline constexpr int kVersion = 2;
 
-// The whole document: {contract_version, contract_hash, ws_hash, models_hash, cli, ws, models, operations}, keys
-// sorted. Hashes are SHA-256 (hex) over the canonical (compact, sorted-key) JSON of {contract_version, cli, ws, models,
-// operations}, of the `ws` array alone and of the `models` array alone.
+// The whole document: {contract_version, contract_hash, ws_hash, models_hash, cli, ws, models, envelope, operations},
+// keys sorted. Hashes are SHA-256 (hex) over the canonical (compact, sorted-key) JSON of {contract_version, cli, ws,
+// models, envelope, operations}, of the `ws` array alone and of the `models` array alone.
 std::string document(int indent = 2);
 
 struct Identity {

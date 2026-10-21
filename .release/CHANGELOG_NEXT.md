@@ -23,4 +23,8 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
 - ws: fs, share, pricing, email, settings, S3 gateway, vault/API key, permission and dashboard-preference refusals
   carry `data.code` (untyped refusals: 61 commands, now 2); messages unchanged. Share Manager, TargetResolver and
   PrincipalResolver throw ops refusal types; HTTP share lanes are unaffected.
+- ws: unroutable frames are answered `parse_error` with `error` (and `message`, kept for old clients) and the
+  frame's requestId; router faults answer `<command>.response` with status ERROR instead of `UNKNOWN` /
+  `Unknown.response`; a non-string requestId no longer breaks an answer; a missing `payload` reads as `{}`.
+- ws contract: `envelope` documents the request, answer and error frames.
 

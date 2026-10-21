@@ -86,6 +86,12 @@
   exhaustion and `fs.upload.finish` final-move failure); message texts are unchanged, so `DENIED_TEXT` in
   `lib/ws/errors.ts` only matters for older daemons. `UsageContract.RefusalsSplitGenericKindsFromConfirmations`
   keeps kinds and confirmations apart and checks every `accept_field` against the payload.
+- **Envelope:** `envelope` in the snapshot documents the frames. Request `{command, payload?, requestId?, token?}`
+  (a payload command without `payload` reads `{}`); answer `{command: "<cmd>.response", status: OK | ERROR |
+  UNAUTHORIZED, requestId?, data?, error?}`, `data` omitted when empty (read as `{}`); internal faults answer the
+  request's own command as ERROR without a code (never `UNKNOWN` / `Unknown.response`); an unroutable frame gets
+  `{command: "error", status: "parse_error", error, message, requestId?}` (`message` kept for old clients).
+  `core/include/protocols/ws/Envelope.hpp` + `WsEnvelope.*` tests.
 - `meta.contract.get` (signed-in sessions only; no pre-login build fingerprinting) returns `{contract_version,
   contract_hash, ws_hash, models_hash}`. The console checks `ws_hash` after login/refresh and on reconnects of a signed-in page,
   and shows one "server was upgraded, reload" notice per server contract.

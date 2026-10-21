@@ -19,3 +19,8 @@ dashboard commands answer refusals with a `data.code` (`denied`, `not_found`, `i
 bare text, with the same messages as before. The contract lists, per command, the questions it may ask before
 proceeding (confirmations such as the encryption waiver) and which request field accepts each one.
 
+Malformed or failing requests no longer leave clients waiting: a frame the daemon can't route is answered with an
+error that carries the request's id, an internal fault answers the request it belongs to with an ordinary error
+instead of an "Unknown" response, and a command sent without a payload is treated as an empty one. The contract
+documents the request and answer frames.
+

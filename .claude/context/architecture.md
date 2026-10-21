@@ -133,6 +133,12 @@ refused count. The session holds the slot and gives it back on its first `close(
 that fail before the websocket handshake (header read, hydration, handshake error) now `close()` at once instead of
 lingering in the session manager until the lifecycle sweep.
 
+**Envelope.** `ws::Session` checks each text frame before routing (`protocols/ws/Envelope.hpp`): unparsable text or
+a frame without a non-empty string `command` (or with a non-string `token`) is answered `parse_error` with `error`,
+`message` and the frame's requestId when it has one. Answers (`model::Response::frame()`) echo a string or integer
+requestId and omit empty `data`; a fault escaping the router answers `<command>.response` with status ERROR and no
+code. Payload handlers read a missing `payload` as `{}`. The contract publishes these rules as `envelope`.
+
 The web client builds `ws(s)://<host>/ws` in `web/src/util/getUrl.ts` (overridable with `NEXT_PUBLIC_VAULTHALLA_WS_ORIGIN`).
 `web/src/stores/useWebSocket.ts` handles reconnect, the pending-request map keyed by `requestId`, and token injection.
 Router allowlists are **exact and per session mode**: unauthenticated, human, pending-share, and ready-share.

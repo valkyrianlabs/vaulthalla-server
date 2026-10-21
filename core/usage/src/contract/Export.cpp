@@ -290,8 +290,12 @@ struct Built {
 };
 
 Built build() {
+    const auto frames = ws::envelope();
+    Json envelope{{"request", wsFieldsJson(frames.request)},
+                  {"response", wsFieldsJson(frames.response)},
+                  {"error_frame", wsFieldsJson(frames.error_frame)}};
     Json body{{"contract_version", kVersion}, {"cli", cliJson()}, {"ws", wsJson()}, {"models", modelsJson()},
-              {"operations", operationsJson()}};
+              {"envelope", std::move(envelope)}, {"operations", operationsJson()}};
     Built b;
     b.identity.version = kVersion;
     b.identity.contract_hash = sha256Hex(body.dump());

@@ -50,7 +50,7 @@ def sha256_hex(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-SNAPSHOT_KEYS = ("contract_version", "ws_hash", "ws", "models_hash", "models")
+SNAPSHOT_KEYS = ("contract_version", "ws_hash", "ws", "models_hash", "models", "envelope")
 
 
 def ws_snapshot(usage: dict[str, Any]) -> dict[str, Any]:

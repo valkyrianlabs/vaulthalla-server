@@ -1,5 +1,197 @@
 {
   "contract_version": 2,
+  "envelope": {
+    "error_frame": [
+      {
+        "enum": [
+          "error"
+        ],
+        "name": "command",
+        "required": true,
+        "types": [
+          "string"
+        ]
+      },
+      {
+        "description": "parse_error: the text was not JSON, not an object, had no non-empty string `command`, or a non-string `token`. internal_error: a binary (upload) frame failed.",
+        "enum": [
+          "parse_error",
+          "internal_error"
+        ],
+        "name": "status",
+        "required": true,
+        "types": [
+          "string"
+        ]
+      },
+      {
+        "description": "What was wrong.",
+        "name": "error",
+        "required": true,
+        "types": [
+          "string"
+        ]
+      },
+      {
+        "description": "The same text, for clients written before error frames carried `error`.",
+        "name": "message",
+        "required": true,
+        "types": [
+          "string"
+        ]
+      },
+      {
+        "description": "The frame's requestId when it had one (parse_error only).",
+        "name": "requestId",
+        "one_of": [
+          {
+            "name": "",
+            "required": true,
+            "types": [
+              "string"
+            ]
+          },
+          {
+            "name": "",
+            "required": true,
+            "types": [
+              "integer"
+            ]
+          }
+        ],
+        "required": false,
+        "types": [
+          "string",
+          "integer"
+        ]
+      }
+    ],
+    "request": [
+      {
+        "description": "The command name (\"fs.dir.list\").",
+        "name": "command",
+        "required": true,
+        "types": [
+          "string"
+        ]
+      },
+      {
+        "description": "The command's payload (its `payload` fields). Commands whose input is \"payload\" read it; a missing payload reads as {} (daemons before 1.16 refused a frame without one). Commands whose input is \"none\" or \"token\" ignore it.",
+        "name": "payload",
+        "required": false,
+        "types": [
+          "object",
+          "null"
+        ]
+      },
+      {
+        "description": "Echoed in the answer so the client can match it; a string (a UUID) or an integer, anything else is not echoed.",
+        "name": "requestId",
+        "one_of": [
+          {
+            "name": "",
+            "required": true,
+            "types": [
+              "string"
+            ]
+          },
+          {
+            "name": "",
+            "required": true,
+            "types": [
+              "integer"
+            ]
+          }
+        ],
+        "required": false,
+        "types": [
+          "string",
+          "integer"
+        ]
+      },
+      {
+        "description": "The access token. Commands with auth \"human\" need a valid one (else the answer's status is UNAUTHORIZED); \"token\"-input commands read it.",
+        "name": "token",
+        "required": false,
+        "types": [
+          "string",
+          "null"
+        ]
+      }
+    ],
+    "response": [
+      {
+        "description": "\"<command>.response\".",
+        "name": "command",
+        "required": true,
+        "types": [
+          "string"
+        ]
+      },
+      {
+        "description": "OK: done, `data` holds the response. UNAUTHORIZED: the router refused before running it (no or expired token; refresh and retry once). ERROR: a refusal (data.code: denied, not_found, invalid, conflict, or a confirmation code from the command's `confirmations`) or a fault (no data.code; internal faults answer the request's own command too).",
+        "enum": [
+          "OK",
+          "ERROR",
+          "UNAUTHORIZED"
+        ],
+        "name": "status",
+        "required": true,
+        "types": [
+          "string"
+        ]
+      },
+      {
+        "description": "The request's requestId, when it had one.",
+        "name": "requestId",
+        "one_of": [
+          {
+            "name": "",
+            "required": true,
+            "types": [
+              "string"
+            ]
+          },
+          {
+            "name": "",
+            "required": true,
+            "types": [
+              "integer"
+            ]
+          }
+        ],
+        "required": false,
+        "types": [
+          "string",
+          "integer"
+        ]
+      },
+      {
+        "description": "OK: the command's response members. Omitted when the result is empty ({}, [] or null): read a missing data as {}. ERROR: {code} for typed refusals.",
+        "name": "data",
+        "required": false,
+        "types": [
+          "object"
+        ]
+      },
+      {
+        "description": "ERROR / UNAUTHORIZED: a human-readable message.",
+        "name": "error",
+        "required": false,
+        "types": [
+          "string"
+        ]
+      },
+      {
+        "description": "auth.login / auth.refresh: the new access token.",
+        "name": "token",
+        "required": false,
+        "types": [
+          "string"
+        ]
+      }
+    ]
+  },
   "models": [
     {
       "description": "An upstream S3 API key's metadata; the secret is never sent (vault::model::to_json(APIKey), core/src/vault/model/APIKey.cpp).",

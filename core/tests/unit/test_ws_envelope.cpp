@@ -1,12 +1,17 @@
 // The ws envelope: what answers look like (requestId echo, empty data omitted, faults as ERROR answers to the
-// request's own command) and how unroutable frames are answered (parse_error with error + requestId). DB-free.
+// request's own command), how unroutable frames are answered (parse_error with error + requestId), and that a
+// payload command without a payload reads {}. The contract publishes the same rules (vh_usage --json `envelope`).
+// DB-free.
 
 #include "protocols/ws/Envelope.hpp"
+#include "protocols/ws/Router.hpp"
+#include "protocols/ws/Session.hpp"
 #include "protocols/ws/model/Response.hpp"
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
+#include <memory>
 #include <string>
 
 namespace vh::test_ws_envelope {
@@ -68,6 +73,28 @@ TEST(WsEnvelope, UnroutableFramesAreNamedAndAnsweredWithTheirRequestId) {
     const auto internal = envelope::internalError();
     EXPECT_EQ(internal.at("status"), "internal_error");
     EXPECT_TRUE(internal.at("error").is_string());
+}
+
+TEST(WsEnvelope, APayloadCommandWithoutAPayloadReadsAnEmptyObject) {
+    const auto router = std::make_shared<protocols::ws::Router>();
+    json seen = nullptr;
+    int reached = 0;
+    // A session-lifecycle name, so an unauthenticated (closed, answer-less) session is allowed to route it.
+    router->registerPayload("auth.logout", [&](const json& payload, const std::shared_ptr<protocols::ws::Session>&) {
+        seen = payload;
+        ++reached;
+        return json::object();
+    });
+    const auto session = std::make_shared<protocols::ws::Session>(router);
+    session->close();
+
+    router->routeMessage(json{{"command", "auth.logout"}, {"requestId", "r-4"}}, session);
+    ASSERT_EQ(reached, 1);
+    EXPECT_EQ(seen, json::object());
+
+    router->routeMessage(json{{"command", "auth.logout"}, {"payload", {{"x", 1}}}}, session);
+    ASSERT_EQ(reached, 2);
+    EXPECT_EQ(seen, (json{{"x", 1}}));
 }
 
 }

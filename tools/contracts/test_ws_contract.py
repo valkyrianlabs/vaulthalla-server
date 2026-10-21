@@ -106,6 +106,12 @@ class WsContractTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             ws_contract.ws_snapshot(tampered)
 
+    def test_snapshot_carries_the_envelope(self) -> None:
+        envelope = committed()["envelope"]
+        self.assertEqual({f["name"] for f in envelope["request"]}, {"command", "payload", "requestId", "token"})
+        data = next(f for f in envelope["response"] if f["name"] == "data")
+        self.assertFalse(data["required"], "a missing data reads as {}")
+
     def test_models_named_by_the_book_are_in_the_snapshot(self) -> None:
         snapshot = committed()
         names = {m["name"] for m in snapshot["models"]}

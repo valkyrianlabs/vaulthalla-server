@@ -9,6 +9,7 @@
 #include "protocols/ws/Router.hpp"
 #include "protocols/ws/Session.hpp"
 #include "protocols/ws/handler/Meta.hpp"
+#include "protocols/ws/model/Response.hpp"
 #include "rbac/role/Admin.hpp"
 
 #include <gtest/gtest.h>
@@ -352,6 +353,27 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
         }
     }
     EXPECT_GE(confirmations, 15) << "the NeedsConfirmation codes left the book";
+}
+
+TEST(UsageContract, EnvelopeDescribesTheFramesTheDaemonSends) {
+    const auto frames = contract::ws::envelope();
+    const auto names = [](const std::vector<contract::WsField>& fields) {
+        std::set<std::string> out;
+        for (const auto& f : fields) out.insert(f.name);
+        return out;
+    };
+    EXPECT_EQ(names(frames.request), (std::set<std::string>{"command", "payload", "requestId", "token"}));
+    EXPECT_EQ(names(frames.response), (std::set<std::string>{"command", "status", "requestId", "data", "error", "token"}));
+    EXPECT_EQ(names(frames.error_frame), (std::set<std::string>{"command", "status", "error", "message", "requestId"}));
+    // The answer statuses are exactly what model::to_string can produce.
+    const auto status = std::ranges::find(frames.response, "status", &contract::WsField::name);
+    ASSERT_NE(status, frames.response.end());
+    std::set<std::string> produced;
+    for (const auto s : {protocols::ws::model::Status::OK, protocols::ws::model::Status::ERROR,
+                         protocols::ws::model::Status::UNAUTHORIZED})
+        produced.insert(protocols::ws::model::to_string(s));
+    EXPECT_EQ(std::set<std::string>(status->enum_values.begin(), status->enum_values.end()), produced);
+    EXPECT_TRUE(json::parse(contract::document()).contains("envelope"));
 }
 
 // ---- operation catalog ----------------------------------------------------------------------------------------
