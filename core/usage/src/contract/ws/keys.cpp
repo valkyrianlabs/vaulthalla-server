@@ -60,7 +60,10 @@ std::vector<WsCommandUsage> vaultKeyCommands() {
              uinteger("key_retain_until").nullable().desc("Deleted vaults: when the retained key is destroyed."),
              uinteger("version").desc("The current key version."),
              keyCheck("key_check").nullable().desc("Null when the key can't be read on this host."),
-             boolean("key_available"), str("unavailable_reason").nullable(),
+             boolean("key_available"),
+             str("unavailable_reason").oneOf({"key_missing", "key_unsealable", "version_missing"}).nullable()
+                 .desc("Why the vault's keys can't be used on this host (null when they can)."),
+             str("unavailable_detail").nullable().desc("What happened and the command that restores the keys."),
              uinteger("exported_version").nullable().desc("The last version recorded as exported."),
              uinteger("exported_at").nullable().desc("Unix seconds."),
              boolean("rotation_in_progress"),

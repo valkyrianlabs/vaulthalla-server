@@ -49,6 +49,15 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   (conflict), a key that authenticates nothing it checked (invalid); skips versions with nothing to verify against;
   NeedsConfirmation vault_key_import until the vault's name is given; one transaction under the rotation lock; then
   reloads or starts the vault's engine.
+- EncryptionManager::load_key no longer mints a key for a vault with sealed content (files with an IV, recovery
+  blobs, live provider versions, encrypted remote index entries): a missing vault_keys row, a row that doesn't
+  unseal, or a missing version live files or a pending rotation need throws vault::KeyUnavailable (key_missing |
+  key_unsealable | version_missing); the engine stays down, storage::Manager records the vault, stats.system.health
+  gains vaults_unavailable (degraded) and vh status lists it; vault.keys.status reports the code as
+  unavailable_reason plus unavailable_detail.
+- Import verifies a cloud vault's version without local ciphertext against its smallest upstream object (price
+  preflight key_import_verify, 1 HEAD + 1 GET capture, If-Match, authenticated in memory), and accepts a version no
+  ciphertext is sealed under on the backup's key check alone.
 - The vh client reads the import file itself and attaches it to the request (`input` member, at most 512 KiB); the
   daemon never opens a caller-named path for it.
 - MCP: key commands refuse when run for an MCP client (remote /mcp, or a vh mcp request marked agent), in addition

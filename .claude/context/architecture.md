@@ -492,6 +492,12 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   existing name hit UNIQUE(parent_id, name)) stranded the bytes and corrupted the cache. RENAME_EXCHANGE is still
   refused (EINVAL). `Filesystem::repairAtRest` (first sync pass per vault per start) seals plaintext left by older
   builds and corrects ciphertext-length sizes.
+- **No key is minted over sealed data (`EncryptionManager::load_key`, `key-backup.md`).** A vault without a
+  `vault_keys` row gets a fresh key only when nothing is sealed under any key (no files row with an IV, recovery blob,
+  live provider version or encrypted remote index entry). Otherwise, and when a needed row doesn't unseal or a version
+  live files (or a pending rotation) need isn't held, `load_key` throws `vault::KeyUnavailable{key_missing |
+  key_unsealable | version_missing}` naming `vh vault keys import`; the engine doesn't start, `storage::Manager`
+  records it (`unavailableVaults()`), and `stats.system.health` (`vaults_unavailable`) / `vh status` turn degraded.
 - **Vault key rotation is failure- and crash-safe (`sync/rotation/`).** `vh vault keys rotate` only prepares a new
   key; the sync pass re-encrypts. Per file: new ciphertext → `<backing>.vh-rotate` (O_EXCL, fsync file + dir) →
   (cloud, encrypt upstream) PUT with its own IV/version metadata → compare-and-set the `files` row on the old

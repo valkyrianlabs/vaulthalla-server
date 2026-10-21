@@ -234,7 +234,8 @@ static std::string status_text(const keys_ops::KeyStatus& s) {
     std::string out = fmt::format("Vault {} ('{}'){}\n", s.vault_id, s.vault_name, s.deleted ? " [deleted]" : "");
     out += fmt::format("  key version:   {}\n", s.version);
     out += fmt::format("  key check:     {}\n", s.key_check.value_or("unavailable"));
-    if (s.unavailable_reason) out += "  unavailable:   " + *s.unavailable_reason + "\n";
+    if (s.unavailable_reason)
+        out += "  unavailable:   " + *s.unavailable_reason + " (" + s.unavailable_detail.value_or("") + ")\n";
     if (s.exported_version)
         out += fmt::format("  exported:      version {}{}{}\n", *s.exported_version,
                            s.exported_at ? " at " + db::encoding::timestampToString(*s.exported_at) : std::string{},

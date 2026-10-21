@@ -42,6 +42,35 @@ KeyVersionUnavailable::KeyVersionUnavailable(const unsigned int vaultId, const u
     : std::runtime_error(fmt::format("Vault {} does not hold key version {}", vaultId, version)),
       vaultId_(vaultId), version_(version) {}
 
+KeyUnavailable::KeyUnavailable(const unsigned int vaultId, std::string code, const std::string& what)
+    : std::runtime_error(what), vaultId_(vaultId), code_(std::move(code)) {}
+
+namespace {
+std::string keyImportHint(const unsigned int vaultId) {
+    return fmt::format("Restore it from a key export or backup: vh vault keys import {} --file <export.json>", vaultId);
+}
+
+std::vector<uint8_t> unsealKeyRowOrThrow(const unsigned int vaultId, const vh::vault::model::Key& rec,
+                                   const std::vector<uint8_t>& masterKey) {
+    std::vector<uint8_t> raw;
+    try {
+        raw = decrypt_aes256_gcm(rec.encrypted_key, masterKey, rec.iv);
+    } catch (const std::exception& e) {
+        throw KeyUnavailable(vaultId, "key_unsealable",
+                             fmt::format("Key version {} of vault {} does not unseal under this host's vault master "
+                                         "({}): the master key changed or the key row is damaged. {}",
+                                         rec.version, vaultId, e.what(), keyImportHint(vaultId)));
+    }
+    if (raw.size() != AES_KEY_SIZE) {
+        sodium_memzero(raw.data(), raw.size());
+        throw KeyUnavailable(vaultId, "key_unsealable",
+                             fmt::format("Key version {} of vault {} is not a 32-byte AES key. {}", rec.version,
+                                         vaultId, keyImportHint(vaultId)));
+    }
+    return raw;
+}
+}
+
 EncryptionManager::EncryptionManager(const unsigned int vault_id)
     : vault_id_(vault_id) {
     tpmKeyProvider_ = std::make_unique<secrets::KeyProvider>(paths::testMode ? "test_vault_master" : "vault_master");
@@ -84,6 +113,15 @@ void EncryptionManager::load_key() {
     const auto masterKey = tpmKeyProvider_->getMasterKey();
 
     if (!rec) {
+        // Never mint a key for a vault whose data is sealed under one: the new key could decrypt none of it, and an
+        // import of the real key would then be refused as replacing a working key.
+        if (const auto sealed = db::query::vault::Key::sealedContentSummary(vault_id_)) {
+            const auto msg = fmt::format("Vault {} has sealed content ({}) but no key record; refusing to create a new "
+                                         "key that could never decrypt it. {}", vault_id_, *sealed, keyImportHint(vault_id_));
+            log::Registry::crypto()->error("[VaultEncryptionManager] {}", msg);
+            throw KeyUnavailable(vault_id_, "key_missing", msg);
+        }
+
         // First time: generate and seal new vault key
         const auto vaultKey = SecretKey::random();
         const WipedKeyCopy raw(vaultKey);
@@ -111,29 +149,34 @@ void EncryptionManager::load_key() {
         return;
     }
 
-    auto rawKey = decrypt_aes256_gcm(rec->encrypted_key, masterKey, rec->iv);
-    if (rawKey.size() != AES_KEY_SIZE) throw std::runtime_error("Vault key must be 32 bytes (AES-256)");
+    auto rawKey = unsealKeyRowOrThrow(vault_id_, *rec, masterKey);
     auto current = std::make_shared<const SecretKey>(rawKey);
     sodium_memzero(rawKey.data(), rawKey.size());
 
     SecretKeyPtr previous;
     if (rotating) {
-        const auto oldKey = db::query::vault::Key::getRotationInProgressOldKey(vault_id_);
-        if (!oldKey) {
-            log::Registry::crypto()->error("[VaultEncryptionManager] No old key found for rotation in progress for vault {}",
-                                         vault_id_);
-            throw std::runtime_error("No old key found for rotation in progress");
-        }
-
-        auto rawOld = decrypt_aes256_gcm(oldKey->encrypted_key, masterKey, oldKey->iv);
-        if (rawOld.size() != AES_KEY_SIZE) {
-            log::Registry::crypto()->error("[VaultEncryptionManager] Old vault key must be 32 bytes (AES-256), got {} bytes",
-                                         rawOld.size());
-            throw std::runtime_error("Old vault key must be 32 bytes (AES-256)");
-        }
+        std::shared_ptr<vault::model::Key> oldKey;
+        try {
+            oldKey = db::query::vault::Key::getRotationInProgressOldKey(vault_id_);
+        } catch (const std::exception&) {}
+        if (!oldKey)
+            throw KeyUnavailable(vault_id_, "version_missing",
+                                 fmt::format("Vault {} is rotating its key but the outgoing key is missing. {}",
+                                             vault_id_, keyImportHint(vault_id_)));
+        auto rawOld = unsealKeyRowOrThrow(vault_id_, *oldKey, masterKey);
         previous = std::make_shared<const SecretKey>(rawOld);
         sodium_memzero(rawOld.data(), rawOld.size());
         log::Registry::crypto()->debug("[VaultEncryptionManager] Loaded old key for vault {} during rotation", vault_id_);
+    }
+
+    // Live files sealed under a version this vault no longer holds (a database restored from before a rotation lost
+    // its row): starting would serve undecryptable files, so the vault waits for an import.
+    for (const auto v : db::query::vault::Key::liveFileKeyVersions(vault_id_)) {
+        if (v == rec->version || (rotating && v + 1 == rec->version)) continue;
+        if (!db::query::vault::Key::hasRetiredKeyVersion(vault_id_, v))
+            throw KeyUnavailable(vault_id_, "version_missing",
+                                 fmt::format("Files of vault {} are sealed under key version {}, which this host no "
+                                             "longer holds. {}", vault_id_, v, keyImportHint(vault_id_)));
     }
 
     {

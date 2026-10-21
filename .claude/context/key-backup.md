@@ -102,10 +102,8 @@ host, but key versions are unusable:
   importing into another vault id (entries are matched by `vault_id`, which the key check binds).
 - A current version newer than the database knows (backup newer than the restored database): no `files` row is sealed
   under it, so it is unverifiable and refused.
-- Known hazard, not changed here: when a vault's `vault_keys` row is missing at startup, `load_key` mints a fresh key
-  (version 1). That key unseals, so import refuses to replace it ("never replace a key the daemon can unseal").
-  Policy question for the maintainer (reported with S6): should `load_key` refuse instead of minting when the vault
-  already has sealed files?
+- (Decided 2026-10-20, revision 2.) `load_key` never mints a key for a vault that already has sealed content: see
+  "Missing keys at startup" below.
 
 **Input.** The export JSON (`vh vault keys export` / `vault.keys.export`): one vault object or the `all` array; the
 entry whose `vault_id` is the target vault; its versions are `key` + `key_info.key_version` and every
@@ -127,7 +125,33 @@ archive`). ws `vault.keys.import {vault_id, keys, confirm_name?}` on paired devi
    whose backing file exists here (local vaults and cloud vaults' local copies), then `recovery_blob` rows with that
    `key_version`. Verified when at least one authenticates (a 128-bit tag under the key is conclusive); others that
    fail are reported as damaged files. None authenticates → not this vault's key: whole import refused (`invalid`).
-   Nothing to check against → that version is `unverifiable` and skipped; the others proceed. Never "trust the user".
+5. Upstream (revision 2): a cloud vault with no local ciphertext under the version verifies against the **smallest**
+   object recorded under it (`remote_object_index` rows with `encrypted` and that key version; else `files` rows
+   without a local copy), fetched whole so the GCM tag authenticates, through the metered remote-read path: price
+   preflight (`RemoteFetchGate`, operation `key_import_verify`), a usage capture of 1 HEAD + 1 GET + the object's
+   bytes, HEAD then GET with If-Match on the HEAD's ETag, authenticated in memory (`GcmStreamVerifier`), never written
+   to disk. The HEAD must still name that key version (and the index's IV). Fails authentication → whole import
+   refused (`invalid`); a refused or failed preflight, a budget, an archived/missing/changed object → the version is
+   `unverifiable` with that detail. The fetch runs on a key-less verification engine
+   (`CloudEngine::forKeyVerification`), never registered with the storage manager.
+6. No ciphertext anywhere (revision 2): when nothing records ciphertext under the version (no `files` row with an IV,
+   no `recovery_blob`, no live `upstream_object_version`, no encrypted `remote_object_index` row), e.g. a fresh
+   rotation target, the version is accepted when the backup carries a key check for it that matches the bytes for
+   this vault id and version: the backup is internally consistent and nothing can be mis-decrypted. Outcome
+   `restored`, detail "no ciphertext under this version; accepted on key check". Without a key check: `unverifiable`.
+7. Otherwise (ciphertext exists but nothing could be checked) the version is `unverifiable` and skipped; the others
+   proceed. Never "trust the user".
+
+**Missing keys at startup (revision 2).** `EncryptionManager::load_key` mints a key only for a vault without sealed
+content (no `files` row with an IV, no recovery blob, no live provider version, no encrypted remote index entry): new
+and empty vaults. Otherwise it throws `vault::KeyUnavailable{code}` and the engine doesn't start:
+`key_missing` (no `vault_keys` row), `key_unsealable` (a needed row doesn't unseal under this host's vault master),
+`version_missing` (the outgoing key of a pending rotation, or a version live files are sealed under, isn't held). The
+message names the command to run (`vh vault keys import <id> --file <export.json>`). `storage::Manager` records the
+vault as unavailable (`unavailableVaults()`), health (`stats.system.health` `vaults_unavailable`, `vh status`) reports
+it and is at least degraded, and `vault.keys.status` reports `key_available: false` with `unavailable_reason` = that
+code and `unavailable_detail`. With no `vault_keys` row, the status version is the highest version data records, and
+an import's current version is the higher of that and the backup's current version (inserted into `vault_keys`).
 
 **Safety rules.** Never replace a key this host can unseal with different bytes (above); same bytes are a no-op.
 Writes happen in one transaction under the vault's rotation lock (`pg_advisory_xact_lock(vault_id)`, as
@@ -171,3 +195,11 @@ user to type the vault name, resend with `confirm_name`, then poll `vault.keys.s
   the resumed rotation take effect); a live vault without an engine is started with `storage::Manager::reinstateVault`;
   a deleted vault reports that it needs a restore. `key_available` says whether the vault runs now.
 - Deleted vaults: only while restorable (pending); purging/purged are `conflict` (no ciphertext left to verify).
+- Revision 2 as built: `KeyUnavailable` in `vault/EncryptionManager.hpp`; `Key::sealedContentSummary`,
+  `liveFileKeyVersions`, `dataKeyVersions`, `ciphertextExistsUnder`, `remoteSamples`; `storage::Manager::
+  unavailableVaults()` (set when an engine fails in `initStorageEngines` / `reloadEngine` / `reinstateVault`, cleared
+  when it starts, on retire and remove); `SystemHealth::vaultsUnavailable` (degraded); `vh status` lists them. Status
+  `needed_versions` also lists versions live files are sealed under (reason `rotation`), and `unavailable_reason` is a
+  code with `unavailable_detail` text. Upstream verification: `CloudEngine::forKeyVerification` +
+  `verifyRemoteObjectWithKey` (`CloudRemoteRead.cpp`); test seam `ops::vault_keys::
+  setKeyVerificationEngineFactoryForTesting`.

@@ -72,12 +72,34 @@ public:
     struct SealedSample {
         std::string path{};  // files: the backing path; blobs: the storage name
         std::string iv{};    // base64
+        std::string vault_path{};   // files only: the vault path (the object key upstream, without its leading slash)
+        uint64_t plaintext_bytes{};  // files only
     };
     [[nodiscard]] static std::vector<SealedSample> sampleSealedFiles(unsigned int vaultId, unsigned int version,
                                                                      unsigned int limit);
     [[nodiscard]] static std::vector<SealedSample> sampleRecoveryBlobs(unsigned int vaultId, unsigned int version,
                                                                        unsigned int limit);
     [[nodiscard]] static bool filesSealedUnder(unsigned int vaultId, unsigned int version);
+
+    // ---- what the vault's data is sealed under (load_key's refusal to mint, import's "no ciphertext anywhere")
+
+    // A short description of the sealed content the vault has ("3 files, 1 recovery blob"), or nullopt when it has
+    // none: files rows with an IV, recovery blobs, live provider object versions, encrypted remote index entries.
+    [[nodiscard]] static std::optional<std::string> sealedContentSummary(unsigned int vaultId);
+    // Distinct key versions live files rows are sealed under (rows with an IV), ascending.
+    [[nodiscard]] static std::vector<unsigned int> liveFileKeyVersions(unsigned int vaultId);
+    // Every key version any of those sources records, ascending.
+    [[nodiscard]] static std::vector<unsigned int> dataKeyVersions(unsigned int vaultId);
+    [[nodiscard]] static bool ciphertextExistsUnder(unsigned int vaultId, unsigned int version);
+    // The smallest object recorded upstream under `version`: object key, stored size, IV (base64). Encrypted
+    // remote_object_index rows first, else files rows (the caller skips those with a local copy).
+    struct RemoteSample {
+        std::string object_key{};
+        uint64_t stored_bytes{};
+        std::string iv{};
+    };
+    [[nodiscard]] static std::vector<RemoteSample> remoteSamples(unsigned int vaultId, unsigned int version,
+                                                                 unsigned int limit);
 };
 
 }

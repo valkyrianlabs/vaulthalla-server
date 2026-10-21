@@ -3,6 +3,8 @@
 #include <mutex>
 #include <vector>
 #include <memory>
+#include <map>
+#include <string>
 #include <filesystem>
 #include <unordered_map>
 #include "fs/Inode.hpp"
@@ -49,6 +51,16 @@ public:
 
     std::shared_ptr<Engine> getEngine(unsigned int id) const;
 
+    // Live vaults whose engine could not start (their keys can't be loaded here, or anything else), by vault id, as
+    // last seen by initStorageEngines / reinstateVault / reloadEngine. Health and `vh status` report them.
+    struct UnavailableVault {
+        unsigned int vault_id{};
+        std::string vault_name{};
+        std::string reason{};  // vault::KeyUnavailable code (key_missing | key_unsealable | version_missing) or engine_failed
+        std::string detail{};
+    };
+    [[nodiscard]] std::vector<UnavailableVault> unavailableVaults() const;
+
     void registerOpenHandle(vh::fs::Inode);
 
     void closeOpenHandle(vh::fs::Inode);
@@ -60,6 +72,9 @@ private:
     std::pmr::unordered_map<std::string, std::shared_ptr<Engine>> engines_;
     std::unordered_map<unsigned int, std::shared_ptr<Engine>> vaultToEngine_;
     std::unordered_map<vh::fs::Inode, int> openHandleCounts_;
+    std::map<unsigned int, UnavailableVault> unavailable_;  // guarded by mutex_
+
+    void noteEngineFailure(const vault::model::Vault& vault, const std::exception& e);  // takes mutex_
 };
 
 }

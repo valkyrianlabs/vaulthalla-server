@@ -19,6 +19,13 @@
 #include "ops/Users.hpp"
 #include "ops/VaultKeys.hpp"
 #include "ops/Vaults.hpp"
+#include "stats/model/SystemHealth.hpp"
+#include "storage/CloudEngine.hpp"
+#include "storage/RemoteFetch.hpp"
+#include "storage/s3/Controller.hpp"
+#include "vault/APIKeyManager.hpp"
+#include "vault/model/APIKey.hpp"
+#include "vault/model/S3Vault.hpp"
 #include "storage/PlaintextReader.hpp"
 #include "device/Crypto.hpp"
 #include "device/Peer.hpp"
@@ -45,10 +52,16 @@
 #include <sodium.h>
 
 #include <array>
+#include <map>
+#include <mutex>
+#include <span>
+#include <unordered_map>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <iostream>
 #include <numeric>
 #include <string>
@@ -67,6 +80,90 @@ std::string tag() {
     static const auto run = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count() % 100000);
     return run + "v" + std::to_string(n.fetch_add(1));
 }
+
+
+// ---- an in-memory bucket for upstream key verification (the production streamObject over a fake wire) -------------
+
+class KeyBucket final : public storage::s3::Controller {
+public:
+    struct Object {
+        std::vector<uint8_t> body;
+        std::string etag;
+        std::map<std::string, std::string> meta;
+    };
+
+    explicit KeyBucket(const std::shared_ptr<vault::model::APIKey>& key) : Controller(key, "key-bucket") {}
+
+    void put(const std::string& key, Object object) {
+        std::scoped_lock lock(mutex_);
+        objects_[key] = std::move(object);
+    }
+    [[nodiscard]] std::vector<std::optional<std::string>> getIfMatches() const {
+        std::scoped_lock lock(mutex_);
+        return ifMatches_;
+    }
+    [[nodiscard]] int heads() const {
+        std::scoped_lock lock(mutex_);
+        return heads_;
+    }
+
+    std::optional<std::unordered_map<std::string, std::string>> getHeadObject(const std::filesystem::path& key) const override {
+        recordRequest(RequestKind::Head);
+        std::scoped_lock lock(mutex_);
+        ++heads_;
+        const auto it = objects_.find(key.string());
+        if (it == objects_.end()) return std::nullopt;
+        std::unordered_map<std::string, std::string> headers{{"ETag", it->second.etag},
+                                                             {"Content-Length", std::to_string(it->second.body.size())}};
+        for (const auto& [name, value] : it->second.meta) headers[name] = value;
+        return headers;
+    }
+
+protected:
+    TransportResponse transportGet(const std::filesystem::path& key, const std::optional<std::string>&,
+                                   const std::map<std::string, std::string>& extraHeaders,
+                                   const TransportBodyFn& onBody) const override {
+        Object object;
+        std::optional<std::string> ifMatch;
+        if (const auto it = extraHeaders.find("if-match"); it != extraHeaders.end()) ifMatch = it->second;
+        {
+            std::scoped_lock lock(mutex_);
+            ifMatches_.push_back(ifMatch);
+            const auto it = objects_.find(key.string());
+            if (it == objects_.end()) return deliver(404, {}, onBody);
+            object = it->second;
+        }
+        if (ifMatch && *ifMatch != object.etag) return deliver(412, {}, onBody);
+        return deliver(200, object.body, onBody, object.etag);
+    }
+
+private:
+    static TransportResponse deliver(const long status, const std::vector<uint8_t>& body, const TransportBodyFn& onBody,
+                                     const std::string& etag = {}) {
+        TransportResponse response;
+        response.http_status = status;
+        if (!etag.empty()) response.headers = "ETag: " + etag + "\r\n";
+        for (std::size_t off = 0; off < body.size(); off += 4096) {
+            const auto n = std::min<std::size_t>(4096, body.size() - off);
+            if (!onBody(status, {body.data() + off, n})) {
+                response.transport_ok = false;
+                return response;
+            }
+        }
+        return response;
+    }
+
+    mutable std::mutex mutex_;
+    std::map<std::string, Object> objects_;
+    mutable std::vector<std::optional<std::string>> ifMatches_;
+    mutable int heads_{0};
+};
+
+class NoopReservation final : public storage::RemoteFetchReservation {
+public:
+    void commit(const storage::s3::S3GatewayUpstreamUsage&) noexcept override {}
+    void release() noexcept override {}
+};
 
 // ---- the key check (DB-free) --------------------------------------------------------------------------------------
 
@@ -299,7 +396,6 @@ protected:
 TEST_F(VaultKeysDbTest, StatusReportsTheCurrentKeyRotationAndRecoveryVersionsWithoutKeyBytes) {
     const auto engine = newVault();
     const auto id = engine->vault->id;
-    write(engine, "/a.txt", "alpha");
     const auto v1 = engine->encryptionManager->get_key_version();
 
     auto s = statusOf(id);
@@ -326,8 +422,9 @@ TEST_F(VaultKeysDbTest, StatusReportsTheCurrentKeyRotationAndRecoveryVersionsWit
     EXPECT_EQ(s.at("needed_versions")[1].at("reason"), "rotation");
     EXPECT_EQ(s.at("needed_versions")[1].at("key_check"), checkOf(engine, v1));
 
-    // Finished: v1 is needed only while recovery data references it.
+    // Finished: v1 is needed only while recovery data references it (or live files are still sealed under it).
     engine->encryptionManager->finish_key_rotation();
+    write(engine, "/a.txt", "alpha");
     s = statusOf(id);
     EXPECT_FALSE(s.at("rotation_in_progress").get<bool>());
     EXPECT_EQ(s.at("needed_versions").size(), 1u);
@@ -619,16 +716,24 @@ TEST_F(VaultKeysDbTest, ImportHandlesPartialVersionSetsAndAMissingRetiredVersion
     EXPECT_EQ(readFile(id, "/new.txt"), "sealed under v2");
     EXPECT_TRUE(statusOf(id).at("rotation_in_progress").get<bool>());
 
-    // A database restored from before the rotation lost the outgoing key's row: it is inserted again, the rotation
-    // resumes and the running vault reloads it.
+    // A database restored from before the rotation lost the outgoing key's row: the vault doesn't start (old.txt
+    // would be unreadable); importing inserts the row again, the rotation resumes and the vault starts.
     db::Transactions::exec("VaultKeysDbTest::dropRetired", [&](pqxx::work& txn) {
         txn.exec("DELETE FROM vault_keys_trashed WHERE vault_id = $1 AND version = $2", pqxx::params{id, v1});
     });
     dropEngine(id);
-    (void)runtime::Deps::get().storageManager->reinstateVault(id);  // a restart: the vault starts without v1
-    EXPECT_FALSE(statusOf(id).at("rotation_in_progress").get<bool>());
+    try {
+        (void)runtime::Deps::get().storageManager->reinstateVault(id);  // a restart
+        ADD_FAILURE() << "the vault started without the key its files are sealed under";
+    } catch (const vault::KeyUnavailable& e) {
+        EXPECT_EQ(e.code(), "version_missing");
+    }
+    const auto missing = statusOf(id);
+    EXPECT_FALSE(missing.at("rotation_in_progress").get<bool>());
+    EXPECT_EQ(missing.at("unavailable_reason"), "version_missing");
     r = importVia(device(superUser), id, full, name);
     EXPECT_EQ(outcome(r, v1), "restored") << r.dump();
+    EXPECT_TRUE(r.at("key_available").get<bool>()) << r.dump();
     EXPECT_TRUE(statusOf(id).at("rotation_in_progress").get<bool>());
     EXPECT_EQ(readFile(id, "/old.txt"), "sealed under v1");
     engine->encryptionManager->finish_key_rotation();
@@ -658,6 +763,168 @@ TEST_F(VaultKeysDbTest, ImportIntoADeletedVaultWithinRetentionThenRestoreIt) {
     (void)ops::vaults::restore(superUser, id);
     ASSERT_TRUE(hasEngine(id));
     EXPECT_EQ(readFile(id, "/kept.txt"), "kept through deletion");
+}
+
+
+// ---- revision 2: no key is minted over sealed content; upstream and key-check-only verification ------------------
+
+TEST_F(VaultKeysDbTest, AMissingKeyRowOverSealedFilesKeepsTheVaultUnavailableUntilImport) {
+    const auto engine = newVault("vkmiss");
+    const auto id = engine->vault->id;
+    const auto name = engine->vault->name;
+    write(engine, "/a.txt", "alpha");
+    const auto keys = WsKeys::exportKeys({{"vault_id", id}}, device(superUser));
+    const auto version = keys.at("key_info").at("key_version").get<unsigned int>();
+
+    db::Transactions::exec("VaultKeysDbTest::dropKeyRow", [&](pqxx::work& txn) {
+        txn.exec("DELETE FROM vault_keys WHERE vault_id = $1", pqxx::params{id});
+    });
+    dropEngine(id);
+    // A restart: the engine refuses to start rather than mint a key that could never decrypt a.txt.
+    try {
+        (void)runtime::Deps::get().storageManager->reinstateVault(id);
+        ADD_FAILURE() << "the vault started without its key";
+    } catch (const vault::KeyUnavailable& e) {
+        EXPECT_EQ(e.code(), "key_missing");
+        EXPECT_NE(std::string(e.what()).find("vh vault keys import " + std::to_string(id)), std::string::npos) << e.what();
+    }
+    EXPECT_TRUE(sealedBytes("vault_keys", id, version).empty()) << "no key was minted";
+    EXPECT_FALSE(hasEngine(id));
+
+    const auto unavailable = runtime::Deps::get().storageManager->unavailableVaults();
+    const auto it = std::ranges::find_if(unavailable, [&](const auto& v) { return v.vault_id == id; });
+    ASSERT_NE(it, unavailable.end());
+    EXPECT_EQ(it->reason, "key_missing");
+    const auto health = stats::model::SystemHealth::snapshot();
+    EXPECT_FALSE(health.healthy());
+    EXPECT_TRUE(std::ranges::any_of(health.vaultsUnavailable, [&](const auto& v) { return v.vaultId == id; }));
+
+    auto s = statusOf(id);
+    EXPECT_FALSE(s.at("key_available").get<bool>());
+    EXPECT_EQ(s.at("unavailable_reason"), "key_missing");
+    EXPECT_EQ(s.at("version"), version);
+
+    const auto r = importVia(device(superUser), id, keys, name);
+    EXPECT_EQ(outcome(r, version), "restored") << r.dump();
+    EXPECT_TRUE(r.at("key_available").get<bool>()) << r.dump();
+    EXPECT_EQ(readFile(id, "/a.txt"), "alpha");
+    EXPECT_TRUE(statusOf(id).at("unavailable_reason").is_null());
+    const auto after = runtime::Deps::get().storageManager->unavailableVaults();
+    EXPECT_FALSE(std::ranges::any_of(after, [&](const auto& v) { return v.vault_id == id; }));
+}
+
+TEST_F(VaultKeysDbTest, AnEmptyVaultWithoutAKeyRowStillGetsAFreshKey) {
+    const auto engine = newVault("vkempty");
+    const auto id = engine->vault->id;
+    db::Transactions::exec("VaultKeysDbTest::dropKeyRow", [&](pqxx::work& txn) {
+        txn.exec("DELETE FROM vault_keys WHERE vault_id = $1", pqxx::params{id});
+    });
+    dropEngine(id);
+    (void)runtime::Deps::get().storageManager->reinstateVault(id);
+    EXPECT_TRUE(hasEngine(id));
+    EXPECT_TRUE(db::query::vault::Key::getVaultKey(id) != nullptr);
+    EXPECT_TRUE(statusOf(id).at("key_available").get<bool>());
+}
+
+TEST_F(VaultKeysDbTest, AVersionWithNoCiphertextAnywhereIsAcceptedOnItsKeyCheckOnly) {
+    const auto engine = newVault("vkfresh");
+    const auto id = engine->vault->id;
+    const auto name = engine->vault->name;
+    write(engine, "/old.txt", "under v1");
+    const auto v1 = engine->encryptionManager->get_key_version();
+    engine->encryptionManager->prepare_key_rotation();  // v2: nothing sealed under it yet
+    const auto v2 = engine->encryptionManager->get_key_version();
+    const auto keys = WsKeys::exportKeys({{"vault_id", id}}, device(superUser));
+    corruptSealed("vault_keys", id);
+    corruptSealed("vault_keys_trashed", id, v1);
+    dropEngine(id);
+
+    // Without a key check for it, a version nothing is sealed under can't be accepted.
+    auto unchecked = keys;
+    unchecked.erase("key_check");
+    unchecked["key_info"].erase("key_check");
+    auto r = importVia(device(superUser), id, unchecked, name);
+    EXPECT_EQ(outcome(r, v2), "unverifiable") << r.dump();
+    EXPECT_EQ(outcome(r, v1), "restored");
+    EXPECT_FALSE(r.at("key_available").get<bool>());
+
+    r = importVia(device(superUser), id, keys, name);
+    EXPECT_EQ(outcome(r, v2), "restored") << r.dump();
+    for (const auto& v : r.at("versions")) {
+        if (v.at("version") == v2) {
+            EXPECT_EQ(v.at("detail"), "no ciphertext under this version; accepted on key check");
+        }
+    }
+    EXPECT_TRUE(r.at("key_available").get<bool>()) << r.dump();
+    EXPECT_EQ(readFile(id, "/old.txt"), "under v1");
+    engine->encryptionManager->finish_key_rotation();
+}
+
+TEST_F(VaultKeysDbTest, ACloudVaultWithoutLocalCiphertextVerifiesAgainstTheSmallestUpstreamObject) {
+    auto apiKey = std::make_shared<vault::model::APIKey>(superUser->id, "vk_key_" + tag(), vault::model::S3Provider::AWS,
+                                                              "AKIATESTACCESSKEY000", "secret-value-0000000000000000000000000",
+                                                              "us-east-1", "https://s3.example.com");
+    const auto keyId = runtime::Deps::get().apiKeyManager->addAPIKey(apiKey);
+    const auto created = ops::vaults::create(superUser, {.name = "vkcloud_" + tag(), .type = vault::model::VaultType::S3,
+                                                         .s3 = ops::vaults::S3Spec{.api_key_id = keyId,
+                                                                                   .bucket = "vk-" + tag()}});
+    const auto id = created->id;
+    const auto engine = runtime::Deps::get().storageManager->getEngine(id);
+    write(engine, "/doc.txt", "only in the bucket");
+    const auto file = db::query::fs::File::getFileByPath(id, "/doc.txt");
+    ASSERT_TRUE(file && !file->encryption_iv.empty());
+    const auto keys = WsKeys::exportKeys({{"vault_id", id}}, device(superUser));
+    const auto version = file->encrypted_with_key_version;
+
+    // The object is upstream; the local copy is gone (a cache vault, or a host that lost its backing store).
+    auto bucket = std::make_shared<KeyBucket>(runtime::Deps::get().apiKeyManager->getAPIKey(keyId));
+    std::ifstream in(file->backing_path, std::ios::binary);
+    std::vector<uint8_t> sealed{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+    bucket->put("doc.txt", {.body = sealed, .etag = "\"etag-1\"",
+                            .meta = {{"x-amz-meta-vh-encrypted", "true"}, {"x-amz-meta-vh-iv", file->encryption_iv},
+                                     {"x-amz-meta-vh-key-version", std::to_string(version)}}});
+    std::filesystem::remove(file->backing_path);
+    corruptSealed("vault_keys", id);
+    dropEngine(id);
+
+    bool refuse = true;
+    keys::setKeyVerificationEngineFactoryForTesting([&](const std::shared_ptr<vault::model::S3Vault>& v) {
+        auto e = std::make_shared<storage::CloudEngine>();
+        e->vault = v;
+        e->setS3ControllerForTesting(bucket);
+        e->setRemoteFetchGate([&](const storage::CloudEngine&, const storage::RemoteFetchRequest& request)
+                                  -> std::unique_ptr<storage::RemoteFetchReservation> {
+            EXPECT_EQ(request.operation, "key_import_verify");
+            EXPECT_EQ(request.get_requests, 1u);
+            if (refuse) throw storage::ContentUnavailable("S3 price budget refused key_import_verify (test)");
+            return std::make_unique<NoopReservation>();
+        });
+        return e;
+    });
+    struct Reset {
+        ~Reset() { keys::setKeyVerificationEngineFactoryForTesting({}); }
+    } reset;
+
+    // A refused price preflight: unverifiable, nothing fetched or written.
+    auto r = importVia(device(superUser), id, keys, created->name);
+    EXPECT_EQ(outcome(r, version), "unverifiable") << r.dump();
+    EXPECT_NE(r.at("versions")[0].at("detail").get<std::string>().find("price budget"), std::string::npos) << r.dump();
+    EXPECT_FALSE(r.at("written").get<bool>());
+    EXPECT_TRUE(bucket->getIfMatches().empty());
+
+    // A wrong key fails the object's tag: refused.
+    refuse = false;
+    EXPECT_EQ(wsCode([&] { return importVia(device(superUser), id, forged(keys), created->name); }), "invalid");
+
+    // The right key: one HEAD, one GET bound to its ETag, authenticated in memory, never written to disk.
+    r = importVia(device(superUser), id, keys, created->name);
+    EXPECT_EQ(outcome(r, version), "restored") << r.dump();
+    EXPECT_EQ(r.at("versions")[0].at("detail"), "verified against upstream object doc.txt");
+    const auto ifMatches = bucket->getIfMatches();
+    ASSERT_FALSE(ifMatches.empty());
+    EXPECT_EQ(ifMatches.back(), std::optional<std::string>("\"etag-1\""));
+    EXPECT_FALSE(std::filesystem::exists(file->backing_path));
+    EXPECT_TRUE(statusOf(id).at("key_available").get<bool>());
 }
 
 }

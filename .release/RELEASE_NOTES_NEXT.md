@@ -52,8 +52,15 @@ database restore that predates a key rotation, or for a deleted vault that can s
 export on your side (`--file -` reads standard input, so a GPG export can be decrypted into a pipe). Every key version
 is verified first, against its key check and by decrypting files sealed under it; a key that decrypts none of the
 vault's files is refused, and a key the host can still use is never replaced. Writing asks you to type the vault's
-name (`--confirm-name` without a terminal); the vault starts again right away. A paired Vaulthalla Desktop restores
-from 1Password the same way.
+name (`--confirm-name` without a terminal); the vault starts again right away. An S3 vault without a local copy of
+its data is verified against one object downloaded from its bucket (within its price budget, never written to disk).
+A paired Vaulthalla Desktop restores from 1Password the same way.
+
+**No new key over encrypted data (behavior change).** Vaulthalla used to create a fresh key at startup for a vault whose
+key record was missing, even when the vault held encrypted files that key could never decrypt. Now such a vault (or one
+whose key doesn't unseal, or whose files need a key version that is gone) does not start: `vh status` reports degraded and
+names it, the console's health turns degraded, `vh vault keys status` says why, and the log names the import
+command. New and empty vaults still get their first key automatically.
 
 See [Secrets And Key Export](https://vaulthalla.io/docs/vaults/secrets-and-key-export).
 

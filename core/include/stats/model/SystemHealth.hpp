@@ -97,6 +97,16 @@ struct DatabaseHealth {
     std::string probeError{};
 };
 
+// A live vault whose engine did not start (storage::Manager::unavailableVaults): its keys can't be loaded on this
+// host (reason key_missing | key_unsealable | version_missing; restore with vh vault keys import) or engine_failed.
+// Any of them makes the node at least degraded: that vault's data can't be read.
+struct VaultUnavailableHealth {
+    unsigned int vaultId = 0;
+    std::string vaultName;
+    std::string reason;
+    std::string detail;
+};
+
 struct HealthSummary {
     std::size_t servicesReady = 0;
     std::size_t servicesTotal = 0;
@@ -115,6 +125,7 @@ struct SystemHealth {
     DependencyHealth deps;
     ShellHealth shell;
     std::optional<DatabaseHealth> database; // nullopt until the pool exists (critical)
+    std::vector<VaultUnavailableHealth> vaultsUnavailable;
     HealthSummary summary;
 
     [[nodiscard]] bool healthy() const noexcept;
@@ -133,6 +144,7 @@ void to_json(nlohmann::json& j, const DependencyHealth& health);
 void to_json(nlohmann::json& j, const ShellHealth& health);
 void to_json(nlohmann::json& j, const DatabaseHealth& health);
 void to_json(nlohmann::json& j, const HealthSummary& health);
+void to_json(nlohmann::json& j, const VaultUnavailableHealth& health);
 void to_json(nlohmann::json& j, const SystemHealth& health);
 
 }

@@ -175,7 +175,8 @@ std::vector<Key::SealedSample> Key::sampleSealedFiles(const unsigned int vaultId
             pqxx::params{vaultId, version, limit});
         std::vector<SealedSample> out;
         for (const auto& file : vh::fs::model::files_from_pq_res(res))
-            out.push_back({.path = file->backing_path.string(), .iv = file->encryption_iv});
+            out.push_back({.path = file->backing_path.string(), .iv = file->encryption_iv,
+                           .vault_path = file->path.string(), .plaintext_bytes = file->size_bytes});
         return out;
     });
 }
@@ -198,6 +199,79 @@ bool Key::filesSealedUnder(const unsigned int vaultId, const unsigned int versio
                         "fs.vault_id = $1 AND f.encrypted_with_key_version = $2 AND f.encryption_iv <> '')",
                         pqxx::params{vaultId, version})
             .one_field_ref().as<bool>();
+    });
+}
+
+namespace {
+// Every (source, key version) the vault's data records ciphertext under.
+constexpr const char* kSealedVersionsSql =
+    "SELECT 'file' AS source, f.encrypted_with_key_version AS v FROM files f JOIN fs_entry fs ON f.fs_entry_id = fs.id "
+    "  WHERE fs.vault_id = $1 AND f.encryption_iv IS NOT NULL AND f.encryption_iv <> '' "
+    "UNION ALL SELECT 'recovery blob', key_version FROM recovery_blob WHERE vault_id = $1 AND key_version > 0 "
+    "UNION ALL SELECT 'provider version', key_version FROM upstream_object_version "
+    "  WHERE vault_id = $1 AND gone_at IS NULL AND key_version IS NOT NULL AND key_version > 0 "
+    "UNION ALL SELECT 'remote object', encrypted_with_key_version FROM remote_object_index "
+    "  WHERE vault_id = $1 AND encrypted IS TRUE AND encrypted_with_key_version IS NOT NULL "
+    "  AND encrypted_with_key_version > 0";
+}
+
+std::optional<std::string> Key::sealedContentSummary(const unsigned int vaultId) {
+    return Transactions::exec("Key::sealedContentSummary", [&](pqxx::work& txn) -> std::optional<std::string> {
+        std::string out;
+        for (const auto& row : txn.exec(std::string("SELECT source, COUNT(*) FROM (") + kSealedVersionsSql +
+                                            ") s GROUP BY source ORDER BY source",
+                                        pqxx::params{vaultId})) {
+            const auto n = row[1].as<uint64_t>();
+            out += (out.empty() ? "" : ", ") + std::to_string(n) + " " + row[0].as<std::string>() + (n == 1 ? "" : "s");
+        }
+        if (out.empty()) return std::nullopt;
+        return out;
+    });
+}
+
+std::vector<unsigned int> Key::liveFileKeyVersions(const unsigned int vaultId) {
+    return Transactions::exec("Key::liveFileKeyVersions", [&](pqxx::work& txn) {
+        std::vector<unsigned int> out;
+        for (const auto& row : txn.exec("SELECT DISTINCT f.encrypted_with_key_version FROM files f JOIN fs_entry fs ON "
+                                        "f.fs_entry_id = fs.id WHERE fs.vault_id = $1 AND f.encryption_iv IS NOT NULL "
+                                        "AND f.encryption_iv <> '' AND f.encrypted_with_key_version > 0 ORDER BY 1",
+                                        pqxx::params{vaultId}))
+            out.push_back(row[0].as<unsigned int>());
+        return out;
+    });
+}
+
+std::vector<unsigned int> Key::dataKeyVersions(const unsigned int vaultId) {
+    return Transactions::exec("Key::dataKeyVersions", [&](pqxx::work& txn) {
+        std::vector<unsigned int> out;
+        for (const auto& row : txn.exec(std::string("SELECT DISTINCT v FROM (") + kSealedVersionsSql +
+                                            ") s WHERE v > 0 ORDER BY 1",
+                                        pqxx::params{vaultId}))
+            out.push_back(row[0].as<unsigned int>());
+        return out;
+    });
+}
+
+bool Key::ciphertextExistsUnder(const unsigned int vaultId, const unsigned int version) {
+    return Transactions::exec("Key::ciphertextExistsUnder", [&](pqxx::work& txn) {
+        return txn.exec(std::string("SELECT EXISTS(SELECT 1 FROM (") + kSealedVersionsSql + ") s WHERE v = $2)",
+                        pqxx::params{vaultId, version})
+            .one_field_ref().as<bool>();
+    });
+}
+
+std::vector<Key::RemoteSample> Key::remoteSamples(const unsigned int vaultId, const unsigned int version,
+                                                  const unsigned int limit) {
+    return Transactions::exec("Key::remoteSamples", [&](pqxx::work& txn) {
+        std::vector<RemoteSample> out;
+        for (const auto& row : txn.exec(
+                 "SELECT object_key, size_bytes, encryption_iv FROM remote_object_index WHERE vault_id = $1 AND "
+                 "encrypted IS TRUE AND encrypted_with_key_version = $2 AND encryption_iv IS NOT NULL AND "
+                 "encryption_iv <> '' ORDER BY size_bytes, id LIMIT $3",
+                 pqxx::params{vaultId, version, limit}))
+            out.push_back({.object_key = row[0].as<std::string>(), .stored_bytes = row[1].as<uint64_t>(),
+                           .iv = row[2].as<std::string>()});
+        return out;
     });
 }
 

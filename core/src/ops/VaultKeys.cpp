@@ -13,6 +13,7 @@
 #include "rbac/permission/admin/Keys.hpp"
 #include "recovery/Store.hpp"
 #include "runtime/Deps.hpp"
+#include "storage/CloudEngine.hpp"
 #include "storage/Engine.hpp"
 #include "storage/Manager.hpp"
 #include "vault/EncryptionManager.hpp"
@@ -20,6 +21,7 @@
 #include "vault/model/APIKey.hpp"
 #include "vault/model/Deletion.hpp"
 #include "vault/model/Key.hpp"
+#include "vault/model/S3Vault.hpp"
 #include "vault/model/Vault.hpp"
 
 #include <fcntl.h>
@@ -187,10 +189,13 @@ Source liveSource(const std::shared_ptr<vault::model::Vault>& vault) {
         const auto [_, version] = s.engine->encryptionManager->currentKey();
         s.current = version;
         s.rotating = s.engine->encryptionManager->rotation_in_progress();
-    } else {
-        const auto rec = KeyQ::getVaultKey(vault->id);
-        if (!rec) throw Conflict("vault '" + vault->name + "' has no key record");
+    } else if (const auto rec = KeyQ::getVaultKey(vault->id)) {
         s.current = rec->version;
+        s.rotating = KeyQ::keyRotationInProgress(vault->id);
+    } else {
+        // No key record (load_key refused to mint one over sealed content): the highest version the data records.
+        const auto versions = KeyQ::dataKeyVersions(vault->id);
+        s.current = versions.empty() ? 0 : versions.back();
         s.rotating = KeyQ::keyRotationInProgress(vault->id);
     }
     const auto exported = KeyQ::exportRecord(vault->id);
@@ -223,6 +228,9 @@ std::vector<std::pair<unsigned int, NeedReason>> neededVersions(const Source& s)
         out.emplace_back(v, reason);
     };
     for (const auto v : KeyQ::rotationPendingKeyVersions(s.vault_id)) add(v, NeedReason::Rotation);
+    // Live files still sealed under an older version (a rotation the database no longer records as pending).
+    for (const auto v : KeyQ::liveFileKeyVersions(s.vault_id))
+        if (v < s.current) add(v, NeedReason::Rotation);
     for (const auto v : KeyQ::recoveryReferencedKeyVersions(s.vault_id)) add(v, NeedReason::Recovery);
     std::sort(out.begin() + 1, out.end());
     return out;
@@ -276,12 +284,26 @@ KeyStatus statusOf(const Source& s, Unsealer& unsealer) {
         out.needed_versions.push_back({.version = version, .key_check = check, .reason = reason});
     }
     out.key_check = out.needed_versions.front().key_check;
-    out.key_available = out.key_check.has_value();
-    if (!out.key_available)
-        out.unavailable_reason = s.sealed.contains(s.current)
-            ? "the vault's key does not unseal on this host (vault master changed or the key row is damaged); "
-              "restore it with `vh vault keys import`"
-            : "the vault's current key version is not held on this host; restore it with `vh vault keys import`";
+    // The codes vault::KeyUnavailable uses when the engine refuses to start.
+    const auto hint = fmt::format("; restore it with `vh vault keys import {} --file <export.json>`", s.vault_id);
+    if (!s.sealed.contains(s.current)) {
+        out.unavailable_reason = "key_missing";
+        out.unavailable_detail = "this host holds no key record for the vault's current version " +
+                                 std::to_string(s.current) + hint;
+    } else if (!out.key_check) {
+        out.unavailable_reason = "key_unsealable";
+        out.unavailable_detail = "the vault's key does not unseal on this host (the vault master changed or the key "
+                                 "row is damaged)" + hint;
+    } else {
+        for (const auto& n : out.needed_versions)
+            if (!n.key_check && n.reason != NeedReason::Recovery) {
+                out.unavailable_reason = "version_missing";
+                out.unavailable_detail = fmt::format("key version {} ({}) is not held or doesn't unseal on this host{}",
+                                                     n.version, to_string(n.reason), hint);
+                break;
+            }
+    }
+    out.key_available = !out.unavailable_reason.has_value();
     return out;
 }
 
@@ -396,6 +418,7 @@ nlohmann::json toJson(const KeyStatus& s) {
             {"key_check", s.key_check ? nlohmann::json(*s.key_check) : nlohmann::json(nullptr)},
             {"key_available", s.key_available},
             {"unavailable_reason", s.unavailable_reason ? nlohmann::json(*s.unavailable_reason) : nlohmann::json(nullptr)},
+            {"unavailable_detail", s.unavailable_detail ? nlohmann::json(*s.unavailable_detail) : nlohmann::json(nullptr)},
             {"exported_version", s.exported_version ? nlohmann::json(*s.exported_version) : nlohmann::json(nullptr)},
             {"exported_at", time(s.exported_at)},
             {"rotation_in_progress", s.rotation_in_progress},
@@ -535,7 +558,8 @@ unsigned int versionOf(const nlohmann::json& v, const char* what) {
 }
 
 // The entry for `vaultId` in an export (one object, or the `all` array), as candidate versions.
-std::vector<Candidate> candidatesFrom(const nlohmann::json& keys, const unsigned int vaultId) {
+std::vector<Candidate> candidatesFrom(const nlohmann::json& keys, const unsigned int vaultId,
+                                      unsigned int& backupCurrent) {
     const nlohmann::json* entry = nullptr;
     const auto matches = [&](const nlohmann::json& e) {
         return e.is_object() && e.contains("vault_id") && e.at("vault_id").is_number_unsigned() &&
@@ -578,7 +602,8 @@ std::vector<Candidate> candidatesFrom(const nlohmann::json& keys, const unsigned
         throw Invalid("the export entry needs key and key_info.key_version");
     const auto* topCheck = entry->contains("key_check") ? &entry->at("key_check")
                          : entry->at("key_info").contains("key_check") ? &entry->at("key_info").at("key_check") : nullptr;
-    add(entry->at("key"), versionOf(entry->at("key_info").at("key_version"), "key_info.key_version"), topCheck);
+    backupCurrent = versionOf(entry->at("key_info").at("key_version"), "key_info.key_version");
+    add(entry->at("key"), backupCurrent, topCheck);
     if (entry->contains("historical_keys")) {
         if (!entry->at("historical_keys").is_array()) throw Invalid("historical_keys must be an array");
         for (const auto& h : entry->at("historical_keys")) {
@@ -640,7 +665,7 @@ struct ImportTarget {
     std::map<unsigned int, KeyRecord> copies{};
 };
 
-ImportTarget importTarget(const Actor& actor, const unsigned int vaultId) {
+ImportTarget importTarget(const Actor& actor, const unsigned int vaultId, const unsigned int backupCurrent) {
     if (vaultId == 0) throw Invalid("vault ID must be a positive integer");
     ImportTarget t{.vault_id = vaultId};
     if (const auto vault = db::query::vault::Vault::getVault(vaultId)) {
@@ -670,13 +695,37 @@ ImportTarget importTarget(const Actor& actor, const unsigned int vaultId) {
     }
     if (t.live_rows) {
         t.current_row = KeyQ::getVaultKey(vaultId);
-        if (t.current_row) t.current = t.current_row->version;
+        if (t.current_row) {
+            t.current = t.current_row->version;
+        } else {
+            // No key record (load_key refuses to mint one over sealed content): the current version is the higher
+            // of what the data records and what the backup calls current; the import inserts it.
+            const auto versions = KeyQ::dataKeyVersions(vaultId);
+            t.current = std::max(backupCurrent, versions.empty() ? 0u : versions.back());
+        }
         for (const auto v : KeyQ::retiredKeyVersions(vaultId))
             if (const auto rec = KeyQ::getRetiredVaultKey(vaultId, v)) t.retired[v] = rec;
     }
-    if (!t.current)
+    if (!t.current || *t.current == 0)
         throw Conflict("vault '" + t.name + "' has no key record to restore into");
     return t;
+}
+
+// The vault as an S3 vault (live or deleted row), or null for a local vault.
+std::shared_ptr<vault::model::S3Vault> s3VaultOf(const ImportTarget& t) {
+    std::shared_ptr<vault::model::Vault> v = t.deleted ? DeletionQ::getDeletedVault(t.vault_id)
+                                                       : db::query::vault::Vault::getVault(t.vault_id);
+    return std::dynamic_pointer_cast<vault::model::S3Vault>(v);
+}
+
+KeyVerificationEngineFactory& verificationFactory() {
+    static KeyVerificationEngineFactory factory;
+    return factory;
+}
+
+std::shared_ptr<storage::CloudEngine> keyVerificationEngine(const std::shared_ptr<vault::model::S3Vault>& vault) {
+    if (const auto& factory = verificationFactory()) return factory(vault);
+    return storage::CloudEngine::forKeyVerification(vault);
 }
 
 struct Slot {
@@ -694,6 +743,10 @@ std::string versionList(const std::vector<unsigned int>& versions) {
     return out;
 }
 
+}
+
+void setKeyVerificationEngineFactoryForTesting(KeyVerificationEngineFactory factory) {
+    verificationFactory() = std::move(factory);
 }
 
 std::string to_string(const ImportOutcome outcome) {
@@ -714,8 +767,9 @@ ImportResult importKeys(const Actor& actor, const ImportRequest& request, const 
     requireKeyChannel(channel);
     if (!request.keys) throw Invalid("keys (the export document) is required");
 
-    const auto target = importTarget(actor, request.vault_id);
-    const auto candidates = candidatesFrom(*request.keys, target.vault_id);
+    unsigned int backupCurrent = 0;
+    const auto candidates = candidatesFrom(*request.keys, request.vault_id, backupCurrent);
+    const auto target = importTarget(actor, request.vault_id, backupCurrent);
     ImportResult result{.vault_id = target.vault_id, .vault_name = target.name, .deleted = target.deleted};
     Unsealer unsealer;
     std::vector<KeyQ::SealedWrite> writes;
@@ -779,10 +833,17 @@ ImportResult importKeys(const Actor& actor, const ImportRequest& request, const 
         }
 
         // 3. Real ciphertext: the key must authenticate data sealed under it (or match a copy that still unseals).
+        std::string verifiedHow = "re-sealed a copy that no longer unsealed (the key matches one this host holds)";
         if (!identical) {
             std::vector<std::filesystem::path> paths;
             std::vector<std::string> ivs;
+            std::optional<KeyQ::RemoteSample> remoteOnly;  // the smallest file without a local copy
             for (const auto& f : KeyQ::sampleSealedFiles(target.vault_id, c.version, kSamplePerSource)) {
+                std::error_code ec;
+                if (!remoteOnly && !std::filesystem::exists(f.path, ec) && f.vault_path.size() > 1)
+                    remoteOnly = KeyQ::RemoteSample{.object_key = f.vault_path.substr(1),
+                                                    .stored_bytes = f.plaintext_bytes + crypto::util::AES_TAG_SIZE,
+                                                    .iv = f.iv};
                 paths.emplace_back(f.path);
                 ivs.push_back(f.iv);
             }
@@ -802,12 +863,51 @@ ImportResult importKeys(const Actor& actor, const ImportRequest& request, const 
                 throw Invalid(fmt::format("key version {} does not decrypt vault '{}' ({} sealed file(s) checked): it is "
                                           "not this vault's key. Nothing was written", c.version, target.name,
                                           out.failed_files));
+            verifiedHow = fmt::format("verified against {} sealed file(s)", out.verified_files);
+
             if (out.verified_files == 0) {
-                out.outcome = ImportOutcome::Unverifiable;
-                out.detail = fmt::format("nothing on this host is sealed under version {}, so it can't be verified; "
-                                         "skipped", c.version);
-                result.versions.push_back(std::move(out));
-                continue;
+                std::optional<std::string> skip;
+                if (!KeyQ::ciphertextExistsUnder(target.vault_id, c.version)) {
+                    // 6. Nothing anywhere is sealed under it (a fresh rotation target): the backup's own key check is
+                    //    what proves it; nothing can be mis-decrypted.
+                    if (c.backup_check) verifiedHow = "no ciphertext under this version; accepted on key check";
+                    else skip = "no ciphertext under this version and the backup has no key check for it";
+                } else if (const auto s3 = s3VaultOf(target)) {
+                    // 5. A cloud vault without local ciphertext: the smallest object recorded under the version.
+                    auto samples = KeyQ::remoteSamples(target.vault_id, c.version, 1);
+                    if (samples.empty() && remoteOnly) samples.push_back(*remoteOnly);
+                    if (samples.empty()) {
+                        skip = fmt::format("nothing on this host or in the bucket index is sealed under version {}",
+                                           c.version);
+                    } else {
+                        const auto& sample = samples.front();
+                        try {
+                            const auto engine = keyVerificationEngine(s3);
+                            if (!engine->verifyRemoteObjectWithKey(sample.object_key, sample.stored_bytes, sample.iv,
+                                                                   c.version, c.key->bytes())) {
+                                out.failed_files = 1;
+                                throw Invalid(fmt::format("key version {} does not decrypt vault '{}' (upstream object "
+                                                          "{}): it is not this vault's key. Nothing was written",
+                                                          c.version, target.name, sample.object_key));
+                            }
+                            out.verified_files = 1;
+                            verifiedHow = "verified against upstream object " + sample.object_key;
+                        } catch (const Invalid&) {
+                            throw;
+                        } catch (const std::exception& e) {
+                            skip = std::string("couldn't verify against the bucket: ") + e.what();
+                        }
+                    }
+                } else {
+                    skip = fmt::format("nothing on this host is sealed under version {}, so it can't be verified",
+                                       c.version);
+                }
+                if (skip) {
+                    out.outcome = ImportOutcome::Unverifiable;
+                    out.detail = *skip + "; skipped";
+                    result.versions.push_back(std::move(out));
+                    continue;
+                }
             }
             verifiedTotal += out.verified_files;
         }
@@ -824,8 +924,7 @@ ImportResult importKeys(const Actor& actor, const ImportRequest& request, const 
             writes.push_back(std::move(w));
         }
         out.outcome = ImportOutcome::Restored;
-        out.detail = identical ? "re-sealed a copy that no longer unsealed (the key matches one this host holds)"
-                               : fmt::format("verified against {} sealed file(s)", out.verified_files);
+        out.detail = verifiedHow;
         if (out.failed_files > 0)
             out.detail += fmt::format("; {} file(s) sealed under it failed authentication (damaged)", out.failed_files);
         result.versions.push_back(std::move(out));

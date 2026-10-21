@@ -2,6 +2,11 @@
 
 #include "ops/Actor.hpp"
 #include "crypto/SecretKey.hpp"
+#include "storage/Fwd.hpp"
+#include "vault/Fwd.hpp"
+
+#include <functional>
+#include <memory>
 
 #include <ctime>
 #include <optional>
@@ -48,7 +53,9 @@ struct KeyStatus {
     unsigned int version{};                         // current key version
     std::optional<std::string> key_check{};         // null when the key can't be read on this host
     bool key_available{true};
+    // key_missing | key_unsealable | version_missing (vault::KeyUnavailable's codes); unavailable_detail says what to do.
     std::optional<std::string> unavailable_reason{};
+    std::optional<std::string> unavailable_detail{};
     std::optional<unsigned int> exported_version{};
     std::optional<std::time_t> exported_at{};
     bool rotation_in_progress{false};
@@ -144,6 +151,12 @@ struct ImportResult {
 };
 
 [[nodiscard]] ImportResult importKeys(const Actor& actor, const ImportRequest& request, Channel channel);
+
+// Test seam: the engine an import verifies a cloud vault's key against the bucket with (default:
+// storage::CloudEngine::forKeyVerification). An empty function restores the default.
+using KeyVerificationEngineFactory =
+    std::function<std::shared_ptr<storage::CloudEngine>(const std::shared_ptr<vault::model::S3Vault>&)>;
+void setKeyVerificationEngineFactoryForTesting(KeyVerificationEngineFactory factory);
 [[nodiscard]] nlohmann::json toJson(const ImportResult& result);
 
 }

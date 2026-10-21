@@ -6,7 +6,7 @@
 export const WS_CONTRACT_VERSION = 1
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = 'ce15c926c30ea66950915c381c56c5430305fdaedc645aefa798c6ac293640dd'
+export const WS_CONTRACT_HASH = '8a39fca0a649b9d025c5c20606d7ada2896e364163885a31ddd6f0338895b400'
 
 export interface WsContract {
   /**
@@ -940,7 +940,8 @@ export interface WsContract {
         version: number
         key_check: string | null
         key_available: boolean
-        unavailable_reason: string | null
+        unavailable_reason: 'key_missing' | 'key_unsealable' | 'version_missing' | null
+        unavailable_detail: string | null
         exported_version: number | null
         exported_at: number | null
         rotation_in_progress: boolean

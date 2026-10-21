@@ -6801,7 +6801,22 @@
               ]
             },
             {
+              "description": "Why the vault's keys can't be used on this host (null when they can).",
+              "enum": [
+                "key_missing",
+                "key_unsealable",
+                "version_missing"
+              ],
               "name": "unavailable_reason",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "What happened and the command that restores the keys.",
+              "name": "unavailable_detail",
               "required": true,
               "types": [
                 "string",
@@ -7220,5 +7235,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "ce15c926c30ea66950915c381c56c5430305fdaedc645aefa798c6ac293640dd"
+  "ws_hash": "8a39fca0a649b9d025c5c20606d7ada2896e364163885a31ddd6f0338895b400"
 }

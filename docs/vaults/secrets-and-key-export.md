@@ -174,9 +174,15 @@ Before anything is written, every key version in the export is verified:
 
 1. When the export carries a [key check](#key-checks) for the version, the key must match it.
 2. The key must decrypt this vault's data: Vaulthalla authenticates a sample of the vault's files sealed under that version (all of them when there are few) with the key. A key that decrypts none of them is refused, and nothing is written.
-3. A version with nothing on this host sealed under it can't be verified and is skipped.
+3. For an S3 vault without a local copy of that data, Vaulthalla downloads the smallest object sealed under the version once and authenticates it in memory, nothing is written to disk. The download goes through the vault's price budget and request limits like any other remote read; if they refuse it, the version is skipped and the message says why.
+4. A version that nothing is sealed under yet (for example the new key of a rotation that hasn't re-encrypted anything) is accepted when the export carries its key check, which proves the export is consistent; without one it is skipped.
+5. Any other version that can't be verified is skipped.
 
 A key that this host can still unseal is never replaced: if the export holds different bytes for it, the import is refused (is the export from another node?). Importing a key the host already holds unchanged does nothing. Verified keys are re-sealed under this host's master key in one step, and the vault starts again. A rotation that was under way continues.
+
+### A Vault Whose Key Is Missing
+
+Vaulthalla never creates a new key for a vault that already holds encrypted data: a new key could decrypt none of it. If a vault's key record is missing, its key doesn't unseal on this host, or a key version its files are sealed under is gone (for example after restoring an older database), the vault does not start. `vh status` reports degraded and names the vault, the console's health turns degraded, `vh vault keys status` shows the key as unavailable with the reason (`key_missing`, `key_unsealable` or `version_missing`), and the daemon log says which command restores it. Import the keys and the vault starts again. A new or empty vault still gets its first key automatically.
 
 Writing asks you to type the vault's name; without a terminal, pass it with `--confirm-name`. The import needs the same permission as export. A Mac paired with Vaulthalla Desktop restores keys from 1Password the same way over its paired connection. Neither the web console nor AI agents can import keys.
 
