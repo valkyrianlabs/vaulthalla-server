@@ -504,6 +504,9 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   live files (or a pending rotation) need isn't held, `load_key` throws `vault::KeyUnavailable{key_missing |
   key_unsealable | version_missing}` naming `vh vault keys import`; the engine doesn't start, `storage::Manager`
   records it (`unavailableVaults()`), and `stats.system.health` (`vaults_unavailable`) / `vh status` turn degraded.
+  Versions a key salvage names (`vault_key_salvage`) don't block it. Every key version carries recorded provenance
+  (key check + this node's Ed25519 attestation, migration 113), and import restores only attested versions the
+  records reference; anything else is salvaged under a fresh key, never stored (`key-backup.md`, revision 3).
 - **Vault key rotation is failure- and crash-safe (`sync/rotation/`).** `vh vault keys rotate` only prepares a new
   key; the sync pass re-encrypts. Per file: new ciphertext → `<backing>.vh-rotate` (O_EXCL, fsync file + dir) →
   (cloud, encrypt upstream) PUT with its own IV/version metadata → compare-and-set the `files` row on the old
@@ -539,7 +542,7 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
 
 ## Database
 
-- PostgreSQL via libpqxx. The schema is `deploy/psql/000…112_*.sql`, applied in order (all in ONE transaction by `core/seed/include/SqlDeployer.hpp`) and installed to `/usr/share/vaulthalla/psql`.
+- PostgreSQL via libpqxx. The schema is `deploy/psql/000…113_*.sql`, applied in order (all in ONE transaction by `core/seed/include/SqlDeployer.hpp`) and installed to `/usr/share/vaulthalla/psql`.
   New migrations take the next number and must be idempotent against upgraded installs. SqlDeployer records sha256(raw bytes)
   per file and refuses to start on a mismatch, so **never edit a shipped migration**: 020/060/082 were edited in place and
   bricked upgrades (1.5.x→1.6.x crash loop on 060). Reviewed exceptions live in `kHistoricalMigrationChecksums` (accepted, recorded

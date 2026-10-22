@@ -57,15 +57,23 @@ versions the vault needs (the current key, an unfinished rotation's previous key
 uses), each with its key check, and a deleted vault's export carries them too. Keys still leave the server only
 through the local `vh` CLI or a paired device, never the web console or an AI agent.
 
-**Restoring keys.** `vh vault keys import <vault> --file <export>` puts a vault's keys back when this host can no
-longer use them: after the master key was lost or replaced (for example a database restored onto a new host), after a
-database restore that predates a key rotation, or for a deleted vault that can still be restored. `vh` reads the
-export on your side (`--file -` reads standard input, so a GPG export can be decrypted into a pipe). Every key version
-is verified first, against its key check and by decrypting files sealed under it; a key that decrypts none of the
-vault's files is refused, and a key the host can still use is never replaced. Writing asks you to type the vault's
-name (`--confirm-name` without a terminal); the vault starts again right away. An S3 vault without a local copy of
-its data is verified against one object downloaded from its bucket (within its price budget, never written to disk).
-A paired Vaulthalla Desktop restores from 1Password the same way.
+**Restoring keys.** `vh vault keys import <vault> --file <export>` is a recovery mechanism: it puts back key
+versions a vault already had when this host can no longer use them, after the master key was lost or replaced (for
+example a database restored onto a new host), after a database restore that predates a key rotation, or for a
+deleted vault that can still be restored. It can't be used to set your own key: every export now carries the
+server's **attestation** of each key version (a signature by a signing key sealed on the host, never exported), and
+a version is restored only when its attestation verifies and the vault's records show it had that version. A key
+the host can still use is never replaced, and a version the vault has no record of is refused. `vh` reads the export
+on your side (`--file -` reads standard input, so a GPG export can be decrypted into a pipe). Writing asks you to type
+the vault's name (`--confirm-name` without a terminal); the vault starts again right away. A paired Vaulthalla
+Desktop restores from 1Password the same way. **Export your vault keys again after upgrading**: older exports carry
+no attestations.
+
+**Salvage.** A key version that can't be proven (an older export, another server's key) is reported as needing
+salvage, and nothing is written for it. `--salvage` then makes a best effort: the server creates a fresh key of its
+own, re-encrypts every file the supplied key decrypts under it (crash-safe, resumable), reports the files it couldn't
+decrypt as unrecoverable, and never stores the supplied key. Files that exist only in an S3 bucket go through the
+vault's price budget, and are reported as skipped with the estimate when it refuses.
 
 **No new key over encrypted data (behavior change).** Vaulthalla used to create a fresh key at startup for a vault whose
 key record was missing, even when the vault held encrypted files that key could never decrypt. Now such a vault (or one

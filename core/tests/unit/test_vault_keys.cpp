@@ -6,6 +6,7 @@
 // vault's files read again, a wrong key or one the host can still unseal is refused, partial version sets, deleted
 // vaults within retention. The device listener itself (real TLS) is covered in test_device_http.cpp.
 
+#include "crypto/secrets/KeyProvider.hpp"
 #include "crypto/util/encrypt.hpp"
 #include "db/Transactions.hpp"
 #include "db/encoding/bytea.hpp"
@@ -43,8 +44,11 @@
 #include "storage/Manager.hpp"
 #include "UsageManager.hpp"
 #include "vault/EncryptionManager.hpp"
+#include "vault/KeyAttestation.hpp"
 #include "vault/KeyCheck.hpp"
+#include "vault/model/Key.hpp"
 #include "vault/model/Vault.hpp"
+#include "sync/rotation/Rotation.hpp"
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
@@ -52,6 +56,7 @@
 #include <sodium.h>
 
 #include <array>
+#include <set>
 #include <map>
 #include <mutex>
 #include <span>
@@ -74,6 +79,17 @@ using UserPtr = std::shared_ptr<identities::User>;
 using EnginePtr = std::shared_ptr<storage::Engine>;
 namespace keys = ops::vault_keys;
 using WsKeys = protocols::ws::handler::VaultKeys;
+
+// Any-length base64 (crypto::util::b64_decode is for 12-byte IVs only).
+std::vector<uint8_t> unb64(const std::string& text) {
+    std::vector<uint8_t> out(text.size());
+    std::size_t len = 0;
+    if (sodium_base642bin(out.data(), out.size(), text.data(), text.size(), nullptr, &len, nullptr,
+                          sodium_base64_VARIANT_ORIGINAL) != 0)
+        throw std::runtime_error("bad base64");
+    out.resize(len);
+    return out;
+}
 
 std::string tag() {
     static std::atomic<unsigned> n{0};
@@ -105,6 +121,22 @@ public:
     [[nodiscard]] int heads() const {
         std::scoped_lock lock(mutex_);
         return heads_;
+    }
+
+    [[nodiscard]] std::optional<Object> object(const std::string& key) const {
+        std::scoped_lock lock(mutex_);
+        const auto it = objects_.find(key);
+        if (it == objects_.end()) return std::nullopt;
+        return it->second;
+    }
+
+    // A salvage re-uploads the re-encrypted object (CloudEngine::upload, small objects).
+    void uploadBufferWithMetadata(const std::filesystem::path& key, const std::vector<uint8_t>& buffer,
+                                  const storage::s3::RequestOptions& options) const override {
+        std::scoped_lock lock(mutex_);
+        Object object{.body = buffer, .etag = "\"etag-" + std::to_string(++puts_ + 100) + "\"", .meta = {}};
+        for (const auto& [name, value] : options.metadata) object.meta["x-amz-meta-" + name] = value;
+        objects_[key.string()] = std::move(object);
     }
 
     std::optional<std::unordered_map<std::string, std::string>> getHeadObject(const std::filesystem::path& key) const override {
@@ -154,7 +186,8 @@ private:
     }
 
     mutable std::mutex mutex_;
-    std::map<std::string, Object> objects_;
+    mutable std::map<std::string, Object> objects_;
+    mutable int puts_{0};
     mutable std::vector<std::optional<std::string>> ifMatches_;
     mutable int heads_{0};
 };
@@ -183,6 +216,41 @@ TEST(VaultKeyCheck, MatchesTheDocumentedVectors) {
     EXPECT_TRUE(vault::keyCheckEquals("72e4c8b7f8ab43b8ed8869a57cef1703", "72e4c8b7f8ab43b8ed8869a57cef1703"));
     EXPECT_FALSE(vault::keyCheckEquals("72e4c8b7f8ab43b8ed8869a57cef1703", "72e4c8b7f8ab43b8ed8869a57cef1704"));
     EXPECT_FALSE(vault::keyCheckEquals("72e4", "72e4"));
+}
+
+TEST(VaultKeyAttestation, MatchesTheDocumentedVector) {
+    std::array<uint8_t, 32> seed{};
+    std::iota(seed.begin(), seed.end(), uint8_t{0});
+    const std::string node = "00000000-0000-4000-8000-000000000001";
+    const auto msg = vault::attestation::message(node, 42, 3, "72e4c8b7f8ab43b8ed8869a57cef1703");
+    ASSERT_EQ(msg.size(), 80u);
+    EXPECT_EQ(std::string(msg.begin(), msg.begin() + 16), "vh-key-attest-v1");
+    const auto hex = [](const std::vector<uint8_t>& b) {
+        std::string out(b.size() * 2 + 1, '\0');
+        sodium_bin2hex(out.data(), out.size(), b.data(), b.size());
+        out.pop_back();
+        return out;
+    };
+    // .claude/context/key-backup.md, vault/KeyAttestation.hpp, docs/vaults/secrets-and-key-export.md.
+    const auto pk = vault::attestation::publicKeyFromSeed(seed);
+    EXPECT_EQ(hex(pk), "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8");
+    const auto sig = vault::attestation::signWithSeed(seed, msg);
+    EXPECT_EQ(hex(sig), "fbda258fa125ef4237a54b7cde732c073ba598fa4a1a782226aa82514ee5c36a"
+                        "3ad452e6d36593337dc1619e61391c6ae20685155b11cc2b6deaf637e893840c");
+    EXPECT_TRUE(vault::attestation::verifySignature(pk, msg, sig));
+    // Every input is bound: node, vault, version and key check; a flipped bit fails.
+    EXPECT_FALSE(vault::attestation::verifySignature(
+        pk, vault::attestation::message("00000000-0000-4000-8000-000000000002", 42, 3, "72e4c8b7f8ab43b8ed8869a57cef1703"), sig));
+    EXPECT_FALSE(vault::attestation::verifySignature(
+        pk, vault::attestation::message(node, 43, 3, "72e4c8b7f8ab43b8ed8869a57cef1703"), sig));
+    EXPECT_FALSE(vault::attestation::verifySignature(
+        pk, vault::attestation::message(node, 42, 4, "72e4c8b7f8ab43b8ed8869a57cef1703"), sig));
+    EXPECT_FALSE(vault::attestation::verifySignature(
+        pk, vault::attestation::message(node, 42, 3, "72e4c8b7f8ab43b8ed8869a57cef1704"), sig));
+    auto bad = sig;
+    bad[0] ^= 1;
+    EXPECT_FALSE(vault::attestation::verifySignature(pk, msg, bad));
+    EXPECT_THROW((void)vault::attestation::message(node, 42, 3, "72E4C8B7F8AB43B8ED8869A57CEF1703"), std::invalid_argument);
 }
 
 // ---- against the test database ------------------------------------------------------------------------------------
@@ -391,6 +459,102 @@ protected:
             if (v.at("version") == version) return v.at("outcome").get<std::string>();
         return "<absent>";
     }
+
+    static std::string detailOf(const json& result, const unsigned int version) {
+        for (const auto& v : result.at("versions"))
+            if (v.at("version") == version) return v.at("detail").get<std::string>();
+        return "<absent>";
+    }
+
+    // An export from before attestations (revision 3): everything but the attestations.
+    static json unattested(json keys) {
+        keys.erase("attestation");
+        keys["key_info"].erase("attestation");
+        if (keys.contains("historical_keys"))
+            for (auto& h : keys["historical_keys"]) h.erase("attestation");
+        return keys;
+    }
+
+    static json salvageVia(const unsigned int vaultId, const json& keys, const std::optional<std::string>& confirm) {
+        json payload{{"vault_id", vaultId}, {"keys", keys}, {"mode", "salvage"}};
+        if (confirm) payload["confirm_name"] = *confirm;
+        return WsKeys::importKeys(payload, device(superUser));
+    }
+
+    struct Recorded {
+        std::optional<std::string> key_check;
+        std::optional<unsigned int> key_id;
+        std::vector<uint8_t> signature;
+    };
+    static Recorded recorded(const std::string& table, const unsigned int vaultId, const unsigned int version) {
+        return db::Transactions::exec("VaultKeysDbTest::recorded", [&](pqxx::work& txn) {
+            Recorded out;
+            const auto res = txn.exec("SELECT key_check, attestation_key_id, attestation FROM " + table +
+                                      " WHERE vault_id = $1 AND version = $2", pqxx::params{vaultId, version});
+            if (res.empty()) return out;
+            const auto row = res.one_row_ref();
+            if (!row[0].is_null()) out.key_check = row[0].as<std::string>();
+            if (!row[1].is_null()) out.key_id = row[1].as<unsigned int>();
+            if (!row[2].is_null()) out.signature = db::encoding::from_hex_bytea(row[2].as<std::string>());
+            return out;
+        });
+    }
+
+    static void clearProvenance(const std::string& table, const unsigned int vaultId) {
+        db::Transactions::exec("VaultKeysDbTest::clearProvenance", [&](pqxx::work& txn) {
+            txn.exec("UPDATE " + table + " SET key_check = NULL, attestation_key_id = NULL, attestation = NULL "
+                     "WHERE vault_id = $1", pqxx::params{vaultId});
+        });
+    }
+
+    // The recorded provenance of (table, vault, version) is this key's check and verifies as this node's attestation.
+    static bool attestedRow(const std::string& table, const unsigned int vaultId, const unsigned int version,
+                            const std::string& check) {
+        const auto r = recorded(table, vaultId, version);
+        if (!r.key_check || *r.key_check != check || !r.key_id) return false;
+        return vault::attestation::check({.key_id = *r.key_id, .signature = r.signature}, vaultId, version, check) ==
+               vault::attestation::Verdict::Valid;
+    }
+
+    // Whether any key row of the vault unseals (under the test vault master) to exactly these bytes.
+    static bool storedAnywhere(const unsigned int vaultId, const std::vector<uint8_t>& bytes) {
+        crypto::secrets::KeyProvider provider("test_vault_master");
+        provider.init();
+        return db::Transactions::exec("VaultKeysDbTest::storedAnywhere", [&](pqxx::work& txn) {
+            for (const auto* table : {"vault_keys", "vault_keys_trashed", "vault_deletion_key"})
+                for (const auto& row : txn.exec(std::string("SELECT encrypted_key, iv FROM ") + table +
+                                                " WHERE vault_id = $1", pqxx::params{vaultId})) {
+                    try {
+                        const auto raw = crypto::util::decrypt_aes256_gcm(
+                            db::encoding::from_hex_bytea(row[0].as<std::string>()), provider.getMasterKey(),
+                            db::encoding::from_hex_bytea(row[1].as<std::string>()));
+                        if (raw == bytes) return true;
+                    } catch (const std::exception&) {}
+                }
+            return false;
+        });
+    }
+
+    static std::vector<uint8_t> keyBytes(const json& keyField) { return unb64(keyField.get<std::string>()); }
+
+    // Replaces a file's ciphertext on disk with `bytes` (damage, or another key's file).
+    static void overwriteBacking(const unsigned int vaultId, const std::string& path, const std::vector<uint8_t>& bytes) {
+        const auto file = db::query::fs::File::getFileByPath(vaultId, path);
+        ASSERT_TRUE(file);
+        std::ofstream out(file->backing_path, std::ios::binary | std::ios::trunc);
+        out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    }
+
+    static std::vector<uint8_t> backingOf(const unsigned int vaultId, const std::string& path) {
+        const auto file = db::query::fs::File::getFileByPath(vaultId, path);
+        std::ifstream in(file->backing_path, std::ios::binary);
+        return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+    }
+
+    static unsigned int fileVersion(const unsigned int vaultId, const std::string& path) {
+        const auto file = db::query::fs::File::getFileByPath(vaultId, path);
+        return file ? file->encrypted_with_key_version : 0;
+    }
 };
 
 TEST_F(VaultKeysDbTest, StatusReportsTheCurrentKeyRotationAndRecoveryVersionsWithoutKeyBytes) {
@@ -582,7 +746,44 @@ TEST_F(VaultKeysDbTest, EverySeededRoleGetsTheSameVerdictOnBothSurfaces) {
 }
 
 
-// ---- import (S6) --------------------------------------------------------------------------------------------------
+// ---- import (S6; revision 3: recovery restores only attested versions, salvage re-keys the rest) ------------------
+
+TEST_F(VaultKeysDbTest, ProvenanceIsRecordedOnCreateAndRotateAndBackfilledWhenAVersionUnseals) {
+    const auto engine = newVault("vkprov");
+    const auto id = engine->vault->id;
+    write(engine, "/a.txt", "alpha");
+    const auto v1 = engine->encryptionManager->get_key_version();
+    EXPECT_TRUE(attestedRow("vault_keys", id, v1, checkOf(engine, v1)));
+
+    engine->encryptionManager->prepare_key_rotation();
+    const auto v2 = engine->encryptionManager->get_key_version();
+    EXPECT_TRUE(attestedRow("vault_keys", id, v2, checkOf(engine, v2)));
+    EXPECT_TRUE(attestedRow("vault_keys_trashed", id, v1, checkOf(engine, v1))) << "the retired row keeps its own";
+
+    // Status and export carry them (public), and the export's verify.
+    const auto s = statusOf(id);
+    ASSERT_TRUE(s.at("attestation").is_object()) << s.dump();
+    const auto keys = WsKeys::exportKeys({{"vault_id", id}}, device(superUser));
+    EXPECT_EQ(keys.at("attestation"), s.at("attestation"));
+    EXPECT_EQ(keys.at("key_info").at("attestation"), keys.at("attestation"));
+    ASSERT_EQ(keys.at("historical_keys").size(), 1u);
+    EXPECT_TRUE(keys.at("historical_keys")[0].at("attestation").is_object());
+
+    // Rows from before migration 113 (or a damaged record): filled in when the daemon next unseals them (a restart
+    // mid-rotation unseals both).
+    clearProvenance("vault_keys", id);
+    clearProvenance("vault_keys_trashed", id);
+    db::Transactions::exec("VaultKeysDbTest::wrongCheck", [&](pqxx::work& txn) {
+        txn.exec("UPDATE vault_keys SET key_check = $2 WHERE vault_id = $1", pqxx::params{id, std::string(32, '0')});
+    });
+    dropEngine(id);
+    (void)runtime::Deps::get().storageManager->reinstateVault(id);
+    const auto restarted = runtime::Deps::get().storageManager->getEngine(id);
+    ASSERT_TRUE(restarted);
+    EXPECT_TRUE(attestedRow("vault_keys", id, v2, checkOf(restarted, v2)));
+    EXPECT_TRUE(attestedRow("vault_keys_trashed", id, v1, checkOf(restarted, v1)));
+    restarted->encryptionManager->finish_key_rotation();
+}
 
 TEST_F(VaultKeysDbTest, ImportRestoresAKeyThatNoLongerUnsealsAndTheFilesReadAgain) {
     const auto engine = newVault("vkimp");
@@ -617,8 +818,9 @@ TEST_F(VaultKeysDbTest, ImportRestoresAKeyThatNoLongerUnsealsAndTheFilesReadAgai
     const auto result = importVia(device(superUser), id, keys, name);
     EXPECT_TRUE(result.at("written").get<bool>()) << result.dump();
     EXPECT_TRUE(result.at("key_available").get<bool>()) << result.dump();
+    EXPECT_EQ(result.at("mode"), "recover");
     EXPECT_EQ(outcome(result, version), "restored");
-    EXPECT_EQ(result.at("versions")[0].at("verified_files"), 2);
+    EXPECT_EQ(detailOf(result, version).rfind("attested by this node (signing key ", 0), 0u) << result.dump();
     EXPECT_NE(sealedBytes("vault_keys", id, version), broken);
 
     ASSERT_TRUE(hasEngine(id));
@@ -640,6 +842,8 @@ TEST_F(VaultKeysDbTest, ImportRestoresAKeyThatNoLongerUnsealsAndTheFilesReadAgai
     EXPECT_NE(router->executeLine(line, superUser, nullptr).exit_code, 0);
 }
 
+// Adjusted for revision 3: an invented key used to be refused as a whole (`invalid`) because it authenticated none of
+// the vault's files; ciphertext no longer decides canonical restores, so it is now needs_salvage (nothing written).
 TEST_F(VaultKeysDbTest, ImportRefusesAWrongKeyAndNeverReplacesAKeyTheHostCanUnseal) {
     const auto engine = newVault("vkwrong");
     const auto id = engine->vault->id;
@@ -647,7 +851,7 @@ TEST_F(VaultKeysDbTest, ImportRefusesAWrongKeyAndNeverReplacesAKeyTheHostCanUnse
     write(engine, "/a.txt", "alpha");
     const auto keys = WsKeys::exportKeys({{"vault_id", id}}, device(superUser));
     const auto version = keys.at("key_info").at("key_version").get<unsigned int>();
-    const auto wrong = forged(keys);
+    const auto wrong = forged(keys);  // other bytes, a matching key check, the genuine attestation
 
     // The host still unseals its key: other bytes are refused, the same bytes are unchanged.
     EXPECT_EQ(wsCode([&] { return importVia(device(superUser), id, wrong, name); }), "conflict");
@@ -657,9 +861,11 @@ TEST_F(VaultKeysDbTest, ImportRefusesAWrongKeyAndNeverReplacesAKeyTheHostCanUnse
     dropEngine(id);
     const auto broken = sealedBytes("vault_keys", id, version);
 
-    // A key that authenticates none of the vault's files is not its key; a key that doesn't match its own key check
-    // is a damaged backup. Neither writes anything.
-    EXPECT_EQ(wsCode([&] { return importVia(device(superUser), id, wrong, name); }), "invalid");
+    // An invented key is never restored: the vault's recorded key check (and the attestation) don't match it.
+    auto r = importVia(device(superUser), id, wrong, name);
+    EXPECT_EQ(outcome(r, version), "needs_salvage") << r.dump();
+    EXPECT_FALSE(r.at("written").get<bool>());
+    // A key that doesn't match its own key check is a damaged backup; another vault's entry isn't this vault's.
     auto damaged = keys;
     damaged["key_check"] = wrong.at("key_check");
     EXPECT_EQ(wsCode([&] { return importVia(device(superUser), id, damaged, name); }), "invalid");
@@ -668,6 +874,7 @@ TEST_F(VaultKeysDbTest, ImportRefusesAWrongKeyAndNeverReplacesAKeyTheHostCanUnse
     EXPECT_EQ(wsCode([&] { return importVia(device(superUser), id, otherVault, name); }), "invalid");
     EXPECT_EQ(sealedBytes("vault_keys", id, version), broken);
     EXPECT_FALSE(hasEngine(id));
+    EXPECT_FALSE(storedAnywhere(id, keyBytes(wrong.at("key"))));
 
     // Same permission as export.
     const auto plain = createUser("vkimp_plain", "unprivileged");
@@ -717,7 +924,8 @@ TEST_F(VaultKeysDbTest, ImportHandlesPartialVersionSetsAndAMissingRetiredVersion
     EXPECT_TRUE(statusOf(id).at("rotation_in_progress").get<bool>());
 
     // A database restored from before the rotation lost the outgoing key's row: the vault doesn't start (old.txt
-    // would be unreadable); importing inserts the row again, the rotation resumes and the vault starts.
+    // would be unreadable); importing inserts the row again (its attestation proves it), the rotation resumes and the
+    // vault starts.
     db::Transactions::exec("VaultKeysDbTest::dropRetired", [&](pqxx::work& txn) {
         txn.exec("DELETE FROM vault_keys_trashed WHERE vault_id = $1 AND version = $2", pqxx::params{id, v1});
     });
@@ -736,6 +944,7 @@ TEST_F(VaultKeysDbTest, ImportHandlesPartialVersionSetsAndAMissingRetiredVersion
     EXPECT_TRUE(r.at("key_available").get<bool>()) << r.dump();
     EXPECT_TRUE(statusOf(id).at("rotation_in_progress").get<bool>());
     EXPECT_EQ(readFile(id, "/old.txt"), "sealed under v1");
+    EXPECT_TRUE(attestedRow("vault_keys_trashed", id, v1, full.at("historical_keys")[0].at("key_check")));
     engine->encryptionManager->finish_key_rotation();
 }
 
@@ -750,11 +959,12 @@ TEST_F(VaultKeysDbTest, ImportIntoADeletedVaultWithinRetentionThenRestoreIt) {
     corruptSealed("vault_keys", id);
     corruptSealed("vault_deletion_key", id);
 
+    // A deleted vault can't be salvaged (restore it first); it can be recovered.
+    EXPECT_EQ(wsCode([&] { return salvageVia(id, unattested(keys), name); }), "conflict");
     const auto r = importVia(device(superUser), id, keys, name);
     EXPECT_TRUE(r.at("deleted").get<bool>());
     EXPECT_TRUE(r.at("written").get<bool>()) << r.dump();
     EXPECT_EQ(outcome(r, version), "restored") << r.dump();
-    EXPECT_GE(r.at("versions")[0].at("verified_files").get<unsigned int>(), 1u);
     const auto s = WsKeys::status(json::object(), console(superUser)).at("vaults");
     const auto it = std::ranges::find_if(s, [&](const json& v) { return v.at("vault_id") == id; });
     ASSERT_NE(it, s.end());
@@ -766,7 +976,7 @@ TEST_F(VaultKeysDbTest, ImportIntoADeletedVaultWithinRetentionThenRestoreIt) {
 }
 
 
-// ---- revision 2: no key is minted over sealed content; upstream and key-check-only verification ------------------
+// ---- revision 2 (still true): no key is minted over sealed content ------------------------------------------------
 
 TEST_F(VaultKeysDbTest, AMissingKeyRowOverSealedFilesKeepsTheVaultUnavailableUntilImport) {
     const auto engine = newVault("vkmiss");
@@ -809,6 +1019,7 @@ TEST_F(VaultKeysDbTest, AMissingKeyRowOverSealedFilesKeepsTheVaultUnavailableUnt
     EXPECT_TRUE(r.at("key_available").get<bool>()) << r.dump();
     EXPECT_EQ(readFile(id, "/a.txt"), "alpha");
     EXPECT_TRUE(statusOf(id).at("unavailable_reason").is_null());
+    EXPECT_TRUE(attestedRow("vault_keys", id, version, keys.at("key_check")));
     const auto after = runtime::Deps::get().storageManager->unavailableVaults();
     EXPECT_FALSE(std::ranges::any_of(after, [&](const auto& v) { return v.vault_id == id; }));
 }
@@ -826,7 +1037,10 @@ TEST_F(VaultKeysDbTest, AnEmptyVaultWithoutAKeyRowStillGetsAFreshKey) {
     EXPECT_TRUE(statusOf(id).at("key_available").get<bool>());
 }
 
-TEST_F(VaultKeysDbTest, AVersionWithNoCiphertextAnywhereIsAcceptedOnItsKeyCheckOnly) {
+// Replaces revision 2's AVersionWithNoCiphertextAnywhereIsAcceptedOnItsKeyCheckOnly: the backup's own key check is
+// consistency only; a fresh rotation target (nothing sealed under it) is restored on this node's attestation, and an
+// export without attestations restores nothing.
+TEST_F(VaultKeysDbTest, AFreshRotationTargetIsRestoredOnItsAttestationNeverOnTheBackupsKeyCheck) {
     const auto engine = newVault("vkfresh");
     const auto id = engine->vault->id;
     const auto name = engine->vault->name;
@@ -839,28 +1053,277 @@ TEST_F(VaultKeysDbTest, AVersionWithNoCiphertextAnywhereIsAcceptedOnItsKeyCheckO
     corruptSealed("vault_keys_trashed", id, v1);
     dropEngine(id);
 
-    // Without a key check for it, a version nothing is sealed under can't be accepted.
-    auto unchecked = keys;
-    unchecked.erase("key_check");
-    unchecked["key_info"].erase("key_check");
-    auto r = importVia(device(superUser), id, unchecked, name);
-    EXPECT_EQ(outcome(r, v2), "unverifiable") << r.dump();
-    EXPECT_EQ(outcome(r, v1), "restored");
+    // An export without attestations, whose own key checks are consistent: nothing is restored.
+    auto r = importVia(device(superUser), id, unattested(keys), name);
+    EXPECT_EQ(outcome(r, v2), "needs_salvage") << r.dump();
+    EXPECT_EQ(outcome(r, v1), "needs_salvage") << r.dump();
+    EXPECT_FALSE(r.at("written").get<bool>());
     EXPECT_FALSE(r.at("key_available").get<bool>());
 
     r = importVia(device(superUser), id, keys, name);
     EXPECT_EQ(outcome(r, v2), "restored") << r.dump();
-    for (const auto& v : r.at("versions")) {
-        if (v.at("version") == v2) {
-            EXPECT_EQ(v.at("detail"), "no ciphertext under this version; accepted on key check");
-        }
-    }
+    EXPECT_EQ(outcome(r, v1), "restored") << r.dump();
     EXPECT_TRUE(r.at("key_available").get<bool>()) << r.dump();
     EXPECT_EQ(readFile(id, "/old.txt"), "under v1");
     engine->encryptionManager->finish_key_rotation();
 }
 
-TEST_F(VaultKeysDbTest, ACloudVaultWithoutLocalCiphertextVerifiesAgainstTheSmallestUpstreamObject) {
+// Master key lost, key rows present but unsealable, and the *current* row lost too: the recorded data and this node's
+// attestations prove each version; nothing else does.
+TEST_F(VaultKeysDbTest, RecoveryRefusesForgedTamperedForeignAndInventedVersions) {
+    const auto engine = newVault("vkforge");
+    const auto id = engine->vault->id;
+    const auto name = engine->vault->name;
+    write(engine, "/a.txt", "alpha");
+    const auto v1 = engine->encryptionManager->get_key_version();
+    engine->encryptionManager->prepare_key_rotation();
+    const auto v2 = engine->encryptionManager->get_key_version();
+    write(engine, "/b.txt", "bravo");
+    engine->encryptionManager->finish_key_rotation();  // a.txt stays under v1 (a database view; nothing reads it here)
+    const auto keys = WsKeys::exportKeys({{"vault_id", id}}, device(superUser));
+    const auto other = newVault("vkforge_other");
+    const auto otherKeys = WsKeys::exportKeys({{"vault_id", other->vault->id}}, device(superUser));
+
+    corruptSealed("vault_keys", id);
+    dropEngine(id);
+    const auto broken = sealedBytes("vault_keys", id, v2);
+
+    const auto expectNeedsSalvage = [&](const json& doc, const std::string& why) {
+        const auto r = importVia(device(superUser), id, doc, name);
+        EXPECT_EQ(outcome(r, v2), "needs_salvage") << why << ": " << r.dump();
+        EXPECT_FALSE(r.at("written").get<bool>()) << why;
+        EXPECT_EQ(sealedBytes("vault_keys", id, v2), broken) << why;
+    };
+
+    auto flipped = keys;
+    auto sig = unb64(flipped["attestation"]["signature"].get<std::string>());
+    sig[5] ^= 1;
+    flipped["attestation"]["signature"] = crypto::util::b64_encode(sig);
+    flipped["key_info"].erase("attestation");
+    expectNeedsSalvage(flipped, "a tampered signature");
+
+    auto unknown = keys;
+    unknown["attestation"]["key_id"] = 999999;
+    unknown["key_info"].erase("attestation");
+    expectNeedsSalvage(unknown, "an unknown signing key");
+
+    auto otherVersion = keys;  // v1's attestation offered for v2
+    otherVersion["key"] = keys.at("key");
+    otherVersion["attestation"] = keys.at("historical_keys").is_array() && !keys.at("historical_keys").empty()
+                                      ? keys.at("historical_keys")[0].at("attestation")
+                                      : json(nullptr);
+    otherVersion["key_info"].erase("attestation");
+    otherVersion.erase("historical_keys");
+    if (!otherVersion["attestation"].is_null()) expectNeedsSalvage(otherVersion, "another version's attestation");
+
+    auto otherVaults = keys;  // another vault's attestation (same node)
+    otherVaults["attestation"] = otherKeys.at("attestation");
+    otherVaults["key_info"].erase("attestation");
+    expectNeedsSalvage(otherVaults, "another vault's attestation");
+
+    // Another node: the same export checked by a node with another id.
+    std::string node;
+    db::Transactions::exec("VaultKeysDbTest::node", [&](pqxx::work& txn) {
+        node = txn.exec("SELECT node_id FROM device_node").one_field_ref().as<std::string>();
+        txn.exec("UPDATE device_node SET node_id = 'another-node'");
+    });
+    expectNeedsSalvage(keys, "an attestation by another node");
+    db::Transactions::exec("VaultKeysDbTest::nodeBack", [&](pqxx::work& txn) {
+        txn.exec("UPDATE device_node SET node_id = $1", pqxx::params{node});
+    });
+
+    // An invented key for an invented version, and a backup that claims a version beyond anything recorded: refused,
+    // and the current version stays what the records say.
+    auto invented = keys;
+    std::vector<uint8_t> random(32);
+    randombytes_buf(random.data(), random.size());
+    invented["historical_keys"].push_back({{"key_version", v2 + 5}, {"key", crypto::util::b64_encode(random)},
+                                           {"key_check", vault::keyCheck(random, id, v2 + 5)}});
+    auto r = importVia(device(superUser), id, invented, name);
+    EXPECT_EQ(outcome(r, v2 + 5), "refused") << r.dump();
+    EXPECT_EQ(outcome(r, v2), "restored") << r.dump();  // the genuine versions still recover
+    EXPECT_TRUE(r.at("key_available").get<bool>()) << r.dump();
+    EXPECT_EQ(statusOf(id).at("version"), v2);
+    EXPECT_FALSE(storedAnywhere(id, random));
+    EXPECT_EQ(readFile(id, "/b.txt"), "bravo");
+
+    // With the key row gone, the current version is the records' highest, never the backup's claim.
+    db::Transactions::exec("VaultKeysDbTest::dropKeyRow", [&](pqxx::work& txn) {
+        txn.exec("DELETE FROM vault_keys WHERE vault_id = $1", pqxx::params{id});
+    });
+    dropEngine(id);
+    auto claim = keys;
+    claim["key_info"]["key_version"] = v2 + 1;
+    claim["key"] = crypto::util::b64_encode(random);
+    claim["key_check"] = vault::keyCheck(random, id, v2 + 1);
+    claim["key_info"]["key_check"] = claim["key_check"];
+    claim["historical_keys"] = json::array({{{"key_version", v2}, {"key", keys.at("key")}, {"key_check", keys.at("key_check")},
+                                             {"attestation", keys.at("attestation")}}});
+    r = importVia(device(superUser), id, claim, name);
+    EXPECT_EQ(outcome(r, v2 + 1), "refused") << r.dump();
+    EXPECT_EQ(outcome(r, v2), "restored") << r.dump();
+    EXPECT_EQ(db::query::vault::Key::getVaultKey(id)->version, v2);
+    EXPECT_TRUE(r.at("key_available").get<bool>()) << r.dump();
+    (void)v1;
+}
+
+TEST_F(VaultKeysDbTest, ANewSigningKeyAfterATpmResetKeepsOldAttestationsValid) {
+    const auto engine = newVault("vktpm");
+    const auto id = engine->vault->id;
+    const auto name = engine->vault->name;
+    write(engine, "/a.txt", "alpha");
+    const auto keys = WsKeys::exportKeys({{"vault_id", id}}, device(superUser));
+    const auto oldKeyId = keys.at("attestation").at("key_id").get<unsigned int>();
+
+    // The sealed signing seed is gone (TPM or swtpm state reset): the next attestation uses a new keypair.
+    std::filesystem::remove_all(paths::getBackingPath() / ".sealed_test_key_attest.blob");
+    vault::attestation::resetForTesting();
+    const auto later = newVault("vktpm_later");
+    const auto newKeyId = recorded("vault_keys", later->vault->id, later->encryptionManager->get_key_version()).key_id;
+    ASSERT_TRUE(newKeyId);
+    EXPECT_NE(*newKeyId, oldKeyId);
+    db::Transactions::exec("VaultKeysDbTest::retired", [&](pqxx::work& txn) {
+        EXPECT_FALSE(txn.exec("SELECT retired_at FROM key_attestation_keys WHERE id = $1", pqxx::params{oldKeyId})
+                         .one_field_ref().is_null());
+    });
+
+    // The old export still recovers: its signing key's public half is still on record.
+    corruptSealed("vault_keys", id);
+    dropEngine(id);
+    const auto r = importVia(device(superUser), id, keys, name);
+    EXPECT_EQ(outcome(r, keys.at("key_info").at("key_version").get<unsigned int>()), "restored") << r.dump();
+    EXPECT_EQ(readFile(id, "/a.txt"), "alpha");
+}
+
+
+// ---- salvage -------------------------------------------------------------------------------------------------------
+
+TEST_F(VaultKeysDbTest, SalvageReKeysWhatTheSuppliedKeyDecryptsAndNeverStoresIt) {
+    const auto engine = newVault("vksalv");
+    const auto id = engine->vault->id;
+    const auto name = engine->vault->name;
+    write(engine, "/good.txt", "good file");
+    write(engine, "/damaged.txt", "damaged file");
+    write(engine, "/foreign.txt", "foreign file");
+    const auto old = unattested(WsKeys::exportKeys({{"vault_id", id}}, device(superUser)));  // a pre-revision-3 export
+    const auto version = old.at("key_info").at("key_version").get<unsigned int>();
+    const auto supplied = keyBytes(old.at("key"));
+
+    auto damaged = backingOf(id, "/damaged.txt");
+    damaged[0] ^= 0xff;
+    overwriteBacking(id, "/damaged.txt", damaged);
+    std::vector<uint8_t> foreign(backingOf(id, "/foreign.txt").size());
+    randombytes_buf(foreign.data(), foreign.size());  // another key's file, as far as any key can tell
+    overwriteBacking(id, "/foreign.txt", foreign);
+    corruptSealed("vault_keys", id);
+    dropEngine(id);
+
+    // Recover: needs salvage, nothing changes.
+    auto r = importVia(device(superUser), id, old, name);
+    EXPECT_EQ(outcome(r, version), "needs_salvage") << r.dump();
+    EXPECT_FALSE(r.at("written").get<bool>());
+    EXPECT_FALSE(hasEngine(id));
+
+    // Salvage needs its own confirmation with the typed name.
+    EXPECT_EQ(wsCode([&] { return salvageVia(id, old, std::nullopt); }), "vault_key_salvage");
+    EXPECT_EQ(wsCode([&] { return salvageVia(id, old, std::string("nope")); }), "vault_key_salvage");
+    EXPECT_FALSE(hasEngine(id));
+
+    r = salvageVia(id, old, name);
+    EXPECT_EQ(r.at("mode"), "salvage");
+    EXPECT_EQ(outcome(r, version), "salvaged") << r.dump();
+    ASSERT_TRUE(r.at("salvage").is_object()) << r.dump();
+    const auto& report = r.at("salvage");
+    EXPECT_EQ(report.at("state"), "finished");
+    EXPECT_EQ(report.at("salvaged"), 1);
+    EXPECT_EQ(report.at("unrecoverable"), 2);
+    EXPECT_EQ(report.at("versions"), json::array({version}));
+    const auto fresh = report.at("new_version").get<unsigned int>();
+    EXPECT_EQ(fresh, version + 1);
+    std::set<std::string> lost;
+    for (const auto& f : report.at("failures")) {
+        EXPECT_EQ(f.at("kind"), "unrecoverable");
+        lost.insert(f.at("path").get<std::string>());
+    }
+    EXPECT_EQ(lost, (std::set<std::string>{"/damaged.txt", "/foreign.txt"}));
+
+    // The vault runs on a fresh, attested daemon key; the good file reads; the supplied key is nowhere.
+    EXPECT_TRUE(r.at("key_available").get<bool>()) << r.dump();
+    ASSERT_TRUE(hasEngine(id));
+    EXPECT_EQ(readFile(id, "/good.txt"), "good file");
+    EXPECT_EQ(fileVersion(id, "/good.txt"), fresh);
+    EXPECT_EQ(fileVersion(id, "/damaged.txt"), version);
+    const auto running = runtime::Deps::get().storageManager->getEngine(id);
+    EXPECT_TRUE(attestedRow("vault_keys", id, fresh, checkOf(running, fresh)));
+    EXPECT_FALSE(storedAnywhere(id, supplied));
+    const auto s = statusOf(id);
+    EXPECT_TRUE(s.at("key_available").get<bool>()) << s.dump();
+    EXPECT_EQ(s.at("version"), fresh);
+    EXPECT_EQ(s.at("last_salvage").at("id"), report.at("id"));
+    EXPECT_FALSE(s.at("rotation_in_progress").get<bool>());
+
+    // The salvaged version still can't be restored as canonical, and the CLI shows the same report.
+    const auto viaCli = router->executeLine("vault keys import " + std::to_string(id) + " --file k.json --json",
+                                            superUser, nullptr, std::nullopt, old.dump());
+    ASSERT_EQ(viaCli.exit_code, 0) << viaCli.stderr_text << viaCli.stdout_text;
+    EXPECT_EQ(outcome(json::parse(viaCli.stdout_text), version), "needs_salvage");
+    // After a restart the vault starts: the unrecoverable files don't hold it hostage.
+    dropEngine(id);
+    EXPECT_NO_THROW((void)runtime::Deps::get().storageManager->reinstateVault(id));
+    EXPECT_TRUE(hasEngine(id));
+}
+
+TEST_F(VaultKeysDbTest, AnInterruptedSalvageResumesOnTheSameKeyWithoutLosingAFile) {
+    const auto engine = newVault("vkcrash");
+    const auto id = engine->vault->id;
+    const auto name = engine->vault->name;
+    for (const auto* f : {"/one.txt", "/two.txt", "/three.txt"}) write(engine, f, std::string("content of ") + f);
+    const auto old = unattested(WsKeys::exportKeys({{"vault_id", id}}, device(superUser)));
+    const auto version = old.at("key_info").at("key_version").get<unsigned int>();
+    corruptSealed("vault_keys", id);
+    dropEngine(id);
+
+    // A crash right after the second file's row moved to the fresh key, before its sidecar was renamed.
+    int committed = 0;
+    keys::setSalvageStepHookForTesting([&](const int step, const std::shared_ptr<fs::model::File>&) {
+        if (step == static_cast<int>(sync::rotation::Step::Committed) && ++committed == 2)
+            throw sync::rotation::SimulatedCrash{sync::rotation::Step::Committed};
+    });
+    struct Reset {
+        ~Reset() { keys::setSalvageStepHookForTesting({}); }
+    } reset;
+    bool crashed = false;
+    try {
+        (void)salvageVia(id, old, name);
+    } catch (const sync::rotation::SimulatedCrash&) {
+        crashed = true;
+    }
+    ASSERT_TRUE(crashed);
+    keys::setSalvageStepHookForTesting({});
+    const auto interrupted = db::query::vault::Key::runningSalvage(id);
+    ASSERT_TRUE(interrupted);
+    ASSERT_TRUE(interrupted->new_version);
+    const auto fresh = *interrupted->new_version;
+
+    // Run again with the same key: the same fresh version, the sidecar settled, the rest re-keyed.
+    const auto r = salvageVia(id, old, name);
+    ASSERT_TRUE(r.at("salvage").is_object()) << r.dump();
+    EXPECT_EQ(r.at("salvage").at("new_version"), fresh);
+    EXPECT_EQ(r.at("salvage").at("state"), "finished");
+    EXPECT_EQ(r.at("salvage").at("unrecoverable"), 0);
+    EXPECT_EQ(db::query::vault::Key::getVaultKey(id)->version, fresh) << "no second key was minted";
+    for (const auto* f : {"/one.txt", "/two.txt", "/three.txt"}) {
+        EXPECT_EQ(readFile(id, f), std::string("content of ") + f);
+        EXPECT_EQ(fileVersion(id, f), fresh) << f;
+        const auto file = db::query::fs::File::getFileByPath(id, f);
+        EXPECT_FALSE(std::filesystem::exists(sync::rotation::sidecarPathFor(file->backing_path))) << f;
+    }
+    EXPECT_FALSE(db::query::vault::Key::runningSalvage(id));
+    EXPECT_FALSE(storedAnywhere(id, keyBytes(old.at("key"))));
+    (void)version;
+}
+
+TEST_F(VaultKeysDbTest, SalvageOfRemoteOnlyFilesGoesThroughThePricePreflight) {
     auto apiKey = std::make_shared<vault::model::APIKey>(superUser->id, "vk_key_" + tag(), vault::model::S3Provider::AWS,
                                                               "AKIATESTACCESSKEY000", "secret-value-0000000000000000000000000",
                                                               "us-east-1", "https://s3.example.com");
@@ -873,7 +1336,7 @@ TEST_F(VaultKeysDbTest, ACloudVaultWithoutLocalCiphertextVerifiesAgainstTheSmall
     write(engine, "/doc.txt", "only in the bucket");
     const auto file = db::query::fs::File::getFileByPath(id, "/doc.txt");
     ASSERT_TRUE(file && !file->encryption_iv.empty());
-    const auto keys = WsKeys::exportKeys({{"vault_id", id}}, device(superUser));
+    const auto old = unattested(WsKeys::exportKeys({{"vault_id", id}}, device(superUser)));
     const auto version = file->encrypted_with_key_version;
 
     // The object is upstream; the local copy is gone (a cache vault, or a host that lost its backing store).
@@ -888,43 +1351,56 @@ TEST_F(VaultKeysDbTest, ACloudVaultWithoutLocalCiphertextVerifiesAgainstTheSmall
     dropEngine(id);
 
     bool refuse = true;
-    keys::setKeyVerificationEngineFactoryForTesting([&](const std::shared_ptr<vault::model::S3Vault>& v) {
-        auto e = std::make_shared<storage::CloudEngine>();
-        e->vault = v;
-        e->setS3ControllerForTesting(bucket);
-        e->setRemoteFetchGate([&](const storage::CloudEngine&, const storage::RemoteFetchRequest& request)
-                                  -> std::unique_ptr<storage::RemoteFetchReservation> {
-            EXPECT_EQ(request.operation, "key_import_verify");
+    int preflights = 0;
+    keys::setSalvageEngineHookForTesting([&](const std::shared_ptr<storage::Engine>& e) {
+        const auto cloud = std::dynamic_pointer_cast<storage::CloudEngine>(e);
+        ASSERT_TRUE(cloud);
+        cloud->setS3ControllerForTesting(bucket);
+        cloud->setRemoteFetchGate([&](const storage::CloudEngine&, const storage::RemoteFetchRequest& request)
+                                      -> std::unique_ptr<storage::RemoteFetchReservation> {
+            ++preflights;
+            EXPECT_EQ(request.operation, "key_salvage");
             EXPECT_EQ(request.get_requests, 1u);
-            if (refuse) throw storage::ContentUnavailable("S3 price budget refused key_import_verify (test)");
+            if (refuse) throw storage::ContentUnavailable("S3 price budget refused key_salvage (test)");
             return std::make_unique<NoopReservation>();
         });
-        return e;
     });
     struct Reset {
-        ~Reset() { keys::setKeyVerificationEngineFactoryForTesting({}); }
+        ~Reset() { keys::setSalvageEngineHookForTesting({}); }
     } reset;
 
-    // A refused price preflight: unverifiable, nothing fetched or written.
-    auto r = importVia(device(superUser), id, keys, created->name);
-    EXPECT_EQ(outcome(r, version), "unverifiable") << r.dump();
-    EXPECT_NE(r.at("versions")[0].at("detail").get<std::string>().find("price budget"), std::string::npos) << r.dump();
-    EXPECT_FALSE(r.at("written").get<bool>());
+    // A refused price preflight: skipped (with the estimate), nothing fetched.
+    auto r = salvageVia(id, old, created->name);
+    ASSERT_TRUE(r.at("salvage").is_object()) << r.dump();
+    EXPECT_EQ(r.at("salvage").at("skipped_remote"), 1) << r.dump();
+    EXPECT_EQ(r.at("salvage").at("salvaged"), 0);
+    const auto& failure = r.at("salvage").at("failures").at(0);
+    EXPECT_EQ(failure.at("kind"), "skipped_remote");
+    EXPECT_NE(failure.at("reason").get<std::string>().find("estimate: 1 HEAD + 1 GET"), std::string::npos) << r.dump();
+    EXPECT_EQ(preflights, 1);
     EXPECT_TRUE(bucket->getIfMatches().empty());
+    const auto fresh = r.at("salvage").at("new_version").get<unsigned int>();
+    EXPECT_EQ(fileVersion(id, "/doc.txt"), version);
 
-    // A wrong key fails the object's tag: refused.
+    // The budget allows it now: one HEAD, one GET bound to its ETag, re-encrypted in memory and uploaded; same key.
     refuse = false;
-    EXPECT_EQ(wsCode([&] { return importVia(device(superUser), id, forged(keys), created->name); }), "invalid");
-
-    // The right key: one HEAD, one GET bound to its ETag, authenticated in memory, never written to disk.
-    r = importVia(device(superUser), id, keys, created->name);
-    EXPECT_EQ(outcome(r, version), "restored") << r.dump();
-    EXPECT_EQ(r.at("versions")[0].at("detail"), "verified against upstream object doc.txt");
+    r = salvageVia(id, old, created->name);
+    ASSERT_TRUE(r.at("salvage").is_object()) << r.dump();
+    EXPECT_EQ(r.at("salvage").at("salvaged"), 1) << r.dump();
+    EXPECT_EQ(r.at("salvage").at("new_version"), fresh);
     const auto ifMatches = bucket->getIfMatches();
     ASSERT_FALSE(ifMatches.empty());
     EXPECT_EQ(ifMatches.back(), std::optional<std::string>("\"etag-1\""));
-    EXPECT_FALSE(std::filesystem::exists(file->backing_path));
-    EXPECT_TRUE(statusOf(id).at("key_available").get<bool>());
+    EXPECT_FALSE(std::filesystem::exists(file->backing_path)) << "nothing is written to disk";
+    EXPECT_EQ(fileVersion(id, "/doc.txt"), fresh);
+    const auto object = bucket->object("doc.txt");
+    ASSERT_TRUE(object);
+    EXPECT_EQ(object->meta.at("x-amz-meta-vh-key-version"), std::to_string(fresh));
+    const auto row = db::query::fs::File::getFileByPath(id, "/doc.txt");
+    const auto running = runtime::Deps::get().storageManager->getEngine(id);
+    const auto plain = running->encryptionManager->decrypt(object->body, row->encryption_iv, fresh);
+    EXPECT_EQ(std::string(plain.begin(), plain.end()), "only in the bucket");
+    EXPECT_FALSE(storedAnywhere(id, keyBytes(old.at("key"))));
 }
 
 }
