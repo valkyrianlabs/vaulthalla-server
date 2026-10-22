@@ -6,10 +6,10 @@
 export const WS_CONTRACT_VERSION = 2
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = 'da663f0abff78adb72d11244417140be18560f6affe9cf83899fe00ab4e3017b'
+export const WS_CONTRACT_HASH = '163845c27ea514dd0b5fe98bc586c7e6a608f7128ba3dcae49281266af346e54'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = 'e3177682637fff82e7987a8e53cd5755df8c1c869645f32ca2781a119dc0ea8d'
+export const WS_MODELS_HASH = '15ce150c0765fa6879670d3bb47aa9a9a2c0bb9618a248ad0adafacee0f0dcc5'
 
 // A merge patch (payload members marked `partial`): any subset of the members, at any depth.
 export type WsPartial<T> = { [K in keyof T]?: T[K] extends readonly unknown[] ? T[K] : T[K] extends object ? WsPartial<T[K]> : T[K] }
@@ -2282,6 +2282,12 @@ export interface WsModels {
     last_error: string | null
   }
   /**
+   * This node's Ed25519 signature over one key version (vault/KeyAttestation.hpp): "vh-key-attest-v1" ‖
+   * node_id ‖ UInt64BE(vault_id) ‖ UInt32BE(version) ‖ key_check (16 bytes). `vh vault keys import` restores
+   * a version as canonical only when it verifies under one of this node's attestation keys.
+   */
+  'VaultKeyAttestation': { key_id: number; signature: string }
+  /**
    * One vault's export document: ops::vault_keys::toJson(VaultExport) (core/src/ops/VaultKeys.cpp), the CLI's
    * `vh vault keys export` shape (vault::model::generate_json_key_object) plus key_check and every needed
    * version. vault.keys.import (and `vh vault keys import`) takes it back, alone or in an `all` array.
@@ -2291,6 +2297,7 @@ export interface WsModels {
     vault_name: string
     key: string
     key_check: string
+    attestation?: WsModels['VaultKeyAttestation'] | null
     key_info: {
       type: string
       key_size: number
@@ -2307,11 +2314,13 @@ export interface WsModels {
       exported_by: string
       exported_at: string
       key_check: string
+      attestation?: WsModels['VaultKeyAttestation'] | null
     }
     historical_keys?: {
       key_version: number
       key: string
       key_check: string
+      attestation?: WsModels['VaultKeyAttestation'] | null
       reason: 'current' | 'rotation' | 'recovery'
       created_at: string | null
       retired_at: string | null
@@ -2327,22 +2336,55 @@ export interface WsModels {
     vault_id: number
     vault_name: string
     deleted: boolean
+    mode: 'recover' | 'salvage'
     written: boolean
     key_available: boolean
     note: string | null
     versions: {
       version: number
-      outcome: 'restored' | 'unchanged' | 'unverifiable'
+      outcome: 'restored' | 'unchanged' | 'needs_salvage' | 'refused' | 'salvaged'
       detail: string
-      verified_files: number
-      failed_files: number
     }[]
+    salvage: WsModels['VaultKeySalvageReport'] | null
   }
   /**
    * A key version still needed to decrypt the vault's data, identified by its key check (never key bytes):
    * ops::vault_keys::toJson(KeyStatus) needed_versions[] (core/src/ops/VaultKeys.cpp).
    */
-  'VaultKeyNeededVersion': { version: number; key_check: string | null; reason: 'current' | 'rotation' | 'recovery' }
+  'VaultKeyNeededVersion': {
+    version: number
+    key_check: string | null
+    reason: 'current' | 'rotation' | 'recovery'
+    attestation: WsModels['VaultKeyAttestation'] | null
+  }
+  /**
+   * One file a key salvage could not re-encrypt.
+   */
+  'VaultKeySalvageFailure': {
+    path: string
+    version: number
+    kind: 'unrecoverable' | 'skipped_remote' | 'deferred' | 'failed'
+    reason: string
+  }
+  /**
+   * A key salvage pass: ops::vault_keys::toJson(SalvageReport) (core/src/ops/VaultKeys.cpp; the
+   * vault_key_salvage row). Files sealed under unverified key versions are re-encrypted under a fresh daemon
+   * key; the supplied keys are never stored.
+   */
+  'VaultKeySalvageReport': {
+    id: number
+    versions: number[]
+    new_version: number | null
+    state: 'running' | 'finished'
+    started_at: number
+    finished_at: number | null
+    salvaged: number
+    unrecoverable: number
+    skipped_remote: number
+    deferred: number
+    failed: number
+    failures: WsModels['VaultKeySalvageFailure'][]
+  }
   /**
    * One vault's key backup state: ops::vault_keys::toJson(KeyStatus) (core/src/ops/VaultKeys.cpp; also `vh
    * vault keys status --json`). Never key bytes.
@@ -2362,6 +2404,8 @@ export interface WsModels {
     rotation_in_progress: boolean
     needed_versions: WsModels['VaultKeyNeededVersion'][]
     missing_versions: number[]
+    attestation: WsModels['VaultKeyAttestation'] | null
+    last_salvage: WsModels['VaultKeySalvageReport'] | null
   }
   /**
    * A vault's backup/recovery posture (core/src/stats/model/VaultRecovery.cpp to_json; C++
@@ -5109,6 +5153,7 @@ export interface WsContract {
       vault_name: string
       key: string
       key_check: string
+      attestation?: WsModels['VaultKeyAttestation'] | null
       key_info: {
         type: string
         key_size: number
@@ -5125,11 +5170,13 @@ export interface WsContract {
         exported_by: string
         exported_at: string
         key_check: string
+        attestation?: WsModels['VaultKeyAttestation'] | null
       }
       historical_keys?: {
         key_version: number
         key: string
         key_check: string
+        attestation?: WsModels['VaultKeyAttestation'] | null
         reason: 'current' | 'rotation' | 'recovery'
         created_at: string | null
         retired_at: string | null
@@ -5148,34 +5195,37 @@ export interface WsContract {
     response: { vault_id: number; version: number; exported_at: number }
   }
   /**
-   * Restore the vault's keys from a backup (`keys`: an export, one vault object or an `all` array) when this
-   * host can't unseal or doesn't hold them. Every version is verified before anything is written (its
-   * key_check, then a GCM tag check of files sealed under it); a key this host can unseal is never replaced
-   * (conflict), identical bytes are unchanged, versions with nothing to verify against are skipped
-   * (unverifiable). Writing needs confirm_name = the vault's name, else data.code vault_key_import with what
-   * would be written. Paired devices only (import_requires_device otherwise); the encryption-key Export
-   * permission.
+   * Recover the vault's keys from a backup (`keys`: an export, one vault object or an `all` array) when this
+   * host can't unseal or doesn't hold them. A recovery mechanism, never a way to set a key: a version is
+   * restored only when the vault's records reference it and its attestation by this node verifies (or it
+   * matches a key this host holds); a key this host can unseal is never replaced (conflict), identical bytes
+   * are unchanged, unreferenced versions are refused, the rest are needs_salvage. mode salvage additionally
+   * re-encrypts the files of the needs_salvage versions under a fresh daemon key (the supplied key is never
+   * stored) and returns the report. Writing needs confirm_name = the vault's name, else data.code
+   * vault_key_import (recover) or vault_key_salvage with what would be done. Paired devices only
+   * (import_requires_device otherwise); the encryption-key Export permission.
    */
   'vault.keys.import': {
     payload: {
       vault_id: number
       keys: WsModels['VaultKeyExport'] | WsModels['VaultKeyExport'][]
+      mode?: 'recover' | 'salvage'
       confirm_name?: string
     }
     response: {
       vault_id: number
       vault_name: string
       deleted: boolean
+      mode: 'recover' | 'salvage'
       written: boolean
       key_available: boolean
       note: string | null
       versions: {
         version: number
-        outcome: 'restored' | 'unchanged' | 'unverifiable'
+        outcome: 'restored' | 'unchanged' | 'needs_salvage' | 'refused' | 'salvaged'
         detail: string
-        verified_files: number
-        failed_files: number
       }[]
+      salvage: WsModels['VaultKeySalvageReport'] | null
     }
   }
   /**
@@ -5499,7 +5549,10 @@ export const WS_CONTRACT_CONFIRMATIONS: Readonly<
     { code: 'upstream_destructive_lifecycle', accept_field: 'accept_destructive' },
   ],
   'upstream.bucket.unprotect': [{ code: 'upstream_unprotect', accept_field: 'confirm' }],
-  'vault.keys.import': [{ code: 'vault_key_import', accept_field: 'confirm_name' }],
+  'vault.keys.import': [
+    { code: 'vault_key_import', accept_field: 'confirm_name' },
+    { code: 'vault_key_salvage', accept_field: 'confirm_name' },
+  ],
   'vault.recovery.suspend': [{ code: 'recovery_versioning_suspend', accept_field: 'confirm' }],
   'vault.recovery.update': [
     { code: 'recovery_versioning_disclosure', accept_field: 'disclosure_token' },
@@ -5728,7 +5781,7 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'upstream.events.status': 15000,
   'vault.keys.export': 15000,
   'vault.keys.export.confirm': 15000,
-  'vault.keys.import': 120000,
+  'vault.keys.import': 600000,
   'vault.keys.status': 15000,
   'vault.recovery.disclosure': 60000,
   'vault.recovery.status': 60000,

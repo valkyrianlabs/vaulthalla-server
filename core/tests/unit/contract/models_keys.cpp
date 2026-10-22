@@ -21,6 +21,20 @@ crypto::SecretKeyPtr keyOf(const uint8_t fill) {
     return std::make_shared<const crypto::SecretKey>(bytes);
 }
 
+keys::KeyAttestationInfo attestationOf(const unsigned int keyId) {
+    return {.key_id = keyId, .signature = std::string(86, 'A') + "=="};
+}
+
+keys::SalvageReport salvageReport() {
+    return {.id = 4, .versions = {2}, .new_version = 4, .state = "finished", .started_at = 1770000000,
+            .finished_at = 1770000060, .salvaged = 10, .unrecoverable = 1, .skipped_remote = 1, .deferred = 0,
+            .failed = 0,
+            .failures = {{.path = "/a/broken.bin", .version = 2, .kind = "unrecoverable",
+                          .reason = "does not authenticate under the supplied key"},
+                         {.path = "/remote.mkv", .version = 2, .kind = "skipped_remote",
+                          .reason = "S3 price budget refused key_salvage (estimate: 1 HEAD + 1 GET, 1048592 bytes)"}}};
+}
+
 // A vault mid-rotation whose current key doesn't unseal here: every nullable member set.
 keys::KeyStatus unavailableStatus() {
     return {.vault_id = 12,
@@ -36,10 +50,14 @@ keys::KeyStatus unavailableStatus() {
             .exported_version = 2,
             .exported_at = 1760000000,
             .rotation_in_progress = true,
-            .needed_versions = {{.version = 3, .key_check = std::string(32, 'a'), .reason = keys::NeedReason::Current},
+            .needed_versions = {{.version = 3, .key_check = std::string(32, 'a'), .reason = keys::NeedReason::Current,
+                                 .attestation = attestationOf(1)},
                                 {.version = 2, .key_check = std::nullopt, .reason = keys::NeedReason::Rotation},
-                                {.version = 1, .key_check = std::string(32, 'b'), .reason = keys::NeedReason::Recovery}},
-            .missing_versions = {2}};
+                                {.version = 1, .key_check = std::string(32, 'b'), .reason = keys::NeedReason::Recovery,
+                                 .attestation = attestationOf(1)}},
+            .missing_versions = {2},
+            .attestation = attestationOf(1),
+            .last_salvage = salvageReport()};
 }
 
 // A healthy live vault never exported: the nullable members null.
@@ -58,8 +76,9 @@ keys::VaultExport fullExport() {
     e.vault_id = 12;
     e.vault_name = "archive";
     e.deleted = true;
-    e.current = {.version = 3, .key = keyOf(3), .key_check = std::string(32, 'a'), .created_at = 1760000000};
-    e.historical = {{.version = 2, .key = keyOf(2), .key_check = std::string(32, 'd'),
+    e.current = {.version = 3, .key = keyOf(3), .key_check = std::string(32, 'a'), .attestation = attestationOf(2),
+                 .created_at = 1760000000};
+    e.historical = {{.version = 2, .key = keyOf(2), .key_check = std::string(32, 'd'), .attestation = attestationOf(1),
                      .reason = keys::NeedReason::Rotation, .created_at = 1755000000, .retired_at = 1760000000}};
     e.missing = {1};
     return e;
@@ -80,8 +99,10 @@ keys::ImportResult restoredImport() {
             .written = true,
             .key_available = true,
             .versions = {{.version = 2, .outcome = keys::ImportOutcome::Restored,
-                          .detail = "verified against 3 sealed file(s)", .verified_files = 3, .failed_files = 1},
-                         {.version = 3, .outcome = keys::ImportOutcome::Unchanged, .detail = "already held"}}};
+                          .detail = "attested by this node (signing key 1)"},
+                         {.version = 3, .outcome = keys::ImportOutcome::Unchanged, .detail = "already held"},
+                         {.version = 9, .outcome = keys::ImportOutcome::Refused,
+                          .detail = "the vault has no record of key version 9"}}};
 }
 
 keys::ImportResult partialDeletedImport() {
@@ -89,8 +110,19 @@ keys::ImportResult partialDeletedImport() {
             .vault_name = "old",
             .deleted = true,
             .note = "the vault is deleted: restore it to use the imported keys",
-            .versions = {{.version = 1, .outcome = keys::ImportOutcome::Unverifiable,
-                          .detail = "nothing local is sealed under this version"}}};
+            .versions = {{.version = 1, .outcome = keys::ImportOutcome::NeedsSalvage,
+                          .detail = "the backup carries no attestation by this node for it; not restored"}}};
+}
+
+keys::ImportResult salvageImport() {
+    return {.vault_id = 12,
+            .vault_name = "archive",
+            .mode = keys::ImportMode::Salvage,
+            .written = true,
+            .key_available = true,
+            .versions = {{.version = 2, .outcome = keys::ImportOutcome::Salvaged,
+                          .detail = "not stored; its files were salvaged into key version 4"}},
+            .salvage = salvageReport()};
 }
 
 }
@@ -106,6 +138,7 @@ void checkVaultKeyModels(Checker& c) {
     c.check(keys::toJson(t::currentOnlyExport(), "alice"), "VaultKeyExport", "vault.keys.export (current only)");
     c.check(keys::toJson(t::restoredImport()), "VaultKeyImportResult", "vault.keys.import (restored)");
     c.check(keys::toJson(t::partialDeletedImport()), "VaultKeyImportResult", "vault.keys.import (deleted, skipped)");
+    c.check(keys::toJson(t::salvageImport()), "VaultKeyImportResult", "vault.keys.import (salvage)");
 }
 
 }

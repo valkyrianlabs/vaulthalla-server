@@ -262,12 +262,16 @@ void vh::db::Connection::initPreparedFiles() const {
          AND f.encrypted_with_key_version IS NOT DISTINCT FROM $6)");
 
     // Empty files and legacy plaintext have no IV: nothing sealed, nothing for a key rotation to re-encrypt.
+    // A key rotation's pending files. Versions a key salvage names are left out (key-backup.md "Salvage"): their files
+    // are re-keyed by the salvage pass or unrecoverable, and the rotation's outgoing key can't decrypt them.
     conn_->prepare("get_files_older_than_key_version",
                    "SELECT fs.*, f.* "
                    "FROM files f "
                    "JOIN fs_entry fs ON f.fs_entry_id = fs.id "
                    "WHERE fs.vault_id = $1 AND f.encrypted_with_key_version < $2 "
-                   "AND f.encryption_iv IS NOT NULL AND f.encryption_iv <> ''");
+                   "AND f.encryption_iv IS NOT NULL AND f.encryption_iv <> '' "
+                   "AND NOT EXISTS (SELECT 1 FROM vault_key_salvage s WHERE s.vault_id = fs.vault_id "
+                   "                AND f.encrypted_with_key_version = ANY (s.versions))");
 
     conn_->prepare("get_n_largest_files",
                    "SELECT fs.*, f.* "
