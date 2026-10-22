@@ -16,6 +16,7 @@
 #include "rbac/role/Vault.hpp"
 #include "rbac/role/vault/Global.hpp"
 #include "rbac/resolver/Admin.hpp"
+#include "rbac/resolver/VaultScope.hpp"
 #include "rbac/resolver/admin/all.hpp"
 #include "rbac/resolver/vault/all.hpp"
 #include "fs/model/Path.hpp"
@@ -179,9 +180,11 @@ namespace vh::fuse {
             const auto* globals = view.vaultGlobals();
             if (!globals) return false;
 
-            return roleOverridesMayAffectListing(globals->self, vaultPath) ||
-                   roleOverridesMayAffectListing(globals->admin, vaultPath) ||
-                   roleOverridesMayAffectListing(globals->user, vaultPath);
+            // Only the scope the evaluator reads for this vault; an unknown owner takes the filtered (denying) path.
+            const auto vault = vaultForEntry(directory);
+            const auto scope = vault ? rbac::resolver::vaultScope(*user, vault->owner_id) : std::nullopt;
+            if (!scope) return true;
+            return roleOverridesMayAffectListing(rbac::resolver::inScope(*scope, *globals), vaultPath);
         }
 
         [[nodiscard]]

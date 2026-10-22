@@ -6,6 +6,7 @@
 #include "identities/User.hpp"
 #include "rbac/permission/admin/VaultGlobals.hpp"
 #include "rbac/fs/glob/Matcher.hpp"
+#include "rbac/resolver/VaultScope.hpp"
 #include "rbac/permission/Override.hpp"
 #include "rbac/permission/vault/Filesystem.hpp"
 #include "rbac/role/Admin.hpp"
@@ -142,33 +143,36 @@ Decision Evaluator::evaluate(const Request &req) {
         }
     }
 
-    // 3) Global vault filesystem policy: last resort
+    // 3) Global vault filesystem policy: last resort, in the one scope this vault falls under for the account (its
+    // own, an admin's, a user's; resolver::vaultScope, the rule admin.vaults.<scope> and the sync/role globals use).
+    // It used to try self, admin, user in turn, but a stage always decides, so the self scope answered for every vault.
     const auto *globals = view.vaultGlobals();
-    if (!globals)
+    const auto scope = globals && target.engine->vault
+                           ? resolver::vaultScope(*user, target.engine->vault->owner_id)
+                           : std::nullopt;
+    if (!scope)
         return {
             .allowed = false,
             .reason = Decision::Reason::DeniedByBasePermissions,
             .evaluated_path = target.vaultPath
         };
-    for (const auto *global: {&globals->self, &globals->admin, &globals->user}) {
-        const auto stage = resolveStage(global->fs, target, req.action);
-        if (stage.matched && stage.allowed.has_value()) {
-            if (!*stage.allowed && req.action == permission::vault::FilesystemAction::List
-                && allowsDirectoryListTraversalThrough(global->fs.overrides, target.vaultPath))
-                return {
-                    .allowed = true,
-                    .reason = Decision::Reason::LowRiskOpRequiredForOverrideTraversal,
-                    .evaluated_path = target.vaultPath
-                };
-
+    const auto &global = resolver::inScope(*scope, *globals);
+    if (const auto stage = resolveStage(global.fs, target, req.action); stage.matched && stage.allowed.has_value()) {
+        if (!*stage.allowed && req.action == permission::vault::FilesystemAction::List
+            && allowsDirectoryListTraversalThrough(global.fs.overrides, target.vaultPath))
             return {
-                .allowed = *stage.allowed,
-                .reason = stage.reason,
-                .evaluated_path = target.vaultPath,
-                .matched_override = stage.matchedOverride,
-                .override_effect = stage.overrideEffect
+                .allowed = true,
+                .reason = Decision::Reason::LowRiskOpRequiredForOverrideTraversal,
+                .evaluated_path = target.vaultPath
             };
-        }
+
+        return {
+            .allowed = *stage.allowed,
+            .reason = stage.reason,
+            .evaluated_path = target.vaultPath,
+            .matched_override = stage.matchedOverride,
+            .override_effect = stage.overrideEffect
+        };
     }
 
     // 4) Default deny

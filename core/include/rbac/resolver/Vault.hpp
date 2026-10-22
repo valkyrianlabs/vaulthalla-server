@@ -5,6 +5,7 @@
 #include "ResolverTraits/Fwd.hpp"
 #include "vault/policy/Base.hpp"
 #include "vault/ResolverMode.hpp"
+#include "rbac/resolver/VaultScope.hpp"
 #include "rbac/resolver/vault/policy/Filesystem.hpp"
 #include "rbac/resolver/vault/policy/Roles.hpp"
 
@@ -61,7 +62,8 @@ namespace vh::rbac::resolver {
             return vault::ContextPolicy<EnumT>::validate(user, resolved, permission, ctx);
         }
 
-        // The admin vault globals, in the scope the vault falls under for this user: its own, an admin's, a user's.
+        // The admin vault globals, in the scope the vault falls under for this user (VaultScope.hpp): its own, an
+        // admin's, a user's. The filesystem evaluator's globals stage reads the same scope.
         template<typename EnumT>
         static bool grantedByGlobals(
             const permission::admin::VaultGlobals &globals,
@@ -69,11 +71,12 @@ namespace vh::rbac::resolver {
             const vault::ResolvedContext &resolved,
             const EnumT permission
         ) {
-            if (user->id == resolved.vault->owner_id)
-                return VaultResolverTraits<EnumT>::self(globals.self).has(permission);
-            if (resolved.owner->isAdmin())
-                return VaultResolverTraits<EnumT>::admin(globals.admin).has(permission);
-            return VaultResolverTraits<EnumT>::user(globals.user).has(permission);
+            switch (vaultScope(user->id, *resolved.owner)) {
+                case VaultScope::Self: return VaultResolverTraits<EnumT>::self(globals.self).has(permission);
+                case VaultScope::Admin: return VaultResolverTraits<EnumT>::admin(globals.admin).has(permission);
+                case VaultScope::User: return VaultResolverTraits<EnumT>::user(globals.user).has(permission);
+            }
+            return false;
         }
 
         // A vault role on this vault, the account's own or one of its groups'. The bits only grant (no role denies

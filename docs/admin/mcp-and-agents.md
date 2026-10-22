@@ -99,7 +99,7 @@ Vaulthalla account (see [Users, Groups And Roles](/admin/users-groups-roles)).
 | `vh_help` | Browses the command reference: descriptions, arguments, options, examples, the command's effect and its confirmations. |
 | `vh_read` | Runs any read-only command (`vault list`, `user info alice`, `status`). |
 | `vh_run` | Runs any other command available to agents. |
-| Typed tools | One per catalogued operation, with typed arguments: `users_create`, `users_delete`, `groups_add_user`, `roles_vault_assign`, `vaults_create`, `vaults_delete`, `recovery_list`, `recovery_restore`, and more. |
+| Typed tools | One per catalogued operation, with typed arguments: `users_create`, `users_delete`, `groups_add_user`, `roles_vault_assign`, `vaults_create`, `vaults_delete`, `vaults_accessible_list`, `recovery_list`, `recovery_restore`, and more. |
 
 Each command is marked **read** (changes nothing), **write** (changes something that can be changed back) or
 **destructive** (deletes, revokes, rotates keys, or can't be undone). The tools carry the matching MCP hints, so a

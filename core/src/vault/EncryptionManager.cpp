@@ -5,6 +5,7 @@
 #include "log/Registry.hpp"
 #include "db/query/vault/Key.hpp"
 #include "vault/model/Key.hpp"
+#include "vault/KeyAttestation.hpp"
 #include "fs/model/File.hpp"
 
 #include <sodium.h>
@@ -133,7 +134,7 @@ void EncryptionManager::load_key() {
         key->vaultId = vault_id_;
         key->encrypted_key = enc_key;
         key->iv = iv;
-        key->version = db::query::vault::Key::addVaultKey(key);
+        key->version = db::query::vault::Key::addVaultKey(key, attestation::provenanceOf(vault_id_, 1, raw.bytes));
 
         {
             std::unique_lock lock(keyMutex_);
@@ -150,6 +151,7 @@ void EncryptionManager::load_key() {
     }
 
     auto rawKey = unsealKeyRowOrThrow(vault_id_, *rec, masterKey);
+    attestation::backfill(*rec, rawKey);
     auto current = std::make_shared<const SecretKey>(rawKey);
     sodium_memzero(rawKey.data(), rawKey.size());
 
@@ -164,15 +166,19 @@ void EncryptionManager::load_key() {
                                  fmt::format("Vault {} is rotating its key but the outgoing key is missing. {}",
                                              vault_id_, keyImportHint(vault_id_)));
         auto rawOld = unsealKeyRowOrThrow(vault_id_, *oldKey, masterKey);
+        attestation::backfill(*oldKey, rawOld);
         previous = std::make_shared<const SecretKey>(rawOld);
         sodium_memzero(rawOld.data(), rawOld.size());
         log::Registry::crypto()->debug("[VaultEncryptionManager] Loaded old key for vault {} during rotation", vault_id_);
     }
 
     // Live files sealed under a version this vault no longer holds (a database restored from before a rotation lost
-    // its row): starting would serve undecryptable files, so the vault waits for an import.
+    // its row): starting would serve undecryptable files, so the vault waits for an import. A version a key salvage
+    // names doesn't wait: its files were re-keyed by the salvage or are unrecoverable (key-backup.md "Salvage").
+    const auto salvaged = db::query::vault::Key::salvageVersions(vault_id_);
     for (const auto v : db::query::vault::Key::liveFileKeyVersions(vault_id_)) {
         if (v == rec->version || (rotating && v + 1 == rec->version)) continue;
+        if (std::ranges::find(salvaged, v) != salvaged.end()) continue;
         if (!db::query::vault::Key::hasRetiredKeyVersion(vault_id_, v))
             throw KeyUnavailable(vault_id_, "version_missing",
                                  fmt::format("Files of vault {} are sealed under key version {}, which this host no "
@@ -205,8 +211,16 @@ void EncryptionManager::prepare_key_rotation() {
     key->vaultId = vault_id_;
     key->encrypted_key = encrypt_aes256_gcm(raw.bytes, tpmKeyProvider_->getMasterKey(), iv);
     key->iv = std::move(iv);
+    // Provenance of both versions (signing reads the database, so before the rotation's transaction).
+    const auto [outgoingKey, outgoingVersion] = currentKey();
+    const db::query::vault::Key::NewVersion expected{
+        .version = outgoingVersion + 1,
+        .provenance = attestation::provenanceOf(vault_id_, outgoingVersion + 1, raw.bytes)};
+    const db::query::vault::Key::Outgoing outgoing{
+        .version = outgoingVersion,
+        .provenance = attestation::provenanceOf(vault_id_, outgoingVersion, outgoingKey->bytes())};
     // Persist first: if this throws, the in-memory keys are untouched.
-    key->version = db::query::vault::Key::rotateVaultKey(key);
+    key->version = db::query::vault::Key::rotateVaultKey(key, expected, outgoing);
 
     {
         std::unique_lock lock(keyMutex_);
@@ -220,6 +234,28 @@ void EncryptionManager::prepare_key_rotation() {
                                          vault_id_, key->version);
     log::Registry::audit()->info(msg);
     log::Registry::crypto()->info(msg);
+}
+
+unsigned int EncryptionManager::mintSalvageKey(const unsigned int vaultId, const unsigned int expectedVersion,
+                                               const bool outgoingHeld) {
+    secrets::KeyProvider provider(paths::testMode ? "test_vault_master" : "vault_master");
+    provider.init();
+    const auto next = SecretKey::random();
+    const WipedKeyCopy raw(next);
+    std::vector<uint8_t> iv;
+    const auto key = std::make_shared<vault::model::Key>();
+    key->vaultId = vaultId;
+    key->encrypted_key = encrypt_aes256_gcm(raw.bytes, provider.getMasterKey(), iv);
+    key->iv = std::move(iv);
+    const db::query::vault::Key::NewVersion expected{
+        .version = expectedVersion, .provenance = attestation::provenanceOf(vaultId, expectedVersion, raw.bytes)};
+    key->version = db::query::vault::Key::rotateVaultKey(key, expected, std::nullopt, true, !outgoingHeld);
+
+    const auto msg = fmt::format("[VaultEncryptionManager] Created salvage key version {} for vault {}", key->version,
+                                 vaultId);
+    log::Registry::audit()->info(msg);
+    log::Registry::crypto()->info(msg);
+    return key->version;
 }
 
 void EncryptionManager::finish_key_rotation() {
@@ -436,6 +472,7 @@ SecretKeyPtr EncryptionManager::historicalKeySnapshot(const unsigned int keyVers
         sodium_memzero(raw.data(), raw.size());
         throw std::runtime_error(fmt::format("Retired key version {} of vault {} is not 32 bytes", keyVersion, vault_id_));
     }
+    attestation::backfill(*rec, raw);
     auto key = std::make_shared<const SecretKey>(raw);
     sodium_memzero(raw.data(), raw.size());
     cacheHistoricalKey(keyVersion, key);

@@ -51,29 +51,59 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   (it used to be omitted mid-rotation), recovery-referenced retired keys, and for deleted vaults too.
 - vault.keys.export and .export.confirm answer only paired device sessions (data.code export_requires_device for any
   other session); confirm records the export only while the version is current and the key check matches.
-- Add `vh vault keys import <vault> --file <path|-> [--confirm-name] [--json]` and ws vault.keys.import (paired
-  devices only, import_requires_device elsewhere): restores key versions this host can't unseal or doesn't hold
-  (live vaults and restorable deleted vaults), after verifying each against its key check and a GCM tag check of
-  up to 16 local files and 16 recovery blobs sealed under it; refuses a key the host still unseals with other bytes
-  (conflict), a key that authenticates nothing it checked (invalid); skips versions with nothing to verify against;
-  NeedsConfirmation vault_key_import until the vault's name is given; one transaction under the rotation lock; then
-  reloads or starts the vault's engine.
+- Add `vh vault keys import <vault> --file <path|-> [--salvage] [--confirm-name] [--json]` and ws vault.keys.import
+  {vault_id, keys, mode?, confirm_name?} (paired devices only, import_requires_device elsewhere). Recover (default)
+  restores, per version, only versions the daemon's records reference (key rows, retired rows and their successor,
+  deleted-vault copies, data sealed under it) whose attestation by this node verifies (or that match a key the host
+  still unseals); outcomes restored | unchanged | needs_salvage | refused. Never replaces a key the host unseals
+  (conflict), never introduces a version or moves the current one (with no key row, current = the highest
+  referenced version). NeedsConfirmation vault_key_import; one transaction under the rotation lock; then reloads or
+  starts the vault's engine.
+- Key provenance (migration 113): vault_keys, vault_keys_trashed and vault_deletion_key gain key_check,
+  attestation_key_id and attestation, recorded on creation and rotation and backfilled whenever the daemon unseals a
+  version; key_attestation_keys holds this node's Ed25519 public keys (the seed is sealed as key_attest and never
+  exported; a seed that no longer unseals is replaced by a new keypair, old public keys stay). Attestation =
+  Ed25519 over "vh-key-attest-v1" ‖ node_id ‖ UInt64BE(vault_id) ‖ UInt32BE(version) ‖ key_check. Status and
+  exports carry {key_id, signature} per version.
+- Salvage (mode salvage, `--salvage`, NeedsConfirmation vault_key_salvage): for versions that need it, mints a fresh
+  attested key version through the rotation path, re-encrypts every file the supplied key authenticates with the
+  rotation's sidecar protocol (remote-only objects through the metered fetch, price preflight key_salvage, refused →
+  skipped_remote with the estimate), reports the rest (unrecoverable, deferred, failed; first 50 failures) in
+  vault_key_salvage, the import result and status last_salvage, and never stores the supplied key. An interrupted pass
+  resumes on the same key. Versions a salvage names no longer keep the vault from starting or a rotation from
+  finishing.
 - EncryptionManager::load_key no longer mints a key for a vault with sealed content (files with an IV, recovery
   blobs, live provider versions, encrypted remote index entries): a missing vault_keys row, a row that doesn't
   unseal, or a missing version live files or a pending rotation need throws vault::KeyUnavailable (key_missing |
   key_unsealable | version_missing); the engine stays down, storage::Manager records the vault, stats.system.health
   gains vaults_unavailable (degraded) and vh status lists it; vault.keys.status reports the code as
   unavailable_reason plus unavailable_detail.
-- Import verifies a cloud vault's version without local ciphertext against its smallest upstream object (price
-  preflight key_import_verify, 1 HEAD + 1 GET capture, If-Match, authenticated in memory), and accepts a version no
-  ciphertext is sealed under on the backup's key check alone.
 - The vh client reads the import file itself and attaches it to the request (`input` member, at most 512 KiB); the
   daemon never opens a caller-named path for it.
 - MCP: key commands refuse when run for an MCP client (remote /mcp, or a vh mcp request marked agent), in addition
   to the catalog exclusions.
 - ws contract: vault.keys.* responses are models (VaultKeyStatus, VaultKeyNeededVersion, VaultKeyExport,
-  VaultKeyImportResult, checked against their serializers); import declares the vault_key_import confirmation
-  (accept_field confirm_name) and SystemHealth declares vaults_unavailable.
+  VaultKeyImportResult, VaultKeyAttestation, VaultKeySalvageReport, VaultKeySalvageFailure, checked against their
+  serializers); import's keys are VaultKeyImportDocument (exactly what the import reads, checked against its parser;
+  other members ignored, so a whole export is one); import declares the vault_key_import and vault_key_salvage
+  confirmations (accept_field confirm_name) and SystemHealth declares vaults_unavailable.
+
+## Vaults
+- Add ops::vaults::listAccessible with ws storage.vault.accessible.list (human and device sessions) and
+  `vh vault list --accessible [--json]` (operation vaults.accessible.list, MCP tool vaults_accessible_list): every
+  live vault the actor reaches as owner, by a vault role of its own or a group's, by its admin role, or as super
+  admin. Rows carry a vault summary (model AccessibleVault) plus browse (rbac::resolver::Vault, FilesystemAction::List
+  at the root's FUSE path, as fs.dir.list enforces it), manage (admin vault View, as storage.vault.get) and via
+  (owner | vault_role | group_role | admin_policy | super_admin). A deactivated account gets an empty list.
+- Filesystem denials found while listing are not logged (rbac::resolver::vault::QuietFilesystemDenials); refused
+  requests still are.
+- Add db::query::vault::Vault::listLiveVaults (unpaginated). Storage engine startup, vault key status/export of all
+  vaults and S3 gateway vault name resolution used listVaults' default 100-row page and silently skipped later
+  vaults.
+- storage::Manager::addVault drops an engine already registered under the vault's id from the path index, and
+  initStorageEngines clears the id index too: one engine per vault id. A test process that reset its schema reused ids,
+  and ops::vault_keys (which scans getEngines()) could take another vault's engine and key
+  (DeviceHttpTest.VaultKeyExportOnlyOnAPairedDevice on macOS); covered by StorageEngineRegistryTest.
 
 ## CLI
 - Add `vh mcp`: an MCP server (JSON-RPC 2.0 over stdio, protocol 2025-11-25, also 2025-06-18 and 2025-03-26).
@@ -97,11 +127,11 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
 - Every CLI leaf declares its effect (`read`, `write`, `destructive`), exported as `effect` by `vh_usage --json`.
 
 ## WS contract
-- ws contract: the usage book (`core/usage/src/contract/ws`) declares every registered ws command (222, was 76).
+- ws contract: the usage book (`core/usage/src/contract/ws`) declares every registered ws command (223, was 76).
   `UsageContract.EveryRegisteredWsCommandHasABookEntry` and `test_ws_contract.py` fail on a command without one.
 - web: client timeouts come only from the contract; WebSocketCommandMap payload types follow the server (no `null`
   payloads, no members the handlers never read).
-- ws contract version 2: `models[]` and `models_hash` (169 named model shapes, `core/usage/src/contract/models`),
+- ws contract version 2: `models[]` and `models_hash` (170 named model shapes, `core/usage/src/contract/models`),
   field `one_of` / `values` / `element` / `partial`, command `response_model`; `meta.contract.get` answers
   `models_hash`. `ContractModels.*` checks every model against its serializer with seeded instances;
   `UsageContract.UnionsObjectsAndArraysAreSpelledOut` keeps unions and objects typed (free-form JSON is an explicit
@@ -119,3 +149,11 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   frame's requestId; router faults answer `<command>.response` with status ERROR instead of `UNKNOWN` /
   `Unknown.response`; a non-string requestId no longer breaks an answer; a missing `payload` reads as `{}`.
 - ws contract: `envelope` documents the request, answer and error frames.
+
+## Security fixes
+- RBAC: the filesystem evaluator's last stage (global vault policy) tried the self, admin and user scopes in turn,
+  but a stage always decides, so the self scope's bits answered for every vault. It now reads only the scope the vault
+  falls under for the account (owner self; an admin-owned vault admin; otherwise user), through
+  rbac::resolver::vaultScope, the function the admin vault resolver (admin.vaults.<scope>) and the sync/role globals
+  resolver now share. FUSE's listing-override check reads the same single scope. Seeded presets are identical in every
+  scope, so no seeded role changes; covered by VaultScopeRbacTest.

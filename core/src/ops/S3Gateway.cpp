@@ -427,7 +427,7 @@ uint32_t vaultIdByName(const Actor& actor, const std::string& name, const std::o
     }
     if (const auto own = db::query::vault::Vault::getVault(name, actor->id)) return own->id;
     std::optional<uint32_t> found;
-    for (const auto& vault : db::query::vault::Vault::listVaults()) {
+    for (const auto& vault : db::query::vault::Vault::listLiveVaults()) {
         if (!vault || vault->name != name) continue;
         if (found) throw Invalid("more than one vault is named '" + name + "'; name it by id or owner");
         found = vault->id;

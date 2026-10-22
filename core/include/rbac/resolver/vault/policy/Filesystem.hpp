@@ -7,6 +7,27 @@
 #include "log/Registry.hpp"
 
 namespace vh::rbac::resolver::vault {
+    // While one is alive on this thread, filesystem denials are not logged. For callers that probe what an account
+    // could do across many vaults (ops::vaults::listAccessible): there a "no" is an answer, not a refused request, and
+    // logging it would write one warning per vault per listing. The decision itself is unchanged.
+    class QuietFilesystemDenials {
+    public:
+        QuietFilesystemDenials() noexcept : previous_(active()) { active() = true; }
+        ~QuietFilesystemDenials() { active() = previous_; }
+        QuietFilesystemDenials(const QuietFilesystemDenials&) = delete;
+        QuietFilesystemDenials& operator=(const QuietFilesystemDenials&) = delete;
+
+        [[nodiscard]] static bool engaged() noexcept { return active(); }
+
+    private:
+        static bool& active() noexcept {
+            thread_local bool quiet = false;
+            return quiet;
+        }
+
+        bool previous_;
+    };
+
     template<>
     struct ContextPolicy<permission::vault::FilesystemAction> {
         static bool validate(
@@ -32,7 +53,7 @@ namespace vh::rbac::resolver::vault {
 
             const auto decision = fs::policy::Evaluator::evaluate(req);
 
-            if (!decision.allowed)
+            if (!decision.allowed && !QuietFilesystemDenials::engaged())
                 log::Registry::auth()->warn("Filesystem permission denied. Context:\n{}", decision.toString());
 
             return decision.allowed;
