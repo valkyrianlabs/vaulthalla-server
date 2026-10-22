@@ -71,7 +71,7 @@ class FixtureV1(unittest.TestCase):
                           "link_type": s.link_type, "allowed_ops": s.allowed_ops, "state": s.state}
                   for s in w.shares}
         state = {"vaults": {k: {"id": i} for k, i in ids.items()}, "files": files, "shares": shares,
-                 "created_at": "2026-10-11T00:00:00Z"}
+                 "created_at": "2026-10-11T00:00:00Z", "build_built_at": "2026-10-11T00:00:00Z"}
         ref = publish.build_manifest(state, argparse.Namespace(build_version="9.9.9", git_commit="abc"))
         mine = fixture_v1.manifest(w, build_version="9.9.9", git_commit="abc", built_at="2026-10-11T00:00:00Z",
                                    real_vault_ids=ids)

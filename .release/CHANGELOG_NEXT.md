@@ -168,3 +168,9 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   ignored) or name, since the bucket's notification configuration spells the queue id unlike the Queues API (every
   subscribe failed with "R2 accepted the event rule … but does not list it"); ensureChannel waits a few seconds for a
   queue it just created to answer its consumers lookup.
+
+## Lab tooling
+- Harden pentest fixture verification: exact daemon contract parity, disposable upload/overwrite/delete probes,
+  content hashes, share isolation and inactive login checks; distinguish permission denials from probe errors.
+- Publish current verification and usage artifacts with stable checksums and secret checks; require restore
+  evidence or an explicit data-loss waiver in the offline readiness gate.

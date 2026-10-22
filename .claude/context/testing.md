@@ -219,6 +219,43 @@ bash tools/dev/verify.sh harness                                   # unit + self
 - Never point mutating commands at vh-storage: targets are validated (a live `VH_TEST_MODE=1` daemon serving a
   `vh_harness_*` database), anything else fails closed.
 
+## Authorized PentAGI fixture (2026-10-20)
+
+The separate, operator-authorized network pentest targets HTTPS `/ws`, `/ws/share`, uploads/downloads on
+`vh-local.cooperhlarson.com` only. The installed host is **not** a private harness instance; do not bypass Tier B's
+target guard to run its mutating engine on vh-storage. Provision/verify through `tools/lab/pentest` instead.
+
+- Published handoff: `vh-storage:/srv/vaulthalla-pentest`; secrets and recovered seed state stay root-only under
+  `/srv/vaulthalla-pentest-private`. The Python tools, exact exported `usage.json` and private venv are under
+  `/opt/vaulthalla-pentest-tools`. The target remains the released apt package (`1.15.0-1`).
+- Current proof: 84/84 live checks, including all 59 oracle expectations, actual disposable uploads/overwrites/deletes,
+  share isolation/expiry/revocation, inactive login, 14 plaintext hashes (bytes never logged), and exact
+  `meta.contract.get` parity with `vh_usage --json`. Errors/404/5xx no longer masquerade as permission denials.
+- `publish.py` copies the sanitized report and contract, excludes the checksum file itself on every publication,
+  and rejects known passwords/share tokens/canary plaintext in public files. Build time is unknown (`null`) unless
+  supplied independently; fixture creation time is not binary build time.
+- `readiness.py <published-dir> --build-version 1.15.0` is offline and never opens credentials. It requires complete
+  checksums, a matching build/contract, fresh verification (24 hours), and restore evidence or an explicit operator
+  waiver. `--snapshot-id` alone never claims a successful restore. Snapshot `ready-state-2` was supplied by Cooper;
+  restore testing was explicitly waived because all data on vh-storage is disposable. Do not describe it as tested.
+- PentAGI has an enabled `pentagi-assessment.service`: static-address worker/scraper firewall rules are installed
+  before containers start; the guard fails closed on topology changes. 13 isolation checks pass. Offline browser/WS
+  wheels and `scripts/prepare-worker.py <flow-id>` provision an existing worker without copying credentials. The
+  sanitized handoff is at `pentagi:/home/coop/pentagi/assessment/fixtures/current`. Campaigns are not auto-launched.
+  The management UI is exposed on the explicitly authorized LAN address `https://10.10.10.33:8443` plus loopback;
+  it uses a local certificate with matching IP/DNS SANs. Existing login credentials are unchanged. Worker access
+  to this management endpoint remains blocked. The eleven April flows were labeled as previous sessions. Flow 12
+  is now `Vaulthalla A1 — ready to start`: its public fixture/tools and private 0600 carol/dave/eve credentials are
+  installed; `/work/pentest_client.py` authenticates internally and emits sanitized responses or hashes. Positive
+  download and negative list controls pass from the worker. No model-driven attack campaign has started, and no
+  flow contents were deleted. This remains the legacy external fixture, **not** native integration-fixture
+  provisioning: the native provisioner still reuses the external Seeder and its agent gateway refuses external
+  targets. Do not describe this engagement as migrated to native fixtures.
+
+The workstation's separate `/Users/cooper/dev/pentagi-vaulthalla` workspace holds the attacker scripts and runbook.
+Refresh live proof before launching if it is stale; such verification mutates only disposable probe resources and
+authentication/audit state, and still needs authorization under `/lab` for a new conversation.
+
 ## Production-style mount dogfooding (`/mnt/vaulthalla`)
 
 Only use this when the prod mount is specifically what's under test. `make dev` (a working-tree install; `bin/vh/install.sh` installs

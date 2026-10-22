@@ -168,3 +168,11 @@ documents the request and answer frames.
 Event-driven sync for Cloudflare R2 buckets can now be turned on: subscribing a vault to its bucket's event
 notifications failed against real Cloudflare with "R2 accepted the event rule … but does not list it", and the first
 subscription on a new account could fail while Cloudflare was still creating the queue.
+
+## Lab pentest fixture
+
+The authorized lab pentest tools verify the installed command contract, complete disposable file operations,
+and check known-content hashes. Transport errors no longer count as authorization denials, and skipped deletes
+no longer count as passes. Published handoffs include their verification report and command contract, with
+repeatable checksums and an offline readiness check. Snapshot names alone no longer claim a tested restore;
+operators may explicitly record acceptance of disposable lab data loss instead.

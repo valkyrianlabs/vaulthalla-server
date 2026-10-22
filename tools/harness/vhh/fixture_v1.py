@@ -93,8 +93,8 @@ def manifest(world: World, *, build_version: str, git_commit: str = "", built_at
         "notes": {"objects": "plaintext_sha256 is provided (a hash, not data) for download-integrity checks; "
                              "per-object ciphertext hashing is omitted because at-rest blobs are sharded and "
                              "AEAD-framed. At-rest encryption is AES-256-GCM under TPM-sealed keys.",
-                  "defects": "See defects/ for product issues found during provisioning (DEF-01..03); these are "
-                             "documented, not patched."}}
+                  "defects": "See defects/ for historical 1.10.0 provisioning findings (DEF-01..03). Their "
+                             "presence in this handoff does not assert they remain reproducible on the current build."}}
     if unmapped is not None:
         out["world"] = {"name": world.name, "seed": world.seed, "world_hash": world.world_hash(),
                         "unmapped_probes": unmapped}
