@@ -34,6 +34,10 @@ inline constexpr std::string_view kDomain = "vh-key-attest-v1";
 inline constexpr std::size_t kSignatureSize = 64;
 inline constexpr std::size_t kPublicKeySize = 32;
 inline constexpr std::size_t kSeedSize = 32;
+// Key ids are key_attestation_keys.id, a SERIAL (PostgreSQL integer): 1 to 2^31 - 1. An attestation naming another
+// value is malformed (the ws contract's VaultKeyAttestation.key_id declares the same bounds).
+inline constexpr unsigned int kMinKeyId = 1;
+inline constexpr unsigned int kMaxKeyId = 2147483647;
 
 struct Attestation {
     unsigned int key_id{};

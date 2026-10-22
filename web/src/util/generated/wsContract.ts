@@ -6,10 +6,10 @@
 export const WS_CONTRACT_VERSION = 2
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = '163845c27ea514dd0b5fe98bc586c7e6a608f7128ba3dcae49281266af346e54'
+export const WS_CONTRACT_HASH = 'cba52446e8e2bc3eda732c6bdac1884cbfa3b1f2326d7b0f37500c8a92a04893'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = '15ce150c0765fa6879670d3bb47aa9a9a2c0bb9618a248ad0adafacee0f0dcc5'
+export const WS_MODELS_HASH = '0fc0e2fa8255c90834b8b3466187617ad7bd7887df3bb7baa90d57fbfabf1cac'
 
 // A merge patch (payload members marked `partial`): any subset of the members, at any depth.
 export type WsPartial<T> = { [K in keyof T]?: T[K] extends readonly unknown[] ? T[K] : T[K] extends object ? WsPartial<T[K]> : T[K] }
@@ -2327,6 +2327,27 @@ export interface WsModels {
     }[]
     missing_key_versions?: number[]
     deleted_vault?: boolean
+  }
+  /**
+   * One vault's entry in a key import (vault.keys.import keys, `vh vault keys import --file`): what
+   * ops::vault_keys::importKeys reads (core/src/ops/VaultKeys.cpp readImportDocument). A whole VaultKeyExport
+   * is one; members not declared here, at any depth, are accepted and ignored. Missing or mistyped required
+   * members, a key that isn't base64 of 32 bytes, a version given two different keys, or a key_check that
+   * doesn't match its key refuse the whole import (invalid). An attestation that is malformed (key_id out of
+   * range, a signature that isn't base64 of 64 bytes) is not an error: that version needs salvage.
+   */
+  'VaultKeyImportDocument': {
+    vault_id: number
+    key: string
+    key_check?: string | null
+    attestation?: WsModels['VaultKeyAttestation'] | null
+    key_info: { key_version: number; key_check?: string | null; attestation?: WsModels['VaultKeyAttestation'] | null }
+    historical_keys?: {
+      key_version: number
+      key: string
+      key_check?: string | null
+      attestation?: WsModels['VaultKeyAttestation'] | null
+    }[]
   }
   /**
    * What a key import did: ops::vault_keys::toJson(ImportResult) (core/src/ops/VaultKeys.cpp; also `vh vault
@@ -5202,13 +5223,14 @@ export interface WsContract {
    * are unchanged, unreferenced versions are refused, the rest are needs_salvage. mode salvage additionally
    * re-encrypts the files of the needs_salvage versions under a fresh daemon key (the supplied key is never
    * stored) and returns the report. Writing needs confirm_name = the vault's name, else data.code
-   * vault_key_import (recover) or vault_key_salvage with what would be done. Paired devices only
-   * (import_requires_device otherwise); the encryption-key Export permission.
+   * vault_key_import (mode recover) or vault_key_salvage (mode salvage, even when nothing turns out to need
+   * salvage) with what would be done. Paired devices only (import_requires_device otherwise); the
+   * encryption-key Export permission.
    */
   'vault.keys.import': {
     payload: {
       vault_id: number
-      keys: WsModels['VaultKeyExport'] | WsModels['VaultKeyExport'][]
+      keys: WsModels['VaultKeyImportDocument'] | WsModels['VaultKeyImportDocument'][]
       mode?: 'recover' | 'salvage'
       confirm_name?: string
     }

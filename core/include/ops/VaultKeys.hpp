@@ -150,7 +150,8 @@ struct Confirmed {
 // unseals); never another key: a key this host can unseal is never replaced (Conflict), identical bytes are a no-op,
 // unreferenced versions are refused, the rest need salvage. Salvage additionally re-encrypts files sealed under the
 // versions that need it under a fresh daemon key, with the supplied key held only in memory. Writing needs
-// `confirm_name` = the vault's name, else NeedsConfirmation "vault_key_import" (recover) or "vault_key_salvage".
+// `confirm_name` = the vault's name, else NeedsConfirmation "vault_key_import" (recover) or "vault_key_salvage" (any
+// salvage-mode request that writes, even when nothing turns out to need salvage).
 enum class ImportMode { Recover, Salvage };
 [[nodiscard]] std::string to_string(ImportMode mode);
 
@@ -160,6 +161,17 @@ struct ImportRequest {
     std::optional<std::string> confirm_name{};
     ImportMode mode{ImportMode::Recover};
 };
+
+// How importKeys reads `keys` (the ws contract's VaultKeyImportDocument): the versions the document carries for
+// vaultId, ascending. Throws Invalid when it lacks something an import needs; a malformed attestation is no error (that
+// version needs salvage) and is reported per version. Pure (no database); the contract tests hold the model to it.
+struct ImportDocumentVersion {
+    unsigned int version{};
+    bool key_check{false};                             // the backup carries its own key check
+    std::optional<unsigned int> attestation_key_id{};  // a well-formed attestation names this signing key
+    std::optional<std::string> attestation_problem{};  // an attestation is present but malformed
+};
+[[nodiscard]] std::vector<ImportDocumentVersion> readImportDocument(const nlohmann::json& keys, unsigned int vaultId);
 
 enum class ImportOutcome {
     Restored,      // attested by this node (or matching a key it holds): re-sealed under this host's vault master

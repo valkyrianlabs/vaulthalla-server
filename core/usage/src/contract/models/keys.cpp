@@ -22,6 +22,13 @@ WsField vaultKeyReason() {
 
 WsField vaultKeyTime(std::string name) { return uinteger(std::move(name)).desc("Unix seconds."); }
 
+// Import document members (VaultKeyImportDocument): optional, and null reads as absent.
+WsField importKeyCheck(const std::string& what) {
+    return vaultKeyCheck("key_check").opt().nullable().desc("32 lowercase hex digits. " + what);
+}
+
+WsField importAttestation() { return object("attestation", "VaultKeyAttestation").opt().nullable(); }
+
 WsField vaultKeyAttestation(std::string name) {
     return object(std::move(name), "VaultKeyAttestation").nullable()
         .desc("This node's attestation of the version (public, like the key check); null when none is recorded.");
@@ -36,7 +43,9 @@ std::vector<WsModel> vaultKeyModels() {
         "This node's Ed25519 signature over one key version (vault/KeyAttestation.hpp): \"vh-key-attest-v1\" ‖ node_id "
         "‖ UInt64BE(vault_id) ‖ UInt32BE(version) ‖ key_check (16 bytes). `vh vault keys import` restores a version as "
         "canonical only when it verifies under one of this node's attestation keys.",
-        {uinteger("key_id").desc("Which of this node's attestation keys signed (key_attestation_keys.id)."),
+        {uinteger("key_id").min(1).max(2147483647)
+             .desc("Which of this node's attestation keys signed (key_attestation_keys.id, a PostgreSQL integer). An "
+                   "import reads any other value as a malformed attestation: that version needs salvage."),
          str("signature").desc("base64 (64 bytes).")}));
 
     out.push_back(model("VaultKeySalvageFailure",
@@ -115,6 +124,37 @@ std::vector<WsModel> vaultKeyModels() {
                    "versions recovery data references (recovery), ascending. Absent when there are none."),
          intArray("missing_key_versions").opt().desc("Needed versions this host no longer holds."),
          boolean("deleted_vault").opt().desc("Present (true) for a deleted vault within its key retention window.")}));
+
+    // What ops::vault_keys::readImportDocument (the import's parser) reads; the rest of an export is ignored.
+    // ContractModels.VaultKeyImportDocument* hold this model to that parser, member by member.
+    out.push_back(model("VaultKeyImportDocument",
+        "One vault's entry in a key import (vault.keys.import keys, `vh vault keys import --file`): what "
+        "ops::vault_keys::importKeys reads (core/src/ops/VaultKeys.cpp readImportDocument). A whole VaultKeyExport is "
+        "one; members not declared here, at any depth, are accepted and ignored. Missing or mistyped required members, "
+        "a key that isn't base64 of 32 bytes, a version given two different keys, or a key_check that doesn't match "
+        "its key refuse the whole import (invalid). An attestation that is malformed (key_id out of range, a signature "
+        "that isn't base64 of 64 bytes) is not an error: that version needs salvage.",
+        {vaultId().desc("The vault the entry is for: the request's vault_id (the entry of an `all` array whose "
+                        "vault_id matches is used; the others are not read)."),
+         str("key").desc("The key of key_info.key_version, base64 (32 bytes)."),
+         importKeyCheck("The backup's own key check of `key` (consistency only: a mismatch refuses the import as "
+                        "damaged). When absent, key_info.key_check is read; null or absent in both: none."),
+         importAttestation().desc("This node's attestation of key_info.key_version, as the export carried it: what "
+                                  "restores that version as canonical. When absent, key_info.attestation is read; null "
+                                  "or absent in both: the version can only be salvaged."),
+         object("key_info", "",
+                {uinteger("key_version").min(1).max(4294967295).desc("The version `key` is."),
+                 importKeyCheck("Read only when the entry has no key_check member."),
+                 importAttestation().desc("Read only when the entry has no attestation member.")})
+             .desc("Only key_version is required; the export's other key metadata is ignored."),
+         objectArray("historical_keys", "",
+                     {uinteger("key_version").min(1).max(4294967295), str("key").desc("base64 (32 bytes)."),
+                      importKeyCheck("The backup's own key check of this key (consistency only)."),
+                      importAttestation().desc("This node's attestation of this version; null or absent: it can only "
+                                               "be salvaged.")})
+             .opt()
+             .desc("The entry's other versions (an export's rotation and recovery versions). A version listed twice "
+                   "must carry the same key.")}));
 
     out.push_back(model("VaultKeyImportResult",
         "What a key import did: ops::vault_keys::toJson(ImportResult) (core/src/ops/VaultKeys.cpp; also "

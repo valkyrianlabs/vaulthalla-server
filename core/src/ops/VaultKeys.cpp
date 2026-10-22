@@ -643,12 +643,19 @@ unsigned int versionOf(const nlohmann::json& v, const char* what) {
     return v.get<unsigned int>();
 }
 
-// {key_id, signature (base64, 64 bytes)}; a malformed one is kept as a problem (that version needs salvage).
+// {key_id, signature (base64, 64 bytes)}; a malformed one is kept as a problem (that version needs salvage). key_id is
+// checked against its range before it is narrowed: 2^32 + n must never read as signing key n.
 void parseAttestation(const nlohmann::json* field, Candidate& c) {
     if (!field || field->is_null()) return;
     if (!field->is_object() || !field->contains("key_id") || !field->at("key_id").is_number_unsigned() ||
         !field->contains("signature")) {
         c.attestation_problem = "the backup's attestation is malformed";
+        return;
+    }
+    if (const auto id = field->at("key_id").get<uint64_t>();
+        id < vault::attestation::kMinKeyId || id > vault::attestation::kMaxKeyId) {
+        c.attestation_problem =
+            fmt::format("the backup's attestation is malformed (key_id {} is not a signing key id)", id);
         return;
     }
     auto sig = decodeKey(field->at("signature"));
@@ -1165,6 +1172,16 @@ SalvageReport runSalvage(const Actor& actor, const ImportTarget& target, std::ma
 
 }
 
+std::vector<ImportDocumentVersion> readImportDocument(const nlohmann::json& keys, const unsigned int vaultId) {
+    std::vector<ImportDocumentVersion> out;
+    for (const auto& c : candidatesFrom(keys, vaultId))
+        out.push_back({.version = c.version,
+                       .key_check = c.backup_check.has_value(),
+                       .attestation_key_id = c.attestation ? std::optional(c.attestation->key_id) : std::nullopt,
+                       .attestation_problem = c.attestation_problem});
+    return out;
+}
+
 ImportResult importKeys(const Actor& actor, const ImportRequest& request, const Channel channel) {
     requireExport(actor);
     if (channel == Channel::Console)
@@ -1344,8 +1361,11 @@ ImportResult importKeys(const Actor& actor, const ImportRequest& request, const 
         }
     }
 
+    // A salvage request is confirmed as one (vault_key_salvage) whatever it turns out to do, so the person's explicit
+    // salvage intent always meets the same question; the text says when it is only a recovery.
     if (!writes.empty() || salvageRun) {
         if (!request.confirm_name || *request.confirm_name != target.name) {
+            const bool salvageMode = request.mode == ImportMode::Salvage;
             std::string text;
             if (!writes.empty())
                 text = fmt::format("Importing keys into vault '{}' (ID {}) restores key version(s) {}, attested by this "
@@ -1356,10 +1376,12 @@ ImportResult importKeys(const Actor& actor, const ImportRequest& request, const 
                                     "{} that the supplied key decrypts under a fresh key this host creates; files it "
                                     "doesn't decrypt are reported unrecoverable, and the supplied key is never stored.",
                                     text.empty() ? "" : " ", target.name, target.vault_id, versionList(salvage));
+            else if (salvageMode)
+                text += " Nothing needs salvage: no file is re-encrypted and no key is created.";
             else if (!salvage.empty())
                 text += " Not restored, need salvage: " + versionList(salvage) + ".";
             text += " Confirm by typing the vault's name.";
-            throw NeedsConfirmation(salvageRun ? "vault_key_salvage" : "vault_key_import", text);
+            throw NeedsConfirmation(salvageMode ? "vault_key_salvage" : "vault_key_import", text);
         }
     }
 

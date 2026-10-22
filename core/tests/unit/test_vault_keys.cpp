@@ -1107,6 +1107,18 @@ TEST_F(VaultKeysDbTest, RecoveryRefusesForgedTamperedForeignAndInventedVersions)
     unknown["key_info"].erase("attestation");
     expectNeedsSalvage(unknown, "an unknown signing key");
 
+    // A key_id outside the signing key ids (key_attestation_keys.id, a PostgreSQL integer) is a malformed attestation.
+    // The genuine id + 2^32 used to be narrowed to the genuine id and restore; 2^31 used to fail the lookup itself.
+    const auto keyId = keys.at("attestation").at("key_id").get<uint64_t>();
+    for (const uint64_t outOfRange : {keyId + (uint64_t{1} << 32), uint64_t{1} << 31, uint64_t{0}}) {
+        auto wrapped = keys;
+        wrapped["attestation"]["key_id"] = outOfRange;
+        wrapped["key_info"].erase("attestation");
+        expectNeedsSalvage(wrapped, "key_id " + std::to_string(outOfRange));
+        const auto r = importVia(device(superUser), id, wrapped, name);
+        EXPECT_NE(detailOf(r, v2).find("attestation is malformed"), std::string::npos) << r.dump();
+    }
+
     auto otherVersion = keys;  // v1's attestation offered for v2
     otherVersion["key"] = keys.at("key");
     otherVersion["attestation"] = keys.at("historical_keys").is_array() && !keys.at("historical_keys").empty()
@@ -1271,6 +1283,55 @@ TEST_F(VaultKeysDbTest, SalvageReKeysWhatTheSuppliedKeyDecryptsAndNeverStoresIt)
     dropEngine(id);
     EXPECT_NO_THROW((void)runtime::Deps::get().storageManager->reinstateVault(id));
     EXPECT_TRUE(hasEngine(id));
+}
+
+// mode salvage is always confirmed as a salvage, even when every version turns out to be restorable: the text says
+// nothing needs salvage, and confirming only restores (no fresh key, no salvage pass).
+TEST_F(VaultKeysDbTest, SalvageModeWithNothingToSalvageConfirmsAsASalvageAndOnlyRestores) {
+    const auto engine = newVault("vksalvnone");
+    const auto id = engine->vault->id;
+    const auto name = engine->vault->name;
+    write(engine, "/a.txt", "alpha");
+    const auto keys = WsKeys::exportKeys({{"vault_id", id}}, device(superUser));  // attested: recoverable
+    const auto version = keys.at("key_info").at("key_version").get<unsigned int>();
+    corruptSealed("vault_keys", id);
+    dropEngine(id);
+    const auto broken = sealedBytes("vault_keys", id, version);
+
+    const auto confirmation = [&](const std::optional<std::string>& confirm) -> std::pair<std::string, std::string> {
+        try {
+            (void)salvageVia(id, keys, confirm);
+        } catch (const ops::NeedsConfirmation& e) {
+            return {e.code, e.what()};
+        }
+        return {"", ""};
+    };
+    for (const auto& confirm : {std::optional<std::string>{}, std::optional<std::string>("not-the-name")}) {
+        const auto [code, text] = confirmation(confirm);
+        EXPECT_EQ(code, "vault_key_salvage");
+        EXPECT_NE(text.find("restores key version(s) " + std::to_string(version)), std::string::npos) << text;
+        EXPECT_NE(text.find("Nothing needs salvage"), std::string::npos) << text;
+        EXPECT_EQ(text.find("Salvaging"), std::string::npos) << text;
+    }
+    EXPECT_EQ(sealedBytes("vault_keys", id, version), broken);
+    // The same document in recover mode keeps its own confirmation.
+    EXPECT_EQ(wsCode([&] { return importVia(device(superUser), id, keys); }), "vault_key_import");
+
+    const auto r = salvageVia(id, keys, name);
+    EXPECT_EQ(r.at("mode"), "salvage");
+    EXPECT_EQ(outcome(r, version), "restored") << r.dump();
+    EXPECT_TRUE(r.at("salvage").is_null()) << r.dump();
+    EXPECT_TRUE(r.at("written").get<bool>());
+    EXPECT_TRUE(r.at("key_available").get<bool>()) << r.dump();
+    EXPECT_EQ(readFile(id, "/a.txt"), "alpha");
+    const auto s = statusOf(id);
+    EXPECT_EQ(s.at("version"), version);  // no fresh key
+    EXPECT_TRUE(s.at("last_salvage").is_null()) << s.dump();
+
+    // Nothing left to write: no confirmation at all, in either mode.
+    const auto again = salvageVia(id, keys, std::nullopt);
+    EXPECT_FALSE(again.at("written").get<bool>());
+    EXPECT_EQ(outcome(again, version), "unchanged");
 }
 
 TEST_F(VaultKeysDbTest, AnInterruptedSalvageResumesOnTheSameKeyWithoutLosingAFile) {

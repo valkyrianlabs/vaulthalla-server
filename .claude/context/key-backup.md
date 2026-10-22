@@ -72,14 +72,23 @@ constant time (`keyCheckEquals`).
   typed. "Keys are never exported through the browser" stays true.
 - **ws contract (v2)** (`core/usage/src/contract/ws/keys.cpp`, models in `contract/models/keys.cpp`): models
   `VaultKeyStatus` (status `vaults[]`, with `attestation` and `last_salvage`), `VaultKeyNeededVersion`,
-  `VaultKeyAttestation`, `VaultKeyExport` (export's `response_model`, and the `keys` payload of import: `one_of` one
-  object or the `all` array), `VaultKeyImportResult` (import's `response_model`), `VaultKeySalvageReport` and
-  `VaultKeySalvageFailure`, each checked against its `toJson` by `ContractModels.VaultKeys` (`models_keys.cpp`).
+  `VaultKeyAttestation` (`key_id` 1..2^31 - 1: `key_attestation_keys.id` is a SERIAL), `VaultKeyExport` (export's
+  `response_model`), `VaultKeyImportDocument` (import's `keys`: `one_of` one object or the `all` array; exactly what
+  `ops::vault_keys::readImportDocument`, the import's parser, reads: `vault_id`, `key`, `key_info.key_version`
+  required, `key_check` / `attestation` (top level, else `key_info`) and `historical_keys[] {key_version, key,
+  key_check?, attestation?}` optional; undeclared members are accepted and ignored, so a whole export is one),
+  `VaultKeyImportResult` (import's `response_model`), `VaultKeySalvageReport` and `VaultKeySalvageFailure`, each
+  checked against its `toJson` by `ContractModels.VaultKeys` (`models_keys.cpp`; the import document through
+  `Checker::checkInput`, which accepts undeclared members). `ContractModels.VaultKeyImportDocumentRequiresWhatTheImportReads`
+  removes and nulls every declared member and requires the parser to refuse exactly what the model calls a problem
+  (and the same for `key_version`'s bounds); `ContractModels.VaultKeyAttestationKeyIdBoundsAreTheImports` pins
+  `key_id`'s bounds to `vault::attestation::kMinKeyId`/`kMaxKeyId`.
   `refusal_kinds` add the D4 channel codes only where they are sent: `export_requires_device` (export, confirm),
   `import_requires_device` (import); `UsageContract.RefusalsSplitGenericKindsFromConfirmations` pins them to those
   commands like the device pairing codes. A key that can't be read here is `conflict`; the `KeyUnavailable` codes
-  are status fields (`unavailable_reason`), never refusals. Import's confirmations: `vault_key_import` and
-  `vault_key_salvage` → `accept_field` `confirm_name` (a string: the vault's name). Health's `vaults_unavailable` is in `SystemHealth`.
+  are status fields (`unavailable_reason`), never refusals. Import's confirmations: `vault_key_import` (mode recover) and
+  `vault_key_salvage` (every mode salvage request that writes) → `accept_field` `confirm_name` (a string: the vault's
+  name). Health's `vaults_unavailable` is in `SystemHealth`.
 
 Tests: `test_vault_keys.cpp` (`VaultKeyCheck`, `VaultKeyAttestation` (the vector), `VaultKeysDbTest`: status incl.
 rotation/recovery/missing, export D4 + mid-rotation versions, confirm incl. a rotation in between, deleted vaults,
@@ -90,8 +99,8 @@ backfilled after a restart; a key that no longer unseals restored on its attesta
 unseals → conflict; partial version sets mid-rotation and a missing retired row re-inserted with the rotation
 resumed; a deleted vault restored after import (salvage refused); a fresh rotation target restored on its
 attestation, never on the backup's key check; tampered signature, unknown signing key, another version's / vault's /
-node's attestation → needs_salvage; an invented version and a backup claiming a higher version → refused, current
-stays the records'; a TPM reset → new signing key, old exports still restore; salvage (local: re-keys what
+node's attestation, a `key_id` out of range (the genuine id + 2^32, 2^31, 0) → needs_salvage; an invented version and a backup claiming a higher version → refused, current
+stays the records'; a TPM reset → new signing key, old exports still restore; mode salvage with nothing to salvage → `vault_key_salvage`, then only restores; salvage (local: re-keys what
 authenticates, damaged and foreign files unrecoverable, the supplied key stored nowhere, the vault restarts; crash
 after a commit → resumes on the same key; remote-only: refused preflight → skipped_remote with the estimate, then
 re-keyed through HEAD + If-Match GET and uploaded). `SqlDeployerHistoryDb.KeyProvenanceMigrationIsAdditiveAndIdempotent`
@@ -124,7 +133,9 @@ Revision 3 (2026-10-21) removes both paths: ciphertext authentication now only f
   UInt32BE(version) ‖ key_check)`, where `node_id` is this install's id (`device_node.node_id`, migration 112: a
   UUID string, its UTF-8 bytes; the fixed-size tail keeps the message unambiguous) and `key_check` is the 16 raw bytes
   of the key check. Stored as `(attestation_key_id, attestation)`. Vector in `vault/KeyAttestation.hpp` and
-  `VaultKeyAttestation.MatchesTheDocumentedVector` (fixed seed `00 01 … 1f`).
+  `VaultKeyAttestation.MatchesTheDocumentedVector` (fixed seed `00 01 … 1f`). An import reads a `key_id` outside
+  1..2^31 - 1 (the SERIAL's range) as a malformed attestation (that version needs salvage), never narrowed to another
+  signing key's id.
 - **When.** Recorded when a version is created (`load_key` minting an empty vault's first key, `prepare_key_rotation`,
   the salvage key) and **backfilled lazily**: whenever the daemon unseals a version (startup `load_key`, the retired
   key cache, rotation, status and export through `Unsealer`) and the row's `key_check` differs from the key's or its
@@ -162,7 +173,9 @@ except that a re-inserted retired row whose live files still need it gets `rotat
 resumes, as before); the current version never moves.
 
 **Salvage (best effort; `mode: "salvage"`, CLI `--salvage`, NeedsConfirmation `vault_key_salvage` + the typed vault
-name).** Runs recover first (attested versions are restored canonically in the same request), then, for the versions
+name).** A salvage request is confirmed as a salvage whatever it turns out to do: when no version needs salvage (every
+one is restorable), it still asks under `vault_key_salvage`, the text says "Nothing needs salvage", and confirming only
+restores (no fresh key, no pass, `salvage: null`); with nothing to write it asks nothing. Runs recover first (attested versions are restored canonically in the same request), then, for the versions
 that need salvage (referenced, not held here, with a supplied key):
 1. Preconditions (refused with `conflict`, nothing written): a live vault (restore a deleted one first); no pending
    rotation whose outgoing key this host holds (let it finish); after salvage every version live files are sealed
@@ -231,11 +244,11 @@ vault, which versions (restored / salvaged, with the report's counts), through w
 callers who may remove it (ops::vaults' rule).
 
 **Desktop (restore milestone 3).** Reveal the item's versions from 1Password (`item.reveal`), build the export shape
-(`{vault_id, key, key_check, attestation, key_info: {key_version}, historical_keys: [{key_version, key, key_check,
-attestation}]}`; Desktop stores the attestation it received with each export), send `vault.keys.import {vault_id,
+(`VaultKeyImportDocument`: `{vault_id, key, key_check, attestation, key_info: {key_version}, historical_keys:
+[{key_version, key, key_check, attestation}]}`; Desktop stores the attestation it received with each export), send `vault.keys.import {vault_id,
 keys}` over the paired connection, show the `vault_key_import` confirmation text, ask the user to type the vault name,
 resend with `confirm_name`, then poll `vault.keys.status` (`key_available`). Versions answered `needs_salvage` are
-offered as a separate, explicit salvage (`mode: "salvage"`, `vault_key_salvage`).
+offered as a separate, explicit salvage (`mode: "salvage"`, always confirmed under `vault_key_salvage`).
 
 **As built (revision 3).** `vault/KeyAttestation.{hpp,cpp}` (`message`, `signWithSeed`, `verifySignature`, `attest`,
 `check`, `provenanceOf`, `backfill`); `db::query::vault::Key` (`Provenance`, `addVaultKey`/`rotateVaultKey` with

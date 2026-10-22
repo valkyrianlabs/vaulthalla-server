@@ -84,8 +84,9 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   to the catalog exclusions.
 - ws contract: vault.keys.* responses are models (VaultKeyStatus, VaultKeyNeededVersion, VaultKeyExport,
   VaultKeyImportResult, VaultKeyAttestation, VaultKeySalvageReport, VaultKeySalvageFailure, checked against their
-  serializers); import declares the vault_key_import and vault_key_salvage confirmations (accept_field confirm_name)
-  and SystemHealth declares vaults_unavailable.
+  serializers); import's keys are VaultKeyImportDocument (exactly what the import reads, checked against its parser;
+  other members ignored, so a whole export is one); import declares the vault_key_import and vault_key_salvage
+  confirmations (accept_field confirm_name) and SystemHealth declares vaults_unavailable.
 
 ## Vaults
 - Add ops::vaults::listAccessible with ws storage.vault.accessible.list (human and device sessions) and
