@@ -87,6 +87,10 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
 - Add db::query::vault::Vault::listLiveVaults (unpaginated). Storage engine startup, vault key status/export of all
   vaults and S3 gateway vault name resolution used listVaults' default 100-row page and silently skipped later
   vaults.
+- storage::Manager::addVault drops an engine already registered under the vault's id from the path index, and
+  initStorageEngines clears the id index too: one engine per vault id. A test process that reset its schema reused ids,
+  and ops::vault_keys (which scans getEngines()) could take another vault's engine and key
+  (DeviceHttpTest.VaultKeyExportOnlyOnAPairedDevice on macOS); covered by StorageEngineRegistryTest.
 
 ## CLI
 - Add `vh mcp`: an MCP server (JSON-RPC 2.0 over stdio, protocol 2025-11-25, also 2025-06-18 and 2025-03-26).

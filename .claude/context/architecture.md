@@ -774,6 +774,10 @@ subject's assignment; both `vh vault role override ...` and ws `role.vault.overr
   `storage::Manager::updateVault`). `storage::Manager` calls `fs::cache::Registry::evictVault` on remove, on rename
   (old and new root, then re-caches the root) and in `addVault` *before* the engine creates the root. Evicting after
   `mkVault` would drop the fresh root and the whole vault would answer ENOENT.
+- `storage::Manager` holds **one engine per vault id** in both indexes (`engines_` by FUSE root, `vaultToEngine_` by
+  id): `addVault`, `updateVault` and `reloadEngine` drop the id's previous engine from the path index, and
+  `initStorageEngines` clears both. `getEngines()` scans (e.g. `ops::vault_keys::engineFor`) otherwise found a stale
+  engine with another vault's key whenever a test process reset its schema and reused ids (`StorageEngineRegistryTest`).
 - Every `users(id)` reference has a delete action (migration 104): attribution/audit columns `SET NULL`, while
   `file_locks.locked_by` and `share_link.created_by` `CASCADE` (a deleted account's public links die with it). New
   tables referencing `users` must pick one; a bare `REFERENCES users` blocks `vh user delete`.

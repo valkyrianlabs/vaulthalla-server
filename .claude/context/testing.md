@@ -106,6 +106,7 @@ Web: `web/tests/e2e/recovery.spec.ts` (scripted ws answers; see `web-client.md`)
 | `HttpArchiveZip`, `HttpArchiveSessionTest` (`test_http_archive.cpp`) | streamed folder ZIP validated by Python `zipfile` + `unzip -t` (`tests/helpers/zip_check.hpp`; skip without them): UTF-8/dot names, empty file, empty dir, exact length, one member open at a time, integrity failure truncates before the CRC, size drift aborts, zip-slip names, ZIP64 (> 4 GiB member as a sparse file, ~25 s; > 65535 entries), and over a socket: HEAD length without opening members, disconnect, stalled client | nothing |
 | `HttpSessionTest` (`test_http_session.cpp`) | socket-level streaming, client disconnect stopping work, stalled/idle deadlines, HEAD framing | nothing |
 | `VaultScopeRbacTest` (`test_vault_scope_rbac.cpp`) | the global vault policy read in the vault's scope (own / admin-owned / other): accounts whose self scope grants more than its others' scopes and the reverse, every filesystem action on a file and a directory against the evaluator applied to exactly that scope, then ws `fs.dir.list` / `fs.dir.create` / `fs.entry.delete` / `storage.vault.get`, `vh fs ls`, the access layer (HTTP human/device lanes, `vh fs`) and the accessible list; every seeded role decides as before | test DB env |
+| `StorageEngineRegistryTest` (`test_vault_lifecycle_regressions.cpp`) | one engine per vault id after a schema reset reuses ids (the DeviceHttpTest key-export flake on macOS) and after `initStorageEngines` | test DB env |
 | `HttpAccessDbTest` (`test_http_access.cpp`) | human preview/download RBAC matrix, no path-existence oracle, D9 (SVG/WebP not Preview), Range/conditional/HEAD, 300 MiB download, folder ZIP of encrypted files (RBAC, HEAD, independent validation, tampered member truncates), text save 428/412/422/413/415/403 + ciphertext-only on disk, PDF paging, hostile size/scale/page, no `/tmp` plaintext residue | test DB env |
 | `HttpSharePreviewTest`, `HttpContentDisposition` (`test_http_share_preview.cpp`) | share lanes (Preview vs Download, Content-Disposition), `max_downloads` per logical download (files and folder ZIPs; HEAD never counts), scoped folder ZIP entries | nothing (injected fakes) |
 | `PreviewStoreDbTest` (`test_preview_store.cpp`) | `VHDERIV1` round trip (ciphertext only on disk), identity/AAD binding, invalidation by source id and generator version, negative cache TTL, writer limit, LRU eviction, legacy-thumbnail sweep, not charged to quota, purge, one-shot `read` (page count, tamper drops the artifact), index-only `status`, batched `last_accessed`, orphan-file sweep | test DB env |
@@ -130,7 +131,8 @@ Web: `web/tests/e2e/recovery.spec.ts` (scripted ws answers; see `web-client.md`)
 | `DeviceParityTest` (`test_ops_parity_devices.cpp`) | `vh device` vs ws `device.*`: windows, number matching, list/rename/revoke ownership, remote switch for every seeded admin role (settings written to a private config copy) | test DB env |
 
 On macOS, run DB suites on a private cluster when another checkout may be testing: `VH_TEST_PG_DIR=$TMPDIR/<name>
-VH_TEST_PG_PORT=<port> tools/macos/test-db.sh up` (two runs on one cluster drop each other's schema). Device tests
+VH_TEST_PG_PORT=<port> tools/macos/test-db.sh up` (two runs on one cluster drop each other's schema; agents sharing a
+scratchpad must keep the printed exports in a file only they write, or one agent's runs land on the other's cluster). Device tests
 never bind 36972 (port 0).
 
 - **ThreadSanitizer** for the identity publication code: `meson setup build-tsan -Db_sanitize=thread

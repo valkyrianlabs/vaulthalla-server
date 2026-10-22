@@ -3,6 +3,9 @@
 //   #178 share links over a subfolder were refused: the share authorizer evaluated the vault path as a FUSE path
 //   #179 deleting a user who had shared, uploaded to someone else's vault or kept versions hit a foreign key
 //   #180 a deleted vault's FS cache entries survived into a new vault with the same FUSE name
+// and one found on macOS: storage::Manager::addVault left an engine already registered under the same vault id (a
+// schema reset in one test process reuses ids) in its path index, so getEngines() scans (ops::vault_keys) could
+// answer with the old vault's engine and key, depending on unordered_map iteration order.
 
 #include "../helpers/identities.hpp"
 #include "db/Transactions.hpp"
@@ -32,6 +35,7 @@
 #include <gtest/gtest.h>
 #include <paths.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -296,6 +300,60 @@ TEST_F(VaultLifecycleRegressionTest, RenamingAVaultMovesItsCachedEntriesToTheNew
     const auto kid = cache()->getEntry(newRoot / "kid");
     ASSERT_TRUE(kid) << "entries must re-hydrate under the renamed root";
     EXPECT_EQ(kid->fuse_path, newRoot / "kid");
+}
+
+// One engine per vault id. The scenario every unit-test binary hits: a suite resets the schema while the process keeps
+// its storage::Manager, so the next suite's vaults reuse the ids of the previous suite's vaults (at other FUSE roots).
+// ops::vault_keys found its engine by scanning getEngines(); with the old engine still indexed by its FUSE root it
+// exported and confirmed against the old vault's key whenever the hash order put that one first
+// (DeviceHttpTest.VaultKeyExportOnlyOnAPairedDevice, on macOS's libc++).
+class StorageEngineRegistryTest : public VaultLifecycleRegressionTest {
+protected:
+    // What the next suite's SetUpTestSuite does, in the same process (same storage::Manager).
+    static void resetSchema() {
+        db::Transactions::init();
+        db::seed::nuke_and_recreate_schema_public();
+        db::Transactions::dbPool_->initPreparedStatements();
+        seed::seed_database();
+        superUser = createUser("vl_super_" + tag(), "super_admin");
+    }
+
+    // Every engine the manager indexes is the one getEngine() returns for its vault id.
+    static void expectOneEnginePerVaultId() {
+        const auto& manager = runtime::Deps::get().storageManager;
+        for (const auto& engine : manager->getEngines()) {
+            ASSERT_TRUE(engine && engine->vault);
+            EXPECT_EQ(manager->getEngine(engine->vault->id), engine)
+                << "vault " << engine->vault->id << " has a second engine at " << fuseRoot(engine);
+        }
+    }
+};
+
+TEST_F(StorageEngineRegistryTest, AVaultIdReusedAfterASchemaResetHasOneEngine) {
+    const auto before = addVault("vl_ids_before_" + tag(), superUser);
+    const auto oldEngine = engineFor(before->id);
+    ASSERT_TRUE(oldEngine);
+    const auto oldRoot = fuseRoot(oldEngine);
+
+    resetSchema();
+    // The same seed and the same creations: the vault sequence hands out the old id again, under another name.
+    const auto after = addVault("vl_ids_after_" + tag(), superUser);
+    ASSERT_EQ(after->id, before->id) << "the scenario needs the vault id to be reused";
+    const auto newEngine = engineFor(after->id);
+    ASSERT_TRUE(newEngine);
+    ASSERT_NE(newEngine, oldEngine);
+    ASSERT_NE(fuseRoot(newEngine), oldRoot);
+
+    expectOneEnginePerVaultId();
+    const auto engines = runtime::Deps::get().storageManager->getEngines();
+    EXPECT_EQ(std::ranges::count(engines, oldEngine), 0) << "the replaced engine is still indexed";
+    EXPECT_NE(runtime::Deps::get().storageManager->resolveStorageEngine(oldRoot / "x"), oldEngine);
+
+    // A full re-initialization starts both indexes over: no id survives for a vault that is not live.
+    runtime::Deps::get().storageManager->initStorageEngines();
+    expectOneEnginePerVaultId();
+    for (const auto& vault : db::query::vault::Vault::listLiveVaults())
+        EXPECT_TRUE(runtime::Deps::get().storageManager->getEngine(vault->id)) << vault->id;
 }
 
 }
