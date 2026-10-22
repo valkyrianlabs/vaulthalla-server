@@ -8,10 +8,11 @@
 # would mean something else as root); the role's settings are read from the root-only file and handed only to the
 # test process's environment. Nothing is installed, no role is rotated, no other database is touched.
 #
-# Live provider tests (UpstreamLive*, never CI) read their test credentials from the environment, which the
-# `env -i` below clears. Only with VH_LIVE_UPSTREAM=1 in the caller's environment are exactly the variables in
-# LIVE_ENV_VARS handed through: on a pipe (never argv, never a file), to the test process only. E.g.
-#   (set -a; . ./.bashrc; set +a; VH_LIVE_UPSTREAM=1 bin/tests/run_unit.sh -- --gtest_filter='UpstreamLive.*')
+# Live provider tests (Live/*, tests/helpers/live_bucket.hpp, never CI) read the shared test bucket's credential from
+# the environment, which the `env -i` below clears. Only with VH_LIVE_TESTS=1 in the caller's environment are exactly
+# the variables in LIVE_ENV_VARS handed through: on a pipe (never argv, never a file), to the test process only. E.g.
+#   (eval "$(grep -E '^export VAULTHALLA_TEST_R2_' .bashrc)"; VH_LIVE_TESTS=1 bin/tests/run_unit.sh -- --gtest_filter='Live/*')
+# There are no bucket-provisioning credentials here on purpose: no test creates, deletes or reconfigures a bucket.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -61,11 +62,14 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-LIVE_ENV_VARS=(VH_LIVE_UPSTREAM VH_AWS_ADMIN_API_KEY VH_AWS_ADMIN_SECRET_KEY VH_R2_ADMIN_ACCESS_KEY
-               VH_R2_ADMIN_SECRET_KEY VH_R2_ADMIN_ENDPOINT VH_CF_API_TOKEN)
-# Prints `export NAME=<quoted value>` lines for the live variables that are set (nothing unless VH_LIVE_UPSTREAM=1).
+# The one shared test bucket per provider (Cloudflare R2; AWS S3 when one is configured).
+LIVE_ENV_VARS=(VAULTHALLA_TEST_R2_ACCESS_KEY VAULTHALLA_TEST_R2_SECRET_ACCESS_KEY VAULTHALLA_TEST_R2_ENDPOINT
+               VAULTHALLA_TEST_R2_REGION VAULTHALLA_TEST_R2_BUCKET
+               VAULTHALLA_TEST_S3_ACCESS_KEY VAULTHALLA_TEST_S3_SECRET_ACCESS_KEY VAULTHALLA_TEST_S3_ENDPOINT
+               VAULTHALLA_TEST_S3_REGION VAULTHALLA_TEST_S3_BUCKET)
+# Prints `export NAME=<quoted value>` lines for the live variables that are set (nothing unless VH_LIVE_TESTS=1).
 live_env_exports() {
-  [[ "${VH_LIVE_UPSTREAM:-}" == 1 ]] || return 0
+  [[ "${VH_LIVE_TESTS:-}" == 1 ]] || return 0
   local v
   for v in "${LIVE_ENV_VARS[@]}"; do
     [[ -n "${!v:-}" ]] && printf 'export %s=%q\n' "$v" "${!v}"
