@@ -123,10 +123,10 @@ tools/smoke/s3_gateway_e2e.sh --web-timeout 180
 Remote R2/S3 validation is opt-in:
 
 ```bash
-tools/smoke/s3_gateway_e2e.sh --require-remote --prefix s3-gateway-e2e/manual-$(date -u +%Y%m%dT%H%M%SZ)
+tools/smoke/s3_gateway_e2e.sh --require-remote --prefix vh-test-runs/manual-$$-$(date -u +%s)/s3-gateway-e2e
 ```
 
-Remote smoke uses existing `S3_GATEWAY_SMOKE_*` and `VAULTHALLA_TEST_R2_*` settings. It deletes only the unique prefix it was given. If cleanup fails, the script prints the exact prefix to remove manually.
+Remote smoke uses the shared live test bucket (`VAULTHALLA_TEST_R2_*`) and a prefix under `vh-test-runs/`. It deletes only the unique prefix it was given. If cleanup fails, the script prints the exact prefix to remove manually.
 
 The scoped smoke has explicit budget-denial modes:
 

@@ -19,7 +19,9 @@ VH_BIN="${VH_BIN:-$DEFAULT_VH_BIN}"
 
 WEB_URL="${VAULTHALLA_E2E_BASE_URL:-http://127.0.0.1:3000}"
 GATEWAY_ENDPOINT="${S3_GATEWAY_ENDPOINT:-http://127.0.0.1:39000}"
-PREFIX="${S3_GATEWAY_E2E_PREFIX:-s3-gateway-e2e/$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+E2E_HOST="$(hostname -s 2>/dev/null | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9\n' '-')"
+# Under vh-test-runs/: the remote part writes to the shared live test bucket (testing.md, "Live provider tests").
+PREFIX="${S3_GATEWAY_E2E_PREFIX:-vh-test-runs/${E2E_HOST:-host}-$$-$(date -u +%s)/s3-gateway-e2e}"
 WEB_TIMEOUT=120
 GATEWAY_TIMEOUT=90
 USE_BUILD_RUNTIME="${S3_GATEWAY_E2E_USE_BUILD_RUNTIME:-0}"
@@ -42,7 +44,7 @@ Usage: tools/smoke/s3_gateway_e2e.sh [options]
 Options:
   --local-only             Exercise web and local gateway smoke only.
   --require-remote         Require the R2/S3-backed smoke pass.
-  --prefix <prefix>        Prefix for smoke data. Defaults to s3-gateway-e2e/<timestamp>-<pid>.
+  --prefix <prefix>        Prefix for smoke data. Defaults to vh-test-runs/<host>-<pid>-<unix time>/s3-gateway-e2e.
   --no-start-web           Do not start the Next dev server if the web URL is unreachable.
   --keep-processes         Keep wrapper-started background processes running after exit.
   --use-build-runtime      Run smoke against build/core/vaulthalla-server and restore systemd afterward.
@@ -201,12 +203,8 @@ is_local_url() {
   [[ "$host" == "localhost" || "$host" == "127.0.0.1" || "$host" == "::1" ]]
 }
 
+# The remote smoke's upstream is only ever the shared live test bucket (VAULTHALLA_TEST_R2_*).
 remote_configured() {
-  [[ -n "${S3_GATEWAY_SMOKE_API_KEY:-}" && -n "${S3_GATEWAY_SMOKE_UPSTREAM_BUCKET:-}" ]] && return 0
-  [[ -n "${S3_GATEWAY_SMOKE_UPSTREAM_BUCKET:-}" &&
-     -n "${S3_GATEWAY_SMOKE_UPSTREAM_ACCESS_KEY:-}" &&
-     -n "${S3_GATEWAY_SMOKE_UPSTREAM_SECRET_KEY:-}" &&
-     -n "${S3_GATEWAY_SMOKE_UPSTREAM_ENDPOINT:-}" ]] && return 0
   vh_e2e_has_r2_env
 }
 

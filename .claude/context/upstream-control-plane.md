@@ -81,12 +81,13 @@ buckets it created. Other providers: plain storage, but protection locks still a
   REST API (6003 / 1000). Events need one CF API token (Queues: Edit, Workers R2 Storage: Edit) stored as the key's
   provider token. R2 accepts any SigV4 region (`auto`, `wnam`, `us-east-1`). New R2 buckets carry a default
   "Default Multipart Abort Rule" (foreign). Collisions: 409 `BucketAlreadyOwnedByYou` on both providers.
-- Live tests: `VH_LIVE_UPSTREAM=1 … --gtest_filter='UpstreamLive*'` (only `vaulthalla-test-<ts>-*` names; cleans up).
-  The DB-backed file-recovery ones (`test_recovery_live.cpp`) run through `bin/tests/run_unit.sh` (testing.md, "Live
-  provider tests"); they proved adoption of a vault's own bucket + versioning enable + retention live (2026-10-16).
-  The test identity also lacks `s3:GetBucketObjectLockConfiguration` there (status warning only).
+- Live tests no longer provision anything (2026-10-22): the bucket/lifecycle/versioning/events live suites
+  (`UpstreamLive.*`, `test_recovery_live.cpp`, `tools/lab/upstream_live_smoke.py`) were removed after they left
+  buckets in the maintainer's account. The facts above were verified by them on 2026-10-15/16 and stay covered by the
+  transport-seam and fake suites; the only live tests are object-level ones in one shared bucket (testing.md, "Live
+  provider tests"). Re-verifying a provider fact that needs a new bucket is a manual, maintainer-approved job.
 - Provider versioning (file recovery, `AdminClient::{supportsVersioning,versioning,putVersioning}`; verified live
-  2026-10-16, `UpstreamLive.AwsVersioning`): PutBucketVersioning carries Content-MD5 (AWS requires an integrity
+  2026-10-16 by the since-removed `UpstreamLive.AwsVersioning`): PutBucketVersioning carries Content-MD5 (AWS requires an integrity
   header) and `x-amz-expected-bucket-owner` when the account is known, Status only — never MfaDelete/`x-amz-mfa`.
   The test identity has Get/PutBucketVersioning + ListBucketVersions; Enabled and Suspended read back on the first
   GET (~130 ms), but AWS still asks for 15 min before relying on versioned writes. R2 has no versioning:
@@ -97,6 +98,7 @@ buckets it created. Other providers: plain storage, but protection locks still a
 ## Tests
 
 DB-free: `UpstreamSigV4*`, `UpstreamProvider*`, `UpstreamEventDecode*`, `UpstreamPassLease*`, `ShellLogRedaction*`.
+Live (object-level, the shared test bucket only, never a bucket of their own): `Live/LiveObjects.*` (testing.md).
 DB-backed (`bin/tests/run_unit.sh`): `UpstreamStore*`, `UpstreamOps*`, `UpstreamEventOps*`, `UpstreamEvents*`,
 `UpstreamSubscriptions*`, `UpstreamScopedSync*`, `UpstreamParity*`, `SqlDeployerHistoryDb.*` (migration 110),
 `RoleParity*` (upstream bits). Fakes: `tests/helpers/upstream_admin_fakes.hpp`, `upstream_event_fakes.hpp`.

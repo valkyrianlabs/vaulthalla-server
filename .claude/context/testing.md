@@ -92,7 +92,8 @@ Design and invariants: `recovery.md`.
 | `RecoveryUsageLedger`, `RecoveryUsageDbTest` (`test_recovery_usage.cpp`) | per-vault UTC-day counters, request tags, first put/overwrite/delete classification, failed flushes |
 | `RecoveryParityTest` (`test_ops_parity_recovery.cpp`) | CLI ↔ ws verdicts and state for `vh vault recovery` / `snapshot` / `recovery` |
 | `S3VersionedOps*`, `S3VersionedFake` (`test_s3_versioned_ops.cpp`) | the real `s3::Controller` versioned ops (signing, parsing, metering, lock) and the `VersionedBucket` fake (DB-free) |
-| `UpstreamLive.AwsVersioning` (`test_upstream_live.cpp`) | opt-in (`VH_LIVE_UPSTREAM=1`): a new AWS bucket through enable → retention → suspend |
+| `RecoveryProviderTest.AnR2VaultRefusesProviderVersioningAndKeepsLocalSnapshotsLocal` | R2: provider versioning refused, nothing sent; local snapshot → overwrite → restore on the same vault, 0 data-plane/admin requests (was the live `R2VersioningRefused`) |
+| `Live/LiveObjects.ProviderVersionsInsideThePrefix` (`test_live_bucket.cpp`) | live, shared bucket: R2 answers ListObjectVersions 501; on a versioned AWS test bucket two PUTs, HEAD ?versionId, CopyObject restore |
 
 Helpers: `tests/helpers/{recovery_local,recovery_pricing,recovery_provider_harness,versioned_bucket}.hpp`. Contract:
 `tools/contracts/test_backing_writers_contract.py` (no in-place writer of vault backing files; `verify.sh packaging`).
@@ -228,8 +229,11 @@ Dev mode requires both `VH_BUILD_MODE=dev` and the gitignored `enable_dev_mode` 
 - `tools/smoke/s3_gateway_{e2e,merge_ready,scoped_budget_smoke}.sh`: S3 gateway smoke runs against a live install.
 - `tools/e2e/{load_env.sh,provision_e2e_user.sh}` + `web/tests/e2e` (Playwright).
 - `tools/dev/share_preview_smoke.mjs`: public share preview smoke.
-- Real R2 dogfooding writes to the real `vaulthalla-test` bucket. Use a unique prefix, clean it up, and check that
-  `.vaulthalla/index-v1.json` isn't left stale.
+- Real R2 dogfooding uses the one shared test bucket (`VAULTHALLA_TEST_R2_BUCKET`, `vh-test`), never a new one. Write
+  under `vh-test-runs/<host>-<pid>-<unix time>/…` and clean it up. The gateway smokes default to such prefixes and refuse
+  a remote run outside `vh-test-runs/`. A remote-cache gateway bucket is a vault on the whole upstream bucket, so its
+  `.vaulthalla/index-v1.json` lands at the bucket root: remove it after a remote smoke (no test may delete outside
+  `vh-test-runs/`).
 
 ## Known test gaps
 
@@ -249,21 +253,52 @@ Dev mode requires both `VH_BUILD_MODE=dev` and the gitignored `enable_dev_mode` 
 - The full `vh_unit_tests` binary against a real DB runs about 230s (S3CostSafety plus S3GatewayDb take about 185s),
   so `meson test` hits its 120s timeout. Run `./build/core/vh_unit_tests` directly for the DB-backed run.
 
-## Live provider tests (`UpstreamLive*`, never CI)
+## Live provider tests (`Live/*`, never CI)
 
-- Skipped unless `VH_LIVE_UPSTREAM=1`. Credentials: `VH_AWS_ADMIN_{API_KEY,SECRET_KEY}` (IAM `vaulthalla-test-admin`,
-  us-east-2), `VH_R2_ADMIN_{ACCESS_KEY,SECRET_KEY,ENDPOINT}`, optional `VH_CF_API_TOKEN`, from the gitignored repo
-  `.bashrc` (source it, never print it). Helpers: `tests/helpers/upstream_live.hpp` (`liveTestName`, `LiveCleanup`,
-  `liveDestroyTestBucket` with every version + a retried DeleteBucket). Only NEW `vaulthalla-test-<unix>-<random>`
-  buckets, deleted again even on failure.
-- DB-free adapters: `(set -a; . ./.bashrc; set +a; VH_LIVE_UPSTREAM=1 build/core/vh_unit_tests --gtest_filter='UpstreamLive.Aws*')`.
-- DB-backed (`test_recovery_live.cpp`: `UpstreamLive.AwsRecoverySmartCache`, `UpstreamLive.AwsRecoveryAcrossKeyRotation`,
-  `UpstreamLive.R2VersioningRefused`) need the per-run DB, so they go through `bin/tests/run_unit.sh`, whose `env -i`
-  would drop the credentials. With `VH_LIVE_UPSTREAM=1` in the caller's environment it hands exactly
-  `LIVE_ENV_VARS` (the names above) through to the test process on a pipe (never argv, never a file):
-  `(set -a; . ./.bashrc; set +a; VH_LIVE_UPSTREAM=1 bash bin/tests/run_unit.sh --build-dir build -- --gtest_filter='UpstreamLive.AwsRecovery*:UpstreamLive.R2VersioningRefused')`
-  (~1 min, ~80 S3 requests per AWS case). Every admin client Vaulthalla opens goes through a tally
-  (`setFactoryForTesting`) that fails the test if it lists the account's buckets or names any other bucket.
+**No test creates, deletes or reconfigures a bucket** (versioning, lifecycle, locks, event notifications, CORS). Agents
+running the old provisioning suites (`VH_LIVE_UPSTREAM=1` with account-admin keys) left 7-8 buckets in the maintainer's
+Cloudflare account; those suites, their credentials (`VH_{R2,AWS}_ADMIN_*`, `VH_CF_API_TOKEN`) and
+`tools/lab/upstream_live_smoke.py` are gone (2026-10-22). Bucket administration and events are covered by the fakes:
+`UpstreamProviderTest` (real adapters over the `curl::http` transport seam: create/collision codes, location
+constraints, HEAD routing, lifecycle round trip with foreign rules, versioning get/put, R2 refusals, protection,
+SQS/Cloudflare queues and notifications), `upstream_admin_fakes.hpp` / `upstream_event_fakes.hpp` (`UpstreamOps*`,
+`UpstreamEvent*`, `UpstreamParity*`, `RecoveryPolicyTest`), `RecoverySmartCacheTest` and `RecoveryProviderTest`
+(the former AWS recovery acceptance, incl. restore across a key rotation).
+
+- **One shared bucket per provider**, provisioned by hand: Cloudflare R2 `VAULTHALLA_TEST_R2_{ACCESS_KEY,
+  SECRET_ACCESS_KEY,ENDPOINT,REGION,BUCKET}` (`vh-test`, a bucket-scoped token: ListBuckets and GetBucketVersioning are
+  403, object calls work); AWS `VAULTHALLA_TEST_S3_*` (none configured: those instances skip; the bucket must be
+  unversioned or versioning Enabled). They live in the gitignored repo `.bashrc` (dev: `/srv/vaulthalla/.bashrc`);
+  source only those lines, never print them: `eval "$(grep -E '^export VAULTHALLA_TEST_R2_' .bashrc)"`.
+- **One helper:** `tests/helpers/live_bucket.hpp`. Fixtures derive from `LiveBucketTest` (parameterized `r2`/`aws`):
+  none of a provider's five variables set = skip; some set = fail naming the missing ones; all set but the bucket not
+  usable = fail with the provider's answer (never a silent skip). Each test gets `live().key(…)`,
+  `live().controller()` (data plane) and `live().admin()` (guarded admin client).
+- **A prefix per test:** `vh-test-runs/<host>-<pid>-<start>/<Suite>.<Test>/`. `TearDown` (an RAII `LivePrefix`, so
+  also after a failed assertion or an exception) deletes every object, every version and delete marker where the
+  provider has versions, and every unfinished multipart upload under it, then fails unless the prefix lists empty.
+  R2 has no versions (ListObjectVersions answers 501 NotImplemented), so a plain listing is complete there.
+- **Sweep:** the first live test of a process deletes `vh-test-runs/` runs that started more than 6 h ago (crashed or
+  killed runs; LastModified for a name without a start time). Nothing outside `vh-test-runs/` is ever deleted.
+- **Runtime guard:** `GuardedAdmin` refuses CreateBucket, DeleteBucket, lifecycle and versioning writes, ListBuckets
+  and probes without forwarding them, any bucket but the configured one, and deletes outside the test's prefix; while
+  a live test runs, `adminFor` hands out only that client (for the test credential) and `eventsFor` nothing. A
+  violation fails the test even if the code under test swallows the exception, and `TearDown` fails a test that left a
+  key outside `vh-test-runs/`. `LiveBucketGuard.*` (DB-free, runs in CI) proves the guard; the source half is
+  `tools/contracts/test_live_bucket_contract.py` (no provisioning credentials or bucket-administration commands in
+  tests/tooling, real adapters only in the helper or behind the transport seam, live test files reach the provider
+  only through the helper, `run_unit.sh` hands through only the shared-bucket variables).
+- Suites: `Live/S3ProviderIntegrationTest.*` (`test_S3Provider.cpp`: upload/download/delete, unicode keys, metadata,
+  multipart + abort, listing, previews from downloaded buffers, credential validation), `Live/LiveObjects.*`
+  (`test_live_bucket.cpp`: admin object calls + protection lock in the prefix, SigV4 on every ListObjectsV2 page,
+  provider versions, the cleanup guard on a scope that throws with an open multipart upload). All DB-free:
+  `(eval "$(grep -E '^export VAULTHALLA_TEST_R2_' .bashrc)"; build/core/vh_unit_tests --gtest_filter='Live*')`
+  (~30 s on R2). Through the per-run DB runner, `VH_LIVE_TESTS=1` hands exactly `LIVE_ENV_VARS` through on a pipe:
+  `(eval "$(grep -E '^export VAULTHALLA_TEST_R2_' .bashrc)"; VH_LIVE_TESTS=1 bash bin/tests/run_unit.sh -- --gtest_filter='Live*')`.
+- Proof it leaves nothing (2026-10-22, macOS and dev): `vh-test` held 0 objects before and after full live runs, also
+  after runs with a forced assertion failure and a forced exception mid-test, and a planted 8 h old run was swept.
+  Check with the aws CLI and the test credential: `list-objects-v2 --prefix vh-test-runs/`, the whole bucket and
+  `list-multipart-uploads`.
 
 ## Provider test credentials (Phase 2 scaffold)
 
@@ -271,7 +306,7 @@ Dev mode requires both `VH_BUILD_MODE=dev` and the gitignored `enable_dev_mode` 
   dedicated S3 + R2 buckets with bucket-scoped keys. The package never ships, reads, rewrites or deletes it (upgrade and
   purge leave it; contract-tested), and the daemon never loads it.
 - Template + tooling: `tools/lab/providers.env.example` (placeholder `CHANGE_ME` values; variable names are the
-  `VAULTHALLA_TEST_{S3,R2}_*` ones core tests and `tools/smoke` already read, plus `VAULTHALLA_TEST_PROVIDER_PREFIX` /
+  `VAULTHALLA_TEST_{S3,R2}_*` ones the live tests and `tools/smoke` read, plus `VAULTHALLA_TEST_PROVIDER_PREFIX` /
   `VAULTHALLA_TEST_PROVIDER_DESTRUCTIVE` safety rails). `bash tools/lab/test_providers.sh install|check [--host vh-storage]`
   creates the scaffold without overwriting and reports set/placeholder/missing per variable, never values.
 - Harness wiring: `tools/e2e/load_env.sh` sources it when readable (override path with `VH_TEST_PROVIDERS_ENV`). Run

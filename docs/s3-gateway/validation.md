@@ -34,7 +34,7 @@ The browser suite creates a fresh `e2e_s3gw_*` admin user during global setup fo
 Remote-backed smoke runs when remote env is present or required explicitly:
 
 ```bash
-tools/smoke/s3_gateway_e2e.sh --require-remote --prefix s3-gateway-e2e/manual-$(date -u +%Y%m%dT%H%M%SZ)
+tools/smoke/s3_gateway_e2e.sh --require-remote --prefix vh-test-runs/manual-$$-$(date -u +%s)/s3-gateway-e2e
 ```
 
 The remote smoke uses a unique prefix and reports cleanup status. It deletes only the supplied prefix. If cleanup fails, it reports the prefix and exits non-zero.
