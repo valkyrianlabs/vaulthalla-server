@@ -13,6 +13,7 @@
 #include "db/query/vault/Key.hpp"
 #include "fs/Filesystem.hpp"
 #include "fs/cache/Registry.hpp"
+#include "fs/model/File.hpp"
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "ops/Error.hpp"

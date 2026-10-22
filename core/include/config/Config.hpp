@@ -306,7 +306,6 @@ struct MountConfig {
 
 struct DevConfig {
     bool enabled = false;
-    bool init_r2_test_vault = false;
 };
 
 struct SubsystemLogLevelsConfig {

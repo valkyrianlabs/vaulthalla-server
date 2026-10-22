@@ -8,11 +8,11 @@
 # would mean something else as root); the role's settings are read from the root-only file and handed only to the
 # test process's environment. Nothing is installed, no role is rotated, no other database is touched.
 #
-# Live provider tests (Live/*, tests/helpers/live_bucket.hpp, never CI) read the shared test bucket's credential from
-# the environment, which the `env -i` below clears. Only with VH_LIVE_TESTS=1 in the caller's environment are exactly
-# the variables in LIVE_ENV_VARS handed through: on a pipe (never argv, never a file), to the test process only. E.g.
-#   (eval "$(grep -E '^export VAULTHALLA_TEST_R2_' .bashrc)"; VH_LIVE_TESTS=1 bin/tests/run_unit.sh -- --gtest_filter='Live/*')
-# There are no bucket-provisioning credentials here on purpose: no test creates, deletes or reconfigures a bucket.
+# Live R2 tests (LiveR2.*, tests/helpers/live_bucket.hpp, never CI) are opt-in: they read VH_LIVE_TESTS=1 and the R2
+# admin key from the environment, which the `env -i` below clears. Only with VH_LIVE_TESTS=1 in the caller's
+# environment are exactly the variables in LIVE_ENV_VARS handed through: on a pipe (never argv, never a file), to the
+# test process only; without it the live tests skip. E.g.
+#   (eval "$(grep -E '^export VH_R2_ADMIN_' .bashrc)"; VH_LIVE_TESTS=1 bin/tests/run_unit.sh -- --gtest_filter='Live*')
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -62,11 +62,10 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# The one shared test bucket per provider (Cloudflare R2; AWS S3 when one is configured).
-LIVE_ENV_VARS=(VAULTHALLA_TEST_R2_ACCESS_KEY VAULTHALLA_TEST_R2_SECRET_ACCESS_KEY VAULTHALLA_TEST_R2_ENDPOINT
-               VAULTHALLA_TEST_R2_REGION VAULTHALLA_TEST_R2_BUCKET
-               VAULTHALLA_TEST_S3_ACCESS_KEY VAULTHALLA_TEST_S3_SECRET_ACCESS_KEY VAULTHALLA_TEST_S3_ENDPOINT
-               VAULTHALLA_TEST_S3_REGION VAULTHALLA_TEST_S3_BUCKET)
+# The opt-in switch, the R2 admin key (each run creates and deletes one vh-test-* bucket) and the optional Cloudflare
+# API token of the event-notification test.
+LIVE_ENV_VARS=(VH_LIVE_TESTS VH_R2_ADMIN_ACCESS_KEY VH_R2_ADMIN_SECRET_KEY VH_R2_ADMIN_ENDPOINT VH_R2_ADMIN_REGION
+               VH_CF_API_TOKEN)
 # Prints `export NAME=<quoted value>` lines for the live variables that are set (nothing unless VH_LIVE_TESTS=1).
 live_env_exports() {
   [[ "${VH_LIVE_TESTS:-}" == 1 ]] || return 0

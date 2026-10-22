@@ -93,7 +93,7 @@ The loader reads, when present:
 - `./deploy/bashrc`
 - `./deploy/vaulthalla.env`
 
-The redacted report shows whether `VH_TEST_DB_*`, `VAULTHALLA_TEST_R2_*`, and `VAULTHALLA_E2E_*` are set without printing secret values.
+The redacted report shows whether `VH_TEST_DB_*`, `S3_GATEWAY_SMOKE_UPSTREAM_*`, and `VAULTHALLA_E2E_*` are set without printing secret values.
 
 The focused browser suite can auto-start the local Next dev server when the base URL is localhost and `VAULTHALLA_E2E_NO_WEB_SERVER` is not set:
 
@@ -123,10 +123,10 @@ tools/smoke/s3_gateway_e2e.sh --web-timeout 180
 Remote R2/S3 validation is opt-in:
 
 ```bash
-tools/smoke/s3_gateway_e2e.sh --require-remote --prefix vh-test-runs/manual-$$-$(date -u +%s)/s3-gateway-e2e
+tools/smoke/s3_gateway_e2e.sh --require-remote --prefix s3-gateway-e2e/manual-$(date -u +%Y%m%dT%H%M%SZ)
 ```
 
-Remote smoke uses the shared live test bucket (`VAULTHALLA_TEST_R2_*`) and a prefix under `vh-test-runs/`. It deletes only the unique prefix it was given. If cleanup fails, the script prints the exact prefix to remove manually.
+Remote smoke uses `S3_GATEWAY_SMOKE_*` settings; `S3_GATEWAY_SMOKE_UPSTREAM_BUCKET` must name an existing `vh-test-*` bucket (the smoke never creates buckets). It deletes only the unique prefix it was given. If cleanup fails, the script prints the exact prefix to remove manually.
 
 The scoped smoke has explicit budget-denial modes:
 

@@ -25,17 +25,14 @@ ACTUAL_MONTHLY_LIMIT="${S3_GATEWAY_SMOKE_ACTUAL_MONTHLY_LIMIT:-0.00000000}"
 MC_ALIAS="${S3_GATEWAY_SMOKE_MC_ALIAS:-vh-smoke}"
 UPSTREAM_API_KEY="${S3_GATEWAY_SMOKE_API_KEY:-}"
 UPSTREAM_API_KEY_NAME="${S3_GATEWAY_SMOKE_UPSTREAM_API_KEY_NAME:-vh-smoke-upstream-$$}"
-# The remote-cache upstream is always the one shared live test bucket (testing.md, "Live provider tests"): no other
-# bucket, never one this script creates. Its objects go under vh-test-runs/, which the live tests' sweep also clears
-# after an interrupted run.
-UPSTREAM_BUCKET="${VAULTHALLA_TEST_R2_BUCKET:-}"
-UPSTREAM_ACCESS_KEY="${VAULTHALLA_TEST_R2_ACCESS_KEY:-}"
-UPSTREAM_SECRET_KEY="${VAULTHALLA_TEST_R2_SECRET_ACCESS_KEY:-}"
-UPSTREAM_ENDPOINT="${VAULTHALLA_TEST_R2_ENDPOINT:-}"
-UPSTREAM_REGION="${VAULTHALLA_TEST_R2_REGION:-auto}"
-UPSTREAM_PROVIDER="cloudflare-r2"
-SMOKE_HOST="$(hostname -s 2>/dev/null | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9\n' '-')"
-PREFIX="${S3_GATEWAY_SMOKE_PREFIX:-vh-test-runs/${SMOKE_HOST:-host}-$$-$(date -u +%s)/s3-gateway-smoke}"
+# The remote-cache upstream: an existing vh-test-* bucket the operator names (this script never creates buckets).
+UPSTREAM_BUCKET="${S3_GATEWAY_SMOKE_UPSTREAM_BUCKET:-}"
+UPSTREAM_ACCESS_KEY="${S3_GATEWAY_SMOKE_UPSTREAM_ACCESS_KEY:-}"
+UPSTREAM_SECRET_KEY="${S3_GATEWAY_SMOKE_UPSTREAM_SECRET_KEY:-}"
+UPSTREAM_ENDPOINT="${S3_GATEWAY_SMOKE_UPSTREAM_ENDPOINT:-}"
+UPSTREAM_REGION="${S3_GATEWAY_SMOKE_UPSTREAM_REGION:-auto}"
+UPSTREAM_PROVIDER="${S3_GATEWAY_SMOKE_UPSTREAM_PROVIDER:-cloudflare-r2}"
+PREFIX="${S3_GATEWAY_SMOKE_PREFIX:-s3-gateway-test/$(date -u +%Y%m%dT%H%M%SZ)-$$}"
 BUDGET_DENIAL="${S3_GATEWAY_SMOKE_BUDGET_DENIAL:-synthetic}"
 BUDGET_DENIAL_SET=0
 LOCAL_ONLY=0
@@ -63,8 +60,7 @@ Options:
   --budget-denial <synthetic|actual-upstream|both>
                      Select deterministic budget-denial smoke mode. Default: synthetic.
   --keep-resources   Do not revoke credentials or delete the test prefix.
-  --prefix <prefix>  Prefix for all test objects. Defaults to vh-test-runs/<host>-<pid>-<unix time>/s3-gateway-smoke
-                     (remote runs must stay under vh-test-runs/).
+  --prefix <prefix>  Prefix for all test objects. Defaults to s3-gateway-test/<timestamp>-<pid>.
   -h, --help         Show this help.
 USAGE
 }
@@ -135,8 +131,8 @@ if [[ -z "$PREFIX" ]]; then
   echo "prefix must not be empty" >&2
   exit 2
 fi
-if [[ "$LOCAL_ONLY" != "1" && "$PREFIX" != vh-test-runs/?*/?* ]]; then
-  echo "the remote-cache smoke writes to the shared test bucket: --prefix must be vh-test-runs/<run>/<name>" >&2
+if [[ -n "$UPSTREAM_BUCKET" && "$UPSTREAM_BUCKET" != vh-test-?* ]]; then
+  echo "S3_GATEWAY_SMOKE_UPSTREAM_BUCKET must be a vh-test-* test bucket (the smoke writes to and deletes from it)" >&2
   exit 2
 fi
 
@@ -392,7 +388,7 @@ if [[ "$LOCAL_ONLY" != "1" ]]; then
     echo "--require-remote set but upstream API key/bucket configuration is unavailable" >&2
     exit 2
   else
-    echo "3. Skipping remote-cache bucket; set VAULTHALLA_TEST_R2_* (the shared live test bucket)"
+    echo "3. Skipping remote-cache bucket; set S3_GATEWAY_SMOKE_UPSTREAM_BUCKET (a vh-test-* bucket) with S3_GATEWAY_SMOKE_API_KEY or S3_GATEWAY_SMOKE_UPSTREAM_*"
   fi
 else
   echo "3. Skipping remote-cache bucket due to --local-only"

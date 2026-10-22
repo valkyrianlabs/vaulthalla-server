@@ -81,11 +81,13 @@ buckets it created. Other providers: plain storage, but protection locks still a
   REST API (6003 / 1000). Events need one CF API token (Queues: Edit, Workers R2 Storage: Edit) stored as the key's
   provider token. R2 accepts any SigV4 region (`auto`, `wnam`, `us-east-1`). New R2 buckets carry a default
   "Default Multipart Abort Rule" (foreign). Collisions: 409 `BucketAlreadyOwnedByYou` on both providers.
-- Live tests no longer provision anything (2026-10-22): the bucket/lifecycle/versioning/events live suites
-  (`UpstreamLive.*`, `test_recovery_live.cpp`, `tools/lab/upstream_live_smoke.py`) were removed after they left
-  buckets in the maintainer's account. The facts above were verified by them on 2026-10-15/16 and stay covered by the
-  transport-seam and fake suites; the only live tests are object-level ones in one shared bucket (testing.md, "Live
-  provider tests"). Re-verifying a provider fact that needs a new bucket is a manual, maintainer-approved job.
+- Live tests (2026-10-22, testing.md "Live provider tests"): opt-in (`VH_LIVE_TESTS=1`), R2 only, through
+  `tests/helpers/live_bucket.hpp`. Two rules: every bucket a test creates is `vh-test-<host>-<pid>-<run start>` and the
+  helper refuses every other bucket/queue name; every such bucket is emptied, deleted and checked gone after the run
+  (orphans of that pattern older than 6 h are swept). One bucket per run: the real `R2Admin` create/collision/delete
+  path plus a small data-plane suite and an R2 event-notification test (needs `VH_CF_API_TOKEN`). The facts above from
+  2026-10-15/16 came from the earlier, since-consolidated `UpstreamLive.*` / `test_recovery_live.cpp` suites and stay
+  covered by the transport-seam and fake suites.
 - Provider versioning (file recovery, `AdminClient::{supportsVersioning,versioning,putVersioning}`; verified live
   2026-10-16 by the since-removed `UpstreamLive.AwsVersioning`): PutBucketVersioning carries Content-MD5 (AWS requires an integrity
   header) and `x-amz-expected-bucket-owner` when the account is known, Status only — never MfaDelete/`x-amz-mfa`.
@@ -98,7 +100,7 @@ buckets it created. Other providers: plain storage, but protection locks still a
 ## Tests
 
 DB-free: `UpstreamSigV4*`, `UpstreamProvider*`, `UpstreamEventDecode*`, `UpstreamPassLease*`, `ShellLogRedaction*`.
-Live (object-level, the shared test bucket only, never a bucket of their own): `Live/LiveObjects.*` (testing.md).
+Live (opt-in, one `vh-test-*` bucket per run): `LiveR2.*`; guard self-tests `LiveBucketGuard.*` (testing.md).
 DB-backed (`bin/tests/run_unit.sh`): `UpstreamStore*`, `UpstreamOps*`, `UpstreamEventOps*`, `UpstreamEvents*`,
 `UpstreamSubscriptions*`, `UpstreamScopedSync*`, `UpstreamParity*`, `SqlDeployerHistoryDb.*` (migration 110),
 `RoleParity*` (upstream bits). Fakes: `tests/helpers/upstream_admin_fakes.hpp`, `upstream_event_fakes.hpp`.

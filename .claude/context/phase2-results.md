@@ -30,8 +30,7 @@ with it) and delete the role.
 
 ## S3/R2
 
-- **R2: live.** (Since 2026-10-22 under `vh-test-runs/` prefixes in the shared bucket only; testing.md "Live provider
-  tests".) `core/tests/unit/test_S3Provider.cpp` runs against Cloudflare R2 when `VAULTHALLA_TEST_R2_*` is set; the
+- **R2: live.** `core/tests/unit/test_S3Provider.cpp` runs against Cloudflare R2 when `VAULTHALLA_TEST_R2_*` is set; the
   dev VM's `deploy/vaulthalla.env` (and the project `.bashrc`) carry those test credentials, so every local full-suite
   run exercised R2: credential validation, upload/download/list/delete, multipart and abort, unicode keys, encrypted
   metadata, bucket-empty checks (11 tests). CI skips them: the credentials aren't configured there.

@@ -15,7 +15,6 @@
 #include "fs/cache/Registry.hpp"
 #include "log/Registry.hpp"
 #include "runtime/Deps.hpp"
-#include "seed/include/seed_db.hpp"
 #include "crypto/id/Generator.hpp"
 #include "sync/model/LocalPolicy.hpp"
 #include "preview/cache/Store.hpp"
@@ -88,20 +87,6 @@ std::vector<Manager::UnavailableVault> Manager::unavailableVaults() const {
 void Manager::initStorageEngines() {
     log::Registry::storage()->debug("[StorageManager] Initializing storage engines...");
     std::scoped_lock lock(mutex_);
-
-    if (const auto& config = Registry::get().dev; config.enabled && config.init_r2_test_vault) {
-        if (const auto admin = vh::identities::manager().userByName("admin")) {
-            constexpr uintmax_t r2TestVaultQuotaBytes = 10ull * 1024ull * 1024ull * 1024ull;
-            const auto existing = db::query::vault::Vault::getVault("R2 Test Vault", admin->id);
-            if (!existing) {
-                seed::initDevCloudVault();
-            } else if (existing->quota == 0) {
-                existing->quota = r2TestVaultQuotaBytes;
-                db::query::vault::Vault::upsertVault(existing);
-                log::Registry::storage()->info("[StorageManager] Updated R2 Test Vault quota to {} bytes", r2TestVaultQuotaBytes);
-            }
-        }
-    }
 
     engines_.clear();
     unavailable_.clear();

@@ -269,8 +269,8 @@ bucket: choosing `off`/`local_snapshots` does not suspend a bucket that is versi
   Outcomes carry `retryable` and the request usage (source `recovery_restore`).
 - Tests: `RecoveryProviderTest*`, `RecoverySmartCacheTest*` (the acceptance scenario), harness
   `tests/helpers/recovery_provider_harness.hpp`.
-- **Live acceptance on real AWS S3** (the since-removed `test_recovery_live.cpp`: it created its own buckets, which
-  live tests no longer may; passed 2026-10-16, us-east-2, fresh test buckets; the same steps stay covered by
+- **Live acceptance on real AWS S3** (the since-removed `test_recovery_live.cpp`, consolidated away with the other
+  live suites on 2026-10-22; passed 2026-10-16, us-east-2, fresh test buckets; the same steps stay covered by
   `RecoverySmartCacheTest` / `RecoveryProviderTest`): the same scenario through ops (disclosure → `update` with
   `accept_adoption` on a new bucket → list → plan → restore → costs), real `CloudEngine`, prices from the signed
   fixture catalog. Measured: each upload pass PUT 2 (object + manifest; the vault's first pass PUT the manifest
@@ -510,5 +510,5 @@ Open, consolidated from the slices (the sections above keep the detail):
   pass `--token`; fix by refusing early or re-planning.
 - **Web:** the point-in-time form is shown for folders of local vaults too; ops refuses it (Invalid).
 - **Proof gaps:** no Tier A/B harness scenario for recovery yet; no live provider-versioning run since the
-  provisioning live suites were removed (2026-10-22; a versioned AWS test bucket in `VAULTHALLA_TEST_S3_*` would let
-  `Live/LiveObjects.ProviderVersionsInsideThePrefix/aws` cover the data plane); no lab install of a recovery build.
+  live suites were consolidated (2026-10-22: the live R2 tests cover the data plane only; R2 has no versions); no lab
+  install of a recovery build.

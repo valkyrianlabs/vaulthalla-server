@@ -14,8 +14,6 @@
 
 // Types
 #include "rbac/permission/Permission.hpp"
-#include "vault/model/S3Vault.hpp"
-#include "sync/model/RemotePolicy.hpp"
 #include "sync/model/LocalPolicy.hpp"
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
@@ -26,13 +24,11 @@
 #include "vault/model/Vault.hpp"
 #include "fs/model/Directory.hpp"
 #include "vault/model/APIKey.hpp"
+#include "config/Registry.hpp"
 
 // Misc
-#include "config/Registry.hpp"
-#include "vault/APIKeyManager.hpp"
 #include "log/Registry.hpp"
 #include "runtime/Deps.hpp"
-#include "storage/s3/Controller.hpp"
 #include "crypto/id/Generator.hpp"
 #include "crypto/util/hash.hpp"
 #include "auth/Bootstrap.hpp"
@@ -46,10 +42,8 @@
 #include <fstream>
 #include <set>
 #include <string>
-#include <string_view>
 #include <vector>
 #include <filesystem>
-#include <pugixml.hpp>
 #include <spdlog/spdlog.h>
 #include <paths.h>
 
@@ -65,108 +59,6 @@ using namespace vh::sync::model;
 using namespace vh::fs::model;
 
 namespace {
-
-struct R2TestEnv {
-    std::string access_key;
-    std::string secret_access_key;
-    std::string endpoint;
-    std::string region;
-    std::string bucket;
-};
-
-std::optional<std::string> readEnv(const std::string_view name) {
-    if (const auto* value = std::getenv(std::string(name).c_str()); value && *value)
-        return std::string(value);
-    return std::nullopt;
-}
-
-std::optional<R2TestEnv> readR2TestEnv(const char* purpose) {
-    constexpr std::string_view prefix = "VAULTHALLA_TEST_R2_";
-    const auto accessKey = readEnv(std::string(prefix) + "ACCESS_KEY");
-    const auto secretKey = readEnv(std::string(prefix) + "SECRET_ACCESS_KEY");
-    const auto endpoint = readEnv(std::string(prefix) + "ENDPOINT");
-    const auto region = readEnv(std::string(prefix) + "REGION");
-    const auto bucket = readEnv(std::string(prefix) + "BUCKET");
-
-    if (!accessKey) {
-        vh::log::Registry::vaulthalla()->info("[initdb] Skipping {}; missing {}ACCESS_KEY", purpose, prefix);
-        return std::nullopt;
-    }
-    if (!secretKey) {
-        vh::log::Registry::vaulthalla()->info("[initdb] Skipping {}; missing {}SECRET_ACCESS_KEY", purpose, prefix);
-        return std::nullopt;
-    }
-    if (!endpoint) {
-        vh::log::Registry::vaulthalla()->info("[initdb] Skipping {}; missing {}ENDPOINT", purpose, prefix);
-        return std::nullopt;
-    }
-    if (!region) {
-        vh::log::Registry::vaulthalla()->info("[initdb] Skipping {}; missing {}REGION", purpose, prefix);
-        return std::nullopt;
-    }
-    if (!bucket) {
-        vh::log::Registry::vaulthalla()->info("[initdb] Skipping {}; missing {}BUCKET", purpose, prefix);
-        return std::nullopt;
-    }
-
-    return R2TestEnv{
-        .access_key = *accessKey,
-        .secret_access_key = *secretKey,
-        .endpoint = *endpoint,
-        .region = *region,
-        .bucket = *bucket
-    };
-}
-
-bool shouldCleanDevR2TestBucket() {
-    try {
-        const auto& dev = Registry::get().dev;
-        return dev.init_r2_test_vault && (dev.enabled || vh::paths::isTestMode());
-    } catch (...) {
-        return false;
-    }
-}
-
-std::shared_ptr<APIKey> r2TestAPIKey(const R2TestEnv& env, const std::string& name) {
-    auto key = std::make_shared<APIKey>();
-    key->user_id = 1;
-    key->name = name;
-    key->provider = S3Provider::CloudflareR2;
-    key->region = env.region;
-    key->access_key = env.access_key;
-    key->secret_access_key = env.secret_access_key;
-    key->endpoint = env.endpoint;
-    return key;
-}
-
-std::vector<std::filesystem::path> listObjectKeysIncludingManifests(const std::u8string& xml) {
-    if (xml.empty()) return {};
-
-    const std::string wrapped = "<VaulthallaListObjects>" +
-        std::string(reinterpret_cast<const char*>(xml.data()), xml.size()) +
-        "</VaulthallaListObjects>";
-
-    pugi::xml_document doc;
-    const pugi::xml_parse_result result = doc.load_string(wrapped.c_str());
-    if (!result) {
-        vh::log::Registry::vaulthalla()->warn("[initdb] Failed to parse R2 test bucket listing: {}", result.description());
-        return {};
-    }
-
-    std::vector<std::filesystem::path> keys;
-    const auto collectKeys = [&](const auto& self, const pugi::xml_node& node) -> void {
-        for (const pugi::xml_node child : node.children()) {
-            if (std::string_view(child.name()) == "Key" &&
-                std::string_view(child.parent().name()) == "Contents") {
-                if (const auto* value = child.text().get(); value && *value)
-                    keys.emplace_back(value);
-            }
-            self(self, child);
-        }
-    };
-    collectKeys(collectKeys, doc);
-    return keys;
-}
 
 vh::rbac::role::Vault shareDownloadOnlyRole() {
     namespace role = vh::rbac::role;
@@ -323,8 +215,6 @@ void assignSuperAdminRole(pqxx::work& txn, const unsigned int userId, const unsi
 void vh::seed::seed_database() {
     log::Registry::audit()->info("Initializing database for Vaulthalla v{}", VH_VERSION);
     log::Registry::vaulthalla()->debug("Initializing database for Vaulthalla v{}", VH_VERSION);
-
-    cleanupDevR2TestBucket();
 
     initPermissions();
     initRoles();
@@ -627,86 +517,6 @@ void vh::seed::initRoot() {
 
     if (!db::query::fs::Entry::rootExists()) throw std::runtime_error("Failed to create root directory in database");
     log::Registry::vaulthalla()->info("[initdb] Root directory initialized successfully");
-}
-
-void vh::seed::initDevCloudVault() {
-    log::Registry::vaulthalla()->debug("[initdb] Initializing development Cloudflare R2 vault...");
-
-    try {
-        cleanupDevR2TestBucket();
-
-        const auto env = readR2TestEnv("R2 test vault seed");
-        if (!env) return;
-
-        auto key = r2TestAPIKey(*env, "R2 Test Key");
-
-        key->id = runtime::Deps::get().apiKeyManager->addAPIKey(key);
-
-        if (key->id == 0) {
-            log::Registry::storage()->error("[StorageManager] Failed to create API key for Cloudflare R2");
-            return;
-        }
-
-        const auto vault = std::make_shared<S3Vault>();
-        vault->name = "R2 Test Vault";
-        vault->description = "Test vault for Cloudflare R2 in development mode";
-        vault->mount_point = id::Generator({ .namespace_token = vault->name }).generate();
-        vault->api_key_id = key->id;
-        vault->owner_id = 1;
-        vault->bucket = env->bucket;
-        vault->type = VaultType::S3;
-        vault->quota = 10ull * 1024ull * 1024ull * 1024ull;
-
-        const auto sync = std::make_shared<RemotePolicy>();
-        sync->interval = std::chrono::minutes(10);
-        sync->conflict_policy = RemotePolicy::ConflictPolicy::KeepLocal;
-        sync->strategy = RemotePolicy::Strategy::Sync;
-
-        vault->id = db::query::vault::Vault::upsertVault(vault, sync);
-
-        log::Registry::vaulthalla()->info("[initdb] Created R2 test vault");
-    } catch (const std::exception& e) {
-        log::Registry::storage()->error("[StorageManager] Error initializing dev Cloudflare R2 vault: {}", e.what());
-    }
-}
-
-void vh::seed::cleanupDevR2TestBucket() {
-    if (!shouldCleanDevR2TestBucket()) return;
-
-    const auto env = readR2TestEnv("R2 test bucket cleanup");
-    if (!env) return;
-
-    try {
-        vh::storage::s3::Controller controller(r2TestAPIKey(*env, "R2 Test Cleanup Key"), env->bucket);
-        const auto keys = listObjectKeysIncludingManifests(controller.listObjects());
-
-        if (keys.empty()) {
-            log::Registry::vaulthalla()->info("[initdb] R2 test bucket cleanup found no objects");
-            return;
-        }
-
-        uint64_t deleted = 0;
-        for (const auto& key : keys) {
-            try {
-                controller.deleteObject(key);
-                ++deleted;
-            } catch (const std::exception& e) {
-                log::Registry::vaulthalla()->warn(
-                    "[initdb] Failed to delete R2 test bucket object '{}': {}",
-                    key.string(),
-                    e.what()
-                );
-            }
-        }
-
-        log::Registry::vaulthalla()->info(
-            "[initdb] R2 test bucket cleanup deleted {}/{} object(s)",
-            deleted,
-            keys.size()
-        );
-    } catch (const std::exception& e) {
-        log::Registry::vaulthalla()->warn("[initdb] R2 test bucket cleanup failed: {}", e.what());
-    }
 }
 
 void vh::seed::reconcileSystemPrincipals() {

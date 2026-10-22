@@ -119,3 +119,8 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   frame's requestId; router faults answer `<command>.response` with status ERROR instead of `UNKNOWN` /
   `Unknown.response`; a non-string requestId no longer breaks an answer; a missing `payload` reads as `{}`.
 - ws contract: `envelope` documents the request, answer and error frames.
+
+## Development
+- Remove the dev-mode R2 test vault: the `dev.init_r2_test_vault` setting (config, ws `DevConfig`, console
+  settings) and its seeding, which read the retired shared test-bucket credential, bound a vault to that bucket and
+  cleared it at initdb. An existing `config.yaml` key is ignored.

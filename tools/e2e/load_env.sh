@@ -102,11 +102,10 @@ vh_e2e_redacted_env_report() {
     VH_TEST_DB_HOST \
     VH_TEST_DB_PORT \
     VH_TEST_DB_NAME \
-    VAULTHALLA_TEST_R2_ACCESS_KEY \
-    VAULTHALLA_TEST_R2_SECRET_ACCESS_KEY \
-    VAULTHALLA_TEST_R2_ENDPOINT \
-    VAULTHALLA_TEST_R2_REGION \
-    VAULTHALLA_TEST_R2_BUCKET \
+    S3_GATEWAY_SMOKE_UPSTREAM_ACCESS_KEY \
+    S3_GATEWAY_SMOKE_UPSTREAM_SECRET_KEY \
+    S3_GATEWAY_SMOKE_UPSTREAM_ENDPOINT \
+    S3_GATEWAY_SMOKE_UPSTREAM_BUCKET \
     VAULTHALLA_E2E_USER \
     VAULTHALLA_E2E_PASSWORD
   do
@@ -130,12 +129,13 @@ vh_e2e_require_test_db_env() {
   return 1
 }
 
+# The remote (R2) gateway smoke's upstream: an existing vh-test-* bucket the operator names explicitly. No script
+# creates buckets (testing.md, "Live provider tests").
 vh_e2e_has_r2_env() {
-  [[ -n "${VAULTHALLA_TEST_R2_BUCKET:-}" &&
-     -n "${VAULTHALLA_TEST_R2_ACCESS_KEY:-}" &&
-     -n "${VAULTHALLA_TEST_R2_SECRET_ACCESS_KEY:-}" &&
-     -n "${VAULTHALLA_TEST_R2_ENDPOINT:-}" &&
-     -n "${VAULTHALLA_TEST_R2_REGION:-}" ]]
+  [[ -n "${S3_GATEWAY_SMOKE_UPSTREAM_BUCKET:-}" &&
+     -n "${S3_GATEWAY_SMOKE_UPSTREAM_ACCESS_KEY:-}" &&
+     -n "${S3_GATEWAY_SMOKE_UPSTREAM_SECRET_KEY:-}" &&
+     -n "${S3_GATEWAY_SMOKE_UPSTREAM_ENDPOINT:-}" ]]
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

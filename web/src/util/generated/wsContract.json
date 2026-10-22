@@ -1834,13 +1834,6 @@
           "types": [
             "boolean"
           ]
-        },
-        {
-          "name": "init_r2_test_vault",
-          "required": true,
-          "types": [
-            "boolean"
-          ]
         }
       ],
       "name": "DevConfig"
@@ -16593,7 +16586,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "b88548f68f153d6bc8f93c6a2ebcb00344107aed747eff6594714161cabc6680",
+  "models_hash": "fca2a849c7ecc7a1e9de39406804e00ad28349a4b3e0f2bcb31dbc091afdd815",
   "ws": [
     {
       "auth": "session",

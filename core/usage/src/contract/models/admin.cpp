@@ -319,7 +319,7 @@ std::vector<WsModel> adminSettingsModels() {
         std::move(subsystems)));
 
     out.push_back(model("DevConfig", "dev.* (Config.cpp to_json(DevConfig)).",
-        {boolean("enabled"), boolean("init_r2_test_vault")}));
+        {boolean("enabled")}));
 
     return out;
 }

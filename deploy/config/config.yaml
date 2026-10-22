@@ -228,4 +228,3 @@ auditing:
 # These features should be disabled in production for security and performance reasons.
 dev:
   enabled: false                    # Enable dev mode features
-  init_r2_test_vault: false         # Initialize a test R2 vault in dev mode

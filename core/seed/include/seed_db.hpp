@@ -24,8 +24,4 @@ void reconcileGlobalVaultPolicies();
 // The `share_upload_dropbox` vault role template new installs seed (upload-only: no List). Exposed for tests.
 rbac::role::Vault shareUploadDropboxRole();
 
-// dev
-void cleanupDevR2TestBucket();
-void initDevCloudVault();
-
 }

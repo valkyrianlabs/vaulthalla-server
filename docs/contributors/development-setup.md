@@ -252,38 +252,12 @@ isn't a test database.
 
 The repo only ships `deploy/vaulthalla.env.example` as a public template. If you need real storage-backed test credentials or environment values, create your own local `deploy/vaulthalla.env` from that template and keep secrets out of commits.
 
-### R2/S3 test environment
+### Live R2 tests
 
-If you want the dev workflow to carry R2 test credentials into the installed environment:
-
-1. copy `deploy/vaulthalla.env.example` to `deploy/vaulthalla.env`
-2. uncomment and fill in the `VAULTHALLA_TEST_R2_*` variables
-
-The example variables are:
-
-```text
-# VAULTHALLA_TEST_R2_ACCESS_KEY=<your_access_key>
-# VAULTHALLA_TEST_R2_SECRET_ACCESS_KEY=<your_secret_key>
-# VAULTHALLA_TEST_R2_ENDPOINT=https://<your_unique_id>.r2.cloudflarestorage.com
-# VAULTHALLA_TEST_R2_REGION=auto
-# VAULTHALLA_TEST_R2_BUCKET=<your_bucket_name>
-```
-
-When `deploy/vaulthalla.env` exists, `bin/setup/install_dirs.sh` installs it as `/etc/vaulthalla/vaulthalla.env`.
-
-### Optional dev R2 test vault seeding
-
-`deploy/config/config.yaml` includes:
-
-```yaml
-dev:
-  enabled: false
-  init_r2_test_vault: false
-```
-
-If dev mode is enabled in config and `init_r2_test_vault` is set to `true`, the storage manager can seed an `R2 Test Vault` automatically during startup when the required `VAULTHALLA_TEST_R2_*` environment variables are present.
-
-Keep this workflow-specific and local. Do not commit real credentials.
+The live Cloudflare R2 tests (`core/tests/unit/test_live_r2.cpp`) are opt-in. They run only with `VH_LIVE_TESTS=1`
+and an R2 admin key in `VH_R2_ADMIN_ACCESS_KEY`, `VH_R2_ADMIN_SECRET_KEY` and `VH_R2_ADMIN_ENDPOINT` (keep it in the
+gitignored repo-root `.bashrc`; never commit it). A run creates one bucket named `vh-test-<host>-<pid>-<start>`, works in
+it under a prefix per test, and deletes it afterwards, also when tests fail. Nothing else in the account is touched.
 
 ## Known Practical Snags
 
