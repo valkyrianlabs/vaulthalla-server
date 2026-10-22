@@ -132,3 +132,11 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   frame's requestId; router faults answer `<command>.response` with status ERROR instead of `UNKNOWN` /
   `Unknown.response`; a non-string requestId no longer breaks an answer; a missing `payload` reads as `{}`.
 - ws contract: `envelope` documents the request, answer and error frames.
+
+## Security fixes
+- RBAC: the filesystem evaluator's last stage (global vault policy) tried the self, admin and user scopes in turn,
+  but a stage always decides, so the self scope's bits answered for every vault. It now reads only the scope the vault
+  falls under for the account (owner self; an admin-owned vault admin; otherwise user), through
+  rbac::resolver::vaultScope, the function the admin vault resolver (admin.vaults.<scope>) and the sync/role globals
+  resolver now share. FUSE's listing-override check reads the same single scope. Seeded presets are identical in every
+  scope, so no seeded role changes; covered by VaultScopeRbacTest.

@@ -143,3 +143,15 @@ Malformed or failing requests no longer leave clients waiting: a frame the daemo
 error that carries the request's id, an internal fault answers the request it belongs to with an ordinary error
 instead of an "Unknown" response, and a command sent without a payload is treated as an empty one. The contract
 documents the request and answer frames.
+
+## Security fixes
+
+- **Global vault policy read in the right scope.** An account's global vault policy has three scopes: its own vaults,
+  vaults owned by admins, and everyone else's. File access decided by that policy (when no vault role applies) always
+  used the account's own-vault scope, for every vault. An account whose own-vault scope granted more than its scope
+  for other accounts' vaults could therefore use those rights on other accounts' vaults, and one whose own-vault scope
+  granted less was refused there. File access now uses the scope the vault falls under, the same rule vault
+  management already used, on every surface (web console, `vh`, FUSE, downloads and uploads, paired devices, shares
+  and the S3 gateway). The built-in roles give every scope the same rights, so accounts on them see no change; only
+  accounts whose policy rows were edited per scope directly in the database are affected.
+

@@ -761,11 +761,15 @@ subject's assignment; both `vh vault role override ...` and ws `role.vault.overr
   path convert it with `engine->vaultPathToFusePath()` first; `share::Manager` once didn't, so only share root `/`
   ever passed and a vault path equal to another vault's FUSE root resolved to that vault. The evaluator refuses an
   entry whose `vault_id` differs from the request's vault (`EntryVaultMismatch`).
-- **Known gap (2026-10-21, unfixed):** the evaluator's last stage (global vault filesystem policy,
-  `Evaluator::evaluate` step 3) loops `self, admin, user` but `resolveStage` always matches on base permissions, so
-  only `self` is ever consulted, for any vault; `rbac::resolver::Vault::grantedByGlobals` picks the scope by owner
-  (self / admin-owned / user-owned). Invisible with the seeded roles (identical scopes) but a global policy whose
-  scopes differ grants filesystem access by its `self` bits on every vault without a vault role.
+- **Per-scope vault permissions use one rule** (`rbac::resolver::vaultScope`, `rbac/resolver/VaultScope.hpp`): the
+  actor's own vault is `self`, a vault whose owner is `User::isAdmin()` is `admin`, any other is `user`. It picks the
+  scope for the admin role's `admin.vaults.<scope>` (`resolver::Admin`), the global vault policy's sync/role bits
+  (`resolver::Vault::grantedByGlobals`), the filesystem evaluator's globals stage (`Evaluator::evaluate` step 3) and
+  FUSE's listing-override check. The evaluator used to loop self, admin, user, but a stage always decides, so the
+  `self` bits answered for every vault (fixed 2026-10-22; `VaultScopeRbacTest` compares every action on a file and a
+  directory with the evaluator applied to exactly the expected scope, plus ws, `vh fs ls`, the access layer and the
+  accessible list). Seeded presets are identical in every scope, so they never showed it; an unknown owner grants
+  nothing from the globals.
 - The FS cache is keyed by FUSE path and can only re-hydrate a vault root through `mkVault` (or the rename path in
   `storage::Manager::updateVault`). `storage::Manager` calls `fs::cache::Registry::evictVault` on remove, on rename
   (old and new root, then re-caches the root) and in `addVault` *before* the engine creates the root. Evicting after
