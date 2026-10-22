@@ -25,6 +25,12 @@ using live::Provider;
 
 std::vector<uint8_t> bytes(const std::string& s) { return {s.begin(), s.end()}; }
 
+padmin::ObjectSummary obj(const std::string& key) {
+    padmin::ObjectSummary o;
+    o.key = key;
+    return o;
+}
+
 // ---- the guard (no provider involved) ---------------------------------------------------------------------------------
 
 // Records every call that reaches it; the guard must stop the forbidden ones before they get here.
@@ -112,28 +118,28 @@ TEST_F(LiveBucketGuard, OnlyTheConfiguredBucket) {
     EXPECT_THROW((void)admin->listObjects("other", {}, 10), live::GuardViolation);
     EXPECT_THROW((void)admin->inspect("other"), live::GuardViolation);
     EXPECT_THROW((void)admin->versioning("other"), live::GuardViolation);
-    EXPECT_THROW((void)admin->deleteObjects("other", {{.key = prefix + "a"}}), live::GuardViolation);
+    EXPECT_THROW((void)admin->deleteObjects("other", {obj(prefix + "a")}), live::GuardViolation);
     EXPECT_EQ(inner->calls.size(), 3u);
     EXPECT_EQ(live::takeViolations().size(), 5u);
 }
 
 TEST_F(LiveBucketGuard, DeletesOnlyUnderItsPrefixAndNeverOutsideTheRunsRoot) {
     auto [admin, inner] = guarded(prefix);
-    EXPECT_TRUE(admin->deleteObjects("vh-test", {{.key = prefix + "a"}, {.key = prefix + "b/c"}}).empty());
+    EXPECT_TRUE(admin->deleteObjects("vh-test", {obj(prefix + "a"), obj(prefix + "b/c")}).empty());
     ASSERT_EQ(inner->calls.size(), 1u);
     EXPECT_EQ(inner->calls[0], "delete vh-test x2");
-    const std::vector<padmin::ObjectSummary> mixed{{.key = prefix + "a"}, {.key = "data/report.txt"}};
+    const std::vector<padmin::ObjectSummary> mixed{obj(prefix + "a"), obj("data/report.txt")};
     EXPECT_THROW((void)admin->deleteObjects("vh-test", mixed), live::GuardViolation) << "one bad key refuses the batch";
-    EXPECT_THROW((void)admin->deleteObjects("vh-test", {{.key = std::string(live::kRunsRoot) + "other-run/x"}}),
+    EXPECT_THROW((void)admin->deleteObjects("vh-test", {obj(std::string(live::kRunsRoot) + "other-run/x")}),
                  live::GuardViolation);
-    EXPECT_THROW((void)admin->deleteObjects("vh-test", {{.key = ".vaulthalla/index-v1.json"}}), live::GuardViolation);
+    EXPECT_THROW((void)admin->deleteObjects("vh-test", {obj(".vaulthalla/index-v1.json")}), live::GuardViolation);
     EXPECT_EQ(inner->calls.size(), 1u);
 
     // The sweep's client may delete any run, still nothing outside vh-test-runs/.
     auto [sweeper, sweptInner] = guarded(std::string(live::kRunsRoot));
-    EXPECT_TRUE(sweeper->deleteObjects("vh-test", {{.key = std::string(live::kRunsRoot) + "other-run/x"}}).empty());
-    EXPECT_THROW((void)sweeper->deleteObjects("vh-test", {{.key = "vh-test-runsX/x"}}), live::GuardViolation);
-    EXPECT_THROW((void)sweeper->deleteObjects("vh-test", {{.key = "x"}}), live::GuardViolation);
+    EXPECT_TRUE(sweeper->deleteObjects("vh-test", {obj(std::string(live::kRunsRoot) + "other-run/x")}).empty());
+    EXPECT_THROW((void)sweeper->deleteObjects("vh-test", {obj("vh-test-runsX/x")}), live::GuardViolation);
+    EXPECT_THROW((void)sweeper->deleteObjects("vh-test", {obj("x")}), live::GuardViolation);
     EXPECT_EQ(sweptInner->calls.size(), 1u);
     EXPECT_THROW((void)live::GuardedAdmin(std::make_unique<RecordingAdmin>(), "vh-test", "data/"), std::logic_error);
     EXPECT_THROW((void)live::LivePrefix(live::Target{}, "data/x/"), std::logic_error);
@@ -142,7 +148,7 @@ TEST_F(LiveBucketGuard, DeletesOnlyUnderItsPrefixAndNeverOutsideTheRunsRoot) {
 TEST_F(LiveBucketGuard, RemovalDeletesOnlyWhatItSelectsUnderThePrefix) {
     auto inner = std::make_unique<RecordingAdmin>();
     auto* raw = inner.get();
-    raw->objects = {{.key = prefix + "a"}, {.key = std::string(live::kRunsRoot) + "other-run/b"}, {.key = "outside"}};
+    raw->objects = {obj(prefix + "a"), obj(std::string(live::kRunsRoot) + "other-run/b"), obj("outside")};
     live::GuardedAdmin admin(std::move(inner), "vh-test", prefix);
     EXPECT_EQ(admin.listUnder(prefix).size(), 1u) << "listings stay inside the prefix";
     EXPECT_TRUE(admin.uploadsUnder(prefix).empty());

@@ -293,7 +293,7 @@ SQS/Cloudflare queues and notifications), `upstream_admin_fakes.hpp` / `upstream
   (`test_live_bucket.cpp`: admin object calls + protection lock in the prefix, SigV4 on every ListObjectsV2 page,
   provider versions, the cleanup guard on a scope that throws with an open multipart upload). All DB-free:
   `(eval "$(grep -E '^export VAULTHALLA_TEST_R2_' .bashrc)"; build/core/vh_unit_tests --gtest_filter='Live*')`
-  (~30 s on R2). Through the per-run DB runner, `VH_LIVE_TESTS=1` hands exactly `LIVE_ENV_VARS` through on a pipe:
+  (~50 s on R2). Through the per-run DB runner, `VH_LIVE_TESTS=1` hands exactly `LIVE_ENV_VARS` through on a pipe:
   `(eval "$(grep -E '^export VAULTHALLA_TEST_R2_' .bashrc)"; VH_LIVE_TESTS=1 bash bin/tests/run_unit.sh -- --gtest_filter='Live*')`.
 - Proof it leaves nothing (2026-10-22, macOS and dev): `vh-test` held 0 objects before and after full live runs, also
   after runs with a forced assertion failure and a forced exception mid-test, and a planted 8 h old run was swept.
