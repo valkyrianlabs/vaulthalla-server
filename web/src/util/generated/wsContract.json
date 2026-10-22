@@ -1961,13 +1961,6 @@
           "types": [
             "boolean"
           ]
-        },
-        {
-          "name": "init_r2_test_vault",
-          "required": true,
-          "types": [
-            "boolean"
-          ]
         }
       ],
       "name": "DevConfig"
@@ -17106,7 +17099,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "0fc0e2fa8255c90834b8b3466187617ad7bd7887df3bb7baa90d57fbfabf1cac",
+  "models_hash": "44c7dcf1d1dac4eb56c9b64deeeea8b2a5f1af6a6548399ea5ae4d9ca637d554",
   "ws": [
     {
       "auth": "session",

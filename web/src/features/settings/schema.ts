@@ -466,7 +466,6 @@ export const SECTIONS: SectionDef[] = [
     warning: 'Don’t enable development behaviour on a production host.',
     fields: [
       { key: 'enabled', label: 'Development mode', type: bool },
-      { key: 'init_r2_test_vault', label: 'Create the R2 test vault at startup', type: bool },
     ],
   },
 ]

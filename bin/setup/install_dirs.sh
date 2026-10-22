@@ -79,11 +79,6 @@ fi
 
 echo "📦 Installing shared data/config payloads..."
 
-if [[ -f "$ROOT_DIR/deploy/vaulthalla.env" ]]; then
-  install_file "$ROOT_DIR/deploy/vaulthalla.env" "$CONFIG_DIR/vaulthalla.env" 0640
-  vh_priv chown "$VH_USER:$VH_GROUP" "$CONFIG_DIR/vaulthalla.env"
-fi
-
 if [[ -f "$ROOT_DIR/config.yaml" ]]; then
   install_config "$ROOT_DIR/config.yaml" "$CONFIG_DIR/config.yaml"
 else

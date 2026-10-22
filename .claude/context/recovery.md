@@ -269,8 +269,9 @@ bucket: choosing `off`/`local_snapshots` does not suspend a bucket that is versi
   Outcomes carry `retryable` and the request usage (source `recovery_restore`).
 - Tests: `RecoveryProviderTest*`, `RecoverySmartCacheTest*` (the acceptance scenario), harness
   `tests/helpers/recovery_provider_harness.hpp`.
-- **Live acceptance on real AWS S3** (`test_recovery_live.cpp`, run per testing.md "Live provider tests"; passed
-  2026-10-16, us-east-2, fresh test buckets): the same scenario through ops (disclosure → `update` with
+- **Live acceptance on real AWS S3** (the since-removed `test_recovery_live.cpp`, consolidated away with the other
+  live suites on 2026-10-22; passed 2026-10-16, us-east-2, fresh test buckets; the same steps stay covered by
+  `RecoverySmartCacheTest` / `RecoveryProviderTest`): the same scenario through ops (disclosure → `update` with
   `accept_adoption` on a new bucket → list → plan → restore → costs), real `CloudEngine`, prices from the signed
   fixture catalog. Measured: each upload pass PUT 2 (object + manifest; the vault's first pass PUT the manifest
   twice, PUT 3, until #248: now PUT 2 too); listing 4 versions = LIST 1, 0 HEAD/GET; restore by copy = COPY 1, HEAD 2, PUT 1 (manifest), GET 0;
@@ -468,7 +469,7 @@ payload shape from its options and reads it with the same readers, so validation
 | Contracts | `core/include/recovery/Model.hpp`, `core/include/ops/Recovery.hpp` — integrator only (agents propose changes) |
 | Keys/crypto | `vault/EncryptionManager`, `crypto/util` reseal, key export |
 | Data plane | `storage/s3/Controller` versioned ops (`storage/s3/version.cpp`), sigv4 query encoding, test fakes |
-| Admin | `storage/s3/provider/admin/*` versioning get/put/probe, admin fakes, live tests |
+| Admin | `storage/s3/provider/admin/*` versioning get/put/probe, admin fakes, transport-seam adapter tests |
 | DB + store | `db/query/recovery/*`, `db/preparedStatements/recovery/*`, `recovery/Model.cpp`, `recovery/Store.*` |
 | Local versioning | `recovery/local/Versions.*` + capture hooks in fs/fuse/sync, backlog replay |
 | Local recovery | `recovery/local/{Snapshots,Restore}.*` |
@@ -508,5 +509,6 @@ Open, consolidated from the slices (the sections above keep the detail):
   `rcRunPlan` sends "" → `recovery_restore`), although the usage book says `--yes` works there. Docs tell operators to
   pass `--token`; fix by refusing early or re-planning.
 - **Web:** the point-in-time form is shown for folders of local vaults too; ops refuses it (Invalid).
-- **Proof gaps:** no Tier A/B harness scenario for recovery yet; `UpstreamLive.AwsVersioning` is opt-in
-  (`VH_LIVE_UPSTREAM=1`); no lab install of a recovery build.
+- **Proof gaps:** no Tier A/B harness scenario for recovery yet; no live provider-versioning run since the
+  live suites were consolidated (2026-10-22: the live R2 tests cover the data plane only; R2 has no versions); no lab
+  install of a recovery build.

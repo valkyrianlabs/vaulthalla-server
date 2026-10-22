@@ -15,7 +15,7 @@ q() { sudo -n -u postgres psql -XAtq -d "${2:-postgres}" -c "$1" 2>/dev/null || 
 snapshot() {
   for f in /usr/bin/vaulthalla-server /usr/bin/vaulthalla-cli /usr/lib/vaulthalla/helpers/vaulthalla-preview-cad \
            /usr/lib/vaulthalla/helpers/vaulthalla-preview-media /etc/vaulthalla/vaulthalla.env \
-           /etc/vaulthalla/config.yaml "$REPO/deploy/bashrc" "$REPO/deploy/vaulthalla.env"; do
+           /etc/vaulthalla/config.yaml "$REPO/.bashrc"; do
     echo "file $f $(h "$f")"
   done
   echo "service $(systemctl is-active vaulthalla 2>/dev/null) pid=$(systemctl show vaulthalla -p MainPID --value 2>/dev/null)"

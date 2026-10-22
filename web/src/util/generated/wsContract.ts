@@ -9,7 +9,7 @@ export const WS_CONTRACT_VERSION = 2
 export const WS_CONTRACT_HASH = 'cba52446e8e2bc3eda732c6bdac1884cbfa3b1f2326d7b0f37500c8a92a04893'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = '0fc0e2fa8255c90834b8b3466187617ad7bd7887df3bb7baa90d57fbfabf1cac'
+export const WS_MODELS_HASH = '44c7dcf1d1dac4eb56c9b64deeeea8b2a5f1af6a6548399ea5ae4d9ca637d554'
 
 // A merge patch (payload members marked `partial`): any subset of the members, at any depth.
 export type WsPartial<T> = { [K in keyof T]?: T[K] extends readonly unknown[] ? T[K] : T[K] extends object ? WsPartial<T[K]> : T[K] }
@@ -296,7 +296,7 @@ export interface WsModels {
   /**
    * dev.* (Config.cpp to_json(DevConfig)).
    */
-  'DevConfig': { enabled: boolean; init_r2_test_vault: boolean }
+  'DevConfig': { enabled: boolean }
   /**
    * A paired device (a devices row, migration 112): device::to_json(Device), core/src/device/Device.cpp.
    */

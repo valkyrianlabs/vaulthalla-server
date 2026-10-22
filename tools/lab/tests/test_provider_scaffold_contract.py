@@ -12,18 +12,18 @@ TARGET = "/etc/vaulthalla/testing"
 
 class ProviderScaffoldContract(unittest.TestCase):
     def test_example_contains_only_placeholders(self):
-        secretish = re.compile(r"^(VAULTHALLA_TEST_\w*(ACCESS_KEY|SECRET_ACCESS_KEY|BUCKET|ENDPOINT))=\"([^\"]*)\"", re.M)
+        secretish = re.compile(r"^(VH_\w*(ACCESS_KEY|SECRET_KEY|ENDPOINT|API_TOKEN))=\"([^\"]*)\"", re.M)
         found = secretish.findall(EXAMPLE.read_text())
-        self.assertEqual(len(found), 8, found)
+        self.assertEqual(len(found), 4, found)
         for name, _, value in found:
             self.assertEqual(value, "CHANGE_ME", f"{name} must stay a placeholder in the tracked example")
 
     def test_example_var_names_match_consumers(self):
-        names = set(re.findall(r"^(VAULTHALLA_TEST_(?:S3|R2)_\w+)=", EXAMPLE.read_text(), re.M))
+        names = set(re.findall(r"^(VH_(?:R2_ADMIN|CF)_\w+)=", EXAMPLE.read_text(), re.M))
         consumed = set()
-        for path in list((ROOT / "core").rglob("*.cpp")) + list((ROOT / "tools/smoke").glob("*.sh")):
-            consumed |= set(re.findall(r"VAULTHALLA_TEST_(?:S3|R2)_[A-Z_]+", path.read_text(errors="ignore")))
-        self.assertTrue(consumed, "expected existing consumers of VAULTHALLA_TEST_* vars")
+        for path in list((ROOT / "core").rglob("*.cpp")) + list((ROOT / "core").rglob("*.hpp")):
+            consumed |= set(re.findall(r"VH_(?:R2_ADMIN|CF)_[A-Z_]+", path.read_text(errors="ignore")))
+        self.assertTrue(consumed, "expected the live test helper to read the VH_R2_ADMIN_* vars")
         self.assertTrue(consumed <= names, f"consumers read vars missing from example: {sorted(consumed - names)}")
 
     def test_runtime_and_diagnostics_never_read_the_file(self):

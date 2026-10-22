@@ -194,7 +194,7 @@ class Instance:
             "device_server: {enabled: false}\n"
             "email: {enabled: false}\n"
             "operator_emails: {enabled: false}\n"
-            "dev: {enabled: false, init_r2_test_vault: false}\n" % (ws_port, http_port, _free_port()))
+            "dev: {enabled: false}\n" % (ws_port, http_port, _free_port()))
 
         db = _read_env_file(DB_ENV_FILE)
         if self.redactor is not None:

@@ -971,7 +971,8 @@ stage "Copy And Delete")
     committed on close. Positioned reads are **unauthenticated** (a hostile bucket can flip plaintext bits);
     `readAllAuthenticated` fetches the whole object and checks the tag. Chunked AEAD is the eventual fix.
   - `off`: `ContentUnavailable`.
-- Dev R2 dogfooding hits a real bucket. With `dev.init_r2_test_vault`, initdb clears the `VAULTHALLA_TEST_R2_*` bucket.
+- Dev R2 dogfooding hits a real bucket. (The dev-mode `dev.init_r2_test_vault` seeding, which bound a vault to a test
+  bucket and cleared it at initdb, was removed 2026-10-22; an older config.yaml key is ignored.)
 
 ## Test instances, contracts and the fs actor (2026-10-11)
 

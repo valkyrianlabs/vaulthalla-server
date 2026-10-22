@@ -5,7 +5,9 @@
 #   - removes the VH_TEST_DB_* lines that bin/tests/install_db.sh used to write into deploy/bashrc,
 #     deploy/vaulthalla.env and /etc/vaulthalla/vaulthalla.env (the dev daemon's EnvironmentFile), without printing
 #     any value;
-#   - removes the old fixed /tmp/vh_{mount,backing,runtime,log} paths if nothing is mounted there.
+#   - removes the old fixed /tmp/vh_{mount,backing,runtime,log} paths if nothing is mounted there;
+#   - deletes the retired local env files deploy/bashrc and deploy/vaulthalla.env (the repo-root .bashrc is the only
+#     local env file now; move anything you still need there first).
 # Nothing here runs automatically. Asks before each part unless --yes.
 set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -46,4 +48,10 @@ if ask "Remove /tmp/vh_{mount,backing,runtime,log} (the old fixed test paths)?";
     if grep -qF " $d " /proc/self/mountinfo; then echo "skipping $d: mounted"; continue; fi
     sudo -n rm -rf --one-file-system "$d" && echo "removed $d"
   done
+fi
+
+retired=()
+for f in "$REPO/deploy/bashrc" "$REPO/deploy/vaulthalla.env"; do [[ -e "$f" ]] && retired+=("$f"); done
+if [[ ${#retired[@]} -gt 0 ]] && ask "Delete the retired env file(s) ${retired[*]} (use the repo-root .bashrc instead)?"; then
+  rm -f -- "${retired[@]}" && printf 'deleted %s\n' "${retired[@]}"
 fi

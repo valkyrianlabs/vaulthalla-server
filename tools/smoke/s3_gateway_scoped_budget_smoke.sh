@@ -23,14 +23,21 @@ SMOKE_OWNER="${S3_GATEWAY_SMOKE_OWNER:-admin}"
 SYNTHETIC_MONTHLY_LIMIT="${S3_GATEWAY_SMOKE_SYNTHETIC_MONTHLY_LIMIT:-0.00000003}"
 ACTUAL_MONTHLY_LIMIT="${S3_GATEWAY_SMOKE_ACTUAL_MONTHLY_LIMIT:-0.00000000}"
 MC_ALIAS="${S3_GATEWAY_SMOKE_MC_ALIAS:-vh-smoke}"
-UPSTREAM_API_KEY="${S3_GATEWAY_SMOKE_API_KEY:-}"
-UPSTREAM_API_KEY_NAME="${S3_GATEWAY_SMOKE_UPSTREAM_API_KEY_NAME:-vh-smoke-upstream-$$}"
-UPSTREAM_BUCKET="${S3_GATEWAY_SMOKE_UPSTREAM_BUCKET:-${VAULTHALLA_TEST_R2_BUCKET:-}}"
-UPSTREAM_ACCESS_KEY="${S3_GATEWAY_SMOKE_UPSTREAM_ACCESS_KEY:-${VAULTHALLA_TEST_R2_ACCESS_KEY:-}}"
-UPSTREAM_SECRET_KEY="${S3_GATEWAY_SMOKE_UPSTREAM_SECRET_KEY:-${VAULTHALLA_TEST_R2_SECRET_ACCESS_KEY:-}}"
-UPSTREAM_ENDPOINT="${S3_GATEWAY_SMOKE_UPSTREAM_ENDPOINT:-${VAULTHALLA_TEST_R2_ENDPOINT:-}}"
-UPSTREAM_REGION="${S3_GATEWAY_SMOKE_UPSTREAM_REGION:-${VAULTHALLA_TEST_R2_REGION:-auto}}"
-UPSTREAM_PROVIDER="${S3_GATEWAY_SMOKE_UPSTREAM_PROVIDER:-cloudflare-r2}"
+# The remote-cache upstream is the fixed test bucket vh-test-gateway-smoke. A remote run creates it first and deletes
+# it last, also on failure (the EXIT trap), through build/core/vh_live_bucket: the guarded live-test helper
+# (core/tests/helpers/live_bucket.hpp), which manages no other name. A leftover of a crashed run is emptied and
+# deleted before the new one is created. The only credential is the R2 admin key VH_R2_ADMIN_* (repo-root .bashrc);
+# the daemon under test gets it as the upstream API key.
+UPSTREAM_BUCKET="vh-test-gateway-smoke"
+LIVE_BUCKET_BIN="$REPO_ROOT/build/core/vh_live_bucket"
+UPSTREAM_API_KEY=""
+UPSTREAM_API_KEY_NAME="vh-smoke-upstream-$$"
+UPSTREAM_ACCESS_KEY="${VH_R2_ADMIN_ACCESS_KEY:-}"
+UPSTREAM_SECRET_KEY="${VH_R2_ADMIN_SECRET_KEY:-}"
+UPSTREAM_ENDPOINT="${VH_R2_ADMIN_ENDPOINT:-}"
+UPSTREAM_REGION="${VH_R2_ADMIN_REGION:-auto}"
+UPSTREAM_PROVIDER="cloudflare-r2"
+UPSTREAM_CREATED=0
 PREFIX="${S3_GATEWAY_SMOKE_PREFIX:-s3-gateway-test/$(date -u +%Y%m%dT%H%M%SZ)-$$}"
 BUDGET_DENIAL="${S3_GATEWAY_SMOKE_BUDGET_DENIAL:-synthetic}"
 BUDGET_DENIAL_SET=0
@@ -217,24 +224,14 @@ gateway_rm_prefix() {
   fi
 }
 
-remote_rm_prefix() {
-  [[ "$REMOTE_CREATED" == "1" && "$KEEP_RESOURCES" != "1" ]] || return 0
-  [[ -n "$UPSTREAM_BUCKET" && -n "$UPSTREAM_ENDPOINT" ]] || return 0
-  if [[ -n "$UPSTREAM_ACCESS_KEY" && -n "$UPSTREAM_SECRET_KEY" && "$AWS_AVAILABLE" == "1" ]]; then
-    AWS_ACCESS_KEY_ID="$UPSTREAM_ACCESS_KEY" \
-    AWS_SECRET_ACCESS_KEY="$UPSTREAM_SECRET_KEY" \
-    AWS_EC2_METADATA_DISABLED=true \
-    AWS_DEFAULT_REGION="$UPSTREAM_REGION" \
-      run_with_timeout "$CLEANUP_TIMEOUT" "$AWS_BIN" --endpoint-url "$UPSTREAM_ENDPOINT" s3 rm "s3://$UPSTREAM_BUCKET/$PREFIX/" --recursive >/dev/null
-    return 0
-  fi
-  if [[ -n "$UPSTREAM_ACCESS_KEY" && -n "$UPSTREAM_SECRET_KEY" && "$MC_AVAILABLE" == "1" ]]; then
-    "$MC_BIN" alias set "${MC_ALIAS}-upstream" "$UPSTREAM_ENDPOINT" "$UPSTREAM_ACCESS_KEY" "$UPSTREAM_SECRET_KEY" >/dev/null
-    run_with_timeout "$CLEANUP_TIMEOUT" "$MC_BIN" rm --recursive --force "${MC_ALIAS}-upstream/$UPSTREAM_BUCKET/$PREFIX/" >/dev/null
-    "$MC_BIN" alias rm "${MC_ALIAS}-upstream" >/dev/null 2>&1 || true
-    return 0
-  fi
-  return 0
+remote_configured() {
+  [[ -n "$UPSTREAM_ACCESS_KEY" && -n "$UPSTREAM_SECRET_KEY" && -n "$UPSTREAM_ENDPOINT" && -x "$LIVE_BUCKET_BIN" ]]
+}
+
+# Empties and deletes the upstream test bucket (the helper then checks HeadBucket says it is gone).
+remote_delete_bucket() {
+  [[ "$UPSTREAM_CREATED" == "1" ]] || return 0
+  run_with_timeout 300 "$LIVE_BUCKET_BIN" delete "$UPSTREAM_BUCKET"
 }
 
 delete_gateway_bucket_if_present() {
@@ -259,13 +256,6 @@ cleanup_resources() {
     echo "GATEWAY CLEANUP FAILED for bucket=$TARGET_BUCKET prefix=$PREFIX" >&2
   fi
 
-  if remote_rm_prefix; then
-    REMOTE_CLEANUP_STATUS=$([[ "$REMOTE_CREATED" == "1" ]] && echo "ok" || echo "not-needed")
-  else
-    REMOTE_CLEANUP_STATUS="failed"
-    echo "REMOTE CLEANUP FAILED for upstream_bucket=$UPSTREAM_BUCKET prefix=$PREFIX" >&2
-  fi
-
   delete_gateway_bucket_if_present "$REMOTE_BUCKET"
   delete_gateway_bucket_if_present "$OTHER_BUCKET"
   delete_gateway_bucket_if_present "$LOCAL_BUCKET"
@@ -282,6 +272,14 @@ cleanup_resources() {
   fi
   if [[ "${MC_AVAILABLE:-0}" == "1" ]]; then
     "$MC_BIN" alias rm "$MC_ALIAS" >/dev/null 2>&1 || true
+  fi
+
+  # Last: the gateway bucket and the API key that used it are gone, so nothing writes to the upstream any more.
+  if remote_delete_bucket; then
+    REMOTE_CLEANUP_STATUS=$([[ "$UPSTREAM_CREATED" == "1" ]] && echo "ok (bucket deleted)" || echo "not-needed")
+  else
+    REMOTE_CLEANUP_STATUS="failed"
+    echo "REMOTE CLEANUP FAILED: delete $UPSTREAM_BUCKET with $LIVE_BUCKET_BIN delete $UPSTREAM_BUCKET" >&2
   fi
 }
 
@@ -345,8 +343,14 @@ create_local_bucket "$OTHER_BUCKET"
 
 TARGET_BUCKET="$LOCAL_BUCKET"
 if [[ "$LOCAL_ONLY" != "1" ]]; then
-  if [[ -z "$UPSTREAM_API_KEY" && -n "$UPSTREAM_ACCESS_KEY" && -n "$UPSTREAM_SECRET_KEY" && -n "$UPSTREAM_ENDPOINT" && -n "$UPSTREAM_BUCKET" ]]; then
-    echo "3a. Create upstream API key from smoke environment"
+  if remote_configured; then
+    echo "3a. Create the upstream test bucket $UPSTREAM_BUCKET"
+    UPSTREAM_CREATED=1   # before the call: the trap deletes a half-created bucket too
+    if ! run_with_timeout 300 "$LIVE_BUCKET_BIN" create "$UPSTREAM_BUCKET"; then
+      echo "could not create $UPSTREAM_BUCKET" >&2
+      exit 1
+    fi
+    echo "3b. Create the upstream API key"
     api_key_output=""
     if api_key_output="$(run_vh api-key create "$UPSTREAM_API_KEY_NAME" \
       --access "$UPSTREAM_ACCESS_KEY" \
@@ -364,7 +368,7 @@ if [[ "$LOCAL_ONLY" != "1" ]]; then
     fi
   fi
 
-  if [[ -n "$UPSTREAM_API_KEY" && -n "$UPSTREAM_BUCKET" ]]; then
+  if [[ -n "$UPSTREAM_API_KEY" ]]; then
     echo "3. Create remote-cache bucket"
     if run_vh s3-gateway bucket create-remote-cache "$REMOTE_BUCKET" \
       --api-key "$UPSTREAM_API_KEY" \
@@ -383,7 +387,7 @@ if [[ "$LOCAL_ONLY" != "1" ]]; then
     echo "--require-remote set but upstream API key/bucket configuration is unavailable" >&2
     exit 2
   else
-    echo "3. Skipping remote-cache bucket; set S3_GATEWAY_SMOKE_API_KEY and S3_GATEWAY_SMOKE_UPSTREAM_BUCKET, or VAULTHALLA_TEST_R2_* environment variables"
+    echo "3. Skipping remote-cache bucket; needs VH_R2_ADMIN_* and $LIVE_BUCKET_BIN (ninja -C build core/vh_live_bucket)"
   fi
 else
   echo "3. Skipping remote-cache bucket due to --local-only"

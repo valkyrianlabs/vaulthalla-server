@@ -71,7 +71,7 @@ versions, cutting releases), `payload-markdown` + `payload-markdown-docs` (doc a
   the live dev install on this VM. This VM is disposable, but say what you're about to wipe. Tests (`make test`,
   `make itest`, `tools/harness`) are isolated and need no heads-up; root-only harness settings live in
   `/var/lib/vaulthalla-harness/db.env`, never printed.
-- **Secrets on disk, never print or commit them:** repo-root `.bashrc`, `deploy/vaulthalla.env`, `deploy/bashrc`,
+- **Secrets on disk, never print or commit them:** repo-root `.bashrc` (the only local env file),
   `/etc/vaulthalla/vaulthalla.env`, `cloudflare.ini`, `config.yaml` at the repo root (gitignored override). Source them; don't cat them.
 - **No tags, pushes, releases, or workflow dispatches** without explicit instruction. A `v*` tag publishes to the real APT repo.
 - **Release history and versions are vl-release's:** never hand-edit `debian/changelog`, `RELEASE_NOTES.md` or version

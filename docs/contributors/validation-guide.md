@@ -89,11 +89,10 @@ vh_e2e_redacted_env_report
 The loader reads, when present:
 
 - `$HOME/.bashrc`
-- `./.bashrc`
-- `./deploy/bashrc`
-- `./deploy/vaulthalla.env`
+- `./.bashrc` (the repo-root env file; gitignored)
+- the test provider credentials file `/etc/vaulthalla/testing/providers.env` (or `VH_TEST_PROVIDERS_ENV`)
 
-The redacted report shows whether `VH_TEST_DB_*`, `VAULTHALLA_TEST_R2_*`, and `VAULTHALLA_E2E_*` are set without printing secret values.
+The redacted report shows whether `VH_TEST_DB_*`, `VH_R2_ADMIN_*`, and `VAULTHALLA_E2E_*` are set without printing secret values.
 
 The focused browser suite can auto-start the local Next dev server when the base URL is localhost and `VAULTHALLA_E2E_NO_WEB_SERVER` is not set:
 
@@ -126,7 +125,7 @@ Remote R2/S3 validation is opt-in:
 tools/smoke/s3_gateway_e2e.sh --require-remote --prefix s3-gateway-e2e/manual-$(date -u +%Y%m%dT%H%M%SZ)
 ```
 
-Remote smoke uses existing `S3_GATEWAY_SMOKE_*` and `VAULTHALLA_TEST_R2_*` settings. It deletes only the unique prefix it was given. If cleanup fails, the script prints the exact prefix to remove manually.
+Remote smoke needs only the R2 admin key (`VH_R2_ADMIN_*`, from the repo-root `.bashrc`) and a build with unit tests (`build/core/vh_live_bucket`). It creates the upstream test bucket `vh-test-gateway-smoke` at the start, removing a leftover of a crashed run first, and empties and deletes it at the end, also when the smoke fails. If that cleanup fails, the script prints the command to finish it.
 
 The scoped smoke has explicit budget-denial modes:
 

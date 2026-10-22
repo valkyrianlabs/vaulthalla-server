@@ -157,3 +157,14 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   rbac::resolver::vaultScope, the function the admin vault resolver (admin.vaults.<scope>) and the sync/role globals
   resolver now share. FUSE's listing-override check reads the same single scope. Seeded presets are identical in every
   scope, so no seeded role changes; covered by VaultScopeRbacTest.
+
+## Development
+- Remove the dev-mode R2 test vault: the `dev.init_r2_test_vault` setting (config, ws `DevConfig`, console
+  settings) and its seeding, which read the retired shared test-bucket credential, bound a vault to that bucket and
+  cleared it at initdb. An existing `config.yaml` key is ignored.
+
+## Upstream events
+- R2 event subscriptions work against real Cloudflare: our rules are matched by the queue's id (dashes and case
+  ignored) or name, since the bucket's notification configuration spells the queue id unlike the Queues API (every
+  subscribe failed with "R2 accepted the event rule … but does not list it"); ensureChannel waits a few seconds for a
+  queue it just created to answer its consumers lookup.

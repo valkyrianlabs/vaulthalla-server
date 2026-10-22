@@ -403,15 +403,6 @@ endif
 # ╭────────────────────────────────────── TESTS ────────────────────────────────────────╮
 
 if get_option('build_unit_tests')
-    # The S3 provider tests open these by relative path from the test's workdir (this build directory).
-    unit_test_assets = [
-        fs.copyfile('test-assets/sample.jpg'),
-        fs.copyfile('test-assets/sample.pdf'),
-        fs.copyfile('test-assets/Screenshot 2025-06-26 at 3.29.35\u202FPM.png'),
-    ]
-endif
-
-if get_option('build_unit_tests')
     unit_test_env = environment()
     unit_test_env.set('VH_PATH_TO_CONFIG', join_paths(repo_root, 'deploy/config/config.yaml'))
 
@@ -424,9 +415,20 @@ if get_option('build_unit_tests')
         install: false,
     )
 
+    # Creates/deletes the fixed test buckets of tools/smoke through the guarded live-test helper (never installed).
+    vh_live_bucket = executable(
+        'vh_live_bucket',
+        files(join_paths(core_root, 'tests/helpers/live_bucket_tool.cpp')),
+        link_with: [lib_core, lib_seed, lib_usage],
+        include_directories: inc,
+        dependencies: test_deps,
+        cpp_args: ['-DVH_TOOL_DEFAULT_CONFIG="' + join_paths(repo_root, 'deploy/config/config.yaml') + '"'],
+        install: false,
+    )
+
     # DB-backed suites make one run take several minutes (#123); 120s always timed out.
     test('vh_unit_tests', vh_unit_tests, env: unit_test_env, workdir: meson.current_build_dir(), timeout: 1800,
-         depends: unit_test_helper_targets + unit_test_assets)
+         depends: unit_test_helper_targets)
 endif
 
 # Drift: the committed web contract (web/src/util/generated/wsContract.{json,ts}) must be what this build's usage

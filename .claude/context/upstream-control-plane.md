@@ -77,16 +77,28 @@ buckets it created. Other providers: plain storage, but protection locks still a
 
 - AWS test identity `vaulthalla-test-admin`: S3 admin works; **no SQS permissions** and no
   `s3:GetBucketObjectLockConfiguration` → AWS event delivery untested live. Needed statement: docs/vaults/upstream-buckets.md.
-- R2: both `VH_R2_*` pairs in the repo `.bashrc` are S3 token pairs (same account); neither authenticates the Cloudflare
-  REST API (6003 / 1000). Events need one CF API token (Queues: Edit, Workers R2 Storage: Edit) stored as the key's
-  provider token. R2 accepts any SigV4 region (`auto`, `wnam`, `us-east-1`). New R2 buckets carry a default
+- R2 credentials (2026-10-22): the repo `.bashrc` holds one R2 admin S3 pair (`VH_R2_ADMIN_*`) and a Cloudflare API
+  token (`VH_CF_API_TOKEN`, Queues: Edit + Workers R2 Storage: Edit) stored as the key's provider token for events; the
+  account id comes from the endpoint host.
+- R2 events, verified live 2026-10-22 (`LiveR2.EventNotificationsOnTheRunBucket`, Mac and dev), and fixed where they
+  broke Vaulthalla: the bucket's notification configuration names the queue by an id spelled unlike the Queues API's
+  `queue_id`, so `R2Events` matches our rules by that id with dashes/case ignored or by queue name (before the fix,
+  every subscribe failed with "R2 accepted the event rule … but does not list it"); a just-created queue can answer
+  404 on its consumers lookup for a few seconds (`ensureChannel` waits for a queue it created); a pull right after
+  the http_pull consumer is added can answer 405 "http_pull mode not enabled", and Cloudflare answers the odd 504
+  7009 (the poller retries both); a new rule takes effect a little after it is listed (the first upload may produce
+  no event); R2 refuses DeleteBucket while the bucket has notification rules (409) and deleting a queue a rule
+  targets (400 11017); the Queues listing lags behind creates and deletes. R2 accepts any SigV4 region (`auto`, `wnam`, `us-east-1`). New R2 buckets carry a default
   "Default Multipart Abort Rule" (foreign). Collisions: 409 `BucketAlreadyOwnedByYou` on both providers.
-- Live tests: `VH_LIVE_UPSTREAM=1 … --gtest_filter='UpstreamLive*'` (only `vaulthalla-test-<ts>-*` names; cleans up).
-  The DB-backed file-recovery ones (`test_recovery_live.cpp`) run through `bin/tests/run_unit.sh` (testing.md, "Live
-  provider tests"); they proved adoption of a vault's own bucket + versioning enable + retention live (2026-10-16).
-  The test identity also lacks `s3:GetBucketObjectLockConfiguration` there (status warning only).
+- Live tests (2026-10-22, testing.md "Live provider tests"): opt-in (`VH_LIVE_TESTS=1`), R2 only, through
+  `tests/helpers/live_bucket.hpp`. Two rules: every bucket a test creates is `vh-test-<host>-<pid>-<run start>` and the
+  helper refuses every other bucket/queue name; every such bucket is emptied, deleted and checked gone after the run
+  (orphans of that pattern older than 6 h are swept). One bucket per run: the real `R2Admin` create/collision/delete
+  path plus a small data-plane suite and an R2 event-notification test (needs `VH_CF_API_TOKEN`). The facts above from
+  2026-10-15/16 came from the earlier, since-consolidated `UpstreamLive.*` / `test_recovery_live.cpp` suites and stay
+  covered by the transport-seam and fake suites.
 - Provider versioning (file recovery, `AdminClient::{supportsVersioning,versioning,putVersioning}`; verified live
-  2026-10-16, `UpstreamLive.AwsVersioning`): PutBucketVersioning carries Content-MD5 (AWS requires an integrity
+  2026-10-16 by the since-removed `UpstreamLive.AwsVersioning`): PutBucketVersioning carries Content-MD5 (AWS requires an integrity
   header) and `x-amz-expected-bucket-owner` when the account is known, Status only — never MfaDelete/`x-amz-mfa`.
   The test identity has Get/PutBucketVersioning + ListBucketVersions; Enabled and Suspended read back on the first
   GET (~130 ms), but AWS still asks for 15 min before relying on versioned writes. R2 has no versioning:
@@ -97,6 +109,7 @@ buckets it created. Other providers: plain storage, but protection locks still a
 ## Tests
 
 DB-free: `UpstreamSigV4*`, `UpstreamProvider*`, `UpstreamEventDecode*`, `UpstreamPassLease*`, `ShellLogRedaction*`.
+Live (opt-in, one `vh-test-*` bucket per run): `LiveR2.*`; guard self-tests `LiveBucketGuard.*` (testing.md).
 DB-backed (`bin/tests/run_unit.sh`): `UpstreamStore*`, `UpstreamOps*`, `UpstreamEventOps*`, `UpstreamEvents*`,
 `UpstreamSubscriptions*`, `UpstreamScopedSync*`, `UpstreamParity*`, `SqlDeployerHistoryDb.*` (migration 110),
 `RoleParity*` (upstream bits). Fakes: `tests/helpers/upstream_admin_fakes.hpp`, `upstream_event_fakes.hpp`.

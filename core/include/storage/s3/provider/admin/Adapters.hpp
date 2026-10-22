@@ -195,7 +195,10 @@ private:
     [[nodiscard]] std::optional<nlohmann::json> findQueue(const std::string& name);
     [[nodiscard]] nlohmann::json ensureQueue(const std::string& name, bool& created);
     [[nodiscard]] nlohmann::json bucketConfiguration(const std::string& bucket);
-    [[nodiscard]] std::vector<std::string> ourRuleIds(const nlohmann::json& config, const std::string& queueId,
+    // Our rule ids on the queue: the configuration listing names the queue by an id spelled differently from the Queues
+    // API's queue_id (seen live), so the queue matches by its id with dashes and case ignored, or by its name (unique
+    // per account).
+    [[nodiscard]] std::vector<std::string> ourRuleIds(const nlohmann::json& config, const ChannelRef& channel,
                                                       const std::string& marker);
     [[nodiscard]] std::optional<std::string> jurisdiction() const;
 

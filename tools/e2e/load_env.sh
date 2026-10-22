@@ -9,8 +9,6 @@ _vh_e2e_repo_root="$(cd "${_vh_e2e_loader_dir}/../.." && pwd)"
 VH_E2E_ENV_FILES=(
   "$HOME/.bashrc"
   "${_vh_e2e_repo_root}/.bashrc"
-  "${_vh_e2e_repo_root}/deploy/bashrc"
-  "${_vh_e2e_repo_root}/deploy/vaulthalla.env"
   # TEST-ONLY S3/R2 provider credentials (operator-managed; see tools/lab/providers.env.example).
   "${VH_TEST_PROVIDERS_ENV:-/etc/vaulthalla/testing/providers.env}"
 )
@@ -102,11 +100,9 @@ vh_e2e_redacted_env_report() {
     VH_TEST_DB_HOST \
     VH_TEST_DB_PORT \
     VH_TEST_DB_NAME \
-    VAULTHALLA_TEST_R2_ACCESS_KEY \
-    VAULTHALLA_TEST_R2_SECRET_ACCESS_KEY \
-    VAULTHALLA_TEST_R2_ENDPOINT \
-    VAULTHALLA_TEST_R2_REGION \
-    VAULTHALLA_TEST_R2_BUCKET \
+    VH_R2_ADMIN_ACCESS_KEY \
+    VH_R2_ADMIN_SECRET_KEY \
+    VH_R2_ADMIN_ENDPOINT \
     VAULTHALLA_E2E_USER \
     VAULTHALLA_E2E_PASSWORD
   do
@@ -130,12 +126,12 @@ vh_e2e_require_test_db_env() {
   return 1
 }
 
+# The remote (R2) gateway smoke needs only the R2 admin key: it creates and deletes its fixed test bucket
+# vh-test-gateway-smoke itself, through the guarded live-test helper (testing.md, "Live provider tests").
 vh_e2e_has_r2_env() {
-  [[ -n "${VAULTHALLA_TEST_R2_BUCKET:-}" &&
-     -n "${VAULTHALLA_TEST_R2_ACCESS_KEY:-}" &&
-     -n "${VAULTHALLA_TEST_R2_SECRET_ACCESS_KEY:-}" &&
-     -n "${VAULTHALLA_TEST_R2_ENDPOINT:-}" &&
-     -n "${VAULTHALLA_TEST_R2_REGION:-}" ]]
+  [[ -n "${VH_R2_ADMIN_ACCESS_KEY:-}" &&
+     -n "${VH_R2_ADMIN_SECRET_KEY:-}" &&
+     -n "${VH_R2_ADMIN_ENDPOINT:-}" ]]
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

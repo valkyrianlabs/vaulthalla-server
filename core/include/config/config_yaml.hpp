@@ -900,14 +900,13 @@ struct convert<DevConfig> {
     static Node encode(const DevConfig& rhs) {
         Node node;
         node["enabled"] = rhs.enabled;
-        node["init_r2_test_vault"] = rhs.init_r2_test_vault;
         return node;
     }
 
     static bool decode(const Node& node, DevConfig& rhs) {
         if (!node.IsMap()) return false;
+        // dev.init_r2_test_vault (removed with the dev R2 test vault) is ignored if an older config.yaml still has it.
         rhs.enabled = node["enabled"].as<bool>(false);
-        rhs.init_r2_test_vault = node["init_r2_test_vault"].as<bool>(false);
         return true;
     }
 };

@@ -621,6 +621,11 @@ struct UpFakeCloudflare {
     nlohmann::json lastPut, lastDelete;
     int deletes = 0;
     bool workerConsumer = false;
+    // How the bucket's notification configuration spells q-1's id: live R2 lists another form than the Queues API's
+    // queue_id, so rules must match by queue name too.
+    std::string listedQueueId = "q-1";
+    int consumersNotFound = 0;   // consumers lookups answering 404 (a just-created queue, seen live)
+    bool queuesExist = true;     // false: the listing is empty and POST /queues creates them
 
     http::Response operator()(const http::Request& r) {
         EXPECT_EQ(upHeader(r, "authorization"), std::string("Bearer ") + kUpCfToken);
@@ -649,15 +654,25 @@ struct UpFakeCloudflare {
             }
         }
         if (path == acct + "/event_notifications/r2/vh-r2/configuration" && r.method == "GET") {
-            nlohmann::json q1 = {{"queueId", "q-1"}, {"queueName", "vaulthalla-events-r2"}, {"rules", nlohmann::json::array()}};
+            nlohmann::json q1 = {{"queueId", listedQueueId}, {"queueName", "vaulthalla-events-r2"}, {"rules", nlohmann::json::array()}};
             nlohmann::json q2 = {{"queueId", "q-other"}, {"queueName", "other-app"}, {"rules", nlohmann::json::array()}};
             for (const auto& rule : rules) (rule.value("queue", "q-1") == "q-other" ? q2 : q1)["rules"].push_back(rule);
             return upRespond(200, upCfOk({{"bucketName", "vh-r2"}, {"queues", {q1, q2}}}));
         }
+        if (path == acct + "/queues" && r.method == "POST") {
+            const auto name = nlohmann::json::parse(r.body).value("queue_name", "");
+            return upRespond(200, upCfOk({{"queue_id", name.ends_with("-dlq") ? "q-dlq" : "q-1"}, {"queue_name", name}}));
+        }
+        if (path.starts_with(acct + "/queues?page=") && !queuesExist)
+            return upRespond(200, upCfOk(nlohmann::json::array(), {{"page", 1}, {"total_pages", 1}}));
         if (path.starts_with(acct + "/queues?page=")) {
             return upRespond(200, upCfOk({{{"queue_id", "q-dlq"}, {"queue_name", "vaulthalla-events-r2-dlq"}},
                                           {{"queue_id", "q-1"}, {"queue_name", "vaulthalla-events-r2"}}},
                                          {{"page", 1}, {"total_pages", 1}}));
+        }
+        if (path == acct + "/queues/q-1/consumers" && r.method == "GET" && consumersNotFound > 0) {
+            --consumersNotFound;
+            return upRespond(404, R"({"success":false,"errors":[{"code":11000,"message":"Queue not found"}]})");
         }
         if (path == acct + "/queues/q-1/consumers" && r.method == "GET") {
             if (workerConsumer) return upRespond(200, upCfOk({{{"type", "worker"}, {"script_name", "their-worker"}}}));
@@ -726,6 +741,29 @@ TEST_F(UpstreamProviderTest, R2SubscribeMarksOurRuleAndDeletesOnlyByRuleId) {
     }
 }
 
+// Seen live: the bucket's notification configuration names the queue by an id spelled unlike the Queues API's
+// queue_id, so subscribe found its own new rule "missing". Rules match by the queue's id (dashes and case ignored) or
+// name; another queue's rule with our marker is still not ours.
+TEST_F(UpstreamProviderTest, R2RulesMatchTheQueueByNameWhenTheListedIdDiffers) {
+    UpFakeCloudflare cf;
+    cf.listedQueueId = "0f-q1-listed-form";
+    cf.rules.push_back({{"ruleId", "foreign-7"}, {"queue", "q-other"}, {"actions", {"PutObject"}}, {"prefix", "x/"},
+                        {"description", "vaulthalla-7"}});
+    handler = std::ref(cf);
+    admin::R2Events events(upR2Key());
+    const auto ids = events.subscribe(upR2Channel(), {.bucket = "vh-r2", .rule_id = "vaulthalla-7", .prefix = "v/"});
+    EXPECT_EQ(ids, (std::vector<std::string>{"rule-2"}));
+    EXPECT_EQ(events.subscribe(upR2Channel(), {.bucket = "vh-r2", .rule_id = "vaulthalla-7", .prefix = "v/"}), ids)
+        << "idempotent: the existing rule is found again";
+    events.unsubscribe(upR2Channel(), {.bucket = "vh-r2", .rule_id = "vaulthalla-7", .prefix = "v/"}, {});
+    EXPECT_EQ(cf.lastDelete["ruleIds"], nlohmann::json::array({"rule-2"}));
+
+    cf.listedQueueId = "Q-1";   // the same id with other case/dashes still matches
+    auto renamed = upR2Channel();
+    renamed.queue_name.clear();
+    EXPECT_EQ(events.subscribe(renamed, {.bucket = "vh-r2", .rule_id = "vaulthalla-8", .prefix = "w/"}).size(), 1u);
+}
+
 TEST_F(UpstreamProviderTest, R2SubscribeRefusesOverlappingForeignRule) {
     UpFakeCloudflare cf;
     cf.rules.push_back({{"ruleId", "foreign-1"}, {"queue", "q-other"}, {"actions", {"PutObject"}}, {"description", "all objects"}});
@@ -762,6 +800,26 @@ TEST_F(UpstreamProviderTest, R2PullDecodesBodiesAndAcks) {
     events.retry(upR2Channel(), {"lease-2"}, std::chrono::seconds{30});
     EXPECT_EQ(cf.lastPut["retries"][0]["lease_id"], "lease-2");
     EXPECT_EQ(cf.lastPut["retries"][0]["delay_seconds"], 30);
+}
+
+// Seen live: right after POST /queues, the new queue's consumers lookup can answer 404. ensureChannel waits for a queue
+// it created; a 404 for a queue that already existed is still an error.
+TEST_F(UpstreamProviderTest, R2EnsureChannelWaitsForAQueueItJustCreated) {
+    UpFakeCloudflare cf;
+    cf.queuesExist = false;
+    cf.consumersNotFound = 2;
+    handler = std::ref(cf);
+    admin::R2Events events(upR2Key());
+    const admin::ChannelSpec spec{.account_ref = kUpR2Account, .region = "", .queue_name = "vaulthalla-events-r2",
+                                  .retention_seconds = 345600, .visibility_timeout_seconds = 120, .max_receive_count = 8};
+    const auto ref = events.ensureChannel(spec);
+    EXPECT_TRUE(ref.created);
+    EXPECT_EQ(ref.queue_ref, "q-1");
+    EXPECT_EQ(matching("POST", "/queues/q-1/consumers").size(), 1u);
+
+    cf.queuesExist = true;
+    cf.consumersNotFound = 1;
+    EXPECT_THROW((void)events.ensureChannel(spec), admin::ProviderError) << "an existing queue's 404 is not waited for";
 }
 
 TEST_F(UpstreamProviderTest, R2EnsureChannelReusesQueueAndRefusesWorkerConsumer) {

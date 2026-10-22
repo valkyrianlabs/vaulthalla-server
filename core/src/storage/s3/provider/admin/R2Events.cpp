@@ -5,7 +5,10 @@
 #include "vault/model/APIKey.hpp"
 
 #include <algorithm>
+#include <cctype>
+#include <chrono>
 #include <stdexcept>
+#include <thread>
 
 namespace vh::storage::s3::provider::admin {
 
@@ -144,7 +147,18 @@ ChannelRef R2Events::ensureChannel(const ChannelSpec& spec) {
         ref.queue_ref = queue.value("queue_id", "");
         if (ref.queue_ref.empty()) throw ProviderError("Cloudflare Queues returned no queue id for " + spec.queue_name);
 
-        const auto consumers = api("GET", "/accounts/" + account_ + "/queues/" + seg(ref.queue_ref) + "/consumers");
+        // A queue created a moment ago can still answer 404 here (Cloudflare Queues is eventually consistent; seen
+        // live): give a queue this call created a few seconds to appear.
+        nlohmann::json consumers;
+        for (const auto delay : {0, 500, 1000, 2000, 4000}) {
+            if (delay) std::this_thread::sleep_for(std::chrono::milliseconds{delay});
+            try {
+                consumers = api("GET", "/accounts/" + account_ + "/queues/" + seg(ref.queue_ref) + "/consumers");
+                break;
+            } catch (const ProviderError& e) {
+                if (!ref.created || e.http_status != 404 || delay == 4000) throw;
+            }
+        }
         bool pull = false;
         if (consumers.is_array())
             for (const auto& c : consumers) {
@@ -185,12 +199,20 @@ nlohmann::json R2Events::bucketConfiguration(const std::string& bucket) {
     }
 }
 
-std::vector<std::string> R2Events::ourRuleIds(const nlohmann::json& config, const std::string& queueId,
+std::vector<std::string> R2Events::ourRuleIds(const nlohmann::json& config, const ChannelRef& channel,
                                               const std::string& marker) {
+    const auto plain = [](std::string id) {
+        std::erase(id, '-');
+        std::ranges::transform(id, id.begin(), [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return id;
+    };
     std::vector<std::string> ids;
     if (!config.is_object() || !config.contains("queues") || !config["queues"].is_array()) return ids;
     for (const auto& q : config["queues"]) {
-        if (q.value("queueId", "") != queueId || !q.contains("rules") || !q["rules"].is_array()) continue;
+        const auto queueId = q.value("queueId", "");
+        const bool ours = (!queueId.empty() && plain(queueId) == plain(channel.queue_ref)) ||
+                          (!channel.queue_name.empty() && q.value("queueName", "") == channel.queue_name);
+        if (!ours || !q.contains("rules") || !q["rules"].is_array()) continue;
         for (const auto& r : q["rules"])
             if (r.value("description", "") == marker) ids.push_back(r.value("ruleId", ""));
     }
@@ -202,7 +224,7 @@ std::vector<std::string> R2Events::subscribe(const ChannelRef& channel, const Su
     if (!isOwnedId(spec.rule_id)) throw std::invalid_argument("subscription rule ids must start with vaulthalla-");
     storage::upstream::requireValidBucketName(spec.bucket);
     const auto config = bucketConfiguration(spec.bucket);
-    if (auto existing = ourRuleIds(config, channel.queue_ref, spec.rule_id); !existing.empty()) return existing;
+    if (auto existing = ourRuleIds(config, channel, spec.rule_id); !existing.empty()) return existing;
 
     NotificationRule ours{.id = spec.rule_id, .destination = channel.queue_ref, .destination_name = channel.queue_name,
                           .events = detail::r2Actions(), .prefix = spec.prefix, .suffix = {}, .foreign = false, .raw = {}};
@@ -221,9 +243,17 @@ std::vector<std::string> R2Events::subscribe(const ChannelRef& channel, const Su
                          seg(channel.queue_ref),
               {{"rules", nlohmann::json::array({rule})}}, nullptr, true);
 
-    auto ids = ourRuleIds(bucketConfiguration(spec.bucket), channel.queue_ref, spec.rule_id);
-    if (ids.empty()) throw ProviderError("R2 accepted the event rule for '" + spec.bucket + "' but does not list it");
-    return ids;
+    const auto listed = bucketConfiguration(spec.bucket);
+    if (auto ids = ourRuleIds(listed, channel, spec.rule_id); !ids.empty()) return ids;
+    std::string seen;
+    if (listed.is_object() && listed.contains("queues") && listed["queues"].is_array())
+        for (const auto& q : listed["queues"])
+            for (const auto& r : q.value("rules", nlohmann::json::array()))
+                seen += (seen.empty() ? "" : ", ") + q.value("queueName", std::string("?")) + ":" +
+                        r.value("description", std::string("<no description>"));
+    throw ProviderError("R2 accepted the event rule for '" + spec.bucket + "' but does not list it (listed: " +
+                        (seen.empty() ? std::string("nothing") : seen) + "); remove it from the bucket's event "
+                        "notifications if it appears later");
 }
 
 void R2Events::unsubscribe(const ChannelRef& channel, const SubscriptionSpec& spec, const std::vector<std::string>& ruleIds) {
@@ -231,7 +261,7 @@ void R2Events::unsubscribe(const ChannelRef& channel, const SubscriptionSpec& sp
     storage::upstream::guard::require({.provider = "cloudflare-r2", .account_ref = account_, .bucket = spec.bucket});
     auto ids = ruleIds;
     std::erase(ids, std::string{});
-    if (ids.empty()) ids = ourRuleIds(bucketConfiguration(spec.bucket), channel.queue_ref, spec.rule_id);
+    if (ids.empty()) ids = ourRuleIds(bucketConfiguration(spec.bucket), channel, spec.rule_id);
     if (ids.empty()) return;
     // Never a body-less DELETE: that removes every rule of the queue on the bucket, other subscriptions' included.
     (void)api("DELETE", "/accounts/" + account_ + "/event_notifications/r2/" + seg(spec.bucket) + "/configuration/queues/" +

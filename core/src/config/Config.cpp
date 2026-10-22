@@ -991,13 +991,11 @@ Config& Config::operator=(Config&&) noexcept = default;
 
     void to_json(nlohmann::json &j, const DevConfig &c) {
         j = {
-            {"enabled", c.enabled},
-            {"init_r2_test_vault", c.init_r2_test_vault}
+            {"enabled", c.enabled}
         };
     }
 
     void from_json(const nlohmann::json &j, DevConfig &c) {
         c.enabled = j.value("enabled", false);
-        c.init_r2_test_vault = j.value("init_r2_test_vault", false);
     }
 } // namespace vh::config

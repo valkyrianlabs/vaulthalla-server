@@ -3,9 +3,13 @@
 // bounded transfer) on the VersionedBucket fake. DB-backed (bin/tests/run_unit.sh).
 
 #include "../helpers/recovery_provider_harness.hpp"
+#include "../helpers/upstream_admin_fakes.hpp"
 #include "../helpers/upstream_event_fakes.hpp"
 
 #include "db/query/upstream/Channel.hpp"
+#include "ops/Error.hpp"
+#include "ops/Recovery.hpp"
+#include "storage/ScopedS3RequestUsageCapture.hpp"
 #include "storage/upstream/Guard.hpp"
 #include "sync/events/Applier.hpp"
 #include "sync/events/Event.hpp"
@@ -683,6 +687,84 @@ TEST_F(RecoveryProviderTest, TheCopysNotificationSettlesAsOurOwnWrite) {
     ASSERT_NE(indexed, nullptr);
     EXPECT_EQ(indexed->remote_version_id, out.new_version_id);
     EXPECT_EQ(indexed->encryption_iv, *rows[0].encryption_iv);
+}
+
+// ---- providers without versions ------------------------------------------------------------------------------------
+
+// Cloudflare R2 (was the live UpstreamLive.R2VersioningRefused, which needed a provisioning credential): provider
+// versioning is refused with the documented reason and nothing is sent, while local snapshots of the same R2 vault
+// work entirely locally (snapshot, overwrite, restore) without a single data-plane or admin request.
+TEST_F(RecoveryProviderTest, AnR2VaultRefusesProviderVersioningAndKeepsLocalSnapshotsLocal) {
+    namespace rec = ops::recovery;
+    namespace padmin = storage::s3::provider::admin;
+    auto cloud = std::make_shared<test_support::upstream_admin::FakeCloud>();
+    cloud->versioningSupported = false;
+    padmin::setFactoryForTesting(padmin::Factory{
+        .admin = [cloud](const auto&) { return std::make_unique<test_support::upstream_admin::FakeAdmin>(cloud); },
+        .events = nullptr});
+    struct ResetFactory {
+        ~ResetFactory() { storage::s3::provider::admin::setFactoryForTesting(std::nullopt); }
+    } resetFactory;
+
+    auto key = std::make_shared<vault::model::APIKey>(superUser->id, "rp_r2_" + test_support::sync_conflicts::tag(),
+                                                      vault::model::S3Provider::CloudflareR2,
+                                                      "r2accesskey000000000000000000000",
+                                                      "r2-secret-0000000000000000000000000000", "auto",
+                                                      "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com");
+    const auto keyId = runtime::Deps::get().apiKeyManager->addAPIKey(key);
+    runtime::Deps::get().apiKeyManager->setAdmin(keyId, true, std::nullopt, std::nullopt, std::time(nullptr));
+    VFixture f;
+    f.vault = ops::vaults::create(superUser, {.name = "rp_r2_vault_" + test_support::sync_conflicts::tag(),
+                                              .type = vault::model::VaultType::S3, .owner_id = superUser->id,
+                                              .s3 = ops::vaults::S3Spec{.api_key_id = keyId,
+                                                                        .bucket = "rp-r2-" + test_support::sync_conflicts::tag(),
+                                                                        .encrypt_upstream = true}});
+    f.bucket = std::make_shared<VersionedBucket>(Versioning::Unversioned);
+    attach(f);
+    f.engine->remote_policy()->strategy = Strategy::Cache;
+
+    const storage::ScopedS3RequestUsageCapture meter(f.engine);
+    const auto callsBefore = [&] {
+        std::scoped_lock lock(cloud->mutex);
+        return cloud->calls;
+    }();
+    const auto st = rec::status(superUser, f.vault->id);
+    EXPECT_FALSE(st.provider.supported);
+    EXPECT_EQ(st.provider.unsupported_reason, padmin::kR2VersioningUnsupported);
+    rec::Update u;
+    u.mode = recovery::Mode::ProviderVersioning;
+    u.provider_retention = recovery::ProviderRetention{.indefinite = false, .days = 30};
+    u.disclosure_token = "v1.0.00";
+    u.accept_adoption = true;
+    try {
+        (void)rec::update(superUser, f.vault->id, u);
+        ADD_FAILURE() << "provider versioning enabled on R2";
+    } catch (const ops::Invalid& e) {
+        EXPECT_EQ(std::string(e.what()), padmin::kR2VersioningUnsupported);
+    }
+    EXPECT_THROW((void)rec::versioningDisclosure(superUser, f.vault->id,
+                                                 recovery::ProviderRetention{.indefinite = false, .days = 30}),
+                 ops::Invalid);
+
+    rec::Update local;
+    local.mode = recovery::Mode::LocalSnapshots;
+    EXPECT_EQ(rec::update(superUser, f.vault->id, local).mode, recovery::Mode::LocalSnapshots);
+    put(f, "/notes/today.txt", "before the mistake");
+    const auto snap = rec::createSnapshot(superUser, f.vault->id, {.path = "/notes", .name = std::string("r2")});
+    EXPECT_TRUE(snap.point.restorable);
+    put(f, "/notes/today.txt", "after the mistake");
+    const auto plan = rec::plan(superUser, {.recovery_id = snap.point.id});
+    EXPECT_TRUE(plan.blockers.empty());
+    const auto out = rec::restore(superUser, {.plan_id = plan.id, .token = plan.token});
+    EXPECT_EQ(out.state, "done");
+    EXPECT_EQ(readVia(f, "/notes/today.txt"), "before the mistake");
+
+    const auto r = meter.usage();
+    EXPECT_EQ(r.list_requests + r.head_requests + r.get_requests + r.put_requests + r.copy_requests + r.delete_requests, 0u)
+        << "nothing sent to the bucket";
+    std::scoped_lock lock(cloud->mutex);
+    EXPECT_EQ(cloud->calls, callsBefore) << "no admin request";
+    EXPECT_TRUE(cloud->putVersioningCalls.empty());
 }
 
 }

@@ -248,42 +248,14 @@ isn't a test database.
 - Default runtime config ships from `deploy/config/config.yaml`.
 - Install scripts copy config into `/etc/vaulthalla/config.yaml` on Linux; on macOS, `vaulthalla-provision` writes `/Library/Application Support/Vaulthalla/config.yaml`.
 - The web service unit uses `deploy/systemd/vaulthalla-web.service.in`.
-- Some local scripts look for `deploy/vaulthalla.env`.
+- Local environment values (test credentials, `VH_TEST_DB_*`) live in one gitignored file, the repo-root `.bashrc`. Scripts that need them source it; keep secrets out of commits. The older env files under `deploy/` are retired: `bin/tests/retire_legacy_test_env.sh` offers to delete stray copies.
 
-The repo only ships `deploy/vaulthalla.env.example` as a public template. If you need real storage-backed test credentials or environment values, create your own local `deploy/vaulthalla.env` from that template and keep secrets out of commits.
+### Live R2 tests
 
-### R2/S3 test environment
-
-If you want the dev workflow to carry R2 test credentials into the installed environment:
-
-1. copy `deploy/vaulthalla.env.example` to `deploy/vaulthalla.env`
-2. uncomment and fill in the `VAULTHALLA_TEST_R2_*` variables
-
-The example variables are:
-
-```text
-# VAULTHALLA_TEST_R2_ACCESS_KEY=<your_access_key>
-# VAULTHALLA_TEST_R2_SECRET_ACCESS_KEY=<your_secret_key>
-# VAULTHALLA_TEST_R2_ENDPOINT=https://<your_unique_id>.r2.cloudflarestorage.com
-# VAULTHALLA_TEST_R2_REGION=auto
-# VAULTHALLA_TEST_R2_BUCKET=<your_bucket_name>
-```
-
-When `deploy/vaulthalla.env` exists, `bin/setup/install_dirs.sh` installs it as `/etc/vaulthalla/vaulthalla.env`.
-
-### Optional dev R2 test vault seeding
-
-`deploy/config/config.yaml` includes:
-
-```yaml
-dev:
-  enabled: false
-  init_r2_test_vault: false
-```
-
-If dev mode is enabled in config and `init_r2_test_vault` is set to `true`, the storage manager can seed an `R2 Test Vault` automatically during startup when the required `VAULTHALLA_TEST_R2_*` environment variables are present.
-
-Keep this workflow-specific and local. Do not commit real credentials.
+The live Cloudflare R2 tests (`core/tests/unit/test_live_r2.cpp`) are opt-in. They run only with `VH_LIVE_TESTS=1`
+and an R2 admin key in `VH_R2_ADMIN_ACCESS_KEY`, `VH_R2_ADMIN_SECRET_KEY` and `VH_R2_ADMIN_ENDPOINT` (keep it in the
+gitignored repo-root `.bashrc`; never commit it). A run creates one bucket named `vh-test-<host>-<pid>-<start>`, works in
+it under a prefix per test, and deletes it afterwards, also when tests fail. Nothing else in the account is touched.
 
 ## Known Practical Snags
 
@@ -300,9 +272,9 @@ pnpm install --frozen-lockfile
 
 The CI web build syncs private icons from `~/vaulthalla-web-icons` before `pnpm build`. If local web build work depends on those assets, coordinate with the maintainer instead of committing fake replacements.
 
-### Integration test scripts expecting `deploy/vaulthalla.env`
+### DB-backed unit tests outside `make test`
 
-Some scripts reference `deploy/vaulthalla.env`, while the repo only includes `deploy/vaulthalla.env.example`. If your test path needs environment values, create the local file explicitly.
+`meson test -C build` doesn't source any env file, so the DB-backed suites skip there. Run them with `make test` (`bin/tests/run_unit.sh`), which creates a per-run database and its own environment.
 
 ### `make dev` is not a safe default
 

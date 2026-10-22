@@ -163,3 +163,8 @@ documents the request and answer frames.
   and the S3 gateway). The built-in roles give every scope the same rights, so accounts on them see no change; only
   accounts whose policy rows were edited per scope directly in the database are affected.
 
+## Fixes
+
+Event-driven sync for Cloudflare R2 buckets can now be turned on: subscribing a vault to its bucket's event
+notifications failed against real Cloudflare with "R2 accepted the event rule … but does not list it", and the first
+subscription on a new account could fail while Cloudflare was still creating the queue.
