@@ -25,8 +25,10 @@ The dev infrastructure is on the maintainer's home Proxmox server. All VMs are o
   (unused), pmdocs 1.0.5, ripgrep. **No `gh`, no `shellcheck`.**
   - **Node is v22.16 but `web/.nvmrc` wants 24.13. pnpm is 10.12.4 but `packageManager` pins 11.0.8.** Check
     `pnpm --dir web typecheck` works before trusting web results; install a matching toolchain if not.
-- Secrets live on disk in gitignored files: repo-root `.bashrc` (R2/SES/test-DB creds), `deploy/vaulthalla.env`,
-  `deploy/bashrc`, and root-owned `cloudflare.ini`. **Never cat, print, or commit these.** Source them to use them.
+- Secrets live on disk in gitignored files: repo-root `.bashrc` (the only local env file: R2 admin/SES/test-DB creds;
+  dev's `/srv/vaulthalla/.bashrc` is byte-identical to the Mac's) and root-owned `cloudflare.ini`. **Never cat, print,
+  or commit these.** Source them to use them. The two older env files under `deploy/` are retired
+  (2026-10-22); `bin/tests/retire_legacy_test_env.sh` offers to delete stray copies.
 - Git remotes: `origin` (github.com/vaulthalla/vaulthalla), `web-repo` (legacy web repo history).
 
 ## dev-db contents (surveyed 2026-09-30)

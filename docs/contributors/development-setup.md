@@ -248,9 +248,7 @@ isn't a test database.
 - Default runtime config ships from `deploy/config/config.yaml`.
 - Install scripts copy config into `/etc/vaulthalla/config.yaml` on Linux; on macOS, `vaulthalla-provision` writes `/Library/Application Support/Vaulthalla/config.yaml`.
 - The web service unit uses `deploy/systemd/vaulthalla-web.service.in`.
-- Some local scripts look for `deploy/vaulthalla.env`.
-
-The repo only ships `deploy/vaulthalla.env.example` as a public template. If you need real storage-backed test credentials or environment values, create your own local `deploy/vaulthalla.env` from that template and keep secrets out of commits.
+- Local environment values (test credentials, `VH_TEST_DB_*`) live in one gitignored file, the repo-root `.bashrc`. Scripts that need them source it; keep secrets out of commits. The older env files under `deploy/` are retired: `bin/tests/retire_legacy_test_env.sh` offers to delete stray copies.
 
 ### Live R2 tests
 
@@ -274,9 +272,9 @@ pnpm install --frozen-lockfile
 
 The CI web build syncs private icons from `~/vaulthalla-web-icons` before `pnpm build`. If local web build work depends on those assets, coordinate with the maintainer instead of committing fake replacements.
 
-### Integration test scripts expecting `deploy/vaulthalla.env`
+### DB-backed unit tests outside `make test`
 
-Some scripts reference `deploy/vaulthalla.env`, while the repo only includes `deploy/vaulthalla.env.example`. If your test path needs environment values, create the local file explicitly.
+`meson test -C build` doesn't source any env file, so the DB-backed suites skip there. Run them with `make test` (`bin/tests/run_unit.sh`), which creates a per-run database and its own environment.
 
 ### `make dev` is not a safe default
 

@@ -89,9 +89,8 @@ vh_e2e_redacted_env_report
 The loader reads, when present:
 
 - `$HOME/.bashrc`
-- `./.bashrc`
-- `./deploy/bashrc`
-- `./deploy/vaulthalla.env`
+- `./.bashrc` (the repo-root env file; gitignored)
+- the test provider credentials file `/etc/vaulthalla/testing/providers.env` (or `VH_TEST_PROVIDERS_ENV`)
 
 The redacted report shows whether `VH_TEST_DB_*`, `S3_GATEWAY_SMOKE_UPSTREAM_*`, and `VAULTHALLA_E2E_*` are set without printing secret values.
 

@@ -19,7 +19,7 @@ bash tools/dev/verify.sh core web   # explicit profiles
 | Profile | What it runs | Cost |
 |---|---|---|
 | `doctor` | toolchain/version pin check (node vs `.nvmrc`, pnpm vs `packageManager`, icons, build dir, release sync) | seconds |
-| `core` | `meson compile -C build` then `meson test -C build` (sources `deploy/vaulthalla.env` if present) | minutes |
+| `core` | `meson compile -C build` then `meson test -C build` (no env file sourced: DB-backed suites need `make test`; live tests are opt-in) | minutes |
 | `web` | `pnpm --dir web typecheck` + `lint` (strict; `VERIFY_STRICT_LINT=0` to soften) | ~1 min |
 | `release` | `vlr check` + `vlr version check` (release.toml, staged `.release/` docs, version targets) | seconds |
 | `packaging` | `tools/contracts` (packaging, maintainer scripts, migrations, release workflow) + `tools/lab/tests`, with minimum test counts | seconds |

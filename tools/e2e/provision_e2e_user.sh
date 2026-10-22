@@ -128,8 +128,8 @@ finish_with_existing_credentials() {
 }
 
 reload_known_env() {
-  # Re-source through the common loader after setup scripts update deploy/bashrc
-  # or deploy/vaulthalla.env.
+  # Re-source through the common loader after setup scripts update the repo-root
+  # .bashrc (the only local env file).
   # shellcheck source=tools/e2e/load_env.sh
   source "$REPO_ROOT/tools/e2e/load_env.sh"
 }

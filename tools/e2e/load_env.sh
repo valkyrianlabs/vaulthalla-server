@@ -9,8 +9,6 @@ _vh_e2e_repo_root="$(cd "${_vh_e2e_loader_dir}/../.." && pwd)"
 VH_E2E_ENV_FILES=(
   "$HOME/.bashrc"
   "${_vh_e2e_repo_root}/.bashrc"
-  "${_vh_e2e_repo_root}/deploy/bashrc"
-  "${_vh_e2e_repo_root}/deploy/vaulthalla.env"
   # TEST-ONLY S3/R2 provider credentials (operator-managed; see tools/lab/providers.env.example).
   "${VH_TEST_PROVIDERS_ENV:-/etc/vaulthalla/testing/providers.env}"
 )

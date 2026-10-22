@@ -59,13 +59,9 @@ run_core() {
   fi
   log "meson compile -C build"
   meson compile -C build
-  log "meson test -C build (DB-backed tests need 'make test' + sourced deploy/vaulthalla.env)"
-  if [[ -f deploy/vaulthalla.env ]]; then
-    set -a; # shellcheck disable=SC1091
-    source deploy/vaulthalla.env; set +a
-  else
-    warn "deploy/vaulthalla.env missing; DB-backed unit tests may fail (run 'make test' first)"
-  fi
+  # No env file is sourced: DB-backed suites skip here and run under 'make test' (bin/tests/run_unit.sh: a per-run
+  # database and its own environment), and live provider tests are opt-in only (never enabled here).
+  log "meson test -C build (DB-backed suites skip here: run 'make test' for them; live tests are opt-in)"
   meson test -C build --print-errorlogs
 }
 
@@ -108,7 +104,7 @@ run_release() {
 
 run_packaging() {
   log "product contracts (tools/contracts)"
-  run_suite "tools/contracts" 172 discover -s tools/contracts -t .
+  run_suite "tools/contracts" 177 discover -s tools/contracts -t .
   log "lab tooling tests (tools/lab/tests)"
   run_suite "tools/lab/tests" 34 discover -s tools/lab/tests -t .
   log "project board tooling tests (tools/project/tests)"
