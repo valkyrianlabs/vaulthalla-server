@@ -77,9 +77,18 @@ buckets it created. Other providers: plain storage, but protection locks still a
 
 - AWS test identity `vaulthalla-test-admin`: S3 admin works; **no SQS permissions** and no
   `s3:GetBucketObjectLockConfiguration` → AWS event delivery untested live. Needed statement: docs/vaults/upstream-buckets.md.
-- R2: both `VH_R2_*` pairs in the repo `.bashrc` are S3 token pairs (same account); neither authenticates the Cloudflare
-  REST API (6003 / 1000). Events need one CF API token (Queues: Edit, Workers R2 Storage: Edit) stored as the key's
-  provider token. R2 accepts any SigV4 region (`auto`, `wnam`, `us-east-1`). New R2 buckets carry a default
+- R2 credentials (2026-10-22): the repo `.bashrc` holds one R2 admin S3 pair (`VH_R2_ADMIN_*`) and a Cloudflare API
+  token (`VH_CF_API_TOKEN`, Queues: Edit + Workers R2 Storage: Edit) stored as the key's provider token for events; the
+  account id comes from the endpoint host.
+- R2 events, verified live 2026-10-22 (`LiveR2.EventNotificationsOnTheRunBucket`, Mac and dev), and fixed where they
+  broke Vaulthalla: the bucket's notification configuration names the queue by an id spelled unlike the Queues API's
+  `queue_id`, so `R2Events` matches our rules by that id with dashes/case ignored or by queue name (before the fix,
+  every subscribe failed with "R2 accepted the event rule … but does not list it"); a just-created queue can answer
+  404 on its consumers lookup for a few seconds (`ensureChannel` waits for a queue it created); a pull right after
+  the http_pull consumer is added can answer 405 "http_pull mode not enabled", and Cloudflare answers the odd 504
+  7009 (the poller retries both); a new rule takes effect a little after it is listed (the first upload may produce
+  no event); R2 refuses DeleteBucket while the bucket has notification rules (409) and deleting a queue a rule
+  targets (400 11017); the Queues listing lags behind creates and deletes. R2 accepts any SigV4 region (`auto`, `wnam`, `us-east-1`). New R2 buckets carry a default
   "Default Multipart Abort Rule" (foreign). Collisions: 409 `BucketAlreadyOwnedByYou` on both providers.
 - Live tests (2026-10-22, testing.md "Live provider tests"): opt-in (`VH_LIVE_TESTS=1`), R2 only, through
   `tests/helpers/live_bucket.hpp`. Two rules: every bucket a test creates is `vh-test-<host>-<pid>-<run start>` and the

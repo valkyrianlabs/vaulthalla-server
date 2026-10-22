@@ -129,3 +129,9 @@ Malformed or failing requests no longer leave clients waiting: a frame the daemo
 error that carries the request's id, an internal fault answers the request it belongs to with an ordinary error
 instead of an "Unknown" response, and a command sent without a payload is treated as an empty one. The contract
 documents the request and answer frames.
+
+## Fixes
+
+Event-driven sync for Cloudflare R2 buckets can now be turned on: subscribing a vault to its bucket's event
+notifications failed against real Cloudflare with "R2 accepted the event rule … but does not list it", and the first
+subscription on a new account could fail while Cloudflare was still creating the queue.

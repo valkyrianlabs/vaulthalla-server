@@ -415,6 +415,17 @@ if get_option('build_unit_tests')
         install: false,
     )
 
+    # Creates/deletes the fixed test buckets of tools/smoke through the guarded live-test helper (never installed).
+    vh_live_bucket = executable(
+        'vh_live_bucket',
+        files(join_paths(core_root, 'tests/helpers/live_bucket_tool.cpp')),
+        link_with: [lib_core, lib_seed, lib_usage],
+        include_directories: inc,
+        dependencies: test_deps,
+        cpp_args: ['-DVH_TOOL_DEFAULT_CONFIG="' + join_paths(repo_root, 'deploy/config/config.yaml') + '"'],
+        install: false,
+    )
+
     # DB-backed suites make one run take several minutes (#123); 120s always timed out.
     test('vh_unit_tests', vh_unit_tests, env: unit_test_env, workdir: meson.current_build_dir(), timeout: 1800,
          depends: unit_test_helper_targets)

@@ -5,9 +5,10 @@
 //  - Opt-in: nothing here runs unless VH_LIVE_TESTS=1, whatever credentials the environment holds. The credential is
 //    the R2 admin key VH_R2_ADMIN_{ACCESS_KEY,SECRET_KEY,ENDPOINT} (+ optional VH_R2_ADMIN_REGION); events also need a
 //    Cloudflare API token, VH_CF_API_TOKEN.
-//  - Rule 1, names: every bucket a test creates is vh-test-<host>-<pid>-<run start> (kRunBucketPattern). GuardedAdmin
-//    refuses to create, delete, empty, inspect or reconfigure any bucket that doesn't match it, and GuardedEvents any
-//    bucket or queue that doesn't; production buckets are unreachable by construction. Account listings (read-only)
+//  - Rule 1, names: every bucket a test creates is vh-test-<host>-<pid>-<run start> (kRunBucketPattern), or one of the
+//    fixed tooling buckets (fixedTestBuckets(): vh-test-gateway-smoke). GuardedAdmin refuses to create, delete, empty,
+//    inspect or reconfigure any other bucket, and GuardedEvents any other bucket or queue; production buckets are
+//    unreachable by construction. Account listings (read-only)
 //    are allowed: the orphan sweep needs them.
 //  - Rule 2, cleanup: a live run creates exactly one bucket (RunBucket, on the first live test) and the global test
 //    environment empties and deletes it after the last test, also when tests failed, then fails the run unless
@@ -18,11 +19,13 @@
 //  - tools/contracts/test_live_bucket_contract.py keeps provider administration in tests behind this helper.
 
 #include "storage/s3/Controller.hpp"
+#include "storage/s3/curl/Http.hpp"
 #include "storage/s3/provider/admin/Adapters.hpp"
 #include "storage/upstream/Guard.hpp"
 #include "vault/model/APIKey.hpp"
 
 #include <gtest/gtest.h>
+#include <nlohmann/json.hpp>
 #include <pugixml.hpp>
 
 #include <algorithm>
@@ -51,6 +54,12 @@ namespace padmin = storage::s3::provider::admin;
 inline constexpr std::string_view kBucketPrefix = "vh-test-";
 // vh-test-<host>-<pid>-<run start>: what newRunBucketName() generates, and the only thing the sweep considers.
 inline constexpr const char* kRunBucketPattern = R"(^vh-test-[a-z0-9]{1,24}-[0-9]{1,10}-[0-9]{10}$)";
+// Fixed test buckets of tooling (tools/smoke), created and deleted by vh_live_bucket (live_bucket_tool.cpp). Never swept:
+// their tool removes a leftover before it creates one.
+inline const std::vector<std::string>& fixedTestBuckets() {
+    static const std::vector<std::string> names{"vh-test-gateway-smoke"};
+    return names;
+}
 // A run whose bucket is older than this crashed or was killed (a run takes minutes).
 inline constexpr std::chrono::hours kStaleAfter{6};
 inline constexpr int kMaxPages = 50;
@@ -110,6 +119,13 @@ inline bool isRunBucketName(const std::string& name) {
     static const std::regex re(kRunBucketPattern);
     return name.starts_with(kBucketPrefix) && name.size() <= 63 && std::regex_match(name, re);
 }
+
+inline bool isFixedTestBucket(const std::string& name) {
+    return std::ranges::find(fixedTestBuckets(), name) != fixedTestBuckets().end();
+}
+
+// What the guarded clients may touch: a generated run bucket or one of the fixed tooling buckets.
+inline bool isTestBucketName(const std::string& name) { return isRunBucketName(name) || isFixedTestBucket(name); }
 
 // This run's bucket (and events queue) name.
 inline const std::string& runBucketName() {
@@ -181,9 +197,18 @@ inline std::vector<std::string> takeViolations() {
     return std::exchange(violationLog(), {});
 }
 
-inline void requireRunBucket(const std::string& name, const char* what = "bucket") {
-    if (!isRunBucketName(name))
-        violate(std::string(what) + " '" + name + "' is not a vh-test-<host>-<pid>-<start> test bucket");
+// The run's events queues: <run bucket name> and <run bucket name>-dlq (R2Events names the dead-letter queue so).
+inline bool isRunQueueName(const std::string& name) {
+    return isRunBucketName(name) || (name.ends_with("-dlq") && isRunBucketName(name.substr(0, name.size() - 4)));
+}
+
+inline void requireTestQueue(const std::string& name) {
+    if (!isRunQueueName(name)) violate("queue '" + name + "' is not a vh-test-<host>-<pid>-<start>[-dlq] test queue");
+}
+
+inline void requireTestBucket(const std::string& name, const char* what = "bucket") {
+    if (!isTestBucketName(name))
+        violate(std::string(what) + " '" + name + "' is not a vh-test-<host>-<pid>-<start> test bucket or a fixed tooling one");
 }
 
 struct Upload {
@@ -203,55 +228,55 @@ public:
         return in_->listBuckets(token, max);
     }
     [[nodiscard]] std::optional<std::string> headBucket(const std::string& bucket) override {
-        requireRunBucket(bucket);
+        requireTestBucket(bucket);
         return in_->headBucket(bucket);
     }
     void setKnownRegion(const std::string& bucket, const std::string& region) override { in_->setKnownRegion(bucket, region); }
     void createBucket(const padmin::CreateBucketRequest& request) override {
-        requireRunBucket(request.name);
+        requireTestBucket(request.name);
         in_->createBucket(request);
     }
     void deleteBucket(const std::string& bucket) override {
-        requireRunBucket(bucket);
+        requireTestBucket(bucket);
         in_->deleteBucket(bucket);
     }
     [[nodiscard]] padmin::BucketConfiguration inspect(const std::string& bucket) override {
-        requireRunBucket(bucket);
+        requireTestBucket(bucket);
         return in_->inspect(bucket);
     }
     void putLifecycle(const std::string& bucket, const std::vector<padmin::LifecycleRule>& rules) override {
-        requireRunBucket(bucket);
+        requireTestBucket(bucket);
         in_->putLifecycle(bucket, rules);
     }
     [[nodiscard]] bool supportsVersioning() const override { return in_->supportsVersioning(); }
     [[nodiscard]] padmin::VersioningState versioning(const std::string& bucket) override {
-        requireRunBucket(bucket);
+        requireTestBucket(bucket);
         return in_->versioning(bucket);
     }
     void putVersioning(const std::string& bucket, const padmin::Versioning target) override {
-        requireRunBucket(bucket);
+        requireTestBucket(bucket);
         in_->putVersioning(bucket, target);
     }
     [[nodiscard]] padmin::ObjectPage listObjects(const std::string& bucket, const std::string& token,
                                                  const unsigned int max) override {
-        requireRunBucket(bucket);
+        requireTestBucket(bucket);
         return in_->listObjects(bucket, token, max);
     }
     [[nodiscard]] padmin::ObjectPage listObjectVersions(const std::string& bucket, const std::string& token,
                                                         const unsigned int max) override {
-        requireRunBucket(bucket);
+        requireTestBucket(bucket);
         return in_->listObjectVersions(bucket, token, max);
     }
     [[nodiscard]] std::vector<std::pair<std::string, std::string>> deleteObjects(
         const std::string& bucket, const std::vector<padmin::ObjectSummary>& objects) override {
-        requireRunBucket(bucket);
+        requireTestBucket(bucket);
         return in_->deleteObjects(bucket, objects);
     }
     [[nodiscard]] padmin::Metrics metrics() const override { return in_->metrics(); }
 
     // Every object under prefix ("" = the whole bucket), all pages.
     [[nodiscard]] std::vector<padmin::ObjectSummary> objectsUnder(const std::string& bucket, const std::string& prefix) {
-        requireRunBucket(bucket);
+        requireTestBucket(bucket);
         std::vector<padmin::ObjectSummary> out;
         std::string token;
         for (int page = 0; page < kMaxPages; ++page) {
@@ -275,7 +300,7 @@ public:
 
     // Unfinished multipart uploads under prefix (none for a fake inner client).
     [[nodiscard]] std::vector<Upload> uploadsUnder(const std::string& bucket, const std::string& prefix) {
-        requireRunBucket(bucket);
+        requireTestBucket(bucket);
         std::vector<Upload> out;
         if (!api_) return out;
         std::string keyMarker, idMarker;
@@ -310,51 +335,134 @@ public:
 
     [[nodiscard]] std::string providerId() const override { return in_->providerId(); }
     [[nodiscard]] padmin::ChannelRef ensureChannel(const padmin::ChannelSpec& spec) override {
-        requireRunBucket(spec.queue_name, "queue");
+        requireTestBucket(spec.queue_name, "queue");
         return in_->ensureChannel(spec);
     }
     [[nodiscard]] std::vector<std::string> subscribe(const padmin::ChannelRef& channel,
                                                      const padmin::SubscriptionSpec& spec) override {
-        requireRunBucket(channel.queue_name, "queue");
-        requireRunBucket(spec.bucket);
+        requireTestBucket(channel.queue_name, "queue");
+        requireTestBucket(spec.bucket);
         return in_->subscribe(channel, spec);
     }
     void unsubscribe(const padmin::ChannelRef& channel, const padmin::SubscriptionSpec& spec,
                      const std::vector<std::string>& ruleIds) override {
-        requireRunBucket(channel.queue_name, "queue");
-        requireRunBucket(spec.bucket);
+        requireTestBucket(channel.queue_name, "queue");
+        requireTestBucket(spec.bucket);
         in_->unsubscribe(channel, spec, ruleIds);
     }
     [[nodiscard]] std::vector<padmin::NotificationRule> rules(const std::string& bucket) override {
-        requireRunBucket(bucket);
+        requireTestBucket(bucket);
         return in_->rules(bucket);
     }
     void removeChannel(const padmin::ChannelRef& channel) override {
-        requireRunBucket(channel.queue_name, "queue");
+        requireTestBucket(channel.queue_name, "queue");
         in_->removeChannel(channel);
     }
     [[nodiscard]] padmin::PollResult poll(const padmin::ChannelRef& channel, const unsigned int max,
                                           const std::chrono::seconds wait, const std::chrono::seconds visibility) override {
-        requireRunBucket(channel.queue_name, "queue");
+        requireTestBucket(channel.queue_name, "queue");
         return in_->poll(channel, max, wait, visibility);
     }
     void ack(const padmin::ChannelRef& channel, const std::vector<std::string>& receipts) override {
-        requireRunBucket(channel.queue_name, "queue");
+        requireTestBucket(channel.queue_name, "queue");
         in_->ack(channel, receipts);
     }
     void retry(const padmin::ChannelRef& channel, const std::vector<std::string>& receipts,
                const std::chrono::seconds delay) override {
-        requireRunBucket(channel.queue_name, "queue");
+        requireTestBucket(channel.queue_name, "queue");
         in_->retry(channel, receipts, delay);
     }
     [[nodiscard]] std::optional<uint64_t> backlog(const padmin::ChannelRef& channel) override {
-        requireRunBucket(channel.queue_name, "queue");
+        requireTestBucket(channel.queue_name, "queue");
         return in_->backlog(channel);
     }
     [[nodiscard]] padmin::Metrics metrics() const override { return in_->metrics(); }
 
 private:
     std::unique_ptr<padmin::EventsClient> in_;
+};
+
+// Cloudflare Queues by NAME, for cleanup and the orphan sweep only: test queues (isRunQueueName) are deleted by name,
+// never through a ChannelRef from ensureChannel, because the Queues API is eventually consistent (seen live: a new
+// queue missing from the listing and 404 for a few seconds), so a failed ensureChannel leaves queues it can't name.
+class QueueAdmin final {
+public:
+    explicit QueueAdmin(const std::shared_ptr<vault::model::APIKey>& key)
+        : token_(key->provider_token), secret_(key->secret_access_key) {
+        const auto account = padmin::staticAccountRef(*key);
+        if (!account) throw std::invalid_argument("R2 endpoint must be https://<account id>.r2.cloudflarestorage.com");
+        account_ = *account;
+        if (token_.empty()) throw padmin::CapabilityMissing("events.queues", padmin::kCloudflareTokenHint);
+    }
+
+    // Every queue of the account: (name, id). Read-only.
+    [[nodiscard]] std::vector<std::pair<std::string, std::string>> list() {
+        std::vector<std::pair<std::string, std::string>> out;
+        for (int page = 1; page <= kMaxPages; ++page) {
+            const auto result = api("GET", "/queues?page=" + std::to_string(page) + "&per_page=100");
+            if (!result.is_array() || result.empty()) break;
+            for (const auto& q : result) out.emplace_back(q.value("queue_name", ""), q.value("queue_id", ""));
+            if (result.size() < 100) break;
+        }
+        return out;
+    }
+
+    // Deletes the named test queue if it is listed. Returns whether it was listed.
+    bool remove(const std::string& name) {
+        requireTestQueue(name);
+        for (const auto& [n, id] : list())
+            if (n == name && !id.empty()) {
+                (void)api("DELETE", "/queues/" + id);
+                return true;
+            }
+        return false;
+    }
+
+    // Deletes the named test queues, retrying until the listing no longer shows them (it lags); throws if it still
+    // does after about a minute.
+    void removeUntilGone(const std::vector<std::string>& names) {
+        for (const auto& n : names) requireTestQueue(n);
+        std::string last;
+        for (int attempt = 0; attempt < 15; ++attempt) {
+            try {
+                bool any = false;
+                for (const auto& n : names) any = remove(n) || any;
+                if (!any) return;
+            } catch (const std::exception& e) {
+                last = e.what();
+            }
+            std::this_thread::sleep_for(std::chrono::seconds{4});
+        }
+        throw std::runtime_error("test queues still listed after a minute" + (last.empty() ? "" : ": " + last));
+    }
+
+private:
+    nlohmann::json api(const std::string& method, const std::string& path) {
+        storage::s3::curl::http::Request request;
+        request.method = method;
+        request.url = "https://api.cloudflare.com/client/v4/accounts/" + account_ + path;
+        request.timeout = std::chrono::seconds{30};
+        request.headers.emplace_back("Authorization", "Bearer " + token_);
+        const auto r = storage::s3::curl::http::perform(request);
+        const auto what = "Cloudflare API " + method + " " + path.substr(0, path.find('?'));
+        if (!r.transport_ok) throw std::runtime_error(what + ": " + r.transport_error);
+        nlohmann::json body;
+        try {
+            body = nlohmann::json::parse(r.body);
+        } catch (const nlohmann::json::exception&) {
+            throw std::runtime_error(what + ": HTTP " + std::to_string(r.status) + ", not JSON");
+        }
+        if (!r.ok() || !body.value("success", false)) {
+            std::string message = body.dump();
+            for (const auto* s : {&token_, &secret_})
+                for (std::size_t p; !s->empty() && (p = message.find(*s)) != std::string::npos;)
+                    message.replace(p, s->size(), "[REDACTED]");
+            throw std::runtime_error(what + ": HTTP " + std::to_string(r.status) + " " + message.substr(0, 300));
+        }
+        return body.contains("result") ? body["result"] : nlohmann::json();
+    }
+
+    std::string token_, secret_, account_;
 };
 
 inline std::unique_ptr<GuardedAdmin> guardedAdmin(const std::shared_ptr<vault::model::APIKey>& key) {
@@ -389,7 +497,7 @@ inline padmin::Factory guardedFactory(const Target& t) {
 // no versions). Returns how many objects + uploads it removed; throws if anything is left.
 inline std::size_t emptyUnder(GuardedAdmin& admin, const std::shared_ptr<vault::model::APIKey>& key,
                               const std::string& bucket, const std::string& prefix) {
-    requireRunBucket(bucket);
+    requireTestBucket(bucket);
     std::size_t removed = 0;
     for (int round = 0; round < 5; ++round) {
         const auto uploads = admin.uploadsUnder(bucket, prefix);
@@ -414,7 +522,7 @@ inline std::size_t emptyUnder(GuardedAdmin& admin, const std::shared_ptr<vault::
 // HeadBucket says it is gone. Throws on failure. The only place a test deletes a bucket.
 inline void emptyAndDeleteBucket(GuardedAdmin& admin, const std::shared_ptr<vault::model::APIKey>& key,
                                  const std::string& bucket) {
-    requireRunBucket(bucket);
+    requireTestBucket(bucket);
     if (!admin.headBucket(bucket)) return;
     for (int attempt = 1;; ++attempt) {
         try {
@@ -431,6 +539,40 @@ inline void emptyAndDeleteBucket(GuardedAdmin& admin, const std::shared_ptr<vaul
     }
     for (int i = 0; i < 15 && admin.headBucket(bucket); ++i) std::this_thread::sleep_for(std::chrono::seconds{1});
     if (admin.headBucket(bucket)) throw std::runtime_error("bucket " + bucket + " still exists after DeleteBucket");
+}
+
+// Removes every event-notification rule on a test bucket, by rule id (the bucket is test-owned, so all of them are the
+// test's; GuardedEvents still refuses a queue outside the pattern). A rule left behind makes R2 refuse DeleteBucket
+// (409 "still has a notification configuration") and the queue's deletion. Retries while R2's listing catches up.
+inline void removeEventRules(GuardedEvents& events, const std::string& bucket) {
+    requireTestBucket(bucket);
+    for (int attempt = 1;; ++attempt) {
+        try {
+            std::vector<std::pair<padmin::ChannelRef, std::vector<std::string>>> byQueue;
+            for (const auto& r : events.rules(bucket)) {
+                auto it = std::ranges::find_if(byQueue, [&](const auto& q) { return q.first.queue_ref == r.destination; });
+                if (it == byQueue.end()) {
+                    padmin::ChannelRef c;
+                    c.queue_ref = r.destination;
+                    c.queue_name = r.destination_name;
+                    byQueue.push_back({c, {}});
+                    it = std::prev(byQueue.end());
+                }
+                it->second.push_back(r.id);
+            }
+            if (byQueue.empty()) return;
+            for (const auto& [channel, ids] : byQueue)
+                events.unsubscribe(channel, {.bucket = bucket, .rule_id = "vaulthalla-live", .prefix = ""}, ids);
+            std::cout << "[live] removed the event rules of " << bucket << std::endl;
+        } catch (const GuardViolation&) {
+            throw;
+        } catch (const std::exception& e) {
+            if (attempt >= 6) throw;
+            std::cerr << "[live] event rules of " << bucket << ", attempt " << attempt << ": " << e.what() << std::endl;
+        }
+        std::this_thread::sleep_for(std::chrono::seconds{3});
+        if (attempt >= 6) throw std::runtime_error("event rules keep being listed on " + bucket);
+    }
 }
 
 // ---- the run's one bucket ---------------------------------------------------------------------------------------------
@@ -475,6 +617,10 @@ public:
         if (!attempted_ || finished_) return {};
         finished_ = true;
         try {
+            if (!key_->provider_token.empty()) {
+                removeEventRules(*guardedEvents(key_), runBucketName());
+                QueueAdmin(key_).removeUntilGone({runBucketName(), runBucketName() + "-dlq"});
+            }
             emptyAndDeleteBucket(*admin_, key_, runBucketName());
             std::cout << "[live] deleted " << runBucketName() << " (HeadBucket: gone)" << std::endl;
             return {};
@@ -501,12 +647,26 @@ private:
             token = p.next_token;
             if (token.empty()) break;
         }
-        const auto stale = orphans(names, std::time(nullptr));
+        const auto now = std::time(nullptr);
+        const auto stale = orphans(names, now);
+        const bool events = !key_->provider_token.empty();
         for (const auto& name : stale) {
+            if (events) removeEventRules(*guardedEvents(key_), name);   // R2 refuses to delete a bucket with rules
             emptyAndDeleteBucket(*admin_, key_, name);
             std::cout << "[live] swept orphaned test bucket " << name << std::endl;
         }
-        std::cout << "[live] orphan sweep: " << stale.size() << " bucket(s) removed" << std::endl;
+        std::size_t queues = 0;
+        if (events) {
+            QueueAdmin q(key_);
+            std::vector<std::string> staleQueues;
+            for (const auto& [name, id] : q.list()) {
+                const auto base = name.ends_with("-dlq") ? name.substr(0, name.size() - 4) : name;
+                if (isRunQueueName(name) && isOrphan(base, now)) staleQueues.push_back(name);
+            }
+            if (!staleQueues.empty()) q.removeUntilGone(staleQueues);
+            queues = staleQueues.size();
+        }
+        std::cout << "[live] orphan sweep: " << stale.size() << " bucket(s), " << queues << " queue(s) removed" << std::endl;
     }
 
     std::mutex mutex_;

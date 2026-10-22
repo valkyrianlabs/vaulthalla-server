@@ -228,10 +228,12 @@ Dev mode requires both `VH_BUILD_MODE=dev` and the gitignored `enable_dev_mode` 
 - `tools/smoke/s3_gateway_{e2e,merge_ready,scoped_budget_smoke}.sh`: S3 gateway smoke runs against a live install.
 - `tools/e2e/{load_env.sh,provision_e2e_user.sh}` + `web/tests/e2e` (Playwright).
 - `tools/dev/share_preview_smoke.mjs`: public share preview smoke.
-- Real R2 dogfooding: only in a `vh-test-*` bucket you create for it and delete afterwards. The remote gateway smoke
-  (`s3_gateway_scoped_budget_smoke.sh`) needs `S3_GATEWAY_SMOKE_UPSTREAM_BUCKET` set to an existing `vh-test-*` bucket and
-  refuses any other name; it never creates buckets. Its remote-cache vault spans the whole upstream bucket, so delete
-  that bucket afterwards rather than relying on prefix cleanup.
+- The remote gateway smoke (`s3_gateway_scoped_budget_smoke.sh`, needs a running install) has no upstream knobs: it
+  creates the fixed test bucket `vh-test-gateway-smoke` with `build/core/vh_live_bucket` (the guarded helper; a
+  leftover of a crashed run is emptied and deleted first), registers `VH_R2_ADMIN_*` as the daemon's upstream API key,
+  and deletes the bucket in its EXIT trap after the gateway bucket and key are gone (the tool then checks HeadBucket).
+  `vh_live_bucket` refuses every name but the fixed ones. Real R2 dogfooding otherwise: only in a bucket you create
+  and delete yourself.
 
 ## Known test gaps
 
@@ -255,10 +257,11 @@ Dev mode requires both `VH_BUILD_MODE=dev` and the gitignored `enable_dev_mode` 
 
 Two hard rules, enforced by `tests/helpers/live_bucket.hpp` (the only way a test reaches a real provider):
 
-1. **Names.** Every bucket a test creates is named `vh-test-<host>-<pid>-<run start>` (`kRunBucketPattern`). The
+1. **Names.** Every bucket a test creates is named `vh-test-<host>-<pid>-<run start>` (`kRunBucketPattern`); tooling
+   has exactly one fixed name, `vh-test-gateway-smoke` (`fixedTestBuckets()`, managed by `vh_live_bucket`). The
    helper's `GuardedAdmin` refuses to create, delete, empty, inspect or reconfigure any other bucket, and
-   `GuardedEvents` any other bucket or queue, before anything is sent. The shared `vh-test` and every production bucket
-   are unreachable by construction.
+   `GuardedEvents` any other bucket or queue, before anything is sent. Every production bucket is unreachable by
+   construction.
 2. **Cleanup.** Every bucket a test creates is emptied (objects, unfinished multipart uploads; R2 has no versions) and
    deleted after the run, also when tests fail, and the run fails unless HeadBucket then says it is gone. Before
    creating its bucket a run sweeps orphans: buckets matching `kRunBucketPattern` whose run started more than 6 h ago,
@@ -268,7 +271,13 @@ Two hard rules, enforced by `tests/helpers/live_bucket.hpp` (the only way a test
   `verify.sh`, `make test` and CI never set it, so agents running the unit suite never reach R2. Credential: the R2
   admin key `VH_R2_ADMIN_{ACCESS_KEY,SECRET_KEY,ENDPOINT,REGION}` in the gitignored repo-root `.bashrc` (Mac and dev
   hold the same file). Source only those lines and never print them. The R2 event test also needs `VH_CF_API_TOKEN`
-  (a Cloudflare API token with Queues: Edit and Workers R2 Storage: Edit) and skips without it. AWS has no live tests.
+  (a Cloudflare API token with Queues: Edit and Workers R2 Storage: Edit) and skips without it; the account id comes
+  from the R2 endpoint host, so nothing else is configured. Its queue is named like the run bucket (plus
+  `<queue>-dlq`). Teardown removes the bucket's rules by id, then both queues BY NAME (`QueueAdmin`, retried while the
+  Queues listing lags; never via the `ChannelRef`, since `ensureChannel`/`subscribe` can fail after creating them),
+  and the run's environment repeats both before deleting the bucket. The orphan sweep also removes test queues of
+  runs older than 6 h. The test uploads a fresh object every 15 s until an event arrives and retries pulls answering
+  405/5xx (R2 facts: upstream-control-plane.md). AWS has no live tests.
   The old shared-bucket keys and their variables were revoked and removed, as were `VH_LIVE_UPSTREAM` and
   `VH_R2_EVENTS_*`.
 - **One bucket per run:** `RunBucket` creates it with the real adapter on the first live test; the global test

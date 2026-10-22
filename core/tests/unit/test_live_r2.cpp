@@ -19,6 +19,7 @@
 #include <regex>
 #include <set>
 #include <span>
+#include <thread>
 #include <unordered_map>
 
 namespace vh::test_live_r2 {
@@ -132,7 +133,8 @@ const std::vector<std::string> kNotTestBuckets = {
     "vh-test", "vh-test-", "vaulthalla", "vaulthalla-database-backups", "portfolio", "docs-valkyrian-labs",
     "vh-test-foo", "vh-test-host-1-170000000", "vh-test-host-1-17000000000", "VH-TEST-host-1-1700000000",
     "vh-test-host-1-1700000000x", "xvh-test-host-1-1700000000", "vh-test-ho_st-1-1700000000",
-    "vh-test-runs", "vaulthalla-test-1700000000-abcd"};
+    "vh-test-runs", "vaulthalla-test-1700000000-abcd", "vh-test-gateway", "vh-test-gateway-smoke2",
+    "vh-test-gateway-smoke-1-1700000000x"};
 
 class LiveBucketGuard : public ::testing::Test {
 protected:
@@ -173,10 +175,12 @@ TEST_F(LiveBucketGuard, ForwardsTestBucketsAndAccountReads) {
     (void)admin.headBucket(mine);
     (void)admin.deleteObjects(mine, {obj("a")});
     admin.deleteBucket(other);
+    admin.createBucket({.name = "vh-test-gateway-smoke", .region = std::nullopt});   // the fixed tooling bucket
     (void)admin.listBuckets({}, 1000);
     (void)admin.probe();
     EXPECT_EQ(*calls, (std::vector<std::string>{"create " + mine, "head " + mine, "deleteObjects " + mine,
-                                                "delete " + other, "listBuckets", "probe"}));
+                                                "delete " + other, "create vh-test-gateway-smoke", "listBuckets",
+                                                "probe"}));
     EXPECT_TRUE(live::takeViolations().empty());
 }
 
@@ -212,13 +216,16 @@ TEST_F(LiveBucketGuard, NamesAndTheOrphanSweep) {
     EXPECT_LE(mine.size(), 63u);
     EXPECT_TRUE(std::regex_match(mine, std::regex(live::kRunBucketPattern))) << mine;
     EXPECT_EQ(live::runStartOf(mine), std::optional<std::time_t>(live::runStarted()));
-    for (const auto& b : kNotTestBuckets) EXPECT_FALSE(live::isRunBucketName(b)) << b;
+    for (const auto& b : kNotTestBuckets) EXPECT_FALSE(live::isTestBucketName(b)) << b;
+    EXPECT_EQ(live::fixedTestBuckets(), (std::vector<std::string>{"vh-test-gateway-smoke"}));
+    EXPECT_TRUE(live::isTestBucketName("vh-test-gateway-smoke"));
+    EXPECT_FALSE(live::isRunBucketName("vh-test-gateway-smoke")) << "the sweep never considers the fixed bucket";
 
     const std::time_t now = live::runStarted() + 60;
     const auto old = std::to_string(now - 7 * 3600), recent = std::to_string(now - 3600);
     std::vector<std::string> account = kNotTestBuckets;
     account.insert(account.end(), {mine, "vh-test-crashed-7-" + old, "vh-test-busy-8-" + recent,
-                                   "vh-test-crashed-7-" + old + "-x", "vh-test-crashed-" + old});
+                                   "vh-test-crashed-7-" + old + "-x", "vh-test-crashed-" + old, "vh-test-gateway-smoke"});
     EXPECT_EQ(live::RunBucket::orphans(account, now), (std::vector<std::string>{"vh-test-crashed-7-" + old}));
 }
 
@@ -237,11 +244,21 @@ TEST_F(LiveBucketGuard, TheFactoryHandsOutGuardedClientsForTheLiveCredentialOnly
     auto withToken = live::apiKey(t);
     withToken->provider_token = "cf-token";
     EXPECT_NE(dynamic_cast<live::GuardedEvents*>(factory.events(withToken).get()), nullptr);
+
+    // Queues are deleted by name: only the run's queue and its -dlq, refused before any request.
+    const auto& run = live::runBucketName();
+    EXPECT_TRUE(live::isRunQueueName(run));
+    EXPECT_TRUE(live::isRunQueueName(run + "-dlq"));
+    for (const auto* q : {"vaulthalla-events-r2", "vaulthalla-events-r2-dlq", "vh-test-gateway-smoke-dlq", "vh-test-dlq"})
+        EXPECT_FALSE(live::isRunQueueName(q)) << q;
+    live::QueueAdmin queues(withToken);
+    EXPECT_THROW((void)queues.remove("vaulthalla-events-r2"), live::GuardViolation);
+    EXPECT_THROW(queues.removeUntilGone({run, "other-app"}), live::GuardViolation);
     auto other = live::apiKey(t);
     other->access_key = "AKIDSOMEONEELSE000000000";
     EXPECT_THROW((void)factory.admin(other), live::GuardViolation);
     EXPECT_THROW((void)factory.events(other), live::GuardViolation);
-    EXPECT_EQ(live::takeViolations().size(), 3u);
+    EXPECT_EQ(live::takeViolations().size(), 5u);
 }
 
 // ---- live (opt-in) ----------------------------------------------------------------------------------------------------
@@ -379,6 +396,10 @@ TEST_F(LiveR2, EventNotificationsOnTheRunBucket) {
     std::optional<padmin::ChannelRef> channel;
     std::vector<std::string> ruleIds;
     const padmin::SubscriptionSpec spec{.bucket = bucket(), .rule_id = "vaulthalla-live-1", .prefix = prefix()};
+    // The queue (and its <queue>-dlq) is named like the run bucket: vh-test-<host>-<pid>-<start>.
+    const padmin::ChannelSpec channelSpec{.account_ref = admin().identity().account_ref, .region = "",
+                                          .queue_name = bucket(), .retention_seconds = 3600,
+                                          .visibility_timeout_seconds = 30, .max_receive_count = 3};
     struct Teardown {
         std::function<void()> fn;
         ~Teardown() {
@@ -389,27 +410,49 @@ TEST_F(LiveR2, EventNotificationsOnTheRunBucket) {
             }
         }
     } teardown{[&] {
-        if (!channel) return;
-        if (!ruleIds.empty()) events->unsubscribe(*channel, spec, ruleIds);
-        events->removeChannel(*channel);
+        // Rules first (R2 refuses to delete a queue a rule targets), then both queues BY NAME: ensureChannel or
+        // subscribe may have failed after creating them, and the Queues listing lags, so nothing here relies on the
+        // ChannelRef. The run bucket's environment teardown repeats both as a safety net.
+        live::removeEventRules(*events, bucket());
+        live::QueueAdmin(apiKey()).removeUntilGone({bucket(), bucket() + "-dlq"});
+        std::cout << "[live] removed queues " << bucket() << " and " << bucket() << "-dlq" << std::endl;
     }};
-    channel = events->ensureChannel({.account_ref = admin().identity().account_ref, .region = "", .queue_name = bucket(),
-                                     .retention_seconds = 3600, .visibility_timeout_seconds = 30, .max_receive_count = 3});
+    channel = events->ensureChannel(channelSpec);
     ruleIds = events->subscribe(*channel, spec);
     ASSERT_FALSE(ruleIds.empty());
-    controller().uploadBufferWithMetadata(key("events/hello.txt"), bytes("hi"), std::unordered_map<std::string, std::string>{});
+    // A new rule takes effect a little after R2 lists it (seen live: an upload right after subscribe produced no
+    // event), so upload a fresh object every 15 s until one is delivered.
     bool seen = false;
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{120};
+    auto nextUpload = std::chrono::steady_clock::now();
+    int uploads = 0, notPullable = 0;
     while (!seen && std::chrono::steady_clock::now() < deadline) {
-        const auto result = events->poll(*channel, 10, std::chrono::seconds{10}, std::chrono::seconds{30});
+        if (std::chrono::steady_clock::now() >= nextUpload) {
+            controller().uploadBufferWithMetadata(key("events/hello-" + std::to_string(uploads++) + ".txt"), bytes("hi"),
+                                                  std::unordered_map<std::string, std::string>{});
+            nextUpload = std::chrono::steady_clock::now() + std::chrono::seconds{15};
+        }
+        padmin::PollResult result;
+        try {
+            result = events->poll(*channel, 10, std::chrono::seconds{10}, std::chrono::seconds{30});
+        } catch (const padmin::ProviderError& e) {
+            // Seen live: a pull right after the http_pull consumer was added answers 405 "http_pull mode not enabled",
+            // and Cloudflare answers the odd 504 (7009 "Upstream service unavailable"). Both pass; retry until the deadline.
+            if (e.http_status != 405 && e.http_status < 500) throw;
+            if (notPullable++ == 0) std::cout << "[live] pull not answered yet: " << e.what() << std::endl;
+            std::this_thread::sleep_for(std::chrono::seconds{3});
+            continue;
+        }
         std::vector<std::string> receipts;
         for (const auto& m : result.messages) {
             receipts.push_back(m.receipt);
-            if (m.body.find("events/hello.txt") != std::string::npos) seen = true;
+            if (m.body.find("events/hello-") != std::string::npos) seen = true;
         }
         if (!receipts.empty()) events->ack(*channel, receipts);
     }
-    EXPECT_TRUE(seen) << "no event for the uploaded object within 120 s";
+    EXPECT_TRUE(seen) << "no event for " << uploads << " upload(s) within 120 s (" << notPullable
+                      << " pull(s) answered 405/5xx)";
+    std::cout << "[live] event delivered after " << uploads << " upload(s)" << std::endl;
 }
 
 }

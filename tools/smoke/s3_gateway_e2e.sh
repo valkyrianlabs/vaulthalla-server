@@ -201,12 +201,8 @@ is_local_url() {
   [[ "$host" == "localhost" || "$host" == "127.0.0.1" || "$host" == "::1" ]]
 }
 
+# The remote smoke needs only the R2 admin key (it creates and deletes its own vh-test-gateway-smoke bucket).
 remote_configured() {
-  [[ -n "${S3_GATEWAY_SMOKE_API_KEY:-}" && -n "${S3_GATEWAY_SMOKE_UPSTREAM_BUCKET:-}" ]] && return 0
-  [[ -n "${S3_GATEWAY_SMOKE_UPSTREAM_BUCKET:-}" &&
-     -n "${S3_GATEWAY_SMOKE_UPSTREAM_ACCESS_KEY:-}" &&
-     -n "${S3_GATEWAY_SMOKE_UPSTREAM_SECRET_KEY:-}" &&
-     -n "${S3_GATEWAY_SMOKE_UPSTREAM_ENDPOINT:-}" ]] && return 0
   vh_e2e_has_r2_env
 }
 

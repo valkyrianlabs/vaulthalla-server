@@ -58,7 +58,12 @@ LIVE_CREDENTIALS = re.compile(r"\b(VH_R2_ADMIN_\w+|VH_CF_API_TOKEN|VH_LIVE_TESTS
 LIVE_CREDENTIAL_READERS = {
     "core/tests/helpers/live_bucket.hpp", "core/tests/unit/test_live_r2.cpp", "bin/tests/run_unit.sh",
     "tools/lab/providers.env.example", "tools/lab/test_providers.sh",
+    # The remote gateway smoke hands the key to the daemon under test as its upstream API key; its bucket is created
+    # and deleted by vh_live_bucket (the helper), never by the script itself.
+    "tools/smoke/s3_gateway_scoped_budget_smoke.sh", "tools/e2e/load_env.sh",
 }
+FIXED_TEST_BUCKETS = ["vh-test-gateway-smoke"]
+TOOL = TESTS / "helpers" / "live_bucket_tool.cpp"
 
 REAL_ADAPTER = re.compile(r"\b(AwsAdmin|R2Admin|AwsEvents|R2Events)\s*[(>{]")
 
@@ -82,7 +87,9 @@ LIVE_FILE_EXCEPTIONS: dict[tuple[str, str], tuple[int, str]] = {
     ("core/tests/unit/test_live_r2.cpp", "deleteBucket"): (
         3, "RecordingAdmin's override; the guard self-tests (refused names, a forwarded vh-test-* name)"),
     ("core/tests/unit/test_live_r2.cpp", "createBucket"): (
-        5, "RecordingAdmin's override; guard self-tests; the 409 collision check on the run's existing bucket"),
+        6, "RecordingAdmin's override; guard self-tests; the 409 collision check on the run's existing bucket"),
+    ("core/tests/helpers/live_bucket_tool.cpp", "createBucket"): (
+        1, "vh_live_bucket creates a fixed tooling bucket after isFixedTestBucket() accepted the name"),
 }
 
 TOOLING_FORBIDDEN = re.compile(
@@ -196,13 +203,18 @@ class LiveBucketContract(unittest.TestCase):
     def test_every_bucket_and_queue_call_is_name_checked(self):
         for method in GUARDED_ADMIN_METHODS:
             body = method_body("GuardedAdmin", method)
-            self.assertIn("requireRunBucket(", body, f"GuardedAdmin::{method}")
+            self.assertIn("requireTestBucket(", body, f"GuardedAdmin::{method}")
             first_forward = min([body.find(s) for s in ("in_->", "api_->", "api_ ") if s in body] or [len(body)])
-            self.assertLess(body.index("requireRunBucket("), first_forward, f"GuardedAdmin::{method} checks first")
+            self.assertLess(body.index("requireTestBucket("), first_forward, f"GuardedAdmin::{method} checks first")
+        for method in ("remove", "removeUntilGone"):
+            body = method_body("QueueAdmin", method)
+            self.assertIn("requireTestQueue(", body, f"QueueAdmin::{method}")
+            first = min(i for i in (body.find("list()"), body.find("remove(n)"), body.find("api(")) if i >= 0)
+            self.assertLess(body.index("requireTestQueue("), first, f"QueueAdmin::{method} checks first")
         for method in GUARDED_EVENTS_METHODS:
             body = method_body("GuardedEvents", method)
-            self.assertIn("requireRunBucket(", body, f"GuardedEvents::{method}")
-            self.assertLess(body.index("requireRunBucket("), body.index("in_->"), f"GuardedEvents::{method} checks first")
+            self.assertIn("requireTestBucket(", body, f"GuardedEvents::{method}")
+            self.assertLess(body.index("requireTestBucket("), body.index("in_->"), f"GuardedEvents::{method} checks first")
 
     def test_the_name_pattern_admits_only_generated_test_buckets(self):
         text = HELPER.read_text()
@@ -214,6 +226,22 @@ class LiveBucketContract(unittest.TestCase):
         for name in NOT_TEST_BUCKETS:
             self.assertIsNone(pattern.match(name), name)
         self.assertIn('kBucketPrefix = "vh-test-"', text)
+        fixed = re.search(r"static const std::vector<std::string> names\{([^}]*)\};", text)
+        self.assertIsNotNone(fixed, "fixedTestBuckets()")
+        self.assertEqual(re.findall(r'"([^"]*)"', fixed.group(1)), FIXED_TEST_BUCKETS, "the fixed allow-list is exact")
+        for name in FIXED_TEST_BUCKETS:
+            self.assertTrue(name.startswith("vh-test-") and pattern.match(name) is None)
+
+    def test_the_tool_manages_only_the_fixed_buckets(self):
+        text = strip_comments(TOOL.read_text())
+        self.assertLess(text.index("isFixedTestBucket(name)"), text.index("guardedAdmin("), "name refused before a client exists")
+        self.assertNotIn("isRunBucketName", text)
+        self.assertIn("emptyAndDeleteBucket(", text)
+        smoke = (REPO_ROOT / "tools/smoke/s3_gateway_scoped_budget_smoke.sh").read_text()
+        self.assertIn('UPSTREAM_BUCKET="vh-test-gateway-smoke"', smoke)
+        self.assertIn('"$LIVE_BUCKET_BIN" delete "$UPSTREAM_BUCKET"', smoke)
+        self.assertIn("trap finish EXIT", smoke)
+        self.assertNotRegex(smoke, r"S3_GATEWAY_SMOKE_(UPSTREAM_\w+|API_KEY)\b", "no upstream env overrides")
 
     def test_the_cleanup_guard_is_wired(self):
         text = strip_comments(HELPER.read_text())
