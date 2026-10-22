@@ -1,5 +1,6 @@
-// Contract models: vault serializers (Vault, RemoteSyncPolicy, VaultDeletion, VaultRemovalPlan, APIKey) against
-// their declared shapes (see model_suites.hpp). DB-free: seeded in-memory instances through the real serializers.
+// Contract models: vault serializers (Vault, AccessibleVault, RemoteSyncPolicy, VaultDeletion, VaultRemovalPlan,
+// APIKey) against their declared shapes (see model_suites.hpp). DB-free: seeded in-memory instances through the real
+// serializers.
 
 #include "model_suites.hpp"
 
@@ -97,6 +98,20 @@ void checkVaultModels(Checker& c) {
             "storage.vault.get of an S3 vault, unlimited");
     c.check(Vaults::detailsJson({.vault = local, .sync = nullptr, .owner_name = ""}), "Vault",
             "storage.vault.get of a local vault");
+
+    // AccessibleVault (ops::vaults::toJson): an owned local vault reached several ways, an S3 vault reachable only
+    // for management, and a super admin's row.
+    using ops::vaults::AccessVia;
+    c.check(ops::vaults::toJson({.vault = local, .owner_name = "alice", .browse = true, .manage = true,
+                                 .via = {AccessVia::Owner, AccessVia::VaultRole, AccessVia::GroupRole,
+                                         AccessVia::AdminPolicy}}),
+            "AccessibleVault", "owned local vault, every relationship");
+    c.check(ops::vaults::toJson({.vault = s3, .owner_name = "", .browse = false, .manage = true,
+                                 .via = {AccessVia::AdminPolicy}}),
+            "AccessibleVault", "S3 vault reachable only for management, owner gone");
+    c.check(ops::vaults::toJson({.vault = noFuse, .owner_name = "bob", .browse = true, .manage = true,
+                                 .via = {AccessVia::SuperAdmin}}),
+            "AccessibleVault", "super admin");
 
     // VaultDeletion: a fresh S3 deletion with every optional set, and a purged local one with none.
     vault::model::Deletion full;

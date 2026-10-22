@@ -11,6 +11,8 @@ using json = nlohmann::json;
 
 struct Vaults {
     static json list(const std::shared_ptr<Session>& session);
+    // Every vault the caller reaches, with browse/manage/via (ops::vaults::listAccessible).
+    static json listAccessible(const std::shared_ptr<Session>& session);
     static json add(const json& payload, const std::shared_ptr<Session>& session);
     static json update(const json& payload, const std::shared_ptr<Session>& session);
     // Safe deletion (#162): remove schedules (or, with now, purges on the next pass); see ops::vaults::Remove.

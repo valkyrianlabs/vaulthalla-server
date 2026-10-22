@@ -68,32 +68,50 @@ std::vector<WsCommandUsage> vaultKeyCommands() {
 
     out.push_back({
         .command = "vault.keys.import",
-        .description = "Restore the vault's keys from a backup (`keys`: an export, one vault object or an `all` "
-                       "array) when this host can't unseal or doesn't hold them. Every version is verified before "
-                       "anything is written (its key_check, then a GCM tag check of files sealed under it); a key "
-                       "this host can unseal is never replaced (conflict), identical bytes are unchanged, versions "
-                       "with nothing to verify against are skipped (unverifiable). Writing needs confirm_name = the "
-                       "vault's name, else data.code vault_key_import with what would be written. Paired devices only "
-                       "(import_requires_device otherwise); the encryption-key Export permission.",
+        .description = "Recover the vault's keys from a backup (`keys`: an export, one vault object or an `all` "
+                       "array) when this host can't unseal or doesn't hold them. A recovery mechanism, never a way to "
+                       "set a key: a version is restored only when the vault's records reference it and its "
+                       "attestation by this node verifies (or it matches a key this host holds); a key this host can "
+                       "unseal is never replaced (conflict), identical bytes are unchanged, unreferenced versions are "
+                       "refused, the rest are needs_salvage. mode salvage additionally re-encrypts the files of the "
+                       "needs_salvage versions under a fresh daemon key (the supplied key is never stored) and returns "
+                       "the report. Writing needs confirm_name = the vault's name, else data.code vault_key_import "
+                       "(mode recover) or vault_key_salvage (mode salvage, even when nothing turns out to need "
+                       "salvage) with what would be done. Paired devices only (import_requires_device otherwise); the "
+                       "encryption-key Export permission.",
         .payload = {vaultId(),
                     anyOf("keys", {"object", "array"})
-                        .alternatives({WsField{.types = {"object"}, .model = "VaultKeyExport"}
-                                           .desc("One vault's export, as vault.keys.export returns it."),
-                                       WsField{.types = {"array"}, .items = "object", .model = "VaultKeyExport"}
+                        .alternatives({WsField{.types = {"object"}, .model = "VaultKeyImportDocument"}
+                                           .desc("One vault's entry: what the import reads of an export (a whole "
+                                                 "vault.keys.export answer is one)."),
+                                       WsField{.types = {"array"}, .items = "object", .model = "VaultKeyImportDocument"}
                                            .desc("The CLI's `vh vault keys export all` array; the entry whose "
                                                  "vault_id matches is used.")})
                         .gen(gen::ref("vault.key", {"export"}))
-                        .desc("The export document."),
+                        .desc("The export document: the members VaultKeyImportDocument declares are read, anything "
+                              "else is ignored."),
+                    str("mode").oneOf({"recover", "salvage"}).opt()
+                        .desc("recover (default): restore attested versions only. salvage: also re-encrypt what "
+                              "unproven versions decrypt under a fresh key."),
                     str("confirm_name").opt().desc("The vault's name: the person confirmed the import.")},
         .response = modelFields("VaultKeyImportResult"),
         .refusal_codes = {"denied", "invalid", "not_found", "conflict", "unauthorized", "import_requires_device"},
         .confirmations = {{.code = "vault_key_import",
                            .accept_field = "confirm_name",
-                           .description = "The import would re-seal the listed key versions under this host's vault "
-                                          "master (the error text says which): resend with confirm_name set to the "
-                                          "vault's name (a string, not a flag) once the person typed it."}},
+                           .description = "mode recover: the import would re-seal the listed key versions under "
+                                          "this host's vault master (the error text says which): resend with "
+                                          "confirm_name set to the vault's name (a string, not a flag) once the person "
+                                          "typed it."},
+                          {.code = "vault_key_salvage",
+                           .accept_field = "confirm_name",
+                           .description = "Every mode salvage request that would write. It would create a fresh key "
+                                          "version and re-encrypt every file the supplied key decrypts under it (the "
+                                          "error text says which versions; files it can't decrypt are reported "
+                                          "unrecoverable), and restore any attested versions as recover does; when no "
+                                          "version needs salvage the text says so and only the restore happens. Resend "
+                                          "with confirm_name set to the vault's name once the person typed it."}},
         .response_model = "VaultKeyImportResult",
-        .client_timeout = std::chrono::milliseconds(120'000),
+        .client_timeout = std::chrono::milliseconds(600'000),
     });
 
     return out;

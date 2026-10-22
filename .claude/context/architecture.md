@@ -504,6 +504,9 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   live files (or a pending rotation) need isn't held, `load_key` throws `vault::KeyUnavailable{key_missing |
   key_unsealable | version_missing}` naming `vh vault keys import`; the engine doesn't start, `storage::Manager`
   records it (`unavailableVaults()`), and `stats.system.health` (`vaults_unavailable`) / `vh status` turn degraded.
+  Versions a key salvage names (`vault_key_salvage`) don't block it. Every key version carries recorded provenance
+  (key check + this node's Ed25519 attestation, migration 113), and import restores only attested versions the
+  records reference; anything else is salvaged under a fresh key, never stored (`key-backup.md`, revision 3).
 - **Vault key rotation is failure- and crash-safe (`sync/rotation/`).** `vh vault keys rotate` only prepares a new
   key; the sync pass re-encrypts. Per file: new ciphertext → `<backing>.vh-rotate` (O_EXCL, fsync file + dir) →
   (cloud, encrypt upstream) PUT with its own IV/version metadata → compare-and-set the `files` row on the old
@@ -539,7 +542,7 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
 
 ## Database
 
-- PostgreSQL via libpqxx. The schema is `deploy/psql/000…112_*.sql`, applied in order (all in ONE transaction by `core/seed/include/SqlDeployer.hpp`) and installed to `/usr/share/vaulthalla/psql`.
+- PostgreSQL via libpqxx. The schema is `deploy/psql/000…113_*.sql`, applied in order (all in ONE transaction by `core/seed/include/SqlDeployer.hpp`) and installed to `/usr/share/vaulthalla/psql`.
   New migrations take the next number and must be idempotent against upgraded installs. SqlDeployer records sha256(raw bytes)
   per file and refuses to start on a mismatch, so **never edit a shipped migration**: 020/060/082 were edited in place and
   bricked upgrades (1.5.x→1.6.x crash loop on 060). Reviewed exceptions live in `kHistoricalMigrationChecksums` (accepted, recorded
@@ -692,7 +695,7 @@ gates (settings/email/pricing admin checks, share upload scope) throw `ops::Deni
 registry, base class or transport abstraction. Parity is proven by `test_ops_parity_groups.cpp`, which runs each
 group operation through both surfaces for every seeded admin role and compares verdicts and DB state.
 Migrated families (each with `test_ops_parity_<family>.cpp`): `groups`, `roles`, `api_keys`, `vaults` (lifecycle,
-safe deletion/restore, sync policy), `users`, `s3_gateway` (credentials, grants, buckets, credential budgets), `pricing` (price budget
+safe deletion/restore, sync policy, accessible list), `users`, `s3_gateway` (credentials, grants, buckets, credential budgets), `pricing` (price budget
 policies), `config` (every settings write: one validation, one apply step that restarts the S3 gateway when
 `s3_gateway.enabled` changes), `stats` (authorization only, ws-only: there is no `vh` stats command; `vh status`
 is deliberately ungated, see Stats below), `conflicts` (sync conflicts, #187: ws `sync.conflicts.*`, `vh sync resolve` /
@@ -720,6 +723,20 @@ Rules the families hold (keep them in ops, never re-add them in a handler):
 - **Vaults:** every change goes through `storage::Manager::updateVault` so the live engine (RBAC's source of the owner)
   follows; owner reassignment needs Create for the new owner; a key change needs Consume; sync settings need vault
   `sync.config.edit`.
+- **Accessible vaults** (`ops::vaults::listAccessible`; ws `storage.vault.accessible.list`, `vh vault list
+  --accessible`, MCP `vaults_accessible_list`; `VaultAccessParityTest`): `list` (storage.vault.list, `vh vault list`)
+  follows the admin role's `admin.vaults.<scope>.view` only, so an owner or vault-role holder without it sees nothing
+  there; this list answers "where can I go" and is deliberately separate (global admin policies on others' vaults are
+  no local role either). Candidates: `Vault::listLiveVaults()` (one unpaginated read; `listVaults` stops at a
+  100-row page, which is why every "all vaults" caller uses `listLiveVaults`). Per vault, with one `authz()` view:
+  `browse` = `rbac::resolver::Vault::has<FilesystemAction>(List, path = engine->vaultPathToFusePath("/"))` (exactly
+  fs.dir.list `/`), `manage` = `Admin::has<VaultPermissions>(View)` (exactly storage.vault.get); no engine → neither.
+  `via` (in order): owner; vault_role / group_role (an assignment in the user's or a live group's `roles.vaults`,
+  whatever it grants); admin_policy (not super admin, and manage, or browse with no vault role, i.e. the evaluator's
+  globals stage decided); super_admin. Listed iff `via` is non-empty, so an unprivileged owner is listed with neither
+  flag (owning grants nothing by itself) and a non-authorizing account gets `[]`. Probing runs under
+  `QuietFilesystemDenials` (no auth warning per denied vault). The row is a summary (`toJson`, model
+  AccessibleVault): no mount_point, bucket or key; those stay behind manage in storage.vault.get.
 - **S3 gateway:** the scope rule that was `CredentialManager::validateScopeMutation` is `requireScopeMutation` in ops;
   `CredentialManager` and `db::query::s3::Gateway` are trusted primitives. Vault names resolve owner-scoped or uniquely,
   never to the first match. Overrides need an explicit effect and pattern. Remote-cache buckets are created through
@@ -747,10 +764,23 @@ subject's assignment; both `vh vault role override ...` and ws `role.vault.overr
   path convert it with `engine->vaultPathToFusePath()` first; `share::Manager` once didn't, so only share root `/`
   ever passed and a vault path equal to another vault's FUSE root resolved to that vault. The evaluator refuses an
   entry whose `vault_id` differs from the request's vault (`EntryVaultMismatch`).
+- **Per-scope vault permissions use one rule** (`rbac::resolver::vaultScope`, `rbac/resolver/VaultScope.hpp`): the
+  actor's own vault is `self`, a vault whose owner is `User::isAdmin()` is `admin`, any other is `user`. It picks the
+  scope for the admin role's `admin.vaults.<scope>` (`resolver::Admin`), the global vault policy's sync/role bits
+  (`resolver::Vault::grantedByGlobals`), the filesystem evaluator's globals stage (`Evaluator::evaluate` step 3) and
+  FUSE's listing-override check. The evaluator used to loop self, admin, user, but a stage always decides, so the
+  `self` bits answered for every vault (fixed 2026-10-22; `VaultScopeRbacTest` compares every action on a file and a
+  directory with the evaluator applied to exactly the expected scope, plus ws, `vh fs ls`, the access layer and the
+  accessible list). Seeded presets are identical in every scope, so they never showed it; an unknown owner grants
+  nothing from the globals.
 - The FS cache is keyed by FUSE path and can only re-hydrate a vault root through `mkVault` (or the rename path in
   `storage::Manager::updateVault`). `storage::Manager` calls `fs::cache::Registry::evictVault` on remove, on rename
   (old and new root, then re-caches the root) and in `addVault` *before* the engine creates the root. Evicting after
   `mkVault` would drop the fresh root and the whole vault would answer ENOENT.
+- `storage::Manager` holds **one engine per vault id** in both indexes (`engines_` by FUSE root, `vaultToEngine_` by
+  id): `addVault`, `updateVault` and `reloadEngine` drop the id's previous engine from the path index, and
+  `initStorageEngines` clears both. `getEngines()` scans (e.g. `ops::vault_keys::engineFor`) otherwise found a stale
+  engine with another vault's key whenever a test process reset its schema and reused ids (`StorageEngineRegistryTest`).
 - Every `users(id)` reference has a delete action (migration 104): attribution/audit columns `SET NULL`, while
   `file_locks.locked_by` and `share_link.created_by` `CASCADE` (a deleted account's public links die with it). New
   tables referencing `users` must pick one; a bare `REFERENCES users` blocks `vh user delete`.

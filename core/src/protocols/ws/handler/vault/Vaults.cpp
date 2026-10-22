@@ -288,6 +288,12 @@ json Vaults::list(const std::shared_ptr<Session> &session) {
     return json{{"vaults", std::move(rows)}};
 }
 
+json Vaults::listAccessible(const std::shared_ptr<Session> &session) {
+    json rows = json::array();
+    for (const auto& entry : vh::ops::vaults::listAccessible(session->user)) rows.push_back(vh::ops::vaults::toJson(entry));
+    return json{{"vaults", std::move(rows)}};
+}
+
 json Vaults::sync(const json &payload, const std::shared_ptr<Session> &session) {
     const auto started = vh::ops::vaults::triggerSync(session->user, payload.at("id").get<unsigned int>());
     return {{"status", started == vh::ops::vaults::SyncStart::Started ? "started" : "rerun_queued"}};

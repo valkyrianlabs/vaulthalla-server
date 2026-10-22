@@ -4,6 +4,7 @@
 #include "ResolverTraits/Fwd.hpp"
 #include "admin/policy/Base.hpp"
 #include "admin/ResolvedContext.hpp"
+#include "rbac/resolver/VaultScope.hpp"
 
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
@@ -92,12 +93,9 @@ namespace vh::rbac::resolver {
                 if (!resolved.owner) return false;
                 if (!resolved.vault && permission != vh::rbac::permission::admin::VaultPermissions::Create) return false;
 
-                if (resolved.owner->id == user->id)
-                    allowed = AdminResolverTraits<EnumT>::self(perms.self).has(permission);
-                else if (resolved.owner->isAdmin())
-                    allowed = AdminResolverTraits<EnumT>::admin(perms.admin).has(permission);
-                else
-                    allowed = AdminResolverTraits<EnumT>::user(perms.user).has(permission);
+                // The same scope rule as the global vault policy (rbac::resolver::Vault, fs::policy::Evaluator).
+                allowed = inScope(vaultScope(user->id, *resolved.owner), perms.self, perms.admin, perms.user)
+                              .has(permission);
             }
             else if constexpr (AdminResolverTraits<EnumT>::domain == Domain::Global) {
                 const auto state = user->state();

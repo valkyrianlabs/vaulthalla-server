@@ -57,15 +57,23 @@ versions the vault needs (the current key, an unfinished rotation's previous key
 uses), each with its key check, and a deleted vault's export carries them too. Keys still leave the server only
 through the local `vh` CLI or a paired device, never the web console or an AI agent.
 
-**Restoring keys.** `vh vault keys import <vault> --file <export>` puts a vault's keys back when this host can no
-longer use them: after the master key was lost or replaced (for example a database restored onto a new host), after a
-database restore that predates a key rotation, or for a deleted vault that can still be restored. `vh` reads the
-export on your side (`--file -` reads standard input, so a GPG export can be decrypted into a pipe). Every key version
-is verified first, against its key check and by decrypting files sealed under it; a key that decrypts none of the
-vault's files is refused, and a key the host can still use is never replaced. Writing asks you to type the vault's
-name (`--confirm-name` without a terminal); the vault starts again right away. An S3 vault without a local copy of
-its data is verified against one object downloaded from its bucket (within its price budget, never written to disk).
-A paired Vaulthalla Desktop restores from 1Password the same way.
+**Restoring keys.** `vh vault keys import <vault> --file <export>` is a recovery mechanism: it puts back key
+versions a vault already had when this host can no longer use them, after the master key was lost or replaced (for
+example a database restored onto a new host), after a database restore that predates a key rotation, or for a
+deleted vault that can still be restored. It can't be used to set your own key: every export now carries the
+server's **attestation** of each key version (a signature by a signing key sealed on the host, never exported), and
+a version is restored only when its attestation verifies and the vault's records show it had that version. A key
+the host can still use is never replaced, and a version the vault has no record of is refused. `vh` reads the export
+on your side (`--file -` reads standard input, so a GPG export can be decrypted into a pipe). Writing asks you to type
+the vault's name (`--confirm-name` without a terminal); the vault starts again right away. A paired Vaulthalla
+Desktop restores from 1Password the same way. **Export your vault keys again after upgrading**: older exports carry
+no attestations.
+
+**Salvage.** A key version that can't be proven (an older export, another server's key) is reported as needing
+salvage, and nothing is written for it. `--salvage` then makes a best effort: the server creates a fresh key of its
+own, re-encrypts every file the supplied key decrypts under it (crash-safe, resumable), reports the files it couldn't
+decrypt as unrecoverable, and never stores the supplied key. Files that exist only in an S3 bucket go through the
+vault's price budget, and are reported as skipped with the estimate when it refuses.
 
 **No new key over encrypted data (behavior change).** Vaulthalla used to create a fresh key at startup for a vault whose
 key record was missing, even when the vault held encrypted files that key could never decrypt. Now such a vault (or one
@@ -74,6 +82,20 @@ names it, the console's health turns degraded, `vh vault keys status` says why, 
 command. New and empty vaults still get their first key automatically.
 
 See [Secrets And Key Export](https://vaulthalla.io/docs/vaults/secrets-and-key-export).
+
+## See every vault you can reach
+
+`vh vault list --accessible` lists every vault you can reach and how: as its owner, through a vault role assigned to
+you or to one of your groups, through your admin role, or as a super admin. Each vault says whether you can browse its
+files and whether you can manage it, decided by the same permission checks that apply when you open it. `vh vault
+list` is unchanged and still shows only the vaults your admin role lets you view, so an account whose access comes
+from a vault role or from owning a vault finds those vaults with `--accessible`. Vaulthalla Desktop's file browser
+uses the same list (ws `storage.vault.accessible.list`), and AI agents get it as the read-only tool
+`vaults_accessible_list`.
+
+**More than 100 vaults.** At startup the daemon brought up only the first 100 vaults (by id): after a restart, any
+vault beyond those was unreachable on every surface until it was changed. `vh vault keys status all`, `vh vault keys
+export all` and resolving an S3 gateway vault by name also stopped at 100. They all cover every vault now.
 
 ## Let Claude Code or Codex operate Vaulthalla
 
@@ -108,13 +130,13 @@ Each `vh` command declares whether it reads, writes or is destructive. The machi
 ## Every ws command is in the published contract
 
 The ws contract the daemon publishes (`vh_usage --json`, identified by `meta.contract.get`) now describes every
-command it answers on `/ws`: 222 commands, up from 76. File management, vaults and API keys, roles and permissions,
+command it answers on `/ws`: 223 commands, up from 76. File management, vaults and API keys, roles and permissions,
 shares and share sessions, stats and dashboards, sync conflicts, pricing budgets, the S3 gateway, settings,
 operator email, paired devices and vault key backup are covered, each with its payload, response, session
 requirement, refusals and client timeout. Native clients can be generated from it, and the web console now takes
 every command's timeout from the server.
 
-The contract also publishes the shape of every object those commands send: 169 named models (users and roles,
+The contract also publishes the shape of every object those commands send: 170 named models (users and roles,
 vaults, devices, vault key status and exports, files and folders, share links, stats, recovery plans, upstream
 buckets, S3 gateway credentials, budgets, settings sections and more), with unions and patch payloads spelled out.
 A daemon unit test serializes each model with the real code and fails if the published shape and what is sent ever
@@ -129,6 +151,17 @@ Malformed or failing requests no longer leave clients waiting: a frame the daemo
 error that carries the request's id, an internal fault answers the request it belongs to with an ordinary error
 instead of an "Unknown" response, and a command sent without a payload is treated as an empty one. The contract
 documents the request and answer frames.
+
+## Security fixes
+
+- **Global vault policy read in the right scope.** An account's global vault policy has three scopes: its own vaults,
+  vaults owned by admins, and everyone else's. File access decided by that policy (when no vault role applies) always
+  used the account's own-vault scope, for every vault. An account whose own-vault scope granted more than its scope
+  for other accounts' vaults could therefore use those rights on other accounts' vaults, and one whose own-vault scope
+  granted less was refused there. File access now uses the scope the vault falls under, the same rule vault
+  management already used, on every surface (web console, `vh`, FUSE, downloads and uploads, paired devices, shares
+  and the S3 gateway). The built-in roles give every scope the same rights, so accounts on them see no change; only
+  accounts whose policy rows were edited per scope directly in the database are affected.
 
 ## Fixes
 

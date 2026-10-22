@@ -108,8 +108,18 @@ public:
     // otherwise a missing or unusable key throws KeyUnavailable (see there).
     void load_key();
 
+    // Every version this manager creates or unseals gets its provenance recorded (key check + this node's attestation,
+    // vault/KeyAttestation.hpp): at creation, and lazily when a row from before migration 113 unseals.
     void prepare_key_rotation();
     void finish_key_rotation();
+
+    // Key salvage (ops::vault_keys, key-backup.md "Salvage") for a vault whose current key this host can't use, so no
+    // engine runs (or one that can't start until the salvage names a version): the same database rotation as prepare_key_rotation, to a fresh key sealed under this host's vault
+    // master and attested. `expectedVersion` is the version it becomes (current + 1, or the highest referenced version
+    // + 1 without a key row). Pending rotations are closed (their outgoing key isn't held); the version retired here
+    // stays a pending rotation only when `outgoingHeld` (this host unseals it, so the rotation pass can re-key its
+    // files). Returns the version.
+    [[nodiscard]] static unsigned int mintSalvageKey(unsigned int vaultId, unsigned int expectedVersion, bool outgoingHeld);
 
     [[nodiscard]] std::vector<uint8_t>
     rotateDecryptEncrypt(const std::vector<uint8_t>& ciphertext, const std::shared_ptr<fs::model::File>& f) const;

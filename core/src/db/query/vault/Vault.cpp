@@ -222,6 +222,32 @@ Vault::VaultPtr Vault::getVault(const std::string& name, unsigned int ownerId) {
     });
 }
 
+namespace {
+
+// Rows of `SELECT v.*, s.* FROM vault v LEFT JOIN s3 s ...` as their dynamic type, optionally of one type.
+std::vector<std::shared_ptr<vh::vault::model::Vault>> vaultsFromRows(const pqxx::result& res,
+                                                                      const std::optional<vh::vault::model::VaultType>& type) {
+    std::vector<std::shared_ptr<vh::vault::model::Vault>> vaults;
+    for (const auto& row : res) {
+        switch (vh::vault::model::from_string(row["type"].as<std::string>())) {
+        case vh::vault::model::VaultType::Local: {
+            if (type && *type != vh::vault::model::VaultType::Local) continue;
+            vaults.push_back(std::make_shared<vh::vault::model::Vault>(row));
+            break;
+        }
+        case vh::vault::model::VaultType::S3: {
+            if (type && *type != vh::vault::model::VaultType::S3) continue;
+            vaults.push_back(std::make_shared<vh::vault::model::S3Vault>(row));
+            break;
+        }
+        default: throw std::runtime_error("Unsupported VaultType in listVaults()");
+        }
+    }
+    return vaults;
+}
+
+}
+
 std::vector<Vault::VaultPtr> Vault::listVaults(const std::optional<vh::vault::model::VaultType>& type, ListQueryParams&& params) {
     return Transactions::exec("Vault::listVaults", [&](pqxx::work& txn) {
         const auto sql = appendPaginationAndFilter(
@@ -231,28 +257,18 @@ std::vector<Vault::VaultPtr> Vault::listVaults(const std::optional<vh::vault::mo
             "WHERE v.deleted_at IS NULL",
             params, "v.id", "v.name"
         );
+        return vaultsFromRows(txn.exec(sql), type);
+    });
+}
 
-        const auto res = txn.exec(sql);
-
-        std::vector<VaultPtr> vaults;
-
-        for (const auto& row : res) {
-            switch (vh::vault::model::from_string(row["type"].as<std::string>())) {
-            case vh::vault::model::VaultType::Local: {
-                if (type && *type != vh::vault::model::VaultType::Local) continue;
-                vaults.push_back(std::make_shared<V>(row));
-                break;
-            }
-            case vh::vault::model::VaultType::S3: {
-                if (type && *type != vh::vault::model::VaultType::S3) continue;
-                vaults.push_back(std::make_shared<vh::vault::model::S3Vault>(row));
-                break;
-            }
-            default: throw std::runtime_error("Unsupported VaultType in listVaults()");
-            }
-        }
-
-        return vaults;
+std::vector<Vault::VaultPtr> Vault::listLiveVaults() {
+    return Transactions::exec("Vault::listLiveVaults", [&](pqxx::work& txn) {
+        return vaultsFromRows(txn.exec("SELECT v.*, s.* "
+                                       "FROM vault v "
+                                       "LEFT JOIN s3 s ON v.id = s.vault_id "
+                                       "WHERE v.deleted_at IS NULL "
+                                       "ORDER BY v.id"),
+                              std::nullopt);
     });
 }
 

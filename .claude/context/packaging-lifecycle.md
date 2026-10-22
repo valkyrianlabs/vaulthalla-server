@@ -19,7 +19,7 @@ semantics do **not** match `apt remove/purge`. Operator-facing detail lives in `
   A gitignored repo-root `config.yaml` is used only by source installs: `bin/setup/install_dirs.sh` copies it,
   and meson installs it to `/etc/vaulthalla` only with `-Dinstall_local_config_override=true` (default off,
   never set by `debian/rules`, option lives in `meson.options`).
-- `psql/000…112_*.sql`: schema + ordered migrations → `/usr/share/vaulthalla/psql`.
+- `psql/000…113_*.sql`: schema + ordered migrations → `/usr/share/vaulthalla/psql`.
 - `systemd/`: `vaulthalla.service.in` (server, user `vaulthalla`; `Wants=`+`After=postgresql.service`,
   `Restart=on-failure`, `RestartSec=10`, `StartLimitIntervalSec=600`/`StartLimitBurst=10`, `TimeoutStopSec=30s`,
   ExecStopPost lazy `fusermount3 -uz` guarded by `findmnt`; the daemon owns `/run/vaulthalla/cli.sock` and rebinds

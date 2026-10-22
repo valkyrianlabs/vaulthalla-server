@@ -42,6 +42,31 @@ std::vector<WsModel> vaultModels() {
          str("owner").opt().desc("The owner's name (\"\" when it no longer resolves): list and get."),
          object("sync", "RemoteSyncPolicy").opt().desc("storage.vault.get of an S3 vault.")}));
 
+    out.push_back(model("AccessibleVault",
+        "A vault the caller reaches (ops::vaults::toJson(AccessibleVault), core/src/ops/Vaults.cpp): a summary of the "
+        "vault (no backing directory or upstream details; storage.vault.get has them, behind manage) and what the "
+        "resolvers that enforce access grant at its root. storage.vault.accessible.list rows, `vh vault list "
+        "--accessible --json`.",
+        {uinteger("id"),
+         str("name"),
+         str("slug"),
+         str("effective_fuse_name").desc("The vault's directory under the FUSE mount."),
+         str("type").oneOf({"local", "s3"}),
+         str("description"),
+         uinteger("quota").desc("Bytes, 0 = unlimited."),
+         uinteger("owner_id").desc("0 when the owner account was deleted."),
+         str("owner").desc("The owner's name; \"\" when it no longer resolves."),
+         boolean("is_active"),
+         vaultModelTimestamp("created_at"),
+         boolean("browse").desc("Filesystem List at the vault root (rbac::resolver::Vault, FilesystemAction::List on "
+                                "the root's FUSE path): the file browser can open it."),
+         boolean("manage").desc("Admin vault View (rbac::resolver::Admin, admin.vaults.<scope>.view): its settings "
+                                "and storage.vault.get."),
+         strArray("via", {"owner", "vault_role", "group_role", "admin_policy", "super_admin"})
+             .desc("Every path by which the caller reaches the vault, in this order; never empty. admin_policy: the "
+                   "admin role's vault permissions grant manage, or its global vault filesystem policy grants browse "
+                   "where no vault role applies.")}));
+
     out.push_back(model("RemoteSyncPolicy",
         "An S3 vault's sync policy (sync::model::to_json(RemotePolicy), core/src/sync/model/RemotePolicy.cpp, over "
         "to_json(Policy) in Policy.cpp).",

@@ -337,6 +337,10 @@ TEST(McpCatalog, TypedToolRendering) {
     EXPECT_EQ(inv.line, "user delete bob --yes");
     inv = invocation("recovery_status", {{"vault", 4}, {"refresh", true}});
     EXPECT_EQ(inv.line, "vault recovery status 4 --refresh --json");
+    // An argument-free read: the binding's fixed flag, then --json.
+    inv = invocation("vaults_accessible_list", json::object());
+    EXPECT_EQ(inv.line, "vault list --accessible --json");
+    EXPECT_TRUE(toolsByName().at("vaults_accessible_list").at("annotations").at("readOnlyHint").get<bool>());
 
     EXPECT_NE(refusal("users_delete", json::object()).find("user is required"), std::string::npos);
     EXPECT_NE(refusal("users_delete", {{"user", "bob"}, {"nope", 1}}).find("unknown argument"), std::string::npos);

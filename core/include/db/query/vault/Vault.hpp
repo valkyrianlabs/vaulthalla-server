@@ -26,7 +26,10 @@ public:
     static void removeVault(unsigned int vaultId);
     static VaultPtr getVault(unsigned int vaultID);
     static VaultPtr getVault(const std::string& name, unsigned int ownerId);
+    // One page (100 rows unless params.limit says otherwise): list surfaces only.
     static std::vector<VaultPtr> listVaults(const std::optional<VaultT>& type = std::nullopt, model::ListQueryParams&& params = {});
+    // Every vault not deleted, by id, unpaginated: what needs all of them (the storage engines, accessible vaults).
+    static std::vector<VaultPtr> listLiveVaults();
     static std::vector<VaultPtr> listUserVaults(unsigned int userId, const std::optional<VaultT>& type = std::nullopt, model::ListQueryParams&& params = {});
 
     static void updateVaultSync(const PolicyPtr& sync, const VaultT& type);

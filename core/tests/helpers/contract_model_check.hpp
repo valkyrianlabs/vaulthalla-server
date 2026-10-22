@@ -3,9 +3,9 @@
 // Checks what a serializer produces against the model the ws contract declares for it (core/usage: WsModel,
 // WsField). Each area's model suite (core/tests/unit/contract/models_*.cpp) serializes seeded instances and hands
 // the JSON to a Checker; the contract suite then requires
-//   - no problems: every key sent is declared, every required field is present, every value has a declared JSON
-//     type (and enum value, bounds, element type), recursively through nested models, inline objects, maps,
-//     arrays and unions;
+//   - no problems: every key sent is declared (checkInput: an input model accepts undeclared members), every
+//     required field is present, every value has a declared JSON type (and enum value, bounds, element type),
+//     recursively through nested models, inline objects, maps, arrays and unions;
 //   - no unseen fields: every declared field of every checked model was produced, non-null, by some instance
 //     (allowUnseen names the exceptions with the reason), so a model can't declare members nobody sends;
 //   - every model in the registry was checked by some suite.
@@ -37,6 +37,14 @@ class Checker {
         std::vector<std::string> out;
         checkModel(value, name, where, out, seen_);
         for (auto& p : out) problems_.push_back(std::move(p));
+    }
+
+    // `value` is a document a client sends as model `name` (an input model, e.g. VaultKeyImportDocument): checked the
+    // same way, except that members the model doesn't declare, at any depth, are accepted (the reader ignores them).
+    void checkInput(const json& value, const std::string& name, const std::string& where) {
+        acceptUndeclared_ = true;
+        check(value, name, where);
+        acceptUndeclared_ = false;
     }
 
     // A declared field path ("Model.field", "Model.field.sub", "Model.list[].sub", "Model.map.*") no seeded instance
@@ -136,6 +144,7 @@ class Checker {
             return;
         }
         for (const auto& [key, member] : v.items()) {
+            if (acceptUndeclared_) break;
             bool declared = false;
             for (const auto& f : fields) declared = declared || f.name == key;
             if (!declared) out.push_back(where + ": " + path + "." + key + " is sent but not declared");
@@ -228,6 +237,7 @@ class Checker {
     Seen seen_;
     std::map<std::string, std::string> allowed_;
     std::vector<std::string> problems_;
+    bool acceptUndeclared_ = false;
 };
 
 }

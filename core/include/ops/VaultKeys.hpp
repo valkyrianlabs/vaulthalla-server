@@ -2,6 +2,7 @@
 
 #include "ops/Actor.hpp"
 #include "crypto/SecretKey.hpp"
+#include "fs/Fwd.hpp"
 #include "storage/Fwd.hpp"
 #include "vault/Fwd.hpp"
 
@@ -39,10 +40,35 @@ enum class Channel {
 enum class NeedReason { Current, Rotation, Recovery };
 [[nodiscard]] std::string to_string(NeedReason reason);
 
+// This node's attestation of one key version (vault/KeyAttestation.hpp): public, like the key check.
+struct KeyAttestationInfo {
+    unsigned int key_id{};
+    std::string signature{};  // base64 (64 bytes)
+};
+
 struct NeededVersion {
     unsigned int version{};
     std::optional<std::string> key_check{};  // null when this host can't read that version
     NeedReason reason{NeedReason::Current};
+    std::optional<KeyAttestationInfo> attestation{};  // null when none is recorded (or the version isn't readable)
+};
+
+// A key salvage pass (import mode salvage; key-backup.md "Salvage"): what it re-keyed and what it couldn't.
+struct SalvageFailure {
+    std::string path{};
+    unsigned int version{};
+    std::string kind{};  // unrecoverable | skipped_remote | deferred | failed
+    std::string reason{};
+};
+struct SalvageReport {
+    unsigned int id{};
+    std::vector<unsigned int> versions{};      // the unverified versions it salvaged files from
+    std::optional<unsigned int> new_version{};  // the fresh key version files were re-encrypted under
+    std::string state{};                         // running | finished
+    std::time_t started_at{};
+    std::optional<std::time_t> finished_at{};
+    unsigned int salvaged{}, unrecoverable{}, skipped_remote{}, deferred{}, failed{};
+    std::vector<SalvageFailure> failures{};      // the first 50
 };
 
 struct KeyStatus {
@@ -61,6 +87,8 @@ struct KeyStatus {
     bool rotation_in_progress{false};
     std::vector<NeededVersion> needed_versions{};   // current first, then ascending
     std::vector<unsigned int> missing_versions{};   // needed, but no key for them is held
+    std::optional<KeyAttestationInfo> attestation{};  // the current version's
+    std::optional<SalvageReport> last_salvage{};
 };
 
 // Every vault the caller may inspect (live, and deleted ones within key retention they may remove), or one vault.
@@ -73,6 +101,7 @@ struct ExportedKey {
     unsigned int version{};
     crypto::SecretKeyPtr key{};
     std::string key_check{};
+    std::optional<KeyAttestationInfo> attestation{};
     NeedReason reason{NeedReason::Current};
     std::time_t created_at{}, retired_at{};
 };
@@ -113,23 +142,43 @@ struct Confirmed {
 [[nodiscard]] Confirmed confirmExport(const Actor& actor, unsigned int vaultId, unsigned int version,
                                       const std::string& keyCheck, Channel channel);
 
-// ---- import (S6, D7): restoring keys from a backup. Design: .claude/context/key-backup.md "Key import".
+// ---- import (S6, D7, revision 3): restoring keys from a backup. Design: .claude/context/key-backup.md "Key import".
 //
 // Same permission and channels as export (the console gets import_requires_device). `keys` is an export: one vault
-// object or the `all` array; the entry for vault_id is used. Every version is verified before anything is written
-// (key check when present, then a GCM tag check of local ciphertext sealed under it); a key this host can unseal is
-// never replaced with other bytes (Conflict); identical bytes are a no-op. Writing needs `confirm_name` = the vault's
-// name, else NeedsConfirmation "vault_key_import" says what would be written.
+// object or the `all` array; the entry for vault_id is used. Recover (the default) restores as canonical only versions
+// the daemon's records reference whose attestation by this node verifies (or that match a key this host still
+// unseals); never another key: a key this host can unseal is never replaced (Conflict), identical bytes are a no-op,
+// unreferenced versions are refused, the rest need salvage. Salvage additionally re-encrypts files sealed under the
+// versions that need it under a fresh daemon key, with the supplied key held only in memory. Writing needs
+// `confirm_name` = the vault's name, else NeedsConfirmation "vault_key_import" (recover) or "vault_key_salvage" (any
+// salvage-mode request that writes, even when nothing turns out to need salvage).
+enum class ImportMode { Recover, Salvage };
+[[nodiscard]] std::string to_string(ImportMode mode);
+
 struct ImportRequest {
     unsigned int vault_id{};
     nlohmann::json const* keys{};  // the export document (not owned)
     std::optional<std::string> confirm_name{};
+    ImportMode mode{ImportMode::Recover};
 };
 
+// How importKeys reads `keys` (the ws contract's VaultKeyImportDocument): the versions the document carries for
+// vaultId, ascending. Throws Invalid when it lacks something an import needs; a malformed attestation is no error (that
+// version needs salvage) and is reported per version. Pure (no database); the contract tests hold the model to it.
+struct ImportDocumentVersion {
+    unsigned int version{};
+    bool key_check{false};                             // the backup carries its own key check
+    std::optional<unsigned int> attestation_key_id{};  // a well-formed attestation names this signing key
+    std::optional<std::string> attestation_problem{};  // an attestation is present but malformed
+};
+[[nodiscard]] std::vector<ImportDocumentVersion> readImportDocument(const nlohmann::json& keys, unsigned int vaultId);
+
 enum class ImportOutcome {
-    Restored,      // verified and re-sealed under this host's vault master
+    Restored,      // attested by this node (or matching a key it holds): re-sealed under this host's vault master
     Unchanged,     // this host already holds exactly these bytes
-    Unverifiable,  // nothing local is sealed under it (or newer than the vault's current version): skipped
+    NeedsSalvage,  // referenced, but not provably this vault's key: nothing written (salvage mode re-keys its files)
+    Refused,       // the vault has no record of this version: an import never introduces one
+    Salvaged,      // salvage mode: its files went through a salvage pass (see the report); the key was not stored
 };
 [[nodiscard]] std::string to_string(ImportOutcome outcome);
 
@@ -137,26 +186,31 @@ struct ImportedVersion {
     unsigned int version{};
     ImportOutcome outcome{ImportOutcome::Unchanged};
     std::string detail{};
-    unsigned int verified_files{}, failed_files{};
 };
 
 struct ImportResult {
     unsigned int vault_id{};
     std::string vault_name{};
     bool deleted{false};
+    ImportMode mode{ImportMode::Recover};
     bool written{false};
     bool key_available{false};  // the vault's engine runs (live vaults); a deleted vault needs a restore first
     std::optional<std::string> note{};
     std::vector<ImportedVersion> versions{};
+    std::optional<SalvageReport> salvage{};
 };
 
 [[nodiscard]] ImportResult importKeys(const Actor& actor, const ImportRequest& request, Channel channel);
 
-// Test seam: the engine an import verifies a cloud vault's key against the bucket with (default:
-// storage::CloudEngine::forKeyVerification). An empty function restores the default.
-using KeyVerificationEngineFactory =
-    std::function<std::shared_ptr<storage::CloudEngine>(const std::shared_ptr<vault::model::S3Vault>&)>;
-void setKeyVerificationEngineFactoryForTesting(KeyVerificationEngineFactory factory);
+// Test seam: called after each step of a salvage pass's per-file protocol (sync::rotation's Step, as an int so this
+// header stays light); throwing sync::rotation::SimulatedCrash from it simulates a crash there. Empty: none.
+using SalvageStepHook = std::function<void(int step, const std::shared_ptr<fs::model::File>& file)>;
+void setSalvageStepHookForTesting(SalvageStepHook hook);
+// Test seam: called with the vault's engine once a salvage pass has it, before any file is touched (tests install a
+// fake bucket and a price gate there). Empty: none.
+using SalvageEngineHook = std::function<void(const std::shared_ptr<storage::Engine>& engine)>;
+void setSalvageEngineHookForTesting(SalvageEngineHook hook);
+[[nodiscard]] nlohmann::json toJson(const SalvageReport& report);
 [[nodiscard]] nlohmann::json toJson(const ImportResult& result);
 
 }

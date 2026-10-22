@@ -63,7 +63,7 @@
   `WebSocketCommandMap` against it, naming each mismatch in `pnpm typecheck` output (payloads deep, responses by
   top-level member: nested models are typed in `WsModels` but not compared with the web's own model classes).
 - **Models (contract_version 2):** `models[]` (name → fields, `models_hash`) holds every named shape the book
-  references (169: users and roles, vaults, fs entries, shares, stats, recovery, upstream, S3 gateway, pricing,
+  references (170: users and roles, vaults, fs entries, shares, stats, recovery, upstream, S3 gateway, pricing,
   settings sections ...), declared in `core/usage/src/contract/models/<area>.cpp`. Fields may carry `one_of` (a union
   spelled out), `values` (map objects), `element` (array element shape) and `partial` (a merge-patch payload such as
   `settings.update`); `response_model` names a command whose `data` is one model. `ContractModels.*`
@@ -72,7 +72,7 @@
   enum value, or a declared field no instance produces. `UsageContract.UnionsObjectsAndArraysAreSpelledOut` fails on
   an unspelled union or a shapeless object outside `opaqueObjects()` (free-form user/operator JSON only, each with
   its reason). The generated TS has `WsModels` and `WsPartial`.
-- The book covers every command the daemon registers (222; `UsageContract.EveryRegisteredWsCommandHasABookEntry` and
+- The book covers every command the daemon registers (223; `UsageContract.EveryRegisteredWsCommandHasABookEntry` and
   `test_ws_contract.py` fail on a registered command without an entry; an explicit, reasoned allowlist exists and is
   empty), so `COMMAND_TIMEOUTS` is just the server-declared `WS_CONTRACT_TIMEOUTS`.
 - Drift fails the meson test `ws_contract_drift` and `tools/contracts/test_ws_contract.py` (which also checks every

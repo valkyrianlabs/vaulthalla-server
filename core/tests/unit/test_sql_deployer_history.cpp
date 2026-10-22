@@ -743,4 +743,58 @@ TEST_F(SqlDeployerHistoryDb, DevicesMigrationIsAdditiveAndCascadesWithTheUser) {
     });
 }
 
+// 113 (vault key provenance): on a 112-era database (no provenance columns, no attestation keys, no salvage table) the
+// columns appear NULL on existing key rows, the attestation-key foreign keys exist once, one running salvage per vault,
+// and re-running the file changes nothing.
+TEST_F(SqlDeployerHistoryDb, KeyProvenanceMigrationIsAdditiveAndIdempotent) {
+    inRolledBackTxn([](pqxx::work& txn) {
+        txn.exec("DROP TABLE IF EXISTS vault_key_salvage CASCADE");
+        for (const auto* table : {"vault_keys", "vault_keys_trashed", "vault_deletion_key"})
+            txn.exec(std::string("ALTER TABLE ") + table + " DROP COLUMN IF EXISTS key_check, "
+                     "DROP COLUMN IF EXISTS attestation_key_id, DROP COLUMN IF EXISTS attestation");
+        txn.exec("DROP TABLE IF EXISTS key_attestation_keys CASCADE");
+        txn.exec("DELETE FROM schema_migrations WHERE filename = '113_vault_key_provenance.sql'");
+        const auto owner = txn.exec("INSERT INTO users (name, password_hash) VALUES ('claude_test_113_owner', 'x') "
+                                    "RETURNING id").one_field_ref().as<int>();
+        const auto vault = txn.exec("INSERT INTO vault (name, owner_id, type, mount_point) VALUES "
+                                    "('claude_test_113', $1, 'local', 'claude_test_113') RETURNING id",
+                                    pqxx::params{owner}).one_field_ref().as<int>();
+        txn.exec("INSERT INTO vault_keys (vault_id, encrypted_key, iv, version) VALUES ($1, '\\x00', '\\x00', 2) "
+                 "ON CONFLICT (vault_id) DO UPDATE SET version = 2", pqxx::params{vault});
+
+        migseed::SqlDeployReport report;
+        ASSERT_NO_THROW(report = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(applied(report, "113_vault_key_provenance.sql"));
+        EXPECT_EQ(recordedHash(txn, "113_vault_key_provenance.sql"), currentHash("113_vault_key_provenance.sql"));
+        const auto row = txn.exec("SELECT key_check, attestation_key_id, attestation FROM vault_keys WHERE vault_id = $1",
+                                  pqxx::params{vault}).one_row();
+        EXPECT_TRUE(row[0].is_null() && row[1].is_null() && row[2].is_null());
+        const auto fks = [&] {
+            return txn.exec("SELECT count(*) FROM pg_constraint WHERE contype = 'f' AND confrelid = "
+                            "'key_attestation_keys'::regclass").one_field_ref().as<int>();
+        };
+        EXPECT_EQ(fks(), 3);
+        {
+            pqxx::subtransaction bad(txn, "bad_pk");
+            EXPECT_THROW(bad.exec("INSERT INTO key_attestation_keys (public_key) VALUES ('\\x00')"),
+                         pqxx::check_violation);
+        }
+        txn.exec("INSERT INTO vault_key_salvage (vault_id, versions) VALUES ($1, '{1}')", pqxx::params{vault});
+        {
+            pqxx::subtransaction dup(txn, "dup_running");
+            EXPECT_THROW(dup.exec("INSERT INTO vault_key_salvage (vault_id, versions) VALUES ($1, '{1}')",
+                                  pqxx::params{vault}), pqxx::unique_violation);
+        }
+
+        migseed::SqlDeployReport again;
+        ASSERT_NO_THROW(again = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(again.applied.empty());
+        ASSERT_NO_THROW(txn.exec(migseed::readFileToString(repoPsqlDir() / "113_vault_key_provenance.sql")));
+        EXPECT_EQ(fks(), 3);
+        txn.exec("DELETE FROM vault WHERE id = $1", pqxx::params{vault});
+        EXPECT_EQ(txn.exec("SELECT count(*) FROM vault_key_salvage WHERE vault_id = $1", pqxx::params{vault})
+                      .one_field_ref().as<int>(), 0);
+    });
+}
+
 } // namespace vh_sql_deployer_history_test

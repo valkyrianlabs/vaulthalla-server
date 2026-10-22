@@ -88,11 +88,14 @@ void Manager::initStorageEngines() {
     log::Registry::storage()->debug("[StorageManager] Initializing storage engines...");
     std::scoped_lock lock(mutex_);
 
+    // Both indexes start over: a vault id left in vaultToEngine_ would keep answering getEngine() for a vault that is
+    // no longer live (or for a different vault that later takes its id).
     engines_.clear();
+    vaultToEngine_.clear();
     unavailable_.clear();
 
     try {
-        for (auto& vault : db::query::vault::Vault::listVaults()) {
+        for (auto& vault : db::query::vault::Vault::listLiveVaults()) {
             try {
                 log::Registry::storage()->debug("[StorageManager] Initializing StorageEngine for Vault {} (ID: {}, Type: {})",
                                               vault->name, vault->id, to_string(vault->type));
@@ -206,6 +209,11 @@ std::shared_ptr<Vault> Manager::addVault(std::shared_ptr<Vault> vault,
     } else {
         engine = std::make_shared<Engine>(vault);
     }
+    // One engine per vault id, in both indexes (updateVault and reloadEngine keep the same rule): an engine already
+    // registered under this id at another FUSE root would stay in engines_ and answer getEngines() scans and path
+    // lookups for this vault with another vault's paths and key. A test process that resets the schema reuses ids.
+    if (const auto it = vaultToEngine_.find(vault->id); it != vaultToEngine_.end())
+        eraseEnginePathEntry(engines_, it->second);
     engines_[enginePathKey(engine)] = engine;
     vaultToEngine_[vault->id] = engine;
 
