@@ -6,7 +6,7 @@
 export const WS_CONTRACT_VERSION = 2
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = 'cba52446e8e2bc3eda732c6bdac1884cbfa3b1f2326d7b0f37500c8a92a04893'
+export const WS_CONTRACT_HASH = 'e9abb13d7b5e7b19c949f4bcfa7eadae2009837dba075dfe6a313083bb72f1d5'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
 export const WS_MODELS_HASH = '44c7dcf1d1dac4eb56c9b64deeeea8b2a5f1af6a6548399ea5ae4d9ca637d554'
@@ -3044,7 +3044,8 @@ export interface WsContract {
     response: { path: string }
   }
   /**
-   * List a directory (List on the path).
+   * List a directory (List on the path). Children the caller cannot Lookup are left out, as in FUSE readdir,
+   * and so is what they hold from child folders' size and counts and the folder's own size.
    */
   'fs.dir.list': {
     payload: { vault_id: number; path?: string }

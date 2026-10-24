@@ -11,12 +11,10 @@
 #include "fs/model/Entry.hpp"
 #include "storage/Manager.hpp"
 #include "vault/model/Vault.hpp"
-#include "rbac/fs/policy/Evaluator.hpp"
+#include "rbac/fs/Visibility.hpp"
 #include "rbac/permission/admin/Vaults.hpp"
 #include "rbac/role/Vault.hpp"
-#include "rbac/role/vault/Global.hpp"
 #include "rbac/resolver/Admin.hpp"
-#include "rbac/resolver/VaultScope.hpp"
 #include "rbac/resolver/admin/all.hpp"
 #include "rbac/resolver/vault/all.hpp"
 #include "fs/model/Path.hpp"
@@ -138,65 +136,6 @@ namespace vh::fuse {
             if (isVaultOwner(user, entry)) return true;
             if (hasAdminVaultView(user, entry)) return true;
             return hasVaultPermission(user, action, entry);
-        }
-
-        [[nodiscard]]
-        bool roleOverridesMayAffectListing(
-            const std::shared_ptr<const rbac::role::Vault>& role,
-            const std::filesystem::path& directory
-        ) {
-            return role && rbac::fs::policy::Evaluator::overridesMayAffectListing(role->fs, directory);
-        }
-
-        [[nodiscard]]
-        bool roleOverridesMayAffectListing(
-            const rbac::role::vault::Global& role,
-            const std::filesystem::path& directory
-        ) {
-            return rbac::fs::policy::Evaluator::overridesMayAffectListing(role.fs, directory);
-        }
-
-        [[nodiscard]]
-        bool userOverridesMayAffectListing(
-            const std::shared_ptr<identities::User>& user,
-            const std::shared_ptr<fs::model::Entry>& directory
-        ) {
-            if (!user || !directory || !directory->vault_id) return false;
-
-            const auto vaultId = static_cast<std::uint32_t>(*directory->vault_id);
-            const auto& vaultPath = directory->path;
-            const auto view = user->authz();
-            if (!view.authorizing()) return true;  // nothing is visible; take the filtered (denying) path
-
-            if (roleOverridesMayAffectListing(view.directVaultRole(vaultId), vaultPath))
-                return true;
-
-            for (const auto& group : view.groups) {
-                const auto it = group->roles.vaults.find(vaultId);
-                if (it != group->roles.vaults.end() && roleOverridesMayAffectListing(it->second, vaultPath))
-                    return true;
-            }
-
-            const auto* globals = view.vaultGlobals();
-            if (!globals) return false;
-
-            // Only the scope the evaluator reads for this vault; an unknown owner takes the filtered (denying) path.
-            const auto vault = vaultForEntry(directory);
-            const auto scope = vault ? rbac::resolver::vaultScope(*user, vault->owner_id) : std::nullopt;
-            if (!scope) return true;
-            return roleOverridesMayAffectListing(rbac::resolver::inScope(*scope, *globals), vaultPath);
-        }
-
-        [[nodiscard]]
-        bool canReturnUnfilteredDirectory(
-            const std::shared_ptr<identities::User>& user,
-            const std::shared_ptr<fs::model::Entry>& directory
-        ) {
-            if (!user || !directory) return false;
-            if (isMountRootEntry(directory)) return false;
-            if (user->isSuperAdmin()) return true;
-            if (isVaultOwner(user, directory)) return true;
-            return !userOverridesMayAffectListing(user, directory);
         }
 
         [[nodiscard]]
@@ -558,19 +497,8 @@ namespace vh::fuse {
             return true;
         }
 
-        if (canReturnUnfilteredDirectory(out.user, out.entry)) {
-            out.dir = std::move(entries);
-            return true;
-        }
-
-        std::vector<std::shared_ptr<fs::model::Entry>> visible;
-        visible.reserve(entries.size());
-
-        for (const auto& entry : entries)
-            if (entry && hasVaultPermission(out.user, rbac::permission::vault::FilesystemAction::Lookup, entry))
-                visible.push_back(entry);
-
-        out.dir = std::move(visible);
+        // Children the caller cannot Lookup are left out (#170); the same rule as ws fs.dir.list and `vh fs ls`.
+        out.dir = rbac::fs::visibility::visibleChildren(out.user, out.entry, std::move(entries));
         return true;
     }
 }

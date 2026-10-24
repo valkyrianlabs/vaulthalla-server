@@ -2,6 +2,8 @@
 #include "rbac/fs/glob/Tokenizer.hpp"
 #include "rbac/fs/glob/model/Token.hpp"
 
+#include <algorithm>
+
 namespace vh::rbac::fs::glob {
     namespace {
         using Token = model::Token;
@@ -163,6 +165,22 @@ namespace vh::rbac::fs::glob {
             normalizedPrefix.pop_back();
 
         return dir == normalizedPrefix || dir == parentDirectory(prefix);
+    }
+
+    bool Matcher::mayMatchWithin(const model::Pattern& pattern, const Path &directory) {
+        const std::string dir = normalizePath(directory);
+        if (dir.empty() || dir.front() != '/') return false;
+
+        if (matches(pattern, directory) || requiresTraversalThrough(pattern, directory)) return true;
+
+        // A literal pattern names one path: it is the directory, below it (traversal) or neither, all answered above.
+        if (!std::ranges::any_of(pattern.tokens, isWildcardToken)) return false;
+
+        // A wildcard can stand for any part of the path after its literal prefix. When that prefix is a string prefix
+        // of "<dir>/" (or the other way round), something below the directory may match.
+        const std::string prefix = literalTraversalPrefix(pattern);
+        const std::string within = dir == "/" ? dir : dir + "/";
+        return within.starts_with(prefix) || prefix.starts_with(within);
     }
 
     bool Matcher::validatePath(const Path &path) {

@@ -179,6 +179,45 @@ namespace vh::test::integration {
             return out;
         }
 
+        // #255: the names FUSE readdir gives `uid` for a folder against the names ws fs.dir.list gives `user` (the same
+        // account) for it. Passes with "PARITY" and the shared names, one per line, when the two sets are equal.
+        ExecResult listingParity(const std::shared_ptr<storage::Engine>& engine, const std::shared_ptr<User>& user,
+                                 const uid_t uid, const std::filesystem::path& fuseDir, const std::string& vaultDir) {
+            const auto command = "readdir of " + fuseDir.string() + " as uid " + std::to_string(uid) +
+                                 " vs fs.dir.list " + vaultDir + " as " + user->name();
+            const auto readdir = ls_as(uid, fuseDir);
+            if (readdir.exit_code != 0) return readdir;
+
+            std::vector<std::string> fuseNames;
+            for (std::size_t start = 0, end; start < readdir.stdout_text.size(); start = end + 1) {
+                end = readdir.stdout_text.find('\n', start);
+                if (end == std::string::npos) end = readdir.stdout_text.size();
+                if (end > start) fuseNames.push_back(readdir.stdout_text.substr(start, end - start));
+            }
+
+            std::vector<std::string> wsNames;
+            try {
+                const auto listing = ::vh::protocols::ws::handler::fs::Storage::listDir(
+                    {{"vault_id", engine->vault->id}, {"path", vaultDir}}, wsSessionFor(user));
+                for (const auto& f : listing.at("files")) wsNames.push_back(f.at("name").get<std::string>());
+            } catch (const std::exception& e) {
+                return {.exit_code = EIO, .stdout_text = {}, .stderr_text = e.what(), .command = command};
+            }
+
+            std::ranges::sort(fuseNames);
+            std::ranges::sort(wsNames);
+            const auto join = [](const std::vector<std::string>& names) {
+                std::string out;
+                for (const auto& n : names) out += n + "\n";
+                return out;
+            };
+            if (fuseNames != wsNames)
+                return {.exit_code = EIO, .stdout_text = {},
+                        .stderr_text = "readdir:\n" + join(fuseNames) + "fs.dir.list:\n" + join(wsNames),
+                        .command = command};
+            return {.exit_code = 0, .stdout_text = "PARITY\n" + join(wsNames), .stderr_text = {}, .command = command};
+        }
+
         // Runs `first`, and `then` only when it succeeded (a delete followed by a look at what it left).
         ExecResult andThen(const ExecResult& first, const std::function<ExecResult()>& then) {
             if (first.exit_code != 0) return first;
@@ -877,6 +916,72 @@ namespace vh::test::integration {
         return builder.exec();
     }
 
+    // #255: fs.dir.list returned every child; FUSE readdir hides those the caller cannot Lookup (#170). Both now take
+    // the same rule (rbac::fs::visibility), so for the same account and folder they list the same names: a file
+    // hidden by a deny override, a folder hidden by a list deny, and a file hidden by a wildcard reaching in from
+    // above (that one used to slip past the listing shortcut in readdir too).
+    static TestStage testListVisibilityParity() {
+        auto builder = Builder::make({
+            .name = "List Visibility Parity",
+            .baseDir = "list_parity_seed"
+        });
+
+        builder.makeUser({ .userNameSeed = "user/create/list_parity" });
+
+        builder.buildAssignVRole({
+            .subjectType = TargetSubject::User,
+            .templateName = role::Vault::PowerUser().name,
+            .roleNameSeed = "vault_role/create/list_parity",
+            .description = "Power user with hidden entries",
+        });
+
+        const auto [ctx, subj] = builder.scenario();
+        const auto adminUid = *ctx.admin->state()->meta.linux_uid;
+        const auto vaultBase = "/" + ctx.baseDir;
+
+        (void)write_as(adminUid, ctx.docs() / "open.txt", "open\n");
+        (void)write_as(adminUid, ctx.docs() / "deploy.key", "key\n");
+        (void)mkdir_as(adminUid, ctx.base() / "hidden_dir");
+        (void)write_as(adminUid, ctx.base() / "hidden_dir" / "inner.txt", "inner\n");
+        (void)mkdir_as(adminUid, ctx.base() / "shown_dir");
+
+        const auto secret = fs::model::makeAbsolute(ctx.baseDir) / "docs" / "secret.txt";
+        for (const auto* perm : {"vault.fs.files.preview", "vault.fs.files.download"}) {
+            builder.makeOverride({.subjectType = TargetSubject::User, .permName = perm,
+                                  .effect = permission::OverrideOpt::DENY, .pattern = secret});
+            builder.makeOverride({.subjectType = TargetSubject::User, .permName = perm,
+                                  .effect = permission::OverrideOpt::DENY, .pattern = "/**/*.key"});
+        }
+        builder.makeOverride({.subjectType = TargetSubject::User, .permName = "vault.fs.directories.list",
+                              .effect = permission::OverrideOpt::DENY,
+                              .pattern = fs::model::makeAbsolute(ctx.baseDir) / "hidden_dir"});
+
+        builder.makeTestCase({
+            .name = "readdir == fs.dir.list: seed folder hides the denied folder",
+            .path = "fuse/ls+ws/fs.dir.list",
+            .must_contain = {"PARITY\n", "docs\n", "note.txt\n", "shown_dir\n"},
+            .must_not_contain = {"hidden_dir\n"},
+            .fn = [=] { return listingParity(ctx.engine, subj.user, subj.uid, ctx.base(), vaultBase); }
+        });
+
+        builder.makeTestCase({
+            .name = "readdir == fs.dir.list: docs hides the denied file and the wildcard-denied key",
+            .path = "fuse/ls+ws/fs.dir.list",
+            .must_contain = {"PARITY\n", "open.txt\n"},
+            .must_not_contain = {"secret.txt\n", "deploy.key\n"},
+            .fn = [=] { return listingParity(ctx.engine, subj.user, subj.uid, ctx.docs(), vaultBase + "/docs"); }
+        });
+
+        builder.makeTestCase({
+            .name = "readdir == fs.dir.list: the admin sees every entry",
+            .path = "fuse/ls+ws/fs.dir.list",
+            .must_contain = {"PARITY\n", "open.txt\n", "secret.txt\n", "deploy.key\n"},
+            .fn = [=] { return listingParity(ctx.engine, ctx.admin, adminUid, ctx.docs(), vaultBase + "/docs"); }
+        });
+
+        return builder.exec();
+    }
+
     static TestStage testFUSEGroupPermissions() {
         auto builder = Builder::make({
             .name = "Group Permissions",
@@ -1070,12 +1175,12 @@ namespace vh::test::integration {
         for (const auto& s : always_run) run(s);
 
         if (geteuid() != 0) {
-            std::cout << "FUSE: not root, skipping the 11 root-only RBAC scenarios (bin/tests/run_proof.sh runs them)"
+            std::cout << "FUSE: not root, skipping the 12 root-only RBAC scenarios (bin/tests/run_proof.sh runs them)"
                       << std::endl;
             return;
         }
 
-        constexpr std::array<Scenario, 11> root_only {{
+        constexpr std::array<Scenario, 12> root_only {{
             {"Root Listing Super Admin", testFUSERootListingSuperAdmin},
             {"Root Listing Unprivileged User", testFUSERootListingUnprivilegedUser},
             {"Permissions Allow", testFUSEAllow},
@@ -1084,6 +1189,7 @@ namespace vh::test::integration {
             {"Vault Permission Overrides Deny", testVaultPermOverridesDeny},
             {"Rename Over Needs Delete", testRenameOverNeedsDelete},
             {"Vault Permission Overrides List Filter", testVaultPermOverridesListFilter},
+            {"List Visibility Parity", testListVisibilityParity},
             {"Group Permissions", testFUSEGroupPermissions},
             {"Group Permission Overrides", testGroupPermOverrides},
             {"User Overrides Group Override", testFUSEUserOverridesGroupOverride},

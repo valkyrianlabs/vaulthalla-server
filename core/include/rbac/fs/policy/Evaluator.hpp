@@ -37,6 +37,8 @@ namespace vh::rbac::fs::policy {
             permission::vault::FilesystemAction action
         );
 
+        // False only when no enabled override can match `directory` or any entry below it: every entry in that
+        // subtree is then judged by the base permissions alone (per kind, the same for all of them).
         [[nodiscard]]
         static bool overridesMayAffectListing(
             const permission::vault::Filesystem& perms,

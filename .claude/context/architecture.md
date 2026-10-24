@@ -532,6 +532,19 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   the action; the mount root is never hidden. The answer must not depend on which op reaches the daemon first.
   An ENOENT answer to a revalidating lookup (or unlink) makes the kernel invalidate that shared dentry, so allowed
   users re-look it up, and a process whose cwd was that dentry gets ENOENT from getcwd.
+- **Listings hide what Lookup hides, on every surface (#255).** FUSE readdir, ws `fs.dir.list` / `fs.list` (outside
+  share mode) and `vh fs ls` all list a folder through `rbac::fs::visibility::visibleChildren` (`rbac/fs/Visibility.hpp`):
+  each child must pass the evaluator's Lookup. ws used to check only List on the folder and return every child. The
+  fast path (no per-entry check) is `seesWholeSubtree`: super admin, vault owner (FUSE's long-standing rule), or no
+  override of the caller's can reach the folder's subtree (`Evaluator::overridesMayAffectListing`, now
+  `glob::Matcher::mayMatchWithin`: a wildcard reaching in from above, `/**/x` or `/docs/*/x`, counts; it used to be
+  missed, so readdir listed names lookup hid) *and* one probe entry per kind (a stand-in file and folder inside it)
+  passes Lookup, since without overrides the base permissions judge every entry there by kind alone (a role that lists
+  folders but may neither preview nor download sees no files). ws also recounts `size_bytes` / `file_count` /
+  `subdirectory_count` of a listed child folder whose subtree holds hidden entries (`visibleTotals`: one cached subtree
+  listing, walked through visible folders) and the listed folder's own `size_bytes`; otherwise the stored totals stand.
+  `fs.metadata` of a folder and FUSE getattr still report the stored size. Proof: `FsListVisibilityDbTest`, Tier A
+  "List Visibility Parity" (readdir == fs.dir.list for the same account).
 - **No kernel metadata caching (#183).** The kernel dentry/attr cache is shared across uids and the mount has no
   `default_permissions`, so anything cached is answered for any caller without the daemon. Every reply uses
   `kKernelMetadataTimeout` = 0 (Bridge.cpp; pinned by `tools/contracts/test_fuse_cache_timeout_contract.py`), so each
@@ -769,7 +782,7 @@ subject's assignment; both `vh vault role override ...` and ws `role.vault.overr
   actor's own vault is `self`, a vault whose owner is `User::isAdmin()` is `admin`, any other is `user`. It picks the
   scope for the admin role's `admin.vaults.<scope>` (`resolver::Admin`), the global vault policy's sync/role bits
   (`resolver::Vault::grantedByGlobals`), the filesystem evaluator's globals stage (`Evaluator::evaluate` step 3) and
-  FUSE's listing-override check. The evaluator used to loop self, admin, user, but a stage always decides, so the
+  the listing-override check (`rbac::fs::visibility`). The evaluator used to loop self, admin, user, but a stage always decides, so the
   `self` bits answered for every vault (fixed 2026-10-22; `VaultScopeRbacTest` compares every action on a file and a
   directory with the evaluator applied to exactly the expected scope, plus ws, `vh fs ls`, the access layer and the
   accessible list). Seeded presets are identical in every scope, so they never showed it; an unknown owner grants

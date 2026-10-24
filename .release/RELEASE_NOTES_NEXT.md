@@ -21,3 +21,12 @@ Vaulthalla Desktop, which is building it on Apple's File Provider. `vh status` a
 so on the mount line. If an older `config.yaml` on a Mac sets `mount.mode` to `multiuser` or `service_private`, the
 daemon runs with the mount disabled and logs a warning instead of reporting degraded health. `vh fs`, the web console
 and the S3 gateway remain the ways to reach vault files on a Mac. Linux is unchanged.
+
+## Security
+
+- **Folder listings hide what you may not see.** The web console and Desktop (`fs.dir.list`) and `vh fs ls` now leave
+  out files and folders you aren't allowed to look up, as the mounted filesystem already did, and a folder's size and
+  item counts no longer include them. The Linux mount hides two more cases it used to list: entries matched by a deny
+  override whose pattern starts above the folder (such as `/**/secret.txt`), and every file for a role that can list
+  folders but neither preview nor download files. Anyone who could see the names of entries they couldn't open no
+  longer sees them.

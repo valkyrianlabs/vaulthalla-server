@@ -318,4 +318,32 @@ namespace vh::rbac::fs::glob::test {
         EXPECT_TRUE(Matcher::requiresTraversalThrough("/**/*.pdf", p("/")));
         EXPECT_FALSE(Matcher::requiresTraversalThrough("/**/*.pdf", p("/report.pdf")));
     }
+    // #255: the listing shortcut (no override can reach a folder's subtree, so nothing in it needs a per-entry Lookup)
+    // used matches() + requiresTraversalThrough(), which miss a wildcard reaching in from above the folder. A false
+    // answer has to prove that nothing at or below the folder can match.
+    static Pattern pat(const std::string &s) { return Tokenizer::parse(s); }
+
+    TEST_F(GlobPathMatchingTest, Matcher_MayMatchWithin_WildcardsReachingInFromAbove) {
+        EXPECT_TRUE(Matcher::mayMatchWithin(pat("/**/secret.txt"), p("/docs")));
+        EXPECT_TRUE(Matcher::mayMatchWithin(pat("/**/secret.txt"), p("/docs/deep/er")));
+        EXPECT_TRUE(Matcher::mayMatchWithin(pat("/seed/*/secret.txt"), p("/seed/docs")));
+        EXPECT_TRUE(Matcher::mayMatchWithin(pat("/se*/secret.txt"), p("/seed")));
+        EXPECT_TRUE(Matcher::mayMatchWithin(pat("/docs/**"), p("/docs/a/b")));
+        EXPECT_TRUE(Matcher::mayMatchWithin(pat("/doc?/x"), p("/docs")));
+
+        // What the old pair already covered still counts.
+        EXPECT_TRUE(Matcher::mayMatchWithin(pat("/docs/*.txt"), p("/docs")));
+        EXPECT_TRUE(Matcher::mayMatchWithin(pat("/docs/*.txt"), p("/")));
+        EXPECT_TRUE(Matcher::mayMatchWithin(pat("/docs/private/report.pdf"), p("/docs")));
+        EXPECT_TRUE(Matcher::mayMatchWithin(pat("/docs/private"), p("/docs/private")));
+    }
+
+    TEST_F(GlobPathMatchingTest, Matcher_MayMatchWithin_ProvesUnrelatedSubtreesUntouched) {
+        EXPECT_FALSE(Matcher::mayMatchWithin(pat("/docs/*.txt"), p("/images")));
+        EXPECT_FALSE(Matcher::mayMatchWithin(pat("/docs/*.txt"), p("/docs2")));
+        EXPECT_FALSE(Matcher::mayMatchWithin(pat("/docs/private/*.txt"), p("/docs/public")));
+        EXPECT_FALSE(Matcher::mayMatchWithin(pat("/docs/report.pdf"), p("/docs/other")));
+        EXPECT_FALSE(Matcher::mayMatchWithin(pat("/docs/report.pdf"), p("/images")));
+        EXPECT_FALSE(Matcher::mayMatchWithin(pat("/docs/*"), p("relative")));
+    }
 }

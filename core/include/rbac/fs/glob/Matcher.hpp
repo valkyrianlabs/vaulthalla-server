@@ -21,6 +21,11 @@ namespace vh::rbac::fs::glob {
 
         static bool requiresTraversalThrough(const model::Pattern& pattern, const Path &directory);
 
+        // Whether the pattern could match `directory` itself or any path below it. Conservative: a wildcard whose
+        // literal prefix leads into or above the directory ("/**/x", "/docs/*/secret.txt" for /docs/a) counts, so a
+        // false answer proves no entry in that subtree is matched. The listing shortcuts rely on that (#255).
+        static bool mayMatchWithin(const model::Pattern& pattern, const Path &directory);
+
     private:
         static bool validatePath(const Path &path);
         static std::string normalizePath(const Path &path);
