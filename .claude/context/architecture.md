@@ -497,7 +497,19 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   `RenameJournal`; it publishes the clones to the cache only after commit and rolls the journal back on any failure.
   Before, it mutated cached entries in place and moved bytes before the commit, so a failure (any rename over an
   existing name hit UNIQUE(parent_id, name)) stranded the bytes and corrupted the cache. RENAME_EXCHANGE is still
-  refused (EINVAL). `Filesystem::repairAtRest` (first sync pass per vault per start) seals plaintext left by older
+  refused (EINVAL).
+- **Move and rename into another folder need what a create there needs (#256).** FUSE rename and ws `fs.entry.move` /
+  `fs.entry.rename` used to check only Move/Rename on the source (plus Delete on a replaced target). Now, when the
+  destination folder differs from the source's, the new path needs Touch (a folder) or Write (a file or symlink), the
+  rule of mkdir/create/upload and of `fs.entry.copy`'s per-entry authorizer (`rbac::fs::placement::createAction`), and a
+  folder's contents are each checked at their new path (`firstRefusedDescendant`). FUSE answers a refusal like a create
+  in that folder (`resolver::deniedErrno`: ENOENT when the caller can't see it, EACCES when it can; EACCES for a
+  refused descendant); ws answers `denied`, checked before the endpoint lookups, so a refused caller gets no
+  not_found/conflict about the destination. A rename within its own folder is unchanged (source check only), and
+  across vaults FUSE still answers EXDEV with nothing authorized. `storage::Engine::move/rename` and
+  `Filesystem::rename` stay non-authorizing primitives; their callers are the two surfaces above and the ws upload
+  finish (a same-folder rename of the staged part after Write on the target). `FsMoveAuthzDbTest`, Tier A "Move Into
+  Unwritable Folder". `Filesystem::repairAtRest` (first sync pass per vault per start) seals plaintext left by older
   builds and corrects ciphertext-length sizes.
 - **No key is minted over sealed data (`EncryptionManager::load_key`, `key-backup.md`).** A vault without a
   `vault_keys` row gets a fresh key only when nothing is sealed under any key (no files row with an IV, recovery blob,

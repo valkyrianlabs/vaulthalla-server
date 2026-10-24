@@ -20255,7 +20255,7 @@
       "client_timeout_ms": 180000,
       "command": "fs.entry.move",
       "confirmations": [],
-      "description": "Move an entry (Move on the source).",
+      "description": "Move an entry: Move on the source; into another folder also Write (files) or Touch (directories) at the destination, for the entry and everything it carries.",
       "input": "payload",
       "operation": null,
       "payload": [
@@ -20340,7 +20340,7 @@
       "client_timeout_ms": 60000,
       "command": "fs.entry.rename",
       "confirmations": [],
-      "description": "Rename an entry (Rename on the source).",
+      "description": "Rename an entry: Rename on the source; into another folder also Write (files) or Touch (directories) at the destination, for the entry and everything it carries.",
       "input": "payload",
       "operation": "fs.rename",
       "payload": [
@@ -38088,5 +38088,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "e9abb13d7b5e7b19c949f4bcfa7eadae2009837dba075dfe6a313083bb72f1d5"
+  "ws_hash": "686e357625cb73a67b350e65eb9ed5e057a42c96013fa6e5215e5ca9d55af074"
 }

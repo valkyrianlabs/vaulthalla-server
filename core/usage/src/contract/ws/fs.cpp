@@ -97,7 +97,8 @@ std::vector<WsCommandUsage> fsCommands() {
 
     out.push_back({
         .command = "fs.entry.move",
-        .description = "Move an entry (Move on the source).",
+        .description = "Move an entry: Move on the source; into another folder also Write (files) or Touch "
+                       "(directories) at the destination, for the entry and everything it carries.",
         .payload = fsMovePayload(),
         .response = fsMoveResponse(),
         .refusal_codes = fsWriteRefusals(),
@@ -106,7 +107,8 @@ std::vector<WsCommandUsage> fsCommands() {
 
     out.push_back({
         .command = "fs.entry.rename",
-        .description = "Rename an entry (Rename on the source).",
+        .description = "Rename an entry: Rename on the source; into another folder also Write (files) or Touch "
+                       "(directories) at the destination, for the entry and everything it carries.",
         .payload = fsMovePayload(),
         .response = fsMoveResponse(),
         .refusal_codes = fsWriteRefusals(),

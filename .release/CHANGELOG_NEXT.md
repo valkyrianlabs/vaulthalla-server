@@ -18,6 +18,10 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   folder's own size without them (#255).
 - The listing fast path no longer skips the per-entry Lookup when a wildcard override reaches the folder from above
   (`glob::Matcher::mayMatchWithin`) or when the base permissions hide one kind of entry.
+- FUSE rename and ws `fs.entry.move` / `fs.entry.rename` into another folder authorize the new path with the action a
+  create there needs (Touch for a folder, Write for a file or symlink; `rbac::fs::placement`), and every entry a folder
+  carries at its new path. FUSE answers a refusal as a create in that folder would (`resolver::deniedErrno`), ws with
+  `denied` before any destination lookup. Same-folder renames and cross-vault EXDEV are unchanged (#256).
 
 ## Test tooling
 - `make test` runs the derive suites: `vh_fake_derive_helper` is built without sanitizers (an ASan helper aborted
