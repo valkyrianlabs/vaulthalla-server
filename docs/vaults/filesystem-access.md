@@ -1,7 +1,7 @@
 ---
 title: Filesystem Access
 navTitle: Filesystem Access
-description: How vaults are reached as files - the FUSE mount on Linux, its identity and permission model, mount modes, and the options on macOS where no mount ships yet.
+description: How vaults are reached as files - the FUSE mount on Linux, its identity and permission model, mount modes, and the options on macOS, where the server never mounts vaults.
 order: 205
 status: published
 tags:
@@ -13,7 +13,7 @@ tags:
 
 # Filesystem Access
 
-Every vault can be reached through the web console, the CLI and the S3 gateway on every platform. On Linux, vaults are also a real filesystem: the daemon mounts them through its own FUSE driver, and ordinary programs read and write them as files. This page explains that mount, its permission model, and what to use on macOS, where the package does not include a mount yet.
+Every vault can be reached through the web console, the CLI and the S3 gateway on every platform. On Linux, vaults are also a real filesystem: the daemon mounts them through its own FUSE driver, and ordinary programs read and write them as files. This page explains that mount, its permission model, and what to use on macOS, where the server never mounts vaults.
 
 :::toc[On this page]{depth="3" theme="compact"}
 :::
@@ -23,9 +23,9 @@ Every vault can be reached through the web console, the CLI and the S3 gateway o
 | Way in | Linux | macOS |
 | --- | --- | --- |
 | Web console (browse, upload, download, preview, share) | Yes | Yes |
-| `vh fs ls`, `vh fs get`, `vh fs put` over the CLI socket | Yes | Yes (the interim file path on macOS) |
+| `vh fs ls`, `vh fs get`, `vh fs put` over the CLI socket | Yes | Yes (the CLI file path on macOS) |
 | S3 gateway (vaults as buckets) | Yes | Yes |
-| Filesystem mount | `/mnt/vaulthalla` (FUSE) | Not in the package |
+| Filesystem mount | `/mnt/vaulthalla` (FUSE) | None: the server never mounts on macOS |
 
 ## The Linux Mount
 
@@ -56,19 +56,23 @@ If the daemon stops uncleanly the mount can be left stale; see [FUSE Mount Fails
 | Mode | Meaning | Shipped |
 | --- | --- | --- |
 | `multiuser` | One mount for every local user, each checked by uid. | Linux (the default there) |
-| `service_private` | A mount only the service account can use, for internal tools. | Not shipped |
-| `disabled` | No mount; storage is served over HTTP, WebSocket, the CLI and S3 only. | macOS (the package's state) |
+| `service_private` | A mount only the service account can use, for internal tools. | Not provided on any platform |
+| `disabled` | No mount; storage is served over HTTP, WebSocket, the CLI and S3 only. | macOS (the only mode there) |
 
-An unknown value refuses to start rather than silently becoming another mode. `vh status` reports the configured mode and the actual state separately (for example `mount: disabled -> disabled`, or `mount: multiuser -> mounted`), and health never reports a mount that isn't there.
+An unknown value refuses to start rather than silently becoming another mode. On macOS, `multiuser` or `service_private` does not stop the daemon: it runs as `disabled` and logs a `[config]` warning saying so; set the key to `disabled` or remove it to clear the warning. `vh status` reports the configured mode and the actual state separately (for example `mount: disabled -> disabled`, or `mount: multiuser -> mounted`), and health never reports a mount that isn't there.
 
 ## On macOS
 
-The macOS package does not include the FUSE bridge, so no vault is mounted and Finder shows no Vaulthalla volume. A per-user mount needs a FUSE implementation that can tell which macOS user is asking, and none has passed Vaulthalla's acceptance yet; until one does, Vaulthalla does not promise Finder integration or per-user isolation on a Mac.
+The macOS server never mounts vaults: it has no FUSE bridge, does not use macFUSE, and Finder shows no Vaulthalla volume from it. Finder integration belongs to Vaulthalla Desktop, a separate app for each Mac user that is in development: it will show the vaults you choose in Finder through Apple's File Provider, with every operation checked by the server under your own Vaulthalla account. Until it ships, Vaulthalla does not offer Finder access on a Mac. `vh status` says so on its mount line:
+
+```text
+  mount: disabled -> disabled — the server never mounts on this platform; Finder access is provided by Vaulthalla Desktop
+```
 
 Use these instead:
 
 - **The web console** for browsing, uploads, downloads, previews and shares.
-- **`vh fs`** for scripts and the command line. `vh fs ls`, `vh fs get` and `vh fs put` move files over the CLI socket with the same permissions as the console; downloads are written atomically and uploads are stored only when complete. It is an interim path until a macOS mount ships. See [Vault Files](/cli/command-reference#vault-files).
+- **`vh fs`** for scripts and the command line. `vh fs ls`, `vh fs get` and `vh fs put` move files over the CLI socket with the same permissions as the console; downloads are written atomically and uploads are stored only when complete. See [Vault Files](/cli/command-reference#vault-files).
 - **The S3 gateway** for tools and sync clients that speak S3. See [S3 Gateway](/s3-gateway).
 
 HTTP uploads on macOS stage in a private directory under the service's state root instead of going through a mount, so the console works fully without one.

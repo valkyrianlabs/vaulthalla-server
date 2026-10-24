@@ -242,9 +242,10 @@ vh fs get <vault> <path> [-o <file>|-] [--owner <user>]
 vh fs put <vault> <local-file|-> <path> [--overwrite] [--owner <user>]
 ```
 
-:::callout{theme="warning" title="Interim"}
-`vh fs` is a stopgap for hosts without a usable mount (macOS today). It will be retired once the macOS FUSE identity
-adapter maps each local user to their own Vaulthalla identity on the mount; scripts should not treat it as permanent.
+:::callout{theme="info" title="Where it fits"}
+`vh fs` is the command-line file path for hosts without a mount, which includes every Mac: the macOS server never
+mounts vaults, and Finder access belongs to Vaulthalla Desktop. It moves single files; for bulk transfers and sync
+clients use the S3 gateway.
 :::
 
 Reads and writes vault files without a mount, through the control socket. `vh` itself reads the local file (or standard input) for `put` and writes the local file for `get`; the daemon only ever sees the vault path. Permissions are the web console's: `ls` needs List, `get` needs Read, `put` needs Write on the new path (missing folders are created) and `--overwrite` needs Overwrite on the existing file. A path you can't read reports "permission denied" whether or not it exists.

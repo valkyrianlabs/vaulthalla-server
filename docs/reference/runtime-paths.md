@@ -97,7 +97,7 @@ Everything that holds data belongs to the hidden `_vaulthalla` account.
 | `…/postgres` | `_vaulthalla 0700` | The bundled PostgreSQL cluster (`data/`) and its socket. |
 | `…/caddy` | `_vaulthalla 0700` | After `vh setup caddy`: the Caddyfile, certificates, ACME account and the Vaulthalla CA. |
 | `…/vaulthalla-local-ca.crt` | `0644` | The Vaulthalla CA certificate to install on devices (internal names). |
-| `…/mount` | `_vaulthalla 0700` | Reserved for a future service-private mount; unused by the package. |
+| `…/mount` | `_vaulthalla 0700` | Unused: the server never mounts vaults on macOS. |
 | `…/uninstall.sh`, `…/vaulthalla-provision` | `root:wheel 0755` | Copies kept outside the package receipt so uninstalling still works after the program files are gone. |
 | `/Library/Logs/Vaulthalla` | `_vaulthalla 0750` | `vaulthalla.log`, `server.log`, `web.log`, `postgres.log`, `caddy.log`. |
 

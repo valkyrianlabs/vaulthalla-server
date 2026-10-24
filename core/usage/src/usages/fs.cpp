@@ -2,10 +2,10 @@
 
 using namespace vh::protocols::shell;
 
-// `vh fs`: vault file access over the CLI socket (#229), for hosts where the vault isn't mounted (macOS FUSE disabled
-// or service-private) or a script wants one file. The client moves the bytes (protocols/shell/Transfer.hpp); the
-// daemon authorizes every path with the same evaluator as the web console's HTTP lanes. Interim: retired once a macOS
-// FUSE identity adapter maps local uids to Vaulthalla users on the mount (#221).
+// `vh fs`: vault file access over the CLI socket (#229), for hosts where the vault isn't mounted (macOS: the server
+// never mounts there, #262) or a script wants one file. The client moves the bytes (protocols/shell/Transfer.hpp);
+// the daemon authorizes every path with the same evaluator as the web console's HTTP lanes. Finder access on macOS is
+// Vaulthalla Desktop's (vaulthalla/desktop#1), not this command's; don't grow it into a second file API.
 namespace vh::protocols::shell::fs_book {
 
 static std::shared_ptr<CommandUsage> buildBaseUsage(const std::weak_ptr<CommandUsage>& parent) {
@@ -83,8 +83,8 @@ static std::shared_ptr<CommandUsage> putCmd(const std::weak_ptr<CommandUsage>& p
 static std::shared_ptr<CommandUsage> base(const std::weak_ptr<CommandUsage>& parent) {
     const auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"fs", "files"};
-    cmd->description = "Read and write vault files without a mount (bytes travel over the vh socket). Interim: "
-                       "replaced by the mount once macOS FUSE maps local users to their own identities.";
+    cmd->description = "Read and write vault files without a mount (bytes travel over the vh socket): the CLI file "
+                       "path on macOS, where the server never mounts vaults.";
     cmd->subcommands = {lsCmd(cmd->weak_from_this()), getCmd(cmd->weak_from_this()), putCmd(cmd->weak_from_this())};
     cmd->examples = {
         {"vh fs ls 42 /", "List the top of vault 42."},

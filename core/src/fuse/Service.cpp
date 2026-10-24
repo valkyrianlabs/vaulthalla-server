@@ -35,7 +35,7 @@ std::weak_ptr<Service> gService;  // the one makeService() created, for mountSta
 std::string unmountableReason(const std::string& mode) {
     if (mode == "disabled") return "";
     if (!platform::mount::supportsMode(mode)) return "this platform does not provide mount mode '" + mode + "'";
-    if (!platform::mount::fuseRuntimeAvailable()) return "the FUSE library is not installed (macFUSE)";
+    if (!platform::mount::fuseRuntimeAvailable()) return "the FUSE library is not installed";
     return "";
 }
 }

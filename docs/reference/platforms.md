@@ -77,7 +77,7 @@ A Secure Enclave or keychain backend for macOS is planned and not shipped. See [
 
 | | Linux | macOS |
 | --- | --- | --- |
-| Mount | FUSE at `/mnt/vaulthalla`, `multiuser` | None (`mount.mode` effectively `disabled`) |
+| Mount | FUSE at `/mnt/vaulthalla`, `multiuser` | None: the server never mounts (`mount.mode` is always `disabled`; Finder access belongs to Vaulthalla Desktop) |
 | File access without a mount | web console, `vh fs`, S3 gateway | web console, `vh fs`, S3 gateway |
 | HTTP upload staging | through the mount | a private directory under the state root |
 

@@ -19,3 +19,13 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   PostgreSQL cluster (tools/macos/test-db.sh), torn down afterwards; `make itest` exits early there with what to run.
   Test scripts drop GNU-only `realpath -m`, `base64 -w0`, `mapfile` and `declare -A` (bash 3.2 compatible), and the
   harness provisioner accepts /tmp as /private/tmp.
+
+## macOS mount
+- Retire the macOS macFUSE integration (#262): darwin never builds the kernel FUSE bridge (`-Dfuse=enabled` is a
+  setup error there; `fuse/unbuilt` is the service), `platform/darwin/Mount.cpp` drops the macFUSE mount options,
+  the `fuse_session_mount` probe and the `macfuse-kernel` backend, and `tools/macos/fuse-probe/` is removed. Finder
+  access belongs to Vaulthalla Desktop's File Provider (vaulthalla/desktop#1). Linux FUSE is unchanged.
+  - macOS `mount.mode` is `disabled` only: `service_private`/`multiuser` left in config.yaml run as `disabled` with a
+    `[config]` warning instead of degrading health; a misspelled mode still refuses to start everywhere.
+  - Health, `vh status` and the console's Runtime page report the macOS mount as disabled, noting that Finder access
+    is provided by Vaulthalla Desktop. `vh fs` help no longer calls itself interim.

@@ -43,10 +43,11 @@ const DEP_LABELS: Record<string, string> = {
 }
 
 // Configured mode next to what the mount actually is (the backend never reports a configured mount as mounted).
+// A disabled mount keeps the backend's note when it has one (macOS: Finder access is Vaulthalla Desktop's).
 const mountSummary = (deps: Raw): string => {
   const mode = String(deps.fuse_mount)
   const state = typeof deps.mount_state === 'string' ? deps.mount_state : null
-  if (mode === 'disabled') return 'Disabled'
+  if (mode === 'disabled') return typeof deps.mount_detail === 'string' ? `Disabled — ${deps.mount_detail}` : 'Disabled'
   if (!state) return mode
   const label = state === 'mounted' ? `${mode}: mounted` : `${mode}: ${state.replace('_', ' ')}`
   const isolation = state === 'mounted' && typeof deps.mount_isolation === 'string' ? ` (isolation ${deps.mount_isolation})` : ''

@@ -66,7 +66,7 @@ The installing user is enrolled for `vh` and becomes the CLI `admin`. Other loca
 ## Not Yet Supported
 
 :::callout[Know these limits before you rely on a Mac]{variant="warning"}
-- **No Finder mount.** The package does not include the FUSE bridge, so vaults are not mounted as a folder. Use the web console, the S3 gateway, or [`vh fs`](/cli/command-reference#vault-files). See [Filesystem Access](/vaults/filesystem-access).
+- **No Finder access yet.** The server never mounts vaults on macOS. Finder integration belongs to Vaulthalla Desktop, which is in development. Use the web console, the S3 gateway, or [`vh fs`](/cli/command-reference#vault-files). See [Filesystem Access](/vaults/filesystem-access#on-macos).
 - **Secrets are not hardware-sealed.** Linux seals vault master keys with a TPM. macOS currently stores them in `0600` files inside the service's `0700` state directory (the `file` secrets backend), protected by file permissions and FileVault, not by the Secure Enclave. Keep FileVault on. See [Encryption](/vaults/encryption#how-master-keys-are-protected).
 - **The package is not signed by Apple yet.** Opening it from Finder needs one manual approval. See [Installation](/macos/installation#open-the-package).
 - **`vh setup nginx`, `vh setup db` and `vh setup remote-db` are Linux commands.** On macOS the package sets up its own database, and HTTPS goes through Caddy.
@@ -83,7 +83,7 @@ Shared behavior is documented once; the differences that matter to an operator a
 | Service account | `vaulthalla` | `_vaulthalla` (hidden; the alias `vaulthalla` resolves to it) |
 | Database | Distribution PostgreSQL, set up by the package | Bundled PostgreSQL 16, private to Vaulthalla |
 | Key protection | TPM2 (hardware or managed software TPM) | `file` backend (permissions + FileVault) |
-| Filesystem mount | FUSE at `/mnt/vaulthalla` | None in the package |
+| Filesystem mount | FUSE at `/mnt/vaulthalla` | None: the server never mounts (Finder access belongs to Vaulthalla Desktop) |
 | HTTPS | `vh setup nginx` | `vh setup caddy` |
 | CLI access | `vaulthalla` group + UID binding | `_vaulthalla` group; the installing user is enrolled automatically |
 

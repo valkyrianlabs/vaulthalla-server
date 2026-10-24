@@ -128,7 +128,7 @@ More in [Serve Vaulthalla With Caddy](/https/caddy#troubleshooting).
 
 ## Health Shows Warnings You Didn't Expect
 
-`vh status` on macOS always shows `mount: disabled -> disabled` and `secrets backend: file (development: no hardware binding)`. Both are expected for the macOS package: there is no Finder mount, and master keys are protected by permissions and FileVault rather than hardware. They are reported, not hidden, so that health never claims more than the host provides.
+`vh status` on macOS always shows `mount: disabled -> disabled` and `secrets backend: file (development: no hardware binding)`. Both are expected for the macOS package: the server never mounts vaults (Finder access belongs to Vaulthalla Desktop), and master keys are protected by permissions and FileVault rather than hardware. They are reported, not hidden, so that health never claims more than the host provides.
 
 ## Start Over Without Losing Data
 

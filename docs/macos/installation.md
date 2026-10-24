@@ -112,11 +112,11 @@ sudo launchctl print system/sh.vaulthalla.server | grep -E 'state|pid'
 `vh status` reports the daemon, database and storage health. Two lines are expected on macOS and are reported as they are rather than hidden:
 
 ```text
-  mount: disabled -> disabled
+  mount: disabled -> disabled — the server never mounts on this platform; Finder access is provided by Vaulthalla Desktop
   secrets backend: file (development: no hardware binding)
 ```
 
-The package has no Finder mount, and master keys are protected by file permissions rather than hardware. See [Vaulthalla On macOS](/macos#not-yet-supported).
+The server never mounts vaults on macOS (Finder access belongs to Vaulthalla Desktop, in development), and master keys are protected by file permissions rather than hardware. See [Vaulthalla On macOS](/macos#not-yet-supported).
 
 ## What Gets Installed Where
 

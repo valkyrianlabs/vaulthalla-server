@@ -136,8 +136,16 @@ pqxx_dep = declare_dependency(
 )
 
 # The kernel FUSE bridge (core/src/fuse/{Bridge,Reply,Resolver,Service}.cpp): required on Linux, which the Debian
-# package ships; off by default elsewhere (macOS serves vaults over HTTP/WS/CLI until a Finder backend is chosen).
-fuse_dep = dependency('fuse3', required: get_option('fuse').enable_auto_if(host_os == 'linux').disable_auto_if(host_os != 'linux'))
+# package ships. macOS never builds it (#262): the server never mounts there, and Finder access belongs to Vaulthalla
+# Desktop's File Provider (vaulthalla/desktop#1); fuse/unbuilt/Service.cpp is the darwin service.
+if host_os == 'darwin'
+    if get_option('fuse').enabled()
+        error('-Dfuse=enabled is not supported on macOS: the server never mounts there (Finder access is Vaulthalla Desktop\'s File Provider, vaulthalla/desktop#1); leave -Dfuse at auto')
+    endif
+    fuse_dep = dependency('', required: false)
+else
+    fuse_dep = dependency('fuse3', required: get_option('fuse').enable_auto_if(host_os == 'linux').disable_auto_if(host_os != 'linux'))
+endif
 fuse_bridge_sources = ['fuse/Bridge.cpp', 'fuse/Reply.cpp', 'fuse/Resolver.cpp', 'fuse/Service.cpp']
 
 deps = [
@@ -161,16 +169,6 @@ deps = [
 ]
 
 if fuse_dep.found()
-    if host_os == 'darwin'
-        # macFUSE's libfuse3 defaults to its Darwin extensions (fuse_darwin_attr instead of struct stat); the vanilla
-        # libfuse API keeps the bridge identical to Linux's. Weak-linked: macFUSE is an optional, operator-installed
-        # integration, and the daemon must start and serve storage without it (platform::mount::fuseRuntimeAvailable).
-        fuse_dep = declare_dependency(
-            dependencies: fuse_dep.partial_dependency(compile_args: true, includes: true),
-            compile_args: ['-DFUSE_DARWIN_ENABLE_EXTENSIONS=0'],
-            link_args: ['-L' + fuse_dep.get_variable(pkgconfig: 'libdir'), '-Wl,-weak-lfuse3'],
-        )
-    endif
     deps += fuse_dep
 endif
 

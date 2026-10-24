@@ -315,7 +315,7 @@ mount:
   mode: multiuser   # disabled | service_private | multiuser
 ```
 
-`mount.mode` records which filesystem mount the operator intends. When the key is absent the build's default applies: `multiuser` on Linux (the FUSE mount at `/mnt/vaulthalla`), and no mount on the macOS package, which doesn't include the FUSE bridge. `service_private` is reserved for a mount only the service account uses and is not shipped. Any other value stops the daemon at startup rather than becoming a different mode. `vh status` shows the configured mode and the actual state side by side. See [Filesystem Access](/vaults/filesystem-access).
+`mount.mode` records which filesystem mount the operator intends. When the key is absent the build's default applies: `multiuser` on Linux (the FUSE mount at `/mnt/vaulthalla`), and `disabled` on macOS, where the server never mounts vaults (Finder access belongs to Vaulthalla Desktop). `service_private` is reserved for a mount only the service account uses and no platform provides it. On macOS, `multiuser` and `service_private` run as `disabled` with a `[config]` warning in the log rather than stopping the daemon. Any other value stops the daemon at startup rather than becoming a different mode. `vh status` shows the configured mode and the actual state side by side. See [Filesystem Access](/vaults/filesystem-access).
 
 ## Development Settings
 

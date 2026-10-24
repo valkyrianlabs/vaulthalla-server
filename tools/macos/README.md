@@ -1,7 +1,8 @@
 # macOS build bootstrap (Apple Silicon + Homebrew)
 
 Development builds and unit tests of `core/` on macOS. Packages and releases stay Linux-only (Debian, `vlr`);
-FUSE is off by default on darwin and TPM2/uuid are Linux-only deps, so none of them are installed here.
+macOS never builds the FUSE bridge (Finder access is Vaulthalla Desktop's) and TPM2/uuid are Linux-only deps, so none
+of them are installed here.
 
 | File | What it does |
 |---|---|

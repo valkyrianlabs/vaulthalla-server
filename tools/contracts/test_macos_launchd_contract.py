@@ -413,7 +413,7 @@ class Provisioning(unittest.TestCase):
         for mounted in (PATHS["MOUNT_DIR"], PATHS["STATE_DIR"] + "/nested mount"):
             with self.subTest(mounted=mounted):
                 (Path(self.tmp.name) / "mounts").write_text(
-                    f"vaulthalla@macfuse0 on {self.path(mounted)} (macfuse, nodev, nosuid, synchronous)\n")
+                    f"/dev/disk5s1 on {self.path(mounted)} (apfs, local, nodev, nosuid, journaled, mounted by alice)\n")
                 r = self.run_provision("--remove", "--purge", apply=True)
                 self.assertEqual(r.returncode, 1, r.stdout)
                 self.assertIn("is mounted", r.stderr)

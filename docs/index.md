@@ -113,8 +113,8 @@ Request budgets and price budgets that stop S3/R2 work before it runs up a bill.
 | Linux (amd64, APT): daemon, web console, CLI, FUSE mount, TPM2 sealing, nginx integration | Production |
 | Encrypted local and S3/R2 vaults, sync, cost controls, RBAC, sharing, S3 gateway | Production, on both platforms |
 | macOS (Apple Silicon): installer package, Homebrew cask, launchd, bundled PostgreSQL, `vh setup caddy` | New in this release |
-| `vh fs` file transfers over the CLI socket | Interim file access on macOS until a mount ships |
+| `vh fs` file transfers over the CLI socket | Production, on both platforms (the CLI file path on macOS) |
 | Hardware video encoding in `vaulthalla-preview-media` | Detected, not yet validated on real GPUs |
-| macOS Finder mount, Secure Enclave key sealing, an Apple-signed package | Planned, not shipped |
+| Finder access on macOS through Vaulthalla Desktop (the server never mounts on macOS), Secure Enclave key sealing, an Apple-signed package | Planned, not shipped |
 
 These docs describe what the installed product does. Anything planned is labeled as such.

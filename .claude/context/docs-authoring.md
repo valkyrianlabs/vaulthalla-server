@@ -48,7 +48,8 @@ filesystem access, encryption, secrets/key export, backup & recovery, S3 gateway
   user enrolled and bound to `admin`). Uninstall: `sudo "/Library/Application Support/Vaulthalla/uninstall.sh"
   [--purge]`. Paths under `/Library/Application Support/Vaulthalla/{state,run,postgres,caddy,config.yaml}`, logs in
   `/Library/Logs/Vaulthalla`.
-- macOS limits (never promise otherwise until shipped and accepted): no FUSE/Finder mount (`vh fs`, console, S3 gateway
+- macOS limits (never promise otherwise until shipped and accepted): no FUSE/Finder mount, ever, from the server (#262;
+  Finder access belongs to Vaulthalla Desktop's File Provider, in development; `vh fs`, console, S3 gateway
   instead), secrets backend `file` (0600 files + FileVault, not Secure Enclave), unsigned package, no
   `vh setup db|remote-db|nginx`. HTTPS on macOS is `vh setup caddy` (internal CA with X.509 name constraints, Let's
   Encrypt, `--dns-cloudflare`, `--cert/--key`); on Linux `vh setup nginx`.

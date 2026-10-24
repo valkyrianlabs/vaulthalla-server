@@ -255,7 +255,7 @@ def main() -> int:
     p.add_argument("--keep", action="store_true", help=f"keep {ROOT} (kept anyway on failure)")
     p.add_argument("--mount-mode", choices=["disabled", "service_private", "multiuser"],
                    help="write mount.mode into the instance's config.yaml")
-    p.add_argument("--expect-mount-state", help="health must report this mount_state (e.g. disabled, unavailable)")
+    p.add_argument("--expect-mount-state", help="health must report this mount_state (macOS: always disabled)")
     ok_all = asyncio.run(run(p.parse_args()))
     print("storage smoke:", "PASSED" if ok_all else "FAILED")
     return 0 if ok_all else 1

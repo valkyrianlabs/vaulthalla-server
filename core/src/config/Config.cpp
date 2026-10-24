@@ -1,6 +1,7 @@
 #include "config/Config.hpp"
 #include "config/config_yaml.hpp"
 #include "config/util.hpp"
+#include "platform/Mount.hpp"
 
 #include <cstdlib>
 #include <algorithm>
@@ -141,6 +142,15 @@ Config& Config::operator=(Config&&) noexcept = default;
             if (const auto& m = cfg.mount.mode;
                 !m.empty() && m != "disabled" && m != "service_private" && m != "multiuser")
                 throw std::invalid_argument("mount.mode must be disabled|service_private|multiuser, got '" + m + "'");
+            // A platform with no FUSE runtime never mounts (macOS, #262). A mode left in config.yaml by an earlier
+            // build is not a reason to refuse to start either: it runs as disabled, and the warning says why.
+            if (const auto m = cfg.mount.mode;
+                !m.empty() && m != "disabled" && !platform::mount::fuseRuntimeAvailable()) {
+                noteDeprecation(deprecations, "mount.mode '" + m + "' is not available: this platform never mounts "
+                                              "vaults (Finder access is provided by Vaulthalla Desktop); running "
+                                              "with mount.mode: disabled. Set it to disabled or remove it");
+                cfg.mount.mode = "disabled";
+            }
         }
 
         if (auto node = root["logging"]) YAML::convert<LoggingConfig>::decode(node, cfg.logging);

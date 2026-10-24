@@ -11,14 +11,15 @@ struct fuse_session;  // libfuse's opaque session handle
 
 namespace vh::fuse {
 
-// The kernel FUSE bridge is a build capability: Linux always builds it; a build without it (`-Dfuse=disabled`,
-// the macOS default until a Finder backend is chosen) serves vaults over HTTP/WS/CLI only.
-// makeService() returns nullptr there and kernelBridgeBuilt() is false; nothing ever claims a mount.
+// The kernel FUSE bridge is a build capability: Linux always builds it; a build without it (macOS, always: the
+// server never mounts there and Finder access is Vaulthalla Desktop's, #262; or `-Dfuse=disabled`) serves vaults
+// over HTTP/WS/CLI/S3 only. makeService() returns nullptr there and kernelBridgeBuilt() is false; nothing ever
+// claims a mount.
 [[nodiscard]] bool kernelBridgeBuilt() noexcept;
 
 class Service;
 // The FUSE service for the configured mount mode, or nullptr when nothing is to be mounted: the mode is disabled,
-// this build/platform can't provide it, or the FUSE library isn't installed. mountStatus() says which; nothing ever
+// this build/platform can't provide it, or the platform has no FUSE runtime. mountStatus() says which; nothing ever
 // mounts a different mode than the one configured.
 [[nodiscard]] std::shared_ptr<Service> makeService();
 
