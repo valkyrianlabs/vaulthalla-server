@@ -9,6 +9,7 @@
 #include "fs/model/File.hpp"
 #include "fs/model/Path.hpp"
 #include "rbac/Actor.hpp"
+#include "rbac/fs/Visibility.hpp"
 #include "rbac/role/Vault.hpp"
 #include "vault/model/Vault.hpp"
 #include "identities/User.hpp"
@@ -589,13 +590,38 @@ json Storage::listDir(const json& payload, const std::shared_ptr<Session>& sessi
     const auto entry = runtime::Deps::get().fsCache->getEntry(fusePath);
     if (!entry) throw vh::ops::NotFound("No entry found for path: " + fusePath.string());
 
-    const auto entries = runtime::Deps::get().fsCache->listDir(entry->id, false);
+    // Deny means hidden (#170, #255): children the caller cannot Lookup are left out, as FUSE readdir leaves them out
+    // (one rule, rbac::fs::visibility), and so is everything they hold from the folder totals.
+    const auto& user = session->user;
+    const auto entries = vh::rbac::fs::visibility::visibleChildren(user, entry,
+                                                                   runtime::Deps::get().fsCache->listDir(entry->id));
+    json entryJson = *entry;
+    json files = entries;
+    if (!vh::rbac::fs::visibility::seesWholeSubtree(user, entry)) {
+        std::uintmax_t listedSize = 0;
+        for (std::size_t i = 0; i < entries.size(); ++i) {
+            const auto& child = entries[i];
+            if (!child->isDirectory()) {
+                listedSize += child->size_bytes;
+                continue;
+            }
+            const auto& dir = static_cast<const vh::fs::model::Directory&>(*child);
+            const auto totals = vh::rbac::fs::visibility::visibleTotals(user, child).value_or(
+                vh::rbac::fs::visibility::Totals{.size_bytes = dir.size_bytes, .file_count = dir.file_count,
+                                                 .subdirectory_count = dir.subdirectory_count});
+            files[i]["size_bytes"] = totals.size_bytes;
+            files[i]["file_count"] = totals.file_count;
+            files[i]["subdirectory_count"] = totals.subdirectory_count;
+            listedSize += totals.size_bytes;
+        }
+        entryJson["size_bytes"] = listedSize;
+    }
 
     return {
         {"vault", engine->vault->name},
         {"path", path.string()},
-        {"entry", *entry},
-        {"files", entries}
+        {"entry", std::move(entryJson)},
+        {"files", std::move(files)}
     };
 } catch (...) {
     rethrowRequestErrorsAsInvalid();

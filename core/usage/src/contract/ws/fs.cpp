@@ -47,7 +47,9 @@ std::vector<WsCommandUsage> fsCommands() {
 
     out.push_back({
         .command = "fs.dir.list",
-        .description = "List a directory (List on the path).",
+        .description = "List a directory (List on the path). Children the caller cannot Lookup are left out, as "
+                       "in FUSE readdir, and so is what they hold from child folders' size and counts and the "
+                       "folder's own size.",
         .payload = {vaultId(), vaultPath("path").opt().desc("Defaults to \"/\".")},
         .response = fsListResponse(),
         .refusal_codes = fsReadRefusals(),

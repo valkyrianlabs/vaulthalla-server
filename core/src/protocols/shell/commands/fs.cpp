@@ -18,6 +18,7 @@
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
 #include "platform/Durable.hpp"
+#include "rbac/fs/Visibility.hpp"
 #include "rbac/permission/vault/Filesystem.hpp"
 #include "runtime/Deps.hpp"
 #include "share/Scope.hpp"
@@ -40,6 +41,7 @@
 #include <ctime>
 #include <filesystem>
 #include <string>
+#include <utility>
 #include <vector>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -185,7 +187,11 @@ CommandResult handleLs(const CommandCall& call) {
     }
 
     std::vector<std::shared_ptr<fs::model::Entry>> entries;
-    if (target.entry->isDirectory()) entries = runtime::Deps::get().fsCache->listDir(target.entry->id, false);
+    // Children the caller cannot Lookup are left out, as in FUSE readdir and ws fs.dir.list (#170, #255).
+    if (target.entry->isDirectory()) {
+        auto children = runtime::Deps::get().fsCache->listDir(target.entry->id, false);
+        entries = ::vh::rbac::fs::visibility::visibleChildren(call.user, target.entry, std::move(children));
+    }
     else entries.push_back(target.entry);
     std::ranges::sort(entries, [](const auto& a, const auto& b) {
         if (a->isDirectory() != b->isDirectory()) return a->isDirectory();

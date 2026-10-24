@@ -403,10 +403,11 @@ bool Evaluator::overridesMayAffectListing(
     const permission::vault::Filesystem& perms,
     const std::filesystem::path& directory
 ) {
+    // Any enabled override that could match the directory or anything below it. It used to count only a match on the
+    // directory or a literal prefix below it, so a wildcard reaching in from above ("/**/secret.txt",
+    // "/docs/*/secret.txt" for /docs/a) skipped the per-entry filter and listed what Lookup hides (#255).
     return std::ranges::any_of(perms.overrides, [&](const permission::Override& o) {
-        return o.enabled &&
-               (glob::Matcher::matches(o.pattern, directory) ||
-                glob::Matcher::requiresTraversalThrough(o.pattern, directory));
+        return o.enabled && glob::Matcher::mayMatchWithin(o.pattern, directory);
     });
 }
 

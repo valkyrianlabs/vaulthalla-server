@@ -12,6 +12,13 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   (falling back to `fsync` only where the file system refuses it). A contract test rejects raw `fsync` outside
   `core/src/platform/` (#205).
 
+## Security
+- ws `fs.dir.list` / `fs.list` (outside share mode) and `vh fs ls` leave out children the caller cannot Lookup, through
+  the filter FUSE readdir uses (`rbac::fs::visibility`), and recount a listed child folder's size and counts and the
+  folder's own size without them (#255).
+- The listing fast path no longer skips the per-entry Lookup when a wildcard override reaches the folder from above
+  (`glob::Matcher::mayMatchWithin`) or when the base permissions hide one kind of entry.
+
 ## Test tooling
 - `make test` runs the derive suites: `vh_fake_derive_helper` is built without sanitizers (an ASan helper aborted
   under the Runner's RLIMIT_AS cap), so DeriveRunnerTest and DeriveQueueDbTest pass in the sanitized build-itest.
