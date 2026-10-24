@@ -2,6 +2,7 @@
 # Copies the private (licensed) icons web/src imports from the local icon store into web/public/icons.
 # The store is not in the repository: $VAULTHALLA_WEB_ICON_SRC, default ~/vaulthalla-web-icons.
 # Used by CI (.github/actions/sync_web_icons) and by the release web build (build_release_payload.sh).
+# Bash 3.2 compatible (macOS): no associative arrays, no mapfile.
 set -euo pipefail
 
 WEB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -13,23 +14,29 @@ if [[ ! -d "$WEB_DIR/src" ]]; then
   exit 0
 fi
 
-declare -A ICON_ALIAS_DIR=(
-  ["fa-regular"]="fa/regular"
-  ["fa-light"]="fa/light"
-  ["fa-duotone"]="fa/duotone"
-  ["fa-duotone-regular"]="fa/duotone-regular"
-  ["fa-brands"]="fa/brands"
-)
+# Import alias -> its directory under the icon store and web/public/icons (empty: unsupported).
+ICON_ALIASES="fa-regular fa-light fa-duotone fa-duotone-regular fa-brands"
+icon_alias_dir() {
+  case "$1" in
+    fa-regular) echo "fa/regular" ;;
+    fa-light) echo "fa/light" ;;
+    fa-duotone) echo "fa/duotone" ;;
+    fa-duotone-regular) echo "fa/duotone-regular" ;;
+    fa-brands) echo "fa/brands" ;;
+    *) echo "" ;;
+  esac
+}
 
 echo "[icons] scanning web source for consumed private icons"
-mapfile -t ICON_IMPORTS < <(
-  grep -RhoE "['\"]@/(fa-regular|fa-light|fa-duotone|fa-duotone-regular|fa-brands)/[^'\"]+\.svg['\"]" "$WEB_DIR/src" \
+# One import per line, sorted and unique; no match is not an error.
+ICON_IMPORTS="$(
+  { grep -RhoE "['\"]@/(fa-regular|fa-light|fa-duotone|fa-duotone-regular|fa-brands)/[^'\"]+\.svg['\"]" "$WEB_DIR/src" || true; } \
     | tr -d "'\"" \
     | sed 's#^@/##' \
     | sort -u
-)
+)"
 
-if [[ "${#ICON_IMPORTS[@]}" -eq 0 ]]; then
+if [[ -z "$ICON_IMPORTS" ]]; then
   echo "[icons] no private icon imports found under $WEB_DIR/src"
   exit 0
 fi
@@ -39,17 +46,18 @@ if [[ ! -d "$ICON_SRC" ]]; then
   exit 1
 fi
 
-for alias in "${!ICON_ALIAS_DIR[@]}"; do
-  rm -rf "${ICON_DST:?}/${ICON_ALIAS_DIR[$alias]}"
-  mkdir -p "$ICON_DST/${ICON_ALIAS_DIR[$alias]}"
+for alias in $ICON_ALIASES; do
+  icon_dir="$(icon_alias_dir "$alias")"
+  rm -rf "${ICON_DST:?}/${icon_dir:?}"
+  mkdir -p "$ICON_DST/$icon_dir"
 done
 
 missing=0
 copied=0
-for import_path in "${ICON_IMPORTS[@]}"; do
+while IFS= read -r import_path; do
   alias="${import_path%%/*}"
   icon_rel="${import_path#*/}"
-  icon_dir="${ICON_ALIAS_DIR[$alias]:-}"
+  icon_dir="$(icon_alias_dir "$alias")"
   if [[ -z "$icon_dir" ]]; then
     echo "[icons] ERROR: unsupported private icon alias: $alias" >&2
     missing=1
@@ -65,7 +73,7 @@ for import_path in "${ICON_IMPORTS[@]}"; do
   mkdir -p "$(dirname "$dst_file")"
   cp "$src_file" "$dst_file"
   copied=$((copied + 1))
-done
+done <<<"$ICON_IMPORTS"
 
 if [[ "$missing" -ne 0 ]]; then
   echo "[icons] ERROR: one or more consumed private icons are missing" >&2

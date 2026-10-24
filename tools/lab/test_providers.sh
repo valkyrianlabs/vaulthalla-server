@@ -25,13 +25,19 @@ while [[ $# -gt 0 ]]; do
 done
 
 run_root() {
-  # Run a root shell script locally or on --host; the script is passed on stdin.
-  if [[ -n "$host" ]]; then ssh -o BatchMode=yes "$host" 'sudo bash -s' ; else sudo bash -s; fi
+  # Run a root shell script locally or on --host; the script is passed on stdin. The script is for a Linux lab host
+  # (getent, GNU stat, the vaulthalla group): from another OS (a Mac), only --host works.
+  if [[ -n "$host" ]]; then ssh -o BatchMode=yes "$host" 'sudo bash -s'; return; fi
+  if [[ "$(uname -s)" != Linux ]]; then
+    echo "test_providers.sh: the scaffold lives on a Linux lab host; from $(uname -s) pass --host <ssh-alias>" >&2
+    exit 2
+  fi
+  sudo bash -s
 }
 
 install_scaffold() {
   local example_b64
-  example_b64="$(base64 -w0 "$EXAMPLE")"
+  example_b64="$(base64 <"$EXAMPLE" | tr -d '\n')"
   run_root <<REMOTE
 set -euo pipefail
 group=root

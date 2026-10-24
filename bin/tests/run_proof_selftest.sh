@@ -23,12 +23,13 @@ BUILD_DIR="$REPO_ROOT/build-itest"
 BIN=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --build-dir) BUILD_DIR="$(realpath -m "$2")"; PASS_ARGS+=(--build-dir "$BUILD_DIR"); shift 2 ;;
-    --bin) BIN="$(realpath -m "$2")"; PASS_ARGS+=(--bin "$BIN"); shift 2 ;;
+    --build-dir) BUILD_DIR="$(itest_abspath "$2")"; PASS_ARGS+=(--build-dir "$BUILD_DIR"); shift 2 ;;
+    --bin) BIN="$(itest_abspath "$2")"; PASS_ARGS+=(--bin "$BIN"); shift 2 ;;
     -h|--help) sed -n '2,13p' "$0"; exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
 done
+itest_require_linux
 
 if [[ -z "$BIN" ]]; then
   itest_ensure_build "$BUILD_DIR" core/vh_integration_tests core/vh_fs_actor core/vh_migrate

@@ -24,6 +24,100 @@ ITEST_BUILD_OPTS=(
 itest_log() { printf '[%s] %s\n' "$ITEST_TAG" "$*"; }
 itest_die() { printf '[%s] error: %s\n' "$ITEST_TAG" "$*" >&2; exit 1; }
 
+# itest_abspath PATH: what GNU `realpath -m PATH` prints, in pure bash (BSD/macOS realpath has no -m; bash 3.2 safe):
+# absolute and normalized, symlinks resolved component by component while the path exists (so `..` after a symlink
+# leaves its target, as in realpath), the rest taken as written; nothing has to exist.
+itest_abspath() {
+  local path="$1" resolved="" part k=0 hops=0
+  local -a todo target
+  [[ "$path" == /* ]] || path="$PWD/$path"
+  IFS=/ read -r -a todo <<<"$path"
+  while [[ $k -lt ${#todo[@]} ]]; do
+    part="${todo[$k]}"
+    k=$((k + 1))
+    case "$part" in
+      ''|.) continue ;;
+      ..) resolved="${resolved%/*}"; continue ;;
+    esac
+    if [[ -L "$resolved/$part" && $hops -lt 40 ]]; then
+      hops=$((hops + 1))
+      path="$(readlink "$resolved/$part")"
+      [[ "$path" != /* ]] || resolved=""
+      IFS=/ read -r -a target <<<"$path"
+      todo=("${target[@]}" "${todo[@]:$k}")
+      k=0
+      continue
+    fi
+    resolved="$resolved/$part"
+  done
+  printf '%s\n' "${resolved:-/}"
+}
+
+# Tier A proofs (make itest) run a private instance on a kernel FUSE mount and inspect it through /proc, fusectl and
+# sudo; none of that exists on macOS yet. Fails there with what to run instead.
+itest_require_linux() {
+  [[ "$(uname -s)" == Darwin ]] || return 0
+  itest_die "Tier A proofs (make itest) need Linux: a kernel FUSE mount, /proc and sudo for the private instance, \
+which macOS doesn't have yet (#199). On this Mac run the DB-backed unit suites instead: make test"
+}
+
+# macOS `make test` (bin/tests/run_unit.sh): no vh_harness host setup and no sudo. The build environment comes from
+# tools/macos/env.sh (Homebrew openssl@3 first, postgresql@16 on PATH, as .github/workflows/macos.yml builds) and
+# the database is a disposable per-run cluster from tools/macos/test-db.sh.
+itest_preflight_darwin() {
+  local c missing=() hint="brew bundle --file tools/macos/Brewfile (or tools/macos/bootstrap.sh)"
+  command -v brew >/dev/null || itest_die "Homebrew (brew) is missing; the macOS build uses its packages ($hint)"
+  # shellcheck source=tools/macos/env.sh
+  . "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)/tools/macos/env.sh" \
+    || itest_die "tools/macos/env.sh failed"
+  for c in meson ninja initdb pg_ctl psql python3 openssl; do command -v "$c" >/dev/null || missing+=("$c"); done
+  [[ ${#missing[@]} -eq 0 ]] || itest_die "missing tools: ${missing[*]} ($hint)"
+}
+
+# itest_exec_darwin TIMEOUT_SECS PASS_VARS CONFIG WORKDIR CMD...: the macOS counterpart of run_unit.sh's
+# `env -i ... setpriv ... timeout` line. stdin carries the `export VH_TEST_DB_*=...` lines tools/macos/test-db.sh
+# printed (so the password never reaches an argv); the command gets a clean environment of PATH, HOME, TMPDIR, LANG,
+# VH_PATH_TO_CONFIG=CONFIG, those VH_TEST_DB_*, the variables named in the comma-separated PASS_VARS that are set (the
+# caller decides which, usually none), and /dev/null as stdin. Exits 124 on the timeout (TERM, then KILL 30 s later)
+# like timeout(1), 128+N on signal N.
+itest_exec_darwin() {
+  python3 -I -c '
+import os, shlex, subprocess, sys
+
+timeout_s, pass_vars, config, workdir, *cmd = sys.argv[1:]
+env = {k: os.environ[k] for k in ("PATH", "HOME", "TMPDIR") if os.environ.get(k)}
+env["LANG"] = "C.UTF-8"
+# libc++ annotates std::vector for ASan; libpqxx (Homebrew, not instrumented) grows pqxx::params vectors the inlined,
+# instrumented code also touches, which reports container-overflow on valid accesses. libstdc++ has no such checks
+# unless _GLIBCXX_SANITIZE_VECTOR is defined (it is not), so this matches what the Linux run checks.
+env["ASAN_OPTIONS"] = "detect_container_overflow=0"
+for line in sys.stdin.read().splitlines():
+    words = shlex.split(line)
+    if len(words) == 2 and words[0] == "export" and words[1].startswith("VH_TEST_DB_") and "=" in words[1]:
+        key, _, value = words[1].partition("=")
+        env[key] = value
+env.update({k: os.environ[k] for k in pass_vars.split(",") if k and os.environ.get(k)})
+env["VH_PATH_TO_CONFIG"] = config
+
+proc = subprocess.Popen(cmd, cwd=workdir, env=env, stdin=subprocess.DEVNULL)
+try:
+    rc = proc.wait(timeout=int(timeout_s))
+except subprocess.TimeoutExpired:
+    print(f"timeout: {timeout_s}s reached; stopping the test binary", file=sys.stderr)
+    proc.terminate()
+    try:
+        proc.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+    sys.exit(124)
+except KeyboardInterrupt:
+    proc.wait()
+    sys.exit(130)
+sys.exit(128 - rc if rc < 0 else rc)
+' "$@"
+}
+
 # Checks the one-time setup without changing anything. $1 = "fuse" when the run mounts FUSE.
 itest_preflight() {
   local need_fuse="${1:-}" missing=()

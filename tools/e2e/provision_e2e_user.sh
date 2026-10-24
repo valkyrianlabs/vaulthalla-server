@@ -24,7 +24,7 @@ LOCAL_DEV_DB_NAME=""
 
 cleanup_tmp_files() {
   local file
-  for file in "${TMP_FILES[@]}"; do
+  for file in ${TMP_FILES[@]+"${TMP_FILES[@]}"}; do  # bash 3.2: an empty array is unbound under set -u
     if [[ -n "$file" ]]; then
       rm -f "$file"
     fi
@@ -385,6 +385,21 @@ new_e2e_password_hash() {
   printf '%s\n' "$password_hash"
 }
 
+# Sets the caller's password and password_hash from new_e2e_password_hash's two lines; exits when either is missing
+# (as the earlier `mapfile` + "${generated[1]}" did under set -u). A while-read loop: macOS's bash 3.2 has no mapfile.
+read_password_and_hash() {
+  local line n=0
+  password="" password_hash=""
+  while IFS= read -r line; do
+    n=$((n + 1))
+    if [[ "$n" -eq 1 ]]; then password="$line"; elif [[ "$n" -eq 2 ]]; then password_hash="$line"; fi
+  done < <(new_e2e_password_hash "$1")
+  if [[ -z "$password" || -z "$password_hash" ]]; then
+    echo "Could not generate the E2E password and its hash." >&2
+    exit 1
+  fi
+}
+
 provision_with_local_dev_db() {
   local_dev_db_seed_allowed || return 1
   command -v sudo >/dev/null 2>&1 || return 1
@@ -394,14 +409,11 @@ provision_with_local_dev_db() {
   fi
 
   local password password_file password_hash sql_file
-  local generated=()
   password_file="$(mktemp "$RESULT_DIR/e2e.password.XXXXXX")"
-  sql_file="$(mktemp "$RESULT_DIR/e2e.seed.XXXXXX.sql")"
+  sql_file="$(mktemp "$RESULT_DIR/e2e.seed.XXXXXX")"  # BSD mktemp randomizes only trailing X's
   TMP_FILES+=("$password_file" "$sql_file")
   chmod 0600 "$password_file" "$sql_file"
-  mapfile -t generated < <(new_e2e_password_hash "$password_file")
-  password="${generated[0]}"
-  password_hash="${generated[1]}"
+  read_password_and_hash "$password_file"
   write_seed_sql "$sql_file"
 
   psql_local_dev_db \
@@ -426,14 +438,11 @@ provision_with_test_db() {
   }
 
   local password password_file password_hash sql_file
-  local generated=()
   password_file="$(mktemp "$RESULT_DIR/e2e.password.XXXXXX")"
-  sql_file="$(mktemp "$RESULT_DIR/e2e.seed.XXXXXX.sql")"
+  sql_file="$(mktemp "$RESULT_DIR/e2e.seed.XXXXXX")"  # BSD mktemp randomizes only trailing X's
   TMP_FILES+=("$password_file" "$sql_file")
   chmod 0600 "$password_file" "$sql_file"
-  mapfile -t generated < <(new_e2e_password_hash "$password_file")
-  password="${generated[0]}"
-  password_hash="${generated[1]}"
+  read_password_and_hash "$password_file"
   write_seed_sql "$sql_file"
 
   psql_test_db \
