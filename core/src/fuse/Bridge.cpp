@@ -15,6 +15,7 @@
 #include "fs/cache/Registry.hpp"
 #include "fuse/Resolver.hpp"
 #include "fuse/WorkingCopies.hpp"
+#include "rbac/fs/Placement.hpp"
 #include "fs/model/Symlink.hpp"
 #include "fs/model/File.hpp"
 #include "db/Transactions.hpp"
@@ -670,6 +671,37 @@ void rename(const fuse_req_t req, const fuse_ino_t parent, const char* name, con
     if (flags & ~static_cast<unsigned int>(RENAME_NOREPLACE)) {
         replyError(req, timer, EINVAL);
         return;
+    }
+
+    // Into another folder (#256): the entry arrives there, so it needs what creating it there needs, Touch for a
+    // folder and Write for a file or symlink (mkdir/create/ws copy), with a create's answer when refused
+    // (resolver::deniedErrno on that parent: ENOENT when the caller cannot see it, EACCES when it can). A folder
+    // carries its contents, each checked the same way at its new path (EACCES: the destination folder is visible by
+    // then). A rename within its folder adds nothing there. Across vaults nothing moves (Filesystem::rename answers
+    // EXDEV): nothing to authorize.
+    if (newparent != parent) {
+        const auto destinationParent = cache->getEntry(newparent);
+        if (destinationParent && destinationParent->vault_id && resolved.entry &&
+            destinationParent->vault_id == resolved.entry->vault_id) {
+            const auto destination = Resolver::resolve({
+                .caller = "rename",
+                .fuseReq = req,
+                .parentIno = newparent,
+                .childName = newname,
+                .action = rbac::fs::placement::createAction(*resolved.entry),
+                .target = resolver::Target::Path
+            });
+
+            if (!destination.ok()) {
+                replyError(req, timer, destination.errnum);
+                return;
+            }
+
+            if (rbac::fs::placement::firstRefusedDescendant(resolved.user, resolved.entry, toPath)) {
+                replyError(req, timer, EACCES);
+                return;
+            }
+        }
     }
 
     // Without RENAME_NOREPLACE an existing destination is replaced (editors save by renaming a temp file over the

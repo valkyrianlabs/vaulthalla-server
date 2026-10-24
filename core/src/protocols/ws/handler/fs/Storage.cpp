@@ -9,6 +9,7 @@
 #include "fs/model/File.hpp"
 #include "fs/model/Path.hpp"
 #include "rbac/Actor.hpp"
+#include "rbac/fs/Placement.hpp"
 #include "rbac/fs/Visibility.hpp"
 #include "rbac/role/Vault.hpp"
 #include "vault/model/Vault.hpp"
@@ -376,6 +377,40 @@ json Storage::mkdir(const json& payload, const std::shared_ptr<Session>& session
 
 namespace {
 
+// The folder an entry at `path` (vault-relative) is in; "/" for a top-level entry.
+[[nodiscard]] std::filesystem::path parentFolder(const std::filesystem::path& path) {
+    auto normal = path.lexically_normal();
+    if (!normal.has_filename() && normal.has_relative_path()) normal = normal.parent_path();  // "/a/b/" -> "/a/b"
+    const auto parent = normal.parent_path();
+    return parent.empty() || parent == normal ? std::filesystem::path("/") : parent;
+}
+
+}
+
+// The rule fs.entry.copy applies to every entry it writes, and what fs.dir.create and an upload check: Touch for a
+// folder, Write for a file or symlink, judged at the new path, for the entry and (a folder) everything it carries. A
+// rename within the entry's own folder adds nothing to that folder, so the source's Move/Rename is enough there, as
+// before. Checked before the endpoints are looked up, so a refused caller learns nothing about the destination.
+void Storage::enforceCreateAtDestination(const std::shared_ptr<Session>& session,
+                                         const std::shared_ptr<Engine>& engine,
+                                         const std::filesystem::path& from,
+                                         const std::filesystem::path& to) {
+    if (parentFolder(from) == parentFolder(to)) return;
+
+    // A missing source is requireTransferEndpoints' not_found.
+    const auto source = runtime::Deps::get().fsCache->getEntry(engine->vaultPathToFusePath(from));
+    if (!source) return;
+
+    enforcePermission(session, engine, to, vh::rbac::fs::placement::createAction(*source),
+                      "Permission denied: User cannot create " + to.string() + " in the vault");
+    if (const auto refused = vh::rbac::fs::placement::firstRefusedDescendant(session->user, source,
+                                                                             engine->vaultPathToFusePath(to)))
+        throw vh::ops::Denied("Permission denied: User cannot create " +
+                              engine->fusePathToVaultPath(*refused).string() + " in the vault");
+}
+
+namespace {
+
 // A move/rename/copy whose source or destination folder is missing is a typed not_found for the console (the FUSE
 // equivalent is ENOENT), checked after the source permission so nothing is revealed to a caller without it. Before,
 // the engine threw an untyped "Failed to rename" error (found by the integration engine, tools/harness).
@@ -419,6 +454,7 @@ json Storage::move(const json& payload, const std::shared_ptr<Session>& session)
         permission::vault::FilesystemAction::Move,
         "Permission denied: User does not have move permission for the source path in the vault"
     );
+    enforceCreateAtDestination(session, engine, from, to);
     requireTransferEndpoints(engine, from, to);
 
     auto operation = startMutationOperation(engine, from, to, session->user->id, SyncOperation::Op::Move);
@@ -454,6 +490,7 @@ json Storage::rename(const json& payload, const std::shared_ptr<Session>& sessio
         permission::vault::FilesystemAction::Rename,
         "Permission denied: User does not have rename permission for the source path in the vault"
     );
+    enforceCreateAtDestination(session, engine, from, to);
     requireTransferEndpoints(engine, from, to);
 
     auto operation = startMutationOperation(engine, from, to, session->user->id, SyncOperation::Op::Rename);

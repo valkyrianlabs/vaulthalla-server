@@ -30,3 +30,9 @@ and the S3 gateway remain the ways to reach vault files on a Mac. Linux is uncha
   override whose pattern starts above the folder (such as `/**/secret.txt`), and every file for a role that can list
   folders but neither preview nor download files. Anyone who could see the names of entries they couldn't open no
   longer sees them.
+- **Moving something into a folder now needs permission to create it there.** Moving or renaming a file or folder into
+  another folder, in the web console, Desktop or the mounted filesystem, used to check only that you could move or
+  rename the source. It now also needs what creating it in the destination needs: upload for a file, create-folder
+  for a folder, and for a folder, the same for everything inside it. Refused moves change nothing; in the Linux mount
+  they fail with "permission denied" (or "no such file or directory" for a folder you can't see). Renaming within the
+  same folder works as before.

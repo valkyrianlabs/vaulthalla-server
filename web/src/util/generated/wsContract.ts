@@ -6,7 +6,7 @@
 export const WS_CONTRACT_VERSION = 2
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = 'e9abb13d7b5e7b19c949f4bcfa7eadae2009837dba075dfe6a313083bb72f1d5'
+export const WS_CONTRACT_HASH = '686e357625cb73a67b350e65eb9ed5e057a42c96013fa6e5215e5ca9d55af074'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
 export const WS_MODELS_HASH = '44c7dcf1d1dac4eb56c9b64deeeea8b2a5f1af6a6548399ea5ae4d9ca637d554'
@@ -3102,14 +3102,16 @@ export interface WsContract {
     response: { path: string }
   }
   /**
-   * Move an entry (Move on the source).
+   * Move an entry: Move on the source; into another folder also Write (files) or Touch (directories) at the
+   * destination, for the entry and everything it carries.
    */
   'fs.entry.move': {
     payload: { vault_id: number; from: string; to: string }
     response: { from: string; to: string }
   }
   /**
-   * Rename an entry (Rename on the source).
+   * Rename an entry: Rename on the source; into another folder also Write (files) or Touch (directories) at
+   * the destination, for the entry and everything it carries.
    */
   'fs.entry.rename': {
     payload: { vault_id: number; from: string; to: string }

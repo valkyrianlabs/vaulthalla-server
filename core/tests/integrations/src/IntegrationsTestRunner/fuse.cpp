@@ -881,6 +881,115 @@ namespace vh::test::integration {
         return builder.exec();
     }
 
+    // #256: rename(2) authorized Rename on the source (and Delete on a replaced target) but never the destination
+    // folder, so a user could move a file into a folder they may not write. Into another folder it now needs what a
+    // create there needs, answered like one (EACCES for a visible folder, ENOENT for a hidden one), and a folder
+    // carries its contents, each checked at its new path. A refused rename leaves everything where it was.
+    static TestStage testMoveIntoUnwritableFolder() {
+        auto builder = Builder::make({
+            .name = "Move Into Unwritable Folder",
+            .baseDir = "move_authz_seed"
+        });
+
+        builder.makeUser({ .userNameSeed = "user/create/move_authz" });
+
+        builder.buildAssignVRole({
+            .subjectType = TargetSubject::User,
+            .templateName = role::Vault::PowerUser().name,
+            .roleNameSeed = "vault_role/create/move_authz",
+            .description = "Power user who may not create anything in locked/ nor upload into drop/",
+        });
+
+        const auto [ctx, subj] = builder.scenario();
+        const auto adminUid = *ctx.admin->state()->meta.linux_uid;
+        const auto base = fs::model::makeAbsolute(ctx.baseDir);
+
+        for (const auto* dir : {"locked", "open", "drop", "hidden", "folder"})
+            (void)mkdir_as(adminUid, ctx.base() / dir);
+        (void)write_as(adminUid, ctx.base() / "folder" / "f.txt", "carried\n");
+
+        for (const auto* perm : {"vault.fs.files.upload", "vault.fs.directories.touch"})
+            for (const auto* dir : {"locked", "hidden"})
+                builder.makeOverride({.subjectType = TargetSubject::User, .permName = perm,
+                                      .effect = permission::OverrideOpt::DENY, .pattern = base / dir / "**"});
+        builder.makeOverride({.subjectType = TargetSubject::User, .permName = "vault.fs.directories.list",
+                              .effect = permission::OverrideOpt::DENY, .pattern = base / "hidden"});
+        builder.makeOverride({.subjectType = TargetSubject::User, .permName = "vault.fs.files.upload",
+                              .effect = permission::OverrideOpt::DENY, .pattern = base / "drop" / "**"});
+
+        builder.makeTestCase({
+            .name = "FUSE write a file to move",
+            .path = "fuse/write",
+            .must_contain = {"OK write"},
+            .fn = [=]{ return write_as(subj.uid, ctx.base() / "mine.txt", "mine\n"); }
+        });
+
+        builder.makeTestCase({
+            .name = "FUSE deny: rename into a folder the caller may not write",
+            .path = "fuse/rename",
+            .expect_exit = EACCES,
+            .fn = [=]{ return mv_as(subj.uid, ctx.base() / "mine.txt", ctx.base() / "locked" / "mine.txt"); }
+        });
+
+        builder.makeTestCase({
+            .name = "FUSE refused rename left the file where it was",
+            .path = "fuse/read",
+            .must_contain = {"mine"},
+            .fn = [=]{ return read_as(subj.uid, ctx.base() / "mine.txt"); }
+        });
+
+        builder.makeTestCase({
+            .name = "FUSE refused rename put nothing in the locked folder",
+            .path = "fuse/ls",
+            .must_not_contain = {"mine.txt\n"},
+            .fn = [=]{ return ls_as(adminUid, ctx.base() / "locked"); }
+        });
+
+        builder.makeTestCase({
+            .name = "FUSE deny: rename into a folder the caller cannot see is ENOENT",
+            .path = "fuse/rename",
+            .expect_exit = ENOENT,
+            .fn = [=]{ return mv_as(subj.uid, ctx.base() / "mine.txt", ctx.base() / "hidden" / "mine.txt"); }
+        });
+
+        builder.makeTestCase({
+            .name = "FUSE deny: a folder carries a file into a folder without upload",
+            .path = "fuse/rename",
+            .expect_exit = EACCES,
+            .fn = [=]{ return mv_as(subj.uid, ctx.base() / "folder", ctx.base() / "drop" / "folder"); }
+        });
+
+        builder.makeTestCase({
+            .name = "FUSE refused folder rename left its content where it was",
+            .path = "fuse/read",
+            .must_contain = {"carried"},
+            .fn = [=]{ return read_as(subj.uid, ctx.base() / "folder" / "f.txt"); }
+        });
+
+        builder.makeTestCase({
+            .name = "FUSE allow: rename within the same folder",
+            .path = "fuse/rename",
+            .must_contain = {"OK mv"},
+            .fn = [=]{ return mv_as(subj.uid, ctx.base() / "mine.txt", ctx.base() / "mine2.txt"); }
+        });
+
+        builder.makeTestCase({
+            .name = "FUSE allow: rename into a writable folder",
+            .path = "fuse/rename",
+            .must_contain = {"OK mv"},
+            .fn = [=]{ return mv_as(subj.uid, ctx.base() / "mine2.txt", ctx.base() / "open" / "mine.txt"); }
+        });
+
+        builder.makeTestCase({
+            .name = "FUSE moved file reads back in its new folder",
+            .path = "fuse/read",
+            .must_contain = {"mine"},
+            .fn = [=]{ return read_as(subj.uid, ctx.base() / "open" / "mine.txt"); }
+        });
+
+        return builder.exec();
+    }
+
     static TestStage testVaultPermOverridesListFilter() {
         auto builder = Builder::make({
             .name = "Vault Permission Overrides List Filter",
@@ -1175,12 +1284,12 @@ namespace vh::test::integration {
         for (const auto& s : always_run) run(s);
 
         if (geteuid() != 0) {
-            std::cout << "FUSE: not root, skipping the 12 root-only RBAC scenarios (bin/tests/run_proof.sh runs them)"
+            std::cout << "FUSE: not root, skipping the 13 root-only RBAC scenarios (bin/tests/run_proof.sh runs them)"
                       << std::endl;
             return;
         }
 
-        constexpr std::array<Scenario, 12> root_only {{
+        constexpr std::array<Scenario, 13> root_only {{
             {"Root Listing Super Admin", testFUSERootListingSuperAdmin},
             {"Root Listing Unprivileged User", testFUSERootListingUnprivilegedUser},
             {"Permissions Allow", testFUSEAllow},
@@ -1188,6 +1297,7 @@ namespace vh::test::integration {
             {"Vault Permission Overrides Allow", testVaultPermOverridesAllow},
             {"Vault Permission Overrides Deny", testVaultPermOverridesDeny},
             {"Rename Over Needs Delete", testRenameOverNeedsDelete},
+            {"Move Into Unwritable Folder", testMoveIntoUnwritableFolder},
             {"Vault Permission Overrides List Filter", testVaultPermOverridesListFilter},
             {"List Visibility Parity", testListVisibilityParity},
             {"Group Permissions", testFUSEGroupPermissions},
