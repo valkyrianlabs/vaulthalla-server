@@ -33,7 +33,8 @@ export interface IDependencyHealth {
   shell_usage_manager: boolean
   http_cache_stats: boolean
   fuse_session: boolean
-  // Configured mount mode: "disabled" | "service_private" | "multiuser"; absent from older daemons.
+  // Configured mount mode: "disabled" | "service_private" | "multiuser" (macOS: always "disabled"); absent from older
+  // daemons.
   fuse_mount?: string
   // What the mount actually is: "disabled" | "mounted" | "not_mounted" | "unavailable" | "unsupported".
   mount_state?: string

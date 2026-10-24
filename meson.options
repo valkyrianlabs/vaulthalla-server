@@ -67,7 +67,7 @@ option(
     'fuse',
     type: 'feature',
     value: 'auto',
-    description: 'Build the kernel FUSE bridge (libfuse3). auto: required on Linux, off elsewhere (macOS serves vaults over HTTP/WS/CLI until a Finder backend is chosen)'
+    description: 'Build the kernel FUSE bridge (libfuse3). auto: required on Linux; never built on macOS (the server does not mount there; Finder access is Vaulthalla Desktop), where enabled is an error'
 )
 
 option(

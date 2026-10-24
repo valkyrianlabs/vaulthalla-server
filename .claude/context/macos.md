@@ -1,7 +1,7 @@
 # macOS port (roadmap #199)
 
-Started 2026-10-12. Goal: a native Apple Silicon daemon with the same `vh`/web/`vh setup` experience. FUSE is
-optional on macOS (#200); Milestones A (native core) and B (working storage) don't wait on Finder or app design.
+Started 2026-10-12. Goal: a native Apple Silicon daemon with the same `vh`/web/`vh setup` experience. The server has
+no FUSE on macOS; Finder is Vaulthalla Desktop's File Provider (vaulthalla/desktop#1, see below).
 Decisions awaiting the maintainer are `needs:review` issues #200–#206 on the Roadmap's macOS view.
 
 ## Layout
@@ -16,32 +16,36 @@ Decisions awaiting the maintainer are `needs:review` issues #200–#206 on the R
     `F_FULLFSYNC` on macOS, whose plain `fsync` stops at the drive cache; #205, guarded by
     `tools/contracts/test_durable_sync_contract.py`). Measured on Apple SSD: about 4.7 ms per 4 KiB flush and about
     21 ms per 64 MiB, against 0.04 and 1.7 ms for plain `fsync`.
-- `-Dfuse` (auto): Linux requires libfuse3; macOS builds without the kernel bridge. `fuse::makeService()` is
-  nullptr there and the runtime registers no FUSE service. Inode numbers outside the bridge are `vh::fs::Inode`.
+- `-Dfuse` (auto): Linux requires libfuse3; macOS never builds the kernel bridge (see below). `fuse::makeService()`
+  is nullptr there and the runtime registers no FUSE service. Inode numbers outside the bridge are `vh::fs::Inode`.
 - Secrets: `crypto::secrets::KeyProvider` (shared) over `platform::sealer`. Linux: TPM2 (`platform/linux/TpmSealer.cpp`,
   same blobs as before). macOS: a **development-only** `file` backend, reported as `file`. Production backend: #201
   (Secure Enclave spike from a user session passed; the pre-login LaunchDaemon test needs maintainer approval).
 - Paths: macOS defaults from meson (`/Library/Application Support/Vaulthalla/{config.yaml,state}`,
   `/Library/Logs/Vaulthalla`, `/var/run/vaulthalla`, mount `/Library/Application Support/Vaulthalla/mount`), per #199/#216.
 
-## FUSE on macOS (macOS 27 audit: #213)
+## No server mount on macOS (#262)
 
-**Direction (2026-10-24): macFUSE is ruled out in any form, including the kext, its FSKit backend, its SDK and a cask
-dependency.** The replacement mount architecture is pending a maintainer decision. The macFUSE build path described
-below is slated for removal.
+**The server never mounts anything on macOS.** macFUSE is ruled out in every form (kext, its FSKit backend, its SDK,
+a cask dependency); its build path, mount modes and proof tooling from #228/#213 were removed in #262 (history stays
+in git: `tools/macos/fuse-probe/` lived there). Finder integration belongs to **Vaulthalla Desktop**, through a File
+Provider extension that talks to the daemon over the mTLS device listener under server-side RBAC
+(vaulthalla/desktop#1). The server gets no macOS filesystem presentation logic, and Desktop hosts no server features.
 
-- `-Dfuse=enabled` builds the real bridge against macFUSE ≥ 5.4.0 (libfuse 3.18.2, `fuse3.pc`); default stays off.
-  macOS compiles with `FUSE_DARWIN_ENABLE_EXTENSIONS=0` (vanilla libfuse API, same code as Linux). macFUSE maps
-  `RENAME_NOREPLACE/EXCHANGE` to Darwin's `RENAME_EXCL/SWAP`. Mount lifecycle is `platform/Mount.hpp`.
-- FSKit backend: forwards euid/egid on 27 but keeps its own name/attr cache with no invalidation (macfuse#1207) and
-  can't mount as root/headless (per-user extension). Not used on the server path. Kernel backend: needs Reduced
-  Security on Apple Silicon; supports `novncache`/`noattrcache`; mounts without a session once approved.
-- Modes (`mount.mode` in config.yaml, read-only; default per build): `disabled` (macOS default) | `service_private`
-  (kext, no allow_other, `nobrowse`) | `multiuser` (Linux, always; macOS only after gate K2). `fuse::makeService()`
-  creates no service unless the configured mode is supported here and libfuse is present (weak-linked on macOS);
-  `fuse::mountStatus()` reports configured mode, actual state, backend and isolation to health and `vh status`.
-  Proof tooling: `tools/macos/fuse-probe/`.
-- macFUSE's license forbids bundling or automated installation with commercial software without permission.
+- Build: on darwin `core/meson.build` never looks for `fuse3`; the bridge sources are left out and
+  `fuse/unbuilt/Service.cpp` is the service. `-Dfuse=auto|disabled` is silent; `-Dfuse=enabled` fails at setup with
+  a pointer to Desktop. Linux is unchanged (libfuse3 required, same dependency expression).
+- `platform/darwin/Mount.cpp` is policy only: `defaultMode()`/`supportsMode()` = `disabled`,
+  `fuseRuntimeAvailable()` = false. The lifecycle half of `platform/Mount.hpp` (options, detach, mount table,
+  connection abort) is called only by the bridge, so only Linux implements it.
+- `mount.mode` (config.yaml, read-only): the spelling check is shared (a typo refuses to start everywhere). Where the
+  platform has no FUSE runtime, `service_private`/`multiuser` are **read as `disabled` with a `[config]` warning**
+  rather than refusing to start: the default there is already `disabled`, and storage must keep serving
+  (`ConfigSettingsTest.MountModeThisPlatformNeverMountsRunsDisabled`). Linux keeps every known mode as written.
+- Health / `vh status` / console: `mount: disabled -> disabled — the server never mounts on this platform; Finder
+  access is provided by Vaulthalla Desktop` (backend `none`, isolation `not_applicable`); health is not degraded by
+  it. The console's Runtime page shows the same note.
+- `vh fs ls|get|put` stays the CLI file path on macOS (still "don't grow it"; see architecture.md).
 
 ## System service (launchd, #216/#202)
 
@@ -71,8 +75,8 @@ down` (disposable cluster on :54329, never the brew service). CI: `.github/workf
 `make test` also works here (#217): no sudo or harness bootstrap; it sources `env.sh`, builds `build-itest` with the
 Linux options (ASan/UBSan, `-Dintegration_tests=true`, only `vh_unit_tests` and the fake derive helper compiled) and
 runs the binary against its own `test-db.sh` cluster (per-run `$TMPDIR/vh-unit-pg-<pid>`, free port), torn down on
-exit. It sets `ASAN_OPTIONS=detect_container_overflow=0` (see Gotchas). `make itest` refuses (no FUSE/proc Tier A on
-macOS yet) and points at `make test`. Open follow-up: `tools/harness/vhh/platform.py` (Tier B: mount table, /proc
+exit. It sets `ASAN_OPTIONS=detect_container_overflow=0` (see Gotchas). `make itest` refuses (Tier A is FUSE and /proc proofs,
+Linux only) and points at `make test`. Open follow-up: `tools/harness/vhh/platform.py` (Tier B: mount table, /proc
 introspection, unmount, account helpers) is still Linux-only, and so are `_validate_private`'s /proc checks.
 
 ## Gotchas found by the port (keep these in mind on Linux too)
@@ -97,5 +101,6 @@ introspection, unmount, account helpers) is still Linux-only, and so are `_valid
   with clang sanitizers; that warning is harmless on Apple ld.
 - Meson debug builds on libc++ enable libc++ hardening, which traps on UB that GCC builds tolerate (it found the
   unset-optional read in `CommandBook::renderHelp`).
-- HTTP uploads stage through the kernel mount (`/mnt/vaulthalla/...`); with FUSE disabled they need another staging
-  location (#213, needs review). Linux keeps staging through FUSE.
+- HTTP uploads stage through the kernel mount (`/mnt/vaulthalla/...`) on Linux; macOS has no mount and stages in a
+  private directory under the state root (`-Dhttp_upload_staging=private`, the darwin default). Linux keeps staging
+  through FUSE.

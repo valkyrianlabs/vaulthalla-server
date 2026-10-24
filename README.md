@@ -92,9 +92,9 @@ Privacy & Security once. Guide: [Install On macOS](https://vaulthalla.io/docs/ma
 | | Feature |
 | --- | --- |
 | **Production** | Linux package, systemd services, FUSE mount, TPM2 key sealing, nginx/Certbot integration; encrypted local and S3/R2 vaults; sync (cache, sync, mirror); request and price budgets; RBAC; sharing; S3 gateway; web console; `vh` |
-| **New** | macOS: installer package and Homebrew cask, launchd services, bundled PostgreSQL, `vh setup caddy`; `vh fs` for file access over the CLI (the macOS file path until a mount ships) |
+| **New** | macOS: installer package and Homebrew cask, launchd services, bundled PostgreSQL, `vh setup caddy`; `vh fs` for file access over the CLI (the CLI file path on macOS, where the server never mounts) |
 | **Experimental** | Hardware video encoding in the optional `vaulthalla-preview-media` package (software encoding is the tested path) |
-| **Planned** | A Finder mount on macOS, Secure Enclave key sealing on macOS (macOS keys are currently protected by file permissions and FileVault), an Apple-signed package, a native Mac app |
+| **Planned** | Finder access on macOS through Vaulthalla Desktop's File Provider (the server itself never mounts on macOS), Secure Enclave key sealing on macOS (macOS keys are currently protected by file permissions and FileVault), an Apple-signed package, a native Mac app |
 
 The full list of platform differences is in [Platform Comparison](https://vaulthalla.io/docs/reference/platforms).
 

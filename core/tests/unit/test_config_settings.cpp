@@ -5,8 +5,10 @@
 #include "config/Config.hpp"
 #include "config/Registry.hpp"
 #include "config/config_yaml.hpp"
+#include "fuse/Service.hpp"
 #include "ops/Config.hpp"
 #include "ops/Error.hpp"
+#include "platform/Mount.hpp"
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
@@ -132,6 +134,70 @@ TEST_F(ConfigSettingsTest, InvalidLegacyValueIsReportedNotFatal) {
 TEST_F(ConfigSettingsTest, InvalidNewValueRefusesToLoad) {
     EXPECT_THROW((void)load("vaults:\n  s3:\n    default_remote_sync_strategy: smart\n"), std::invalid_argument);
     EXPECT_THROW((void)load("vaults:\n  s3:\n    default_remote_conflict_policy: overwrite\n"), std::invalid_argument);
+}
+
+// mount.mode (#262). A typo refuses to start on every platform. A platform with no FUSE runtime (macOS) never mounts:
+// a mode an earlier build accepted there is read as disabled with a warning, never a reason to refuse to start. Where
+// FUSE exists (Linux) every known mode is kept as written, and fuse::mountStatus() reports what can't be mounted.
+TEST_F(ConfigSettingsTest, MountModeTypoRefusesToLoad) {
+    EXPECT_THROW((void)load("mount:\n  mode: multi-user\n"), std::invalid_argument);
+}
+
+TEST_F(ConfigSettingsTest, MountModeThisPlatformNeverMountsRunsDisabled) {
+    for (const std::string mode : {"service_private", "multiuser"}) {
+        SCOPED_TRACE(mode);
+        std::vector<std::string> deprecations;
+        config::Config cfg;
+        ASSERT_NO_THROW(cfg = load("mount:\n  mode: " + mode + "\n", &deprecations));
+        if (platform::mount::fuseRuntimeAvailable()) {
+            EXPECT_EQ(cfg.mount.mode, mode);
+            EXPECT_TRUE(deprecations.empty());
+        } else {
+            EXPECT_EQ(cfg.mount.mode, "disabled");
+            ASSERT_EQ(deprecations.size(), 1u);
+            EXPECT_TRUE(mentions(deprecations, "mount.mode '" + mode + "' is not available"));
+            EXPECT_TRUE(mentions(deprecations, "Vaulthalla Desktop"));
+        }
+    }
+    std::vector<std::string> deprecations;
+    EXPECT_EQ(load("mount:\n  mode: disabled\n", &deprecations).mount.mode, "disabled");
+    EXPECT_TRUE(deprecations.empty());
+}
+
+// The platform seam: macOS provides only disabled, Linux only multiuser (as it always has), neither service_private.
+TEST(MountPlatform, ModesMatchTheFuseRuntime) {
+    EXPECT_TRUE(platform::mount::supportsMode(platform::mount::defaultMode()));
+    EXPECT_FALSE(platform::mount::supportsMode("service_private"));
+    if (platform::mount::fuseRuntimeAvailable()) {
+        EXPECT_EQ(platform::mount::defaultMode(), "multiuser");
+    } else {
+        EXPECT_EQ(platform::mount::defaultMode(), "disabled");
+        EXPECT_FALSE(platform::mount::supportsMode("multiuser"));
+    }
+}
+
+// Health and `vh status` where the server never mounts (macOS): disabled, saying where Finder access comes from,
+// whatever config.yaml asked for. Linux mounts; its status is proven by make itest.
+TEST_F(ConfigSettingsTest, MountStatusWhereTheServerNeverMounts) {
+    if (platform::mount::fuseRuntimeAvailable()) GTEST_SKIP() << "this platform mounts; make itest proves its status";
+    EXPECT_FALSE(fuse::kernelBridgeBuilt());
+    EXPECT_EQ(fuse::makeService(), nullptr);
+    struct Restore {
+        config::Config saved;
+        ~Restore() { config::Registry::set(saved); }
+    } restore{config::Registry::get()};
+    for (const std::string yaml : {"dev:\n  enabled: false\n", "mount:\n  mode: disabled\n",
+                                   "mount:\n  mode: service_private\n", "mount:\n  mode: multiuser\n"}) {
+        SCOPED_TRACE(yaml);
+        config::Registry::set(load(yaml));
+        const auto status = fuse::mountStatus();
+        EXPECT_EQ(status.configuredMode, "disabled");
+        EXPECT_EQ(status.state, "disabled");
+        EXPECT_EQ(status.backend, "none");
+        EXPECT_EQ(status.isolation, "not_applicable");
+        EXPECT_NE(status.detail.find("Finder access is provided by Vaulthalla Desktop"), std::string::npos)
+            << status.detail;
+    }
 }
 
 // What the console edits and Config::save writes back: the new keys only, so a save migrates an old file.

@@ -54,11 +54,11 @@ itest_abspath() {
 }
 
 # Tier A proofs (make itest) run a private instance on a kernel FUSE mount and inspect it through /proc, fusectl and
-# sudo; none of that exists on macOS yet. Fails there with what to run instead.
+# sudo; none of that exists on macOS, where the server never mounts (#262). Fails there with what to run instead.
 itest_require_linux() {
   [[ "$(uname -s)" == Darwin ]] || return 0
   itest_die "Tier A proofs (make itest) need Linux: a kernel FUSE mount, /proc and sudo for the private instance, \
-which macOS doesn't have yet (#199). On this Mac run the DB-backed unit suites instead: make test"
+which macOS doesn't have (the server never mounts there, #262). On this Mac run the DB-backed unit suites instead: make test"
 }
 
 # macOS `make test` (bin/tests/run_unit.sh): no vh_harness host setup and no sudo. The build environment comes from
