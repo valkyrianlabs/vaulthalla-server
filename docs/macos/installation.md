@@ -30,7 +30,7 @@ Homebrew asks for your password and installs the package with macOS's `installer
 :::
 
 :::tab[Installer package]{value="pkg"}
-Download `vaulthalla-<version>-arm64.pkg` (and its `.sha256`) from the [GitHub releases](https://github.com/vaulthalla/vaulthalla/releases), check it, and install it from the command line:
+Download `vaulthalla-<version>-arm64.pkg` (and its `.sha256`) from the [GitHub releases](https://github.com/vaulthalla/server/releases), check it, and install it from the command line:
 
 ```bash
 shasum -a 256 -c vaulthalla-<version>-arm64.pkg.sha256

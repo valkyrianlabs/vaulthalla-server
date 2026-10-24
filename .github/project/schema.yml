@@ -23,7 +23,7 @@
 
 version: 1
 owner: vaulthalla
-repo: vaulthalla/vaulthalla
+repo: vaulthalla/server
 project: 4  # production board; board.py refuses to mutate it without --production
 
 # Org-level issue types (managed in org settings; `apply` only checks that they exist).

@@ -1,11 +1,11 @@
 ![Vaulthalla - The Final Cloud](https://media.vaulthalla.io/Vaulthalla_%20The%20Final%20Cloud.png)
 
-[![build](https://img.shields.io/github/actions/workflow/status/vaulthalla/vaulthalla/build_and_test.yml?label=build)](https://github.com/vaulthalla/vaulthalla/actions)
-[![release](https://img.shields.io/github/v/release/vaulthalla/vaulthalla?display_name=tag&label=release&cacheSeconds=3600)](https://github.com/vaulthalla/vaulthalla/releases)
-[![license](https://img.shields.io/github/license/vaulthalla/vaulthalla?v=2)](https://github.com/vaulthalla/vaulthalla/blob/main/LICENSE)
+[![build](https://img.shields.io/github/actions/workflow/status/vaulthalla/server/build_and_test.yml?label=build)](https://github.com/vaulthalla/server/actions)
+[![release](https://img.shields.io/github/v/release/vaulthalla/server?display_name=tag&label=release&cacheSeconds=3600)](https://github.com/vaulthalla/server/releases)
+[![license](https://img.shields.io/github/license/vaulthalla/server?v=2)](https://github.com/vaulthalla/server/blob/main/LICENSE)
 ![Linux](https://img.shields.io/badge/Linux-amd64-A81D33?logo=debian&logoColor=white)
 ![macOS](https://img.shields.io/badge/macOS-Apple%20Silicon-000000?logo=apple&logoColor=white)
-[![AES-256-GCM/NI](https://img.shields.io/badge/AES--256--GCM%2FNI-encrypted-cyan)](https://github.com/vaulthalla/vaulthalla)
+[![AES-256-GCM/NI](https://img.shields.io/badge/AES--256--GCM%2FNI-encrypted-cyan)](https://github.com/vaulthalla/server)
 
 # Vaulthalla: The Final Cloud
 
@@ -47,7 +47,7 @@ the services. Upgrades arrive through `apt upgrade`. Guide: [Install On Linux](h
 brew install --cask vaulthalla/tap/vaulthalla
 ```
 
-Or download `vaulthalla-<version>-arm64.pkg` from the [releases](https://github.com/vaulthalla/vaulthalla/releases) and
+Or download `vaulthalla-<version>-arm64.pkg` from the [releases](https://github.com/vaulthalla/server/releases) and
 run `sudo installer -pkg vaulthalla-<version>-arm64.pkg -target /`. The package is self-contained (it bundles
 PostgreSQL, Node and Caddy), sets up a hidden `_vaulthalla` service account and its LaunchDaemons, and enrolls you as
 the CLI administrator. It is not signed by Apple yet: opened from Finder it needs **Open Anyway** in System Settings →

@@ -1,5 +1,5 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
-Source: https://github.com/vaulthalla/vaulthalla-core
+Source: https://github.com/vaulthalla/server
 Upstream-Name: Vaulthalla
 Upstream-Contact: Cooper Larson <cooper@valkyrianlabs.com>
 Comment:
