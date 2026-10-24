@@ -12,7 +12,10 @@ Decisions awaiting the maintainer are `needs:review` issues #200–#206 on the R
   `FileTime.hpp` (field names differ).
   - `Waker`, `process::disableCoreDumps`, `fd::*` (CLOEXEC, SIGPIPE), `PeerCredentials`, `accounts::*`
     (group membership, first human uid 1000|501, add-to-group command), `child::*` (converter runner),
-    `staged::*` (O_TMPFILE), `sealer::*` (secrets).
+    `staged::*` (O_TMPFILE), `sealer::*` (secrets), `durable::sync` (every durability flush: `fsync` on Linux,
+    `F_FULLFSYNC` on macOS, whose plain `fsync` stops at the drive cache; #205, guarded by
+    `tools/contracts/test_durable_sync_contract.py`). Measured on Apple SSD: about 4.7 ms per 4 KiB flush and about
+    21 ms per 64 MiB, against 0.04 and 1.7 ms for plain `fsync`.
 - `-Dfuse` (auto): Linux requires libfuse3; macOS builds without the kernel bridge. `fuse::makeService()` is
   nullptr there and the runtime registers no FUSE service. Inode numbers outside the bridge are `vh::fs::Inode`.
 - Secrets: `crypto::secrets::KeyProvider` (shared) over `platform::sealer`. Linux: TPM2 (`platform/linux/TpmSealer.cpp`,
@@ -22,6 +25,10 @@ Decisions awaiting the maintainer are `needs:review` issues #200–#206 on the R
   `/Library/Logs/Vaulthalla`, `/var/run/vaulthalla`, mount `/Library/Application Support/Vaulthalla/mount`), per #199/#216.
 
 ## FUSE on macOS (macOS 27 audit: #213)
+
+**Direction (2026-10-24): macFUSE is ruled out in any form, including the kext, its FSKit backend, its SDK and a cask
+dependency.** The replacement mount architecture is pending a maintainer decision. The macFUSE build path described
+below is slated for removal.
 
 - `-Dfuse=enabled` builds the real bridge against macFUSE ≥ 5.4.0 (libfuse 3.18.2, `fuse3.pc`); default stays off.
   macOS compiles with `FUSE_DARWIN_ENABLE_EXTENSIONS=0` (vanilla libfuse API, same code as Linux). macFUSE maps
@@ -61,6 +68,13 @@ libpqxx), then `source tools/macos/env.sh && meson setup build-macos -Dbuild_uni
 build-macos`. DB-backed tests: `eval "$(tools/macos/test-db.sh up)"; meson test -C build-macos; tools/macos/test-db.sh
 down` (disposable cluster on :54329, never the brew service). CI: `.github/workflows/macos.yml` (hosted `xcode-27`: macOS 27 public preview; `macos-26` is the fallback).
 
+`make test` also works here (#217): no sudo or harness bootstrap; it sources `env.sh`, builds `build-itest` with the
+Linux options (ASan/UBSan, `-Dintegration_tests=true`, only `vh_unit_tests` and the fake derive helper compiled) and
+runs the binary against its own `test-db.sh` cluster (per-run `$TMPDIR/vh-unit-pg-<pid>`, free port), torn down on
+exit. It sets `ASAN_OPTIONS=detect_container_overflow=0` (see Gotchas). `make itest` refuses (no FUSE/proc Tier A on
+macOS yet) and points at `make test`. Open follow-up: `tools/harness/vhh/platform.py` (Tier B: mount table, /proc
+introspection, unmount, account helpers) is still Linux-only, and so are `_validate_private`'s /proc checks.
+
 ## Gotchas found by the port (keep these in mind on Linux too)
 
 - **libpqxx `row[name]` is `[[gnu::pure]]`.** clang treats pure functions as non-throwing, so `try { row["x"] }
@@ -75,6 +89,12 @@ down` (disposable cluster on :54329, never the brew service). CI: `.github/workf
 - The generated `paths.h` shadows the system `<paths.h>` on macOS (both are found as `<paths.h>`). It works because
   the build dir comes first; renaming it is a cleanup worth doing.
 - Never put the repo root on `-I`: APFS is case-insensitive and `VERSION` answers `#include <version>`.
+- ASan + libc++ reports `container-overflow` on valid `pqxx::params` appends: libc++ annotates `std::vector`, and the
+  uninstrumented Homebrew libpqxx grows the same vectors. Run sanitized tests with `detect_container_overflow=0`
+  (Linux's libstdc++ doesn't annotate vectors without `_GLIBCXX_SANITIZE_VECTOR`, so nothing is lost relative to it).
+- Meson 1.8 with stale `-L` dirs in `LDFLAGS` fails `-Db_sanitize=…` at setup ("Linker … does not support sanitizer
+  arguments": its link probe uses `-Wl,-fatal_warnings`); `env.sh` drops those dirs. It also warns about `b_lundef`
+  with clang sanitizers; that warning is harmless on Apple ld.
 - Meson debug builds on libc++ enable libc++ hardening, which traps on UB that GCC builds tolerate (it found the
   unset-optional read in `CommandBook::renderHelp`).
 - HTTP uploads stage through the kernel mount (`/mnt/vaulthalla/...`); with FUSE disabled they need another staging

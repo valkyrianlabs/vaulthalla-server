@@ -268,11 +268,14 @@ if get_option('build_unit_tests')
         endif
     endforeach
 
-    # A protocol-speaking fake converter for the preview::derive::Runner tests (never installed).
+    # A protocol-speaking fake converter for the preview::derive::Runner tests (never installed). Never sanitized:
+    # the Runner caps helpers with RLIMIT_AS (the tests assert it), and an ASan helper aborts under that cap because
+    # it can't reserve its shadow memory (#224; make test builds with -Db_sanitize=address,undefined).
     fake_derive_helper = executable(
         'vh_fake_derive_helper',
         files(join_paths(core_root, 'tests/helpers/fake_derive_helper.cpp')),
         include_directories: include_directories('vendor'),
+        override_options: ['b_sanitize=none'],
         install: false,
     )
     unit_test_helper_targets = [fake_derive_helper]

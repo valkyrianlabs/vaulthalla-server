@@ -48,10 +48,10 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --build-dir) BUILD_DIR="$(realpath -m "$2")"; shift 2 ;;
-    --bin) BIN="$(realpath -m "$2")"; shift 2 ;;
-    --actor) ACTOR="$(realpath -m "$2")"; shift 2 ;;
-    --artifacts) ARTIFACTS="$(realpath -m "$2")"; shift 2 ;;
+    --build-dir) BUILD_DIR="$(itest_abspath "$2")"; shift 2 ;;
+    --bin) BIN="$(itest_abspath "$2")"; shift 2 ;;
+    --actor) ACTOR="$(itest_abspath "$2")"; shift 2 ;;
+    --artifacts) ARTIFACTS="$(itest_abspath "$2")"; shift 2 ;;
     --timeout) TIMEOUT_SECS="$2"; shift 2 ;;
     --keep-db) KEEP_DB=true; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -60,6 +60,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ "$TIMEOUT_SECS" =~ ^[0-9]+$ ]] || { echo "--timeout must be a number of seconds" >&2; exit 2; }
+itest_require_linux
 
 log() { printf '[proof] %s\n' "$*"; }
 die() { printf '[proof] error: %s\n' "$*" >&2; exit 1; }

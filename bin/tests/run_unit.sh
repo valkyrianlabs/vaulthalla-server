@@ -13,6 +13,10 @@
 # environment are exactly the variables in LIVE_ENV_VARS handed through: on a pipe (never argv, never a file), to the
 # test process only; without it the live tests skip. E.g.
 #   (eval "$(grep -E '^export VH_R2_ADMIN_' .bashrc)"; VH_LIVE_TESTS=1 bin/tests/run_unit.sh -- --gtest_filter='Live*')
+#
+# macOS: no host setup and no sudo. The build environment is tools/macos/env.sh and the database a disposable cluster
+# of the run's own (tools/macos/test-db.sh in a per-run directory on a free port), always removed afterwards
+# (--keep-db leaves it running). The live-test opt-in works the same way.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -27,7 +31,7 @@ TIMEOUT_SECS="${VH_UNIT_TIMEOUT:-3600}"
 GTEST_ARGS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --build-dir) BUILD_DIR="$(realpath -m "$2")"; shift 2 ;;
+    --build-dir) BUILD_DIR="$(itest_abspath "$2")"; shift 2 ;;
     --keep-db) KEEP_DB=true; shift ;;
     --) shift; GTEST_ARGS=("$@"); break ;;
     -h|--help) sed -n '2,9p' "$0"; exit 0 ;;
@@ -35,7 +39,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-itest_preflight
+if [[ "$(uname -s)" == Darwin ]]; then itest_preflight_darwin; else itest_preflight; fi
 itest_log "building vh_unit_tests in $BUILD_DIR"
 itest_ensure_build "$BUILD_DIR" core/vh_unit_tests core/vh_fake_derive_helper  # the derive suites spawn the fake helper
 BIN="$BUILD_DIR/core/vh_unit_tests"
@@ -44,9 +48,19 @@ BIN="$BUILD_DIR/core/vh_unit_tests"
 RUN_ID="$(date -u +%Y%m%dt%H%M%S)_$$"
 DB_NAME="vh_harness_unit_${RUN_ID}"
 DB_CREATED=false
+PG_DIR=""  # macOS: the per-run cluster's directory, set before tools/macos/test-db.sh starts it
 cleanup() {
   local rc=$?
   trap - EXIT INT TERM
+  if [[ -n "$PG_DIR" ]]; then
+    if [[ "$KEEP_DB" == true ]]; then
+      itest_log "keeping the cluster (--keep-db); remove it with: VH_TEST_PG_DIR=$PG_DIR tools/macos/test-db.sh down"
+    elif VH_TEST_PG_DIR="$PG_DIR" "$REPO_ROOT/tools/macos/test-db.sh" down 2>/dev/null; then
+      itest_log "test cluster removed: $PG_DIR"
+    else
+      itest_log "error: could not remove the test cluster in $PG_DIR"; rc=1
+    fi
+  fi
   if [[ "$DB_CREATED" == true ]]; then
     if [[ "$KEEP_DB" == true ]]; then
       itest_log "keeping $DB_NAME (--keep-db); drop it with: sudo -u postgres dropdb --force $DB_NAME"
@@ -75,6 +89,26 @@ live_env_exports() {
   done
   return 0
 }
+
+if [[ "$(uname -s)" == Darwin ]]; then
+  # A per-run directory and port, so a cluster someone started by hand (tools/macos/test-db.sh up) is never reused
+  # or torn down. cleanup removes the directory, after a partial start too.
+  PG_DIR="${TMPDIR:-/tmp}"
+  PG_DIR="${PG_DIR%/}/vh-unit-pg-$$"
+  PG_PORT="${VH_TEST_PG_PORT:-$(python3 -I -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')}"
+  DB_EXPORTS="$(VH_TEST_PG_DIR="$PG_DIR" VH_TEST_PG_PORT="$PG_PORT" "$REPO_ROOT/tools/macos/test-db.sh" up)" \
+    || itest_die "could not start the test cluster (tools/macos/test-db.sh up)"
+  itest_log "test cluster 127.0.0.1:$PG_PORT in $PG_DIR; running $BIN ${GTEST_ARGS[*]-}"
+  # The live variables pass (from this environment, never argv) only with the opt-in, as on Linux.
+  PASS_VARS=""
+  if [[ "${VH_LIVE_TESTS:-}" == 1 ]]; then PASS_VARS="$(IFS=,; echo "${LIVE_ENV_VARS[*]}")"; fi
+  set +e
+  printf '%s\n' "$DB_EXPORTS" | itest_exec_darwin "$TIMEOUT_SECS" "$PASS_VARS" \
+    "$REPO_ROOT/deploy/config/config.yaml" "$(dirname "$BIN")" "$BIN" ${GTEST_ARGS[@]+"${GTEST_ARGS[@]}"}
+  rc=$?
+  set -e
+  exit "$rc"
+fi
 
 itest_create_db "$DB_NAME"
 DB_CREATED=true

@@ -6,6 +6,7 @@
 #include "fs/cache/Record.hpp"
 #include "fs/model/Path.hpp"
 #include "log/Registry.hpp"
+#include "platform/Durable.hpp"
 #include "runtime/Deps.hpp"
 #include "storage/Engine.hpp"
 #include "storage/GcmFileReader.hpp"
@@ -134,7 +135,7 @@ enum class RowState { Usable, Stale, ExpiredFailure };
 void fsyncDir(const std::filesystem::path& dir) {
     const int fd = ::open(dir.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     if (fd < 0) return;
-    (void)::fsync(fd);
+    (void)platform::durable::sync(fd);
     ::close(fd);
 }
 
@@ -394,7 +395,7 @@ Artifact Store::Writer::commit() {
     // size, header, GCM tag) and turns into a regeneration; the temp-file rename still keeps readers from ever seeing
     // a partial file.
     const bool durable = s.durability == Durability::Durable;
-    if (durable && ::fsync(s.fd) != 0) throw std::system_error(errno, std::generic_category(), "fsync derived artifact");
+    if (durable && platform::durable::sync(s.fd) != 0) throw std::system_error(errno, std::generic_category(), "fsync derived artifact");
     ::close(s.fd);
     s.fd = -1;
     std::fill(s.scratch.begin(), s.scratch.end(), uint8_t{0});

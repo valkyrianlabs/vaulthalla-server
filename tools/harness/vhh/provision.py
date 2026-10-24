@@ -104,14 +104,25 @@ class LocalCli:
         return output
 
 
+def _private_root(target: Target) -> Path:
+    """The run directory, canonical: exactly /tmp/vhh_<run_id> with no symlink below /tmp. /tmp itself is resolved
+    once (macOS: /private/tmp), so the run dir may be named through it; everything else is as strict as before, and
+    on Linux, where /tmp is a real directory, this is the plain `parent == /tmp and resolve() == root` check. Paths
+    are compared against the result, which is what Path.resolve() gives for anything beneath it. Raises ValueError."""
+    tmp = Path("/tmp").resolve()
+    root = Path(target.run_dir)
+    name = f"vhh_{target.run_id}"
+    if root.name != name or root.parent not in (Path("/tmp"), tmp) or root.resolve() != tmp / name:
+        raise ValueError
+    return tmp / name
+
+
 def _validate_private(target: Target) -> None:
     """Also bind the descriptor's socket and loopback ports to the validated daemon, not just a /tmp prefix."""
     try:
         if validate_target(target):
             raise ValueError
-        root = Path(target.run_dir)
-        if root.parent != Path("/tmp") or root.name != f"vhh_{target.run_id}" or root.resolve() != root:
-            raise ValueError
+        root = _private_root(target)
         if target.db_name != f"vh_harness_{target.run_id}".lower():
             raise ValueError
         proc = Path(f"/proc/{target.pid}")

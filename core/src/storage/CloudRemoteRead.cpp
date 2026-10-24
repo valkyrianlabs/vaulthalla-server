@@ -3,6 +3,7 @@
 
 #include "storage/CloudEngine.hpp"
 #include "sync/events/Subscriptions.hpp"
+#include "platform/Durable.hpp"
 #include "platform/StagedFile.hpp"
 
 #include "crypto/util/Gcm.hpp"
@@ -95,7 +96,7 @@ public:
     // (someone else stored the file meanwhile); the staged bytes are then discarded.
     bool publish() {
         if (::fchmod(fd_, 0600) < 0) throwErrnoAt(errno, "chmod", target_);
-        if (::fsync(fd_) < 0) throwErrnoAt(errno, "fsync", target_);
+        if (platform::durable::sync(fd_) < 0) throwErrnoAt(errno, "fsync", target_);
 
         int rc = 0;
         if (named_.empty()) {

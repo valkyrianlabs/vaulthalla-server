@@ -14,11 +14,15 @@ from pathlib import Path
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import textwrap
 import unittest
 
 SHELL = shutil.which("dash") or "/bin/sh"
+# The few cases that depend on the host being what the scripts run on (Debian: /proc/self/mountinfo, GNU stat), not
+# just on the stubs. The rest of the module runs anywhere, macOS included.
+LINUX_HOST = unittest.skipUnless(sys.platform.startswith("linux"), "needs a Linux host (/proc, GNU coreutils)")
 
 FAKE_PSQL = r"""#!/bin/sh
 # Fake psql: logs argv, answers the queries the maintainer scripts make, logs stdin SQL.
@@ -254,6 +258,7 @@ class PostinstDbBootstrapBehaviorTests(unittest.TestCase):
 
 
 class MountDetectionBehaviorTests(unittest.TestCase):
+    @LINUX_HOST  # reads the real /proc/self/mountinfo
     def test_is_mountpoint_uses_mountinfo_and_never_calls_mountpoint(self) -> None:
         for script in ("postinst", "postrm"):
             h = _Harness(script)
@@ -694,6 +699,7 @@ class PostinstOutputPolicyTests(unittest.TestCase):
         self.assertIn("SINK=/dev/null", result.stdout)
         self.assertEqual(target.read_text(encoding="utf-8"), "")
 
+    @LINUX_HOST  # the size check is GNU `stat -c %s`
     def test_package_log_rotates_when_large(self) -> None:
         self.package_log.write_text("old\n", encoding="utf-8")
         self._configure("PACKAGE_LOG_MAX_BYTES=1\nopen_package_log\n")

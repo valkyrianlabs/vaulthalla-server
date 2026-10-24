@@ -61,6 +61,14 @@ make test ARGS="--gtest_filter='RoleParity*'"           # or: bash bin/tests/run
 
 The tests run as you (not root), with the role's settings only in the test process's environment.
 
+On macOS, `make test` needs no host setup and no sudo (#217): it sources `tools/macos/env.sh`, builds the same
+`build-itest` options (ASan/UBSan) and runs `vh_unit_tests` against a cluster of its own (`tools/macos/test-db.sh up`
+in `$TMPDIR/vh-unit-pg-<pid>` on a free port, or `VH_TEST_PG_PORT`), removed on exit (`--keep-db` leaves it
+running), with `ASAN_OPTIONS=detect_container_overflow=0` (libc++ false positives, see macos.md). A cluster started
+by hand is never reused or torn down. `make itest` (and `run_proof*.sh`) refuses on
+macOS with a pointer to `make test`: Tier A needs a kernel FUSE mount, /proc and sudo. The test scripts stay bash 3.2
+compatible (`/bin/bash -n`); `itest_abspath` in `bin/tests/lib/itest.sh` replaces GNU `realpath -m`.
+
 CLI ↔ ws parity for families migrated to `core/ops/`:
 `--gtest_filter='*Parity*:OpsGroups*:AuthPasswordChange*'` (groups, roles, API keys, vaults and the accessible-vaults list, users, S3 gateway,
 pricing/config, sync conflicts). The whole binary takes ~7 minutes against a local DB; meson's test timeout is 30 minutes (#123). A parity case
@@ -142,8 +150,11 @@ never bind 36972 (port 0).
   test schema.
 - Tests that write identity or role rows with raw SQL must call `identities::manager().reconcile()` afterwards (the
   revision watcher does it in the daemon) or the canonical objects they read keep the old state.
-- Tests that run helpers under `RLIMIT_AS` (`DeriveRunnerTest`, the helper suites) need a **non-sanitized** build:
-  ASan reserves far more address space than the limit allows, so a sanitized helper can't start.
+- Helpers that run under `RLIMIT_AS` can't be sanitized: ASan reserves far more address space than the limit allows,
+  so a sanitized helper aborts at start. `vh_fake_derive_helper` is therefore always built with `b_sanitize=none`
+  (per-target override, honoured by meson 1.3 and 1.8), and `DeriveRunnerTest`/`DeriveQueueDbTest` pass in the
+  sanitized `build-itest` (`make test`; #224). The real preview helpers (`core/tools/preview-*`, the helper suites)
+  are still sanitized in such a build: run those suites from a non-sanitized one.
 - `bench_http_paths.cpp` holds `DISABLED_HttpBench*` benchmarks (256 MiB download TTFB/throughput/peak RSS, 192 MiB
   folder ZIP HEAD/TTFB/peak RSS, 4 concurrent downloads, 1 MiB range at 200 MiB, HEAD vs GET, 12 MP preview cold/warm, thumbnail generation). Run with
   a release build and the test DB env:
