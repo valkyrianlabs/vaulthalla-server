@@ -6,6 +6,7 @@
 #include "runtime/Deps.hpp"
 #include "log/Registry.hpp"
 #include "fs/cache/Registry.hpp"
+#include "platform/Durable.hpp"
 
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -67,7 +68,7 @@ namespace {
 void fsyncOpened(const std::filesystem::path& path, const int flags, const char* what) {
     const int fd = ::open(path.c_str(), flags | O_CLOEXEC);
     if (fd < 0) throwErrnoAt(errno, std::string("open for ") + what, path);
-    const int rc = ::fsync(fd);
+    const int rc = platform::durable::sync(fd);
     const int err = errno;
     ::close(fd);
     if (rc < 0) throwErrnoAt(err, what, path);
@@ -117,7 +118,7 @@ void writeFileExclusive(const std::filesystem::path& absPath, const std::span<co
         // An empty new inode has no data to flush (FUSE create, empty createFile): no fsync, as before these files
         // were created exclusively. Callers that need the name durable fsync the directory.
         if (!bytes.empty()) {
-            if (::fsync(fd) < 0) throwErrnoAt(errno, "fsync", absPath);
+            if (platform::durable::sync(fd) < 0) throwErrnoAt(errno, "fsync", absPath);
             ++exclusiveFsyncs;
         }
     } catch (...) {

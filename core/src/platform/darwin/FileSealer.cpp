@@ -1,4 +1,5 @@
 #include "platform/Sealer.hpp"
+#include "platform/Durable.hpp"
 #include "log/Registry.hpp"
 
 #include <atomic>
@@ -59,7 +60,7 @@ void seal(const std::filesystem::path& dir, const std::string& name, const std::
         }
         off += static_cast<std::size_t>(n);
     }
-    if (::fcntl(fd, F_FULLFSYNC) != 0 && ::fsync(fd) != 0) {
+    if (durable::sync(fd) != 0) {
         const int err = errno;
         ::close(fd);
         fail("fsync", tmp, err);

@@ -4,6 +4,7 @@
 #include "db/Transactions.hpp"
 #include "db/query/auth/RefreshToken.hpp"
 #include "log/Registry.hpp"
+#include "platform/Durable.hpp"
 
 #include <paths.h>
 #include <pqxx/pqxx>
@@ -68,7 +69,7 @@ void writePrivateFileAtomically(const std::filesystem::path& path, const std::st
     try {
         if (::fchmod(fd, 0600) != 0) throwErrno("chmod " + tmp.string());
         writeAll(fd, content, tmp);
-        if (::fsync(fd) != 0) throwErrno("fsync " + tmp.string());
+        if (platform::durable::sync(fd) != 0) throwErrno("fsync " + tmp.string());
     } catch (...) {
         ::close(fd);
         (void)::unlink(tmp.c_str());
@@ -85,7 +86,7 @@ void writePrivateFileAtomically(const std::filesystem::path& path, const std::st
         throwErrno("renaming " + tmp.string() + " to " + path.string());
     }
     if (const int dfd = ::open(dir.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC); dfd >= 0) {
-        (void)::fsync(dfd);
+        (void)platform::durable::sync(dfd);
         ::close(dfd);
     }
 }

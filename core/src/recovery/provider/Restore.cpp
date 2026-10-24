@@ -18,6 +18,7 @@
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
+#include "platform/Durable.hpp"
 #include "recovery/provider/Points.hpp"
 #include "recovery/provider/Versions.hpp"
 #include "runtime/Deps.hpp"
@@ -268,7 +269,7 @@ public:
         }
     }
     void sync() {
-        if (fd_ >= 0 && ::fsync(fd_) < 0) throw std::system_error(errno, std::generic_category(), "fsync " + path_.string());
+        if (fd_ >= 0 && platform::durable::sync(fd_) < 0) throw std::system_error(errno, std::generic_category(), "fsync " + path_.string());
     }
     void closeFd() {
         if (fd_ >= 0) ::close(fd_);

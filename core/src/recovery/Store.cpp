@@ -4,6 +4,7 @@
 #include "fs/ops/file.hpp"
 #include "log/Registry.hpp"
 #include "platform/Clone.hpp"
+#include "platform/Durable.hpp"
 #include "platform/FileTime.hpp"
 #include "vault/Retention.hpp"
 #include "vault/model/Vault.hpp"
@@ -228,7 +229,7 @@ struct detail::Stager {
         if (fd < 0) throw std::system_error(errno, std::generic_category(), "staging recovery blob " + temp.string());
         try {
             write(fd);
-            if (::fsync(fd) != 0) throw std::system_error(errno, std::generic_category(), "fsync " + temp.string());
+            if (platform::durable::sync(fd) != 0) throw std::system_error(errno, std::generic_category(), "fsync " + temp.string());
             const int closed = ::close(fd);
             fd = -1;
             if (closed != 0) throw std::system_error(errno, std::generic_category(), "close " + temp.string());

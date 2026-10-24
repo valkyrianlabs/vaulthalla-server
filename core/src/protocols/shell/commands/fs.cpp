@@ -17,6 +17,7 @@
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
+#include "platform/Durable.hpp"
 #include "rbac/permission/vault/Filesystem.hpp"
 #include "runtime/Deps.hpp"
 #include "share/Scope.hpp"
@@ -310,7 +311,7 @@ public:
         }
     }
     void finish() {
-        if (::fsync(fd_) != 0) throw std::runtime_error(std::string("fsync of the staging file failed: ") + std::strerror(errno));
+        if (platform::durable::sync(fd_) != 0) throw std::runtime_error(std::string("fsync of the staging file failed: ") + std::strerror(errno));
         ::close(fd_);
         fd_ = -1;
     }

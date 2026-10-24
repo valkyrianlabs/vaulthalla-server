@@ -9,6 +9,7 @@
 #include "fs/model/File.hpp"
 #include "fs/ops/file.hpp"
 #include "log/Registry.hpp"
+#include "platform/Durable.hpp"
 #include "runtime/Deps.hpp"
 #include "storage/Engine.hpp"
 #include "storage/Manager.hpp"
@@ -43,7 +44,7 @@ void createPrivateFile(const std::filesystem::path& path) {
 void fsyncPath(const std::filesystem::path& path) {
     const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
     if (fd < 0) throwErrno("open sealed file");
-    const int rc = ::fsync(fd);
+    const int rc = platform::durable::sync(fd);
     const int err = errno;
     ::close(fd);
     if (rc < 0) {
