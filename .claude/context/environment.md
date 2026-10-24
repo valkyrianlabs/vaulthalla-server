@@ -29,7 +29,7 @@ The dev infrastructure is on the maintainer's home Proxmox server. All VMs are o
   dev's `/srv/vaulthalla/.bashrc` is byte-identical to the Mac's) and root-owned `cloudflare.ini`. **Never cat, print,
   or commit these.** Source them to use them. The two older env files under `deploy/` are retired
   (2026-10-22); `bin/tests/retire_legacy_test_env.sh` offers to delete stray copies.
-- Git remotes: `origin` (github.com/vaulthalla/vaulthalla), `web-repo` (legacy web repo history).
+- Git remotes: `origin` (github.com/vaulthalla/server), `web-repo` (legacy web repo history).
 
 ## dev-db contents (surveyed 2026-09-30)
 

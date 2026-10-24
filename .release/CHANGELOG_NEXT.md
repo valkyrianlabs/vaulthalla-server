@@ -36,3 +36,6 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
     `[config]` warning instead of degrading health; a misspelled mode still refuses to start everywhere.
   - Health, `vh status` and the console's Runtime page report the macOS mount as disabled, noting that Finder access
     is provided by Vaulthalla Desktop. `vh fs` help no longer calls itself interim.
+
+## Packaging
+- The repository moved to `github.com/vaulthalla/server`. The package `Homepage`/`Source` fields (`debian/control`, `debian/copyright`), the release contract (`release.toml`), the Homebrew cask URL and the docs links point there; the old `vaulthalla-core` and `vaulthalla/vaulthalla` URLs are gone.

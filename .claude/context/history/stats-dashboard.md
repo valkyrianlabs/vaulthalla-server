@@ -626,7 +626,7 @@ Still-open items are tracked in `.claude/context/production-hardening.md`.
 - Commit: `e0845d96`.
 - Push target: `origin/stats-dashboards`
 - Push result: succeeded, with GitHub remote moved warning.
-- Issue: `https://github.com/vaulthalla/vaulthalla/issues/50`
+- Issue: `https://github.com/vaulthalla/server/issues/50`
 - Backend surfaces: none.
 - Frontend/web surfaces:
   - `web/src/app/api/auth/session/route.ts`
