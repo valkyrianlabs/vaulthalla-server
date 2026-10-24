@@ -45,6 +45,13 @@ namespace vh::fs::model {
         void print() const;
     };
 
+    // Opaque version of an entry's metadata ("m<id>-<hex16>"), sent as `metadata_version`: a stable hash of what a
+    // sync client shows for the entry itself, i.e. vault, parent folder, name, mode, owner, group and updated_at. It
+    // changes on rename, move, mode change and any updated_at change (content writes included) and is the same again
+    // only for the same metadata. Not a counter: computed from the fields the reply carries, so it never disagrees
+    // with them (no migration, no write path to keep in step). A parent's rename or move does not change it.
+    [[nodiscard]] std::string metadataVersion(const Entry &entry);
+
     void to_json(nlohmann::json &j, const Entry &entry);
 
     void from_json(const nlohmann::json &j, Entry &entry);

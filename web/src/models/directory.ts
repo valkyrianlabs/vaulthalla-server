@@ -21,6 +21,7 @@ export class Directory implements IDirectory {
   file_count: number = 0
   subdirectory_count: number = 0
   last_modified: Date = new Date()
+  metadata_version?: string
 
   constructor(data?: FSEntryWire<Partial<IDirectory>>) {
     if (data) Object.assign(this, normalizeFsEntryTimestamps(data))

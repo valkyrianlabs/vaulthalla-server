@@ -12,6 +12,17 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   (falling back to `fsync` only where the file system refuses it). A contract test rejects raw `fsync` outside
   `core/src/platform/` (#205).
 
+## File API
+- fs entries (ws `fs.dir.list` / `fs.list` / `fs.metadata`, sync conflict artifacts) carry `metadata_version` (all
+  entries) and `content_version` (files), set by the Entry base serializer (#257).
+  - `content_version` = `storage::Generation::etag()`, the strong ETag `/download/content` serves; it changes on every
+    content write, never on rename or move.
+  - `metadata_version` = `"m<id>-<hex16(sha256(vault|parent|name|mode|owner|group|updated_at))>"`, a stable hash of
+    the fields the reply carries (no counter, no migration).
+  - An empty file's generation is `plain:0` whatever its `updated_at`, so its ETag survives rename and touch.
+  - `FsEntryVersionsDbTest`: the entry id is unchanged across ws rename, ws move, FUSE rename over an existing file
+    and a folder move (its children too).
+
 ## Security
 - ws `fs.dir.list` / `fs.list` (outside share mode) and `vh fs ls` leave out children the caller cannot Lookup, through
   the filter FUSE readdir uses (`rbac::fs::visibility`), and recount a listed child folder's size and counts and the

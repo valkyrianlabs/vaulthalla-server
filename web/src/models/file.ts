@@ -38,6 +38,8 @@ export interface IFile extends FSEntry {
   size_bytes: number
   mime_type?: string
   preview?: IPreviewPlan
+  // The strong ETag /download/content serves for the current bytes (quotes included). Absent from older daemons.
+  content_version?: string
 }
 
 export class File implements IFile {
@@ -53,6 +55,8 @@ export class File implements IFile {
   path?: string
   mime_type?: string
   preview?: IPreviewPlan
+  content_version?: string
+  metadata_version?: string
 
   constructor(data?: FSEntryWire<Partial<IFile>>) {
     if (data) Object.assign(this, normalizeFsEntryTimestamps(data))

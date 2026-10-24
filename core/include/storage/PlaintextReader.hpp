@@ -14,7 +14,9 @@
 namespace vh::storage {
 
 // One content generation of a vault file. Every content write reseals the file with a fresh random IV, so the
-// IV (or, for the rare unencrypted legacy/empty file, size + mtime) identifies the bytes. Rename and move keep it.
+// IV identifies the bytes; an empty file is always the same generation, and a rare unencrypted legacy file is
+// identified by size + mtime. Rename and move keep it (except for that legacy case). The etag() is what
+// /download/content serves and what an entry's `content_version` carries.
 struct Generation {
     uint32_t vault_id{};
     uint32_t file_id{};

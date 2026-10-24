@@ -8,6 +8,9 @@ export interface FSEntry {
   updated_at: number | string // Unix timestamp seconds, milliseconds, or ISO timestamp
   last_modified_by?: number
   path?: string
+  // Opaque; changes on rename, move, mode change or an updated_at change (compare for equality only). Absent from
+  // older daemons.
+  metadata_version?: string
 }
 
 export type FSTimestampInput = number | string | Date | null | undefined

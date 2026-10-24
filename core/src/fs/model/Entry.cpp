@@ -8,13 +8,17 @@
 #include "config/Registry.hpp"
 #include "db/encoding/u8.hpp"
 #include "sync/model/RemoteManifest.hpp"
+#include "storage/PlaintextReader.hpp"
 
 #include <nlohmann/json.hpp>
 #include <pqxx/result>
 #include <unordered_map>
 #include <sstream>
 #include <pugixml.hpp>
+#include <sodium.h>
 #include <algorithm>
+#include <array>
+#include <fmt/format.h>
 #include <ranges>
 #include <paths.h>
 
@@ -90,6 +94,25 @@ bool Entry::operator==(const Entry& other) const {
            path == other.path;
 }
 
+std::string vh::fs::model::metadataVersion(const Entry& entry) {
+    // Unambiguous material: optional members print as "-" when unset, and the name is length-prefixed, so no two
+    // different field sets serialize the same way.
+    const auto opt = [](const auto& v) { return v ? std::to_string(*v) : std::string{"-"}; };
+    const auto material = fmt::format("v1|{}|{}|{}:{}|{}|{}|{}|{}", opt(entry.vault_id), opt(entry.parent_id),
+                                      entry.name.size(), entry.name, opt(entry.mode), opt(entry.owner_uid),
+                                      opt(entry.group_gid), static_cast<long long>(entry.updated_at));
+    std::array<unsigned char, crypto_hash_sha256_BYTES> digest{};
+    crypto_hash_sha256(digest.data(), reinterpret_cast<const unsigned char*>(material.data()), material.size());
+    static constexpr char kHex[] = "0123456789abcdef";
+    std::string hex;
+    hex.reserve(16);
+    for (std::size_t i = 0; i < 8; ++i) {
+        hex.push_back(kHex[digest[i] >> 4]);
+        hex.push_back(kHex[digest[i] & 0x0f]);
+    }
+    return fmt::format("m{}-{}", entry.id, hex);
+}
+
 void vh::fs::model::to_json(nlohmann::json& j, const Entry& entry) {
     j = {
         {"id", entry.id},
@@ -101,7 +124,13 @@ void vh::fs::model::to_json(nlohmann::json& j, const Entry& entry) {
         {"updated_at", timestampToString(entry.updated_at)},
         {"path", entry.path.string()},
         {"abs_path", entry.fuse_path.string()},
+        {"metadata_version", metadataVersion(entry)},
     };
+
+    // Files carry the strong generation tag /download/content serves as their ETag (storage::Generation::etag): the
+    // same string, so a client can send it back as If-Match/If-None-Match/If-Range. Set here, on the base serializer,
+    // so a looked-up file (fs.metadata `entry`) carries it as a listed one does.
+    if (const auto* file = dynamic_cast<const File*>(&entry)) j["content_version"] = storage::generationOf(*file).etag();
 
     if (entry.parent_id) j["parent_id"] = entry.parent_id;
     if (entry.vault_id) j["vault_id"] = entry.vault_id;
