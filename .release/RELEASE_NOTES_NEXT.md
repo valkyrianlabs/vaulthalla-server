@@ -32,6 +32,23 @@ changes on rename, move, mode change and any change of the modification time. An
 rename and move, so it can serve as a stable item identifier. Renaming or touching an empty file no longer changes its
 ETag. Nothing else changes for existing clients: the fields are additive.
 
+## Saving over a file from a client
+
+A new upload lane, `PUT /upload/content`, lets Desktop and other clients of the HTTP and device lanes save a file of
+any size, up to the 8 GiB upload limit, safely:
+
+- **Replace** a file with `If-Match: <content_version>`. It succeeds only if nobody changed the file since that
+  version. Otherwise it answers 412 with the current version, and nothing is lost. A file open through the mounted
+  filesystem is never replaced underneath the program editing it.
+- **Create** a file with `If-None-Match: *`. It succeeds only if nothing is there yet.
+
+The body is streamed to disk, so memory use doesn't depend on the file size. The answer carries the file's new entry
+and versions.
+
+Uploads through `/upload/session` (the web console's uploads) no longer hold each file in memory while it is stored.
+Their results are the same. A file whose upload request failed partway, for example on a dropped connection, can now
+be sent again within the same upload session instead of restarting the whole session.
+
 ## Security
 
 - **Folder listings hide what you may not see.** The web console and Desktop (`fs.dir.list`) and `vh fs ls` now leave

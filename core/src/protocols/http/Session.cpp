@@ -4,6 +4,7 @@
 #include "log/Registry.hpp"
 #include "protocols/http/Router.hpp"
 #include "protocols/http/Access.hpp"
+#include "protocols/http/upload/Content.hpp"
 #include "protocols/http/upload/Coordinator.hpp"
 #include "protocols/ws/ConnectionLimit.hpp"
 #include "protocols/ws/Session.hpp"
@@ -23,7 +24,9 @@
 #include <chrono>
 #include <limits>
 #include <mutex>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <poll.h>
 #include <sys/socket.h>
 #include <variant>
@@ -416,6 +419,9 @@ bool Session::serve(HeaderParser& parser) {
     try {
         if (upload::Coordinator::isUploadFileRequest(parser.get().method(), parser.get().target()))
             return handle_streaming_upload(parser);
+        if (upload::content::isRequest(parser.get().method(),
+                                       std::string_view(parser.get().target().data(), parser.get().target().size())))
+            return handle_streaming_content(parser);
         const bool hasBody = parser.chunked() || (parser.content_length() && *parser.content_length() > 0);
         if (hasBody && !device_ && !carriesSessionCookie(parser)) {
             auto req = make_request_from_parser(parser);
@@ -517,6 +523,51 @@ bool Session::handle_streaming_upload(
         (void)write_response(std::move(response));
         return false;
     }
+}
+
+// PUT /upload/content: refused (and the connection closed, the body unread) or accepted before the body is read,
+// then the body streams into the staging file in kReadBufferBytes chunks: memory stays bounded whatever its size.
+bool Session::handle_streaming_content(
+    boost::beast::http::request_parser<boost::beast::http::buffer_body>& parser
+) {
+    auto req = make_request_from_parser(parser);
+    const auto keepAlive = req.keep_alive();
+    const auto contentLength = parser.chunked() || !parser.content_length()
+                                   ? std::optional<uint64_t>{}
+                                   : std::make_optional(static_cast<uint64_t>(*parser.content_length()));
+    auto begun = upload::content::begin(req, contentLength);
+    const auto closeWith = [&](model::preview::Response response) {
+        std::visit([](auto& res) { res.keep_alive(false); }, response);
+        (void)write_response(std::move(response));
+        return false;
+    };
+    if (begun.refusal) return closeWith(std::move(*begun.refusal));
+
+    try {
+        std::array<char, kReadBufferBytes> storage{};
+        beast::error_code ec;
+        while (!parser.is_done() && !stopping()) {
+            parser.get().body().data = storage.data();
+            parser.get().body().size = storage.size();
+            boost::beast::http::read(*stream_, buffer_, parser, ec);
+
+            const auto used = storage.size() - parser.get().body().size;
+            if (used > 0) begun.upload.write(storage.data(), used);
+
+            if (ec == boost::beast::http::error::need_buffer) {
+                ec = {};
+                continue;
+            }
+            if (ec) throw boost::system::system_error(ec);
+        }
+        if (stopping()) return false;
+    } catch (const std::exception& e) {
+        if (stopping()) return false;
+        log::Registry::http()->debug("[Session] /upload/content body failed: {}", e.what());
+        return closeWith(Router::makeErrorResponse(req, e.what(), statusForException(e)));
+    }
+
+    return write_response(begun.upload.commit(req)) && keepAlive;
 }
 
 bool Session::write_response(model::preview::Response&& response, const bool headRequest) {

@@ -345,6 +345,26 @@ void requireUser(const std::shared_ptr<identities::User>& user, const std::share
     requireUserAction(user, engine, share::Scope::normalizeVaultPath(vaultPath.string()), action);
 }
 
+Target resolveCreate(const Caller& caller, const Params& params) {
+    if (caller.share) throw Forbidden("Uploading through share links is not supported on this lane");
+    const auto& user = caller.session ? caller.session->user : nullptr;
+    if (!user) throw Unauthorized("Request requires a user session");
+
+    const auto vaultId = parseVaultId(params);
+    const auto rawPath = pathParam(params);
+    if (!share::Scope::contains("/", rawPath)) throw BadRequest("Path escapes the vault");
+    const auto vaultPath = share::Scope::normalizeVaultPath(rawPath);
+    if (vaultPath == "/" || rawPath.ends_with('/')) throw BadRequest("The path must name a file");
+
+    const auto engine = hooks::engineResolver()(vaultId);
+    if (!engine) throw NotFound("Not found");
+    requireUserAction(user, engine, vaultPath, FsAction::Write);
+
+    const auto& cache = runtime::Deps::get().fsCache;
+    auto entry = cache ? cache->getEntry(engine->vaultPathToFusePath(vaultPath)) : nullptr;
+    return fromEntry(engine, std::move(entry), vaultId, vaultPath);
+}
+
 Target resolvePath(const Caller& caller, const uint32_t vaultId, const std::string& rawPath, const Need need,
                    const Expect expect) {
     if (caller.share) throw BadRequest("Share requests address paths relative to the share");

@@ -8,7 +8,6 @@
 #include "fs/model/Entry.hpp"
 #include "fs/model/File.hpp"
 #include "fs/model/Path.hpp"
-#include "fs/ops/file.hpp"
 #include "protocols/http/Access.hpp"
 #include "protocols/http/upload/Staging.hpp"
 #include "identities/User.hpp"
@@ -500,16 +499,13 @@ void reserveUploadSpace(
     planned += requested;
 }
 
-std::vector<uint8_t> readCompletedUploadFile(const UploadFileState& file) {
+void checkCompletedUploadFile(const UploadFileState& file) {
     if (!std::filesystem::exists(file.tmp_path))
         throw std::runtime_error("Uploaded temp file is missing: " + file.tmp_path.string());
 
     const auto actualSize = std::filesystem::file_size(file.tmp_path);
     if (actualSize != file.expected_size)
         throw std::runtime_error("Uploaded temp file size mismatch");
-
-    if (actualSize == 0) return {};
-    return vh::fs::ops::readFileToVector(file.tmp_path);
 }
 
 std::shared_ptr<vh::fs::model::File> commitCompletedUploadFile(
@@ -517,14 +513,18 @@ std::shared_ptr<vh::fs::model::File> commitCompletedUploadFile(
     const std::shared_ptr<vh::identities::User>& user
 ) {
     if (!user) throw std::runtime_error("Upload requires a user");
+    checkCompletedUploadFile(file);
 
-    auto created = vh::fs::Filesystem::createFile({
+    // Sealed straight from the staged file (streaming, bounded memory: it used to be read whole into a buffer, up to
+    // the 8 GiB file limit). An empty file keeps the empty-buffer branch, so its MIME type still comes from its name.
+    vh::fs::NewFileContext ctx{
         .path = file.vault_path,
         .fuse_path = file.fuse_to,
-        .buffer = readCompletedUploadFile(file),
         .engine = file.engine,
         .user = user
-    });
+    };
+    if (file.expected_size > 0) ctx.source_path = file.tmp_path;
+    auto created = vh::fs::Filesystem::createFile(ctx);
 
     std::error_code ec;
     std::filesystem::remove(file.tmp_path, ec);
@@ -904,7 +904,10 @@ Coordinator::FileStream Coordinator::beginFile(const request& req, const std::op
         auto& file = it->second;
         if (file.status == FileStatus::Complete) throw std::runtime_error("Upload file is already complete");
         if (file.status == FileStatus::Receiving) throw std::runtime_error("Upload file is already receiving data");
-        if (file.status == FileStatus::Failed) throw std::runtime_error("Upload file has failed");
+        // A failed PUT (dropped connection, short body) may be sent again from the start: the staging file is
+        // truncated below. A share upload's attempt is recorded as failed for good, so its file stays failed.
+        if (file.status == FileStatus::Failed && upload->mode == UploadMode::Share)
+            throw std::runtime_error("Upload file has failed");
         if (contentLength && *contentLength != file.expected_size) throw std::runtime_error("Upload size mismatch");
 
         std::filesystem::create_directories(file.tmp_path.parent_path());

@@ -367,7 +367,8 @@ for PDFs; `scale` accepted and ignored), `POST /preview/batch` (≤ 200 items, p
 `ready|queued|missing|unsupported|error`, never fetches remote-only files), `GET|HEAD /download/content` (original
 bytes, inline by default), `GET|HEAD /download` (files stream with no size cap; directories stream a STORE ZIP,
 see "Folder ZIPs" below), `GET /preview/derived?kind=&variant=` (200 artifact | 202 queued + Retry-After |
-415 | 422 `conversion_failed` | 503 `converter_unavailable`/`busy`), `PUT /upload/text`, `GET|HEAD /download/conflict?
+415 | 422 `conversion_failed` | 503 `converter_unavailable`/`busy`), `PUT /upload/text`, `PUT /upload/content`
+(below), `GET|HEAD /download/conflict?
 conflict_id&side=local|remote` (#187, humans only: `ops::conflicts::previewTarget` = resolve_conflicts + filesystem Read;
 409 when the conflict is closed; local side served like `/download/content` with remote fetch off; remote side fetched
 on demand by `sync::ConflictResolver::fetchRemoteForPreview`: price preflight `conflict_preview`, a usage capture of
@@ -413,6 +414,20 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   `Filesystem::createFile(overwrite, expected_source_id)`, which takes a per-file content lock
   (`contentWriteMutex(fuse_path)`) so the check is a true CAS, and throws `ContentConflict` (→ 412) when the source id
   moved or the file has an open FUSE working copy.
+
+- **Conditional content writes** (`upload/Content.cpp`, #258): `PUT /upload/content?vault_id&path`, humans and devices
+  only. `If-Match: <content_version>` replaces (`access::resolve(Need::Overwrite)`; stale or a FUSE working copy open:
+  412 + current ETag), `If-None-Match: *` creates (`access::resolveCreate`: Write on the path; missing parents are
+  made as for an upload; something there: 412 with its ETag for a file, 409 otherwise). Neither (or both, or `*` in
+  If-Match): 428; no Content-Length: 411; > 8 GiB or more than `freeSpace()`: 413. All of that is answered before a
+  body byte is read (the connection then closes). `Session::handle_streaming_content` streams the body in 64 KiB reads
+  into the staging seam (`.upload-http-content-<uuid>.part`, same private/mount choice as uploads), flushed with
+  `platform::durable::sync`; the commit authenticates and authorizes again, then `Filesystem::createFile{source_path,
+  overwrite, expected_source_id}` (the matched sourceId, or "" for create-only), so concurrent writers and an open
+  working copy are a ContentConflict → 412. Lane creates of one path are claimed one at a time. 201/200 answers
+  `{created, entry}` (the file's entry JSON with both versions) and the new ETag. The `/upload/session` commit seals
+  from the staged file the same way (no whole-file buffer; an empty file keeps the empty-buffer branch), and a file
+  whose PUT failed may be PUT again from the start (share upload sessions excepted: their record is terminal).
 
 ### Byte-serving spine, integrity and derived artifacts
 
@@ -477,8 +492,9 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
 - **FUSE ops still hit the DB for content and metadata writes**, but no longer for identity: the caller (by uid), its
   groups and the vault owner come from `identities::Manager` in memory (see Identities below). If the DB pool wedges,
   writes, opens of uncached entries and anything else that queries still hang. See P0 in `production-hardening.md`.
-- HTTP uploads stage `.upload-http-<id>-<file>.part` next to the target *through FUSE*, then rename
-  from `fuse_from` to `fuse_to` (`http/upload/Coordinator.cpp`). This is intentional. Don't move staging out of
+- HTTP uploads (Linux, `mount` staging) stage `.upload-http-<id>-<file>.part` next to the target *through FUSE*, then
+  seal it into the target with `Filesystem::createFile{source_path}` (`http/upload/Coordinator.cpp`, and
+  `.upload-http-content-*.part` for `PUT /upload/content`). This is intentional. Don't move staging out of
   FUSE to reduce sync churn; fix duplicate sync triggers or backing-path resolution instead.
 - **Vault bytes are always ciphertext at rest; the mount is the decrypting view (#173).** Every backing file (local
   vaults and cloud vaults' local copies) is AES-256-GCM body‖16-byte tag, IV and key version in `files`, and

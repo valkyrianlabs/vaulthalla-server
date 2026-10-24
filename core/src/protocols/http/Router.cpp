@@ -7,6 +7,7 @@
 #include "protocols/http/Access.hpp"
 #include "protocols/http/AccessHooks.hpp"
 #include "protocols/http/handler/Handlers.hpp"
+#include "protocols/http/upload/Content.hpp"
 #include "protocols/http/upload/Coordinator.hpp"
 #include "protocols/ws/Session.hpp"
 #include "runtime/Deps.hpp"
@@ -138,6 +139,7 @@ Response Router::route(request&& req) {
     const std::string_view target(req.target().data(), req.target().size());
 
     if (target.starts_with("/upload/text")) return handler::saveText(std::move(req));
+    if (target == "/upload/content" || target.starts_with("/upload/content?")) return upload::content::handle(std::move(req));
     if (target.starts_with("/upload")) return handleUpload(std::move(req));
     if (target.starts_with("/preview/batch")) return handlePreviewBatch(std::move(req));
 
