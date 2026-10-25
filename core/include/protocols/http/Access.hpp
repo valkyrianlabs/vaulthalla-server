@@ -21,7 +21,7 @@ namespace vh::share {
     struct ResolvedTarget;
 }
 
-// Authentication and authorization for every HTTP lane (/preview*, /download*, /upload/text). One place maps a
+// Authentication and authorization for every HTTP lane (/preview*, /download*, /upload/text, /upload/content). One place maps a
 // route's need onto RBAC: human sessions through rbac::resolver::Vault, share sessions through
 // share::TargetResolver. Nothing here trusts the client about capability; handlers only see resolved targets.
 namespace vh::protocols::http::access {
@@ -98,6 +98,11 @@ private:
 // peer credentials): one evaluator, one path normalization, one no-existence-oracle rule for every surface.
 [[nodiscard]] Target resolveUserPath(const std::shared_ptr<identities::User>& user, uint32_t vaultId,
                                      const std::string& path, Need need, Expect expect = Expect::File);
+// A new file at the addressed path (the create-only form of PUT /upload/content, `If-None-Match: *`): human callers
+// only, Write on the path itself, as an upload needs. Refuses the vault root and paths that escape the vault.
+// `entry`/`file` are whatever exists there now (null when nothing does): the caller decides what that means.
+[[nodiscard]] Target resolveCreate(const Caller& caller, const Params& params);
+
 // Throws Forbidden unless `user` holds `action` on `vaultPath` (normalized) in the engine's vault.
 void requireUser(const std::shared_ptr<identities::User>& user, const std::shared_ptr<storage::Engine>& engine,
                  const std::filesystem::path& vaultPath, rbac::permission::vault::FilesystemAction action);

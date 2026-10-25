@@ -22,6 +22,17 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   - An empty file's generation is `plain:0` whatever its `updated_at`, so its ETag survives rename and touch.
   - `FsEntryVersionsDbTest`: the entry id is unchanged across ws rename, ws move, FUSE rename over an existing file
     and a folder move (its children too).
+- `PUT /upload/content?vault_id&path` (#258, `protocols/http/upload/Content.cpp`): conditional replace (`If-Match`,
+  `Need::Overwrite`) or create (`If-None-Match: *`, `access::resolveCreate`: Write) of one file, body streamed by
+  `Session::handle_streaming_content` into the upload staging seam and sealed through
+  `Filesystem::createFile{source_path, overwrite, expected_source_id}`.
+  - 412 + current ETag on a stale version, an open FUSE working copy or an existing file on create; 409 for a
+    non-file in the way; 428 / 411 / 413 answered before the body; access checked again at commit.
+  - 201/200 answer `{created, entry}` with `content_version` / `metadata_version` and the new ETag.
+- `/upload/session` commits seal from the staged file (`source_path`) instead of reading it whole into memory; an
+  empty file keeps the empty-buffer branch (same MIME type). A file whose PUT failed may be PUT again (human and
+  device sessions; a share upload's record stays failed).
+- `tools/contracts/test_upload_content_contract.py` pins the bounded-memory commit and the streaming route.
 
 ## Security
 - ws `fs.dir.list` / `fs.list` (outside share mode) and `vh fs ls` leave out children the caller cannot Lookup, through

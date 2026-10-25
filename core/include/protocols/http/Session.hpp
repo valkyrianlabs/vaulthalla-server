@@ -133,6 +133,7 @@ private:
     model::preview::Response route(request&& req);
     bool handle_buffered_request(boost::beast::http::request_parser<boost::beast::http::buffer_body>& parser);
     bool handle_streaming_upload(boost::beast::http::request_parser<boost::beast::http::buffer_body>& parser);
+    bool handle_streaming_content(boost::beast::http::request_parser<boost::beast::http::buffer_body>& parser);
     bool write_response(model::preview::Response&& response, bool headRequest = false);
     bool write_stream(model::preview::StreamResponse&& response);
     void do_close();

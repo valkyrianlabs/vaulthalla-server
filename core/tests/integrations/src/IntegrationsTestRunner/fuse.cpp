@@ -179,6 +179,70 @@ namespace vh::test::integration {
             return out;
         }
 
+        // One in-process HTTP request as `user`: the status and the ETag of the answer.
+        std::pair<int, std::string> httpAs(const std::shared_ptr<User>& user, ::vh::protocols::http::request req) {
+            namespace http = ::vh::protocols::http;
+            const auto session = wsSessionFor(user);
+            http::Router::setPreviewSessionResolverForTesting([session](const http::request&) { return session; });
+            std::pair<int, std::string> out{0, {}};
+            try {
+                const auto res = http::Router::route(std::move(req));
+                out.first = std::visit([](const auto& r) { return static_cast<int>(r.result()); }, res);
+                out.second = std::visit([](const auto& r) {
+                    const auto it = r.find(http::field::etag);
+                    return it == r.end() ? std::string{} : std::string(it->value());
+                }, res);
+            } catch (const std::exception& e) {
+                out = {-1, e.what()};
+            }
+            http::Router::resetPreviewSessionResolverForTesting();
+            return out;
+        }
+
+        // #258: PUT /upload/content with If-Match is refused (412, current ETag) while the file is open through the
+        // mount (a working copy may hold unsealed edits), and goes through once the last handle is released. One test
+        // case so the steps run in order: hold (FUSE open by uid), PUT, release, PUT, read back through FUSE.
+        ExecResult conditionalPutAgainstOpenCopy(const std::shared_ptr<storage::Engine>& engine,
+                                                 const std::shared_ptr<User>& user, const uid_t uid, const gid_t gid,
+                                                 const std::filesystem::path& fusePath, const std::string& vaultPath) {
+            namespace http = ::vh::protocols::http;
+            std::string encoded;
+            for (const char c : vaultPath) encoded += c == '/' ? std::string("%2F") : std::string(1, c);
+            const auto query = "?vault_id=" + std::to_string(engine->vault->id) + "&path=" + encoded;
+            const auto command = "hold " + fusePath.string() + " as uid " + std::to_string(uid) +
+                                 ", PUT /upload/content" + query + " If-Match (in-process) as " + user->name();
+            const auto fail = [&](const std::string& why) {
+                return ExecResult{.exit_code = EIO, .stdout_text = {}, .stderr_text = why, .command = command};
+            };
+
+            const auto [headStatus, version] = httpAs(user, http::request{http::verb::head, "/download/content" + query, 11});
+            if (headStatus != 200 || version.empty()) return fail("HEAD /download/content answered " + std::to_string(headStatus));
+            const auto put = [&](const std::string& body) {
+                http::request req{http::verb::put, "/upload/content" + query, 11};
+                req.set(http::field::if_match, version);
+                req.body() = body;
+                req.prepare_payload();
+                return httpAs(user, std::move(req));
+            };
+
+            const auto held = fuse::detail::call(uid, gid, fuse::detail::req("hold", fusePath));
+            if (held.err != 0) return fuse::detail::result(held, command);
+            const auto [whileOpen, conflictEtag] = put("written over HTTP while open\n");
+            const auto released = fuse::detail::call(uid, gid, fuse::detail::req("release", fusePath));
+            if (released.err != 0) return fuse::detail::result(released, command);
+            if (whileOpen != 412) return fail("PUT while open answered " + std::to_string(whileOpen) + ", expected 412");
+            if (conflictEtag != version) return fail("the 412 carried ETag " + conflictEtag + ", expected " + version);
+
+            const auto [afterRelease, newEtag] = put("written over HTTP after release\n");
+            if (afterRelease != 200) return fail("PUT after release answered " + std::to_string(afterRelease));
+            if (newEtag == version) return fail("the replacement kept the old ETag");
+            const auto readBack = read_as(uid, gid, fusePath);
+            if (readBack.exit_code != 0) return readBack;
+            return {.exit_code = 0,
+                    .stdout_text = "412 while open\n200 after release\n" + readBack.stdout_text,
+                    .stderr_text = {}, .command = command};
+        }
+
         // #255: the names FUSE readdir gives `uid` for a folder against the names ws fs.dir.list gives `user` (the same
         // account) for it. Passes with "PARITY" and the shared names, one per line, when the two sets are equal.
         ExecResult listingParity(const std::shared_ptr<storage::Engine>& engine, const std::shared_ptr<User>& user,
@@ -328,6 +392,18 @@ namespace vh::test::integration {
             .must_contain = {"OK rmdir"},
             .fn = [=] {
                 return andThen(rmdir_as(uid, copy / "sub" / "deep"), [=] { return rmdir_as(uid, copy / "sub"); });
+            }
+        });
+
+        const auto gid = static_cast<gid_t>(uid);  // the uid-only helpers' actor (uid, uid)
+        (void)write_as(uid, gid, ctx.base() / "open-edit.txt", "opened through the mount\n");
+        builder.makeTestCase({
+            .name = "PUT /upload/content If-Match is 412 while a FUSE handle is open, 200 after (admin)",
+            .path = "http/upload-content",
+            .must_contain = {"412 while open\n", "200 after release\n", "written over HTTP after release\n"},
+            .fn = [=] {
+                return conditionalPutAgainstOpenCopy(ctx.engine, ctx.admin, uid, gid, ctx.base() / "open-edit.txt",
+                                                     vaultBase + "/open-edit.txt");
             }
         });
 
