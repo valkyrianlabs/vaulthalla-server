@@ -22,6 +22,16 @@ so on the mount line. If an older `config.yaml` on a Mac sets `mount.mode` to `m
 daemon runs with the mount disabled and logs a warning instead of reporting degraded health. `vh fs`, the web console
 and the S3 gateway remain the ways to reach vault files on a Mac. Linux is unchanged.
 
+## Item versions for sync clients
+
+Every file and folder the console, Desktop and other ws clients list or look up now carries a `metadata_version`, and
+every file a `content_version`. The content version is exactly the strong ETag `/download/content` serves for the
+file's current bytes, so a client can tell from a listing which files changed without asking for each one, and send it
+back as a precondition. It changes on every write and stays the same across rename and move. The metadata version
+changes on rename, move, mode change and any change of the modification time. An entry's id stays the same across
+rename and move, so it can serve as a stable item identifier. Renaming or touching an empty file no longer changes its
+ETag. Nothing else changes for existing clients: the fields are additive.
+
 ## Security
 
 - **Folder listings hide what you may not see.** The web console and Desktop (`fs.dir.list`) and `vh fs ls` now leave

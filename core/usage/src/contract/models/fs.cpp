@@ -27,6 +27,14 @@ std::vector<WsField> fsModelEntryBaseFields() {
         integer("group_gid").opt(),
         uinteger("inode").opt(),
         uinteger("mode").opt().desc("POSIX mode bits."),
+        str("metadata_version").desc(
+            "Opaque version of the entry's own metadata (\"m<id>-<hex16>\"): a hash of vault, parent, name, mode, "
+            "owner, group and updated_at, so it changes on rename, move, mode change and any updated_at change and "
+            "matches again only for the same metadata. Compare for equality only."),
+        str("content_version").opt().desc(
+            "Files only: the strong generation ETag GET /download/content serves for the current bytes, exactly "
+            "(quotes included; usable as If-Match / If-None-Match / If-Range). Changes on every content write, never "
+            "on rename or move."),
     };
 }
 
@@ -61,7 +69,8 @@ std::vector<WsModel> fsModels() {
 
     out.push_back(model("FsEntryBase",
         "The listed directory or looked-up entry itself (`entry` of fs.dir.list / fs.metadata): fs::model::to_json"
-        "(Entry) on the Entry base (core/src/fs/model/Entry.cpp), so it carries no type, mime_type, preview or counts.",
+        "(Entry) on the Entry base (core/src/fs/model/Entry.cpp), so it carries no type, mime_type, preview or counts "
+        "(a file still carries content_version).",
         fsModelEntryBaseFields()));
 
     return out;

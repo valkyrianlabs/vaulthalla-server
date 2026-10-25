@@ -2486,6 +2486,22 @@
           ]
         },
         {
+          "description": "Opaque version of the entry's own metadata (\"m<id>-<hex16>\"): a hash of vault, parent, name, mode, owner, group and updated_at, so it changes on rename, move, mode change and any updated_at change and matches again only for the same metadata. Compare for equality only.",
+          "name": "metadata_version",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Files only: the strong generation ETag GET /download/content serves for the current bytes, exactly (quotes included; usable as If-Match / If-None-Match / If-Range). Changes on every content write, never on rename or move.",
+          "name": "content_version",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
           "enum": [
             "file",
             "directory",
@@ -2545,7 +2561,7 @@
       "name": "FsEntry"
     },
     {
-      "description": "The listed directory or looked-up entry itself (`entry` of fs.dir.list / fs.metadata): fs::model::to_json(Entry) on the Entry base (core/src/fs/model/Entry.cpp), so it carries no type, mime_type, preview or counts.",
+      "description": "The listed directory or looked-up entry itself (`entry` of fs.dir.list / fs.metadata): fs::model::to_json(Entry) on the Entry base (core/src/fs/model/Entry.cpp), so it carries no type, mime_type, preview or counts (a file still carries content_version).",
       "fields": [
         {
           "minimum": 0,
@@ -2676,6 +2692,22 @@
           "required": false,
           "types": [
             "integer"
+          ]
+        },
+        {
+          "description": "Opaque version of the entry's own metadata (\"m<id>-<hex16>\"): a hash of vault, parent, name, mode, owner, group and updated_at, so it changes on rename, move, mode change and any updated_at change and matches again only for the same metadata. Compare for equality only.",
+          "name": "metadata_version",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Files only: the strong generation ETag GET /download/content serves for the current bytes, exactly (quotes included; usable as If-Match / If-None-Match / If-Range). Changes on every content write, never on rename or move.",
+          "name": "content_version",
+          "required": false,
+          "types": [
+            "string"
           ]
         }
       ],
@@ -17099,7 +17131,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "44c7dcf1d1dac4eb56c9b64deeeea8b2a5f1af6a6548399ea5ae4d9ca637d554",
+  "models_hash": "540aadf56707a312f350cc7510385baa09eacaed912950ff5da1afb9776ba0a5",
   "ws": [
     {
       "auth": "session",

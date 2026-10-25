@@ -12,6 +12,10 @@ namespace vh::storage {
 
 std::string Generation::sourceId() const {
     if (!iv_b64.empty()) return iv_b64;
+    // Every empty file has the same (zero) bytes, so its generation doesn't depend on updated_at: renaming, moving or
+    // touching an empty file keeps its validator (entry content_version, #257). A legacy plaintext file has nothing
+    // else that changes with its content, until repairAtRest seals it.
+    if (size == 0) return "plain:0";
     return fmt::format("plain:{}:{}", size, static_cast<long long>(updated_at));
 }
 

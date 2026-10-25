@@ -9,7 +9,7 @@ export const WS_CONTRACT_VERSION = 2
 export const WS_CONTRACT_HASH = '686e357625cb73a67b350e65eb9ed5e057a42c96013fa6e5215e5ca9d55af074'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = '44c7dcf1d1dac4eb56c9b64deeeea8b2a5f1af6a6548399ea5ae4d9ca637d554'
+export const WS_MODELS_HASH = '540aadf56707a312f350cc7510385baa09eacaed912950ff5da1afb9776ba0a5'
 
 // A merge patch (payload members marked `partial`): any subset of the members, at any depth.
 export type WsPartial<T> = { [K in keyof T]?: T[K] extends readonly unknown[] ? T[K] : T[K] extends object ? WsPartial<T[K]> : T[K] }
@@ -385,6 +385,8 @@ export interface WsModels {
     group_gid?: number
     inode?: number
     mode?: number
+    metadata_version: string
+    content_version?: string
     type: 'file' | 'directory' | 'symlink'
     mime_type?: string | null
     preview?: WsModels['PreviewPlan']
@@ -395,7 +397,7 @@ export interface WsModels {
   /**
    * The listed directory or looked-up entry itself (`entry` of fs.dir.list / fs.metadata):
    * fs::model::to_json(Entry) on the Entry base (core/src/fs/model/Entry.cpp), so it carries no type,
-   * mime_type, preview or counts.
+   * mime_type, preview or counts (a file still carries content_version).
    */
   'FsEntryBase': {
     id: number
@@ -415,6 +417,8 @@ export interface WsModels {
     group_gid?: number
     inode?: number
     mode?: number
+    metadata_version: string
+    content_version?: string
   }
   /**
    * FUSE operation counters (core/src/stats/model/FuseStats.cpp to_json).

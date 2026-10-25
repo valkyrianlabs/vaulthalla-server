@@ -418,8 +418,12 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
 
 - **Positioned reads.** `storage::Engine::openPlaintextReader(file, ReaderOptions)` is the single funnel for every
   byte consumer (HTTP, media, models, text, thumbnails, converter input). `storage::Generation` identifies one content
-  version: `sourceId()` = IV (changes on every write; rename/move keep it), `plain:<size>:<updated_at>` for
-  unencrypted legacy/empty files. `GcmFileReader` preads only the requested ciphertext and decrypts with the GCM CTR
+  version: `sourceId()` = IV (changes on every write; rename/move keep it), `plain:0` for an empty file and
+  `plain:<size>:<updated_at>` for an unencrypted legacy file. **Entry versions (#257):** fs entry JSON carries
+  `content_version` (files: exactly `Generation::etag()`, the `/download/content` ETag) and `metadata_version` (every
+  entry: `fs::model::metadataVersion`, a hash of vault, parent, name, mode, owner, group and updated_at; not a counter,
+  so it can't disagree with the fields in the same reply), both set by the Entry base serializer. Entry ids survive
+  rename and move (`FsEntryVersionsDbTest`). `GcmFileReader` preads only the requested ciphertext and decrypts with the GCM CTR
   keystream (`crypto::util::gcmCtrDecryptAt`: plaintext offset o ↔ ciphertext offset o, counter IV‖BE32(2+o/16)).
   Keys come from `EncryptionManager::keySnapshot(version)` (immutable `crypto::SecretKey`, mlocked, wiped; rotation
   swaps pointers under a shared_mutex). `readAll()` does one authenticated pass and records the verdict.
