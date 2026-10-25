@@ -75,6 +75,10 @@ void initDB() {
     vh::db::seed::init_tables_if_not_exists();
     vh::db::Transactions::dbPool_->initPreparedStatements();
     vh::seed::seed_database();
+    // As the daemon does at startup (core/main/main.cpp): the protected principals own their uids (root = 0, system =
+    // the vaulthalla OS user), so the instance's own requests through the mount, such as HTTP upload staging
+    // (mount staging on Linux), run as a principal, as they do in a real install.
+    vh::seed::reconcileSystemPrincipals();
 }
 
 void initServices() {

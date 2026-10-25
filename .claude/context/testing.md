@@ -186,6 +186,9 @@ make itest-selftest             # negative controls + fail-closed env checks
 database owned by the harness role `vh_harness`, `/tmp/vhh_proof_<run>/` paths, its own FUSE mount. It refuses to
 start (exit 78) without a complete private environment (`runtime/TestInstance.hpp`); there is no opt-out. Last results (2026-10-11):
 minimal 102/102, default 270/270 (seed 0x8f86ba60a0e5ccba; it caught the admin-role deletion defect fixed in bf56dec3).
+- The instance reconciles the protected principals at start, as the daemon does (`seed::reconcileSystemPrincipals`:
+  root = uid 0, system = the `vaulthalla` OS user), so its own requests through the mount (mount-staged HTTP uploads,
+  `PUT /upload/content`) run as a principal; before, uid 0 mapped to no user there and such staging got EACCES.
 - Seeds: `VH_TEST_SEED` (printed in the header, summary and reports); per-test BLAKE2b-64 streams, so a seed
   reproduces the same command lines. `VH_TEST_SEED_THREADS=1` for exact DB-id repro.
 - Knobs: `VH_TEST_CONFIG` (minimal|default|medium|large), `VH_TEST_STAGES`, `VH_TEST_NEGATIVE_CONTROL=assertion|oracle`
