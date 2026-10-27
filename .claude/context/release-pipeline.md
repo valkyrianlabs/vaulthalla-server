@@ -95,17 +95,15 @@ The build needs the private icons (`$VAULTHALLA_WEB_ICON_SRC`, default `~/vaulth
     visible to jobs that declare `environment: Production`.
 - Composite actions (`.github/actions/`): `runner`, `build`, `test`, `setup_web`, `build_web`, `sync_web_icons`
   (calls `web/bin/sync_private_icons.sh`), `test_web`, `setup_valkyrianlabs_tools` (vl-release, pmdocs from apt).
-  Runners (since 2026-10-07): the VPS runner `vps` (user `gh-vaulthalla`, labels `vaulthalla`, `vps-ci`; shared
-  `ci.slice` CPU/memory pool with the ValkyrianLabs runner). CI targets `[self-hosted, Linux, X64, vaulthalla, vps-ci]`
+  Runners: the Valkyrian Labs VPS build pool (valkyrianlabs org runners labelled `vps-ci`, in the shared `ci.slice`
+  CPU/memory pool; the repository moved from vaulthalla/server in 2026-10). CI targets `[self-hosted, Linux, X64, vps-ci]`
   (fork PRs: `ubuntu-latest`, which has no icon store); release jobs target the same labels. Every step runs in the
   disposable CI container (`ci/run-ci`, rootless Podman, `ci/Containerfile` with the Build-Depends, g++ 14, ccache,
   Node/pnpm, vl-release, pmdocs, gh, shellcheck) as the job's default shell, composite actions included: no host
   sudo/apt/Docker, `sudo meson install` only touches the container. Caches persist on the runner in
-  `~gh-vaulthalla/.cache/vaulthalla-ci/{ccache,pnpm-store,npm}`; the licensed icon store
-  (`~gh-vaulthalla/vaulthalla-web-icons`) is mounted read-only (`CI_RO_MOUNTS`, `VAULTHALLA_WEB_ICON_SRC`).
-  `setup_valkyrianlabs_tools` is no longer used by the workflows. The old home-server runner
-  (`vaulthalla-ci-sentinel-4044`, labels `ubuntu-latest-lts`) stays registered as the rollback: reverting the
-  workflow commit retargets it.
+  `~/.cache/vaulthalla-ci/{ccache,pnpm-store,npm}` of the runner user; the licensed icon store
+  (`/opt/ci/vaulthalla-web-icons`) is mounted read-only (`CI_RO_MOUNTS`, `VAULTHALLA_WEB_ICON_SRC`).
+  `setup_valkyrianlabs_tools` is no longer used by the workflows.
 
 ### Re-run rules
 

@@ -1,6 +1,6 @@
 # Vault key backup and restoration (Vaulthalla Desktop S2/S6)
 
-Plan of record: `vaulthalla/desktop` `docs/architecture.md` §2 S2, §6, decisions D4 (key export only through paired
+Plan of record: `valkyrianlabs/vaulthalla-desktop` `docs/architecture.md` §2 S2, §6, decisions D4 (key export only through paired
 devices or the local CLI, never browser sessions or MCP), D6 (Desktop keeps every needed version in one 1Password
 item), D7 (real restoration via `vh vault keys import`). Desktop's consumer: `Sources/VHOnePassword/BackupStatus.swift`.
 

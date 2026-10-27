@@ -1,4 +1,4 @@
-// ws book: device.* (core/src/protocols/ws/handler/Devices.cpp; protocol: docs/pairing.md in vaulthalla/desktop).
+// ws book: device.* (core/src/protocols/ws/handler/Devices.cpp; protocol: docs/pairing.md in valkyrianlabs/vaulthalla-desktop).
 //
 // Auth levels on the device listener: "pairing" commands run on a pairing-only connection (a client key that is not a
 // live device; everything else there is refused with data.code "device_unknown") and on a paired device's session;

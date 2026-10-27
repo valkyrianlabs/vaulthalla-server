@@ -114,7 +114,7 @@ shipped. The client waits at most `VAULTHALLA_CLI_TIMEOUT` (default 10s) for the
 healthy/degraded/critical and includes a live `SELECT 1` DB probe.
 
 **File transfer (`vh fs ls|get|put`, #229).** The CLI file path on hosts without a mount (macOS: the server never
-mounts there, and Finder access is Vaulthalla Desktop's File Provider, vaulthalla/desktop#1; #262). No macOS FUSE
+mounts there, and Finder access is Vaulthalla Desktop's File Provider, valkyrianlabs/vaulthalla-desktop#1; #262). No macOS FUSE
 identity adapter is coming, so nothing retires it, but don't grow it into a second file API. Bytes ride the same length-prefixed JSON frames, never a second channel
 (`protocols/shell/Transfer.hpp`, header-only and shared with the client): the request carries `"transfer": {"v":1}`
 (`put_size` for put), the daemon answers `transfer`/`transfer-ready`, then `data` frames (`seq`, base64 of at most
@@ -215,7 +215,7 @@ See `link-sharing.md`.
 
 ### Device listener and pairing (Vaulthalla Desktop, S1a)
 
-Normative protocol: `docs/pairing.md` in `vaulthalla/desktop` (its §8 test vectors are asserted in
+Normative protocol: `docs/pairing.md` in `valkyrianlabs/vaulthalla-desktop` (its §8 test vectors are asserted in
 `test_device_crypto.cpp`). Decisions D1-D3 in that repo's `docs/architecture.md` §8.
 - **Listener** (`protocols/device/`): runtime service `DeviceServer` (after ProtocolService) with its own io_context
   (4 threads + work guard). Boost.Asio `ssl::stream`, TLS 1.3 only, no tickets/session cache, client certificate
@@ -950,7 +950,7 @@ stage "Copy And Delete")
 - Rationale history: `history/stats-dashboard.md`.
 
 **S3 pricing / cost estimates** (`core/{include,src}/storage/s3/pricing/`)
-- Prices come from the **price bot**, a separate repo (`github.com/vaulthalla/vaulthalla-price-bot`, checked out at
+- Prices come from the **price bot**, a separate repo (`github.com/valkyrianlabs/vaulthalla-price-bot`, checked out at
   `/srv/vaulthalla-price-bot`, DB `vaulthalla_price_bot` on dev-db). It fetches official provider pricing, normalizes it,
   and publishes **Ed25519-signed** artifacts (`price-bot publish` / `mirror-artifacts`), served under `/v1/artifacts/`.
 - Core `PriceBotClient` fetches `/v1/artifacts/manifest.json` plus the artifacts, verifies signatures with libsodium

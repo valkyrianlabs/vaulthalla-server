@@ -261,13 +261,13 @@ jobs:
           retention-days: 14
 
   # Nexus is published to from the VPS runner, straight to Nexus on its loopback (pkg.vaulthalla.sh serves the
-  # read-only group vaulthalla-raw; uploads go to its hosted member), in the CI container sharing the host's network,
+  # read-only group valkyrian-raw; uploads go to its hosted member), in the CI container sharing the host's network,
   # as release.yml's macos-publish-nexus does. Only on manual runs; delete what these publish afterwards.
   nexus-publish-rehearsal:
     name: Nexus publish (rehearsal package)
     needs: package
     if: github.event_name == 'workflow_dispatch' && inputs.nexus_test && needs.package.result == 'success'
-    runs-on: [self-hosted, Linux, X64, vaulthalla, vps-ci]
+    runs-on: [self-hosted, Linux, X64, vps-ci]
     defaults:
       run:
         shell: bash ./ci/run-ci bash -euo pipefail {0}
@@ -283,7 +283,7 @@ jobs:
       - name: Publish
         env:
           RELEASE_PUBLISH_MODE: nexus
-          NEXUS_PKG_REPO: ${{ vars.NEXUS_PKG_UPLOAD_URL || 'http://127.0.0.1:8081/repository/vaulthalla-raw-hosted' }}
+          NEXUS_PKG_REPO: ${{ vars.NEXUS_PKG_UPLOAD_URL || 'http://127.0.0.1:8081/repository/valkyrian-raw-hosted' }}
           NEXUS_USER: ${{ secrets.NEXUS_USER }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD || secrets.NEXUS_PASS }}
         run: bash tools/macos/pkg/publish-nexus.sh pkg
@@ -293,7 +293,7 @@ jobs:
   nexus-upload-check:
     name: Nexus upload check (dummy package)
     if: github.event_name == 'workflow_dispatch' && inputs.nexus_upload_check
-    runs-on: [self-hosted, Linux, X64, vaulthalla, vps-ci]
+    runs-on: [self-hosted, Linux, X64, vps-ci]
     defaults:
       run:
         shell: bash ./ci/run-ci bash -euo pipefail {0}
@@ -310,7 +310,7 @@ jobs:
       - name: "Publish it, then again (identical bytes must be skipped)"
         env:
           RELEASE_PUBLISH_MODE: nexus
-          NEXUS_PKG_REPO: ${{ vars.NEXUS_PKG_UPLOAD_URL || 'http://127.0.0.1:8081/repository/vaulthalla-raw-hosted' }}
+          NEXUS_PKG_REPO: ${{ vars.NEXUS_PKG_UPLOAD_URL || 'http://127.0.0.1:8081/repository/valkyrian-raw-hosted' }}
           NEXUS_USER: ${{ secrets.NEXUS_USER }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD || secrets.NEXUS_PASS }}
         run: |

@@ -1,4 +1,4 @@
-// The device pairing protocol's byte-level rules (docs/pairing.md in vaulthalla/desktop, "the spec"): every test
+// The device pairing protocol's byte-level rules (docs/pairing.md in valkyrianlabs/vaulthalla-desktop, "the spec"): every test
 // vector of §8, which Desktop's VHIdentityTests assert too, so both sides compute the same commitments, codes and
 // rotation messages. Also the encodings, number-matching code input, device names and the server identity.
 

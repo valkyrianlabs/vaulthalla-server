@@ -23,7 +23,7 @@ import {
   type PendingRequest,
 } from '@/features/devices/model'
 
-// Pair a device by number matching (docs/pairing.md §3 in vaulthalla/desktop). Opening the dialog opens this account's
+// Pair a device by number matching (docs/pairing.md §3 in valkyrianlabs/vaulthalla-desktop). Opening the dialog opens this account's
 // pairing window on the node; requests from Vaulthalla Desktop appear with three codes, one of them the code the Mac
 // shows. Clicking the matching one approves the request, any other declines it (the daemon decides; the real code
 // never reaches the browser). Closing the dialog closes the window. Loaded with next/dynamic, mounted only while open.

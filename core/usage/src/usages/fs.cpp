@@ -5,7 +5,7 @@ using namespace vh::protocols::shell;
 // `vh fs`: vault file access over the CLI socket (#229), for hosts where the vault isn't mounted (macOS: the server
 // never mounts there, #262) or a script wants one file. The client moves the bytes (protocols/shell/Transfer.hpp);
 // the daemon authorizes every path with the same evaluator as the web console's HTTP lanes. Finder access on macOS is
-// Vaulthalla Desktop's (vaulthalla/desktop#1), not this command's; don't grow it into a second file API.
+// Vaulthalla Desktop's (valkyrianlabs/vaulthalla-desktop#1), not this command's; don't grow it into a second file API.
 namespace vh::protocols::shell::fs_book {
 
 static std::shared_ptr<CommandUsage> buildBaseUsage(const std::weak_ptr<CommandUsage>& parent) {

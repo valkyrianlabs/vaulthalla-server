@@ -1,6 +1,7 @@
 # Project board (GitHub Projects v2)
 
-The Roadmap board (org project #4, public) is meant to be read and driven by agents. Its
+The Roadmap board (valkyrianlabs org project #1, public; it was vaulthalla org project #4 until the
+repository moved to valkyrianlabs in 2026-10, rebuilt with `board.py transfer`) is meant to be read and driven by agents. Its
 meaning lives in `.github/project/schema.yml`: fields, options, `area:*` labels, views and the
 Ready gate. `tools/project/board.py` reconciles a project to it. Read the schema before triaging
 or picking up board work; do not infer field meaning from option names.
@@ -37,11 +38,11 @@ Field writes: `gh project item-edit` (single-select/text/date), multi-select onl
 
 ```bash
 python3 tools/project/board.py lint                 # Ready gate + stale claims, read-only
-python3 tools/project/board.py apply                # dry run against #4 (all commands default to dry run)
+python3 tools/project/board.py apply                # dry run against #1 (all commands default to dry run)
 python3 tools/project/board.py snapshot > snap.json # backup before production writes
 ```
 
-Writes need `--apply`; writes to #4 also need `--production`; repo labels need `--labels`;
+Writes need `--apply`; writes to #1 also need `--production`; repo labels need `--labels`;
 issue label writes in `migrate` need `--issue-writes`. `apply` preserves option ids (renames
 keep values), keeps retired options while in use, never drops unknown options, and compares
 view columns as a set (GitHub imposes its own column order). Group-by, sort and board column
@@ -51,9 +52,14 @@ from area labels; retiring an option is `apply` → `migrate` → `apply`.
 `ProjectV2.items(query:)` evaluates view filter syntax, which is how filters were verified.
 `seed-sandbox` copies items into a private copy (`gh project copy`) for rehearsing schema
 changes; it strips the copy's built-in workflows first (the copy brings Auto-close enabled).
+`transfer` rebuilds a board from a `snapshot` in another owner's project (made with `gh project copy`, which
+brings fields, options, iterations, views with their group/sort settings and the built-in workflows, but not
+the Auto-add workflow or any items): it adds issues, PRs and drafts in board order, sets their values by name
+and re-applies issue types (org-level, so they are lost if the new org lacks one at transfer time). It is
+idempotent and prints every value it could not map.
 
 Gotchas: `gh issue create --project` fails on gh 2.45 (it queries the removed classic Projects
-API); create the issue, then add it (#4's auto-add workflow usually picks it up). Draft items
+API); create the issue, then add it (#1's auto-add workflow usually picks it up). Draft items
 cannot carry labels, so `migrate` skips them.
 
 ## Rollout status

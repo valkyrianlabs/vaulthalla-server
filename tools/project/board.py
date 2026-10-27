@@ -13,6 +13,9 @@ Every command is a dry run unless --apply is given. Mutating the production boar
   lint          check open items against the Ready gate and flag stale claims (read-only)
   seed-sandbox  copy items and their field values from --from into a private sandbox
                 project and strip its built-in workflows (rehearsal only)
+  transfer      rebuild a board in another owner's project from a `snapshot` file: issues and
+                pull requests (node ids survive repository transfers), drafts, field values,
+                issue types and item order; idempotent, so a partial run can be repeated
 
 Needs gh authenticated with the `project` scope (plus repo for labels).
 """
@@ -26,6 +29,7 @@ import pathlib
 import re
 import subprocess
 import sys
+import time
 
 import yaml
 
@@ -48,11 +52,16 @@ class GitHub:
 
     def query(self, q: str, **variables):
         body = json.dumps({"query": q, "variables": variables})
-        proc = subprocess.run(["gh", "api", "graphql", "--input", "-"], input=body,
-                              capture_output=True, text=True)
-        if proc.returncode != 0:
-            raise SystemExit(f"graphql error: {proc.stderr.strip() or proc.stdout.strip()}")
-        return json.loads(proc.stdout)["data"]
+        for attempt in range(6):
+            proc = subprocess.run(["gh", "api", "graphql", "--input", "-"], input=body,
+                                  capture_output=True, text=True)
+            if proc.returncode == 0:
+                return json.loads(proc.stdout)["data"]
+            err = proc.stderr.strip() or proc.stdout.strip()
+            # Bulk writes (transfer) trip GitHub's secondary rate limit; it clears within a minute or two.
+            if "secondary rate limit" not in err.lower() or attempt == 5:
+                raise SystemExit(f"graphql error: {err}")
+            time.sleep(30 * (attempt + 1))
 
     def mutate(self, desc: str, q: str, **variables):
         print(("  WRITE " if self.apply else "  would ") + desc)
@@ -71,7 +80,8 @@ query($owner:String!, $number:Int!) { organization(login:$owner) { projectV2(num
   id number title public
   fields(first:100) { nodes { __typename
     ... on ProjectV2Field { id name dataType }
-    ... on ProjectV2IterationField { id name dataType }
+    ... on ProjectV2IterationField { id name dataType configuration {
+      iterations { id title } completedIterations { id title } } }
     ... on ProjectV2SingleSelectField { id name dataType options { id name color description } }
     ... on ProjectV2MultiSelectField { id name dataType multiSelectOptions { id name color description } } } }
   views(first:50) { nodes { id number name layout filter
@@ -87,12 +97,14 @@ query($id:ID!, $after:String) { node(id:$id) { ... on ProjectV2 {
       ... on ProjectV2ItemFieldMultiSelectValue { options { name } field { ... on ProjectV2FieldCommon { name } } }
       ... on ProjectV2ItemFieldTextValue { text field { ... on ProjectV2FieldCommon { name } } }
       ... on ProjectV2ItemFieldDateValue { date field { ... on ProjectV2FieldCommon { name } } }
-      ... on ProjectV2ItemFieldNumberValue { number field { ... on ProjectV2FieldCommon { name } } } } }
+      ... on ProjectV2ItemFieldNumberValue { number field { ... on ProjectV2FieldCommon { name } } }
+      ... on ProjectV2ItemFieldIterationValue { title field { ... on ProjectV2FieldCommon { name } } } } }
     content { __typename
       ... on Issue { id number title state body issueType { name } labels(first:50) { nodes { name } }
+                     repository { nameWithOwner }
                      subIssues { totalCount } blockedBy(first:20) { nodes { state } } }
-      ... on PullRequest { id number title state }
-      ... on DraftIssue { id title } } } } } } }"""
+      ... on PullRequest { id number title state repository { nameWithOwner } }
+      ... on DraftIssue { id title body } } } } } } }"""
 
 
 def load_board(gh: GitHub, owner: str, number: int) -> dict:
@@ -103,6 +115,10 @@ def load_board(gh: GitHub, owner: str, number: int) -> dict:
     for f in p["fields"]["nodes"]:
         opts = f.get("options") or f.get("multiSelectOptions")
         fields[f["name"]] = {"id": f["id"], "dataType": f["dataType"], "options": opts}
+        if f.get("configuration"):
+            cfg = f["configuration"]
+            fields[f["name"]]["iterations"] = {i["title"]: i["id"]
+                                               for i in cfg["iterations"] + cfg["completedIterations"]}
     views = {v["name"]: {"id": v["id"], "layout": v["layout"], "filter": v["filter"] or "",
                          "fields": [x["name"] for x in v["fields"]["nodes"] if x]}
              for v in p["views"]["nodes"]}
@@ -137,9 +153,12 @@ def normalize_item(n: dict) -> dict:
             values[name] = v["date"]
         elif kind.endswith("NumberValue"):
             values[name] = v["number"]
+        elif kind.endswith("IterationValue"):
+            values[name] = v["title"]
     c = n["content"] or {"__typename": "Unknown"}
     return {
         "id": n["id"], "kind": c["__typename"], "content_id": c.get("id"),
+        "repo": (c.get("repository") or {}).get("nameWithOwner"),
         "number": c.get("number"), "title": c.get("title", ""),
         "open": c.get("state", "OPEN") == "OPEN", "body": c.get("body") or "",
         "issue_type": (c.get("issueType") or {}).get("name"),
@@ -529,26 +548,101 @@ def cmd_seed_sandbox(gh, schema, args):
                         "mutation($p:ID!,$c:ID!){addProjectV2ItemById(input:{projectId:$p,contentId:$c}){item{id}}}",
                         p=dst["id"], c=item["content_id"])
         new_id = res["addProjectV2ItemById"]["item"]["id"] if res else None
-        for fname, val in item["values"].items():
-            f = dst["fields"].get(fname)
-            if not f or fname == "Title":
-                continue
-            if f["options"]:
-                by_name = {o["name"]: o["id"] for o in f["options"]}
-                vals = val if isinstance(val, list) else [val]
-                if any(v not in by_name for v in vals):
-                    continue
-                value = ({"multiSelectOptionIds": [by_name[v] for v in vals]} if f["dataType"] == "MULTI_SELECT"
-                         else {"singleSelectOptionId": by_name[vals[0]]})
-            elif f["dataType"] in ("TEXT", "DATE", "NUMBER"):
-                value = {f["dataType"].lower(): val}
-            else:
-                continue
-            if gh.apply:
-                gh.query("mutation($p:ID!,$i:ID!,$f:ID!,$v:ProjectV2FieldValue!){updateProjectV2ItemFieldValue("
-                         "input:{projectId:$p,itemId:$i,fieldId:$f,value:$v}){clientMutationId}}",
-                         p=dst["id"], i=new_id, f=f["id"], v=value)
+        copy_values(gh, dst, new_id, item)
     report([], gh)
+
+
+def field_value(f: dict, val) -> dict | None:
+    """The ProjectV2FieldValue for `val` (option/iteration names, text, date, number) in field `f`, or None."""
+    if f["options"]:
+        by_name = {o["name"]: o["id"] for o in f["options"]}
+        vals = val if isinstance(val, list) else [val]
+        if any(v not in by_name for v in vals):
+            return None
+        return ({"multiSelectOptionIds": [by_name[v] for v in vals]} if f["dataType"] == "MULTI_SELECT"
+                else {"singleSelectOptionId": by_name[vals[0]]})
+    if f["dataType"] == "ITERATION":
+        return {"iterationId": f["iterations"][val]} if val in f.get("iterations", {}) else None
+    if f["dataType"] in ("TEXT", "DATE", "NUMBER"):
+        return {f["dataType"].lower(): val}
+    return None
+
+
+def copy_values(gh, dst: dict, item_id: str | None, item: dict) -> list[str]:
+    """Set `item`'s field values on `item_id` in board `dst`, matched by field and option name.
+
+    Returns the values that have no counterpart on `dst`. Value writes are not counted as writes.
+    """
+    missing = []
+    for fname, val in item["values"].items():
+        if fname == "Title":
+            continue
+        f = dst["fields"].get(fname)
+        value = field_value(f, val) if f else None
+        if value is None:
+            missing.append(f"{ref(item)}: {fname}={val!r}")
+            continue
+        if gh.apply:
+            gh.query("mutation($p:ID!,$i:ID!,$f:ID!,$v:ProjectV2FieldValue!){updateProjectV2ItemFieldValue("
+                     "input:{projectId:$p,itemId:$i,fieldId:$f,value:$v}){clientMutationId}}",
+                     p=dst["id"], i=item_id, f=f["id"], v=value)
+    return missing
+
+
+def cmd_transfer(gh, schema, args):
+    snap = json.loads(args.snapshot.read_text())
+    dst = load_board(gh, args.owner, args.project)
+    if args.owner == schema["owner"]:
+        guard_mutation(args, schema, dst["number"])
+    if dst["id"] == snap["id"]:
+        raise SystemExit("transfer needs a different target project than the snapshot's")
+    print(f"[transfer] snapshot '{snap['title']}' ({len(snap['items'])} items) -> {args.owner}#{dst['number']} "
+          f"{dst['title']}{'' if gh.apply else ' -- dry run'}")
+    types = {t["name"]: t["id"] for t in gh.query(
+        "query($o:String!){organization(login:$o){issueTypes(first:50){nodes{id name}}}}",
+        o=args.owner)["organization"]["issueTypes"]["nodes"]}
+    have = {}
+    for i in load_items(gh, dst["id"]):
+        have[i["content_id"] if i["kind"] != "DraftIssue" else ("draft", i["title"])] = i
+    notes, prev = [], None
+    for item in snap["items"]:
+        if item["kind"] in ("Issue", "PullRequest"):
+            key = item["content_id"]
+        elif item["kind"] == "DraftIssue":
+            key = ("draft", item["title"])
+        else:
+            notes.append(f"skipped {item['kind']} item '{item['title'][:40]}' (content not readable)")
+            continue
+        current = have.get(key)
+        if current:
+            item_id = current["id"]
+        elif item["kind"] == "DraftIssue":
+            res = gh.mutate(f"add {ref(item)}",
+                            "mutation($p:ID!,$t:String!,$b:String){addProjectV2DraftIssue("
+                            "input:{projectId:$p,title:$t,body:$b}){projectItem{id}}}",
+                            p=dst["id"], t=item["title"], b=item["body"])
+            item_id = res["addProjectV2DraftIssue"]["projectItem"]["id"] if res else None
+        else:
+            res = gh.mutate(f"add {ref(item)}",
+                            "mutation($p:ID!,$c:ID!){addProjectV2ItemById(input:{projectId:$p,contentId:$c}){item{id}}}",
+                            p=dst["id"], c=item["content_id"])
+            item_id = res["addProjectV2ItemById"]["item"]["id"] if res else None
+        # Values already on the target win only when they match; the snapshot is the source of truth.
+        stale = {k: v for k, v in item["values"].items() if not current or current["values"].get(k) != v}
+        notes += copy_values(gh, dst, item_id, {**item, "values": stale})
+        if item["kind"] == "Issue" and item["issue_type"] and (not current or current["issue_type"] != item["issue_type"]):
+            if item["issue_type"] not in types:
+                notes.append(f"{ref(item)}: issue type {item['issue_type']} missing in org {args.owner}")
+            else:
+                gh.mutate(f"type {ref(item)} {item['issue_type']}",
+                          "mutation($i:ID!,$t:ID!){updateIssue(input:{id:$i,issueTypeId:$t}){clientMutationId}}",
+                          i=item["content_id"], t=types[item["issue_type"]])
+        if gh.apply and item_id:
+            gh.query("mutation($p:ID!,$i:ID!,$a:ID){updateProjectV2ItemPosition("
+                     "input:{projectId:$p,itemId:$i,afterId:$a}){clientMutationId}}",
+                     p=dst["id"], i=item_id, a=prev)
+        prev = item_id
+    report(notes, gh)
 
 
 def report(notes: list[str], gh: GitHub):
@@ -561,7 +655,7 @@ def report(notes: list[str], gh: GitHub):
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["snapshot", "apply", "migrate", "lint", "seed-sandbox"])
+    ap.add_argument("command", choices=["snapshot", "apply", "migrate", "lint", "seed-sandbox", "transfer"])
     ap.add_argument("--schema", type=pathlib.Path, default=SCHEMA)
     ap.add_argument("--owner")
     ap.add_argument("--project", type=int, help="project number (default: schema project)")
@@ -572,15 +666,18 @@ def main(argv=None) -> int:
     ap.add_argument("--issue-writes", action="store_true", help="migrate: add labels to issues")
     ap.add_argument("--source", type=int, help="seed-sandbox: project to copy items from")
     ap.add_argument("--all", action="store_true", help="seed-sandbox: include closed items")
+    ap.add_argument("--snapshot", type=pathlib.Path, help="transfer: snapshot JSON to rebuild from")
     args = ap.parse_args(argv)
     schema = yaml.safe_load(args.schema.read_text())
     args.owner = args.owner or schema["owner"]
     args.project = args.project or schema["project"]
     if args.command == "seed-sandbox" and not args.source:
         ap.error("seed-sandbox needs --source")
+    if args.command == "transfer" and not args.snapshot:
+        ap.error("transfer needs --snapshot")
     gh = GitHub(apply=args.apply)
     cmd = {"snapshot": cmd_snapshot, "apply": cmd_apply, "migrate": cmd_migrate,
-           "lint": cmd_lint, "seed-sandbox": cmd_seed_sandbox}[args.command]
+           "lint": cmd_lint, "seed-sandbox": cmd_seed_sandbox, "transfer": cmd_transfer}[args.command]
     return cmd(gh, schema, args) or 0
 
 

@@ -15,7 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DISPATCH_REF = "${{ github.event.inputs.ref || github.ref }}"
 # Every CI step runs in the disposable CI container (ci/run-ci, ci/Containerfile) on the VPS runner, never on the host.
 CONTAINER_SHELL = "bash ./ci/run-ci bash -euo pipefail {0}"
-VPS_RUNNER = "[self-hosted, Linux, X64, vaulthalla, vps-ci]"
+VPS_RUNNER = "[self-hosted, Linux, X64, vps-ci]"
 
 
 def _read(relative: str) -> str:
@@ -134,7 +134,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
     def test_ci_and_its_composite_actions_run_in_the_ci_container(self) -> None:
         ci = _read(".github/workflows/build_and_test.yml")
         self.assertEqual(ci.count(f"shell: {CONTAINER_SHELL}"), 2)
-        self.assertEqual(ci.count('"self-hosted","Linux","X64","vaulthalla","vps-ci"'), 2)
+        self.assertEqual(ci.count('"self-hosted","Linux","X64","vps-ci"'), 2)
         self.assertNotIn("sudo", _code(ci))
         for action in ("build", "test", "setup_web", "build_web", "test_web", "sync_web_icons"):
             text = _read(f".github/actions/{action}/action.yml")

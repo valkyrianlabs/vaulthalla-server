@@ -1,6 +1,7 @@
 # CI container
 
-Vaulthalla's GitHub Actions run on the VPS runner (`vps`: user `gh-vaulthalla`, labels `vaulthalla`, `vps-ci`). Every
+Vaulthalla's GitHub Actions run on the Valkyrian Labs VPS build pool (org runners labelled `vps-ci`, shared with the
+other valkyrianlabs repositories). Every
 run step, including the composite actions', executes in a disposable rootless Podman container:
 
 ```yaml
@@ -17,7 +18,7 @@ defaults:
   options: `CI_CACHE_NAMES` (extra persistent caches, `<cache>/<name>` → `/cache/<name>`) and `CI_RO_MOUNTS`
   (read-only host paths). The workspace is `/workspace`; files stay owned by the runner user.
 - Caches on the runner: `~/.cache/vaulthalla-ci/{ccache,pnpm-store,npm}` (`CCACHE_DIR=/cache/ccache`).
-- The licensed icon store `~gh-vaulthalla/vaulthalla-web-icons` is mounted read-only at `/opt/vaulthalla-web-icons`
+- The licensed icon store `/opt/ci/vaulthalla-web-icons` on the VPS is mounted read-only at `/opt/vaulthalla-web-icons`
   (`VAULTHALLA_WEB_ICON_SRC`); it is never copied into the repository.
 
 Run any step locally the same way (needs Podman): `./ci/run-ci meson compile -C build`.

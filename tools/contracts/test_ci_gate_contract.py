@@ -191,7 +191,7 @@ class CiGateDecisionTests(unittest.TestCase):
             event_path.write_text(json.dumps(push("merge", "Merge pull request #7")))
             output = Path(tmp, "output")
             env = {"GITHUB_EVENT_NAME": "push", "GITHUB_EVENT_PATH": str(event_path), "GITHUB_OUTPUT": str(output),
-                   "GITHUB_REPOSITORY": "vaulthalla/server", "GH_TOKEN": "x"}
+                   "GITHUB_REPOSITORY": "valkyrianlabs/vaulthalla-server", "GH_TOKEN": "x"}
 
             def broken(*_args, **_kwargs):
                 raise OSError("network down")

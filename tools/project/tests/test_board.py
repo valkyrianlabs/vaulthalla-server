@@ -170,5 +170,28 @@ class Lint(unittest.TestCase):
         self.assertFalse(board.has_heading("acceptance is mentioned in prose", ["Acceptance"]))
 
 
+class TransferValueTests(unittest.TestCase):
+    """transfer and seed-sandbox map values by name: option and iteration ids differ between projects."""
+
+    SINGLE = {"dataType": "SINGLE_SELECT", "options": [{"id": "o1", "name": "P0"}, {"id": "o2", "name": "P1"}]}
+    MULTI = {"dataType": "MULTI_SELECT", "options": [{"id": "h1", "name": "none"}, {"id": "h2", "name": "migration"}]}
+    ITER = {"dataType": "ITERATION", "options": None, "iterations": {"Iteration 3": "i3"}}
+
+    def test_options_and_iterations_map_by_name(self):
+        self.assertEqual(board.field_value(self.SINGLE, "P1"), {"singleSelectOptionId": "o2"})
+        self.assertEqual(board.field_value(self.MULTI, ["migration", "none"]), {"multiSelectOptionIds": ["h2", "h1"]})
+        self.assertEqual(board.field_value(self.ITER, "Iteration 3"), {"iterationId": "i3"})
+        self.assertEqual(board.field_value({"dataType": "DATE", "options": None}, "2026-10-27"), {"date": "2026-10-27"})
+
+    def test_unknown_names_are_reported_not_guessed(self):
+        self.assertIsNone(board.field_value(self.SINGLE, "P9"))
+        self.assertIsNone(board.field_value(self.MULTI, ["migration", "gone"]))
+        self.assertIsNone(board.field_value(self.ITER, "Iteration 9"))
+        item = {"number": 7, "title": "t", "values": {"Title": "t", "Priority": "P9", "Nope": "x"}}
+        dst = {"id": "p", "fields": {"Priority": self.SINGLE}}
+        self.assertEqual(board.copy_values(board.GitHub(apply=False), dst, None, item),
+                         ["#7: Priority='P9'", "#7: Nope='x'"])
+
+
 if __name__ == "__main__":
     unittest.main()

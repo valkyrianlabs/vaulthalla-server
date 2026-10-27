@@ -122,7 +122,7 @@ Overwrite, reported per row as `can_overwrite`).
 ## Paired devices (`features/devices`)
 
 Vaulthalla Desktop pairing over ws `device.*` (typed in `WebSocketCommandMap`, `models/device.ts`; protocol
-`docs/pairing.md` in vaulthalla/desktop, daemon side in architecture.md "Device listener and pairing"). No new
+`docs/pairing.md` in valkyrianlabs/vaulthalla-desktop, daemon side in architecture.md "Device listener and pairing"). No new
 permission bits (D3): any signed-in user, super-admin parts gated with `useCan({superAdmin: true})`.
 - **Routes:** `/devices` (nav item "Devices" in the first section, everyone; also "Your devices" in the user menu) and
   `/devices/all` (super admins; `DevicesShell` shows the `LinkTabs` only to them, others get the typed denied state).

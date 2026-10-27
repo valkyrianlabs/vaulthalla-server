@@ -60,7 +60,7 @@ Full guide: [Install On macOS](/macos/installation).
 :::
 
 :::tab[macOS (package)]{value="pkg"}
-Download `vaulthalla-<version>-arm64.pkg` from the [GitHub releases](https://github.com/vaulthalla/server/releases), then:
+Download `vaulthalla-<version>-arm64.pkg` from the [GitHub releases](https://github.com/valkyrianlabs/vaulthalla-server/releases), then:
 
 ```bash
 sudo installer -pkg vaulthalla-<version>-arm64.pkg -target /

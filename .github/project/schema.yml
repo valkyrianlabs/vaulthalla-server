@@ -1,4 +1,4 @@
-# Vaulthalla Roadmap board schema (GitHub Projects v2, org project #4).
+# Vaulthalla Roadmap board schema (GitHub Projects v2, valkyrianlabs org project #1).
 #
 # This file is the source of truth for what every board field, option, area label and view
 # means. Agents read it to decide what an issue needs before work starts (where the code lives,
@@ -22,9 +22,9 @@
 #     `none` means "assessed, nothing applies". Unknown is never presented as safe.
 
 version: 1
-owner: vaulthalla
-repo: vaulthalla/server
-project: 4  # production board; board.py refuses to mutate it without --production
+owner: valkyrianlabs
+repo: valkyrianlabs/vaulthalla-server
+project: 1  # production board; board.py refuses to mutate it without --production
 
 # Org-level issue types (managed in org settings; `apply` only checks that they exist).
 issue_types:

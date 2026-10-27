@@ -15,7 +15,7 @@ namespace vh::platform::mount {
 //   service_private  mounted for the daemon's own uid only (no allow_other). No platform provides it.
 //   multiuser        any local uid, each request authorized for its caller (allow_other).
 // Linux: multiuser only, as it has always been. macOS: disabled only (#262): the server never mounts there, and
-// Finder access belongs to Vaulthalla Desktop's File Provider (vaulthalla/desktop#1).
+// Finder access belongs to Vaulthalla Desktop's File Provider (valkyrianlabs/vaulthalla-desktop#1).
 [[nodiscard]] std::string_view defaultMode() noexcept;
 [[nodiscard]] bool supportsMode(std::string_view mode) noexcept;
 
