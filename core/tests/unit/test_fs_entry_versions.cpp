@@ -1,4 +1,4 @@
-// Entry versions for sync clients (#257, vaulthalla/desktop#1): every entry carries `metadata_version` and every file
+// Entry versions for sync clients (#257, valkyrianlabs/vaulthalla-desktop#1): every entry carries `metadata_version` and every file
 // `content_version`, the strong generation ETag GET /download/content serves for its bytes. The ids clients key items
 // by survive rename and move. Through the real ws handlers (fs.metadata, fs.dir.list, fs.entry.rename, fs.entry.move),
 // the FUSE rename call and the HTTP download lane.

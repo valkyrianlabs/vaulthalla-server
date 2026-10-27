@@ -1,7 +1,7 @@
 import type { Response } from '@/lib/ws/client'
 import type { Device } from '@/models/device'
 
-// Paired devices (Vaulthalla Desktop). Normative protocol: docs/pairing.md in vaulthalla/desktop (§3 number matching,
+// Paired devices (Vaulthalla Desktop). Normative protocol: docs/pairing.md in valkyrianlabs/vaulthalla-desktop (§3 number matching,
 // §6 revocation); the daemon side is ops::devices (ws device.*).
 
 export type PairingWindow = Response<'device.pairing.open'>['window']

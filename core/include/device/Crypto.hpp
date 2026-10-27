@@ -10,7 +10,7 @@
 
 #include <openssl/types.h>
 
-// The byte-level protocol of device pairing (docs/pairing.md in vaulthalla/desktop, "the spec"): SPKI hashes,
+// The byte-level protocol of device pairing (docs/pairing.md in valkyrianlabs/vaulthalla-desktop, "the spec"): SPKI hashes,
 // the commit-then-reveal SAS, the key rotation proof and the encodings they travel in. Every function here is pure
 // and deterministic except the CSPRNG helpers; the spec's test vectors are asserted in test_device_crypto.cpp.
 namespace vh::device::crypto {

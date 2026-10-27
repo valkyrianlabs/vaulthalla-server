@@ -6,7 +6,7 @@ The dev infrastructure is on the maintainer's home Proxmox server. All VMs are o
 |---|---|---|---|
 | `dev` (10.0.0.11) | **This VM.** Agent dev box, checkout at `/srv/vaulthalla` | local, `coop` (uid 1000, passwordless sudo, in `vaulthalla` + `fuse` groups) | Yes, it's a disposable agent VM |
 | `vh-storage` (10.0.0.33) | **Production test lab.** Ubuntu 24.04, 8 vCPU, 31 GiB, 1 TB `/dev/sdb1` mounted at `/var/lib/vaulthalla`, **hardware TPM** (`/dev/tpm0`), local PostgreSQL 16 + nginx, installs from the real `apt.vaulthalla.sh` repo | `ssh vh-storage` (user `coop`, passwordless sudo) | **No.** Treat it as production. Get approval before any mutation |
-| `vps` (GitHub Actions runner) | Off-site VPS shared with the ValkyrianLabs runner. Vaulthalla's runner is user `gh-vaulthalla` (no sudo, no docker), service `github-vaulthalla-runner.service` in `ci.slice`; CI runs in rootless Podman containers (`ci/run-ci`) | through GitHub Actions only (labels `vaulthalla`, `vps-ci`) | No: shared CI host |
+| `vps` (GitHub Actions runners) | Off-site VPS. Vaulthalla's CI runs on the Valkyrian Labs build pool there (valkyrianlabs org runners, no sudo, no docker, in `ci.slice`), in rootless Podman containers (`ci/run-ci`) | through GitHub Actions only (label `vps-ci`) | No: shared CI host |
 | `dev-db` (10.0.0.20) | Shared PostgreSQL 16 for the maintainer's side projects (2 vCPU, 7.7 GiB, 19 GB root disk at 50%). **Not used by the vaulthalla core daemon or its tests** | `ssh dev-db` (user `coop`, passwordless sudo). PG listens on `127.0.0.1` + `10.0.0.20:5432`, scram auth from `10.0.0.0/24` | Partly. Agents may create and drop their **own** burner DBs and roles (via `sudo -u postgres`), but must never modify existing DBs. **Prefer the dev VM's local PostgreSQL**, which is simpler |
 
 ## This VM (`dev`)
@@ -16,7 +16,7 @@ The dev infrastructure is on the maintainer's home Proxmox server. All VMs are o
   `vaulthalla-dev*.service`, `/mnt/vh_dev`, DB `vaulthalla_dev`, ports +100, `vh-dev`), and `VH_INSTANCE= make dev` is
   the old in-place dev install.
 - `vaulthalla-price-bot.service` (gunicorn on `127.0.0.1:36933`) runs the **price bot**, a separate repo checked out at
-  `/srv/vaulthalla-price-bot` (github.com/vaulthalla/vaulthalla-price-bot). It drives S3 cost estimates; see
+  `/srv/vaulthalla-price-bot` (github.com/valkyrianlabs/vaulthalla-price-bot). It drives S3 cost estimates; see
   `architecture.md` → S3 pricing. It's outside this repo's install lifecycle: `make uninstall/dev` must not touch it,
   and `vaulthalla*` unit globs match it.
 - Dev HTTPS: `Caddyfile` → `https://vh.home.arpa:8443` (tls internal; `/ws`→36969, `/preview|/download|/upload`
@@ -29,7 +29,7 @@ The dev infrastructure is on the maintainer's home Proxmox server. All VMs are o
   dev's `/srv/vaulthalla/.bashrc` is byte-identical to the Mac's) and root-owned `cloudflare.ini`. **Never cat, print,
   or commit these.** Source them to use them. The two older env files under `deploy/` are retired
   (2026-10-22); `bin/tests/retire_legacy_test_env.sh` offers to delete stray copies.
-- Git remotes: `origin` (github.com/vaulthalla/server), `web-repo` (legacy web repo history).
+- Git remotes: `origin` (github.com/valkyrianlabs/vaulthalla-server), `web-repo` (legacy web repo history).
 
 ## dev-db contents (surveyed 2026-09-30)
 

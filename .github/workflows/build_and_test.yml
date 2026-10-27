@@ -14,15 +14,15 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# Runners: pushes and pull requests from branches of this repository run on the VPS runner
-# (gh-vaulthalla, labels vaulthalla + vps-ci); pull requests from forks (untrusted code that could also
+# Runners: pushes and pull requests from branches of this repository run on the
+# Valkyrian Labs VPS build pool (label vps-ci); pull requests from forks (untrusted code that could also
 # rewrite this file) run on GitHub-hosted runners, which have no licensed icon store, so their icon sync fails.
 # Every run step (including the composite actions') executes in the disposable CI container (ci/run-ci,
 # rootless Podman, ci/Containerfile): no host sudo, apt or Docker. ccache and the pnpm store persist in the
 # runner's cache; the licensed icon store is mounted read-only and never enters the repository.
 env:
   CI_CACHE_NAMES: ccache
-  CI_RO_MOUNTS: /home/gh-vaulthalla/vaulthalla-web-icons:/opt/vaulthalla-web-icons
+  CI_RO_MOUNTS: /opt/ci/vaulthalla-web-icons:/opt/vaulthalla-web-icons
   VAULTHALLA_WEB_ICON_SRC: /opt/vaulthalla-web-icons
 
 jobs:
@@ -54,7 +54,7 @@ jobs:
   build:
     needs: gate
     if: ${{ !cancelled() && needs.gate.outputs.run != 'false' }}
-    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || fromJSON('["self-hosted","Linux","X64","vaulthalla","vps-ci"]') }}
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || fromJSON('["self-hosted","Linux","X64","vps-ci"]') }}
     defaults:
       run:
         shell: bash ./ci/run-ci bash -euo pipefail {0}
@@ -71,7 +71,7 @@ jobs:
     name: Release contract, packaging contracts, lifecycle and lab tests, shellcheck
     needs: gate
     if: ${{ !cancelled() && needs.gate.outputs.run != 'false' }}
-    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || fromJSON('["self-hosted","Linux","X64","vaulthalla","vps-ci"]') }}
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || fromJSON('["self-hosted","Linux","X64","vps-ci"]') }}
     defaults:
       run:
         shell: bash ./ci/run-ci bash -euo pipefail {0}

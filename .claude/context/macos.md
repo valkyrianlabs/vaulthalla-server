@@ -1,7 +1,7 @@
 # macOS port (roadmap #199)
 
 Started 2026-10-12. Goal: a native Apple Silicon daemon with the same `vh`/web/`vh setup` experience. The server has
-no FUSE on macOS; Finder is Vaulthalla Desktop's File Provider (vaulthalla/desktop#1, see below).
+no FUSE on macOS; Finder is Vaulthalla Desktop's File Provider (valkyrianlabs/vaulthalla-desktop#1, see below).
 Decisions awaiting the maintainer are `needs:review` issues #200–#206 on the Roadmap's macOS view.
 
 ## Layout
@@ -30,7 +30,7 @@ Decisions awaiting the maintainer are `needs:review` issues #200–#206 on the R
 a cask dependency); its build path, mount modes and proof tooling from #228/#213 were removed in #262 (history stays
 in git: `tools/macos/fuse-probe/` lived there). Finder integration belongs to **Vaulthalla Desktop**, through a File
 Provider extension that talks to the daemon over the mTLS device listener under server-side RBAC
-(vaulthalla/desktop#1). The server gets no macOS filesystem presentation logic, and Desktop hosts no server features.
+(valkyrianlabs/vaulthalla-desktop#1). The server gets no macOS filesystem presentation logic, and Desktop hosts no server features.
 
 - Build: on darwin `core/meson.build` never looks for `fuse3`; the bridge sources are left out and
   `fuse/unbuilt/Service.cpp` is the service. `-Dfuse=auto|disabled` is silent; `-Dfuse=enabled` fails at setup with

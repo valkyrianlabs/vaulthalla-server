@@ -36,20 +36,20 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
-# Runners: the VPS runner (gh-vaulthalla, labels vaulthalla + vps-ci). Every run step executes in the disposable CI
+# Runners: the Valkyrian Labs VPS build pool (label vps-ci). Every run step executes in the disposable CI
 # container (ci/run-ci, rootless Podman, ci/Containerfile), which carries vl-release, pmdocs, gh, shellcheck, Node/pnpm
 # and the build dependencies: no host sudo, apt or Docker. The licensed icon store is mounted read-only.
 env:
   RELEASE_REF: ${{ github.event.inputs.ref || github.ref }}
   DOCS_SYNC_ENDPOINT: ${{ vars.DOCS_SYNC_ENDPOINT || 'https://vaulthalla.io/api/documentation/sync' }}
   CI_CACHE_NAMES: ccache
-  CI_RO_MOUNTS: /home/gh-vaulthalla/vaulthalla-web-icons:/opt/vaulthalla-web-icons
+  CI_RO_MOUNTS: /opt/ci/vaulthalla-web-icons:/opt/vaulthalla-web-icons
   VAULTHALLA_WEB_ICON_SRC: /opt/vaulthalla-web-icons
 
 jobs:
   release-check:
     name: Release check
-    runs-on: [self-hosted, Linux, X64, vaulthalla, vps-ci]
+    runs-on: [self-hosted, Linux, X64, vps-ci]
     defaults:
       run:
         shell: bash ./ci/run-ci bash -euo pipefail {0}
@@ -100,7 +100,7 @@ jobs:
 
   contracts-verify:
     name: Packaging contracts, lifecycle and lab tests, shellcheck
-    runs-on: [self-hosted, Linux, X64, vaulthalla, vps-ci]
+    runs-on: [self-hosted, Linux, X64, vps-ci]
     defaults:
       run:
         shell: bash ./ci/run-ci bash -euo pipefail {0}
@@ -123,7 +123,7 @@ jobs:
   # pre_build) and checks its budgets, so the release never builds the web app twice (#185).
   web-verify:
     name: Web checks
-    runs-on: [self-hosted, Linux, X64, vaulthalla, vps-ci]
+    runs-on: [self-hosted, Linux, X64, vps-ci]
     defaults:
       run:
         shell: bash ./ci/run-ci bash -euo pipefail {0}
@@ -147,7 +147,7 @@ jobs:
 
   docs-validate:
     name: Documentation validation
-    runs-on: [self-hosted, Linux, X64, vaulthalla, vps-ci]
+    runs-on: [self-hosted, Linux, X64, vps-ci]
     defaults:
       run:
         shell: bash ./ci/run-ci bash -euo pipefail {0}
@@ -164,7 +164,7 @@ jobs:
 
   release-artifacts:
     name: Prepare, build and validate release artifacts
-    runs-on: [self-hosted, Linux, X64, vaulthalla, vps-ci]
+    runs-on: [self-hosted, Linux, X64, vps-ci]
     defaults:
       run:
         shell: bash ./ci/run-ci bash -euo pipefail {0}
@@ -219,7 +219,7 @@ jobs:
 
   publish-debian:
     name: Publish Debian package
-    runs-on: [self-hosted, Linux, X64, vaulthalla, vps-ci]
+    runs-on: [self-hosted, Linux, X64, vps-ci]
     defaults:
       run:
         shell: bash ./ci/run-ci bash -euo pipefail {0}
@@ -267,7 +267,7 @@ jobs:
 
   github-release:
     name: GitHub release
-    runs-on: [self-hosted, Linux, X64, vaulthalla, vps-ci]
+    runs-on: [self-hosted, Linux, X64, vps-ci]
     defaults:
       run:
         shell: bash ./ci/run-ci bash -euo pipefail {0}
@@ -458,12 +458,12 @@ jobs:
           git push -q origin HEAD:main
 
   # The package into the Nexus raw repository, from the VPS runner straight to Nexus on its loopback (the public
-  # pkg.vaulthalla.sh serves the read-only group vaulthalla-raw; uploads go to its hosted member). In the CI container
+  # pkg.vaulthalla.sh serves the read-only group valkyrian-raw; uploads go to its hosted member). In the CI container
   # sharing the host's network (see the job's env), the APT publication's gate and credentials, never cancelled.
   # Immutable: identical bytes already there are skipped, different ones refused.
   macos-publish-nexus:
     name: Publish the macOS package to Nexus
-    runs-on: [self-hosted, Linux, X64, vaulthalla, vps-ci]
+    runs-on: [self-hosted, Linux, X64, vps-ci]
     defaults:
       run:
         shell: bash ./ci/run-ci bash -euo pipefail {0}
@@ -495,14 +495,14 @@ jobs:
       - name: Publish to the Nexus package repository
         env:
           RELEASE_PUBLISH_MODE: ${{ vars.RELEASE_PUBLISH_MODE || 'disabled' }}
-          NEXUS_PKG_REPO: ${{ vars.NEXUS_PKG_UPLOAD_URL || 'http://127.0.0.1:8081/repository/vaulthalla-raw-hosted' }}
+          NEXUS_PKG_REPO: ${{ vars.NEXUS_PKG_UPLOAD_URL || 'http://127.0.0.1:8081/repository/valkyrian-raw-hosted' }}
           NEXUS_USER: ${{ secrets.NEXUS_USER }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD || secrets.NEXUS_PASS }}
         run: bash tools/macos/pkg/publish-nexus.sh pkg
 
   finalize:
     name: Record the release on main
-    runs-on: [self-hosted, Linux, X64, vaulthalla, vps-ci]
+    runs-on: [self-hosted, Linux, X64, vps-ci]
     defaults:
       run:
         shell: bash ./ci/run-ci bash -euo pipefail {0}
@@ -551,7 +551,7 @@ jobs:
     # Independent of finalize: a docs failure never marks a live APT release as failed. Retry with
     # "Re-run failed jobs".
     name: Publish docs
-    runs-on: [self-hosted, Linux, X64, vaulthalla, vps-ci]
+    runs-on: [self-hosted, Linux, X64, vps-ci]
     defaults:
       run:
         shell: bash ./ci/run-ci bash -euo pipefail {0}

@@ -1,6 +1,6 @@
 // vh-test-tier: db-only
 // Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
-// PUT /upload/content (#258, vaulthalla/desktop#1): conditional create (If-None-Match: *) and replace
+// PUT /upload/content (#258, valkyrianlabs/vaulthalla-desktop#1): conditional create (If-None-Match: *) and replace
 // (If-Match: <content_version>) of one file, committed through Filesystem::createFile's streaming seal and
 // compare-and-swap; and the /upload/session hygiene that came with it (commit from the staged file instead of a
 // whole-file buffer, a failed per-file PUT sent again). Real vaults, users, RBAC and encrypted files; the large-file

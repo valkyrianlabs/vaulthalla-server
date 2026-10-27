@@ -137,10 +137,10 @@ pqxx_dep = declare_dependency(
 
 # The kernel FUSE bridge (core/src/fuse/{Bridge,Reply,Resolver,Service}.cpp): required on Linux, which the Debian
 # package ships. macOS never builds it (#262): the server never mounts there, and Finder access belongs to Vaulthalla
-# Desktop's File Provider (vaulthalla/desktop#1); fuse/unbuilt/Service.cpp is the darwin service.
+# Desktop's File Provider (valkyrianlabs/vaulthalla-desktop#1); fuse/unbuilt/Service.cpp is the darwin service.
 if host_os == 'darwin'
     if get_option('fuse').enabled()
-        error('-Dfuse=enabled is not supported on macOS: the server never mounts there (Finder access is Vaulthalla Desktop\'s File Provider, vaulthalla/desktop#1); leave -Dfuse at auto')
+        error('-Dfuse=enabled is not supported on macOS: the server never mounts there (Finder access is Vaulthalla Desktop\'s File Provider, valkyrianlabs/vaulthalla-desktop#1); leave -Dfuse at auto')
     endif
     fuse_dep = dependency('', required: false)
 else

@@ -3,7 +3,7 @@
 #include <string_view>
 
 // macOS never mounts (#262): macFUSE is ruled out in every form, and Finder access belongs to Vaulthalla Desktop's
-// File Provider (vaulthalla/desktop#1). The kernel bridge is never built here (core/meson.build), so the lifecycle
+// File Provider (valkyrianlabs/vaulthalla-desktop#1). The kernel bridge is never built here (core/meson.build), so the lifecycle
 // half of platform/Mount.hpp, which only fuse/Service.cpp calls, has no darwin implementation.
 namespace vh::platform::mount {
 
