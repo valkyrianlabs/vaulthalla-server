@@ -55,7 +55,7 @@ class PreviewHelperPackagesContractTests(unittest.TestCase):
     def test_core_suggests_the_helpers_after_the_pinned_recommends(self) -> None:
         control = _read("debian/control")
         self.assertIn(
-            "Recommends:\n postgresql,\n nginx,\n certbot,\n python3-certbot-nginx,\n python3-certbot-dns-cloudflare,\n"
+            "Recommends:\n valkyrianlabs-archive-keyring,\n postgresql,\n nginx,\n certbot,\n python3-certbot-nginx,\n python3-certbot-dns-cloudflare,\n"
             " swtpm,\n swtpm-tools\nSuggests:\n vaulthalla-preview-cad,\n vaulthalla-preview-media\n",
             control,
         )

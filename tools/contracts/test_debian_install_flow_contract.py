@@ -190,7 +190,7 @@ class DebianInstallFlowContractTests(unittest.TestCase):
         control = (self._repo_root() / "debian" / "control").read_text(encoding="utf-8")
         self.assertIn("Depends:\n adduser,\n nodejs,\n openssl,", control)
         self.assertIn(
-            "Recommends:\n postgresql,\n nginx,\n certbot,\n python3-certbot-nginx,\n python3-certbot-dns-cloudflare",
+            "Recommends:\n valkyrianlabs-archive-keyring,\n postgresql,\n nginx,\n certbot,\n python3-certbot-nginx,\n python3-certbot-dns-cloudflare",
             control,
         )
         self.assertIn("swtpm,", control)
