@@ -1,12 +1,24 @@
 ## NOTICE
 
-Vaulthalla is an open-source project authored and maintained by Cooper Larson.
+Vaulthalla is a product of Valkyrian Labs LLC (https://valkyrianlabs.com).
 
-Copyright (C) 2025 Cooper Larson
+Copyright (C) 2025-2026 Valkyrian Labs LLC
+
+Vaulthalla was created by Cooper Larson, founder of Valkyrian Labs LLC, who
+assigned his copyright in it to the company. Valkyrian Labs LLC owns,
+develops, maintains, packages and publishes Vaulthalla.
 
 This software is licensed under the GNU Affero General Public License,
 version 3 or later (AGPLv3+). The license grants the right to use, study,
 modify, and redistribute the software under its terms.
 
-This notice is provided for clarity regarding project stewardship and
+Contributors keep the copyright in their own contributions and license them
+under the same terms (see CONTRIBUTING.md). Third-party code bundled under
+core/vendor/ remains under the copyright and license of its authors (see
+debian/copyright).
+
+"Vaulthalla" and the Vaulthalla logo are trademarks of Valkyrian Labs LLC
+(see TRADEMARKS.md).
+
+This notice is provided for clarity regarding ownership, stewardship and
 branding and does not modify or supersede the license.

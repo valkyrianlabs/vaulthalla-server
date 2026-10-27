@@ -22,3 +22,10 @@ If your change touches user data, filesystem semantics, auth or session behavior
 Before opening a PR, run the checks that actually prove your change and say clearly what you did and did not validate.
 
 AI assistance is allowed. AI abdication is not. You own the patch.
+
+## Licensing of contributions
+
+Vaulthalla is owned and published by Valkyrian Labs LLC under the GNU Affero General Public License, version 3 or
+later. By submitting a contribution you confirm you have the right to submit it, and you license it under those same
+terms. You keep the copyright in your contribution. Code from elsewhere keeps its original copyright and license:
+say where it came from in the PR, and add it to `debian/copyright` if it ships.

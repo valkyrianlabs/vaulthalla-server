@@ -110,4 +110,9 @@ Bug reports and pull requests are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md
 include the output of `vh status` and the recent daemon log: `sudo journalctl -u vaulthalla -n 150 --no-pager` on Linux,
 `sudo tail -n 150 /Library/Logs/Vaulthalla/vaulthalla.log /Library/Logs/Vaulthalla/server.log` on macOS.
 
-Licensed under the terms in [LICENSE](LICENSE).
+## License and ownership
+
+Vaulthalla is a product of [Valkyrian Labs LLC](https://valkyrianlabs.com). Copyright © 2025-2026 Valkyrian Labs LLC.
+
+It is free software, licensed under the GNU Affero General Public License, version 3 or later: see [LICENSE](LICENSE)
+and [NOTICE](NOTICE). "Vaulthalla" and its logo are trademarks of Valkyrian Labs LLC: see [TRADEMARKS.md](TRADEMARKS.md).

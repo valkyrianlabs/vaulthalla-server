@@ -63,3 +63,10 @@ be sent again within the same upload session instead of restarting the whole ses
   for a folder, and for a folder, the same for everything inside it. Refused moves change nothing; in the Linux mount
   they fail with "permission denied" (or "no such file or directory" for a folder you can't see). Renaming within the
   same folder works as before.
+
+## A Valkyrian Labs product
+
+Vaulthalla is now owned and published by Valkyrian Labs LLC, the company its creator founded to build it. The
+license does not change: Vaulthalla stays free software under the AGPL, version 3 or later. The package's copyright
+file, `NOTICE` and `TRADEMARKS.md` name Valkyrian Labs LLC as copyright holder and owner of the Vaulthalla name and
+logo, and the copyright file now credits the third-party code bundled with the server.
