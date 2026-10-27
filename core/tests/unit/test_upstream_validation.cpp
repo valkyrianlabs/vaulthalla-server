@@ -1,3 +1,5 @@
+// vh-test-tier: db-only
+// Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
 // Input validation and bucket identity at the ops boundary (#237 security review, FX-2), against the test DB:
 //  - bucket names that could change what a provider URL addresses are refused by vault create/update and by every
 //    upstream op that calls a provider; legacy names already stored keep working, and can still be locked;

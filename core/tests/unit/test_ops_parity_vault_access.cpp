@@ -1,3 +1,5 @@
+// vh-test-tier: db-only
+// Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
 // "Vaults I can access" (ops::vaults::listAccessible): `vh vault list --accessible` and ws
 // storage.vault.accessible.list. storage.vault.list follows the admin role's vault policy alone, so an unprivileged
 // account that owns a vault or holds a vault role on it (its own or a group's) saw nothing there. The accessible list

@@ -1,3 +1,5 @@
+// vh-test-tier: db-only
+// Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
 // Price budgets, settings and health through both surfaces (Phase 2). The web let any vault owner change (and so
 // disable) a vault's price budget and accepted budgets on local vaults and unknown providers; settings.update
 // skipped email validation and email.config.update clamped what the CLI refused; and stats.system.health had no

@@ -1,3 +1,5 @@
+// vh-test-tier: db-only
+// Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
 // Event subscriptions of S3 vaults (#96), against the test DB and an in-memory provider:
 //  - enable is idempotent, records other applications' rules, resolves and persists an AWS account once;
 //  - disable removes only our rule ids; the shared channel goes only when nothing uses it and we created it;

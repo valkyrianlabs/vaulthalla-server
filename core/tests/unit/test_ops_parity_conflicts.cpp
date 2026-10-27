@@ -1,3 +1,5 @@
+// vh-test-tier: db-only
+// Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
 // Sync conflicts through both surfaces (#187): `vh sync resolve` / `vh resolve` and the ws sync.conflicts.*
 // commands run the same ops::conflicts operations. For every seeded admin role, on a vault owned by an unprivileged
 // account (so admins reach it through their vault globals' "user" scope), both surfaces must agree on what the

@@ -1,3 +1,5 @@
+// vh-test-tier: db-only
+// Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
 // Local snapshots (recovery::local::snapshots, ops::recovery::createSnapshot): what a snapshot captures (sealed
 // generations by link, empty directories) and skips (symlinks, upload staging, remote content the gate refuses), the
 // mode gate, dedupe, quotas, RBAC over every entry, crash cleanup, deletion and garbage collection, local version

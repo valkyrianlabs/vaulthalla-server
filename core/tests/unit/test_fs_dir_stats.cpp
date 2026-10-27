@@ -1,3 +1,5 @@
+// vh-test-tier: db-only
+// Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
 // #158: directory size_bytes / file_count / subdirectory_count are subtree totals kept on every ancestor. Upload and
 // mkdir maintained them; move, cross-directory rename, copy and delete did not, so a folder that received a file by
 // move showed "0 items" and its old parent still counted the file.

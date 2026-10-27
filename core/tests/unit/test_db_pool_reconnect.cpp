@@ -1,3 +1,5 @@
+// vh-test-tier: db-only
+// Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
 // Regression guard for P0-1 (production-hardening.md): after a PostgreSQL restart the pool leaked a slot for
 // every dead connection that reached pqxx::work's constructor and then parked every DB caller on a condvar
 // forever. These tests kill the pool's server sessions with pg_terminate_backend (a PostgreSQL restart as the

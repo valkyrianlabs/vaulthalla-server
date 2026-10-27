@@ -1,3 +1,5 @@
+// vh-test-tier: db-only
+// Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
 // Role and permission editing through both surfaces (Phase 2). Before this, permission edits were silently dropped:
 // the resolver could not apply 77/87 admin permissions, CLI --allow-*/--deny-* flags were skipped, `--from` was
 // ignored, unknown keys vanished, and CLI vault-role overrides were never persisted. Every check below compares

@@ -1,3 +1,5 @@
+// vh-test-tier: db-only
+// Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
 // The sync controller must sleep while no sync is due. It used to pop the earliest task and push it straight back
 // in a tight loop whenever that task was scheduled in the future, which is always once a vault has synced: one
 // core at 100% for the daemon's whole life (seen on vh-storage: 1d 4h of CPU in 28.6h of uptime).

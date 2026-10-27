@@ -1,3 +1,5 @@
+// vh-test-tier: db-only
+// Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
 // #255: fs.dir.list (and fs.list outside share mode) checked List on the folder and returned every child, so the web
 // console and Desktop showed the names, sizes and dates of entries FUSE readdir hides from the same user (#170: deny
 // means hidden). The folder totals next to a child folder counted what is hidden inside it too. Every listing surface

@@ -1,3 +1,5 @@
+// vh-test-tier: db-only
+// Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
 // The global vault policy (user_global_vault_policy) is read in the scope the vault falls under for the account: its
 // own vault (self), a vault owned by an admin identity (admin), anyone else's (user). The filesystem evaluator's last
 // stage used to try self, admin, user in turn, but a stage always decides, so the self scope answered for every vault:

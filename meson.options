@@ -36,6 +36,13 @@ option(
 )
 
 option(
+    'db_tests',
+    type: 'boolean',
+    value: true,
+    description: 'Compile the DB-only unit test files (marked "// vh-test-tier: db-only"); CI builds with false'
+)
+
+option(
     'integration_tests',
     type: 'boolean',
     value: false,

@@ -1,3 +1,5 @@
+// vh-test-tier: db-only
+// Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
 // The upstream control plane (#237, #96) through both surfaces: `vh upstream …` / `vh vault create --bucket-mode …`
 // (shell::Router::executeLine) and the ws upstream.* / storage.vault.add handlers, against the test DB and an
 // in-memory provider account. Verdicts are compared with the oracle from the role's admin.upstream bits and the key's

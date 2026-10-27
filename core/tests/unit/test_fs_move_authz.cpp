@@ -1,3 +1,5 @@
+// vh-test-tier: db-only
+// Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
 // #256: fs.entry.move / fs.entry.rename (and FUSE rename) authorized Move/Rename on the source only, so a user who may
 // move something could put it into a folder they may not write. Moving or renaming into another folder now needs what
 // creating the entry there needs (Touch for a folder, Write for a file, as fs.dir.create / an upload / each entry of

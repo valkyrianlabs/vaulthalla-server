@@ -1,3 +1,5 @@
+// vh-test-tier: db-only
+// Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
 // Safe vault deletion with retention (#162), driven through ops::vaults and vault::retention against the test DB:
 // schedule → restore, schedule → purge after the window (the pass takes an injected clock), delete now, the key
 // tombstone and its expiry, the S3 key-loss gate, the bounded and resumable upstream purge (fake S3 controller), the

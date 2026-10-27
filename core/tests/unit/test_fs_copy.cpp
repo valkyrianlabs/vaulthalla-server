@@ -1,3 +1,5 @@
+// vh-test-tier: db-only
+// Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
 // #167: fs.entry.copy of a directory copied only the folder row, and a copied file got a row but no bytes: the sync
 // pass meant to write them was never queued (the operations table only records activity) and looked in the
 // pre-alias BACKING_VAULT_ROOT/<vault path> layout anyway. A copy is now deep, readable at once at the alias backing

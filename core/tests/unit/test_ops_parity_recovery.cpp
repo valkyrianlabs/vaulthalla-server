@@ -1,3 +1,5 @@
+// vh-test-tier: db-only
+// Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
 // File recovery through both surfaces: `vh vault recovery …` / `vh snapshot …` / `vh recovery …`
 // (shell::Router::executeLine) and the ws vault.recovery.* / recovery.* handlers, against the test DB and local vaults.
 // Verdicts are compared between the surfaces (and pinned for the super admin and an unprivileged account), outcomes

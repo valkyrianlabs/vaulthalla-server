@@ -1,3 +1,5 @@
+// vh-test-tier: db-only
+// Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
 // Deleting a folder that once received a share-link upload failed with a raw foreign key violation:
 // share_upload.target_parent_entry_id was NOT NULL REFERENCES fs_entry with no delete action. Migration 101 makes it
 // nullable and ON DELETE SET NULL, so upload history outlives the folder. DB-backed (VH_TEST_DB_*).

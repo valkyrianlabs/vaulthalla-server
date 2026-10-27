@@ -1,3 +1,5 @@
+// vh-test-tier: db-only
+// Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
 // Event-driven sync through the control-plane ops (#96, #237), against the test DB, an in-memory provider account
 // (upstream_admin_fakes.hpp: buckets), an in-memory queue (upstream_event_fakes.hpp) and an in-memory bucket for the
 // vault's data (sync-conflict harness FakeBucket):

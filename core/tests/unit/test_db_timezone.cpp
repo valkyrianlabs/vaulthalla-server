@@ -1,3 +1,5 @@
+// vh-test-tier: db-only
+// Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
 // #157: on a database whose TimeZone isn't UTC, naive `timestamp` columns stored local wall time that the daemon
 // read back as UTC, so every time was off by the UTC offset. Daemon sessions are now forced to UTC (recording the
 // zone they started in), and migration 100 converts naive columns to timestamptz, reading old values in that zone.

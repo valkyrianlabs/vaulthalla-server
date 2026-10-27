@@ -1,3 +1,5 @@
+// vh-test-tier: db-only
+// Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
 // A daemon restart in the middle of a vault key rotation (prepared, not finished) must load both keys again. The old
 // key used to be read with SELECT * from vault_keys_trashed, which has no updated_at column, so vault::model::Key
 // threw and the vault's key could not be loaded at all until the rotation was finished by hand.

@@ -1,3 +1,5 @@
+// vh-test-tier: db-only
+// Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
 // Restoring local generations (recovery::local::planFor / restore, Filesystem's pre-sealed commit): to the original
 // paths after the file and its folder were deleted, to an alternate destination, over a changed file (Overwrite, and
 // a conflict when it changed again after the plan), Skip when identical, after a rename, across finished and

@@ -1,3 +1,5 @@
+// vh-test-tier: db-only
+// Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
 // Users through both surfaces (Phase 2). Before: the CLI wrote accounts straight to the DB (no default vault, no
 // registration validation) while the web went through auth::Manager; both judged "admin" by User::isAdmin(),
 // which is false for the built-in admin role, so anyone who could add users could mint or promote admins (S3);

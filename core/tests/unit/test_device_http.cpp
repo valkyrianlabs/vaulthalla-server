@@ -1,3 +1,5 @@
+// vh-test-tier: db-only
+// Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
 // The device listener's HTTP lanes and remote MCP over real TLS 1.3 (S1b): downloads with Range, an upload session,
 // RBAC as the device's user (never a cookie), no share lanes, pairing-only refused, revocation ending a keep-alive
 // connection; /mcp as Streamable HTTP (initialize, tools/list, tools/call through executeLine), its Origin and

@@ -1,3 +1,5 @@
+// vh-test-tier: db-only
+// Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
 // DB-backed HTTP lane tests over real vaults, users, RBAC and encrypted files: the human preview authorization
 // matrix (audit D1), original-bytes vs preview semantics (D9), Range/HEAD/conditional serving, large files,
 // text editing with optimistic concurrency, PDF paging, hostile parameters and plaintext temp-file hygiene.

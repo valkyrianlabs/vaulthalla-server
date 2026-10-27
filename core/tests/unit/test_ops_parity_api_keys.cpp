@@ -1,3 +1,5 @@
+// vh-test-tier: db-only
+// Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
 // API keys through both surfaces (Phase 2). vault::APIKeyManager used to hide its own "key belongs to the caller"
 // rule under the resolver: the web passed the caller's id and refused admins the resolver allowed, the CLI passed
 // the key owner's id and skipped it, and CloudEngine passed the vault owner's id, so an S3 vault using a key its

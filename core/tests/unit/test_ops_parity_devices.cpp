@@ -1,3 +1,5 @@
+// vh-test-tier: db-only
+// Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
 // Paired devices through both surfaces: `vh device ...` and ws device.* run the same ops::devices, so for every caller
 // they reach the same verdict and leave the same state. D3: any user pairs, lists, renames and revokes their own
 // devices; only super admins see every user's devices and switch remote connections. The device's side of pairing is

@@ -1,3 +1,5 @@
+// vh-test-tier: db-only
+// Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
 // Local versioning (recovery::local::versions) and its upstream backlog (recovery::local::backlog): every content
 // change keeps the prior sealed generation (createFile overwrite, FUSE seal, deletes), nothing else does (rename, copy,
 // key rotation), the off path costs no query, retention (keep_last / max age / quota; pending and snapshot-held blobs

@@ -1,3 +1,5 @@
+// vh-test-tier: db-only
+// Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
 // #161: every vault reported (and was quota-checked against) the size of the whole shared backing root, so an empty
 // vault showed the default vault's bytes. A vault's physical size is now its own backing tree only.
 

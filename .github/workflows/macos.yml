@@ -133,7 +133,7 @@ jobs:
       - name: meson setup
         run: |
           . tools/macos/env.sh
-          meson setup build-macos -Dwerror=true -Dbuild_unit_tests=true -Dmanpage=true 2>&1 | tee "$RUNNER_TEMP/meson-setup.log"
+          meson setup build-macos -Dwerror=true -Dbuild_unit_tests=true -Ddb_tests=false -Dmanpage=true 2>&1 | tee "$RUNNER_TEMP/meson-setup.log"
 
       - name: meson compile
         run: |

@@ -1,3 +1,5 @@
+// vh-test-tier: db-only
+// Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
 // Event-driven upstream sync pipeline (#96), against the test DB, an in-memory bucket (sync-conflict harness) and an
 // in-memory provider (upstream_event_fakes.hpp):
 //  - poll → durable inbox → ack: nothing is acknowledged unless stored; redelivery is deduplicated; undecodable

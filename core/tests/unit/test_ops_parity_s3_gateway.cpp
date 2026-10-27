@@ -1,3 +1,5 @@
+// vh-test-tier: db-only
+// Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
 // The S3 gateway through both surfaces (Phase 2). `vh s3-gateway` and ws s3.gateway.* each re-implemented the
 // credential, grant, bucket and budget rules and drifted: the web let a vault owner hand their credential role
 // administration (S7), defaulted overrides to allow-everything (S10), told anyone whether a bucket existed before

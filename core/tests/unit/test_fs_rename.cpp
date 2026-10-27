@@ -1,3 +1,5 @@
+// vh-test-tier: db-only
+// Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
 // A FUSE rename onto an existing name (how vim, LibreOffice and most IDEs save: write a temp file, rename(2) it over
 // the target) failed with EIO: Filesystem::rename updated the source row onto (parent_id, name) the target still held
 // and hit UNIQUE(parent_id, name), after already mutating the cached source entry in place. The target is now

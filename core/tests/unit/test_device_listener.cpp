@@ -1,3 +1,5 @@
+// vh-test-tier: db-only
+// Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
 // The device listener end to end over real TLS 1.3 (docs/pairing.md): the handshake profile, authorization by the
 // client key at handshake time (pairing-only vs Device session, revoked -> pairing-only with device_unknown), the
 // whole pairing flow through the ws Router (request -> confirm -> number matching -> approve -> reconnect as a

@@ -1,3 +1,5 @@
+// vh-test-tier: db-only
+// Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
 // Recovery authorization (ops::recovery + ops/RecoveryAccess): the review findings that history must not loosen
 // filesystem RBAC. A deleted or renamed folder keeps its deny overrides for its history; nothing is revealed or sent
 // before the source is authorized; restoring elsewhere is a copy.

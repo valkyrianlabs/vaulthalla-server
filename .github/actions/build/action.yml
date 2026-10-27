@@ -26,7 +26,7 @@ runs:
     - name: Build
       shell: bash ./ci/run-ci bash -euo pipefail {0}
       run: |
-        meson setup build --buildtype=${{ inputs.build_type }} -Dwerror=true -Dbuild_unit_tests=true -Dinstall_data=false \
+        meson setup build --buildtype=${{ inputs.build_type }} -Dwerror=true -Dbuild_unit_tests=true -Ddb_tests=false -Dinstall_data=false \
           2>&1 | tee "$RUNNER_TEMP/meson-setup.log"
         # Progress only: any warning, note or chatter fails the build (AGENTS.md).
         bash tools/dev/quiet-build.sh build "$RUNNER_TEMP/meson-setup.log"

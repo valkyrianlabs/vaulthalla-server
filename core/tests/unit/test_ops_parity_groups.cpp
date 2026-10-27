@@ -1,3 +1,5 @@
+// vh-test-tier: db-only
+// Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
 // CLI <-> WebSocket parity for the group command family (Stage 1 of the ops:: consolidation).
 //
 // Every case runs one logical operation twice, each time against a fresh, uniquely named world: once through the

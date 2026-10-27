@@ -59,6 +59,11 @@ make test                                              # whole vh_unit_tests bin
 make test ARGS="--gtest_filter='RoleParity*'"           # or: bash bin/tests/run_unit.sh -- --gtest_filter=...
 ```
 
+Manual validation only, never CI: no CI job starts a test database, so the DB-backed suites skip there. Files whose
+every test is DB-backed start with `// vh-test-tier: db-only`; CI builds with `-Ddb_tests=false`, which doesn't compile
+them (tools/contracts/test_db_test_tier_contract.py). Files that mix DB and plain tests stay unmarked so CI keeps the
+plain ones; mark a new file only when none of its tests runs without `VH_TEST_DB_*`.
+
 The tests run as you (not root), with the role's settings only in the test process's environment.
 
 On macOS, `make test` needs no host setup and no sudo (#217): it sources `tools/macos/env.sh`, builds the same

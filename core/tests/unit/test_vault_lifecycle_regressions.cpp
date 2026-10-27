@@ -1,3 +1,5 @@
+// vh-test-tier: db-only
+// Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
 // Regressions found while provisioning the authorized-pentest fixture on vh-storage (1.10.0), driven through the real
 // runtime (storage manager, FS cache, RBAC evaluator, share manager) against the test DB:
 //   #178 share links over a subfolder were refused: the share authorizer evaluated the vault path as a FUSE path

@@ -1,3 +1,5 @@
+// vh-test-tier: db-only
+// Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
 #include "db/Transactions.hpp"
 #include "db/query/fs/Cache.hpp"
 #include "db/query/identities/User.hpp"

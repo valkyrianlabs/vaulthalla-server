@@ -260,7 +260,14 @@ if get_option('build_unit_tests')
     unit_test_sources = []
     # Suites of the kernel FUSE bridge itself; without it (-Dfuse=disabled) there is nothing to test.
     fuse_bridge_tests = ['test_fuse_denial.cpp']
-    foreach f : run_command('sh', '-c', 'find "$1" -type f -name "*.cpp" | LC_ALL=C sort', 'find-cpp', tests_src, check: true).stdout().strip().split('\n')
+    # DB-backed suites skip without VH_TEST_DB_* (they are manual validation: `make test`). Files whose every test is
+    # DB-backed carry the line `// vh-test-tier: db-only`; -Ddb_tests=false (CI) doesn't compile them. Files that mix
+    # DB and plain tests stay unmarked, so CI keeps their plain tests.
+    find_tests = 'find "$1" -type f -name "*.cpp"'
+    if not get_option('db_tests')
+        find_tests += ' -exec grep -L -F -x "// vh-test-tier: db-only" {} +'
+    endif
+    foreach f : run_command('sh', '-c', find_tests + ' | LC_ALL=C sort', 'find-cpp', tests_src, check: true).stdout().strip().split('\n')
         if fuse_dep.found() or fs.name(f) not in fuse_bridge_tests
             unit_test_sources += files(f)
         endif
