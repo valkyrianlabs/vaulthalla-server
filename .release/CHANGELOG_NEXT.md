@@ -64,4 +64,8 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
     is provided by Vaulthalla Desktop. `vh fs` help no longer calls itself interim.
 
 ## Packaging
+- Valkyrian Labs LLC is the copyright holder and trademark owner: `NOTICE`, `TRADEMARKS.md`, `debian/copyright`
+  (`Upstream-Contact` and both `Files` stanzas), `debian/copyright_human`, the README and CONTRIBUTING say so.
+  `debian/copyright` now also lists the vendored jwt-cpp, nlohmann/json, picojson and stb headers under their own
+  licenses.
 - The repository moved to `github.com/vaulthalla/server`. The package `Homepage`/`Source` fields (`debian/control`, `debian/copyright`), the release contract (`release.toml`), the Homebrew cask URL and the docs links point there; the old `vaulthalla-core` and `vaulthalla/vaulthalla` URLs are gone.
