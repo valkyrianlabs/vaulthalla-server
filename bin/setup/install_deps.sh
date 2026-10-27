@@ -23,24 +23,32 @@ if [ "$(uname -s)" = Darwin ]; then
     exit 0
 fi
 
-# apt.vaulthalla.sh is the only source of Vaulthalla's own packages and build SDKs (libpdfium-dev,
-# libpqxx-vh-dev). Same keyring and source line as bin/vh/install.sh.
-readonly VH_KEYRING="/usr/share/keyrings/vaulthalla.gpg"
-readonly VH_SOURCE_FILE="/etc/apt/sources.list.d/vaulthalla.list"
+# The Valkyrian Labs APT repository (apt.valkyrianlabs.com; apt.vaulthalla.sh is an alias of the same index) is the
+# only source of Vaulthalla's own packages and build SDKs (libpdfium-dev, libpqxx-vh-dev). Same keyring and source
+# line as bin/vh/install.sh.
+readonly VH_KEYRING="/usr/share/keyrings/valkyrianlabs.gpg"
+readonly VH_SOURCE_FILE="/etc/apt/sources.list.d/valkyrianlabs.list"
 VH_ARCH="$(dpkg --print-architecture)"
 readonly VH_ARCH
-readonly VH_SOURCE_LINE="deb [arch=${VH_ARCH} signed-by=${VH_KEYRING}] https://apt.vaulthalla.sh stable main"
+readonly VH_SOURCE_LINE="deb [arch=${VH_ARCH} signed-by=${VH_KEYRING}] https://apt.valkyrianlabs.com stable main"
+# What this script and bin/vh/install.sh wrote before the move; retired when unchanged (same index, second entry).
+readonly VH_LEGACY_SOURCE_FILE="/etc/apt/sources.list.d/vaulthalla.list"
+readonly VH_LEGACY_SOURCE_LINE="deb [arch=${VH_ARCH} signed-by=/usr/share/keyrings/vaulthalla.gpg] https://apt.vaulthalla.sh stable main"
 
-echo "🔗 Installing Vaulthalla public key..."
-curl -fsSL https://apt.vaulthalla.sh/pubkey.gpg | sudo install -D -m 0644 /dev/stdin "$VH_KEYRING"
+echo "🔗 Installing the Valkyrian Labs LLC APT key..."
+curl -fsSL https://apt.valkyrianlabs.com/pubkey.gpg | sudo install -D -m 0644 /dev/stdin "$VH_KEYRING"
 
 if [ "$(cat "$VH_SOURCE_FILE" 2>/dev/null)" != "$VH_SOURCE_LINE" ]; then
-    echo "🔗 Configuring the Vaulthalla repository..."
+    echo "🔗 Configuring the Valkyrian Labs repository..."
     echo "$VH_SOURCE_LINE" | sudo tee "$VH_SOURCE_FILE" > /dev/null
     # The old setup trusted the key globally; the source line now names its keyring.
     sudo rm -f /etc/apt/trusted.gpg.d/vaulthalla.gpg
 else
-    echo "✅ Vaulthalla repository already configured."
+    echo "✅ Valkyrian Labs repository already configured."
+fi
+if [ "$(cat "$VH_LEGACY_SOURCE_FILE" 2>/dev/null)" = "$VH_LEGACY_SOURCE_LINE" ]; then
+    echo "🔗 Retiring ${VH_LEGACY_SOURCE_FILE} (apt.vaulthalla.sh serves the same index)..."
+    sudo rm -f "$VH_LEGACY_SOURCE_FILE"
 fi
 
 # Wait for other apt/dpkg users (e.g. unattended-upgrades after a reboot) instead of failing after 120s.
@@ -67,10 +75,10 @@ else
     echo "✅ Meson and Ninja already installed."
 fi
 
-# -- Vaulthalla maintained packages (apt.vaulthalla.sh) --
+# -- Vaulthalla maintained packages (apt.valkyrianlabs.com) --
 # libpdfium-dev moved from date versions (20250629) to Chromium ones (155.8059.x), which dpkg orders lower, so
 # apt never replaces the retired snapshot by itself: install the repository's version explicitly.
-pdfium_repo_version="$(apt-cache madison libpdfium-dev | awk -F'|' '/apt\.vaulthalla\.sh/ {gsub(/ /, "", $2); print $2; exit}')"
+pdfium_repo_version="$(apt-cache madison libpdfium-dev | awk -F'|' '/apt\.(valkyrianlabs\.com|vaulthalla\.sh)/ {gsub(/ /, "", $2); print $2; exit}')"
 if [[ "$(dpkg-query -W -f='${Version}' libpdfium-dev 2>/dev/null)" != "$pdfium_repo_version" ]]; then
     echo "🔌 Installing libpdfium-dev ${pdfium_repo_version}..."
     sudo apt-get "${APT_LOCK_OPTS[@]}" install -y --allow-downgrades "libpdfium-dev=${pdfium_repo_version}"

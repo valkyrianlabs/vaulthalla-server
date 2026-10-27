@@ -3,7 +3,7 @@
 A Linux-native, self-hosted cloud: a C++23 daemon with a native FUSE filesystem, encrypted vaults (AES-256-GCM,
 TPM2/swtpm-sealed secrets), RBAC, local and S3/R2 storage with cost guardrails, an S3-compatible gateway,
 a `vh` CLI over a unix socket, and a packaged Next.js web console. It ships as a single Debian package
-`vaulthalla` from `apt.vaulthalla.sh`. It is a product of Valkyrian Labs LLC, which owns its copyright and trademarks (NOTICE, TRADEMARKS.md, `debian/copyright`), and was built mostly by hand by its founder and maintainer (Cooper). Version: `VERSION` (kept in sync by `vlr version`).
+`vaulthalla` from the Valkyrian Labs APT repository `apt.valkyrianlabs.com` (`apt.vaulthalla.sh` is an alias of the same index, signed by the same Valkyrian Labs LLC key). It is a product of Valkyrian Labs LLC, which owns its copyright and trademarks (NOTICE, TRADEMARKS.md, `debian/copyright`), and was built mostly by hand by its founder and maintainer (Cooper). Version: `VERSION` (kept in sync by `vlr version`).
 
 **Current phase: production hardening.** The build → package → publish → install/upgrade → run pipeline
 has to become trustworthy on real hosts. Start with `.claude/context/production-hardening.md`: it has a

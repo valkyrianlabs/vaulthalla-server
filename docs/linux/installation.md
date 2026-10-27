@@ -56,25 +56,43 @@ From a checked-out repository, the same helper is available as:
 
 ## Manual APT Setup
 
-If you prefer to add the repository yourself:
+Vaulthalla is published to the Valkyrian Labs APT repository, `apt.valkyrianlabs.com`, alongside the other
+Valkyrian Labs tools. `apt.vaulthalla.sh` serves the same index, so either URL installs the same packages, signed by
+the same key. If you prefer to add the repository yourself:
 
 ```bash
-sudo curl -fsSL https://apt.vaulthalla.sh/pubkey.gpg -o /usr/share/keyrings/vaulthalla.gpg
-echo "deb [arch=amd64 signed-by=/usr/share/keyrings/vaulthalla.gpg] https://apt.vaulthalla.sh stable main" | sudo tee /etc/apt/sources.list.d/vaulthalla.list > /dev/null
+sudo curl -fsSL https://apt.valkyrianlabs.com/pubkey.gpg -o /usr/share/keyrings/valkyrianlabs.gpg
+echo "deb [arch=amd64 signed-by=/usr/share/keyrings/valkyrianlabs.gpg] https://apt.valkyrianlabs.com stable main" | sudo tee /etc/apt/sources.list.d/valkyrianlabs.list > /dev/null
 sudo apt update
 sudo apt install vaulthalla
 ```
 
-`vaulthalla` depends on `vaulthalla-archive-keyring`, which takes over `/usr/share/keyrings/vaulthalla.gpg` and
+`vaulthalla` recommends `valkyrianlabs-archive-keyring`, which takes over `/usr/share/keyrings/valkyrianlabs.gpg` and
 keeps the repository's signing key current through normal upgrades (for example when its expiry changes). You don't
-need to download the key again later. Existing installs pick it up with `sudo apt upgrade` (or `apt-get dist-upgrade`).
-A plain `apt-get upgrade` never installs new packages, so it holds `vaulthalla` back until you do. To install
-the keyring on its own: `sudo apt install vaulthalla-archive-keyring`.
+need to download the key again later. With `--no-install-recommends`, install it yourself:
+`sudo apt install valkyrianlabs-archive-keyring`.
 
-The signing key fingerprint is `0657 4F63 2342 3EBC 99A1  DF7B E906 C69B 29C0 E706`.
+The signing key is **Valkyrian Labs LLC (APT Signing Key)**, fingerprint
+`494D 71A1 EEDD F87B D48E  5048 6D64 CB7B DFC3 0EC6`.
 
-:::callout{theme="info" title="apt.vaulthalla.sh is required"}
-Vaulthalla depends on libraries that are built for it and published only in this repository (PDFium as `libpdfium<branch>`, for example `libpdfium8059`). Installing a downloaded `.deb` without the repository configured leaves those dependencies unresolved.
+### Existing apt.vaulthalla.sh installs
+
+Hosts set up before the move keep their `apt.vaulthalla.sh` source and `/usr/share/keyrings/vaulthalla.gpg`.
+`vaulthalla` depends on `vaulthalla-archive-keyring`, which owns that file; its `2026.10.27-1` release adds the
+Valkyrian Labs LLC key next to the retiring Vaulthalla key, so the source keeps verifying after apt.vaulthalla.sh
+switched to the Valkyrian Labs index. Nothing needs editing: `sudo apt update && sudo apt upgrade` (or
+`apt-get dist-upgrade`) brings it in. A plain `apt-get upgrade` never installs new packages, so it holds
+`vaulthalla` back until you use one of those.
+
+If `apt update` reports `NO_PUBKEY 6D64CB7BDFC30EC6` for apt.vaulthalla.sh, the host missed that keyring update.
+Rerun the installer, which configures the Valkyrian Labs source and key and retires the old source line:
+
+```bash
+curl -fsSL https://apt.vaulthalla.sh/install.sh | bash
+```
+
+:::callout{theme="info" title="The Valkyrian Labs repository is required"}
+Vaulthalla depends on libraries that are built for it and published only in this repository (PDFium as `libpdfium<branch>`, for example `libpdfium8059`, and the static `libpqxx-vh-dev` SDK). Installing a downloaded `.deb` without the repository configured leaves those dependencies unresolved.
 :::
 
 ## Install Profiles

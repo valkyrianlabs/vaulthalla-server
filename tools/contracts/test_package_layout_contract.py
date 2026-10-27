@@ -23,6 +23,17 @@ class PackageLayoutContractTests(unittest.TestCase):
         depends = block.split("Depends:", 1)[1].split("Recommends:", 1)[0]
         return [item.strip().rstrip(",") for item in depends.splitlines() if item.strip()]
 
+    def _field(self, name: str) -> list[str]:
+        control = self._read("debian/control")
+        block = control.split("Package: vaulthalla\n", 1)[1].split("\nPackage:", 1)[0]
+        value = block.split(f"\n{name}:", 1)[1]
+        lines = []
+        for line in value.splitlines()[1:]:
+            if not line.startswith(" "):
+                break
+            lines.append(line.strip().rstrip(","))
+        return lines
+
     def test_depends_include_fuse3_and_python3(self) -> None:
         depends = self._depends()
         self.assertIn("fuse3", depends)  # fusermount3 in ExecStopPost, /etc/fuse.conf allow_other
@@ -32,12 +43,20 @@ class PackageLayoutContractTests(unittest.TestCase):
 
     def test_depends_include_archive_keyring(self) -> None:
         # vaulthalla-archive-keyring owns /usr/share/keyrings/vaulthalla.gpg, the signed-by= path install.sh and the
-        # manual setup have always written, so upgrades deliver renewed APT key metadata without touching sources.
+        # manual setup wrote before the move to apt.valkyrianlabs.com; it now ships the Valkyrian Labs LLC key, so
+        # those sources keep verifying apt.vaulthalla.sh (an alias of the same index) without being edited.
         # It must be a hard Depends: Recommends is skipped by --no-install-recommends (install.sh --lean).
         self.assertIn("vaulthalla-archive-keyring", self._depends())
         self.assertNotRegex(self._read("debian/control"), r"vaulthalla-archive-keyring\s*\(")
+        # New installs use the Valkyrian Labs keyring. vl-release refuses a Depends on it (a release .deb must
+        # install without the repository), so it is a Recommends.
+        self.assertIn("valkyrianlabs-archive-keyring", self._field("Recommends"))
+        self.assertNotIn("valkyrianlabs-archive-keyring", self._depends())
         install_sh = self._read("bin/vh/install.sh")
-        self.assertIn('KEY_FILE="/usr/share/keyrings/vaulthalla.gpg"', install_sh)
+        self.assertIn('KEY_FILE="/usr/share/keyrings/valkyrianlabs.gpg"', install_sh)
+        self.assertIn('https://apt.valkyrianlabs.com/pubkey.asc', install_sh)
+        self.assertIn('LEGACY_SOURCE_LINE="deb [arch=${REPO_ARCH} signed-by=/usr/share/keyrings/vaulthalla.gpg] '
+                      'https://apt.vaulthalla.sh ${REPO_DIST} ${REPO_COMPONENT}"', install_sh)
 
     def test_nodejs_dependency_stays_installable_on_noble(self) -> None:
         # Next 16 wants >= 20.9, but noble ships 18.19; a version constraint would make
@@ -66,7 +85,7 @@ class PackageLayoutContractTests(unittest.TestCase):
         ):
             self.assertIn(package, build_depends)
         self.assertNotIn("cmake", build_depends)
-        # Ubuntu's shared libpqxx-dev is not a substitute: core links apt.vaulthalla.sh's static libpqxx-vh SDK.
+        # Ubuntu's shared libpqxx-dev is not a substitute: core links apt.valkyrianlabs.com's static libpqxx-vh SDK.
         self.assertNotRegex(build_depends, r"(?m)^\s*libpqxx-dev\b")
 
     def test_core_consumes_the_vaulthalla_db_and_pdf_sdks(self) -> None:

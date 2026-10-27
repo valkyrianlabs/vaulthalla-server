@@ -27,7 +27,7 @@ this file says how it applies here.
   - `vaulthalla-preview-cad`: architecture `amd64`; must ship `usr/lib/vaulthalla/helpers/vaulthalla-preview-cad`, `usr/share/doc/vaulthalla-preview-cad/copyright`; must never ship `usr/bin/*`, `etc/*`, `lib/systemd/*`, `usr/lib/systemd/*`, `usr/share/vaulthalla/*`, `usr/lib/vaulthalla/helpers/vaulthalla-preview-media`
   - `vaulthalla-preview-media`: architecture `amd64`; must ship `usr/lib/vaulthalla/helpers/vaulthalla-preview-media`, `usr/share/doc/vaulthalla-preview-media/copyright`; must never ship `usr/bin/*`, `etc/*`, `lib/systemd/*`, `usr/lib/systemd/*`, `usr/share/vaulthalla/*`, `usr/lib/vaulthalla/helpers/vaulthalla-preview-cad`
   - pre-build: `bash web/bin/build_release_payload.sh build/web-payload`
-- **APT**: https://apt.vaulthalla.sh (suite `stable`, components main), published by release CI with `vlr publish-deb`
+- **APT**: https://apt.valkyrianlabs.com (suite `stable`, components main), published by release CI with `vlr publish-deb`
 
 ## Before considering substantial work complete
 

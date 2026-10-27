@@ -47,11 +47,16 @@ bash bin/doctor.sh
 Check repository configuration:
 
 ```bash
-ls -l /etc/apt/sources.list.d/vaulthalla.list
-ls -l /etc/apt/trusted.gpg.d/vaulthalla.gpg
+ls -l /etc/apt/sources.list.d/valkyrianlabs.list /etc/apt/sources.list.d/vaulthalla.list
+gpg --show-keys /usr/share/keyrings/valkyrianlabs.gpg /usr/share/keyrings/vaulthalla.gpg
 sudo apt update
 apt-cache policy vaulthalla
 ```
+
+Both `apt.valkyrianlabs.com` and `apt.vaulthalla.sh` serve the same index, signed by the Valkyrian Labs LLC key
+(`494D 71A1 EEDD F87B D48E  5048 6D64 CB7B DFC3 0EC6`). `NO_PUBKEY 6D64CB7BDFC30EC6` means the source's
+`signed-by=` keyring doesn't have that key yet: `sudo apt install vaulthalla-archive-keyring valkyrianlabs-archive-keyring`
+if the old index is still reachable, otherwise rerun `curl -fsSL https://apt.vaulthalla.sh/install.sh | bash`.
 
 Package install and upgrade steps are logged to `/var/log/vaulthalla-package.log`. A clean upgrade prints a single status line; the log has every step and the full summary. To see everything on the terminal, rerun configuration verbosely:
 

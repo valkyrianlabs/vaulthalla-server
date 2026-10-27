@@ -136,7 +136,7 @@ forbidden_paths = [
 ]
 
 [publish.apt]
-repository_url = "https://apt.vaulthalla.sh"
+repository_url = "https://apt.valkyrianlabs.com"
 suite = "stable"
 components = ["main"]
 architectures = ["amd64"]

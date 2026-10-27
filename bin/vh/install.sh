@@ -1,15 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly KEY_URL="${VH_APT_KEY_URL:-https://apt.vaulthalla.sh/pubkey.asc}"
-readonly REPO_URL="${VH_APT_REPO_URL:-https://apt.vaulthalla.sh}"
+# Vaulthalla is published to the Valkyrian Labs APT repository, signed by the Valkyrian Labs LLC key.
+# apt.vaulthalla.sh serves the same index (an alias), so either URL installs the same packages.
+readonly KEY_URL="${VH_APT_KEY_URL:-https://apt.valkyrianlabs.com/pubkey.asc}"
+readonly REPO_URL="${VH_APT_REPO_URL:-https://apt.valkyrianlabs.com}"
 readonly REPO_DIST="${VH_APT_DIST:-stable}"
 readonly REPO_COMPONENT="${VH_APT_COMPONENT:-main}"
 readonly REPO_ARCH="${VH_APT_ARCH:-$(dpkg --print-architecture 2>/dev/null || echo amd64)}"
 
-readonly KEY_FILE="/usr/share/keyrings/vaulthalla.gpg"
-readonly SOURCE_FILE="/etc/apt/sources.list.d/vaulthalla.list"
+# Owned by valkyrianlabs-archive-keyring once vaulthalla pulls it in (same bytes), which keeps it current.
+readonly KEY_FILE="/usr/share/keyrings/valkyrianlabs.gpg"
+readonly SOURCE_FILE="/etc/apt/sources.list.d/valkyrianlabs.list"
 readonly SOURCE_LINE="deb [arch=${REPO_ARCH} signed-by=${KEY_FILE}] ${REPO_URL} ${REPO_DIST} ${REPO_COMPONENT}"
+# What earlier versions of this script wrote. apt.vaulthalla.sh now serves the index above, so a byte-identical
+# copy is retired in favor of SOURCE_FILE; anything else there is the admin's and is left alone.
+readonly LEGACY_SOURCE_FILE="/etc/apt/sources.list.d/vaulthalla.list"
+readonly LEGACY_SOURCE_LINE="deb [arch=${REPO_ARCH} signed-by=/usr/share/keyrings/vaulthalla.gpg] https://apt.vaulthalla.sh ${REPO_DIST} ${REPO_COMPONENT}"
 
 readonly VH_GROUP="vaulthalla"
 readonly DEFAULT_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -237,7 +244,7 @@ ensure_repo_bootstrap() {
     # shellcheck disable=SC2064
     trap "rm -f '$tmp_key' '$tmp_keyring' '$tmp_source'" EXIT
 
-    log "Ensuring Vaulthalla apt key and source are configured."
+    log "Ensuring the Valkyrian Labs apt key and source are configured."
     curl -fsSL "$KEY_URL" -o "$tmp_key"
     [[ -s "$tmp_key" ]] || die "Downloaded key is empty: ${KEY_URL}"
 
@@ -254,12 +261,37 @@ ensure_repo_bootstrap() {
 
     printf '%s\n' "$SOURCE_LINE" > "$tmp_source"
 
+    local other
+    other="$(other_source_for "$REPO_URL")"
     if [[ -f "$SOURCE_FILE" ]] && cmp -s "$tmp_source" "$SOURCE_FILE"; then
         REPO_SOURCE_STATUS="already configured"
+    elif [[ -n "$other" ]]; then
+        # A second entry for the same URI with another signed-by= makes apt refuse every source.
+        REPO_SOURCE_STATUS="already configured (${other})"
     else
         run_priv install -m 0644 -o root -g root "$tmp_source" "$SOURCE_FILE"
         REPO_SOURCE_STATUS="updated"
     fi
+
+    printf '%s\n' "$LEGACY_SOURCE_LINE" > "$tmp_source"
+    if [[ -f "$LEGACY_SOURCE_FILE" ]] && cmp -s "$tmp_source" "$LEGACY_SOURCE_FILE"; then
+        run_priv rm -f "$LEGACY_SOURCE_FILE"
+        REPO_SOURCE_STATUS+="; retired ${LEGACY_SOURCE_FILE} (apt.vaulthalla.sh serves the same index)"
+    elif [[ -f "$LEGACY_SOURCE_FILE" ]]; then
+        warn "${LEGACY_SOURCE_FILE} was edited by hand; left unchanged. apt.vaulthalla.sh serves the same index as ${REPO_URL}."
+    fi
+}
+
+# Print the first APT source file other than SOURCE_FILE that already names URL (one-line or deb822).
+other_source_for() {
+    local url="${1%/}" f
+    for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+        [[ -f "$f" && "$f" != "$SOURCE_FILE" ]] || continue
+        if grep -Eq "^[^#]*[[:space:]]${url//./\\.}/?([[:space:]]|$)" "$f"; then
+            printf '%s\n' "$f"
+            return
+        fi
+    done
 }
 
 interactive_select_profile() {

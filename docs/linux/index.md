@@ -23,7 +23,7 @@ Linux is Vaulthalla's original and most complete platform. The `vaulthalla` Debi
 | --- | --- |
 | Architecture | amd64 (x86-64) with AES and PCLMUL instructions |
 | Distribution | Ubuntu 24.04 LTS (tested); other Debian-family releases with systemd may work but are not validated |
-| Install channel | `apt.vaulthalla.sh` (signed); the package depends on libraries published only there |
+| Install channel | `apt.valkyrianlabs.com`, also served as `apt.vaulthalla.sh` (signed by the Valkyrian Labs LLC key); the package depends on libraries published only there |
 | Key protection | A hardware TPM2 (`/dev/tpmrm0` or `/dev/tpm0`) or the packaged software TPM (`swtpm`) |
 | Database | PostgreSQL 11 or newer, local (set up automatically) or remote |
 | Filesystem | FUSE 3 for the `/mnt/vaulthalla` mount |

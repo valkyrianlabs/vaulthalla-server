@@ -229,9 +229,10 @@ jobs:
     if: needs.release-check.outputs.publish_required == 'true'
     environment: Production
     timeout-minutes: 30
-    # One APT publication at a time across tags; queued, never cancelled.
+    # One APT publication at a time across tags and across every Valkyrian Labs publisher (one repository, one
+    # pipeline); queued, never cancelled.
     concurrency:
-      group: vaulthalla-apt-publish
+      group: valkyrianlabs-apt-publish
       cancel-in-progress: false
     steps:
       - name: Checkout

@@ -11,7 +11,8 @@ Use of the name "Vaulthalla" or associated branding does not imply
 endorsement, affiliation, or sponsorship by Valkyrian Labs LLC.
 
 Official Vaulthalla releases are the ones Valkyrian Labs LLC publishes: the
-`apt.vaulthalla.sh` package repository, the `vaulthalla/homebrew-tap` Homebrew
+Valkyrian Labs APT repository (`apt.valkyrianlabs.com`, also served as
+`apt.vaulthalla.sh`), the `vaulthalla/homebrew-tap` Homebrew
 tap, and releases in the `github.com/vaulthalla` organization.
 
 Forks, derivative works, or redistributed versions must not present

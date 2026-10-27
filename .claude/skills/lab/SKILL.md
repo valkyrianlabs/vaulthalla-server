@@ -6,7 +6,7 @@ description: Inspect or diagnose the vh-storage production test lab VM (ssh vh-s
 # vh-storage lab
 
 `vh-storage` (10.0.0.33) is the production test lab: Ubuntu 24.04, hardware TPM, local PostgreSQL 16 +
-nginx, a 1 TB disk at `/var/lib/vaulthalla`, and packages from the real `apt.vaulthalla.sh stable` repo.
+nginx, a 1 TB disk at `/var/lib/vaulthalla`, and packages from the real `apt.valkyrianlabs.com stable` repo (the lab's source still names its alias `apt.vaulthalla.sh`).
 **Treat it as production.** Topology is in `.claude/context/environment.md`.
 
 ## Permission boundary
@@ -43,7 +43,7 @@ unit states with restart counts and timestamps, the FUSE wedge indicator, D-stat
 ### No candidate packages on the lab
 
 **Never install a pre-release, candidate or locally built .deb on vh-storage**: no `lab-smoke --deb`, no
-`apt-get install ./x.deb`, no CI dry-run artifacts. The lab exists to test the real `apt.vaulthalla.sh` install and
+`apt-get install ./x.deb`, no CI dry-run artifacts. The lab exists to test the real APT install and
 upgrade path, so it has to sit on a published version when a release is cut. Pre-flashing a candidate defeats that,
 and on 2026-10-02 it also broke DNS resolution on the maintainer's network. Prove candidates on the dev VM
 (`/verify`, `make itest`) and with a CI dry run. Lab upgrades come from the real repo, after publishing, and only

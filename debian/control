@@ -57,6 +57,7 @@ Depends:
  ${shlibs:Depends},
  ${misc:Depends}
 Recommends:
+ valkyrianlabs-archive-keyring,
  postgresql,
  nginx,
  certbot,

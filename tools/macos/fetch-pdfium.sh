@@ -3,7 +3,7 @@
 #
 #   tools/macos/fetch-pdfium.sh <prefix>
 #
-# Linux builds take PDFium from apt.vaulthalla.sh (libpdfium-dev, Chromium-tracking). On macOS the source is a pinned
+# Linux builds take PDFium from apt.valkyrianlabs.com (libpdfium-dev, Chromium-tracking). On macOS the source is a pinned
 # bblanchon/pdfium-binaries release, verified by SHA-256 before anything is unpacked. Nothing from the download is
 # executed. The result:
 #   <prefix>/lib/libpdfium.dylib          install name = its absolute path, so a Meson-built binary finds it
@@ -24,7 +24,7 @@ die() { printf 'fetch-pdfium: error: %s\n' "$*" >&2; exit 1; }
 log() { printf 'fetch-pdfium: %s\n' "$*"; }
 
 [ $# -eq 1 ] && [ -n "$1" ] || die "usage: $0 <prefix>"
-[ "$(uname -s)" = Darwin ] || die "macOS only (Linux builds use libpdfium-dev from apt.vaulthalla.sh)"
+[ "$(uname -s)" = Darwin ] || die "macOS only (Linux builds use libpdfium-dev from apt.valkyrianlabs.com)"
 [ "$(uname -m)" = arm64 ] || die "only the mac-arm64 build is pinned (this host is $(uname -m))"
 for tool in curl tar shasum install_name_tool codesign; do
   command -v "$tool" >/dev/null 2>&1 || die "missing tool: $tool"
