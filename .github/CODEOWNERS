@@ -1,1 +1,3 @@
-@organization/owners
+# Valkyrian Labs LLC maintainer. Code-owner review is not required by the main ruleset while there is a
+# single maintainer (GitHub never lets a PR author approve their own PR); CI-gated merges instead.
+* @cooperlarson
