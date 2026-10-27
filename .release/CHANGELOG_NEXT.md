@@ -69,3 +69,12 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   `debian/copyright` now also lists the vendored jwt-cpp, nlohmann/json, picojson and stb headers under their own
   licenses.
 - The repository moved to `github.com/vaulthalla/server`. The package `Homepage`/`Source` fields (`debian/control`, `debian/copyright`), the release contract (`release.toml`), the Homebrew cask URL and the docs links point there; the old `vaulthalla-core` and `vaulthalla/vaulthalla` URLs are gone.
+- Published to the Valkyrian Labs APT repository (`release.toml` `[publish.apt].repository_url` =
+  `https://apt.valkyrianlabs.com`; Production `NEXUS_REPO_URL` likewise); `apt.vaulthalla.sh` is an nginx alias of the
+  same Nexus repo. The publish job shares the `valkyrianlabs-apt-publish` concurrency group with the other publishers.
+- `Recommends: valkyrianlabs-archive-keyring` (vl-release refuses a Depends on it). `Depends:
+  vaulthalla-archive-keyring` stays: from 2026.10.27-1 it ships the Valkyrian Labs LLC key (and, during the move, the
+  retiring Vaulthalla key) at `/usr/share/keyrings/vaulthalla.gpg`.
+- `bin/vh/install.sh` and `bin/setup/install_deps.sh` configure `apt.valkyrianlabs.com` with
+  `/usr/share/keyrings/valkyrianlabs.gpg` and retire an unchanged `vaulthalla.list` they wrote earlier; install.sh
+  skips its own source when another file already names the repository. The CI image uses the one source.

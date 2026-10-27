@@ -45,6 +45,11 @@ remove_repo_if_present() {
         echo "✅ Vaulthalla public key already absent."
     fi
 
+    # The Valkyrian Labs repository also serves other tools (vl-release, pmdocs), so its source stays.
+    if [[ -f /etc/apt/sources.list.d/valkyrianlabs.list ]]; then
+        echo "ℹ️ Keeping /etc/apt/sources.list.d/valkyrianlabs.list (shared Valkyrian Labs repository)."
+    fi
+
     echo "🔄 Refreshing APT package lists..."
     sudo apt update || echo "⚠️ apt update failed after repo removal"
 }

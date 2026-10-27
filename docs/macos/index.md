@@ -78,7 +78,7 @@ Shared behavior is documented once; the differences that matter to an operator a
 
 | Topic | Linux | macOS |
 | --- | --- | --- |
-| Install channel | APT (`apt.vaulthalla.sh`) | Installer package or Homebrew cask |
+| Install channel | APT (`apt.valkyrianlabs.com`, alias `apt.vaulthalla.sh`) | Installer package or Homebrew cask |
 | Service manager | systemd units | launchd LaunchDaemons |
 | Service account | `vaulthalla` | `_vaulthalla` (hidden; the alias `vaulthalla` resolves to it) |
 | Database | Distribution PostgreSQL, set up by the package | Bundled PostgreSQL 16, private to Vaulthalla |

@@ -151,7 +151,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         publish = self.jobs["publish-debian"]
         self.assertIn("vlr publish-deb --require-enabled", publish)
         self.assertIn("vlr checksums --verify", publish)
-        self.assertRegex(publish, r"concurrency:\n      group: vaulthalla-apt-publish\n      cancel-in-progress: false")
+        self.assertRegex(publish, r"concurrency:\n      group: valkyrianlabs-apt-publish\n      cancel-in-progress: false")
         self.assertIn("environment: Production", publish)
 
     def test_every_job_has_a_timeout(self) -> None:
@@ -309,7 +309,7 @@ class ReleaseTomlContractTests(unittest.TestCase):
                          ["build/web-payload/vaulthalla-web_*_next-standalone.tar.gz"])
 
     def test_apt_publication_target(self) -> None:
-        self.assertEqual(self.config["publish"]["apt"]["repository_url"], "https://apt.vaulthalla.sh")
+        self.assertEqual(self.config["publish"]["apt"]["repository_url"], "https://apt.valkyrianlabs.com")
 
     def test_published_history_is_only_written_by_vl_release(self) -> None:
         changelog = _read("debian/changelog")

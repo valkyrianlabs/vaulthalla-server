@@ -121,13 +121,13 @@ host_os = host_machine.system()
 # Third-party headers are system headers (-isystem), as they already are on Linux under /usr/include: Homebrew's
 # spdlog 1.17 calls an fmt 12 conversion that fmt deprecates, which is theirs to fix, not a warning in our code.
 fmt_dep = dependency('fmt', required: true, include_type: 'system')
-# apt.vaulthalla.sh's libpqxx-vh-dev: a static libpqxx SDK under its own pkg-config name (the .pc links libpqxx.a
+# apt.valkyrianlabs.com's libpqxx-vh-dev: a static libpqxx SDK under its own pkg-config name (the .pc links libpqxx.a
 # by path and the system libpq by SONAME), so neither Ubuntu's libpqxx-dev nor its headers can be picked up.
 # Read through pkg-config itself rather than dependency(): meson can't resolve the .pc's GNU ld `-l:libpq.so.5` and
 # warned on every configure, although the link line it produced was right. The flags are passed through unchanged.
 pqxx_pkgconfig = find_program('pkg-config', required: true)
 if run_command(pqxx_pkgconfig, '--atleast-version=8.0.2', 'libpqxx-vh', check: false).returncode() != 0
-    error('libpqxx-vh >= 8.0.2 not found by pkg-config (Linux: apt.vaulthalla.sh libpqxx-vh-dev; macOS: tools/macos/bootstrap.sh)')
+    error('libpqxx-vh >= 8.0.2 not found by pkg-config (Linux: apt.valkyrianlabs.com libpqxx-vh-dev; macOS: tools/macos/bootstrap.sh)')
 endif
 pqxx_dep = declare_dependency(
     compile_args: run_command(pqxx_pkgconfig, '--cflags', 'libpqxx-vh', check: true).stdout().strip().split(),
@@ -153,7 +153,7 @@ deps = [
     dependency('libcurl', required: true),
     dependency('boost', modules: ['filesystem'], required: true),
     pqxx_dep,
-    # apt.vaulthalla.sh's Chromium-tracking build (<milestone>.<branch>.<n>). The retired 2025.06.29 fork snapshot sorts
+    # apt.valkyrianlabs.com's Chromium-tracking build (<milestone>.<branch>.<n>). The retired 2025.06.29 fork snapshot sorts
     # higher, so the upper bound is what keeps a stale host from building against (and depending on) it.
     dependency('pdfium', version: ['>=155.8059', '<1000'], required: true),
     dependency('libmagic', required: true),

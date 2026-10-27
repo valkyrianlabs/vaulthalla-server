@@ -74,7 +74,7 @@ probes.
 
 ### P0-3: nothing verifies an upgrade on a real host
 
-`publish-debian` ships straight to `apt.vaulthalla.sh stable`, and the lab pulled 1.6.6 from there. There is no
+`publish-debian` ships straight to `apt.valkyrianlabs.com stable` (apt.vaulthalla.sh until 1.16.0), and the lab pulled 1.6.6 from there. There is no
 gate that installs and upgrades the candidate `.deb` on a real host with a running daemon, TPM, PostgreSQL, and nginx before
 publication. Candidate: a lab smoke stage (N-1 → N upgrade, service health, FUSE `stat` with timeout,
 `vh status`, DB restart survival) using vh-storage or a disposable clone of it.

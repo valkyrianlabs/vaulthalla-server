@@ -78,7 +78,7 @@ The build needs the private icons (`$VAULTHALLA_WEB_ICON_SRC`, default `~/vaulth
   `finalize`; `docs-publish` needs only `docs-validate` + `publish-debian`.
   - Every downstream job re-runs `vlr prepare` (deterministic: dates come from the release commit) and downloads the
     artifact; `finalize` passes `--record` so it persists exactly what was built and published.
-  - `publish-debian`: environment `Production`, concurrency `vaulthalla-apt-publish` (queued, never cancelled),
+  - `publish-debian`: environment `Production`, concurrency `valkyrianlabs-apt-publish` (shared with every Valkyrian Labs publisher; queued, never cancelled),
     `vlr publish-deb --require-enabled` (idempotent: identical bytes skipped, different bytes refused, the APT index
     is verified by sha256). Credentials are step-scoped: `RELEASE_PUBLISH_MODE`, `NEXUS_APT_REPO` (falls back to the
     legacy `NEXUS_REPO_URL` variable), `NEXUS_USER`, `NEXUS_PASSWORD` (falls back to the legacy `NEXUS_PASS` secret).
@@ -90,7 +90,8 @@ The build needs the private icons (`$VAULTHALLA_WEB_ICON_SRC`, default `~/vaulth
     actor on that ruleset, or the secret `RELEASE_FINALIZE_TOKEN` (a bypass actor's token with contents:write, used
     by the job's checkout). Without either, everything is published and only `finalize` fails; fix, then re-run it.
   - `Production` environment: no protection rules (checked 2026-09-30); holds `NEXUS_USER`, `NEXUS_PASS`,
-    `NEXUS_REPO_URL=https://apt.vaulthalla.sh`, `RELEASE_PUBLISH_MODE=nexus`. Environment-scoped values are only
+    `NEXUS_REPO_URL=https://apt.valkyrianlabs.com` (was apt.vaulthalla.sh until 2026-10-27; that host is now an
+    alias of the same Nexus repo), `RELEASE_PUBLISH_MODE=nexus`. Environment-scoped values are only
     visible to jobs that declare `environment: Production`.
 - Composite actions (`.github/actions/`): `runner`, `build`, `test`, `setup_web`, `build_web`, `sync_web_icons`
   (calls `web/bin/sync_private_icons.sh`), `test_web`, `setup_valkyrianlabs_tools` (vl-release, pmdocs from apt).

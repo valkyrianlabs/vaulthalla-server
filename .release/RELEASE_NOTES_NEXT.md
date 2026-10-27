@@ -70,3 +70,19 @@ Vaulthalla is now owned and published by Valkyrian Labs LLC, the company its cre
 license does not change: Vaulthalla stays free software under the AGPL, version 3 or later. The package's copyright
 file, `NOTICE` and `TRADEMARKS.md` name Valkyrian Labs LLC as copyright holder and owner of the Vaulthalla name and
 logo, and the copyright file now credits the third-party code bundled with the server.
+
+## One package repository, one signing key
+
+Vaulthalla now ships from the Valkyrian Labs APT repository, `apt.valkyrianlabs.com`, together with PDFium, the
+libpqxx SDK and the other Valkyrian Labs tools, all signed by the Valkyrian Labs LLC key
+(`494D 71A1 EEDD F87B D48E  5048 6D64 CB7B DFC3 0EC6`). `apt.vaulthalla.sh` keeps working: it now serves that same
+index, so existing sources need no edits.
+
+- **Existing installs:** run `sudo apt update && sudo apt upgrade` (or `apt-get dist-upgrade`; a plain `apt-get
+  upgrade` holds `vaulthalla` back). `vaulthalla-archive-keyring` 2026.10.27-1 adds the Valkyrian Labs LLC key to
+  `/usr/share/keyrings/vaulthalla.gpg`, which your `apt.vaulthalla.sh` source already trusts. If `apt update` reports
+  `NO_PUBKEY 6D64CB7BDFC30EC6`, rerun `curl -fsSL https://apt.vaulthalla.sh/install.sh | bash`.
+- **New installs** (`install.sh`, `bin/setup/install_deps.sh`, the manual steps in the docs) configure
+  `apt.valkyrianlabs.com` with `/usr/share/keyrings/valkyrianlabs.gpg`. A source line written by an earlier
+  `install.sh` is retired, so the host ends up with one entry for the one index; a hand-edited one is left alone.
+- `vaulthalla` now recommends `valkyrianlabs-archive-keyring`, which keeps that key current through upgrades.

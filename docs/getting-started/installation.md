@@ -23,7 +23,7 @@ Vaulthalla runs on Linux and on Apple Silicon Macs. Both run the same daemon, we
 | --- | --- | --- |
 | Hardware | amd64 (x86-64) | Apple Silicon (arm64) |
 | Operating system | Ubuntu 24.04 LTS (tested) | macOS 14 Sonoma or later |
-| Install channel | APT, `apt.vaulthalla.sh` | Installer package or Homebrew cask |
+| Install channel | APT, `apt.valkyrianlabs.com` (alias `apt.vaulthalla.sh`) | Installer package or Homebrew cask |
 | Service manager | systemd | launchd |
 | Database | Distribution PostgreSQL (local or remote) | Bundled PostgreSQL 16 |
 | Master key protection | TPM2 (hardware or software TPM) | Protected files + FileVault |

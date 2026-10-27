@@ -4,7 +4,7 @@
 #   tools/macos/make-pc-aliases.sh <prefix>
 #
 # core/meson.build requires `libpqxx-vh >= 8.0.2` on every OS (on Linux: the static libpqxx SDK from
-# apt.vaulthalla.sh; tools/contracts pins the name). On macOS, libpqxx-vh.pc wraps Homebrew's shared libpqxx
+# apt.valkyrianlabs.com; tools/contracts pins the name). On macOS, libpqxx-vh.pc wraps Homebrew's shared libpqxx
 # (+ libpq) for development builds; a static SDK is a distribution-time concern. Rerun after `brew upgrade libpqxx`
 # (bootstrap does).
 # Bash 3.2 compatible.

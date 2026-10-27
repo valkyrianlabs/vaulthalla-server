@@ -24,7 +24,7 @@ and MinIO, and it runs on Linux servers and Apple Silicon Macs.
 
 | Platform | Architecture | Install | Status |
 | --- | --- | --- | --- |
-| Linux: Ubuntu 24.04 LTS (tested), Debian family | amd64 | APT repository `apt.vaulthalla.sh` | Production |
+| Linux: Ubuntu 24.04 LTS (tested), Debian family | amd64 | Valkyrian Labs APT repository `apt.valkyrianlabs.com` (alias `apt.vaulthalla.sh`) | Production |
 | macOS 14 Sonoma or later | Apple Silicon (arm64) | Installer package or Homebrew cask | New: [see what is not supported yet](https://vaulthalla.io/docs/macos) |
 
 Intel Macs, Windows and ARM Linux are not supported.

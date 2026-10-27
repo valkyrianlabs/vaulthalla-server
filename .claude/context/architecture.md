@@ -14,7 +14,7 @@ core-backend, and protocol-map docs, with stale claims corrected.
   OS-specific code lives only in `core/src/platform/{linux,darwin}/` behind `core/include/platform/*.hpp` (see
   `macos.md`); source discovery adds the host's directory and, without FUSE, swaps the four libfuse sources for
   `fuse/unbuilt/Service.cpp`.
-  The two Vaulthalla-built SDKs come only from apt.vaulthalla.sh: `libpqxx-vh-dev` (libpqxx 8, a **static** archive
+  The two Vaulthalla-built SDKs come only from the Valkyrian Labs APT repository (apt.valkyrianlabs.com, alias apt.vaulthalla.sh): `libpqxx-vh-dev` (libpqxx 8, a **static** archive
   under its own pkg-config name `libpqxx-vh`, so servers need only `libpq5`) and `libpdfium-dev` (Chromium-tracking
   PDFium, runtime `libpdfium<branch>`, e.g. `libpdfium8059`). The pdfium dependency carries a version window
   (`>=155.8059`, `<1000`) because the retired `20250629` fork snapshot sorts higher; `tools/contracts` pins both.
