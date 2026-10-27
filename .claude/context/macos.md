@@ -70,7 +70,8 @@ Provider extension that talks to the daemon over the mTLS device listener under 
 `tools/macos/bootstrap.sh` (Brewfile, pinned PDFium `chromium/8066`, `libpqxx-vh.pc` alias over Homebrew's shared
 libpqxx), then `source tools/macos/env.sh && meson setup build-macos -Dbuild_unit_tests=true && meson compile -C
 build-macos`. DB-backed tests: `eval "$(tools/macos/test-db.sh up)"; meson test -C build-macos; tools/macos/test-db.sh
-down` (disposable cluster on :54329, never the brew service). CI: `.github/workflows/macos.yml` (hosted `xcode-27`: macOS 27 public preview; `macos-26` is the fallback).
+down` (disposable cluster on :54329, never the brew service). CI: `.github/workflows/macos.yml` (hosted `xcode-27`: macOS 27 public preview; `macos-26` is the fallback) runs
+`vh_unit_tests` without a database, like Linux CI: the DB-backed suites are manual validation only.
 
 `make test` also works here (#217): no sudo or harness bootstrap; it sources `env.sh`, builds `build-itest` with the
 Linux options (ASan/UBSan, `-Dintegration_tests=true`, only `vh_unit_tests` and the fake derive helper compiled) and

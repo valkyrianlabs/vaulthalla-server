@@ -200,7 +200,7 @@ meson test -C build-macos
 tools/macos/test-db.sh down
 ```
 
-`env.sh` pins OpenSSL 3 ahead of Homebrew's unversioned `openssl` (which may be 4.x), treats a `CPATH` that points at Homebrew's headers as system include paths so their warnings stay out of the build, and drops `-L`/`-I` entries for directories that no longer exist. CI runs the same steps in `.github/workflows/macos.yml`.
+`env.sh` pins OpenSSL 3 ahead of Homebrew's unversioned `openssl` (which may be 4.x), treats a `CPATH` that points at Homebrew's headers as system include paths so their warnings stay out of the build, and drops `-L`/`-I` entries for directories that no longer exist. CI runs the same steps in `.github/workflows/macos.yml`, minus the test database: the DB-backed suites are manual validation and skip in CI, as on Linux.
 :::
 
 :::

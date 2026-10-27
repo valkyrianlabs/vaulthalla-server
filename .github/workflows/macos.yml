@@ -1,7 +1,9 @@
 name: macOS
-# Builds core/ on Apple Silicon with Homebrew deps and runs vh_unit_tests against a disposable PostgreSQL 16 cluster
-# (tools/macos/); on manual dispatch it also builds the installer package (tools/macos/pkg/) as an artifact. Runs in
-# parallel with the Linux CI (ci/run-ci containers, self-hosted runners); nothing here publishes (release.yml does).
+# Builds core/ on Apple Silicon with Homebrew deps and runs vh_unit_tests without a database, as Linux CI does: the
+# DB-backed suites skip (no VH_TEST_DB_*). They are manual validation (`make test`, tools/macos/test-db.sh), never CI:
+# a Postgres cluster plus ~850 DB cases took ~10 of the job's minutes on hosted Macs. On manual dispatch it also
+# builds the installer package (tools/macos/pkg/) as an artifact. Runs in parallel with the Linux CI (ci/run-ci
+# containers, self-hosted runners); nothing here publishes (release.yml does).
 # Failures are real, never masked.
 on:
   pull_request:
@@ -141,21 +143,11 @@ jobs:
           bash tools/dev/quiet-build.sh build-macos "$RUNNER_TEMP/meson-setup.log"
           ccache -s
 
-      - name: Test database up
-        env:
-          VH_TEST_PG_DIR: ${{ runner.temp }}/vh-pg
-        run: |
-          tools/macos/test-db.sh up > "$RUNNER_TEMP/testdb.env"
-          # Disposable password, still kept out of the log.
-          echo "::add-mask::$(grep '^export VH_TEST_DB_PASS=' "$RUNNER_TEMP/testdb.env" | cut -d= -f2- | tr -d "'")"
-
       - name: meson test
         run: |
           . tools/macos/env.sh
-          . "$RUNNER_TEMP/testdb.env"
           meson test -C build-macos --print-errorlogs
 
-      # Before teardown: the cluster's server.log goes with its directory.
       - name: Upload meson logs
         if: failure()
         uses: actions/upload-artifact@v4
@@ -163,15 +155,8 @@ jobs:
           name: macos-meson-logs
           path: |
             build-macos/meson-logs/
-            ${{ runner.temp }}/vh-pg/server.log
           if-no-files-found: ignore
           retention-days: 7
-
-      - name: Test database down
-        if: always()
-        env:
-          VH_TEST_PG_DIR: ${{ runner.temp }}/vh-pg
-        run: tools/macos/test-db.sh down
 
   # Not part of PR CI: release.yml builds the package (in parallel with the Debian build) for every release. Run this
   # workflow by hand (Actions > macOS > Run workflow) to rehearse a package from any branch.
