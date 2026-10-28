@@ -175,6 +175,14 @@ That shape maps `archive` to the gateway bucket and `reports/report.pdf` to the 
 
 Virtual-hosted style may be accepted by the direct listener when enabled, but path-style is the operational default for public reverse-proxy mode.
 
+### Behind Cloudflare Or Another CDN
+
+A proxied (orange-cloud) Cloudflare record, or any CDN in front of the S3 domain, works with these rules:
+
+- **Bypass the cache for the S3 hostname.** Add a Cache Rule that matches the S3 hostname and sets **Bypass cache**. The gateway also sends `Cache-Control: private, no-store` on every response, including presigned GETs, so a CDN that honors origin headers never stores one; the rule covers CDNs or settings that override origin cache headers.
+- **A stripped `Content-Length: 0` is fine.** Cloudflare drops `Content-Length: 0` from bodiless requests (GET, HEAD, DELETE), while the AWS CLI's CRT transfer client signs `content-length`. When a request carries neither `Content-Length` nor `Transfer-Encoding` and no body arrived, the gateway canonicalizes the signed header as `0`, the length the request actually had, as MinIO does. A request that carries a body never gets an implied length.
+- **Upload size limits still apply.** Cloudflare caps request bodies by plan (100 MB on Free and Pro). Keep the CLI's multipart part size below the limit, for example `aws configure set default.s3.multipart_chunksize 64MB`.
+
 ## Web Console Workflow
 
 Use the browser workflow for interactive setup:

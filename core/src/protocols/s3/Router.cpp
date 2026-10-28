@@ -147,6 +147,7 @@ Router::Response makeResponse(
     Router::Response response{status, request.version()};
     response.set(http::field::server, "VaulthallaS3Gateway");
     response.set(http::field::content_type, contentType);
+    response.set(http::field::cache_control, Router::kCacheControl);
     response.body() = std::move(body);
     response.keep_alive(request.keep_alive());
     response.prepare_payload();

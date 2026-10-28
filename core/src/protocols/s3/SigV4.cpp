@@ -91,11 +91,24 @@ std::vector<std::string> split(const std::string& value, const char delim) {
     return out;
 }
 
+// A request with neither Content-Length nor Transfer-Encoding has no body (RFC 9112 section 6.3), and the gateway
+// read none. Only then may an absent Content-Length be taken to be 0.
+bool framedWithoutBody(const VerificationInput& input, const std::map<std::string, std::string>& headers) {
+    if (headers.contains("content-length") || headers.contains("transfer-encoding")) return false;
+    if (!input.body.empty()) return false;
+    return !input.body_sha256 || *input.body_sha256 == sha256Hex("");
+}
+
 std::map<std::string, std::string> normalizedHeaders(const VerificationInput& input) {
     std::map<std::string, std::string> out;
     for (const auto& [name, value] : input.headers)
         out[lower(name)] = trimAndCompress(value);
     if (!input.host.empty() && !out.contains("host")) out["host"] = input.host;
+    // Proxies and CDNs (Cloudflare) drop "Content-Length: 0" from bodiless requests (GET, HEAD, DELETE, an empty
+    // POST), while clients that sign content-length (the AWS CLI CRT transfer client) signed it as 0. Canonicalize the
+    // missing header as the length the request was actually framed with, as MinIO does. The value is the true body
+    // length, so it lets no request through that the client did not sign; a request with a body never gets one.
+    if (framedWithoutBody(input, out)) out["content-length"] = "0";
     return out;
 }
 

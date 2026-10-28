@@ -10,3 +10,5 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
 - Source moved to github.com/valkyrianlabs/vaulthalla-server (Homepage, debian/copyright Source, release.toml);
   the old vaulthalla/server URLs redirect. CI runs on the Valkyrian Labs VPS build pool (label vps-ci).
 - The macOS installer's Nexus mirror moved to the valkyrian-raw repository (pkg.vaulthalla.sh).
+- S3 gateway: a signed content-length that a proxy stripped (Cloudflare drops Content-Length: 0) is canonicalized
+  as 0 when the request has no body and no Transfer-Encoding; every response sends Cache-Control: private, no-store.
