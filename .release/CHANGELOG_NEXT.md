@@ -12,3 +12,6 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
 - The macOS installer's Nexus mirror moved to the valkyrian-raw repository (pkg.vaulthalla.sh).
 - S3 gateway: a signed content-length that a proxy stripped (Cloudflare drops Content-Length: 0) is canonicalized
   as 0 when the request has no body and no Transfer-Encoding; every response sends Cache-Control: private, no-store.
+- TPM sealer: seal/unseal are serialized per process (each holds 2 of the TPM's 3 transient object slots; the swtpm
+  TCTI has no resource manager), so concurrent unseals no longer fail Esys_Load with TPM_RC_OBJECT_MEMORY; transient
+  TPM warnings (object/session memory, retry, yielded, testing) are retried up to 5 times with backoff.

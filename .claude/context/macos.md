@@ -19,7 +19,9 @@ Decisions awaiting the maintainer are `needs:review` issues #200–#206 on the R
 - `-Dfuse` (auto): Linux requires libfuse3; macOS never builds the kernel bridge (see below). `fuse::makeService()`
   is nullptr there and the runtime registers no FUSE service. Inode numbers outside the bridge are `vh::fs::Inode`.
 - Secrets: `crypto::secrets::KeyProvider` (shared) over `platform::sealer`. Linux: TPM2 (`platform/linux/TpmSealer.cpp`,
-  same blobs as before). macOS: a **development-only** `file` backend, reported as `file`. Production backend: #201
+  same blobs as before; one seal/unseal at a time per process, because each holds 2 of the TPM's 3 transient object
+  slots and the swtpm socket TCTI has no resource manager; transient TPM warnings are retried up to 5 times,
+  `TpmSealerTest` runs it against a private swtpm). macOS: a **development-only** `file` backend, reported as `file`. Production backend: #201
   (Secure Enclave spike from a user session passed; the pre-login LaunchDaemon test needs maintainer approval).
 - Paths: macOS defaults from meson (`/Library/Application Support/Vaulthalla/{config.yaml,state}`,
   `/Library/Logs/Vaulthalla`, `/var/run/vaulthalla`, mount `/Library/Application Support/Vaulthalla/mount`), per #199/#216.

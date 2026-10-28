@@ -8,14 +8,17 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include <algorithm>
+#include <chrono>
 #include <fstream>
 #include <filesystem>
 #include <iomanip>
+#include <mutex>
 #include <random>
 #include <sstream>
 #include <stdexcept>
 #include <cstring>
 #include <cstdlib>
+#include <thread>
 #include <utility>
 #include <paths.h>
 
@@ -75,6 +78,66 @@ namespace vh::platform::sealer {
 
     static bool is_initialize_rc(const TSS2_RC rc) {
         return (rc & 0xFFFFu) == TPM2_RC_INITIALIZE;
+    }
+
+    // A failed TPM command, with its response code, so a caller can tell a full TPM from a broken blob.
+    struct TpmError : std::runtime_error {
+        TSS2_RC rc;
+        TpmError(const std::string &what, const TSS2_RC code)
+            : std::runtime_error(what + " " + describe_rc(code)), rc(code) {}
+    };
+
+    // TPM warnings that mean "busy or out of room right now", not "this blob or request is bad": out of transient object
+    // or session slots, or asked to retry. Another process on the same TPM (tpm2-tools, a second daemon instance on a
+    // shared swtpm) can cause them even while this process holds its own TPM lock.
+    static bool is_transient_rc(const TSS2_RC rc) {
+        switch (rc & 0xFFFFu) {
+            case TPM2_RC_OBJECT_MEMORY:
+            case TPM2_RC_SESSION_MEMORY:
+            case TPM2_RC_MEMORY:
+            case TPM2_RC_OBJECT_HANDLES:
+            case TPM2_RC_SESSION_HANDLES:
+            case TPM2_RC_RETRY:
+            case TPM2_RC_YIELDED:
+            case TPM2_RC_TESTING:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    // One TPM operation at a time in this process. swtpm (and many hardware TPMs) have three transient object slots,
+    // and each seal/unseal holds two at once: the storage primary and the sealed object. The swtpm TCTI reconnects for
+    // every command and nothing virtualizes handles (no resource manager on the socket), so commands of concurrent
+    // operations interleave on the one TPM and their objects coexist: two unseals at once (the first request of each new
+    // S3 gateway connection unseals s3gw_master, so parallel multipart uploads do it together; DB pool connections;
+    // engines loading vault keys) need four slots and fail in Esys_Load with TPM_RC_OBJECT_MEMORY. Serialized, every
+    // operation flushes its two objects before the next one creates any.
+    static std::mutex &tpm_mutex() {
+        static std::mutex m;
+        return m;
+    }
+
+    constexpr int kTpmAttempts = 5;
+
+    // Runs op (a whole seal or unseal: fresh ESYS context, objects created and flushed) under the TPM lock, and runs it
+    // again, a bounded number of times, while it fails with a transient TPM warning from outside this process.
+    template<class Op>
+    static auto with_tpm(const char *what, Op &&op) {
+        std::scoped_lock lock(tpm_mutex());
+        auto backoff = std::chrono::milliseconds(50);
+        for (int attempt = 1;; ++attempt) {
+            try {
+                return op();
+            } catch (const TpmError &e) {
+                if (!is_transient_rc(e.rc) || attempt >= kTpmAttempts) throw;
+                log::Registry::crypto()->warn(
+                    "[TPMKeyProvider] {} hit a transient TPM condition (attempt {}/{}): {}; retrying in {} ms",
+                    what, attempt, kTpmAttempts, e.what(), backoff.count());
+                std::this_thread::sleep_for(backoff);
+                backoff *= 2;
+            }
+        }
     }
 
     static bool device_tpm_exists(const std::filesystem::path &p) {
@@ -236,7 +299,7 @@ namespace vh::platform::sealer {
                 log::Registry::crypto()->error(
                     "[TPMKeyProvider] CreatePrimary indicates TPM initialize/startup state issue; verify selected backend and TPM2_Startup flow.");
             }
-            throw std::runtime_error("CreatePrimary failed " + describe_rc(rc));
+            throw TpmError("CreatePrimary failed", rc);
         }
         log::Registry::crypto()->info("[TPMKeyProvider] CreatePrimary succeeded");
 
@@ -248,7 +311,7 @@ namespace vh::platform::sealer {
     // A KEYEDHASH object holding the secret under the TPM's storage primary, which is recreated on each use (no
     // persistent handle). The blob only loads into this TPM. No PCR policy: whoever can read `dir` and reach the TPM
     // can unseal it.
-    void seal(const std::filesystem::path &dir, const std::string &name, const std::vector<uint8_t> &secret) {
+    static void seal_once(const std::filesystem::path &dir, const std::string &name, const std::vector<uint8_t> &secret) {
         auto runtime = init_esys();
         ESYS_TR parent = ESYS_TR_NONE;
         TPM2B_PRIVATE *outPriv = nullptr;
@@ -286,7 +349,7 @@ namespace vh::platform::sealer {
                                      nullptr, nullptr, nullptr);
 
             if (rc != TSS2_RC_SUCCESS) {
-                throw std::runtime_error("Esys_Create failed " + describe_rc(rc));
+                throw TpmError("Esys_Create failed", rc);
             }
 
             dump(dir / (name + ".priv"), {outPriv->buffer, outPriv->buffer + outPriv->size});
@@ -309,7 +372,7 @@ namespace vh::platform::sealer {
         log::Registry::crypto()->debug("[TPMKeyProvider] Sealed {} key to {}", name, dir.string());
     }
 
-    std::vector<uint8_t> unseal(const std::filesystem::path &dir, const std::string &name) {
+    static std::vector<uint8_t> unseal_once(const std::filesystem::path &dir, const std::string &name) {
         std::vector<uint8_t> secret;
         auto runtime = init_esys();
         ESYS_TR parent = ESYS_TR_NONE;
@@ -338,14 +401,14 @@ namespace vh::platform::sealer {
                                    ESYS_TR_PASSWORD, ESYS_TR_NONE, ESYS_TR_NONE,
                                    &inPriv, &inPub, &obj);
             if (rc != TSS2_RC_SUCCESS) {
-                throw std::runtime_error("Esys_Load failed " + describe_rc(rc));
+                throw TpmError("Esys_Load failed", rc);
             }
 
             rc = Esys_Unseal(runtime.esys, obj,
                              ESYS_TR_PASSWORD, ESYS_TR_NONE, ESYS_TR_NONE,
                              &outData);
             if (rc != TSS2_RC_SUCCESS) {
-                throw std::runtime_error("Esys_Unseal failed " + describe_rc(rc));
+                throw TpmError("Esys_Unseal failed", rc);
             }
 
             secret.assign(outData->buffer, outData->buffer + outData->size);
@@ -362,6 +425,14 @@ namespace vh::platform::sealer {
 
         log::Registry::crypto()->debug("[TPMKeyProvider] Unsealed master key from {}", dir.string());
         return secret;
+    }
+
+    void seal(const std::filesystem::path &dir, const std::string &name, const std::vector<uint8_t> &secret) {
+        with_tpm("seal", [&] { seal_once(dir, name, secret); });
+    }
+
+    std::vector<uint8_t> unseal(const std::filesystem::path &dir, const std::string &name) {
+        return with_tpm("unseal", [&] { return unseal_once(dir, name); });
     }
 
     bool present(const std::filesystem::path &dir, const std::string &name) {

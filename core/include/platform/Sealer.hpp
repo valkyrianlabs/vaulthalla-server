@@ -13,6 +13,8 @@
 //   macOS: "file" — a development backend with no hardware binding (a 0600 file in a 0700 directory, readable by
 //          whoever can read the state directory). Never a production default; the macOS production backend is an
 //          open decision (Secure Enclave vs keychain), and the backend name is reported wherever health is.
+// seal() and unseal() are safe to call from any thread: the TPM backend runs one operation at a time per process
+// (the TPM has only a few transient object slots) and retries, boundedly, when another process has the TPM full.
 namespace vh::platform::sealer {
 
 [[nodiscard]] std::string_view backend() noexcept;
