@@ -30,3 +30,13 @@ several secrets were unsealed at once, and a TPM without a resource manager in f
 transient objects.
 TPM operations now run one at a time, each flushing its objects before the next starts, and a TPM that another process
 has momentarily filled is retried a few times instead of failing the request.
+
+## Stats history no longer fills the database
+
+The 5-minute trend rollups behind the health dashboard were kept for 365 days whatever `stats_snapshots.retention_days`
+said, and on a busy install they grew to gigabytes. Each rollup tier now has its own setting:
+`stats_snapshots.rollup_5m_retention_days` (default 30 days; the dashboard reads this tier only for windows up to 7
+days) and `stats_snapshots.rollup_1h_retention_days` (default 365 days). Both are also under **Settings → Health
+history**. The first daily purge after upgrading deletes the backlog; PostgreSQL keeps the freed space in the table file,
+so [reclaim it once](/reference/configuration#reclaiming-disk-space-after-the-first-purge) with `VACUUM (FULL)` or
+`pg_repack` during a maintenance window.

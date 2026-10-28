@@ -280,6 +280,59 @@ TEST(ConfigSettingsValidation, RefusesUnknownVaultDefaultsAndZeroCaps) {
     EXPECT_NO_THROW(ops::config::validateSettings(doc));
 }
 
+// Rollup retention used to be a hard-coded 365 days for both tiers, so the 5-minute tier (read only for windows up to
+// 7 days) grew to most of the database. Each tier now has its own key; old configs get the defaults.
+TEST_F(ConfigSettingsTest, StatsRollupRetentionDefaultsAndClamps) {
+    const auto old = load("stats_snapshots:\n  enabled: true\n  retention_days: 14\n");
+    EXPECT_EQ(old.stats_snapshots.retention_days, 14u);
+    EXPECT_EQ(old.stats_snapshots.rollup_5m_retention_days, 30u);
+    EXPECT_EQ(old.stats_snapshots.rollup_1h_retention_days, 365u);
+
+    const auto set = load("stats_snapshots:\n  rollup_5m_retention_days: 10\n  rollup_1h_retention_days: 90\n");
+    EXPECT_EQ(set.stats_snapshots.retention_days, 30u);
+    EXPECT_EQ(set.stats_snapshots.rollup_5m_retention_days, 10u);
+    EXPECT_EQ(set.stats_snapshots.rollup_1h_retention_days, 90u);
+
+    // At least a day each, and the coarser tier is never dropped before the finer one.
+    const auto clamped = load("stats_snapshots:\n  rollup_5m_retention_days: 0\n  rollup_1h_retention_days: 0\n");
+    EXPECT_EQ(clamped.stats_snapshots.rollup_5m_retention_days, 1u);
+    EXPECT_EQ(clamped.stats_snapshots.rollup_1h_retention_days, 1u);
+    const auto inverted = load("stats_snapshots:\n  rollup_5m_retention_days: 60\n  rollup_1h_retention_days: 7\n");
+    EXPECT_EQ(inverted.stats_snapshots.rollup_5m_retention_days, 60u);
+    EXPECT_EQ(inverted.stats_snapshots.rollup_1h_retention_days, 60u);
+}
+
+TEST(ConfigSettingsSerialization, StatsRollupRetentionRoundTripsThroughYamlAndJson) {
+    config::StatsSnapshotsConfig cfg;
+    cfg.retention_days = 21;
+    cfg.rollup_5m_retention_days = 9;
+    cfg.rollup_1h_retention_days = 120;
+
+    config::StatsSnapshotsConfig fromYaml;
+    ASSERT_TRUE(YAML::convert<config::StatsSnapshotsConfig>::decode(
+        YAML::Load(YAML::Dump(YAML::convert<config::StatsSnapshotsConfig>::encode(cfg))), fromYaml));
+    EXPECT_EQ(json(fromYaml), json(cfg));
+
+    const json doc = cfg;
+    EXPECT_EQ(doc.at("rollup_5m_retention_days"), 9);
+    EXPECT_EQ(doc.at("rollup_1h_retention_days"), 120);
+    EXPECT_EQ(json(doc.get<config::StatsSnapshotsConfig>()), doc);
+
+    // An older console that doesn't know the keys keeps the defaults; the settings JSON clamps like YAML.
+    json legacy = doc;
+    legacy.erase("rollup_5m_retention_days");
+    legacy.erase("rollup_1h_retention_days");
+    const auto fromLegacy = legacy.get<config::StatsSnapshotsConfig>();
+    EXPECT_EQ(fromLegacy.rollup_5m_retention_days, 30u);
+    EXPECT_EQ(fromLegacy.rollup_1h_retention_days, 365u);
+    json inverted = doc;
+    inverted["rollup_5m_retention_days"] = 0;
+    inverted["rollup_1h_retention_days"] = 0;
+    const auto fromInverted = inverted.get<config::StatsSnapshotsConfig>();
+    EXPECT_EQ(fromInverted.rollup_5m_retention_days, 1u);
+    EXPECT_EQ(fromInverted.rollup_1h_retention_days, 1u);
+}
+
 // The shipped default config uses the new keys only (an install never starts with a deprecation warning).
 TEST(ShippedConfig, UsesTheNewKeysWithTheirDefaults) {
     // This tree's deploy/config/config.yaml (VH_PATH_TO_CONFIG may point at another checkout's).
@@ -295,6 +348,9 @@ TEST(ShippedConfig, UsesTheNewKeysWithTheirDefaults) {
     EXPECT_EQ(cfg.vaults.s3.default_remote_conflict_policy, "ask");
     EXPECT_EQ(cfg.websocket.max_connections, 1024u);
     EXPECT_EQ(cfg.http_preview.max_connections, 512u);
+    EXPECT_EQ(cfg.stats_snapshots.retention_days, 30u);
+    EXPECT_EQ(cfg.stats_snapshots.rollup_5m_retention_days, 30u);
+    EXPECT_EQ(cfg.stats_snapshots.rollup_1h_retention_days, 365u);
 }
 
 }

@@ -9998,6 +9998,22 @@
           "types": [
             "integer"
           ]
+        },
+        {
+          "minimum": 0,
+          "name": "rollup_5m_retention_days",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "rollup_1h_retention_days",
+          "required": true,
+          "types": [
+            "integer"
+          ]
         }
       ],
       "name": "StatsSnapshotsConfig"
@@ -17131,7 +17147,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "540aadf56707a312f350cc7510385baa09eacaed912950ff5da1afb9776ba0a5",
+  "models_hash": "00cc5309cf6f162bb2881d6ab73e6273170a560d30e0dc588694c81dfe1f57da",
   "ws": [
     {
       "auth": "session",

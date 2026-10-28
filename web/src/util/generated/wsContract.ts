@@ -9,7 +9,7 @@ export const WS_CONTRACT_VERSION = 2
 export const WS_CONTRACT_HASH = '686e357625cb73a67b350e65eb9ed5e057a42c96013fa6e5215e5ca9d55af074'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = '540aadf56707a312f350cc7510385baa09eacaed912950ff5da1afb9776ba0a5'
+export const WS_MODELS_HASH = '00cc5309cf6f162bb2881d6ab73e6273170a560d30e0dc588694c81dfe1f57da'
 
 // A merge patch (payload members marked `partial`): any subset of the members, at any depth.
 export type WsPartial<T> = { [K in keyof T]?: T[K] extends readonly unknown[] ? T[K] : T[K] extends object ? WsPartial<T[K]> : T[K] }
@@ -1575,6 +1575,8 @@ export interface WsModels {
     gauge_observation_interval_seconds: number
     vault_interval_seconds: number
     retention_days: number
+    rollup_5m_retention_days: number
+    rollup_1h_retention_days: number
   }
   /**
    * Metric trend series from the stats rollups (core/src/stats/model/StatsTrends.cpp to_json).

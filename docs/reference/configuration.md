@@ -213,15 +213,49 @@ Durations take `s`, `m`, `h`, `d` or `w`. Each deletion records its own deadline
 
 ## Stats Snapshots
 
-Stats snapshot settings control dashboard trend collection:
+Stats snapshot settings control dashboard trend collection and how long its history is kept:
 
 ```yaml
 stats_snapshots:
   enabled: true
   runtime_interval_seconds: 60
-  vault_interval_seconds: 300
+  vault_interval_seconds: 3600
   retention_days: 30
+  rollup_5m_retention_days: 30
+  rollup_1h_retention_days: 365
 ```
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `retention_days` | `30` | Snapshot rows (`stats_snapshot`) and raw samples (`stats_*_sample`) older than this are deleted. Minimum 1. |
+| `rollup_5m_retention_days` | `30` | 5-minute trend rollups older than this are deleted. Dashboard windows of up to 7 days read this tier, so a value below 7 shortens those charts. Minimum 1. |
+| `rollup_1h_retention_days` | `365` | Hourly trend rollups older than this are deleted. Longer dashboard windows (up to 30 days) read this tier. Never less than `rollup_5m_retention_days`; a smaller value is raised to it. |
+
+The daemon purges once a day, starting shortly after it starts. Every key is optional: a missing key keeps the default shown here. Settings saved from the web console (**Settings → Health history**) apply at the next purge.
+
+Earlier releases kept both rollup tiers for 365 days whatever the config said, so the 5-minute tier could grow to most of the database. The first purge after upgrading deletes that backlog, which can take a minute on a large install.
+
+### Reclaiming Disk Space After The First Purge
+
+PostgreSQL does not return the space of deleted rows to the filesystem: autovacuum marks it reusable for new rows, so the table stops growing, but its file stays the same size. To shrink it once after upgrading, rewrite the table during a maintenance window. Check the size first:
+
+```bash
+sudo -u postgres psql vaulthalla -c "SELECT pg_size_pretty(pg_total_relation_size('stats_metric_rollup'));"
+```
+
+`VACUUM (FULL)` rewrites the table and its indexes. It takes an exclusive lock, so stats writes from the daemon wait until it finishes, and it needs free disk space for a full copy of the table's remaining rows:
+
+```bash
+sudo -u postgres psql vaulthalla -c "VACUUM (FULL, ANALYZE, VERBOSE) stats_metric_rollup;"
+```
+
+Where `pg_repack` is installed (the `postgresql-<version>-repack` package, and `CREATE EXTENSION pg_repack;` in the database), it does the same rewrite while holding the exclusive lock only briefly at the start and end:
+
+```bash
+sudo -u postgres pg_repack --dbname=vaulthalla --table=public.stats_metric_rollup
+```
+
+Vaulthalla never runs either one itself. Use your database's name if it isn't `vaulthalla`. You only need to do this once: later purges remove a day's worth of rows at a time, and new rows reuse that space.
 
 Dashboard backup/recovery readiness indicators should be treated as policy/status signals, not proof that backup work has run.
 

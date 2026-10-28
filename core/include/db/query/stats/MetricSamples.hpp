@@ -127,7 +127,9 @@ struct SampleBatch {
 struct MetricSamples {
     static void insertBatch(const SampleBatch& batch);
     static void purgeRawOlderThan(std::uint32_t retentionDays);
-    static void purgeRollupsOlderThan(std::uint32_t retentionDays);
+    // Deletes the rollups of one tier (300 or 3600 seconds) that ended more than retentionDays (at least 1) ago, and
+    // returns how many. Deleted rows don't shrink the table on disk; see docs/reference/configuration.md.
+    static std::uint64_t purgeRollupsOlderThan(std::uint32_t resolutionSeconds, std::uint32_t retentionDays);
 };
 
 }

@@ -923,16 +923,29 @@ void SnapshotService::collectVaultSnapshots() {
 }
 
 void SnapshotService::purgeOldSnapshots() {
-    const auto retentionDays = config::Registry::get().stats_snapshots.retention_days;
+    const auto snapshots = config::Registry::get().stats_snapshots;
+    const auto retentionDays = snapshots.retention_days;
     snapshotServiceTry("stats_snapshot retention", [retentionDays] {
         db::query::stats::Snapshot::purgeOlderThan(retentionDays);
     });
     snapshotServiceTry("typed stats raw retention", [retentionDays] {
         db::query::stats::MetricSamples::purgeRawOlderThan(retentionDays);
     });
-    snapshotServiceTry("typed stats rollup retention", [] {
-        db::query::stats::MetricSamples::purgeRollupsOlderThan(365);
-    });
+    // Each rollup tier has its own retention. 5-minute rollups used to be kept 365 days like the hourly ones, which made
+    // them most of the database although the dashboard reads them only for windows up to 7 days.
+    struct Tier {
+        std::uint32_t resolutionSeconds;
+        std::uint32_t days;
+    };
+    for (const Tier tier : {Tier{300, snapshots.rollup_5m_retention_days}, Tier{3600, snapshots.rollup_1h_retention_days}}) {
+        snapshotServiceTry("typed stats rollup retention", [tier] {
+            const auto purged = db::query::stats::MetricSamples::purgeRollupsOlderThan(tier.resolutionSeconds, tier.days);
+            if (purged > 0)
+                log::Registry::runtime()->info(
+                    "[SnapshotService] Purged {} stats rollups of resolution {} s older than {} days",
+                    purged, tier.resolutionSeconds, tier.days);
+        });
+    }
 }
 
 }

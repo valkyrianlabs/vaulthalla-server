@@ -328,6 +328,8 @@ export const SECTIONS: SectionDef[] = [
       { key: 'gauge_observation_interval_seconds', label: 'Sample gauges every', type: int('seconds', 1, 60) },
       { key: 'vault_interval_seconds', label: 'Vault snapshot every', type: int('seconds', 300) },
       { key: 'retention_days', label: 'Keep snapshots for', type: int('days', 1) },
+      { key: 'rollup_5m_retention_days', label: 'Keep 5-minute trends for', type: int('days', 1) },
+      { key: 'rollup_1h_retention_days', label: 'Keep hourly trends for', type: int('days', 1) },
     ],
   },
   {

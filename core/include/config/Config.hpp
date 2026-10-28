@@ -177,7 +177,13 @@ struct StatsSnapshotsConfig {
     uint32_t runtime_interval_seconds = 60;
     uint32_t gauge_observation_interval_seconds = 3;
     uint32_t vault_interval_seconds = 3600;
+    // stats_snapshot rows and the raw typed samples (stats_*_sample).
     uint32_t retention_days = 30;
+    // The typed-stats rollups (stats_metric_rollup), per tier. The dashboard reads 5-minute rollups for windows up to
+    // 7 days and hourly ones for longer windows (up to 30 days). The hourly tier is kept at least as long as the
+    // 5-minute one (the decoders enforce it), so history only ever gets coarser.
+    uint32_t rollup_5m_retention_days = 30;
+    uint32_t rollup_1h_retention_days = 365;
 };
 
 struct ServicesConfig {

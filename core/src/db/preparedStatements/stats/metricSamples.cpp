@@ -280,10 +280,12 @@ void vh::db::Connection::initPreparedStatsMetricSamples() const {
         )SQL"
     );
 
+    // One rollup tier ($1 = resolution_seconds) at a time: each has its own retention (stats_snapshots.rollup_*).
     conn_->prepare("stats_samples.purge_rollups_older_than",
         R"SQL(
             DELETE FROM stats_metric_rollup
-            WHERE window_end < CURRENT_TIMESTAMP - ($1::int * INTERVAL '1 day');
+            WHERE resolution_seconds = $1::int
+              AND window_end < CURRENT_TIMESTAMP - ($2::int * INTERVAL '1 day');
         )SQL"
     );
 }

@@ -243,7 +243,8 @@ std::vector<WsModel> adminSettingsModels() {
          uinteger("sweep_interval_seconds")}));
     out.push_back(model("StatsSnapshotsConfig", "stats_snapshots.* (Config.cpp to_json(StatsSnapshotsConfig)).",
         {boolean("enabled"), uinteger("runtime_interval_seconds"), uinteger("gauge_observation_interval_seconds"),
-         uinteger("vault_interval_seconds"), uinteger("retention_days")}));
+         uinteger("vault_interval_seconds"), uinteger("retention_days"), uinteger("rollup_5m_retention_days"),
+         uinteger("rollup_1h_retention_days")}));
 
     out.push_back(model("SharingConfig",
         "sharing.*: the share-link switches (Config.cpp to_json(SharingConfig)). enabled gates every link; "
