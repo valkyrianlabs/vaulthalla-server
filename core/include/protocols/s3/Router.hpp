@@ -22,6 +22,10 @@ public:
     using Request = http::request<http::string_body>;
     using Response = http::response<http::string_body>;
 
+    // Cache-Control on every gateway answer. Each one is per-credential, and a presigned GET is a bearer URL: no CDN or
+    // shared cache in front of the gateway may store or replay one.
+    static constexpr const char* kCacheControl = "private, no-store";
+
     struct ParsedTarget {
         std::string bucket;
         std::string key;

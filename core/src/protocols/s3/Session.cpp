@@ -541,6 +541,7 @@ bool Session::writeReadError(const http::request_header<>& header, const http::s
     Router::Response response{status, header.version()};
     response.set(http::field::server, "VaulthallaS3Gateway");
     response.set(http::field::content_type, "application/xml");
+    response.set(http::field::cache_control, Router::kCacheControl);
     response.body() = xml::error(code, message, std::string(header.target()), "");
     response.keep_alive(false);
     response.prepare_payload();

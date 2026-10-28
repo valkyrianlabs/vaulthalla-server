@@ -153,7 +153,8 @@ std::string scopeDate(const std::string& amzDate) {
 void signS3GatewayRequest(
     vh::protocols::s3::Router::Request& request,
     const std::string& accessKey,
-    const std::string& secretKey) {
+    const std::string& secretKey,
+    const std::string& signedHeaders = "host;x-amz-content-sha256;x-amz-date") {
     using namespace vh::protocols::s3::sigv4;
 
     const auto bodyHash = sha256Hex(request.body());
@@ -169,7 +170,7 @@ void signS3GatewayRequest(
             .region = "us-east-1",
             .service = "s3"
         },
-        .signed_headers = "host;x-amz-content-sha256;x-amz-date",
+        .signed_headers = signedHeaders,
         .signature = {},
         .amz_date = amzDate,
         .payload_hash = bodyHash
@@ -801,6 +802,127 @@ TEST(S3GatewaySigV4Test, RejectsMissingSignedHeader) {
     EXPECT_NE(result.error.find("Signed header missing"), std::string::npos);
 }
 
+namespace {
+
+// What the AWS CLI's CRT transfer client sends: "Content-Length: 0" on a bodiless request, signed.
+vh::protocols::s3::sigv4::VerificationInput signedWithZeroContentLength(
+    const std::string& method, const std::string& secret, const std::string& accessKey) {
+    using namespace vh::protocols::s3::sigv4;
+
+    const std::string amzDate = amzNow();
+    VerificationInput input{
+        .method = method,
+        .target = "/bucket/object.txt",
+        .host = "s3.example.test",
+        .headers = {
+            {"Host", "s3.example.test"},
+            {"Content-Length", "0"},
+            {"x-amz-content-sha256", sha256Hex("")},
+            {"x-amz-date", amzDate}
+        },
+        .body = {},
+        .body_sha256 = std::nullopt
+    };
+    ParsedAuth auth{
+        .credential = {.access_key = accessKey, .date = scopeDate(amzDate), .region = "us-east-1", .service = "s3"},
+        .signed_headers = "content-length;host;x-amz-content-sha256;x-amz-date",
+        .signature = {},
+        .amz_date = amzDate,
+        .payload_hash = sha256Hex("")
+    };
+    auth.signature = signatureFor(input, auth, secret);
+    input.headers["Authorization"] =
+        "AWS4-HMAC-SHA256 Credential=" + accessKey + "/" + auth.credential.date + "/us-east-1/s3/aws4_request, "
+        "SignedHeaders=" + auth.signed_headers + ", Signature=" + auth.signature;
+    return input;
+}
+
+}
+
+// Cloudflare (and other proxies) drop "Content-Length: 0" from bodiless requests; the signature still covers it.
+TEST(S3GatewaySigV4Test, CanonicalizesSignedContentLengthStrippedByProxyAsZero) {
+    using namespace vh::protocols::s3::sigv4;
+
+    const std::string secret = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY";
+    const std::string accessKey = "VHTESTACCESSKEY";
+
+    for (const std::string method : {"GET", "HEAD", "DELETE", "POST"}) {
+        auto input = signedWithZeroContentLength(method, secret, accessKey);
+        const auto direct = verify(input, secret);
+        EXPECT_TRUE(direct.ok) << method << ": " << direct.error;
+
+        input.headers.erase("Content-Length");
+        const auto proxied = verify(input, secret);
+        EXPECT_TRUE(proxied.ok) << method << " without Content-Length: " << proxied.error;
+        EXPECT_EQ(proxied.access_key, accessKey);
+    }
+}
+
+// The implied length is the body the gateway actually read, never a free pass for content-length.
+TEST(S3GatewaySigV4Test, MissingSignedContentLengthIsOnlyImpliedForAnEmptyUnchunkedBody) {
+    using namespace vh::protocols::s3::sigv4;
+
+    const std::string secret = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY";
+    const std::string accessKey = "VHTESTACCESSKEY";
+
+    {
+        auto input = signedWithZeroContentLength("PUT", secret, accessKey);
+        input.headers.erase("Content-Length");
+        input.headers["Transfer-Encoding"] = "chunked";
+        const auto result = verify(input, secret);
+        EXPECT_FALSE(result.ok);
+        EXPECT_EQ(result.error, "Signed header missing from request: content-length");
+    }
+    {
+        auto input = signedWithZeroContentLength("PUT", secret, accessKey);
+        input.headers.erase("Content-Length");
+        input.headers["x-amz-content-sha256"] = "UNSIGNED-PAYLOAD";
+        input.body = "payload";
+        const auto result = verify(input, secret);
+        EXPECT_FALSE(result.ok);
+        EXPECT_EQ(result.error, "Signed header missing from request: content-length");
+    }
+    {
+        auto input = signedWithZeroContentLength("PUT", secret, accessKey);
+        input.headers.erase("Content-Length");
+        input.body_sha256 = sha256Hex("streamed");
+        const auto result = verify(input, secret);
+        EXPECT_FALSE(result.ok);
+    }
+    {
+        // A length the client signed as non-zero cannot be satisfied by an empty request.
+        const std::string amzDate = amzNow();
+        VerificationInput input{
+            .method = "PUT",
+            .target = "/bucket/object.txt",
+            .host = "s3.example.test",
+            .headers = {
+                {"host", "s3.example.test"},
+                {"content-length", "5"},
+                {"x-amz-content-sha256", "UNSIGNED-PAYLOAD"},
+                {"x-amz-date", amzDate}
+            },
+            .body = {},
+            .body_sha256 = std::nullopt
+        };
+        ParsedAuth auth{
+            .credential = {.access_key = accessKey, .date = scopeDate(amzDate), .region = "us-east-1", .service = "s3"},
+            .signed_headers = "content-length;host;x-amz-content-sha256;x-amz-date",
+            .signature = {},
+            .amz_date = amzDate,
+            .payload_hash = "UNSIGNED-PAYLOAD"
+        };
+        auth.signature = signatureFor(input, auth, secret);
+        input.headers.erase("content-length");
+        input.headers["authorization"] =
+            "AWS4-HMAC-SHA256 Credential=" + accessKey + "/" + auth.credential.date + "/us-east-1/s3/aws4_request, "
+            "SignedHeaders=" + auth.signed_headers + ", Signature=" + auth.signature;
+        const auto result = verify(input, secret);
+        EXPECT_FALSE(result.ok);
+        EXPECT_EQ(result.error, "Signature mismatch");
+    }
+}
+
 TEST(S3GatewaySigV4Test, RejectsMalformedPresignedExpiresWithoutThrowing) {
     using namespace vh::protocols::s3::sigv4;
 
@@ -882,6 +1004,7 @@ TEST(S3GatewayServiceTest, EnabledServiceBindsAndReturnsS3XmlErrors) {
     EXPECT_NE(response.body().find("<Code>SignatureDoesNotMatch</Code>"), std::string::npos);
     EXPECT_NE(response.body().find("<RequestId>"), std::string::npos);
     EXPECT_FALSE(response["x-amz-request-id"].empty());
+    EXPECT_EQ(response[http::field::cache_control], "private, no-store");
     EXPECT_GE(service.gatewayStatus().totalRequests, 1u);
 
     service.stop();
@@ -1782,6 +1905,44 @@ TEST_F(S3GatewayDbTest, SignedDedicatedHostRootListsBuckets) {
 
     EXPECT_EQ(response.result(), http::status::ok) << response.body();
     EXPECT_NE(response.body().find("<ListAllMyBucketsResult"), std::string::npos);
+}
+
+// The request the AWS CLI CRT client makes through Cloudflare: content-length signed as 0, the header stripped.
+TEST_F(S3GatewayDbTest, SignedListBucketsSurvivesProxyStrippedContentLengthAndIsNeverCacheable) {
+    ConfigRestore restoreConfig(vh::config::Registry::get());
+
+    auto cfg = vh::config::Registry::get();
+    cfg.s3_gateway.require_sigv4 = true;
+    cfg.s3_gateway.allow_path_style = true;
+    vh::config::Registry::set(cfg);
+
+    const auto admin = vh::identities::manager().userByName("admin");
+    ASSERT_TRUE(admin);
+
+    const vh::protocols::s3::CredentialManager manager;
+    auto secret = manager.createCredential({
+        .created_by = admin->id,
+        .principal_user_id = admin->id,
+        .name = "stripped-length-" + s3GatewayUniqueSuffix("credential"),
+        .scope_mode = "user_access",
+        .description = std::nullopt,
+        .expires_at = std::nullopt,
+        .vault_scopes = {}
+    });
+
+    vh::protocols::s3::Router::Request request{http::verb::get, "/", 11};
+    request.set(http::field::host, "localhost:39000");
+    request.set(http::field::content_length, "0");
+    signS3GatewayRequest(request, secret.credential.access_key, secret.secret_access_key,
+                         "content-length;host;x-amz-content-sha256;x-amz-date");
+    request.erase(http::field::content_length);
+
+    const vh::protocols::s3::Router router;
+    const auto response = router.route(std::move(request));
+
+    EXPECT_EQ(response.result(), http::status::ok) << response.body();
+    EXPECT_NE(response.body().find("<ListAllMyBucketsResult"), std::string::npos);
+    EXPECT_EQ(response[http::field::cache_control], "private, no-store");
 }
 
 TEST_F(S3GatewayDbTest, SignedDedicatedHostPutAndGetAuthenticateAndRoutePathStyle) {
@@ -2925,6 +3086,7 @@ TEST_F(S3GatewayDbTest, GatewayServiceBindsAndServesS3XmlWhenEnabled) {
     EXPECT_EQ(response.result(), http::status::ok);
     EXPECT_NE(response.body().find("<ListAllMyBucketsResult"), std::string::npos);
     EXPECT_FALSE(response["x-amz-request-id"].empty());
+    EXPECT_EQ(response[http::field::cache_control], "private, no-store");
     EXPECT_GE(service.gatewayStatus().totalRequests, 1u);
 
     service.stop();
