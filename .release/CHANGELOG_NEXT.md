@@ -15,3 +15,6 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
 - TPM sealer: seal/unseal are serialized per process (each holds 2 of the TPM's 3 transient object slots; the swtpm
   TCTI has no resource manager), so concurrent unseals no longer fail Esys_Load with TPM_RC_OBJECT_MEMORY; transient
   TPM warnings (object/session memory, retry, yielded, testing) are retried up to 5 times with backoff.
+- Stats: rollup retention is configurable per tier (stats_snapshots.rollup_5m_retention_days, default 30;
+  rollup_1h_retention_days, default 365, never below the 5-minute value) instead of a hard-coded 365 days for both;
+  the purge logs how many rows it deleted. Operator docs describe a one-time VACUUM (FULL) / pg_repack.

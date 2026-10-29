@@ -137,7 +137,9 @@ stats_snapshots:
   runtime_interval_seconds: 60        # Persisted runtime/cache/FUSE/DB sample window, fixed at 60 seconds
   gauge_observation_interval_seconds: 3 # Runtime-only gauge observation tick, minimum 1 second
   vault_interval_seconds: 3600        # Vault capacity/sync/activity snapshots, minimum 300 seconds
-  retention_days: 30                  # Delete historical snapshots older than this, minimum 1 day
+  retention_days: 30                  # Delete historical snapshots and raw samples older than this, minimum 1 day
+  rollup_5m_retention_days: 30        # 5-minute trend rollups (dashboard windows up to 7 days), minimum 1 day
+  rollup_1h_retention_days: 365       # Hourly trend rollups (longer windows), never less than the 5-minute value
 
 
 # === 🤝 SHARING SETTINGS ===

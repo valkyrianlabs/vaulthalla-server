@@ -541,6 +541,8 @@ struct convert<StatsSnapshotsConfig> {
         node["gauge_observation_interval_seconds"] = rhs.gauge_observation_interval_seconds;
         node["vault_interval_seconds"] = rhs.vault_interval_seconds;
         node["retention_days"] = rhs.retention_days;
+        node["rollup_5m_retention_days"] = rhs.rollup_5m_retention_days;
+        node["rollup_1h_retention_days"] = rhs.rollup_1h_retention_days;
         return node;
     }
 
@@ -555,6 +557,10 @@ struct convert<StatsSnapshotsConfig> {
         );
         rhs.vault_interval_seconds = std::max(static_cast<uint32_t>(300), node["vault_interval_seconds"].as<uint32_t>(3600));
         rhs.retention_days = std::max(static_cast<uint32_t>(1), node["retention_days"].as<uint32_t>(30));
+        rhs.rollup_5m_retention_days =
+            std::max(static_cast<uint32_t>(1), node["rollup_5m_retention_days"].as<uint32_t>(30));
+        rhs.rollup_1h_retention_days =
+            std::max(rhs.rollup_5m_retention_days, node["rollup_1h_retention_days"].as<uint32_t>(365));
         return true;
     }
 };

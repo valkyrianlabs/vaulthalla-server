@@ -567,12 +567,14 @@ void MetricSamples::purgeRawOlderThan(const std::uint32_t retentionDays) {
     });
 }
 
-void MetricSamples::purgeRollupsOlderThan(const std::uint32_t retentionDays) {
-    Transactions::exec("MetricSamples::purgeRollupsOlderThan", [&](pqxx::work& txn) {
-        txn.exec(
+std::uint64_t MetricSamples::purgeRollupsOlderThan(const std::uint32_t resolutionSeconds,
+                                                   const std::uint32_t retentionDays) {
+    return Transactions::exec("MetricSamples::purgeRollupsOlderThan", [&](pqxx::work& txn) {
+        const auto result = txn.exec(
             pqxx::prepped{"stats_samples.purge_rollups_older_than"},
-            pqxx::params{std::max<std::uint32_t>(1, retentionDays)}
+            pqxx::params{resolutionSeconds, std::max<std::uint32_t>(1, retentionDays)}
         );
+        return static_cast<std::uint64_t>(result.affected_rows());
     });
 }
 

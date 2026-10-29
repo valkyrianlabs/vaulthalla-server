@@ -737,7 +737,9 @@ Config& Config::operator=(Config&&) noexcept = default;
             {"runtime_interval_seconds", c.runtime_interval_seconds},
             {"gauge_observation_interval_seconds", c.gauge_observation_interval_seconds},
             {"vault_interval_seconds", c.vault_interval_seconds},
-            {"retention_days", c.retention_days}
+            {"retention_days", c.retention_days},
+            {"rollup_5m_retention_days", c.rollup_5m_retention_days},
+            {"rollup_1h_retention_days", c.rollup_1h_retention_days}
         };
     }
 
@@ -747,6 +749,8 @@ Config& Config::operator=(Config&&) noexcept = default;
         c.gauge_observation_interval_seconds = std::clamp(j.value("gauge_observation_interval_seconds", 3u), 1u, 60u);
         c.vault_interval_seconds = std::max(300u, j.value("vault_interval_seconds", 3600u));
         c.retention_days = std::max(1u, j.value("retention_days", 30u));
+        c.rollup_5m_retention_days = std::max(1u, j.value("rollup_5m_retention_days", 30u));
+        c.rollup_1h_retention_days = std::max(c.rollup_5m_retention_days, j.value("rollup_1h_retention_days", 365u));
     }
 
     void to_json(nlohmann::json &j, const ServicesConfig &c) {

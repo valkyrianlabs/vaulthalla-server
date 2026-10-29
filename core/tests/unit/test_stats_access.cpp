@@ -30,6 +30,7 @@
 #include "stats/model/CacheStats.hpp"
 #include "stats/model/DashboardOverview.hpp"
 #include "stats/model/StatsTrends.hpp"
+#include "stats/SnapshotService.hpp"
 #include "vault/model/Vault.hpp"
 
 #include <gtest/gtest.h>
@@ -380,6 +381,54 @@ TEST_F(StatsAccessTest, FsCacheCapacityIsUnknownAndThePreviewCacheCapIsReported)
 }
 
 // #160: 24 h trends read the same 5-minute rollups as 7 d, so the shorter window can never return more points.
+// Each rollup tier is purged after its own stats_snapshots.rollup_*_retention_days (it was 365 days for both).
+TEST_F(StatsAccessTest, RollupTiersArePurgedAfterTheirConfiguredRetention) {
+    const auto key = "claude_test_rollup_retention_" + statsTag();
+    const std::vector<int> agesDays{3, 20, 60, 400};
+    db::Transactions::exec("test rollup retention seed", [&](pqxx::work& txn) {
+        for (const int resolution : {300, 3600})
+            for (const int age : agesDays)
+                txn.exec(R"SQL(
+                    INSERT INTO stats_metric_rollup (
+                        scope, metric_key, series_key, series_label, unit, snapshot_type, resolution_seconds,
+                        window_start, window_end, value_last, source_sample_count)
+                    VALUES ('system', $1, '', 'Retention test', 'count', 'system.test', $2,
+                            CURRENT_TIMESTAMP - ($3::int * INTERVAL '1 day') - ($2::int * INTERVAL '1 second'),
+                            CURRENT_TIMESTAMP - ($3::int * INTERVAL '1 day'), 1, 1)
+                )SQL", pqxx::params{key, resolution, age});
+    });
+    const auto ages = [&](const int resolution) {
+        return db::Transactions::exec("test rollup retention read", [&](pqxx::work& txn) {
+            std::vector<int> out;
+            for (const auto& row : txn.exec(R"SQL(
+                    SELECT round(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - window_end)) / 86400)::int
+                    FROM stats_metric_rollup WHERE metric_key = $1 AND resolution_seconds = $2
+                    ORDER BY window_end DESC
+                )SQL", pqxx::params{key, resolution}))
+                out.push_back(row[0].as<int>());
+            return out;
+        });
+    };
+    ASSERT_EQ(ages(300), agesDays);
+    ASSERT_EQ(ages(3600), agesDays);
+
+    const auto previous = config::Registry::get();
+    auto cfg = previous;
+    cfg.stats_snapshots.rollup_5m_retention_days = 10;
+    cfg.stats_snapshots.rollup_1h_retention_days = 90;
+    config::Registry::set(cfg);
+    stats::SnapshotService::purgeOldSnapshots();
+    config::Registry::set(previous);
+
+    EXPECT_EQ(ages(300), (std::vector<int>{3}));
+    EXPECT_EQ(ages(3600), (std::vector<int>{3, 20, 60}));
+
+    // The defaults keep 30 days of 5-minute and 365 days of hourly rollups.
+    stats::SnapshotService::purgeOldSnapshots();
+    EXPECT_EQ(ages(300), (std::vector<int>{3}));
+    EXPECT_EQ(ages(3600), (std::vector<int>{3, 20, 60}));
+}
+
 TEST_F(StatsAccessTest, ShortTrendWindowsAreRolledUpLikeTheSevenDayWindow) {
     const auto key = "claude_test_rollup_" + statsTag();
     const auto now = static_cast<std::uint64_t>(
