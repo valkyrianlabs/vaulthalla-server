@@ -22,3 +22,11 @@ The S3 gateway now works through a proxied Cloudflare record with the AWS CLI's 
 `SignatureDoesNotMatch`; the gateway now treats the missing header as `0` when the request had no body. Every gateway
 response also carries `Cache-Control: private, no-store`, so a CDN never caches an object or a presigned GET. See
 [Behind Cloudflare Or Another CDN](/s3-gateway/setup#behind-cloudflare-or-another-cdn).
+
+## Parallel uploads no longer exhaust the TPM
+
+Under parallel S3 multipart uploads the daemon could log `Esys_Load failed ... out of memory for object contexts`:
+several secrets were unsealed at once, and a TPM without a resource manager in front (the managed swtpm) holds only three
+transient objects.
+TPM operations now run one at a time, each flushing its objects before the next starts, and a TPM that another process
+has momentarily filled is retried a few times instead of failing the request.
