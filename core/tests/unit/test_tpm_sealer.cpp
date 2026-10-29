@@ -4,6 +4,7 @@
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <sys/time.h>
 #include <signal.h>
 #include <spawn.h>
 #include <sys/socket.h>
@@ -74,6 +75,46 @@ bool portAccepts(const uint16_t port) {
     return ok;
 }
 
+// swtpm's control channel: CMD_SHUTDOWN (3) makes it exit. Signals are not enough: inside the CI container kill(2) on swtpm
+// fails with EPERM (its confinement), so a SIGTERM + blocking waitpid teardown hung the whole suite.
+#if defined(MSG_NOSIGNAL)
+constexpr int kSendFlags = MSG_NOSIGNAL;
+#else
+constexpr int kSendFlags = 0;
+#endif
+
+void shutdownViaControlChannel(const uint16_t ctrlPort) {
+    const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return;
+    timeval timeout{.tv_sec = 2, .tv_usec = 0};
+    (void)::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    (void)::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = htons(ctrlPort);
+    if (::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0) {
+        constexpr unsigned char cmdShutdown[4] = {0, 0, 0, 3};
+        if (::send(fd, cmdShutdown, sizeof(cmdShutdown), kSendFlags) == static_cast<ssize_t>(sizeof(cmdShutdown))) {
+            unsigned char result[4];
+            (void)::recv(fd, result, sizeof(result), 0);
+        }
+    }
+    ::close(fd);
+}
+
+// Reaps pid within the deadline; false if it is still running.
+bool reapWithin(const pid_t pid, const std::chrono::milliseconds deadline) {
+    const auto until = std::chrono::steady_clock::now() + deadline;
+    do {
+        int status = 0;
+        const auto r = ::waitpid(pid, &status, WNOHANG);
+        if (r == pid || r < 0) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    } while (std::chrono::steady_clock::now() < until);
+    return false;
+}
+
 // A private swtpm the way vaulthalla-swtpm.service runs one (socket TCTI, no resource manager), on free loopback ports
 // with its own state directory, and VH_TPM_TCTI pointed at it for the test's lifetime.
 class PrivateSwtpm {
@@ -87,7 +128,8 @@ public:
         fs::create_directories(state_);
         port_ = freeLoopbackPortPair();
         if (port_ == 0) return;
-        const auto ctrl = static_cast<uint16_t>(port_ + 1);
+        ctrlPort_ = static_cast<uint16_t>(port_ + 1);
+        const auto ctrl = ctrlPort_;
 
         std::vector<std::string> args{
             swtpm->string(), "socket", "--tpm2",
@@ -119,10 +161,13 @@ public:
             if (previousTcti_) ::setenv("VH_TPM_TCTI", previousTcti_->c_str(), 1);
             else ::unsetenv("VH_TPM_TCTI");
         }
+        // Never block the suite on teardown: ask swtpm to exit, then signal it, and give up after a bounded wait.
         if (pid_ > 0) {
-            ::kill(pid_, SIGTERM);
-            int status = 0;
-            ::waitpid(pid_, &status, 0);
+            shutdownViaControlChannel(ctrlPort_);
+            if (!reapWithin(pid_, std::chrono::seconds(5))) {
+                ::kill(pid_, SIGKILL);
+                (void)reapWithin(pid_, std::chrono::seconds(2));
+            }
         }
         std::error_code ec;
         fs::remove_all(state_, ec);
@@ -138,6 +183,7 @@ private:
     fs::path state_;
     pid_t pid_{-1};
     uint16_t port_{};
+    uint16_t ctrlPort_{};
     bool ready_{};
     std::optional<std::string> previousTcti_;
 };
