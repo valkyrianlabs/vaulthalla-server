@@ -1,5 +1,21 @@
 # Vaulthalla release notes
 
+<!-- vl-release:entry version=1.19.0 -->
+## 1.19.0 — Clients and servers negotiate a protocol version
+
+_Released 2026-10-30_
+
+The server, the web console and Vaulthalla Desktop release on their own schedules, so a client now starts its
+WebSocket session with `meta.hello` (on the web socket, once signed in: the server still tells no one its version
+before login). It says which protocol versions it speaks; the server answers its product version,
+the protocol version the session will use, the features it has (capabilities such as `fs.entry.metadata_version` or
+`device.mcp`) and every command it offers. A client that has no version in common with the server gets a clear
+`protocol_unsupported` answer naming the server's range instead of failing on a changed shape later. A paired device's
+reported app version now stays current in the device list instead of keeping the version it paired with.
+
+An unknown command now carries the error code `unknown_command` (the message is unchanged). The rules for what may
+change within a protocol version are in [WebSocket Protocol](/reference/ws-protocol).
+
 <!-- vl-release:entry version=1.18.0 -->
 ## 1.18.0 — Vaulthalla moves to the Valkyrian Labs organization
 
