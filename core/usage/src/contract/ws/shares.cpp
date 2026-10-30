@@ -188,14 +188,15 @@ std::vector<WsCommandUsage> metaCommands() {
     };
     return {{
         .command = "meta.hello",
-        .description = "The protocol handshake; any session may send it (web signed in or not, share, device, "
-                       "pairing-only), first thing after connecting. The client says what it is and the protocol "
+        .description = "The protocol handshake, first thing after connecting (after sign-in on the web socket; "
+                       "allowed where meta.contract.get is: signed-in web, paired device and pairing-only sessions, "
+                       "never an unauthenticated or share session). The client says what it is and the protocol "
                        "range it speaks; the daemon answers its own name and version, the protocol version this "
                        "session now speaks (the newest both speak; kProtocolMin without a range, as for a session "
                        "that never says hello), its own range, its capabilities, every command it registers and its "
                        "contract identity. No overlap: ERROR protocol_unsupported with data {code, server_min, "
                        "server_max, server_version}. A paired device's client.version refreshes its app_version.",
-        .auth = "any",
+        .auth = "session",
         .input = "payload",
         .payload = {object("client", "", {versionText("name").opt(), versionText("version").opt()})
                         .opt()

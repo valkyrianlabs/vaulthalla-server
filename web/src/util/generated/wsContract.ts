@@ -6,7 +6,7 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = 'c23c9f14f44deca8026366ff183d5e07534cc1a93cf055b30298ed8a1d530678'
+export const WS_CONTRACT_HASH = 'b4a6c4e186b5ff132cb86abcbd04f974c005567d32fb20177b96c3cf27958416'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
 export const WS_MODELS_HASH = '00cc5309cf6f162bb2881d6ab73e6273170a560d30e0dc588694c81dfe1f57da'
@@ -3268,13 +3268,13 @@ export interface WsContract {
     response: { contract_version: number; contract_hash: string; ws_hash: string; models_hash: string }
   }
   /**
-   * The protocol handshake; any session may send it (web signed in or not, share, device, pairing-only),
-   * first thing after connecting. The client says what it is and the protocol range it speaks; the daemon
-   * answers its own name and version, the protocol version this session now speaks (the newest both speak;
-   * kProtocolMin without a range, as for a session that never says hello), its own range, its capabilities,
-   * every command it registers and its contract identity. No overlap: ERROR protocol_unsupported with data
-   * {code, server_min, server_max, server_version}. A paired device's client.version refreshes its
-   * app_version.
+   * The protocol handshake, first thing after connecting (after sign-in on the web socket; allowed where
+   * meta.contract.get is: signed-in web, paired device and pairing-only sessions, never an unauthenticated or
+   * share session). The client says what it is and the protocol range it speaks; the daemon answers its own
+   * name and version, the protocol version this session now speaks (the newest both speak; kProtocolMin
+   * without a range, as for a session that never says hello), its own range, its capabilities, every command
+   * it registers and its contract identity. No overlap: ERROR protocol_unsupported with data {code,
+   * server_min, server_max, server_version}. A paired device's client.version refreshes its app_version.
    */
   'meta.hello': {
     payload: { client?: { name?: string; version?: string }; protocol?: { min?: number; max?: number } }

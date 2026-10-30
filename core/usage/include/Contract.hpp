@@ -89,8 +89,7 @@ struct WsCommandUsage {
     // What a session needs before the router runs it: "public" (no session), "session" (any socket, the
     // session-lifecycle set), "human" (a signed-in user with a valid access token, or a paired device's session on
     // the device listener: a device acts as its user), "share" (a share session), "pairing" (the device listener's
-    // pairing-only connections, and a paired device's session), "device" (a paired device's own session only), "any"
-    // (every session: web signed in or not, share, device and pairing-only; meta.hello).
+    // pairing-only connections, and a paired device's session), "device" (a paired device's own session only).
     std::string auth = "human";
     // Where the handler reads its input: "payload" (the `payload` object), "none" (nothing), "token" (the envelope
     // `token`, payload ignored).
@@ -222,7 +221,7 @@ std::vector<OperationSpec> operations();
 // It is not the ws protocol's compatibility: that is kProtocolVersion (WsProtocol.hpp).
 // 2: `models` (+ `models_hash`), WsField `one_of`/`values`/`element`/`partial`, command `response_model`,
 //    `refusal_kinds` and `confirmations` (`refusal_codes` stays their union), `envelope`.
-// 3: `protocol` ({version, min}), `capabilities` ([{name, since, description}]), `envelope.error_codes`, auth "any".
+// 3: `protocol` ({version, min}), `capabilities` ([{name, since, description}]), `envelope.error_codes`.
 inline constexpr int kVersion = 3;
 
 // The whole document: {contract_version, contract_hash, ws_hash, models_hash, protocol, capabilities, cli, ws, models,

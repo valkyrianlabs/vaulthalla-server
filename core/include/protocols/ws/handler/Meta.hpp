@@ -24,7 +24,7 @@ struct Meta {
     // session's protocol version from the client's range, keeps what the client said it is on the session (and a
     // paired device's app_version), and answers {server, protocol, capabilities, commands, contract}. `commands` is
     // what the daemon's router registers. No overlap throws a refusal with data.code protocol_unsupported and the
-    // server's range; malformed members are `invalid`. Any session may send it.
+    // server's range; malformed members are `invalid`. Allowed where contract() is (Router::classifyCommand).
     static json hello(const json& payload, const std::shared_ptr<Session>& session,
                       const std::vector<std::string>& commands);
 };

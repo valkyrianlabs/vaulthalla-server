@@ -18,8 +18,8 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
 - Stats: rollup retention is configurable per tier (stats_snapshots.rollup_5m_retention_days, default 30;
   rollup_1h_retention_days, default 365, never below the 5-minute value) instead of a hard-coded 365 days for both;
   the purge logs how many rows it deleted. Operator docs describe a one-time VACUUM (FULL) / pg_repack.
-- ws protocol negotiation: new command meta.hello (every session type, unauthenticated web and pairing-only device
-  connections included) answers {server {name, version}, protocol {version, min, max}, capabilities, commands,
+- ws protocol negotiation: new command meta.hello (allowed where meta.contract.get is: signed-in web, paired device
+  and pairing-only device connections; unauthenticated web and share sessions get UNAUTHORIZED) answers {server {name, version}, protocol {version, min, max}, capabilities, commands,
   contract}; the session keeps the negotiated version (kProtocolVersion = kProtocolMin = 1); no overlap is ERROR
   data.code protocol_unsupported with server_min/server_max/server_version; a paired device's client.version
   refreshes devices.app_version.

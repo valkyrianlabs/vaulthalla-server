@@ -32,7 +32,12 @@ The contract hashes (`contract_hash`, `ws_hash`, `models_hash`) identify an exac
 
 ## The Hello Exchange
 
-Send `meta.hello` first thing after connecting. Every session may send it: a signed-in or anonymous web socket, a share session, a paired device and a device that is not paired yet. Every member of the payload is optional:
+Send `meta.hello` first thing after connecting, or on the web socket right after signing in. It follows the same rule as `meta.contract.get`:
+
+- a signed-in web session (with a valid access token), a paired device and a device that is not paired yet may send it;
+- an anonymous web socket and a share session get `UNAUTHORIZED`. The server doesn't tell anyone its version or contract before they sign in.
+
+Every member of the payload is optional:
 
 ```json
 {
@@ -71,7 +76,7 @@ The session remembers its version until it closes. Saying hello again negotiates
 
 ### Servers Without The Handshake
 
-A server older than the handshake answers `meta.hello` with `ERROR` `"Unknown command"`. Treat that as protocol 1 with no capabilities, and detect commands as before.
+A server older than the handshake answers `meta.hello` with `ERROR` `"Unknown command"` (a device that isn't paired yet gets `device_unknown`). Treat that as protocol 1 with no capabilities, and detect commands as before.
 
 ## Capabilities
 

@@ -196,7 +196,8 @@ code. Payload handlers read a missing `payload` as `{}`. The contract publishes 
 **Protocol negotiation (`meta.hello`).** `core/usage/include/WsProtocol.hpp` holds `kProtocolVersion` (max) and
 `kProtocolMin` (both 1), the capability registry (`capabilities()`: `{name, since, description}`, append-only, names
 never reused) and `negotiateProtocol` (`min(server max, client max)`, refused below `max(server min, client min)`, no
-client range → `kProtocolMin`). `meta.hello` (auth `any`: every session mode, unauthenticated web included) answers
+client range → `kProtocolMin`). `meta.hello` (auth `session`, the same rule as `meta.contract.get`: signed-in web, Device and DevicePairing; never
+unauthenticated web or share sessions, bc342115) answers
 `{server: {name, version: VH_VERSION}, protocol: {version, min, max}, capabilities, commands (the router's, sorted),
 contract}`; no overlap is ERROR `protocol_unsupported` with `{server_min, server_max, server_version}`
 (`ws::core::DetailedRefusal`). `ws::Session::protocolVersion()` is what a handler reads to answer an older client in

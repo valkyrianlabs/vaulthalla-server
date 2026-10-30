@@ -98,7 +98,7 @@
 - `meta.contract.get` (signed-in sessions only; no pre-login build fingerprinting) returns `{contract_version,
   contract_hash, ws_hash, models_hash}`. The console checks `ws_hash` after login/refresh and on reconnects of a signed-in page,
   and shows one "server was upgraded, reload" notice per server contract.
-- `meta.hello` (any session) is the protocol handshake for clients released on their own schedule (Desktop): server
+- `meta.hello` (where `meta.contract.get` is allowed: signed-in web, devices, pairing-only) is the protocol handshake for clients released on their own schedule (Desktop): server
   version, negotiated protocol version, capabilities, registered commands, contract identity
   (`docs/reference/ws-protocol.md`). The generated TS exports `WS_PROTOCOL_VERSION`, `WS_PROTOCOL_MIN` and
   `WS_CAPABILITIES`; the console itself still checks the contract with `meta.contract.get`.

@@ -166,7 +166,7 @@ TEST(UsageContract, WsBookCoversTheEngineAndConsoleCommands) {
         EXPECT_FALSE(cmd.description.empty()) << cmd.command;
         EXPECT_TRUE(cmd.input == "payload" || cmd.input == "none" || cmd.input == "token") << cmd.command;
         EXPECT_TRUE(cmd.auth == "human" || cmd.auth == "session" || cmd.auth == "share" || cmd.auth == "public" ||
-                    cmd.auth == "pairing" || cmd.auth == "device" || cmd.auth == "any")
+                    cmd.auth == "pairing" || cmd.auth == "device")
             << cmd.command;
         if (cmd.input != "payload") {
             EXPECT_TRUE(cmd.payload.empty()) << cmd.command << " takes no payload";

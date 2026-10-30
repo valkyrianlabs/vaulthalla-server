@@ -26,7 +26,9 @@ bool containsCommand(const std::array<std::string_view, N>& commands, const std:
     return std::ranges::find(commands, command) != commands.end();
 }
 
-// The protocol handshake: every session may say hello, before anything else (WsProtocol.hpp).
+// The protocol handshake (WsProtocol.hpp). Allowed where meta.contract.get is: pairing-only and paired device sessions,
+// and signed-in web sessions (RequireHumanAuth); never an unauthenticated socket (no pre-login build fingerprinting,
+// bc342115) or a share session.
 constexpr std::string_view kHelloCommand{"meta.hello"};
 
 // Commands that establish, refresh, inspect or end a session. They must work before (or without a valid) access
@@ -262,8 +264,6 @@ Router::CommandAuthDecision Router::classifyCommand(const std::string_view comma
             return CommandAuthDecision::Deny;
         return CommandAuthDecision::Allow;
     }
-    // Web sockets, signed in or not, and share sessions.
-    if (command == kHelloCommand) return CommandAuthDecision::Allow;
     if (isDevicePairCommand(command) || isDeviceOnlyCommand(command)) return CommandAuthDecision::Deny;
 
     if (session.isSharePending()) {

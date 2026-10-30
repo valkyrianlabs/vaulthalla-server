@@ -541,14 +541,14 @@ TEST_F(DeviceListenerTest, SweeperAndContractAuthLevelsMatchTheRouter) {
             EXPECT_EQ(protocols::ws::Router::classifyCommand(c, *deviceSession),
                       deviceMayRun ? Decision::Allow : Decision::Deny) << c;
             EXPECT_EQ(protocols::ws::Router::classifyCommand(c, *pairingSession), Decision::DenyDeviceUnknown) << c;
-        } else if (cmd.auth == "any") {
-            EXPECT_EQ(protocols::ws::Router::classifyCommand(c, *pairingSession), Decision::Allow) << c;
-            EXPECT_EQ(protocols::ws::Router::classifyCommand(c, *deviceSession), Decision::Allow) << c;
-            EXPECT_EQ(protocols::ws::Router::classifyCommand(c, *human), Decision::Allow) << c;
         } else if (cmd.auth == "session") {
-            const bool deviceMayRun = c == "auth.isAuthenticated" || c == "meta.contract.get";
+            // The handshake pair (meta.contract.get, meta.hello) also runs before pairing.
+            const bool handshake = c == "meta.contract.get" || c == "meta.hello";
+            const bool deviceMayRun = c == "auth.isAuthenticated" || handshake;
             EXPECT_EQ(protocols::ws::Router::classifyCommand(c, *deviceSession),
                       deviceMayRun ? Decision::Allow : Decision::Deny) << c;
+            EXPECT_EQ(protocols::ws::Router::classifyCommand(c, *pairingSession),
+                      handshake ? Decision::Allow : Decision::DenyDeviceUnknown) << c;
         }
     }
 }

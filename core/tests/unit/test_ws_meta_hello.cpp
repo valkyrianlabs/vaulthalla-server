@@ -1,7 +1,7 @@
 // meta.hello, the ws protocol handshake (core/usage WsProtocol.hpp, docs/reference/ws-protocol.md): the answer's wire
 // shape, negotiation and its edges (no client range, overlap, no overlap -> protocol_unsupported with the server's
-// range), what the session remembers (and its default without a hello), the auth decision on every session type, and
-// the typed unknown-command answer per session type. DB-free; the device listener's end-to-end half (pairing-only
+// range), what the session remembers (and its default without a hello), the auth decision per session type (that of
+// meta.contract.get: no unauthenticated sockets), and the typed unknown-command answer per session type. DB-free; the device listener's end-to-end half (pairing-only
 // and paired sessions over TLS, app_version refresh) is in test_device_listener.cpp.
 
 #include "Contract.hpp"
@@ -166,7 +166,10 @@ TEST(WsMetaHello, MalformedMembersAreInvalid) {
         EXPECT_EQ(refusalData(payload), (json{{"code", "invalid"}})) << payload.dump();
 }
 
-TEST(WsMetaHello, EverySessionTypeMaySayHello) {
+// meta.hello follows meta.contract.get's rule: signed-in web (after its token checks out), paired devices and
+// pairing-only connections (test_device_listener.cpp, over TLS); never an unauthenticated socket (no pre-login build
+// fingerprinting, bc342115) or a share session.
+TEST(WsMetaHello, AllowedWhereMetaContractGetIs) {
     const auto unauthenticated = std::make_shared<Session>(std::make_shared<Router>());
     const auto human = std::make_shared<Session>(std::make_shared<Router>());
     human->user = admin(4302, "hello_human");
@@ -175,21 +178,24 @@ TEST(WsMetaHello, EverySessionTypeMaySayHello) {
     const auto device = deviceSession();
     ASSERT_TRUE(device->isDeviceSession());
 
+    EXPECT_EQ(Router::classifyCommand("meta.hello", *unauthenticated), Decision::Deny);
+    EXPECT_EQ(Router::classifyCommand("meta.hello", *human), Decision::RequireHumanAuth);
+    EXPECT_EQ(Router::classifyCommand("meta.hello", *share), Decision::Deny);
+    EXPECT_EQ(Router::classifyCommand("meta.hello", *device), Decision::Allow);
     for (const auto& s : {unauthenticated, human, share, device})
-        EXPECT_EQ(Router::classifyCommand("meta.hello", *s), Decision::Allow) << static_cast<int>(s->mode());
-    // meta.contract.get stays behind sign-in on the web side (bc342115); pairing-only sessions are covered over TLS.
-    EXPECT_EQ(Router::classifyCommand("meta.contract.get", *unauthenticated), Decision::Deny);
+        EXPECT_EQ(Router::classifyCommand("meta.hello", *s), Router::classifyCommand("meta.contract.get", *s))
+            << static_cast<int>(s->mode());
 
-    // Through the daemon's router: an unauthenticated socket's hello reaches the handler and the session keeps it
-    // (the answer goes nowhere: the session is closed).
+    // Through the daemon's router: an unauthenticated socket's hello never reaches the handler (it is answered
+    // UNAUTHORIZED; the closed session swallows the answer), so nothing is negotiated or recorded.
     const auto router = daemonRouter();
     const auto routed = std::make_shared<Session>(router);
     routed->close();
     router->routeMessage({{"command", "meta.hello"},
                           {"payload", {{"client", {{"name", "probe"}}}, {"protocol", {{"max", 99}}}}}},
                          routed);
-    EXPECT_EQ(routed->protocolVersion(), contract::kProtocolVersion);
-    EXPECT_EQ(routed->clientInfo().name, "probe");
+    EXPECT_EQ(routed->protocolVersion(), contract::kProtocolMin);
+    EXPECT_TRUE(routed->clientInfo().name.empty());
 }
 
 TEST(WsMetaHello, UnknownCommandsAreTypedOnWebAndDeviceSessions) {
