@@ -77,6 +77,9 @@ fi
 if [ -n "${VH_PKG_NOTARY_PROFILE:-}" ]; then
   xcrun notarytool submit "$OUT/$NAME" --keychain-profile "$VH_PKG_NOTARY_PROFILE" --wait
   xcrun stapler staple "$OUT/$NAME"
+  # What a downloaded package gets: Gatekeeper accepts it as notarized Developer ID.
+  pkgutil --check-signature "$OUT/$NAME"
+  spctl --assess --type install --verbose=2 "$OUT/$NAME"
 fi
 (cd "$OUT" && shasum -a 256 "$NAME" > "$NAME.sha256")
 log "$OUT/$NAME ($(du -h "$OUT/$NAME" | cut -f1), sha256 $(cut -d' ' -f1 "$OUT/$NAME.sha256"))"

@@ -1,6 +1,6 @@
 # Homebrew cask for the Vaulthalla macOS package (rendered per release by tools/macos/pkg/render-cask.sh into the
-# vaulthalla/homebrew-tap repository as Casks/vaulthalla.rb). `brew install --cask vaulthalla/tap/vaulthalla` runs the
-# same package as a manual install, so both paths provision identically.
+# valkyrianlabs/homebrew-tap repository as Casks/vaulthalla.rb). `brew install --cask valkyrianlabs/tap/vaulthalla`
+# runs the same package as a manual install, so both paths provision identically.
 cask "vaulthalla" do
   version "@VERSION@"
   sha256 "@SHA256@"
@@ -29,7 +29,6 @@ cask "vaulthalla" do
   }
 
   caveats <<~EOS
-    The package is not yet signed by Apple; Homebrew installs it with `installer`, which doesn't prompt.
     Vaulthalla runs as a system service (LaunchDaemons sh.vaulthalla.*) and starts at boot.
     Web console: http://127.0.0.1:36968 (user 'admin'; first password:
       sudo cat "/Library/Application Support/Vaulthalla/state/super_admin_initial_password")
