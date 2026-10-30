@@ -48,6 +48,9 @@ public:
     static void clearPrevious(uint32_t id, const std::string& currentSpki);
     // last_seen_at / last_ip, written at most once a minute per device unless the address changed.
     static void touch(uint32_t id, const std::string& ip);
+    // The app version a live device reports in meta.hello (pairing recorded the first one). Writes only when it
+    // differs; true when it did.
+    static bool updateAppVersion(uint32_t id, const std::string& appVersion);
 
     // This node's id for paired clients (device_node), created on first use.
     [[nodiscard]] static std::string nodeId();

@@ -3,13 +3,32 @@
 // then run: python3 tools/contracts/ws_contract.py --write --vh-usage build/core/vh_usage
 // web/src/util/wsContractCheck.ts checks WebSocketCommandMap against these types.
 
-export const WS_CONTRACT_VERSION = 2
+export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = '686e357625cb73a67b350e65eb9ed5e057a42c96013fa6e5215e5ca9d55af074'
+export const WS_CONTRACT_HASH = 'c23c9f14f44deca8026366ff183d5e07534cc1a93cf055b30298ed8a1d530678'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
 export const WS_MODELS_HASH = '00cc5309cf6f162bb2881d6ab73e6273170a560d30e0dc588694c81dfe1f57da'
+
+// The ws protocol range this book is (core/usage WsProtocol.hpp): send it in meta.hello.
+export const WS_PROTOCOL_VERSION = 1
+export const WS_PROTOCOL_MIN = 1
+
+// The capabilities a daemon built from this book answers in meta.hello.
+export const WS_CAPABILITIES: readonly string[] = [
+  'device.lanes.download',
+  'device.lanes.preview',
+  'device.lanes.upload',
+  'device.mcp',
+  'device.server.identity',
+  'errors.unknown_command_code',
+  'fs.entry.content_version',
+  'fs.entry.metadata_version',
+  'fs.entry.stable_id',
+  'http.upload.content',
+  'ws.envelope.optional_payload',
+]
 
 // A merge patch (payload members marked `partial`): any subset of the members, at any depth.
 export type WsPartial<T> = { [K in keyof T]?: T[K] extends readonly unknown[] ? T[K] : T[K] extends object ? WsPartial<T[K]> : T[K] }
@@ -3249,6 +3268,25 @@ export interface WsContract {
     response: { contract_version: number; contract_hash: string; ws_hash: string; models_hash: string }
   }
   /**
+   * The protocol handshake; any session may send it (web signed in or not, share, device, pairing-only),
+   * first thing after connecting. The client says what it is and the protocol range it speaks; the daemon
+   * answers its own name and version, the protocol version this session now speaks (the newest both speak;
+   * kProtocolMin without a range, as for a session that never says hello), its own range, its capabilities,
+   * every command it registers and its contract identity. No overlap: ERROR protocol_unsupported with data
+   * {code, server_min, server_max, server_version}. A paired device's client.version refreshes its
+   * app_version.
+   */
+  'meta.hello': {
+    payload: { client?: { name?: string; version?: string }; protocol?: { min?: number; max?: number } }
+    response: {
+      server: { name: 'vaulthalla'; version: string }
+      protocol: { version: number; min: number; max: number }
+      capabilities: string[]
+      commands: string[]
+      contract: { contract_version: number; contract_hash: string; ws_hash: string; models_hash: string }
+    }
+  }
+  /**
    * One permission of the catalog by id.
    */
   'permission.get': {
@@ -5386,6 +5424,7 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'groups.list',
   'groups.list.byUser',
   'meta.contract.get',
+  'meta.hello',
   'permission.get',
   'permission.get.byName',
   'permissions.list',
@@ -5655,6 +5694,7 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'groups.list': 15000,
   'groups.list.byUser': 15000,
   'meta.contract.get': 15000,
+  'meta.hello': 15000,
   'permission.get': 15000,
   'permission.get.byName': 15000,
   'permissions.list': 15000,

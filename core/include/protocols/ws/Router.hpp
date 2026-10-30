@@ -10,6 +10,7 @@
 #include <vector>
 #include "protocols/ws/Fwd.hpp"
 #include "protocols/ws/RefusalLogThrottle.hpp"
+#include "protocols/ws/model/Response.hpp"
 
 namespace vh::protocols::ws {
 
@@ -60,6 +61,9 @@ class Router {
     // Commands only a paired device's own session may run (device.identity.rotate, device.server.identity).
     [[nodiscard]] static bool isDeviceOnlyCommand(std::string_view command);
     [[nodiscard]] static CommandAuthDecision classifyCommand(std::string_view command, const Session& session);
+    // The answer to a command no handler is registered for, once the session may run it (web and device sessions;
+    // pairing-only ones get device_unknown first): ERROR "Unknown command" with data.code "unknown_command".
+    [[nodiscard]] static model::Response unknownCommand(std::string&& command, json&& msg);
 
     // ---------------------------
     // Member-function-pointer overloads

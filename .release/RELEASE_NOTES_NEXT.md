@@ -40,3 +40,15 @@ days) and `stats_snapshots.rollup_1h_retention_days` (default 365 days). Both ar
 history**. The first daily purge after upgrading deletes the backlog; PostgreSQL keeps the freed space in the table file,
 so [reclaim it once](/reference/configuration#reclaiming-disk-space-after-the-first-purge) with `VACUUM (FULL)` or
 `pg_repack` during a maintenance window.
+
+## Clients and servers negotiate a protocol version
+
+The server, the web console and Vaulthalla Desktop release on their own schedules, so a client now starts its
+WebSocket session with `meta.hello`. It says which protocol versions it speaks; the server answers its product version,
+the protocol version the session will use, the features it has (capabilities such as `fs.entry.metadata_version` or
+`device.mcp`) and every command it offers. A client that has no version in common with the server gets a clear
+`protocol_unsupported` answer naming the server's range instead of failing on a changed shape later. A paired device's
+reported app version now stays current in the device list instead of keeping the version it paired with.
+
+An unknown command now carries the error code `unknown_command` (the message is unchanged). The rules for what may
+change within a protocol version are in [WebSocket Protocol](/reference/ws-protocol).

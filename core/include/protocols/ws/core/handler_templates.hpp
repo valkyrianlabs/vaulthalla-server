@@ -27,11 +27,23 @@ namespace vh::protocols::ws::core {
         json data{};
     };
 
+    // A typed refusal whose answer carries more than its code: data is `details` plus {code} (meta.hello's
+    // protocol_unsupported names the server's range and version). ws handlers only; ops:: never raise it.
+    struct DetailedRefusal : ops::Refused {
+        json details;
+        DetailedRefusal(std::string code_, const std::string &text, json details_)
+            : Refused(std::move(code_), text), details(std::move(details_)) {}
+    };
+
     inline ErrorReply describeCurrentError() {
         try {
             throw;
         } catch (const ops::NeedsConfirmation &e) {
             return {e.what(), json{{"code", e.code}}};
+        } catch (const DetailedRefusal &e) {
+            json data = e.details.is_object() ? e.details : json::object();
+            data["code"] = e.code;
+            return {e.what(), std::move(data)};
         } catch (const ops::Refused &e) {
             return {e.what(), json{{"code", e.code}}};
         } catch (const ops::Denied &e) {

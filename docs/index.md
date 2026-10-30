@@ -103,7 +103,7 @@ Request budgets and price budgets that stop S3/R2 work before it runs up a bill.
 ## Administration And Reference
 
 - [Users, Groups And Roles](/admin/users-groups-roles), [S3 Gateway Administration](/admin/s3-gateway), [Operator Emails](/admin/operator-emails), [AI Agents And MCP](/admin/mcp-and-agents).
-- [Configuration](/reference/configuration), [Runtime Paths](/reference/runtime-paths), [Platform Comparison](/reference/platforms), [Command Reference](/cli/command-reference).
+- [Configuration](/reference/configuration), [Runtime Paths](/reference/runtime-paths), [Platform Comparison](/reference/platforms), [WebSocket Protocol](/reference/ws-protocol), [Command Reference](/cli/command-reference).
 - When something breaks: [Linux Troubleshooting](/linux/troubleshooting), [macOS Troubleshooting](/macos/troubleshooting), then [General Troubleshooting](/troubleshooting/general-troubleshooting) for vaults, sync, previews, shares and costs.
 
 ## What Ships Today

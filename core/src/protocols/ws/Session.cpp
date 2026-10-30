@@ -247,6 +247,19 @@ void Session::acceptDevice(std::shared_ptr<TlsTransport> transport, const Reques
     });
 }
 
+Session::ClientInfo Session::clientInfo() const {
+    std::scoped_lock lock(clientInfoMutex_);
+    return clientInfo_;
+}
+
+void Session::setHello(const int protocolVersion, ClientInfo client) {
+    {
+        std::scoped_lock lock(clientInfoMutex_);
+        clientInfo_ = std::move(client);
+    }
+    protocolVersion_.store(protocolVersion, std::memory_order_release);
+}
+
 std::shared_ptr<Session> Session::devicePrincipal(std::shared_ptr<const ::vh::device::Peer> peer,
                                                   std::shared_ptr<identities::User> deviceUser,
                                                   std::function<void()> onClose) {

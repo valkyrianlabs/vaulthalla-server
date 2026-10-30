@@ -1,5 +1,5 @@
-// ws book: share link management (core/src/protocols/ws/handler/share/Links.cpp → share::Manager) and the contract
-// identity (core/src/protocols/ws/handler/Meta.cpp).
+// ws book: share link management (core/src/protocols/ws/handler/share/Links.cpp → share::Manager), the contract
+// identity and the protocol handshake (core/src/protocols/ws/handler/Meta.cpp).
 
 #include "fields.hpp"
 
@@ -179,7 +179,41 @@ std::vector<WsCommandUsage> shareCommands() {
 }
 
 std::vector<WsCommandUsage> metaCommands() {
+    const auto contractIdentity = [](std::string name) {
+        return object(std::move(name), "",
+                      {uinteger("contract_version"), str("contract_hash"), str("ws_hash"), str("models_hash")});
+    };
+    const auto versionText = [](std::string name) {
+        return str(std::move(name)).desc("At most 64 printable ASCII characters.");
+    };
     return {{
+        .command = "meta.hello",
+        .description = "The protocol handshake; any session may send it (web signed in or not, share, device, "
+                       "pairing-only), first thing after connecting. The client says what it is and the protocol "
+                       "range it speaks; the daemon answers its own name and version, the protocol version this "
+                       "session now speaks (the newest both speak; kProtocolMin without a range, as for a session "
+                       "that never says hello), its own range, its capabilities, every command it registers and its "
+                       "contract identity. No overlap: ERROR protocol_unsupported with data {code, server_min, "
+                       "server_max, server_version}. A paired device's client.version refreshes its app_version.",
+        .auth = "any",
+        .input = "payload",
+        .payload = {object("client", "", {versionText("name").opt(), versionText("version").opt()})
+                        .opt()
+                        .desc("Who is connecting (\"Vaulthalla Desktop\", \"0.4.0\"): kept on the session for "
+                              "the logs."),
+                    object("protocol", "", {uinteger("min").opt(), uinteger("max").opt()})
+                        .opt()
+                        .desc("The protocol versions the client speaks; a missing bound is the server's.")},
+        .response = {object("server", "", {str("name").oneOf({"vaulthalla"}), str("version")})
+                         .desc("The daemon's product version (VH_VERSION)."),
+                     object("protocol", "", {uinteger("version"), uinteger("min"), uinteger("max")})
+                         .desc("version: what this session speaks from now on; min/max: the daemon's range."),
+                     strArray("capabilities").desc("Capability names, sorted (vh_usage --json `capabilities`)."),
+                     strArray("commands").desc("Every ws command this daemon registers, sorted."),
+                     contractIdentity("contract").desc("What meta.contract.get answers.")},
+        .refusal_codes = {"invalid", "protocol_unsupported"},
+        .client_timeout = kDefaultTimeout,
+    }, {
         .command = "meta.contract.get",
         .description = "The contract this daemon was built from: contract_version, contract_hash (the whole "
                        "document vh_usage --json publishes), ws_hash (the ws command book, what the web console "

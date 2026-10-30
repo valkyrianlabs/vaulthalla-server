@@ -231,6 +231,17 @@ Json modelsJson() {
     return out;
 }
 
+// ---- protocol -------------------------------------------------------------------------------------------------
+
+Json protocolJson() { return {{"version", kProtocolVersion}, {"min", kProtocolMin}}; }
+
+Json capabilitiesJson() {
+    Json out = Json::array();
+    for (const auto& c : capabilities())
+        out.push_back({{"name", c.name}, {"since", c.since}, {"description", c.description}});
+    return out;
+}
+
 // ---- operations -----------------------------------------------------------------------------------------------
 
 Json stringMap(const std::map<std::string, std::string>& m) {
@@ -293,11 +304,15 @@ struct Built {
 
 Built build() {
     const auto frames = ws::envelope();
+    Json errorCodes = Json::array();
+    for (const auto& c : frames.error_codes) errorCodes.push_back({{"code", c.code}, {"description", c.description}});
     Json envelope{{"request", wsFieldsJson(frames.request)},
                   {"response", wsFieldsJson(frames.response)},
-                  {"error_frame", wsFieldsJson(frames.error_frame)}};
-    Json body{{"contract_version", kVersion}, {"cli", cliJson()}, {"ws", wsJson()}, {"models", modelsJson()},
-              {"envelope", std::move(envelope)}, {"operations", operationsJson()}};
+                  {"error_frame", wsFieldsJson(frames.error_frame)},
+                  {"error_codes", std::move(errorCodes)}};
+    Json body{{"contract_version", kVersion}, {"protocol", protocolJson()}, {"capabilities", capabilitiesJson()},
+              {"cli", cliJson()}, {"ws", wsJson()}, {"models", modelsJson()}, {"envelope", std::move(envelope)},
+              {"operations", operationsJson()}};
     Built b;
     b.identity.version = kVersion;
     b.identity.contract_hash = sha256Hex(body.dump());

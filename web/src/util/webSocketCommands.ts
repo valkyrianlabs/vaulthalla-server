@@ -174,6 +174,8 @@ export interface RoleUpdatePayload {
 export interface WebSocketCommandMap {
   // The daemon's contract identity; the console compares ws_hash with WS_CONTRACT_HASH after connecting.
   'meta.contract.get': WsContract['meta.contract.get']
+  // The protocol handshake (any session): server version, negotiated protocol, capabilities, commands.
+  'meta.hello': WsContract['meta.hello']
 
   // Auth
   // The access token arrives in the response envelope (`token`), not in data.

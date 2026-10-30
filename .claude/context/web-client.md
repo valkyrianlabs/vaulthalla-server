@@ -62,7 +62,7 @@
   --vh-usage build/core/vh_usage`. Never edit by hand. `web/src/util/wsContractCheck.ts` type-checks
   `WebSocketCommandMap` against it, naming each mismatch in `pnpm typecheck` output (payloads deep, responses by
   top-level member: nested models are typed in `WsModels` but not compared with the web's own model classes).
-- **Models (contract_version 2):** `models[]` (name → fields, `models_hash`) holds every named shape the book
+- **Models (contract_version 2; 3 adds `protocol`, `capabilities`, `envelope.error_codes`):** `models[]` (name → fields, `models_hash`) holds every named shape the book
   references (170: users and roles, vaults, fs entries, shares, stats, recovery, upstream, S3 gateway, pricing,
   settings sections ...), declared in `core/usage/src/contract/models/<area>.cpp`. Fields may carry `one_of` (a union
   spelled out), `values` (map objects), `element` (array element shape) and `partial` (a merge-patch payload such as
@@ -72,11 +72,14 @@
   enum value, or a declared field no instance produces. `UsageContract.UnionsObjectsAndArraysAreSpelledOut` fails on
   an unspelled union or a shapeless object outside `opaqueObjects()` (free-form user/operator JSON only, each with
   its reason). The generated TS has `WsModels` and `WsPartial`.
-- The book covers every command the daemon registers (223; `UsageContract.EveryRegisteredWsCommandHasABookEntry` and
+- The book covers every command the daemon registers (224; `UsageContract.EveryRegisteredWsCommandHasABookEntry` and
   `test_ws_contract.py` fail on a registered command without an entry; an explicit, reasoned allowlist exists and is
   empty), so `COMMAND_TIMEOUTS` is just the server-declared `WS_CONTRACT_TIMEOUTS`.
 - Drift fails the meson test `ws_contract_drift` and `tools/contracts/test_ws_contract.py` (which also checks every
-  book command is registered in core and typed in the web map).
+  book command is registered in core and typed in the web map). A breaking change to the ws surface (protocol policy:
+  `docs/reference/ws-protocol.md`) fails the meson test `protocol_compat` and `tools/contracts/test_protocol_compat.py`
+  until `kProtocolVersion` is bumped and its baseline frozen (`core/usage/protocol/v<N>.json`, `protocol_compat.py
+  --write`).
 - **Refusals:** each command lists `refusal_kinds` (`denied`, `not_found`, `invalid`, `conflict` as data.code;
   `unauthorized` = status UNAUTHORIZED; `error` = no code by design) and `confirmations` (`{code, accept_field,
   description}`: the NeedsConfirmation codes and the payload member, dotted, a resend sets; e.g. `encryption_waiver`
@@ -95,6 +98,10 @@
 - `meta.contract.get` (signed-in sessions only; no pre-login build fingerprinting) returns `{contract_version,
   contract_hash, ws_hash, models_hash}`. The console checks `ws_hash` after login/refresh and on reconnects of a signed-in page,
   and shows one "server was upgraded, reload" notice per server contract.
+- `meta.hello` (any session) is the protocol handshake for clients released on their own schedule (Desktop): server
+  version, negotiated protocol version, capabilities, registered commands, contract identity
+  (`docs/reference/ws-protocol.md`). The generated TS exports `WS_PROTOCOL_VERSION`, `WS_PROTOCOL_MIN` and
+  `WS_CAPABILITIES`; the console itself still checks the contract with `meta.contract.get`.
 
 ## Sync conflicts (#187)
 

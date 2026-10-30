@@ -452,6 +452,11 @@ if python3.found()
     test('ws_contract_drift', python3,
          args: [join_paths(repo_root, 'tools/contracts/ws_contract.py'), '--check', '--usage-json', usage_json],
          depends: usage_json, timeout: 60)
+    # The ws surface stays additive over the frozen baseline of kProtocolVersion (core/usage/protocol/v<N>.json); a
+    # breaking change needs a protocol bump. See tools/contracts/protocol_compat.py.
+    test('protocol_compat', python3,
+         args: [join_paths(repo_root, 'tools/contracts/protocol_compat.py'), '--check', '--usage-json', usage_json],
+         depends: usage_json, timeout: 60)
 endif
 
 if get_option('integration_tests')
