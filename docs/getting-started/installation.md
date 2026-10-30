@@ -51,7 +51,8 @@ Full guide: [Install On Linux](/linux/installation).
 
 :::tab[macOS (Homebrew)]{value="brew"}
 ```bash
-brew install --cask valkyrianlabs/tap/vaulthalla
+brew install --cask valkyrianlabs/tap/vaulthalla          # server + Vaulthalla Desktop (macOS 27+)
+brew install --cask valkyrianlabs/tap/vaulthalla-server   # server only, for headless Macs
 ```
 
 Then sign in at `http://127.0.0.1:36968` as `admin` with the password in `/Library/Application Support/Vaulthalla/state/super_admin_initial_password`.

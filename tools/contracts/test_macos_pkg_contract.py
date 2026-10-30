@@ -29,10 +29,43 @@ class MacosPackageScripts(unittest.TestCase):
         self.assertIn('chmod -R u+rwX,go+rX,go-w "$ROOT"', (PKG / "build-pkg.sh").read_text())
         self.assertIn('chmod -R u+rwX,go+rX,go-w "$work/vaulthalla-web"', (PKG / "web-for-macos.sh").read_text())
 
-    def test_cask_uses_the_current_macos_requirement_syntax(self) -> None:
-        cask = (PKG / "homebrew" / "vaulthalla.rb.in").read_text()
-        self.assertIn("depends_on macos: :sonoma", cask)
-        self.assertNotRegex(cask, r'depends_on macos: ">=')
+    def test_casks_use_the_current_macos_requirement_syntax(self) -> None:
+        server = (PKG / "homebrew" / "vaulthalla-server.rb.in").read_text()
+        full = (PKG / "homebrew" / "vaulthalla.rb.in").read_text()
+        self.assertIn("depends_on macos: :sonoma", server)
+        # Vaulthalla Desktop needs macOS 27.
+        self.assertIn("depends_on macos: :golden_gate", full)
+        for cask in (server, full):
+            self.assertNotRegex(cask, r'depends_on macos: ">=')
+
+    def test_desktop_is_an_optional_off_by_default_choice(self) -> None:
+        # `sudo installer -pkg` and vaulthalla-server stay headless; only the vaulthalla cask turns Desktop on.
+        choice = (PKG / "distribution-desktop.xml.in").read_text()
+        self.assertRegex(choice, r'<choice id="sh\.vaulthalla\.desktop"[^>]*start_selected="false"')
+        self.assertIn("desktop_supported()", choice)
+        self.assertIn('customize="allow"', (PKG / "distribution.xml.in").read_text())
+        full = (PKG / "homebrew" / "vaulthalla.rb.in").read_text()
+        self.assertIn('"choiceIdentifier" => "sh.vaulthalla.desktop"', full)
+        self.assertIn('"attributeSetting" => 1', full)
+        self.assertNotIn("choices:", (PKG / "homebrew" / "vaulthalla-server.rb.in").read_text())
+
+    def test_bundled_desktop_never_downgrades_or_relocates(self) -> None:
+        text = (PKG / "build-pkg.sh").read_text()
+        self.assertIn("BundleIsVersionChecked=True", text)
+        self.assertIn('bundle["BundleIsRelocatable"] = False', text)
+        self.assertIn("--install-location /Applications", text)
+
+    def test_casks_conflict_where_they_install_the_same_things(self) -> None:
+        self.assertIn('conflicts_with cask: "vaulthalla"', (PKG / "homebrew" / "vaulthalla-server.rb.in").read_text())
+        self.assertIn(
+            'conflicts_with cask: ["vaulthalla-server", "vaulthalla-desktop"]',
+            (PKG / "homebrew" / "vaulthalla.rb.in").read_text(),
+        )
+
+    def test_bundled_desktop_is_verified_before_packaging(self) -> None:
+        text = (PKG / "fetch-desktop.sh").read_text()
+        for check in ("shasum -a 256 -c", "source=Notarized Developer ID", "TeamIdentifier=$TEAM", "stapler validate"):
+            self.assertIn(check, text)
 
 
 if __name__ == "__main__":

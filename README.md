@@ -44,10 +44,11 @@ the services. Upgrades arrive through `apt upgrade`. Guide: [Install On Linux](h
 ### macOS
 
 ```bash
-brew install --cask valkyrianlabs/tap/vaulthalla
+brew install --cask valkyrianlabs/tap/vaulthalla          # server + Vaulthalla Desktop (macOS 27+)
+brew install --cask valkyrianlabs/tap/vaulthalla-server   # server only, for headless Macs
 ```
 
-Or download `vaulthalla-<version>-arm64.pkg` from the [releases](https://github.com/valkyrianlabs/vaulthalla-server/releases) and
+`valkyrianlabs/tap/vaulthalla-desktop` installs the Desktop app alone, for nodes on other machines. Or download `vaulthalla-<version>-arm64.pkg` from the [releases](https://github.com/valkyrianlabs/vaulthalla-server/releases) and
 run `sudo installer -pkg vaulthalla-<version>-arm64.pkg -target /`. The package is self-contained (it bundles
 PostgreSQL, Node and Caddy), sets up a hidden `_vaulthalla` service account and its LaunchDaemons, and enrolls you as
 the CLI administrator. It is signed by Valkyrian Labs LLC and notarized by Apple, so it also opens from Finder. Guide:

@@ -387,6 +387,16 @@ jobs:
             echo "VH_PKG_NOTARY_PROFILE=vaulthalla-notary" >> "$GITHUB_ENV"
           fi
 
+      # The latest Vaulthalla Desktop release, verified (checksum, notarized Developer ID, team ZG2G6V7GLC), becomes the
+      # package's optional Desktop component: the `vaulthalla` cask installs it, `vaulthalla-server` and a plain
+      # `sudo installer -pkg` don't. Without it the release fails rather than publish a `vaulthalla` without Desktop.
+      - name: Vaulthalla Desktop for the package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          app=$(tools/macos/pkg/fetch-desktop.sh "$RUNNER_TEMP/desktop")
+          echo "VH_PKG_DESKTOP_APP=$app" >> "$GITHUB_ENV"
+
       - name: Build and package
         run: |
           web=$(find release -name "vaulthalla-web_${{ needs.release-check.outputs.version }}_next-standalone.tar.gz" | head -1)
@@ -395,10 +405,13 @@ jobs:
           tools/macos/candidate.sh pkg
           pkg=$(ls "$VH_CANDIDATE_DIR"/pkg/vaulthalla-*-arm64.pkg)
           [ "$(basename "$pkg")" = "vaulthalla-${{ needs.release-check.outputs.version }}-arm64.pkg" ]
-          tools/macos/pkg/render-cask.sh "$pkg" > "$VH_CANDIDATE_DIR/pkg/vaulthalla.rb"
-          ruby -c "$VH_CANDIDATE_DIR/pkg/vaulthalla.rb"
+          for cask in vaulthalla vaulthalla-server; do
+            tools/macos/pkg/render-cask.sh "$pkg" "$cask" > "$VH_CANDIDATE_DIR/pkg/$cask.rb"
+            ruby -c "$VH_CANDIDATE_DIR/pkg/$cask.rb"
+          done
 
-      # The Homebrew path on this clean Mac, before anything is published: install, use, uninstall, reinstall, zap.
+      # The Homebrew paths on this clean Mac, before anything is published: vaulthalla-server (no app), then vaulthalla
+      # (the app, never downgrading a newer one): install, use, uninstall, reinstall, zap.
       - name: Homebrew cask smoke
         run: bash tools/macos/pkg/cask-smoke.sh "$(ls "$VH_CANDIDATE_DIR"/pkg/vaulthalla-*-arm64.pkg)"
 
@@ -408,8 +421,9 @@ jobs:
           path: ${{ env.VH_CANDIDATE_DIR }}/pkg/
           if-no-files-found: error
 
-  # Attaches the package to the GitHub release and updates the Homebrew cask (valkyrianlabs/homebrew-tap, with
-  # HOMEBREW_TAP_TOKEN: contents:write on that repository; without it the cask update is skipped with a warning).
+  # Attaches the package to the GitHub release and updates the Homebrew casks vaulthalla and vaulthalla-server
+  # (valkyrianlabs/homebrew-tap, with HOMEBREW_TAP_TOKEN: contents:write on that repository; without it the cask update
+  # is skipped with a warning).
   macos-publish:
     name: Publish the macOS package
     runs-on: ubuntu-latest
@@ -444,7 +458,7 @@ jobs:
           gh release upload "v$VERSION" "pkg/vaulthalla-$VERSION-arm64.pkg" "pkg/vaulthalla-$VERSION-arm64.pkg.sha256" \
             --clobber -R "$GITHUB_REPOSITORY"
 
-      - name: Update the Homebrew cask
+      - name: Update the Homebrew casks
         env:
           TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           VERSION: ${{ needs.release-check.outputs.version }}
@@ -453,13 +467,13 @@ jobs:
           if [ -z "$TAP_TOKEN" ]; then echo "::warning::no HOMEBREW_TAP_TOKEN: cask not updated"; exit 0; fi
           git clone -q "https://x-access-token:${TAP_TOKEN}@github.com/valkyrianlabs/homebrew-tap.git" tap
           mkdir -p tap/Casks
-          cp pkg/vaulthalla.rb tap/Casks/vaulthalla.rb
+          cp pkg/vaulthalla.rb pkg/vaulthalla-server.rb tap/Casks/
           cd tap
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Casks/vaulthalla.rb
-          if git diff --cached --quiet; then echo "cask already at $VERSION"; exit 0; fi
-          git commit -q -m "vaulthalla $VERSION"
+          git add Casks/vaulthalla.rb Casks/vaulthalla-server.rb
+          if git diff --cached --quiet; then echo "casks already at $VERSION"; exit 0; fi
+          git commit -q -m "vaulthalla, vaulthalla-server $VERSION"
           git push -q origin HEAD:main
 
   # The package into the Nexus raw repository, from the VPS runner straight to Nexus on its loopback (the public
