@@ -66,7 +66,7 @@ Download `vaulthalla-<version>-arm64.pkg` from the [GitHub releases](https://git
 sudo installer -pkg vaulthalla-<version>-arm64.pkg -target /
 ```
 
-The package is not signed by Apple yet: opening it from Finder needs **Open Anyway** in System Settings → Privacy & Security once.
+The package is signed by Valkyrian Labs LLC and notarized by Apple, so it also opens from Finder.
 
 Full guide: [Install On macOS](/macos/installation).
 :::

@@ -26,7 +26,7 @@ Vaulthalla ships for macOS as one installer package, `vaulthalla-<version>-arm64
 brew install --cask vaulthalla/tap/vaulthalla
 ```
 
-Homebrew asks for your password and installs the package with macOS's `installer`, which does not show the Gatekeeper prompt described below.
+Homebrew asks for your password and installs the package with macOS's `installer`.
 :::
 
 :::tab[Installer package]{value="pkg"}
@@ -37,32 +37,21 @@ shasum -a 256 -c vaulthalla-<version>-arm64.pkg.sha256
 sudo installer -pkg vaulthalla-<version>-arm64.pkg -target /
 ```
 
-Or open it in Finder: see [Open The Package](#open-the-package).
+Or double-click it in Finder and follow Installer: see [Open The Package](#open-the-package).
 :::
 
 :::
 
 ## Open The Package
 
-The package is not signed by Apple yet. The first time you open it from Finder, macOS refuses with a message that it can't verify the developer.
+From 1.18.0 the package is signed with the Developer ID of Valkyrian Labs LLC (team `ZG2G6V7GLC`) and notarized by Apple, so it opens from Finder like any other installer: double-click it and follow Installer, which asks for an administrator password. To check a download before installing:
 
-:::steps
+```bash
+pkgutil --check-signature vaulthalla-<version>-arm64.pkg   # Developer ID Installer: Valkyrian Labs LLC (ZG2G6V7GLC)
+spctl --assess --type install -v vaulthalla-<version>-arm64.pkg   # accepted, source=Notarized Developer ID
+```
 
-### Try to open it once
-
-Double-click the `.pkg`. macOS shows the warning and does not open it.
-
-### Allow it
-
-Open **System Settings → Privacy & Security**, scroll to the message about `vaulthalla-<version>-arm64.pkg`, and choose **Open Anyway**. Confirm with your password.
-
-### Run the installer
-
-Open the package again and follow Installer. It needs an administrator password.
-
-:::
-
-Command-line installs (`sudo installer -pkg …`) and the Homebrew cask are not affected by this prompt. Signing and notarization are planned.
+Packages before 1.18.0 are unsigned. Opened from Finder, macOS blocks them the first time: choose **Open Anyway** next to the message in **System Settings → Privacy & Security**, then open the package again.
 
 ## What The Installer Does
 

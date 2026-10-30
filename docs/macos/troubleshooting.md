@@ -33,7 +33,9 @@ The last command changes nothing: on a healthy install it ends with `0 change(s)
 
 ## macOS Won't Open The Package
 
-Opened from Finder, the unsigned package is blocked the first time. Open **System Settings → Privacy & Security** and choose **Open Anyway** next to the message about the package, then open it again. Installing with `sudo installer -pkg … -target /` or the Homebrew cask avoids the prompt. See [Install On macOS](/macos/installation#open-the-package).
+Packages from 1.18.0 are signed and notarized and open normally; if macOS still says it can't verify the developer, the download is not the published file. Check it against its `.sha256` and with `spctl --assess --type install -v <pkg>` (it should say `source=Notarized Developer ID`), and download it again from the [GitHub releases](https://github.com/valkyrianlabs/vaulthalla-server/releases).
+
+Packages before 1.18.0 are unsigned: the first time, open **System Settings → Privacy & Security** and choose **Open Anyway** next to the message about the package, then open it again. See [Install On macOS](/macos/installation#open-the-package).
 
 ## The Installation Failed
 

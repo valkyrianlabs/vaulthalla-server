@@ -309,10 +309,11 @@ jobs:
   # macOS: the self-contained installer package (tools/macos/pkg/), on GitHub-hosted Apple Silicon. One -O3 build
   # (PR CI already ran the tests), packaged with the web console from release-artifacts' web bundle (only the Linux
   # runner has the licensed icons; tools/macos/pkg/web-for-macos.sh swaps sharp's native addon for darwin-arm64), then
-  # installed through the Homebrew cask on this clean Mac before anything is published. Signed and notarized when the
-  # Developer ID secrets exist (MACOS_SIGNING_P12 + MACOS_SIGNING_P12_PASSWORD holding the Application and Installer
-  # identities; MACOS_NOTARY_APPLE_ID, MACOS_NOTARY_TEAM_ID, MACOS_NOTARY_PASSWORD), unsigned otherwise. It never fails
-  # the APT release; re-run it with "Re-run failed jobs".
+  # installed through the Homebrew cask on this clean Mac before anything is published. Signed and notarized with the
+  # Developer ID secrets (MACOS_SIGNING_P12 + MACOS_SIGNING_P12_PASSWORD holding the Application and Installer
+  # identities; MACOS_NOTARY_APPLE_ID, MACOS_NOTARY_TEAM_ID, MACOS_NOTARY_PASSWORD); without them the job fails rather
+  # than publish an unsigned package, since the docs and the cask promise a signed one. It never fails the APT release;
+  # re-run it with "Re-run failed jobs".
   macos-package:
     name: macOS installer package
     runs-on: xcode-27
@@ -354,7 +355,7 @@ jobs:
           go-version: stable
           cache: false
 
-      - name: Signing identities (only when the secrets exist)
+      - name: Signing identities
         env:
           P12: ${{ secrets.MACOS_SIGNING_P12 }}
           P12_PASSWORD: ${{ secrets.MACOS_SIGNING_P12_PASSWORD }}
@@ -362,7 +363,10 @@ jobs:
           NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
           NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
         run: |
-          if [ -z "$P12" ]; then echo "::warning::no MACOS_SIGNING_P12: the package is unsigned"; exit 0; fi
+          if [ -z "$P12" ] || [ -z "$NOTARY_APPLE_ID" ]; then
+            echo "::error::the Developer ID signing and notary secrets are missing: refusing to build an unsigned package"
+            exit 1
+          fi
           kc="$RUNNER_TEMP/signing.keychain-db"; kcpw=$(openssl rand -hex 16)
           security create-keychain -p "$kcpw" "$kc"
           security set-keychain-settings -lut 3600 "$kc"
