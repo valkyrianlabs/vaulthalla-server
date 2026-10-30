@@ -1,9 +1,11 @@
 // The server-owned contract (core/usage): the ws command book, the operation catalog, the generators on CLI usage
-// entries, the exported TestUsage graph, and meta.contract.get. DB-free.
+// entries, the exported TestUsage graph, meta.contract.get, and the ws protocol's range and capability registry
+// (meta.hello's own suite: test_ws_meta_hello.cpp). DB-free.
 
 #include "CommandUsage.hpp"
 #include "Contract.hpp"
 #include "UsageManager.hpp"
+#include "WsProtocol.hpp"
 #include "identities/User.hpp"
 #include "protocols/ws/Handler.hpp"
 #include "protocols/ws/Router.hpp"
@@ -19,6 +21,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <regex>
 #include <set>
 #include <string>
 #include <utility>
@@ -156,7 +159,7 @@ TEST(UsageContract, WsBookCoversTheEngineAndConsoleCommands) {
                              "group.member.remove", "role.vault.assign", "role.vault.unassign", "storage.vault.add",
                              "storage.vault.remove", "fs.dir.list", "fs.dir.create", "fs.entry.delete",
                              "fs.entry.rename", "fs.entry.copy", "fs.entry.move", "fs.upload.start",
-                             "share.link.create", "share.link.revoke", "meta.contract.get"})
+                             "share.link.create", "share.link.revoke", "meta.contract.get", "meta.hello"})
         EXPECT_NE(wsCommand(book, name), nullptr) << name;
 
     for (const auto& cmd : book) {
@@ -334,11 +337,13 @@ bool payloadDeclares(const contract::WsCommandUsage& cmd, const std::string& dot
 TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
     static const std::set<std::string> kKinds{"denied", "not_found", "invalid", "conflict", "unauthorized", "error"};
     // ops::Refused codes (core/include/ops/Error.hpp), each allowed only on the commands that send it: device
-    // pairing's, and the vault key commands' D4 channel refusals (a session that isn't a paired device's).
+    // pairing's, the vault key commands' D4 channel refusals (a session that isn't a paired device's), and meta.hello's
+    // protocol_unsupported (no protocol version in common).
     static const std::map<std::string, std::set<std::string>> kRefusedCodes{
         {"no_pairing_window", {}}, {"rate_limited", {}}, {"device_unknown", {}},
         {"export_requires_device", {"vault.keys.export", "vault.keys.export.confirm"}},
-        {"import_requires_device", {"vault.keys.import"}}};
+        {"import_requires_device", {"vault.keys.import"}},
+        {"protocol_unsupported", {"meta.hello"}}};
     const auto refusedCodeAllowed = [](const std::string& code, const std::string& command) {
         const auto it = kRefusedCodes.find(code);
         if (it == kRefusedCodes.end()) return false;
@@ -388,6 +393,17 @@ TEST(UsageContract, EnvelopeDescribesTheFramesTheDaemonSends) {
         produced.insert(protocols::ws::model::to_string(s));
     EXPECT_EQ(std::set<std::string>(status->enum_values.begin(), status->enum_values.end()), produced);
     EXPECT_TRUE(json::parse(contract::document()).contains("envelope"));
+
+    // The codes any answer may carry: the generic kinds the handler templates produce and the router's own.
+    std::vector<std::string> codes;
+    for (const auto& c : frames.error_codes) {
+        EXPECT_FALSE(c.description.empty()) << c.code;
+        codes.push_back(c.code);
+    }
+    EXPECT_TRUE(std::ranges::is_sorted(codes));
+    EXPECT_EQ(codes, (std::vector<std::string>{"conflict", "denied", "device_unknown", "invalid", "not_found",
+                                               "unknown_command"}));
+    EXPECT_EQ(json::parse(contract::document()).at("envelope").at("error_codes").size(), codes.size());
 }
 
 // ---- operation catalog ----------------------------------------------------------------------------------------
@@ -524,6 +540,57 @@ TEST(UsageContract, ExportedTestUsageGraphHasNoDanglingSteps) {
     EXPECT_GT(edges, 50);
     // The membership subtree's steps (previously dangling) are present.
     EXPECT_TRUE(paths.contains("group user add"));
+}
+
+// ---- ws protocol: range and capabilities ----------------------------------------------------------------------
+
+TEST(UsageContract, TheDocumentPublishesTheProtocolRangeAndCapabilities) {
+    const auto doc = document();
+    EXPECT_EQ(contract::kVersion, 3) << "the document gained protocol, capabilities and envelope.error_codes";
+    EXPECT_EQ(doc.at("protocol"), (json{{"version", contract::kProtocolVersion}, {"min", contract::kProtocolMin}}));
+    EXPECT_EQ(doc.at("protocol").at("version"), 1);
+    EXPECT_EQ(doc.at("protocol").at("min"), 1);
+    const auto& caps = doc.at("capabilities");
+    ASSERT_EQ(caps.size(), contract::capabilities().size());
+    std::vector<std::string> names;
+    for (const auto& c : caps) {
+        EXPECT_EQ(c.size(), 3u) << c.dump();
+        names.push_back(c.at("name").get<std::string>());
+    }
+    EXPECT_EQ(names, contract::capabilityNames());
+
+    // Both are covered by contract_hash (a capability or range change is a new contract).
+    auto body = doc;
+    body.erase("contract_hash");
+    body.erase("ws_hash");
+    body.erase("models_hash");
+    EXPECT_EQ(contract::sha256Hex(body.dump()), contract::identity().contract_hash);
+    body["capabilities"].push_back({{"name", "x.y"}, {"since", "0.0.0"}, {"description", "d"}});
+    EXPECT_NE(contract::sha256Hex(body.dump()), contract::identity().contract_hash);
+}
+
+TEST(UsageContract, CapabilityNamesAreUniqueSortedAndWellFormed) {
+    static const std::regex kName{R"([a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+)"};
+    static const std::regex kRelease{R"((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))"};
+    const auto caps = contract::capabilities();
+    ASSERT_GE(caps.size(), 7u);
+    const auto names = contract::capabilityNames();
+    EXPECT_TRUE(std::ranges::is_sorted(names));
+    EXPECT_EQ(std::ranges::adjacent_find(names), names.end()) << "a capability name is declared twice";
+    for (const auto& c : caps) {
+        EXPECT_TRUE(std::regex_match(c.name, kName)) << c.name << ": dotted lower-case identifiers only";
+        EXPECT_TRUE(std::regex_match(c.since, kRelease)) << c.name << " since " << c.since;
+        EXPECT_FALSE(c.description.empty()) << c.name;
+    }
+    // Command presence is not a capability: meta.hello lists the commands.
+    const auto book = contract::ws::commands();
+    for (const auto& name : names) {
+        if (name == "device.server.identity") continue;  // kept by request: the pin over a device session (1.16.0)
+        EXPECT_EQ(wsCommand(book, name), nullptr) << name << " is a command name; clients read `commands` for that";
+    }
+    for (const auto* expected : {"errors.unknown_command_code", "fs.entry.metadata_version", "device.lanes.preview",
+                                 "device.lanes.download", "device.lanes.upload", "device.mcp", "device.server.identity"})
+        EXPECT_NE(std::ranges::find(names, expected), names.end()) << expected;
 }
 
 // ---- meta.contract.get ----------------------------------------------------------------------------------------

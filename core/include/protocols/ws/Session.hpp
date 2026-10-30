@@ -5,6 +5,7 @@
 #include <boost/beast/http.hpp>
 #include <boost/beast/websocket.hpp>
 
+#include "WsProtocol.hpp"
 #include "rbac/Actor.hpp"
 #include "device/Fwd.hpp"
 #include "identities/Fwd.hpp"
@@ -107,6 +108,17 @@ public:
     [[nodiscard]] const std::string& shareSessionId() const noexcept { return shareSessionId_; }
     [[nodiscard]] const std::string& shareSessionToken() const noexcept { return shareSessionToken_; }
 
+    // meta.hello (core/usage WsProtocol.hpp): the protocol version this session speaks, contract::kProtocolMin until the
+    // client says hello. A handler that changes an answer's shape in a later protocol answers older sessions in the
+    // shape they know.
+    [[nodiscard]] int protocolVersion() const noexcept { return protocolVersion_.load(std::memory_order_acquire); }
+    // What the client said it is in meta.hello (validated printable ASCII; empty when it didn't say), for the logs.
+    struct ClientInfo {
+        std::string name{}, version{};
+    };
+    [[nodiscard]] ClientInfo clientInfo() const;
+    void setHello(int protocolVersion, ClientInfo client);
+
     static std::string generateUUIDv4();
 
 private:
@@ -165,6 +177,10 @@ private:
     bool externallyHttps_ = false;         // set during handshake hydration (cookie Secure flag)
 
     bool sendAccessToken_{false};
+
+    std::atomic<int> protocolVersion_{contract::kProtocolMin};
+    mutable std::mutex clientInfoMutex_;
+    ClientInfo clientInfo_;
 };
 
 }

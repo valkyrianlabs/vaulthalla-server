@@ -106,6 +106,12 @@ void Handler::registerVaultKeyHandlers(const std::shared_ptr<Router>& r) {
 
 void Handler::registerMetaHandlers(const std::shared_ptr<Router>& r) {
     r->registerEmptyHandler("meta.contract.get", &handler::Meta::contract);
+    // `commands` is what this router registers (read per hello: registration finishes after this line).
+    r->registerPayload("meta.hello", [router = std::weak_ptr<Router>(r)](const json& payload,
+                                                                         const std::shared_ptr<Session>& session) {
+        const auto self = router.lock();
+        return handler::Meta::hello(payload, session, self ? self->commands() : std::vector<std::string>{});
+    });
 }
 
 void Handler::registerFileSystemHandlers(const std::shared_ptr<Router>& r) {

@@ -42,6 +42,7 @@
 #include <openssl/x509.h>
 #include <paths.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -241,6 +242,14 @@ TEST_F(DeviceListenerTest, AnUnknownKeyOnlyPairs) {
         EXPECT_EQ(code(reply), "device_unknown") << command;
     }
     EXPECT_TRUE(ok(client.call("meta.contract.get")));
+    // The protocol handshake works before pairing; an unknown command is still device_unknown (no oracle).
+    const auto hello = client.call("meta.hello", {{"client", {{"name", "Vaulthalla Desktop"}, {"version", "0.9.0"}}},
+                                                  {"protocol", {{"min", 1}, {"max", 1}}}});
+    ASSERT_TRUE(ok(hello)) << (hello ? hello->dump() : "no reply");
+    EXPECT_EQ(hello->at("data").at("protocol").at("version"), contract::kProtocolVersion);
+    EXPECT_EQ(code(client.call("meta.no.such.command")), "device_unknown");
+    EXPECT_EQ(code(client.call("meta.hello", {{"protocol", {{"min", contract::kProtocolVersion + 1}}}})),
+              "protocol_unsupported");
     EXPECT_EQ(code(client.call("device.pair.request", {{"name", "Mac"}, {"platform", "macOS"},
                                                         {"commitment", std::string(64, '0')}})),
               "no_pairing_window");
@@ -533,11 +542,58 @@ TEST_F(DeviceListenerTest, SweeperAndContractAuthLevelsMatchTheRouter) {
                       deviceMayRun ? Decision::Allow : Decision::Deny) << c;
             EXPECT_EQ(protocols::ws::Router::classifyCommand(c, *pairingSession), Decision::DenyDeviceUnknown) << c;
         } else if (cmd.auth == "session") {
-            const bool deviceMayRun = c == "auth.isAuthenticated" || c == "meta.contract.get";
+            // The handshake pair (meta.contract.get, meta.hello) also runs before pairing.
+            const bool handshake = c == "meta.contract.get" || c == "meta.hello";
+            const bool deviceMayRun = c == "auth.isAuthenticated" || handshake;
             EXPECT_EQ(protocols::ws::Router::classifyCommand(c, *deviceSession),
                       deviceMayRun ? Decision::Allow : Decision::Deny) << c;
+            EXPECT_EQ(protocols::ws::Router::classifyCommand(c, *pairingSession),
+                      handshake ? Decision::Allow : Decision::DenyDeviceUnknown) << c;
         }
     }
+}
+
+// ---- the protocol handshake on a paired device --------------------------------------------------------------------
+
+// meta.hello on a Device session: the negotiated version stays on the server's session, client.version refreshes the
+// row's app_version (pairing recorded 1.0.0) only when it differs, and an unknown command now carries
+// data.code unknown_command with the old text.
+TEST_F(DeviceListenerTest, APairedDeviceSaysHelloAndGetsTypedUnknownCommands) {
+    const auto owner = seedUser("dl_hello");
+    const ClientIdentity device;
+    const auto row = pair(device, owner);
+    EXPECT_EQ(row.app_version, "1.0.0");
+    Client client(port, device);
+    ASSERT_TRUE(client.connect());
+    const auto session = serverSession(device, true);
+    ASSERT_TRUE(session);
+    EXPECT_EQ(session->protocolVersion(), contract::kProtocolMin) << "no hello yet";
+
+    const auto hello = client.call("meta.hello", {{"client", {{"name", "Vaulthalla Desktop"}, {"version", "1.2.3"}}},
+                                                  {"protocol", {{"min", 1}, {"max", contract::kProtocolVersion + 5}}}});
+    ASSERT_TRUE(ok(hello)) << (hello ? hello->dump() : "no reply");
+    const auto& data = hello->at("data");
+    EXPECT_EQ(data.at("server").at("name"), "vaulthalla");
+    EXPECT_EQ(data.at("protocol").at("version"), contract::kProtocolVersion);
+    EXPECT_EQ(data.at("capabilities").get<std::vector<std::string>>(), contract::capabilityNames());
+    const auto commands = data.at("commands").get<std::vector<std::string>>();
+    EXPECT_TRUE(std::ranges::is_sorted(commands));
+    EXPECT_NE(std::ranges::find(commands, "meta.hello"), commands.end());
+    EXPECT_NE(std::ranges::find(commands, "device.server.identity"), commands.end());
+    EXPECT_EQ(session->protocolVersion(), contract::kProtocolVersion);
+    EXPECT_EQ(session->clientInfo().name, "Vaulthalla Desktop");
+    EXPECT_EQ(db::query::device::Devices::byId(row.id)->app_version, "1.2.3");
+
+    // The same version again writes nothing; an unparseable one is refused and changes nothing.
+    EXPECT_FALSE(db::query::device::Devices::updateAppVersion(row.id, "1.2.3"));
+    EXPECT_EQ(code(client.call("meta.hello", {{"client", {{"version", std::string(65, '1')}}}})), "invalid");
+    EXPECT_EQ(db::query::device::Devices::byId(row.id)->app_version, "1.2.3");
+
+    const auto unknown = client.call("meta.no.such.command");
+    ASSERT_TRUE(unknown);
+    EXPECT_EQ(unknown->value("status", ""), "ERROR");
+    EXPECT_EQ(code(unknown), "unknown_command");
+    EXPECT_EQ(unknown->value("error", ""), "Unknown command") << "old clients match the text";
 }
 
 // ---- the listener's exposure (D1) ---------------------------------------------------------------------------------

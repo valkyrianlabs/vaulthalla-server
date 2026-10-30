@@ -166,6 +166,15 @@ void Devices::touch(const uint32_t id, const std::string& ip) {
     });
 }
 
+bool Devices::updateAppVersion(const uint32_t id, const std::string& appVersion) {
+    return Transactions::exec("Devices::updateAppVersion", [&](pqxx::work& txn) {
+        return txn.exec("UPDATE devices SET app_version = $2 "
+                        "WHERE id = $1 AND revoked_at IS NULL AND app_version IS DISTINCT FROM $2",
+                        pqxx::params{id, appVersion})
+                   .affected_rows() == 1;
+    });
+}
+
 std::string Devices::nodeId() {
     return Transactions::exec("Devices::nodeId", [&](pqxx::work& txn) {
         txn.exec("INSERT INTO device_node (singleton, node_id) VALUES (TRUE, gen_random_uuid()::text) "

@@ -29,9 +29,9 @@ WsEnvelope envelope() {
             str("command").desc("\"<command>.response\"."),
             str("status").oneOf({"OK", "ERROR", "UNAUTHORIZED"}).desc(
                 "OK: done, `data` holds the response. UNAUTHORIZED: the router refused before running it (no or "
-                "expired token; refresh and retry once). ERROR: a refusal (data.code: denied, not_found, invalid, "
-                "conflict, or a confirmation code from the command's `confirmations`) or a fault (no data.code; "
-                "internal faults answer the request's own command too)."),
+                "expired token; refresh and retry once). ERROR: a refusal (data.code: one of `error_codes`, or a "
+                "code from the command's `refusal_kinds` or `confirmations`) or a fault (no data.code; internal "
+                "faults answer the request's own command too)."),
             requestId.desc("The request's requestId, when it had one."),
             object("data").opt().desc(
                 "OK: the command's response members. Omitted when the result is empty ({}, [] or null): read a "
@@ -47,6 +47,18 @@ WsEnvelope envelope() {
             str("error").desc("What was wrong."),
             str("message").desc("The same text, for clients written before error frames carried `error`."),
             requestId.desc("The frame's requestId when it had one (parse_error only)."),
+        },
+        .error_codes = {
+            {.code = "conflict", .description = "The request collides with existing state."},
+            {.code = "denied", .description = "RBAC or a business rule refused the actor."},
+            {.code = "device_unknown",
+             .description = "The device listener: this connection's key is not a paired device; it may only pair "
+                            "(device.pair.*) and say hello (meta.hello, meta.contract.get)."},
+            {.code = "invalid", .description = "The request itself is malformed (a bad name, an out-of-range value)."},
+            {.code = "not_found", .description = "What the request names doesn't exist (or isn't visible to the actor)."},
+            {.code = "unknown_command",
+             .description = "No command by that name on this daemon (web and device sessions; the text stays "
+                            "\"Unknown command\"). meta.hello's `commands` lists the ones it has."},
         },
     };
 }

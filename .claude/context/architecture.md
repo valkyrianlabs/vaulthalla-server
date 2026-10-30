@@ -193,6 +193,21 @@ a frame without a non-empty string `command` (or with a non-string `token`) is a
 requestId and omit empty `data`; a fault escaping the router answers `<command>.response` with status ERROR and no
 code. Payload handlers read a missing `payload` as `{}`. The contract publishes these rules as `envelope`.
 
+**Protocol negotiation (`meta.hello`).** `core/usage/include/WsProtocol.hpp` holds `kProtocolVersion` (max) and
+`kProtocolMin` (both 1), the capability registry (`capabilities()`: `{name, since, description}`, append-only, names
+never reused) and `negotiateProtocol` (`min(server max, client max)`, refused below `max(server min, client min)`, no
+client range → `kProtocolMin`). `meta.hello` (auth `session`, the same rule as `meta.contract.get`: signed-in web, Device and DevicePairing; never
+unauthenticated web or share sessions, bc342115) answers
+`{server: {name, version: VH_VERSION}, protocol: {version, min, max}, capabilities, commands (the router's, sorted),
+contract}`; no overlap is ERROR `protocol_unsupported` with `{server_min, server_max, server_version}`
+(`ws::core::DetailedRefusal`). `ws::Session::protocolVersion()` is what a handler reads to answer an older client in
+its shape (`kProtocolMin` until hello); `clientInfo()` (client name/version) shows in router refusal logs, and a paired
+device's `client.version` refreshes `devices.app_version` (`Devices::updateAppVersion`). An unknown command on a web
+(signed-in) or device session is ERROR `data.code: unknown_command`, text still "Unknown command"
+(`Router::unknownCommand`); unauthenticated web stays UNAUTHORIZED, pairing-only stays `device_unknown`. Breaking ws
+changes need a protocol bump: `tools/contracts/protocol_compat.py` (meson test `protocol_compat`) checks the surface
+against the frozen `core/usage/protocol/v<kProtocolVersion>.json`. Policy: `docs/reference/ws-protocol.md`.
+
 The web client builds `ws(s)://<host>/ws` in `web/src/util/getUrl.ts` (overridable with `NEXT_PUBLIC_VAULTHALLA_WS_ORIGIN`).
 `web/src/stores/useWebSocket.ts` handles reconnect, the pending-request map keyed by `requestId`, and token injection.
 Router allowlists are **exact and per session mode**: unauthenticated, human, pending-share, ready-share, and on the
@@ -261,7 +276,7 @@ Normative protocol: `docs/pairing.md` in `valkyrianlabs/vaulthalla-desktop` (its
 - **Session modes** `Device` / `DevicePairing` (`SessionMode`). Device: no tokens (`session::Manager::validate` is
   true while the user is `authorizing()` and the session open), `rbacActor()` = `human(user)`, classify = the Human set
   minus `auth.login|logout|refresh|register` and the share-recipient commands, plus `device.*`; deactivation or
-  deletion is seen on the next command. Pairing: only `device.pair.*` and `meta.contract.get`; anything else is ERROR
+  deletion is seen on the next command. Pairing: only `device.pair.*`, `meta.contract.get` and `meta.hello`; anything else is ERROR
   `data.code: device_unknown` (same for unknown and revoked keys). `device.identity.rotate` /
   `device.server.identity` only in Device mode; `device.pair.*` never on console sessions. Key material
   (`vault.keys.export|export.confirm|import`) reaches the handler from any signed-in session but `ops::vault_keys` answers

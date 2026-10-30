@@ -4,11 +4,12 @@
 The ws command book lives in core/usage (core/usage/src/contract/ws/*.cpp) and is published by
 `vh_usage --json` (build/core/usage.json). This tool turns its `ws` section into
 
-  web/src/util/generated/wsContract.json   the ws book and the models it names, with their hashes (reviewable; what
-                                           the TS is generated from, and what other clients vendor)
+  web/src/util/generated/wsContract.json   the ws book and the models it names, with their hashes, the envelope, the
+                                           protocol range and the capabilities (reviewable; what the TS is generated
+                                           from, and what other clients vendor)
   web/src/util/generated/wsContract.ts     TypeScript: per-command payload/response types (`WsContract`), the model
-                                           shapes (`WsModels`), command names, client timeouts, contract version and
-                                           hashes
+                                           shapes (`WsModels`), command names, client timeouts, contract version,
+                                           hashes, protocol range and capability names
 
 `web/src/util/wsContractCheck.ts` type-checks the hand-written `WebSocketCommandMap` against `WsContract`, so a
 server-side change breaks `pnpm typecheck` until the files are regenerated and the map follows.
@@ -50,7 +51,7 @@ def sha256_hex(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-SNAPSHOT_KEYS = ("contract_version", "ws_hash", "ws", "models_hash", "models", "envelope")
+SNAPSHOT_KEYS = ("contract_version", "ws_hash", "ws", "models_hash", "models", "envelope", "protocol", "capabilities")
 
 
 def ws_snapshot(usage: dict[str, Any]) -> dict[str, Any]:
@@ -207,6 +208,15 @@ def generate_ts(snapshot: dict[str, Any]) -> str:
         "",
         "// What meta.contract.get answers as models_hash when the daemon's model shapes are these.",
         f"export const WS_MODELS_HASH = {ts_string(snapshot['models_hash'])}",
+        "",
+        "// The ws protocol range this book is (core/usage WsProtocol.hpp): send it in meta.hello.",
+        f"export const WS_PROTOCOL_VERSION = {snapshot['protocol']['version']}",
+        f"export const WS_PROTOCOL_MIN = {snapshot['protocol']['min']}",
+        "",
+        "// The capabilities a daemon built from this book answers in meta.hello.",
+        "export const WS_CAPABILITIES: readonly string[] = [",
+        *[f"  {ts_string(c['name'])}," for c in snapshot["capabilities"]],
+        "]",
         "",
         "// A merge patch (payload members marked `partial`): any subset of the members, at any depth.",
         "export type WsPartial<T> = { [K in keyof T]?: T[K] extends readonly unknown[] ? T[K] : T[K] extends object "

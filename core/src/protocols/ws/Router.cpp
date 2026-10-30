@@ -26,6 +26,11 @@ bool containsCommand(const std::array<std::string_view, N>& commands, const std:
     return std::ranges::find(commands, command) != commands.end();
 }
 
+// The protocol handshake (WsProtocol.hpp). Allowed where meta.contract.get is: pairing-only and paired device sessions,
+// and signed-in web sessions (RequireHumanAuth); never an unauthenticated socket (no pre-login build fingerprinting,
+// bc342115) or a share session.
+constexpr std::string_view kHelloCommand{"meta.hello"};
+
 // Commands that establish, refresh, inspect or end a session. They must work before (or without a valid) access
 // token. Everything else under `auth.` (user register/update/delete/get/list, password change) is account
 // management and goes through RequireHumanAuth like any other command; a `starts_with("auth")` rule used to
@@ -45,10 +50,13 @@ vh::protocols::ws::ShareRateLimit& shareRateLimit() {
 }
 
 std::string refusalClient(const vh::protocols::ws::Session& session) {
-    const auto address = !session.clientAddress.empty() ? session.clientAddress
-                                                         : (session.ipAddress.empty() ? "unknown" : session.ipAddress);
-    if (const auto& peer = session.devicePeer()) return address + " (device " + peer->shortId() + ")";
-    return address;
+    auto out = !session.clientAddress.empty() ? session.clientAddress
+                                              : (session.ipAddress.empty() ? "unknown" : session.ipAddress);
+    if (const auto& peer = session.devicePeer()) out += " (device " + peer->shortId() + ")";
+    // What the client said it is in meta.hello (validated printable ASCII).
+    if (const auto client = session.clientInfo(); !client.name.empty())
+        out += " [" + client.name + (client.version.empty() ? "" : " " + client.version) + "]";
+    return out;
 }
 
 // The command string is client-supplied: keep it short and printable before it reaches a log line.
@@ -231,10 +239,16 @@ bool Router::isDeviceOnlyCommand(const std::string_view command) {
     return containsCommand(commands, command);
 }
 
+model::Response Router::unknownCommand(std::string&& command, json&& msg) {
+    // The text stays what clients before the code matched on.
+    return {std::move(command), std::move(msg), Status::ERROR, json{{"code", "unknown_command"}}, "Unknown command"};
+}
+
 Router::CommandAuthDecision Router::classifyCommand(const std::string_view command, const Session& session) {
     // The device listener: who this is was decided at the TLS handshake, never by a token.
     if (session.isDevicePairing()) {
-        if (isDevicePairCommand(command) || command == "meta.contract.get") return CommandAuthDecision::Allow;
+        if (isDevicePairCommand(command) || command == "meta.contract.get" || command == kHelloCommand)
+            return CommandAuthDecision::Allow;
         return CommandAuthDecision::DenyDeviceUnknown;
     }
     if (session.isDeviceSession()) {
@@ -345,8 +359,8 @@ void Router::routeMessage(json&& msg, const SessionPtr& session) {
 
         if (handlers_.contains(command)) handlers_[command](std::move(msg), session);
         else {
-            log::Registry::ws()->warn("[Router] Unknown command: {}", command);
-            Response::ERROR(std::move(command), std::move(msg), "Unknown command")(session);
+            log::Registry::ws()->warn("[Router] Unknown command: {}", printableCommand(command));
+            unknownCommand(std::move(command), std::move(msg))(session);
         }
     } catch (const std::exception& e) {
         log::Registry::ws()->error("[Router] Error routing message: {}", e.what());

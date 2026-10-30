@@ -1,6 +1,7 @@
 #pragma once
 
 #include "FieldGen.hpp"
+#include "WsProtocol.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -12,7 +13,8 @@
 // The server-owned contract: the CLI books (CommandUsage), the ws command book (WsCommandUsage) and the operation
 // catalog (OperationSpec), all declared here in the usage module and published by `vh_usage --json`. The web console's
 // ws types are generated from it (web/src/util/generated/wsContract.ts), the integration engine reads it, and the
-// daemon answers `meta.contract.get` with its identity so a console built against another contract can tell.
+// daemon answers `meta.contract.get` (and `meta.hello`, with the protocol version and capabilities of WsProtocol.hpp)
+// with its identity so a client built against another contract can tell.
 namespace vh::contract {
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -112,11 +114,19 @@ struct WsCommandUsage {
     std::chrono::milliseconds client_timeout{15'000};
 };
 
+// A data.code an ERROR answer can carry whatever the command: the generic refusal kinds and the router's own
+// codes. A command's own codes are its `refusal_codes` and `confirmations`.
+struct WsErrorCode {
+    std::string code{};
+    std::string description{};
+};
+
 // The frames every command travels in (the same for all commands; core/include/protocols/ws/Envelope.hpp and the
 // handler templates enforce them): the request, the answer, and the frame that answers a message the daemon can't
-// route.
+// route; plus the error codes any answer may carry.
 struct WsEnvelope {
     std::vector<WsField> request{}, response{}, error_frame{};
+    std::vector<WsErrorCode> error_codes{};
 };
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -208,13 +218,16 @@ WsEnvelope envelope();
 std::vector<OperationSpec> operations();
 
 // Bumped when the JSON document's own shape changes (not when its content does: that is what the hashes are for).
+// It is not the ws protocol's compatibility: that is kProtocolVersion (WsProtocol.hpp).
 // 2: `models` (+ `models_hash`), WsField `one_of`/`values`/`element`/`partial`, command `response_model`,
 //    `refusal_kinds` and `confirmations` (`refusal_codes` stays their union), `envelope`.
-inline constexpr int kVersion = 2;
+// 3: `protocol` ({version, min}), `capabilities` ([{name, since, description}]), `envelope.error_codes`.
+inline constexpr int kVersion = 3;
 
-// The whole document: {contract_version, contract_hash, ws_hash, models_hash, cli, ws, models, envelope, operations},
-// keys sorted. Hashes are SHA-256 (hex) over the canonical (compact, sorted-key) JSON of {contract_version, cli, ws,
-// models, envelope, operations}, of the `ws` array alone and of the `models` array alone.
+// The whole document: {contract_version, contract_hash, ws_hash, models_hash, protocol, capabilities, cli, ws, models,
+// envelope, operations}, keys sorted. Hashes are SHA-256 (hex) over the canonical (compact, sorted-key) JSON of
+// {contract_version, protocol, capabilities, cli, ws, models, envelope, operations}, of the `ws` array alone and of
+// the `models` array alone.
 std::string document(int indent = 2);
 
 struct Identity {
