@@ -46,7 +46,7 @@ Every listener except Caddy binds to the loopback address, so nothing is reachab
 :::cards{columns="2" cardTheme="muted"}
 
 :::card[Installer package and Homebrew]{href="/macos/installation" linkScope="title"}
-A `.pkg` you open in Finder or install from the command line, or `brew install --cask vaulthalla/tap/vaulthalla`. Upgrades reinstall over the top and keep every vault.
+A `.pkg` you open in Finder or install from the command line, or `brew install --cask valkyrianlabs/tap/vaulthalla`. Upgrades reinstall over the top and keep every vault.
 :::
 
 :::card[HTTPS through Caddy]{href="/https/caddy" linkScope="title"}

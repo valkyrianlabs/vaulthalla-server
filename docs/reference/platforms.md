@@ -24,7 +24,7 @@ Vaulthalla is one code base: vault formats, encryption, the database schema, RBA
 | --- | --- | --- |
 | Architecture | amd64 | arm64 (Apple Silicon) |
 | Operating system | Ubuntu 24.04 LTS (tested) | macOS 14 Sonoma or later |
-| Install | `apt.valkyrianlabs.com` (alias `apt.vaulthalla.sh`) | `vaulthalla-<version>-arm64.pkg`, or the Homebrew cask `vaulthalla/tap/vaulthalla` |
+| Install | `apt.valkyrianlabs.com` (alias `apt.vaulthalla.sh`) | `vaulthalla-<version>-arm64.pkg`, or the Homebrew cask `valkyrianlabs/tap/vaulthalla` |
 | Package signing | APT repository signed by the Valkyrian Labs LLC key (`494D71A1EEDDF87BD48E50486D64CB7BDFC30EC6`) | Not signed by Apple yet (manual approval in Finder) |
 | Upgrades | `apt upgrade` | Install the newer package, or `brew upgrade --cask vaulthalla` |
 | Removal | `apt remove` / `apt purge` | `uninstall.sh` / `uninstall.sh --purge` |

@@ -51,7 +51,7 @@ Full guide: [Install On Linux](/linux/installation).
 
 :::tab[macOS (Homebrew)]{value="brew"}
 ```bash
-brew install --cask vaulthalla/tap/vaulthalla
+brew install --cask valkyrianlabs/tap/vaulthalla
 ```
 
 Then sign in at `http://127.0.0.1:36968` as `admin` with the password in `/Library/Application Support/Vaulthalla/state/super_admin_initial_password`.
@@ -66,7 +66,7 @@ Download `vaulthalla-<version>-arm64.pkg` from the [GitHub releases](https://git
 sudo installer -pkg vaulthalla-<version>-arm64.pkg -target /
 ```
 
-The package is not signed by Apple yet: opening it from Finder needs **Open Anyway** in System Settings → Privacy & Security once.
+The package is signed by Valkyrian Labs LLC and notarized by Apple, so it also opens from Finder.
 
 Full guide: [Install On macOS](/macos/installation).
 :::

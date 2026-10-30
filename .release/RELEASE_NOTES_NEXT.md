@@ -7,41 +7,7 @@ Format: the first line is "# <release title>" WITHOUT a version number (vlr adds
 Everything after the title is the Markdown release body. Describe the resulting behavior
 for users and operators; keep it representative of what actually ships.
 -->
-# Vaulthalla moves to the Valkyrian Labs organization
-
-Vaulthalla's source, issues and roadmap now live under Valkyrian Labs LLC on GitHub:
-[valkyrianlabs/vaulthalla-server](https://github.com/valkyrianlabs/vaulthalla-server) and
-[valkyrianlabs/vaulthalla-desktop](https://github.com/valkyrianlabs/vaulthalla-desktop). Old `vaulthalla/server` links
-redirect. Nothing changes for installs: the APT repository, `apt.vaulthalla.sh` and `brew install --cask
-vaulthalla/tap/vaulthalla` keep working.
-
-## S3 gateway behind Cloudflare
-
-The S3 gateway now works through a proxied Cloudflare record with the AWS CLI's CRT transfer client. Cloudflare drops
-`Content-Length: 0` from GET, HEAD and DELETE requests that the client signed with it, which failed with
-`SignatureDoesNotMatch`; the gateway now treats the missing header as `0` when the request had no body. Every gateway
-response also carries `Cache-Control: private, no-store`, so a CDN never caches an object or a presigned GET. See
-[Behind Cloudflare Or Another CDN](/s3-gateway/setup#behind-cloudflare-or-another-cdn).
-
-## Parallel uploads no longer exhaust the TPM
-
-Under parallel S3 multipart uploads the daemon could log `Esys_Load failed ... out of memory for object contexts`:
-several secrets were unsealed at once, and a TPM without a resource manager in front (the managed swtpm) holds only three
-transient objects.
-TPM operations now run one at a time, each flushing its objects before the next starts, and a TPM that another process
-has momentarily filled is retried a few times instead of failing the request.
-
-## Stats history no longer fills the database
-
-The 5-minute trend rollups behind the health dashboard were kept for 365 days whatever `stats_snapshots.retention_days`
-said, and on a busy install they grew to gigabytes. Each rollup tier now has its own setting:
-`stats_snapshots.rollup_5m_retention_days` (default 30 days; the dashboard reads this tier only for windows up to 7
-days) and `stats_snapshots.rollup_1h_retention_days` (default 365 days). Both are also under **Settings → Health
-history**. The first daily purge after upgrading deletes the backlog; PostgreSQL keeps the freed space in the table file,
-so [reclaim it once](/reference/configuration#reclaiming-disk-space-after-the-first-purge) with `VACUUM (FULL)` or
-`pg_repack` during a maintenance window.
-
-## Clients and servers negotiate a protocol version
+# Clients and servers negotiate a protocol version
 
 The server, the web console and Vaulthalla Desktop release on their own schedules, so a client now starts its
 WebSocket session with `meta.hello` (on the web socket, once signed in: the server still tells no one its version
