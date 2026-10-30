@@ -408,7 +408,7 @@ jobs:
           path: ${{ env.VH_CANDIDATE_DIR }}/pkg/
           if-no-files-found: error
 
-  # Attaches the package to the GitHub release and updates the Homebrew cask (vaulthalla/homebrew-tap, with
+  # Attaches the package to the GitHub release and updates the Homebrew cask (valkyrianlabs/homebrew-tap, with
   # HOMEBREW_TAP_TOKEN: contents:write on that repository; without it the cask update is skipped with a warning).
   macos-publish:
     name: Publish the macOS package
@@ -451,7 +451,8 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "$TAP_TOKEN" ]; then echo "::warning::no HOMEBREW_TAP_TOKEN: cask not updated"; exit 0; fi
-          git clone -q "https://x-access-token:${TAP_TOKEN}@github.com/vaulthalla/homebrew-tap.git" tap
+          git clone -q "https://x-access-token:${TAP_TOKEN}@github.com/valkyrianlabs/homebrew-tap.git" tap
+          mkdir -p tap/Casks
           cp pkg/vaulthalla.rb tap/Casks/vaulthalla.rb
           cd tap
           git config user.name "github-actions[bot]"

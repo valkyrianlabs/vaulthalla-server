@@ -44,7 +44,7 @@ the services. Upgrades arrive through `apt upgrade`. Guide: [Install On Linux](h
 ### macOS
 
 ```bash
-brew install --cask vaulthalla/tap/vaulthalla
+brew install --cask valkyrianlabs/tap/vaulthalla
 ```
 
 Or download `vaulthalla-<version>-arm64.pkg` from the [releases](https://github.com/valkyrianlabs/vaulthalla-server/releases) and

@@ -23,7 +23,7 @@ Vaulthalla ships for macOS as one installer package, `vaulthalla-<version>-arm64
 
 :::tab[Homebrew]{value="brew"}
 ```bash
-brew install --cask vaulthalla/tap/vaulthalla
+brew install --cask valkyrianlabs/tap/vaulthalla
 ```
 
 Homebrew asks for your password and installs the package with macOS's `installer`.
