@@ -1,0 +1,39 @@
+# Homebrew cask for the Vaulthalla server, without the Desktop app (rendered per release by
+# tools/macos/pkg/render-cask.sh into the valkyrianlabs/homebrew-tap repository as Casks/vaulthalla-server.rb).
+# `brew install --cask valkyrianlabs/tap/vaulthalla-server` runs the same package as `sudo installer -pkg` (its
+# Desktop choice stays off), so both paths provision identically.
+cask "vaulthalla-server" do
+  version "@VERSION@"
+  sha256 "@SHA256@"
+
+  url "https://github.com/valkyrianlabs/vaulthalla-server/releases/download/v#{version}/vaulthalla-#{version}-arm64.pkg"
+  name "Vaulthalla Server"
+  desc "Self-hosted encrypted cloud: server, web console and vh CLI"
+  homepage "https://vaulthalla.io/"
+
+  conflicts_with cask: "vaulthalla"
+  depends_on arch: :arm64
+  depends_on macos: :sonoma
+
+  pkg "vaulthalla-#{version}-arm64.pkg"
+
+  # Keeps vault data, the database and the _vaulthalla account; `brew uninstall --zap` deletes them too.
+  uninstall script:  {
+              executable: "/Library/Application Support/Vaulthalla/uninstall.sh",
+              sudo:       true,
+            },
+            pkgutil: "sh.vaulthalla.server"
+
+  zap script: {
+    executable: "/Library/Application Support/Vaulthalla/uninstall.sh",
+    args:       ["--purge"],
+    sudo:       true,
+  }
+
+  caveats <<~EOS
+    Vaulthalla runs as a system service (LaunchDaemons sh.vaulthalla.*) and starts at boot.
+    Web console: http://127.0.0.1:36968 (user 'admin'; first password:
+      sudo cat "/Library/Application Support/Vaulthalla/state/super_admin_initial_password")
+    For the Desktop app too, install valkyrianlabs/tap/vaulthalla instead.
+  EOS
+end

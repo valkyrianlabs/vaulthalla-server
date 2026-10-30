@@ -12,7 +12,7 @@ tags:
 
 # Install On macOS
 
-Vaulthalla ships for macOS as one installer package, `vaulthalla-<version>-arm64.pkg`. The Homebrew cask installs that same package, so both paths set up the service identically and without further steps: the installer creates the service account and its private directories, initializes a private PostgreSQL database, starts the LaunchDaemons, and enrolls you as the CLI administrator.
+Vaulthalla ships for macOS as one installer package, `vaulthalla-<version>-arm64.pkg`. It always installs the server, and optionally Vaulthalla Desktop, the native app (macOS 27 or later). The Homebrew casks install that same package, so every path sets up the service identically and without further steps: the installer creates the service account and its private directories, initializes a private PostgreSQL database, starts the LaunchDaemons, and enrolls you as the CLI administrator.
 
 :::toc[On this page]{depth="3" theme="compact"}
 :::
@@ -22,11 +22,17 @@ Vaulthalla ships for macOS as one installer package, `vaulthalla-<version>-arm64
 :::tabs{default="brew"}
 
 :::tab[Homebrew]{value="brew"}
+| Cask | Installs | For |
+| --- | --- | --- |
+| `valkyrianlabs/tap/vaulthalla` | Server + Desktop | local-first use on this Mac, the full experience (macOS 27 or later) |
+| `valkyrianlabs/tap/vaulthalla-server` | Server only | headless and self-hosted Macs (macOS 14 or later) |
+| `valkyrianlabs/tap/vaulthalla-desktop` | Desktop only | managing Vaulthalla nodes on other machines |
+
 ```bash
 brew install --cask valkyrianlabs/tap/vaulthalla
 ```
 
-Homebrew asks for your password and installs the package with macOS's `installer`.
+Use the full name: Homebrew then taps `valkyrianlabs/tap` itself and trusts the cask you name, with no `brew tap` or `brew trust` step. It asks for your password and installs the package with macOS's `installer`. Vaulthalla Desktop updates itself; a server upgrade never replaces a newer copy of the app.
 :::
 
 :::tab[Installer package]{value="pkg"}
@@ -37,7 +43,7 @@ shasum -a 256 -c vaulthalla-<version>-arm64.pkg.sha256
 sudo installer -pkg vaulthalla-<version>-arm64.pkg -target /
 ```
 
-Or double-click it in Finder and follow Installer: see [Open The Package](#open-the-package).
+The package installs the server only from the command line. Double-clicked in Finder, Installer offers Vaulthalla Desktop under **Customize** (off by default; macOS 27 or later): see [Open The Package](#open-the-package).
 :::
 
 :::

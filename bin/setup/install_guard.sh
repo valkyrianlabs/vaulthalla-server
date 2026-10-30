@@ -24,7 +24,8 @@ case "$OS" in
 ${YELLOW}${BOLD}⛔️  macOS: production installs come from the package${RESET}
 
 ${CYAN}Install Vaulthalla on a Mac with the signed installer package or Homebrew:
-    brew install --cask valkyrianlabs/tap/vaulthalla      (or open vaulthalla-<version>.pkg)
+    brew install --cask valkyrianlabs/tap/vaulthalla-server   (headless; vaulthalla adds the Desktop app)
+    or open vaulthalla-<version>-arm64.pkg
 
 From a source checkout, 'make dev' installs an isolated development instance
 (vh-dev, sh.vaulthalla.dev.*) that never touches a production install.${RESET}
