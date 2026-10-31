@@ -7,6 +7,7 @@ import { randomId } from '@/lib/randomId'
 import { formatBytes } from '@/lib/format'
 import { normalizePath, parentOf } from '@/features/files/paths'
 import type { FsSource } from '@/features/files/source'
+import { RESUME_STORAGE_KEY } from '@/features/files/upload/resumeStore'
 
 export interface PickedFile {
   file: File
@@ -30,6 +31,10 @@ export interface TransferTask {
   finishedAt: number | null
   error: string | null
   sourceKey: string
+  // Shown under an active upload (e.g. resuming an earlier session).
+  note?: string | null
+  // Per-file errors of a batch that partly failed ("path: reason").
+  failures?: string[]
 }
 
 interface TransferState {
@@ -63,6 +68,9 @@ export const cancelTask = (id: string) => controllers.get(id)?.abort()
 onSessionReset(() => {
   for (const controller of controllers.values()) controller.abort()
   useTransfers.setState({ tasks: [], open: false })
+  try {
+    sessionStorage.removeItem(RESUME_STORAGE_KEY)
+  } catch {}
 })
 
 // Never let a tab close silently drop an upload.
@@ -79,6 +87,9 @@ const SESSION_MAX_FILES = 500
 const SESSION_MAX_BYTES = 4 * 1024 ** 3
 const CONCURRENCY = 3
 const RETRIES = 3
+
+// A message already written for the user (a resumable batch's summary): shown as is.
+class UploadReport extends Error {}
 
 class HttpError extends Error {
   constructor(
@@ -105,6 +116,7 @@ const headRefusal = (status: number, isDir: boolean) => {
 }
 
 const friendly = (error: unknown) => {
+  if (error instanceof UploadReport) return error.message
   const message = error instanceof Error ? error.message : String(error)
   const lower = message.toLowerCase()
   if (lower.includes('already exists')) return 'A file with that name already exists here.'
@@ -237,12 +249,42 @@ export const startUpload = (source: FsSource, targetDir: string, files: PickedFi
   const touchedDirs = new Set<string>([target])
   const onBytes = (delta: number) => patch(id, task => ({ bytesDone: Math.max(0, task.bytesDone + delta) }))
 
+  const fullPath = (item: PickedFile) => normalizePath(`${target}/${item.relativePath || item.file.name}`)
+  for (const item of files) touchedDirs.add(parentOf(fullPath(item)))
+
+  // Servers with `http.upload.resumable` take parts through /upload/sessions (upload/resumable.ts, loaded on demand);
+  // false means "use the whole-file flow below".
+  const uploadResumably = async () => {
+    let resumable: typeof import('@/features/files/upload/resumable')
+    try {
+      resumable = await import('@/features/files/upload/resumable')
+    } catch {
+      return false
+    }
+    const outcome = await resumable.uploadResumable({
+      source,
+      items: files.map(item => ({ file: item.file, path: fullPath(item) })),
+      signal: controller.signal,
+      onBytes,
+      onFileDone: () => patch(id, task => ({ filesDone: task.filesDone + 1 })),
+      onFinishing: finishing => patch(id, { status: finishing ? 'finishing' : 'running' }),
+      onNote: note => patch(id, { note }),
+    })
+    if (outcome === 'unsupported') return false
+    refreshListing(source, touchedDirs)
+    if (outcome.error) {
+      patch(id, { failures: outcome.failures })
+      throw new UploadReport(outcome.error)
+    }
+    return true
+  }
+
   const run = async () => {
     patch(id, { status: 'running' })
+    if (await uploadResumably()) return
     for (const chunk of chunkFiles(files)) {
       const prepared = chunk.map((item, index) => {
-        const full = normalizePath(`${target}/${item.relativePath || item.file.name}`)
-        touchedDirs.add(parentOf(full))
+        const full = fullPath(item)
         return { item, fileId: `f${index}`, path: parentOf(full), filename: full.split('/').at(-1) as string }
       })
       const start = await fetch(`/upload/session${source.uploadQuery}`, {
