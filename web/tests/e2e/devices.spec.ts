@@ -321,6 +321,57 @@ test.describe.serial('devices', () => {
     expect(count(sent, 'device.pairing.pending')).toBe(0)
   })
 
+  test('pairing: advertised endpoints are listed and linked to Desktop (device.endpoints)', async ({ page }) => {
+    const spki = 'ab'.repeat(32)
+    const sent = await scriptDevices(page, frame => {
+      if (frame.command === 'device.list') return { data: { devices: [] } }
+      if (frame.command === 'device.pairing.open')
+        return {
+          data: {
+            ...opened(),
+            remote: true,
+            server_spki_sha256: spki,
+            endpoints: {
+              port: 40123,
+              remote: true,
+              listening: true,
+              candidates: [
+                { host: '10.0.0.11', port: 40123, kind: 'lan', source: 'interface', interface: 'enp3s0' },
+                { host: 'fd00::11', port: 40123, kind: 'lan', source: 'interface', interface: 'enp3s0' },
+                { host: 'device.example.com', port: 443, kind: 'passthrough', source: 'config' },
+              ],
+            },
+          },
+        }
+      if (frame.command === 'device.pairing.pending') return { data: pendingAnswer([]) }
+      if (frame.command === 'device.pairing.close') return { data: { closed: true } }
+      return undefined
+    })
+    await page.goto('/devices')
+    await page.getByTestId('pair-open').click()
+    const dialog = page.getByTestId('pair-dialog')
+    await expect(dialog.getByTestId('pair-endpoint')).toHaveText(['10.0.0.11:40123', '[fd00::11]:40123', 'device.example.com:443'])
+    const href = await dialog.getByTestId('pair-open-desktop').getAttribute('href')
+    expect(href).toBe(`vaulthalla://pair?spki=${spki}&endpoints=${encodeURIComponent('10.0.0.11:40123,[fd00::11]:40123,device.example.com:443')}`)
+    await dialog.getByRole('button', { name: 'Close' }).last().click()
+    await expect.poll(() => count(sent, 'device.pairing.close')).toBe(1)
+  })
+
+  test('pairing: an older server shows no endpoint list', async ({ page }) => {
+    await scriptDevices(page, frame => {
+      if (frame.command === 'device.list') return { data: { devices: [] } }
+      if (frame.command === 'device.pairing.open') return { data: opened() }
+      if (frame.command === 'device.pairing.pending') return { data: pendingAnswer([]) }
+      if (frame.command === 'device.pairing.close') return { data: { closed: true } }
+      return undefined
+    })
+    await page.goto('/devices')
+    await page.getByTestId('pair-open').click()
+    const dialog = page.getByTestId('pair-dialog')
+    await expect(dialog.getByTestId('pair-waiting')).toBeVisible()
+    await expect(dialog.getByTestId('pair-endpoints')).toHaveCount(0)
+  })
+
   test('super admin: every device and the remote-connections switch', async ({ page }) => {
     let status = listener()
     const sent = await scriptDevices(
