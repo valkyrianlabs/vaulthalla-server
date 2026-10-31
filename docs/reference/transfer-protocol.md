@@ -157,7 +157,7 @@ Probing:
 
 Served on the device listener (device principal) and the web listener (cookie, or `?share=1` + `share_refresh`).
 Every route is under `/upload`, so nginx and Caddy need no new prefix. Authorization, quota, RBAC, share scope and
-overwrite rules are those of `/upload/session` and `PUT /upload/content` today.
+overwrite rules are those of `/upload/session` and `PUT /upload/content` today. The older lanes stay as they are.
 
 ### 3.1 Create: `POST /upload/sessions`
 
@@ -173,32 +173,43 @@ overwrite rules are those of `/upload/session` and `PUT /upload/content` today.
 }
 ```
 
-- `file_id`: `[A-Za-z0-9_-]{1,96}`, unique in the session; default a UUID.
-- Per file exactly one of: `duplicate_policy: "reject"` (default; the `/upload/session` rule: the target must not
-  exist), `if_none_match: "*"` (create only: the `/upload/content` rule, 412 when something is there),
-  `if_match: "<content_version>"` (replace: `Need::Overwrite`, compare-and-swap at commit).
+- One vault per session (`vault_id`; a share session's vault is the link's, and `vault_id` is ignored there).
+- `file_id`: `[A-Za-z0-9_-]{1,96}`, unique in the session; default a UUID. `path` names a file inside the vault (a
+  share session: relative to the share root); `/`, a trailing `/` and paths escaping the vault are 400.
+- Per file at most one of: `duplicate_policy: "reject"` (default; the `/upload/session` rule: the target must not
+  exist), `if_none_match: "*"` (create only: the `/upload/content` rule), `if_match: "<content_version>"`
+  (replace: `Need::Overwrite`, compare-and-swap at commit). Two of them, or another value, is 400.
+- Checked at create, each refusal naming the `file_id` in the body: Write on the path (`if_match`: Overwrite on the
+  file, and its current version must equal `if_match`, else 412 `precondition_failed` + `ETag`; a file open through
+  the mount is 412 too); something at the path: `reject` → 409 `already_exists`, `if_none_match` → 412
+  `precondition_failed` + `ETag`, not a file → 409 `conflict`.
 - At most `transfer.max_session_files` files (default 4096). Each `size` ≤ `transfer.max_file_bytes` (default 0 =
   no limit beyond the format) and ≤ 68 719 476 704 (the AES-GCM single-message limit, 2^36 − 32; larger files are
-  refused with 413 `file_too_large`). Sum of sizes ≤ the vault's `freeSpace()` (507 `insufficient_storage`).
+  refused with 413 `file_too_large`). Sum of sizes plus the bytes promised to the vault's other open sessions ≤ the
+  vault's `freeSpace()` (507 `insufficient_storage`).
+- Shares: `reject` or `if_none_match` only (`if_match` is 403: shares never replace); the link's limits
+  (`max_upload_size_bytes`, file count and total, MIME and extension rules) are applied by `startUpload` and refuse
+  with 403 `forbidden`.
 - 201:
 
 ```json
 {
-  "upload_id": "…", "resumable": true, "expires_at": 1793540209,
+  "upload_id": "…", "resumable": true, "expires_at": 1793540209, "state": "open",
   "part": {"default_bytes": 67108864, "min_bytes": 1048576, "max_bytes": 536870912, "max_in_flight": 4},
   "files": [ /* §3.2 file objects */ ]
 }
 ```
 
 `part.max_bytes` is `transfer.max_part_bytes` on the device listener and `min(that, transfer.http.max_part_bytes)`
-on the web listener (default 64 MiB there, so a request stays under Cloudflare's 100 MB body limit). `min_bytes`
-binds every part except a file's last. `max_in_flight` bounds concurrent part requests per session; more get 429.
+on the web listener (default 64 MiB there, so a request stays under Cloudflare's 100 MB body limit);
+`default_bytes` is `min(transfer.part_default_bytes, max_bytes)`. `min_bytes` binds every part except a file's
+last. `max_in_flight` bounds concurrent part requests per session; more get 429.
 
 ### 3.2 Status: `GET /upload/sessions/<id>`
 
 ```json
 {
-  "upload_id": "…", "state": "open|finalizing|complete|failed|cancelled", "expires_at": 1793540209,
+  "upload_id": "…", "state": "open|finalizing|complete|failed", "expires_at": 1793540209,
   "part": { … as above … },
   "files": [
     {"file_id": "f0", "path": "/photos/a.mov", "size": 12884901888, "state": "receiving",
@@ -210,81 +221,119 @@ binds every part except a file's last. `max_in_flight` bounds concurrent part re
 
 - `ranges`: sorted, coalesced, half-open `[start, end)` byte ranges the server has **durably** stored. A client
   resuming sends exactly the gaps.
-- File `state`: `receiving` → `sealing` (all bytes present, integrity tag being finished) → `committing` →
-  `committed` (`entry` = the file's entry JSON, as `PUT /upload/content` answers) | `failed` (`error` =
-  `{code, message}`; codes: `already_exists`, `precondition_failed` (+ `etag`), `conflict`, `forbidden`,
-  `quota_exceeded`, `key_rotated`, `integrity`, `internal`).
+- Session `state`: `open` while any file is `receiving`, `finalizing` while any is `sealing`/`committing`, then
+  `complete` or (any file failed) `failed`. A cancelled or expired session is gone (404).
+- File `state`: `receiving` → `sealing` (all bytes present, the sealing cursor is finishing the file's stream and
+  tag) → `committing` → `committed` (`entry` = the file's entry JSON, as `PUT /upload/content` answers; a share
+  session gets `{id, path, transfer_id}` with the share-relative path) | `failed` (`error` = `{code, message}`;
+  codes: `already_exists`, `precondition_failed` (+ `etag`), `conflict`, `forbidden`, `key_rotated`, `integrity`,
+  `internal`). Share sessions' files also carry `transfer_id` (the `share_upload` id).
 
 ### 3.3 Part: `PUT /upload/sessions/<id>/files/<file_id>?offset=<n>`
 
-- Headers: `Content-Length` (required, 411 otherwise), optional `Content-Digest: sha-256=:<base64>:` (RFC 9530).
+- Headers: `Content-Length` (required, 411 otherwise), optional `Content-Digest: sha-256=:<base64>:` (RFC 9530;
+  other algorithms in the header are ignored, a malformed `sha-256` member is 400).
 - Rules, all checked before a body byte is read (refusal closes the connection):
-  - `offset + length ≤ size`; `length ≤ part.max_bytes`; `length ≥ part.min_bytes` unless `offset + length ==
-    size`; `length > 0`.
+  - `offset` present, `length > 0`, `offset + length ≤ size`, `length ≥ part.min_bytes` unless `offset + length ==
+    size` (each 400 `bad_request`); `length ≤ part.max_bytes` (413 `part_too_large`); an unknown `file_id` is 404.
   - The range is disjoint from every stored range and every part in flight, **or** it equals a stored part exactly
-    (same offset and length): then the body is read, its SHA-256 compared with the stored part's, and the answer is
-    200 (idempotent) or 409 `part_conflict` (different bytes; nothing changes).
-  - Partial overlap: 409 `part_overlap`. File not `receiving`: 409 `file_state`. Over `max_in_flight`: 429 with
-    `Retry-After`.
-- The server streams the body (bounded buffers), encrypts it at its offset (§3.5), hashes it, writes it to the
-  spool, `durable::sync`s, records the part, and only then answers. A `Content-Digest` that doesn't match: 400
-  `digest_mismatch`, and the part is not recorded.
-- 200:
+    (same offset and length): then the body is read and compared byte for byte with the stored part (decrypted in
+    memory), and the answer is 200 (idempotent) or 409 `part_conflict` (different bytes; nothing changes).
+  - Partial overlap (with a stored part or one in flight): 409 `part_overlap`. File not `receiving`: 409
+    `file_state`. Over `max_in_flight`: 429 `too_many_parts_in_flight` with `Retry-After`. More than 64 part bodies
+    being received by the whole server: 503 `busy` with `Retry-After`.
+  - The vault key is no longer the version the file was created under: the file fails with `key_rotated` and the
+    part gets 409 `file_state`.
+- The server streams the body (bounded buffers), encrypts it as its own AES-256-GCM message (§3.5), writes it to an
+  attempt file in the spool, `durable::sync`s it, renames it into place, syncs the directory, records the part (and
+  for a share session `recordUploadChunk`), and only then answers. A `Content-Digest` that doesn't match: 400
+  `digest_mismatch`, and the part is not recorded. A part whose connection drops is not recorded either.
+- 200 (`sha256` is the SHA-256 of the part's plaintext as received, computed in memory; no plaintext digest is
+  stored):
 
 ```json
 {"file_id": "f0", "offset": 536870912, "length": 536870912, "sha256": "<hex>",
  "received_bytes": 1610612736, "ranges": [[0, 1610612736]], "state": "receiving"}
 ```
 
-  `Server-Timing: recv;dur=<ms>, write;dur=<ms>, sync;dur=<ms>` reports where the server spent its time. When the
-  server's write path is saturated it answers 503 `busy` with `Retry-After` before reading the body.
+  `Server-Timing: recv;dur=<ms>, write;dur=<ms>, sync;dur=<ms>` reports where the server spent its time (reading
+  the body, encrypting and writing it, flushing and recording it).
 - When the last gap closes the file moves to `sealing` and then `committing` on its own (§3.4); the answer to that
   part carries the new state.
 
 ### 3.4 Finalization
 
-- Files commit independently as soon as they are complete, on a bounded worker pool (`transfer.commit_workers`,
-  default 2), never on a request thread. Commit = finish the GCM tag, `durable::sync`, then
-  `Filesystem::createFile` with the `sealed` writer (the spool file becomes the backing file: rename, copy on
-  EXDEV), with the file's precondition (reject / create-only / compare-and-swap). A file is never visible before
-  its bytes and tag are durable.
+- Files seal and commit independently as soon as they are complete, on a bounded worker pool
+  (`transfer.commit_workers`, default 2), never on a request thread. Commit = the sealing cursor's tag appended and
+  `durable::sync`ed, then `Filesystem::createFile` with the `sealed` writer (the sealed spool file becomes the
+  backing file: a hard link, copied where linking is impossible, so the spool keeps it until the commit is
+  recorded), with the file's precondition (reject / create-only / compare-and-swap), authorized again as the caller
+  is at that moment (a user: its current roles, and an account that stopped authorizing fails `forbidden`; a share:
+  the share session's principal re-resolved, scope and target re-checked, committed as the link's creator). A target
+  that appeared since create fails the file (`already_exists`, or `precondition_failed` + `etag`); it is never
+  silently skipped. A file is never visible before its bytes and tag are durable.
 - `POST /upload/sessions/<id>/finish`: idempotent. 200 `{state: "complete", files: [...]}` once every file is
   `committed`; 202 `{state: "finalizing", files: [...]}` + `Retry-After: 1` while any is `sealing`/`committing`
-  (the server waits up to 5 s for that before answering); 409 `incomplete` + the status while any file has gaps;
-  200 with `state: "failed"` once every file is terminal and any failed. Finish never re-encrypts and never holds
-  the request for the commit.
+  (the server waits up to 5 s for that before answering, without doing any of the work itself); 409 `incomplete` +
+  the status while any file is still `receiving`; 200 with `state: "failed"` once every file is terminal and any
+  failed. Finish never re-encrypts and never holds the request for the commit.
 - Commit state is in the database, so a restart resumes it (§3.6); re-running a commit is idempotent (a file row
-  carrying the upload's IV at the target path is the committed result).
+  carrying the upload's IV at the target path is the committed result). A share session's commit resumes after a
+  restart on that share session's next request (status, part or finish), because only it can provide the principal.
 
 ### 3.5 Encryption of parts (no plaintext at rest)
 
 The vault file format is unchanged: AES-256-GCM over the whole file, body ‖ 16-byte tag, one IV per file, empty
-AAD. At create the server picks the file's IV and the vault key version and stores both. GCM's body is CTR mode,
-so the ciphertext of any part is computable at its offset (counter = 2 + block index, `crypto/util/Gcm.hpp`):
-parts are encrypted on arrival and written at their offset in the spool file. The tag needs GHASH over the
-ciphertext in order: a per-file sealing cursor feeds it while the contiguous prefix grows (a part landing at the
-cursor is fed from memory; parts that landed ahead are read back from the spool when the gap before them fills).
-The cursor lives in memory; after a restart it is rebuilt by reading the spool from 0. The content hash (BLAKE2b
-of the ciphertext) is computed by the same cursor. A resubmitted part is accepted only with identical bytes
-(§3.3), so a keystream position is never used for two different plaintexts. If the key version is retired before
-commit, the file fails with `key_rotated` and the client re-uploads it.
+AAD. At create the server picks the file's IV and the vault key version and stores both.
+
+Parts are **not** written under the file's keystream. A part attempt that fails half way (the connection drops, the
+digest is wrong, the daemon dies before the part is recorded) is not recorded, and the range may later be filled
+with different bytes (the client's file changed, or a bug). Had the attempt's ciphertext been written at its offset
+under the file's IV, two different plaintexts would have been encrypted under the same CTR keystream positions,
+and both versions can survive on disk (copy-on-write file systems, snapshots, SSD remapping): their XOR is the XOR of
+the plaintexts. So each part attempt is its own AES-256-GCM message under the same vault key version with a fresh
+random IV, written to `<ordinal>.<offset>.<random>.tmp` and renamed to `<ordinal>.<offset>.part` when durable; the
+part row records that IV. No keystream is ever used twice, and every stored part is authenticated.
+
+A per-file sealing cursor builds the vault-format file: it reads the stored parts in order as the contiguous prefix
+grows, decrypts and authenticates each (a failure fails the file with `integrity`), and re-encrypts the plaintext
+through the file's own GCM stream into `<ordinal>.sealed`, feeding the BLAKE2b content hash at the same time
+(`createFile` then doesn't read the file back). Plaintext exists only in bounded memory buffers. The durable sealed
+prefix is flushed and recorded (`sealed_bytes`) at least every 256 MiB and at the end of every pass; parts below it
+are then deleted. The cursor lives in memory; after a restart it is rebuilt by reading the sealed prefix back
+(decrypted at its offset and re-encrypted, which must reproduce it byte for byte) and the file is cut to that
+prefix. Positions of the sealed file only ever receive the decided bytes, so rewriting a prefix after a restart
+writes the same ciphertext again.
+
+The vault key version must still be the current one when a part arrives and when the file commits; otherwise the
+file fails with `key_rotated` and the client uploads it again (a rotation re-keys only committed files, so a file
+committed under an outgoing version after the rotation pass had run would become unreadable).
 
 ### 3.6 Persistence, expiry, cleanup
 
 - Sessions, files and parts are rows (migration 114); spool files live in `<backing>/.upload-spool/<upload_id>/`
-  (0700, outside the FUSE mount, ciphertext only). Restart keeps both.
-- A session expires `transfer.session_idle_ttl` (default 24 h) after its last part, and at the latest
-  `transfer.session_max_age` (default 7 days) after creation; the DB janitor deletes expired sessions' rows and spool
-  files. `DELETE /upload/sessions/<id>` cancels at once (204; committed files stay).
-- Shares: `?share=1` sessions also write the `share_upload` row (`startUpload` / `recordUploadChunk` /
-  `finishUpload`) and keep the link's `max_upload_size_bytes`; a share session is bound to its share session.
+  (0700, outside the FUSE mount and every vault tree, ciphertext only): `<ordinal>.<offset>.part` stored parts,
+  `<ordinal>.sealed` the file being sealed. Nothing else (FUSE, snapshots, versions, archives, copy, sync) reads
+  them. Restart keeps both; at startup attempt files, parts without a row and session directories without a session
+  are removed, and part rows above the sealed prefix whose file is gone are dropped (they become gaps again).
+- Disk use: a file's stored parts plus its sealed prefix, at most about twice the parts not yet sealed.
+- A session expires `transfer.session_idle_ttl_hours` (default 24) after its last part, and at the latest
+  `transfer.session_max_age_hours` (default 168) after creation; the DB janitor deletes expired sessions' rows and
+  spool files (and spool directories without a row). `DELETE /upload/sessions/<id>` cancels at once (204; committed
+  files stay; files of a share session that never committed are cancelled in `share_upload`).
+- Shares: `?share=1` sessions also write the `share_upload` row (`startUpload` / `recordUploadChunk` once per stored
+  part / `finishUpload`) and keep the link's `max_upload_size_bytes`; a share session is bound to its share session
+  (another share session, a human or a device gets 404). The share manager's stale-upload sweep (6 h without a chunk)
+  still applies to the `share_upload` row: a share session idle longer than that loses the file.
 
 ### 3.7 Errors
 
-JSON `{error: {code, message}}` with the status; never status-by-substring. 400 `bad_request`/`digest_mismatch`,
-401, 403 `forbidden`, 404 `not_found` (unknown or someone else's session: no oracle), 409 `part_overlap`/
-`part_conflict`/`file_state`/`incomplete`, 411, 412 `precondition_failed` (+ `ETag`), 413 `file_too_large`/
-`part_too_large`, 429 `too_many_parts_in_flight`, 503 `busy`, 507 `insufficient_storage`.
+JSON `{error: {code, message}}` with the status (412 adds `error.etag` and the `ETag` header; refusals about one
+file of a create carry its `file_id`; 409 `incomplete` carries the §3.2 status); never status-by-substring.
+400 `bad_request`/`digest_mismatch`, 401 `unauthorized`, 403 `forbidden`, 404 `not_found` (unknown, expired,
+cancelled or someone else's session: no oracle), 405 `method_not_allowed`, 409 `part_overlap`/`part_conflict`/
+`file_state`/`incomplete`/`already_exists`/`conflict`, 411 `length_required`, 412 `precondition_failed` (+ `ETag`),
+413 `file_too_large`/`part_too_large`, 429 `too_many_parts_in_flight`, 503 `busy`, 507 `insufficient_storage`.
 
 ## 4. Device transfer lanes (`device.lanes.transfer`, device listener only)
 
@@ -336,6 +385,8 @@ characters; no scheme, path or spaces), every `kind` is one of the four, no glob
 refuses to start (config load) and `settings.update` refuses it with `invalid`. Absent keys keep the defaults
 above; the section round-trips through `Config::save` and the settings JSON.
 
-Validation: `part_min_bytes ≤ part_default_bytes ≤ max_part_bytes ≤ 4 GiB`, `http.max_part_bytes ≤
-max_part_bytes`, `1 ≤ max_parts_in_flight ≤ 16`, `1 ≤ commit_workers ≤ 8`. Out of range: the daemon refuses to start
-with a clear message (config load), and `settings.update` refuses with `invalid`.
+Validation: `1 ≤ part_min_bytes ≤ part_default_bytes ≤ max_part_bytes ≤ 4 GiB`, `part_min_bytes ≤
+http.max_part_bytes ≤ max_part_bytes` (a listener whose cap is below the minimum could never take a full part),
+`1 ≤ max_parts_in_flight ≤ 16`, `1 ≤ commit_workers ≤ 8`, `1 ≤ max_session_files ≤ 65536`, both TTLs ≥ 1 hour.
+Out of range: the daemon refuses to start with a clear message (config load), and `settings.update` refuses with
+`invalid`. Nothing is clamped; a key left out keeps its default.

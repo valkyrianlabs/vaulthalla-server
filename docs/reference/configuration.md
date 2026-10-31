@@ -76,6 +76,32 @@ that reach it from outside (`public`: `host`, optional `port` (default: the list
 `wan` (default) or `passthrough`). The node never looks up its public address itself. A malformed entry stops the
 daemon from starting, with a message naming it. See [Paired Devices](/admin/devices).
 
+Resumable uploads (`/upload/sessions`, used by Vaulthalla Desktop and the web console when the server offers them)
+keep their state across restarts and resume at the byte:
+
+```yaml
+transfer:
+  part_default_bytes: 67108864   # 64 MiB
+  part_min_bytes: 1048576        # 1 MiB
+  max_part_bytes: 536870912      # 512 MiB, device listener
+  max_parts_in_flight: 4         # per session
+  max_file_bytes: 0              # 0 = only the format limit
+  max_session_files: 4096
+  commit_workers: 2
+  session_idle_ttl_hours: 24
+  session_max_age_hours: 168
+  http:
+    max_part_bytes: 67108864     # web listener
+```
+
+Behind Cloudflare Free or Pro keep `http.max_part_bytes` at or below 95000000 (Cloudflare refuses request bodies over
+100 MB). Values must satisfy `part_min_bytes <= part_default_bytes <= max_part_bytes <= 4 GiB`, `part_min_bytes <=
+http.max_part_bytes <= max_part_bytes`, `max_parts_in_flight` 1 to 16 and `commit_workers` 1 to 8; otherwise the
+daemon refuses to start and the console refuses the change. A file may be up to 68719476704 bytes (the AES-GCM
+limit of the vault format). Parts are encrypted as they arrive and wait in `<state>/.upload-spool/` (ciphertext
+only, outside every vault) until the file is sealed and committed; a session expires `session_idle_ttl_hours` after
+its last part and at the latest `session_max_age_hours` after it began, and its spool is then removed.
+
 The S3-compatible gateway is a separate runtime service and is disabled by default:
 
 ```yaml

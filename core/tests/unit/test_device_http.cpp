@@ -277,6 +277,67 @@ TEST_F(DeviceHttpTest, UploadSessionOverTls) {
     EXPECT_GE(refused->result_int(), 400);
 }
 
+// Resumable uploads on the device listener (http.upload.resumable): the device's user owns the session, parts may
+// be as large as transfer.max_part_bytes there, and another user's device can't see the session.
+TEST_F(DeviceHttpTest, ResumableUploadOverTls) {
+    const ClientIdentity device;
+    (void)paired(device, owner);
+    HttpClient http(port, device);
+    ASSERT_TRUE(http.connect());
+
+    const std::string first(1u << 20, 'a'), second = "and the rest\n";  // every part but the last: >= 1 MiB
+    const auto size = first.size() + second.size();
+    const auto created = http.request(
+        bhttp::verb::post, "/upload/sessions",
+        json{{"vault_id", engine->vault->id}, {"files", {{{"file_id", "f1"}, {"path", "/resumable-mac.txt"}, {"size", size}}}}}.dump(),
+        {{"Content-Type", "application/json"}});
+    ASSERT_TRUE(created);
+    ASSERT_EQ(created->result_int(), 201) << created->body();
+    const auto body = json::parse(created->body());
+    EXPECT_EQ(body.at("part").at("max_bytes"), 512ull << 20) << "the device listener's part cap";
+    const auto uploadId = body.at("upload_id").get<std::string>();
+
+    // The second part first (out of order), then the first.
+    const auto tail = http.request(bhttp::verb::put, "/upload/sessions/" + uploadId + "/files/f1?offset=" + std::to_string(first.size()), second,
+                                   {{"Content-Type", "application/octet-stream"}});
+    ASSERT_TRUE(tail);
+    ASSERT_EQ(tail->result_int(), 200) << tail->body();
+
+    const ClientIdentity theirs;
+    (void)paired(theirs, stranger);
+    HttpClient other(port, theirs);
+    ASSERT_TRUE(other.connect());
+    const auto peek = other.request(bhttp::verb::get, "/upload/sessions/" + uploadId);
+    ASSERT_TRUE(peek);
+    EXPECT_EQ(peek->result_int(), 404) << "another user's device: no oracle";
+
+    const auto head = http.request(bhttp::verb::put, "/upload/sessions/" + uploadId + "/files/f1?offset=0", first,
+                                   {{"Content-Type", "application/octet-stream"}});
+    ASSERT_TRUE(head);
+    ASSERT_EQ(head->result_int(), 200) << head->body();
+    int code = 0;
+    for (int i = 0; i < 60 && code != 200; ++i) {
+        const auto finished = http.request(bhttp::verb::post, "/upload/sessions/" + uploadId + "/finish");
+        ASSERT_TRUE(finished);
+        code = finished->result_int();
+        ASSERT_TRUE(code == 200 || code == 202) << finished->body();
+    }
+    ASSERT_EQ(code, 200);
+
+    HttpClient check(port, device);
+    ASSERT_TRUE(check.connect());
+    const auto back = check.request(bhttp::verb::get, "/download/content?vault_id=" + std::to_string(engine->vault->id) +
+                                                          "&path=/resumable-mac.txt");
+    ASSERT_TRUE(back);
+    EXPECT_EQ(back->result_int(), 200);
+    EXPECT_EQ(back->body(), first + second);
+
+    // A share session is never served on the device listener.
+    const auto share = http.request(bhttp::verb::get, "/upload/sessions/" + uploadId + "?share=1");
+    ASSERT_TRUE(share);
+    EXPECT_EQ(share->result_int(), 403);
+}
+
 TEST_F(DeviceHttpTest, RevocationEndsAKeepAliveConnection) {
     const ClientIdentity device;
     const auto row = paired(device, owner);

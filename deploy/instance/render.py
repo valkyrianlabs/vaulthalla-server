@@ -40,7 +40,7 @@ def render_config(text, instance, db_port=None):
     out = []
     section = None
     for line in text.splitlines(keepends=True):
-        top = re.match(r"^([A-Za-z_]+):", line)
+        top = re.match(r"^([A-Za-z0-9_]+):", line)
         if top:
             section = top.group(1)
         if section in ("websocket_server", "http_preview_server", "device_server", "s3_gateway") and \

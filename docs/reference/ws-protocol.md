@@ -98,6 +98,7 @@ Names are stable dotted lower-case identifiers (`fs.entry.metadata_version`). A 
 | `fs.entry.metadata_version` | 1.17.0 | Entries carry `metadata_version`, which changes on rename and move. |
 | `fs.entry.stable_id` | 1.17.0 | An entry keeps its id across rename and move. |
 | `http.upload.content` | 1.17.0 | `PUT /upload/content`: a streaming conditional create or replace. |
+| `http.upload.resumable` | 1.20.0 | `/upload/sessions`: resumable uploads with idempotent parts (transfer protocol, section 3). |
 | `ws.envelope.optional_payload` | 1.16.0 | A request without `payload` reads as `{}`. |
 
 ## Error Codes

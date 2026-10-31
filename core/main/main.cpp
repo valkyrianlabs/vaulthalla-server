@@ -18,6 +18,7 @@
 #include "preview/cache/Maintenance.hpp"
 #include "preview/derive/Queue.hpp"
 #include "protocols/http/upload/Staging.hpp"
+#include "protocols/http/upload/Resumable.hpp"
 #include "preview/render/Raster.hpp"
 
 // Seed
@@ -177,6 +178,10 @@ void wireStorage() {
 
     // Private HTTP upload staging (protocols/http/upload/Staging.hpp): a crash can leave partial uploads behind.
     vh::protocols::http::upload::staging::sweepAtStartup();
+
+    // Resumable uploads (migration 114): sessions back in memory, the spool reconciled with the rows, interrupted
+    // sealing and commits resumed on the upload workers.
+    vh::protocols::http::upload::resumable::Service::recover();
 }
 
 // --- Runtime ---

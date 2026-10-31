@@ -58,6 +58,11 @@ std::vector<Capability> capabilities() {
          .since = "1.17.0",
          .description = "PUT /upload/content: a streaming conditional create (If-None-Match) or replace (If-Match) "
                         "on the web and device listeners."},
+        {.name = "http.upload.resumable",
+         .since = "1.20.0",
+         .description = "Resumable uploads under /upload/sessions (create, status, idempotent parts at any offset, "
+                        "finish, cancel) on the web and device listeners, shares included "
+                        "(docs/reference/transfer-protocol.md)."},
         {.name = "ws.envelope.optional_payload",
          .since = "1.16.0",
          .description = "A request frame without `payload` reads as {} (daemons before 1.16 refused it)."},

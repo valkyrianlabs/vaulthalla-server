@@ -13,6 +13,8 @@ s3_gateway: {}
 
 device_server: {}
 
+transfer: {}
+
 
 # === 🐘 DATABASE SETTINGS ===
 database: {}

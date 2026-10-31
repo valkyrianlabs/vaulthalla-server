@@ -136,6 +136,7 @@ private:
     bool handle_streaming_content(boost::beast::http::request_parser<boost::beast::http::buffer_body>& parser);
     // The device listener's /transfer calibration lanes (protocols/device/Transfer.hpp).
     bool handle_transfer(HeaderParser& parser);
+    bool handle_resumable_part(boost::beast::http::request_parser<boost::beast::http::buffer_body>& parser);
     bool write_response(model::preview::Response&& response, bool headRequest = false);
     bool write_stream(model::preview::StreamResponse&& response);
     void do_close();

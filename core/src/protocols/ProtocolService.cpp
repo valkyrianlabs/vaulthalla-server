@@ -6,6 +6,7 @@
 #include "protocols/http/Server.hpp"
 #include "protocols/http/Session.hpp"
 #include "protocols/http/upload/Coordinator.hpp"
+#include "protocols/http/upload/Resumable.hpp"
 #include "protocols/SessionLifetimes.hpp"
 #include "log/Registry.hpp"
 
@@ -139,6 +140,8 @@ void ProtocolService::shutdownProtocols() noexcept {
         if (wsServer_) wsServer_->close();
         http::Session::cancelAllActive();
         http::upload::Coordinator::instance().abortAll("http_service_stopping");
+        // Sealing and commit steps finish the step they are in; resumable sessions themselves survive the restart.
+        http::upload::resumable::Service::shutdown();
         if (ioContext_) ioContext_->stop();
         for (auto& thread : ioThreads_) {
             if (!thread.joinable()) continue;
