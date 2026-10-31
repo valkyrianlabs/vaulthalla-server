@@ -11,6 +11,7 @@
 #include "platform/Durable.hpp"
 #include "protocols/http/Access.hpp"
 #include "protocols/http/handler/Common.hpp"
+#include "protocols/http/upload/CreateClaim.hpp"
 #include "protocols/http/upload/Staging.hpp"
 #include "protocols/ws/Session.hpp"
 #include "runtime/Deps.hpp"
@@ -26,8 +27,6 @@
 #include <cstring>
 #include <fcntl.h>
 #include <filesystem>
-#include <mutex>
-#include <set>
 #include <string>
 #include <system_error>
 #include <unistd.h>
@@ -85,38 +84,6 @@ constexpr uint64_t kMaxContentBytes = 8ull * 1024ull * 1024ull * 1024ull;
     if (!file) return std::nullopt;
     return vh::storage::generationOf(*file).etag();
 }
-
-// Creates of one path through this lane commit one at a time: the second finds the first's file (412), instead of
-// both taking the new-file branch of createFile.
-[[nodiscard]] std::mutex& creatingMutex() {
-    static std::mutex m;
-    return m;
-}
-
-[[nodiscard]] std::set<std::string>& creating() {
-    static std::set<std::string> s;
-    return s;
-}
-
-class CreateClaim {
-public:
-    explicit CreateClaim(std::string key) : key_(std::move(key)) {
-        std::scoped_lock lock(creatingMutex());
-        held_ = creating().insert(key_).second;
-    }
-    ~CreateClaim() {
-        if (!held_) return;
-        std::scoped_lock lock(creatingMutex());
-        creating().erase(key_);
-    }
-    CreateClaim(const CreateClaim&) = delete;
-    CreateClaim& operator=(const CreateClaim&) = delete;
-    [[nodiscard]] bool held() const { return held_; }
-
-private:
-    std::string key_;
-    bool held_{false};
-};
 
 void removeStaging(const std::filesystem::path& staging, const std::filesystem::path& fuseStaging) noexcept {
     if (staging.empty()) return;

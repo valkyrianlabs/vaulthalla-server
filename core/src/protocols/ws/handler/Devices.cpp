@@ -4,6 +4,7 @@
 #include "device/Peer.hpp"
 #include "ops/Devices.hpp"
 #include "ops/Error.hpp"
+#include "protocols/device/Endpoints.hpp"
 #include "protocols/device/Service.hpp"
 #include "protocols/ws/Session.hpp"
 #include "config/Registry.hpp"
@@ -50,6 +51,26 @@ json windowJson(const vh::device::PairingWindow& w) {
 
 // The node's clock, so a client counts a window down without trusting its own.
 int64_t serverTime() { return static_cast<int64_t>(std::time(nullptr)); }
+
+json candidatesJson(const std::vector<protocols::device::endpoints::Candidate>& candidates) {
+    json out = json::array();
+    for (const auto& c : candidates) {
+        json item{{"host", c.host}, {"port", c.port}, {"kind", protocols::device::endpoints::to_string(c.kind)},
+                  {"source", c.source}};
+        if (c.interface) item["interface"] = *c.interface;
+        out.push_back(std::move(item));
+    }
+    return out;
+}
+
+// The §1.1 object; device.pairing.open leaves node_id out of it (it carries node_id beside it).
+json endpointsJson(const protocols::device::endpoints::Advertisement& a) {
+    return {{"port", a.port},
+            {"remote", a.remote},
+            {"listening", a.listening},
+            {"generated_at", static_cast<int64_t>(a.generated_at)},
+            {"candidates", candidatesJson(a.candidates)}};
+}
 
 json statusJson(const protocols::device::ListenerStatus& s) {
     return {{"enabled", s.enabled},
@@ -107,11 +128,27 @@ json Devices::serverIdentity(const std::shared_ptr<Session>& session) {
     return {{"spki_sha256", info.spki_sha256}};
 }
 
+json Devices::endpoints(const std::shared_ptr<Session>& session) {
+    const auto info = devices::endpoints(peerOf(session));
+    auto out = endpointsJson(info.advertisement);
+    out["node_id"] = info.node_id;
+    return out;
+}
+
 json Devices::pairingOpen(const std::shared_ptr<Session>& session) {
     const auto window = devices::openWindow(actorOf(session));
-    // What the person types into Desktop: the listener's port, and whether another host can reach it at all.
+    // What the person types into Desktop: the listener's port, and whether another host can reach it at all; and
+    // what the "Pair a device" link carries (node id, server pin, endpoints).
     const auto cfg = config::Registry::get().device_server;
-    return {{"window", windowJson(window)}, {"server_time", serverTime()}, {"port", cfg.port}, {"remote", cfg.remote}};
+    const auto bootstrap = devices::pairingBootstrap(actorOf(session));
+    return {{"window", windowJson(window)},
+            {"server_time", serverTime()},
+            {"port", cfg.port},
+            {"remote", cfg.remote},
+            {"node_id", bootstrap.node_id},
+            {"server_spki_sha256", bootstrap.server_spki_sha256.empty() ? json(nullptr)
+                                                                        : json(bootstrap.server_spki_sha256)},
+            {"endpoints", endpointsJson(bootstrap.endpoints)}};
 }
 
 json Devices::pairingClose(const json& payload, const std::shared_ptr<Session>& session) {
@@ -165,7 +202,21 @@ json Devices::revoke(const json& payload, const std::shared_ptr<Session>& sessio
 }
 
 json Devices::remoteStatus(const std::shared_ptr<Session>& session) {
-    return {{"status", statusJson(devices::remoteStatus(actorOf(session)))}};
+    const auto& actor = actorOf(session);
+    const auto status = devices::remoteStatus(actor);
+    const auto d = devices::remoteDiagnostics(actor);
+    const auto opt = [](const std::optional<std::string>& v) { return v ? json(*v) : json(nullptr); };
+    return {{"status", statusJson(status)},
+            {"diagnostics",
+             {{"bind", d.bind},
+              {"ipv6", d.ipv6},
+              {"candidates", candidatesJson(d.candidates)},
+              {"firewall", {{"detected", d.firewall.detected},
+                            {"active", d.firewall.active ? json(*d.firewall.active) : json(nullptr)},
+                            {"hint", opt(d.firewall.hint)}}},
+              {"last_remote_device_at", d.last_remote_device ? json(static_cast<int64_t>(d.last_remote_device->at))
+                                                             : json(nullptr)},
+              {"last_remote_device_ip", d.last_remote_device ? json(d.last_remote_device->ip) : json(nullptr)}}}};
 }
 
 json Devices::remoteEnable(const std::shared_ptr<Session>& session) {

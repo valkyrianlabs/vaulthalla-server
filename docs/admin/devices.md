@@ -28,8 +28,9 @@ a browser cookie; each side pins the other's key instead.
   same key changes nothing.
 - The daemon creates its key on first start and seals it like its other secrets (the TPM on Linux). The certificate
   lives next to them in the state directory (see [Runtime Paths](/reference/runtime-paths)).
-- **It listens on loopback only by default**, so only a Desktop on the same machine can connect. Turn on remote
-  connections (below) to let Macs on your network pair.
+- **It listens on loopback only by default** (`127.0.0.1`, and `::1` where the host has IPv6), so only a Desktop on
+  the same machine can connect. Turn on remote connections (below) to let Macs on your network pair; the listener
+  then accepts IPv4 and IPv6 on every interface (IPv4 only where IPv6 is disabled).
 - A connection is authorized once, when it connects, by the key it presents. A key that isn't a paired device can
   only ask to pair; everything else is refused.
 
@@ -53,7 +54,10 @@ pairing window. If another user is pairing on the node at that moment, the dialo
 done.
 
 The dialog shows the address and port to enter in Desktop, how long the pairing window stays open (by the node's
-clock), and a warning when remote connections are off.
+clock), and a warning when remote connections are off. On servers that advertise their addresses it also lists them
+(with a copy button) and offers **Open in Vaulthalla Desktop**, a `vaulthalla://pair` link that fills in Desktop's Add
+Node sheet with those addresses and the server key. The link only saves typing: the code match is still the proof
+(see [Pairing Links](/admin/direct-connections#pairing-links)).
 
 ### With the CLI
 
@@ -140,8 +144,40 @@ vh device remote disable   # back to loopback; connections from other hosts clos
 ```
 
 The listener moves at once, without restarting the daemon. The choice is saved in `config.yaml`
-(`device_server.remote`) and kept across restarts and upgrades. Before enabling it, make sure port `36972/tcp` is
-reachable only from networks you trust (a firewall rule), even though every connection needs a paired key.
+(`device_server.remote`) and kept across restarts and upgrades. Before enabling it, decide who should reach port
+`36972/tcp` and set the firewall to match: networks you trust only, or the internet through a router port forward.
+Every connection needs a client certificate, and only paired keys get past pairing. Connecting from outside your
+network (direct WAN, a TLS passthrough on 443, firewall commands, DNS and Cloudflare) is covered in
+[Direct Device Connections](/admin/direct-connections).
+
+### Where devices are told to connect
+
+A paired Mac asks the node where else it can be reached and picks the best route on its own: this machine, the
+local network, a VPN such as Tailscale or WireGuard, the internet, then a TLS passthrough. The node lists its
+interface addresses (classified by range; container and bridge interfaces are left out), `<hostname>.local` where an
+mDNS responder runs (always on macOS, avahi on Linux), and the names you add under `device_server.advertise` in
+`config.yaml`. It never asks an outside service for its public address, so list port forwards, tunnels and TLS
+passthroughs there yourself:
+
+```yaml
+device_server:
+  advertise:
+    hostnames: ["nas.home.arpa"]
+    public:
+      - {host: device.example.com, port: 36972}
+      - {host: device.example.com, port: 443, kind: passthrough}
+```
+
+`passthrough` marks an SNI router on 443 in front of the listener
+([nginx example](/https/nginx#share-port-443-with-vaulthalla-desktop)). Any name a device reaches from outside must be
+a DNS-only record, never a Cloudflare-proxied one. Restart the daemon after editing `config.yaml`.
+
+`vh device remote status` and the web console's **Remote connections** card show where the listener is bound. Super
+admins also see, through the ws `device.remote.status` diagnostics, the addresses devices are told, what the host
+firewall looks like (read from its configuration only; "unknown" when it can't be told without root) and when a
+device last connected from a public address. These checks look at the node only and can't prove that it is
+reachable through a router: a Desktop connecting from outside is the proof (see
+[Check That It Works](/admin/direct-connections#check-that-it-works)).
 
 ## Troubleshooting
 
@@ -150,3 +186,5 @@ reachable only from networks you trust (a firewall rule), even though every conn
 - **Desktop says the node's identity changed:** the node's key was replaced (for example the state directory was
   restored without its sealed secrets). Pair again; the old pin can't be trusted automatically.
 - **Desktop says this Mac was unpaired:** the device was revoked, or its account deleted. Pair again.
+- **Desktop connects on the LAN but not from outside, or a route shows an error:** see the symptom table in
+  [Direct Device Connections](/admin/direct-connections#troubleshooting).

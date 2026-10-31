@@ -87,7 +87,7 @@ private:
 
 using HeaderParser = boost::beast::http::request_parser<boost::beast::http::buffer_body>;
 
-// An HTTP connection on the device listener (/preview, /download, /upload, /mcp): TLS is up, the first request's
+// An HTTP connection on the device listener (/preview, /download, /upload, /transfer, /mcp): TLS is up, the first request's
 // header is read, and who this is was settled by the client key. Requests run as the device's user (a Device
 // principal, never a cookie); the share lanes are refused.
 struct DeviceConnection {
@@ -134,6 +134,9 @@ private:
     bool handle_buffered_request(boost::beast::http::request_parser<boost::beast::http::buffer_body>& parser);
     bool handle_streaming_upload(boost::beast::http::request_parser<boost::beast::http::buffer_body>& parser);
     bool handle_streaming_content(boost::beast::http::request_parser<boost::beast::http::buffer_body>& parser);
+    // The device listener's /transfer calibration lanes (protocols/device/Transfer.hpp).
+    bool handle_transfer(HeaderParser& parser);
+    bool handle_resumable_part(boost::beast::http::request_parser<boost::beast::http::buffer_body>& parser);
     bool write_response(model::preview::Response&& response, bool headRequest = false);
     bool write_stream(model::preview::StreamResponse&& response);
     void do_close();

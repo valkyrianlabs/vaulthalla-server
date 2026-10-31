@@ -36,6 +36,32 @@ device_server:
   port: 36972
   remote: false
   max_connections: 256         # Concurrent device connections; more are refused until one closes
+  # Where paired devices are told they can reach this listener (ws device.endpoints, the "Pair a device" dialog).
+  # Interface addresses are classified loopback/lan/vpn/wan by range; the server never asks a third party for its
+  # public address, so list port forwards, tunnels and TLS passthroughs under `public`.
+  advertise:
+    interfaces: true           # advertise interface addresses (only loopback ones while remote is false)
+    include_ipv6: true
+    exclude_interfaces: ["docker*", "br-*", "veth*", "virbr*", "podman*", "cni*", "flannel*", "lxc*"]
+    hostnames: []              # extra LAN names, e.g. ["nas.home.arpa"] (kind lan, this port)
+    public: []                 # e.g. [{host: device.example.com, port: 36972}, {host: device.example.com, port: 443, kind: passthrough}]
+
+
+# === 📦 Resumable uploads (/upload/sessions) ===
+# Sessions survive restarts and resume at the byte; parts are encrypted on arrival (ciphertext only in the spool).
+# Out-of-range values stop the daemon at start with a message (they are never clamped).
+transfer:
+  part_default_bytes: 67108864       # 64 MiB, suggested part size
+  part_min_bytes: 1048576            # 1 MiB, every part but a file's last
+  max_part_bytes: 536870912          # 512 MiB, device listener (at most 4 GiB)
+  max_parts_in_flight: 4             # Concurrent part requests per session (1-16); more get 429
+  max_file_bytes: 0                  # 0 = only the format limit (68719476704 bytes)
+  max_session_files: 4096
+  commit_workers: 2                  # Sealing and commit workers (1-8)
+  session_idle_ttl_hours: 24         # A session expires this long after its last part...
+  session_max_age_hours: 168         # ...and at the latest this long after it was created
+  http:
+    max_part_bytes: 67108864         # Web listener cap; keep <= 95000000 behind Cloudflare Free/Pro (100 MB bodies)
 
 
 # === 🪣 S3-Compatible Gateway ===

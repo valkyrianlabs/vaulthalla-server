@@ -98,7 +98,7 @@ Press `⌘K` (`Ctrl+K`) anywhere to jump to a page, a vault, a user or an action
 - Deleting a file leaves its folder in place, even when the folder ends up empty, here and in `/mnt/vaulthalla`. Delete a folder to remove it.
 - Keyboard: arrow keys move, Shift/Ctrl extend the selection, Ctrl+A selects all, F2 renames, Delete deletes, Backspace goes up a folder.
 - The preview sheet shows images, PDFs (every page), video and audio with seeking, 3D models (GLB, glTF, STL, OBJ, and STEP with the optional CAD helper) and text or Markdown, which you can also edit and save in place. See [File Previews](/web-console/previews).
-- The transfers indicator in the top bar shows progress, speed and time left. Uploads can be cancelled, briefly interrupted files are retried, and the browser warns before you close a tab mid-upload. File downloads stream at any size; a download the server refuses (for example for missing permission) is reported there instead of replacing the page.
+- The transfers indicator in the top bar shows progress, speed and time left. Uploads can be cancelled, briefly interrupted files are retried, and the browser warns before you close a tab mid-upload. On current servers uploads resume where they stopped, even after a reload: see [Uploads](/web-console/uploads). File downloads stream at any size; a download the server refuses (for example for missing permission) is reported there instead of replacing the page.
 
 The actions offered depend on your role; the daemon enforces every permission.
 

@@ -58,11 +58,55 @@ device_server:
   port: 36972
   remote: false
   max_connections: 256
+  advertise:
+    interfaces: true
+    include_ipv6: true
+    exclude_interfaces: ["docker*", "br-*", "veth*", "virbr*", "podman*", "cni*", "flannel*", "lxc*"]
+    hostnames: []
+    public: []
 ```
 
-It listens on loopback until `remote` is on. Change `remote` with `vh device remote enable|disable` (super admins),
-which rebinds the listener at once and writes the value here; there is no host setting. See
-[Paired Devices](/admin/devices).
+It listens on loopback (`127.0.0.1`, and `::1` when available) until `remote` is on, then on every interface, IPv4
+and IPv6 (`[::]`, or `0.0.0.0` where IPv6 is disabled). Change `remote` with `vh device remote enable|disable`
+(super admins), which rebinds the listener at once and writes the value here; there is no host setting.
+
+`advertise` decides what paired devices are told about where to reach the listener: interface addresses (`interfaces`,
+`include_ipv6`, minus interfaces matching `exclude_interfaces` globs), extra LAN names (`hostnames`), and addresses
+that reach it from outside (`public`: `host`, optional `port` (default: the listener's) and `kind` `lan`, `vpn`,
+`wan` (default) or `passthrough`). The node never looks up its public address itself. A malformed entry stops the
+daemon from starting, with a message naming it. Host names under `public` must be DNS-only records (a
+Cloudflare-proxied name can't carry device connections). See [Paired Devices](/admin/devices) and
+[Direct Device Connections](/admin/direct-connections).
+
+Resumable uploads (`/upload/sessions`, used by Vaulthalla Desktop and the web console when the server offers them)
+keep their state across restarts and resume at the byte:
+
+```yaml
+transfer:
+  part_default_bytes: 67108864   # 64 MiB
+  part_min_bytes: 1048576        # 1 MiB
+  max_part_bytes: 536870912      # 512 MiB, device listener
+  max_parts_in_flight: 4         # per session
+  max_file_bytes: 0              # 0 = only the format limit
+  max_session_files: 4096
+  commit_workers: 2
+  session_idle_ttl_hours: 24
+  session_max_age_hours: 168
+  http:
+    max_part_bytes: 67108864     # web listener
+```
+
+`max_part_bytes` caps parts on the device listener (Vaulthalla Desktop); `http.max_part_bytes` caps them on the web
+listener (browsers and share links, through the proxy). Behind Cloudflare's proxy keep `http.max_part_bytes` under the
+plan's request body limit: at or below 95000000 on Free or Pro (Cloudflare's documented limit there is 100 MB).
+Values must satisfy `part_min_bytes <= part_default_bytes <= max_part_bytes <= 4 GiB`, `part_min_bytes <=
+http.max_part_bytes <= max_part_bytes`, `max_parts_in_flight` 1 to 16 and `commit_workers` 1 to 8; otherwise the
+daemon refuses to start and the console refuses the change. A file may be up to 68719476704 bytes (the AES-GCM
+limit of the vault format). Parts are encrypted as they arrive and wait in `<state>/.upload-spool/`
+(`/var/lib/vaulthalla/.upload-spool` on Linux; ciphertext only, outside every vault) until the file is sealed and
+committed by one of `commit_workers`; a session expires `session_idle_ttl_hours` after its last part and at the latest
+`session_max_age_hours` after it began, and its spool is then removed. How uploads behave for browsers, share links
+and proxies: [Uploads](/web-console/uploads).
 
 The S3-compatible gateway is a separate runtime service and is disabled by default:
 

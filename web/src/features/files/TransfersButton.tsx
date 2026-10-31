@@ -45,6 +45,17 @@ const TaskRow = ({ task }: { task: TransferTask }) => {
                     ? `${formatBytes(task.bytesTotal)} uploaded ${task.detail}`
                     : task.detail}
           </div>
+          {active && task.note ? <div className="truncate text-xs text-fg-subtle">{task.note}</div> : null}
+          {task.status === 'failed' && task.failures?.length ? (
+            <ul className="mt-1 space-y-0.5 text-xs text-fg-subtle">
+              {task.failures.slice(0, 3).map(line => (
+                <li key={line} className="truncate" title={line}>
+                  {line}
+                </li>
+              ))}
+              {task.failures.length > 3 ? <li>and {task.failures.length - 3} more</li> : null}
+            </ul>
+          ) : null}
           {active && task.kind === 'upload' ? <Meter ratio={ratio} className="mt-2" label={`${task.label} progress`} /> : null}
         </div>
         {active && task.kind === 'upload' ? (

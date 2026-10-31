@@ -285,6 +285,21 @@ ServerIdentityInfo serverIdentity(const vh::device::Peer& peer) {
     return {.spki_sha256 = serverIdentityOrThrow()->spkiHex()};
 }
 
+// ---- endpoint advertisement
+
+Endpoints endpoints(const vh::device::Peer& peer) {
+    if (!peer.deviceRowId) throw Refused("device_unknown", "this device is not paired with this node");
+    return {.node_id = protocols::device::endpoints::nodeId(), .advertisement = protocols::device::endpoints::current()};
+}
+
+PairingBootstrap pairingBootstrap(const Actor& actor) {
+    requireUser(actor);
+    PairingBootstrap out{.node_id = protocols::device::endpoints::nodeId(),
+                         .endpoints = protocols::device::endpoints::current()};
+    if (const auto identity = vh::device::currentServerIdentity()) out.server_spki_sha256 = identity->spkiHex();
+    return out;
+}
+
 // ---- the listener's exposure
 
 protocols::device::ListenerStatus remoteStatus(const Actor& actor) {
@@ -295,6 +310,16 @@ protocols::device::ListenerStatus remoteStatus(const Actor& actor) {
     protocols::device::ListenerStatus out{.enabled = cfg.enabled, .remote = cfg.remote, .port = cfg.port};
     if (const auto identity = vh::device::currentServerIdentity()) out.server_spki_sha256 = identity->spkiHex();
     return out;
+}
+
+RemoteDiagnostics remoteDiagnostics(const Actor& actor) {
+    const auto status = remoteStatus(actor);  // super admins only
+    auto advertisement = protocols::device::endpoints::current();
+    return {.bind = status.bind,
+            .ipv6 = status.ipv6,
+            .candidates = std::move(advertisement.candidates),
+            .firewall = platform::network::detectFirewall(advertisement.port),
+            .last_remote_device = protocols::device::endpoints::lastRemoteDevice()};
 }
 
 protocols::device::ListenerStatus setRemote(const Actor& actor, const bool enabled) {

@@ -62,6 +62,8 @@ See [File Previews](/web-console/previews) for what opens in the browser (images
 
 See [File Recovery](/web-console/recovery) for recovery history, restores, snapshots and provider versioning.
 
+See [Uploads](/web-console/uploads) for resumable uploads: part sizes, resuming after a reload, and what reverse proxies and Cloudflare need.
+
 ## Vault Management
 
 The Vaults page supports local and S3/R2 vault creation. For S3/R2 vaults, the form includes:

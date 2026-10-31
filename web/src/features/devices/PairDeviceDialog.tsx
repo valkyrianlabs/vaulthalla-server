@@ -10,7 +10,9 @@ import { Button } from '@/components/ui/Button'
 import { Dialog, DialogClose, DialogContent } from '@/components/ui/Dialog'
 import { Spinner } from '@/components/ui/Spinner'
 import { InlineError } from '@/components/ui/State'
-import { CircleCheckIcon, CircleInfoIcon, ClockIcon, TriangleExclamationIcon, XmarkIcon } from '@/components/ui/icons'
+import { IconButton } from '@/components/ui/IconButton'
+import { notify } from '@/components/ui/Toast'
+import { ArrowUpRightFromSquareIcon, CheckIcon, CircleCheckIcon, CircleInfoIcon, ClockIcon, CopyIcon, TriangleExclamationIcon, XmarkIcon } from '@/components/ui/icons'
 import { cn } from '@/util/cn'
 import type { Device } from '@/models/device'
 import {
@@ -22,6 +24,7 @@ import {
   type PairingWindow,
   type PendingRequest,
 } from '@/features/devices/model'
+import { hostPort, KIND_LABELS, pairLink, readPairingBootstrap, type PairingBootstrap } from '@/features/devices/pairLink'
 
 // Pair a device by number matching (docs/pairing.md §3 in valkyrianlabs/vaulthalla-desktop). Opening the dialog opens this account's
 // pairing window on the node; requests from Vaulthalla Desktop appear with three codes, one of them the code the Mac
@@ -58,6 +61,8 @@ export default function PairDeviceDialog({ open, onOpenChange }: { open: boolean
   const [window_, setWindow] = useState<PairingWindow | null>(null)
   // What device.pairing.open said about the listener: the port to type into Desktop, and whether other hosts can reach it.
   const [listener, setListener] = useState<{ port: number; remote: boolean } | null>(null)
+  // With `device.endpoints`: the addresses Desktop can try and the server key, for the vaulthalla://pair link.
+  const [bootstrap, setBootstrap] = useState<PairingBootstrap | null>(null)
   // The node's clock minus the browser's (ms) when the window was opened: the countdown never trusts the browser's clock.
   const [openSkew, setOpenSkew] = useState(0)
   const [failure, setFailure] = useState<unknown>(null)
@@ -87,6 +92,7 @@ export default function PairDeviceDialog({ open, onOpenChange }: { open: boolean
       openedAt.current = Date.now()
       setOpenSkew(opened.server_time * 1000 - openedAt.current)
       setListener({ port: opened.port, remote: opened.remote })
+      setBootstrap(readPairingBootstrap(opened))
       setWindow(opened.window)
       setPhase('open')
     } catch (error) {
@@ -238,7 +244,7 @@ export default function PairDeviceDialog({ open, onOpenChange }: { open: boolean
           </div>
         ) : (
           <div className="space-y-5">
-            <Instructions superAdmin={superAdmin} listener={listener} />
+            <Instructions superAdmin={superAdmin} listener={listener} bootstrap={bootstrap} />
             {notice ? (
               <p
                 role={notice.tone === 'danger' ? 'alert' : 'status'}
@@ -282,7 +288,15 @@ export default function PairDeviceDialog({ open, onOpenChange }: { open: boolean
   )
 }
 
-const Instructions = ({ superAdmin, listener }: { superAdmin: boolean; listener: { port: number; remote: boolean } | null }) => {
+const Instructions = ({
+  superAdmin,
+  listener,
+  bootstrap,
+}: {
+  superAdmin: boolean
+  listener: { port: number; remote: boolean } | null
+  bootstrap: PairingBootstrap | null
+}) => {
   // The port and the remote switch come with device.pairing.open (any user). Only super admins may read the listener's
   // live status, which adds whether it actually listens.
   const status = useWs('device.remote.status', null, { enabled: superAdmin })
@@ -303,6 +317,7 @@ const Instructions = ({ superAdmin, listener }: { superAdmin: boolean; listener:
               </code>
             </span>
           ) : null}
+          {bootstrap?.endpoints?.candidates.length ? <Endpoints bootstrap={bootstrap} /> : null}
         </li>
         <li>The Mac shows a six-digit code. Click the same code on its request below.</li>
         <li>A wrong code declines the request, so compare before you click.</li>
@@ -325,12 +340,51 @@ const Instructions = ({ superAdmin, listener }: { superAdmin: boolean; listener:
             </span>
           )}
         </p>
-      ) : live && live.enabled && !live.listening ? (
-        <p className="mt-3 flex items-start gap-2 text-warn">
+      ) : (live && live.enabled && !live.listening) || bootstrap?.endpoints?.listening === false ? (
+        <p className="mt-3 flex items-start gap-2 text-warn" data-testid="pair-not-listening">
           <TriangleExclamationIcon className="mt-0.5 size-4 shrink-0" aria-hidden />
-          <span>The device listener isn’t listening{live.error ? `: ${live.error}` : ''}.</span>
+          <span>The device listener isn’t listening{live?.error ? `: ${live.error}` : ''}.</span>
         </p>
       ) : null}
+    </div>
+  )
+}
+
+// The addresses the server advertises (transfer-protocol.md §1.2), copyable, and a link that opens Desktop's Add Node
+// sheet with them and the server key filled in.
+const Endpoints = ({ bootstrap }: { bootstrap: PairingBootstrap }) => {
+  const [copied, setCopied] = useState(false)
+  const candidates = bootstrap.endpoints?.candidates ?? []
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(candidates.map(hostPort).join('\n'))
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch {
+      notify.info('Copy it manually', 'Clipboard access isn’t available here.')
+    }
+  }
+  return (
+    <div className="mt-2" data-testid="pair-endpoints">
+      <p className="mb-1 text-xs text-fg-subtle">Addresses Desktop can try:</p>
+      <div className="flex items-start gap-1">
+        <ul className="flex min-w-0 flex-1 flex-wrap gap-1.5" aria-label="Server addresses">
+          {candidates.map(candidate => (
+            <li key={hostPort(candidate)} title={[KIND_LABELS[candidate.kind] ?? candidate.kind, candidate.interface].filter(Boolean).join(' · ')}>
+              <code className="rounded border border-line bg-surface-2 px-1.5 py-0.5 font-mono text-xs break-all text-fg-muted" data-testid="pair-endpoint">
+                {hostPort(candidate)}
+              </code>
+            </li>
+          ))}
+        </ul>
+        <IconButton label={copied ? 'Copied' : 'Copy addresses'} icon={copied ? CheckIcon : CopyIcon} size="icon-sm" className="-mt-1 size-7" onClick={copy} />
+      </div>
+      <Button asChild size="sm" variant="secondary" className="mt-2">
+        <a href={pairLink(bootstrap)} data-testid="pair-open-desktop">
+          <ArrowUpRightFromSquareIcon aria-hidden />
+          Open in Vaulthalla Desktop
+        </a>
+      </Button>
     </div>
   )
 }

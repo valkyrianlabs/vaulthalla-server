@@ -26,6 +26,7 @@ Use this reference when backing up, troubleshooting, or verifying package layout
 | `/run/vaulthalla` | Runtime sockets and transient secrets. |
 | `/var/lib/vaulthalla` | Vaulthalla state, local vault bodies, cache/index state (including the encrypted preview cache), and sealed blobs. |
 | `/var/lib/vaulthalla/.vh-recovery` | Encrypted local snapshots and local versions ([File Recovery](/vaults/recovery)), one directory per vault. |
+| `/var/lib/vaulthalla/.upload-spool` | Unfinished resumable uploads, ciphertext only, one directory per upload; expired uploads are removed ([Uploads](/web-console/uploads#the-upload-spool)). |
 | `/var/log/vaulthalla` | Log location where file logging is configured. |
 | `/mnt/vaulthalla` | FUSE filesystem mount. |
 | `/usr/share/vaulthalla/psql` | Packaged SQL schema and migration assets. |
@@ -92,7 +93,7 @@ Everything that holds data belongs to the hidden `_vaulthalla` account.
 | --- | --- | --- |
 | `/Library/Application Support/Vaulthalla` | `root:wheel 0755` | Service root. |
 | `…/config.yaml` | `root:_vaulthalla 0640` | Runtime configuration. Written only when missing. |
-| `…/state` | `_vaulthalla 0700` | Vault data (ciphertext), sealed secrets (`file` backend), previews cache, upload staging, local snapshots and versions (`.vh-recovery`), the initial admin password. |
+| `…/state` | `_vaulthalla 0700` | Vault data (ciphertext), sealed secrets (`file` backend), previews cache, upload staging, unfinished resumable uploads (`.upload-spool`), local snapshots and versions (`.vh-recovery`), the initial admin password. |
 | `…/run` | `_vaulthalla 0750` | The CLI socket `cli.sock` (`0660`, group `_vaulthalla`) and the one-time database password handoff. |
 | `…/postgres` | `_vaulthalla 0700` | The bundled PostgreSQL cluster (`data/`) and its socket. |
 | `…/caddy` | `_vaulthalla 0700` | After `vh setup caddy`: the Caddyfile, certificates, ACME account and the Vaulthalla CA. |
@@ -131,4 +132,4 @@ Everything that holds data belongs to the hidden `_vaulthalla` account.
 
 These listeners are intended for local service wiring and the HTTPS proxy, not direct public exposure; the device
 listener is the exception once remote connections are on (mutual TLS with pinned keys, see
-[Paired Devices](/admin/devices)). The isolated development instance adds 100 to the Vaulthalla ports.
+[Paired Devices](/admin/devices) and [Direct Device Connections](/admin/direct-connections)). The isolated development instance adds 100 to the Vaulthalla ports.

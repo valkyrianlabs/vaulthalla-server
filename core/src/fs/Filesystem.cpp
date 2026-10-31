@@ -932,8 +932,10 @@ std::shared_ptr<File> Filesystem::createFile(const NewFileContext& ctx) {
         ec.clear();
         std::filesystem::remove(sidecar, ec);  // a leftover is settled by startup recovery; we hold the file's lock
         try {
+            std::optional<std::string> sealedHash;
             if (ctx.sealed) {
                 const auto sealed = ctx.sealed(sidecar);
+                sealedHash = sealed.content_hash;
                 std::filesystem::permissions(sidecar, static_cast<std::filesystem::perms>(mode),
                                              std::filesystem::perm_options::replace);
                 fsyncFile(sidecar);
@@ -969,7 +971,7 @@ std::shared_ptr<File> Filesystem::createFile(const NewFileContext& ctx) {
             }
             fsyncDirectory(entry->backing_path.parent_path());
 
-            staged->content_hash = hash::blake2b(sidecar);
+            staged->content_hash = sealedHash ? *sealedHash : hash::blake2b(sidecar);
             staged->last_modified_by = userIdFor(ctx.user);
             staged->updated_at = std::time(nullptr);
 
@@ -1041,10 +1043,12 @@ std::shared_ptr<File> Filesystem::createFile(const NewFileContext& ctx) {
     // A new file at a fresh alias. Created exclusively or replaced by rename, never written in place: a retained
     // generation may share an existing backing inode (recovery.md, "Local storage").
     std::filesystem::create_directories(f->backing_path.parent_path());
+    std::optional<std::string> sealedHash;
     if (ctx.sealed) {
         replaceFileAtomic(f->backing_path, [&](const std::filesystem::path& temp) {
             std::filesystem::remove(temp);   // a SealedWriter creates its destination itself (private random name)
             const auto sealed = ctx.sealed(temp);
+            sealedHash = sealed.content_hash;
             f->encryption_iv = sealed.encryption_iv;
             f->encrypted_with_key_version = sealed.key_version;
             f->size_bytes = sealed.plaintext_size;
@@ -1060,7 +1064,7 @@ std::shared_ptr<File> Filesystem::createFile(const NewFileContext& ctx) {
         writeFileAtomic(f->backing_path, ciphertext);
     }
 
-    f->content_hash = hash::blake2b(f->backing_path);
+    f->content_hash = sealedHash ? *sealedHash : hash::blake2b(f->backing_path);
 
     if (!std::filesystem::exists(f->backing_path))
         throw std::runtime_error("[Filesystem] Failed to create real file at: " + f->backing_path.string());

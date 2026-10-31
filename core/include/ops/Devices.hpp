@@ -4,6 +4,8 @@
 #include "device/Fwd.hpp"
 #include "device/Pairing.hpp"
 #include "ops/Actor.hpp"
+#include "platform/Network.hpp"
+#include "protocols/device/Endpoints.hpp"
 #include "protocols/device/Fwd.hpp"
 
 #include <cstdint>
@@ -86,9 +88,36 @@ struct ServerIdentityInfo {
 };
 [[nodiscard]] ServerIdentityInfo serverIdentity(const vh::device::Peer& peer);
 
+// ---- endpoint advertisement (docs/reference/transfer-protocol.md §1)
+
+struct Endpoints {
+    std::string node_id{};
+    protocols::device::endpoints::Advertisement advertisement{};
+};
+// device.endpoints: a paired device's own session only (no address disclosure before a device is trusted).
+[[nodiscard]] Endpoints endpoints(const vh::device::Peer& peer);
+
+struct PairingBootstrap {
+    std::string node_id{};
+    std::string server_spki_sha256{};  // empty until the listener has loaded its identity
+    protocols::device::endpoints::Advertisement endpoints{};
+};
+// What device.pairing.open adds for the "Pair a device" dialog (any signed-in user, as openWindow).
+[[nodiscard]] PairingBootstrap pairingBootstrap(const Actor& actor);
+
 // ---- the listener's exposure (super admins only)
 
 [[nodiscard]] protocols::device::ListenerStatus remoteStatus(const Actor& actor);
+
+struct RemoteDiagnostics {
+    std::vector<std::string> bind{};
+    bool ipv6 = false;
+    std::vector<protocols::device::endpoints::Candidate> candidates{};
+    platform::network::FirewallState firewall{};
+    std::optional<protocols::device::endpoints::RemoteContact> last_remote_device{};
+};
+// device.remote.status's `diagnostics` (§1.3).
+[[nodiscard]] RemoteDiagnostics remoteDiagnostics(const Actor& actor);
 // Persists device_server.remote (config.yaml, kept across restarts and upgrades) and rebinds the listener now.
 [[nodiscard]] protocols::device::ListenerStatus setRemote(const Actor& actor, bool enabled);
 

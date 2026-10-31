@@ -135,6 +135,12 @@ Config& Config::operator=(Config&&) noexcept = default;
         if (auto node = root["operator_emails"]) YAML::convert<OperatorEmailsConfig>::decode(node, cfg.operator_emails);
         if (auto node = root["auditing"]) YAML::convert<AuditConfig>::decode(node, cfg.auditing);
         if (auto node = root["dev"]) YAML::convert<DevConfig>::decode(node, cfg.dev);
+        if (auto node = root["transfer"]) YAML::convert<TransferConfig>::decode(node, cfg.transfer);
+        try {
+            validateTransfer(cfg.transfer);
+        } catch (const std::invalid_argument& e) {
+            throw std::invalid_argument(std::string("config.yaml: ") + e.what());
+        }
         if (auto node = root["mount"]) {
             YAML::convert<MountConfig>::decode(node, cfg.mount);
             // A typo must not quietly become another mode. Whether this build can provide the mode is reported at
@@ -197,6 +203,7 @@ Config& Config::operator=(Config&&) noexcept = default;
         put("auditing", auditing);
         put("logging", logging);
         put("dev", dev);
+        put("transfer", transfer);
 
         // Write the final result
         ofstream out(configFile);
@@ -230,7 +237,8 @@ Config& Config::operator=(Config&&) noexcept = default;
             {"operator_emails", c.operator_emails},
             {"auditing", c.auditing},
             {"logging", c.logging},
-            {"dev", c.dev}
+            {"dev", c.dev},
+            {"transfer", c.transfer}
         };
     }
 
@@ -267,6 +275,7 @@ Config& Config::operator=(Config&&) noexcept = default;
         j.at("auditing").get_to(c.auditing);
         if (j.contains("logging")) j.at("logging").get_to(c.logging);
         j.at("dev").get_to(c.dev);
+        if (j.contains("transfer")) j.at("transfer").get_to(c.transfer);
     }
 
     void to_json(nlohmann::json &j, const WebsocketConfig &c) {
@@ -306,12 +315,68 @@ Config& Config::operator=(Config&&) noexcept = default;
         c.max_preview_size_bytes = j.value("max_preview_size_bytes", MAX_PREVIEW_SIZE_BYTES);
     }
 
+    namespace {
+    // A host as a client would dial it: a DNS name or an IP literal, no scheme, port, path or user part. IPv6
+    // literals may come bracketed; they are stored bare.
+    std::string advertisedHost(std::string host, const std::string& where) {
+        if (host.size() >= 2 && host.front() == '[' && host.back() == ']') host = host.substr(1, host.size() - 2);
+        const bool ok = !host.empty() && host.size() <= 253 && std::ranges::all_of(host, [](const unsigned char ch) {
+            return std::isalnum(ch) != 0 || ch == '.' || ch == '-' || ch == '_' || ch == ':';
+        });
+        if (!ok) throw std::invalid_argument(where + ": '" + host + "' is not a host name or IP address");
+        return host;
+    }
+    }
+
+    void normalize(DeviceAdvertiseConfig &c) {
+        for (const auto& glob : c.exclude_interfaces)
+            if (glob.empty()) throw std::invalid_argument("device_server.advertise.exclude_interfaces: empty pattern");
+        for (auto& name : c.hostnames) name = advertisedHost(name, "device_server.advertise.hostnames");
+        for (auto& e : c.public_) {
+            e.host = advertisedHost(e.host, "device_server.advertise.public");
+            if (e.kind != "lan" && e.kind != "vpn" && e.kind != "wan" && e.kind != "passthrough")
+                throw std::invalid_argument("device_server.advertise.public: kind must be lan, vpn, wan or "
+                                            "passthrough, got '" + e.kind + "'");
+        }
+    }
+
+    void to_json(nlohmann::json &j, const DeviceAdvertiseEndpoint &c) {
+        j = {{"host", c.host}, {"port", c.port}, {"kind", c.kind}};
+    }
+
+    void from_json(const nlohmann::json &j, DeviceAdvertiseEndpoint &c) {
+        c.host = j.value("host", std::string{});
+        c.port = j.value("port", static_cast<uint16_t>(0));
+        c.kind = j.value("kind", std::string("wan"));
+    }
+
+    void to_json(nlohmann::json &j, const DeviceAdvertiseConfig &c) {
+        j = {
+            {"interfaces", c.interfaces},
+            {"include_ipv6", c.include_ipv6},
+            {"exclude_interfaces", c.exclude_interfaces},
+            {"hostnames", c.hostnames},
+            {"public", c.public_}
+        };
+    }
+
+    void from_json(const nlohmann::json &j, DeviceAdvertiseConfig &c) {
+        const DeviceAdvertiseConfig defaults;
+        c.interfaces = j.value("interfaces", defaults.interfaces);
+        c.include_ipv6 = j.value("include_ipv6", defaults.include_ipv6);
+        c.exclude_interfaces = j.value("exclude_interfaces", defaults.exclude_interfaces);
+        c.hostnames = j.value("hostnames", defaults.hostnames);
+        c.public_ = j.value("public", defaults.public_);
+        normalize(c);
+    }
+
     void to_json(nlohmann::json &j, const DeviceServerConfig &c) {
         j = {
             {"enabled", c.enabled},
             {"port", c.port},
             {"remote", c.remote},
-            {"max_connections", c.max_connections}
+            {"max_connections", c.max_connections},
+            {"advertise", c.advertise}
         };
     }
 
@@ -320,6 +385,7 @@ Config& Config::operator=(Config&&) noexcept = default;
         c.port = j.value("port", kDefaultDeviceServerPort);
         c.remote = j.value("remote", false);
         c.max_connections = j.value("max_connections", 256u);
+        c.advertise = j.value("advertise", DeviceAdvertiseConfig{});
     }
 
     void to_json(nlohmann::json &j, const S3GatewayMultipartConfig &c) {
@@ -1011,5 +1077,61 @@ Config& Config::operator=(Config&&) noexcept = default;
 
     void from_json(const nlohmann::json &j, DevConfig &c) {
         c.enabled = j.value("enabled", false);
+    }
+
+    void validateTransfer(const TransferConfig &c) {
+        constexpr uint64_t kMaxPart = 4ull << 30;
+        const auto need = [](const bool ok, const char* rule) {
+            if (!ok) throw std::invalid_argument(std::string("transfer: ") + rule);
+        };
+        need(c.part_min_bytes >= 1, "part_min_bytes must be at least 1");
+        need(c.part_min_bytes <= c.part_default_bytes, "part_min_bytes must not exceed part_default_bytes");
+        need(c.part_default_bytes <= c.max_part_bytes, "part_default_bytes must not exceed max_part_bytes");
+        need(c.max_part_bytes <= kMaxPart, "max_part_bytes must not exceed 4 GiB (4294967296)");
+        need(c.http.max_part_bytes <= c.max_part_bytes, "http.max_part_bytes must not exceed max_part_bytes");
+        need(c.part_min_bytes <= c.http.max_part_bytes, "part_min_bytes must not exceed http.max_part_bytes");
+        need(c.max_parts_in_flight >= 1 && c.max_parts_in_flight <= 16, "max_parts_in_flight must be 1 to 16");
+        need(c.commit_workers >= 1 && c.commit_workers <= 8, "commit_workers must be 1 to 8");
+        need(c.max_session_files >= 1 && c.max_session_files <= 65536, "max_session_files must be 1 to 65536");
+        need(c.session_idle_ttl_hours >= 1, "session_idle_ttl_hours must be at least 1");
+        need(c.session_max_age_hours >= 1, "session_max_age_hours must be at least 1");
+    }
+
+    void to_json(nlohmann::json &j, const TransferHttpConfig &c) { j = {{"max_part_bytes", c.max_part_bytes}}; }
+
+    void from_json(const nlohmann::json &j, TransferHttpConfig &c) {
+        c.max_part_bytes = j.value("max_part_bytes", TransferHttpConfig{}.max_part_bytes);
+    }
+
+    void to_json(nlohmann::json &j, const TransferConfig &c) {
+        j = {
+            {"part_default_bytes", c.part_default_bytes},
+            {"part_min_bytes", c.part_min_bytes},
+            {"max_part_bytes", c.max_part_bytes},
+            {"max_parts_in_flight", c.max_parts_in_flight},
+            {"max_file_bytes", c.max_file_bytes},
+            {"max_session_files", c.max_session_files},
+            {"commit_workers", c.commit_workers},
+            {"session_idle_ttl_hours", c.session_idle_ttl_hours},
+            {"session_max_age_hours", c.session_max_age_hours},
+            {"http", c.http}
+        };
+    }
+
+    // A key left out keeps its default; the result is validated as config.yaml is (settings.update answers invalid).
+    void from_json(const nlohmann::json &j, TransferConfig &c) {
+        const TransferConfig d;
+        c.part_default_bytes = j.value("part_default_bytes", d.part_default_bytes);
+        c.part_min_bytes = j.value("part_min_bytes", d.part_min_bytes);
+        c.max_part_bytes = j.value("max_part_bytes", d.max_part_bytes);
+        c.max_parts_in_flight = j.value("max_parts_in_flight", d.max_parts_in_flight);
+        c.max_file_bytes = j.value("max_file_bytes", d.max_file_bytes);
+        c.max_session_files = j.value("max_session_files", d.max_session_files);
+        c.commit_workers = j.value("commit_workers", d.commit_workers);
+        c.session_idle_ttl_hours = j.value("session_idle_ttl_hours", d.session_idle_ttl_hours);
+        c.session_max_age_hours = j.value("session_max_age_hours", d.session_max_age_hours);
+        c.http = d.http;
+        if (j.contains("http")) j.at("http").get_to(c.http);
+        validateTransfer(c);
     }
 } // namespace vh::config

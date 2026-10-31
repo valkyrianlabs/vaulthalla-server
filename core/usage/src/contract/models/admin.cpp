@@ -164,7 +164,8 @@ std::vector<WsModel> adminSettingsModels() {
          object("stats_snapshots", "StatsSnapshotsConfig"), object("sharing", "SharingConfig"),
          object("vaults", "VaultsConfig"), object("email", "EmailConfig"),
          object("operator_emails", "OperatorEmailsConfig"), object("auditing", "AuditConfig"),
-         object("logging", "LoggingConfig"), object("dev", "DevConfig")}));
+         object("logging", "LoggingConfig"), object("dev", "DevConfig"),
+         object("transfer", "TransferConfig")}));
 
     out.push_back(model("WebsocketServerConfig", "websocket_server.* (Config.cpp to_json(WebsocketConfig)).",
         {boolean("enabled"), str("host"), uinteger("port").max(65535), uinteger("max_connections"),
@@ -177,7 +178,20 @@ std::vector<WsModel> adminSettingsModels() {
         "device_server.* (Config.cpp to_json(DeviceServerConfig)): the device listener. remote is changed with "
         "device.remote.enable|disable; a settings.update that changes the section rebinds the listener in place.",
         {boolean("enabled"), uinteger("port").max(65535),
-         boolean("remote").desc("Every interface; else loopback only."), uinteger("max_connections")}));
+         boolean("remote").desc("Every interface; else loopback only."), uinteger("max_connections"),
+         object("advertise", "DeviceAdvertiseConfig").opt()
+             .desc("What device.endpoints lists (absent: the defaults).")}));
+    out.push_back(model("DeviceAdvertiseConfig",
+        "device_server.advertise.* (Config.cpp to_json(DeviceAdvertiseConfig); docs/reference/transfer-protocol.md "
+        "§1.1, §5).",
+        {boolean("interfaces").desc("Advertise interface addresses."), boolean("include_ipv6"),
+         strArray("exclude_interfaces").desc("Interface-name globs never advertised."),
+         strArray("hostnames").desc("Extra LAN names (kind lan, the listener's port)."),
+         objectArray("public", "DeviceAdvertiseEndpoint")
+             .desc("Names or addresses that reach the listener from outside (port forwards, tunnels, passthroughs).")}));
+    out.push_back(model("DeviceAdvertiseEndpoint", "device_server.advertise.public[] (Config.cpp).",
+        {str("host"), uinteger("port").max(65535).desc("0: the listener's port."),
+         str("kind").oneOf({"lan", "vpn", "wan", "passthrough"})}));
 
     out.push_back(model("S3GatewayConfig", "s3_gateway.* (Config.cpp to_json(S3GatewayConfig)).",
         {boolean("enabled"), str("host"), uinteger("port").max(65535), uinteger("max_connections"),
@@ -214,6 +228,18 @@ std::vector<WsModel> adminSettingsModels() {
          uinteger("failure_ttl_hours")}));
     out.push_back(model("PreviewTextConfig", "preview.text.* (Config.cpp to_json(PreviewTextConfig)).",
         {uinteger("max_edit_bytes")}));
+
+    out.push_back(model("TransferConfig",
+        "transfer.* (Config.cpp to_json(TransferConfig)): resumable uploads (/upload/sessions, "
+        "docs/reference/transfer-protocol.md). Out-of-range values are refused (invalid), never clamped.",
+        {uinteger("part_default_bytes"), uinteger("part_min_bytes").min(1),
+         uinteger("max_part_bytes").max(4294967296).desc("Device listener cap."),
+         uinteger("max_parts_in_flight").min(1).max(16), uinteger("max_file_bytes").desc("0 = only the format limit."),
+         uinteger("max_session_files").min(1).max(65536), uinteger("commit_workers").min(1).max(8),
+         uinteger("session_idle_ttl_hours").min(1), uinteger("session_max_age_hours").min(1),
+         object("http", "TransferHttpConfig")}));
+    out.push_back(model("TransferHttpConfig", "transfer.http.* (Config.cpp to_json(TransferHttpConfig)).",
+        {uinteger("max_part_bytes").desc("Web listener cap; keep <= 95000000 behind Cloudflare Free/Pro.")}));
 
     out.push_back(model("DatabaseConfig",
         "database.* (Config.cpp to_json(DatabaseConfig)); the password is never part of it.",

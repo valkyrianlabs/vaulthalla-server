@@ -38,6 +38,11 @@ for archaeology, because parts of it are stale (for example, it says uploads sta
   `Secure` `share_refresh` cookie.
   Raw tokens never go in URLs. Manual QA therefore needs the HTTPS origin (Caddy, `https://vh.home.arpa:8443`).
 - Uploads use the HTTP lane `/upload/session?share=1` (`features/files/transfers.ts`, `http/upload/Coordinator.cpp`).
+- Resumable uploads (`/upload/sessions?share=1`, `http/upload/Resumable.cpp`) keep the same share rules: share-relative
+  paths, reject / create-only only (no replace), `startUpload` limits at create (`max_upload_size_bytes` → 403),
+  `recordUploadChunk` once per stored part, re-resolved principal + scope at commit as the link creator,
+  `finishUpload`. A session belongs to one share session (others: 404). The 6 h stale share-upload sweep still fails
+  an idle share file.
 - Directory thumbnails use scoped HTTP preview, never per-row ws preview.
 - Upload-only ("dropbox") shares never list or preview beyond what they were granted. A share upload needs only the
   `upload` op (parent resolves as Write → directory Upload, the file as Write → file Upload); no `metadata`/`list`.

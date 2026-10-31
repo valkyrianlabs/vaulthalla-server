@@ -53,6 +53,8 @@ The Cloudflare credentials file is the same on both: a root-owned `0600` file co
 
 :::callout[Never expose the internal listeners]{variant="warning"}
 Do not publish ports 36968, 36969 or 36970 directly, or forward them from a router. They are plain HTTP and expect the proxy in front of them. Only the proxy's ports 80 and 443 belong on a network. The S3 gateway, when enabled, listens on `0.0.0.0:39000` by default; behind a proxy hostname, set `s3_gateway.host: 127.0.0.1` in [Configuration](/reference/configuration).
+
+The device listener for Vaulthalla Desktop (`36972`) is the one exception: it speaks TLS itself, with a client certificate on both sides, and is never put behind the proxy. It listens on loopback until a super admin turns on remote connections. See [Direct Device Connections](/admin/direct-connections).
 :::
 
 ## What The Proxy Routes
@@ -67,3 +69,23 @@ Both integrations generate the same routes:
 | the S3 hostname (optional) | S3 gateway (`s3_gateway.port`, default 39000) | Path-style requests; long timeouts for large objects. |
 
 The proxy passes the original `Host` and sets `X-Forwarded-For`, `X-Forwarded-Proto` and `X-Real-IP`.
+
+Vaulthalla Desktop isn't routed through the proxy at all. It connects to the device listener directly, or through a layer-4 TLS passthrough on port 443 ([nginx](/https/nginx#share-port-443-with-vaulthalla-desktop)).
+
+## Cloudflare In Front Of The Console
+
+Cloudflare plays two separate roles here. **DNS-01 validation** (`--certbot-dns-cloudflare`, `--dns-cloudflare`) only proves domain ownership to Let's Encrypt and works with any record type. **Cloudflare's proxy** (an orange-cloud record) puts Cloudflare's edge between browsers and your host. Every browser request then terminates at Cloudflare, which opens its own connection to your origin.
+
+The console, WebSockets and share links work through the proxy, within Cloudflare's limits:
+
+- **Upload size per request.** Cloudflare's documented limits cap request bodies by plan (100 MB on Free and Pro, 200 MB on Business, 500 MB by default on Enterprise). Browser uploads are sent in parts of at most `transfer.http.max_part_bytes` (64 MiB by default), which fits every plan. Behind Free or Pro, keep that setting at or below 95,000,000. See [Uploads](/web-console/uploads#behind-cloudflare).
+- **Response timeout.** Cloudflare waits about 100 seconds for the origin's answer, then shows error 524. Resumable upload requests answer well within that.
+- **Large files and terms.** Every byte of every upload and download crosses Cloudflare. Its service-specific terms restrict serving video or a disproportionate share of large files on the CDN without its paid products. Review Cloudflare's terms before routing bulk file transfers through the proxy.
+
+**The device listener never goes through the proxy.** Cloudflare's proxy terminates TLS, so Desktop's client certificate and the node's pinned key can't survive it. The device host name must be a **DNS-only (grey-cloud)** record. See [Direct Device Connections](/admin/direct-connections#cloudflare).
+
+Bulk file transfers are better off the proxy too: Vaulthalla Desktop over a DNS-only name or a VPN, or a console served under a DNS-only name, keeps them off Cloudflare.
+
+A DNS-only record publishes your origin's address. Keep that in mind if you rely on the proxy to hide the console's origin: see [Security](/admin/direct-connections#security).
+
+The S3 gateway's own rules behind a CDN are in [S3 Gateway Setup](/s3-gateway/setup#behind-cloudflare-or-another-cdn).

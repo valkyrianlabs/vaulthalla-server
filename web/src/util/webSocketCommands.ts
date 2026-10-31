@@ -938,13 +938,14 @@ export interface WebSocketCommandMap {
   'stats.http.cache': { payload: null; response: { stats: CacheStats } }
 
   // Paired devices (Vaulthalla Desktop). The device's own side (device.pair.*, device.identity.rotate,
-  // device.server.identity) only answers on the device listener (mutual TLS, port 36972); the console never sends it,
+  // device.server.identity, device.endpoints) only answers on the device listener (mutual TLS, port 36972); the console never sends it,
   // but every registered command is typed here.
   'device.pair.request': WsContract['device.pair.request']
   'device.pair.confirm': WsContract['device.pair.confirm']
   'device.pair.status': WsContract['device.pair.status']
   'device.identity.rotate': WsContract['device.identity.rotate']
   'device.server.identity': WsContract['device.server.identity']
+  'device.endpoints': WsContract['device.endpoints']
   // Any signed-in user pairs devices to their own account: open a 10-minute window, then approve a request by picking
   // the one of its three code_choices the device shows (a wrong pick denies the request).
   'device.pairing.open': WsContract['device.pairing.open']

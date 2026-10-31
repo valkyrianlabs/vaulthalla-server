@@ -76,10 +76,10 @@ ShellServer is not created in test mode (`paths::testMode`).
 | Surface | Code | Default bind (shipped `deploy/config/config.yaml`) |
 |---|---|---|
 | WebSocket `/ws` | `ws/Server.cpp`, `ws/Router.cpp`, `ws/Handler.cpp`, `ws/handler/*`, `ws/Session.cpp` | `0.0.0.0:36969` |
-| HTTP preview/download/upload/auth | `http/Server.cpp`, `http/Session.cpp`, `http/Router.cpp`, `http/Access.cpp`, `http/handler/*`, `http/upload/Coordinator.cpp` | `0.0.0.0:36970` (fresh installs: `127.0.0.1`) |
+| HTTP preview/download/upload/auth | `http/Server.cpp`, `http/Session.cpp`, `http/Router.cpp`, `http/Access.cpp`, `http/handler/*`, `http/upload/Coordinator.cpp`, `http/upload/Resumable.cpp` | `0.0.0.0:36970` (fresh installs: `127.0.0.1`) |
 | S3 gateway (SigV4, multipart) | `s3/*` (`GatewayService`, `SigV4`, `ObjectStore`, `MultipartStore`, `CredentialManager`) | `0.0.0.0:39000`, disabled by default |
 | Shell/CLI control | `shell/Server.cpp`, `shell/Router.cpp`, `shell/commands/*` | unix socket `/run/vaulthalla/cli.sock` |
-| Device listener (Vaulthalla Desktop, mutual TLS) | `device/Service.cpp`, `device/Listener.cpp` (`/ws` → the ws Router) | `127.0.0.1:36972`; `0.0.0.0` once `device_server.remote` (absent section = these defaults) |
+| Device listener (Vaulthalla Desktop, mutual TLS) | `device/Service.cpp`, `device/Listener.cpp` (`/ws` → the ws Router) | `127.0.0.1:36972` (+ `[::1]` when available); `[::]` dual-stack once `device_server.remote`, `0.0.0.0` where IPv6 is off (absent section = these defaults) |
 
 > `core/include/config/Config.hpp` compiled-in defaults are **33369/33370**, but the shipped config,
 > web fallbacks, and Caddyfile all use **36969/36970**. Trust the config file, and treat that
@@ -241,17 +241,35 @@ Normative protocol: `docs/pairing.md` in `valkyrianlabs/vaulthalla-desktop` (its
   canonical `identities::Manager` object); anything else (unknown, revoked, owner gone) → pairing-only. A handshake
   with a rotated device's new key clears `previous_spki_sha256`. Then the HTTP request is read and dispatched by path
   in `Connection::dispatch` (only the header is read; an upload body is the session's): `/ws` upgrades into
-  `ws::Session::acceptDevice`; `/preview*`, `/download*`, `/upload*` and `/mcp` hand the TLS stream to an
-  `http::Session` (below); anything else is 404. Cap
+  `ws::Session::acceptDevice`; `/preview*`, `/download*`, `/upload*`, `/transfer*` and `/mcp` hand the TLS stream to
+  an `http::Session` (below); anything else is 404. Cap
   `device_server.max_connections` (own `ConnectionSlot::Pool::Device`; over it the socket is closed, a TLS client
   can't read a 503), 10 s handshake and request deadlines. A bind failure never stops the daemon: it is in
-  `listenerStatus()` and retried every 30 s.
+  `listenerStatus()` and retried every 30 s. Binding (`docs/reference/transfer-protocol.md` §1.4): `Listener` holds
+  one acceptor per socket; remote on = `[::]` with IPV6_V6ONLY off, falling back to `0.0.0.0`; remote off =
+  `127.0.0.1` plus `[::1]` on the same port when that binds. `ListenerStatus.bind` lists every socket, `address` is
+  the first. The peer address of an IPv4 client on the dual-stack socket is unmapped to IPv4 in
+  `Connection::onHandshake`, before `device::authorize`, so `last_ip`, pairing rate limits and the loopback test
+  never see `::ffff:` forms.
+- **Endpoint advertisement** (`protocols/device/Endpoints.cpp`, transfer-protocol.md §1; capability
+  `device.endpoints`): ws `device.endpoints` (auth `device`, `Router::isDeviceOnlyCommand`), the `node_id` /
+  `server_spki_sha256` / `endpoints` members of `device.pairing.open`, and `diagnostics` beside `status` in
+  `device.remote.status`. `buildCandidates` is pure (classification by range + interface-name globs,
+  `device_server.advertise`); interfaces come from `getifaddrs` behind `setInterfaceEnumeratorForTesting`. The
+  node id is cached per process (`endpoints::nodeId`, `clearNodeIdForTesting` after a schema reset). The last
+  public (`wan`) Device handshake is an in-memory record (`noteDeviceHandshake`, called from the listener), lost on
+  restart. Firewall and mDNS-responder detection are `platform/Network.hpp` (Linux: ufw/firewalld/nftables state
+  files; macOS: `socketfilterfw --getglobalstate`), read-only and `unknown`/null when they can't tell.
+- **Transfer lanes** (`protocols/device/Transfer.cpp` policy, `http::Session::handle_transfer` mechanics; capability
+  `device.lanes.transfer`, §4): `GET /transfer/probe`, `POST /transfer/sink` (read and discarded, ≤ 256 MiB),
+  `GET /transfer/source?bytes=n` (SplitMix64 `PlaintextReader` through `write_stream`). At most 2 sink/source
+  requests per device row at once (in-memory slots, 429). Device listener only; nothing touches disk.
 - **HTTP lanes and remote MCP (S1b).** `http::Session` runs over a `ByteStream`: `TimedStream` (the plain socket,
   poll + deadline) or `TlsStream` (the device TLS stream: each blocking call starts one async op on the stream's strand
   and waits against the deadline, cancelling the socket's I/O when it passes; bytes go through op-owned buffers so an
   abandoned op never touches freed memory). A device connection runs on its own thread like the web side's, holds its
-  `ConnectionSlot` (device pool), and serves only `/preview*`, `/download*`, `/upload*` and `/mcp` (pairing-only
-  connections get 403 `device_unknown`). Its principal is a stream-less Device `ws::Session`
+  `ConnectionSlot` (device pool), and serves only `/preview*`, `/download*`, `/upload*`, `/transfer*` and `/mcp`
+  (pairing-only connections get 403 `device_unknown`). Its principal is a stream-less Device `ws::Session`
   (`Session::devicePrincipal`) registered with the session manager, so revocation, `revokeSessions`, remote-off and
   the sweeper close it; its close hook cancels the HTTP session, which also stops between requests and between
   chunks. Requests run under `access::DevicePrincipalScope` (thread-local): `access::authenticate` and the upload
@@ -444,6 +462,38 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   from the staged file the same way (no whole-file buffer; an empty file keeps the empty-buffer branch), and a file
   whose PUT failed may be PUT again from the start (share upload sessions excepted: their record is terminal).
 
+- **Resumable uploads** (`upload/Resumable.cpp`, capability `http.upload.resumable`, normative spec
+  `docs/reference/transfer-protocol.md` §3, migration 114 `upload_session`/`_file`/`_part`, query layer
+  `db/query/upload/Resumable`): `POST /upload/sessions`, `GET|DELETE /upload/sessions/<id>`, `PUT
+  /upload/sessions/<id>/files/<fid>?offset=` (streamed by `Session::handle_resumable_part`, checked from the header,
+  refusals close the connection), `POST …/finish`; both listeners, shares via `?share=1`. Typed errors
+  `{error:{code,message}}` (never status-by-substring). Ownership: the user id (device principal or cookie) or the
+  share session id; anything else is 404 (no oracle). One vault per session; sizes up to the GCM limit 2^36 − 32 (no
+  8 GiB cap), quota = `freeSpace()` minus bytes promised to the vault's other open sessions.
+  - **Parts are never written under the file's keystream** (the spec's first draft did that; an unrecorded attempt
+    followed by different bytes would have reused CTR positions on disk). Each attempt is its own AES-256-GCM message
+    (file's key version, fresh IV) in `<spool>/<ord>.<offset>.<rand>.tmp` → fsync → rename to `.part` → dir fsync →
+    part row (+ `recordUploadChunk` for shares) → 200. Duplicates of an exact stored range are compared byte for
+    byte (decrypting the stored part, or the sealed file once the part is sealed): 200 or 409 `part_conflict`. No
+    plaintext digest is stored; the answer's `sha256` is computed in memory.
+  - A per-file **sealing cursor** (worker pool `transfer.commit_workers`) decrypts the stored parts in order and
+    re-encrypts them through the file's GCM stream into `<ord>.sealed` (+ BLAKE2b content hash, passed to
+    `createFile` through `SealedContent::content_hash`); `sealed_bytes` checkpoints (≤ 256 MiB, and every pass)
+    let consumed part files go. After a restart the cursor reads the sealed prefix back (it must re-encrypt to the
+    same bytes) and truncates the rest. Commit: `Filesystem::createFile{overwrite=true, expected_source_id = "" or
+    the if_match generation, sealed = link(spool → dst), copy on EXDEV/EPERM}` under `upload::CreateClaim` (shared
+    with `PUT /upload/content`), authorized again as the user is now (share: principal re-resolved, committed as the
+    link creator). A target that appeared meanwhile fails the file (`already_exists` / `precondition_failed`), never
+    the old silent `overwrite=false` return. The sealed spool file is never reopened for writing once its link count
+    is > 1. Key version ≠ current at part or commit → `key_rotated`.
+  - State machine `receiving → sealing → committing → committed | failed`, monotonic in the DB (SQL guards a late
+    write). `Service::recover()` (main.cpp `wireStorage`, after the engines) reloads sessions, drops part rows whose
+    spool file is gone, sweeps attempt files / orphan parts / orphan session dirs and re-queues sealing and commits
+    (a share file's commit waits for the share session's next request). `Service::shutdown()` from
+    `ProtocolService::shutdownProtocols`; the janitor calls `Service::sweepExpired()` (idle TTL from the last part,
+    max age; rows + spool + spool dirs without a row). Finish waits ≤ 5 s for commits (never does them) → 200 / 202
+    + `Retry-After` / 409 `incomplete`.
+
 ### Byte-serving spine, integrity and derived artifacts
 
 - **Positioned reads.** `storage::Engine::openPlaintextReader(file, ReaderOptions)` is the single funnel for every
@@ -511,6 +561,12 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   seal it into the target with `Filesystem::createFile{source_path}` (`http/upload/Coordinator.cpp`, and
   `.upload-http-content-*.part` for `PUT /upload/content`). This is intentional. Don't move staging out of
   FUSE to reduce sync churn; fix duplicate sync triggers or backing-path resolution instead.
+- **Resumable uploads deliberately do not stage through FUSE** (`<backing>/.upload-spool/<upload id>/`, 0700,
+  ciphertext only, outside the mount and every vault tree; nothing in FUSE, snapshots, versions, archives, copy or
+  sync walks it). The rule above is about the plaintext `.upload-http-*` lanes. A resumable file receives many parts
+  that must each be durable before they are acknowledged; through FUSE every `fsync` re-seals the whole working
+  copy (`fuse/Bridge.cpp` fsync → `WorkingCopies::persist`), so per-part durability would cost O(n²) bytes of
+  encryption and I/O for an n-part file, and the staged bytes would be plaintext at rest while in flight.
 - **Vault bytes are always ciphertext at rest; the mount is the decrypting view (#173).** Every backing file (local
   vaults and cloud vaults' local copies) is AES-256-GCM body‖16-byte tag, IV and key version in `files`, and
   `files.size_bytes` is the *plaintext* size. Derived preview artifacts are encrypted too (`VHDERIV1`, see
@@ -603,7 +659,7 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
 
 ## Database
 
-- PostgreSQL via libpqxx. The schema is `deploy/psql/000…113_*.sql`, applied in order (all in ONE transaction by `core/seed/include/SqlDeployer.hpp`) and installed to `/usr/share/vaulthalla/psql`.
+- PostgreSQL via libpqxx. The schema is `deploy/psql/000…114_*.sql`, applied in order (all in ONE transaction by `core/seed/include/SqlDeployer.hpp`) and installed to `/usr/share/vaulthalla/psql`.
   New migrations take the next number and must be idempotent against upgraded installs. SqlDeployer records sha256(raw bytes)
   per file and refuses to start on a mismatch, so **never edit a shipped migration**: 020/060/082 were edited in place and
   bricked upgrades (1.5.x→1.6.x crash loop on 060). Reviewed exceptions live in `kHistoricalMigrationChecksums` (accepted, recorded

@@ -2,7 +2,7 @@
 // Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
 // The device listener's HTTP lanes and remote MCP over real TLS 1.3 (S1b): downloads with Range, an upload session,
 // RBAC as the device's user (never a cookie), no share lanes, pairing-only refused, revocation ending a keep-alive
-// connection; /mcp as Streamable HTTP (initialize, tools/list, tools/call through executeLine), its Origin and
+// connection; the /transfer calibration lanes; /mcp as Streamable HTTP (initialize, tools/list, tools/call through executeLine), its Origin and
 // MCP-Protocol-Version checks, the exclusions (D4: key export unreachable), the destructive gate and the per-call
 // deadline.
 
@@ -23,7 +23,9 @@
 #include "ops/Vaults.hpp"
 #include "protocols/device/Listener.hpp"
 #include "protocols/device/Mcp.hpp"
+#include "protocols/device/Endpoints.hpp"
 #include "protocols/device/Service.hpp"
+#include "protocols/device/Transfer.hpp"
 #include "protocols/http/Access.hpp"
 #include "protocols/http/Session.hpp"
 #include "protocols/ws/Handler.hpp"
@@ -43,6 +45,7 @@
 #include <gtest/gtest.h>
 #include <paths.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -274,6 +277,67 @@ TEST_F(DeviceHttpTest, UploadSessionOverTls) {
     EXPECT_GE(refused->result_int(), 400);
 }
 
+// Resumable uploads on the device listener (http.upload.resumable): the device's user owns the session, parts may
+// be as large as transfer.max_part_bytes there, and another user's device can't see the session.
+TEST_F(DeviceHttpTest, ResumableUploadOverTls) {
+    const ClientIdentity device;
+    (void)paired(device, owner);
+    HttpClient http(port, device);
+    ASSERT_TRUE(http.connect());
+
+    const std::string first(1u << 20, 'a'), second = "and the rest\n";  // every part but the last: >= 1 MiB
+    const auto size = first.size() + second.size();
+    const auto created = http.request(
+        bhttp::verb::post, "/upload/sessions",
+        json{{"vault_id", engine->vault->id}, {"files", {{{"file_id", "f1"}, {"path", "/resumable-mac.txt"}, {"size", size}}}}}.dump(),
+        {{"Content-Type", "application/json"}});
+    ASSERT_TRUE(created);
+    ASSERT_EQ(created->result_int(), 201) << created->body();
+    const auto body = json::parse(created->body());
+    EXPECT_EQ(body.at("part").at("max_bytes"), 512ull << 20) << "the device listener's part cap";
+    const auto uploadId = body.at("upload_id").get<std::string>();
+
+    // The second part first (out of order), then the first.
+    const auto tail = http.request(bhttp::verb::put, "/upload/sessions/" + uploadId + "/files/f1?offset=" + std::to_string(first.size()), second,
+                                   {{"Content-Type", "application/octet-stream"}});
+    ASSERT_TRUE(tail);
+    ASSERT_EQ(tail->result_int(), 200) << tail->body();
+
+    const ClientIdentity theirs;
+    (void)paired(theirs, stranger);
+    HttpClient other(port, theirs);
+    ASSERT_TRUE(other.connect());
+    const auto peek = other.request(bhttp::verb::get, "/upload/sessions/" + uploadId);
+    ASSERT_TRUE(peek);
+    EXPECT_EQ(peek->result_int(), 404) << "another user's device: no oracle";
+
+    const auto head = http.request(bhttp::verb::put, "/upload/sessions/" + uploadId + "/files/f1?offset=0", first,
+                                   {{"Content-Type", "application/octet-stream"}});
+    ASSERT_TRUE(head);
+    ASSERT_EQ(head->result_int(), 200) << head->body();
+    int code = 0;
+    for (int i = 0; i < 60 && code != 200; ++i) {
+        const auto finished = http.request(bhttp::verb::post, "/upload/sessions/" + uploadId + "/finish");
+        ASSERT_TRUE(finished);
+        code = finished->result_int();
+        ASSERT_TRUE(code == 200 || code == 202) << finished->body();
+    }
+    ASSERT_EQ(code, 200);
+
+    HttpClient check(port, device);
+    ASSERT_TRUE(check.connect());
+    const auto back = check.request(bhttp::verb::get, "/download/content?vault_id=" + std::to_string(engine->vault->id) +
+                                                          "&path=/resumable-mac.txt");
+    ASSERT_TRUE(back);
+    EXPECT_EQ(back->result_int(), 200);
+    EXPECT_EQ(back->body(), first + second);
+
+    // A share session is never served on the device listener.
+    const auto share = http.request(bhttp::verb::get, "/upload/sessions/" + uploadId + "?share=1");
+    ASSERT_TRUE(share);
+    EXPECT_EQ(share->result_int(), 403);
+}
+
 TEST_F(DeviceHttpTest, RevocationEndsAKeepAliveConnection) {
     const ClientIdentity device;
     const auto row = paired(device, owner);
@@ -447,6 +511,87 @@ TEST_F(DeviceHttpTest, McpTransportChecks) {
     EXPECT_EQ(call(bhttp::verb::post, "not json", {ct}), 400u);
     EXPECT_EQ(call(bhttp::verb::post, "[" + ping + "]", {ct}), 400u);
     EXPECT_EQ(call(bhttp::verb::get, {}, {}), 405u);
+}
+
+// ---- /transfer (device.lanes.transfer, transfer-protocol.md §4) -------------------------------------------------
+
+TEST_F(DeviceHttpTest, TransferLanesCalibrateWithoutStoringAnything) {
+    protocols::device::endpoints::clearNodeIdForTesting();
+    const ClientIdentity device;
+    const auto row = paired(device, owner);
+    HttpClient http(port, device);
+    ASSERT_TRUE(http.connect());
+
+    const auto probe = http.request(bhttp::verb::get, "/transfer/probe");
+    ASSERT_TRUE(probe);
+    ASSERT_EQ(probe->result_int(), 200) << probe->body();
+    const auto info = json::parse(probe->body());
+    EXPECT_EQ(info.at("node_id"), db::query::device::Devices::nodeId());
+    const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    EXPECT_LT(std::abs(info.at("server_time_ms").get<int64_t>() - now), 60'000);
+    const auto caps = info.at("capabilities").get<std::vector<std::string>>();
+    EXPECT_NE(std::ranges::find(caps, "device.lanes.transfer"), caps.end());
+
+    // Same keep-alive connection: a body read and discarded, then n bytes streamed back.
+    const std::string body(5 * 1024 * 1024 + 3, 'x');
+    const auto sink = http.request(bhttp::verb::post, "/transfer/sink", body,
+                                   {{"Content-Type", "application/octet-stream"}});
+    ASSERT_TRUE(sink);
+    ASSERT_EQ(sink->result_int(), 200) << sink->body();
+    const auto sunk = json::parse(sink->body());
+    EXPECT_EQ(sunk.at("bytes"), body.size());
+    EXPECT_TRUE(sunk.at("server_ms").is_number_integer());
+    EXPECT_TRUE((*sink)["Server-Timing"].starts_with("recv;dur="));
+
+    const auto source = http.request(bhttp::verb::get, "/transfer/source?bytes=3145731");
+    ASSERT_TRUE(source);
+    ASSERT_EQ(source->result_int(), 200);
+    EXPECT_EQ(source->body().size(), 3145731u);
+    EXPECT_EQ((*source)[bhttp::field::content_type], "application/octet-stream");
+    const auto empty = http.request(bhttp::verb::get, "/transfer/source?bytes=0");
+    ASSERT_TRUE(empty);
+    EXPECT_EQ(empty->result_int(), 200);
+    EXPECT_TRUE(empty->body().empty());
+    EXPECT_EQ(protocols::device::transfer::inFlightForTesting(row.id), 0u) << "slots are released";
+
+    // Refusals.
+    const auto tooMany = http.request(bhttp::verb::get, "/transfer/source?bytes=268435457");
+    ASSERT_TRUE(tooMany);
+    EXPECT_EQ(tooMany->result_int(), 400);
+    EXPECT_EQ(json::parse(tooMany->body()).at("error").at("code"), "bad_request");
+    const auto wrongVerb = http.request(bhttp::verb::get, "/transfer/sink");
+    ASSERT_TRUE(wrongVerb);
+    EXPECT_EQ(wrongVerb->result_int(), 405);
+    const auto unknown = http.request(bhttp::verb::get, "/transfer/elsewhere");
+    ASSERT_TRUE(unknown);
+    EXPECT_EQ(unknown->result_int(), 404);
+
+    // At most two calibrations per device at once.
+    auto a = protocols::device::transfer::acquire(row.id);
+    auto b = protocols::device::transfer::acquire(row.id);
+    const auto busy = http.request(bhttp::verb::get, "/transfer/source?bytes=10");
+    ASSERT_TRUE(busy);
+    EXPECT_EQ(busy->result_int(), 429);
+    EXPECT_EQ((*busy)[bhttp::field::retry_after], "1");
+    EXPECT_EQ(json::parse(busy->body()).at("error").at("code"), "too_many_requests");
+    const auto probeStillAnswers = http.request(bhttp::verb::get, "/transfer/probe");
+    ASSERT_TRUE(probeStillAnswers);
+    EXPECT_EQ(probeStillAnswers->result_int(), 200) << "the probe is not a calibration";
+    a.reset();
+    b.reset();
+    const auto again = http.request(bhttp::verb::get, "/transfer/source?bytes=10");
+    ASSERT_TRUE(again);
+    EXPECT_EQ(again->result_int(), 200);
+
+    // A pairing-only key gets nothing (like every other lane).
+    const ClientIdentity unknownKey;
+    HttpClient anon(port, unknownKey);
+    ASSERT_TRUE(anon.connect());
+    const auto refused = anon.request(bhttp::verb::get, "/transfer/probe");
+    ASSERT_TRUE(refused);
+    EXPECT_EQ(refused->result_int(), 403);
+    EXPECT_NE(refused->body().find("device_unknown"), std::string::npos);
 }
 
 }

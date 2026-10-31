@@ -6,6 +6,7 @@
 #include "db/query/upstream/WriteIntent.hpp"
 #include "log/Registry.hpp"
 #include "preview/cache/Maintenance.hpp"
+#include "protocols/http/upload/Resumable.hpp"
 #include "db/query/recovery/Plan.hpp"
 #include "recovery/local/Snapshots.hpp"
 #include "recovery/local/Versions.hpp"
@@ -87,6 +88,8 @@ void vh::db::Janitor::runLoop() {
                 const auto swept = vh::share::Manager{}.sweepStaleUploads();
                 if (swept.failed > 0)
                     log::Registry::vaulthalla()->info("[DBSweeper] Marked {} stale share uploads failed", swept.failed);
+                if (const auto expired = protocols::http::upload::resumable::Service::sweepExpired(); expired > 0)
+                    log::Registry::vaulthalla()->info("[DBSweeper] Removed {} expired resumable upload session(s)", expired);
             } catch (const std::exception& e) {
                 log::Registry::vaulthalla()->warn("[DBSweeper] Failed to run database cleanup: {}", e.what());
             }

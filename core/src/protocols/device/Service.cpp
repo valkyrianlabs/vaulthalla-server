@@ -82,8 +82,13 @@ ListenerStatus Service::listenerStatus() const {
     std::scoped_lock lock(mutex_);
     const auto cfg = config::Registry::get().device_server;
     ListenerStatus out{.enabled = cfg.enabled, .remote = cfg.remote, .port = cfg.port};
-    out.listening = !boundAddress_.empty();
-    if (out.listening) out.address = boundAddress_ + ":" + std::to_string(boundPort_);
+    out.listening = !bound_.empty();
+    if (out.listening) {
+        out.address = bound_.front();
+        out.bind = bound_;
+        out.bound_port = boundPort_;
+        out.ipv6 = boundIpv6_;
+    }
     out.error = error_;
     if (const auto identity = vh::device::currentServerIdentity()) out.server_spki_sha256 = identity->spkiHex();
     out.connections = ws::ConnectionSlot::active(ws::ConnectionSlot::Pool::Device);
@@ -133,23 +138,47 @@ void Service::bindLocked(const bool logFailure) {
     const auto cfg = config::Registry::get().device_server;
     if (!listener_) listener_ = std::make_shared<Listener>(*ioc_, tls_, router_, cfg.max_connections);
     listener_->setMaxConnections(cfg.max_connections);
-    const auto address = asio::ip::make_address(cfg.remote ? "0.0.0.0" : "127.0.0.1");
+    std::vector<std::string> notes;  // what was tried and given up on, for the log
     try {
-        listener_->listen({address, cfg.port});
+        if (cfg.remote) {
+            try {
+                listener_->listen({asio::ip::address_v6::any(), cfg.port});
+            } catch (const std::exception& e) {
+                // IPv6 disabled (or no dual-stack sockets): IPv4 on every interface still serves every client.
+                notes.emplace_back(e.what());
+                listener_->listen({asio::ip::address_v4::any(), cfg.port});
+            }
+        } else {
+            listener_->listen({asio::ip::address_v4::loopback(), cfg.port});
+            try {
+                listener_->listenAlso({asio::ip::address_v6::loopback(), listener_->localEndpoint().port()});
+            } catch (const std::exception& e) {
+                notes.emplace_back(e.what());
+            }
+        }
     } catch (const std::exception& e) {
-        boundAddress_.clear();
+        bound_.clear();
         error_ = e.what();
         if (logFailure)
             log::Registry::runtime()->warn("[DeviceServer] {} (retrying every {}s; `vh device remote status` shows it)",
                                            e.what(), kRetryBind.count());
         return;
     }
-    boundAddress_ = address.to_string();
+    bound_.clear();
+    boundIpv6_ = false;
+    for (const auto& ep : listener_->localEndpoints()) {
+        const auto host = ep.address().is_v6() ? "[" + ep.address().to_string() + "]" : ep.address().to_string();
+        bound_.push_back(host + ":" + std::to_string(ep.port()));
+        boundIpv6_ = boundIpv6_ || ep.address().is_v6();
+    }
     boundPort_ = listener_->localEndpoint().port();
     boundRemote_ = cfg.remote;
     error_.reset();
-    log::Registry::runtime()->info("[DeviceServer] Listening on {}:{} ({})", boundAddress_, boundPort_,
+    std::string joined;
+    for (const auto& b : bound_) joined += (joined.empty() ? "" : ", ") + b;
+    log::Registry::runtime()->info("[DeviceServer] Listening on {} ({})", joined,
                                    cfg.remote ? "remote connections on" : "loopback only");
+    for (const auto& note : notes) log::Registry::runtime()->info("[DeviceServer] Not listening on IPv6: {}", note);
 }
 
 ListenerStatus Service::applyConfig() {
@@ -160,15 +189,15 @@ ListenerStatus Service::applyConfig() {
         closeRemote = !cfg.remote;
         if (isRunning()) {
             const bool wanted = cfg.enabled;
-            const bool bound = !boundAddress_.empty();
+            const bool bound = !bound_.empty();
             const bool same = bound && boundRemote_ == cfg.remote && (cfg.port == 0 || boundPort_ == cfg.port);
             if (!wanted) {
                 if (listener_) listener_->close();
-                boundAddress_.clear();
+                bound_.clear();
                 error_.reset();
             } else if (!same) {
                 if (listener_) listener_->close();
-                boundAddress_.clear();
+                bound_.clear();
                 try {
                     ensureIdentityLocked();
                     bindLocked(true);
@@ -195,7 +224,7 @@ void Service::runLoop() {
             std::scoped_lock lock(mutex_);
             const auto cfg = config::Registry::get().device_server;
             const auto now = std::chrono::steady_clock::now();
-            if (cfg.enabled && boundAddress_.empty() && now >= nextAttempt) {
+            if (cfg.enabled && bound_.empty() && now >= nextAttempt) {
                 try {
                     ensureIdentityLocked();
                     bindLocked(!failureLogged);
@@ -205,7 +234,7 @@ void Service::runLoop() {
                         log::Registry::runtime()->error("[DeviceServer] Cannot start: {} (retrying every {}s)", e.what(),
                                                         kRetryBind.count());
                 }
-                failureLogged = boundAddress_.empty();
+                failureLogged = bound_.empty();
                 if (failureLogged) nextAttempt = now + kRetryBind;
             }
         }
@@ -221,7 +250,7 @@ void Service::shutdown() noexcept {
         std::scoped_lock lock(mutex_);
         if (listener_) listener_->close();
         listener_.reset();
-        boundAddress_.clear();
+        bound_.clear();
         if (ioc_) {
             closeAllDeviceListenerSessions();  // HTTP connections end with their principals
             std::this_thread::sleep_for(kCloseGrace);

@@ -586,6 +586,9 @@ TEST(UsageContract, CapabilityNamesAreUniqueSortedAndWellFormed) {
     const auto book = contract::ws::commands();
     for (const auto& name : names) {
         if (name == "device.server.identity") continue;  // kept by request: the pin over a device session (1.16.0)
+        // The normative transfer protocol's name (1.20.0); it also covers members device.pairing.open and
+        // device.remote.status gained, which `commands` can't show.
+        if (name == "device.endpoints") continue;
         EXPECT_EQ(wsCommand(book, name), nullptr) << name << " is a command name; clients read `commands` for that";
     }
     for (const auto* expected : {"errors.unknown_command_code", "fs.entry.metadata_version", "device.lanes.preview",

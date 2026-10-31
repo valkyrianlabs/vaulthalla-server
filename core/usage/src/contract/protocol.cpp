@@ -11,6 +11,11 @@ namespace vh::contract {
 
 std::vector<Capability> capabilities() {
     std::vector<Capability> out{
+        {.name = "device.endpoints",
+         .since = "1.20.0",
+         .description = "ws device.endpoints answers a paired device with where the listener can be reached; "
+                        "device.pairing.open carries node_id, server_spki_sha256 and endpoints; device.remote.status "
+                        "carries diagnostics (docs/reference/transfer-protocol.md §1)."},
         {.name = "device.lanes.download",
          .since = "1.16.0",
          .description = "The device listener serves GET/HEAD /download/content (Range, conditional requests) as the "
@@ -22,6 +27,10 @@ std::vector<Capability> capabilities() {
          .since = "1.16.0",
          .description = "The device listener serves the /upload session lane (create, PUT, finish) as the device's "
                         "user."},
+        {.name = "device.lanes.transfer",
+         .since = "1.20.0",
+         .description = "The device listener serves GET /transfer/probe, POST /transfer/sink and GET "
+                        "/transfer/source (throughput calibration, nothing stored; transfer-protocol.md §4)."},
         {.name = "device.mcp",
          .since = "1.16.0",
          .description = "The device listener serves remote MCP (JSON-RPC over POST /mcp) as the device's user."},
@@ -49,6 +58,11 @@ std::vector<Capability> capabilities() {
          .since = "1.17.0",
          .description = "PUT /upload/content: a streaming conditional create (If-None-Match) or replace (If-Match) "
                         "on the web and device listeners."},
+        {.name = "http.upload.resumable",
+         .since = "1.20.0",
+         .description = "Resumable uploads under /upload/sessions (create, status, idempotent parts at any offset, "
+                        "finish, cancel) on the web and device listeners, shares included "
+                        "(docs/reference/transfer-protocol.md)."},
         {.name = "ws.envelope.optional_payload",
          .since = "1.16.0",
          .description = "A request frame without `payload` reads as {} (daemons before 1.16 refused it)."},

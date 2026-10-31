@@ -351,6 +351,57 @@ TEST(ShippedConfig, UsesTheNewKeysWithTheirDefaults) {
     EXPECT_EQ(cfg.stats_snapshots.retention_days, 30u);
     EXPECT_EQ(cfg.stats_snapshots.rollup_5m_retention_days, 30u);
     EXPECT_EQ(cfg.stats_snapshots.rollup_1h_retention_days, 365u);
+    EXPECT_EQ(json(cfg.transfer), json(config::TransferConfig{})) << "the shipped transfer section is the defaults";
+}
+
+
+// transfer.* (resumable uploads): every key optional, out-of-range values refused (never clamped), and the same keys
+// round-trip through YAML and JSON.
+TEST_F(ConfigSettingsTest, TransferDefaultsParseAndRefuseOutOfRange) {
+    const auto defaults = load("dev:\n  enabled: false\n");
+    EXPECT_EQ(defaults.transfer.part_default_bytes, 64ull << 20);
+    EXPECT_EQ(defaults.transfer.part_min_bytes, 1ull << 20);
+    EXPECT_EQ(defaults.transfer.max_part_bytes, 512ull << 20);
+    EXPECT_EQ(defaults.transfer.http.max_part_bytes, 64ull << 20);
+    EXPECT_EQ(defaults.transfer.max_parts_in_flight, 4u);
+    EXPECT_EQ(defaults.transfer.commit_workers, 2u);
+    EXPECT_EQ(defaults.transfer.session_idle_ttl_hours, 24u);
+    EXPECT_EQ(defaults.transfer.session_max_age_hours, 168u);
+
+    const auto set = load("transfer:\n  max_parts_in_flight: 8\n  http:\n    max_part_bytes: 95000000\n");
+    EXPECT_EQ(set.transfer.max_parts_in_flight, 8u);
+    EXPECT_EQ(set.transfer.http.max_part_bytes, 95000000u);
+    EXPECT_EQ(set.transfer.max_part_bytes, 512ull << 20) << "a key left out keeps its default";
+
+    for (const auto* bad : {"transfer:\n  max_parts_in_flight: 0\n", "transfer:\n  max_parts_in_flight: 17\n",
+                            "transfer:\n  commit_workers: 9\n", "transfer:\n  max_part_bytes: 4294967297\n",
+                            "transfer:\n  part_min_bytes: 0\n", "transfer:\n  part_default_bytes: 1024\n",
+                            "transfer:\n  http:\n    max_part_bytes: 1073741824\n",
+                            "transfer:\n  http:\n    max_part_bytes: 1024\n",
+                            "transfer:\n  session_idle_ttl_hours: 0\n"})
+        EXPECT_THROW((void)load(bad), std::invalid_argument) << bad;
+}
+
+TEST(ConfigSettingsSerialization, TransferRoundTripsAndSettingsUpdateRefusesOutOfRange) {
+    config::Config cfg;
+    cfg.transfer.max_parts_in_flight = 6;
+    cfg.transfer.http.max_part_bytes = 32ull << 20;
+    const auto node = YAML::convert<config::TransferConfig>::encode(cfg.transfer);
+    config::TransferConfig back;
+    ASSERT_TRUE(YAML::convert<config::TransferConfig>::decode(node, back));
+    EXPECT_EQ(json(back), json(cfg.transfer));
+    EXPECT_EQ(json(cfg).at("transfer").get<config::TransferConfig>().max_parts_in_flight, 6u);
+
+    const json current = config::Registry::get();
+    auto doc = current;
+    doc["transfer"]["commit_workers"] = 0;
+    EXPECT_THROW(ops::config::validateSettings(doc), ops::Invalid);
+    doc = current;
+    doc["transfer"]["http"]["max_part_bytes"] = (1ull << 30);
+    EXPECT_THROW(ops::config::validateSettings(doc), ops::Invalid);
+    doc = current;
+    doc["transfer"]["max_parts_in_flight"] = 8;
+    EXPECT_NO_THROW(ops::config::validateSettings(doc));
 }
 
 }

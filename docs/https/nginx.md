@@ -80,6 +80,115 @@ DNS-01 proves ownership through a temporary TXT record written with the Cloudfla
 
 The credentials file is a root-owned, `0600` Certbot file containing `dns_cloudflare_api_token = <token>`. Creating the token and the file, and the error messages, are covered step by step in [S3 Gateway Setup](/s3-gateway/setup#managed-nginx-s3-domain-endpoint). Certbot reads the file on every renewal, so keep it in place; package purge keeps `/etc/vaulthalla/certbot/` for that reason.
 
+## Uploads Through nginx
+
+Resumable uploads use paths under `/upload`, which the managed site already routes with `client_max_body_size 0` and request buffering off. The `/upload` location sets no timeouts of its own, so nginx's 60-second defaults apply between successive reads and writes. That is enough: a part is answered once it is stored, and finishing an upload waits at most about five seconds because files are sealed in the background. Nothing needs changing for resumable uploads. See [Uploads](/web-console/uploads#reverse-proxies).
+
+## Share Port 443 With Vaulthalla Desktop
+
+Vaulthalla Desktop normally reaches the node directly on port `36972` ([Direct Device Connections](/admin/direct-connections)). Where that port is blocked, nginx can route a dedicated device host name on port 443 to the device listener with a TLS passthrough. The console keeps its own name on the same port.
+
+The passthrough routes at layer 4: a `stream {}` server reads the server name from the TLS ClientHello (`ssl_preread`) and forwards the encrypted connection unchanged. nginx never decrypts device traffic and needs no certificate for the device name. It can't terminate TLS for that name, because the device protocol's client certificate and pinned server key only work end to end.
+
+Because the `stream {}` server takes port 443, the console's HTTPS servers in `http {}` move to a local port (`127.0.0.1:8443` below), and the stream server routes every other name there. The public hop adds a PROXY protocol header, so the console still sees each client's real address (share rate limits and logs depend on it). The device listener doesn't read PROXY headers, so a second local hop removes the header before the device listener.
+
+:::steps
+
+### Install the stream module
+
+Debian and Ubuntu ship it as a separate package:
+
+```bash
+sudo apt install libnginx-mod-stream
+```
+
+### Move the console's HTTPS servers off port 443
+
+In `/etc/nginx/sites-available/vaulthalla`, in every server block that has them (the console's, and the S3 host name's if you have one), replace
+
+```nginx
+    listen 443 ssl;
+    listen [::]:443 ssl;
+```
+
+with
+
+```nginx
+    listen 127.0.0.1:8443 ssl proxy_protocol;
+    set_real_ip_from 127.0.0.1;
+    real_ip_header proxy_protocol;
+```
+
+Leave the port 80 redirect server as it is.
+
+### Add the stream router
+
+Create `/etc/nginx/vaulthalla-stream.conf`, with your device host name in the `map`:
+
+```nginx
+stream {
+    # Route by the name in the TLS ClientHello; nothing is decrypted here.
+    map $ssl_preread_server_name $vaulthalla_tls_route {
+        device.example.com  127.0.0.1:8441;   # Vaulthalla Desktop -> device hop below
+        default             127.0.0.1:8443;   # the console (and S3 host name) in http {}
+    }
+
+    server {
+        listen 443;
+        listen [::]:443;
+        ssl_preread on;
+        proxy_pass $vaulthalla_tls_route;
+        proxy_protocol on;                    # the console learns the client's address
+        proxy_connect_timeout 10s;
+        proxy_timeout 1h;
+    }
+
+    # Device hop: accepts the PROXY header and passes the TLS stream on untouched.
+    server {
+        listen 127.0.0.1:8441 proxy_protocol;
+        proxy_pass 127.0.0.1:36972;
+        proxy_timeout 1h;
+    }
+}
+```
+
+Then include it at the top level of `/etc/nginx/nginx.conf`, outside `http {}`, for example just before the `http {` line:
+
+```nginx
+include /etc/nginx/vaulthalla-stream.conf;
+```
+
+### Reload and check
+
+```bash
+sudo nginx -t && sudo systemctl reload nginx
+sudo ss -ltnp 'sport = :443'
+sudo tail -n 20 /var/log/nginx/error.log
+```
+
+`nginx -t` doesn't catch two servers claiming port 443. If one is left in `http {}`, the reload logs `bind() to 0.0.0.0:443 failed (98: Address already in use)` and nginx keeps running the previous configuration (a full restart would fail).
+
+### Advertise it and publish the name
+
+Add the passthrough to `config.yaml` and restart the daemon:
+
+```yaml
+device_server:
+  advertise:
+    public:
+      - {host: device.example.com, port: 443, kind: passthrough}
+```
+
+Point `device.example.com` at the host's public address with a **DNS-only** record. A Cloudflare-proxied (orange-cloud) record terminates TLS at Cloudflare and can never carry device connections.
+
+:::
+
+The passthrough reaches the listener over loopback, so it works with remote connections off, and the node sees passthrough devices as `127.0.0.1`. What that means is covered in [TLS Passthrough On Port 443](/admin/direct-connections#tls-passthrough-on-port-443).
+
+:::callout[Rerunning vh setup nginx undoes the move]{variant="warning"}
+`sudo vh setup nginx` regenerates the managed site, which writes `listen 443 ssl` back into it. The reload then fails as described above: the running nginx keeps the old configuration, but nginx won't start at all on its next restart or reboot until you move the HTTPS servers to `127.0.0.1:8443` again. Package upgrades never rewrite an existing site file. After anything rewrites the site, check that no server in `http {}` listens on 443.
+:::
+
 ## Check And Remove
 
 ```bash
