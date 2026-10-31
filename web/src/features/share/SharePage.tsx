@@ -207,7 +207,10 @@ const Dropbox = ({ source }: { source: ReturnType<typeof shareSource> }) => {
               ) : (
                 <Spinner className="size-4" />
               )}
-              <span className="min-w-0 flex-1 truncate text-fg">{task.label}</span>
+              <span className="min-w-0 flex-1 truncate text-fg" title={task.failures?.join('\n')}>
+                {task.label}
+                {task.note && task.status !== 'done' && task.status !== 'failed' ? <span className="block truncate text-xs text-fg-subtle">{task.note}</span> : null}
+              </span>
               <span className={cn('text-xs text-fg-subtle tabular', task.status === 'failed' && 'text-danger')}>
                 {task.status === 'failed' ? task.error : task.status === 'done' ? `${formatBytes(task.bytesTotal)} sent` : `${formatBytes(task.bytesDone)} / ${formatBytes(task.bytesTotal)}`}
               </span>
