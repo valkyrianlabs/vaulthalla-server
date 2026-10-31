@@ -6,10 +6,10 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = 'b4a6c4e186b5ff132cb86abcbd04f974c005567d32fb20177b96c3cf27958416'
+export const WS_CONTRACT_HASH = 'b7a3f3543f599617594861835a33433601f8aaf0ee816186fa4f59044545c69d'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = '00cc5309cf6f162bb2881d6ab73e6273170a560d30e0dc588694c81dfe1f57da'
+export const WS_MODELS_HASH = '4274711b101eac2e0a676381cf1bd47ed66046040681d2a34927762cd81996e7'
 
 // The ws protocol range this book is (core/usage WsProtocol.hpp): send it in meta.hello.
 export const WS_PROTOCOL_VERSION = 1
@@ -27,6 +27,7 @@ export const WS_CAPABILITIES: readonly string[] = [
   'fs.entry.metadata_version',
   'fs.entry.stable_id',
   'http.upload.content',
+  'http.upload.resumable',
   'ws.envelope.optional_payload',
 ]
 
@@ -1502,6 +1503,7 @@ export interface WsModels {
     auditing: WsModels['AuditConfig']
     logging: WsModels['LoggingConfig']
     dev: WsModels['DevConfig']
+    transfer: WsModels['TransferConfig']
   }
   /**
    * A file or directory inside a share, as the share session sees it (share-relative path, no ownership):
@@ -1940,6 +1942,26 @@ export interface WsModels {
    * caching.thumbnails.* (Config.cpp to_json(ThumbnailsConfig)).
    */
   'ThumbnailsConfig': { formats: string[]; sizes: number[]; expiry_days: number }
+  /**
+   * transfer.* (Config.cpp to_json(TransferConfig)): resumable uploads (/upload/sessions,
+   * docs/reference/transfer-protocol.md). Out-of-range values are refused (invalid), never clamped.
+   */
+  'TransferConfig': {
+    part_default_bytes: number
+    part_min_bytes: number
+    max_part_bytes: number
+    max_parts_in_flight: number
+    max_file_bytes: number
+    max_session_files: number
+    commit_workers: number
+    session_idle_ttl_hours: number
+    session_max_age_hours: number
+    http: WsModels['TransferHttpConfig']
+  }
+  /**
+   * transfer.http.* (Config.cpp to_json(TransferHttpConfig)).
+   */
+  'TransferHttpConfig': { max_part_bytes: number }
   /**
    * The provider account behind an API key (storage::s3::provider::admin::to_json(AccountIdentity)).
    */
@@ -4283,6 +4305,7 @@ export interface WsContract {
       auditing?: WsPartial<WsModels['AuditConfig']>
       logging?: WsPartial<WsModels['LoggingConfig']>
       dev?: WsPartial<WsModels['DevConfig']>
+      transfer?: WsPartial<WsModels['TransferConfig']>
     }
     response: { settings: WsModels['Settings'] }
   }

@@ -51,6 +51,11 @@
       "since": "1.17.0"
     },
     {
+      "description": "Resumable uploads under /upload/sessions (create, status, idempotent parts at any offset, finish, cancel) on the web and device listeners, shares included (docs/reference/transfer-protocol.md).",
+      "name": "http.upload.resumable",
+      "since": "1.20.0"
+    },
+    {
       "description": "A request frame without `payload` reads as {} (daemons before 1.16 refused it).",
       "name": "ws.envelope.optional_payload",
       "since": "1.16.0"
@@ -9465,6 +9470,14 @@
           "types": [
             "object"
           ]
+        },
+        {
+          "model": "TransferConfig",
+          "name": "transfer",
+          "required": true,
+          "types": [
+            "object"
+          ]
         }
       ],
       "name": "Settings"
@@ -12469,6 +12482,113 @@
         }
       ],
       "name": "ThumbnailsConfig"
+    },
+    {
+      "description": "transfer.* (Config.cpp to_json(TransferConfig)): resumable uploads (/upload/sessions, docs/reference/transfer-protocol.md). Out-of-range values are refused (invalid), never clamped.",
+      "fields": [
+        {
+          "minimum": 0,
+          "name": "part_default_bytes",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 1,
+          "name": "part_min_bytes",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Device listener cap.",
+          "maximum": 4294967296,
+          "minimum": 0,
+          "name": "max_part_bytes",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "maximum": 16,
+          "minimum": 1,
+          "name": "max_parts_in_flight",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "0 = only the format limit.",
+          "minimum": 0,
+          "name": "max_file_bytes",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "maximum": 65536,
+          "minimum": 1,
+          "name": "max_session_files",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "maximum": 8,
+          "minimum": 1,
+          "name": "commit_workers",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 1,
+          "name": "session_idle_ttl_hours",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 1,
+          "name": "session_max_age_hours",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "model": "TransferHttpConfig",
+          "name": "http",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "name": "TransferConfig"
+    },
+    {
+      "description": "transfer.http.* (Config.cpp to_json(TransferHttpConfig)).",
+      "fields": [
+        {
+          "description": "Web listener cap; keep <= 95000000 behind Cloudflare Free/Pro.",
+          "minimum": 0,
+          "name": "max_part_bytes",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "name": "TransferHttpConfig"
     },
     {
       "description": "The provider account behind an API key (storage::s3::provider::admin::to_json(AccountIdentity)).",
@@ -17230,7 +17350,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "00cc5309cf6f162bb2881d6ab73e6273170a560d30e0dc588694c81dfe1f57da",
+  "models_hash": "4274711b101eac2e0a676381cf1bd47ed66046040681d2a34927762cd81996e7",
   "protocol": {
     "min": 1,
     "version": 1
@@ -30171,6 +30291,16 @@
           "types": [
             "object"
           ]
+        },
+        {
+          "description": "Partial section: only the members to change.",
+          "model": "TransferConfig",
+          "name": "transfer",
+          "partial": true,
+          "required": false,
+          "types": [
+            "object"
+          ]
         }
       ],
       "refusal_codes": [
@@ -38417,5 +38547,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "b4a6c4e186b5ff132cb86abcbd04f974c005567d32fb20177b96c3cf27958416"
+  "ws_hash": "b7a3f3543f599617594861835a33433601f8aaf0ee816186fa4f59044545c69d"
 }

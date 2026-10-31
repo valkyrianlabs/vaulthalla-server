@@ -9,6 +9,7 @@
 #include "protocols/http/handler/Handlers.hpp"
 #include "protocols/http/upload/Content.hpp"
 #include "protocols/http/upload/Coordinator.hpp"
+#include "protocols/http/upload/Resumable.hpp"
 #include "protocols/ws/Session.hpp"
 #include "runtime/Deps.hpp"
 #include "stats/model/CacheStats.hpp"
@@ -138,6 +139,8 @@ Response Router::route(request&& req) {
     if (const auto& handler = routeOverride()) return handler(std::move(req));
     const std::string_view target(req.target().data(), req.target().size());
 
+    // Resumable uploads (/upload/sessions) before the legacy session lane, whose /upload/<id> routes it would shadow.
+    if (upload::resumable::isRoute(target)) return upload::resumable::handle(std::move(req));
     if (target.starts_with("/upload/text")) return handler::saveText(std::move(req));
     if (target == "/upload/content" || target.starts_with("/upload/content?")) return upload::content::handle(std::move(req));
     if (target.starts_with("/upload")) return handleUpload(std::move(req));

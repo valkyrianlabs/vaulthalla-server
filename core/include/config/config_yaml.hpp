@@ -902,6 +902,58 @@ struct convert<MountConfig> {
 };
 
 template<>
+struct convert<TransferHttpConfig> {
+    static Node encode(const TransferHttpConfig& rhs) {
+        Node node;
+        node["max_part_bytes"] = rhs.max_part_bytes;
+        return node;
+    }
+
+    static bool decode(const Node& node, TransferHttpConfig& rhs) {
+        if (!node.IsMap()) return false;
+        rhs.max_part_bytes = node["max_part_bytes"].as<uint64_t>(TransferHttpConfig{}.max_part_bytes);
+        return true;
+    }
+};
+
+// Every key is optional (a missing one keeps its default); out-of-range values are refused by loadConfig
+// (validateTransfer), never clamped.
+template<>
+struct convert<TransferConfig> {
+    static Node encode(const TransferConfig& rhs) {
+        Node node;
+        node["part_default_bytes"] = rhs.part_default_bytes;
+        node["part_min_bytes"] = rhs.part_min_bytes;
+        node["max_part_bytes"] = rhs.max_part_bytes;
+        node["max_parts_in_flight"] = rhs.max_parts_in_flight;
+        node["max_file_bytes"] = rhs.max_file_bytes;
+        node["max_session_files"] = rhs.max_session_files;
+        node["commit_workers"] = rhs.commit_workers;
+        node["session_idle_ttl_hours"] = rhs.session_idle_ttl_hours;
+        node["session_max_age_hours"] = rhs.session_max_age_hours;
+        node["http"] = rhs.http;
+        return node;
+    }
+
+    static bool decode(const Node& node, TransferConfig& rhs) {
+        if (!node.IsMap()) return false;
+        const TransferConfig d;
+        rhs.part_default_bytes = node["part_default_bytes"].as<uint64_t>(d.part_default_bytes);
+        rhs.part_min_bytes = node["part_min_bytes"].as<uint64_t>(d.part_min_bytes);
+        rhs.max_part_bytes = node["max_part_bytes"].as<uint64_t>(d.max_part_bytes);
+        rhs.max_parts_in_flight = node["max_parts_in_flight"].as<uint32_t>(d.max_parts_in_flight);
+        rhs.max_file_bytes = node["max_file_bytes"].as<uint64_t>(d.max_file_bytes);
+        rhs.max_session_files = node["max_session_files"].as<uint32_t>(d.max_session_files);
+        rhs.commit_workers = node["commit_workers"].as<uint32_t>(d.commit_workers);
+        rhs.session_idle_ttl_hours = node["session_idle_ttl_hours"].as<uint32_t>(d.session_idle_ttl_hours);
+        rhs.session_max_age_hours = node["session_max_age_hours"].as<uint32_t>(d.session_max_age_hours);
+        rhs.http = d.http;
+        if (const auto http = node["http"]) convert<TransferHttpConfig>::decode(http, rhs.http);
+        return true;
+    }
+};
+
+template<>
 struct convert<DevConfig> {
     static Node encode(const DevConfig& rhs) {
         Node node;
