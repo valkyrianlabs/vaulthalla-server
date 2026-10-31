@@ -4,7 +4,10 @@
 - Toolchain: Node `24.13` (`web/.nvmrc`), `packageManager: pnpm@11.0.8`. `web/package.json` also carries `version`
   (release-managed, kept in sync with `VERSION`).
 - Scripts: `dev` (turbopack), `dev:e2e`, `build`, `start`, `typecheck` (`next typegen && tsc --noEmit`: generates `next-env.d.ts`, so it works without a prior build), `lint` (`eslint src`),
-  `colors` (design-token guard), `test` (= typecheck + lint + colors; **there is no unit test runner**),
+  `colors` (design-token guard), `test` (= typecheck + lint + colors + `test:unit`), `test:unit` (`node --test
+  'src/**/*.test.ts'` on Node's own TypeScript stripping: no runner dependency, nothing in the bundle; tested modules
+  must be pure, use erasable syntax only and import each other by relative path **with** the `.ts` extension, which
+  `allowImportingTsExtensions` in `tsconfig.json` permits; `@/` aliases don't resolve under plain Node),
   `budgets` (first-load JS gate, needs a `build`), `test:e2e` (Playwright, `web/tests/e2e`).
 
 ## Architecture (since the 2026-10 overhaul)
@@ -101,7 +104,10 @@
 - `meta.hello` (where `meta.contract.get` is allowed: signed-in web, devices, pairing-only) is the protocol handshake for clients released on their own schedule (Desktop): server
   version, negotiated protocol version, capabilities, registered commands, contract identity
   (`docs/reference/ws-protocol.md`). The generated TS exports `WS_PROTOCOL_VERSION`, `WS_PROTOCOL_MIN` and
-  `WS_CAPABILITIES`; the console itself still checks the contract with `meta.contract.get`.
+  `WS_CAPABILITIES`; the console itself still checks the contract with `meta.contract.get`. It sends `meta.hello`
+  (`{client: {name: 'Vaulthalla Web'}}`, no protocol range, so the session keeps the server's minimum as before) only
+  to read capabilities, cached 10 min, from the lazy upload chunk (`features/files/upload/resumable.ts`). Share
+  sessions may not say hello.
 
 ## Sync conflicts (#187)
 
@@ -152,7 +158,12 @@ permission bits (D3): any signed-in user, super-admin parts gated with `useCan({
   daemon closes only the caller's own window without `any`; a dialog that got `conflict` has none); the close is
   deferred one tick so React's dev double-invoke keeps the window. The instructions show `host:port` with the `port`
   from `device.pairing.open` and warn when its `remote` is off (any user; super admins get a link to turn it on and,
-  from `device.remote.status`, a warning when the listener isn't listening).
+  from `device.remote.status`, a warning when the listener isn't listening). With `device.endpoints` the open also
+  carries `endpoints` + `server_spki_sha256` (transfer-protocol.md §1.2): the dialog lists the candidates
+  (`pair-endpoint`, IPv6 bracketed, copy-all) and an "Open in Vaulthalla Desktop" link
+  `vaulthalla://pair?node=&spki=&endpoints=` (`pairLink.ts`; node omitted while the open carries no `node_id`; list
+  percent-encoded), and warns everyone when `endpoints.listening` is false. Until the contract is regenerated these
+  members are read through `readPairingBootstrap`, a narrow guard.
 - **Remote connections** (`RemoteConnectionsCard`, `/devices/all#remote-connections`): `device.remote.status` (30 s
   poll) → status badge, bind address, port (always the daemon's, never a console constant), connections, bind error,
   server key fingerprint (grouped, copyable); `Switch` → `confirm()` → `device.remote.enable|disable`, whose answer
@@ -186,7 +197,7 @@ page, accounts with a vault remove permission) lists `storage.vault.deleted.list
   `PreviewSheet`. Inside them, CodeMirror (`TextEditor.tsx`, per-extension language chunks), react-markdown
   (`MarkdownView.tsx`) and the 3D engine (`ModelViewer.tsx`, the only module allowed to import `@babylonjs/*`)
   are lazy again. Nothing under `preview/` may be imported statically from `FileBrowser`, `entries.ts`, `FileIcon`
-  or the share page (first-load headroom is ~5 KB on `/files`, ~6.5 KB on `/share`).
+  or the share page (first-load headroom is ~2 KB on `/files`, ~4.3 KB on `/share` as of the resumable-upload change).
 - **HTTP per renderer** (all same-origin with the cookie; `FsSource` builds the URLs, `share=1&path=` on links):
   image `GET /preview?size=1024`; PDF `GET /preview?page=N&size=1536|2048` → blob URL, page count from
   `X-Vaulthalla-Page-Count`; SVG/WebP/video/audio `src=/download/content?disposition=inline` (Range is the
@@ -261,7 +272,23 @@ wasm + wrapper emitted to `/_next/static/media` via `new URL(..., import.meta.ur
 - The WS URL is `ws(s)://<location.host>/ws` unless `NEXT_PUBLIC_VAULTHALLA_WS_ORIGIN` is set. The app expects a reverse
   proxy that routes `/ws` → 36969 and `/preview|/download|/upload` → 36970 (nginx in prod, `Caddyfile` in dev).
   HTTP uploads: `POST /upload/session[?share=1]` → `PUT /upload/<id>/files/<fileId>` → `POST /upload/<id>/finish`
-  (`DELETE` on failure); the client splits large drops into several sessions. Downloads are preflighted with a
+  (`DELETE` on failure); the client splits large drops into several sessions. **Resumable uploads**
+  (`docs/reference/transfer-protocol.md` §3, capability `http.upload.resumable`): `transfers.ts` `import()`s
+  `features/files/upload/resumable.ts` per upload (never first-load JS); console sources check `meta.hello`
+  capabilities, share sources probe with the create itself (an older daemon's plain-text 404/405 → whole-file flow).
+  `POST /upload/sessions` (§3.1 body; `vault_id` omitted on shares, `path` the full target path) → parts `PUT
+  /upload/sessions/<id>/files/<fid>?offset=` (`?share=1&offset=` on links) → `POST …/finish` (202 polled with
+  Retry-After) → `DELETE` on cancel. The engine (`upload/engine.ts`, pure, injected HTTP; `plan.ts` part planning,
+  `retry.ts` policy, `digest.ts`, `protocol.ts` readers, `resumeStore.ts`) sends files one at a time, ≤ min(3,
+  `max_in_flight`) parts each, part size `default_bytes` capped by `max_bytes` and 64 MiB, never < `min_bytes` but a
+  file's last part, every body asserted < 100 000 000 B (Cloudflare). `Content-Digest: sha-256=:…:` only where
+  `crypto.subtle` exists (secure contexts; the default plain-HTTP site sends none). Network errors, stalls (120 s
+  without progress/answer), 5xx/503 busy and 429 back off (equal jitter, 1 s doubling to 30 s, Retry-After as floor);
+  two lost answers in a row or 409 `part_overlap`/`part_conflict` read `GET /upload/sessions/<id>` and send only the
+  gaps; 20 failures in a row end the batch as "choose the same files again to resume". sessionStorage
+  `vaulthalla-upload-resume` maps (source key, path, size, lastModified) → (upload_id, file_id, expires_at); choosing
+  the same file again continues that session ("Resuming … already on the server" note); logout clears it. Per-file
+  failures land in `TransferTask.failures` (first 3 shown in the transfers popover). Downloads are preflighted with a
   `HEAD` of the same `/download` URL (status → failed-task message; a folder's 413 means too many entries) before
   handing the URL to the browser with `anchor.download`. Folder ZIPs report their exact size like files. Browsers
   strip a leading dot from saved names themselves (Chromium `SanitizeGeneratedFileName`, Firefox
@@ -292,7 +319,7 @@ no 3D engine chunk on an image preview, preview-only vs download share links) wi
 proves the console's own rules: history sheet, typed `RESTORE`, disclosure acknowledgements, unknown costs never $0.
 `devices.spec.ts` scripts `device.*` the same way (list/rename/revoke, number matching right and wrong code, conflict
 never closed, countdown by `server_time`, the open's port in the instructions, super-admin remote switch with a
-non-default port) and patches the `auth.refresh` user to a super admin
+non-default port, advertised endpoints and the `vaulthalla://pair` link, none from an older server) and patches the `auth.refresh` user to a super admin
 where needed (UI gating only). With `VAULTHALLA_E2E_OFFLINE=1` it needs no daemon at all: `globalSetup` skips
 provisioning, a dummy `refresh` cookie passes the middleware, `auth.refresh` is answered with a scripted user and every
 other command is refused (`pnpm exec playwright test tests/e2e/devices.spec.ts` starts `pnpm dev:e2e`).
