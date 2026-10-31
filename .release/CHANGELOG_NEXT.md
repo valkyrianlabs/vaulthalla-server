@@ -7,3 +7,5 @@ Format: one "- " bullet per change (concise, technical). Indent continuation lin
 Optional "## Section" headings group bullets; if used, every bullet must be under one.
 One level of nested "  - " detail bullets is allowed. Consolidate; don't paste commit logs.
 -->
+- Web console: replace the default Next.js favicon with the Vaulthalla logo
+  (favicon.ico, icon.png and apple-icon.png).
