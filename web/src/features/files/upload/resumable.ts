@@ -9,9 +9,8 @@ import { browserHttp } from './http.ts'
 import { contentDigest } from './digest.ts'
 import { createResumeStore, resumeKey } from './resumeStore.ts'
 
-// meta.hello capability for /upload/sessions (transfer-protocol.md §3).
-// TODO(contract): once wsContract.ts is regenerated with it, check WS_CAPABILITIES includes this name (or import a
-// generated constant) instead of spelling it here.
+// meta.hello capability for /upload/sessions (transfer-protocol.md §3); listed in WS_CAPABILITIES (wsContract.ts).
+// Spelled here so this lazy chunk does not pull in the generated contract.
 export const RESUMABLE_UPLOADS_CAPABILITY = 'http.upload.resumable'
 
 const HELLO = { client: { name: 'Vaulthalla Web' } } as const

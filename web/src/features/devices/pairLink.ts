@@ -3,8 +3,8 @@
 // candidate addresses and a vaulthalla://pair link that prefills Vaulthalla Desktop's Add Node sheet; Desktop treats
 // the link as untrusted input and the number match stays authoritative.
 //
-// TODO(contract): these members aren't in the generated contract yet, so they are read through the narrow guard below.
-// Once wsContract.ts is regenerated, type them from Response<'device.pairing.open'> and drop readPairingBootstrap.
+// The members are typed in the generated contract (Response<'device.pairing.open'>), but they end up in a URL, so they
+// are still read through the guard below: a host that isn't a plain name or address never reaches the link.
 // Pure: see pairLink.test.ts.
 
 export interface EndpointCandidate {
