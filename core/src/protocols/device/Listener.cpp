@@ -5,6 +5,7 @@
 #include "device/Peer.hpp"
 #include "device/ServerIdentity.hpp"
 #include "log/Registry.hpp"
+#include "protocols/device/Endpoints.hpp"
 #include "protocols/device/Mcp.hpp"
 #include "protocols/http/Session.hpp"
 #include "protocols/ws/ConnectionLimit.hpp"
@@ -56,9 +57,10 @@ bool isPath(const std::string_view target, const std::string_view path) {
     return target == path || (target.starts_with(path) && target.size() > path.size() && target[path.size()] == '?');
 }
 
-// The HTTP routes served on the listener: the lanes nginx forwards on the web side, and MCP.
+// The HTTP routes served on the listener: the lanes nginx forwards on the web side, the transfer calibration lanes
+// (this listener only), and MCP.
 bool isHttpLane(const std::string_view target) {
-    for (const std::string_view prefix : {"/preview", "/download", "/upload"})
+    for (const std::string_view prefix : {"/preview", "/download", "/upload", "/transfer"})
         if (target.starts_with(prefix) && (target.size() == prefix.size() || target[prefix.size()] == '/' ||
                                            target[prefix.size()] == '?'))
             return true;
@@ -104,7 +106,12 @@ private:
     void onHandshake(const beast::error_code& ec) {
         if (ec) return abort("TLS handshake failed: " + ec.message());
         try {
-            address_ = socket().remote_endpoint().address().to_string();
+            // A dual-stack socket reports IPv4 clients as ::ffff:a.b.c.d; everything downstream (last_ip, pairing
+            // rate limits, the loopback test) sees the IPv4 address.
+            auto remote = socket().remote_endpoint().address();
+            if (remote.is_v6() && remote.to_v6().is_v4_mapped())
+                remote = asio::ip::make_address_v4(asio::ip::v4_mapped, remote.to_v6());
+            address_ = remote.to_string();
         } catch (...) {
             return abort("peer vanished");
         }
@@ -119,6 +126,7 @@ private:
                                        e.what());
             return abort("authorization failed");
         }
+        if (authorization_.user) endpoints::noteDeviceHandshake(address_);
 
         // The header only: an upload's body is the HTTP session's to stream.
         parser_ = std::make_unique<protocols::http::HeaderParser>();
@@ -221,46 +229,81 @@ std::shared_ptr<ssl::context> makeServerContext(const vh::device::ServerIdentity
 
 Listener::Listener(asio::io_context& ioc, std::shared_ptr<ssl::context> tls, std::shared_ptr<ws::Router> router,
                    const unsigned int maxConnections)
-    : ioc_(ioc), acceptor_(ioc), tls_(std::move(tls)), router_(std::move(router)), maxConnections_(maxConnections) {}
+    : ioc_(ioc), tls_(std::move(tls)), router_(std::move(router)), maxConnections_(maxConnections) {}
+
+namespace {
+
+std::shared_ptr<tcp::acceptor> openAcceptor(asio::io_context& ioc, const tcp::endpoint& endpoint) {
+    auto acceptor = std::make_shared<tcp::acceptor>(ioc);
+    beast::error_code ec;
+    acceptor->open(endpoint.protocol(), ec);
+    if (!ec) acceptor->set_option(asio::socket_base::reuse_address(true), ec);
+    // [::] takes IPv4 too (as ::ffff:a.b.c.d); [::1] only itself.
+    if (!ec && endpoint.address().is_v6())
+        acceptor->set_option(asio::ip::v6_only(!endpoint.address().is_unspecified()), ec);
+    if (!ec) acceptor->bind(endpoint, ec);
+    if (!ec) acceptor->listen(asio::socket_base::max_listen_connections, ec);
+    if (ec) {
+        beast::error_code ignored;
+        acceptor->close(ignored);
+        const auto host = endpoint.address().is_v6() ? "[" + endpoint.address().to_string() + "]"
+                                                     : endpoint.address().to_string();
+        throw std::runtime_error("cannot listen on " + host + ":" + std::to_string(endpoint.port()) + ": " +
+                                 ec.message());
+    }
+    return acceptor;
+}
+
+}
 
 void Listener::listen(const tcp::endpoint& endpoint) {
     close();
-    beast::error_code ec;
-    acceptor_.open(endpoint.protocol(), ec);
-    if (!ec) acceptor_.set_option(asio::socket_base::reuse_address(true), ec);
-    if (!ec) acceptor_.bind(endpoint, ec);
-    if (!ec) acceptor_.listen(asio::socket_base::max_listen_connections, ec);
-    if (ec) {
-        beast::error_code ignored;
-        acceptor_.close(ignored);
-        throw std::runtime_error("cannot listen on " + endpoint.address().to_string() + ":" +
-                                 std::to_string(endpoint.port()) + ": " + ec.message());
-    }
+    auto acceptor = openAcceptor(ioc_, endpoint);
+    acceptors_.push_back(acceptor);
     closed_.store(false, std::memory_order_release);
-    doAccept();
+    doAccept(acceptor);
+}
+
+void Listener::listenAlso(const tcp::endpoint& endpoint) {
+    if (closed_.load(std::memory_order_acquire)) return listen(endpoint);
+    auto acceptor = openAcceptor(ioc_, endpoint);
+    acceptors_.push_back(acceptor);
+    doAccept(acceptor);
 }
 
 void Listener::close() noexcept {
     closed_.store(true, std::memory_order_release);
-    beast::error_code ec;
-    acceptor_.cancel(ec);
-    acceptor_.close(ec);
+    for (const auto& acceptor : acceptors_) {
+        beast::error_code ec;
+        acceptor->cancel(ec);
+        acceptor->close(ec);
+    }
+    acceptors_.clear();
 }
 
 tcp::endpoint Listener::localEndpoint() const {
-    beast::error_code ec;
-    auto ep = acceptor_.local_endpoint(ec);
-    return ec ? tcp::endpoint{} : ep;
+    const auto all = localEndpoints();
+    return all.empty() ? tcp::endpoint{} : all.front();
 }
 
-void Listener::doAccept() {
-    if (closed_.load(std::memory_order_acquire) || !acceptor_.is_open()) return;
-    acceptor_.async_accept(asio::make_strand(ioc_), [self = shared_from_this()](const beast::error_code& ec,
-                                                                                tcp::socket socket) mutable {
+std::vector<tcp::endpoint> Listener::localEndpoints() const {
+    std::vector<tcp::endpoint> out;
+    for (const auto& acceptor : acceptors_) {
+        beast::error_code ec;
+        const auto ep = acceptor->local_endpoint(ec);
+        if (!ec) out.push_back(ep);
+    }
+    return out;
+}
+
+void Listener::doAccept(const std::shared_ptr<tcp::acceptor>& acceptor) {
+    if (closed_.load(std::memory_order_acquire) || !acceptor->is_open()) return;
+    acceptor->async_accept(asio::make_strand(ioc_), [self = shared_from_this(), acceptor](const beast::error_code& ec,
+                                                                                         tcp::socket socket) mutable {
         if (ec) {
             if (ec == asio::error::operation_aborted || self->closed_.load(std::memory_order_acquire)) return;
             log::Registry::ws()->debug("[DeviceServer] accept error: {}", ec.message());
-            return self->doAccept();
+            return self->doAccept(acceptor);
         }
         const auto limit = self->maxConnections_.load(std::memory_order_relaxed);
         if (auto slot = ws::ConnectionSlot::tryAcquire(limit, ws::ConnectionSlot::Pool::Device)) {
@@ -274,7 +317,7 @@ void Listener::doAccept() {
             beast::error_code ignored;
             socket.close(ignored);
         }
-        self->doAccept();
+        self->doAccept(acceptor);
     });
 }
 

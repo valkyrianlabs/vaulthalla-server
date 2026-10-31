@@ -306,12 +306,68 @@ Config& Config::operator=(Config&&) noexcept = default;
         c.max_preview_size_bytes = j.value("max_preview_size_bytes", MAX_PREVIEW_SIZE_BYTES);
     }
 
+    namespace {
+    // A host as a client would dial it: a DNS name or an IP literal, no scheme, port, path or user part. IPv6
+    // literals may come bracketed; they are stored bare.
+    std::string advertisedHost(std::string host, const std::string& where) {
+        if (host.size() >= 2 && host.front() == '[' && host.back() == ']') host = host.substr(1, host.size() - 2);
+        const bool ok = !host.empty() && host.size() <= 253 && std::ranges::all_of(host, [](const unsigned char ch) {
+            return std::isalnum(ch) != 0 || ch == '.' || ch == '-' || ch == '_' || ch == ':';
+        });
+        if (!ok) throw std::invalid_argument(where + ": '" + host + "' is not a host name or IP address");
+        return host;
+    }
+    }
+
+    void normalize(DeviceAdvertiseConfig &c) {
+        for (const auto& glob : c.exclude_interfaces)
+            if (glob.empty()) throw std::invalid_argument("device_server.advertise.exclude_interfaces: empty pattern");
+        for (auto& name : c.hostnames) name = advertisedHost(name, "device_server.advertise.hostnames");
+        for (auto& e : c.public_) {
+            e.host = advertisedHost(e.host, "device_server.advertise.public");
+            if (e.kind != "lan" && e.kind != "vpn" && e.kind != "wan" && e.kind != "passthrough")
+                throw std::invalid_argument("device_server.advertise.public: kind must be lan, vpn, wan or "
+                                            "passthrough, got '" + e.kind + "'");
+        }
+    }
+
+    void to_json(nlohmann::json &j, const DeviceAdvertiseEndpoint &c) {
+        j = {{"host", c.host}, {"port", c.port}, {"kind", c.kind}};
+    }
+
+    void from_json(const nlohmann::json &j, DeviceAdvertiseEndpoint &c) {
+        c.host = j.value("host", std::string{});
+        c.port = j.value("port", static_cast<uint16_t>(0));
+        c.kind = j.value("kind", std::string("wan"));
+    }
+
+    void to_json(nlohmann::json &j, const DeviceAdvertiseConfig &c) {
+        j = {
+            {"interfaces", c.interfaces},
+            {"include_ipv6", c.include_ipv6},
+            {"exclude_interfaces", c.exclude_interfaces},
+            {"hostnames", c.hostnames},
+            {"public", c.public_}
+        };
+    }
+
+    void from_json(const nlohmann::json &j, DeviceAdvertiseConfig &c) {
+        const DeviceAdvertiseConfig defaults;
+        c.interfaces = j.value("interfaces", defaults.interfaces);
+        c.include_ipv6 = j.value("include_ipv6", defaults.include_ipv6);
+        c.exclude_interfaces = j.value("exclude_interfaces", defaults.exclude_interfaces);
+        c.hostnames = j.value("hostnames", defaults.hostnames);
+        c.public_ = j.value("public", defaults.public_);
+        normalize(c);
+    }
+
     void to_json(nlohmann::json &j, const DeviceServerConfig &c) {
         j = {
             {"enabled", c.enabled},
             {"port", c.port},
             {"remote", c.remote},
-            {"max_connections", c.max_connections}
+            {"max_connections", c.max_connections},
+            {"advertise", c.advertise}
         };
     }
 
@@ -320,6 +376,7 @@ Config& Config::operator=(Config&&) noexcept = default;
         c.port = j.value("port", kDefaultDeviceServerPort);
         c.remote = j.value("remote", false);
         c.max_connections = j.value("max_connections", 256u);
+        c.advertise = j.value("advertise", DeviceAdvertiseConfig{});
     }
 
     void to_json(nlohmann::json &j, const S3GatewayMultipartConfig &c) {

@@ -33,9 +33,9 @@ Request `{}`. Never answered on pairing-only or console sessions (no address dis
     {"host": "::1",              "port": 36972, "kind": "loopback",    "source": "interface", "interface": "lo"},
     {"host": "10.0.0.11",        "port": 36972, "kind": "lan",         "source": "interface", "interface": "enp3s0"},
     {"host": "fd00::11",         "port": 36972, "kind": "lan",         "source": "interface", "interface": "enp3s0"},
-    {"host": "100.101.1.2",      "port": 36972, "kind": "vpn",         "source": "interface", "interface": "tailscale0"},
     {"host": "vh-storage.local", "port": 36972, "kind": "lan",         "source": "mdns"},
     {"host": "nas.home.arpa",    "port": 36972, "kind": "lan",         "source": "config"},
+    {"host": "100.101.1.2",      "port": 36972, "kind": "vpn",         "source": "interface", "interface": "tailscale0"},
     {"host": "device.example.com","port": 36972,"kind": "wan",         "source": "config"},
     {"host": "device.example.com","port": 443,  "kind": "passthrough", "source": "config"}
   ]
@@ -43,23 +43,35 @@ Request `{}`. Never answered on pairing-only or console sessions (no address dis
 ```
 
 - `kind` ∈ `loopback | lan | vpn | wan | passthrough`. Interface addresses are classified by range:
-  loopback (127/8, ::1); `lan` = RFC 1918, 100.64/10 is `vpn`, IPv6 ULA fc00::/7; `wan` = other global unicast.
-  IPv4 link-local (169.254/16) and IPv6 link-local (fe80::/10) are never advertised (scope ids don't travel).
-  Interfaces matching `device_server.advertise.exclude_interfaces` (globs) are skipped; `vpn` also covers
-  interfaces named `tailscale*`, `wg*`, `zt*`, `utun*`.
-- `source` ∈ `interface | config | mdns`. `mdns` is `<hostname>.local`, advertised only where an mDNS responder is
-  known to run (macOS always; Linux when `/run/avahi-daemon/pid` exists).
-- When the listener is loopback-only (`remote: false`) only `loopback` candidates are listed. Configured candidates
-  are listed whatever `remote` says (a reverse tunnel or port forward may reach a loopback listener).
-- The list is computed on every call (`getifaddrs`), de-duplicated by `(host, port)`, ordered loopback, lan, vpn,
-  wan, passthrough, and capped at 32 entries.
+  loopback (127/8, ::1); `lan` = RFC 1918, 100.64/10 is `vpn`, IPv6 ULA fc00::/7; `wan` = other global unicast
+  (IPv4 outside 0/8, 169.254/16 and 224/3; IPv6 2000::/3). IPv4-mapped IPv6 is classified as its IPv4 address.
+  IPv4 link-local (169.254/16) and IPv6 link-local (fe80::/10) are never advertised (scope ids don't travel), nor
+  are unspecified, multicast or reserved addresses. Interfaces matching `device_server.advertise.exclude_interfaces`
+  (globs, fnmatch(3)) are skipped; `vpn` also covers every non-loopback address on interfaces named `tailscale*`,
+  `wg*`, `zt*`, `utun*`.
+- `source` ∈ `interface | config | mdns`. `mdns` is `<hostname>.local` (the host name's first label), advertised
+  only where an mDNS responder is known to run (macOS always; Linux when `/run/avahi-daemon/pid` exists).
+  `interface` (the interface name) is present only on `source: interface` entries.
+- When the listener is loopback-only (`remote: false`) only `loopback` candidates are listed (so no `mdns` entry).
+  Configured candidates are listed whatever `remote` says (a reverse tunnel or port forward may reach a loopback
+  listener). `hostnames` entries are `lan` on the listener's port; `public` entries default to `wan` and the
+  listener's port.
+- IPv6 interface addresses (`::1` included) are left out when `advertise.include_ipv6` is false, and when the
+  listener is bound but has no IPv6 socket (§1.4 fell back to `0.0.0.0`): an address no socket answers on is not
+  advertised. With `advertise.interfaces: false` no interface address is listed at all.
+- The list is computed on every call (`getifaddrs`, interfaces that are up), de-duplicated by `(host lowercased,
+  port)` keeping the first, stably ordered loopback, lan, vpn, wan, passthrough (within a kind: interface, mdns,
+  config, in that order), and capped at 32 entries.
+- `port` is the port actually bound (it differs from `device_server.port` only when that is 0, as in tests), else
+  the configured port; `listening` says whether the listener is bound right now.
 - The server MUST NOT discover its public address by contacting a third party. Public addresses come from
   configuration (`device_server.advertise.public`) or from a global address on an interface.
 
 ### 1.2 Pairing bootstrap
 
 `device.pairing.open` (an authenticated human's console session) adds `endpoints` (the §1.1 object without
-`node_id`) and `server_spki_sha256`. The web "Pair a device" dialog shows them and a link
+`node_id`), `server_spki_sha256` (null until the listener has loaded its identity) and `node_id` (top level, beside
+`endpoints`: the link below needs it). The web "Pair a device" dialog shows them and a link
 `vaulthalla://pair?node=<node_id>&spki=<hex>&endpoints=<host:port,host:port,…>` (hosts with `:` bracketed,
 the list percent-encoded). Desktop treats the link as untrusted input: it prefills the Add Node sheet, probes the
 endpoints like §2, and if `spki` is present it refuses a pairing connection whose server SPKI differs. The SAS
@@ -81,14 +93,34 @@ The existing answer gains:
 }
 ```
 
-`last_remote_device_*` is the latest Device-session handshake whose source address is neither loopback nor private:
-proof that a remote client reached the listener directly. Firewall inspection is read-only (config files and state
-files the daemon can read; no commands needing root, no rule changes) and reports `null` rather than guess.
+`diagnostics` sits beside `status` in the `device.remote.status` answer (`{status, diagnostics}`);
+`device.remote.enable|disable` answer `{status}` as before. `bind` lists every listening socket, `ipv6` says
+whether one of them is IPv6.
+
+`last_remote_device_*` is the latest Device-session handshake (ws or HTTP lane) whose source address is neither
+loopback nor private, i.e. classifies as `wan` (100.64/10 and VPN ranges don't count): proof that a remote client
+reached the listener directly. It is kept in memory only, so a daemon restart forgets it (null until the next one).
+
+Firewall inspection is read-only (config files and state files the daemon can read; no commands needing root, no
+rule changes) and reports `null` rather than guess. What is detected today:
+
+- Linux: `ufw` when `/etc/ufw/ufw.conf` says `ENABLED=yes` (active, hint `sudo ufw allow <port>/tcp`); else
+  `firewalld` when its pid file or `/run/firewalld` exists (active, hint `firewall-cmd --permanent
+  --add-port=<port>/tcp` + reload); else `nftables` when `nftables.service` is enabled and `/etc/nftables.conf` is
+  non-empty (`active: null`: the loaded ruleset needs root to read); else `ufw` with `active: false` when ufw is
+  installed but disabled; else `unknown`. Linux never reports `none`: plain iptables rules can't be seen without
+  root.
+- macOS: `alf` (the application firewall) from `socketfilterfw --getglobalstate`, which answers any user, bounded
+  to 2 s; else `unknown`. pf's state needs root and is never reported.
+- `pf` and `none` stay reserved values.
 
 ### 1.4 Listener binding
 
 `device_server.remote: true` binds `[::]:<port>` dual-stack (IPV6_V6ONLY off). If that fails (IPv6 disabled), it
-binds `0.0.0.0:<port>`. Loopback-only binds `127.0.0.1` and, when available, `[::1]`.
+binds `0.0.0.0:<port>`. Loopback-only binds `127.0.0.1` and, when available, `[::1]` on the same port. IPv4 clients
+of the dual-stack socket are seen as their IPv4 address (not `::ffff:a.b.c.d`) everywhere: `last_ip`, pairing rate
+limits, the loopback test that decides which sessions turning remote off closes. A bind failure is retried every
+30 s as before; `status.address` is the first bound socket (`[::]:36972`, `127.0.0.1:36972`).
 
 ## 2. Desktop endpoint selection
 
@@ -256,11 +288,21 @@ JSON `{error: {code, message}}` with the status; never status-by-substring. 400 
 
 ## 4. Device transfer lanes (`device.lanes.transfer`, device listener only)
 
-- `GET /transfer/probe` → `{node_id, server_time_ms, capabilities: [...]}`: cheap, no I/O.
+- `GET /transfer/probe` → `{node_id, server_time_ms, capabilities: [...]}`: cheap, no I/O (the node id is read
+  from the database once per process).
 - `POST /transfer/sink` with a body ≤ 256 MiB: read and discarded; answers `{bytes, server_ms}` (time from the
-  first to the last body byte).
-- `GET /transfer/source?bytes=<n>` (n ≤ 256 MiB): streams n pseudo-random bytes.
-- Nothing is written to disk. At most 2 calibration requests per device at once (429 beyond).
+  first to the last body byte, integer milliseconds; `Server-Timing: recv;dur=<ms with 3 decimals>` carries it
+  precisely).
+- `GET /transfer/source?bytes=<n>` (0 ≤ n ≤ 256 MiB, decimal): streams n pseudo-random bytes (SplitMix64; not
+  cryptographic, not compressible), `Content-Type: application/octet-stream`, through the same bounded,
+  backpressured stream path as downloads.
+- Nothing is written to disk. At most 2 calibration requests (sink, source) per device at once; the probe doesn't
+  count. Answers are `Cache-Control: no-store`; keep-alive works across them.
+- Refusals are JSON `{error: {code, message}}`: 400 `bad_request` (missing or out-of-range `bytes`), 404
+  `not_found` (another `/transfer/*` path), 405 `method_not_allowed`, 413 `too_large` (a `Content-Length` or a
+  chunked body over 256 MiB; the connection closes), 429 `too_many_requests` with `Retry-After: 1`. A pairing-only
+  connection gets 403 `device_unknown` like every other lane. The lanes exist only on the device listener (never
+  on the web listener or behind nginx).
 
 ## 5. Configuration (`/etc/vaulthalla/config.yaml`)
 
@@ -273,6 +315,8 @@ device_server:
     exclude_interfaces: ["docker*", "br-*", "veth*", "virbr*", "podman*", "cni*", "flannel*", "lxc*"]
     hostnames: []                 # extra LAN names, e.g. ["nas.home.arpa"] (kind lan)
     public: []                    # [{host: device.example.com, port: 36972}, {host: device.example.com, port: 443, kind: passthrough}]
+                                  # per entry: host (name or IP; IPv6 may be bracketed), port (absent/0 = the listener's),
+                                  # kind lan|vpn|wan|passthrough (default wan)
 transfer:
   part_default_bytes: 67108864    # 64 MiB
   part_min_bytes: 1048576         # 1 MiB
@@ -286,6 +330,11 @@ transfer:
   http:
     max_part_bytes: 67108864      # web listener cap; keep ≤ 95 000 000 behind Cloudflare Free/Pro (100 MB)
 ```
+
+`device_server.advertise` validation: every host is a DNS name or IP literal (letters, digits, `.-_:`, at most 253
+characters; no scheme, path or spaces), every `kind` is one of the four, no glob is empty. A malformed entry
+refuses to start (config load) and `settings.update` refuses it with `invalid`. Absent keys keep the defaults
+above; the section round-trips through `Config::save` and the settings JSON.
 
 Validation: `part_min_bytes ≤ part_default_bytes ≤ max_part_bytes ≤ 4 GiB`, `http.max_part_bytes ≤
 max_part_bytes`, `1 ≤ max_parts_in_flight ≤ 16`, `1 ≤ commit_workers ≤ 8`. Out of range: the daemon refuses to start

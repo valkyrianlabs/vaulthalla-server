@@ -79,7 +79,7 @@ ShellServer is not created in test mode (`paths::testMode`).
 | HTTP preview/download/upload/auth | `http/Server.cpp`, `http/Session.cpp`, `http/Router.cpp`, `http/Access.cpp`, `http/handler/*`, `http/upload/Coordinator.cpp` | `0.0.0.0:36970` (fresh installs: `127.0.0.1`) |
 | S3 gateway (SigV4, multipart) | `s3/*` (`GatewayService`, `SigV4`, `ObjectStore`, `MultipartStore`, `CredentialManager`) | `0.0.0.0:39000`, disabled by default |
 | Shell/CLI control | `shell/Server.cpp`, `shell/Router.cpp`, `shell/commands/*` | unix socket `/run/vaulthalla/cli.sock` |
-| Device listener (Vaulthalla Desktop, mutual TLS) | `device/Service.cpp`, `device/Listener.cpp` (`/ws` → the ws Router) | `127.0.0.1:36972`; `0.0.0.0` once `device_server.remote` (absent section = these defaults) |
+| Device listener (Vaulthalla Desktop, mutual TLS) | `device/Service.cpp`, `device/Listener.cpp` (`/ws` → the ws Router) | `127.0.0.1:36972` (+ `[::1]` when available); `[::]` dual-stack once `device_server.remote`, `0.0.0.0` where IPv6 is off (absent section = these defaults) |
 
 > `core/include/config/Config.hpp` compiled-in defaults are **33369/33370**, but the shipped config,
 > web fallbacks, and Caddyfile all use **36969/36970**. Trust the config file, and treat that
@@ -241,17 +241,35 @@ Normative protocol: `docs/pairing.md` in `valkyrianlabs/vaulthalla-desktop` (its
   canonical `identities::Manager` object); anything else (unknown, revoked, owner gone) → pairing-only. A handshake
   with a rotated device's new key clears `previous_spki_sha256`. Then the HTTP request is read and dispatched by path
   in `Connection::dispatch` (only the header is read; an upload body is the session's): `/ws` upgrades into
-  `ws::Session::acceptDevice`; `/preview*`, `/download*`, `/upload*` and `/mcp` hand the TLS stream to an
-  `http::Session` (below); anything else is 404. Cap
+  `ws::Session::acceptDevice`; `/preview*`, `/download*`, `/upload*`, `/transfer*` and `/mcp` hand the TLS stream to
+  an `http::Session` (below); anything else is 404. Cap
   `device_server.max_connections` (own `ConnectionSlot::Pool::Device`; over it the socket is closed, a TLS client
   can't read a 503), 10 s handshake and request deadlines. A bind failure never stops the daemon: it is in
-  `listenerStatus()` and retried every 30 s.
+  `listenerStatus()` and retried every 30 s. Binding (`docs/reference/transfer-protocol.md` §1.4): `Listener` holds
+  one acceptor per socket; remote on = `[::]` with IPV6_V6ONLY off, falling back to `0.0.0.0`; remote off =
+  `127.0.0.1` plus `[::1]` on the same port when that binds. `ListenerStatus.bind` lists every socket, `address` is
+  the first. The peer address of an IPv4 client on the dual-stack socket is unmapped to IPv4 in
+  `Connection::onHandshake`, before `device::authorize`, so `last_ip`, pairing rate limits and the loopback test
+  never see `::ffff:` forms.
+- **Endpoint advertisement** (`protocols/device/Endpoints.cpp`, transfer-protocol.md §1; capability
+  `device.endpoints`): ws `device.endpoints` (auth `device`, `Router::isDeviceOnlyCommand`), the `node_id` /
+  `server_spki_sha256` / `endpoints` members of `device.pairing.open`, and `diagnostics` beside `status` in
+  `device.remote.status`. `buildCandidates` is pure (classification by range + interface-name globs,
+  `device_server.advertise`); interfaces come from `getifaddrs` behind `setInterfaceEnumeratorForTesting`. The
+  node id is cached per process (`endpoints::nodeId`, `clearNodeIdForTesting` after a schema reset). The last
+  public (`wan`) Device handshake is an in-memory record (`noteDeviceHandshake`, called from the listener), lost on
+  restart. Firewall and mDNS-responder detection are `platform/Network.hpp` (Linux: ufw/firewalld/nftables state
+  files; macOS: `socketfilterfw --getglobalstate`), read-only and `unknown`/null when they can't tell.
+- **Transfer lanes** (`protocols/device/Transfer.cpp` policy, `http::Session::handle_transfer` mechanics; capability
+  `device.lanes.transfer`, §4): `GET /transfer/probe`, `POST /transfer/sink` (read and discarded, ≤ 256 MiB),
+  `GET /transfer/source?bytes=n` (SplitMix64 `PlaintextReader` through `write_stream`). At most 2 sink/source
+  requests per device row at once (in-memory slots, 429). Device listener only; nothing touches disk.
 - **HTTP lanes and remote MCP (S1b).** `http::Session` runs over a `ByteStream`: `TimedStream` (the plain socket,
   poll + deadline) or `TlsStream` (the device TLS stream: each blocking call starts one async op on the stream's strand
   and waits against the deadline, cancelling the socket's I/O when it passes; bytes go through op-owned buffers so an
   abandoned op never touches freed memory). A device connection runs on its own thread like the web side's, holds its
-  `ConnectionSlot` (device pool), and serves only `/preview*`, `/download*`, `/upload*` and `/mcp` (pairing-only
-  connections get 403 `device_unknown`). Its principal is a stream-less Device `ws::Session`
+  `ConnectionSlot` (device pool), and serves only `/preview*`, `/download*`, `/upload*`, `/transfer*` and `/mcp`
+  (pairing-only connections get 403 `device_unknown`). Its principal is a stream-less Device `ws::Session`
   (`Session::devicePrincipal`) registered with the session manager, so revocation, `revokeSessions`, remote-off and
   the sweeper close it; its close hook cancels the HTTP session, which also stops between requests and between
   chunks. Requests run under `access::DevicePrincipalScope` (thread-local): `access::authenticate` and the upload

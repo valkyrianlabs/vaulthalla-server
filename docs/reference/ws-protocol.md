@@ -86,8 +86,10 @@ Names are stable dotted lower-case identifiers (`fs.entry.metadata_version`). A 
 
 | Capability | Since | Meaning |
 | --- | --- | --- |
+| `device.endpoints` | 1.20.0 | `device.endpoints` (paired devices), plus `node_id`, `server_spki_sha256` and `endpoints` in `device.pairing.open` and `diagnostics` in `device.remote.status` (transfer protocol §1). |
 | `device.lanes.download` | 1.16.0 | The device listener serves `/download/content` (Range, conditional requests) as the device's user. |
 | `device.lanes.preview` | 1.16.0 | The device listener serves `/preview` as the device's user. |
+| `device.lanes.transfer` | 1.20.0 | The device listener serves `/transfer/probe`, `/transfer/sink` and `/transfer/source` (throughput calibration; transfer protocol §4). |
 | `device.lanes.upload` | 1.16.0 | The device listener serves the `/upload` session lane as the device's user. |
 | `device.mcp` | 1.16.0 | The device listener serves remote MCP at `POST /mcp`. |
 | `device.server.identity` | 1.16.0 | A paired device can read the server key's pin over its own session. |

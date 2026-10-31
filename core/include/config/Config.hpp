@@ -35,14 +35,38 @@ struct HttpPreviewConfig {
 
 // The device listener (Vaulthalla Desktop's mutual-TLS endpoint, docs/pairing.md). There is no host: it listens on
 // loopback until remote connections are turned on (`vh device remote enable`, ws device.remote.enable), then on every
-// interface. That switch is the only setting operators change, and they change it through those commands.
+// interface. That switch is changed through those commands; `advertise` (what device.endpoints lists) is edited in
+// config.yaml.
 inline constexpr uint16_t kDefaultDeviceServerPort = 36972;
+
+// device_server.advertise.public[]: a name or address that reaches the listener from outside (a port forward, a
+// reverse tunnel, a TLS passthrough). Port 0 is the listener's own port.
+struct DeviceAdvertiseEndpoint {
+    std::string host;
+    uint16_t port = 0;
+    std::string kind = "wan";  // lan | vpn | wan | passthrough
+};
+
+// device_server.advertise: what ws device.endpoints lists (docs/reference/transfer-protocol.md §1.1, §5).
+struct DeviceAdvertiseConfig {
+    bool interfaces = true;    // advertise interface addresses
+    bool include_ipv6 = true;
+    std::vector<std::string> exclude_interfaces = {"docker*", "br-*", "veth*", "virbr*", "podman*", "cni*",
+                                                   "flannel*", "lxc*"};
+    std::vector<std::string> hostnames;               // extra LAN names (kind lan, the listener's port)
+    std::vector<DeviceAdvertiseEndpoint> public_;     // yaml/json key "public"
+};
+
+// Unbrackets IPv6 literals and checks every entry; throws std::invalid_argument naming the bad one (empty or
+// malformed host, unknown kind, empty glob). Config load and settings.update both go through it.
+void normalize(DeviceAdvertiseConfig& c);
 
 struct DeviceServerConfig {
     bool enabled = true;
     uint16_t port = kDefaultDeviceServerPort;
     bool remote = false;
     unsigned int max_connections = 256;
+    DeviceAdvertiseConfig advertise;
 };
 
 struct S3GatewayMultipartConfig {
@@ -401,6 +425,10 @@ void to_json(nlohmann::json& j, const WebsocketConfig& c);
 void from_json(const nlohmann::json& j, WebsocketConfig& c);
 void to_json(nlohmann::json& j, const HttpPreviewConfig& c);
 void from_json(const nlohmann::json& j, HttpPreviewConfig& c);
+void to_json(nlohmann::json& j, const DeviceAdvertiseEndpoint& c);
+void from_json(const nlohmann::json& j, DeviceAdvertiseEndpoint& c);
+void to_json(nlohmann::json& j, const DeviceAdvertiseConfig& c);
+void from_json(const nlohmann::json& j, DeviceAdvertiseConfig& c);
 void to_json(nlohmann::json& j, const DeviceServerConfig& c);
 void from_json(const nlohmann::json& j, DeviceServerConfig& c);
 void to_json(nlohmann::json& j, const S3GatewayMultipartConfig& c);

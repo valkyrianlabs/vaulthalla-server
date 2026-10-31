@@ -74,10 +74,12 @@ std::string describeDevice(const Device& d) {
 std::string listenerText(const protocols::device::ListenerStatus& s) {
     std::string out;
     if (!s.enabled) out += "Device listener: disabled in config.yaml (device_server.enabled)\n";
-    else if (s.listening)
-        out += fmt::format("Device listener: listening on {} ({})\n", s.address,
+    else if (s.listening) {
+        std::string where;
+        for (const auto& b : s.bind) where += (where.empty() ? "" : ", ") + b;
+        out += fmt::format("Device listener: listening on {} ({})\n", where.empty() ? s.address : where,
                            s.remote ? "every interface" : "loopback only");
-    else out += fmt::format("Device listener: not listening{}\n", s.error ? ": " + *s.error : std::string{});
+    } else out += fmt::format("Device listener: not listening{}\n", s.error ? ": " + *s.error : std::string{});
     out += fmt::format("Remote connections: {}\n", s.remote ? "on" : "off (devices on this machine only)");
     out += fmt::format("Port: {}\n", s.port);
     if (!s.server_spki_sha256.empty()) out += fmt::format("Server key (pin): {}\n", s.server_spki_sha256);

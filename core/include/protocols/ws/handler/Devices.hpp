@@ -5,8 +5,8 @@
 #include "protocols/ws/Fwd.hpp"
 
 // ws device.*: paired devices (ops::devices). device.pair.* runs on the device listener's pairing-only connections
-// (and a paired device's own session), device.identity.rotate / device.server.identity only on a paired device's
-// session; the rest on a signed-in human's session or a paired device's (a device acts as its user).
+// (and a paired device's own session), device.identity.rotate / device.server.identity / device.endpoints only on a
+// paired device's session; the rest on a signed-in human's session or a paired device's (a device acts as its user).
 namespace vh::protocols::ws::handler {
 
 using json = nlohmann::json;
@@ -19,6 +19,7 @@ struct Devices {
     // A paired device's own session.
     static json identityRotate(const json& payload, const std::shared_ptr<Session>& session);
     static json serverIdentity(const std::shared_ptr<Session>& session);
+    static json endpoints(const std::shared_ptr<Session>& session);
     // The owner's side of pairing.
     static json pairingOpen(const std::shared_ptr<Session>& session);
     static json pairingClose(const json& payload, const std::shared_ptr<Session>& session);

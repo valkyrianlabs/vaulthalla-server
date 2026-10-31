@@ -22,7 +22,9 @@
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "ops/Devices.hpp"
+#include "ops/Error.hpp"
 #include "protocols/device/Listener.hpp"
+#include "protocols/device/Endpoints.hpp"
 #include "protocols/device/Service.hpp"
 #include "protocols/ws/ConnectionLifecycleManager.hpp"
 #include "protocols/ws/Handler.hpp"
@@ -118,6 +120,7 @@ protected:
         for (int i = 0; i < 2; ++i) threads.emplace_back([guard] { ioc->run(); });
 
         super = seedUser("dl_super", "super_admin");
+        protocols::device::endpoints::clearNodeIdForTesting();  // this suite's database has its own node id
     }
 
     static void TearDownTestSuite() {
@@ -616,16 +619,39 @@ TEST_F(DeviceListenerTest, RemoteConnectionsRebindTheListenerLive) {
     EXPECT_FALSE(status.remote);
     EXPECT_EQ(status.server_spki_sha256, server->spkiHex());
 
+    // Loopback only: 127.0.0.1, and [::1] on the same port where the host has IPv6.
+    EXPECT_EQ(status.bind.front(), status.address);
+    EXPECT_EQ(status.bind.size(), status.ipv6 ? 2u : 1u);
+    if (status.ipv6) {
+        EXPECT_EQ(status.bind.at(1), "[::1]:" + std::to_string(status.bound_port));
+    }
+
     cfg.device_server.remote = true;
     config::Registry::set(cfg);
     status = service.applyConfig();
     EXPECT_TRUE(status.listening);
-    EXPECT_TRUE(status.address.starts_with("0.0.0.0:")) << status.address;
-    const auto remotePort = static_cast<uint16_t>(std::stoi(status.address.substr(status.address.rfind(':') + 1)));
+    // Dual-stack [::] (transfer-protocol.md §1.4), or 0.0.0.0 where IPv6 is off.
+    EXPECT_TRUE(status.address.starts_with("[::]:") || status.address.starts_with("0.0.0.0:")) << status.address;
+    EXPECT_EQ(status.bind.size(), 1u);
+    EXPECT_EQ(status.ipv6, status.address.starts_with("[::]:"));
+    const auto remotePort = status.bound_port;
+    EXPECT_EQ(status.address, (status.ipv6 ? "[::]:" : "0.0.0.0:") + std::to_string(remotePort));
+    const auto owner = seedUser("dl_dual");
     const ClientIdentity device;
+    (void)pair(device, owner);
     {
         Client client(remotePort, device);
-        EXPECT_TRUE(client.connect()) << "reachable after the rebind, without a restart";
+        EXPECT_TRUE(client.connect()) << "reachable over IPv4 after the rebind, without a restart";
+        const auto session = serverSession(device, true);
+        ASSERT_TRUE(session);
+        EXPECT_EQ(session->devicePeer()->address, "127.0.0.1") << "IPv4 clients of a dual-stack socket stay IPv4";
+    }
+    if (status.ipv6) {
+        test::device::HttpClient http(remotePort, device);
+        ASSERT_TRUE(http.connect("::1")) << "and over IPv6";
+        const auto probe = http.request(boost::beast::http::verb::get, "/transfer/probe");
+        ASSERT_TRUE(probe);
+        EXPECT_EQ(probe->result_int(), 200);
     }
 
     cfg.device_server.remote = false;
@@ -661,6 +687,92 @@ TEST_F(DeviceListenerTest, RemoteSwitchIsASuperAdminSetting) {
     paths::configPath = previousConfigPath;
     std::filesystem::remove(tmp);
     config::Registry::set(before);
+}
+
+// ---- endpoint advertisement (transfer-protocol.md §1) ----------------------------------------------------------
+
+TEST_F(DeviceListenerTest, EndpointsAreForPairedDevicesAndThePairingDialog) {
+    namespace ep = protocols::device::endpoints;
+    const auto before = config::Registry::get();
+    auto cfg = before;
+    cfg.device_server.remote = true;
+    cfg.device_server.port = 36972;
+    cfg.device_server.advertise.hostnames = {"nas.home.arpa"};
+    cfg.device_server.advertise.public_ = {{.host = "device.example.com", .port = 443, .kind = "passthrough"}};
+    config::Registry::set(cfg);
+    ep::setInterfaceEnumeratorForTesting([] {
+        return std::vector<ep::InterfaceAddress>{{"lo", "127.0.0.1"}, {"enp3s0", "10.0.0.11"},
+                                                 {"docker0", "172.17.0.1"}, {"tailscale0", "100.101.1.2"}};
+    });
+
+    // Never before a device is trusted.
+    const ClientIdentity stranger;
+    Client unpaired(port, stranger);
+    ASSERT_TRUE(unpaired.connect());
+    EXPECT_EQ(code(unpaired.call("device.endpoints")), "device_unknown");
+
+    const auto owner = seedUser("dl_endpoints");
+    const ClientIdentity device;
+    (void)pair(device, owner);
+    Client client(port, device);
+    ASSERT_TRUE(client.connect());
+    const auto reply = client.call("device.endpoints");
+    ASSERT_TRUE(ok(reply)) << (reply ? reply->dump() : "no reply");
+    const auto& data = reply->at("data");
+    EXPECT_EQ(data.at("node_id"), db::query::device::Devices::nodeId()) << "the id device.pair.status reported";
+    EXPECT_EQ(data.at("port"), 36972);
+    EXPECT_TRUE(data.at("remote").get<bool>());
+    EXPECT_FALSE(data.at("listening").get<bool>()) << "no DeviceServer runs in this test process";
+    EXPECT_GT(data.at("generated_at").get<int64_t>(), 0);
+    std::vector<std::string> listed;
+    for (const auto& c : data.at("candidates")) listed.push_back(c.at("host").get<std::string>() + "/" +
+                                                                 c.at("kind").get<std::string>() + "/" +
+                                                                 c.at("source").get<std::string>());
+    const auto mdns = ep::mdnsHostname();
+    std::vector<std::string> expected{"127.0.0.1/loopback/interface", "10.0.0.11/lan/interface"};
+    if (mdns) expected.push_back(*mdns + "/lan/mdns");
+    expected.insert(expected.end(), {"nas.home.arpa/lan/config", "100.101.1.2/vpn/interface",
+                                     "device.example.com/passthrough/config"});
+    EXPECT_EQ(listed, expected);
+    EXPECT_EQ(data.at("candidates").at(1).at("interface"), "enp3s0");
+    EXPECT_FALSE(data.at("candidates").back().contains("interface"));
+
+    // The console's "Pair a device" dialog: the same list without node_id, the node id and the pin beside it.
+    const auto open = handler::Devices::pairingOpen(console(owner));
+    EXPECT_EQ(open.at("node_id"), data.at("node_id"));
+    EXPECT_EQ(open.at("server_spki_sha256"), server->spkiHex());
+    EXPECT_FALSE(open.at("endpoints").contains("node_id"));
+    EXPECT_EQ(open.at("endpoints").at("candidates"), data.at("candidates"));
+    (void)handler::Devices::pairingClose(json::object(), console(owner));
+
+    ep::setInterfaceEnumeratorForTesting({});
+    config::Registry::set(before);
+}
+
+TEST_F(DeviceListenerTest, RemoteStatusCarriesDiagnosticsForSuperAdmins) {
+    namespace ep = protocols::device::endpoints;
+    ep::clearLastRemoteDeviceForTesting();
+    const auto plain = seedUser("dl_diag");
+    EXPECT_THROW((void)handler::Devices::remoteStatus(console(plain)), ops::Denied);
+
+    const auto reply = handler::Devices::remoteStatus(console(super));
+    ASSERT_TRUE(reply.contains("status"));
+    const auto& d = reply.at("diagnostics");
+    EXPECT_TRUE(d.at("bind").is_array());
+    EXPECT_TRUE(d.at("ipv6").is_boolean());
+    EXPECT_TRUE(d.at("candidates").is_array());
+    const auto& fw = d.at("firewall");
+    EXPECT_TRUE(fw.at("detected").is_string());
+    EXPECT_TRUE(fw.at("active").is_boolean() || fw.at("active").is_null());
+    EXPECT_TRUE(fw.at("hint").is_string() || fw.at("hint").is_null());
+    EXPECT_TRUE(d.at("last_remote_device_at").is_null()) << "only loopback handshakes in this suite";
+    EXPECT_TRUE(d.at("last_remote_device_ip").is_null());
+
+    ep::noteDeviceHandshake("203.0.113.7");
+    const auto after = handler::Devices::remoteStatus(console(super)).at("diagnostics");
+    EXPECT_EQ(after.at("last_remote_device_ip"), "203.0.113.7");
+    EXPECT_GT(after.at("last_remote_device_at").get<int64_t>(), 0);
+    ep::clearLastRemoteDeviceForTesting();
 }
 
 }

@@ -6,10 +6,10 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = 'b4a6c4e186b5ff132cb86abcbd04f974c005567d32fb20177b96c3cf27958416'
+export const WS_CONTRACT_HASH = 'b3fcd2e1864f74d701ee8242448e96280c4828cf901d999f84bcecce3e98dd53'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = '00cc5309cf6f162bb2881d6ab73e6273170a560d30e0dc588694c81dfe1f57da'
+export const WS_MODELS_HASH = 'd309c9252a3e52b5e75d37ccc25cb4abdfc0f4e5633f7a329c6cb49e3a00beaf'
 
 // The ws protocol range this book is (core/usage WsProtocol.hpp): send it in meta.hello.
 export const WS_PROTOCOL_VERSION = 1
@@ -17,8 +17,10 @@ export const WS_PROTOCOL_MIN = 1
 
 // The capabilities a daemon built from this book answers in meta.hello.
 export const WS_CAPABILITIES: readonly string[] = [
+  'device.endpoints',
   'device.lanes.download',
   'device.lanes.preview',
+  'device.lanes.transfer',
   'device.lanes.upload',
   'device.mcp',
   'device.server.identity',
@@ -336,10 +338,31 @@ export interface WsModels {
     revoked: boolean
   }
   /**
+   * device_server.advertise.* (Config.cpp to_json(DeviceAdvertiseConfig); docs/reference/transfer-protocol.md
+   * §1.1, §5).
+   */
+  'DeviceAdvertiseConfig': {
+    interfaces: boolean
+    include_ipv6: boolean
+    exclude_interfaces: string[]
+    hostnames: string[]
+    public: WsModels['DeviceAdvertiseEndpoint'][]
+  }
+  /**
+   * device_server.advertise.public[] (Config.cpp).
+   */
+  'DeviceAdvertiseEndpoint': { host: string; port: number; kind: 'lan' | 'vpn' | 'wan' | 'passthrough' }
+  /**
    * device_server.* (Config.cpp to_json(DeviceServerConfig)): the device listener. remote is changed with
    * device.remote.enable|disable; a settings.update that changes the section rebinds the listener in place.
    */
-  'DeviceServerConfig': { enabled: boolean; port: number; remote: boolean; max_connections: number }
+  'DeviceServerConfig': {
+    enabled: boolean
+    port: number
+    remote: boolean
+    max_connections: number
+    advertise?: WsModels['DeviceAdvertiseConfig']
+  }
   /**
    * email.*: the outbound email provider (Config.cpp to_json(EmailConfig)).
    */
@@ -2798,6 +2821,28 @@ export interface WsContract {
     response: { preferences: WsModels['DashboardPreference'] }
   }
   /**
+   * Where this node's device listener can be reached (docs/reference/transfer-protocol.md §1.1): interface
+   * addresses classified by range, <hostname>.local where an mDNS responder runs, and
+   * device_server.advertise's configured names. Computed per call; never answered before a device is paired.
+   */
+  'device.endpoints': {
+    payload: null
+    response: {
+      node_id: string
+      port: number
+      remote: boolean
+      listening: boolean
+      generated_at: number
+      candidates: {
+        host: string
+        port: number
+        kind: 'loopback' | 'lan' | 'vpn' | 'wan' | 'passthrough'
+        source: 'interface' | 'mdns' | 'config'
+        interface?: string
+      }[]
+    }
+  }
+  /**
    * Replace this device's key: certificate is the new self-signed P-256 certificate (base64 DER), signature
    * the old key's ECDSA-P256-SHA256 (base64 DER) over "vh-device-rotate-v1" ‖ new_spki_sha256 ‖
    * server_spki_sha256 ‖ UInt64BE(timestamp). The old key keeps working until the first connection with the
@@ -2873,7 +2918,8 @@ export interface WsContract {
   /**
    * Open a 10-minute pairing window owned by the caller (reopening extends it). One window per node: conflict
    * while another user's is open. Also says what to type into Desktop: the listener's port and whether
-   * devices on other hosts can reach it (remote).
+   * devices on other hosts can reach it (remote), and what the vaulthalla://pair link carries (node_id,
+   * server_spki_sha256, endpoints; transfer-protocol.md §1.2).
    */
   'device.pairing.open': {
     payload: null
@@ -2882,6 +2928,21 @@ export interface WsContract {
       server_time: number
       port: number
       remote: boolean
+      node_id: string
+      server_spki_sha256: string | null
+      endpoints: {
+        port: number
+        remote: boolean
+        listening: boolean
+        generated_at: number
+        candidates: {
+          host: string
+          port: number
+          kind: 'loopback' | 'lan' | 'vpn' | 'wan' | 'passthrough'
+          source: 'interface' | 'mdns' | 'config'
+          interface?: string
+        }[]
+      }
     }
   }
   /**
@@ -2945,7 +3006,9 @@ export interface WsContract {
     }
   }
   /**
-   * The device listener: loopback only or every interface, and whether it listens.
+   * The device listener: loopback only or every interface, and whether it listens; diagnostics say where it
+   * is bound, what devices are told, what the host firewall looks like (read-only, null when unknown) and
+   * when a device last connected from a public address.
    */
   'device.remote.status': {
     payload: null
@@ -2959,6 +3022,24 @@ export interface WsContract {
         error: string | null
         server_spki_sha256: string | null
         connections: number
+      }
+      diagnostics: {
+        bind: string[]
+        ipv6: boolean
+        candidates: {
+          host: string
+          port: number
+          kind: 'loopback' | 'lan' | 'vpn' | 'wan' | 'passthrough'
+          source: 'interface' | 'mdns' | 'config'
+          interface?: string
+        }[]
+        firewall: {
+          detected: 'ufw' | 'firewalld' | 'nftables' | 'pf' | 'alf' | 'none' | 'unknown'
+          active: boolean | null
+          hint: string | null
+        }
+        last_remote_device_at: number | null
+        last_remote_device_ip: string | null
       }
     }
   }
@@ -5379,6 +5460,7 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'dashboard.preferences.get',
   'dashboard.preferences.reset',
   'dashboard.preferences.update',
+  'device.endpoints',
   'device.identity.rotate',
   'device.list',
   'device.pair.confirm',
@@ -5649,6 +5731,7 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'dashboard.preferences.get': 15000,
   'dashboard.preferences.reset': 15000,
   'dashboard.preferences.update': 15000,
+  'device.endpoints': 15000,
   'device.identity.rotate': 15000,
   'device.list': 15000,
   'device.pair.confirm': 15000,

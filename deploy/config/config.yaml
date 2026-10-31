@@ -36,6 +36,15 @@ device_server:
   port: 36972
   remote: false
   max_connections: 256         # Concurrent device connections; more are refused until one closes
+  # Where paired devices are told they can reach this listener (ws device.endpoints, the "Pair a device" dialog).
+  # Interface addresses are classified loopback/lan/vpn/wan by range; the server never asks a third party for its
+  # public address, so list port forwards, tunnels and TLS passthroughs under `public`.
+  advertise:
+    interfaces: true           # advertise interface addresses (only loopback ones while remote is false)
+    include_ipv6: true
+    exclude_interfaces: ["docker*", "br-*", "veth*", "virbr*", "podman*", "cni*", "flannel*", "lxc*"]
+    hostnames: []              # extra LAN names, e.g. ["nas.home.arpa"] (kind lan, this port)
+    public: []                 # e.g. [{host: device.example.com, port: 36972}, {host: device.example.com, port: 443, kind: passthrough}]
 
 
 # === 🪣 S3-Compatible Gateway ===

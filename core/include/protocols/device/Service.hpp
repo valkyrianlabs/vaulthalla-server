@@ -25,14 +25,19 @@ struct ListenerStatus {
     bool remote = false;       // device_server.remote: every interface, else loopback only
     uint16_t port = 0;         // configured port
     bool listening = false;
-    std::string address{};     // where it actually listens ("127.0.0.1:36972"), empty when not
+    std::string address{};     // the first address it listens on ("[::]:36972", "127.0.0.1:36972"), empty when not
+    std::vector<std::string> bind{};  // every address it listens on, same format
+    uint16_t bound_port = 0;   // the port it listens on (differs from `port` only when that is 0), 0 when not
+    bool ipv6 = false;         // an IPv6 socket is among them (IPv6 clients can connect)
     std::optional<std::string> error{};  // why it is not listening where configured (e.g. the port is taken)
     std::string server_spki_sha256{};    // the pin Desktop records; empty until the identity is loaded
     unsigned int connections = 0;
 };
 
 // The "DeviceServer" runtime service (started after ProtocolService): loads the server identity (generating and
-// sealing it on first start), runs its own io_context and keeps the listener bound where device_server says.
+// sealing it on first start), runs its own io_context and keeps the listener bound where device_server says:
+// remote on, `[::]` dual-stack, falling back to `0.0.0.0` where IPv6 is unavailable; remote off, `127.0.0.1` and
+// also `[::1]` when that binds (transfer-protocol.md §1.4).
 // A bind failure (port in use) never stops the daemon: it is reported in the status and retried every 30 seconds.
 // applyConfig() rebinds at once (remote connections on/off) without touching the other listeners; turning remote
 // off also closes the device sessions that came from another host.
@@ -64,7 +69,8 @@ private:
     std::vector<std::thread> threads_;
     std::shared_ptr<ws::Router> router_;
     std::shared_ptr<Listener> listener_;
-    std::string boundAddress_;
+    std::vector<std::string> bound_;  // "host:port" per listening socket, empty when not listening
+    bool boundIpv6_ = false;
     uint16_t boundPort_ = 0;
     bool boundRemote_ = false;
     std::optional<std::string> error_;

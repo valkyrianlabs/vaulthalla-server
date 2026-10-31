@@ -41,6 +41,30 @@ WsField listenerStatus() {
         .desc("The device listener as configured and as it is.");
 }
 
+// One advertised endpoint (docs/reference/transfer-protocol.md §1.1).
+std::vector<WsField> candidateFields() {
+    return {str("host").desc("Host name or IP literal (IPv6 unbracketed)."), uinteger("port").max(65535),
+            str("kind").oneOf({"loopback", "lan", "vpn", "wan", "passthrough"})
+                .desc("Address class: loopback, RFC 1918 / ULA (lan), 100.64/10 or a VPN interface (vpn), other "
+                      "global unicast (wan), a TLS passthrough (passthrough)."),
+            str("source").oneOf({"interface", "mdns", "config"}),
+            str("interface").opt().desc("The interface it was read from (source interface only).")};
+}
+
+WsField candidates() {
+    return objectArray("candidates", "", candidateFields())
+        .desc("Ordered loopback, lan, vpn, wan, passthrough; de-duplicated by (host, port); at most 32. Only loopback "
+              "interface addresses while remote is off; configured names always.");
+}
+
+// The §1.1 object (device.endpoints adds node_id).
+std::vector<WsField> endpointFields() {
+    return {uinteger("port").max(65535).desc("The listener's port."),
+            boolean("remote").desc("Remote connections on; else loopback only."),
+            boolean("listening").desc("The listener is bound right now."),
+            uinteger("generated_at").desc("Unix seconds: the list is computed on every call."), candidates()};
+}
+
 // The device's side answers ops::Refused codes of its own besides the generic kinds: no_pairing_window and
 // rate_limited (pairing), device_unknown (the command reached a session without a device identity, or the key is not
 // a live device). The router refuses device.pair.* and the device-only commands on console sessions (unauthorized).
@@ -123,17 +147,42 @@ std::vector<WsCommandUsage> deviceCommands() {
         .client_timeout = kDefaultTimeout,
     });
 
+    out.push_back({
+        .command = "device.endpoints",
+        .description = "Where this node's device listener can be reached (docs/reference/transfer-protocol.md §1.1): "
+                       "interface addresses classified by range, <hostname>.local where an mDNS responder runs, and "
+                       "device_server.advertise's configured names. Computed per call; never answered before a device "
+                       "is paired.",
+        .auth = "device",
+        .input = "none",
+        .response = [] {
+            auto fields = endpointFields();
+            fields.insert(fields.begin(), str("node_id").desc("The node id, as device.pair.status reports it."));
+            return fields;
+        }(),
+        .refusal_codes = {"device_unknown", "unauthorized"},
+        .client_timeout = kDefaultTimeout,
+    });
+
     // ---- the owner's side of pairing (any signed-in user, for their own account)
 
     out.push_back({
         .command = "device.pairing.open",
         .description = "Open a 10-minute pairing window owned by the caller (reopening extends it). One window per "
                        "node: conflict while another user's is open. Also says what to type into Desktop: the "
-                       "listener's port and whether devices on other hosts can reach it (remote).",
+                       "listener's port and whether devices on other hosts can reach it (remote), and what the "
+                       "vaulthalla://pair link carries (node_id, server_spki_sha256, endpoints; "
+                       "transfer-protocol.md §1.2).",
         .input = "none",
         .response = {windowObject(), uinteger("server_time").desc("The node's clock (Unix seconds), to count down by."),
                      uinteger("port").desc("The device listener's port."),
-                     boolean("remote").desc("Remote connections on; else only a Desktop on the node itself can pair.")},
+                     boolean("remote").desc("Remote connections on; else only a Desktop on the node itself can pair."),
+                     str("node_id").desc("The node id (the pairing link's node=)."),
+                     hex64("server_spki_sha256").nullable()
+                         .desc("The server key's SPKI hash (the pairing link's spki=); null until the listener has "
+                               "loaded its identity."),
+                     object("endpoints", "", endpointFields())
+                         .desc("device.endpoints' answer without node_id: what the pairing link's endpoints= lists.")},
         .refusal_codes = opsRefusals(),
         .client_timeout = kDefaultTimeout,
     });
@@ -218,9 +267,24 @@ std::vector<WsCommandUsage> deviceCommands() {
 
     out.push_back({
         .command = "device.remote.status",
-        .description = "The device listener: loopback only or every interface, and whether it listens.",
+        .description = "The device listener: loopback only or every interface, and whether it listens; diagnostics "
+                       "say where it is bound, what devices are told, what the host firewall looks like (read-only, "
+                       "null when unknown) and when a device last connected from a public address.",
         .input = "none",
-        .response = {listenerStatus()},
+        .response = {listenerStatus(),
+                     object("diagnostics", "",
+                            {strArray("bind").desc("Every address it listens on (\"[::]:36972\", \"127.0.0.1:36972\")."),
+                             boolean("ipv6").desc("An IPv6 socket is among them."), candidates(),
+                             object("firewall", "",
+                                    {str("detected").oneOf({"ufw", "firewalld", "nftables", "pf", "alf", "none",
+                                                            "unknown"}),
+                                     boolean("active").nullable().desc("Null when it can't be told without root."),
+                                     str("hint").nullable().desc("What to run so the port gets through, if known.")}),
+                             uinteger("last_remote_device_at").nullable()
+                                 .desc("Unix seconds of the latest Device handshake from a public (non-loopback, "
+                                       "non-private) address since the daemon started; null when none."),
+                             str("last_remote_device_ip").nullable()})
+                         .desc("transfer-protocol.md §1.3.")},
         .refusal_codes = opsRefusals(),
         .client_timeout = kDefaultTimeout,
     });

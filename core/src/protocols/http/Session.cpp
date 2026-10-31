@@ -6,6 +6,7 @@
 #include "protocols/http/Access.hpp"
 #include "protocols/http/upload/Content.hpp"
 #include "protocols/http/upload/Coordinator.hpp"
+#include "protocols/device/Transfer.hpp"
 #include "protocols/ws/ConnectionLimit.hpp"
 #include "protocols/ws/Session.hpp"
 #include "protocols/ws/TlsTransport.hpp"
@@ -15,6 +16,7 @@
 #include "storage/PlaintextReader.hpp"
 
 #include <boost/asio/dispatch.hpp>
+#include <nlohmann/json.hpp>
 #include <boost/asio/post.hpp>
 #include <condition_variable>
 
@@ -407,7 +409,9 @@ bool Session::serve(HeaderParser& parser) {
             (void)write_response(std::move(response));
             return false;
         };
-        if (!isDeviceLaneTarget(target) && !isMcpTarget(target)) return refuse("Not found", status::not_found);
+        const bool transfer = protocols::device::transfer::isTarget(target);
+        if (!isDeviceLaneTarget(target) && !isMcpTarget(target) && !transfer)
+            return refuse("Not found", status::not_found);
         if (!device_->principal) return refuse("device_unknown: this device is not paired with this node", status::forbidden);
         if (stopping()) return false;
         const auto& peer = *device_->connection.peer;
@@ -417,6 +421,9 @@ bool Session::serve(HeaderParser& parser) {
     }
 
     try {
+        if (device_ && protocols::device::transfer::isTarget(
+                           std::string_view(parser.get().target().data(), parser.get().target().size())))
+            return handle_transfer(parser);
         if (upload::Coordinator::isUploadFileRequest(parser.get().method(), parser.get().target()))
             return handle_streaming_upload(parser);
         if (upload::content::isRequest(parser.get().method(),
@@ -568,6 +575,110 @@ bool Session::handle_streaming_content(
     }
 
     return write_response(begun.upload.commit(req)) && keepAlive;
+}
+
+// GET /transfer/probe, POST /transfer/sink, GET /transfer/source?bytes=<n> (transfer-protocol.md §4). The sink reads
+// and discards its body in kReadBufferBytes pieces; the source streams through write_stream (bounded chunks, blocking
+// writes with deadlines), so both run at the network's pace with bounded memory and never touch the disk.
+bool Session::handle_transfer(HeaderParser& parser) {
+    namespace transfer = protocols::device::transfer;
+    auto req = make_request_from_parser(parser);
+    const auto keepAlive = req.keep_alive();
+    const std::string target(req.target());
+    const std::string_view path = std::string_view(target).substr(0, target.find('?'));
+    const bool hasBody = parser.chunked() || (parser.content_length() && *parser.content_length() > 0);
+    const auto error = [&](const status code, const std::string_view errorCode, const std::string& message,
+                           const bool close) {
+        string_response res{code, req.version()};
+        res.set(field::content_type, "application/json");
+        if (code == status::too_many_requests) res.set(field::retry_after, "1");
+        res.body() = nlohmann::json{{"error", {{"code", errorCode}, {"message", message}}}}.dump();
+        res.prepare_payload();
+        // A body left unread can't be skipped: the connection ends with the answer.
+        res.keep_alive(keepAlive && !close && !hasBody);
+        const bool alive = res.keep_alive();
+        return write_response(std::move(res)) && alive;
+    };
+
+    if (path == "/transfer/probe") {
+        if (req.method() != verb::get) return error(status::method_not_allowed, "method_not_allowed", "GET only", false);
+        string_response res{status::ok, req.version()};
+        res.set(field::content_type, "application/json");
+        res.set(field::cache_control, "no-store");
+        res.body() = transfer::probeJson();
+        res.prepare_payload();
+        res.keep_alive(keepAlive && !hasBody);
+        const bool alive = res.keep_alive();
+        return write_response(std::move(res)) && alive;
+    }
+    const bool sink = path == "/transfer/sink";
+    if (!sink && path != "/transfer/source") return error(status::not_found, "not_found", "Not found", false);
+    if (req.method() != (sink ? verb::post : verb::get))
+        return error(status::method_not_allowed, "method_not_allowed", sink ? "POST only" : "GET only", false);
+
+    if (sink && parser.content_length() && *parser.content_length() > transfer::kMaxBytes)
+        return error(status::payload_too_large, "too_large", "at most 268435456 bytes", true);
+    std::optional<uint64_t> bytes;
+    if (!sink && !(bytes = transfer::sourceBytes(target)))
+        return error(status::bad_request, "bad_request", "bytes must be an integer from 0 to 268435456", false);
+    auto slot = transfer::acquire(*device_->connection.peer->deviceRowId);
+    if (!slot) return error(status::too_many_requests, "too_many_requests", "at most 2 calibration requests at once", false);
+
+    if (!sink) {
+        model::preview::StreamResponse res;
+        res.version(req.version());
+        res.result(status::ok);
+        res.set(field::content_type, "application/octet-stream");
+        res.set(field::cache_control, "no-store");
+        res.reader = transfer::randomSource(*bytes, static_cast<uint64_t>(
+                                                        std::chrono::steady_clock::now().time_since_epoch().count()));
+        res.length = *bytes;
+        res.keep_alive(keepAlive && !hasBody);
+        res.onFinish = [slot = std::move(slot)](uint64_t, bool) mutable { slot.reset(); };
+        const bool alive = res.keep_alive();
+        return write_response(std::move(res)) && alive;
+    }
+
+    std::array<char, kReadBufferBytes> storage{};
+    uint64_t received = 0;
+    std::optional<std::chrono::steady_clock::time_point> first;
+    auto last = std::chrono::steady_clock::now();
+    beast::error_code ec;
+    try {
+        while (!parser.is_done() && !stopping()) {
+            parser.get().body().data = storage.data();
+            parser.get().body().size = storage.size();
+            boost::beast::http::read(*stream_, buffer_, parser, ec);
+            if (const auto used = storage.size() - parser.get().body().size; used > 0) {
+                last = std::chrono::steady_clock::now();
+                if (!first) first = last;
+                received += used;
+                if (received > transfer::kMaxBytes)
+                    return error(status::payload_too_large, "too_large", "at most 268435456 bytes", true);
+            }
+            if (ec == boost::beast::http::error::need_buffer) {
+                ec = {};
+                continue;
+            }
+            if (ec) throw boost::system::system_error(ec);
+        }
+    } catch (const std::exception& e) {
+        if (stopping()) return false;
+        log::Registry::http()->debug("[Session] /transfer/sink body failed: {}", e.what());
+        return false;
+    }
+    if (stopping()) return false;
+    slot.reset();
+    const auto micros = first ? std::chrono::duration_cast<std::chrono::microseconds>(last - *first).count() : 0;
+    string_response res{status::ok, req.version()};
+    res.set(field::content_type, "application/json");
+    res.set(field::cache_control, "no-store");
+    res.set("Server-Timing", "recv;dur=" + std::to_string(micros / 1000) + "." +
+                                 std::to_string(1000 + micros % 1000).substr(1));
+    res.body() = nlohmann::json{{"bytes", received}, {"server_ms", micros / 1000}}.dump();
+    res.prepare_payload();
+    res.keep_alive(keepAlive);
+    return write_response(std::move(res)) && keepAlive;
 }
 
 bool Session::write_response(model::preview::Response&& response, const bool headRequest) {

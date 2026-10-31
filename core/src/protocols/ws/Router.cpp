@@ -234,7 +234,8 @@ bool Router::isDevicePairCommand(const std::string_view command) {
 bool Router::isDeviceOnlyCommand(const std::string_view command) {
     constexpr std::array commands{
         std::string_view{"device.identity.rotate"},
-        std::string_view{"device.server.identity"}
+        std::string_view{"device.server.identity"},
+        std::string_view{"device.endpoints"}
     };
     return containsCommand(commands, command);
 }

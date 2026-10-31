@@ -168,7 +168,8 @@ private:
     int counter_ = 0;
 };
 
-// HTTP/1.1 over the same TLS profile (the device listener's /preview, /download, /upload and /mcp lanes), keep-alive.
+// HTTP/1.1 over the same TLS profile (the device listener's /preview, /download, /upload, /transfer and /mcp lanes),
+// keep-alive.
 class HttpClient {
 public:
     using Response = beast::http::response<beast::http::string_body>;
@@ -181,9 +182,9 @@ public:
         stream_ = std::make_unique<ssl::stream<tcp::socket>>(ioc_, tls_);
     }
 
-    bool connect() {
+    bool connect(const std::string& host = "127.0.0.1") {
         beast::error_code ec;
-        stream_->lowest_layer().connect(tcp::endpoint(asio::ip::make_address("127.0.0.1"), port_), ec);
+        stream_->lowest_layer().connect(tcp::endpoint(asio::ip::make_address(host), port_), ec);
         if (ec) return false;
         bool ok = false;
         stream_->async_handshake(ssl::stream_base::client, [&](const beast::error_code& e) { ok = !e; });

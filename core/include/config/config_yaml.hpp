@@ -103,6 +103,60 @@ struct convert<S3GatewaySyntheticLocalRequestCostConfig> {
 };
 
 template<>
+struct convert<DeviceAdvertiseEndpoint> {
+    static Node encode(const DeviceAdvertiseEndpoint& rhs) {
+        Node node;
+        node["host"] = rhs.host;
+        if (rhs.port != 0) node["port"] = rhs.port;
+        node["kind"] = rhs.kind;
+        return node;
+    }
+
+    static bool decode(const Node& node, DeviceAdvertiseEndpoint& rhs) {
+        if (!node.IsMap()) return false;
+        rhs.host = node["host"].as<std::string>("");
+        rhs.port = node["port"].as<uint16_t>(0);
+        rhs.kind = node["kind"].as<std::string>("wan");
+        return true;
+    }
+};
+
+template<>
+struct convert<DeviceAdvertiseConfig> {
+    static Node encode(const DeviceAdvertiseConfig& rhs) {
+        Node node;
+        node["interfaces"] = rhs.interfaces;
+        node["include_ipv6"] = rhs.include_ipv6;
+        node["exclude_interfaces"] = rhs.exclude_interfaces;
+        node["hostnames"] = rhs.hostnames;
+        node["public"] = Node(NodeType::Sequence);
+        for (const auto& e : rhs.public_) node["public"].push_back(e);
+        return node;
+    }
+
+    // Absent keys keep their defaults; a malformed entry refuses the config (normalize()).
+    static bool decode(const Node& node, DeviceAdvertiseConfig& rhs) {
+        if (!node.IsMap()) return false;
+        rhs.interfaces = node["interfaces"].as<bool>(rhs.interfaces);
+        rhs.include_ipv6 = node["include_ipv6"].as<bool>(rhs.include_ipv6);
+        if (const auto n = node["exclude_interfaces"]) rhs.exclude_interfaces = n.as<std::vector<std::string>>();
+        if (const auto n = node["hostnames"]) rhs.hostnames = n.as<std::vector<std::string>>();
+        if (const auto n = node["public"]) {
+            if (!n.IsSequence()) throw std::invalid_argument("device_server.advertise.public must be a list");
+            rhs.public_.clear();
+            for (const auto& item : n) {
+                DeviceAdvertiseEndpoint e;
+                if (!convert<DeviceAdvertiseEndpoint>::decode(item, e))
+                    throw std::invalid_argument("device_server.advertise.public: each entry is {host, port, kind}");
+                rhs.public_.push_back(std::move(e));
+            }
+        }
+        normalize(rhs);
+        return true;
+    }
+};
+
+template<>
 struct convert<DeviceServerConfig> {
     static Node encode(const DeviceServerConfig& rhs) {
         Node node;
@@ -110,6 +164,7 @@ struct convert<DeviceServerConfig> {
         node["port"] = rhs.port;
         node["remote"] = rhs.remote;
         node["max_connections"] = rhs.max_connections;
+        node["advertise"] = rhs.advertise;
         return node;
     }
 
@@ -119,6 +174,10 @@ struct convert<DeviceServerConfig> {
         rhs.port = node["port"].as<uint16_t>(kDefaultDeviceServerPort);
         rhs.remote = node["remote"].as<bool>(false);
         rhs.max_connections = node["max_connections"].as<unsigned int>(256);
+        if (const auto n = node["advertise"]) {
+            if (!n.IsMap()) throw std::invalid_argument("device_server.advertise must be a map");
+            convert<DeviceAdvertiseConfig>::decode(n, rhs.advertise);
+        }
         return true;
     }
 };
