@@ -141,6 +141,14 @@ sudo vh setup caddy --s3-domain none          # stop serving it
 
 The S3 hostname uses the same certificate source and is routed to the S3 gateway (`s3_gateway.port`, default 39000) with path-style addressing and long timeouts for large objects. Enable the gateway first (`s3_gateway.enabled: true`); until then that hostname answers 502. See [S3 Gateway Setup](/s3-gateway/setup).
 
+## Uploads Through Caddy
+
+Resumable uploads use paths under `/upload`, which the generated configuration already streams to the HTTP server (`flush_interval -1`, no read or write timeout). Nothing needs changing. See [Uploads](/web-console/uploads).
+
+## Vaulthalla Desktop And Port 443
+
+Vaulthalla Desktop doesn't go through Caddy: it connects to the device listener on port `36972` directly ([Direct Device Connections](/admin/direct-connections)). Sharing port 443 with Desktop through a TLS passthrough needs a layer-4 router that forwards the encrypted connection by its server name without terminating it, because the device protocol's client certificate and pinned key only work end to end. Caddy's HTTP server can't do that. Layer-4 routing needs the third-party `caddy-l4` plugin, which the bundled Caddy doesn't include and `vh setup caddy` doesn't configure. On macOS, reach the node from outside over a VPN or direct WAN on port 36972 instead.
+
 ## Options
 
 | Option | Effect |
