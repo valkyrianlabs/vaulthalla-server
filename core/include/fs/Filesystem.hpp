@@ -51,6 +51,9 @@ struct SealedContent {
     unsigned int key_version{};
     uint64_t plaintext_size{};
     std::optional<std::string> mime_type{};   // nullopt: inferred from the path (sealed bytes can't be sniffed)
+    // BLAKE2b of the sealed bytes as files.content_hash holds it, when the writer already computed it while sealing
+    // (resumable uploads): createFile then skips reading the whole file back. nullopt: createFile hashes dst.
+    std::optional<std::string> content_hash{};
 };
 
 // Creates `dst` (the content sidecar on an overwrite, the new backing path otherwise) holding the sealed bytes
