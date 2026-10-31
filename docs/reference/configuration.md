@@ -58,11 +58,23 @@ device_server:
   port: 36972
   remote: false
   max_connections: 256
+  advertise:
+    interfaces: true
+    include_ipv6: true
+    exclude_interfaces: ["docker*", "br-*", "veth*", "virbr*", "podman*", "cni*", "flannel*", "lxc*"]
+    hostnames: []
+    public: []
 ```
 
-It listens on loopback until `remote` is on. Change `remote` with `vh device remote enable|disable` (super admins),
-which rebinds the listener at once and writes the value here; there is no host setting. See
-[Paired Devices](/admin/devices).
+It listens on loopback (`127.0.0.1`, and `::1` when available) until `remote` is on, then on every interface, IPv4
+and IPv6 (`[::]`, or `0.0.0.0` where IPv6 is disabled). Change `remote` with `vh device remote enable|disable`
+(super admins), which rebinds the listener at once and writes the value here; there is no host setting.
+
+`advertise` decides what paired devices are told about where to reach the listener: interface addresses (`interfaces`,
+`include_ipv6`, minus interfaces matching `exclude_interfaces` globs), extra LAN names (`hostnames`), and addresses
+that reach it from outside (`public`: `host`, optional `port` (default: the listener's) and `kind` `lan`, `vpn`,
+`wan` (default) or `passthrough`). The node never looks up its public address itself. A malformed entry stops the
+daemon from starting, with a message naming it. See [Paired Devices](/admin/devices).
 
 The S3-compatible gateway is a separate runtime service and is disabled by default:
 

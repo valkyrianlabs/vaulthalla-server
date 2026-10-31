@@ -28,8 +28,9 @@ a browser cookie; each side pins the other's key instead.
   same key changes nothing.
 - The daemon creates its key on first start and seals it like its other secrets (the TPM on Linux). The certificate
   lives next to them in the state directory (see [Runtime Paths](/reference/runtime-paths)).
-- **It listens on loopback only by default**, so only a Desktop on the same machine can connect. Turn on remote
-  connections (below) to let Macs on your network pair.
+- **It listens on loopback only by default** (`127.0.0.1`, and `::1` where the host has IPv6), so only a Desktop on
+  the same machine can connect. Turn on remote connections (below) to let Macs on your network pair; the listener
+  then accepts IPv4 and IPv6 on every interface (IPv4 only where IPv6 is disabled).
 - A connection is authorized once, when it connects, by the key it presents. A key that isn't a paired device can
   only ask to pair; everything else is refused.
 
@@ -142,6 +143,28 @@ vh device remote disable   # back to loopback; connections from other hosts clos
 The listener moves at once, without restarting the daemon. The choice is saved in `config.yaml`
 (`device_server.remote`) and kept across restarts and upgrades. Before enabling it, make sure port `36972/tcp` is
 reachable only from networks you trust (a firewall rule), even though every connection needs a paired key.
+
+### Where devices are told to connect
+
+A paired Mac asks the node where else it can be reached and picks the best route on its own: this machine, the
+local network, a VPN such as Tailscale or WireGuard, then the internet. The node lists its interface addresses
+(classified by range; container and bridge interfaces are left out), `<hostname>.local` where an mDNS responder runs
+(always on macOS, avahi on Linux), and the names you add under `device_server.advertise` in `config.yaml`. It never
+asks an outside service for its public address, so list port forwards, tunnels and TLS passthroughs there yourself:
+
+```yaml
+device_server:
+  advertise:
+    hostnames: ["nas.home.arpa"]
+    public:
+      - {host: device.example.com, port: 36972}
+      - {host: device.example.com, port: 443, kind: passthrough}
+```
+
+`vh device remote status` and the web console's **Remote connections** card show where the listener is bound. Super
+admins also see, through the ws `device.remote.status` diagnostics, the addresses devices are told, what the host
+firewall looks like (read from its configuration only; "unknown" when it can't be told without root) and when a
+device last connected from a public address.
 
 ## Troubleshooting
 
