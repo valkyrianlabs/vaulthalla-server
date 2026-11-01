@@ -6,7 +6,7 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = '056cfd712b9e8341a251678acac0ae408f236bfb5b2b042eba62f1f1c8fe3c5e'
+export const WS_CONTRACT_HASH = '565d480c01daf23a165cffc03a948b97281ad3f0eccac146a9352e0d4a4742c2'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
 export const WS_MODELS_HASH = '7a08c439ab90a86e6316d2df81ca0ae484b1d7a8d7eb0673d84efaadf579eb31'
@@ -3253,7 +3253,8 @@ export interface WsContract {
     response: { vault: string; path: string; entry: WsModels['FsEntryBase']; files: WsModels['FsEntry'][] } | { path: string; entry: WsModels['ShareEntry']; files: WsModels['ShareEntry'][] }
   }
   /**
-   * One entry's metadata (Lookup on the path).
+   * One entry's metadata (Lookup on the path). A folder's size covers only what the caller can Lookup, as in
+   * fs.dir.list.
    */
   'fs.metadata': {
     payload: { vault_id: number; path?: string } | { vault_id?: number | null; path?: string }
