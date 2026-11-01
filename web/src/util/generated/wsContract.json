@@ -21340,7 +21340,7 @@
       "client_timeout_ms": 15000,
       "command": "fs.metadata",
       "confirmations": [],
-      "description": "One entry's metadata (Lookup on the path).",
+      "description": "One entry's metadata (Lookup on the path). A folder's size covers only what the caller can Lookup, as in fs.dir.list.",
       "input": "payload",
       "operation": null,
       "payload": [
@@ -39056,5 +39056,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "056cfd712b9e8341a251678acac0ae408f236bfb5b2b042eba62f1f1c8fe3c5e"
+  "ws_hash": "565d480c01daf23a165cffc03a948b97281ad3f0eccac146a9352e0d4a4742c2"
 }

@@ -587,10 +587,16 @@ json Storage::metadata(const json& payload, const std::shared_ptr<Session>& sess
     const auto entry = runtime::Deps::get().fsCache->getEntry(fusePath);
     if (!entry) throw vh::ops::NotFound("No entry found for path: " + fusePath.string());
 
+    // A folder's size covers only what the caller can see (#269), as in fs.dir.list (#255): the stored subtree total
+    // counts hidden entries too.
+    json entryJson = *entry;
+    if (const auto totals = vh::rbac::fs::visibility::visibleTotals(session->user, entry))
+        entryJson["size_bytes"] = totals->size_bytes;
+
     return {
         {"vault", engine->vault->name},
         {"path", path.string()},
-        {"entry", *entry}
+        {"entry", std::move(entryJson)}
     };
 } catch (...) {
     rethrowRequestErrorsAsInvalid();

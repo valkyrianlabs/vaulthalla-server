@@ -27,3 +27,6 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   - Where no Secure Enclave key can be used (checked once per start with a throwaway key) the daemon falls back to
     `file`, logged and reported. `-Ddarwin_sealer=file` builds the development backend.
   - cask-smoke checks the reported backend, the blob format and that secrets reopen after a daemon restart.
+- Security: a folder's size no longer reveals how much it holds that the caller cannot see. `fs.metadata` and FUSE
+  `stat` of a directory cover only entries the caller can Lookup, as `fs.dir.list` already did (lookup's attributes
+  withhold the size for such callers). Super admins and vault owners still see the stored totals (#269).
