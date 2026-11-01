@@ -335,11 +335,12 @@ test('after an interruption, the same file resumes in its session and sends only
   assert.equal(failed.ok, false)
   assert.equal(!failed.ok && failed.resumable, true)
   assert.match(!failed.ok ? failed.error : '', /resume/)
-  const stored = [...server.sessions.values()][0].files[0].ranges
+  // Which parts landed depends on how the concurrent parts interleaved; copied, since the resumed batch extends them.
+  const stored = [...server.sessions.values()][0].files[0].ranges.map(([a, b]) => [a, b])
   assert.ok(stored.length > 0)
 
   // "Reload": a new batch with a new Blob of the same file and the same store.
-  const putsBefore = server.log.filter(e => e.method === 'PUT').length
+  const logBefore = server.log.length
   const second = options(fakeServerAgain(server), { store: createResumeStore(() => storage, () => 0) })
   let resumedBytes = -1
   const again = item('/big', 4096 * 6)
@@ -347,8 +348,10 @@ test('after an interruption, the same file resumes in its session and sends only
   assert.equal(result.kind === 'done' && result.results[0].ok, true)
   assert.equal(server.sessions.size, 1, 'no new session')
   assert.equal(resumedBytes, 4096 * 2)
-  const resent = server.log.slice(putsBefore + 0).filter(e => e.method === 'PUT' && e.length)
-  assert.ok(resent.every(e => !/offset=(0|4096)$/.test(e.url)), 'stored parts not resent')
+  const resent = server.log.slice(logBefore).filter(e => e.method === 'PUT' && e.length)
+  const offset = (url: string) => Number(new URLSearchParams(url.split('?')[1]).get('offset'))
+  assert.ok(resent.length > 0)
+  assert.ok(resent.every(e => !stored.some(([a, b]) => offset(e.url) >= a && offset(e.url) < b)), 'stored parts not resent')
   assert.deepEqual([...server.sessions.values()][0].files[0].bytes, again.bytes)
   assert.equal(second.progress(), 4096 * 6)
 })
