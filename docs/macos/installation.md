@@ -107,14 +107,14 @@ vh status
 sudo launchctl print system/sh.vaulthalla.server | grep -E 'state|pid'
 ```
 
-`vh status` reports the daemon, database and storage health. Two lines are expected on macOS and are reported as they are rather than hidden:
+`vh status` reports the daemon, database and storage health. On macOS it includes:
 
 ```text
   mount: disabled -> disabled — the server never mounts on this platform; Finder access is provided by Vaulthalla Desktop
-  secrets backend: file (development: no hardware binding)
+  secrets backend: secure-enclave
 ```
 
-The server never mounts vaults on macOS (Finder access belongs to Vaulthalla Desktop, in development), and master keys are protected by file permissions rather than hardware. See [Vaulthalla On macOS](/macos#not-yet-supported).
+The server never mounts vaults on macOS (Finder access belongs to Vaulthalla Desktop, in development); that line is reported as it is rather than hidden. Master keys are sealed with the Mac's Secure Enclave, by the daemon on its first start (see [Disk Encryption And Key Protection](/macos/administration#disk-encryption-and-key-protection)). On a virtual Mac without a Secure Enclave the line reads `file (development: no hardware binding)`.
 
 ## What Gets Installed Where
 

@@ -104,6 +104,8 @@ conf.set_quoted('VH_PSQL_SCHEMAS_PATH', psql_dir)
 # A libmagic database shipped with the install (the macOS package bundles one); absent on Debian, which has its own.
 conf.set_quoted('VH_MAGIC_DB_PATH', join_paths(data_dir, 'magic.mgc'))
 conf.set_quoted('VH_PSQL_TEST_SCHEMAS_PATH', join_paths(repo_root, 'deploy/psql'))
+# The macOS sealer this build prefers (platform/darwin/Sealer.cpp); Linux always seals with TPM2.
+conf.set_quoted('VH_DARWIN_SEALER', get_option('darwin_sealer'))
 
 vh_paths_header = configure_file(
     input: 'deploy/path/paths.h.in',
@@ -170,6 +172,11 @@ deps = [
 
 if fuse_dep.found()
     deps += fuse_dep
+endif
+
+# The Secure Enclave sealer (platform/darwin/SecureEnclaveSealer.cpp).
+if host_os == 'darwin'
+    deps += dependency('appleframeworks', modules: ['CoreFoundation', 'IOKit', 'Security'], required: true)
 endif
 
 # Linux-only system libraries: libuuid (macOS has <uuid/uuid.h> in libSystem) and the TPM2 stack behind the TPM

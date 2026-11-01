@@ -7,8 +7,9 @@
 # (valkyrianlabs/homebrew-tap), with an empty Homebrew trust store, then:
 # - vaulthalla-server, named in full (no `brew trust`): `brew install --cask` (the package's postinstall provisions the
 #   service and enrolls the console user as the CLI admin); the three daemons run as _vaulthalla; `vh status` and
-#   `vh vault list` answer the console user; the web console answers; no Vaulthalla.app is installed; `brew uninstall`
-#   stops everything, keeps the data.
+#   `vh vault list` answer the console user; the web console answers; the daemon sealed its secrets with the Secure
+#   Enclave (`file` only on a virtual Mac without one) and opens them again after a restart; no Vaulthalla.app is
+#   installed; `brew uninstall` stops everything, keeps the data.
 # - vaulthalla, the meta cask: refused until the tap is trusted (Homebrew loads dependency casks only from a trusted
 #   tap); then it installs vaulthalla-server (the server comes back on the kept data) and vaulthalla-desktop (the
 #   published app, signed by the Valkyrian Labs LLC team); uninstalling it leaves both.
@@ -28,9 +29,10 @@ fail() { echo "::error::FAIL $*"; failures=$((failures + 1)); }
 check() { local name="$1"; shift; if "$@"; then pass "$name"; else fail "$name"; fi; }
 wait_for() { local deadline=$(( $(date +%s) + $1 )); shift; until "$@"; do [ "$(date +%s)" -lt "$deadline" ] || return 1; sleep 1; done; }
 listening() { /usr/bin/nc -z -G 1 127.0.0.1 "$1" >/dev/null 2>&1; }
+pid_of() { sudo launchctl print "system/$1" 2>/dev/null | awk '$1 == "pid" && $2 == "=" {print $3}'; }
 running() {  # running LABEL: loaded, with a pid owned by _vaulthalla
   local pid
-  pid=$(sudo launchctl print "system/$1" 2>/dev/null | awk '$1 == "pid" && $2 == "=" {print $3}')
+  pid=$(pid_of "$1")
   [ -n "$pid" ] && [ "$(ps -o user= -p "$pid" | tr -d ' ')" = _vaulthalla ]
 }
 loaded() { sudo launchctl print "system/$1" >/dev/null 2>&1; }
@@ -47,6 +49,17 @@ no_app() { [ ! -e "$APP" ]; }
 has_app() { [ -d "$APP" ]; }
 installed() { brew list --cask --versions "${1##*/}" >/dev/null 2>&1; }  # brew list takes the token, not tap/token
 nothing_installed() { no_service && no_app; }
+status_backend() { as_console /usr/local/bin/vh status 2>/dev/null | awk -F': ' '/secrets backend:/ {print $2; exit}' | awk '{print $1}'; }
+VIRTUAL=$(sysctl -n kern.hv_vmm_present 2>/dev/null || echo 0)
+if [ "$VIRTUAL" = 1 ]; then EXPECT_SEALER="file"; SEALED_EXT=key; else EXPECT_SEALER=secure-enclave; SEALED_EXT=se; fi
+sealed_as_expected() {  # the DB password sealed in the active format, and no slot left in the other one
+  local found other
+  found=$(sudo sh -c "ls '$SUPPORT/state'/.sealed_*.blob/") || return 1
+  if [ "$SEALED_EXT" = se ]; then other=key; else other=se; fi
+  echo "$found" | grep -qx "psql\.$SEALED_EXT" && ! echo "$found" | grep -q "\.$other\$"
+}
+reports_backend() { [ "$(status_backend)" = "$EXPECT_SEALER" ]; }
+restarted() { local pid; pid=$(pid_of sh.vaulthalla.server); [ -n "$pid" ] && [ "$pid" != "$OLD_PID" ] && ready; }
 app_signed() { codesign --verify --deep --strict "$APP" && codesign -dv "$APP" 2>&1 | grep -q '^TeamIdentifier=ZG2G6V7GLC$'; }
 
 [ "${CI:-}" = true ] || die "CI only: this installs Vaulthalla and then zaps it, data and account included"
@@ -90,6 +103,14 @@ rc=0; /usr/local/bin/vh status >/dev/null 2>&1 || rc=$?
 if [ "$rc" -le 2 ]; then echo "::notice::an already-open session can use vh right after install (exit $rc)"
 else echo "::notice::an already-open session can't use vh yet (exit $rc): a new terminal is needed after install"; fi
 check "the initial admin password was generated" sudo test -s "$SUPPORT/state/super_admin_initial_password"
+echo "::notice::secrets backend: $(status_backend) (virtual machine: $VIRTUAL)"
+check "vh status reports the $EXPECT_SEALER secrets backend" reports_backend
+check "the daemon sealed its secrets as .$SEALED_EXT blobs" sealed_as_expected
+echo "== restart the daemon (it must unseal what it sealed)"
+OLD_PID=$(pid_of sh.vaulthalla.server)
+sudo launchctl kickstart -k system/sh.vaulthalla.server
+check "the server is ready again after a restart (new pid)" wait_for 180 restarted
+check "the sealed DB password opens after a restart (vh vault list)" wait_for 60 admin_bound
 check "the uninstaller is kept outside the receipt" test -x "$SUPPORT/uninstall.sh"
 check "vaulthalla-server installs no Vaulthalla.app" no_app
 
@@ -110,6 +131,7 @@ check "vaulthalla-server is installed as its own cask" installed "$TAP/vaulthall
 check "vaulthalla-desktop is installed as its own cask" installed "$TAP/vaulthalla-desktop"
 check "the server is ready again on the kept data" wait_for 180 ready
 check "the admin binding survived" admin_bound
+check "the reinstalled server still reports $EXPECT_SEALER" reports_backend
 check "Vaulthalla.app is installed" has_app
 check "the app is signed by the Valkyrian Labs LLC team" app_signed
 

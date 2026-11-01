@@ -370,7 +370,7 @@ std::vector<WsModel> statsSystemModels() {
                  str("mount_backend"),
                  str("mount_isolation").desc("enforced | unproven | not_applicable."),
                  statsNullable(str("mount_detail")),
-                 str("secrets_backend").desc("\"tpm2\", or \"file\" (macOS development backend).")}),
+                 str("secrets_backend").desc("\"tpm2\" (Linux), \"secure-enclave\" (macOS), or \"file\" (macOS development backend, no hardware binding).")}),
          object("shell", "", {statsNullable(boolean("admin_uid_bound"))}),
          object("database", "",
                 {statsUint("pool_size"), statsUint("idle"), statsUint("in_use"), statsUint("broken_idle"),

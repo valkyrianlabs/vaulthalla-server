@@ -93,7 +93,7 @@ Everything that holds data belongs to the hidden `_vaulthalla` account.
 | --- | --- | --- |
 | `/Library/Application Support/Vaulthalla` | `root:wheel 0755` | Service root. |
 | `…/config.yaml` | `root:_vaulthalla 0640` | Runtime configuration. Written only when missing. |
-| `…/state` | `_vaulthalla 0700` | Vault data (ciphertext), sealed secrets (`file` backend), previews cache, upload staging, unfinished resumable uploads (`.upload-spool`), local snapshots and versions (`.vh-recovery`), the initial admin password. |
+| `…/state` | `_vaulthalla 0700` | Vault data (ciphertext), sealed secrets (`.sealed_*.blob`, bound to this Mac's Secure Enclave), previews cache, upload staging, unfinished resumable uploads (`.upload-spool`), local snapshots and versions (`.vh-recovery`), the initial admin password. |
 | `…/run` | `_vaulthalla 0750` | The CLI socket `cli.sock` (`0660`, group `_vaulthalla`) and the one-time database password handoff. |
 | `…/postgres` | `_vaulthalla 0700` | The bundled PostgreSQL cluster (`data/`) and its socket. |
 | `…/caddy` | `_vaulthalla 0700` | After `vh setup caddy`: the Caddyfile, certificates, ACME account and the Vaulthalla CA. |

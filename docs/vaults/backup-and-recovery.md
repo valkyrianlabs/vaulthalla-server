@@ -27,7 +27,7 @@ A practical recovery set includes:
 | PostgreSQL database dump | distribution or remote PostgreSQL | the bundled cluster | Users, groups, roles, vault definitions, sync policy, shares, audit state, key records, remote indexes, and metadata. |
 | Configuration | `/etc/vaulthalla/config.yaml` | `/Library/Application Support/Vaulthalla/config.yaml` | Runtime ports, auth settings, pricing settings, sharing settings, cache policy, and service configuration. |
 | State | `/var/lib/vaulthalla` | `/Library/Application Support/Vaulthalla/state` | Vaulthalla-managed state, local vault bodies, cache/index state, and sealed key material. |
-| Key protection | `/var/lib/swtpm/vaulthalla` when `swtpm` is used | included in the state directory (`file` backend) | Unseals the master keys on the original host. |
+| Key protection | `/var/lib/swtpm/vaulthalla` when `swtpm` is used | this Mac's Secure Enclave (not backed up; the sealed blobs are in the state directory) | Unseals the master keys on the original host. |
 | Vault key export | Portable recovery material for encrypted vault content. |
 | Internal secret export | Database and JWT secrets managed by Vaulthalla. |
 | S3/R2 bucket data | Remote object bodies for S3-compatible vaults (and, with provider versioning, their object versions). |
@@ -116,7 +116,16 @@ When using `swtpm`, restoring `/var/lib/swtpm/vaulthalla` can preserve the softw
 
 ## macOS Key Recovery
 
-On macOS the sealed keys are files in the state directory, so restoring the state archive to a Mac restores the master keys with it, on any Mac. That makes the archive itself key material: protect it like a GPG-encrypted key export, and prefer the exports for long-term storage.
+On macOS the master keys are sealed with the Mac's Secure Enclave. Restoring the state archive to the **same** Mac, on the same macOS installation, brings them back: the daemon opens them on its next start under launchd.
+
+On **another Mac**, or after macOS was erased and reinstalled, the sealed blobs (`state/.sealed_*.blob`) can't be opened, and the daemon stops at startup with an error saying so. Recover with the exports instead:
+
+1. After restoring the state directory, remove the old blobs: `sudo sh -c 'rm -rf "/Library/Application Support/Vaulthalla/state"/.sealed_*.blob'` (the state directory is private to `_vaulthalla`, so the pattern has to expand as root).
+2. Hand the database password to the daemon: write it to `/Library/Application Support/Vaulthalla/run/db_password` (owner `_vaulthalla`, mode `0600`). The daemon seals it on its next start.
+3. Start the daemon (`sudo /usr/local/lib/vaulthalla/vaulthalla-provision --apply`). It creates new master keys in this Mac's Secure Enclave.
+4. Import the vault keys (`vh vault keys import`, see [Restore Vault Keys](/vaults/secrets-and-key-export#restore-vault-keys)) and set the JWT secret from the internal secret export (`vh secret set jwt-secret`).
+
+Copying sealed blobs between Macs never works; only the exports move keys between machines. Installs that still use the `file` backend (a virtual machine, or a development build) keep plaintext key files in the state directory, so there the state archive is itself key material: protect it like a key export.
 
 ## Restore Outline
 

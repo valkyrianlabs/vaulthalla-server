@@ -110,7 +110,7 @@ attestation = Ed25519(server signing key,
                       "vh-key-attest-v1" ‖ node_id ‖ UInt64BE(vault_id) ‖ UInt32BE(version) ‖ key_check (16 bytes))
 ```
 
-In the export it appears as `"attestation": {"key_id": 1, "signature": "<base64>"}` next to each `key_check`. `node_id` is this installation's id (the one paired devices record); `key_id` names which of the server's signing keys signed. The signing key is created on first use, sealed by the host (TPM2 or `swtpm`), and never leaves it. If it can no longer be unsealed (for example after the TPM state was reset), the server creates a new one and keeps the public half of every old one, so attestations in older exports still verify. Test vector: signing seed `00 01 02 … 1f`, node id `00000000-0000-4000-8000-000000000001`, vault 42, version 3 and the key check above give the public key `03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8` and the signature `fbda258fa125ef4237a54b7cde732c073ba598fa4a1a782226aa82514ee5c36a3ad452e6d36593337dc1619e61391c6ae20685155b11cc2b6deaf637e893840c`.
+In the export it appears as `"attestation": {"key_id": 1, "signature": "<base64>"}` next to each `key_check`. `node_id` is this installation's id (the one paired devices record); `key_id` names which of the server's signing keys signed. The signing key is created on first use, sealed by the host (TPM2 or `swtpm` on Linux, the Secure Enclave on macOS), and never leaves it. If it can no longer be unsealed (for example after the TPM state was reset), the server creates a new one and keeps the public half of every old one, so attestations in older exports still verify. Test vector: signing seed `00 01 02 … 1f`, node id `00000000-0000-4000-8000-000000000001`, vault 42, version 3 and the key check above give the public key `03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8` and the signature `fbda258fa125ef4237a54b7cde732c073ba598fa4a1a782226aa82514ee5c36a3ad452e6d36593337dc1619e61391c6ae20685155b11cc2b6deaf637e893840c`.
 
 Exports taken before attestations existed have none. Export your vault keys again after upgrading so every backup can be restored.
 
@@ -215,4 +215,4 @@ Vaulthalla never creates a new key for a vault that already holds encrypted data
 
 Writing asks you to type the vault's name; without a terminal, pass it with `--confirm-name`. The import needs the same permission as export. A Mac paired with Vaulthalla Desktop restores keys from 1Password the same way over its paired connection. Neither the web console nor AI agents can import keys.
 
-Test the restore path before relying on it: keep database backups, Vaulthalla state, TPM or `swtpm` state, and encrypted key exports together as a recovery set.
+Test the restore path before relying on it: keep database backups, Vaulthalla state, TPM or `swtpm` state (Linux), and encrypted key exports together as a recovery set.

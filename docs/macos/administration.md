@@ -134,7 +134,29 @@ It refuses rather than repairs anything that doesn't look like its own: a `_vaul
 
 ## Disk Encryption And Key Protection
 
-The macOS secrets backend stores master keys as `0600` files in the `0700` state directory. Anyone who can read that directory as root or as `_vaulthalla`, or who can read the disk without FileVault, can read them. Keep FileVault on, keep `/Library/Application Support/Vaulthalla` out of shared or synced folders, and export vault keys to a GPG recipient for recovery: see [Encryption](/vaults/encryption#how-master-keys-are-protected) and [Backup And Recovery](/vaults/backup-and-recovery).
+Master keys (the vault master key, the database password, API-key and gateway secrets) are sealed with the Mac's Secure Enclave, and `vh status` reports `secrets backend: secure-enclave`. The daemon creates the keys itself on its first start under launchd, and only the daemon can use them: not `sudo`, a login session or a copy of the server started by hand, even as root. The sealed blobs in the state directory open only on this Mac, so export vault keys and internal secrets to a GPG recipient for recovery: see [Encryption](/vaults/encryption#the-secure-enclave-on-macos) and [macOS Key Recovery](/vaults/backup-and-recovery#macos-key-recovery).
+
+Upgrades keep the keys. An install from before the Secure Enclave backend had its keys in `0600` files; the first start of the new version moves each into the Secure Enclave and deletes the file.
+
+On a Mac without a Secure Enclave (a virtual machine), the daemon falls back to the `file` backend and says so in its log and in `vh status` (`secrets backend: file (development: no hardware binding)`): the keys are then plain files protected only by the state directory's permissions and FileVault.
+
+Keep FileVault on either way: vault data and the database are on the same disk.
+
+## Restarts And FileVault
+
+The keys are available from the first unlock after a boot, before anyone logs in. What starts the daemon depends on FileVault:
+
+- **FileVault on, cold boot or plain restart:** the Mac stops at the FileVault login screen with the disk still locked, so no daemon runs, Vaulthalla included, until someone logs in or unlocks the disk. This is how FileVault works, not a Vaulthalla failure.
+- **FileVault on, unattended restart:** restart with
+
+  ```bash
+  sudo fdesetup authrestart
+  ```
+
+  It unlocks the disk once on the way back up. The Mac comes back to the login window, and launchd starts Vaulthalla there, before anyone logs in. Use it for updates and maintenance on a headless Mac. (`fdesetup authrestart -delayminutes -1` arms it for the next restart instead, for example one an update triggers.)
+- **FileVault off:** the daemon starts at every boot. The keys are still sealed by the Secure Enclave, but the vault data and the database on disk are not encrypted at rest.
+
+After any restart, `vh status` from an enrolled user confirms the daemon unsealed its keys.
 
 ## Isolated Development Instance
 
