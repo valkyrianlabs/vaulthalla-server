@@ -76,12 +76,11 @@ void replyError(const fuse_req_t req, ScopedFuseOpTimer& timer, const int errnum
 // processes such as MOTD scripts stat every mount, and they must not raise the dashboard's FUSE error rate. Every
 // other resolver failure is reported as an error.
 void replyResolveError(const fuse_req_t req, ScopedFuseOpTimer& timer, const resolver::Resolved& resolved) {
-    if (resolved.status != resolver::Status::MissingUser && resolved.status != resolver::Status::AccessDenied) {
-        replyResolveError(req, timer, resolved);
-        return;
-    }
     const int normalized = resolved.errnum < 0 ? -resolved.errnum : resolved.errnum;
-    timer.denied(normalized);
+    if (resolved.status == resolver::Status::MissingUser || resolved.status == resolver::Status::AccessDenied)
+        timer.denied(normalized);
+    else
+        timer.error(normalized);
     fuse_reply_err(req, normalized);
 }
 
