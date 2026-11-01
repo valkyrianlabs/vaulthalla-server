@@ -15,6 +15,7 @@
 #include "fs/cache/Registry.hpp"
 #include "fuse/Resolver.hpp"
 #include "fuse/WorkingCopies.hpp"
+#include "fuse/task/Request.hpp"
 #include "rbac/fs/Placement.hpp"
 #include "fs/model/Symlink.hpp"
 #include "fs/model/File.hpp"
@@ -650,8 +651,6 @@ void rename(const fuse_req_t req, const fuse_ino_t parent, const char* name, con
 
     const auto& cache = runtime::Deps::get().fsCache;
 
-    const auto toPath = cache->resolvePath(newparent) / newname;
-
     const auto resolved = Resolver::resolve({
         .caller = "rename",
         .fuseReq = req,
@@ -670,6 +669,15 @@ void rename(const fuse_req_t req, const fuse_ino_t parent, const char* name, con
     // know is refused: carried out as a plain rename it would overwrite the entry the caller asked to keep.
     if (flags & ~static_cast<unsigned int>(RENAME_NOREPLACE)) {
         replyError(req, timer, EINVAL);
+        return;
+    }
+
+    // A destination folder inode the cache doesn't know (gone since the kernel looked it up) is ENOENT (#263).
+    std::filesystem::path toPath;
+    try {
+        toPath = cache->resolvePath(newparent) / newname;
+    } catch (const std::runtime_error&) {
+        replyError(req, timer, ENOENT);
         return;
     }
 
@@ -1020,28 +1028,31 @@ void statfs(const fuse_req_t req, const fuse_ino_t ino) {
     fuse_reply_statfs(req, &st);
 }
 
+// Every op goes through the reply guard (task::Guard, #263): an exception that escapes an op, a database pool timeout
+// above all, is answered instead of leaving the kernel request (and its caller) waiting forever.
+// tools/contracts/test_fuse_reply_guard_contract.py keeps every registration guarded.
 fuse_lowlevel_ops getOperations() {
     fuse_lowlevel_ops ops = {};
-    ops.getattr = getattr;
-    ops.setattr = setattr;
-    ops.readdir = readdir;
-    ops.lookup = lookup;
-    ops.readlink = readlink;
-    ops.symlink = symlink;
-    ops.open = open;
-    ops.read = read;
-    ops.forget = forget;
-    ops.write = write;
-    ops.create = create;
-    ops.release = release;
-    ops.access = access;
-    ops.mkdir = mkdir;
-    ops.rename = rename;
-    ops.unlink = unlink;
-    ops.rmdir = rmdir;
-    ops.flush = flush;
-    ops.fsync = fsync;
-    ops.statfs = statfs;
+    ops.getattr = task::guarded<&getattr>;
+    ops.setattr = task::guarded<&setattr>;
+    ops.readdir = task::guarded<&readdir>;
+    ops.lookup = task::guarded<&lookup>;
+    ops.readlink = task::guarded<&readlink>;
+    ops.symlink = task::guarded<&symlink>;
+    ops.open = task::guarded<&open>;
+    ops.read = task::guarded<&read>;
+    ops.forget = task::guardedForget<&forget>;
+    ops.write = task::guarded<&write>;
+    ops.create = task::guarded<&create>;
+    ops.release = task::guarded<&release>;
+    ops.access = task::guarded<&access>;
+    ops.mkdir = task::guarded<&mkdir>;
+    ops.rename = task::guarded<&rename>;
+    ops.unlink = task::guarded<&unlink>;
+    ops.rmdir = task::guarded<&rmdir>;
+    ops.flush = task::guarded<&flush>;
+    ops.fsync = task::guarded<&fsync>;
+    ops.statfs = task::guarded<&statfs>;
     return ops;
 }
 

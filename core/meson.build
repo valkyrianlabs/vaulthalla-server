@@ -266,7 +266,7 @@ core_pch = get_option('optimization') == '0' ? ['pch/vaulthalla_pch.hpp'] : []
 if get_option('build_unit_tests')
     unit_test_sources = []
     # Suites of the kernel FUSE bridge itself; without it (-Dfuse=disabled) there is nothing to test.
-    fuse_bridge_tests = ['test_fuse_denial.cpp']
+    fuse_bridge_tests = ['test_fuse_denial.cpp', 'test_fuse_reply_guard.cpp']
     # DB-backed suites skip without VH_TEST_DB_* (they are manual validation: `make test`). Files whose every test is
     # DB-backed carry the line `// vh-test-tier: db-only`; -Ddb_tests=false (CI) doesn't compile them. Files that mix
     # DB and plain tests stay unmarked, so CI keeps their plain tests.

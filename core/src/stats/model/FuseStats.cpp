@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
+#include <exception>
+#include <utility>
 #include <nlohmann/json.hpp>
 
 namespace vh::stats::model {
@@ -13,6 +15,14 @@ std::uint64_t fuseStatsUnixTimestamp() {
     const auto now = std::chrono::system_clock::now();
     return static_cast<std::uint64_t>(std::chrono::system_clock::to_time_t(now));
 }
+
+// A timer destroyed by an exception, waiting for fuse::task::Guard to say which errno the request got.
+struct UnansweredOp {
+    FuseStats* stats = nullptr;
+    FuseOperation op = FuseOperation::Unknown;
+    std::uint64_t elapsedUs = 0;
+};
+thread_local UnansweredOp unansweredFuseOp;
 
 void observeMax(PaddedAtomic<std::uint64_t>& counter, const std::uint64_t value) noexcept {
     auto current = counter.v.load(std::memory_order_relaxed);
@@ -220,10 +230,21 @@ FuseStatsSnapshot FuseStats::snapshot() const {
 }
 
 ScopedFuseOpTimer::ScopedFuseOpTimer(FuseStats* stats, const FuseOperation op) noexcept
-    : stats_(stats), op_(op), start_(std::chrono::steady_clock::now()) {}
+    : stats_(stats), op_(op), start_(std::chrono::steady_clock::now()), uncaught_(std::uncaught_exceptions()) {}
 
 ScopedFuseOpTimer::~ScopedFuseOpTimer() {
-    if (!completed_ && stats_) success();
+    if (completed_ || !stats_) return;
+    if (std::uncaught_exceptions() > uncaught_) {
+        completed_ = true;
+        unansweredFuseOp = {stats_, op_, elapsedUs()};
+        return;
+    }
+    success();
+}
+
+void ScopedFuseOpTimer::recordUnanswered(const int errnum) noexcept {
+    const auto op = std::exchange(unansweredFuseOp, {});
+    if (op.stats) op.stats->record_error(op.op, errnum, op.elapsedUs);
 }
 
 std::uint64_t ScopedFuseOpTimer::elapsedUs() const noexcept {

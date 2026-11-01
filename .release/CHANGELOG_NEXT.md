@@ -12,6 +12,10 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
 - CLI tables (`vh fs ls` and every other `vh` table) measure, truncate and pad cells by display width instead of
   bytes, so long names with accents, CJK or emoji are never cut mid-character and columns stay aligned; malformed
   UTF-8 in a name shows as U+FFFD (#273).
+- FUSE: every request is answered, even when its operation fails unexpectedly. A database pool timeout (or an
+  unknown inode in rename) during unlink, rmdir, rename or any other op used to leave the kernel request unanswered, so
+  `rm`, `mv` and the like hung; they now fail with EAGAIN (database unreachable) or EIO. FUSE stats count such ops
+  as errors, not successes (#263).
 - macOS: master keys are sealed with the Secure Enclave by default (`secrets_backend` `secure-enclave`; #290): a
   non-permanent SE P-256 key per secret (AfterFirstUnlockThisDeviceOnly, private-key usage), ECIES X9.63-SHA256
   AES-GCM, stored as `<state>/.sealed_<name>.blob/<name>.se`; created and opened only by the daemon under launchd.
