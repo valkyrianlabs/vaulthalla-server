@@ -20656,6 +20656,132 @@
     {
       "auth": "human",
       "client_timeout_ms": 15000,
+      "command": "fs.changes.subscribe",
+      "confirmations": [],
+      "description": "Follow vaults' changes by push (#260): after changes to a followed vault commit, the session gets an unsolicited frame {\"command\": \"fs.changed\", \"data\": {\"vault_id\", \"revision\"}} (no requestId), coalesced per vault, and calls fs.changes.list from its cursor. Accepted for vaults the caller can follow (fs.changes.list's rule), at most 256 per session; a vault it can no longer follow is dropped with one last event carrying \"subscribed\": false. Events wait while the session is slow to read, coalesced, never queued without bound. Subscriptions end with the session.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Vault ids to follow (added to what the session follows).",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "items": "integer",
+          "name": "vault_ids",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "unauthorized",
+        "denied",
+        "invalid"
+      ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied",
+        "invalid"
+      ],
+      "response": [
+        {
+          "description": "Every vault the session follows now, ascending.",
+          "items": "integer",
+          "name": "vault_ids",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "Vaults not followed, and why.",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "vault_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "enum": [
+                "denied",
+                "not_found",
+                "limit"
+              ],
+              "name": "code",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "items": "object",
+          "name": "refused",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "fs.changes.unsubscribe",
+      "confirmations": [],
+      "description": "Stop following vaults by push (fs.changes.subscribe); without vault_ids, all of them.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Absent or null: every vault.",
+          "items": "integer",
+          "name": "vault_ids",
+          "required": false,
+          "types": [
+            "array",
+            "null"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "unauthorized",
+        "invalid"
+      ],
+      "refusal_kinds": [
+        "unauthorized",
+        "invalid"
+      ],
+      "response": [
+        {
+          "description": "What the session still follows.",
+          "items": "integer",
+          "name": "vault_ids",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
       "command": "fs.dir.create",
       "confirmations": [],
       "description": "Create a directory (Touch on the path).",
@@ -39276,5 +39402,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "b3c8d7ef4e24e96435bd28d8dfdc6c7ccd0c873ad39bd171f5ea0387f286c912"
+  "ws_hash": "adc8d0db539312dec5e05ef49106ee41376ff4622a5ab257aee951c167344b2e"
 }

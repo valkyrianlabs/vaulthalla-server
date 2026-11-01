@@ -41,6 +41,9 @@ folders again.
 - When a role, group membership or permission override changes what someone may see in a vault, their cursor
   expires and their client lists the vault again. So does a cursor older than the journal's retention (7 days or the
   last million changes).
+- Clients can subscribe instead of polling: `fs.changes.subscribe` makes the server tell a connected session when a
+  vault it follows has changed (`fs.changed`). Events are merged per vault for slow clients, and a subscription
+  ends when its user loses access to the vault.
 - The journal adds one row per change. The database migration (115) is safe on upgraded installs.
 
 ## Vaulthalla Desktop sets up this Mac's server on its own

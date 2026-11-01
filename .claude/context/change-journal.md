@@ -1,4 +1,4 @@
-# Filesystem change journal (`fs.changes.*`, #259/#260)
+# Filesystem change journal and push (`fs.changes.*`, #259/#260)
 
 Sync clients ask "what changed in this vault since revision N" instead of re-listing folders. The first consumer is
 Vaulthalla Desktop's File Provider (working set and sync anchors, desktop#1 Stage D; its background agent, desktop#5,
@@ -59,6 +59,28 @@ was an agent's, not Cooper's; this records the reviewed scope).
   reaching override). A rename/move visible only after reads as `create`; visible only before, as `delete` at the old
   path; neither, it is left out.
 - Contract: ws book `fs.changes.list`, model `FsChange` (`ops::fs_changes::toJson`).
+
+## Push (`fs.changes.subscribe` / `unsubscribe`, #260; `protocols::ws::ChangeNotifier`)
+
+- A signed-in web or paired device session subscribes to vaults it can follow (`canFollow`); the answer lists what it
+  follows and refuses the rest per vault (`denied`, `not_found`, `limit`: at most 256 vaults per session and per
+  request). Subscriptions live in the notifier, keyed by session uuid with a weak pointer, and end with the session.
+- Service `FsChangeNotifier` (runtime::Manager, started before ProtocolService): while any session is subscribed it
+  calls `ChangeLog::sequence()` every 250 ms (a read-only `EXISTS` on the pending index when nothing is pending; no
+  row lock, no WAL) and turns what was numbered into per-vault news, so writes from any path, psql included, are
+  pushed. With no subscriber it does nothing.
+- Event: `{"command": "fs.changed", "data": {"vault_id", "revision"}}`, no requestId. It only says "ask again":
+  the client calls `fs.changes.list` from its cursor. Resets are pushed too (the vault, or all of the account's
+  vaults), so a client learns its cursor expired.
+- Visibility: a vault with news is re-checked before its event goes out, and every subscription every 30 s; one the
+  user can no longer follow (role or override removed, vault deleted, signed out) is dropped with a last event
+  carrying `"subscribed": false`.
+- Backpressure: per session and vault one pending revision (the newest wins), and events wait while the session has
+  64 or more frames queued (`Session::queuedFrames()`, counted from `send`/`pushEvent` to the write completing). So a
+  slow consumer costs at most one entry per subscribed vault. `Session::pushEvent` never carries the access token an
+  answer may owe (`sendAccessTokenOnNextResponse`).
+- Proof: `FsChangePushDbTest` (`core/tests/unit/test_fs_change_push.cpp`): one coalesced event per changed vault,
+  refusals, revocation drop, a pushed reset, a slow consumer, closed sessions forgotten, the request cap.
 
 ## Proof
 

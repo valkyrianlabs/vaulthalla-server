@@ -6,7 +6,7 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = 'b3c8d7ef4e24e96435bd28d8dfdc6c7ccd0c873ad39bd171f5ea0387f286c912'
+export const WS_CONTRACT_HASH = 'adc8d0db539312dec5e05ef49106ee41376ff4622a5ab257aee951c167344b2e'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
 export const WS_MODELS_HASH = 'd027924cc65070807b32b2f2daba00e0707ae3f871cad44d826254dc6e12e67c'
@@ -3194,6 +3194,25 @@ export interface WsContract {
     response: { vault_id: number; revision: number; changes: WsModels['FsChange'][]; more: boolean; expired: boolean }
   }
   /**
+   * Follow vaults' changes by push (#260): after changes to a followed vault commit, the session gets an
+   * unsolicited frame {"command": "fs.changed", "data": {"vault_id", "revision"}} (no requestId), coalesced
+   * per vault, and calls fs.changes.list from its cursor. Accepted for vaults the caller can follow
+   * (fs.changes.list's rule), at most 256 per session; a vault it can no longer follow is dropped with one
+   * last event carrying "subscribed": false. Events wait while the session is slow to read, coalesced, never
+   * queued without bound. Subscriptions end with the session.
+   */
+  'fs.changes.subscribe': {
+    payload: { vault_ids: number[] }
+    response: { vault_ids: number[]; refused: { vault_id: number; code: 'denied' | 'not_found' | 'limit' }[] }
+  }
+  /**
+   * Stop following vaults by push (fs.changes.subscribe); without vault_ids, all of them.
+   */
+  'fs.changes.unsubscribe': {
+    payload: { vault_ids?: number[] | null }
+    response: { vault_ids: number[] }
+  }
+  /**
    * Create a directory (Touch on the path).
    */
   'fs.dir.create': {
@@ -5536,6 +5555,8 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'email.provider.secret.set',
   'email.test.send',
   'fs.changes.list',
+  'fs.changes.subscribe',
+  'fs.changes.unsubscribe',
   'fs.dir.create',
   'fs.dir.list',
   'fs.download.cancel',
@@ -5808,6 +5829,8 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'email.provider.secret.set': 15000,
   'email.test.send': 60000,
   'fs.changes.list': 30000,
+  'fs.changes.subscribe': 15000,
+  'fs.changes.unsubscribe': 15000,
   'fs.dir.create': 15000,
   'fs.dir.list': 30000,
   'fs.download.cancel': 15000,

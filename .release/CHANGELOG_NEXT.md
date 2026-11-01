@@ -45,3 +45,8 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
     `FsChange`), filtered by Lookup visibility; needs List on the vault root. Janitor prunes after 7 days / 1M revisions.
   - Contract test `test_fs_change_journal_contract.py` keeps every SQL writer of the entry tables classified; vhbench
     gains a FUSE seal scenario (`--only seal`).
+- ws push for the change journal (#260): `fs.changes.subscribe` / `fs.changes.unsubscribe {vault_ids}` on web and
+  device sessions; service `FsChangeNotifier` sequences every 250 ms while anyone is subscribed and sends unsolicited
+  `{command: "fs.changed", data: {vault_id, revision}}`, coalesced per vault and held while the session has 64
+  frames queued; subscriptions need List on the vault root, at most 256 per session, and are dropped (last event
+  `subscribed: false`) when access is lost. `ws::Session::pushEvent` / `queuedFrames()`.

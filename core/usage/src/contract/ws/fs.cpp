@@ -153,6 +153,35 @@ std::vector<WsCommandUsage> fsCommands() {
     });
 
     out.push_back({
+        .command = "fs.changes.subscribe",
+        .description = "Follow vaults' changes by push (#260): after changes to a followed vault commit, the session "
+                       "gets an unsolicited frame {\"command\": \"fs.changed\", \"data\": {\"vault_id\", "
+                       "\"revision\"}} (no requestId), coalesced per vault, and calls fs.changes.list from its "
+                       "cursor. Accepted for vaults the caller can follow (fs.changes.list's rule), at most 256 per "
+                       "session; a vault it can no longer follow is dropped with one last event carrying "
+                       "\"subscribed\": false. Events wait while the session is slow to read, coalesced, never queued "
+                       "without bound. Subscriptions end with the session.",
+        .payload = {intArray("vault_ids")
+                        .gen(gen::ref("vault", {"id"}))
+                        .desc("Vault ids to follow (added to what the session follows).")},
+        .response = {intArray("vault_ids").desc("Every vault the session follows now, ascending."),
+                     objectArray("refused", "", {uinteger("vault_id"),
+                                                 str("code").oneOf({"denied", "not_found", "limit"})})
+                         .desc("Vaults not followed, and why.")},
+        .refusal_codes = {"unauthorized", "denied", "invalid"},
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "fs.changes.unsubscribe",
+        .description = "Stop following vaults by push (fs.changes.subscribe); without vault_ids, all of them.",
+        .payload = {intArray("vault_ids").opt().nullable().desc("Absent or null: every vault.")},
+        .response = {intArray("vault_ids").desc("What the session still follows.")},
+        .refusal_codes = {"unauthorized", "invalid"},
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
         .command = "fs.upload.start",
         .description = "Start a chunked ws upload (Write on the path). The console uploads over HTTP instead "
                        "(POST /upload/session); this is the native ws transfer.",

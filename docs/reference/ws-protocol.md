@@ -121,6 +121,8 @@ A sync client follows a vault with `fs.changes.list` instead of listing its fold
 3. Ask for changes since the anchor, and from then on since the `revision` of the last answer. Ask again at once while `more` is true.
 4. When the answer says `expired`, list the vault again and continue from the `revision` it carries.
 
+Instead of asking on a timer, a client can subscribe: `fs.changes.subscribe` with `vault_ids` makes the server send an unsolicited frame `{"command": "fs.changed", "data": {"vault_id": 3, "revision": 1042}}` after changes to one of those vaults commit. The frame has no `requestId` and carries no changes: it means "ask again" (step 3). Events for one vault are merged while the client is slow to read. A vault the caller can no longer see is dropped from the subscription with a last event carrying `"subscribed": false`. `fs.changes.unsubscribe` stops them; closing the session ends every subscription.
+
 Changes are `create`, `update`, `rename`, `move` and `delete`, keyed by `entry_id`, which stays the same across rename and move. A caller sees only changes to entries it can see: a rename or move into its view reads as `create`, out of it as `delete`. A cursor expires when it is older than the journal's retention, when it doesn't come from this server, or when an authorization change may have changed what the caller sees in the vault.
 
 ## Breaking And Additive Changes

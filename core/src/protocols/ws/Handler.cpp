@@ -132,6 +132,8 @@ void Handler::registerFileSystemHandlers(const std::shared_ptr<Router>& r) {
     r->registerPayload("fs.entry.rename", &handler::fs::Storage::rename);
     r->registerPayload("fs.entry.copy", &handler::fs::Storage::copy);
     r->registerPayload("fs.changes.list", &handler::fs::Changes::list);
+    r->registerPayload("fs.changes.subscribe", &handler::fs::Changes::subscribe);
+    r->registerPayload("fs.changes.unsubscribe", &handler::fs::Changes::unsubscribe);
 }
 
 void Handler::registerStorageHandlers(const std::shared_ptr<Router>& r) {

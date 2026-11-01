@@ -818,6 +818,11 @@ export interface WebSocketCommandMap {
   // The change journal (sync clients; the console doesn't follow it yet).
   'fs.changes.list': WsContract['fs.changes.list']
 
+  // Push: the server then sends unsolicited { command: 'fs.changed', data: { vault_id, revision, subscribed? } }.
+  'fs.changes.subscribe': WsContract['fs.changes.subscribe']
+
+  'fs.changes.unsubscribe': WsContract['fs.changes.unsubscribe']
+
   // Share management commands
 
   'share.link.create': { payload: ShareLinkCreatePayload; response: ShareLinkTokenResponse }
