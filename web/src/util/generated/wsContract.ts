@@ -6,10 +6,10 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = '565d480c01daf23a165cffc03a948b97281ad3f0eccac146a9352e0d4a4742c2'
+export const WS_CONTRACT_HASH = 'b3c8d7ef4e24e96435bd28d8dfdc6c7ccd0c873ad39bd171f5ea0387f286c912'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = '7a08c439ab90a86e6316d2df81ca0ae484b1d7a8d7eb0673d84efaadf579eb31'
+export const WS_MODELS_HASH = 'd027924cc65070807b32b2f2daba00e0707ae3f871cad44d826254dc6e12e67c'
 
 // The ws protocol range this book is (core/usage WsProtocol.hpp): send it in meta.hello.
 export const WS_PROTOCOL_VERSION = 1
@@ -406,6 +406,22 @@ export interface WsModels {
    * auditing.files_trashed.* (Config.cpp to_json(FilesTrashedConfig)).
    */
   'FilesTrashedConfig': { retention_days: number }
+  /**
+   * One change of fs.changes.list (ops::fs_changes::toJson(Change), core/src/ops/FsChanges.cpp): a journaled
+   * entry mutation (migration 115) as the caller sees it.
+   */
+  'FsChange': {
+    revision: number
+    kind: 'create' | 'update' | 'rename' | 'move' | 'delete'
+    entry_id: number
+    type: 'file' | 'directory' | 'symlink' | null
+    parent_id: number | null
+    name: string
+    path: string
+    changed_at: string
+    old_path?: string
+    old_parent_id?: number | null
+  }
   /**
    * A directory listing's entry: fs::model::to_json(std::vector<std::shared_ptr<Entry>>) dispatches to the
    * File, Directory or Symlink serializer (core/src/fs/model/*.cpp), so `type` says which members follow.
@@ -3165,6 +3181,19 @@ export interface WsContract {
     }
   }
   /**
+   * What changed in a vault since a revision (the change journal, #259), oldest first; for sync clients
+   * instead of re-listing folders. Needs List on the vault root (storage.vault.accessible.list's browse).
+   * Only changes to entries the caller can Lookup are returned: a rename or move into view reads as create,
+   * out of view as delete. Without `since`: the current revision and no changes, the anchor to take before
+   * enumerating. `expired`: the cursor can't be served (retention, an authorization change that can change
+   * what the caller sees, or a revision this server never handed out): enumerate the vault again and continue
+   * from `revision`.
+   */
+  'fs.changes.list': {
+    payload: { vault_id: number; since?: number | null; limit?: number }
+    response: { vault_id: number; revision: number; changes: WsModels['FsChange'][]; more: boolean; expired: boolean }
+  }
+  /**
    * Create a directory (Touch on the path).
    */
   'fs.dir.create': {
@@ -5506,6 +5535,7 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'email.history',
   'email.provider.secret.set',
   'email.test.send',
+  'fs.changes.list',
   'fs.dir.create',
   'fs.dir.list',
   'fs.download.cancel',
@@ -5777,6 +5807,7 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'email.history': 15000,
   'email.provider.secret.set': 15000,
   'email.test.send': 60000,
+  'fs.changes.list': 30000,
   'fs.dir.create': 15000,
   'fs.dir.list': 30000,
   'fs.download.cancel': 15000,

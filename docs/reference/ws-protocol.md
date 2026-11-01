@@ -112,6 +112,17 @@ A typed refusal is an `ERROR` answer whose `data.code` a client can act on witho
 | `device_unknown` | The device listener: this key is not a paired device. It may only pair and say hello. |
 | `denied`, `not_found`, `invalid`, `conflict` | The generic refusals. |
 
+## Following Changes
+
+A sync client follows a vault with `fs.changes.list` instead of listing its folders again. The server records every change to the vault's entries, whichever way it was made, and numbers the changes in commit order.
+
+1. Take an anchor: `fs.changes.list` with `vault_id` and no `since` answers the current `revision`.
+2. List the vault (`fs.dir.list`).
+3. Ask for changes since the anchor, and from then on since the `revision` of the last answer. Ask again at once while `more` is true.
+4. When the answer says `expired`, list the vault again and continue from the `revision` it carries.
+
+Changes are `create`, `update`, `rename`, `move` and `delete`, keyed by `entry_id`, which stays the same across rename and move. A caller sees only changes to entries it can see: a rename or move into its view reads as `create`, out of it as `delete`. A cursor expires when it is older than the journal's retention, when it doesn't come from this server, or when an authorization change may have changed what the caller sees in the vault.
+
 ## Breaking And Additive Changes
 
 Within one protocol version the WebSocket API only grows.

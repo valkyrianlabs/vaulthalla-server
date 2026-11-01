@@ -15,7 +15,7 @@ live P0 (the DB pool wedges after a PostgreSQL restart, which hangs FUSE and `ap
 |---|---|---|
 | `core/` | C++ daemon `vaulthalla-server`, CLI `vaulthalla-cli`, `usage/` (help + manpages), `tests/{unit,integrations}`, `tools/` (sandboxed preview helpers shipped as optional packages `vaulthalla-preview-{cad,media}`) | `.claude/context/architecture.md` |
 | `web/` | Next.js 16 / React 19 console: typed ws client + TanStack Query, `components/ui` design system, hard per-route JS budgets | `.claude/context/web-client.md` |
-| `deploy/` | runtime config, `psql/000…114` migrations, systemd units, nginx template, `lifecycle/` (Python behind `vh setup/teardown`) | `.claude/context/packaging-lifecycle.md` |
+| `deploy/` | runtime config, `psql/000…115` migrations, systemd units, nginx template, `lifecycle/` (Python behind `vh setup/teardown`) | `.claude/context/packaging-lifecycle.md` |
 | `debian/` | package metadata + maintainer scripts (the lifecycle source of truth) | `.claude/context/packaging-lifecycle.md` |
 | `release.toml`, `.release/` | vl-release (`vlr`) contract: versions, Debian package contract, APT publication; staged release notes + changelog for the next release | `.claude/context/release-pipeline.md` |
 | `.github/` | `build_and_test.yml`, `release.yml` (a thin `vlr` transaction), composite actions, self-hosted runners | `.claude/context/release-pipeline.md` |
@@ -37,6 +37,8 @@ File recovery (local snapshots, local versioning, AWS provider versioning, cost 
 `.claude/context/recovery.md`.
 Vault key backup and restoration (key check, `vault.keys.*`, `vh vault keys status|export|import`; Desktop S2/S6):
 `.claude/context/key-backup.md`.
+Filesystem change journal (migration 115 `fs_change_log`, `fs.changes.list`, ws push; Desktop File Provider):
+`.claude/context/change-journal.md`.
 Other context: `.claude/context/environment.md` (VM topology: this box, the lab, dev-db, price bot), `link-sharing.md`
 (share model, invariants, open gaps), `history/stats-dashboard.md` (dashboard design log).
 `.claude/scratch/` is gitignored working notes, including the pre-migration Codex archive. Use it for

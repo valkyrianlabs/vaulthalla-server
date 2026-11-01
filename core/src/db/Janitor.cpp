@@ -1,5 +1,6 @@
 #include "db/Janitor.hpp"
 #include "config/Registry.hpp"
+#include "db/query/fs/ChangeLog.hpp"
 #include "db/query/sync/Event.hpp"
 #include "db/query/auth/RefreshToken.hpp"
 #include "db/query/upstream/Inbox.hpp"
@@ -31,6 +32,11 @@ constexpr std::chrono::hours kRecoveryStoreSweepInterval{24};
 // Finished and expired restore plans are kept this long (resume, diagnostics).
 constexpr std::chrono::hours kRecoveryPlanRetention{24 * 30};
 
+// The filesystem change journal (fs.changes.list, migration 115): a cursor older than this, or more than this many
+// revisions behind, is expired and its client enumerates again.
+constexpr std::chrono::hours kFsChangeRetention{24 * 7};
+constexpr uint64_t kFsChangeMaxRevisions = 1'000'000;
+
 void maintainRecovery(const bool sweepStores) {
     // Snapshots left `creating` by a crash: at the first run after startup nothing of this process is in flight.
     static bool firstRun = true;
@@ -56,6 +62,19 @@ void maintainRecovery(const bool sweepStores) {
                 r.orphans_removed, r.unreferenced_removed);
     } catch (const std::exception& e) {
         log::Registry::vaulthalla()->warn("[DBSweeper] Recovery maintenance failed: {}", e.what());
+    }
+}
+
+// Best effort: a failure here never blocks the other sweeps.
+void pruneFsChanges() {
+    try {
+        // Number what no client has asked for yet, so retention sees it (pending rows are never pruned).
+        (void)query::fs::ChangeLog::sequence();
+        if (const auto r = query::fs::ChangeLog::prune(kFsChangeRetention, kFsChangeMaxRevisions); r.removed > 0)
+            log::Registry::vaulthalla()->info("[DBSweeper] Pruned {} filesystem change(s) through revision {}",
+                                              r.removed, r.pruned_through);
+    } catch (const std::exception& e) {
+        log::Registry::vaulthalla()->warn("[DBSweeper] Filesystem change journal prune failed: {}", e.what());
     }
 }
 
@@ -94,6 +113,7 @@ void vh::db::Janitor::runLoop() {
                 log::Registry::vaulthalla()->warn("[DBSweeper] Failed to run database cleanup: {}", e.what());
             }
             janitor_impl::sweepUpstreamEvents();
+            janitor_impl::pruneFsChanges();
             nextDbSweep = std::chrono::steady_clock::now() + sweep_interval_;
         }
 

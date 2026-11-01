@@ -2,6 +2,7 @@
 #include "protocols/ws/Router.hpp"
 #include "protocols/ws/handler/Auth.hpp"
 #include "protocols/ws/handler/Devices.hpp"
+#include "protocols/ws/handler/fs/Changes.hpp"
 #include "protocols/ws/handler/fs/Storage.hpp"
 #include "protocols/ws/handler/rbac/Permissions.hpp"
 #include "protocols/ws/handler/Settings.hpp"
@@ -130,6 +131,7 @@ void Handler::registerFileSystemHandlers(const std::shared_ptr<Router>& r) {
     r->registerPayload("fs.entry.move", &handler::fs::Storage::move);
     r->registerPayload("fs.entry.rename", &handler::fs::Storage::rename);
     r->registerPayload("fs.entry.copy", &handler::fs::Storage::copy);
+    r->registerPayload("fs.changes.list", &handler::fs::Changes::list);
 }
 
 void Handler::registerStorageHandlers(const std::shared_ptr<Router>& r) {

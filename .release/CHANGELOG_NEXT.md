@@ -30,3 +30,10 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
 - Security: a folder's size no longer reveals how much it holds that the caller cannot see. `fs.metadata` and FUSE
   `stat` of a directory cover only entries the caller can Lookup, as `fs.dir.list` already did (lookup's attributes
   withhold the size for such callers). Super admins and vault owners still see the stored totals (#269).
+- Filesystem change journal (#259): migration 115 `fs_change_log` + `fs_change_revision`, written by row triggers on
+  `fs_entry`/`files`/`directories`/`symlinks` in each mutation's transaction (every write path) and on the RBAC rows
+  that decide Lookup (resets); commit-ordered revisions assigned by a lock-free-for-writers sequencer.
+  - ws `fs.changes.list {vault_id, since?, limit?}` → `{vault_id, revision, changes[], more, expired}` (model
+    `FsChange`), filtered by Lookup visibility; needs List on the vault root. Janitor prunes after 7 days / 1M revisions.
+  - Contract test `test_fs_change_journal_contract.py` keeps every SQL writer of the entry tables classified; vhbench
+    gains a FUSE seal scenario (`--only seal`).
