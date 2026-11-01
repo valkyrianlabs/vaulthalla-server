@@ -162,11 +162,16 @@ $$ LANGUAGE sql;
 -- everyone for a group), its overrides (the assignment's), a vault role template (every vault using it), a user's
 -- global vault policy, group membership and admin role (that user, every vault), an admin role template (its
 -- holders), and the vault's owner or deletion (the vault, everyone). A cascade from a deleted assignment finds no
--- assignment row; that delete is logged by the assignment.
+-- assignment row; that delete is logged by the assignment. An update that changes only timestamps, a name or a
+-- description is not a reset (the daemon's startup reconcile re-upserts the system principals' admin roles).
 CREATE OR REPLACE FUNCTION vh_fs_change_track_rbac() RETURNS TRIGGER AS $$
 DECLARE
     rec RECORD;
+    ignored CONSTANT TEXT[] := ARRAY['created_at', 'updated_at', 'assigned_at', 'joined_at', 'name', 'description'];
 BEGIN
+    IF TG_OP = 'UPDATE' AND TG_TABLE_NAME <> 'vault' AND (to_jsonb(OLD) - ignored) = (to_jsonb(NEW) - ignored) THEN
+        RETURN NULL;
+    END IF;
     IF TG_TABLE_NAME = 'vault_role_assignments' THEN
         IF TG_OP <> 'INSERT' THEN
             PERFORM vh_fs_change_reset(OLD.vault_id, CASE WHEN OLD.subject_type = 'user' THEN OLD.subject_id END);

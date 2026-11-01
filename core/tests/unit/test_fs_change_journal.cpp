@@ -359,11 +359,24 @@ TEST_F(FsChangeJournalDbTest, CursorsExpire) {
     // The override concerns that account only.
     EXPECT_FALSE(since(superUser, adminCursor).expired);
 
-    // A role template edit reaches everyone holding it in a vault that uses it.
-    const auto before = anchor(user);
-    (void)ops::roles::updateVaultRole(superUser, {.role = ops::roles::Ref{std::string("power_user")},
+    // A role template's permissions reach everyone holding it in a vault that uses it; its description doesn't.
+    const auto roleName = "cj_role_" + cjTag();
+    (void)ops::roles::createVaultRole(superUser, {.name = roleName, .from = ops::roles::Ref{std::string("power_user")}});
+    const auto holder = userWithVaultRole(roleName);
+    const auto before = anchor(holder);
+    (void)ops::roles::updateVaultRole(superUser, {.role = ops::roles::Ref{roleName},
                                                   .description = std::string("cj " + cjTag())});
-    EXPECT_TRUE(since(user, before).expired);
+    EXPECT_FALSE(since(holder, before).expired);
+    (void)ops::roles::updateVaultRole(superUser, {.role = ops::roles::Ref{roleName},
+                                                  .permissions = {.changes = {{"vault.fs.files.download", false}}}});
+    EXPECT_TRUE(since(holder, before).expired);
+
+    // Re-upserting an admin role assignment as it was (the startup reconcile) is not a reset.
+    const auto quiet = anchor(superUser);
+    db::Transactions::exec("cj reconcile", [&](pqxx::work& txn) {
+        txn.exec("UPDATE admin_role_assignments SET assigned_at = NOW() WHERE user_id = $1", pqxx::params{superUser->id});
+    });
+    EXPECT_FALSE(since(superUser, quiet).expired);
 
     // A revision from the future (another database) and one retention dropped.
     EXPECT_TRUE(since(superUser, ChangeLog::revision() + 1000).expired);
