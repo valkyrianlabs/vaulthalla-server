@@ -499,7 +499,7 @@ def seal_scenarios(results: dict) -> None:
         with Probe() as p:
             subprocess.run(loop_write(prefix, folder, n, "again"), shell=True, check=True, timeout=600)
         results[f"fuse.seal_overwrite.{who}"] = p.result(n, note="overwrite 4 KiB + close (sealed) per file")
-        subprocess.run(prefix + ["rm", "-rf", str(folder)], check=True, timeout=600)
+        subprocess.run(["rm", "-rf", str(folder)], check=True, timeout=600)  # as admin: bench_user may not delete
 
 
 def preview_scenarios(state: Path, results: dict, manifest: dict) -> None:
