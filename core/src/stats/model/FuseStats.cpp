@@ -110,11 +110,16 @@ void FuseStats::record_success(
     observeMax(counters.maxUs, elapsedUs);
 }
 
-void FuseStats::record_error(const FuseOperation op, const int errnum, const std::uint64_t elapsedUs) noexcept {
+void FuseStats::record_error(
+    const FuseOperation op,
+    const int errnum,
+    const std::uint64_t elapsedUs,
+    const bool denied
+) noexcept {
     auto& counters = ops_[opIndex(op)];
     counters.count.v.fetch_add(1, std::memory_order_relaxed);
     counters.errors.v.fetch_add(1, std::memory_order_relaxed);
-    const bool expected = isExpectedError(op, errnum);
+    const bool expected = denied || isExpectedError(op, errnum);
     if (expected) {
         counters.expectedErrors.v.fetch_add(1, std::memory_order_relaxed);
     } else {
@@ -264,6 +269,12 @@ void ScopedFuseOpTimer::error(const int errnum) noexcept {
     if (completed_) return;
     completed_ = true;
     if (stats_) stats_->record_error(op_, errnum, elapsedUs());
+}
+
+void ScopedFuseOpTimer::denied(const int errnum) noexcept {
+    if (completed_) return;
+    completed_ = true;
+    if (stats_) stats_->record_error(op_, errnum, elapsedUs(), true);
 }
 
 void ScopedFuseOpTimer::cancel() noexcept {

@@ -71,6 +71,19 @@ void replyError(const fuse_req_t req, ScopedFuseOpTimer& timer, const int errnum
     fuse_reply_err(req, normalized);
 }
 
+// A refusal by the permission model (a uid with no Vaulthalla user, or RBAC) is the mount doing its job: system
+// processes such as MOTD scripts stat every mount, and they must not raise the dashboard's FUSE error rate. Every
+// other resolver failure is reported as an error.
+void replyResolveError(const fuse_req_t req, ScopedFuseOpTimer& timer, const resolver::Resolved& resolved) {
+    if (resolved.status != resolver::Status::MissingUser && resolved.status != resolver::Status::AccessDenied) {
+        replyResolveError(req, timer, resolved);
+        return;
+    }
+    const int normalized = resolved.errnum < 0 ? -resolved.errnum : resolved.errnum;
+    timer.denied(normalized);
+    fuse_reply_err(req, normalized);
+}
+
 void replyOk(const fuse_req_t req, ScopedFuseOpTimer& timer) {
     timer.success();
     fuse_reply_err(req, 0);
@@ -142,7 +155,7 @@ void getattr(const fuse_req_t req, const fuse_ino_t ino, fuse_file_info* fi) {
     });
 
     if (!resolved.ok()) {
-        replyError(req, timer, resolved.errnum);
+        replyResolveError(req, timer, resolved);
         return;
     }
 
@@ -170,7 +183,7 @@ void setattr(const fuse_req_t req, const fuse_ino_t ino,
     });
 
     if (!resolved.ok()) {
-        replyError(req, timer, resolved.errnum);
+        replyResolveError(req, timer, resolved);
         return;
     }
 
@@ -250,7 +263,7 @@ void readdir(const fuse_req_t req, const fuse_ino_t ino, const size_t size, cons
     });
 
     if (!resolved.ok()) {
-        replyError(req, timer, resolved.errnum);
+        replyResolveError(req, timer, resolved);
         return;
     }
 
@@ -316,7 +329,7 @@ void lookup(const fuse_req_t req, const fuse_ino_t parent, const char* name) {
     });
 
     if (!resolved.ok()) {
-        replyError(req, timer, resolved.errnum);
+        replyResolveError(req, timer, resolved);
         return;
     }
 
@@ -343,7 +356,7 @@ void readlink(const fuse_req_t req, const fuse_ino_t ino) {
     });
 
     if (!resolved.ok()) {
-        replyError(req, timer, resolved.errnum);
+        replyResolveError(req, timer, resolved);
         return;
     }
 
@@ -372,7 +385,7 @@ void create(const fuse_req_t req, const fuse_ino_t parent, const char* name, con
     });
 
     if (!resolved.ok()) {
-        replyError(req, timer, resolved.errnum);
+        replyResolveError(req, timer, resolved);
         return;
     }
 
@@ -440,7 +453,7 @@ void symlink(const fuse_req_t req, const char* link, const fuse_ino_t parent, co
     });
 
     if (!resolved.ok()) {
-        replyError(req, timer, resolved.errnum);
+        replyResolveError(req, timer, resolved);
         return;
     }
 
@@ -484,7 +497,7 @@ void open(const fuse_req_t req, const fuse_ino_t ino, fuse_file_info* fi) {
     });
 
     if (!resolved.ok()) {
-        replyError(req, timer, resolved.errnum);
+        replyResolveError(req, timer, resolved);
         return;
     }
 
@@ -541,7 +554,7 @@ void write(const fuse_req_t req, const fuse_ino_t ino, const char* buf,
     });
 
     if (!resolved.ok()) {
-        replyError(req, timer, resolved.errnum);
+        replyResolveError(req, timer, resolved);
         return;
     }
 
@@ -579,7 +592,7 @@ void read(const fuse_req_t req, const fuse_ino_t ino, const size_t size, const o
     });
 
     if (!resolved.ok()) {
-        replyError(req, timer, resolved.errnum);
+        replyResolveError(req, timer, resolved);
         return;
     }
 
@@ -610,7 +623,7 @@ void mkdir(const fuse_req_t req, const fuse_ino_t parent, const char* name, cons
     });
 
     if (!resolved.ok()) {
-        replyError(req, timer, resolved.errnum);
+        replyResolveError(req, timer, resolved);
         return;
     }
 
@@ -661,7 +674,7 @@ void rename(const fuse_req_t req, const fuse_ino_t parent, const char* name, con
     });
 
     if (!resolved.ok()) {
-        replyError(req, timer, resolved.errnum);
+        replyResolveError(req, timer, resolved);
         return;
     }
 
@@ -701,12 +714,13 @@ void rename(const fuse_req_t req, const fuse_ino_t parent, const char* name, con
             });
 
             if (!destination.ok()) {
-                replyError(req, timer, destination.errnum);
+                replyResolveError(req, timer, destination);
                 return;
             }
 
             if (rbac::fs::placement::firstRefusedDescendant(resolved.user, resolved.entry, toPath)) {
-                replyError(req, timer, EACCES);
+                timer.denied(EACCES);
+                fuse_reply_err(req, EACCES);
                 return;
             }
         }
@@ -728,7 +742,7 @@ void rename(const fuse_req_t req, const fuse_ino_t parent, const char* name, con
 
         if (target.ok()) mode = RenameMode::Replace;
         else if (target.status != resolver::Status::MissingEntry) {
-            replyError(req, timer, target.errnum);
+            replyResolveError(req, timer, target);
             return;
         }
     }
@@ -771,7 +785,7 @@ void access(const fuse_req_t req, const fuse_ino_t ino, const int mask) {
     });
 
     if (!resolved.ok()) {
-        replyError(req, timer, resolved.errnum);
+        replyResolveError(req, timer, resolved);
         return;
     }
 
@@ -805,7 +819,7 @@ void unlink(const fuse_req_t req, const fuse_ino_t parent, const char* name) {
             });
 
             if (!tempResolved.ok()) {
-                replyError(req, timer, tempResolved.errnum);
+                replyResolveError(req, timer, tempResolved);
                 return;
             }
 
@@ -817,7 +831,7 @@ void unlink(const fuse_req_t req, const fuse_ino_t parent, const char* name) {
             return;
         }
 
-        replyError(req, timer, resolved.errnum);
+        replyResolveError(req, timer, resolved);
         return;
     }
 
@@ -899,7 +913,7 @@ void rmdir(const fuse_req_t req, const fuse_ino_t parent, const char* name) {
     });
 
     if (!resolved.ok()) {
-        replyError(req, timer, resolved.errnum);
+        replyResolveError(req, timer, resolved);
         return;
     }
 
@@ -982,7 +996,7 @@ void fsync(const fuse_req_t req, const fuse_ino_t ino, const int datasync, fuse_
     });
 
     if (!resolved.ok()) {
-        replyError(req, timer, resolved.errnum);
+        replyResolveError(req, timer, resolved);
         return;
     }
 

@@ -96,7 +96,9 @@ public:
         std::uint64_t bytesWritten = 0
     ) noexcept;
 
-    void record_error(FuseOperation op, int errnum, std::uint64_t elapsedUs) noexcept;
+    // denied: the permission model refused the caller (a uid with no Vaulthalla user, or RBAC). That is the mount
+    // working as designed, so it counts as expected whatever the op and errno.
+    void record_error(FuseOperation op, int errnum, std::uint64_t elapsedUs, bool denied = false) noexcept;
 
     void record_open_handle() noexcept;
     void record_close_handle() noexcept;
@@ -139,6 +141,7 @@ public:
 
     void success(std::uint64_t bytesRead = 0, std::uint64_t bytesWritten = 0) noexcept;
     void error(int errnum) noexcept;
+    void denied(int errnum) noexcept;  // the permission model refused the caller (see FuseStats::record_error)
     void cancel() noexcept;
 
     // An op that throws before replying is answered by fuse::task::Guard (#263). Its timer, destroyed while the

@@ -27,3 +27,10 @@ they were plain `0600` files in the state directory, protected only by permissio
   reports `secrets backend: file`.
 
 Linux TPM2 sealing is unchanged.
+
+## Fixes
+
+- **Health dashboard: FUSE permission denials are no longer errors.** A system process with no Vaulthalla account
+  that looks at the mount (an ssh login's MOTD scripts, for example), or a user refused by RBAC, is the filesystem
+  enforcing access as designed. These now count as expected errors, so they no longer raise "FUSE alertable error
+  rate is above 10%". They still appear under all errors and errors by errno.

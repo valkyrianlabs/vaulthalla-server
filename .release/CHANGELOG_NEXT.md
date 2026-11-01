@@ -16,6 +16,9 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   unknown inode in rename) during unlink, rmdir, rename or any other op used to leave the kernel request unanswered, so
   `rm`, `mv` and the like hung; they now fail with EAGAIN (database unreachable) or EIO. FUSE stats count such ops
   as errors, not successes (#263).
+- FUSE stats: a refusal by the permission model (a calling uid with no Vaulthalla user, or an RBAC denial) counts as
+  an expected error for every op, not an alertable one. System processes that stat every mount (MOTD scripts, ssh
+  logins) no longer put the Health dashboard's FUSE card into error. EACCES from anything else stays alertable.
 - macOS: master keys are sealed with the Secure Enclave by default (`secrets_backend` `secure-enclave`; #290): a
   non-permanent SE P-256 key per secret (AfterFirstUnlockThisDeviceOnly, private-key usage), ECIES X9.63-SHA256
   AES-GCM, stored as `<state>/.sealed_<name>.blob/<name>.se`; created and opened only by the daemon under launchd.

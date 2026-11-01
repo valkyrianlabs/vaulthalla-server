@@ -147,6 +147,51 @@ TEST(FuseStatsTest, NonLookupAndPermissionErrorsAreAlertable) {
     EXPECT_DOUBLE_EQ(open->alertableErrorRate, 1.0);
 }
 
+TEST(FuseStatsTest, PermissionDenialsAreExpectedForEveryOp) {
+    // A uid with no Vaulthalla user (a MOTD script stat'ing every mount) or an RBAC refusal: the mount doing its job.
+    FuseStats stats;
+    stats.record_error(FuseOperation::GetAttr, EACCES, 10, true);
+    stats.record_error(FuseOperation::Open, ENOENT, 20, true);
+    stats.record_error(FuseOperation::GetAttr, EACCES, 30);
+
+    const auto snapshot = stats.snapshot();
+    EXPECT_EQ(snapshot.totalErrors, 3u);
+    EXPECT_EQ(snapshot.expectedErrors, 2u);
+    EXPECT_EQ(snapshot.alertableErrors, 1u);
+
+    const auto* getattr = findOp(snapshot, "getattr");
+    ASSERT_NE(getattr, nullptr);
+    EXPECT_EQ(getattr->expectedErrors, 1u);
+    EXPECT_EQ(getattr->alertableErrors, 1u);
+    EXPECT_EQ(snapshot.alertableErrnoTypes, 1u);
+}
+
+TEST(FuseStatsTest, TimerRecordsADenialAsExpected) {
+    FuseStats stats;
+    {
+        vh::stats::model::ScopedFuseOpTimer timer(&stats, FuseOperation::GetAttr);
+        timer.denied(EACCES);
+    }
+    const auto snapshot = stats.snapshot();
+    EXPECT_EQ(snapshot.totalErrors, 1u);
+    EXPECT_EQ(snapshot.expectedErrors, 1u);
+    EXPECT_EQ(snapshot.alertableErrors, 0u);
+}
+
+TEST(FuseStatsTest, DashboardIgnoresPermissionDenialsForFuseSeverity) {
+    auto stats = std::make_shared<FuseStats>();
+    for (int i = 0; i < 3; ++i) stats->record_error(FuseOperation::GetAttr, EACCES, 10, true);
+    FuseStatsDepsGuard guard(stats);
+
+    const auto overview = DashboardOverview::snapshot(fuseCardRequest());
+    const auto* card = findCard(overview, "system.fuse");
+    ASSERT_NE(card, nullptr);
+    EXPECT_EQ(card->severity, "info");
+    EXPECT_TRUE(card->errors.empty());
+    ASSERT_TRUE(metricValue(*card, "alertable_error_rate"));
+    EXPECT_DOUBLE_EQ(*metricValue(*card, "alertable_error_rate"), 0.0);
+}
+
 TEST(FuseStatsTest, UnlinkEnoentRemainsAlertable) {
     FuseStats stats;
     stats.record_error(FuseOperation::Unlink, ENOENT, 10);
