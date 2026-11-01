@@ -1,3 +1,14 @@
+vaulthalla (1.20.1-1) unstable; urgency=high
+
+  * macOS: `valkyrianlabs/tap/vaulthalla` is a meta cask depending on
+    `vaulthalla-server` and `vaulthalla-desktop` (each upgrades to its own
+    latest release; it needs `brew trust valkyrianlabs/tap` once). The server
+    package no longer bundles Vaulthalla Desktop (`fetch-desktop.sh`, the
+    `sh.vaulthalla.desktop` choice and `VH_PKG_DESKTOP_APP` are gone) and the
+    casks no longer conflict.
+
+ -- Cooper Larson <cooper@valkyrianlabs.com>  Sun, 01 Nov 2026 17:09:15 +0000
+
 vaulthalla (1.20.0-1) unstable; urgency=high
 
   * Web console: replace the default Next.js favicon with the Vaulthalla logo
