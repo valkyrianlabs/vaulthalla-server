@@ -59,7 +59,8 @@ std::vector<WsCommandUsage> fsCommands() {
 
     out.push_back({
         .command = "fs.metadata",
-        .description = "One entry's metadata (Lookup on the path).",
+        .description = "One entry's metadata (Lookup on the path). A folder's size covers only what the caller can "
+                       "Lookup, as in fs.dir.list.",
         .payload = {vaultId(), vaultPath("path").opt().desc("Defaults to \"/\".")},
         .response = {str("vault").desc("The vault's name."), str("path"),
                      object("entry", "FsEntryBase").desc("Entry base members only (no type, mime_type or preview).")},
@@ -126,6 +127,29 @@ std::vector<WsCommandUsage> fsCommands() {
         .untyped_refusals = {"conflict"},
         .operation = "fs.copy",
         .client_timeout = 180s,
+    });
+
+    out.push_back({
+        .command = "fs.changes.list",
+        .description = "What changed in a vault since a revision (the change journal, #259), oldest first; for sync "
+                       "clients instead of re-listing folders. Needs List on the vault root (storage.vault.accessible"
+                       ".list's browse). Only changes to entries the caller can Lookup are returned: a rename or move "
+                       "into view reads as create, out of view as delete. Without `since`: the current revision and "
+                       "no changes, the anchor to take before enumerating. `expired`: the cursor can't be served "
+                       "(retention, an authorization change that can change what the caller sees, or a revision this "
+                       "server never handed out): enumerate the vault again and continue from `revision`.",
+        .payload = {vaultId(),
+                    uinteger("since").opt().nullable().gen(gen::intRange(0, 0))
+                        .desc("The revision of the last fs.changes.list answer (or anchor)."),
+                    uinteger("limit").opt().gen(gen::intRange(1, 1000))
+                        .desc("Changes to read, 1..10000 (default 1000); fewer may be returned after filtering.")},
+        .response = {uinteger("vault_id"),
+                     uinteger("revision").desc("The cursor for the next call."),
+                     objectArray("changes", "FsChange"),
+                     boolean("more").desc("More changes follow `revision`: ask again at once."),
+                     boolean("expired").desc("Enumerate again; `changes` is empty.")},
+        .refusal_codes = {"unauthorized", "denied", "not_found", "invalid"},
+        .client_timeout = 30s,
     });
 
     out.push_back({

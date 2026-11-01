@@ -646,8 +646,13 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   folders but may neither preview nor download sees no files). ws also recounts `size_bytes` / `file_count` /
   `subdirectory_count` of a listed child folder whose subtree holds hidden entries (`visibleTotals`: one cached subtree
   listing, walked through visible folders) and the listed folder's own `size_bytes`; otherwise the stored totals stand.
-  `fs.metadata` of a folder and FUSE getattr still report the stored size. Proof: `FsListVisibilityDbTest`, Tier A
-  "List Visibility Parity" (readdir == fs.dir.list for the same account).
+  `fs.metadata` of a folder recounts its `size_bytes` the same way (#269; its `entry` has the base members only, no
+  counts). FUSE getattr and setattr of a folder report the visible
+  `size_bytes` (`applyVisibleFolderSize` in `fuse/Bridge.cpp`); lookup's attributes withhold it (0) for such a caller
+  instead of walking a subtree on every path walk (attr timeouts are 0, so stat(2) always comes from getattr; only
+  `statx(AT_STATX_DONT_SYNC)` sees lookup's). The mount root's size is a super admin's only. Proof:
+  `FsListVisibilityDbTest`, Tier A "List Visibility Parity" (readdir == fs.dir.list, and folder stat == fs.metadata ==
+  fs.dir.list, for the same account). Share-mode listings (`shareEntryJson`) keep the share's own model.
 - **No kernel metadata caching (#183).** The kernel dentry/attr cache is shared across uids and the mount has no
   `default_permissions`, so anything cached is answered for any caller without the daemon. Every reply uses
   `kKernelMetadataTimeout` = 0 (Bridge.cpp; pinned by `tools/contracts/test_fuse_cache_timeout_contract.py`), so each
@@ -659,7 +664,7 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
 
 ## Database
 
-- PostgreSQL via libpqxx. The schema is `deploy/psql/000…114_*.sql`, applied in order (all in ONE transaction by `core/seed/include/SqlDeployer.hpp`) and installed to `/usr/share/vaulthalla/psql`.
+- PostgreSQL via libpqxx. The schema is `deploy/psql/000…115_*.sql`, applied in order (all in ONE transaction by `core/seed/include/SqlDeployer.hpp`) and installed to `/usr/share/vaulthalla/psql`.
   New migrations take the next number and must be idempotent against upgraded installs. SqlDeployer records sha256(raw bytes)
   per file and refuses to start on a mismatch, so **never edit a shipped migration**: 020/060/082 were edited in place and
   bricked upgrades (1.5.x→1.6.x crash loop on 060). Reviewed exceptions live in `kHistoricalMigrationChecksums` (accepted, recorded

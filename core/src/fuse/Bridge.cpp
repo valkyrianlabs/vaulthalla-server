@@ -17,6 +17,7 @@
 #include "fuse/WorkingCopies.hpp"
 #include "fuse/task/Request.hpp"
 #include "rbac/fs/Placement.hpp"
+#include "rbac/fs/Visibility.hpp"
 #include "fs/model/Symlink.hpp"
 #include "fs/model/File.hpp"
 #include "db/Transactions.hpp"
@@ -75,12 +76,11 @@ void replyError(const fuse_req_t req, ScopedFuseOpTimer& timer, const int errnum
 // processes such as MOTD scripts stat every mount, and they must not raise the dashboard's FUSE error rate. Every
 // other resolver failure is reported as an error.
 void replyResolveError(const fuse_req_t req, ScopedFuseOpTimer& timer, const resolver::Resolved& resolved) {
-    if (resolved.status != resolver::Status::MissingUser && resolved.status != resolver::Status::AccessDenied) {
-        replyResolveError(req, timer, resolved);
-        return;
-    }
     const int normalized = resolved.errnum < 0 ? -resolved.errnum : resolved.errnum;
-    timer.denied(normalized);
+    if (resolved.status == resolver::Status::MissingUser || resolved.status == resolver::Status::AccessDenied)
+        timer.denied(normalized);
+    else
+        timer.error(normalized);
     fuse_reply_err(req, normalized);
 }
 
@@ -131,6 +131,29 @@ void warnSetattrMetadataNoOpOncePerMinute() {
         "chmod/chown is forbidden beyond the gates. If this is a cp operation you may disregard this warning.");
 }
 
+// A folder's size is its subtree total, which counts entries the caller may not be allowed to see (#269). A caller who
+// can't see the whole subtree gets the visible part instead: recounted (one subtree listing, as fs.dir.list does) where
+// the size is what the call is for (getattr, setattr), and withheld (0) in lookup's attributes, which every path walk
+// asks for and stat(2) never shows on its own (attr timeouts are 0, so the kernel asks getattr before answering; only
+// statx(AT_STATX_DONT_SYNC) would read lookup's). Super admins and vault owners keep the stored totals. The mount root
+// spans every vault: only a super admin sees its size.
+enum class FolderSize { Recount, Withhold };
+
+void applyVisibleFolderSize(struct stat& st, const std::shared_ptr<User>& user, const std::shared_ptr<Entry>& entry,
+                            const FolderSize how) {
+    if (!entry || !entry->isDirectory()) return;
+    if (!entry->vault_id) {
+        if (!user || !user->isSuperAdmin()) st.st_size = 0;
+        return;
+    }
+    if (how == FolderSize::Withhold) {
+        if (!rbac::fs::visibility::seesWholeSubtree(user, entry)) st.st_size = 0;
+        return;
+    }
+    if (const auto totals = rbac::fs::visibility::visibleTotals(user, entry))
+        st.st_size = static_cast<off_t>(totals->size_bytes);
+}
+
 fuse_ino_t inodeForEntry(const std::shared_ptr<Entry>& entry) {
     if (!entry) return FUSE_ROOT_ID;
     if (entry->inode) return *entry->inode;
@@ -164,7 +187,8 @@ void getattr(const fuse_req_t req, const fuse_ino_t ino, fuse_file_info* fi) {
         return;
     }
 
-    const auto st = statFromEntry(resolved.entry, ino);
+    auto st = statFromEntry(resolved.entry, ino);
+    applyVisibleFolderSize(st, resolved.user, resolved.entry, FolderSize::Recount);
     timer.success();
     fuse_reply_attr(req, &st, kKernelMetadataTimeout);
 }
@@ -241,6 +265,7 @@ void setattr(const fuse_req_t req, const fuse_ino_t ino,
     }
 
     auto sanitized = statFromEntry(resolved.entry, ino);  // plaintext size, not the ciphertext's
+    applyVisibleFolderSize(sanitized, resolved.user, resolved.entry, FolderSize::Recount);
     platform::atime(sanitized) = platform::atime(st);
     platform::mtime(sanitized) = platform::mtime(st);
     platform::ctime(sanitized) = platform::ctime(st);
@@ -338,6 +363,7 @@ void lookup(const fuse_req_t req, const fuse_ino_t parent, const char* name) {
     e.attr_timeout = kKernelMetadataTimeout;
     e.entry_timeout = kKernelMetadataTimeout;
     e.attr = statFromEntry(resolved.entry, *resolved.ino);
+    applyVisibleFolderSize(e.attr, resolved.user, resolved.entry, FolderSize::Withhold);
 
     timer.success();
     fuse_reply_entry(req, &e);

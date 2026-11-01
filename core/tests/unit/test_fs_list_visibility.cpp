@@ -4,7 +4,9 @@
 // console and Desktop showed the names, sizes and dates of entries FUSE readdir hides from the same user (#170: deny
 // means hidden). The folder totals next to a child folder counted what is hidden inside it too. Every listing surface
 // now filters through rbac::fs::visibility (the evaluator's Lookup), and recounts the totals of folders whose subtree
-// holds hidden entries. `vh fs ls` had the same gap.
+// holds hidden entries. `vh fs ls` had the same gap. #269: fs.metadata on a folder still reported the stored size (a
+// side channel on how much is hidden); it now covers the visible part too. FUSE getattr of a folder is covered in the
+// Tier A "List Visibility Parity" scenario.
 
 #include "fs/Filesystem.hpp"
 #include "fs/cache/Registry.hpp"
@@ -206,6 +208,14 @@ protected:
         return {};
     }
 
+    // The size fs.metadata reports for an entry (#269). Its `entry` carries the base members only: no counts.
+    [[nodiscard]] std::uintmax_t metadataSize(const UserPtr& user, const std::string& path) const {
+        const auto meta = protocols::ws::handler::fs::Storage::metadata(
+            {{"vault_id", engine->vault->id}, {"path", path}}, wsAs(user));
+        EXPECT_FALSE(meta.at("entry").contains("file_count")) << "same shape for every caller";
+        return meta.at("entry").at("size_bytes").get<std::uintmax_t>();
+    }
+
     // What FUSE readdir answers for the folder (fuse::Resolver::resolveList calls exactly this; the bridge itself is
     // proven against ws in the Tier A "List Visibility Parity" scenario).
     [[nodiscard]] Names readdirNames(const UserPtr& user, const std::string& path) const {
@@ -237,10 +247,16 @@ TEST_F(FsListVisibilityDbTest, HiddenChildrenAreLeftOutOfTheListingAndOutOfTheTo
     // sub holds b.txt and open/d.txt for this user; hidden.bin and the whole of private/ don't count.
     EXPECT_EQ(countsOf(box, "sub"), (Counts{.size = 600300, .files = 2, .subdirs = 1}));
     EXPECT_EQ(box.at("entry").at("size_bytes").get<std::uintmax_t>(), 600301u);
+    // #269: fs.metadata of a folder covers the same visible part as the listing (a.txt, b.txt, open/d.txt).
+    EXPECT_EQ(metadataSize(user, "/box"), 600301u);
+    EXPECT_EQ(metadataSize(user, "/box/sub"), countsOf(box, "sub").size);
 
     const auto sub = list(user, "/box/sub");
     EXPECT_EQ(names(sub), (Names{"b.txt", "open"}));
     EXPECT_EQ(countsOf(sub, "open"), (Counts{.size = 600000, .files = 1, .subdirs = 0}));
+    EXPECT_EQ(sub.at("entry").at("size_bytes").get<std::uintmax_t>(), 600300u);
+    EXPECT_EQ(metadataSize(user, "/box/sub/open"), 600000u);
+    EXPECT_EQ(metadataSize(user, "/box/a.txt"), 1u);  // a file's is its own
 
     EXPECT_THROW((void)list(user, "/box/sub/private"), ops::Denied);
 
@@ -255,6 +271,9 @@ TEST_F(FsListVisibilityDbTest, SuperAdminSeesEverythingWithTheStoredTotals) {
     const auto box = list(superUser, "/box");
     EXPECT_EQ(names(box), (Names{"a.txt", "secret.txt", "sub"}));
     EXPECT_EQ(countsOf(box, "sub"), (Counts{.size = 654300, .files = 4, .subdirs = 2}));
+    EXPECT_EQ(box.at("entry").at("size_bytes").get<std::uintmax_t>(), 654321u);
+    EXPECT_EQ(metadataSize(superUser, "/box"), 654321u);
+    EXPECT_EQ(metadataSize(superUser, "/box/sub"), 654300u);
     EXPECT_EQ(names(list(superUser, "/box/sub")), (Names{"b.txt", "hidden.bin", "private", "open"}));
     EXPECT_EQ(cliNames(superUser, "/box"), (Names{"a.txt", "secret.txt", "sub/"}));
 }
@@ -264,6 +283,7 @@ TEST_F(FsListVisibilityDbTest, AUserWithNothingHiddenGetsTheFullListing) {
     const auto box = list(user, "/box");
     EXPECT_EQ(names(box), (Names{"a.txt", "secret.txt", "sub"}));
     EXPECT_EQ(countsOf(box, "sub"), (Counts{.size = 654300, .files = 4, .subdirs = 2}));
+    EXPECT_EQ(metadataSize(user, "/box"), 654321u);
     EXPECT_TRUE(visibility::seesWholeSubtree(user, runtime::Deps::get().fsCache->getEntry(
         engine->vaultPathToFusePath("/box"))));
 
@@ -299,6 +319,8 @@ TEST_F(FsListVisibilityDbTest, BasePermissionsWithoutPreviewHideEveryFile) {
     const auto box = list(user, "/box");
     EXPECT_EQ(names(box), (Names{"sub"}));
     EXPECT_EQ(countsOf(box, "sub"), (Counts{.size = 0, .files = 0, .subdirs = 2}));
+    EXPECT_EQ(metadataSize(user, "/box"), 0u);
+    EXPECT_EQ(box.at("entry").at("size_bytes").get<std::uintmax_t>(), 0u);
     EXPECT_EQ(names(list(user, "/box/sub")), (Names{"private", "open"}));
     EXPECT_EQ(names(box), readdirNames(user, "/box"));
     EXPECT_EQ(cliNames(user, "/box"), (Names{"sub/"}));

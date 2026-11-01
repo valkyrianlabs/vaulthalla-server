@@ -815,6 +815,9 @@ export interface WebSocketCommandMap {
 
   'fs.entry.rename': { payload: { vault_id: number; from: string; to: string }; response: { from: string; to: string } }
 
+  // The change journal (sync clients; the console doesn't follow it yet).
+  'fs.changes.list': WsContract['fs.changes.list']
+
   // Share management commands
 
   'share.link.create': { payload: ShareLinkCreatePayload; response: ShareLinkTokenResponse }

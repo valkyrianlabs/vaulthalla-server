@@ -46,9 +46,6 @@ void vh::db::Connection::initPreparedDirectories() const {
     conn_->prepare("is_dir_empty",
                    "SELECT NOT EXISTS (SELECT 1 FROM fs_entry WHERE parent_id = $1 AND id != 1) AS is_empty");
 
-    conn_->prepare("delete_empty_dir",
-                   "DELETE FROM directories WHERE fs_entry_id = $1 AND file_count = 0 AND subdirectory_count = 0");
-
     conn_->prepare(
         "upsert_directory",
         "WITH inserted AS ( "

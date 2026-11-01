@@ -480,6 +480,28 @@ def fuse_scenarios(results: dict) -> None:
         results[f"fuse.cat_4mb.{who}"] = p.result(n, note=f"read a {size} byte file")
 
 
+def seal_scenarios(results: dict) -> None:
+    """FUSE writes: each create or overwrite is sealed on close (encrypt, row update, journal; #259)."""
+    stamp = time.strftime("%H%M%S")
+    as_bench = ["sudo", "-n", "-u", "vhbench"]
+
+    def loop_write(prefix: list[str], folder: Path, n: int, fill: str) -> str:
+        return " ".join(prefix) + (f" sh -c 'i=0; while [ $i -lt {n} ]; do printf \"%4096s\" \"{fill}$i\" > {folder}/f$i.txt; "
+                                   "i=$((i+1)); done'")
+
+    for who, prefix in (("admin", []), ("bench_user", as_bench)):
+        folder = MOUNT / VAULT_DIR / f"bench/seal_{who}_{stamp}"
+        subprocess.run(prefix + ["mkdir", str(folder)], check=True, timeout=60)
+        n = 200
+        with Probe() as p:
+            subprocess.run(loop_write(prefix, folder, n, "new"), shell=True, check=True, timeout=600)
+        results[f"fuse.seal_create.{who}"] = p.result(n, note="create + write 4 KiB + close (sealed) per file")
+        with Probe() as p:
+            subprocess.run(loop_write(prefix, folder, n, "again"), shell=True, check=True, timeout=600)
+        results[f"fuse.seal_overwrite.{who}"] = p.result(n, note="overwrite 4 KiB + close (sealed) per file")
+        subprocess.run(["rm", "-rf", str(folder)], check=True, timeout=600)  # as admin: bench_user may not delete
+
+
 def preview_scenarios(state: Path, results: dict, manifest: dict) -> None:
     password = (state / "bench_user.password").read_text().strip()
     ws, cookie = login("bench_user", password)
@@ -664,6 +686,8 @@ def run(state: Path, label: str, only: set[str]) -> None:
     results["idle_rate_per_s"] = {k: round(v, 3) for k, v in (Probe.idle_rate or {}).items() if v}
     if not only or "fuse" in only:
         fuse_scenarios(results)
+    if not only or "seal" in only:
+        seal_scenarios(results)
     if not only or "preview" in only:
         preview_scenarios(state, results, manifest)
     if not only or "import" in only:
@@ -704,7 +728,7 @@ def main() -> int:
     r = sub.add_parser("run")
     r.add_argument("--state", required=True, type=Path)
     r.add_argument("--label", required=True)
-    r.add_argument("--only", default="", help="comma list of fuse,preview,import")
+    r.add_argument("--only", default="", help="comma list of fuse,seal,preview,import")
     c = sub.add_parser("compare")
     c.add_argument("a")
     c.add_argument("b")

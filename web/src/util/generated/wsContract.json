@@ -2544,6 +2544,110 @@
       "name": "FilesTrashedConfig"
     },
     {
+      "description": "One change of fs.changes.list (ops::fs_changes::toJson(Change), core/src/ops/FsChanges.cpp): a journaled entry mutation (migration 115) as the caller sees it.",
+      "fields": [
+        {
+          "description": "Commit-ordered; the cursor after this change.",
+          "minimum": 0,
+          "name": "revision",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "update: content (files), target (symlinks), mode or hidden flag. A rename or move into the caller's view reads as create, out of it as delete.",
+          "enum": [
+            "create",
+            "update",
+            "rename",
+            "move",
+            "delete"
+          ],
+          "name": "kind",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The entry's id (fs_entry.id; stable across rename and move).",
+          "minimum": 0,
+          "name": "entry_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "null when the entry was in no type table at the time.",
+          "enum": [
+            "file",
+            "directory",
+            "symlink"
+          ],
+          "name": "type",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "The parent folder's entry id (for delete: where it was).",
+          "minimum": 0,
+          "name": "parent_id",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "name": "name",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Vault path after the change (for delete: where it was).",
+          "name": "path",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "ISO-8601 UTC.",
+          "name": "changed_at",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "rename and move: the vault path before.",
+          "name": "old_path",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "rename and move: the parent before.",
+          "minimum": 0,
+          "name": "old_parent_id",
+          "required": false,
+          "types": [
+            "integer",
+            "null"
+          ]
+        }
+      ],
+      "name": "FsChange"
+    },
+    {
       "description": "A directory listing's entry: fs::model::to_json(std::vector<std::shared_ptr<Entry>>) dispatches to the File, Directory or Symlink serializer (core/src/fs/model/*.cpp), so `type` says which members follow.",
       "fields": [
         {
@@ -17454,7 +17558,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "7a08c439ab90a86e6316d2df81ca0ae484b1d7a8d7eb0673d84efaadf579eb31",
+  "models_hash": "d027924cc65070807b32b2f2daba00e0707ae3f871cad44d826254dc6e12e67c",
   "protocol": {
     "min": 1,
     "version": 1
@@ -20435,6 +20539,122 @@
     },
     {
       "auth": "human",
+      "client_timeout_ms": 30000,
+      "command": "fs.changes.list",
+      "confirmations": [],
+      "description": "What changed in a vault since a revision (the change journal, #259), oldest first; for sync clients instead of re-listing folders. Needs List on the vault root (storage.vault.accessible.list's browse). Only changes to entries the caller can Lookup are returned: a rename or move into view reads as create, out of view as delete. Without `since`: the current revision and no changes, the anchor to take before enumerating. `expired`: the cursor can't be served (retention, an authorization change that can change what the caller sees, or a revision this server never handed out): enumerate the vault again and continue from `revision`.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The revision of the last fs.changes.list answer (or anchor).",
+          "generator": {
+            "kind": "int_range",
+            "max": 0,
+            "min": 0
+          },
+          "minimum": 0,
+          "name": "since",
+          "required": false,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "Changes to read, 1..10000 (default 1000); fewer may be returned after filtering.",
+          "generator": {
+            "kind": "int_range",
+            "max": 1000,
+            "min": 1
+          },
+          "minimum": 0,
+          "name": "limit",
+          "required": false,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "unauthorized",
+        "denied",
+        "not_found",
+        "invalid"
+      ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied",
+        "not_found",
+        "invalid"
+      ],
+      "response": [
+        {
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The cursor for the next call.",
+          "minimum": 0,
+          "name": "revision",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "items": "object",
+          "model": "FsChange",
+          "name": "changes",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "More changes follow `revision`: ask again at once.",
+          "name": "more",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "Enumerate again; `changes` is empty.",
+          "name": "expired",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
       "client_timeout_ms": 15000,
       "command": "fs.dir.create",
       "confirmations": [],
@@ -21340,7 +21560,7 @@
       "client_timeout_ms": 15000,
       "command": "fs.metadata",
       "confirmations": [],
-      "description": "One entry's metadata (Lookup on the path).",
+      "description": "One entry's metadata (Lookup on the path). A folder's size covers only what the caller can Lookup, as in fs.dir.list.",
       "input": "payload",
       "operation": null,
       "payload": [
@@ -39056,5 +39276,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "056cfd712b9e8341a251678acac0ae408f236bfb5b2b042eba62f1f1c8fe3c5e"
+  "ws_hash": "b3c8d7ef4e24e96435bd28d8dfdc6c7ccd0c873ad39bd171f5ea0387f286c912"
 }

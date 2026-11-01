@@ -28,6 +28,21 @@ they were plain `0600` files in the state directory, protected only by permissio
 
 Linux TPM2 sealing is unchanged.
 
+## Change feed for sync clients
+
+Every change to a vault's files and folders is now recorded in a change journal, in the same database transaction as
+the change itself, whichever way it was made: the mounted filesystem, uploads, the web console, sync, recovery or a
+manual database edit. A new WebSocket command, `fs.changes.list`, returns what changed in a vault since a revision,
+oldest first, so sync clients such as Vaulthalla Desktop's Finder integration can follow a vault without listing its
+folders again.
+
+- Anyone who can browse a vault can follow it, and sees only changes to entries they are allowed to see. A rename or
+  move into or out of what they can see reads as a create or a delete.
+- When a role, group membership or permission override changes what someone may see in a vault, their cursor
+  expires and their client lists the vault again. So does a cursor older than the journal's retention (7 days or the
+  last million changes).
+- The journal adds one row per change. The database migration (115) is safe on upgraded installs.
+
 ## Vaulthalla Desktop sets up this Mac's server on its own
 
 `brew install --cask valkyrianlabs/tap/vaulthalla` now ends with Vaulthalla Desktop open and already connected to

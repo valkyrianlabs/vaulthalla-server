@@ -56,7 +56,12 @@ class FuseReplyGuardContract(unittest.TestCase):
         text = BRIDGE.read_text()
         self.assertNotRegex(text, r"replyError\(req, timer, \w+\.errnum\)")
         self.assertGreaterEqual(text.count("replyResolveError(req, timer, "), 15)
-        self.assertRegex(text, r"Status::MissingUser && resolved\.status != resolver::Status::AccessDenied")
+        self.assertRegex(text, r"Status::MissingUser \|\| resolved\.status == resolver::Status::AccessDenied")
+        # It answers itself: a call back into replyResolveError recursed until the stack overflowed (4c50108f).
+        body = re.search(r"void replyResolveError\([^)]*\) \{(.*?)\n\}", text, re.S)
+        self.assertIsNotNone(body)
+        self.assertNotIn("replyResolveError(", body.group(1))
+        self.assertIn("fuse_reply_err(req, normalized)", body.group(1))
 
 
 if __name__ == "__main__":

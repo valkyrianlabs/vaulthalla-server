@@ -282,6 +282,36 @@ namespace vh::test::integration {
             return {.exit_code = 0, .stdout_text = "PARITY\n" + join(wsNames), .stderr_text = {}, .command = command};
         }
 
+        // #269: a folder's size through the mount (stat(2), i.e. getattr) is what the same user's fs.metadata and
+        // fs.dir.list report for it: the visible part of its subtree. Prints "SIZE <n>" and "PARITY" on a match.
+        ExecResult folderSizeParity(const std::shared_ptr<storage::Engine>& engine, const std::shared_ptr<User>& user,
+                                    const uid_t uid, const std::filesystem::path& fuseDir, const std::string& vaultDir) {
+            const auto command = "stat of " + fuseDir.string() + " as uid " + std::to_string(uid) +
+                                 " vs fs.metadata/fs.dir.list " + vaultDir + " as " + user->name();
+            const auto stat = stat_size_as(uid, fuseDir);
+            if (stat.exit_code != 0) return stat;
+            const auto at = stat.stdout_text.rfind("size=");
+            const auto fuseSize = std::stoull(stat.stdout_text.substr(at + 5));
+
+            std::uintmax_t metadataSize = 0, listingSize = 0;
+            try {
+                const nlohmann::json request = {{"vault_id", engine->vault->id}, {"path", vaultDir}};
+                metadataSize = ::vh::protocols::ws::handler::fs::Storage::metadata(request, wsSessionFor(user))
+                                   .at("entry").at("size_bytes").get<std::uintmax_t>();
+                listingSize = ::vh::protocols::ws::handler::fs::Storage::listDir(request, wsSessionFor(user))
+                                  .at("entry").at("size_bytes").get<std::uintmax_t>();
+            } catch (const std::exception& e) {
+                return {.exit_code = EIO, .stdout_text = {}, .stderr_text = e.what(), .command = command};
+            }
+
+            const auto report = "stat " + std::to_string(fuseSize) + ", fs.metadata " + std::to_string(metadataSize) +
+                                ", fs.dir.list " + std::to_string(listingSize) + "\n";
+            if (fuseSize != metadataSize || fuseSize != listingSize)
+                return {.exit_code = EIO, .stdout_text = {}, .stderr_text = report, .command = command};
+            return {.exit_code = 0, .stdout_text = "SIZE " + std::to_string(fuseSize) + "\nPARITY\n" + report,
+                    .stderr_text = {}, .command = command};
+        }
+
         // Runs `first`, and `then` only when it succeeded (a delete followed by a look at what it left).
         ExecResult andThen(const ExecResult& first, const std::function<ExecResult()>& then) {
             if (first.exit_code != 0) return first;
@@ -1162,6 +1192,40 @@ namespace vh::test::integration {
             .path = "fuse/ls+ws/fs.dir.list",
             .must_contain = {"PARITY\n", "open.txt\n", "secret.txt\n", "deploy.key\n"},
             .fn = [=] { return listingParity(ctx.engine, ctx.admin, adminUid, ctx.docs(), vaultBase + "/docs"); }
+        });
+
+        // #269: the seed folder's size leaves out what is hidden (secret.txt, deploy.key, hidden_dir/inner.txt) through
+        // the mount as on ws; the admin's is the stored total, which is larger.
+        builder.makeTestCase({
+            .name = "folder size: stat == fs.metadata == fs.dir.list for the restricted user",
+            .path = "fuse/stat+ws/fs.metadata",
+            .must_contain = {"PARITY\n"},
+            .fn = [=] { return folderSizeParity(ctx.engine, subj.user, subj.uid, ctx.base(), vaultBase); }
+        });
+
+        builder.makeTestCase({
+            .name = "folder size: stat == fs.metadata == fs.dir.list for the admin",
+            .path = "fuse/stat+ws/fs.metadata",
+            .must_contain = {"PARITY\n"},
+            .fn = [=] { return folderSizeParity(ctx.engine, ctx.admin, adminUid, ctx.base(), vaultBase); }
+        });
+
+        builder.makeTestCase({
+            .name = "folder size: the restricted user's leaves the hidden bytes out",
+            .path = "fuse/stat",
+            .must_contain = {"SMALLER\n"},
+            .fn = [=] {
+                const auto restricted = stat_size_as(subj.uid, ctx.base());
+                const auto admin = stat_size_as(adminUid, ctx.base());
+                if (restricted.exit_code != 0) return restricted;
+                if (admin.exit_code != 0) return admin;
+                const auto size = [](const ExecResult& r) { return std::stoull(r.stdout_text.substr(r.stdout_text.rfind("size=") + 5)); };
+                const auto hidden = size(admin) - std::min(size(admin), size(restricted));
+                // At least deploy.key ("key\n") and hidden_dir/inner.txt ("inner\n") are hidden from the user.
+                return ExecResult{.exit_code = hidden >= 10 ? 0 : EIO,
+                                  .stdout_text = (hidden >= 10 ? "SMALLER\n" : "") + restricted.stdout_text + admin.stdout_text,
+                                  .stderr_text = {}, .command = "stat as uid " + std::to_string(subj.uid) + " and " + std::to_string(adminUid)};
+            }
         });
 
         return builder.exec();
