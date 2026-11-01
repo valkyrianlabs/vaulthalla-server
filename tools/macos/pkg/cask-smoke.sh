@@ -45,7 +45,7 @@ account_gone() { ! dscl . -read /Users/_vaulthalla >/dev/null 2>&1; }
 APP=/Applications/Vaulthalla.app
 no_app() { [ ! -e "$APP" ]; }
 has_app() { [ -d "$APP" ]; }
-installed() { brew list --cask --versions "$1" >/dev/null 2>&1; }
+installed() { brew list --cask --versions "${1##*/}" >/dev/null 2>&1; }  # brew list takes the token, not tap/token
 nothing_installed() { no_service && no_app; }
 app_signed() { codesign --verify --deep --strict "$APP" && codesign -dv "$APP" 2>&1 | grep -q '^TeamIdentifier=ZG2G6V7GLC$'; }
 
