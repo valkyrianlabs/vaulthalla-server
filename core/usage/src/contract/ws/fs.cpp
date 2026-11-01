@@ -59,7 +59,8 @@ std::vector<WsCommandUsage> fsCommands() {
 
     out.push_back({
         .command = "fs.metadata",
-        .description = "One entry's metadata (Lookup on the path).",
+        .description = "One entry's metadata (Lookup on the path). A folder's size covers only what the caller can "
+                       "Lookup, as in fs.dir.list.",
         .payload = {vaultId(), vaultPath("path").opt().desc("Defaults to \"/\".")},
         .response = {str("vault").desc("The vault's name."), str("path"),
                      object("entry", "FsEntryBase").desc("Entry base members only (no type, mime_type or preview).")},
