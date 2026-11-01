@@ -9,11 +9,6 @@
 # load (bundle_dylibs.py, into /usr/local/lib/vaulthalla) ship inside it, so a Mac without Homebrew runs it. Its
 # preinstall stops running services; its postinstall provisions (vaulthalla-provision --apply --enroll <console user>).
 #
-# Vaulthalla Desktop (optional): VH_PKG_DESKTOP_APP names a signed, notarized Vaulthalla.app (fetch-desktop.sh) to add
-# as a second component, sh.vaulthalla.desktop in /Applications, behind an Installer choice that is off by default.
-# The `vaulthalla` cask turns it on; `vaulthalla-server` and `sudo installer -pkg` leave it off. The component is
-# version-checked, so a newer app (Sparkle updates it in place) is never replaced. The app keeps its own signature.
-#
 # Signing (optional; unsigned packages install with `sudo installer` and Homebrew, Installer.app warns):
 #   VH_PKG_CODESIGN_IDENTITY   "Developer ID Application: ..." for the binaries (hardened runtime)
 #   VH_PKG_INSTALLER_IDENTITY  "Developer ID Installer: ..." for the package
@@ -70,47 +65,7 @@ pkgbuild --analyze --root "$ROOT" "$WORK/component.plist" >/dev/null
 pkgbuild --root "$ROOT" --component-plist "$WORK/component.plist" --identifier "$ID" --version "$VERSION" \
   --install-location / --scripts "$HERE/scripts" --ownership recommended "$WORK/component.pkg" >/dev/null
 
-desktop_outline=""
-desktop_choice=""
-if [ -n "${VH_PKG_DESKTOP_APP:-}" ]; then
-  app="${VH_PKG_DESKTOP_APP%/}"
-  [ "$(basename "$app")" = Vaulthalla.app ] || die "VH_PKG_DESKTOP_APP must be a Vaulthalla.app ($app)"
-  [ "$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$app/Contents/Info.plist")" = sh.vaulthalla.app ] ||
-    die "$app is not sh.vaulthalla.app"
-  codesign --verify --deep --strict "$app" || die "$app's signature does not verify"
-  desktop_version=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$app/Contents/Info.plist")
-  mkdir -p "$WORK/desktop-root"
-  ditto "$app" "$WORK/desktop-root/Vaulthalla.app"
-  pkgbuild --analyze --root "$WORK/desktop-root" "$WORK/desktop.plist" >/dev/null
-  # Never relocated to wherever another copy lives, never downgraded: Installer skips the bundle when the installed
-  # one has a newer version.
-  python3 -I - "$WORK/desktop.plist" <<'PY'
-import plistlib, sys
-path = sys.argv[1]
-with open(path, "rb") as f:
-    bundles = plistlib.load(f)
-app = [b for b in bundles if b["RootRelativeBundlePath"] == "Vaulthalla.app"]
-assert len(app) == 1, "no Vaulthalla.app in the component plist"
-for bundle in bundles:  # the app and everything nested in it
-    bundle["BundleIsRelocatable"] = False
-app[0].update(BundleIsVersionChecked=True, BundleHasStrictIdentifier=True, BundleOverwriteAction="upgrade")
-with open(path, "wb") as f:
-    plistlib.dump(bundles, f)
-PY
-  pkgbuild --root "$WORK/desktop-root" --component-plist "$WORK/desktop.plist" --identifier sh.vaulthalla.desktop \
-    --version "$desktop_version" --install-location /Applications "$WORK/desktop.pkg" >/dev/null
-  desktop_outline='        <line choice="sh.vaulthalla.desktop"/>'
-  desktop_choice=$(sed "s/@DESKTOP_VERSION@/$desktop_version/g" "$HERE/distribution-desktop.xml.in")
-  log "with Vaulthalla Desktop $desktop_version (choice sh.vaulthalla.desktop, off by default)"
-fi
-DESKTOP_OUTLINE="$desktop_outline" DESKTOP_CHOICE="$desktop_choice" python3 -c '
-import os, sys
-text = open(sys.argv[1]).read().replace("@VERSION@", sys.argv[2])
-for key in ("DESKTOP_OUTLINE", "DESKTOP_CHOICE"):
-    value = os.environ[key]
-    text = text.replace("@" + key + "@\n", value + "\n" if value else "")
-sys.stdout.write(text)
-' "$HERE/distribution.xml.in" "$VERSION" > "$WORK/distribution.xml"
+sed "s/@VERSION@/$VERSION/g" "$HERE/distribution.xml.in" > "$WORK/distribution.xml"
 xmllint --noout "$WORK/distribution.xml" || die "distribution.xml is not well-formed"
 mkdir -p "$OUT"
 productbuild --distribution "$WORK/distribution.xml" --package-path "$WORK" "$WORK/unsigned.pkg" >/dev/null

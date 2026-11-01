@@ -231,14 +231,6 @@ jobs:
       - name: Stage (release build, web console from the bundle, Node runtime, pdfium)
         run: tools/macos/candidate.sh stage
 
-      # The package's optional Desktop component: the latest Vaulthalla Desktop release, verified, as release.yml does.
-      - name: Vaulthalla Desktop for the package
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          app=$(tools/macos/pkg/fetch-desktop.sh "$RUNNER_TEMP/desktop")
-          echo "VH_PKG_DESKTOP_APP=$app" >> "$GITHUB_ENV"
-
       - name: Build the package
         run: tools/macos/candidate.sh pkg
 
@@ -251,8 +243,8 @@ jobs:
             ruby -c "$VH_CANDIDATE_DIR/pkg/$cask.rb"
           done
 
-      # The Homebrew paths on this clean Mac: vaulthalla-server (no app), then vaulthalla over a newer app and on its
-      # own: install, use, uninstall, zap.
+      # The Homebrew paths on this clean Mac: vaulthalla-server, then the vaulthalla meta cask (server + the published
+      # vaulthalla-desktop cask): install, use, uninstall, zap.
       - name: Homebrew cask smoke (vaulthalla-server, vaulthalla)
         run: |
           pkg=$(ls "$VH_CANDIDATE_DIR"/pkg/vaulthalla-*-arm64.pkg)

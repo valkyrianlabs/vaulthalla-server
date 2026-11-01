@@ -41,10 +41,11 @@ filesystem access, encryption, secrets/key export, backup & recovery, S3 gateway
 
 - Install (Linux, amd64, Ubuntu 24.04 tested): `curl -fsSL https://apt.vaulthalla.sh/install.sh | bash`, manual APT, or
   `./bin/vh/install.sh`. Source installs (`make install` / `make dev`) are development-only.
-- Install (macOS, Apple Silicon): casks `valkyrianlabs/tap/vaulthalla` (server + Desktop, macOS 27+),
-  `…/vaulthalla-server` (server only, macOS 14+), `…/vaulthalla-desktop` (app only); or
-  `sudo installer -pkg vaulthalla-<version>-arm64.pkg -target /` (server only; Desktop is an Installer choice, off by
-  default). Signed and notarized from 1.18.0.
+- Install (macOS, Apple Silicon): casks `valkyrianlabs/tap/vaulthalla-server` (server, macOS 14+),
+  `…/vaulthalla-desktop` (app, macOS 27+) and the `…/vaulthalla` meta cask, which only depends on both (each upgrades
+  to its own latest release; it needs `brew trust valkyrianlabs/tap` once); or
+  `sudo installer -pkg vaulthalla-<version>-arm64.pkg -target /` (the server; the package never carries Desktop).
+  Signed and notarized from 1.18.0.
   Postinstall = `vaulthalla-provision --apply --enroll <console user>` (hidden `_vaulthalla`, bundled PostgreSQL on
   127.0.0.1:36971, LaunchDaemons `sh.vaulthalla.{postgres,server,web}` + `caddy` after `vh setup caddy`, installing
   user enrolled and bound to `admin`). Uninstall: `sudo "/Library/Application Support/Vaulthalla/uninstall.sh"

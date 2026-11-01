@@ -12,7 +12,7 @@ tags:
 
 # Install On macOS
 
-Vaulthalla ships for macOS as one installer package, `vaulthalla-<version>-arm64.pkg`. It always installs the server, and optionally Vaulthalla Desktop, the native app (macOS 27 or later). The Homebrew casks install that same package, so every path sets up the service identically and without further steps: the installer creates the service account and its private directories, initializes a private PostgreSQL database, starts the LaunchDaemons, and enrolls you as the CLI administrator.
+Vaulthalla ships for macOS as one installer package, `vaulthalla-<version>-arm64.pkg`. It installs the server. Vaulthalla Desktop, the native app (macOS 27 or later), ships on its own and updates itself. The `vaulthalla-server` cask installs that same package, so every path sets up the service identically and without further steps: the installer creates the service account and its private directories, initializes a private PostgreSQL database, starts the LaunchDaemons, and enrolls you as the CLI administrator.
 
 :::toc[On this page]{depth="3" theme="compact"}
 :::
@@ -28,11 +28,14 @@ Vaulthalla ships for macOS as one installer package, `vaulthalla-<version>-arm64
 | `valkyrianlabs/tap/vaulthalla-server` | Server only | headless and self-hosted Macs (macOS 14 or later) |
 | `valkyrianlabs/tap/vaulthalla-desktop` | Desktop only | managing Vaulthalla nodes on other machines |
 
+`vaulthalla` is a meta cask: it installs nothing itself and depends on the other two, so each installs and upgrades to its own latest release. Homebrew loads dependency casks only from a trusted tap, so trust the tap once:
+
 ```bash
+brew trust valkyrianlabs/tap
 brew install --cask valkyrianlabs/tap/vaulthalla
 ```
 
-Use the full name: Homebrew then taps `valkyrianlabs/tap` itself and trusts the cask you name, with no `brew tap` or `brew trust` step. It asks for your password and installs the package with macOS's `installer`. Vaulthalla Desktop updates itself; a server upgrade never replaces a newer copy of the app.
+`vaulthalla-server` and `vaulthalla-desktop` alone need no `brew trust`: name them in full and Homebrew taps `valkyrianlabs/tap` and trusts the cask you named. The server asks for your password and installs the package with macOS's `installer`; Vaulthalla Desktop updates itself.
 :::
 
 :::tab[Installer package]{value="pkg"}
@@ -43,7 +46,7 @@ shasum -a 256 -c vaulthalla-<version>-arm64.pkg.sha256
 sudo installer -pkg vaulthalla-<version>-arm64.pkg -target /
 ```
 
-The package installs the server only from the command line. Double-clicked in Finder, Installer offers Vaulthalla Desktop under **Customize** (off by default; macOS 27 or later): see [Open The Package](#open-the-package).
+The package installs the server. Vaulthalla Desktop is a separate download from its [releases](https://github.com/valkyrianlabs/vaulthalla-desktop/releases).
 :::
 
 :::
@@ -132,7 +135,7 @@ The full map is in [Runtime Paths](/reference/runtime-paths).
 Install the newer package the same way, or with Homebrew:
 
 ```bash
-brew upgrade --cask vaulthalla
+brew upgrade --cask valkyrianlabs/tap/vaulthalla-server
 sudo installer -pkg vaulthalla-<new-version>-arm64.pkg -target /
 ```
 
@@ -152,7 +155,7 @@ Remove everything, including vault data, the database, logs, configuration, cert
 sudo "/Library/Application Support/Vaulthalla/uninstall.sh" --purge
 ```
 
-With Homebrew, `brew uninstall --cask vaulthalla` keeps data and `brew uninstall --zap --cask vaulthalla` purges it.
+With Homebrew, `brew uninstall --cask valkyrianlabs/tap/vaulthalla-server` keeps data and `brew uninstall --zap --cask valkyrianlabs/tap/vaulthalla-server` purges it. Uninstalling the `vaulthalla` meta cask leaves the server and the app installed.
 
 :::callout[Purge is permanent]{variant="danger"}
 `--purge` deletes local vault data and the keys that decrypt it. Export vault keys and back up first: see [Backup And Recovery](/vaults/backup-and-recovery). Devices that trusted the Vaulthalla CA keep trusting it until you remove it there, and lines added with `vh setup caddy --hosts-entry` are removed by `vh teardown caddy`, not by the uninstaller.
