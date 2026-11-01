@@ -147,6 +147,18 @@ protected:
         return vh::identities::manager().user(created.user->id);
     }
 
+    [[nodiscard]] static uint64_t anchor(const EnginePtr& engine) {
+        return ops::fs_changes::list(superUser, {.vault_id = engine->vault->id}).revision;
+    }
+
+    // The revision of the vault's newest change after `since`.
+    [[nodiscard]] static uint64_t last(const EnginePtr& engine, const uint64_t since) {
+        const auto r = ops::fs_changes::list(superUser, {.vault_id = engine->vault->id, .since = since});
+        EXPECT_FALSE(r.expired);
+        EXPECT_FALSE(r.changes.empty());
+        return r.changes.empty() ? 0 : r.changes.back().revision;
+    }
+
     [[nodiscard]] std::vector<json> take(const SessionPtr& session) {
         auto out = std::move(delivered[session->uuid]);
         delivered.erase(session->uuid);
@@ -170,6 +182,8 @@ TEST_F(FsChangePushDbTest, SubscribedSessionsGetOneCoalescedEventPerVault) {
 
     notifier->tick();
     EXPECT_TRUE(take(session).empty()) << "nothing changed since subscribing";
+    const auto anchorA = anchor(a);
+    const auto anchorB = anchor(b);
 
     for (int i = 0; i < 5; ++i) write(a, "/a" + std::to_string(i) + ".txt", "x");
     write(b, "/b.txt", "y");
@@ -177,10 +191,8 @@ TEST_F(FsChangePushDbTest, SubscribedSessionsGetOneCoalescedEventPerVault) {
 
     // One event per changed vault, at the cursor fs.changes.list answers.
     const auto events = take(session);
-    const auto atA = ops::fs_changes::list(superUser, {.vault_id = a->vault->id, .since = 0}).revision;
-    const auto lastB = ops::fs_changes::list(superUser, {.vault_id = b->vault->id, .since = 0}).changes.back().revision;
-    const auto lastA = ops::fs_changes::list(superUser, {.vault_id = a->vault->id, .since = 0}).changes.back().revision;
-    EXPECT_GE(atA, lastA);
+    const auto lastA = last(a, anchorA);
+    const auto lastB = last(b, anchorB);
     EXPECT_EQ(events, (std::vector<json>{changed(a->vault->id, lastA), changed(b->vault->id, lastB)}));
     EXPECT_TRUE(take(other).empty());
 
@@ -270,6 +282,7 @@ TEST_F(FsChangePushDbTest, ASlowConsumerHoldsOneEventPerVault) {
     const auto session = sessionAs(superUser);
     ASSERT_TRUE(notifier->subscribe(session, {a->vault->id, b->vault->id}).refused.empty());
 
+    const auto anchorB = anchor(b);
     full = true;
     for (int round = 0; round < 20; ++round) {
         write(a, "/a" + std::to_string(round) + ".txt", "x");
@@ -282,8 +295,7 @@ TEST_F(FsChangePushDbTest, ASlowConsumerHoldsOneEventPerVault) {
     notifier->flush();
     const auto events = take(session);
     ASSERT_EQ(events.size(), 2u) << "twenty rounds coalesce into one event per vault";
-    const auto last = ops::fs_changes::list(superUser, {.vault_id = b->vault->id, .since = 0}).changes.back().revision;
-    EXPECT_EQ(events[1].at("data").at("revision"), last);
+    EXPECT_EQ(events[1].at("data").at("revision"), last(b, anchorB));
 }
 
 // The default delivery: a closed session takes nothing and is forgotten.
