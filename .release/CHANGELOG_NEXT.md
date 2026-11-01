@@ -17,6 +17,6 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   AES-GCM, stored as `<state>/.sealed_<name>.blob/<name>.se`; created and opened only by the daemon under launchd.
   - Secrets sealed by the `file` backend (macOS 1.18.0-1.20.x) move into the Secure Enclave on the daemon's first
     unseal; the plaintext `.key` file is removed after the new blob is verified.
-  - A Mac without a Secure Enclave (a VM) falls back to `file`, logged and reported. `-Ddarwin_sealer=file` builds
-    the development backend.
+  - Where no Secure Enclave key can be used (checked once per start with a throwaway key) the daemon falls back to
+    `file`, logged and reported. `-Ddarwin_sealer=file` builds the development backend.
   - cask-smoke checks the reported backend, the blob format and that secrets reopen after a daemon restart.

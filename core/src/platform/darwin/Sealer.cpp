@@ -9,7 +9,7 @@
 #include <paths.h>
 
 // macOS: the Secure Enclave by default (-Ddarwin_sealer=secure-enclave), the development "file" backend when the
-// build asks for it or the Mac has no Secure Enclave (a virtual machine). One backend per process, reported by
+// build asks for it or no Secure Enclave key can be used here. One backend per process, reported by
 // backend(). Reads follow the format on disk, not the backend: a slot holding <name>.key (every macOS install before
 // the Secure Enclave backend) is unsealed from the file and, under the Secure Enclave, resealed there and the
 // plaintext file removed. When both formats are present (a crash between writing one and removing the other), the
@@ -29,9 +29,9 @@ DarwinSealer chooseDarwinSealer() {
         return DarwinSealer::File;
     }
     if (secure_enclave::available()) return DarwinSealer::SecureEnclave;
-    log::Registry::crypto()->error("[Sealer] This Mac has no Secure Enclave (a virtual machine?): sealing with the "
-                                   "development 'file' backend instead, plain 0600 files with no hardware binding. "
-                                   "Health reports the secrets backend as 'file'");
+    log::Registry::crypto()->error("[Sealer] The Secure Enclave can't be used here ({}): sealing with the development "
+                                   "'file' backend instead, plain 0600 files with no hardware binding. Health "
+                                   "reports the secrets backend as 'file'", secure_enclave::unavailableReason());
     return DarwinSealer::File;
 }
 

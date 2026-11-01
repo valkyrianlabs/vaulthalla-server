@@ -34,7 +34,7 @@ Master keys (the vault master key, the database password, API-key and S3 gateway
 | --- | --- | --- |
 | Linux | TPM2 (hardware TPM, or the managed `swtpm`) | The keys are sealed to the TPM; a copy of the state directory alone doesn't unseal them on another host. |
 | macOS | Secure Enclave (`secure-enclave`) | Each key is wrapped to its own Secure Enclave key (ECIES: P-256 key agreement, AES-256-GCM). Unwrapping needs this Mac's Secure Enclave, so a copy of the state directory doesn't open on another Mac. |
-| macOS without a Secure Enclave (a virtual machine), or a development build | `file` | The keys are `0600` files inside the `0700` state directory, owned by `_vaulthalla`. Nothing binds them to the machine: they are as safe as the directory's permissions and, at rest, FileVault. `vh status` reports `secrets backend: file (development: no hardware binding)`. |
+| macOS where the Secure Enclave can't be used (some virtual machines), or a development build | `file` | The keys are `0600` files inside the `0700` state directory, owned by `_vaulthalla`. Nothing binds them to the machine: they are as safe as the directory's permissions and, at rest, FileVault. `vh status` reports `secrets backend: file (development: no hardware binding)`. |
 
 ### The Secure Enclave On macOS
 

@@ -23,7 +23,7 @@ they were plain `0600` files in the state directory, protected only by permissio
   Recovery in the backup docs.
 - **Restarts with FileVault on:** a cold boot waits at the FileVault login before any service runs. For an unattended
   restart use `sudo fdesetup authrestart`; Vaulthalla then starts at the login window, before anyone logs in.
-- A Mac without a Secure Enclave (a virtual machine) keeps using key files, logs that it does, and reports
-  `secrets backend: file`.
+- If the Secure Enclave can't be used (the daemon checks at startup), it keeps using key files, logs why, and
+  reports `secrets backend: file`.
 
 Linux TPM2 sealing is unchanged.

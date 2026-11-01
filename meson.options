@@ -90,7 +90,7 @@ option(
     type: 'combo',
     choices: ['secure-enclave', 'file'],
     value: 'secure-enclave',
-    description: 'macOS secret sealer (platform/Sealer.hpp). secure-enclave (default, the package): Secure Enclave, falling back to file only on a Mac without one (a virtual machine), reported as such. file: the development backend, plain 0600 files. Ignored on Linux (TPM2)'
+    description: 'macOS secret sealer (platform/Sealer.hpp). secure-enclave (default, the package): Secure Enclave, falling back to file (logged and reported) only where no Secure Enclave key can be used. file: the development backend, plain 0600 files. Ignored on Linux (TPM2)'
 )
 
 option(

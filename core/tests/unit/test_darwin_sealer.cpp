@@ -1,7 +1,7 @@
 // The macOS sealer (platform/darwin/Sealer.cpp): Secure Enclave by default, the development "file" backend on a Mac
 // without one, and the migration of file-sealed secrets (every macOS install before #290) into the Secure Enclave.
-// Secure Enclave cases run from a login session, where the SEP accepts keys the session creates; a Mac without one
-// (GitHub's hosted runners are virtual machines) skips them and checks the fallback instead.
+// Secure Enclave cases run from a login session, where the SEP accepts keys the session creates. Apple silicon VMs
+// (GitHub's hosted runners) have a virtual SEP that passes too; a Mac where no SE key works skips them.
 #if defined(__APPLE__)
 
 #include "platform/Sealer.hpp"
@@ -77,27 +77,26 @@ protected:
 using darwin_sealer_test::DarwinSealerTest;
 namespace dst = darwin_sealer_test;
 
-// The backend is the build's choice, falling back to "file" only where there's no Secure Enclave; never silently
-// "file" on hardware that has one. The output records what this host has (CI runs on virtual Macs).
+// The backend is the build's choice, falling back to "file" only where no Secure Enclave key works; never "file" on
+// a Mac whose Secure Enclave works. The output records what this host has (CI runs on virtual Macs).
 TEST(DarwinSealer, ReportsTheBackendThisMacSupports) {
     const bool se = vh::platform::sealer::secure_enclave::available();
     std::cout << "[darwin-sealer] VH_DARWIN_SEALER=" << VH_DARWIN_SEALER << " secure_enclave_available=" << se
-              << " virtual_machine=" << dst::virtualMachine() << " backend=" << vh::platform::sealer::backend()
-              << std::endl;
+              << " virtual_machine=" << dst::virtualMachine()
+              << " reason=" << vh::platform::sealer::secure_enclave::unavailableReason() << std::endl;
     EXPECT_EQ(vh::platform::sealer::backend(), dst::preferSecureEnclave() && se ? "secure-enclave" : "file");
 #if defined(__aarch64__) || defined(__arm64__)
     if (!dst::virtualMachine()) EXPECT_TRUE(se) << "Apple silicon outside a VM always has a Secure Enclave";
 #endif
 }
 
-// Where the Secure Enclave is missing, record what the SEP itself says: the fallback must not hide a working one.
-TEST(DarwinSealer, SecureEnclaveProbeAgreesWithTheHardware) {
+// The fallback must not hide a working Secure Enclave: where the probe said no, a real seal fails too.
+TEST(DarwinSealer, SecureEnclaveProbeAgreesWithARealSeal) {
     if (vh::platform::sealer::secure_enclave::available()) GTEST_SKIP() << "covered by the Secure Enclave cases";
     std::string tmpl = (std::filesystem::temp_directory_path() / "vh-se-probe-XXXXXX").string();
     ASSERT_NE(::mkdtemp(tmpl.data()), nullptr);
     try {
         vh::platform::sealer::secure_enclave::seal(tmpl, "probe", {1, 2, 3});
-        std::cout << "[darwin-sealer] no AppleSEPManager, yet a Secure Enclave key worked here" << std::endl;
         ADD_FAILURE() << "the Secure Enclave works on this Mac but available() says it has none";
     } catch (const std::exception& e) {
         std::cout << "[darwin-sealer] no Secure Enclave, as expected: " << e.what() << std::endl;

@@ -14,7 +14,7 @@
 //          Mac and to the daemon's launchd context, so only the daemon running under launchd seals or unseals; an
 //          installer or CLI hands secrets to the daemon instead (see platform/darwin/SealerBackends.hpp).
 //          "file": a development backend with no hardware binding (<name>.key, a 0600 file in a 0700 directory),
-//          used with -Ddarwin_sealer=file or on a Mac without a Secure Enclave. A file-sealed secret is moved into
+//          used with -Ddarwin_sealer=file or where no Secure Enclave key works. A file-sealed secret is moved into
 //          the Secure Enclave the first time the daemon unseals it there.
 //   The backend name is reported wherever health is.
 // seal() and unseal() are safe to call from any thread: the TPM backend runs one operation at a time per process

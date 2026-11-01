@@ -138,7 +138,7 @@ Master keys (the vault master key, the database password, API-key and gateway se
 
 Upgrades keep the keys. An install from before the Secure Enclave backend had its keys in `0600` files; the first start of the new version moves each into the Secure Enclave and deletes the file.
 
-On a Mac without a Secure Enclave (a virtual machine), the daemon falls back to the `file` backend and says so in its log and in `vh status` (`secrets backend: file (development: no hardware binding)`): the keys are then plain files protected only by the state directory's permissions and FileVault.
+If the Secure Enclave can't be used (the daemon tries a throwaway key at startup; some virtual machines refuse it), the daemon falls back to the `file` backend and says so in its log and in `vh status` (`secrets backend: file (development: no hardware binding)`): the keys are then plain files protected only by the state directory's permissions and FileVault.
 
 Keep FileVault on either way: vault data and the database are on the same disk.
 

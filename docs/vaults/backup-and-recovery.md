@@ -125,7 +125,7 @@ On **another Mac**, or after macOS was erased and reinstalled, the sealed blobs 
 3. Start the daemon (`sudo /usr/local/lib/vaulthalla/vaulthalla-provision --apply`). It creates new master keys in this Mac's Secure Enclave.
 4. Import the vault keys (`vh vault keys import`, see [Restore Vault Keys](/vaults/secrets-and-key-export#restore-vault-keys)) and set the JWT secret from the internal secret export (`vh secret set jwt-secret`).
 
-Copying sealed blobs between Macs never works; only the exports move keys between machines. Installs that still use the `file` backend (a virtual machine, or a development build) keep plaintext key files in the state directory, so there the state archive is itself key material: protect it like a key export.
+Copying sealed blobs between Macs never works; only the exports move keys between machines. Installs that still use the `file` backend (where the Secure Enclave can't be used, or a development build) keep plaintext key files in the state directory, so there the state archive is itself key material: protect it like a key export.
 
 ## Restore Outline
 

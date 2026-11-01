@@ -69,7 +69,7 @@ Full maps: [Runtime Paths](/reference/runtime-paths).
 | --- | --- | --- |
 | Vault data | AES-256-GCM | AES-256-GCM |
 | Master key protection | TPM2: hardware, or the managed software TPM | The Secure Enclave, keys created and used only by the daemon under launchd |
-| Reported as | `secrets backend: tpm2` | `secrets backend: secure-enclave` (`file` on a Mac without a Secure Enclave, such as a virtual machine) |
+| Reported as | `secrets backend: tpm2` | `secrets backend: secure-enclave` (`file` where the Secure Enclave can't be used, such as some virtual machines) |
 | Unattended reboot | Yes | With FileVault on, only through `sudo fdesetup authrestart` (a cold boot waits for the disk to be unlocked) |
 
 See [Encryption](/vaults/encryption#how-master-keys-are-protected).

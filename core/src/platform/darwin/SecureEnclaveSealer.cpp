@@ -1,7 +1,6 @@
 #include "platform/darwin/SealerBackends.hpp"
 
 #include <CoreFoundation/CoreFoundation.h>
-#include <IOKit/IOKitLib.h>
 #include <Security/Security.h>
 #include <sodium/utils.h>
 
@@ -24,8 +23,8 @@
 // bound to the keybag context it was made in. So only the daemon, under launchd, ever seals or unseals.
 //
 // Restoring the key from plain C++ needs the token object id attribute, "toid" (kSecAttrTokenOID), which is not in
-// the public headers. If a macOS release ever drops it, seal() fails its read-back check before replacing anything,
-// and the fallback is the CryptoKit SecureEnclave.P256.KeyAgreement.PrivateKey(dataRepresentation:) shim from the
+// the public headers. If a macOS release ever drops it, seal() fails its read-back check before replacing anything
+// (and so does the startup probe, so the daemon reports "file" rather than claim the Secure Enclave), and the fix is the CryptoKit SecureEnclave.P256.KeyAgreement.PrivateKey(dataRepresentation:) shim from the
 // spike (~/vh-macos-spikes/se-spike/sespike.swift).
 namespace vh::platform::sealer::secure_enclave {
 
@@ -174,23 +173,8 @@ std::vector<uint8_t> unwrap(const SeBlob& blob, const std::string& name, const s
     return secret;
 }
 
-}
-
-bool available() noexcept {
-    static const bool present = [] {
-        const io_service_t sep = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSEPManager"));
-        if (!sep) return false;
-        IOObjectRelease(sep);
-        return true;
-    }();
-    return present;
-}
-
-std::filesystem::path path(const std::filesystem::path& dir, const std::string& name) {
-    return dir / (name + ".se");
-}
-
-void seal(const std::filesystem::path& dir, const std::string& name, const std::vector<uint8_t>& secret) {
+// A new key, the secret wrapped to it, and the blob decrypted back by the SEP before anyone relies on it.
+SeBlob sealNew(const std::string& name, const std::vector<uint8_t>& secret, const std::filesystem::path& target) {
     CFErrorRef err = nullptr;
     const CfOwned<SecAccessControlRef> access(SecAccessControlCreateWithFlags(
         kCFAllocatorDefault, kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly, kSecAccessControlPrivateKeyUsage, &err));
@@ -223,17 +207,48 @@ void seal(const std::filesystem::path& dir, const std::string& name, const std::
     wipe(plain);
     if (!ct) failSe("wrapping the secret", err);
 
-    const SeBlob blob{cfBytes(static_cast<CFDataRef>(tokenObject)), cfBytes(ct.get())};
-    const auto target = path(dir, name);
-
-    // Read it back the way unseal() will (restore from the stored token object, decrypt in the SEP) before replacing
-    // the old blob, so a sealing path that can't be undone never costs the secret already on disk.
+    SeBlob blob{cfBytes(static_cast<CFDataRef>(tokenObject)), cfBytes(ct.get())};
+    // Read it back the way unseal() will (restore from the stored token object, decrypt in the SEP) before it
+    // replaces anything, so a sealing path that can't be undone never costs the secret already on disk.
     auto check = unwrap(blob, name, target);
     const bool same = check == secret;
     wipe(check);
     if (!same) throw std::runtime_error("Secure Enclave: read-back of the new blob for " + name + " didn't match");
+    return blob;
+}
 
-    writePrivateFile(target, encodeBlob(blob));
+struct SeProbe {
+    bool usable = false;
+    std::string failure;
+};
+
+const SeProbe& probe() {
+    static const SeProbe result = [] {
+        SeProbe p;
+        try {
+            (void)sealNew("probe", {'v', 'h', '-', 's', 'e', '-', 'p', 'r', 'o', 'b', 'e'}, "<probe>");
+            p.usable = true;
+        } catch (const std::exception& e) {
+            p.failure = e.what();
+        }
+        return p;
+    }();
+    return result;
+}
+
+}
+
+bool available() noexcept { return probe().usable; }
+
+std::string unavailableReason() { return probe().failure; }
+
+std::filesystem::path path(const std::filesystem::path& dir, const std::string& name) {
+    return dir / (name + ".se");
+}
+
+void seal(const std::filesystem::path& dir, const std::string& name, const std::vector<uint8_t>& secret) {
+    const auto target = path(dir, name);
+    writePrivateFile(target, encodeBlob(sealNew(name, secret, target)));
 }
 
 std::vector<uint8_t> unseal(const std::filesystem::path& dir, const std::string& name) {

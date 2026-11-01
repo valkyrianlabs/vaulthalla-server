@@ -176,7 +176,7 @@ endif
 
 # The Secure Enclave sealer (platform/darwin/SecureEnclaveSealer.cpp).
 if host_os == 'darwin'
-    deps += dependency('appleframeworks', modules: ['CoreFoundation', 'IOKit', 'Security'], required: true)
+    deps += dependency('appleframeworks', modules: ['CoreFoundation', 'Security'], required: true)
 endif
 
 # Linux-only system libraries: libuuid (macOS has <uuid/uuid.h> in libSystem) and the TPM2 stack behind the TPM

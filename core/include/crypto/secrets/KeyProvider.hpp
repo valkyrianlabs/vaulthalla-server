@@ -24,7 +24,7 @@ public:
     [[nodiscard]] bool sealedExists() const;
 
     // The sealing backend in use: "tpm2" (Linux), "secure-enclave" (macOS), or "file" (the macOS development
-    // backend, also used on a Mac without a Secure Enclave).
+    // backend, also used where no Secure Enclave key works).
     [[nodiscard]] static std::string_view backend() noexcept;
 
 private:

@@ -132,7 +132,7 @@ More in [Serve Vaulthalla With Caddy](/https/caddy#troubleshooting).
 
 `vh status` on macOS always shows `mount: disabled -> disabled`: the server never mounts vaults (Finder access belongs to Vaulthalla Desktop). It is reported, not hidden, so that health never claims more than the host provides.
 
-`secrets backend` should read `secure-enclave`. It reads `file (development: no hardware binding)` only on a Mac without a Secure Enclave, such as a virtual machine, where the master keys are plain files protected by permissions and FileVault; the daemon log says the same at startup.
+`secrets backend` should read `secure-enclave`. It reads `file (development: no hardware binding)` only when the daemon couldn't use the Secure Enclave at startup (some virtual machines), where the master keys are plain files protected by permissions and FileVault; the daemon log says why at startup (`The Secure Enclave can't be used here`).
 
 ## The Server Stops At Startup: Secure Enclave Unsealing Failed
 

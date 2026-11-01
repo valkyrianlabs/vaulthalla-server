@@ -25,8 +25,12 @@ void seal(const std::filesystem::path& dir, const std::string& name, const std::
 // LaunchDaemon can't be used from sudo or a user session, even as root. Only the daemon seals and unseals.
 namespace secure_enclave {
 
-// This Mac has a Secure Enclave (Apple silicon or a T2; not a virtual machine).
+// A Secure Enclave key can be created and used here: tried once per process with a throwaway key (create, wrap,
+// unwrap through the SEP, about 30 ms). Apple silicon has one; so do Apple silicon virtual machines (a virtual SEP:
+// GitHub's hosted runners pass), which expose no AppleSEPManager, so the hardware can't be read off IOKit.
 [[nodiscard]] bool available() noexcept;
+// Why not (the probe's error), or empty.
+[[nodiscard]] std::string unavailableReason();
 [[nodiscard]] std::filesystem::path path(const std::filesystem::path& dir, const std::string& name);
 void seal(const std::filesystem::path& dir, const std::string& name, const std::vector<uint8_t>& secret);
 [[nodiscard]] std::vector<uint8_t> unseal(const std::filesystem::path& dir, const std::string& name);

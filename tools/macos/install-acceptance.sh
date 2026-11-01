@@ -12,7 +12,8 @@
 #   accept     account, permissions and the three LaunchDaemons; the web console; an encrypted vault over HTTP with
 #              RBAC denial (tools/macos/install_acceptance.py as --client); ciphertext at rest; secrets sealed by
 #              the daemon with the Secure Enclave (`.se` blobs, no plaintext `.key` left, also after an upgrade from
-#              a file-sealed 1.20.x install; `file` only on a virtual Mac) and reopened after every restart; restart, crash
+#              a file-sealed 1.20.x install; `file` allowed only on a virtual Mac) and reopened after every restart;
+#              restart, crash
 #              recovery, stop/start; PostgreSQL restarted under the server and the server started before PostgreSQL
 #              (each recovers); `vh` and `vh fs` as the enrolled client; a hidden unenrolled identity refused
 #              everywhere; `vh setup caddy` on an internal name (HTTPS through the Vaulthalla CA, WebSockets, previews,
@@ -79,11 +80,18 @@ server_ready() { listening 36969 && listening 36970 && [ -S "$RUN/cli.sock" ]; }
 pg_ready() { listening 36971; }
 perms() { stat -f '%Sp %Su:%Sg' "$1"; }
 as_client() { sudo -u "$CLIENT" -- "$@"; }
-if [ "$(sysctl -n kern.hv_vmm_present 2>/dev/null || echo 0)" = 1 ]; then SEALER="file"; SEALED=key; PLAIN=se
-else SEALER=secure-enclave; SEALED=se; PLAIN=key; fi
+VIRTUAL=$(sysctl -n kern.hv_vmm_present 2>/dev/null || echo 0)
+status_sealer() { as_client $PREFIX/bin/vh status 2>/dev/null | awk -F': ' '/^  secrets backend:/ {print $2; exit}' | awk '{print $1}'; }
+reports_sealer() {  # secure-enclave on real hardware; a virtual Mac may report file (no usable virtual SEP)
+  local b; b=$(status_sealer)
+  [ "$b" = secure-enclave ] || { [ "$VIRTUAL" = 1 ] && [ "$b" = file ]; }
+}
 sealed_slots() { ls "$STATE"/.sealed_*.blob/ 2>/dev/null; }
-sealed_by_backend() { sealed_slots | grep -qx "psql\.$SEALED" && ! sealed_slots | grep -q "\.$PLAIN\$"; }
-reports_sealer() { as_client $PREFIX/bin/vh status 2>/dev/null | grep -qE "^  secrets backend: $SEALER( |\$)"; }
+sealed_by_backend() {  # the DB password in the reported backend's format, nothing left in the other one
+  local ext other
+  case "$(status_sealer)" in secure-enclave) ext=se other=key ;; file) ext=key other=se ;; *) return 1 ;; esac
+  sealed_slots | grep -qx "psql\.$ext" && ! sealed_slots | grep -q "\.$other\$"
+}
 
 client() {  # client seed|verify: the admin password goes from the state dir to the unprivileged client on stdin
   # shellcheck disable=SC2024  # deliberate: root opens the secret, the client only gets the stream
@@ -184,7 +192,7 @@ phase_accept() {
   check "CLI socket _vaulthalla 0660" test "$(perms "$RUN/cli.sock")" = "srw-rw---- _vaulthalla:_vaulthalla"
   check "DB password handoff consumed (sealed into the state dir)" not test -e "$RUN/db_password"
   check "uninstaller kept outside the receipt" test -x "$SUPPORT/uninstall.sh"
-  check "secrets sealed as .$SEALED blobs by the daemon, no .$PLAIN left" sealed_by_backend
+  check "secrets sealed by the daemon in the reported backend's format, nothing left in the other" sealed_by_backend
 
   say "== LaunchDaemons"
   for label in $PG $SERVER $WEB; do
@@ -256,7 +264,7 @@ phase_accept() {
   rc=0; out=$(as_client $PREFIX/bin/vh status 2>&1) || rc=$?
   printf '%s\n' "$out" | sed -n '1,20s/^/  /p'
   check "$CLIENT gets an answer from vh status (exit $rc)" test "$rc" -le 2
-  check "vh status reports secrets backend: $SEALER" reports_sealer
+  check "vh status reports secrets backend: secure-enclave (file only on a virtual Mac)" reports_sealer
   out=$(as_client $PREFIX/bin/vh vault list 2>&1) || true
   check "$CLIENT is bound to 'admin' and sees the acceptance vault" grep -q install_acceptance <<<"$out"
   accept_vh_fs
@@ -268,7 +276,7 @@ phase_accept() {
   check "ready after the upgrade" wait_for 120 server_ready
   check "verify after the upgrade: every byte kept" verify_within 120
   check "the admin binding survived the upgrade" sh -c "sudo -u $CLIENT -- $PREFIX/bin/vh vault list 2>&1 | grep -q install_acceptance"
-  check "the upgraded daemon still seals with $SEALER" sealed_by_backend
+  check "the upgraded daemon's secrets are all in the reported backend's format" sealed_by_backend
   if [ -f "$SUPPORT/caddy/Caddyfile" ]; then
     check "Caddy is back after the upgrade" wait_for 60 caddy_https_ok
     $PREFIX/bin/vh teardown caddy --purge 2>&1 | sed 's/^/  /' || true

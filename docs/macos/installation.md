@@ -114,7 +114,7 @@ sudo launchctl print system/sh.vaulthalla.server | grep -E 'state|pid'
   secrets backend: secure-enclave
 ```
 
-The server never mounts vaults on macOS (Finder access belongs to Vaulthalla Desktop, in development); that line is reported as it is rather than hidden. Master keys are sealed with the Mac's Secure Enclave, by the daemon on its first start (see [Disk Encryption And Key Protection](/macos/administration#disk-encryption-and-key-protection)). On a virtual Mac without a Secure Enclave the line reads `file (development: no hardware binding)`.
+The server never mounts vaults on macOS (Finder access belongs to Vaulthalla Desktop, in development); that line is reported as it is rather than hidden. Master keys are sealed with the Mac's Secure Enclave, by the daemon on its first start (see [Disk Encryption And Key Protection](/macos/administration#disk-encryption-and-key-protection)). Where the Secure Enclave can't be used (some virtual machines) the line reads `file (development: no hardware binding)`.
 
 ## What Gets Installed Where
 

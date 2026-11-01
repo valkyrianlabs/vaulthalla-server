@@ -29,9 +29,12 @@ Decisions awaiting the maintainer are `needs:review` issues #200–#206 on the R
 
 - `platform/darwin/Sealer.cpp` dispatches between `SecureEnclaveSealer.cpp` (default, reported `secure-enclave`) and
   `FileSealer.cpp` (development, reported `file`); declarations in `platform/darwin/SealerBackends.hpp`. meson
-  `-Ddarwin_sealer=secure-enclave|file` picks the preference (`VH_DARWIN_SEALER` in paths.h). A Mac with no
-  `AppleSEPManager` IOService (a VM, e.g. GitHub's hosted runners) falls back to `file` with an error log; health
-  says `file`. Never a silent fallback on hardware that has a SEP.
+  `-Ddarwin_sealer=secure-enclave|file` picks the preference (`VH_DARWIN_SEALER` in paths.h). Availability is a
+  functional probe, once per process (a throwaway key: create, wrap, unwrap; ~30 ms): where it fails the daemon falls
+  back to `file` with an error log naming the reason, and health says `file`. Not an IOKit check: Apple silicon VMs
+  (GitHub's `xcode-27` runners, 2026-11-01) have no `AppleSEPManager` IOService yet a virtual SEP that creates and
+  uses SE keys from a login session; whether it also works for a LaunchDaemon there is untested (cask-smoke accepts
+  either backend in a VM and records which).
 - SE format `<state>/.sealed_<name>.blob/<name>.se`: `VHSE` | v1 | u16 key len | SE key token object (`toid`, the
   CryptoKit `dataRepresentation`) | ECIES (`kSecKeyAlgorithmECIESEncryptionStandardVariableIVX963SHA256AESGCM`) of
   `<name>\0<secret>`. A fresh non-permanent P-256 key per seal, `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` +
@@ -48,7 +51,7 @@ Decisions awaiting the maintainer are `needs:review` issues #200–#206 on the R
   into the SE and deleted on first unseal; if both exist the active backend's file wins (it is written first).
 - Tests: `test_darwin_sealer.cpp` runs the SE cases from a login session (works on a real Mac) and skips them on VMs,
   where it prints whether the SEP probe and a real key attempt agree. cask-smoke checks the backend (`file` only when
-  `kern.hv_vmm_present=1`), the blob format, and a `launchctl kickstart -k` restart. Real-hardware proof of the package
+  `kern.hv_vmm_present=1`), that blobs match the reported backend, and a `launchctl kickstart -k` restart. Real-hardware proof of the package
   path (SE under launchd, 1.20.x file → SE upgrade, authrestart) is manual: it needs root on a real Mac.
 
 ## No server mount on macOS (#262)
