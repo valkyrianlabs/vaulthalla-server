@@ -67,6 +67,23 @@ std::vector<WsModel> fsModels() {
         "Directory or Symlink serializer (core/src/fs/model/*.cpp), so `type` says which members follow.",
         std::move(entry)));
 
+    out.push_back(model("FsChange",
+        "One change of fs.changes.list (ops::fs_changes::toJson(Change), core/src/ops/FsChanges.cpp): a journaled entry "
+        "mutation (migration 115) as the caller sees it.",
+        {uinteger("revision").desc("Commit-ordered; the cursor after this change."),
+         str("kind").oneOf({"create", "update", "rename", "move", "delete"})
+             .desc("update: content (files), target (symlinks), mode or hidden flag. A rename or move into the "
+                   "caller's view reads as create, out of it as delete."),
+         uinteger("entry_id").desc("The entry's id (fs_entry.id; stable across rename and move)."),
+         str("type").oneOf({"file", "directory", "symlink"}).nullable()
+             .desc("null when the entry was in no type table at the time."),
+         uinteger("parent_id").nullable().desc("The parent folder's entry id (for delete: where it was)."),
+         str("name"),
+         str("path").desc("Vault path after the change (for delete: where it was)."),
+         str("changed_at").desc("ISO-8601 UTC."),
+         str("old_path").opt().desc("rename and move: the vault path before."),
+         uinteger("old_parent_id").opt().nullable().desc("rename and move: the parent before.")}));
+
     out.push_back(model("FsEntryBase",
         "The listed directory or looked-up entry itself (`entry` of fs.dir.list / fs.metadata): fs::model::to_json"
         "(Entry) on the Entry base (core/src/fs/model/Entry.cpp), so it carries no type, mime_type, preview or counts "

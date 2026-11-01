@@ -1,6 +1,6 @@
 // Contract models: fs serializers against their declared shapes (see model_suites.hpp): FsEntry (a listing's
 // entries, dispatched to the File / Directory / Symlink serializer), FsEntryBase (the Entry base serializer that
-// `entry` of fs.dir.list / fs.metadata goes through) and PreviewPlan.
+// `entry` of fs.dir.list / fs.metadata goes through), PreviewPlan and FsChange (fs.changes.list).
 
 #include "model_suites.hpp"
 
@@ -8,6 +8,7 @@
 #include "fs/model/Entry.hpp"
 #include "fs/model/File.hpp"
 #include "fs/model/Symlink.hpp"
+#include "ops/FsChanges.hpp"
 
 #include <memory>
 #include <vector>
@@ -72,6 +73,21 @@ void checkFsModels(Checker& c) {
     c.check(json(static_cast<const fs::model::Entry&>(*dir)), "FsEntryBase", "fs.dir.list entry (directory)");
     c.check(json(static_cast<const fs::model::Entry&>(*file)), "FsEntryBase", "fs.metadata entry (file)");
     c.check(json(static_cast<const fs::model::Entry&>(*bare)), "FsEntryBase", "fs.metadata entry (bare file)");
+
+    db::query::fs::Change created{.revision = 12, .kind = "create", .vault_id = 3, .entry_id = 42, .parent_id = 7,
+                                  .entry_type = "file", .name = "report.pdf", .path = "/docs/report.pdf",
+                                  .changed_at = 1760000000};
+    c.check(ops::fs_changes::toJson(created), "FsChange", "fs.changes.list changes[] (create)");
+    auto moved = created;
+    moved.kind = "move";
+    moved.old_parent_id = 1;
+    moved.old_path = "/report.pdf";
+    c.check(ops::fs_changes::toJson(moved), "FsChange", "fs.changes.list changes[] (move)");
+    auto gone = created;
+    gone.kind = "delete";
+    gone.entry_type.reset();
+    gone.parent_id.reset();
+    c.check(ops::fs_changes::toJson(gone), "FsChange", "fs.changes.list changes[] (delete, unknown type)");
 }
 
 }
