@@ -7,7 +7,7 @@ Format: the first line is "# <release title>" WITHOUT a version number (vlr adds
 Everything after the title is the Markdown release body. Describe the resulting behavior
 for users and operators; keep it representative of what actually ships.
 -->
-# macOS: Secure Enclave key sealing
+# Secure Enclave keys, a live change feed and automatic Desktop pairing
 
 ## Master keys on macOS are sealed with the Secure Enclave
 
@@ -63,7 +63,14 @@ later) pairs through the server's own `vh` as you, so the device acts as the Vau
 
 ## Fixes
 
+- **Security: folder sizes no longer reveal hidden contents.** A folder's size (in the web console, `vh` and `stat`
+  on the mount) now counts only what you are allowed to see in it. Super admins and vault owners still see the full
+  totals (#269).
+- **The mounted filesystem never leaves a request hanging.** If the database was briefly unreachable, `rm`, `mv` and
+  `rmdir` on the mount could hang forever. They now fail with an error you can retry (#263).
 - **Health dashboard: FUSE permission denials are no longer errors.** A system process with no Vaulthalla account
   that looks at the mount (an ssh login's MOTD scripts, for example), or a user refused by RBAC, is the filesystem
   enforcing access as designed. These now count as expected errors, so they no longer raise "FUSE alertable error
   rate is above 10%". They still appear under all errors and errors by errno.
+- **CLI tables** line up with accented, CJK and emoji names, and never cut a character in half (#273).
+- **macOS uninstall** says which service it is waiting on while it stops (up to 75 s), instead of pausing silently.
