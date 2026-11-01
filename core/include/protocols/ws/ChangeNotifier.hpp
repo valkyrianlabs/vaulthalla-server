@@ -42,12 +42,12 @@ public:
 
     struct Refusal {
         uint32_t vault_id{};
-        std::string code;  // denied | not_found | limit
+        std::string code{};  // denied | not_found | limit
     };
 
     struct SubscribeResult {
-        std::vector<uint32_t> vault_ids;  // everything the session follows now, ascending
-        std::vector<Refusal> refused;
+        std::vector<uint32_t> vault_ids{};  // everything the session follows now, ascending
+        std::vector<Refusal> refused{};
     };
 
     ChangeNotifier();
