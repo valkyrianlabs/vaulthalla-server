@@ -35,6 +35,8 @@ brew trust valkyrianlabs/tap
 brew install --cask valkyrianlabs/tap/vaulthalla
 ```
 
+The install ends by opening Vaulthalla Desktop once, already set up with the server on this Mac: there is no pairing code to compare, because your macOS account is the proof. Desktop pairs through the server's `vh` as you, so it acts as the Vaulthalla account you're bound to (`admin`, for the person who installed the server). See [This Mac Pairs On Its Own](/admin/devices#this-mac-pairs-on-its-own). Upgrades don't open it again.
+
 `vaulthalla-server` and `vaulthalla-desktop` alone need no `brew trust`: name them in full and Homebrew taps `valkyrianlabs/tap` and trusts the cask you named. The server asks for your password and installs the package with macOS's `installer`; Vaulthalla Desktop updates itself.
 :::
 

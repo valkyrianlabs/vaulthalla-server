@@ -24,6 +24,7 @@
 #include <ctime>
 #include <set>
 #include <thread>
+#include <utility>
 
 // `vh device ...`: parsing and rendering only. Who may do what, and what it changes, is ops::devices.
 namespace vh::protocols::shell::commands {
@@ -159,14 +160,36 @@ CommandResult waitAndApprove(const CommandCall& call) {
     }
 }
 
+// `vh device pair --json`: opens the window and returns at once with what Vaulthalla Desktop on this machine reads to
+// pair itself through `vh` (its LocalPairing): where the listener is, and the node id and server key it should find
+// there. Number matching still decides; the key only lets Desktop refuse another server before it sends anything.
+std::string pairJson(const vh::device::PairingWindow& window, const devices::PairingBootstrap& bootstrap) {
+    const auto cfg = config::Registry::get().device_server;
+    return jsonText({{"window", {{"opened_at", static_cast<int64_t>(window.opened_at)},
+                                 {"expires_at", static_cast<int64_t>(window.expires_at)}}},
+                     {"port", cfg.port},
+                     {"remote", cfg.remote},
+                     {"listening", bootstrap.endpoints.listening},
+                     {"node_id", bootstrap.node_id},
+                     {"server_spki_sha256", bootstrap.server_spki_sha256.empty()
+                                                ? nlohmann::json(nullptr)
+                                                : nlohmann::json(bootstrap.server_spki_sha256)}});
+}
+
 CommandResult handlePair(const CommandCall& call) {
     validatePositionals(call, resolveUsage({"device", "pair"}));
+    const bool json = hasFlag(call, "json");
     if (hasFlag(call, "close"))
         return runOp("device pair", [&] { return devices::closeWindow(call.user, hasFlag(call, "any")); },
-                     [](const bool closed) {
+                     [&](const bool closed) {
+            if (json) return jsonText({{"closed", closed}});
             return std::string(closed ? "Pairing window closed; its requests expired.\n"
                                       : "No pairing window of yours was open.\n");
         });
+    if (json)
+        return runOp("device pair",
+                     [&] { return std::pair{devices::openWindow(call.user), devices::pairingBootstrap(call.user)}; },
+                     [](const auto& opened) { return pairJson(opened.first, opened.second); });
 
     vh::device::PairingWindow window;
     try {

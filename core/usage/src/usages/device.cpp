@@ -30,12 +30,17 @@ std::shared_ptr<CommandUsage> pair(const std::weak_ptr<CommandUsage>& parent) {
     cmd->effect = CommandEffect::Write;
     cmd->aliases = {"pair"};
     cmd->description = "Open a 10-minute pairing window for your account. Interactively, wait for a device and approve "
-                       "it by the code it shows; otherwise approve with `vh device approve`.";
+                       "it by the code it shows; otherwise approve with `vh device approve`. With --json, only open it "
+                       "and print what a Desktop on this machine needs to pair (device port, node id, server key).";
     cmd->optional_flags = {Flag::WithAliases("close", "Close your pairing window instead", {"close"}),
                            Flag::WithAliases("any", "With --close: close whoever's window is open (super admins)",
-                                             {"any"})};
+                                             {"any"}),
+                           Flag::WithAliases("json_output", "Open the window without waiting and print it as JSON",
+                                             {"json", "j"})};
     cmd->examples = {
         {"vh device pair", "Open a pairing window, then pick the code your Mac shows when it asks to pair."},
+        {"vh device pair --json", "Open the window without waiting and print its expiry, port, node id and server key "
+                                  "as JSON (what Vaulthalla Desktop on this Mac reads to pair itself)."},
         {"vh device pair --close", "Close your pairing window; its requests expire."},
         {"vh device pair --close --any", "Close another user's pairing window (super admins)."},
     };

@@ -43,6 +43,21 @@ folders again.
   last million changes).
 - The journal adds one row per change. The database migration (115) is safe on upgraded installs.
 
+## Vaulthalla Desktop sets up this Mac's server on its own
+
+`brew install --cask valkyrianlabs/tap/vaulthalla` now ends with Vaulthalla Desktop open and already connected to
+the server on the same Mac. There is no pairing code to compare: your macOS account is the proof. Desktop (0.5.0 and
+later) pairs through the server's own `vh` as you, so the device acts as the Vaulthalla user your account is bound to
+(the person who installed the server is `admin`), and it shows up in your device list like any other.
+
+- The meta cask opens Desktop once, on its first install; upgrades don't open it again. Desktop also does this
+  whenever it starts, or when a server is installed on its Mac while it runs, so installing the two casks separately
+  works too. A Mac with only one of them is unchanged.
+- Nothing on the network is trusted more than before: it is the same number-matched pairing you could run in
+  Terminal, approved over the local `vh` socket, and the connection is pinned to the server key `vh` reports.
+- New for scripts: `vh device pair --json` opens your pairing window without waiting and prints its expiry, the
+  device port, the node id and the server key.
+
 ## Fixes
 
 - **Health dashboard: FUSE permission denials are no longer errors.** A system process with no Vaulthalla account

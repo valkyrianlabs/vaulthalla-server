@@ -94,6 +94,28 @@ The code is what proves the Mac is talking to this node and not to something in 
 you didn't start, and never pick a code the Mac isn't showing.
 :::
 
+### This Mac pairs on its own
+
+When Vaulthalla Desktop runs on the same Mac as the server, it sets that server up by itself: at launch, or as soon
+as a server is installed while it runs. The `valkyrianlabs/tap/vaulthalla` cask installs both and opens Desktop once,
+so the install ends with this Mac's server already in Desktop. There is no code to compare and nothing to click.
+
+The trust comes from your macOS account. Desktop runs `vh` as you, over the daemon's local socket, where the daemon
+recognizes your account from the kernel and acts as the Vaulthalla user bound to it (the person who installed the
+server is bound to `admin`; see [CLI access](/macos/installation#what-the-installer-does)). Nothing on the network is
+trusted more than before: it is the pairing you could run in Terminal, done for you.
+
+1. `vh device pair --json` opens your pairing window and returns the device listener's port, the node id and the
+   server key.
+2. Desktop saves the node at `127.0.0.1` and that port, and connects pinned to that key, so another server is refused
+   before anything is sent.
+3. Desktop confirms with `vh device pending --json` that the request carries this Mac's key and code, approves it
+   with `vh device approve <request> --code <code>`, and closes the window.
+
+The device then appears in your list like any other and is managed and revoked the same way. Desktop doesn't do this
+if your account isn't enrolled for `vh` (it isn't in the `_vaulthalla` group, or no Vaulthalla user is bound to it),
+after you removed this Mac's server from Desktop, or with **Keep me signed in on this Mac** off.
+
 ## What a paired device can reach
 
 Over its connection to the device listener, a paired device can use the web console's operations (as its account),

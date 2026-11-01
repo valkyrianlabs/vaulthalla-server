@@ -13,7 +13,8 @@
 #   installed; `brew uninstall` stops everything, keeps the data.
 # - vaulthalla, the meta cask: refused until the tap is trusted (Homebrew loads dependency casks only from a trusted
 #   tap); then it installs vaulthalla-server (the server comes back on the kept data) and vaulthalla-desktop (the
-#   published app, signed by the Valkyrian Labs LLC team); uninstalling it leaves both.
+#   published app, signed by the Valkyrian Labs LLC team) and opens Desktop once (its Caskroom marker); uninstalling
+#   it leaves both and drops the marker.
 # - `brew uninstall --zap` of the two removes the service, its data, the _vaulthalla account and the app.
 # Bash 3.2 compatible.
 set -euo pipefail
@@ -48,6 +49,7 @@ account_gone() { ! dscl . -read /Users/_vaulthalla >/dev/null 2>&1; }
 APP=/Applications/Vaulthalla.app
 no_app() { [ ! -e "$APP" ]; }
 has_app() { [ -d "$APP" ]; }
+OPENED_MARKER="$(brew --caskroom)/vaulthalla/.desktop-opened"
 installed() { brew list --cask --versions "${1##*/}" >/dev/null 2>&1; }  # brew list takes the token, not tap/token
 nothing_installed() { no_service && no_app; }
 status_backend() { as_console /usr/local/bin/vh status 2>/dev/null | awk -F': ' '/secrets backend:/ {print $2; exit}' | awk '{print $1}'; }
@@ -139,11 +141,18 @@ check "the admin binding survived" admin_bound
 check "the reinstalled server reports the same secrets backend ($FIRST_BACKEND)" same_backend
 check "Vaulthalla.app is installed" has_app
 check "the app is signed by the Valkyrian Labs LLC team" app_signed
+# The meta cask opens Desktop once (it then pairs with this server through vh, no code); upgrades don't reopen it.
+check "the meta cask opened Desktop once (its marker is in the Caskroom)" test -e "$OPENED_MARKER"
+if pgrep -x Vaulthalla >/dev/null; then echo "::notice::Desktop is running after the meta cask's install"
+else echo "::notice::Desktop isn't running after the meta cask's install (no login session for open?)"; fi
 
 echo "== brew uninstall --cask vaulthalla (leaves the server and the app)"
 brew uninstall --cask "$TAP/vaulthalla"
 check "the server keeps running" ready
 check "the app stays" has_app
+check "the marker goes with the meta cask" test ! -e "$OPENED_MARKER"
+# Quit the Desktop the meta cask opened (by its exact pid) before its cask is zapped.
+for pid in $(pgrep -x Vaulthalla || true); do kill "$pid" 2>/dev/null || true; done
 
 echo "== brew uninstall --zap --cask vaulthalla-desktop vaulthalla-server (removes everything)"
 brew uninstall --zap --cask "$TAP/vaulthalla-desktop" "$TAP/vaulthalla-server"

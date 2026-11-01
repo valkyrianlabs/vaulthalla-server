@@ -348,6 +348,7 @@ the host and are estimates, not provider invoices.
 
 ```bash
 vh device pair                                   # open a 10-minute pairing window and approve by number matching
+vh device pair --json                            # only open it; print its expiry, device port, node id and server key
 vh device pending
 vh device approve 7f3a9c1d2e4b6a80 --code 482913
 vh device deny 7f3a9c1d2e4b6a80

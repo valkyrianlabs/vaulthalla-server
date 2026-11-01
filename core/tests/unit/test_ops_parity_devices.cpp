@@ -205,6 +205,40 @@ TEST_F(DeviceParityTest, PairingWindowsOnBothSurfaces) {
     EXPECT_FALSE(ops::devices::pending(bob).window);
 }
 
+// `vh device pair --json`, what Vaulthalla Desktop on the same machine runs to pair itself through `vh`: it opens the
+// window without waiting (even with a terminal attached) and names the same listener, node and server key as the
+// console's device.pairing.open.
+TEST_F(DeviceParityTest, PairJsonOpensTheWindowAndNamesTheNode) {
+    const auto alice = seedUser("dp_json");
+    const auto bob = seedUser("dp_json_b");
+
+    const auto [code, out] = cli("device pair --json", alice);
+    ASSERT_EQ(code, 0) << out;
+    const auto opened = json::parse(out);
+    const auto window = ops::devices::pending(alice).window;
+    ASSERT_TRUE(window);
+    EXPECT_EQ(opened.at("window").at("expires_at").get<int64_t>(), static_cast<int64_t>(window->expires_at));
+    EXPECT_EQ(opened.at("window").at("expires_at").get<int64_t>() - opened.at("window").at("opened_at").get<int64_t>(),
+              600);
+    const auto console = handler::Devices::pairingOpen(ws(alice));  // the owner reopening extends it
+    EXPECT_EQ(opened.at("port"), console.at("port"));
+    EXPECT_EQ(opened.at("remote"), console.at("remote"));
+    EXPECT_EQ(opened.at("node_id"), console.at("node_id"));
+    EXPECT_FALSE(opened.at("node_id").get<std::string>().empty());
+    EXPECT_EQ(opened.at("server_spki_sha256"), console.at("server_spki_sha256"));
+    EXPECT_EQ(opened.at("listening"), console.at("endpoints").at("listening"));
+
+    // Refusals stay refusals (exit 2, the reason on stderr), so a Desktop can tell them from an old `vh`.
+    const auto [refused, why] = cli("device pair --json", bob);
+    EXPECT_EQ(refused, 2) << why;
+    EXPECT_FALSE(ops::devices::pending(bob).window);
+
+    const auto [closedCode, closed] = cli("device pair --close --json", alice);
+    ASSERT_EQ(closedCode, 0) << closed;
+    EXPECT_TRUE(json::parse(closed).at("closed").get<bool>());
+    EXPECT_FALSE(json::parse(cli("device pair --close --json", alice).second).at("closed").get<bool>());
+}
+
 TEST_F(DeviceParityTest, NumberMatchingOnBothSurfaces) {
     const auto alice = seedUser("dp_nm");
 

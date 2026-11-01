@@ -96,6 +96,17 @@ Provider extension that talks to the daemon over the mTLS device listener under 
   copies dylibs a build links from `~/.cache` (PDFium) into the prefix: the role account can't read a 0750 home.
   `make dev-plan` prints every privileged step. A production install is never touched by any of it.
 
+## Desktop pairs with the local server on its own
+
+The macOS account is an authenticated space (Cooper's trust model), so Vaulthalla Desktop on the server's Mac pairs
+with it with no code (desktop `VHNodes.LocalNodeAutopair`): `vh device pair --json` (opens the window; port, node id,
+server key), a node at `127.0.0.1:<port>` pinned to that key, then the usual number match approved through
+`vh device pending --json` / `vh device approve`. `vh` is authorized by peer uid on `run/cli.sock`; the installing
+console user is enrolled and bound to `admin` by the postinstall. The `vaulthalla` meta cask's `postflight_steps` open
+Desktop once (`.desktop-opened` marker in its Caskroom): Homebrew 7 runs install steps sandboxed (fake `HOME`, home
+unreadable, no network), so the pairing can't run from the cask itself; `open` goes through LaunchServices and the app
+runs outside the sandbox. Contract: `test_macos_pkg_contract.py`; parity: `DeviceParityTest.PairJsonOpensTheWindowAndNamesTheNode`.
+
 ## Build and test on a Mac
 
 `tools/macos/bootstrap.sh` (Brewfile, pinned PDFium `chromium/8066`, `libpqxx-vh.pc` alias over Homebrew's shared
