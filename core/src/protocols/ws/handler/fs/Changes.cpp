@@ -1,6 +1,7 @@
 #include "protocols/ws/handler/fs/Changes.hpp"
 
 #include "ops/FsChanges.hpp"
+#include "protocols/ws/ChangeNotifier.hpp"
 #include "protocols/ws/Session.hpp"
 
 #include <nlohmann/json.hpp>
@@ -20,6 +21,19 @@ uint64_t unsignedMember(const json& payload, const char* name, const uint64_t fa
     return payload.at(name).get<uint64_t>();
 }
 
+std::vector<uint32_t> vaultIds(const json& payload) {
+    if (!payload.is_object() || !payload.contains("vault_ids") || !payload.at("vault_ids").is_array())
+        throw ops::Invalid("vault_ids must be a list of vault ids");
+    std::vector<uint32_t> out;
+    for (const auto& id : payload.at("vault_ids")) {
+        if (!id.is_number_unsigned() || id.get<uint64_t>() > UINT32_MAX) throw ops::Invalid("vault_ids must be a list of vault ids");
+        out.push_back(id.get<uint32_t>());
+    }
+    if (out.size() > ChangeNotifier::kMaxVaults)
+        throw ops::Invalid("at most " + std::to_string(ChangeNotifier::kMaxVaults) + " vaults per request");
+    return out;
+}
+
 }
 
 json Changes::list(const json& payload, const std::shared_ptr<Session>& session) {
@@ -30,6 +44,20 @@ json Changes::list(const json& payload, const std::shared_ptr<Session>& session)
                                          .limit = unsignedMember(payload, "limit", ops::fs_changes::kDefaultLimit)};
     if (payload.contains("since") && !payload.at("since").is_null()) request.since = unsignedMember(payload, "since", 0);
     return ops::fs_changes::toJson(ops::fs_changes::list(session->user, request));
+}
+
+json Changes::subscribe(const json& payload, const std::shared_ptr<Session>& session) {
+    const auto ids = vaultIds(payload);
+    const auto result = ChangeNotifier::instance()->subscribe(session, ids);
+    auto refused = json::array();
+    for (const auto& r : result.refused) refused.push_back({{"vault_id", r.vault_id}, {"code", r.code}});
+    return {{"vault_ids", result.vault_ids}, {"refused", std::move(refused)}};
+}
+
+json Changes::unsubscribe(const json& payload, const std::shared_ptr<Session>& session) {
+    std::optional<std::vector<uint32_t>> ids;
+    if (payload.is_object() && payload.contains("vault_ids") && !payload.at("vault_ids").is_null()) ids = vaultIds(payload);
+    return {{"vault_ids", ChangeNotifier::instance()->unsubscribe(session, ids)}};
 }
 
 }

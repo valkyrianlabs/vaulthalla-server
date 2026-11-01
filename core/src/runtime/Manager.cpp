@@ -10,6 +10,7 @@
 #include "protocols/ProtocolService.hpp"
 #include "protocols/device/Service.hpp"
 #include "protocols/s3/GatewayService.hpp"
+#include "protocols/ws/ChangeNotifier.hpp"
 #include "protocols/shell/Server.hpp"
 #include "protocols/ws/ConnectionLifecycleManager.hpp"
 #include "runtime/Deps.hpp"
@@ -42,6 +43,7 @@ constexpr std::array kBaseStartOrder{
     "LogRotationService",
     "StatsSnapshotService",
     "OperatorEmailService",
+    "FsChangeNotifier",
     "ConnectionLifecycleManager",
     "ProtocolService",
     "DeviceServer",
@@ -54,6 +56,7 @@ constexpr std::array kBaseStopOrder{
     "ProtocolService",
     "ShellServer",
     "ConnectionLifecycleManager",
+    "FsChangeNotifier",
     "OperatorEmailService",
     "StatsSnapshotService",
     "VaultRetentionService",
@@ -99,6 +102,7 @@ Manager::Manager()
     services_["StatsSnapshotService"] = statsSnapshotService;
     services_["OperatorEmailService"] = operatorEmailService;
     services_["UpstreamEventService"] = upstreamEventService;
+    services_["FsChangeNotifier"] = protocols::ws::ChangeNotifier::instance();
 
     // A test instance serves `vh` only on a private socket (VH_TEST_CLI_SOCKET), never the system one.
     if (!paths::testMode || paths::testCliSocket) {

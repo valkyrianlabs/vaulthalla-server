@@ -433,7 +433,7 @@ void Session::close() {
     asio::post(strand_, [self]() mutable {
         self->closeAfterWrite_ = true;
         if (self->writing_) return;
-        self->writeQueue_.clear();
+        self->clearWriteQueue();
         self->closeOnStrand();
     });
 }
@@ -459,14 +459,31 @@ void Session::send(json message) {
         sendAccessToken_ = false;
     }
 
-    auto payload = message.dump();
+    enqueue(message.dump());
+}
+
+void Session::pushEvent(const json& event) {
+    if (closing_.load(std::memory_order_acquire)) return;
+    enqueue(event.dump());
+}
+
+void Session::enqueue(std::string payload) {
+    queuedFrames_.fetch_add(1, std::memory_order_acq_rel);
     auto self = shared_from_this();
 
     asio::post(strand_, [self, payload = std::move(payload)]() mutable {
-        if (self->closing_.load(std::memory_order_acquire) || !self->stream_) return;
+        if (self->closing_.load(std::memory_order_acquire) || !self->stream_) {
+            self->queuedFrames_.fetch_sub(1, std::memory_order_acq_rel);
+            return;
+        }
         self->writeQueue_.push_back(std::move(payload));
         self->maybeStartWrite();
     });
+}
+
+void Session::clearWriteQueue() {
+    queuedFrames_.fetch_sub(writeQueue_.size(), std::memory_order_acq_rel);
+    writeQueue_.clear();
 }
 
 void Session::closeOnStrand() {
@@ -523,7 +540,7 @@ void Session::maybeStartWrite() {
 void Session::doWrite() {
     if (!stream_ || closeStarted_) {
         writing_ = false;
-        writeQueue_.clear();
+        clearWriteQueue();
         return;
     }
 
@@ -542,15 +559,18 @@ void Session::onWrite(const beast::error_code& ec, std::size_t) {
     if (ec) {
         logFail("Write error", ec);
         writing_ = false;
-        writeQueue_.clear();
+        clearWriteQueue();
         if (closeAfterWrite_) closeOnStrand();
         return;
     }
 
-    if (!writeQueue_.empty()) writeQueue_.pop_front();
+    if (!writeQueue_.empty()) {
+        writeQueue_.pop_front();
+        queuedFrames_.fetch_sub(1, std::memory_order_acq_rel);
+    }
     if (closeAfterWrite_) {
         writing_ = false;
-        writeQueue_.clear();
+        clearWriteQueue();
         closeOnStrand();
         return;
     }

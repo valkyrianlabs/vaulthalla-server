@@ -76,6 +76,10 @@ public:
                                                                   std::shared_ptr<identities::User> deviceUser,
                                                                   std::function<void()> onClose);
     void send(json message);
+    // An unsolicited frame (fs.changed): queued like an answer, but never carries the access token an answer may owe.
+    void pushEvent(const json& event);
+    // Frames queued and not yet written (answers and events); readable off the strand, for push backpressure.
+    [[nodiscard]] std::size_t queuedFrames() const noexcept { return queuedFrames_.load(std::memory_order_acquire); }
     void close();
     // Closes once the reply to the command being handled has gone out (a device unpairing itself gets its answer).
     void closeAfterReply();
@@ -127,6 +131,8 @@ private:
     void doRead();
     void onRead(const beast::error_code& ec, std::size_t bytesRead);
 
+    void enqueue(std::string payload);
+    void clearWriteQueue();  // on strand
     void maybeStartWrite();
     void doWrite();
     void onWrite(const beast::error_code& ec, std::size_t bytesWritten);
@@ -170,6 +176,7 @@ private:
 
     bool writing_ = false;                 // only touched on strand
     std::deque<std::string> writeQueue_;   // only touched on strand
+    std::atomic<std::size_t> queuedFrames_{0};  // posted to the strand or in writeQueue_
     bool closeAfterWrite_ = false;         // only touched on strand
     bool closeStarted_ = false;            // only touched on strand
     bool handshakeDone_ = false;           // only touched on strand
