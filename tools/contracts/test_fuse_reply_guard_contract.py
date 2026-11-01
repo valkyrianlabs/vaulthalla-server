@@ -50,5 +50,6 @@ class FuseReplyGuardContract(unittest.TestCase):
         self.assertIn("fuse_lowlevel_ops ops = getOperations();", SERVICE.read_text(),
                       "the mount must register the guarded table from getOperations()")
 
+
 if __name__ == "__main__":
     unittest.main()

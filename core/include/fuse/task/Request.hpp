@@ -66,9 +66,11 @@ private:
             try {
                 std::rethrow_exception(std::current_exception());
             } catch (const std::exception& e) {
-                log::Registry::fuse()->error("[fuse] op threw before replying (answered errno {}): {}", errnum, e.what());
+                log::Registry::fuse()->error("[fuse::task::Guard] op threw before replying (answered errno {}): {}",
+                                             errnum, e.what());
             } catch (...) {
-                log::Registry::fuse()->error("[fuse] op threw a non-exception before replying (answered errno {})", errnum);
+                log::Registry::fuse()->error(
+                    "[fuse::task::Guard] op threw a non-exception before replying (answered errno {})", errnum);
             }
         } catch (...) {} // the reply still goes out
     }
