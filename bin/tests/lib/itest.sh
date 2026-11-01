@@ -134,12 +134,22 @@ itest_preflight() {
   fi
 }
 
-# itest_ensure_build DIR TARGET... : configure DIR with ITEST_BUILD_OPTS if it has no build.ninja, re-configure only the
-# options that differ, then compile just the targets. Never with sudo (root-owned files would break later builds).
+# itest_source_fingerprint ROOT: the set of C++ files core/meson.build discovers. Meson lists sources with `find` at
+# configure time, so a build directory configured before a .cpp was added (or removed) builds a stale list and fails to
+# link (#270). Paths only, sorted: contents are ninja's business. The test builds keep -Ddb_tests at its default (true),
+# so the db-only tier marker never changes which files are built.
+itest_source_fingerprint() {
+  (cd "$1/core" && find . -type f -name '*.cpp' | LC_ALL=C sort | cksum)
+}
+
+# itest_ensure_build DIR TARGET... : configure DIR with ITEST_BUILD_OPTS if it has no build.ninja; re-configure it when
+# options differ or the source set changed since it was last configured (DIR/.itest-sources), then compile just the
+# targets. Never with sudo (root-owned files would break later builds).
 itest_ensure_build() {
-  local dir="$1" root opt key want have changed=()
+  local dir="$1" root opt key want have sources changed=()
   shift
   root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+  sources="$(itest_source_fingerprint "$root")"
   if [[ ! -f "$dir/build.ninja" ]]; then
     itest_log "configuring $dir"
     meson setup "$dir" "$root" "${ITEST_BUILD_OPTS[@]}" >/dev/null
@@ -156,9 +166,13 @@ print(",".join(v) if isinstance(v, list) else str(v).lower() if isinstance(v, bo
     done
     if [[ ${#changed[@]} -gt 0 ]]; then
       itest_log "re-configuring $dir: ${changed[*]}"
-      meson configure "$dir" "${changed[@]}" >/dev/null
+      meson setup --reconfigure "$dir" "$root" "${changed[@]}" >/dev/null
+    elif [[ "$(cat "$dir/.itest-sources" 2>/dev/null)" != "$sources" ]]; then
+      itest_log "re-configuring $dir: the set of source files changed"
+      meson setup --reconfigure "$dir" "$root" >/dev/null
     fi
   fi
+  printf '%s\n' "$sources" >"$dir/.itest-sources"
   meson compile -C "$dir" "$@" >/dev/null || meson compile -C "$dir" "$@"
 }
 
