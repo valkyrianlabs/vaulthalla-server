@@ -26,6 +26,8 @@ class MacosPackageScripts(unittest.TestCase):
             self.assertIn("--apply", call)
         self.assertLess(text.index("--remove --apply"), text.index("pkgutil --only-files"))
         self.assertIn("is still loaded", text)
+        # The wait for launchd to stop the daemons (up to 75 s) is announced, so it doesn't look like a hang.
+        self.assertIn('echo "Waiting for $label to stop', text)
 
     def test_payload_and_web_console_are_readable(self) -> None:
         self.assertIn('chmod -R u+rwX,go+rX,go-w "$ROOT"', (PKG / "build-pkg.sh").read_text())

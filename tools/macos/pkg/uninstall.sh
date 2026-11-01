@@ -14,10 +14,12 @@ case "${1:-}" in --purge) PURGE=true ;; '') ;; *) echo "usage: uninstall.sh [--p
 # deleted while a daemon might still be running.
 if [ "$PURGE" = true ]; then "$SUPPORT/vaulthalla-provision" --remove --purge --apply
 else "$SUPPORT/vaulthalla-provision" --remove --apply; fi
-# bootout returns while launchd still lets a daemon exit (up to its ExitTimeOut: 60 s for PostgreSQL).
+# bootout returns while launchd still lets a daemon exit (up to its ExitTimeOut: 60 s for PostgreSQL). Say so, or the
+# silent wait looks like a hang.
 for label in sh.vaulthalla.caddy sh.vaulthalla.server sh.vaulthalla.web sh.vaulthalla.postgres; do
   i=0
   while /bin/launchctl print "system/$label" >/dev/null 2>&1; do
+    [ "$i" -eq 0 ] && echo "Waiting for $label to stop (up to 75 s)..."
     i=$((i + 1))
     if [ "$i" -gt 75 ]; then echo "uninstall.sh: $label is still loaded; stopping" >&2; exit 1; fi
     sleep 1
