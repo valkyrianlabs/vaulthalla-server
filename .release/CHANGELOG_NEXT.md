@@ -7,5 +7,3 @@ Format: one "- " bullet per change (concise, technical). Indent continuation lin
 Optional "## Section" headings group bullets; if used, every bullet must be under one.
 One level of nested "  - " detail bullets is allowed. Consolidate; don't paste commit logs.
 -->
-- macOS release: `cask-smoke.sh` checks installed casks by token (`brew list` refuses `tap/token`), which stopped
-  1.20.1 before its package and casks were published.

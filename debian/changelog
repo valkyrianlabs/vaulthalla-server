@@ -1,3 +1,11 @@
+vaulthalla (1.20.2-1) unstable; urgency=high
+
+  * macOS release: `cask-smoke.sh` checks installed casks by token (`brew list`
+    refuses `tap/token`), which stopped 1.20.1 before its package and casks
+    were published.
+
+ -- Cooper Larson <cooper@valkyrianlabs.com>  Sun, 01 Nov 2026 17:57:54 +0000
+
 vaulthalla (1.20.1-1) unstable; urgency=high
 
   * macOS: `valkyrianlabs/tap/vaulthalla` is a meta cask depending on
