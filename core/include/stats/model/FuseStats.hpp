@@ -141,12 +141,18 @@ public:
     void error(int errnum) noexcept;
     void cancel() noexcept;
 
+    // An op that throws before replying is answered by fuse::task::Guard (#263). Its timer, destroyed while the
+    // exception unwinds, can't know that errno: it leaves the measurement with its thread, and the guard records it
+    // here as an error with the errno it answered (never as a success).
+    static void recordUnanswered(int errnum) noexcept;
+
 private:
     [[nodiscard]] std::uint64_t elapsedUs() const noexcept;
 
     FuseStats* stats_ = nullptr;
     FuseOperation op_ = FuseOperation::Unknown;
     std::chrono::steady_clock::time_point start_{};
+    int uncaught_ = 0;
     bool completed_ = false;
 };
 
