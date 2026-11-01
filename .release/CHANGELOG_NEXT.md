@@ -19,6 +19,14 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
 - FUSE stats: a refusal by the permission model (a calling uid with no Vaulthalla user, or an RBAC denial) counts as
   an expected error for every op, not an alertable one. System processes that stat every mount (MOTD scripts, ssh
   logins) no longer put the Health dashboard's FUSE card into error. EACCES from anything else stays alertable.
+- `vh device pair --json`: opens the caller's pairing window without waiting (a terminal attached or not) and prints
+  `window` (`opened_at`, `expires_at`), `port`, `remote`, `listening`, `node_id` and `server_spki_sha256`, what
+  Vaulthalla Desktop on the same Mac reads to pair itself through `vh` with no code; `--close --json` prints
+  `{"closed": bool}`. Refusals stay exit 2 on stderr.
+- macOS: the `vaulthalla` meta cask's `postflight_steps` open Vaulthalla Desktop once on first install (a marker in
+  its Caskroom; upgrades don't reopen it, the open may fail without failing the install). Desktop 0.5.0+ then pairs
+  with the local server through `vh` as the console user (trust model: the macOS account is the authenticated space).
+  cask-smoke checks the marker and quits Desktop before zapping it.
 - macOS: master keys are sealed with the Secure Enclave by default (`secrets_backend` `secure-enclave`; #290): a
   non-permanent SE P-256 key per secret (AfterFirstUnlockThisDeviceOnly, private-key usage), ECIES X9.63-SHA256
   AES-GCM, stored as `<state>/.sealed_<name>.blob/<name>.se`; created and opened only by the daemon under launchd.

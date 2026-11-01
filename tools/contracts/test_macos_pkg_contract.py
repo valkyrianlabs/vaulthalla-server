@@ -6,7 +6,9 @@
   container with a restrictive umask: EACCES on public/);
 - the Homebrew casks use the current `depends_on macos:` syntax;
 - `vaulthalla` is a meta cask over vaulthalla-server and vaulthalla-desktop: the server package never carries the
-  Desktop app, so neither release pins the other.
+  Desktop app, so neither release pins the other;
+- the meta cask alone opens Desktop, once, on its first install (Desktop then pairs with this Mac's server through the
+  server's `vh`, with no code): never on upgrades, never failing the install, never as root.
 """
 from __future__ import annotations
 
@@ -50,6 +52,25 @@ class MacosPackageScripts(unittest.TestCase):
         for artifact in (r"^\s*pkg ", r"^\s*app ", r"^\s*uninstall ", r"^\s*zap ", "choices:", "conflicts_with"):
             self.assertNotRegex(meta, re.compile(artifact, re.M))
         self.assertNotIn("conflicts_with", (PKG / "homebrew" / "vaulthalla-server.rb.in").read_text())
+
+    def test_the_meta_cask_opens_desktop_once(self) -> None:
+        meta = (PKG / "homebrew" / "vaulthalla.rb.in").read_text()
+        # Homebrew 7: declarative install steps only (`brew style`'s Cask/InstallSteps), run in its sandbox.
+        self.assertNotRegex(meta, r"^\s*postflight do", "a legacy postflight block")
+        steps = re.search(r"^  postflight_steps do\n(.*?)^  end\n", meta, re.M | re.S)
+        self.assertIsNotNone(steps, "the meta cask has postflight steps")
+        body = steps.group(1)
+        self.assertIn('run "/usr/bin/open", args: ["-a", "{{appdir}}/Vaulthalla.app"], must_succeed: false', body)
+        # Once: the marker lives in the Caskroom (kept across upgrades, gone with the cask) and guards the open.
+        self.assertIn('unless_path_exists ".desktop-opened", base: :caskroom_path do', body)
+        self.assertIn('touch ".desktop-opened", base: :caskroom_path', body)
+        self.assertLess(body.index("unless_path_exists"), body.index('run "/usr/bin/open"'))
+        self.assertIn('if_path_exists "Vaulthalla.app", base: :appdir do', body)
+        self.assertNotRegex(body, r"sudo|network_access")
+        self.assertIn("no pairing code", meta)
+        # The server cask stays usable alone: it never reaches for Desktop.
+        server = (PKG / "homebrew" / "vaulthalla-server.rb.in").read_text()
+        self.assertNotRegex(server, r"postflight|Vaulthalla\.app")
 
     def test_the_meta_cask_records_the_checksum_of_what_it_downloads(self) -> None:
         text = (PKG / "render-cask.sh").read_text()

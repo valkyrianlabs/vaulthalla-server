@@ -21,10 +21,25 @@ cask "vaulthalla" do
 
   stage_only true
 
+  # Opens Vaulthalla Desktop once, on this cask's first install, so the install ends with Desktop set up with this
+  # Mac's server: at launch Desktop pairs with it through the server's `vh`, as the person installing (no pairing
+  # code: the server's installer bound their macOS account to its 'admin'). Install steps are sandboxed away from the
+  # home folder, so Desktop does the pairing itself, outside it. Upgrades don't open it again (the marker stays in
+  # the Caskroom until this cask is uninstalled); without a login session `open` fails and Desktop pairs when opened.
+  postflight_steps do
+    unless_path_exists ".desktop-opened", base: :caskroom_path do
+      if_path_exists "Vaulthalla.app", base: :appdir do
+        run "/usr/bin/open", args: ["-a", "{{appdir}}/Vaulthalla.app"], must_succeed: false
+      end
+      touch ".desktop-opened", base: :caskroom_path
+    end
+  end
+
   caveats <<~EOS
     Vaulthalla is installed as two casks, which upgrade on their own:
       valkyrianlabs/tap/vaulthalla-server   the service, web console and vh CLI (`brew upgrade`)
       valkyrianlabs/tap/vaulthalla-desktop  the app (updates itself)
+    Vaulthalla Desktop sets itself up with this server when it opens: no pairing code to compare.
     Uninstalling this cask leaves both; uninstall them by name.
   EOS
 end

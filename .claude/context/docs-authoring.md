@@ -43,7 +43,8 @@ filesystem access, encryption, secrets/key export, backup & recovery, S3 gateway
   `./bin/vh/install.sh`. Source installs (`make install` / `make dev`) are development-only.
 - Install (macOS, Apple Silicon): casks `valkyrianlabs/tap/vaulthalla-server` (server, macOS 14+),
   `…/vaulthalla-desktop` (app, macOS 27+) and the `…/vaulthalla` meta cask, which only depends on both (each upgrades
-  to its own latest release; it needs `brew trust valkyrianlabs/tap` once); or
+  to its own latest release; it needs `brew trust valkyrianlabs/tap` once, and its postflight steps open Desktop once,
+  which then pairs with the local server through `vh device pair --json`, no code); or
   `sudo installer -pkg vaulthalla-<version>-arm64.pkg -target /` (the server; the package never carries Desktop).
   Signed and notarized from 1.18.0.
   Postinstall = `vaulthalla-provision --apply --enroll <console user>` (hidden `_vaulthalla`, bundled PostgreSQL on
