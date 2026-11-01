@@ -50,6 +50,14 @@ class FuseReplyGuardContract(unittest.TestCase):
         self.assertIn("fuse_lowlevel_ops ops = getOperations();", SERVICE.read_text(),
                       "the mount must register the guarded table from getOperations()")
 
+    def test_resolver_failures_report_denials_as_expected(self) -> None:
+        # A refusal by the permission model (no Vaulthalla user for the uid, or RBAC) is expected, not a FUSE fault:
+        # system processes stat every mount. Resolver failures go through replyResolveError, which tells them apart.
+        text = BRIDGE.read_text()
+        self.assertNotRegex(text, r"replyError\(req, timer, \w+\.errnum\)")
+        self.assertGreaterEqual(text.count("replyResolveError(req, timer, "), 15)
+        self.assertRegex(text, r"Status::MissingUser && resolved\.status != resolver::Status::AccessDenied")
+
 
 if __name__ == "__main__":
     unittest.main()
