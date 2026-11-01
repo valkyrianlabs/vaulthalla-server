@@ -26,7 +26,8 @@ std::vector<uint32_t> vaultIds(const json& payload) {
         throw ops::Invalid("vault_ids must be a list of vault ids");
     std::vector<uint32_t> out;
     for (const auto& id : payload.at("vault_ids")) {
-        if (!id.is_number_unsigned() || id.get<uint64_t>() > UINT32_MAX) throw ops::Invalid("vault_ids must be a list of vault ids");
+        if (!isNonNegativeInteger(id) || id.get<uint64_t>() > UINT32_MAX)
+            throw ops::Invalid("vault_ids must be a list of vault ids");
         out.push_back(id.get<uint32_t>());
     }
     if (out.size() > ChangeNotifier::kMaxVaults)
