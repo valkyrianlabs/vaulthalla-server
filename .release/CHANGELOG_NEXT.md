@@ -9,6 +9,9 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
 -->
 - macOS: `uninstall.sh` (also run by `brew uninstall --cask vaulthalla-server`) says which daemon it is waiting on
   while launchd stops it (up to 75 s), instead of pausing silently.
+- CLI tables (`vh fs ls` and every other `vh` table) measure, truncate and pad cells by display width instead of
+  bytes, so long names with accents, CJK or emoji are never cut mid-character and columns stay aligned; malformed
+  UTF-8 in a name shows as U+FFFD (#273).
 - macOS: master keys are sealed with the Secure Enclave by default (`secrets_backend` `secure-enclave`; #290): a
   non-permanent SE P-256 key per secret (AfterFirstUnlockThisDeviceOnly, private-key usage), ECIES X9.63-SHA256
   AES-GCM, stored as `<state>/.sealed_<name>.blob/<name>.se`; created and opened only by the daemon under launchd.
