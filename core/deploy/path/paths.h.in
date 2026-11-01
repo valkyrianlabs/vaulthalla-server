@@ -25,6 +25,8 @@
 #define VH_MAGIC_DB_PATH @VH_MAGIC_DB_PATH@
 #define VH_CADDY_TOOL_PATH @VH_CADDY_TOOL_PATH@
 #define VH_PSQL_TEST_SCHEMAS_PATH @VH_PSQL_TEST_SCHEMAS_PATH@
+// The macOS sealer this build prefers: "secure-enclave" (default) or "file" (development). Unused on Linux.
+#define VH_DARWIN_SEALER @VH_DARWIN_SEALER@
 
 #include <cstdlib>
 #include <filesystem>

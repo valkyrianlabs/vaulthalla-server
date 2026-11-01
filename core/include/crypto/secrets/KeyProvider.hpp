@@ -10,7 +10,8 @@
 namespace vh::crypto::secrets {
 
 // One named secret sealed to this machine (master, psql, vault_master, ...). The sealing itself is the platform's
-// (platform/Sealer.hpp: TPM2 on Linux); this class decides when to generate, unseal or reseal.
+// (platform/Sealer.hpp: TPM2 on Linux, the Secure Enclave on macOS); this class decides when to generate, unseal or
+// reseal.
 class KeyProvider {
 public:
     explicit KeyProvider(const std::string& name = "master");
@@ -22,7 +23,8 @@ public:
 
     [[nodiscard]] bool sealedExists() const;
 
-    // The sealing backend this build uses ("tpm2", or "file" for the macOS development backend).
+    // The sealing backend in use: "tpm2" (Linux), "secure-enclave" (macOS), or "file" (the macOS development
+    // backend, also used where no Secure Enclave key works).
     [[nodiscard]] static std::string_view backend() noexcept;
 
 private:

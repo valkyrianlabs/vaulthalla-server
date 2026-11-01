@@ -12161,7 +12161,7 @@
               ]
             },
             {
-              "description": "\"tpm2\", or \"file\" (macOS development backend).",
+              "description": "\"tpm2\" (Linux), \"secure-enclave\" (macOS), or \"file\" (macOS development backend, no hardware binding).",
               "name": "secrets_backend",
               "required": true,
               "types": [
@@ -17454,7 +17454,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "90e903c4b40419ac7c469d4461938664799af1b82168f8db763ef46d1bdc6b81",
+  "models_hash": "7a08c439ab90a86e6316d2df81ca0ae484b1d7a8d7eb0673d84efaadf579eb31",
   "protocol": {
     "min": 1,
     "version": 1

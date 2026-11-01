@@ -21,10 +21,38 @@ Decisions awaiting the maintainer are `needs:review` issues #200–#206 on the R
 - Secrets: `crypto::secrets::KeyProvider` (shared) over `platform::sealer`. Linux: TPM2 (`platform/linux/TpmSealer.cpp`,
   same blobs as before; one seal/unseal at a time per process, because each holds 2 of the TPM's 3 transient object
   slots and the swtpm socket TCTI has no resource manager; transient TPM warnings are retried up to 5 times,
-  `TpmSealerTest` runs it against a private swtpm). macOS: a **development-only** `file` backend, reported as `file`. Production backend: #201
-  (Secure Enclave spike from a user session passed; the pre-login LaunchDaemon test needs maintainer approval).
+  `TpmSealerTest` runs it against a private swtpm). macOS: see "Secret sealing" below.
 - Paths: macOS defaults from meson (`/Library/Application Support/Vaulthalla/{config.yaml,state}`,
   `/Library/Logs/Vaulthalla`, `/var/run/vaulthalla`, mount `/Library/Application Support/Vaulthalla/mount`), per #199/#216.
+
+## Secret sealing: Secure Enclave (#201, #290)
+
+- `platform/darwin/Sealer.cpp` dispatches between `SecureEnclaveSealer.cpp` (default, reported `secure-enclave`) and
+  `FileSealer.cpp` (development, reported `file`); declarations in `platform/darwin/SealerBackends.hpp`. meson
+  `-Ddarwin_sealer=secure-enclave|file` picks the preference (`VH_DARWIN_SEALER` in paths.h). Availability is a
+  functional probe, once per process (a throwaway key: create, wrap, unwrap; ~30 ms): where it fails the daemon falls
+  back to `file` with an error log naming the reason, and health says `file`. Not an IOKit check: Apple silicon VMs
+  (GitHub's `xcode-27` runners, 2026-11-01) have no `AppleSEPManager` IOService yet a virtual SEP that creates and
+  uses SE keys from a login session; whether it also works for a LaunchDaemon there is untested (cask-smoke accepts
+  either backend in a VM and records which).
+- SE format `<state>/.sealed_<name>.blob/<name>.se`: `VHSE` | v1 | u16 key len | SE key token object (`toid`, the
+  CryptoKit `dataRepresentation`) | ECIES (`kSecKeyAlgorithmECIESEncryptionStandardVariableIVX963SHA256AESGCM`) of
+  `<name>\0<secret>`. A fresh non-permanent P-256 key per seal, `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` +
+  `kSecAccessControlPrivateKeyUsage`; no keychain item, no entitlement. seal() decrypts the new blob back before the
+  atomic rename. Restore uses the private `toid` attribute through `SecKeyCreateWithData`; fallback if Apple drops it
+  is a Swift `@_cdecl` shim over CryptoKit (`~/vh-macos-spikes/se-spike/sespike.swift`).
+- **Bound to the launchd/keybag context** (privileged test 2026-11-01, `~/vh-macos-spikes/se-spike/priv-test/results.txt`):
+  a LaunchDaemon-created key fails from sudo, the user session and root (`AKSError=-536362989`). So only the daemon under
+  launchd seals/unseals; the installer hands the DB password through `run/db_password`, and `vh secret` / `vh vault
+  keys` go through the socket. Never run the server by hand against a production state dir. Survives reboots, binary
+  swaps (not bound to code identity) and `fdesetup authrestart` (works at the login window, before login); a cold
+  FileVault boot runs no daemon until unlock. Unwrap p50 ≈ 7 ms; the first after a user login ≈ 400 ms.
+- Migration: reads follow the on-disk format. A `<name>.key` (every macOS install up to 1.20.x) is unsealed, resealed
+  into the SE and deleted on first unseal; if both exist the active backend's file wins (it is written first).
+- Tests: `test_darwin_sealer.cpp` runs the SE cases from a login session (works on a real Mac) and skips them on VMs,
+  where it prints whether the SEP probe and a real key attempt agree. cask-smoke checks the backend (`file` only when
+  `kern.hv_vmm_present=1`), that blobs match the reported backend, and a `launchctl kickstart -k` restart. Real-hardware proof of the package
+  path (SE under launchd, 1.20.x file → SE upgrade, authrestart) is manual: it needs root on a real Mac.
 
 ## No server mount on macOS (#262)
 
@@ -54,6 +82,7 @@ Provider extension that talks to the daemon over the mTLS device listener under 
 - `deploy/launchd/sh.vaulthalla.{server,web}.plist.in` mirror the systemd units (KeepAlive SuccessfulExit=false ≈
   Restart=on-failure, ThrottleInterval, ExitTimeOut 30, NOFILE 65535, Core 0, Umask 077), running as `_vaulthalla`
   in the system domain: up before login, across logout. No StartLimit and no ordering after PostgreSQL in launchd.
+- Secrets are sealed by the daemon under launchd only (see "Secret sealing"); nothing in provisioning seals or reads them.
 - `vaulthalla-provision` (installed to `<prefix>/lib/vaulthalla/`): idempotent; plan by default, `--apply`,
   `--remove [--purge]`. Hidden role account `_vaulthalla` (uid/gid 450-499 from the top, clear of Apple's role accounts that grow upward from 200, alias `vaulthalla` so the daemon's
   `vaulthalla` user/group lookups work unchanged), `state` 0700, `run` 0750 (CLI socket), `mount` 0700, logs 0750,

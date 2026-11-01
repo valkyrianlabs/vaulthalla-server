@@ -130,7 +130,17 @@ More in [Serve Vaulthalla With Caddy](/https/caddy#troubleshooting).
 
 ## Health Shows Warnings You Didn't Expect
 
-`vh status` on macOS always shows `mount: disabled -> disabled` and `secrets backend: file (development: no hardware binding)`. Both are expected for the macOS package: the server never mounts vaults (Finder access belongs to Vaulthalla Desktop), and master keys are protected by permissions and FileVault rather than hardware. They are reported, not hidden, so that health never claims more than the host provides.
+`vh status` on macOS always shows `mount: disabled -> disabled`: the server never mounts vaults (Finder access belongs to Vaulthalla Desktop). It is reported, not hidden, so that health never claims more than the host provides.
+
+`secrets backend` should read `secure-enclave`. It reads `file (development: no hardware binding)` only when the daemon couldn't use the Secure Enclave at startup (some virtual machines), where the master keys are plain files protected by permissions and FileVault; the daemon log says why at startup (`The Secure Enclave can't be used here`).
+
+## The Server Stops At Startup: Secure Enclave Unsealing Failed
+
+The log (`/Library/Logs/Vaulthalla/vaulthalla.log`) says `Secure Enclave: unsealing … failed` and the daemon keeps restarting. Sealed keys open only on the Mac that sealed them and only inside the daemon that launchd starts:
+
+- **The server was started by hand** (from a terminal, with `sudo`, or under a debugger). That copy can't open the keys, even as root. Stop it and let launchd run the service: `sudo launchctl kickstart -k system/sh.vaulthalla.server`.
+- **The state directory came from another Mac, or macOS was erased and reinstalled.** The old blobs can never open here. Follow [macOS Key Recovery](/vaults/backup-and-recovery#macos-key-recovery): remove them, hand the database password to the daemon, and import the key exports.
+- **After a restart with FileVault on**, the daemon doesn't run at all until the disk is unlocked; see [Restarts And FileVault](/macos/administration#restarts-and-filevault).
 
 ## Start Over Without Losing Data
 

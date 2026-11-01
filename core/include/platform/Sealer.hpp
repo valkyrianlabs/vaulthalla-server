@@ -10,9 +10,13 @@
 // what to seal and when; a backend only stores and recovers bytes. Each secret lives in its own directory
 // (<state>/.sealed_<name>.blob/).
 //   Linux: TPM2 (hardware /dev/tpmrm0, else swtpm), files <name>.priv + <name>.pub.
-//   macOS: "file" — a development backend with no hardware binding (a 0600 file in a 0700 directory, readable by
-//          whoever can read the state directory). Never a production default; the macOS production backend is an
-//          open decision (Secure Enclave vs keychain), and the backend name is reported wherever health is.
+//   macOS: "secure-enclave" (default): a non-permanent Secure Enclave key per secret, file <name>.se. Bound to this
+//          Mac and to the daemon's launchd context, so only the daemon running under launchd seals or unseals; an
+//          installer or CLI hands secrets to the daemon instead (see platform/darwin/SealerBackends.hpp).
+//          "file": a development backend with no hardware binding (<name>.key, a 0600 file in a 0700 directory),
+//          used with -Ddarwin_sealer=file or where no Secure Enclave key works. A file-sealed secret is moved into
+//          the Secure Enclave the first time the daemon unseals it there.
+//   The backend name is reported wherever health is.
 // seal() and unseal() are safe to call from any thread: the TPM backend runs one operation at a time per process
 // (the TPM has only a few transient object slots) and retries, boundedly, when another process has the TPM full.
 namespace vh::platform::sealer {
