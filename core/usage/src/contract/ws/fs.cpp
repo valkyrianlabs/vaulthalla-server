@@ -161,7 +161,9 @@ std::vector<WsCommandUsage> fsCommands() {
                        "session; a vault it can no longer follow is dropped with one last event carrying "
                        "\"subscribed\": false. Events wait while the session is slow to read, coalesced, never queued "
                        "without bound. Subscriptions end with the session.",
-        .payload = {intArray("vault_ids").desc("Vault ids to follow (added to what the session follows).")},
+        .payload = {intArray("vault_ids")
+                        .gen(gen::ref("vault", {"id"}))
+                        .desc("Vault ids to follow (added to what the session follows).")},
         .response = {intArray("vault_ids").desc("Every vault the session follows now, ascending."),
                      objectArray("refused", "", {uinteger("vault_id"),
                                                  str("code").oneOf({"denied", "not_found", "limit"})})

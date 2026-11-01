@@ -6,7 +6,7 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = 'b953594a25ff4799ee790bae1757c354bf30078e60f1c4d94d1cf729c9729856'
+export const WS_CONTRACT_HASH = 'adc8d0db539312dec5e05ef49106ee41376ff4622a5ab257aee951c167344b2e'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
 export const WS_MODELS_HASH = 'd027924cc65070807b32b2f2daba00e0707ae3f871cad44d826254dc6e12e67c'

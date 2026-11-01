@@ -20664,6 +20664,14 @@
       "payload": [
         {
           "description": "Vault ids to follow (added to what the session follows).",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
           "items": "integer",
           "name": "vault_ids",
           "required": true,
@@ -39394,5 +39402,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "b953594a25ff4799ee790bae1757c354bf30078e60f1c4d94d1cf729c9729856"
+  "ws_hash": "adc8d0db539312dec5e05ef49106ee41376ff4622a5ab257aee951c167344b2e"
 }
