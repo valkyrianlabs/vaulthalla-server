@@ -14,15 +14,15 @@ namespace vh::db::query::fs {
 
 struct Change {
     uint64_t revision{};
-    std::string kind;                    // create | update | rename | move | delete
+    std::string kind{};                  // create | update | rename | move | delete
     uint32_t vault_id{};
     uint32_t entry_id{};
-    std::optional<uint32_t> parent_id;
-    std::optional<std::string> entry_type;  // file | directory | symlink (unknown for an entry in no type table)
-    std::string name;
-    std::string path;                    // vault path
-    std::optional<uint32_t> old_parent_id;  // rename and move
-    std::optional<std::string> old_path;    // rename and move
+    std::optional<uint32_t> parent_id{};
+    std::optional<std::string> entry_type{};  // file | directory | symlink (unknown for an entry in no type table)
+    std::string name{};
+    std::string path{};                  // vault path
+    std::optional<uint32_t> old_parent_id{};  // rename and move
+    std::optional<std::string> old_path{};    // rename and move
     std::time_t changed_at{};
 };
 
@@ -34,21 +34,21 @@ struct Sequenced {
         uint64_t revision{};
     };
     struct Reset {
-        std::optional<uint32_t> vault_id;
-        std::optional<uint32_t> user_id;
+        std::optional<uint32_t> vault_id{};
+        std::optional<uint32_t> user_id{};
         uint64_t revision{};
     };
 
     uint64_t revision{};
     uint64_t numbered{};
-    std::vector<Vault> vaults;
-    std::vector<Reset> resets;
+    std::vector<Vault> vaults{};
+    std::vector<Reset> resets{};
 };
 
 struct ChangePage {
     // The cursor to ask from next: the last change read when `more`, else the watermark.
     uint64_t revision{};
-    std::vector<Change> changes;
+    std::vector<Change> changes{};
     bool more{false};
     // The cursor can't be served: retention dropped changes after it, an authorization change (reset) for this vault
     // and account came after it, or it is newer than anything handed out (another database). `revision` is then the

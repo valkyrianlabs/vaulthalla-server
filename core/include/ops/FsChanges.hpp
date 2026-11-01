@@ -25,14 +25,14 @@ inline constexpr uint64_t kMaxLimit = 10'000;
 
 struct ListRequest {
     uint32_t vault_id{};
-    std::optional<uint64_t> since;
+    std::optional<uint64_t> since{};
     uint64_t limit{kDefaultLimit};
 };
 
 struct ListResult {
     uint32_t vault_id{};
     uint64_t revision{};
-    std::vector<db::query::fs::Change> changes;
+    std::vector<db::query::fs::Change> changes{};
     bool more{false};
     bool expired{false};
 };

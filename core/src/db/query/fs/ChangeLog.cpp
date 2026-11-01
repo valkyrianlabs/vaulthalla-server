@@ -116,7 +116,7 @@ ChangePage ChangeLog::list(const uint32_t vaultId, const uint32_t userId, const 
             "FROM fs_change_log WHERE vault_id = $1 AND revision > $2 AND kind <> 'reset' "
             "ORDER BY revision LIMIT $3",
             pqxx::params{vaultId, since, pageSize + 1});
-        page.more = res.size() > pageSize;
+        page.more = static_cast<uint64_t>(res.size()) > pageSize;
         page.changes.reserve(std::min<std::size_t>(res.size(), pageSize));
         for (const auto row : res) {
             if (page.changes.size() == pageSize) break;
