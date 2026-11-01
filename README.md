@@ -44,6 +44,7 @@ the services. Upgrades arrive through `apt upgrade`. Guide: [Install On Linux](h
 ### macOS
 
 ```bash
+brew trust valkyrianlabs/tap                              # once: the meta cask's dependencies load from it
 brew install --cask valkyrianlabs/tap/vaulthalla          # server + Vaulthalla Desktop (macOS 27+)
 brew install --cask valkyrianlabs/tap/vaulthalla-server   # server only, for headless Macs
 ```

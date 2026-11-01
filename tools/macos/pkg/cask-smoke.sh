@@ -3,15 +3,17 @@
 #
 #   tools/macos/pkg/cask-smoke.sh PKG
 #
-# Renders both release casks for PKG into a local tap with a file:// URL, with an empty Homebrew trust store (a fully
-# qualified install must need no `brew trust`), then:
-# - vaulthalla-server: `brew install --cask` (the package's postinstall provisions the service and enrolls the console
-#   user as the CLI admin); the three daemons run as _vaulthalla; `vh status` and `vh vault list` answer the console
-#   user; the web console answers; no Vaulthalla.app is installed; `brew uninstall` stops everything, keeps the data.
-# - vaulthalla, over a newer Vaulthalla.app already in /Applications (as Sparkle leaves it): the server comes back on
-#   the kept data and the newer app is not replaced; `brew uninstall` removes the app too.
-# - vaulthalla again, on a Mac without the app: the bundled app lands, signed by the Valkyrian Labs LLC team.
-# - `brew uninstall --zap` removes the service, its data, the _vaulthalla account and the app. Bash 3.2 compatible.
+# Renders both release casks for PKG into a local tap with file:// URLs, beside the published vaulthalla-desktop cask
+# (valkyrianlabs/homebrew-tap), with an empty Homebrew trust store, then:
+# - vaulthalla-server, named in full (no `brew trust`): `brew install --cask` (the package's postinstall provisions the
+#   service and enrolls the console user as the CLI admin); the three daemons run as _vaulthalla; `vh status` and
+#   `vh vault list` answer the console user; the web console answers; no Vaulthalla.app is installed; `brew uninstall`
+#   stops everything, keeps the data.
+# - vaulthalla, the meta cask: refused until the tap is trusted (Homebrew loads dependency casks only from a trusted
+#   tap); then it installs vaulthalla-server (the server comes back on the kept data) and vaulthalla-desktop (the
+#   published app, signed by the Valkyrian Labs LLC team); uninstalling it leaves both.
+# - `brew uninstall --zap` of the two removes the service, its data, the _vaulthalla account and the app.
+# Bash 3.2 compatible.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
@@ -42,9 +44,9 @@ no_service() { ! loaded sh.vaulthalla.server && ! loaded sh.vaulthalla.web && ! 
 account_gone() { ! dscl . -read /Users/_vaulthalla >/dev/null 2>&1; }
 APP=/Applications/Vaulthalla.app
 no_app() { [ ! -e "$APP" ]; }
-app_version() { /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP/Contents/Info.plist" 2>/dev/null; }
-newer_app_kept() { [ "$(app_version)" = 999.0.0 ]; }
-bundled_app_installed() { [ "$(app_version)" = "$BUNDLED_VERSION" ]; }
+has_app() { [ -d "$APP" ]; }
+installed() { brew list --cask --versions "$1" >/dev/null 2>&1; }
+nothing_installed() { no_service && no_app; }
 app_signed() { codesign --verify --deep --strict "$APP" && codesign -dv "$APP" 2>&1 | grep -q '^TeamIdentifier=ZG2G6V7GLC$'; }
 
 [ "${CI:-}" = true ] || die "CI only: this installs Vaulthalla and then zaps it, data and account included"
@@ -56,23 +58,22 @@ echo "console user: $CONSOLE, running as $(id -un)"
 export XDG_CONFIG_HOME
 XDG_CONFIG_HOME="$(mktemp -d)"
 
-# A local tap holding both release casks, pointed at the package on disk.
+# A local tap holding both release casks, pointed at the package on disk, and the published vaulthalla-desktop cask.
 brew tap-new --no-git "$TAP" >/dev/null
 casks="$(brew --repository)/Library/Taps/vaulthalla/homebrew-smoke/Casks"
 mkdir -p "$casks"
-for cask in vaulthalla vaulthalla-server; do
-  "$HERE/render-cask.sh" "$PKG" "$cask" |
-    sed -e "s|^  url \".*\"\$|  url \"file://$PKG\"|" > "$casks/$cask.rb"
-  grep -q "file://$PKG" "$casks/$cask.rb" || die "the rendered $cask cask's url wasn't replaced"
-  ruby -c "$casks/$cask.rb" >/dev/null
-done
-
-# The app the package bundles, for the version checks below.
-bundled="$(mktemp -d)"
-pkgutil --expand-full "$PKG" "$bundled/pkg"
-BUNDLED_VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" \
-  "$bundled/pkg/desktop.pkg/Payload/Vaulthalla.app/Contents/Info.plist")
-[ -n "$BUNDLED_VERSION" ] || die "the package bundles no Vaulthalla.app"
+"$HERE/render-cask.sh" "$PKG" vaulthalla-server |
+  sed -e "s|^  url \".*\"\$|  url \"file://$PKG\"|" > "$casks/vaulthalla-server.rb"
+"$HERE/render-cask.sh" "$PKG" vaulthalla |
+  sed -e "s|^  url \".*\"\$|  url \"file://$PKG.sha256\"|" \
+      -e "s|\"valkyrianlabs/tap/vaulthalla-|\"$TAP/vaulthalla-|" > "$casks/vaulthalla.rb"
+curl -fsSL https://raw.githubusercontent.com/valkyrianlabs/homebrew-tap/main/Casks/vaulthalla-desktop.rb \
+  -o "$casks/vaulthalla-desktop.rb"
+grep -q "file://$PKG\"" "$casks/vaulthalla-server.rb" || die "the rendered vaulthalla-server cask's url wasn't replaced"
+grep -q "file://$PKG.sha256\"" "$casks/vaulthalla.rb" || die "the rendered vaulthalla cask's url wasn't replaced"
+grep -q "\"$TAP/vaulthalla-desktop\"" "$casks/vaulthalla.rb" || die "the vaulthalla cask's dependencies weren't retargeted"
+! grep -q conflicts_with "$casks/vaulthalla-desktop.rb" || die "the published vaulthalla-desktop cask still conflicts"
+for cask in vaulthalla vaulthalla-server vaulthalla-desktop; do ruby -c "$casks/$cask.rb" >/dev/null; done
 no_app || die "$APP already exists on this runner"
 
 echo "== brew install --cask vaulthalla-server"
@@ -91,7 +92,6 @@ else echo "::notice::an already-open session can't use vh yet (exit $rc): a new 
 check "the initial admin password was generated" sudo test -s "$SUPPORT/state/super_admin_initial_password"
 check "the uninstaller is kept outside the receipt" test -x "$SUPPORT/uninstall.sh"
 check "vaulthalla-server installs no Vaulthalla.app" no_app
-check "the package's Desktop choice stayed off" sh -c '! pkgutil --pkg-info sh.vaulthalla.desktop >/dev/null 2>&1'
 
 echo "== brew uninstall --cask vaulthalla-server (keeps data)"
 brew uninstall --cask "$TAP/vaulthalla-server"
@@ -99,36 +99,32 @@ check "every daemon is stopped" no_service
 check "vault data is kept" sudo test -d "$SUPPORT/state"
 check "the package receipt is gone" sh -c '! pkgutil --pkg-info sh.vaulthalla.server >/dev/null 2>&1'
 
-echo "== brew install --cask vaulthalla over a newer Vaulthalla.app (as Sparkle leaves it)"
-sudo ditto "$bundled/pkg/desktop.pkg/Payload/Vaulthalla.app" "$APP"
-sudo /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString 999.0.0" -c "Set :CFBundleVersion 999999" \
-  "$APP/Contents/Info.plist"
+echo "== brew install --cask vaulthalla from an untrusted tap"
+check "the meta cask is refused until the tap is trusted" sh -c "! brew install --cask '$TAP/vaulthalla'"
+check "nothing was installed" nothing_installed
+
+echo "== brew trust $TAP; brew install --cask vaulthalla"
+brew trust --tap "$TAP"
 brew install --cask "$TAP/vaulthalla"
+check "vaulthalla-server is installed as its own cask" installed "$TAP/vaulthalla-server"
+check "vaulthalla-desktop is installed as its own cask" installed "$TAP/vaulthalla-desktop"
 check "the server is ready again on the kept data" wait_for 180 ready
 check "the admin binding survived" admin_bound
-check "the newer app was not replaced by the bundled $BUNDLED_VERSION" newer_app_kept
-
-echo "== brew uninstall --cask vaulthalla (keeps data, removes the app)"
-brew uninstall --cask "$TAP/vaulthalla"
-check "every daemon is stopped" no_service
-check "vault data is kept" sudo test -d "$SUPPORT/state"
-check "the app is removed" no_app
-
-echo "== brew install --cask vaulthalla (the bundled app)"
-brew install --cask "$TAP/vaulthalla"
-check "the server is ready again" wait_for 180 ready
-check "Vaulthalla.app $BUNDLED_VERSION is installed" bundled_app_installed
+check "Vaulthalla.app is installed" has_app
 check "the app is signed by the Valkyrian Labs LLC team" app_signed
-check "the Desktop component's receipt exists" pkgutil --pkg-info sh.vaulthalla.desktop
 
-echo "== brew uninstall --zap --cask vaulthalla (removes everything)"
-brew uninstall --zap --cask "$TAP/vaulthalla"
+echo "== brew uninstall --cask vaulthalla (leaves the server and the app)"
+brew uninstall --cask "$TAP/vaulthalla"
+check "the server keeps running" ready
+check "the app stays" has_app
+
+echo "== brew uninstall --zap --cask vaulthalla-desktop vaulthalla-server (removes everything)"
+brew uninstall --zap --cask "$TAP/vaulthalla-desktop" "$TAP/vaulthalla-server"
 check "every daemon is stopped" no_service
 check "the support directory is gone" sh -c "[ ! -e '$SUPPORT' ]"
 check "the _vaulthalla account is gone" account_gone
 check "the app is gone" no_app
 
 brew untap "$TAP" >/dev/null 2>&1 || true
-rm -rf "$bundled"
 echo "cask-smoke: $failures failure(s)"
 [ "$failures" = 0 ]

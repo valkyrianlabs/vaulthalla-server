@@ -2,17 +2,15 @@
 <installer-gui-script minSpecVersion="2">
     <title>Vaulthalla @VERSION@</title>
     <organization>sh.vaulthalla</organization>
-    <options customize="allow" require-scripts="true" hostArchitectures="arm64"/>
+    <options customize="never" require-scripts="true" hostArchitectures="arm64"/>
     <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
     <allowed-os-versions><os-version min="14.0"/></allowed-os-versions>
     <choices-outline>
         <line choice="sh.vaulthalla.server"/>
-@DESKTOP_OUTLINE@
     </choices-outline>
     <choice id="sh.vaulthalla.server" title="Vaulthalla Server" enabled="false" selected="true"
         description="The Vaulthalla service: the server, the web console and the vh CLI. It runs as a system service.">
         <pkg-ref id="sh.vaulthalla.server"/>
     </choice>
     <pkg-ref id="sh.vaulthalla.server" version="@VERSION@" onConclusion="none">component.pkg</pkg-ref>
-@DESKTOP_CHOICE@
 </installer-gui-script>
