@@ -29,7 +29,7 @@ const RequestOptions& options) const {
 
     std::vector<std::string> etags;
     int partNo = 1;
-    bool success = true;
+    std::string partError;   // set when a part fails: the upload is aborted and this call throws
 
     while (file) {
         std::string part(partSize, '\0');
@@ -43,24 +43,26 @@ const RequestOptions& options) const {
         try { uploadPart(key, uploadId, partNo++, part, etag); }
         catch (const std::exception& e) {
             log::Registry::cloud()->error("[S3Provider] uploadLargeObject failed to upload part {}: {}", partNo - 1, e.what());
-            success = false;
+            partError = fmt::format("part {}: {}", partNo - 1, e.what());
             break;
         }
         etags.push_back(std::move(etag));
     }
 
-    if (!success || etags.empty()) {
+    if (!partError.empty() || etags.empty()) {
         try {
             abortMultipartUpload(key, uploadId);
-            return;
-        }
-        catch (const std::exception& e) {
+        } catch (const std::exception& e) {
             log::Registry::cloud()->error(
                 "[S3Provider] uploadLargeObject failed to abort multipart upload for {}: uploadId={}",
                 key.string(), uploadId);
             log::Registry::cloud()->error(e.what());
             throw std::runtime_error("Failed to abort multipart upload after part upload failure");
         }
+        // An aborted upload stored nothing: a part failure must reach the caller, never read as an upload.
+        if (!partError.empty())
+            throw std::runtime_error("Multipart upload of " + key.string() + " failed at " + partError);
+        return;
     }
 
     return completeMultipartUpload(key, uploadId, etags);
