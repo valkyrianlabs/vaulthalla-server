@@ -14,7 +14,7 @@
 # - vaulthalla, the meta cask: refused until the tap is trusted (Homebrew loads dependency casks only from a trusted
 #   tap); then it installs vaulthalla-server (the server comes back on the kept data) and vaulthalla-desktop (the
 #   published app, signed by the Valkyrian Labs LLC team) and opens Desktop once (its Caskroom marker); uninstalling
-#   it leaves both and drops the marker.
+#   it leaves both, and the marker.
 # - `brew uninstall --zap` of the two removes the service, its data, the _vaulthalla account and the app.
 # Bash 3.2 compatible.
 set -euo pipefail
@@ -150,7 +150,10 @@ echo "== brew uninstall --cask vaulthalla (leaves the server and the app)"
 brew uninstall --cask "$TAP/vaulthalla"
 check "the server keeps running" ready
 check "the app stays" has_app
-check "the marker goes with the meta cask" test ! -e "$OPENED_MARKER"
+# The marker stays: Homebrew runs uninstall steps on every upgrade too, so removing it there would reopen Desktop
+# after each server upgrade. A leftover marker doesn't count as an installed cask (brew needs its caskfile).
+check "the meta cask is uninstalled" sh -c '! brew list --cask --versions vaulthalla >/dev/null 2>&1'
+check "the marker stays (a reinstall doesn't reopen Desktop)" test -e "$OPENED_MARKER"
 # Quit the Desktop the meta cask opened (by its exact pid) before its cask is zapped.
 for pid in $(pgrep -x Vaulthalla || true); do kill "$pid" 2>/dev/null || true; done
 

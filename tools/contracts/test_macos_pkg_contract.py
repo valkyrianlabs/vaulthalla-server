@@ -61,7 +61,8 @@ class MacosPackageScripts(unittest.TestCase):
         self.assertIsNotNone(steps, "the meta cask has postflight steps")
         body = steps.group(1)
         self.assertIn('run "/usr/bin/open", args: ["-a", "{{appdir}}/Vaulthalla.app"], must_succeed: false', body)
-        # Once: the marker lives in the Caskroom (kept across upgrades, gone with the cask) and guards the open.
+        # Once: the marker lives in the Caskroom and guards the open. It is never removed: uninstall steps also run on
+        # upgrades, so removing it there would reopen Desktop after every server upgrade.
         self.assertIn('unless_path_exists ".desktop-opened", base: :caskroom_path do', body)
         self.assertIn('touch ".desktop-opened", base: :caskroom_path', body)
         self.assertLess(body.index("unless_path_exists"), body.index('run "/usr/bin/open"'))

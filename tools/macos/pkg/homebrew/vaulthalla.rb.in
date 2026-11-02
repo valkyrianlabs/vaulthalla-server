@@ -24,8 +24,9 @@ cask "vaulthalla" do
   # Opens Vaulthalla Desktop once, on this cask's first install, so the install ends with Desktop set up with this
   # Mac's server: at launch Desktop pairs with it through the server's `vh`, as the person installing (no pairing
   # code: the server's installer bound their macOS account to its 'admin'). Install steps are sandboxed away from the
-  # home folder, so Desktop does the pairing itself, outside it. Upgrades don't open it again (the marker stays in
-  # the Caskroom until this cask is uninstalled); without a login session `open` fails and Desktop pairs when opened.
+  # home folder, so Desktop does the pairing itself, outside it. Upgrades and reinstalls don't open it again: the
+  # marker stays in the Caskroom for good (Homebrew runs uninstall steps on upgrades too, so removing it there would
+  # reopen Desktop after every server upgrade). Without a login session `open` fails and Desktop pairs when opened.
   postflight_steps do
     unless_path_exists ".desktop-opened", base: :caskroom_path do
       if_path_exists "Vaulthalla.app", base: :appdir do
