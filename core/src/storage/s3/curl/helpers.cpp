@@ -162,6 +162,17 @@ namespace vh::storage::s3::curl {
                                          const std::map<std::string, std::string> &headers,
                                          const std::string &payloadHash,
                                          const std::string &canonicalQuery /* = "" */) {
+        return buildAuthorizationTrace(api_key, method, fullPath, headers, payloadHash, canonicalQuery, getDate())
+            .authorization;
+    }
+
+    LegacySigningTrace buildAuthorizationTrace(const std::shared_ptr<vault::model::APIKey> &api_key,
+                                               const std::string &method,
+                                               const std::string &fullPath,
+                                               const std::map<std::string, std::string> &headers,
+                                               const std::string &payloadHash,
+                                               const std::string &canonicalQuery,
+                                               const std::string &dateStamp) {
         std::string canonicalPath;
         std::string effectiveQuery;
 
@@ -183,7 +194,6 @@ namespace vh::storage::s3::curl {
         const std::string service = "s3";
         const std::string algorithm = "AWS4-HMAC-SHA256";
         const std::string amzDate = headers.at("x-amz-date");
-        const std::string dateStamp = getDate(); // YYYYMMDD
 
         // Build canonical headers and signed headers
         std::string canonicalHeaders, signedHeaders;
@@ -230,7 +240,7 @@ namespace vh::storage::s3::curl {
                 << "SignedHeaders=" << signedHeaders << ", "
                 << "Signature=" << signature;
 
-        return authHeader.str();
+        return {.canonical_request = canonicalRequest, .string_to_sign = stringToSign, .authorization = authHeader.str()};
     }
 
     void trimInPlace(std::string &s) {

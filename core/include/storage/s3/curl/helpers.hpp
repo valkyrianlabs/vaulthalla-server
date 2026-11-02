@@ -32,6 +32,20 @@ std::string buildAuthorizationHeader(const std::shared_ptr<vault::model::APIKey>
                                      const std::string& method, const std::string& fullPath,
                                      const std::map<std::string, std::string>& headers,
                                      const std::string& payloadHash, const std::string& canonicalQuery = "");
+// buildAuthorizationHeader with the intermediate strings returned and the credential-scope date (YYYYMMDD) given
+// instead of read from the wall clock (buildAuthorizationHeader passes today's UTC date; the x-amz-date header is
+// always the caller's). A test seam for the SigV4 characterization goldens (tests/unit/test_sigv4_goldens.cpp).
+struct LegacySigningTrace {
+    std::string canonical_request;
+    std::string string_to_sign;
+    std::string authorization;
+};
+[[nodiscard]] LegacySigningTrace buildAuthorizationTrace(const std::shared_ptr<vault::model::APIKey>& api_key,
+                                                         const std::string& method, const std::string& fullPath,
+                                                         const std::map<std::string, std::string>& headers,
+                                                         const std::string& payloadHash,
+                                                         const std::string& canonicalQuery,
+                                                         const std::string& dateStamp);
 // "b=2&a=1&flag" → "a=1&b=2&flag=": already-encoded parameters in SigV4 canonical order (no re-encoding).
 [[nodiscard]] std::string canonicalQueryString(const std::string& query);
 // Value of the last `name:` line (case-insensitive) of the final response block in raw curl header text.
