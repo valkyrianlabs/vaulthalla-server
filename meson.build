@@ -1,5 +1,5 @@
 project('vaulthalla', 'cpp',
-        version: '1.20.2',
+        version: '1.21.0',
         license: 'AGPL-3.0-or-later',
         meson_version: '>=1.3.0',
         default_options: [
