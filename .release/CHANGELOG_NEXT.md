@@ -12,3 +12,7 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   >= 5 MiB treated the aborted upload as stored. Regression test
   `S3VersionedFake.AFailedMultipartPartAbortsAndThrowsForBuffersAndFiles` runs the real driver against the
   versioned fake.
+- Tests: SigV4 characterization goldens (`core/tests/unit/test_sigv4_goldens.cpp`, `core/test-assets/sigv4/`) pin the
+  canonical requests and signatures of the upstream, legacy data-path, SES and gateway signers ahead of their
+  consolidation. Two test seams, no behaviour change: `curl::buildAuthorizationTrace` (the legacy signer with the
+  scope date given) and `email::providers::detail::signAwsV4` (SesProvider's signer, now in `SesSigning.hpp`).

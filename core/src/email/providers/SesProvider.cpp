@@ -1,4 +1,5 @@
 #include "email/providers/SesProvider.hpp"
+#include "email/providers/SesSigning.hpp"
 
 #include "crypto/secrets/Manager.hpp"
 
@@ -21,12 +22,6 @@ namespace {
 constexpr const char* kSesPath = "/v2/email/outbound-emails";
 constexpr const char* kAwsAlgorithm = "AWS4-HMAC-SHA256";
 constexpr const char* kAwsService = "ses";
-
-struct SigningResult {
-    std::string authorization;
-    std::string amzDate;
-    std::string payloadHash;
-};
 
 std::string sesSafeSummary(const std::string& value) {
     constexpr std::size_t kMax = 300;
@@ -103,7 +98,9 @@ std::string trimTrailingSlashes(std::string value) {
     return value;
 }
 
-SigningResult signAwsV4(
+}
+
+detail::SigningResult detail::signAwsV4(
     const std::string& accessKey,
     const std::string& secretKey,
     const std::string& region,
@@ -156,10 +153,10 @@ SigningResult signAwsV4(
     return {
         .authorization = authorization.str(),
         .amzDate = amzDate,
-        .payloadHash = payloadHash
+        .payloadHash = payloadHash,
+        .canonicalRequest = canonicalRequest.str(),
+        .stringToSign = stringToSign.str()
     };
-}
-
 }
 
 SesProvider::SesProvider(
@@ -251,7 +248,7 @@ SendResult SesProvider::send(const Message& message) {
         {"x-amz-content-sha256", payloadHash},
         {"x-amz-date", amzDate}
     };
-    const auto signedRequest = signAwsV4(
+    const auto signedRequest = detail::signAwsV4(
         *accessKey,
         *secretKey,
         config_.region,
