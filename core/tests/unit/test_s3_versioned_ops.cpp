@@ -14,7 +14,11 @@
 
 #include <gtest/gtest.h>
 
+#include <unistd.h>
+
 #include <algorithm>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -733,6 +737,49 @@ TEST(S3VersionedFake, MultipartUploadsGoThroughTheRealDriverAndRecordTheOutcome)
     EXPECT_EQ("iv", current->meta.at("vh-iv"));
     EXPECT_EQ(5u, bucket.requestMetrics().put_requests) << "initiate + 3 parts + complete";
     EXPECT_EQ(10u, bucket.requestMetrics().uploaded_bytes);
+}
+
+// A failed part aborts the upload and must throw: before the fix the driver returned normally after the abort, so
+// CloudEngine treated a large file that never reached the bucket as uploaded.
+TEST(S3VersionedFake, AFailedMultipartPartAbortsAndThrowsForBuffersAndFiles) {
+    const auto expectAbortedAndThrown = [](VersionedBucket& bucket, const std::function<void()>& upload) {
+        bucket.failAfter(VersionedBucket::Op::Put, VersionedBucket::Failure::Http503, 2);   // initiate, part 1 pass
+        try {
+            upload();
+            ADD_FAILURE() << "a failed part must not read as an upload";
+        } catch (const std::runtime_error& e) {
+            EXPECT_NE(std::string::npos, std::string(e.what()).find("part 2")) << e.what();
+        }
+        EXPECT_FALSE(bucket.current("big.bin")) << "nothing was stored";
+        EXPECT_EQ(1u, bucket.counters().del) << "the upload was aborted";
+        EXPECT_EQ(3u, bucket.requestMetrics().put_requests) << "initiate + 2 parts, never a complete";
+        EXPECT_TRUE(s3::Controller::lastPutOutcome().etag.empty());
+    };
+
+    VersionedBucket fromBuffer(Versioning::Enabled);
+    expectAbortedAndThrown(fromBuffer, [&] {
+        fromBuffer.uploadLargeObject("big.bin", bytesOf("0123456789"), 4, s3::RequestOptions{});
+    });
+
+    const auto path = std::filesystem::temp_directory_path() /
+                      ("vh-multipart-failure-" + std::to_string(::getpid()) + ".bin");
+    {
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        out << "0123456789";
+    }
+    VersionedBucket fromFile(Versioning::Enabled);
+    expectAbortedAndThrown(fromFile, [&] {
+        fromFile.uploadLargeObject("big.bin", path, 4, s3::RequestOptions{});
+    });
+    std::filesystem::remove(path);
+
+    // An abort that fails too keeps its own error.
+    VersionedBucket abortFails(Versioning::Enabled);
+    abortFails.failAfter(VersionedBucket::Op::Put, VersionedBucket::Failure::Http503, 1);
+    abortFails.failNext(VersionedBucket::Op::Delete, VersionedBucket::Failure::Transport);
+    EXPECT_THROW(abortFails.uploadLargeObject("big.bin", bytesOf("0123456789"), 4, s3::RequestOptions{}),
+                 std::runtime_error);
+    EXPECT_FALSE(abortFails.current("big.bin"));
 }
 
 TEST(S3VersionedFake, ListObjectVersionsPaginatesWithoutDownloading) {
