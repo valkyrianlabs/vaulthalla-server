@@ -1,5 +1,16 @@
 # Vaulthalla release notes
 
+<!-- vl-release:entry version=1.21.1 -->
+## 1.21.1 — macOS package and Homebrew casks for 1.21
+
+_Released 2026-11-02_
+
+The macOS installer package and the Homebrew casks of 1.21.0 were held back by a check in the release's cask test;
+this release publishes them. Everything in 1.21.0 is included.
+
+- The `vaulthalla` meta cask opens Vaulthalla Desktop once, on its first install. Uninstalling and reinstalling it
+  doesn't open Desktop again; Desktop still sets itself up with this Mac's server whenever it starts.
+
 <!-- vl-release:entry version=1.21.0 -->
 ## 1.21.0 — Secure Enclave keys, a live change feed and automatic Desktop pairing
 
