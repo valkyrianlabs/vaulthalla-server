@@ -85,7 +85,7 @@ void Controller::uploadPart(const std::filesystem::path& key, const std::string&
     const auto [canonicalPath, url] = constructPaths(curl, keyStr, query);
 
     const std::string payloadHash = sha256Hex(partData);
-    const auto hdrMap = buildHeaderMap(payloadHash);
+    auto hdrMap = buildHeaderMap(payloadHash);
     const std::string authHeader = buildAuthorizationHeader(apiKey_, "PUT", canonicalPath, hdrMap, payloadHash);
 
     HeaderList headers;
@@ -189,7 +189,7 @@ void Controller::abortMultipartUpload(const std::filesystem::path& key, const st
     const auto [canonicalPath, url] = constructPaths(curl, keyStr, query);
 
     const std::string payloadHash = sha256Hex("");
-    const auto hdrMap = buildHeaderMap(payloadHash);
+    auto hdrMap = buildHeaderMap(payloadHash);
     const std::string authHeader = buildAuthorizationHeader(apiKey_, "DELETE", canonicalPath, hdrMap, payloadHash);
 
     HeaderList headers;

@@ -189,7 +189,7 @@ void Controller::downloadToBuffer(const std::filesystem::path& key, std::vector<
 
     const auto [canonicalPath, url] = constructPaths(curl, key);
     const std::string payloadHash = "UNSIGNED-PAYLOAD";
-    const auto hdrMap = buildHeaderMap(payloadHash);
+    auto hdrMap = buildHeaderMap(payloadHash);
     const std::string authHeader = buildAuthorizationHeader(apiKey_, "GET", canonicalPath, hdrMap, payloadHash);
 
     HeaderList headers;

@@ -1,8 +1,9 @@
 // SigV4 characterization ("golden") tests for Vaulthalla's four AWS Signature Version 4 implementations, DB-free.
 //
 //   upstream  storage::s3::sigv4::sign                     upstream control plane, Controller::signObjectRequest
-//   legacy    storage::s3::curl::buildAuthorizationHeader  vault data path (through the buildAuthorizationTrace seam,
-//                                                          which pins the credential-scope date)
+//   legacy    storage::s3::curl::buildAuthorizationTrace   the vault data path's former signer (scope date given); the
+//                                                          data path now signs with curl::signDataPathRequest
+//                                                          (vl-sigv4), held to these records by VlSigv4*Legacy*
 //   ses       email::providers::detail::signAwsV4          SesProvider (SES v2 SendEmail)
 //   gateway   protocols::s3::sigv4                         the S3 gateway's verifier (makeCanonicalRequest,
 //                                                          signatureFor, verify); the gateway now verifies with
@@ -15,7 +16,10 @@
 // sign with vl::sigv4::sign, and the VlSigv4* tests below hold that path to the same records byte for byte. The
 // "ses" records were captured from email::providers::detail::signAwsV4; SesProvider::send now signs with
 // vl::sigv4::sign too, and the VlSigv4*Ses* tests hold it to every ses record except the four where the old signer
-// deviates from SigV4 (kSesSignerDeviations), which are checked against the spec instead. The in-tree signers stay
+// deviates from SigV4 (kSesSignerDeviations), which are checked against the spec instead. The "legacy" records were
+// captured from curl::buildAuthorizationTrace; the vault data path now signs with curl::signDataPathRequest (vl-sigv4's
+// primitives), and the VlSigv4*Legacy* / VlSigv4DataPath* tests hold it to every legacy record except the one where
+// the old signer deviates from SigV4 (legacySignerDeviations). The in-tree signers stay
 // (and stay checked) until they are deleted after a verified release. Where implementations disagree for the same input, each
 // one's own output is asserted and the disagreement is spelled out in SigV4Goldens.CrossImplementationAgreement.
 //
@@ -45,6 +49,7 @@
 #include "vault/model/APIKey.hpp"
 
 #include <gtest/gtest.h>
+#include <vl/sigv4/canonical.hpp>
 #include <vl/sigv4/crypto.hpp>
 #include <vl/sigv4/signer.hpp>
 #include <vl/sigv4/verifier.hpp>
@@ -237,14 +242,49 @@ inline std::map<std::string, std::string> legacyHeaders(const Case& c, const std
     return headers;
 }
 
-inline legacy::LegacySigningTrace runLegacy(const Case& c, const std::time_t now) {
-    const auto key = std::make_shared<vh::vault::model::APIKey>(0, "sigv4-golden", vh::vault::model::S3Provider::AWS,
-                                                                c.access_key, c.secret_key, c.region,
-                                                                "https://" + c.host);
+inline std::shared_ptr<vh::vault::model::APIKey> legacyKey(const Case& c) {
+    return std::make_shared<vh::vault::model::APIKey>(0, "sigv4-golden", vh::vault::model::S3Provider::AWS,
+                                                      c.access_key, c.secret_key, c.region, "https://" + c.host);
+}
+
+// What the data-path callers pass as fullPath: the curl-escaped path plus the query in caller order.
+inline std::string legacyFullPath(const Case& c) {
     const auto query = wireQuery(c);
-    const auto fullPath = legacyPath(c) + (query.empty() ? std::string{} : "?" + query);
-    return legacy::buildAuthorizationTrace(key, c.method, fullPath, legacyHeaders(c, now), payloadHashOf(c), "",
-                                           up::amzDate(now).substr(0, 8));
+    return legacyPath(c) + (query.empty() ? std::string{} : "?" + query);
+}
+
+inline legacy::LegacySigningTrace runLegacy(const Case& c, const std::time_t now) {
+    return legacy::buildAuthorizationTrace(legacyKey(c), c.method, legacyFullPath(c), legacyHeaders(c, now),
+                                           payloadHashOf(c), "", up::amzDate(now).substr(0, 8));
+}
+
+// The production data-path signer (curl::signDataPathRequest, vl-sigv4's primitives), driven as the Controller drives
+// it now: the same fullPath as runLegacy, buildHeaderMap's headers without x-amz-date (the signer sets it from `now`),
+// the caller's payload hash. `sent` is the header map the caller sends afterwards.
+struct DataPathRun {
+    legacy::DataPathSignature signature;
+    std::map<std::string, std::string> sent;
+};
+
+inline DataPathRun runDataPath(const Case& c, const std::time_t now) {
+    auto headers = legacyHeaders(c, now);
+    headers.erase("x-amz-date");
+    auto signature = legacy::signDataPathRequest(*legacyKey(c), c.method, legacyFullPath(c), headers,
+                                                 payloadHashOf(c), "", vlsig::Clock::from_time_t(now));
+    return {.signature = std::move(signature), .sent = std::move(headers)};
+}
+
+// The legacy records where the old signer is not SigV4, so the data path's new signer differs on purpose, with the
+// part of the new canonical request the old one gets wrong. No data-path request ever carried such a header: every
+// value the Controller signs is generated (host from the API key's endpoint, hashes, x-amz-date, constants, base64
+// IVs, decimal key versions, storage classes from the provider tables, byte ranges, copy sources escaped by curl) or
+// an ETag read back from S3 with whitespace trimmed (if-match).
+inline const std::map<std::string, std::string>& legacySignerDeviations() {
+    static const std::map<std::string, std::string> deviations{
+        // header value signed untrimmed: "  Cooper   Larson "
+        {"s3/put-object-headers-case-and-space", "\nx-amz-meta-owner:Cooper Larson\n"},
+    };
+    return deviations;
 }
 
 inline sesv4::SigningResult runSes(const Case& c, const std::time_t now) {
@@ -743,6 +783,118 @@ TEST(SigV4Goldens, VlSigv4SendsWhatTheSesSignerSent) {
     }
 }
 
+// The vault data path's signer: signDataPathRequest (vl-sigv4) reproduces every "legacy" record (canonical request,
+// string to sign, Authorization) captured from the old signer, except its deviation from SigV4.
+TEST(SigV4Goldens, VlSigv4MatchesLegacyGoldens) {
+    using namespace sigv4golden;
+    const auto& golden = fixture();
+    ASSERT_FALSE(golden.empty()) << "missing or empty fixture " << fixturePath();
+    std::size_t compared = 0, deviating = 0;
+    for (const auto& c : cases()) {
+        if (!applies(c, Impl::Legacy)) continue;
+        const auto run = runDataPath(c, c.time);
+        if (legacySignerDeviations().contains(c.name)) {   // VlSigv4FixesTheLegacySignersDeviations
+            ++deviating;
+            EXPECT_NE(run.signature.canonical_request, golden.at(recordKey(c, Impl::Legacy, "canonical_request")))
+                << c.name;
+            continue;
+        }
+        const std::vector<std::pair<std::string, std::string>> fields{
+            {"canonical_request", run.signature.canonical_request},
+            {"string_to_sign", run.signature.string_to_sign},
+            {"authorization", run.signature.authorization},
+        };
+        for (const auto& [field, value] : fields) {
+            const auto key = recordKey(c, Impl::Legacy, field);
+            const auto it = golden.find(key);
+            if (it == golden.end()) {
+                ADD_FAILURE() << "no golden for " << key;
+                continue;
+            }
+            EXPECT_EQ(value, it->second) << key << " (vl-sigv4)";
+            ++compared;
+        }
+    }
+    EXPECT_EQ(deviating, legacySignerDeviations().size());
+    EXPECT_EQ(compared, 23u * 3);   // 24 legacy records minus the 1 deviation
+}
+
+// Where the old data-path signer deviates from SigV4 (an untrimmed header value), the new one is held to the spec:
+// its canonical request and Authorization are the upstream signer's for the same request (upstream trims; it is
+// anchored to AWS's published signatures), and it differs from the old one exactly in the deviating part.
+TEST(SigV4Goldens, VlSigv4FixesTheLegacySignersDeviations) {
+    using namespace sigv4golden;
+    const auto& golden = fixture();
+    for (const auto& [name, specPart] : legacySignerDeviations()) {
+        const auto& c = caseNamed(name);
+        ASSERT_TRUE(applies(c, Impl::Legacy)) << name;
+        ASSERT_EQ(c.service, "s3") << name;   // so the upstream signer's scope is the data path's
+        const auto run = runDataPath(c, c.time);
+        const auto& old = golden.at(recordKey(c, Impl::Legacy, "canonical_request"));
+        const auto& upstream = golden.at(recordKey(c, Impl::Upstream, "canonical_request"));
+        EXPECT_EQ(run.signature.canonical_request, upstream) << name;
+        EXPECT_EQ(run.signature.authorization, golden.at(recordKey(c, Impl::Upstream, "authorization"))) << name;
+        EXPECT_NE(run.signature.canonical_request, old) << name;
+        EXPECT_NE(run.signature.canonical_request.find(specPart), std::string::npos)
+            << name << ": " << run.signature.canonical_request;
+        EXPECT_EQ(old.find(specPart), std::string::npos) << name;
+    }
+}
+
+// Beyond the signature, what the data path puts on the wire is the same: the callers still build the URL and send the
+// header map themselves, and after signing that map holds exactly the headers the old path sent (same names, values
+// and order, x-amz-date included); the Authorization is the old one. At the cases' times and at the current time.
+TEST(SigV4Goldens, VlSigv4SendsWhatTheLegacySignerSent) {
+    using namespace sigv4golden;
+    const auto now = std::time(nullptr);
+    for (const auto& c : cases()) {
+        if (!applies(c, Impl::Legacy)) continue;
+        for (const auto t : {c.time, now}) {
+            const auto run = runDataPath(c, t);
+            EXPECT_EQ(run.sent, legacyHeaders(c, t)) << c.name << " @" << t;
+            EXPECT_EQ(run.sent.at("x-amz-date"), up::amzDate(t)) << c.name << " @" << t;
+            if (legacySignerDeviations().contains(c.name)) continue;
+            const auto before = runLegacy(c, t);
+            EXPECT_EQ(run.signature.canonical_request, before.canonical_request) << c.name << " @" << t;
+            EXPECT_EQ(run.signature.string_to_sign, before.string_to_sign) << c.name << " @" << t;
+            EXPECT_EQ(run.signature.authorization, before.authorization) << c.name << " @" << t;
+        }
+    }
+}
+
+// x-amz-date and the credential-scope date come from one instant, also across UTC midnight. The old path read them
+// from two clock reads (getCurrentTimestamp() in buildHeaderMap, getDate() in the old buildAuthorizationHeader): a
+// request whose header was stamped at 23:59:59 and signed a moment later carried the next day in its scope, which AWS
+// (and vl-sigv4's verifier, ScopeDateMismatch) refuses.
+TEST(SigV4Goldens, VlSigv4DataPathDatesComeFromOneInstant) {
+    using namespace sigv4golden;
+    constexpr std::time_t k20261102T235959Z = 1793663999;
+    const Case c = caseNamed("s3/get-object");
+    const auto verifyAt = [&](const std::map<std::string, std::string>& sent, const std::string& authorization) {
+        vlsig::VerificationInput input{.method = c.method, .target = legacyFullPath(c), .host = c.host,
+                                       .headers = vlsig::HeaderList(sent.begin(), sent.end()), .body = c.body};
+        input.headers.emplace_back("authorization", authorization);
+        return vlsig::verify(input, c.secret_key, vlsig::Clock::from_time_t(k20261102T235959Z));
+    };
+
+    for (const auto t : {k20261102T235959Z, k20261102T235959Z + 1, c.time}) {
+        const auto run = runDataPath(c, t);
+        const auto amzDate = run.sent.at("x-amz-date");
+        EXPECT_EQ(amzDate, up::amzDate(t));
+        EXPECT_NE(run.signature.authorization.find("Credential=" + c.access_key + "/" + amzDate.substr(0, 8) + "/"),
+                  std::string::npos) << run.signature.authorization;
+    }
+    const auto run = runDataPath(c, k20261102T235959Z);
+    EXPECT_TRUE(verifyAt(run.sent, run.signature.authorization).ok());
+
+    // The old path when the day rolled over between its two clock reads.
+    const auto headers = legacyHeaders(c, k20261102T235959Z);
+    const auto split = legacy::buildAuthorizationTrace(legacyKey(c), c.method, legacyFullPath(c), headers,
+                                                       payloadHashOf(c), "", "20261103");
+    const auto refused = verifyAt(headers, split.authorization);
+    EXPECT_EQ(refused.code, vlsig::ErrorCode::ScopeDateMismatch) << refused.message;
+}
+
 TEST(SigV4Goldens, FixtureHasNoStaleEntries) {
     const auto current = sigv4golden::currentRecords();
     for (const auto& [key, value] : sigv4golden::fixture())
@@ -886,6 +1038,29 @@ TEST(SigV4Goldens, LegacySignaturesAtGateway) {
             EXPECT_TRUE(result.ok) << c.name << ": " << result.error;
         }
     }
+}
+
+// The data path's new signatures verify at the gateway, the untrimmed-header case included (LegacySignaturesAtGateway:
+// the old signer's fails there).
+TEST(SigV4Goldens, VlSigv4DataPathSignaturesVerifyAtGateway) {
+    using namespace sigv4golden;
+    const auto now = std::time(nullptr);
+    std::size_t checked = 0;
+    for (const auto& c : cases()) {
+        if (c.service != "s3" || !applies(c, Impl::Legacy)) continue;
+        const auto run = runDataPath(c, now);
+        gw::VerificationInput input;
+        input.method = c.method;
+        input.target = legacyFullPath(c);
+        input.host = c.host;
+        for (const auto& [name, value] : run.sent) input.headers[name] = value;
+        input.headers["authorization"] = run.signature.authorization;
+        input.body = c.body;
+        const auto result = gw::verify(input, c.secret_key);
+        EXPECT_TRUE(result.ok) << c.name << ": " << result.error;
+        ++checked;
+    }
+    EXPECT_GT(checked, 15u);
 }
 
 // SesProvider::send (now vl::sigv4::sign) sends exactly the request the old detail::signAwsV4 path sent: same URL,

@@ -1808,11 +1808,10 @@ TEST(S3CostSafetyTest, DbFileBackingPathOmitsGlobalRootAlias) {
 }
 
 TEST(S3CostSafetyTest, SigV4SignedHeadersIncludeMetadataHeaders) {
-    const std::map<std::string, std::string> headers{
+    std::map<std::string, std::string> headers{
         {"content-type", "application/octet-stream"},
         {"host", "s3.example.com"},
         {"x-amz-content-sha256", vh::storage::s3::curl::sha256Hex("ciphertext")},
-        {"x-amz-date", "20260525T000000Z"},
         {"x-amz-meta-vh-encrypted", "true"},
         {"x-amz-meta-vh-iv", "iv"},
         {"x-amz-meta-vh-key-version", "3"},
@@ -1823,7 +1822,9 @@ TEST(S3CostSafetyTest, SigV4SignedHeadersIncludeMetadataHeaders) {
         "PUT",
         "/unit-bucket/ciphertext.bin",
         headers,
-        headers.at("x-amz-content-sha256"));
+        vh::storage::s3::curl::sha256Hex("ciphertext"),
+        "",
+        vl::sigv4::Clock::from_time_t(1779667200));   // 2026-05-25T00:00:00Z: the signer sets x-amz-date
 
     EXPECT_NE(
         std::string::npos,

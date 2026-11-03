@@ -13,6 +13,7 @@
 #include "../helpers/versioned_bucket.hpp"
 
 #include <gtest/gtest.h>
+#include <vl/sigv4/types.hpp>
 
 #include <unistd.h>
 
@@ -134,14 +135,18 @@ TEST(S3VersionedOpsSigning, LegacyCanonicalQueryIsSortedAndUnchangedWhenAlreadyC
     EXPECT_EQ("a=1&a-b=2", canonicalQueryString("a-b=2&a=1"));
     EXPECT_EQ("", canonicalQueryString(""));
 
-    // The legacy signer signs the canonical order whatever order the URL carries.
+    // The data-path signer signs the canonical order whatever order the URL carries.
     const auto key = awsKey();
     const std::map<std::string, std::string> headers{{"host", "s3.us-east-2.amazonaws.com"},
-                                                     {"x-amz-content-sha256", "UNSIGNED-PAYLOAD"},
-                                                     {"x-amz-date", "20261016T120000Z"}};
+                                                     {"x-amz-content-sha256", "UNSIGNED-PAYLOAD"}};
+    const auto signedAt = vl::sigv4::Clock::from_time_t(1792152000);   // 2026-10-16T12:00:00Z
     using vh::storage::s3::curl::buildAuthorizationHeader;
-    const auto a = buildAuthorizationHeader(key, "GET", "/b?list-type=2&continuation-token=t", headers, "UNSIGNED-PAYLOAD");
-    const auto b = buildAuthorizationHeader(key, "GET", "/b?continuation-token=t&list-type=2", headers, "UNSIGNED-PAYLOAD");
+    auto headersA = headers;
+    auto headersB = headers;
+    const auto a = buildAuthorizationHeader(key, "GET", "/b?list-type=2&continuation-token=t", headersA,
+                                            "UNSIGNED-PAYLOAD", "", signedAt);
+    const auto b = buildAuthorizationHeader(key, "GET", "/b?continuation-token=t&list-type=2", headersB,
+                                            "UNSIGNED-PAYLOAD", "", signedAt);
     EXPECT_EQ(a, b);
 }
 
