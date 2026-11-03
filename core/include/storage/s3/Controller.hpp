@@ -389,7 +389,7 @@ namespace vh::storage::s3 {
                                                const std::map<std::string, std::string> &extraHeaders,
                                                const TransportBodyFn &onBody) const;
 
-        // A request signed with sigv4::sign: RFC 3986 encoded path, and a sorted, RFC 3986 encoded query that is
+        // A request signed with vl::sigv4::sign: RFC 3986 encoded path, and a sorted, RFC 3986 encoded query that is
         // also exactly what the URL carries, so version ids with '+', '/', '=' sign and travel identically. key
         // empty = the bucket itself. The version-aware ops send these through curl::http (bounded timeouts).
         struct SignedObjectRequest {

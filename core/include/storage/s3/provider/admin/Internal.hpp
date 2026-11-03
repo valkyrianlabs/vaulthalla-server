@@ -2,7 +2,8 @@
 
 #include "storage/s3/curl/Http.hpp"
 #include "storage/s3/provider/admin/Admin.hpp"
-#include "storage/s3/sigv4/Signer.hpp"
+
+#include <vl/sigv4/types.hpp>
 
 #include <chrono>
 #include <ctime>
@@ -50,7 +51,7 @@ struct SignedCall {
 }
 
 [[nodiscard]] curl::http::Response send(const Endpoint& endpoint, const SignedCall& call,
-                                        const sigv4::Credentials& credentials);
+                                        const vl::sigv4::Credentials& credentials);
 
 // "https://host/a?b" → "host"; host[:port] kept as written.
 [[nodiscard]] std::string hostOf(const std::string& url);

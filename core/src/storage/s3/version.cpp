@@ -1,21 +1,24 @@
 // Version-aware data-plane operations for file recovery (.claude/context/recovery.md, "Provider versioning"):
 // ListObjectVersions, HEAD/GET/COPY ?versionId=, and the per-thread PUT outcome (ETag + x-amz-version-id).
 //
-// These requests are signed with sigv4::sign, whose canonical query is RFC 3986 encoded and sorted and is also the
-// query the URL carries: AWS version ids contain '+', '/' and '=', and any difference between what is signed and
-// what is sent is a SignatureDoesNotMatch. They go through curl::http (bounded timeouts, the test transport).
+// These requests are signed with vl::sigv4::sign (the vl-sigv4 library), whose canonical query is RFC 3986 encoded
+// and sorted and is also the query the URL carries: AWS version ids contain '+', '/' and '=', and any difference
+// between what is signed and what is sent is a SignatureDoesNotMatch. They go through curl::http (bounded timeouts,
+// the test transport).
 // Every request is metered by recordRequest before it is sent, which also enforces the protection lock (#237).
 
 #include "storage/s3/Controller.hpp"
 #include "recovery/usage/Ledger.hpp"
 #include "storage/s3/curl/Http.hpp"
 #include "storage/s3/curl/helpers.hpp"
-#include "storage/s3/sigv4/Signer.hpp"
 #include "vault/model/APIKey.hpp"
 #include "log/Registry.hpp"
 
 #include <fmt/format.h>
 #include <pugixml.hpp>
+#include <vl/sigv4/canonical.hpp>
+#include <vl/sigv4/crypto.hpp>
+#include <vl/sigv4/signer.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -163,20 +166,20 @@ Controller::SignedObjectRequest Controller::signObjectRequest(
     const std::map<std::string, std::string>& headers,
     const std::string& payloadHash) const {
     const auto endpoint = version_detail::endpointParts(apiKey_->endpoint);
-    const sigv4::Request request{
+    const vl::sigv4::Request request{
         .method = method,
         .host = endpoint.host,
         .path = "/" + bucket_ + (key.empty() ? std::string{} : "/" + key),
         .query = query,
-        .headers = headers,
+        .headers = vl::sigv4::HeaderList(headers.begin(), headers.end()),
         .payload_hash = payloadHash,
     };
-    const sigv4::Credentials credentials{
+    const vl::sigv4::Credentials credentials{
         .access_key = apiKey_->access_key,
         .secret_key = apiKey_->secret_access_key,
         .session_token = {},
     };
-    const auto signedRequest = sigv4::sign(request, credentials, apiKey_->region, "s3", std::time(nullptr));
+    const auto signedRequest = vl::sigv4::sign(request, credentials, apiKey_->region, "s3", vl::sigv4::Clock::now());
 
     SignedObjectRequest out;
     out.method = method;
@@ -311,8 +314,8 @@ CopyResult Controller::copyObjectVersion(const std::string& sourceKey, const std
 
     std::map<std::string, std::string> headers;
     applyRequestOptions(headers, options, false);   // storage class etc.; never replacement metadata (COPY keeps it)
-    headers["x-amz-copy-source"] = "/" + bucket_ + "/" + sigv4::uriEncode(sourceKey, false) +
-                                   "?versionId=" + sigv4::uriEncode(sourceVersionId, true);
+    headers["x-amz-copy-source"] = "/" + bucket_ + "/" + vl::sigv4::uriEncode(sourceKey, false) +
+                                   "?versionId=" + vl::sigv4::uriEncode(sourceVersionId, true);
     headers["x-amz-metadata-directive"] = "COPY";
     if (ifSourceMatchEtag) headers["x-amz-copy-source-if-match"] = *ifSourceMatchEtag;
 
@@ -321,7 +324,7 @@ CopyResult Controller::copyObjectVersion(const std::string& sourceKey, const std
         const vh::recovery::usage::ScopedRequestTag tag(vh::recovery::usage::RequestTag::VersionRestore);
         recordRequest(RequestKind::Copy);
     }
-    const auto response = version_detail::send(signObjectRequest("PUT", destKey, {}, headers, sigv4::sha256Hex("")),
+    const auto response = version_detail::send(signObjectRequest("PUT", destKey, {}, headers, vl::sigv4::sha256Hex("")),
                                                 version_detail::kCopyTimeout);
 
     const auto error = version_detail::parseErrorBody(response.body);

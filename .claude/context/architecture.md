@@ -1055,7 +1055,7 @@ stage "Copy And Delete")
 - **Provider versions (data plane, `storage/s3/version.cpp`):** `listObjectVersionsPage` (List), `headObjectVersion`
   (Head; 404 → nullopt, delete marker → `delete_marker`, outages throw), `streamObject` with
   `GetObjectOptions::version_id`, `copyObjectVersion` (Copy, directive COPY keeps vh-iv/key-version/hash; > 5 GiB →
-  `ObjectTooLargeForCopy` before metering; a 200 carrying `<Error>` fails). They sign with `sigv4::sign` (sorted,
+  `ObjectTooLargeForCopy` before metering; a 200 carrying `<Error>` fails). They sign with `vl::sigv4::sign` (vl-sigv4; sorted,
   RFC 3986 query identical in URL and signature: version ids carry `+/=`) and send through `curl::http` (timeouts,
   test transport). Every PUT path records the thread's `lastPutOutcome()` (ETag + `x-amz-version-id`). The legacy
   `buildAuthorizationHeader` sorts the canonical query (it signed `list-type&…&continuation-token` unsorted).
@@ -1064,7 +1064,7 @@ stage "Copy And Delete")
 - **Listings are never partial (#246).** `Controller::listObjects` (the full LIST behind `Cloud::initBins` →
   `RemoteObjectIndex::replaceFromListObjects` and `vault sync reconcile`) and `listObjectKeysPage` throw on any
   transport error, non-2xx (403 SignatureDoesNotMatch, 503 SlowDown), cut/non-XML body, or a truncated page without
-  an advancing token; callers fail the pass and leave the index untouched. `listObjects` signs with `sigv4::sign` and
+  an advancing token; callers fail the pass and leave the index untouched. `listObjects` signs with `vl::sigv4::sign` and
   goes through `curl::http` (test transport: `S3ListObjects*`); its result is one ListBucketResult per page, and
   `fs::model::filesFromS3XML` reads every one of them (it used to read only the first: buckets past 1000 objects
   indexed page 1 only).

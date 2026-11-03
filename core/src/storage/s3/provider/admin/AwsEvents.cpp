@@ -71,7 +71,7 @@ nlohmann::json AwsEvents::sqs(const std::string& region, const std::string& acti
         ++metrics_.requests;
         ++metrics_.queue_requests;
     }
-    const sigv4::Credentials credentials{.access_key = key_->access_key, .secret_key = key_->secret_access_key, .session_token = {}};
+    const vl::sigv4::Credentials credentials{.access_key = key_->access_key, .secret_key = key_->secret_access_key, .session_token = {}};
     const auto response = detail::send({"sqs." + region + ".amazonaws.com", region, "sqs"}, c, credentials);
     if (!response.ok()) throw detail::makeError("SQS " + action, response, detail::sqsError(response), s3_.secrets());
     if (response.body.empty()) return nlohmann::json::object();

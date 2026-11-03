@@ -10,6 +10,7 @@ on:
     paths:
       - 'core/**'
       - 'meson*'
+      - 'subprojects/**'
       - 'tools/macos/**'
       - 'deploy/launchd/**'
       - '.github/workflows/macos.yml'
@@ -19,6 +20,7 @@ on:
     paths:
       - 'core/**'
       - 'meson*'
+      - 'subprojects/**'
       - 'tools/macos/**'
       - 'deploy/launchd/**'
       - '.github/workflows/macos.yml'

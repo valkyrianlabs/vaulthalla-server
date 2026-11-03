@@ -8,8 +8,13 @@
 #include <vector>
 
 // General AWS Signature Version 4 (header signing) for any service: S3 (and S3-compatible providers such as R2),
-// SQS, STS. The older storage::s3::curl::buildAuthorizationHeader stays for the vault data path; the upstream control
-// plane (#237) signs through this.
+// SQS, STS.
+//
+// RETIRED from production: the upstream control plane (#237) and the versioned data-plane requests now sign with
+// vl::sigv4::sign (the vl-sigv4 library, subprojects/vl-sigv4.wrap), which reproduces this signer byte for byte
+// (core/tests/unit/test_sigv4_goldens.cpp). This copy stays only as the reference the goldens and
+// test_upstream_sigv4.cpp compare against, until a release with vl-sigv4 is verified on the VPS; then it is deleted
+// (shared-infrastructure extraction, Phase 1 step 5). Don't add callers.
 //
 // Canonical URI: S3 encodes each path segment once (keys are opaque); every other service double-encodes, per the
 // SigV4 spec. Canonical query: RFC 3986 encoding of names and values, sorted by name then value. Signed headers: every

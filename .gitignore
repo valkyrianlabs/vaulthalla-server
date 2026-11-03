@@ -32,6 +32,10 @@ providers.env
 /build-install/
 /build-macos/
 /core/build/
+# Meson unpacks wrap-file subprojects here at setup; the wraps and their pinned tarballs
+# (subprojects/packagecache/, used offline by the Debian build) are tracked.
+/subprojects/*/
+!/subprojects/packagecache/
 
 # Production artifacts (multi-project)
 */dist/
