@@ -44,9 +44,9 @@ def _needs(job: str) -> set[str]:
 
 # GitHub-hosted macOS jobs (tools/macos/pkg): outside the VPS container by necessity, and off the APT critical path.
 MACOS_JOBS = {"macos-package", "macos-publish"}
-# The macOS package's Nexus publication runs on the VPS runner (in the CI container, with the host's network to reach
-# Nexus on its loopback); like the hosted macOS jobs it is off the APT critical path.
-MACOS_PATH = MACOS_JOBS | {"macos-publish-nexus"}
+# The macOS package's publication to Apthalla runs on the VPS runner (in the CI container, with the host's network to
+# reach Apthalla on its loopback); like the hosted macOS jobs it is off the APT critical path.
+MACOS_PATH = MACOS_JOBS | {"macos-publish-pkg"}
 
 
 class ReleaseWorkflowContractTests(unittest.TestCase):
@@ -169,14 +169,24 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
                 with self.subTest(job=name):
                     self.assertGreaterEqual(indent, 10, "secrets belong in a step's env, not the job's")
 
-    def test_only_the_nexus_publication_leaves_the_isolated_container_network(self) -> None:
+    def test_only_the_pkg_publication_leaves_the_isolated_container_network(self) -> None:
         for name, job in self.jobs.items():
             with self.subTest(job=name):
-                if name == "macos-publish-nexus":
+                if name == "macos-publish-pkg":
                     self.assertIn("      CI_NETWORK: host\n", job)
                     self.assertIn("environment: Production", job)
                 else:
                     self.assertNotIn("CI_NETWORK", job)
+
+    def test_the_pkg_publication_goes_to_apthalla(self) -> None:
+        job = self.jobs["macos-publish-pkg"]
+        self.assertIn("PKG_REPO_URL: http://127.0.0.1:8090/repository/valkyrian-raw\n", job)
+        self.assertIn("run: bash tools/macos/pkg/publish-pkg.sh pkg\n", job)
+        self.assertIn("RELEASE_PUBLISH_MODE: ${{ vars.RELEASE_PUBLISH_MODE || 'disabled' }}", job)
+        script = _read("tools/macos/pkg/publish-pkg.sh")
+        self.assertIn('-H "X-Checksum-SHA256: $sum"', script)
+        self.assertIn("--netrc-file", script)
+        self.assertIn("reads back different bytes", script)
 
     def test_least_privilege_writes(self) -> None:
         self.assertRegex(self.workflow, r"(?m)^permissions:\n  contents: read$")

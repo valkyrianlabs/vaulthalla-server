@@ -102,16 +102,16 @@ service is not restarted outside Vaulthalla's package-controlled boundary.
 
 Unrelated service restarts during `apt upgrade` are controlled by host-level apt
 hooks such as `needrestart`, not by the Vaulthalla package.
-If `nexus.service` should never be auto-restarted by apt, set local
+If `example.service` should never be auto-restarted by apt, set local
 `needrestart` policy in `/etc/needrestart/conf.d/local.conf`, for example:
 
 ```
 $nrconf{override_rc} = {} unless exists $nrconf{override_rc};
-$nrconf{override_rc}->{qr(^nexus\.service$)} = 0;
+$nrconf{override_rc}->{qr(^example\.service$)} = 0;
 ```
 
-Vaulthalla does not ship third-party restart policy for services such as
-Sonatype Nexus.
+Vaulthalla does not ship third-party restart policy for other
+services on the host.
 
 `vaulthalla.service` gives up after 10 failed starts within 10 minutes (for
 example, no DB credential or no TPM) instead of restarting forever. Re-arm it

@@ -140,7 +140,7 @@ repository_url = "https://apt.valkyrianlabs.com"
 suite = "stable"
 components = ["main"]
 architectures = ["amd64"]
-# Nexus can take well over ten minutes to reindex after an upload: v1.9.0 published but failed verification
-# at the 600 s default. Still verified, just with room for a slow reindex.
+# The repository has taken well over ten minutes to reindex after an upload (v1.9.0, then on Nexus, published but
+# failed verification at the 600 s default). Still verified, just with room for a slow reindex.
 verify_timeout = 1800
 verify_interval = 30

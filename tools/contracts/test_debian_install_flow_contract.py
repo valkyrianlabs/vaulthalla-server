@@ -226,11 +226,11 @@ class DebianInstallFlowContractTests(unittest.TestCase):
             "Unrelated service restarts during `apt upgrade` are controlled by host-level apt",
             "hooks such as `needrestart`, not by the Vaulthalla package.",
             "needrestart",
-            "nexus.service",
+            "example.service",
             "/etc/needrestart/conf.d/local.conf",
-            "$nrconf{override_rc}->{qr(^nexus\\.service$)} = 0;",
+            "$nrconf{override_rc}->{qr(^example\\.service$)} = 0;",
             "Vaulthalla does not ship third-party restart policy",
-            "Sonatype Nexus",
+            "services on the host",
         )
         for fragment in required:
             self.assertIn(fragment, readme)

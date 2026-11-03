@@ -82,6 +82,16 @@ The build needs the private icons (`$VAULTHALLA_WEB_ICON_SRC`, default `~/vaulth
     `vlr publish-deb --require-enabled` (idempotent: identical bytes skipped, different bytes refused, the APT index
     is verified by sha256). Credentials are step-scoped: `RELEASE_PUBLISH_MODE`, `NEXUS_APT_REPO` (falls back to the
     legacy `NEXUS_REPO_URL` variable), `NEXUS_USER`, `NEXUS_PASSWORD` (falls back to the legacy `NEXUS_PASS` secret).
+    The repository is served by Apthalla (Valkyrian Labs' repository manager, which replaced Nexus on 2026-11-03). The
+    `NEXUS_*` names and `RELEASE_PUBLISH_MODE=nexus` are vl-release's interface and the org's secret names, kept
+    until they are renamed there; Apthalla takes the same logins.
+  - `macos-package` → `macos-publish` (GitHub release assets, Homebrew casks) and `macos-publish-pkg` (VPS runner,
+    environment `Production`, `CI_NETWORK=host`): `tools/macos/pkg/publish-pkg.sh` PUTs the `.pkg` and its `.sha256`
+    to Apthalla's raw repository on the VPS loopback (`PKG_REPO_URL`, default
+    `http://127.0.0.1:8090/repository/valkyrian-raw`, at `vaulthalla/<version>/`; `pkg.vaulthalla.sh` serves it) with
+    `X-Checksum-SHA256`, same gate and credentials as the APT publication. Immutable: identical bytes skipped,
+    different bytes refused (Apthalla answers 409), every upload read back. None of the macOS jobs gate the APT
+    release. `macos.yml`'s manual `publish_test` / `upload_check` inputs rehearse the same path.
   - `github-release` (`contents: write`): `vlr github-release` creates/updates the release with the assets.
   - `finalize` (`contents: write`): `vlr finalize` commits the promoted `debian/changelog` + `RELEASE_NOTES.md` and the
     cleared `_NEXT` files onto `main` (a no-op if `main` already records the version). `main` has the ruleset
@@ -91,7 +101,7 @@ The build needs the private icons (`$VAULTHALLA_WEB_ICON_SRC`, default `~/vaulth
     by the job's checkout). Without either, everything is published and only `finalize` fails; fix, then re-run it.
   - `Production` environment: no protection rules (checked 2026-09-30); holds `NEXUS_USER`, `NEXUS_PASS`,
     `NEXUS_REPO_URL=https://apt.valkyrianlabs.com` (was apt.vaulthalla.sh until 2026-10-27; that host is now an
-    alias of the same Nexus repo), `RELEASE_PUBLISH_MODE=nexus`. Environment-scoped values are only
+    alias of the same Apthalla repository), `RELEASE_PUBLISH_MODE=nexus`. Environment-scoped values are only
     visible to jobs that declare `environment: Production`.
 - Composite actions (`.github/actions/`): `runner`, `build`, `test`, `setup_web`, `build_web`, `sync_web_icons`
   (calls `web/bin/sync_private_icons.sh`), `test_web`, `setup_valkyrianlabs_tools` (vl-release, pmdocs from apt).

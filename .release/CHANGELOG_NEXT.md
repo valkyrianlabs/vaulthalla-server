@@ -109,3 +109,8 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   canonical requests and signatures of the upstream, legacy data-path, SES and gateway signers ahead of their
   consolidation. Two test seams, no behaviour change: `curl::buildAuthorizationTrace` (the legacy signer with the
   scope date given) and `email::providers::detail::signAwsV4` (SesProvider's signer, now in `SesSigning.hpp`).
+- Release CI: the macOS `.pkg` and its `.sha256` publish to Apthalla's raw repository `valkyrian-raw` (VPS loopback
+  port 8090; `pkg.vaulthalla.sh` serves it) instead of Nexus. `tools/macos/pkg/publish-nexus.sh` is now
+  `publish-pkg.sh` (`PKG_REPO_URL`, uploads carry `X-Checksum-SHA256`; immutable, read back as before) and the
+  release job is `macos-publish-pkg`. README.Debian's needrestart example names a placeholder `example.service`
+  instead of `nexus.service`.
