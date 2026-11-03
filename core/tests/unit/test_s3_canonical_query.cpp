@@ -1,4 +1,5 @@
-// The data-plane signer (storage::s3::curl::buildAuthorizationHeader, on vl-sigv4) signs the query in SigV4 canonical order.
+// The data-plane signer (storage::s3::curl::buildAuthorizationHeader, on vl-sigv4) signs the query in SigV4 canonical
+// order.
 // Paged ListObjectsV2 requests are written ?list-type=2&max-keys=N&continuation-token=…, which is out of order; signing
 // them as written made every page after the first fail with SignatureDoesNotMatch on AWS.
 

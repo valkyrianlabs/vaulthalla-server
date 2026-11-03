@@ -831,7 +831,8 @@ TEST(SigV4Goldens, VlSigv4FixesTheLegacySignersDeviations) {
         ASSERT_EQ(c.service, "s3") << name;   // so the upstream signer's scope is the data path's
         const auto run = runDataPath(c, c.time);
         const auto& old = golden.at(recordKey(c, Impl::Legacy, "canonical_request"));
-        EXPECT_EQ(run.signature.canonical_request, golden.at(recordKey(c, Impl::Upstream, "canonical_request"))) << name;
+        const auto& upstream = golden.at(recordKey(c, Impl::Upstream, "canonical_request"));
+        EXPECT_EQ(run.signature.canonical_request, upstream) << name;
         EXPECT_EQ(run.signature.authorization, golden.at(recordKey(c, Impl::Upstream, "authorization"))) << name;
         EXPECT_NE(run.signature.canonical_request, old) << name;
         EXPECT_NE(run.signature.canonical_request.find(specPart), std::string::npos)
@@ -862,9 +863,9 @@ TEST(SigV4Goldens, VlSigv4SendsWhatTheLegacySignerSent) {
 }
 
 // x-amz-date and the credential-scope date come from one instant, also across UTC midnight. The old path read them
-// from two clock reads (getCurrentTimestamp() in buildHeaderMap, getDate() in the old buildAuthorizationHeader): a request whose
-// header was stamped at 23:59:59 and signed a moment later carried the next day in its scope, which AWS (and
-// vl-sigv4's verifier, ScopeDateMismatch) refuses.
+// from two clock reads (getCurrentTimestamp() in buildHeaderMap, getDate() in the old buildAuthorizationHeader): a
+// request whose header was stamped at 23:59:59 and signed a moment later carried the next day in its scope, which AWS
+// (and vl-sigv4's verifier, ScopeDateMismatch) refuses.
 TEST(SigV4Goldens, VlSigv4DataPathDatesComeFromOneInstant) {
     using namespace sigv4golden;
     constexpr std::time_t k20261102T235959Z = 1793663999;

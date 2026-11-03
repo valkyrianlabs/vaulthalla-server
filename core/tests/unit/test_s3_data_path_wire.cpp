@@ -1,7 +1,7 @@
-// What the vault data path actually puts on the wire, DB-free: the real storage::s3::Controller and real libcurl against
-// a capture server on 127.0.0.1, one request per operation that signs through curl::buildAuthorizationHeader (object
-// PUT from a buffer and from a file, conditional PUT, GET to a buffer and to a file, streamed GET with a range, HEAD,
-// both copy-in-place metadata updates, DELETE, ListObjectsV2 pages, multipart initiate/part/complete/abort, the
+// What the vault data path actually puts on the wire, DB-free: the real storage::s3::Controller and real libcurl
+// against a capture server on 127.0.0.1, one request per operation that signs through curl::buildAuthorizationHeader
+// (object PUT from a buffer and from a file, conditional PUT, GET to a buffer and to a file, streamed GET with a range,
+// HEAD, both copy-in-place metadata updates, DELETE, ListObjectsV2 pages, multipart initiate/part/complete/abort, the
 // ListBuckets credential probe, the bucket-empty check).
 //
 // For every captured request:
@@ -205,10 +205,11 @@ std::string answerLikeS3(const Captured& r) {
     if (r.method == "HEAD")
         return httpResponse(200, "OK", "", {"ETag: \"head-etag\"", "x-amz-meta-vh-iv: aXY="}, true);
     if (r.method == "POST" && t.ends_with("?uploads"))
-        return httpResponse(200, "OK",
-                            "<InitiateMultipartUploadResult><UploadId>up%2Bload</UploadId></InitiateMultipartUploadResult>");
+        return httpResponse(200, "OK", "<InitiateMultipartUploadResult><UploadId>up%2Bload</UploadId>"
+                                       "</InitiateMultipartUploadResult>");
     if (r.method == "POST")
-        return httpResponse(200, "OK", "<CompleteMultipartUploadResult><ETag>\"mp-3\"</ETag></CompleteMultipartUploadResult>",
+        return httpResponse(200, "OK",
+                            "<CompleteMultipartUploadResult><ETag>\"mp-3\"</ETag></CompleteMultipartUploadResult>",
                             {"ETag: \"mp-3\""});
     if (r.method == "PUT") return httpResponse(200, "OK", "", {"ETag: \"put-etag\""});
     if (r.method == "DELETE") return httpResponse(204, "No Content", "");
@@ -225,8 +226,8 @@ class S3DataPathWire : public ::testing::Test {
 protected:
     CaptureServer server{answerLikeS3};
     std::shared_ptr<vh::vault::model::APIKey> key = std::make_shared<vh::vault::model::APIKey>(
-        7, "wire-unit", vh::vault::model::S3Provider::AWS, "AKIAWIREUNIT00000000", "wire/unit+secret=0000000000000000000000",
-        "us-east-2", "http://127.0.0.1:" + std::to_string(server.port()));
+        7, "wire-unit", vh::vault::model::S3Provider::AWS, "AKIAWIREUNIT00000000",
+        "wire/unit+secret=0000000000000000000000", "us-east-2", "http://127.0.0.1:" + std::to_string(server.port()));
     s3::Controller controller{key, "vh-wire-bucket"};
     std::filesystem::path scratch;
 
@@ -251,7 +252,8 @@ protected:
 
 std::string maskPort(std::string text, const std::string& port) {
     const auto replaceAll = [&](const std::string& from, const std::string& to) {
-        for (std::size_t at = 0; (at = text.find(from, at)) != std::string::npos; at += to.size()) text.replace(at, from.size(), to);
+        for (std::size_t at = 0; (at = text.find(from, at)) != std::string::npos; at += to.size())
+            text.replace(at, from.size(), to);
     };
     replaceAll(port, "<PORT>");
     return text;
@@ -295,8 +297,8 @@ void expectSignedLikeBefore(const std::string& op, const Captured& r, const vh::
                                    .headers = vlsig::HeaderList(r.headers.begin(), r.headers.end()), .body = r.body};
     const auto verified = vlsig::verify(input, key.secret_access_key, *signedAt);
     EXPECT_TRUE(verified.ok()) << vlsig::errorCodeName(verified.code) << ": " << verified.message;
-    EXPECT_NE(authorization->find("/" + amzDate->substr(0, 8) + "/" + key.region + "/s3/aws4_request"), std::string::npos)
-        << *authorization;
+    const auto scope = "/" + amzDate->substr(0, 8) + "/" + key.region + "/s3/aws4_request";
+    EXPECT_NE(authorization->find(scope), std::string::npos) << *authorization;
 
     // The retired signer over the same signed headers (values verbatim), path, query and date.
     const auto signedPos = authorization->find("SignedHeaders=") + 14;
@@ -311,8 +313,9 @@ void expectSignedLikeBefore(const std::string& op, const Captured& r, const vh::
         signedHeaders[name] = value.value_or("");
         start = end + 1;
     }
-    const auto old = legacy::buildAuthorizationTrace(std::make_shared<vh::vault::model::APIKey>(key), r.method, r.target,
-                                                     signedHeaders, *payloadHash, "", amzDate->substr(0, 8));
+    const auto apiKey = std::make_shared<vh::vault::model::APIKey>(key);
+    const auto old = legacy::buildAuthorizationTrace(apiKey, r.method, r.target, signedHeaders, *payloadHash, "",
+                                                     amzDate->substr(0, 8));
     EXPECT_EQ(*authorization, old.authorization);
 }
 
@@ -335,8 +338,8 @@ TEST_F(S3DataPathWire, EveryDataPathRequestIsSignedAsBeforeAndVerifies) {
     const std::string object = "dir/a b+c=d.txt";
 
     record("PutObject (buffer, conditional)", [&] {
-        controller.uploadBufferWithMetadataConditional(object, bytesOf("ciphertext"), options, std::string("\"put-etag\""),
-                                                       std::nullopt);
+        controller.uploadBufferWithMetadataConditional(object, bytesOf("ciphertext"), options,
+                                                       std::string("\"put-etag\""), std::nullopt);
     });
     record("PutObject (buffer, if-none-match)", [&] {
         controller.uploadBufferWithMetadataConditional(".vaulthalla/index-v1.json", bytesOf("{}"), s3::RequestOptions{},
@@ -356,7 +359,8 @@ TEST_F(S3DataPathWire, EveryDataPathRequestIsSignedAsBeforeAndVerifies) {
         get.range = std::make_pair<uint64_t, uint64_t>(1, 3);
         get.if_match = "\"put-etag\"";
         std::string body;
-        (void)controller.streamObject(object, get, [&](const std::span<const uint8_t> b) { body.append(b.begin(), b.end()); });
+        (void)controller.streamObject(object, get,
+                                      [&](const std::span<const uint8_t> b) { body.append(b.begin(), b.end()); });
         EXPECT_EQ(body, "bcd");
     });
     record("HeadObject", [&] { EXPECT_TRUE(controller.getHeadObject(object)); });
@@ -368,7 +372,8 @@ TEST_F(S3DataPathWire, EveryDataPathRequestIsSignedAsBeforeAndVerifies) {
     record("ListObjectsV2 page", [&] {
         (void)controller.listObjectKeysPage("1ueGcxLPRx1Tr/XYExHnhbYLgveDs2J+wm36Hy4vbOwM=", 1000);
     });
-    record("CreateMultipartUpload", [&] { EXPECT_EQ(controller.initiateMultipartUpload(object, options), "up%2Bload"); });
+    record("CreateMultipartUpload",
+           [&] { EXPECT_EQ(controller.initiateMultipartUpload(object, options), "up%2Bload"); });
     record("UploadPart", [&] {
         std::string etag;
         controller.uploadPart(object, "up%2Bload", 2, "part two", etag);

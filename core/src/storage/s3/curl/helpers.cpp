@@ -182,7 +182,8 @@ namespace vh::storage::s3::curl {
             canonicalUri = fullPath.substr(0, qpos);
             query = sig::sortEncodedQuery(std::string_view(fullPath).substr(qpos + 1));
         }
-        const auto canonical = sig::canonicalHeaders(sig::normalizeHeaders(sig::HeaderList(headers.begin(), headers.end())));
+        const auto canonical =
+            sig::canonicalHeaders(sig::normalizeHeaders(sig::HeaderList(headers.begin(), headers.end())));
         auto canonicalRequest = sig::canonicalRequest(method, canonicalUri, query, canonical.canonical,
                                                       canonical.signed_headers, payloadHash);
         const auto scope = sig::credentialScope(date, api_key.region, kService);
@@ -191,7 +192,8 @@ namespace vh::storage::s3::curl {
             sig::deriveSigningKey(api_key.secret_access_key, date, api_key.region, kService), stringToSign);
         return {.canonical_request = std::move(canonicalRequest),
                 .string_to_sign = std::move(stringToSign),
-                .authorization = sig::authorizationHeader(api_key.access_key, scope, canonical.signed_headers, signature)};
+                .authorization =
+                    sig::authorizationHeader(api_key.access_key, scope, canonical.signed_headers, signature)};
     }
 
     std::string buildAuthorizationHeader(const std::shared_ptr<vault::model::APIKey> &api_key,
