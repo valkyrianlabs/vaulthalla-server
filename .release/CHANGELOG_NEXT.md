@@ -41,6 +41,12 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
     generated or an ETag read back trimmed), so no request changes; `VlSigv4FixesTheLegacySignersDeviations`.
   - `curl::buildAuthorizationTrace` (the old signer) has no production callers and stays as the goldens' reference
     until a release is verified.
+- SES: an `email.ses.endpoint` with a path prefix (an SES proxy at `https://host/aws`) is signed for the path it is
+  sent to. `SesProvider::send` used to send to `<endpoint>/v2/email/outbound-emails` while signing
+  `/v2/email/outbound-emails`, so every send through such an endpoint failed with SignatureDoesNotMatch. The endpoint
+  is split into origin, Host and prefix, the prefix is signed with the SES path, and the URL is built from what was
+  signed. Endpoints without a path are unchanged. Regression test `SesProviderTest.EndpointPathPrefixIsSentAndSigned`
+  verifies the sent request with vl-sigv4's verifier.
 - Build: new dependency vl-sigv4 0.1.0, a static library built from the release tarball pinned in
   `subprojects/vl-sigv4.wrap` (sha256 checked by meson) and committed in `subprojects/packagecache/`, so the package
   build stays offline (`--wrap-mode=nodownload`). Needs only libcrypto >= 3.0, already a build dependency; installs
