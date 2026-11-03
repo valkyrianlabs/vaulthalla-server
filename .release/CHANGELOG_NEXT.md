@@ -22,6 +22,26 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   `subprojects/vl-sigv4.wrap` (sha256 checked by meson) and committed in `subprojects/packagecache/`, so the package
   build stays offline (`--wrap-mode=nodownload`). Needs only libcrypto >= 3.0, already a build dependency; installs
   nothing into the package.
+- S3 gateway: SigV4 verification moves to vl-sigv4 0.1.0 (`vl::sigv4::verify` with a `SecretLookup`):
+  `protocols::s3::verifySignedRequest` parses, runs every secret-free check (date, skew or presign window, signed
+  headers, payload hash), then looks the credential up, then compares the signature in constant time. `Router::route`
+  builds the input with `protocols::s3::verificationInput` (Beast adapter). The in-tree `protocols/s3/SigV4` has no
+  production callers and stays as the goldens' reference until a release is verified.
+  - Same acceptance for real clients: 126 requests captured from aws-cli 2.38, boto3 1.34, rclone 1.69 and mc 2025-08
+    over HTTP and HTTPS (`core/test-assets/sigv4/client-requests.jsonl`, `tools/dev/sigv4-capture/`) verify as
+    before, and `SigV4Goldens.VlSigv4VerifierMatchesGatewayGoldens` rebuilds every S3 gateway record.
+  - Error codes follow AWS (`vl::sigv4::awsErrorCode`; statuses in `sigv4Error`): RequestTimeTooSkewed (403),
+    InvalidAccessKeyId (403, was AccessDenied), AuthorizationHeaderMalformed / AuthorizationQueryParametersError (400),
+    XAmzContentSHA256Mismatch (400), AccessDenied (403) for a missing Authorization, missing or invalid date or an
+    expired presigned URL, NotImplemented (501) for signed-chunk payloads, InvalidArgument (400) for header plus
+    presigned query. Everything else was SignatureDoesNotMatch (403); a wrong signature and a missing signed header
+    still are, and session tokens are still InvalidToken (400).
+  - Newly refused (AWS refuses them too): host not signed, credential scope date != x-amz-date date, X-Amz-Expires=0,
+    Authorization header plus presigned query, malformed x-amz-date, credential scope or SignedHeaders, Authorization
+    parts without '='. Newly accepted (spec-valid, refused before): repeated signed headers combined with ',', an
+    X-Amz-Signature query parameter on a header-signed request, upper-case hex in x-amz-content-sha256.
+  - The credential lookup (a DB query and the secret's decryption) now runs after the date and payload checks, not
+    before them.
 - Tests: SigV4 characterization goldens (`core/tests/unit/test_sigv4_goldens.cpp`, `core/test-assets/sigv4/`) pin the
   canonical requests and signatures of the upstream, legacy data-path, SES and gateway signers ahead of their
   consolidation. Two test seams, no behaviour change: `curl::buildAuthorizationTrace` (the legacy signer with the

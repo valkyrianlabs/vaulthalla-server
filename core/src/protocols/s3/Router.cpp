@@ -917,9 +917,8 @@ Router::Response Router::route(Request&& request) const {
 Router::Response Router::route(Request&& request, BodyPayload payload) const {
     const auto rid = requestId();
     try {
-        auto input = sigv4::inputFromRequest(request, request.body());
-        input.body_sha256 = payload.sha256_hex;
-        const auto auth = auth_.authenticate(input);
+        // request.body() (empty when streamed: payload.sha256_hex is set) outlives the verification.
+        const auto auth = auth_.authenticate(verificationInput(request, request.body(), payload.sha256_hex));
         auto response = routeAuthenticated(std::move(request), auth, rid, payload);
         response.set("x-amz-request-id", rid);
         return response;
