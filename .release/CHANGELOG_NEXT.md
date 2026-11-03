@@ -17,7 +17,13 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   ListObjectVersions, HEAD/GET/COPY with `versionId`) sign with `vl::sigv4::sign` from vl-sigv4 0.1.0 (Valkyrian
   Labs, MIT) instead of the in-tree `storage::s3::sigv4::sign`. Same bytes on the wire: `SigV4Goldens.VlSigv4MatchesUpstreamGoldens` and
   `VlSigv4SendsWhatTheUpstreamSignerSent` hold it to every upstream golden record. The in-tree signer stays as the
-  reference until a release is verified; the legacy data-path, SES and gateway implementations are unchanged.
+  reference until a release is verified; the legacy data-path and gateway implementations are unchanged.
+- SES: `SesProvider::send` (SES v2 SendEmail) signs with `vl::sigv4::sign` (service `ses`) instead of
+  `email::providers::detail::signAwsV4`. Same request on the wire: `SigV4Goldens.VlSigv4MatchesSesGoldens`,
+  `VlSigv4SendsWhatTheSesSignerSent` and `SesProviderSendSignsLikeTheGoldens` (URL, header lines, Authorization).
+  The old signer, kept as the goldens' reference until a release is verified, deviated from SigV4 for inputs
+  SendEmail never has (unsorted query, bare flag parameters, untrimmed header values, single-encoded non-S3 paths);
+  `VlSigv4FixesTheSesSignersDeviations` holds vl-sigv4 to the spec there.
 - Build: new dependency vl-sigv4 0.1.0, a static library built from the release tarball pinned in
   `subprojects/vl-sigv4.wrap` (sha256 checked by meson) and committed in `subprojects/packagecache/`, so the package
   build stays offline (`--wrap-mode=nodownload`). Needs only libcrypto >= 3.0, already a build dependency; installs

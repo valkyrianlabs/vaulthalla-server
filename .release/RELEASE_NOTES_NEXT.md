@@ -37,3 +37,5 @@ for users and operators; keep it representative of what actually ships.
   file-version recovery are now signed by vl-sigv4, Valkyrian Labs' shared AWS Signature Version 4 library, instead
   of a copy inside Vaulthalla. The signed requests are byte-for-byte the same, so nothing changes for providers or
   keys.
+- Operator email sent through Amazon SES is signed by vl-sigv4 too. The requests are the same as before, so SES
+  credentials and settings need no change.
