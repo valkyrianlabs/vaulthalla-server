@@ -12,12 +12,15 @@
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 #include <yaml-cpp/yaml.h>
+#include <vl/sigv4/verifier.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <ctime>
 #include <memory>
 #include <optional>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 namespace {
@@ -277,6 +280,48 @@ TEST(ResendProviderTest, MissingSecretDoesNotCallTransport) {
     ASSERT_TRUE(result.errorSummary);
     EXPECT_EQ(*result.errorSummary, "missing Resend API key secret");
     EXPECT_TRUE(fakePtr->requests.empty());
+}
+
+// An endpoint with a path prefix (an SES proxy at https://host/aws) sends to <origin><prefix>/v2/... and must sign that
+// same path: signing only /v2/... while the URL carries the prefix is a SignatureDoesNotMatch at the proxy or SES.
+TEST(SesProviderTest, EndpointPathPrefixIsSentAndSigned) {
+    for (const auto& [endpoint, origin, host, path] : std::vector<std::tuple<std::string, std::string, std::string, std::string>>{
+             {"https://ses-proxy.example.test/aws/", "https://ses-proxy.example.test", "ses-proxy.example.test",
+              "/aws/v2/email/outbound-emails"},
+             {"http://127.0.0.1:8443/relay/ses", "http://127.0.0.1:8443", "127.0.0.1:8443",
+              "/relay/ses/v2/email/outbound-emails"},
+             {"https://email.eu-west-1.amazonaws.test", "https://email.eu-west-1.amazonaws.test",
+              "email.eu-west-1.amazonaws.test", "/v2/email/outbound-emails"},
+         }) {
+        SCOPED_TRACE(endpoint);
+        auto fake = std::make_unique<vh::email::FakeTransport>();
+        fake->response = {.status = 200, .body = R"json({"MessageId":"m"})json", .headers = ""};
+        auto* fakePtr = fake.get();
+        vh::email::providers::SesProvider provider(
+            {.region = "eu-west-1", .endpoint = endpoint},
+            vh::crypto::secrets::Manager::createForTesting({
+                {vh::email::providers::SesProvider::kAccessKeySecret, "AKIA_UNIT_TEST"},
+                {vh::email::providers::SesProvider::kSecretKeySecret, "ses_unit_test_secret"}
+            }),
+            std::move(fake)
+        );
+
+        ASSERT_TRUE(provider.send(testMessage()).ok);
+        ASSERT_EQ(fakePtr->requests.size(), 1u);
+        const auto& request = fakePtr->requests.front();
+        EXPECT_EQ(request.url, origin + path);
+        EXPECT_TRUE(hasHeader(request, "Host: " + host));
+
+        vl::sigv4::VerificationInput input{.method = request.method, .target = path, .host = host, .body = request.body};
+        for (const auto& header : request.headers) {
+            const auto colon = header.find(": ");
+            ASSERT_NE(colon, std::string::npos) << header;
+            input.headers.emplace_back(header.substr(0, colon), header.substr(colon + 2));
+        }
+        const auto verified = vl::sigv4::verify(input, "ses_unit_test_secret", vl::sigv4::Clock::now(),
+                                                {.service = "ses", .region = "eu-west-1"});
+        EXPECT_TRUE(verified.ok()) << verified.message << "\n" << verified.canonical_request;
+    }
 }
 
 TEST(SesProviderTest, SendsExpectedRequestThroughFakeTransport) {

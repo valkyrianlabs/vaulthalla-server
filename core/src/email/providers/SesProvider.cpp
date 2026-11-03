@@ -88,13 +88,23 @@ std::string formatUtcBasic(const char* format, const std::time_t now) {
     return out.str();
 }
 
-std::string endpointHost(const std::string& endpoint) {
-    auto host = endpoint;
-    if (const auto scheme = host.find("://"); scheme != std::string::npos)
-        host = host.substr(scheme + 3);
-    if (const auto slash = host.find('/'); slash != std::string::npos)
-        host = host.substr(0, slash);
-    return host;
+// A configured endpoint may carry a path prefix (a proxy at https://host/aws): the request goes to
+// <origin><prefix>/v2/..., so the signed path has to include the prefix too, or SES answers SignatureDoesNotMatch.
+struct EndpointParts {
+    std::string origin;   // scheme://host[:port]
+    std::string host;     // host[:port], the Host header
+    std::string prefix;   // "" or "/segment...", no trailing slash
+};
+
+EndpointParts splitEndpoint(const std::string& endpoint) {
+    const auto scheme = endpoint.find("://");
+    const auto hostStart = scheme == std::string::npos ? 0 : scheme + 3;
+    const auto slash = endpoint.find('/', hostStart);
+    EndpointParts parts;
+    parts.origin = endpoint.substr(0, slash);
+    parts.host = endpoint.substr(hostStart, slash == std::string::npos ? std::string::npos : slash - hostStart);
+    if (slash != std::string::npos) parts.prefix = endpoint.substr(slash);
+    return parts;
 }
 
 std::string trimTrailingSlashes(std::string value) {
@@ -240,13 +250,14 @@ SendResult SesProvider::send(const Message& message) {
     }
 
     const auto payload = body.dump();
-    const auto endpoint = endpointForConfig(config_);
-    const auto host = endpointHost(endpoint);
+    const auto endpoint = splitEndpoint(endpointForConfig(config_));
+    const auto& host = endpoint.host;
 
     // Signed with vl::sigv4::sign (vl-sigv4) as service "ses": it adds host and x-amz-date, signs the two headers
-    // below, and double-encodes the path in the canonical request as SigV4 requires outside S3. kSesPath has nothing
-    // to encode and the query is empty, so the request is byte for byte the one detail::signAwsV4 signed
-    // (SigV4Goldens.VlSigv4*Ses*, SesProviderSendSignsLikeTheGoldens).
+    // below, and double-encodes the path in the canonical request as SigV4 requires outside S3. The signed path is the
+    // endpoint's path prefix (if any) plus kSesPath, and the URL is built from what was signed. Without a prefix the
+    // request is byte for byte the one detail::signAwsV4 signed (SigV4Goldens.VlSigv4*Ses*,
+    // SesProviderSendSignsLikeTheGoldens). The prefix is taken as a plain path: vl-sigv4 encodes it.
     std::string payloadHash;
     vl::sigv4::Signed signedRequest;
     try {   // throws only if OpenSSL's SHA-256/HMAC fails; send() reports failures, it doesn't throw them
@@ -254,7 +265,7 @@ SendResult SesProvider::send(const Message& message) {
         const vl::sigv4::Request toSign{
             .method = "POST",
             .host = host,
-            .path = kSesPath,
+            .path = endpoint.prefix + kSesPath,
             .query = {},
             .headers = {{"content-type", "application/json"}, {"x-amz-content-sha256", payloadHash}},
             .payload_hash = payloadHash,
@@ -269,7 +280,7 @@ SendResult SesProvider::send(const Message& message) {
 
     HttpRequest request;
     request.method = "POST";
-    request.url = endpoint + signedRequest.encoded_path;
+    request.url = endpoint.origin + signedRequest.encoded_path;
     request.headers = {
         "Content-Type: application/json",
         "Host: " + host,
