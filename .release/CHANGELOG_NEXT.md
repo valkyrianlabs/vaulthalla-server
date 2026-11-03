@@ -17,7 +17,7 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   ListObjectVersions, HEAD/GET/COPY with `versionId`) sign with `vl::sigv4::sign` from vl-sigv4 0.1.0 (Valkyrian
   Labs, MIT) instead of the in-tree `storage::s3::sigv4::sign`. Same bytes on the wire: `SigV4Goldens.VlSigv4MatchesUpstreamGoldens` and
   `VlSigv4SendsWhatTheUpstreamSignerSent` hold it to every upstream golden record. The in-tree signer stays as the
-  reference until a release is verified; the legacy data-path and gateway implementations are unchanged.
+  reference until a release is verified; the legacy data-path implementation is unchanged.
 - SES: `SesProvider::send` (SES v2 SendEmail) signs with `vl::sigv4::sign` (service `ses`) instead of
   `email::providers::detail::signAwsV4`. Same request on the wire: `SigV4Goldens.VlSigv4MatchesSesGoldens`,
   `VlSigv4SendsWhatTheSesSignerSent` and `SesProviderSendSignsLikeTheGoldens` (URL, header lines, Authorization).
