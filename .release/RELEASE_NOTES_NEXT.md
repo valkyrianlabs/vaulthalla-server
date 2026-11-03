@@ -16,15 +16,22 @@ for users and operators; keep it representative of what actually ships.
 
 ## S3 gateway
 
+- MinIO `mc` and the AWS Java SDK can now upload to the gateway over plain HTTP, for example to the direct listener
+  at `http://127.0.0.1:39000`. Over HTTP these clients sign every chunk of the upload. The gateway checks each chunk
+  against the one before it as the data arrives. It stores nothing until the whole upload has verified, so a chunk
+  that is altered, missing or out of order fails the upload with `SignatureDoesNotMatch` and leaves any existing
+  object untouched. Signed trailing checksums are verified too. `docs/s3-gateway/clients.md` lists the signing modes
+  each client uses.
+- An upload whose `aws-chunked` body is cut short or malformed now gets an S3 error: `IncompleteBody`, or
+  `InvalidRequest` for bad framing or a chunk over 16 MiB. The gateway used to close the connection without answering.
 - The S3 gateway checks request signatures with vl-sigv4, Valkyrian Labs' shared AWS Signature Version 4 library.
   AWS CLI, boto3, rclone and MinIO mc requests, presigned URLs included, are accepted exactly as before.
 - Refused requests now carry the error code AWS S3 would send, so clients report the real cause instead of a
   signature mismatch: `RequestTimeTooSkewed` when the client's clock is off by more than 15 minutes (SDKs that correct
   their clock react to it), `InvalidAccessKeyId` for an unknown, disabled or expired gateway key,
   `AuthorizationHeaderMalformed` or `AuthorizationQueryParametersError` (HTTP 400) for a malformed signature,
-  `XAmzContentSHA256Mismatch` when the body doesn't match its declared hash, `AccessDenied` for an unsigned request or
-  an expired presigned URL, and `NotImplemented` for uploads with signed chunks (`mc` and the AWS Java SDK over plain
-  HTTP), which the gateway has never accepted. A wrong secret is still `SignatureDoesNotMatch`.
+  `XAmzContentSHA256Mismatch` when the body doesn't match its declared hash, and `AccessDenied` for an unsigned request
+  or an expired presigned URL. A wrong secret is still `SignatureDoesNotMatch`.
 - Requests that break SigV4 rules AWS S3 enforces are now refused too: an unsigned `Host` header, a credential date
   that differs from the request date, a presigned URL with `X-Amz-Expires=0` (it used to never expire), and a
   presigned URL that also carries an `Authorization` header. No client that works with AWS sends these.

@@ -3,6 +3,7 @@
 #include "config/Registry.hpp"
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
+#include "protocols/s3/RequestBody.hpp"
 #include "protocols/s3/Xml.hpp"
 #include "storage/ScopedS3RequestUsageCapture.hpp"
 #include "db/query/fs/File.hpp"
@@ -917,8 +918,24 @@ Router::Response Router::route(Request&& request) const {
 Router::Response Router::route(Request&& request, BodyPayload payload) const {
     const auto rid = requestId();
     try {
+        // An aws-chunked body arrives still encoded. Unsigned framing is decoded first, so that a body hash in
+        // x-amz-content-sha256 is compared with the decoded body. Signed chunks are decoded after the headers and
+        // seed signature verified, through the chunk verifier authentication hands back; nothing below runs unless
+        // every chunk (and trailer) verified.
+        const bool encoded = payload.aws_chunked_decode_to.has_value();
+        const bool signedChunks = encoded && hasSignedChunks(request);
+        const auto decode = [&](std::optional<vl::sigv4::ChunkVerifier> chain) {
+            std::ifstream in(*payload.temp_file, std::ios::binary);
+            if (!in) throw std::runtime_error("Unable to open aws-chunked request body");
+            payload = decodeAwsChunkedBody(in, *payload.aws_chunked_decode_to, request, std::move(chain));
+        };
+        if (encoded && !signedChunks) decode(std::nullopt);
+
         // request.body() (empty when streamed: payload.sha256_hex is set) outlives the verification.
-        const auto auth = auth_.authenticate(verificationInput(request, request.body(), payload.sha256_hex));
+        std::optional<vl::sigv4::ChunkVerifier> chain;
+        const auto auth = auth_.authenticate(verificationInput(request, request.body(), payload.sha256_hex),
+                                             signedChunks ? &chain : nullptr);
+        if (signedChunks) decode(std::move(chain));
         auto response = routeAuthenticated(std::move(request), auth, rid, payload);
         response.set("x-amz-request-id", rid);
         return response;

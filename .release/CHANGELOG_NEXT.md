@@ -14,7 +14,7 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   versioned fake.
 - S3/SQS/STS: the upstream control plane (bucket administration, event notifications, `provider::admin::detail::send`)
   and the object requests built by `Controller::signObjectRequest` (the full bucket LIST of `listObjects`,
-  ListObjectVersions, HEAD/GET/COPY with `versionId`) sign with `vl::sigv4::sign` from vl-sigv4 0.1.0 (Valkyrian
+  ListObjectVersions, HEAD/GET/COPY with `versionId`) sign with `vl::sigv4::sign` from vl-sigv4 (Valkyrian
   Labs, MIT) instead of the in-tree `storage::s3::sigv4::sign`. Same bytes on the wire: `SigV4Goldens.VlSigv4MatchesUpstreamGoldens` and
   `VlSigv4SendsWhatTheUpstreamSignerSent` hold it to every upstream golden record. The in-tree signer stays as the
   reference until a release is verified.
@@ -26,8 +26,8 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   `VlSigv4FixesTheSesSignersDeviations` holds vl-sigv4 to the spec there.
 - S3 data path: object PUT (buffer, file, conditional), GET (buffer, file, streamed), HEAD, copy-in-place metadata
   updates, DELETE, `listObjectKeysPage`, multipart initiate/part/complete/abort, the credential probe and
-  `isBucketEmpty` sign with `curl::signDataPathRequest` (behind `curl::buildAuthorizationHeader`), built on vl-sigv4
-  0.1.0's primitives, instead of the in-tree legacy signer. Callers still build the URL, the header lines and the
+  `isBucketEmpty` sign with `curl::signDataPathRequest` (behind `curl::buildAuthorizationHeader`), built on vl-sigv4's
+  primitives, instead of the in-tree legacy signer. Callers still build the URL, the header lines and the
   payload hash (`UNSIGNED-PAYLOAD` or the body's SHA-256, per operation, unchanged), so the request is the same:
   `SigV4Goldens.VlSigv4MatchesLegacyGoldens` and `VlSigv4SendsWhatTheLegacySignerSent` hold it to 23 of the 24 legacy
   records, and `S3DataPathWire.*` sends every request shape through real curl to a capture server and checks that
@@ -47,11 +47,11 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   is split into origin, Host and prefix, the prefix is signed with the SES path, and the URL is built from what was
   signed. Endpoints without a path are unchanged. Regression test `SesProviderTest.EndpointPathPrefixIsSentAndSigned`
   verifies the sent request with vl-sigv4's verifier.
-- Build: new dependency vl-sigv4 0.1.0, a static library built from the release tarball pinned in
+- Build: new dependency vl-sigv4 (0.2.1), a static library built from the release tarball pinned in
   `subprojects/vl-sigv4.wrap` (sha256 checked by meson) and committed in `subprojects/packagecache/`, so the package
   build stays offline (`--wrap-mode=nodownload`). Needs only libcrypto >= 3.0, already a build dependency; installs
   nothing into the package.
-- S3 gateway: SigV4 verification moves to vl-sigv4 0.1.0 (`vl::sigv4::verify` with a `SecretLookup`):
+- S3 gateway: SigV4 verification moves to vl-sigv4 (`vl::sigv4::verify` with a `SecretLookup`):
   `protocols::s3::verifySignedRequest` parses, runs every secret-free check (date, skew or presign window, signed
   headers, payload hash), then looks the credential up, then compares the signature in constant time. `Router::route`
   builds the input with `protocols::s3::verificationInput` (Beast adapter). The in-tree `protocols/s3/SigV4` has no
@@ -71,6 +71,40 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
     X-Amz-Signature query parameter on a header-signed request, upper-case hex in x-amz-content-sha256.
   - The credential lookup (a DB query and the secret's decryption) now runs after the date and payload checks, not
     before them.
+- S3 gateway: signed streaming uploads (`STREAMING-AWS4-HMAC-SHA256-PAYLOAD` and `-TRAILER`: mc and the AWS Java SDK
+  over plain HTTP) are accepted. They were `NotImplemented` (501) before.
+  - `Session` spools a streamed PUT as before. It now hands aws-chunked bodies to `Router::route` still encoded
+    (`BodyPayload::aws_chunked_decode_to`) when Content-Encoding says `aws-chunked` or `x-amz-content-sha256` is any
+    `STREAMING-*` mode. mc sends signed chunks without Content-Encoding.
+  - `Router::route` decodes the body with `decodeAwsChunkedBody` (`protocols/s3/RequestBody.cpp`, vl-sigv4's
+    `AwsChunkedDecoder`). Unsigned framing is decoded before authentication, as before. Signed chunks are decoded
+    after it, through the `vl::sigv4::ChunkVerifier` that `Authenticator::authenticate(input, &chain)` /
+    `verifySignedRequest(..., &chain)` returns once the seed signature verified.
+  - `routeAuthenticated` runs only after the final chunk (and the trailer signature) verified. A tampered,
+    reordered, dropped or missing chunk stores nothing and leaves an existing object unchanged.
+  - The Session's own aws-chunked decoder (`decodeAwsChunkedBody` in `Session.cpp`) is gone. Moving to the library
+    parser changes some answers:
+    - Framing errors were a `std::runtime_error` that closed the connection without a response. They are now S3
+      errors: `IncompleteBody` (400) for a truncated body, a missing final chunk or an
+      `x-amz-decoded-content-length` mismatch; `InvalidRequest` (400) for malformed framing, a chunk over 16 MiB or
+      trailers that differ from `x-amz-trailer`; `SignatureDoesNotMatch` (403) for a chunk or trailer signature;
+      `InvalidArgument` for a non-numeric `x-amz-decoded-content-length`.
+    - Stricter, as AWS and MinIO are: chunk sizes are 1 to 16 hex digits (no sign, whitespace or `0x`), chunk
+      headers end in CRLF, header and trailer lines are at most 4 KiB, trailer lines need a `name:` token, and no
+      bytes may follow the end of the body. The trailer layouts of the AWS SDKs and of MinIO's Go client are both
+      accepted.
+  - Signed chunks outside a streamed PUT, and SigV4a streaming, still answer `NotImplemented`. New `sigv4StatusFor`
+    rows: `ChunkSignatureMismatch` 403; `MalformedChunkedEncoding`, `ChunkTooLarge`, `IncompleteBody`,
+    `DecodedLengthMismatch` 400.
+  - Tests:
+    - `S3GatewayStreaming.*` covers mc- and SDK-shaped uploads, trailers and every failure class.
+    - `S3GatewayClientCaptures` replays mc's real uploads over plain HTTP (one chunk, three chunks, and
+      `mc cp --checksum` unsigned trailers), each verified and decoded at its signing time. Captures come from the
+      new `tools/dev/sigv4-capture/capture_mc_streaming.sh`, and a flipped byte in a signed body fails.
+    - `S3GatewayDbTest.SignedStreamingUploadsStoreOnlyFullyVerifiedBodies` runs end to end over a socket. Tampered,
+      reordered, dropped and unfinished bodies store nothing, and a tampered overwrite keeps the old object.
+    - `S3GatewayDbTest.RealMcUploadsOverPlainHttpWhenMcIsInstalled` runs a real mc against the running gateway and
+      skips where mc is not installed.
 - Tests: SigV4 characterization goldens (`core/tests/unit/test_sigv4_goldens.cpp`, `core/test-assets/sigv4/`) pin the
   canonical requests and signatures of the upstream, legacy data-path, SES and gateway signers ahead of their
   consolidation. Two test seams, no behaviour change: `curl::buildAuthorizationTrace` (the legacy signer with the

@@ -7,9 +7,13 @@
 //                              differently, one by one: what vl-sigv4 now refuses (all refused by AWS too) and the
 //                              spec-valid requests it now accepts
 //   S3GatewayClientCaptures.*  requests recorded from real clients (aws-cli 2, boto3, rclone, mc) by a capture server,
-//                              verified at the time they were signed (core/test-assets/sigv4/client-requests.jsonl)
+//                              verified at the time they were signed (core/test-assets/sigv4/client-requests.jsonl),
+//                              aws-chunked bodies decoded (and their chunk signatures verified) as Router::route does
+//   S3GatewayStreaming.*       signed streaming payloads (STREAMING-AWS4-HMAC-SHA256-PAYLOAD[-TRAILER]): the seed
+//                              signature, then every chunk through decodeAwsChunkedBody, and each way a body fails
 
 #include "protocols/s3/Auth.hpp"
+#include "protocols/s3/RequestBody.hpp"
 #include "protocols/s3/Router.hpp"
 #include "protocols/s3/SigV4.hpp"
 
@@ -18,17 +22,23 @@
 #include <vl/sigv4/canonical.hpp>
 #include <vl/sigv4/crypto.hpp>
 #include <vl/sigv4/signer.hpp>
+#include <vl/sigv4/streaming.hpp>
 #include <vl/sigv4/verifier.hpp>
+#include <boost/beast/zlib.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <openssl/evp.h>
 #include <optional>
 #include <set>
+#include <sstream>
+#include <unistd.h>
 #include <string>
 #include <utility>
 #include <vector>
@@ -187,6 +197,74 @@ inline Request oldSigned(const std::string& method, const std::string& target, H
 
 inline vs::TimePoint now() { return vs::Clock::now(); }
 
+// Raw deflate (as tools/dev/sigv4-capture/to_fixture.py stores aws-chunked bodies) to bytes, with Beast's inflater
+// (the platform zlib a test binary binds to differs between hosts).
+inline std::string inflateRaw(const std::string& compressed) {
+    boost::beast::zlib::inflate_stream inflater;
+    boost::beast::zlib::z_params zs;
+    zs.next_in = compressed.data();
+    zs.avail_in = compressed.size();
+    std::string out;
+    std::array<char, 64 * 1024> buffer{};
+    while (true) {
+        zs.next_out = buffer.data();
+        zs.avail_out = buffer.size();
+        boost::system::error_code ec;
+        inflater.write(zs, boost::beast::zlib::Flush::sync, ec);
+        out.append(buffer.data(), buffer.size() - zs.avail_out);
+        if (ec == boost::beast::zlib::error::end_of_stream) return out;
+        if (ec) return {};
+        if (zs.avail_in == 0 && zs.avail_out != 0) return out;
+    }
+}
+
+inline std::string base64Decode(const std::string& encoded) {
+    std::string out((encoded.size() / 4) * 3, '\0');
+    const auto n = EVP_DecodeBlock(reinterpret_cast<unsigned char*>(out.data()),
+                                   reinterpret_cast<const unsigned char*>(encoded.data()), static_cast<int>(encoded.size()));
+    if (n < 0) return {};
+    out.resize(static_cast<std::size_t>(n));
+    std::size_t pad = 0;
+    for (auto it = encoded.rbegin(); it != encoded.rend() && *it == '='; ++it) ++pad;
+    out.resize(out.size() - pad);
+    return out;
+}
+
+// What Router::route does with a streamed aws-chunked body: authenticate (signed chunks: the seed signature, handing
+// back the chunk verifier), then decode the body through decodeAwsChunkedBody. "ok" with the decoded body, or the S3
+// error code and message.
+struct Decoded {
+    std::string outcome;
+    http::status status = http::status::ok;
+    s3::Router::BodyPayload payload{};
+    std::string data;
+};
+
+inline Decoded routeChunkedBody(const Request& req, const std::string& rawBody, const s3::GatewaySecretLookup& lookup,
+                                const vs::TimePoint at) {
+    Decoded out;
+    const auto decodedPath = std::filesystem::temp_directory_path() /
+                             ("vh-s3-chunked-" + std::to_string(::getpid()) + "-" +
+                              std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    try {
+        std::optional<vs::ChunkVerifier> chain;
+        const bool signedChunks = s3::hasSignedChunks(req);
+        std::istringstream in(rawBody);
+        if (!signedChunks) out.payload = s3::decodeAwsChunkedBody(in, decodedPath, req, std::nullopt);
+        (void)s3::verifySignedRequest(s3::verificationInput(req, {}, out.payload.sha256_hex), lookup, at,
+                                      signedChunks ? &chain : nullptr);
+        if (signedChunks) out.payload = s3::decodeAwsChunkedBody(in, decodedPath, req, std::move(chain));
+        std::ifstream decoded(decodedPath, std::ios::binary);
+        out.data.assign(std::istreambuf_iterator<char>(decoded), std::istreambuf_iterator<char>());
+        out.outcome = "ok";
+    } catch (const s3::S3Error& e) {
+        out.outcome = e.code + ": " + e.what();
+        out.status = e.status;
+    }
+    std::filesystem::remove(decodedPath);
+    return out;
+}
+
 }
 
 // ---- error mapping ------------------------------------------------------------------------------------------------
@@ -225,6 +303,11 @@ TEST(S3GatewayAuth, EveryVerifierFailureMapsToAnS3ErrorAndStatus) {
         {ErrorCode::PayloadHashMismatch, "XAmzContentSHA256Mismatch", "XAmzContentSHA256Mismatch", http::status::bad_request},
         {ErrorCode::UnknownAccessKey, "InvalidAccessKeyId", "InvalidAccessKeyId", http::status::forbidden},
         {ErrorCode::SignatureMismatch, "SignatureDoesNotMatch", "SignatureDoesNotMatch", http::status::forbidden},
+        {ErrorCode::MalformedChunkedEncoding, "InvalidRequest", "InvalidRequest", http::status::bad_request},
+        {ErrorCode::ChunkTooLarge, "InvalidRequest", "InvalidRequest", http::status::bad_request},
+        {ErrorCode::IncompleteBody, "IncompleteBody", "IncompleteBody", http::status::bad_request},
+        {ErrorCode::DecodedLengthMismatch, "IncompleteBody", "IncompleteBody", http::status::bad_request},
+        {ErrorCode::ChunkSignatureMismatch, "SignatureDoesNotMatch", "SignatureDoesNotMatch", http::status::forbidden},
     };
     std::set<int> covered;
     for (const auto& row : rows) {
@@ -240,8 +323,9 @@ TEST(S3GatewayAuth, EveryVerifierFailureMapsToAnS3ErrorAndStatus) {
         covered.insert(static_cast<int>(row.code));
     }
     // Every ErrorCode but None has a row: a new code in vl-sigv4 needs a decision here.
-    EXPECT_EQ(covered.size(), static_cast<std::size_t>(vl::sigv4::ErrorCode::SignatureMismatch));
-    for (int c = 1; c <= static_cast<int>(vl::sigv4::ErrorCode::SignatureMismatch); ++c) EXPECT_TRUE(covered.contains(c)) << c;
+    EXPECT_EQ(covered.size(), static_cast<std::size_t>(vl::sigv4::ErrorCode::ChunkSignatureMismatch));
+    for (int c = 1; c <= static_cast<int>(vl::sigv4::ErrorCode::ChunkSignatureMismatch); ++c)
+        EXPECT_TRUE(covered.contains(c)) << c;
 }
 
 TEST(S3GatewayAuth, GatewayOptionsAreS3AnyRegionNoSessionTokens) {
@@ -298,8 +382,10 @@ TEST(S3GatewayAuth, StreamedBodiesAreCheckedThroughTheirHash) {
     EXPECT_TRUE(verifyAt(s3::verificationInput(trailer, {}, vs::sha256Hex("decoded")), t).ok);
     EXPECT_TRUE(verifyOld(trailer));
 
-    // Signed chunks (STREAMING-AWS4-HMAC-SHA256-PAYLOAD: mc and the Java SDK over plain HTTP) were refused before as a
-    // payload hash mismatch, and still are: neither verifier checks chunk signatures. Now it says so.
+    // Signed chunks (STREAMING-AWS4-HMAC-SHA256-PAYLOAD: mc and the Java SDK over plain HTTP) verify only where the
+    // body streams (Router::route passes a chunk verifier for a streamed PUT, see S3GatewayStreaming). Anywhere else,
+    // and for SigV4a streaming always, they answer NotImplemented before the credential lookup. The retired verifier
+    // refused them all as a payload hash mismatch.
     for (const std::string mode : {"STREAMING-AWS4-HMAC-SHA256-PAYLOAD", "STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER",
                                    "STREAMING-AWS4-ECDSA-P256-SHA256-PAYLOAD"}) {
         auto chunked = signedRequest("PUT", "/vh-bucket/a.bin", {}, t, {},
@@ -309,6 +395,24 @@ TEST(S3GatewayAuth, StreamedBodiesAreCheckedThroughTheirHash) {
         EXPECT_EQ(out.status, http::status::not_implemented) << mode;
         EXPECT_EQ(out.lookups, 0) << mode;
         EXPECT_FALSE(verifyOld(chunked)) << mode;
+
+        Lookup lookup;
+        std::optional<vs::ChunkVerifier> chain;
+        const bool sigv4a = mode.contains("ECDSA");
+        try {
+            (void)s3::verifySignedRequest(s3::verificationInput(chunked, {}, vs::sha256Hex("decoded")), lookup.fn(), t,
+                                          &chain);
+            EXPECT_FALSE(sigv4a) << mode;
+            EXPECT_TRUE(chain.has_value()) << mode;
+            if (chain) {
+                EXPECT_EQ(chain->expectsTrailer(), mode.ends_with("-TRAILER")) << mode;
+            }
+        } catch (const s3::S3Error& e) {
+            EXPECT_TRUE(sigv4a) << mode << ": " << e.what();
+            EXPECT_EQ(e.code, "NotImplemented") << mode;
+            EXPECT_FALSE(chain.has_value()) << mode;
+        }
+        EXPECT_EQ(lookup.calls, sigv4a ? 0 : 1) << mode;
     }
 }
 
@@ -639,10 +743,13 @@ TEST(S3GatewayAuthCompat, SpecValidRequestsTheOldVerifierRefused) {
 
 // Requests recorded from aws-cli 2.38 (macOS), rclone 1.69, boto3/botocore 1.34 and mc (2025-08) by a capture server
 // (tools/dev/sigv4-capture/), over HTTP and HTTPS, with the test credential below: list buckets, PUT (payload hash,
-// UNSIGNED-PAYLOAD, STREAMING-UNSIGNED-PAYLOAD-TRAILER), GET, ranges, HEAD, LIST v2, copy, deletes, multipart, UTF-8
-// and special-character keys, versionId, and presigned GET/PUT URLs fetched with curl or urllib. Each is verified at
-// the time it was signed, through the production adapter (a Beast request as Session builds it), streamed and buffered.
-// The one refusal is mc's upload over plain HTTP: signed chunks, refused by both verifiers.
+// UNSIGNED-PAYLOAD, STREAMING-UNSIGNED-PAYLOAD-TRAILER, and mc's uploads over plain HTTP: signed chunks,
+// STREAMING-AWS4-HMAC-SHA256-PAYLOAD, single- and multi-chunk, and mc cp --checksum's unsigned trailers), GET,
+// ranges, HEAD, LIST v2, copy, deletes, multipart, UTF-8 and special-character keys, versionId, and presigned GET/PUT
+// URLs fetched with curl or urllib. Each is verified at the time it was signed, through the production adapter (a
+// Beast request as Session builds it), streamed and buffered. Every captured aws-chunked body ("body_deflate_b64") is
+// decoded as Router::route does it, signed chunks through their chunk verifier, to the body the client sent; one
+// flipped data byte in a signed body fails the upload. The retired verifier refused every signed-chunk upload.
 TEST(S3GatewayClientCaptures, RealClientRequestsVerifyAtTheGateway) {
     using namespace s3gatewayauth;
     constexpr const char* kCaptureAccessKey = "VHCAPTUREFIXTUREKEY00000A";
@@ -658,16 +765,17 @@ TEST(S3GatewayClientCaptures, RealClientRequestsVerifyAtTheGateway) {
         secret.secret_access_key = kCaptureSecret;
         return secret;
     };
-    const auto outcome = [&](const vs::VerificationInput& input, const vs::TimePoint at) -> std::string {
+    const auto outcome = [&](const vs::VerificationInput& input, const vs::TimePoint at,
+                             std::optional<vs::ChunkVerifier>* chain = nullptr) -> std::string {
         try {
-            (void)s3::verifySignedRequest(input, lookup, at);
+            (void)s3::verifySignedRequest(input, lookup, at, chain);
             return "ok";
         } catch (const s3::S3Error& e) {
             return e.code + ": " + e.what();
         }
     };
 
-    std::size_t records = 0, presigned = 0, refused = 0;
+    std::size_t records = 0, presigned = 0, refused = 0, signedChunkBodies = 0, chunkedBodies = 0;
     std::set<std::string> clients, payloadModes;
     std::string line;
     while (std::getline(in, line)) {
@@ -691,12 +799,36 @@ TEST(S3GatewayClientCaptures, RealClientRequestsVerifyAtTheGateway) {
         if (parsed->presigned) ++presigned;
         payloadModes.insert(parsed->presigned ? "presigned" : parsed->payload_hash.size() == 64 ? "sha256" : parsed->payload_hash);
 
-        const auto streamed = outcome(newInput, *at);
+        const bool signedChunks = s3::hasSignedChunks(req);
+        std::optional<vs::ChunkVerifier> chain;
+        const auto streamed = outcome(newInput, *at, signedChunks ? &chain : nullptr);
         if (expect == "ok") {
             EXPECT_EQ(streamed, "ok") << name << " " << req.target();
         } else {
             ++refused;
             EXPECT_EQ(streamed.substr(0, streamed.find(':')), expect) << name;
+        }
+        // Not streamed (no chunk verifier to hand back): signed chunks are refused, as before.
+        if (signedChunks) {
+            EXPECT_EQ(outcome(newInput, *at).substr(0, 14), "NotImplemented") << name;
+        }
+        if (rec.contains("body_deflate_b64")) {
+            const auto raw = inflateRaw(base64Decode(rec.at("body_deflate_b64").get<std::string>()));
+            ASSERT_FALSE(raw.empty()) << name;
+            EXPECT_TRUE(s3::isAwsChunked(req)) << name;
+            ++chunkedBodies;
+            if (signedChunks) ++signedChunkBodies;
+            const auto decoded = routeChunkedBody(req, raw, lookup, *at);
+            EXPECT_EQ(decoded.outcome, "ok") << name;
+            EXPECT_EQ(vs::sha256Hex(decoded.data), bodySha) << name;
+            EXPECT_EQ(decoded.payload.sha256_hex, bodySha) << name;
+            if (signedChunks) {
+                auto tampered = raw;
+                tampered[tampered.find("\r\n") + 2] ^= 0x01;   // the first data byte
+                const auto bad = routeChunkedBody(req, tampered, lookup, *at);
+                EXPECT_EQ(bad.outcome.substr(0, bad.outcome.find(':')), "SignatureDoesNotMatch") << name;
+                EXPECT_EQ(bad.status, http::status::forbidden) << name;
+            }
         }
         if (rec.contains("body")) {
             req.body() = rec.at("body").get<std::string>();
@@ -713,12 +845,278 @@ TEST(S3GatewayClientCaptures, RealClientRequestsVerifyAtTheGateway) {
         const bool oldPayloadOk = oldParsed->payload_hash == "UNSIGNED-PAYLOAD" ||
                                   oldParsed->payload_hash == "STREAMING-UNSIGNED-PAYLOAD-TRAILER" ||
                                   oldParsed->payload_hash == bodySha;
-        EXPECT_EQ(oldPayloadOk, expect == "ok") << name;
+        // It refused signed chunks as a payload hash mismatch.
+        EXPECT_EQ(oldPayloadOk, expect == "ok" && !signedChunks) << name;
     }
-    EXPECT_GE(records, 120u);
+    EXPECT_GE(records, 135u);
     EXPECT_GE(presigned, 8u);
-    EXPECT_EQ(refused, 1u);
+    EXPECT_EQ(refused, 0u);
+    EXPECT_EQ(signedChunkBodies, 2u);   // mc cp over HTTP: one chunk, and three chunks (64 KiB, 64 KiB, 18928 bytes)
+    EXPECT_EQ(chunkedBodies, 4u);       // and mc cp --checksum's two STREAMING-UNSIGNED-PAYLOAD-TRAILER bodies
     EXPECT_EQ(clients, (std::set<std::string>{"aws-cli", "boto3", "mc", "rclone"}));
     EXPECT_EQ(payloadModes, (std::set<std::string>{"presigned", "sha256", "UNSIGNED-PAYLOAD", "STREAMING-UNSIGNED-PAYLOAD-TRAILER",
                                                    "STREAMING-AWS4-HMAC-SHA256-PAYLOAD"}));
+}
+
+// ---- signed streaming payloads ----------------------------------------------------------------------------------
+
+namespace s3gatewayauth {
+
+struct Upload {
+    Request req;
+    std::string body;   // aws-chunked, as sent
+    std::string payload;
+};
+
+// An upload as mc (minio-go) sends it over plain HTTP: signed chunks, x-amz-decoded-content-length, no
+// Content-Encoding; `sdkShaped` adds Content-Encoding: aws-chunked as the AWS SDKs do. Trailers make it -TRAILER.
+inline Upload signedUpload(const std::string& payload, const std::size_t chunkSize, const vs::TimePoint at,
+                           const vs::HeaderList& trailers = {}, const bool sdkShaped = false) {
+    const auto mode = trailers.empty() ? vs::PayloadMode::StreamingSigned : vs::PayloadMode::StreamingSignedTrailer;
+    vs::HeaderList headers{{"x-amz-decoded-content-length", std::to_string(payload.size())},
+                           {"Content-Length", std::to_string(vs::awsChunkedLength(payload.size(), chunkSize, mode, trailers))},
+                           {"Content-Type", "text/plain"}};
+    if (sdkShaped) headers.emplace_back("Content-Encoding", "aws-chunked");
+    if (!trailers.empty()) headers.emplace_back("x-amz-trailer", trailers.front().first);
+    const vs::Request request{.method = "PUT", .host = kHost, .path = "/vh-bucket/dir/streamed.txt", .query = {},
+                              .headers = headers,
+                              .payload_hash = std::string(trailers.empty() ? vs::kStreamingSignedPayload
+                                                                           : vs::kStreamingSignedPayloadTrailer)};
+    const auto s = vs::sign(request, {.access_key = kAccessKey, .secret_key = kSecret, .session_token = {}},
+                            "us-east-1", "s3", at);
+    auto signer = vs::ChunkSigner::forRequest(s, kSecret);
+    EXPECT_TRUE(signer.has_value());
+    Upload out{.req = makeRequest("PUT", s.target(), Headers(s.headers.begin(), s.headers.end())),
+               .body = signer ? vs::encodeAwsChunked(*signer, payload, chunkSize, trailers) : std::string{},
+               .payload = payload};
+    return out;
+}
+
+inline Decoded route(const Upload& upload, const std::string& body, const vs::TimePoint at, Lookup& lookup) {
+    return routeChunkedBody(upload.req, body, lookup.fn(), at);
+}
+
+inline std::string patternPayload(const std::size_t size) {
+    std::string out(size, '\0');
+    for (std::size_t i = 0; i < size; ++i) out[i] = static_cast<char>('a' + (i * 7) % 26);
+    return out;
+}
+
+// The chunk encodings of a body, final chunk (and trailers) last.
+inline std::vector<std::string> chunksOf(const std::string& body) {
+    std::vector<std::string> out;
+    std::size_t offset = 0;
+    while (offset < body.size()) {
+        const auto lineEnd = body.find("\r\n", offset);
+        const auto size = std::stoull(body.substr(offset, body.find(';', offset) - offset), nullptr, 16);
+        const auto end = size == 0 ? body.size() : lineEnd + 2 + size + 2;
+        out.push_back(body.substr(offset, end - offset));
+        offset = end;
+    }
+    return out;
+}
+
+inline std::string joined(const std::vector<std::string>& parts) {
+    std::string out;
+    for (const auto& part : parts) out += part;
+    return out;
+}
+
+}
+
+TEST(S3GatewayStreaming, McShapedAndSdkShapedUploadsDecodeToTheSignedPayload) {
+    using namespace s3gatewayauth;
+    const auto t = now();
+    for (const bool sdkShaped : {false, true}) {
+        for (const std::size_t size : {std::size_t{0}, std::size_t{17}, std::size_t{65536}, std::size_t{150000}}) {
+            const auto upload = signedUpload(patternPayload(size), 65536, t, {}, sdkShaped);
+            EXPECT_TRUE(s3::isAwsChunked(upload.req));
+            EXPECT_TRUE(s3::hasSignedChunks(upload.req));
+            Lookup lookup;
+            const auto out = route(upload, upload.body, t, lookup);
+            ASSERT_EQ(out.outcome, "ok") << size;
+            EXPECT_EQ(out.data, upload.payload);
+            EXPECT_EQ(out.payload.size, size);
+            EXPECT_EQ(out.payload.sha256_hex, vs::sha256Hex(upload.payload));
+            EXPECT_EQ(lookup.calls, 1);
+        }
+    }
+}
+
+TEST(S3GatewayStreaming, SignedTrailersReachTheChecksumValidation) {
+    using namespace s3gatewayauth;
+    const auto t = now();
+    const vs::HeaderList trailers{{"x-amz-checksum-crc32", "AAAAAA=="}};
+    const auto upload = signedUpload(patternPayload(70000), 65536, t, trailers, true);
+    Lookup lookup;
+    const auto out = route(upload, upload.body, t, lookup);
+    ASSERT_EQ(out.outcome, "ok");
+    EXPECT_EQ(out.data, upload.payload);
+    EXPECT_EQ(out.payload.trailer_headers, (std::map<std::string, std::string>{{"x-amz-checksum-crc32", "AAAAAA=="}}));
+
+    auto tampered = upload.body;
+    tampered.replace(tampered.find("AAAAAA=="), 8, "BBBBBB==");
+    const auto bad = route(upload, tampered, t, lookup);
+    EXPECT_EQ(bad.outcome, "SignatureDoesNotMatch: Trailer signature mismatch");
+    EXPECT_EQ(bad.status, http::status::forbidden);
+}
+
+TEST(S3GatewayStreaming, EveryBrokenBodyFailsWithItsS3Error) {
+    using namespace s3gatewayauth;
+    const auto t = now();
+    const auto upload = signedUpload(patternPayload(3 * 8192), 8192, t);
+    const auto chunks = chunksOf(upload.body);
+    ASSERT_EQ(chunks.size(), 4u);
+
+    struct Case {
+        std::string name;
+        std::string body;
+        std::string code;
+        http::status status;
+    };
+    std::vector<Case> cases;
+    {
+        auto c = chunks;
+        c[1][c[1].size() - 10] ^= 0x01;
+        cases.push_back({"tampered data", joined(c), "SignatureDoesNotMatch", http::status::forbidden});
+    }
+    {
+        auto c = chunks;
+        auto& sig = c[1][std::string("2000;chunk-signature=").size() + 3];
+        sig = sig == '0' ? '1' : '0';
+        cases.push_back({"tampered signature", joined(c), "SignatureDoesNotMatch", http::status::forbidden});
+    }
+    {
+        auto c = chunks;
+        std::swap(c[0], c[1]);
+        cases.push_back({"reordered chunks", joined(c), "SignatureDoesNotMatch", http::status::forbidden});
+    }
+    {
+        auto c = chunks;
+        c.erase(c.begin() + 1);
+        cases.push_back({"dropped chunk", joined(c), "SignatureDoesNotMatch", http::status::forbidden});
+    }
+    {
+        auto c = chunks;
+        c.pop_back();
+        cases.push_back({"missing final chunk", joined(c), "IncompleteBody", http::status::bad_request});
+    }
+    cases.push_back({"truncated", upload.body.substr(0, upload.body.size() / 2), "IncompleteBody",
+                     http::status::bad_request});
+    {
+        auto c = chunks;
+        c[1].replace(0, 4, "1fff");
+        cases.push_back({"chunk size mismatch", joined(c), "InvalidRequest", http::status::bad_request});
+    }
+    cases.push_back({"oversize chunk header", "2000;chunk-signature=" + std::string(10000, 'a') + "\r\n",
+                     "InvalidRequest", http::status::bad_request});
+    cases.push_back({"chunk over 16 MiB", "1000001" + chunks[0].substr(4, chunks[0].find("\r\n") - 4) + "\r\n",
+                     "InvalidRequest", http::status::bad_request});
+    cases.push_back({"data after the end", upload.body + "x", "InvalidRequest", http::status::bad_request});
+
+    for (const auto& c : cases) {
+        Lookup lookup;
+        const auto out = route(upload, c.body, t, lookup);
+        EXPECT_EQ(out.outcome.substr(0, out.outcome.find(':')), c.code) << c.name << ": " << out.outcome;
+        EXPECT_EQ(out.status, c.status) << c.name;
+        EXPECT_EQ(lookup.calls, 1) << c.name;   // the seed signature verified first
+    }
+}
+
+TEST(S3GatewayStreaming, DecodedLengthAndDeclaredTrailersAreEnforced) {
+    using namespace s3gatewayauth;
+    const auto t = now();
+    {
+        // x-amz-decoded-content-length is signed: changing it in transit breaks the seed signature before any chunk
+        // is read.
+        auto upload = signedUpload(patternPayload(100), 64, t);
+        upload.req.set("x-amz-decoded-content-length", "99");
+        Lookup lookup;
+        const auto out = route(upload, upload.body, t, lookup);
+        EXPECT_EQ(out.outcome.substr(0, out.outcome.find(':')), "SignatureDoesNotMatch");
+    }
+    {
+        // Signed honestly with a wrong decoded length: refused once the body disagrees.
+        const auto t2 = now();
+        vs::HeaderList headers{{"x-amz-decoded-content-length", "101"}, {"Content-Length", "1"}};
+        const vs::Request request{.method = "PUT", .host = kHost, .path = "/vh-bucket/a.txt", .query = {},
+                                  .headers = headers, .payload_hash = std::string(vs::kStreamingSignedPayload)};
+        const auto s = vs::sign(request, {.access_key = kAccessKey, .secret_key = kSecret, .session_token = {}},
+                                "us-east-1", "s3", t2);
+        auto signer = vs::ChunkSigner::forRequest(s, kSecret);
+        ASSERT_TRUE(signer.has_value());
+        const auto body = vs::encodeAwsChunked(*signer, patternPayload(100), 64);
+        Lookup lookup;
+        const auto out = routeChunkedBody(makeRequest("PUT", s.target(), Headers(s.headers.begin(), s.headers.end())),
+                                          body, lookup.fn(), t2);
+        EXPECT_EQ(out.outcome, "IncompleteBody: Body is shorter than x-amz-decoded-content-length");
+    }
+    {
+        const auto t2 = now();
+        vs::HeaderList headers{{"x-amz-decoded-content-length", "lots"}, {"Content-Length", "1"}};
+        const vs::Request request{.method = "PUT", .host = kHost, .path = "/vh-bucket/a.txt", .query = {},
+                                  .headers = headers, .payload_hash = std::string(vs::kStreamingSignedPayload)};
+        const auto s = vs::sign(request, {.access_key = kAccessKey, .secret_key = kSecret, .session_token = {}},
+                                "us-east-1", "s3", t2);
+        Lookup lookup;
+        const auto out = routeChunkedBody(makeRequest("PUT", s.target(), Headers(s.headers.begin(), s.headers.end())),
+                                          "0;chunk-signature=" + std::string(64, 'a') + "\r\n\r\n", lookup.fn(), t2);
+        EXPECT_EQ(out.outcome, "InvalidArgument: Invalid x-amz-decoded-content-length");
+    }
+    {
+        // x-amz-trailer (signed) names x-amz-checksum-crc32; the body carries a signed x-amz-checksum-sha256 instead.
+        const vs::HeaderList trailers{{"x-amz-checksum-sha256", "AAAA"}};
+        vs::HeaderList headers{{"x-amz-decoded-content-length", "10"},
+                               {"Content-Length", std::to_string(vs::awsChunkedLength(
+                                                      10, 64, vs::PayloadMode::StreamingSignedTrailer, trailers))},
+                               {"x-amz-trailer", "x-amz-checksum-crc32"}};
+        const vs::Request request{.method = "PUT", .host = kHost, .path = "/vh-bucket/a.txt", .query = {},
+                                  .headers = headers, .payload_hash = std::string(vs::kStreamingSignedPayloadTrailer)};
+        const auto s = vs::sign(request, {.access_key = kAccessKey, .secret_key = kSecret, .session_token = {}},
+                                "us-east-1", "s3", t);
+        auto signer = vs::ChunkSigner::forRequest(s, kSecret);
+        ASSERT_TRUE(signer.has_value());
+        const auto body = vs::encodeAwsChunked(*signer, patternPayload(10), 64, trailers);
+        Lookup lookup;
+        const auto out = routeChunkedBody(makeRequest("PUT", s.target(), Headers(s.headers.begin(), s.headers.end())),
+                                          body, lookup.fn(), t);
+        EXPECT_EQ(out.outcome, "InvalidRequest: Trailers differ from x-amz-trailer");
+    }
+}
+
+TEST(S3GatewayStreaming, UnsignedChunkedBodiesUseTheSameDecoder) {
+    using namespace s3gatewayauth;
+    const auto t = now();
+    // aws-cli's layout (CRLF after the trailer) and mc cp --checksum's (bare LF, then CRLF CRLF).
+    for (const std::string tail :
+         {"x-amz-checksum-crc32:AAAAAA==\r\n\r\n", "x-amz-checksum-crc32:AAAAAA==\n\r\n\r\n"}) {
+        const std::string payload = "decoded body";
+        const std::string body = "c\r\n" + payload + "\r\n0\r\n" + tail;
+        auto req = signedRequest("PUT", "/vh-bucket/a.bin", {}, t, {},
+                                 {{"Content-Encoding", "aws-chunked"},
+                                  {"x-amz-decoded-content-length", std::to_string(payload.size())},
+                                  {"x-amz-trailer", "x-amz-checksum-crc32"},
+                                  {"Content-Length", std::to_string(body.size())}},
+                                 "STREAMING-UNSIGNED-PAYLOAD-TRAILER");
+        EXPECT_TRUE(s3::isAwsChunked(req));
+        EXPECT_FALSE(s3::hasSignedChunks(req));
+        Lookup lookup;
+        const auto out = routeChunkedBody(req, body, lookup.fn(), t);
+        ASSERT_EQ(out.outcome, "ok") << tail;
+        EXPECT_EQ(out.data, payload);
+        EXPECT_EQ(out.payload.trailer_headers.at("x-amz-checksum-crc32"), "AAAAAA==");
+    }
+    // A body hash in x-amz-content-sha256 is compared with the decoded body.
+    const std::string payload = "hashed";
+    const std::string body = "6\r\n" + payload + "\r\n0\r\n\r\n";
+    auto req = signedRequest("PUT", "/vh-bucket/a.bin", {}, t, {},
+                             {{"Content-Encoding", "aws-chunked"}, {"Content-Length", std::to_string(body.size())}},
+                             vs::sha256Hex(payload));
+    Lookup lookup;
+    EXPECT_EQ(routeChunkedBody(req, body, lookup.fn(), t).outcome, "ok");
+    EXPECT_EQ(routeChunkedBody(req, "6\r\nHASHED\r\n0\r\n\r\n", lookup.fn(), t).outcome.substr(0, 25),
+              "XAmzContentSHA256Mismatch");
+    // Plain bodies are not aws-chunked.
+    EXPECT_FALSE(s3::isAwsChunked(signedRequest("PUT", "/vh-bucket/a.bin", {}, t, "plain")));
+    EXPECT_FALSE(s3::isAwsChunked(signedRequest("PUT", "/vh-bucket/a.bin", {}, t, "plain", {}, "UNSIGNED-PAYLOAD")));
 }

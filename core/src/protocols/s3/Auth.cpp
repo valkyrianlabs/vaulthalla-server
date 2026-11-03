@@ -42,7 +42,8 @@ http::status sigv4StatusFor(const vl::sigv4::ErrorCode code) {
         case vl::sigv4::ErrorCode::PresignExpired:
         case vl::sigv4::ErrorCode::SignedHeaderMissing:
         case vl::sigv4::ErrorCode::UnknownAccessKey:
-        case vl::sigv4::ErrorCode::SignatureMismatch: return http::status::forbidden;
+        case vl::sigv4::ErrorCode::SignatureMismatch:
+        case vl::sigv4::ErrorCode::ChunkSignatureMismatch: return http::status::forbidden;
         case vl::sigv4::ErrorCode::AmbiguousAuthorization:
         case vl::sigv4::ErrorCode::UnsupportedAlgorithm:
         case vl::sigv4::ErrorCode::MalformedAuthorization:
@@ -56,7 +57,11 @@ http::status sigv4StatusFor(const vl::sigv4::ErrorCode code) {
         case vl::sigv4::ErrorCode::InvalidExpires:
         case vl::sigv4::ErrorCode::ExpiresTooLarge:
         case vl::sigv4::ErrorCode::SessionTokenNotSupported:
-        case vl::sigv4::ErrorCode::PayloadHashMismatch: return http::status::bad_request;
+        case vl::sigv4::ErrorCode::PayloadHashMismatch:
+        case vl::sigv4::ErrorCode::MalformedChunkedEncoding:
+        case vl::sigv4::ErrorCode::ChunkTooLarge:
+        case vl::sigv4::ErrorCode::IncompleteBody:
+        case vl::sigv4::ErrorCode::DecodedLengthMismatch: return http::status::bad_request;
         case vl::sigv4::ErrorCode::UnsupportedPayloadHash: return http::status::not_implemented;
     }
     return http::status::forbidden;
@@ -84,8 +89,10 @@ S3Error sigv4Error(const vl::sigv4::ErrorCode code, const bool presigned, std::s
 }
 
 GatewaySecret verifySignedRequest(const vl::sigv4::VerificationInput& input, const GatewaySecretLookup& lookup,
-                                  const vl::sigv4::TimePoint now) {
-    const auto options = gatewayVerifyOptions();
+                                  const vl::sigv4::TimePoint now,
+                                  std::optional<vl::sigv4::ChunkVerifier>* streamingBody) {
+    auto options = gatewayVerifyOptions();
+    options.allow_streaming_signed_payload = streamingBody != nullptr;
     const auto parsed = vl::sigv4::parseAuthorization(input, options);
     if (!parsed)
         throw sigv4Error(parsed.error().code, presignedRequestTarget(input.target), parsed.error().message,
@@ -109,6 +116,15 @@ GatewaySecret verifySignedRequest(const vl::sigv4::VerificationInput& input, con
     if (!result.ok()) throw sigv4Error(result.code, parsed->presigned, result.message, input.target);
     if (!found)
         throw sigv4Error(vl::sigv4::ErrorCode::UnknownAccessKey, parsed->presigned, "Unknown access key", input.target);
+    if (result.body_pending) {
+        // Only reachable with streamingBody (allow_streaming_signed_payload is off otherwise).
+        auto chain = vl::sigv4::ChunkVerifier::forRequest(result, found->secret_access_key);
+        if (!chain || streamingBody == nullptr)
+            throw sigv4Error(vl::sigv4::ErrorCode::UnsupportedPayloadHash, parsed->presigned,
+                             chain ? "Signed streaming payload outside a streamed request" : chain.error().message,
+                             input.target);
+        streamingBody->emplace(std::move(*chain));
+    }
     return std::move(*found);
 }
 
@@ -122,7 +138,8 @@ CredentialManager& Authenticator::credentials() const {
     return *credentials_;
 }
 
-AuthContext Authenticator::authenticate(const vl::sigv4::VerificationInput& input) const {
+AuthContext Authenticator::authenticate(const vl::sigv4::VerificationInput& input,
+                                        std::optional<vl::sigv4::ChunkVerifier>* streamingBody) const {
     if (!requireSigV4_) {
         if (!config::Registry::get().dev.enabled && !configuredHostIsLoopback())
             throw S3Error{
@@ -146,7 +163,7 @@ AuthContext Authenticator::authenticate(const vl::sigv4::VerificationInput& inpu
     const auto secret = verifySignedRequest(
         input,
         [this](const std::string& accessKey) { return credentials().findEnabledSecret(accessKey); },
-        vl::sigv4::Clock::now());
+        vl::sigv4::Clock::now(), streamingBody);
 
     auto user = vh::identities::manager().user(secret.credential.principal_user_id);
     if (!user || !user->authorizing()) throw accessDenied(input.target);

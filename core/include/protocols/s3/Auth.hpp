@@ -5,6 +5,7 @@
 #include "identities/Fwd.hpp"
 
 #include <boost/beast/http.hpp>
+#include <vl/sigv4/streaming.hpp>
 #include <vl/sigv4/verifier.hpp>
 
 #include <functional>
@@ -66,14 +67,24 @@ using GatewaySecretLookup = std::function<std::optional<GatewaySecret>(const std
 // credential scope, X-Amz-Expires, session tokens), then the secret-free checks (date, skew or presign window, signed
 // headers, payload hash), then the credential lookup, then the signature in constant time. The lookup runs at most
 // once, and only for a request that passed every check that needs no secret. Throws S3Error (sigv4Error) on failure.
+//
+// Signed streaming payloads (STREAMING-AWS4-HMAC-SHA256-PAYLOAD[-TRAILER], aws-chunked bodies whose chunks are signed)
+// are accepted only when `streamingBody` is given: the seed signature is verified and *streamingBody receives the
+// chunk verifier. The body is NOT verified then: the caller decodes it through that verifier
+// (decodeAwsChunkedBody) and acts on nothing until every chunk verified. Without `streamingBody` they answer
+// NotImplemented (a buffered request: the gateway streams only PUT bodies).
 [[nodiscard]] GatewaySecret verifySignedRequest(const vl::sigv4::VerificationInput& input,
-                                                const GatewaySecretLookup& lookup, vl::sigv4::TimePoint now);
+                                                const GatewaySecretLookup& lookup, vl::sigv4::TimePoint now,
+                                                std::optional<vl::sigv4::ChunkVerifier>* streamingBody = nullptr);
 
 class Authenticator {
 public:
     explicit Authenticator(bool requireSigV4 = true);
 
-    AuthContext authenticate(const vl::sigv4::VerificationInput& input) const;
+    // streamingBody: as verifySignedRequest's. Left empty when SigV4 is not required (dev and loopback listeners):
+    // the chunks are then decoded unverified, like every other unsigned request there.
+    AuthContext authenticate(const vl::sigv4::VerificationInput& input,
+                             std::optional<vl::sigv4::ChunkVerifier>* streamingBody = nullptr) const;
 
 private:
     bool requireSigV4_{true};
