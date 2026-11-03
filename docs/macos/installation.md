@@ -48,7 +48,7 @@ shasum -a 256 -c vaulthalla-<version>-arm64.pkg.sha256
 sudo installer -pkg vaulthalla-<version>-arm64.pkg -target /
 ```
 
-The package installs the server. Vaulthalla Desktop is a separate download from its [releases](https://github.com/valkyrianlabs/vaulthalla-desktop/releases).
+The package installs the server. Vaulthalla Desktop is a separate download from its [releases](https://github.com/valkyrianlabs/vaulthalla-desktop-releases/releases).
 :::
 
 :::
