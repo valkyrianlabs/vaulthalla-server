@@ -1000,8 +1000,11 @@ TEST(S3GatewayServiceTest, EnabledServiceBindsAndReturnsS3XmlErrors) {
 
     const auto response = httpGetRoot(cfg.s3_gateway.port);
 
+    // An unsigned request answers what AWS answers an anonymous one: 403 AccessDenied (SignatureDoesNotMatch before
+    // the gateway verified with vl-sigv4; the status is unchanged).
     EXPECT_EQ(response.result(), http::status::forbidden);
-    EXPECT_NE(response.body().find("<Code>SignatureDoesNotMatch</Code>"), std::string::npos);
+    EXPECT_NE(response.body().find("<Code>AccessDenied</Code>"), std::string::npos);
+    EXPECT_NE(response.body().find("<Message>Missing Authorization header</Message>"), std::string::npos);
     EXPECT_NE(response.body().find("<RequestId>"), std::string::npos);
     EXPECT_FALSE(response["x-amz-request-id"].empty());
     EXPECT_EQ(response[http::field::cache_control], "private, no-store");

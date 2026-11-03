@@ -5,7 +5,9 @@
 //                                                          which pins the credential-scope date)
 //   ses       email::providers::detail::signAwsV4          SesProvider (SES v2 SendEmail)
 //   gateway   protocols::s3::sigv4                         the S3 gateway's verifier (makeCanonicalRequest,
-//                                                          signatureFor, verify)
+//                                                          signatureFor, verify); the gateway now verifies with
+//                                                          vl::sigv4 (protocols::s3::verifySignedRequest), held to
+//                                                          these records by the VlSigv4Verifier*/GatewayVerifier* tests
 //
 // These record what the CURRENT code produces, not what SigV4 says it should: SigV4 is being consolidated into one
 // library (vl-sigv4), and the swap must change no bytes. The "upstream" records were captured from the in-tree
@@ -35,6 +37,8 @@
 #include "email/Transport.hpp"
 #include "email/providers/SesProvider.hpp"
 #include "email/providers/SesSigning.hpp"
+#include "protocols/s3/Auth.hpp"
+#include "protocols/s3/Router.hpp"
 #include "protocols/s3/SigV4.hpp"
 #include "storage/s3/curl/helpers.hpp"
 #include "storage/s3/sigv4/Signer.hpp"
@@ -43,6 +47,7 @@
 #include <gtest/gtest.h>
 #include <vl/sigv4/crypto.hpp>
 #include <vl/sigv4/signer.hpp>
+#include <vl/sigv4/verifier.hpp>
 
 #include <curl/curl.h>
 
@@ -52,6 +57,7 @@
 #include <chrono>
 #include <ctime>
 #include <filesystem>
+#include <functional>
 #include <fstream>
 #include <iomanip>
 #include <map>
@@ -940,4 +946,214 @@ TEST(SigV4Goldens, SesProviderSendSignsLikeTheGoldens) {
         "Authorization: " + old.authorization,
     };
     EXPECT_EQ(request.headers, oldHeaders);
+}
+
+// ---- the gateway verifier: vl-sigv4 (protocols::s3::verifySignedRequest) against the in-tree reference -------------
+
+namespace sigv4golden {
+
+// The request as Session hands it to Router::route (a Beast request), built from what the client sent.
+template <typename SignedRequest>
+vh::protocols::s3::Router::Request gatewayRequest(const Case& c, const SignedRequest& sent) {
+    const auto input = gatewayInput(c, sent);
+    vh::protocols::s3::Router::Request req;
+    req.method_string(input.method);
+    req.target(input.target);
+    req.version(11);
+    bool host = false;
+    for (const auto& [name, value] : input.headers) {
+        req.insert(name, value);
+        host = host || lowerName(name) == "host";
+    }
+    if (!host) req.insert("Host", input.host);
+    req.body() = input.body;
+    return req;
+}
+
+inline vh::protocols::s3::GatewaySecretLookup lookupFor(const Case& c) {
+    return [c](const std::string& accessKey) -> std::optional<vh::protocols::s3::GatewaySecret> {
+        if (accessKey != c.access_key) return std::nullopt;
+        vh::protocols::s3::GatewaySecret secret;
+        secret.credential.access_key = accessKey;
+        secret.secret_access_key = c.secret_key;
+        return secret;
+    };
+}
+
+// The production gateway path: "ok" or the S3 error code it answers with.
+inline std::string gatewayVerdict(const Case& c, const vh::protocols::s3::Router::Request& req,
+                                  const std::string& secret, const vlsig::TimePoint now) {
+    auto lookup = lookupFor(c);
+    if (secret != c.secret_key) {
+        lookup = [c, secret](const std::string& accessKey) -> std::optional<vh::protocols::s3::GatewaySecret> {
+            vh::protocols::s3::GatewaySecret s;
+            s.credential.access_key = accessKey;
+            s.secret_access_key = secret;
+            return s;
+        };
+    }
+    try {
+        (void)vh::protocols::s3::verifySignedRequest(vh::protocols::s3::verificationInput(req, req.body()), lookup, now);
+        return "ok";
+    } catch (const vh::protocols::s3::S3Error& e) {
+        return e.code;
+    }
+}
+
+// The retired path, as Router + Authenticator drove it: gw::inputFromRequest, Auth.cpp's session-token refusal, then
+// gw::verify (which reads the clock itself).
+inline bool oldGatewayAccepts(const vh::protocols::s3::Router::Request& req, const std::string& secret) {
+    const auto input = gw::inputFromRequest(req, req.body());
+    std::string error;
+    if (!gw::parseAuthorization(input, error)) return false;
+    if (input.target.find("X-Amz-Security-Token=") != std::string::npos) return false;
+    for (const auto& [name, value] : input.headers)
+        if (lowerName(name) == "x-amz-security-token" && !value.empty()) return false;
+    return gw::verify(input, secret).ok;
+}
+
+}
+
+// vl-sigv4's verifier, fed through the gateway's Beast adapter, rebuilds every gateway record: the canonical request
+// and the signature, for all 25 cases (the non-S3 ones with VerifyOptions::service set to theirs; production accepts
+// only s3). The one difference is the non-S3 path encoding of aws-suite/get-utf8 (vl-sigv4 compat notes, item 3),
+// where vl-sigv4 rebuilds what the upstream signer signed instead.
+TEST(SigV4Goldens, VlSigv4VerifierMatchesGatewayGoldens) {
+    using namespace sigv4golden;
+    const auto& golden = fixture();
+    ASSERT_FALSE(golden.empty()) << "missing or empty fixture " << fixturePath();
+    std::size_t compared = 0;
+    for (const auto& c : cases()) {
+        const auto req = gatewayRequest(c, runUpstream(c, c.time));
+        const auto input = vh::protocols::s3::verificationInput(req, req.body());
+        auto options = vh::protocols::s3::gatewayVerifyOptions();
+        options.service = c.service;
+        options.reject_session_tokens = false;   // s3/session-token: the record is about canonicalization
+        const auto parsed = vlsig::parseAuthorization(input, options);
+        ASSERT_TRUE(parsed) << c.name << ": " << parsed.error().message;
+        const auto canonical = vlsig::canonicalRequestFor(input, *parsed, options);
+        const auto signature = vlsig::signatureFor(input, *parsed, c.secret_key, options);
+        if (c.name == "aws-suite/get-utf8") {
+            EXPECT_EQ(canonical, golden.at(recordKey(c, Impl::Upstream, "canonical_request"))) << c.name;
+            EXPECT_NE(canonical, golden.at(recordKey(c, Impl::Gateway, "canonical_request"))) << c.name;
+            continue;
+        }
+        EXPECT_EQ(canonical, golden.at(recordKey(c, Impl::Gateway, "canonical_request"))) << c.name;
+        EXPECT_EQ(signature, golden.at(recordKey(c, Impl::Gateway, "signature"))) << c.name;
+        compared += 2;
+        const auto result = vlsig::verify(input, c.secret_key, vlsig::Clock::from_time_t(c.time), options);
+        EXPECT_TRUE(result.ok()) << c.name << ": " << result.message;
+    }
+    EXPECT_EQ(compared, (cases().size() - 1) * 2);
+}
+
+// At the current time, the production gateway path accepts and refuses exactly what the retired one did for every S3
+// case, signed by the upstream signer, vl-sigv4 and the legacy data-path signer.
+TEST(SigV4Goldens, GatewayVerifierAcceptsWhatTheOldVerifierAccepted) {
+    using namespace sigv4golden;
+    const auto now = std::time(nullptr);
+    const auto at = vlsig::Clock::from_time_t(now);
+    std::size_t checked = 0;
+    for (const auto& c : cases()) {
+        if (c.service != "s3") continue;   // the gateway accepts only service s3
+        std::vector<std::pair<std::string, vh::protocols::s3::Router::Request>> sent{
+            {"upstream", gatewayRequest(c, runUpstream(c, now))},
+            {"vl-sigv4", gatewayRequest(c, runVlSigv4(c, now))},
+        };
+        if (applies(c, Impl::Legacy)) {
+            const auto trace = runLegacy(c, now);
+            vh::protocols::s3::Router::Request req;
+            req.method_string(c.method);
+            const auto query = wireQuery(c);
+            req.target(legacyPath(c) + (query.empty() ? std::string{} : "?" + query));
+            req.version(11);
+            for (const auto& [name, value] : legacyHeaders(c, now)) req.insert(name, value);
+            req.insert("authorization", trace.authorization);
+            req.body() = c.body;
+            sent.emplace_back("legacy", std::move(req));
+        }
+        for (const auto& [signer, req] : sent) {
+            const auto verdict = gatewayVerdict(c, req, c.secret_key, at);
+            EXPECT_EQ(verdict == "ok", oldGatewayAccepts(req, c.secret_key)) << c.name << " " << signer << ": " << verdict;
+            if (c.name == "s3/session-token") {
+                EXPECT_EQ(verdict, "InvalidToken") << signer;   // refused by Auth.cpp before, by the options now
+            } else if (signer == "legacy" && c.name == "s3/put-object-headers-case-and-space") {
+                EXPECT_EQ(verdict, "SignatureDoesNotMatch");   // legacy signs header values untrimmed
+            } else {
+                EXPECT_EQ(verdict, "ok") << c.name << " " << signer;
+            }
+            ++checked;
+        }
+    }
+    EXPECT_GT(checked, 50u);
+}
+
+// Tampering, staleness and wrong keys: for every S3 case the production path and the retired one agree on accept or
+// refuse, and the production path answers the S3 error code listed.
+TEST(SigV4Goldens, GatewayVerifierAgreesWithTheOldVerifierOnMutations) {
+    using namespace sigv4golden;
+    using Request = vh::protocols::s3::Router::Request;
+    namespace http = boost::beast::http;
+    const auto now = std::time(nullptr);
+    const auto at = vlsig::Clock::from_time_t(now);
+    struct Mutation {
+        std::string name;
+        std::function<Request(const Case&)> make;
+        std::string secret;        // empty: the case's
+        std::string refusedWith;   // the code when refused
+    };
+    const auto signedAt = [](const Case& c, const std::time_t t) { return gatewayRequest(c, runVlSigv4(c, t)); };
+    const auto edit = [&](std::function<void(Request&)> f) {
+        return [=](const Case& c) {
+            auto req = signedAt(c, now);
+            f(req);
+            return req;
+        };
+    };
+    const std::vector<Mutation> mutations{
+        {"unchanged", edit([](Request&) {}), {}, {}},
+        {"wrong secret", edit([](Request&) {}), "wJalrXUtnFEMI/K7MDENG+bPxRfiCYWRONGKEY", "SignatureDoesNotMatch"},
+        {"body changed", edit([](Request& r) { r.body() += "!"; }), {}, "XAmzContentSHA256Mismatch"},
+        {"host changed", edit([](Request& r) { r.set(http::field::host, "evil.example"); }), {}, "SignatureDoesNotMatch"},
+        {"path changed", edit([](Request& r) { r.target("/other" + std::string(r.target())); }), {}, "SignatureDoesNotMatch"},
+        {"query added", edit([](Request& r) {
+             const auto t = std::string(r.target());
+             r.target(t + (t.find('?') == std::string::npos ? "?" : "&") + "extra=1");
+         }), {}, "SignatureDoesNotMatch"},
+        {"method changed", edit([](Request& r) { r.method_string(r.method_string() == "GET" ? "DELETE" : "GET"); }), {},
+         "SignatureDoesNotMatch"},
+        {"signed header removed", edit([](Request& r) { r.erase("x-amz-content-sha256"); }), {}, "SignatureDoesNotMatch"},
+        {"unsigned header added", edit([](Request& r) { r.insert("x-vh-extra", "1"); }), {}, {}},
+        {"signature upper-case", edit([](Request& r) {
+             auto a = std::string(r[http::field::authorization]);
+             std::ranges::transform(a.begin() + static_cast<std::ptrdiff_t>(a.find("Signature=") + 10), a.end(),
+                                    a.begin() + static_cast<std::ptrdiff_t>(a.find("Signature=") + 10),
+                                    [](const unsigned char ch) { return static_cast<char>(std::toupper(ch)); });
+             r.set(http::field::authorization, a);
+         }), {}, {}},
+        {"signature truncated", edit([](Request& r) {
+             auto a = std::string(r[http::field::authorization]);
+             a.pop_back();
+             r.set(http::field::authorization, a);
+         }), {}, "SignatureDoesNotMatch"},
+        {"signed 20 minutes ago", [&](const Case& c) { return signedAt(c, now - 20 * 60); }, {}, "RequestTimeTooSkewed"},
+        {"signed 20 minutes ahead", [&](const Case& c) { return signedAt(c, now + 20 * 60); }, {}, "RequestTimeTooSkewed"},
+        {"signed 14 minutes ago", [&](const Case& c) { return signedAt(c, now - 14 * 60); }, {}, {}},
+    };
+    std::size_t checked = 0;
+    for (const auto& c : cases()) {
+        if (c.service != "s3" || !c.session_token.empty()) continue;
+        for (const auto& m : mutations) {
+            const auto secret = m.secret.empty() ? c.secret_key : m.secret;
+            const auto req = m.make(c);
+            const auto verdict = gatewayVerdict(c, req, secret, at);
+            const bool old = oldGatewayAccepts(req, secret);
+            EXPECT_EQ(verdict == "ok", old) << c.name << " / " << m.name << ": " << verdict;
+            if (verdict != "ok") {
+                EXPECT_EQ(verdict, m.refusedWith) << c.name << " / " << m.name;
+            }
+            ++checked;
+        }
+    }
+    EXPECT_GT(checked, 250u);
 }
