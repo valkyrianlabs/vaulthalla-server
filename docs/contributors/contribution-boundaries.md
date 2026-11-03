@@ -74,7 +74,7 @@ Some of that work should begin as a private report, not a public PR.
 | Database schema and query layer | `deploy/psql/*`, `core/src/db/*`, `core/include/db/*` | Maintainer-guided area | Audits, docs, tightly scoped fixes after discussion | Schema changes, migration ordering, retention semantics, query contract changes |
 | Sync engine | `core/src/sync/*`, `core/include/sync/*` | Maintainer-guided area | Diagnostics, targeted fixes with strong repro and validation | Conflict resolution, remote/local policy changes, key rotation, deletion/download/upload semantics |
 | Auth, RBAC, crypto, secrets, TPM | `core/src/auth/*`, `core/src/rbac/*`, `core/src/crypto/*`, `core/include/auth/*`, `core/include/rbac/*`, `core/include/crypto/*`, `web/middleware.ts`, `web/src/lib/session.ts`, `deploy/systemd/vaulthalla-swtpm.service.in` | Security-sensitive or restricted work | Documentation, approved hardening, tests, threat-model clarifications | Public exploit details, bypass fixes without prior coordination, secret-handling changes, token/session changes, TPM backend behavior |
-| Release process and publication | `release.toml`, `.release/*`, `.github/workflows/release.yml` | Maintainer-guided area | Package contract and contract-test improvements, release notes for your change | Publication policy, Nexus/GitHub release behavior, versioning contract changes |
+| Release process and publication | `release.toml`, `.release/*`, `.github/workflows/release.yml` | Maintainer-guided area | Package contract and contract-test improvements, release notes for your change | Publication policy, APT/package repository and GitHub release behavior, versioning contract changes |
 
 ## Good First PR Shapes
 

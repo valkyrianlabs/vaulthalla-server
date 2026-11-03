@@ -10,7 +10,7 @@
 #                   mounts and isolation
 #   CI_NETWORK=host (environment) shares the runner host's network instead of the isolated default: only for
 #                   jobs that must reach a service on the host's loopback (the macOS package publication to
-#                   Nexus on 127.0.0.1:8081). Not combinable with --postgres.
+#                   Apthalla on 127.0.0.1:8090). Not combinable with --postgres.
 #   --root          run as container root (still an unprivileged subordinate uid on the host),
 #                   for images without sudo; files it leaves in the workspace are handed back
 #
