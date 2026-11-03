@@ -1,6 +1,5 @@
 #include "storage/s3/Controller.hpp"
 #include "vault/model/APIKey.hpp"
-#include "db/encoding/timestamp.hpp"
 #include "storage/s3/curl/helpers.hpp"
 #include "log/Registry.hpp"
 
@@ -10,13 +9,13 @@
 using namespace vh::storage::s3;
 using namespace vh::vault::model;
 using namespace vh::storage::s3::curl;
-using namespace vh::db::encoding;
 
+// x-amz-date is not here: buildAuthorizationHeader sets it from the instant it signs at (one clock read for the date
+// and the credential scope), so send these headers after signing.
 std::map<std::string, std::string> Controller::buildHeaderMap(const std::string &payloadHash) const {
     return {
         {"host", apiKey_->endpoint.substr(apiKey_->endpoint.find("//") + 2)},
         {"x-amz-content-sha256", payloadHash},
-        {"x-amz-date", getCurrentTimestamp()}
     };
 }
 
@@ -43,7 +42,7 @@ SList Controller::makeSigHeaders(const std::string &method,
                                  const std::string &canonical,
                                  const std::string &payloadHash,
                                  const std::string &query) const {
-    auto base = buildHeaderMap(payloadHash); // host + dates
+    auto base = buildHeaderMap(payloadHash); // host + payload hash; x-amz-date comes from the signer
     const auto auth = buildAuthorizationHeader(apiKey_, method, canonical, base, payloadHash, query);
 
     SList out;

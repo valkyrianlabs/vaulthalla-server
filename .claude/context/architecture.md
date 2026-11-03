@@ -1057,8 +1057,17 @@ stage "Copy And Delete")
   `GetObjectOptions::version_id`, `copyObjectVersion` (Copy, directive COPY keeps vh-iv/key-version/hash; > 5 GiB →
   `ObjectTooLargeForCopy` before metering; a 200 carrying `<Error>` fails). They sign with `vl::sigv4::sign` (vl-sigv4; sorted,
   RFC 3986 query identical in URL and signature: version ids carry `+/=`) and send through `curl::http` (timeouts,
-  test transport). Every PUT path records the thread's `lastPutOutcome()` (ETag + `x-amz-version-id`). The legacy
-  `buildAuthorizationHeader` sorts the canonical query (it signed `list-type&…&continuation-token` unsorted).
+  test transport). Every PUT path records the thread's `lastPutOutcome()` (ETag + `x-amz-version-id`).
+- **The rest of the data path** (object PUT/GET/HEAD/DELETE, copy-in-place metadata, multipart, `listObjectKeysPage`,
+  the credential probe, `isBucketEmpty`) builds its own URLs (`constructPaths`: curl-escaped key segments) and header
+  maps (`buildHeaderMap`: host + payload hash) and signs with `curl::buildAuthorizationHeader` →
+  `curl::signDataPathRequest` (vl-sigv4's primitives: the encoded path as sent, the encoded query sorted without
+  re-encoding, every map entry signed with trimmed values). The signer sets `x-amz-date` in the map from the instant it
+  signs at and takes the scope date from the same instant, so headers are sent after signing. Payload hashes stay per
+  operation: `UNSIGNED-PAYLOAD` for GET/HEAD/copy/initiate/list/probe, the body's SHA-256 for PUT/part/complete, the
+  empty body's for DELETE/abort. `curl::buildAuthorizationTrace` (the old signer) is only the goldens' reference.
+  Wire guard: `S3DataPathWire.*` (real curl against a capture server; every request verifies and matches the old
+  signer).
   Test fake: `tests/helpers/versioned_bucket.hpp` (`VersionedBucket`: S3 versioning modes, delete markers, failure
   injection, body-GET counters).
 - **Listings are never partial (#246).** `Controller::listObjects` (the full LIST behind `Cloud::initBins` →

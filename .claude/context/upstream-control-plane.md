@@ -108,7 +108,7 @@ buckets it created. Other providers: plain storage, but protection locks still a
 
 ## Tests
 
-DB-free: `UpstreamSigV4*`, `SigV4Goldens.*` (incl. `VlSigv4*`: vl-sigv4 against the upstream and SES goldens), `UpstreamProvider*`, `UpstreamEventDecode*`, `UpstreamPassLease*`, `ShellLogRedaction*`.
+DB-free: `UpstreamSigV4*`, `SigV4Goldens.*` (incl. `VlSigv4*`: vl-sigv4 against the upstream, SES and legacy data-path goldens), `S3DataPathWire.*`, `UpstreamProvider*`, `UpstreamEventDecode*`, `UpstreamPassLease*`, `ShellLogRedaction*`.
 Live (opt-in, one `vh-test-*` bucket per run): `LiveR2.*`; guard self-tests `LiveBucketGuard.*` (testing.md).
 DB-backed (`bin/tests/run_unit.sh`): `UpstreamStore*`, `UpstreamOps*`, `UpstreamEventOps*`, `UpstreamEvents*`,
 `UpstreamSubscriptions*`, `UpstreamScopedSync*`, `UpstreamParity*`, `SqlDeployerHistoryDb.*` (migration 110),

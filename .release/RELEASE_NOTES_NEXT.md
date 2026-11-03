@@ -22,3 +22,7 @@ for users and operators; keep it representative of what actually ships.
   keys.
 - Operator email sent through Amazon SES is signed by vl-sigv4 too. The requests are the same as before, so SES
   credentials and settings need no change.
+- The everyday traffic of S3 and R2 vaults (uploads, downloads, listings, deletes, multipart uploads) is signed by
+  vl-sigv4 as well, so all of Vaulthalla's AWS request signing now goes through that one library. The requests are
+  the same as before. One rare failure is gone: a request signed at the very moment UTC midnight passed could carry
+  two different dates and be refused by the provider; both dates now come from the same instant.

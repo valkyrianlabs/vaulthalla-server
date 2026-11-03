@@ -249,7 +249,7 @@ namespace vh::storage::s3 {
         const std::string uriStr = uri.str();
         const std::string url = apiKey_->endpoint + uriStr;
         const std::string payloadHash = "UNSIGNED-PAYLOAD";
-        const auto hdrMap = buildHeaderMap(payloadHash);
+        auto hdrMap = buildHeaderMap(payloadHash);
         const std::string authHeader = buildAuthorizationHeader(apiKey_, "GET", uriStr, hdrMap, payloadHash);
 
         HeaderList headers;

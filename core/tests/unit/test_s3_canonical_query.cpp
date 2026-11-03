@@ -1,12 +1,12 @@
-// The legacy data-plane signer (storage::s3::curl::buildAuthorizationHeader) signs the query in SigV4 canonical order.
+// The data-plane signer (storage::s3::curl::buildAuthorizationHeader, on vl-sigv4) signs the query in SigV4 canonical order.
 // Paged ListObjectsV2 requests are written ?list-type=2&max-keys=N&continuation-token=…, which is out of order; signing
 // them as written made every page after the first fail with SignatureDoesNotMatch on AWS.
 
-#include "db/encoding/timestamp.hpp"
 #include "storage/s3/curl/helpers.hpp"
 #include "vault/model/APIKey.hpp"
 
 #include <gtest/gtest.h>
+#include <vl/sigv4/types.hpp>
 
 #include <map>
 #include <memory>
@@ -20,17 +20,22 @@ std::shared_ptr<vh::vault::model::APIKey> canonicalQueryTestKey() {
                                                       "https://s3.us-east-2.amazonaws.com");
 }
 
+// One fixed signing instant: the signer derives x-amz-date and the credential-scope date from it.
+const vl::sigv4::TimePoint kSignedAt = vl::sigv4::Clock::from_time_t(1793614500);   // 2026-11-02T10:15:00Z
+constexpr const char* kSignedAtAmzDate = "20261102T101500Z";
+constexpr const char* kSignedAtDate = "20261102";
+
 std::map<std::string, std::string> canonicalQueryTestHeaders() {
     return {
         {"host", "s3.us-east-2.amazonaws.com"},
         {"x-amz-content-sha256", "UNSIGNED-PAYLOAD"},
-        {"x-amz-date", vh::db::encoding::getDate() + "T000000Z"},
     };
 }
 
 std::string signQuery(const std::string& fullPath, const std::string& canonicalQuery = {}) {
-    return vh::storage::s3::curl::buildAuthorizationHeader(canonicalQueryTestKey(), "GET", fullPath,
-                                                           canonicalQueryTestHeaders(), "UNSIGNED-PAYLOAD", canonicalQuery);
+    auto headers = canonicalQueryTestHeaders();
+    return vh::storage::s3::curl::buildAuthorizationHeader(canonicalQueryTestKey(), "GET", fullPath, headers,
+                                                           "UNSIGNED-PAYLOAD", canonicalQuery, kSignedAt);
 }
 
 // Independent SigV4 reference over a canonical query the caller already put in order.
@@ -38,14 +43,15 @@ std::string referenceSignature(const std::string& path, const std::string& sorte
     namespace curl = vh::storage::s3::curl;
     const auto key = canonicalQueryTestKey();
     const auto headers = canonicalQueryTestHeaders();
-    const auto date = vh::db::encoding::getDate();
+    const std::string date = kSignedAtDate;
+    const std::string amzDate = kSignedAtAmzDate;
     const std::string canonicalRequest = "GET\n" + path + "\n" + sortedQuery + "\n" +
                                          "host:" + headers.at("host") + "\n" +
                                          "x-amz-content-sha256:UNSIGNED-PAYLOAD\n" +
-                                         "x-amz-date:" + headers.at("x-amz-date") + "\n\n" +
+                                         "x-amz-date:" + amzDate + "\n\n" +
                                          "host;x-amz-content-sha256;x-amz-date\nUNSIGNED-PAYLOAD";
     const std::string scope = date + "/" + key->region + "/s3/aws4_request";
-    const std::string stringToSign = "AWS4-HMAC-SHA256\n" + headers.at("x-amz-date") + "\n" + scope + "\n" +
+    const std::string stringToSign = "AWS4-HMAC-SHA256\n" + amzDate + "\n" + scope + "\n" +
                                      curl::sha256Hex(canonicalRequest);
     const auto kDate = curl::hmacSha256Raw("AWS4" + key->secret_access_key, date);
     const auto kSigning = curl::hmacSha256Raw(curl::hmacSha256Raw(curl::hmacSha256Raw(kDate, key->region), "s3"),

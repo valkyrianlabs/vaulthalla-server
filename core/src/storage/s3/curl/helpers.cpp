@@ -1,6 +1,5 @@
 #include "storage/s3/curl/helpers.hpp"
 #include "db/encoding/u8.hpp"
-#include "db/encoding/timestamp.hpp"
 #include "vault/model/APIKey.hpp"
 
 #include <openssl/hmac.h>
@@ -13,6 +12,9 @@
 #include <filesystem>
 #include <mutex>
 #include <curl/curl.h>
+#include <vl/sigv4/canonical.hpp>
+#include <vl/sigv4/crypto.hpp>
+#include <utility>
 
 using namespace vh::db::encoding;
 
@@ -156,14 +158,50 @@ namespace vh::storage::s3::curl {
         return found;
     }
 
+    DataPathSignature signDataPathRequest(const vault::model::APIKey &api_key,
+                                          const std::string &method,
+                                          const std::string &fullPath,
+                                          std::map<std::string, std::string> &headers,
+                                          const std::string &payloadHash,
+                                          const std::string &canonicalQuery,
+                                          const vl::sigv4::TimePoint now) {
+        namespace sig = vl::sigv4;
+        static constexpr std::string_view kService = "s3";
+
+        // One instant for the x-amz-date header and the credential scope.
+        const auto amzDate = sig::amzDate(now);
+        const auto date = sig::dateStamp(now);
+        headers["x-amz-date"] = amzDate;
+
+        // The path as the URL carries it; the encoded query (an explicit canonicalQuery wins) sorted, not re-encoded.
+        std::string canonicalUri = fullPath;
+        std::string query;
+        if (!canonicalQuery.empty()) {
+            query = sig::sortEncodedQuery(canonicalQuery);
+        } else if (const auto qpos = fullPath.find('?'); qpos != std::string::npos) {
+            canonicalUri = fullPath.substr(0, qpos);
+            query = sig::sortEncodedQuery(std::string_view(fullPath).substr(qpos + 1));
+        }
+        const auto canonical = sig::canonicalHeaders(sig::normalizeHeaders(sig::HeaderList(headers.begin(), headers.end())));
+        auto canonicalRequest = sig::canonicalRequest(method, canonicalUri, query, canonical.canonical,
+                                                      canonical.signed_headers, payloadHash);
+        const auto scope = sig::credentialScope(date, api_key.region, kService);
+        auto stringToSign = sig::stringToSign(amzDate, scope, canonicalRequest);
+        const auto signature = sig::signatureHex(
+            sig::deriveSigningKey(api_key.secret_access_key, date, api_key.region, kService), stringToSign);
+        return {.canonical_request = std::move(canonicalRequest),
+                .string_to_sign = std::move(stringToSign),
+                .authorization = sig::authorizationHeader(api_key.access_key, scope, canonical.signed_headers, signature)};
+    }
+
     std::string buildAuthorizationHeader(const std::shared_ptr<vault::model::APIKey> &api_key,
                                          const std::string &method,
                                          const std::string &fullPath,
-                                         const std::map<std::string, std::string> &headers,
+                                         std::map<std::string, std::string> &headers,
                                          const std::string &payloadHash,
-                                         const std::string &canonicalQuery /* = "" */) {
-        return buildAuthorizationTrace(api_key, method, fullPath, headers, payloadHash, canonicalQuery, getDate())
-            .authorization;
+                                         const std::string &canonicalQuery /* = "" */,
+                                         const vl::sigv4::TimePoint now /* = Clock::now() */) {
+        return signDataPathRequest(*api_key, method, fullPath, headers, payloadHash, canonicalQuery, now).authorization;
     }
 
     LegacySigningTrace buildAuthorizationTrace(const std::shared_ptr<vault::model::APIKey> &api_key,
