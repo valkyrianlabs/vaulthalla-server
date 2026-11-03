@@ -14,6 +14,23 @@ for users and operators; keep it representative of what actually ships.
   carried on as if the file had arrived, so the bucket could be missing a file that the vault showed as synced. A
   failed part now fails the upload, and the file stays pending for the next sync pass.
 
+## S3 gateway
+
+- The S3 gateway checks request signatures with vl-sigv4, Valkyrian Labs' shared AWS Signature Version 4 library.
+  AWS CLI, boto3, rclone and MinIO mc requests, presigned URLs included, are accepted exactly as before.
+- Refused requests now carry the error code AWS S3 would send, so clients report the real cause instead of a
+  signature mismatch: `RequestTimeTooSkewed` when the client's clock is off by more than 15 minutes (SDKs that correct
+  their clock react to it), `InvalidAccessKeyId` for an unknown, disabled or expired gateway key,
+  `AuthorizationHeaderMalformed` or `AuthorizationQueryParametersError` (HTTP 400) for a malformed signature,
+  `XAmzContentSHA256Mismatch` when the body doesn't match its declared hash, `AccessDenied` for an unsigned request or
+  an expired presigned URL, and `NotImplemented` for uploads with signed chunks (`mc` and the AWS Java SDK over plain
+  HTTP), which the gateway has never accepted. A wrong secret is still `SignatureDoesNotMatch`.
+- Requests that break SigV4 rules AWS S3 enforces are now refused too: an unsigned `Host` header, a credential date
+  that differs from the request date, a presigned URL with `X-Amz-Expires=0` (it used to never expire), and a
+  presigned URL that also carries an `Authorization` header. No client that works with AWS sends these.
+- Requests whose credentials don't check out no longer cause a credential lookup: a request with a bad date, a stale
+  timestamp or a mismatched body is refused before the gateway reads or decrypts any key.
+
 ## Under the hood
 
 - Requests to S3, R2, SQS and STS for bucket administration, event notifications, full bucket listings and

@@ -77,9 +77,22 @@ ShellServer is not created in test mode (`paths::testMode`).
 |---|---|---|
 | WebSocket `/ws` | `ws/Server.cpp`, `ws/Router.cpp`, `ws/Handler.cpp`, `ws/handler/*`, `ws/Session.cpp` | `0.0.0.0:36969` |
 | HTTP preview/download/upload/auth | `http/Server.cpp`, `http/Session.cpp`, `http/Router.cpp`, `http/Access.cpp`, `http/handler/*`, `http/upload/Coordinator.cpp`, `http/upload/Resumable.cpp` | `0.0.0.0:36970` (fresh installs: `127.0.0.1`) |
-| S3 gateway (SigV4, multipart) | `s3/*` (`GatewayService`, `SigV4`, `ObjectStore`, `MultipartStore`, `CredentialManager`) | `0.0.0.0:39000`, disabled by default |
+| S3 gateway (SigV4, multipart) | `s3/*` (`GatewayService`, `Auth` (SigV4 via vl-sigv4), `ObjectStore`, `MultipartStore`, `CredentialManager`) | `0.0.0.0:39000`, disabled by default |
 | Shell/CLI control | `shell/Server.cpp`, `shell/Router.cpp`, `shell/commands/*` | unix socket `/run/vaulthalla/cli.sock` |
 | Device listener (Vaulthalla Desktop, mutual TLS) | `device/Service.cpp`, `device/Listener.cpp` (`/ws` → the ws Router) | `127.0.0.1:36972` (+ `[::1]` when available); `[::]` dual-stack once `device_server.remote`, `0.0.0.0` where IPv6 is off (absent section = these defaults) |
+
+**S3 gateway authentication** (`protocols/s3/Auth.{hpp,cpp}`): `Router::route` builds a `vl::sigv4::VerificationInput`
+with `verificationInput(request, body, sha256)` (Beast adapter; streamed bodies pass the aws-chunked-decoded hash) and
+`Authenticator::authenticate` calls `verifySignedRequest`: `vl::sigv4::parseAuthorization` → the gateway's own refusal
+of `X-Amz-Security-Token=` anywhere in the target → `vl::sigv4::verify` with a `SecretLookup` (date, skew/presign
+window, signed headers, payload hash first; then `CredentialManager::findEnabledSecret`, a DB read plus decryption;
+then the constant-time signature). Options (`gatewayVerifyOptions`): service `s3`, any region, ±15 min, presign ≤ 7 d,
+no session tokens, host must be signed, scope date = x-amz-date date, implied `content-length: 0` for bodiless
+requests a proxy stripped it from. Failures map to AWS's S3 codes and statuses in `sigv4Error`. Signed-chunk uploads
+(`STREAMING-AWS4-HMAC-SHA256-PAYLOAD`: mc and the Java SDK over plain HTTP) are refused (`NotImplemented`); nothing
+verifies chunk signatures. `protocols/s3/SigV4` (the old verifier) has no production callers: it is the goldens'
+reference until a release is verified. Tests: `S3GatewayAuth*`, `S3GatewayClientCaptures` (real-client captures,
+`tools/dev/sigv4-capture/`), `SigV4Goldens.{VlSigv4Verifier,GatewayVerifier}*`.
 
 > `core/include/config/Config.hpp` compiled-in defaults are **33369/33370**, but the shipped config,
 > web fallbacks, and Caddyfile all use **36969/36970**. Trust the config file, and treat that
