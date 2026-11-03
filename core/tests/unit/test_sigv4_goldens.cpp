@@ -1,8 +1,9 @@
 // SigV4 characterization ("golden") tests for Vaulthalla's four AWS Signature Version 4 implementations, DB-free.
 //
 //   upstream  storage::s3::sigv4::sign                     upstream control plane, Controller::signObjectRequest
-//   legacy    storage::s3::curl::buildAuthorizationHeader  vault data path (through the buildAuthorizationTrace seam,
-//                                                          which pins the credential-scope date)
+//   legacy    storage::s3::curl::buildAuthorizationTrace   the vault data path's former signer (scope date given); the
+//                                                          data path now signs with curl::signDataPathRequest
+//                                                          (vl-sigv4), held to these records by VlSigv4*Legacy*
 //   ses       email::providers::detail::signAwsV4          SesProvider (SES v2 SendEmail)
 //   gateway   protocols::s3::sigv4                         the S3 gateway's verifier (makeCanonicalRequest,
 //                                                          signatureFor, verify); the gateway now verifies with
@@ -861,7 +862,7 @@ TEST(SigV4Goldens, VlSigv4SendsWhatTheLegacySignerSent) {
 }
 
 // x-amz-date and the credential-scope date come from one instant, also across UTC midnight. The old path read them
-// from two clock reads (getCurrentTimestamp() in buildHeaderMap, getDate() in buildAuthorizationHeader): a request whose
+// from two clock reads (getCurrentTimestamp() in buildHeaderMap, getDate() in the old buildAuthorizationHeader): a request whose
 // header was stamped at 23:59:59 and signed a moment later carried the next day in its scope, which AWS (and
 // vl-sigv4's verifier, ScopeDateMismatch) refuses.
 TEST(SigV4Goldens, VlSigv4DataPathDatesComeFromOneInstant) {
