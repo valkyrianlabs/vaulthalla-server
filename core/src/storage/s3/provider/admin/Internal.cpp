@@ -5,6 +5,8 @@
 #include <nlohmann/json.hpp>
 #include <openssl/evp.h>
 #include <pugixml.hpp>
+#include <vl/sigv4/crypto.hpp>
+#include <vl/sigv4/signer.hpp>
 
 #include <array>
 #include <cstdio>
@@ -64,16 +66,17 @@ std::optional<std::time_t> parseIsoTime(const std::string& value) {
     return timegm(&tm);
 }
 
-curl::http::Response send(const Endpoint& endpoint, const SignedCall& call, const sigv4::Credentials& credentials) {
-    sigv4::Request request{
+curl::http::Response send(const Endpoint& endpoint, const SignedCall& call, const vl::sigv4::Credentials& credentials) {
+    const vl::sigv4::Request request{
         .method = call.method,
         .host = endpoint.host,
         .path = call.path,
         .query = call.query,
-        .headers = call.headers,
-        .payload_hash = sigv4::sha256Hex(call.body),
+        .headers = vl::sigv4::HeaderList(call.headers.begin(), call.headers.end()),
+        .payload_hash = vl::sigv4::sha256Hex(call.body),
     };
-    const auto signedRequest = sigv4::sign(request, credentials, endpoint.region, endpoint.service, std::time(nullptr));
+    const auto signedRequest =
+        vl::sigv4::sign(request, credentials, endpoint.region, endpoint.service, vl::sigv4::Clock::now());
 
     curl::http::Request http;
     http.method = call.method;

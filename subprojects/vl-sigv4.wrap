@@ -1,0 +1,8 @@
+[wrap-file]
+directory = vl-sigv4-0.1.0
+source_url = https://github.com/valkyrianlabs/vl-sigv4/releases/download/v0.1.0/vl-sigv4-0.1.0.tar.xz
+source_filename = vl-sigv4-0.1.0.tar.xz
+source_hash = d94411d9d39d8895f6c2583a5ea835a75089dbc021d3aaf0d857340fb10e7f7a
+
+[provide]
+vl-sigv4 = vl_sigv4_dep

@@ -8,7 +8,10 @@
 //                                                          signatureFor, verify)
 //
 // These record what the CURRENT code produces, not what SigV4 says it should: SigV4 is being consolidated into one
-// library (vl-sigv4), and the swap must change no bytes. Where implementations disagree for the same input, each
+// library (vl-sigv4), and the swap must change no bytes. The "upstream" records were captured from the in-tree
+// storage::s3::sigv4::sign; its production callers (Controller::signObjectRequest, provider::admin::detail::send) now
+// sign with vl::sigv4::sign, and the VlSigv4* tests below hold that path to the same records byte for byte. The
+// in-tree signer stays (and stays checked) until it is deleted after a verified release. Where implementations disagree for the same input, each
 // one's own output is asserted and the disagreement is spelled out in SigV4Goldens.CrossImplementationAgreement.
 //
 // Every case runs each implementation the way its real callers drive it: upstream with the raw path and query pairs;
@@ -35,12 +38,14 @@
 #include "vault/model/APIKey.hpp"
 
 #include <gtest/gtest.h>
+#include <vl/sigv4/signer.hpp>
 
 #include <curl/curl.h>
 
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <chrono>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -59,6 +64,7 @@ namespace up = vh::storage::s3::sigv4;
 namespace legacy = vh::storage::s3::curl;
 namespace gw = vh::protocols::s3::sigv4;
 namespace sesv4 = vh::email::providers::detail;
+namespace vlsig = vl::sigv4;
 
 constexpr std::time_t k20150830T123600Z = 1440938160;   // AWS sig-v4 test suite
 constexpr std::time_t k20130524T000000Z = 1369353600;   // S3 API reference examples
@@ -169,6 +175,20 @@ inline up::Signed runUpstream(const Case& c, const std::time_t now) {
     return up::sign(request, credentials, c.region, c.service, now);
 }
 
+// The vl-sigv4 path, driven exactly as its production callers drive it (Controller::signObjectRequest in
+// storage/s3/version.cpp, provider::admin::detail::send in provider/admin/Internal.cpp): extra headers in the std::map
+// the callers keep, handed over as a HeaderList; raw path and query pairs; the caller's payload hash.
+inline vlsig::Signed runVlSigv4(const Case& c, const std::time_t now) {
+    std::map<std::string, std::string> headers;
+    for (const auto& [name, value] : c.headers) headers[name] = value;
+    const vlsig::Request request{.method = c.method, .host = c.host, .path = c.path, .query = c.query,
+                                 .headers = vlsig::HeaderList(headers.begin(), headers.end()),
+                                 .payload_hash = payloadHashOf(c)};
+    const vlsig::Credentials credentials{.access_key = c.access_key, .secret_key = c.secret_key,
+                                         .session_token = c.session_token};
+    return vlsig::sign(request, credentials, c.region, c.service, vlsig::Clock::from_time_t(now));
+}
+
 inline std::map<std::string, std::string> legacyHeaders(const Case& c, const std::time_t now) {
     std::map<std::string, std::string> headers{{"host", c.host}, {"x-amz-date", up::amzDate(now)}};
     if (c.service == "s3") headers["x-amz-content-sha256"] = payloadHashOf(c);
@@ -196,7 +216,8 @@ inline sesv4::SigningResult runSes(const Case& c, const std::time_t now) {
 
 // The request the gateway receives when the upstream signer's output is sent: the caller's own header names and
 // values, everything the signer added, the query in caller order.
-inline gw::VerificationInput gatewayInput(const Case& c, const up::Signed& sent) {
+template <typename SignedRequest>   // up::Signed or vlsig::Signed
+gw::VerificationInput gatewayInput(const Case& c, const SignedRequest& sent) {
     gw::VerificationInput input;
     input.method = c.method;
     const auto query = wireQuery(c);
@@ -545,6 +566,54 @@ TEST(SigV4Goldens, LegacyDataPathSignerMatchesGoldens) { sigv4golden::expectMatc
 TEST(SigV4Goldens, SesSignerMatchesGoldens) { sigv4golden::expectMatchesFixture(sigv4golden::Impl::Ses); }
 TEST(SigV4Goldens, GatewayVerifierMatchesGoldens) { sigv4golden::expectMatchesFixture(sigv4golden::Impl::Gateway); }
 
+// The production signing path: vl-sigv4 reproduces every "upstream" record (canonical request, string to sign,
+// Authorization) captured from the in-tree signer.
+TEST(SigV4Goldens, VlSigv4MatchesUpstreamGoldens) {
+    using namespace sigv4golden;
+    const auto& golden = fixture();
+    ASSERT_FALSE(golden.empty()) << "missing or empty fixture " << fixturePath();
+    std::size_t compared = 0;
+    for (const auto& c : cases()) {
+        const auto sent = runVlSigv4(c, c.time);
+        const std::vector<std::pair<std::string, std::string>> fields{
+            {"canonical_request", sent.canonical_request},
+            {"string_to_sign", sent.string_to_sign},
+            {"authorization", sent.authorization},
+        };
+        for (const auto& [field, value] : fields) {
+            const auto key = recordKey(c, Impl::Upstream, field);
+            const auto it = golden.find(key);
+            if (it == golden.end()) {
+                ADD_FAILURE() << "no golden for " << key;
+                continue;
+            }
+            EXPECT_EQ(value, it->second) << key << " (vl-sigv4)";
+            ++compared;
+        }
+        EXPECT_EQ(sent.signature, signatureOf(sent.authorization)) << c.name;
+    }
+    EXPECT_EQ(compared, cases().size() * 3);
+}
+
+// Beyond the signature, the request on the wire is the same: every header sent (Authorization included), the encoded
+// path and the query string, at the cases' times and at the current time.
+TEST(SigV4Goldens, VlSigv4SendsWhatTheUpstreamSignerSent) {
+    using namespace sigv4golden;
+    const auto now = std::time(nullptr);
+    for (const auto& c : cases()) {
+        for (const auto t : {c.time, now}) {
+            const auto before = runUpstream(c, t);
+            const auto after = runVlSigv4(c, t);
+            EXPECT_EQ(after.headers, before.headers) << c.name << " @" << t;
+            EXPECT_EQ(after.encoded_path, before.encoded_path) << c.name << " @" << t;
+            EXPECT_EQ(after.query_string, before.query_string) << c.name << " @" << t;
+            EXPECT_EQ(after.canonical_request, before.canonical_request) << c.name << " @" << t;
+            EXPECT_EQ(after.string_to_sign, before.string_to_sign) << c.name << " @" << t;
+            EXPECT_EQ(after.authorization, before.authorization) << c.name << " @" << t;
+        }
+    }
+}
+
 TEST(SigV4Goldens, FixtureHasNoStaleEntries) {
     const auto current = sigv4golden::currentRecords();
     for (const auto& [key, value] : sigv4golden::fixture())
@@ -566,6 +635,7 @@ TEST(SigV4Goldens, AnchoredToAwsPublishedSignatures) {
         const auto& c = caseNamed(name);
         const auto sent = runUpstream(c, c.time);
         EXPECT_EQ(signatureOf(sent.authorization), signature) << name << " upstream";
+        EXPECT_EQ(runVlSigv4(c, c.time).signature, signature) << name << " vl-sigv4";
         const auto input = gatewayInput(c, sent);
         EXPECT_EQ(gw::signatureFor(input, gatewayAuth(c, input, sent), c.secret_key), signature) << name << " gateway";
         if (c.service == "s3") {   // legacy and ses hard-code their service ("s3", "ses") in the credential scope
@@ -643,6 +713,20 @@ TEST(SigV4Goldens, UpstreamSignaturesVerifyAtGateway) {
         if (c.service != "s3") continue;   // the gateway accepts only service s3
         const auto sent = runUpstream(c, now);
         const auto result = gw::verify(gatewayInput(c, sent), c.secret_key);
+        EXPECT_TRUE(result.ok) << c.name << ": " << result.error;
+        EXPECT_EQ(result.access_key, c.access_key) << c.name;
+        ++checked;
+    }
+    EXPECT_GT(checked, 15u);
+}
+
+TEST(SigV4Goldens, VlSigv4SignaturesVerifyAtGateway) {
+    using namespace sigv4golden;
+    const auto now = std::time(nullptr);
+    std::size_t checked = 0;
+    for (const auto& c : cases()) {
+        if (c.service != "s3") continue;   // the gateway accepts only service s3
+        const auto result = gw::verify(gatewayInput(c, runVlSigv4(c, now)), c.secret_key);
         EXPECT_TRUE(result.ok) << c.name << ": " << result.error;
         EXPECT_EQ(result.access_key, c.access_key) << c.name;
         ++checked;

@@ -20,6 +20,16 @@ Copyright:
   2025-2026 Valkyrian Labs LLC <cooper@valkyrianlabs.com>
 License: AGPL-3.0+
 
+Files: subprojects/packagecache/vl-sigv4-*.tar.xz
+       subprojects/vl-sigv4-*/*
+Copyright:
+  2026 Valkyrian Labs LLC <cooper@valkyrianlabs.com>
+License: MIT
+Comment:
+ vl-sigv4 (https://github.com/valkyrianlabs/vl-sigv4), the AWS SigV4 library
+ statically linked into vaulthalla-server, built from the release tarball
+ pinned in subprojects/vl-sigv4.wrap.
+
 Files: core/vendor/jwt-cpp/*
 Copyright:
   2018 Dominik Thalhammer

@@ -13,3 +13,10 @@ for users and operators; keep it representative of what actually ships.
   connection) and still be treated as uploaded. Vaulthalla cancelled the incomplete upload at the provider but then
   carried on as if the file had arrived, so the bucket could be missing a file that the vault showed as synced. A
   failed part now fails the upload, and the file stays pending for the next sync pass.
+
+## Under the hood
+
+- Requests to S3, R2, SQS and STS for bucket administration, event notifications, full bucket listings and
+  file-version recovery are now signed by vl-sigv4, Valkyrian Labs' shared AWS Signature Version 4 library, instead
+  of a copy inside Vaulthalla. The signed requests are byte-for-byte the same, so nothing changes for providers or
+  keys.

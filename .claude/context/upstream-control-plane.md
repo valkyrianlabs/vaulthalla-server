@@ -15,7 +15,7 @@ buckets it created. Other providers: plain storage, but protection locks still a
 | Layer | Where |
 |---|---|
 | Provider adapters (trusted, no RBAC) | `storage/s3/provider/admin/` — `Admin.hpp` interfaces (`AdminClient`, `EventsClient`), `AwsAdmin`, `AwsEvents` (SQS JSON protocol, queue policy, notification GET-merge-PUT), `R2Admin`, `R2Events` (Cloudflare REST), `S3Api`/`Xml`/`Internal` (merges, redaction), `Registry` (`adminFor`/`eventsFor`, `setFactoryForTesting` test-mode only) |
-| Signing/HTTP | `storage/s3/sigv4/Signer` (any service/region), `storage/s3/curl/Http` (timeouts, size cap, `ScopedCancellation`, transport seam) |
+| Signing/HTTP | `vl::sigv4::sign` from vl-sigv4 (`subprojects/vl-sigv4.wrap`, any service/region; called in `provider/admin/Internal.cpp` `detail::send` and `Controller::signObjectRequest`; the in-tree `storage/s3/sigv4/Signer` is kept only as the goldens' reference until a verified release),  `storage/s3/curl/Http` (timeouts, size cap, `ScopedCancellation`, transport seam) |
 | Identity + lock | `storage/upstream/{Identity,Guard}` — identity = (providerIdentity, account_ref, bucket); `guard::require` in `s3::Controller::recordRequest` and every bucket-scoped adapter call; set loaded at startup (`main.cpp wireStorage`, fail closed) |
 | Control plane primitives | `storage/upstream/{Inventory,Lifecycle,Provisioner,Cleanup}`, models `storage/upstream/model/*`, queries `db/query/upstream/{Bucket,Audit,Binding,Channel,Subscription,Inbox,WriteIntent}` |
 | Events | `sync/events/{Event (normalized + decoders), Ingest (message → inbox), Applier (inbox → index → scoped pass), Service (UpstreamEventService: pollers, sweeps), Subscriptions (state machine)}` |
@@ -108,7 +108,7 @@ buckets it created. Other providers: plain storage, but protection locks still a
 
 ## Tests
 
-DB-free: `UpstreamSigV4*`, `UpstreamProvider*`, `UpstreamEventDecode*`, `UpstreamPassLease*`, `ShellLogRedaction*`.
+DB-free: `UpstreamSigV4*`, `SigV4Goldens.*` (incl. `VlSigv4*`: vl-sigv4 against the upstream goldens), `UpstreamProvider*`, `UpstreamEventDecode*`, `UpstreamPassLease*`, `ShellLogRedaction*`.
 Live (opt-in, one `vh-test-*` bucket per run): `LiveR2.*`; guard self-tests `LiveBucketGuard.*` (testing.md).
 DB-backed (`bin/tests/run_unit.sh`): `UpstreamStore*`, `UpstreamOps*`, `UpstreamEventOps*`, `UpstreamEvents*`,
 `UpstreamSubscriptions*`, `UpstreamScopedSync*`, `UpstreamParity*`, `SqlDeployerHistoryDb.*` (migration 110),

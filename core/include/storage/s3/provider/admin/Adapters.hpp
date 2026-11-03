@@ -70,7 +70,7 @@ protected:
     [[nodiscard]] virtual std::optional<std::string> expectedBucketOwner() const { return std::nullopt; }
 
     std::shared_ptr<vault::model::APIKey> key_;
-    sigv4::Credentials credentials_;
+    vl::sigv4::Credentials credentials_;
     mutable std::mutex metricsMutex_;
     Metrics metrics_;
 };

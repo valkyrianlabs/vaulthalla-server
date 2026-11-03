@@ -53,7 +53,7 @@ Controller::TransportResponse Controller::transportGet(
     std::string url;
     SList headers;
     if (versionId) {
-        // Version ids may carry '+', '/', '=': sigv4::sign encodes the query once for the URL and the signature.
+        // Version ids may carry '+', '/', '=': vl::sigv4::sign encodes the query once for the URL and the signature.
         const auto request = signObjectRequest("GET", key.string(), {{"versionId", *versionId}}, extraHeaders);
         url = request.url;
         for (const auto& [name, value] : request.headers) headers.add(name + ": " + value);
