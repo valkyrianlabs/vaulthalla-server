@@ -700,7 +700,7 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
 ## Subsystem directory map (`core/src`, mirrored in `core/include`)
 
 `auth` sessions/tokens · `concurrency` thread pools · `config` YAML registry · `crypto` AES-GCM, TPM2/swtpm
-key provider, secrets · `db` · `email` providers (Resend, SES v2) · `fs` · `fuse` · `identities` users/groups ·
+key provider, secrets · `db` · `email` providers (Resend, SES v2 signed with `vl::sigv4::sign`; `SesSigning.hpp`'s `detail::signAwsV4` is only the goldens' reference) · `fs` · `fuse` · `identities` users/groups ·
 `log` spdlog registries + rotation · `notifications` operator emails · `preview` plans (`Plan.cpp`), in-memory
 renders (`render/`: pdfium, turbojpeg, stb), the encrypted derived cache (`cache/Store.cpp`) and the
 converter-helper runner/queue (`derive/`, below) · `protocols` · `rbac` roles/permissions/resolver/actor · `runtime` Manager · `share` link

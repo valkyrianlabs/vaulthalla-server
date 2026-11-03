@@ -11,7 +11,10 @@
 // library (vl-sigv4), and the swap must change no bytes. The "upstream" records were captured from the in-tree
 // storage::s3::sigv4::sign; its production callers (Controller::signObjectRequest, provider::admin::detail::send) now
 // sign with vl::sigv4::sign, and the VlSigv4* tests below hold that path to the same records byte for byte. The
-// in-tree signer stays (and stays checked) until it is deleted after a verified release. Where implementations disagree for the same input, each
+// "ses" records were captured from email::providers::detail::signAwsV4; SesProvider::send now signs with
+// vl::sigv4::sign too, and the VlSigv4*Ses* tests hold it to every ses record except the four where the old signer
+// deviates from SigV4 (kSesSignerDeviations), which are checked against the spec instead. The in-tree signers stay
+// (and stay checked) until they are deleted after a verified release. Where implementations disagree for the same input, each
 // one's own output is asserted and the disagreement is spelled out in SigV4Goldens.CrossImplementationAgreement.
 //
 // Every case runs each implementation the way its real callers drive it: upstream with the raw path and query pairs;
@@ -38,6 +41,7 @@
 #include "vault/model/APIKey.hpp"
 
 #include <gtest/gtest.h>
+#include <vl/sigv4/crypto.hpp>
 #include <vl/sigv4/signer.hpp>
 
 #include <curl/curl.h>
@@ -187,6 +191,37 @@ inline vlsig::Signed runVlSigv4(const Case& c, const std::time_t now) {
     const vlsig::Credentials credentials{.access_key = c.access_key, .secret_key = c.secret_key,
                                          .session_token = c.session_token};
     return vlsig::sign(request, credentials, c.region, c.service, vlsig::Clock::from_time_t(now));
+}
+
+// The vl-sigv4 path as SesProvider::send drives it: service "ses" (hard-coded, like the old signer's scope), the
+// raw path and query pairs, the caller's extra headers (SendEmail: content-type and x-amz-content-sha256) in a
+// HeaderList, and the body's hash. sign() adds host and x-amz-date. For S3-shaped cases it is given the
+// x-amz-content-sha256 header runSes signs, since sign() adds that header only for service "s3".
+inline vlsig::Signed runVlSigv4Ses(const Case& c, const std::time_t now) {
+    vlsig::HeaderList headers(c.headers.begin(), c.headers.end());
+    if (c.service == "s3") headers.emplace_back("x-amz-content-sha256", payloadHashOf(c));
+    const vlsig::Request request{.method = c.method, .host = c.host, .path = c.path, .query = c.query,
+                                 .headers = std::move(headers), .payload_hash = vlsig::sha256Hex(c.body)};
+    const vlsig::Credentials credentials{.access_key = c.access_key, .secret_key = c.secret_key, .session_token = {}};
+    return vlsig::sign(request, credentials, c.region, "ses", vlsig::Clock::from_time_t(now));
+}
+
+// The ses records where the old signer is not SigV4, so vl-sigv4 (spec-correct) differs on purpose, each with the part
+// of vl-sigv4's canonical request that the old one gets wrong. None is a
+// request SesProvider ever sent: since it was added (d5b2cf9a) it has signed one constant path,
+// /v2/email/outbound-emails, with an empty query and two headers whose values have no extra whitespace.
+inline const std::map<std::string, std::string>& sesSignerDeviations() {
+    static const std::map<std::string, std::string> deviations{
+        // query signed as written, unsorted: "Param2=value2&Param1=value1"
+        {"aws-suite/get-vanilla-query-order-key-case", "\nParam1=value1&Param2=value2\n"},
+        // flag parameter signed bare: "lifecycle", not "lifecycle="
+        {"aws-s3-docs/get-bucket-lifecycle", "\nlifecycle=\n"},
+        // header value signed untrimmed: "  Cooper   Larson "
+        {"s3/put-object-headers-case-and-space", "\nx-amz-meta-owner:Cooper Larson\n"},
+        // non-S3 path not double-encoded: "/%E1%88%B4"
+        {"aws-suite/get-utf8", "GET\n/%25E1%2588%25B4\n"},
+    };
+    return deviations;
 }
 
 inline std::map<std::string, std::string> legacyHeaders(const Case& c, const std::time_t now) {
@@ -614,6 +649,94 @@ TEST(SigV4Goldens, VlSigv4SendsWhatTheUpstreamSignerSent) {
     }
 }
 
+// SesProvider's signing path: vl-sigv4 reproduces every "ses" record (canonical request, string to sign,
+// Authorization) captured from detail::signAwsV4, SendEmail included, except the old signer's deviations from SigV4.
+TEST(SigV4Goldens, VlSigv4MatchesSesGoldens) {
+    using namespace sigv4golden;
+    const auto& golden = fixture();
+    ASSERT_FALSE(golden.empty()) << "missing or empty fixture " << fixturePath();
+    std::size_t compared = 0, deviating = 0;
+    for (const auto& c : cases()) {
+        if (!applies(c, Impl::Ses)) continue;
+        const auto sent = runVlSigv4Ses(c, c.time);
+        if (sesSignerDeviations().contains(c.name)) {   // VlSigv4FixesTheSesSignersDeviations
+            ++deviating;
+            EXPECT_NE(sent.canonical_request, golden.at(recordKey(c, Impl::Ses, "canonical_request"))) << c.name;
+            continue;
+        }
+        const std::vector<std::pair<std::string, std::string>> fields{
+            {"canonical_request", sent.canonical_request},
+            {"string_to_sign", sent.string_to_sign},
+            {"authorization", sent.authorization},
+        };
+        for (const auto& [field, value] : fields) {
+            const auto key = recordKey(c, Impl::Ses, field);
+            const auto it = golden.find(key);
+            if (it == golden.end()) {
+                ADD_FAILURE() << "no golden for " << key;
+                continue;
+            }
+            EXPECT_EQ(value, it->second) << key << " (vl-sigv4)";
+            ++compared;
+        }
+        EXPECT_EQ(sent.signature, signatureOf(sent.authorization)) << c.name;
+    }
+    EXPECT_EQ(deviating, sesSignerDeviations().size());
+    EXPECT_EQ(compared, 8u * 3);   // 12 ses records minus the 4 deviations
+    EXPECT_EQ(sesSignerDeviations().count("ses/send-email"), 0u);
+}
+
+// Where the old SES signer deviates from SigV4, vl-sigv4 is held to the spec instead of the ses record: its canonical
+// request is the one the upstream signer produced for the same request (anchored to AWS's published signatures by
+// AnchoredToAwsPublishedSignatures), and it differs from the old one exactly in the deviating part.
+TEST(SigV4Goldens, VlSigv4FixesTheSesSignersDeviations) {
+    using namespace sigv4golden;
+    const auto& golden = fixture();
+    for (const auto& [name, specPart] : sesSignerDeviations()) {
+        const auto& c = caseNamed(name);
+        ASSERT_TRUE(applies(c, Impl::Ses)) << name;
+        const auto sent = runVlSigv4Ses(c, c.time);
+        const auto& upstream = golden.at(recordKey(c, Impl::Upstream, "canonical_request"));
+        const auto& old = golden.at(recordKey(c, Impl::Ses, "canonical_request"));
+        EXPECT_EQ(sent.canonical_request, upstream) << name;
+        EXPECT_NE(sent.canonical_request, old) << name;
+        EXPECT_NE(sent.canonical_request.find(specPart), std::string::npos) << name << ": " << sent.canonical_request;
+        EXPECT_EQ(old.find(specPart), std::string::npos) << name;
+    }
+    // The AWS suite publishes the sorted-query signature for service "service"; vl-sigv4 signing the request exactly
+    // as the SES path builds it, under that scope, reproduces it.
+    const Case c = caseNamed("aws-suite/get-vanilla-query-order-key-case");
+    const vlsig::Request request{.method = c.method, .host = c.host, .path = c.path, .query = c.query,
+                                 .headers = {}, .payload_hash = vlsig::sha256Hex(c.body)};
+    EXPECT_EQ(vlsig::sign(request, {.access_key = c.access_key, .secret_key = c.secret_key, .session_token = {}},
+                          c.region, c.service, vlsig::Clock::from_time_t(c.time)).signature,
+              "b97d918cfa904a5beff61c982a1b6f458b799221646efd99d3219ec94cdf2500");
+}
+
+// Beyond the signature, what SesProvider puts on the wire is the same: x-amz-date, x-amz-content-sha256, the path and
+// the query, at the cases' times and at the current time.
+TEST(SigV4Goldens, VlSigv4SendsWhatTheSesSignerSent) {
+    using namespace sigv4golden;
+    const auto now = std::time(nullptr);
+    for (const auto& c : cases()) {
+        if (!applies(c, Impl::Ses) || sesSignerDeviations().contains(c.name)) continue;
+        for (const auto t : {c.time, now}) {
+            const auto before = runSes(c, t);
+            const auto after = runVlSigv4Ses(c, t);
+            EXPECT_EQ(after.headers.at("x-amz-date"), before.amzDate) << c.name << " @" << t;
+            if (after.headers.contains("x-amz-content-sha256")) {
+                EXPECT_EQ(after.headers.at("x-amz-content-sha256"), before.payloadHash) << c.name << " @" << t;
+            }
+            EXPECT_EQ(after.headers.at("host"), c.host) << c.name << " @" << t;
+            EXPECT_EQ(after.encoded_path, up::uriEncode(c.path, false)) << c.name << " @" << t;
+            EXPECT_EQ(after.query_string, wireQuery(c)) << c.name << " @" << t;
+            EXPECT_EQ(after.canonical_request, before.canonicalRequest) << c.name << " @" << t;
+            EXPECT_EQ(after.string_to_sign, before.stringToSign) << c.name << " @" << t;
+            EXPECT_EQ(after.authorization, before.authorization) << c.name << " @" << t;
+        }
+    }
+}
+
 TEST(SigV4Goldens, FixtureHasNoStaleEntries) {
     const auto current = sigv4golden::currentRecords();
     for (const auto& [key, value] : sigv4golden::fixture())
@@ -759,8 +882,8 @@ TEST(SigV4Goldens, LegacySignaturesAtGateway) {
     }
 }
 
-// SesProvider::send signs through detail::signAwsV4 with exactly the headers the goldens use, and the upstream signer
-// agrees with it for that request.
+// SesProvider::send (now vl::sigv4::sign) sends exactly the request the old detail::signAwsV4 path sent: same URL,
+// same header lines in the same order, same Authorization, and the upstream signer agrees with it.
 TEST(SigV4Goldens, SesProviderSendSignsLikeTheGoldens) {
     using namespace sigv4golden;
     auto transport = std::make_unique<vh::email::FakeTransport>();
@@ -801,6 +924,20 @@ TEST(SigV4Goldens, SesProviderSendSignsLikeTheGoldens) {
     const auto sentAt = timegm(&tm);
 
     const Case c = caseNamed("ses/send-email");
-    EXPECT_EQ(authorization, runSes(c, sentAt).authorization);
+    const auto old = runSes(c, sentAt);
+    EXPECT_EQ(authorization, old.authorization);
     EXPECT_EQ(authorization, runUpstream(c, sentAt).authorization);
+    EXPECT_EQ(authorization, runVlSigv4Ses(c, sentAt).authorization);
+
+    // What SesProvider::send built before the migration, from detail::signAwsV4's result.
+    EXPECT_EQ(request.method, "POST");
+    EXPECT_EQ(request.url, "https://" + c.host + c.path);
+    const std::vector<std::string> oldHeaders{
+        "Content-Type: application/json",
+        "Host: " + c.host,
+        "X-Amz-Date: " + old.amzDate,
+        "X-Amz-Content-Sha256: " + old.payloadHash,
+        "Authorization: " + old.authorization,
+    };
+    EXPECT_EQ(request.headers, oldHeaders);
 }
