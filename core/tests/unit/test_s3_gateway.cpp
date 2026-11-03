@@ -49,10 +49,14 @@
 #include <paths.h>
 #include <sys/socket.h>
 #include <sys/time.h>
+#include <unistd.h>
+#include <vl/sigv4/signer.hpp>
+#include <vl/sigv4/streaming.hpp>
 #include <yaml-cpp/yaml.h>
 
 #include <chrono>
 #include <cstdlib>
+#include <functional>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -125,6 +129,54 @@ http::response<http::string_body> httpGetRoot(const uint16_t port) {
     http::response<http::string_body> res;
     http::read(socket, buffer, res);
     return res;
+}
+
+// Sends `wire` (a whole HTTP/1.1 request, as written) and reads the gateway's answer.
+http::response<http::string_body> httpRaw(const uint16_t port, const std::string& wire) {
+    boost::asio::io_context ioc;
+    tcp::socket socket(ioc);
+    socket.connect(tcp::endpoint(boost::asio::ip::make_address("127.0.0.1"), port));
+    timeval timeout{
+        .tv_sec = 10,
+        .tv_usec = 0
+    };
+    (void)::setsockopt(socket.native_handle(), SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    (void)::setsockopt(socket.native_handle(), SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+    boost::asio::write(socket, boost::asio::buffer(wire));
+    beast::flat_buffer buffer;
+    http::response<http::string_body> res;
+    http::read(socket, buffer, res);
+    return res;
+}
+
+// A PUT of `payload` as mc (minio-go) sends it over plain HTTP: STREAMING-AWS4-HMAC-SHA256-PAYLOAD, signed host,
+// x-amz-content-sha256, x-amz-date and x-amz-decoded-content-length, no Content-Encoding, 64 KiB chunks, signed with
+// vl::sigv4. `edit` may change the encoded chunks (the last one is the final chunk) before they are sent;
+// Content-Length (unsigned, as mc leaves it) follows the body actually sent.
+std::string mcStylePut(const uint16_t port, const std::string& path, const std::string& accessKey,
+                       const std::string& secretKey, const std::string& payload,
+                       const std::function<void(std::vector<std::string>&)>& edit = {}) {
+    const auto host = "127.0.0.1:" + std::to_string(port);
+    const vl::sigv4::Request request{.method = "PUT", .host = host, .path = path, .query = {},
+                                     .headers = {{"x-amz-decoded-content-length", std::to_string(payload.size())}},
+                                     .payload_hash = std::string(vl::sigv4::kStreamingSignedPayload)};
+    const auto s = vl::sigv4::sign(request, {.access_key = accessKey, .secret_key = secretKey, .session_token = {}},
+                                   "us-east-1", "s3", vl::sigv4::Clock::now());
+    auto signer = vl::sigv4::ChunkSigner::forRequest(s, secretKey);
+    if (!signer) throw std::runtime_error(signer.error().message);
+    std::vector<std::string> chunks;
+    constexpr std::size_t kChunk = 64 * 1024;
+    for (std::size_t offset = 0; offset < payload.size(); offset += kChunk)
+        chunks.push_back(signer->encodeChunk(std::string_view(payload).substr(offset, kChunk)));
+    chunks.push_back(signer->encodeFinal());
+    if (edit) edit(chunks);
+    std::string body;
+    for (const auto& chunk : chunks) body += chunk;
+
+    std::string wire = "PUT " + s.target() + " HTTP/1.1\r\n";
+    for (const auto& [name, value] : s.headers) wire += name + ": " + value + "\r\n";
+    wire += "Content-Type: text/plain\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body;
+    return wire;
 }
 
 std::string amzNow() {
@@ -3285,4 +3337,221 @@ TEST_F(S3GatewayDbTest, DeleteBucketAllowsTrulyEmptyApiExclusiveBucket) {
     const vh::protocols::s3::ObjectStore store;
     EXPECT_NO_THROW(store.deleteBucket(bucketName, admin));
     EXPECT_FALSE(vh::db::query::s3::Gateway::resolveBucket(bucketName));
+}
+
+// Signed streaming uploads (mc and the AWS Java SDK over plain HTTP) through the running gateway, end to end: Session
+// spools the aws-chunked body, Router::route verifies the seed signature, then decodes the body through the chunk
+// verifier, and only then stores. A body that fails anywhere leaves nothing behind: no object row, no file, no
+// change to an existing object, no request-body temp file.
+TEST_F(S3GatewayDbTest, SignedStreamingUploadsStoreOnlyFullyVerifiedBodies) {
+    ConfigRestore restoreConfig(vh::config::Registry::get());
+    auto cfg = vh::config::Registry::get();
+    cfg.s3_gateway.enabled = true;
+    cfg.s3_gateway.host = "127.0.0.1";
+    cfg.s3_gateway.port = freeLoopbackPort();
+    cfg.s3_gateway.require_sigv4 = true;
+    cfg.s3_gateway.allow_path_style = true;
+    vh::config::Registry::set(cfg);
+
+    const auto admin = vh::identities::manager().userByName("admin");
+    ASSERT_TRUE(admin);
+    const std::string bucketName = "streaming-" + std::to_string(vaultId);
+    vh::db::query::s3::Gateway::bindBucket({
+        .vault_id = vaultId,
+        .bucket_name = bucketName,
+        .api_exclusive = true,
+        .mode = "local",
+        .created_by = admin->id
+    });
+    const vh::protocols::s3::CredentialManager manager;
+    const auto secret = manager.createCredential({
+        .created_by = admin->id,
+        .principal_user_id = admin->id,
+        .name = "streaming-" + s3GatewayUniqueSuffix("credential"),
+        .scope_mode = "vault_allowlist",
+        .description = std::nullopt,
+        .expires_at = std::nullopt,
+        .vault_scopes = {{
+            .credential_id = 0,
+            .vault_id = vaultId,
+            .can_list = true,
+            .can_read = true,
+            .can_write = true,
+            .can_delete = false,
+            .can_admin = false
+        }}
+    });
+    const auto& accessKey = secret.credential.access_key;
+    const auto& secretKey = secret.secret_access_key;
+
+    vh::concurrency::ThreadPoolManager::instance().init();
+    ThreadPoolShutdown shutdownPools{true};
+    vh::protocols::s3::GatewayService service;
+    service.start();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!service.gatewayStatus().ready && service.isRunning() && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+    ASSERT_TRUE(service.gatewayStatus().ready);
+    const auto port = cfg.s3_gateway.port;
+
+    const auto get = [&](const std::string& target) {
+        vh::protocols::s3::Router::Request request{http::verb::get, "/" + bucketName + target, 11};
+        request.set(http::field::host, "127.0.0.1:" + std::to_string(port));
+        signS3GatewayRequest(request, accessKey, secretKey);
+        return vh::protocols::s3::Router{}.route(std::move(request));
+    };
+    // ListObjectsV2 of a local bucket lists the vault's files as well as gateway rows.
+    const auto listed = [&] { return get("?list-type=2").body(); };
+    const auto tempBodies = [] {
+        const auto root = vh::paths::getBackingPath() / "s3-request-body";
+        std::size_t n = 0;
+        if (std::filesystem::exists(root))
+            for ([[maybe_unused]] const auto& entry : std::filesystem::directory_iterator(root)) ++n;
+        return n;
+    };
+    std::string payload(150000, '\0');
+    for (std::size_t i = 0; i < payload.size(); ++i) payload[i] = static_cast<char>('a' + (i * 7) % 26);
+
+    // 1. Three signed chunks (64 KiB, 64 KiB, 18928 bytes) and the final one: stored, readable.
+    auto response = httpRaw(port, mcStylePut(port, "/" + bucketName + "/good.txt", accessKey, secretKey, payload));
+    EXPECT_EQ(response.result(), http::status::ok) << response.body();
+    EXPECT_TRUE(vh::db::query::s3::Gateway::getObjectState(vaultId, "good.txt"));
+    auto read = get("/good.txt");
+    EXPECT_EQ(read.result(), http::status::ok);
+    EXPECT_EQ(read.body(), payload);
+
+    // 2. Failures: each refused with its S3 error, nothing stored.
+    struct Case {
+        std::string key;
+        std::function<void(std::vector<std::string>&)> edit;
+        http::status status;
+        std::string code;
+    };
+    const std::vector<Case> cases{
+        {"tampered.txt", [](auto& c) { c[1][c[1].size() - 100] ^= 0x01; }, http::status::forbidden,
+         "SignatureDoesNotMatch"},
+        {"reordered.txt", [](auto& c) { std::swap(c[0], c[1]); }, http::status::forbidden, "SignatureDoesNotMatch"},
+        {"dropped.txt", [](auto& c) { c.erase(c.begin() + 1); }, http::status::forbidden, "SignatureDoesNotMatch"},
+        {"unfinished.txt", [](auto& c) { c.pop_back(); }, http::status::bad_request, "IncompleteBody"},
+    };
+    for (const auto& c : cases) {
+        response = httpRaw(port, mcStylePut(port, "/" + bucketName + "/" + c.key, accessKey, secretKey, payload, c.edit));
+        EXPECT_EQ(response.result(), c.status) << c.key << ": " << response.body();
+        EXPECT_NE(response.body().find("<Code>" + c.code + "</Code>"), std::string::npos) << c.key << ": " << response.body();
+        EXPECT_FALSE(vh::db::query::s3::Gateway::getObjectState(vaultId, c.key)) << c.key;
+        EXPECT_NE(get("/" + c.key).result(), http::status::ok) << c.key;
+        EXPECT_EQ(listed().find("<Key>" + c.key + "</Key>"), std::string::npos) << c.key;
+    }
+
+    // 3. A tampered overwrite leaves the existing object as it was.
+    std::string other = payload;
+    other[0] = 'Z';
+    response = httpRaw(port, mcStylePut(port, "/" + bucketName + "/good.txt", accessKey, secretKey, other,
+                                        [](auto& c) { c[2][c[2].size() - 10] ^= 0x01; }));
+    EXPECT_EQ(response.result(), http::status::forbidden) << response.body();
+    EXPECT_NE(listed().find("<Key>good.txt</Key>"), std::string::npos);
+    read = get("/good.txt");
+    EXPECT_EQ(read.result(), http::status::ok);
+    EXPECT_EQ(read.body(), payload);
+
+    EXPECT_EQ(tempBodies(), 0u);
+    service.stop();
+}
+
+// A real mc (MinIO client) against the running gateway over plain HTTP, where it signs every chunk. Skipped where mc
+// is not installed (CI); dev has it. The credential is created in this run's test database.
+TEST_F(S3GatewayDbTest, RealMcUploadsOverPlainHttpWhenMcIsInstalled) {
+    // make test runs with PATH=/usr/sbin:/usr/bin:/sbin:/bin; mc usually lives in /usr/local/bin or Homebrew.
+    std::string mcBinary;
+    if (std::system("command -v mc >/dev/null 2>&1") == 0) mcBinary = "mc";
+    for (const char* candidate : {"/usr/local/bin/mc", "/opt/homebrew/bin/mc"})
+        if (mcBinary.empty() && ::access(candidate, X_OK) == 0) mcBinary = candidate;
+    if (mcBinary.empty()) GTEST_SKIP() << "mc is not installed";
+
+    ConfigRestore restoreConfig(vh::config::Registry::get());
+    auto cfg = vh::config::Registry::get();
+    cfg.s3_gateway.enabled = true;
+    cfg.s3_gateway.host = "127.0.0.1";
+    cfg.s3_gateway.port = freeLoopbackPort();
+    cfg.s3_gateway.require_sigv4 = true;
+    cfg.s3_gateway.allow_path_style = true;
+    vh::config::Registry::set(cfg);
+
+    const auto admin = vh::identities::manager().userByName("admin");
+    ASSERT_TRUE(admin);
+    const std::string bucketName = "mc-" + std::to_string(vaultId);
+    vh::db::query::s3::Gateway::bindBucket({
+        .vault_id = vaultId,
+        .bucket_name = bucketName,
+        .api_exclusive = true,
+        .mode = "local",
+        .created_by = admin->id
+    });
+    const vh::protocols::s3::CredentialManager manager;
+    const auto secret = manager.createCredential({
+        .created_by = admin->id,
+        .principal_user_id = admin->id,
+        .name = "mc-" + s3GatewayUniqueSuffix("credential"),
+        .scope_mode = "vault_allowlist",
+        .description = std::nullopt,
+        .expires_at = std::nullopt,
+        .vault_scopes = {{
+            .credential_id = 0,
+            .vault_id = vaultId,
+            .can_list = true,
+            .can_read = true,
+            .can_write = true,
+            .can_delete = false,
+            .can_admin = false
+        }}
+    });
+
+    vh::concurrency::ThreadPoolManager::instance().init();
+    ThreadPoolShutdown shutdownPools{true};
+    vh::protocols::s3::GatewayService service;
+    service.start();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!service.gatewayStatus().ready && service.isRunning() && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+    ASSERT_TRUE(service.gatewayStatus().ready);
+
+    const auto work = std::filesystem::temp_directory_path() / s3GatewayUniqueSuffix("vh_mc");
+    std::filesystem::create_directories(work / "config");
+    std::string payload(150000, '\0');
+    for (std::size_t i = 0; i < payload.size(); ++i) payload[i] = static_cast<char>('a' + (i * 11) % 26);
+    std::ofstream(work / "big.txt", std::ios::binary) << payload;
+    std::ofstream(work / "small.txt", std::ios::binary) << "hello vaulthalla\n";
+
+    // mc reads its alias from MC_HOST_<alias> and keeps its state in MC_CONFIG_DIR; both only in mc's environment.
+    const auto mc = [&](const std::string& args) {
+        const auto env = "MC_CONFIG_DIR='" + (work / "config").string() + "' MC_HOST_vhtest='http://" +
+                         secret.credential.access_key + ":" + secret.secret_access_key + "@127.0.0.1:" +
+                         std::to_string(cfg.s3_gateway.port) + "' ";
+        const std::string timeout = std::system("command -v timeout >/dev/null 2>&1") == 0 ? "timeout 60 " : "";
+        return std::system((env + timeout + mcBinary + " " + args + " >'" + (work / "mc.log").string() + "' 2>&1").c_str());
+    };
+    const auto stored = [&](const std::string& key) {
+        vh::protocols::s3::Router::Request request{http::verb::get, "/" + bucketName + "/" + key, 11};
+        request.set(http::field::host, "127.0.0.1:" + std::to_string(cfg.s3_gateway.port));
+        signS3GatewayRequest(request, secret.credential.access_key, secret.secret_access_key);
+        auto response = vh::protocols::s3::Router{}.route(std::move(request));
+        return response.result() == http::status::ok ? response.body() : std::string{};
+    };
+    const auto log = [&] {
+        std::ifstream in(work / "mc.log");
+        return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    };
+
+    // Signed chunks (STREAMING-AWS4-HMAC-SHA256-PAYLOAD): one chunk, and three.
+    EXPECT_EQ(mc("cp '" + (work / "small.txt").string() + "' vhtest/" + bucketName + "/mc/small.txt"), 0) << log();
+    EXPECT_EQ(stored("mc/small.txt"), "hello vaulthalla\n");
+    EXPECT_EQ(mc("cp '" + (work / "big.txt").string() + "' vhtest/" + bucketName + "/mc/big.txt"), 0) << log();
+    EXPECT_EQ(stored("mc/big.txt"), payload);
+    // --checksum: STREAMING-UNSIGNED-PAYLOAD-TRAILER with minio-go's trailer layout.
+    EXPECT_EQ(mc("cp --checksum CRC32C '" + (work / "big.txt").string() + "' vhtest/" + bucketName + "/mc/sum.txt"), 0)
+        << log();
+    EXPECT_EQ(stored("mc/sum.txt"), payload);
+
+    std::filesystem::remove_all(work);
+    service.stop();
 }

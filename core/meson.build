@@ -169,7 +169,7 @@ deps = [
     # AWS SigV4 (Valkyrian Labs, MIT), statically linked from the release pinned in subprojects/vl-sigv4.wrap. Its
     # tarball is committed under subprojects/packagecache/, so the Debian build (--wrap-mode=nodownload) needs no
     # network. As a subproject it installs nothing and builds no tests.
-    dependency('vl-sigv4', version: '>=0.1.0', fallback: ['vl-sigv4', 'vl_sigv4_dep']),
+    dependency('vl-sigv4', version: '>=0.2.1', fallback: ['vl-sigv4', 'vl_sigv4_dep']),
     dependency('zlib', required: true),
     fmt_dep
 ]

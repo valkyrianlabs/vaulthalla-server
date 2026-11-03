@@ -2,6 +2,7 @@
 
 #include "config/Registry.hpp"
 #include "log/Registry.hpp"
+#include "protocols/s3/RequestBody.hpp"
 #include "protocols/s3/Xml.hpp"
 
 #include <algorithm>
@@ -13,21 +14,14 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
-#include <iomanip>
-#include <map>
 #include <mutex>
-#include <openssl/evp.h>
-#include <openssl/md5.h>
-#include <openssl/sha.h>
-#include "crypto/util/digest.hpp"
+#include <optional>
 #include <paths.h>
-#include <sstream>
 #include <stdexcept>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <utility>
 #include <vector>
-#include <zlib.h>
 
 namespace vh::protocols::s3 {
 
@@ -118,184 +112,6 @@ std::filesystem::path requestBodyTempRoot() {
     return paths::getBackingPath() / "s3-request-body";
 }
 
-std::string digestHex(const unsigned char* digest, const std::size_t size) {
-    std::ostringstream out;
-    out << std::hex << std::setfill('0');
-    for (std::size_t i = 0; i < size; ++i)
-        out << std::setw(2) << static_cast<unsigned>(digest[i]);
-    return out.str();
-}
-
-std::string sha256Hex(const unsigned char* digest) {
-    return digestHex(digest, SHA256_DIGEST_LENGTH);
-}
-
-std::string md5Hex(const unsigned char* digest) {
-    return digestHex(digest, MD5_DIGEST_LENGTH);
-}
-
-std::string sessionMd5Base64(const unsigned char* digest) {
-    std::array<unsigned char, EVP_ENCODE_LENGTH(MD5_DIGEST_LENGTH)> encoded{};
-    const auto len = EVP_EncodeBlock(encoded.data(), digest, MD5_DIGEST_LENGTH);
-    return {reinterpret_cast<char*>(encoded.data()), static_cast<std::size_t>(len)};
-}
-
-template <std::size_t N>
-std::string digestBase64(const std::array<unsigned char, N>& digest) {
-    std::array<unsigned char, EVP_ENCODE_LENGTH(N)> encoded{};
-    const auto len = EVP_EncodeBlock(encoded.data(), digest.data(), static_cast<int>(digest.size()));
-    return {reinterpret_cast<char*>(encoded.data()), static_cast<std::size_t>(len)};
-}
-
-std::string sha256Base64(const unsigned char* digest) {
-    std::array<unsigned char, SHA256_DIGEST_LENGTH> raw{};
-    std::copy_n(digest, raw.size(), raw.begin());
-    return digestBase64(raw);
-}
-
-std::string crc32Base64(const uint32_t checksum) {
-    const std::array<unsigned char, 4> raw{
-        static_cast<unsigned char>((checksum >> 24) & 0xff),
-        static_cast<unsigned char>((checksum >> 16) & 0xff),
-        static_cast<unsigned char>((checksum >> 8) & 0xff),
-        static_cast<unsigned char>(checksum & 0xff)
-    };
-    return digestBase64(raw);
-}
-
-struct BodyDigest {
-    std::string sha256_hex;
-    std::string sha256_base64;
-    std::string md5_base64;
-    std::string md5_hex;
-    std::string crc32_base64;
-};
-
-struct BodyHash {
-    crypto::util::EvpDigest sha{EVP_sha256()};
-    crypto::util::EvpDigest md5{EVP_md5()};
-    uLong crc = crc32(0L, Z_NULL, 0);
-
-    void update(const char* data, const std::size_t size) {
-        if (size == 0) return;
-        sha.update(data, size);
-        md5.update(data, size);
-        crc = crc32(crc, reinterpret_cast<const Bytef*>(data), static_cast<uInt>(size));
-    }
-
-    BodyDigest finish() {
-        const auto shaBytes = sha.finish();
-        const auto md5Bytes = md5.finish();
-        const auto* shaDigest = shaBytes.data();
-        const auto* md5Digest = md5Bytes.data();
-
-        return {
-            .sha256_hex = sha256Hex(shaDigest),
-            .sha256_base64 = sha256Base64(shaDigest),
-            .md5_base64 = sessionMd5Base64(md5Digest),
-            .md5_hex = md5Hex(md5Digest),
-            .crc32_base64 = crc32Base64(static_cast<uint32_t>(crc))
-        };
-    }
-};
-
-Router::BodyPayload makePayload(
-    const std::filesystem::path& path,
-    const uint64_t size,
-    BodyDigest digest,
-    std::map<std::string, std::string> trailers = {}) {
-    return {
-        .temp_file = path,
-        .size = size,
-        .trailer_headers = std::move(trailers),
-        .sha256_hex = std::move(digest.sha256_hex),
-        .sha256_base64 = std::move(digest.sha256_base64),
-        .md5_base64 = std::move(digest.md5_base64),
-        .md5_hex = std::move(digest.md5_hex),
-        .crc32_base64 = std::move(digest.crc32_base64)
-    };
-}
-
-bool hasAwsChunkedEncoding(const Router::Request& request) {
-    const auto it = request.find(http::field::content_encoding);
-    return it != request.end() && lower(std::string(it->value())).contains("aws-chunked");
-}
-
-std::string readCrLfLine(std::ifstream& in) {
-    std::string line;
-    if (!std::getline(in, line)) throw std::runtime_error("Malformed aws-chunked body");
-    if (!line.empty() && line.back() == '\r') line.pop_back();
-    return line;
-}
-
-uint64_t parseAwsChunkSize(const std::string& line) {
-    const auto semi = line.find(';');
-    const auto sizeHex = line.substr(0, semi);
-    if (sizeHex.empty()) throw std::runtime_error("Malformed aws-chunked size");
-    char* end = nullptr;
-    const auto size = std::strtoull(sizeHex.c_str(), &end, 16);
-    if (!end || *end != '\0') throw std::runtime_error("Malformed aws-chunked size");
-    return static_cast<uint64_t>(size);
-}
-
-std::map<std::string, std::string> readAwsChunkTrailers(std::ifstream& in) {
-    std::map<std::string, std::string> trailers;
-    while (true) {
-        auto line = readCrLfLine(in);
-        if (line.empty()) break;
-        const auto colon = line.find(':');
-        if (colon == std::string::npos) continue;
-        auto name = lower(line.substr(0, colon));
-        auto value = line.substr(colon + 1);
-        while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front())))
-            value.erase(value.begin());
-        trailers[std::move(name)] = std::move(value);
-    }
-    return trailers;
-}
-
-Router::BodyPayload decodeAwsChunkedBody(
-    const std::filesystem::path& sourcePath,
-    const std::filesystem::path& decodedPath) {
-    std::ifstream in(sourcePath, std::ios::binary);
-    if (!in) throw std::runtime_error("Unable to open aws-chunked request body");
-    std::ofstream out(decodedPath, std::ios::binary | std::ios::trunc);
-    if (!out) throw std::runtime_error("Unable to open decoded aws-chunked request body");
-
-    BodyHash hash;
-    uint64_t decodedSize = 0;
-    std::array<char, kReadBufferBytes> buffer{};
-    std::map<std::string, std::string> trailers;
-
-    while (true) {
-        const auto line = readCrLfLine(in);
-        const auto chunkSize = parseAwsChunkSize(line);
-        if (chunkSize == 0) {
-            trailers = readAwsChunkTrailers(in);
-            break;
-        }
-
-        uint64_t remaining = chunkSize;
-        while (remaining > 0) {
-            const auto toRead = static_cast<std::streamsize>(std::min<uint64_t>(remaining, buffer.size()));
-            in.read(buffer.data(), toRead);
-            if (in.gcount() != toRead) throw std::runtime_error("Truncated aws-chunked body");
-            out.write(buffer.data(), toRead);
-            if (!out) throw std::runtime_error("Failed writing decoded aws-chunked body");
-            hash.update(buffer.data(), static_cast<std::size_t>(toRead));
-            remaining -= static_cast<uint64_t>(toRead);
-            decodedSize += static_cast<uint64_t>(toRead);
-        }
-
-        char crlf[2]{};
-        in.read(crlf, 2);
-        if (in.gcount() != 2 || crlf[0] != '\r' || crlf[1] != '\n')
-            throw std::runtime_error("Malformed aws-chunked chunk terminator");
-    }
-
-    out.close();
-    return makePayload(decodedPath, decodedSize, hash.finish(), std::move(trailers));
-}
 } // namespace
 
 Session::Session(tcp::socket socket) : lifetime_(sessionLifetimes()), socket_(std::move(socket)) {
@@ -484,24 +300,12 @@ bool Session::handleStreamedRequest(http::request_parser<http::buffer_body>& par
 
         auto request = makeRequestFromParser(parser);
         const auto keepAlive = request.keep_alive();
-        Router::BodyPayload payload;
-        if (hasAwsChunkedEncoding(request)) {
+        auto payload = rawHash.finish(tempPath, bytes);
+        if (isAwsChunked(request)) {
+            // Router::route decodes it (signed chunks only after authenticating) into this file.
             decodedPath = tempPath;
             decodedPath->concat(".decoded");
-            payload = decodeAwsChunkedBody(tempPath, *decodedPath);
-            const auto expectedDecodedLength = headerValue(parser.get(), "x-amz-decoded-content-length");
-            if (!expectedDecodedLength.empty()) {
-                try {
-                    if (std::stoull(expectedDecodedLength) != payload.size)
-                        throw std::runtime_error("Decoded aws-chunked body length mismatch");
-                } catch (const std::invalid_argument&) {
-                    throw std::runtime_error("Invalid x-amz-decoded-content-length");
-                } catch (const std::out_of_range&) {
-                    throw std::runtime_error("Invalid x-amz-decoded-content-length");
-                }
-            }
-        } else {
-            payload = makePayload(tempPath, bytes, rawHash.finish());
+            payload.aws_chunked_decode_to = *decodedPath;
         }
 
         g_totalRequests.fetch_add(1, std::memory_order_relaxed);

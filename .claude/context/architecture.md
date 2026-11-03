@@ -88,11 +88,22 @@ of `X-Amz-Security-Token=` anywhere in the target → `vl::sigv4::verify` with a
 window, signed headers, payload hash first; then `CredentialManager::findEnabledSecret`, a DB read plus decryption;
 then the constant-time signature). Options (`gatewayVerifyOptions`): service `s3`, any region, ±15 min, presign ≤ 7 d,
 no session tokens, host must be signed, scope date = x-amz-date date, implied `content-length: 0` for bodiless
-requests a proxy stripped it from. Failures map to AWS's S3 codes and statuses in `sigv4Error`. Signed-chunk uploads
-(`STREAMING-AWS4-HMAC-SHA256-PAYLOAD`: mc and the Java SDK over plain HTTP) are refused (`NotImplemented`); nothing
-verifies chunk signatures. `protocols/s3/SigV4` (the old verifier) has no production callers: it is the goldens'
-reference until a release is verified. Tests: `S3GatewayAuth*`, `S3GatewayClientCaptures` (real-client captures,
-`tools/dev/sigv4-capture/`), `SigV4Goldens.{VlSigv4Verifier,GatewayVerifier}*`.
+requests a proxy stripped it from. Failures map to AWS's S3 codes and statuses in `sigv4Error`.
+**aws-chunked bodies** (`protocols/s3/RequestBody.{hpp,cpp}`): `Session` spools a streamed PUT to
+`<backing>/s3-request-body/<uuid>.body` and, when `isAwsChunked` (Content-Encoding `aws-chunked`, or any `STREAMING-*`
+payload hash: mc signs chunks without Content-Encoding), sets `BodyPayload::aws_chunked_decode_to`. `Router::route`
+decodes it with `decodeAwsChunkedBody` (vl-sigv4's `AwsChunkedDecoder`, the only aws-chunked parser): unsigned framing
+before authenticating (a hashed payload is compared with the decoded body); signed chunks
+(`STREAMING-AWS4-HMAC-SHA256-PAYLOAD[-TRAILER]`: mc and the Java SDK over plain HTTP) after it, through the
+`vl::sigv4::ChunkVerifier` that `authenticate(input, &chain)` hands back once the seed signature verified. Nothing
+reaches `routeAuthenticated` (and so no object, budget or metadata write) unless every chunk and trailer verified;
+both temp files are removed by `Session`. Signed chunks outside a streamed PUT, and SigV4a streaming, answer
+`NotImplemented`. `protocols/s3/SigV4` (the old verifier) has no production callers: it is the goldens'
+reference until a release is verified. Tests: `S3GatewayAuth*`, `S3GatewayStreaming*`, `S3GatewayClientCaptures`
+(real-client captures incl. mc's signed-chunk and `--checksum` bodies, `tools/dev/sigv4-capture/`),
+`S3GatewayDbTest.SignedStreamingUploadsStoreOnlyFullyVerifiedBodies` (socket end to end, tampered/reordered/dropped/
+unfinished bodies store nothing), `S3GatewayDbTest.RealMcUploadsOverPlainHttpWhenMcIsInstalled` (skips without mc),
+`SigV4Goldens.{VlSigv4Verifier,GatewayVerifier}*`.
 
 > `core/include/config/Config.hpp` compiled-in defaults are **33369/33370**, but the shipped config,
 > web fallbacks, and Caddyfile all use **36969/36970**. Trust the config file, and treat that
