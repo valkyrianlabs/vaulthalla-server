@@ -6,13 +6,17 @@
 #include <nlohmann/json.hpp>
 #include <openssl/hmac.h>
 #include <openssl/sha.h>
+#include <vl/sigv4/crypto.hpp>
+#include <vl/sigv4/signer.hpp>
 
 #include <algorithm>
 #include <chrono>
 #include <ctime>
+#include <exception>
 #include <iomanip>
 #include <map>
 #include <sstream>
+#include <string>
 #include <utility>
 
 namespace vh::email::providers {
@@ -239,35 +243,38 @@ SendResult SesProvider::send(const Message& message) {
     const auto endpoint = endpointForConfig(config_);
     const auto host = endpointHost(endpoint);
 
-    const auto now = std::time(nullptr);
-    const auto payloadHash = sha256Hex(payload);
-    const auto amzDate = formatUtcBasic("%Y%m%dT%H%M%SZ", now);
-    const std::map<std::string, std::string> canonicalHeaders{
-        {"content-type", "application/json"},
-        {"host", host},
-        {"x-amz-content-sha256", payloadHash},
-        {"x-amz-date", amzDate}
-    };
-    const auto signedRequest = detail::signAwsV4(
-        *accessKey,
-        *secretKey,
-        config_.region,
-        "POST",
-        kSesPath,
-        "",
-        canonicalHeaders,
-        payload,
-        now
-    );
+    // Signed with vl::sigv4::sign (vl-sigv4) as service "ses": it adds host and x-amz-date, signs the two headers
+    // below, and double-encodes the path in the canonical request as SigV4 requires outside S3. kSesPath has nothing
+    // to encode and the query is empty, so the request is byte for byte the one detail::signAwsV4 signed
+    // (SigV4Goldens.VlSigv4*Ses*, SesProviderSendSignsLikeTheGoldens).
+    std::string payloadHash;
+    vl::sigv4::Signed signedRequest;
+    try {   // throws only if OpenSSL's SHA-256/HMAC fails; send() reports failures, it doesn't throw them
+        payloadHash = vl::sigv4::sha256Hex(payload);
+        const vl::sigv4::Request toSign{
+            .method = "POST",
+            .host = host,
+            .path = kSesPath,
+            .query = {},
+            .headers = {{"content-type", "application/json"}, {"x-amz-content-sha256", payloadHash}},
+            .payload_hash = payloadHash,
+        };
+        const vl::sigv4::Credentials credentials{.access_key = *accessKey, .secret_key = *secretKey, .session_token = {}};
+        signedRequest = vl::sigv4::sign(toSign, credentials, config_.region, kAwsService, vl::sigv4::Clock::now());
+    } catch (const std::exception& e) {
+        SendResult result;
+        result.errorSummary = std::string("SES request signing failed: ") + e.what();
+        return result;
+    }
 
     HttpRequest request;
     request.method = "POST";
-    request.url = endpoint + kSesPath;
+    request.url = endpoint + signedRequest.encoded_path;
     request.headers = {
         "Content-Type: application/json",
         "Host: " + host,
-        "X-Amz-Date: " + signedRequest.amzDate,
-        "X-Amz-Content-Sha256: " + signedRequest.payloadHash,
+        "X-Amz-Date: " + signedRequest.headers.at("x-amz-date"),
+        "X-Amz-Content-Sha256: " + payloadHash,
         "Authorization: " + signedRequest.authorization
     };
     request.body = payload;
