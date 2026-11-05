@@ -30,6 +30,29 @@ Comment:
  statically linked into vaulthalla-server, built from the release tarball
  pinned in subprojects/vl-sigv4.wrap.
 
+Files: deploy/password-lists/common-passwords.txt
+Copyright:
+  2018 Daniel Miessler
+License: MIT
+Comment:
+ "100k-most-used-passwords-NCSC.txt" from SecLists
+ (https://github.com/danielmiessler/SecLists, commit
+ 1a7bb9127eca9e6ff2fc0301c597fe6e16a0cb56), the UK NCSC's list of the
+ 100,000 most common passwords in the Have I Been Pwned corpus. Installed as
+ /usr/share/vaulthalla/password-lists/common-passwords.txt. Provenance and
+ checksums: deploy/password-lists/README.md.
+
+Files: deploy/password-lists/dictionary.txt
+Copyright:
+  2000-2011 Kevin Atkinson
+License: SCOWL
+Comment:
+ Derived from SCOWL size 50 (american-english, Debian package wamerican
+ 2020.12.07-2): words of three or more ASCII letters, lowercased and
+ de-duplicated. Installed as
+ /usr/share/vaulthalla/password-lists/dictionary.txt. Provenance and the
+ derivation command: deploy/password-lists/README.md.
+
 Files: core/vendor/jwt-cpp/*
 Copyright:
   2018 Dominik Thalhammer
@@ -137,3 +160,22 @@ License: public-domain
  AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
  ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
  WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+License: SCOWL
+ Copyright 2000-2011 by Kevin Atkinson
+ .
+ Permission to use, copy, modify, distribute and sell these word
+ lists, the associated scripts, the output created from the scripts,
+ and its documentation for any purpose is hereby granted without fee,
+ provided that the above copyright notice appears in all copies and
+ that both that copyright notice and this permission notice appear in
+ supporting documentation. Kevin Atkinson makes no representations
+ about the suitability of this array for any purpose. It is provided
+ "as is" without express or implied warranty.
+ .
+ SCOWL is a collective work that also includes material from other
+ sources under compatible terms (Moby Words II, placed in the public
+ domain; ENABLE, public domain; 12Dicts by Alan Beale; and others). The
+ full SCOWL copyright statement (including the WordNet 1.6 notice it
+ requires on every copy) ships next to the list as
+ /usr/share/vaulthalla/password-lists/SCOWL-COPYRIGHT.
