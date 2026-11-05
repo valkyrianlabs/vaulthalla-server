@@ -7,7 +7,10 @@
 #include "fs/cache/Registry.hpp"
 #include "fs/model/File.hpp"
 #include "fs/model/Path.hpp"
+#include "identities/Manager.hpp"
 #include "identities/User.hpp"
+#include "rbac/permission/vault/Filesystem.hpp"
+#include "rbac/resolver/vault/all.hpp"
 #include "fs/ops/file.hpp"
 #include "log/Registry.hpp"
 #include "platform/Durable.hpp"
@@ -161,14 +164,27 @@ WorkingCopyHooks runtimeHooks() {
         .recover = [](const fs::model::File& last, const fs::PlaintextSource& content,
                       const std::optional<int32_t> writer) {
             const auto engine = engineFor(last);
-            const auto user = writer ? identities::User::detached(static_cast<uint32_t>(*writer), {}) : nullptr;
+            // Recreating the file is a new write by its last writer, authorized as one (#328 review): the account as
+            // it is now, Touch to recreate a missing folder and Write at the new file's path. A writer who lost the
+            // right meanwhile (or no longer exists) gets nothing written; the changes stay unsaved and the loss is
+            // counted at shutdown like any other unsaved copy.
+            const auto user = writer ? identities::manager().user(static_cast<uint32_t>(*writer)) : nullptr;
+            if (!user) throw std::runtime_error("its last writer is not an account any more");
+            const auto allowed = [&](const std::filesystem::path& fusePath, const rbac::permission::vault::FilesystemAction action) {
+                return rbac::resolver::Vault::has<rbac::permission::vault::FilesystemAction>(
+                    {.user = user, .permission = action, .vault_id = engine->vault->id, .path = fusePath});
+            };
             const auto parent = last.fuse_path.parent_path();
+            const auto& cache = runtime::Deps::get().fsCache;
+            if (!cache->entryExists(parent) && !allowed(parent, rbac::permission::vault::FilesystemAction::Touch))
+                throw std::runtime_error("its last writer may not recreate the folder it was in");
             if (fs::Filesystem::mkdir({.path = parent, .engine = engine, .user = user}) != 0)
                 throw std::runtime_error("cannot create the folder it was in");
-            const auto& cache = runtime::Deps::get().fsCache;
             for (const auto& name : {last.name, unsavedName(last.name)}) {
                 const auto fusePath = parent / name;
                 if (cache->entryExists(fusePath)) continue;
+                if (!allowed(fusePath, rbac::permission::vault::FilesystemAction::Write))
+                    throw std::runtime_error("its last writer may not create files there any more");
                 const auto created = fs::Filesystem::createFile({.path = last.path.parent_path() / name,
                                                                  .fuse_path = fusePath, .source = content,
                                                                  .engine = engine, .user = user});
