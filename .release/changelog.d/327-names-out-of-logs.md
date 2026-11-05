@@ -1,0 +1,4 @@
+- Log lines name files by entry id or an opaque per-run tag; logging.file_paths (ids|full, default ids) controls it (#327).
+- Console HTTP lanes address files by entry=<id>; ids follow the same RBAC, share scope and no-existence-oracle rules as paths.
+- Share links put the token in the URL fragment (/share#<token>); /share/<token> links redirect.
+- nginx sites log through a redacting log_format (share tokens, query strings, no Referer).

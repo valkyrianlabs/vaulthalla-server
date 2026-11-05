@@ -817,7 +817,7 @@ CreateLinkResult Manager::createLink(const rbac::Actor& actor, CreateLinkRequest
         return {
             .link = created,
             .public_token = token.raw,
-            .public_url_path = "/share/" + token.raw
+            .public_url_path = std::string(kPublicSharePath) + token.raw
         };
     } catch (...) {
         setDenied(*audit, "share_create_denied");
@@ -921,7 +921,7 @@ RotateLinkTokenResult Manager::rotateLinkToken(const rbac::Actor& actor, const s
     return {
         .link = rotated,
         .public_token = token.raw,
-        .public_url_path = "/share/" + token.raw
+        .public_url_path = std::string(kPublicSharePath) + token.raw
     };
 }
 

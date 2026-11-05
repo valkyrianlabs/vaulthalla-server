@@ -12,6 +12,7 @@
 #include "db/query/fs/Symlink.hpp"
 #include "db/query/fs/Directory.hpp"
 #include "log/Registry.hpp"
+#include "log/Redact.hpp"
 #include "fs/cache/Registry.hpp"
 #include "fuse/Resolver.hpp"
 #include "fuse/WorkingCopies.hpp"
@@ -240,7 +241,7 @@ void setattr(const fuse_req_t req, const fuse_ino_t ino,
                 copies.release(handle);
             }
         } catch (const std::exception& e) {
-            log::Registry::fuse()->error("[setattr] Could not truncate {}: {}", resolved.entry->fuse_path.string(), e.what());
+            log::Registry::fuse()->error("[setattr] Could not truncate {}: {}", log::file(resolved.entry->id, resolved.entry->fuse_path), e.what());
             replyError(req, timer, errnoFrom(e));
             return;
         }
@@ -342,7 +343,7 @@ void readdir(const fuse_req_t req, const fuse_ino_t ino, const size_t size, cons
 
 void lookup(const fuse_req_t req, const fuse_ino_t parent, const char* name) {
     ScopedFuseOpTimer timer(fuseStats(), FuseOperation::Lookup);
-    log::Registry::fuse()->debug("[lookup] Called for parent: {}, name: {}", parent, name);
+    log::Registry::fuse()->debug("[lookup] Called for parent: {}, name: {}", parent, log::path(name));
 
     const auto resolved = Resolver::resolve({
         .caller = "lookup",
@@ -399,7 +400,7 @@ void readlink(const fuse_req_t req, const fuse_ino_t ino) {
 void create(const fuse_req_t req, const fuse_ino_t parent, const char* name, const mode_t mode, fuse_file_info* fi) {
     ScopedFuseOpTimer timer(fuseStats(), FuseOperation::Create);
     log::Registry::fuse()->debug("[create] Called for parent: {}, name: {}, mode: {}",
-        parent, name, mode);
+        parent, log::path(name), mode);
 
     const auto resolved = Resolver::resolve({
         .caller = "create",
@@ -436,7 +437,7 @@ void create(const fuse_req_t req, const fuse_ino_t parent, const char* name, con
         handle = WorkingCopies::instance().open(
             *newEntry->inode, std::static_pointer_cast<File>(newEntry), fi->flags & ~(O_CREAT | O_EXCL));
     } catch (const std::exception& e) {
-        log::Registry::fuse()->error("[create] Could not open {}: {}", newEntry->fuse_path.string(), e.what());
+        log::Registry::fuse()->error("[create] Could not open {}: {}", log::file(newEntry->id, newEntry->fuse_path), e.what());
         replyError(req, timer, errnoFrom(e));
         return;
     }
@@ -462,7 +463,7 @@ void create(const fuse_req_t req, const fuse_ino_t parent, const char* name, con
 void symlink(const fuse_req_t req, const char* link, const fuse_ino_t parent, const char* name) {
     ScopedFuseOpTimer timer(fuseStats(), FuseOperation::Symlink);
     log::Registry::fuse()->debug("[symlink] Called for parent: {}, name: {}, target: {}",
-        parent, name ? name : "null", link ? link : "null");
+        parent, name ? log::path(name) : std::string("null"), link ? link : "null");
 
     if (!link || !name || std::string_view(name).find('/') != std::string::npos) {
         replyError(req, timer, EINVAL);
@@ -540,7 +541,7 @@ void open(const fuse_req_t req, const fuse_ino_t ino, fuse_file_info* fi) {
     try {
         handle = WorkingCopies::instance().open(ino, std::static_pointer_cast<File>(resolved.entry), fi->flags);
     } catch (const std::exception& e) {
-        log::Registry::fuse()->error("[open] Could not open {}: {}", resolved.entry->fuse_path.string(), e.what());
+        log::Registry::fuse()->error("[open] Could not open {}: {}", log::file(resolved.entry->id, resolved.entry->fuse_path), e.what());
         replyError(req, timer, errnoFrom(e));
         return;
     }
@@ -637,7 +638,7 @@ void read(const fuse_req_t req, const fuse_ino_t ino, const size_t size, const o
 
 void mkdir(const fuse_req_t req, const fuse_ino_t parent, const char* name, const mode_t mode) {
     ScopedFuseOpTimer timer(fuseStats(), FuseOperation::MkDir);
-    log::Registry::fuse()->debug("[mkdir] Called for parent: {}, name: {}, mode: {}", parent, name, mode);
+    log::Registry::fuse()->debug("[mkdir] Called for parent: {}, name: {}, mode: {}", parent, log::path(name), mode);
 
     const auto resolved = Resolver::resolve({
         .caller = "mkdir",
@@ -686,7 +687,7 @@ void mkdir(const fuse_req_t req, const fuse_ino_t parent, const char* name, cons
 void rename(const fuse_req_t req, const fuse_ino_t parent, const char* name, const fuse_ino_t newparent, const char* newname, const unsigned int flags) {
     ScopedFuseOpTimer timer(fuseStats(), FuseOperation::Rename);
     log::Registry::fuse()->debug("[rename] Called for parent: {}, name: {}, newparent: {}, newname: {}, flags: {}",
-                               parent, name, newparent, newname, flags);
+                               parent, log::path(name), newparent, log::path(newname), flags);
 
     const auto& cache = runtime::Deps::get().fsCache;
 
@@ -820,7 +821,7 @@ void access(const fuse_req_t req, const fuse_ino_t ino, const int mask) {
 
 void unlink(const fuse_req_t req, const fuse_ino_t parent, const char* name) {
     ScopedFuseOpTimer timer(fuseStats(), FuseOperation::Unlink);
-    log::Registry::fuse()->debug("[unlink] Called for parent: {}, name: {}", parent, name);
+    log::Registry::fuse()->debug("[unlink] Called for parent: {}, name: {}", parent, log::path(name));
 
     const auto childName = name ? std::string_view{name} : std::string_view{};
     const auto isHttpUploadTemp = isHttpUploadTempPartName(childName);
@@ -851,7 +852,7 @@ void unlink(const fuse_req_t req, const fuse_ino_t parent, const char* name) {
 
             log::Registry::fuse()->debug(
                 "[unlink] Treating missing HTTP upload temp part as already removed: {}",
-                tempResolved.path->string()
+                log::path(*tempResolved.path)
             );
             replyOk(req, timer);
             return;
@@ -873,7 +874,7 @@ void unlink(const fuse_req_t req, const fuse_ino_t parent, const char* name) {
         db::query::fs::Symlink::deleteSymlink(link);
 
         if (::unlink(entry->backing_path.c_str()) < 0)
-            log::Registry::fuse()->debug("[unlink] Failed to remove backing symlink: {}: {}", entry->backing_path.string(), strerror(errno));
+            log::Registry::fuse()->debug("[unlink] Failed to remove backing symlink: {}: {}", log::file(entry->id, entry->backing_path), strerror(errno));
 
         runtime::Deps::get().fsCache->evictPath(entry->fuse_path);
         if (entry->parent_id) runtime::Deps::get().fsCache->refreshDirStats(*entry->parent_id);
@@ -885,7 +886,7 @@ void unlink(const fuse_req_t req, const fuse_ino_t parent, const char* name) {
         db::query::fs::File::deleteFile(resolved.user->id, std::static_pointer_cast<File>(entry));
 
         if (::unlink(entry->backing_path.c_str()) < 0)
-            log::Registry::fuse()->debug("[unlink] Failed to remove backing upload temp file: {}: {}", entry->backing_path.string(), strerror(errno));
+            log::Registry::fuse()->debug("[unlink] Failed to remove backing upload temp file: {}: {}", log::file(entry->id, entry->backing_path), strerror(errno));
 
         runtime::Deps::get().fsCache->evictPath(entry->fuse_path);
         if (entry->parent_id) runtime::Deps::get().fsCache->refreshDirStats(*entry->parent_id);
@@ -913,7 +914,7 @@ void unlink(const fuse_req_t req, const fuse_ino_t parent, const char* name) {
         kept.committed();
 
         if (::unlink(entry->backing_path.c_str()) < 0)
-            log::Registry::fuse()->debug("[unlink] Failed to remove backing file: {}: {}", entry->backing_path.string(), strerror(errno));
+            log::Registry::fuse()->debug("[unlink] Failed to remove backing file: {}: {}", log::file(entry->id, entry->backing_path), strerror(errno));
         runtime::Deps::get().fsCache->evictPath(entry->fuse_path);
     }
 
@@ -927,7 +928,7 @@ void unlink(const fuse_req_t req, const fuse_ino_t parent, const char* name) {
 
 void rmdir(const fuse_req_t req, const fuse_ino_t parent, const char* name) {
     ScopedFuseOpTimer timer(fuseStats(), FuseOperation::RmDir);
-    log::Registry::fuse()->debug("[rmdir] Called for parent: {}, name: {}", parent, name);
+    log::Registry::fuse()->debug("[rmdir] Called for parent: {}, name: {}", parent, log::path(name));
 
     const auto resolved = Resolver::resolve({
         .caller = "rmdir",
@@ -955,7 +956,7 @@ void rmdir(const fuse_req_t req, const fuse_ino_t parent, const char* name) {
     }
 
     if (::rmdir(resolved.entry->backing_path.c_str()) < 0)
-        log::Registry::fuse()->warn("[rmdir] Failed to remove backing directory: {}: {}", resolved.entry->backing_path.string(), strerror(errno));
+        log::Registry::fuse()->warn("[rmdir] Failed to remove backing directory: {}: {}", log::file(resolved.entry->id, resolved.entry->backing_path), strerror(errno));
 
     runtime::Deps::get().fsCache->evictPath(resolved.entry->fuse_path);
     if (resolved.entry->parent_id) runtime::Deps::get().fsCache->refreshDirStats(*resolved.entry->parent_id);
@@ -1059,7 +1060,7 @@ void statfs(const fuse_req_t req, const fuse_ino_t ino) {
     struct statvfs st{};
 
     if (::statvfs(entry->backing_path.c_str(), &st) < 0) {
-        log::Registry::fuse()->debug("[statfs] Failed to get filesystem stats for: {}: {}", entry->backing_path.string(), strerror(errno));
+        log::Registry::fuse()->debug("[statfs] Failed to get filesystem stats for: {}: {}", log::file(entry->id, entry->backing_path), strerror(errno));
         replyError(req, timer, errno);
         return;
     }

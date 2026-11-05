@@ -373,7 +373,9 @@ std::vector<WsModel> adminSettingsModels() {
         {uinteger("retention_days")}));
 
     out.push_back(model("LoggingConfig", "logging.* (Config.cpp to_json(LoggingConfig)).",
-        {object("levels", "LogLevelsConfig")}));
+        {object("levels", "LogLevelsConfig"),
+         str("file_paths").oneOf({"ids", "full"}).opt()
+             .desc("How log lines name files: ids (entry ids, opaque per-run tags) or full (with vault paths).")}));
     out.push_back(model("LogLevelsConfig", "logging.levels.* (Config.cpp to_json(LogLevelsConfig)).",
         {adminLogLevel("console_log_level"), adminLogLevel("file_log_level"),
          object("subsystem_levels", "SubsystemLogLevelsConfig")}));

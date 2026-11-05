@@ -14,6 +14,7 @@
 #include "fs/ops/file.hpp"
 #include "preview/render/Service.hpp"
 #include "log/Registry.hpp"
+#include "log/Redact.hpp"
 #include "concurrency/ThreadPoolManager.hpp"
 #include "concurrency/ThreadPool.hpp"
 #include "fs/Filesystem.hpp"
@@ -687,7 +688,7 @@ std::vector<std::shared_ptr<Directory>> CloudEngine::extractDirectories(
 std::optional<std::pair<std::string, unsigned int>> CloudEngine::getRemoteIVBase64AndVersion(const fs::path& rel_path) const {
     const auto context = resolveRemoteEncryptionContext(rel_path, nullptr, RemoteEncryptionResolveOptions{});
     if (!context.payload) {
-        log::Registry::cloud()->error("[CloudStorageEngine] No IV or key version found for encrypted file: {}", rel_path.string());
+        log::Registry::cloud()->error("[CloudStorageEngine] No IV or key version found for encrypted file: {}", log::path(rel_path));
         return std::nullopt;
     }
 
@@ -732,12 +733,12 @@ CloudEngine::RemoteEncryptionContext CloudEngine::resolveRemoteEncryptionContext
             log::Registry::cloud()->warn(
                 "[CloudStorageEngine] Vault {}: importing '{}' as plaintext over a sealed file: the upstream object "
                 "carries no usable Vaulthalla encryption metadata (the event subscription imports foreign objects)",
-                vault->id, rel_path.string());
+                vault->id, log::path(rel_path));
             return true;
         }
         log::Registry::cloud()->warn(
             "[CloudStorageEngine] Vault {}: refusing '{}' as plaintext: the vault holds it sealed and encrypts upstream",
-            vault->id, rel_path.string());
+            vault->id, log::path(rel_path));
         return false;
     };
 

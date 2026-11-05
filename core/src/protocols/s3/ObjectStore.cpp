@@ -11,6 +11,7 @@
 #include "fs/model/Path.hpp"
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
+#include "log/Redact.hpp"
 #include "protocols/s3/Error.hpp"
 #include "rbac/permission/admin/S3Gateway.hpp"
 #include "rbac/permission/admin/Vaults.hpp"
@@ -102,7 +103,7 @@ void removeIfExists(const std::filesystem::path& path) {
     std::error_code ec;
     std::filesystem::remove_all(path, ec);
     if (ec)
-        log::Registry::storage()->warn("[S3Gateway] Failed to remove {}: {}", path.string(), ec.message());
+        log::Registry::storage()->warn("[S3Gateway] Failed to remove {}: {}", log::path(path), ec.message());
 }
 
 bool shouldMaterializeRemoteObject(
@@ -529,7 +530,7 @@ ObjectBody ObjectStore::getObject(
                 log::Registry::cloud()->warn(
                     "[S3Gateway] Remote-cache materialization failed for vault {} key {}: {}",
                     bucket.vault_id,
-                    vaultPath.generic_string(),
+                    log::path(vaultPath),
                     e.what());
             }
         }

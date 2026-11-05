@@ -482,12 +482,14 @@ Config& Config::operator=(Config&&) noexcept = default;
 
     void to_json(nlohmann::json &j, const LoggingConfig &c) {
         j = {
-            {"levels", c.levels}
+            {"levels", c.levels},
+            {"file_paths", logFilePathsToString(c.file_paths)}
         };
     }
 
     void from_json(const nlohmann::json &j, LoggingConfig &c) {
         j.at("levels").get_to(c.levels);
+        if (j.contains("file_paths")) c.file_paths = logFilePathsFromString(j.at("file_paths").get<std::string>());
     }
 
     void to_json(nlohmann::json &j, const LogLevelsConfig &c) {
@@ -585,6 +587,17 @@ Config& Config::operator=(Config&&) noexcept = default;
         if (v == "optimistic") return PreviewIntegrityMode::Optimistic;
         if (v == "strict") return PreviewIntegrityMode::Strict;
         throw std::invalid_argument("preview.media.integrity must be optimistic|strict, got '" + v + "'");
+    }
+
+    std::string logFilePathsToString(const LogFilePaths mode) {
+        return mode == LogFilePaths::Full ? "full" : "ids";
+    }
+
+    LogFilePaths logFilePathsFromString(const std::string_view value) {
+        const auto v = lowercasePreviewValue(value);
+        if (v == "ids") return LogFilePaths::Ids;
+        if (v == "full") return LogFilePaths::Full;
+        throw std::invalid_argument("logging.file_paths must be ids|full, got '" + v + "'");
     }
 
     std::string previewRemoteModeToString(const PreviewRemoteMode mode) {

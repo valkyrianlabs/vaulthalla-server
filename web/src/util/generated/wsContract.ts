@@ -9,7 +9,7 @@ export const WS_CONTRACT_VERSION = 3
 export const WS_CONTRACT_HASH = '799049bb18175a04a74f8728b1c348617c1eb3e1868321c538e7240eeaba36d9'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = 'b0720995e740138fba5f6b6cd747ae68ec56d60650f54b7f86010ad883cbd85f'
+export const WS_MODELS_HASH = 'cf6983ce81554b4659c07b61a135da2640649d96b9d9ab73bee765f56b47b9e5'
 
 // The ws protocol range this book is (core/usage WsProtocol.hpp): send it in meta.hello.
 export const WS_PROTOCOL_VERSION = 1
@@ -594,7 +594,7 @@ export interface WsModels {
   /**
    * logging.* (Config.cpp to_json(LoggingConfig)).
    */
-  'LoggingConfig': { levels: WsModels['LogLevelsConfig'] }
+  'LoggingConfig': { levels: WsModels['LogLevelsConfig']; file_paths?: 'ids' | 'full' }
   /**
    * Filesystem operation queue and share upload figures, one vault or the system
    * (core/src/stats/model/OperationStats.cpp to_json).

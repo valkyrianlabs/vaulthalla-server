@@ -3,7 +3,7 @@ import { SharePage } from '@/features/share/SharePage'
 
 export const metadata: Metadata = { title: 'Shared files', robots: { index: false, follow: false } }
 
-export default async function Page({ params }: { params: Promise<{ token: string }> }) {
-  const { token } = await params
-  return <SharePage token={decodeURIComponent(token)} />
+// The token and folder live in the URL fragment (`/share#<token>/<path>`, #327): SharePage reads them in the browser.
+export default function Page() {
+  return <SharePage />
 }

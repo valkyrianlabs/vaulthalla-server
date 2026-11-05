@@ -7,6 +7,7 @@
 #include "identities/Group.hpp"
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
+#include "log/Redact.hpp"
 #include "rbac/fs/policy/Evaluator.hpp"
 #include "rbac/permission/admin/VaultGlobals.hpp"
 #include "rbac/permission/vault/Filesystem.hpp"
@@ -103,7 +104,7 @@ bool canLookup(const std::shared_ptr<identities::User>& user, const EntryPtr& en
         return resolver::Vault::has<Action>({.user = user, .permission = Action::Lookup, .entry = entry});
     } catch (const std::exception& e) {
         // Failing to decide hides the entry rather than showing it.
-        log::Registry::auth()->warn("[visibility] Failed to evaluate Lookup on {}: {}", entry->fuse_path.string(),
+        log::Registry::auth()->warn("[visibility] Failed to evaluate Lookup on {}: {}", log::file(entry->id, entry->fuse_path),
                                     e.what());
         return false;
     }

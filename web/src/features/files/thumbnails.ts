@@ -102,7 +102,7 @@ export const useThumbnails = (source: FsSource, visible: Entry[], enabled: boole
     const state = cache.get(signature(source, entry, size))
     if (!state) return null
     if (state.status === 'ready') return state.url
-    if (state.status === 'error') return source.previewUrl(entry.path, size)
+    if (state.status === 'error') return source.previewUrl(entry, size)
     return null
   }
 }

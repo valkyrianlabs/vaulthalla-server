@@ -699,6 +699,30 @@ TEST_F(HttpSharePreviewTest, ShareContentServesSvgInlineWithSandboxCspToDownload
     EXPECT_EQ(0u, responseHeader(response, field::content_disposition).find("inline"));
 }
 
+// #327: share recipients address files by entry id too. The id resolves through the share provider and the link's
+// scope check, and a file outside the shared folder answers like an unknown id.
+TEST_F(HttpSharePreviewTest, ShareContentByEntryIdStaysInsideTheShare) {
+    auto session = readySession(vh::share::bit(vh::share::Operation::Download));
+    installSharePreviewHooks(session);
+    const auto svg = addSvgFile();
+
+    auto response = Router::handleDownload(previewRequest("/download/content?share=1&entry=" + std::to_string(svg->id)));
+    EXPECT_EQ(status::ok, responseStatus(response));
+    EXPECT_EQ(svgBody(), vectorBody(response));
+
+    auto outside = std::make_shared<vh::fs::model::File>(*svg);
+    outside->id = 77;
+    outside->parent_id = std::nullopt;
+    outside->path = "/private/vector.svg";
+    provider->byId[outside->id] = outside;
+    provider->byPath[outside->path.string()] = outside;
+    // Outside the share, and unknown: the same answer, so ids elsewhere in the vault can't be probed.
+    EXPECT_EQ(status::not_found, responseStatus(Router::handleDownload(previewRequest("/download/content?share=1&entry=77"))));
+    EXPECT_EQ(status::not_found, responseStatus(Router::handleDownload(previewRequest("/download/content?share=1&entry=4242"))));
+    EXPECT_EQ(status::bad_request, responseStatus(Router::handleDownload(
+        previewRequest("/download/content?share=1&entry=13&path=%2Fvector.svg"))));
+}
+
 TEST_F(HttpSharePreviewTest, SharePreviewRefusesWebpOriginals) {
     auto session = readySession(vh::share::bit(vh::share::Operation::Preview));
     installSharePreviewHooks(session);

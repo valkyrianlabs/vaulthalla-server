@@ -6,6 +6,7 @@
 #include "fs/model/File.hpp"
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
+#include "log/Redact.hpp"
 #include "rbac/permission/vault/Filesystem.hpp"
 #include "rbac/permission/vault/sync/Action.hpp"
 #include "rbac/resolver/vault/all.hpp"
@@ -172,7 +173,7 @@ ResolveResult resolve(const Actor& actor, const Decision decision, const std::ve
                 vh::sync::ConflictResolver::resolve(engine, *record, decision);
                 item = {.conflict_id = id, .ok = true, .status = "resolved", .message = std::nullopt};
                 log::Registry::audit()->info("[ops::conflicts] {} resolved sync conflict {} on '{}' in vault {}: {}",
-                                             actor->name(), id, record->path, record->vault_id,
+                                             actor->name(), id, log::path(record->path), record->vault_id,
                                              vh::sync::toString(decision));
             }
         } catch (const vh::sync::ConflictStale& e) {
