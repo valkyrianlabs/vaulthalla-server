@@ -28,6 +28,9 @@ for users and operators; keep it representative of what actually ships.
   daemon was reading a different key, so a changed value was ignored and tokens always lasted 60 minutes.
   Configs that use the older `token_expiry_minutes` keep working, and the daemon logs a note to rename it.
 - The sign-in cookie now lasts as long as `auth.refresh_token_expiry_days`. It was fixed at 7 days.
+- Contributor docs: a security-first compatibility policy (`docs/contributors/compatibility-policy.md`). Security
+  and recoverability of customer data take precedence over backward compatibility. Breaking changes are allowed
+  where they remove a real risk, but never at the cost of data, keys or recovery material.
 
 ## S3 gateway
 
