@@ -13,6 +13,10 @@ for users and operators; keep it representative of what actually ships.
   connection) and still be treated as uploaded. Vaulthalla cancelled the incomplete upload at the provider but then
   carried on as if the file had arrived, so the bucket could be missing a file that the vault showed as synced. A
   failed part now fails the upload, and the file stays pending for the next sync pass.
+- The installation guide now opens with an optional "Don't Trust Vaulthalla. Verify It." step. It shows how to
+  clone the source and have your own AI coding agent audit it before you install, using the read-only prompt in
+  `SECURITY_AUDIT_PROMPT.md`. The audit runs entirely on your side: nothing in Vaulthalla starts it or sends
+  anything to Valkyrian Labs.
 - The access-token lifetime set in `config.yaml` (`auth.access_token_expiry_minutes`) now takes effect. The
   daemon was reading a different key, so a changed value was ignored and tokens always lasted 60 minutes.
   Configs that use the older `token_expiry_minutes` keep working, and the daemon logs a note to rename it.

@@ -33,6 +33,31 @@ Vaulthalla runs on Linux and on Apple Silicon Macs. Both run the same daemon, we
 
 For a server you will rely on, Linux is the more complete platform. A Mac is a good fit for a home or small-office server where the web console, sync, sharing and the S3 gateway cover how you reach your files.
 
+## Don't Trust Vaulthalla. Verify It.
+
+Your data deserves more than a promise.
+
+Vaulthalla is open-source because we believe security claims should be independently verifiable. Before installing, we encourage you to clone the source code and have your preferred AI coding agent investigate it for vulnerabilities, hidden telemetry, backdoors, and undocumented behavior.
+
+You don't need our permission, our tools, or our involvement.
+
+If your audit discovers something concerning, we'd appreciate hearing about it, but the decision to share those findings is entirely yours.
+
+An automated audit cannot guarantee software security, but independent scrutiny is an important part of establishing trust.
+
+```bash
+git clone https://github.com/valkyrianlabs/vaulthalla-server.git
+cd vaulthalla-server
+```
+
+Then open your AI coding agent in that folder and paste the prompt from [`SECURITY_AUDIT_PROMPT.md`](https://github.com/valkyrianlabs/vaulthalla-server/blob/main/SECURITY_AUDIT_PROMPT.md). The file also shows a one-line command that copies the prompt to your clipboard.
+
+:::callout{theme="info" title="The audit stays with you"}
+The audit runs locally with the agent you choose. Nothing in Vaulthalla starts an audit, sends your code or findings to Valkyrian Labs, or adds telemetry. The prompt tells your agent to change nothing, to ask you before preparing a report, and to send nothing without your explicit approval.
+:::
+
+This step is optional. Whenever you're ready, continue with the install below.
+
 ## Quick Install
 
 :::tabs{default="linux"}
