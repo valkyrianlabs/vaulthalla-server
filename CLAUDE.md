@@ -21,6 +21,7 @@ live P0 (the DB pool wedges after a PostgreSQL restart, which hangs FUSE and `ap
 | `.github/` | `build_and_test.yml`, `release.yml` (a thin `vlr` transaction), composite actions, self-hosted runners | `.claude/context/release-pipeline.md` |
 | `bin/` | source install/uninstall/test-env scripts (dev helpers, **not** apt semantics) | `.claude/context/testing.md` |
 | `docs/` | operator docs (Payload Markdown, published by `pmdocs`) | `.claude/context/docs-authoring.md` |
+| `design/` | architecture specs under review, never published (`design/encryption/`: #329 formats, migration, recovery, sealed vaults, claims; golden vectors with `--check`) | `design/encryption/README.md` |
 | `tools/{smoke,e2e,dev}` | S3 gateway smoke, Playwright env, share preview smoke, `dev/verify.sh` (shared verification entrypoint) | `.claude/context/testing.md` |
 | `tools/contracts/` | product contracts (Debian packaging, maintainer scripts, shipped migrations, release workflow) | `.claude/context/packaging-lifecycle.md` |
 | `.github/project/`, `tools/project/` | Roadmap board schema (fields, `area:*` labels, views, Ready gate) + `board.py` reconcile/migrate/lint | `.claude/context/project-board.md` |
