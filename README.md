@@ -31,6 +31,12 @@ Intel Macs, Windows and ARM Linux are not supported.
 
 ## Install
 
+**Don't trust Vaulthalla. Verify it.** Before installing, you're welcome to clone this repository and have your own
+AI coding agent audit it for vulnerabilities, hidden telemetry, backdoors and undocumented behavior, using the
+read-only prompt in [SECURITY_AUDIT_PROMPT.md](SECURITY_AUDIT_PROMPT.md). The audit runs entirely on your side.
+Sharing what it finds is up to you, and nothing is sent to Valkyrian Labs unless you choose to send it. This step is
+optional: the install commands below work the same either way.
+
 ### Linux
 
 ```bash
