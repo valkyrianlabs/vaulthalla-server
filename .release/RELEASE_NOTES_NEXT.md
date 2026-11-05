@@ -13,6 +13,10 @@ for users and operators; keep it representative of what actually ships.
   connection) and still be treated as uploaded. Vaulthalla cancelled the incomplete upload at the provider but then
   carried on as if the file had arrived, so the bucket could be missing a file that the vault showed as synced. A
   failed part now fails the upload, and the file stays pending for the next sync pass.
+- The installation guide now opens with an optional "Don't Trust Vaulthalla. Verify It." step. It shows how to
+  clone the source and have your own AI coding agent audit it before you install, using the read-only prompt in
+  `SECURITY_AUDIT_PROMPT.md`. The audit runs entirely on your side: nothing in Vaulthalla starts it or sends
+  anything to Valkyrian Labs.
 - Email-verified share links now work. Vaulthalla emails the 6-digit code to the address the visitor enters, if
   that address is on the link's list, through the email provider set up under `vh email` (Resend or SES). Until
   now no code was ever sent, so these links couldn't be opened. Every address gets the same reply, and the email
