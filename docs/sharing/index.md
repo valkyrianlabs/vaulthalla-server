@@ -21,9 +21,9 @@ Vaulthalla shares expose selected file or directory access through scoped links.
 | Access mode | Behavior |
 | --- | --- |
 | Public | Anyone with the link can use the share within its allowed operations. |
-| Email-validated | Recipients verify through email before access. |
+| Email-validated | Only the addresses you list can open the link. A visitor enters their address, and Vaulthalla emails a 6-digit code to it if it's on the list; the code works once and expires after 15 minutes. |
 
-Use email validation for sensitive data or when you need recipient-level control.
+Email validation limits a link to named people. It needs [operator email](/admin/operator-emails) to be set up: without it, Vaulthalla refuses to create email-validated links, and existing ones tell visitors that email isn't available. Every address a visitor enters gets the same reply, whether or not it's on the list, so the link can't be used to find out who it was shared with. The email contains only the code: no file, folder or link name.
 
 ## Turning Sharing Off
 
@@ -102,7 +102,7 @@ Share links never edit files in place. Text editing in the preview sheet is a co
 
 ## Operator Email Dependency
 
-Email-validated shares depend on working operator email configuration. Before using email-validated access for production workflows, verify:
+Email-validated shares send their verification codes through the operator email provider (Resend or SES). When email isn't enabled, creating an email-validated link, or switching a link to it, fails with `share_email_unavailable`. If a code can't be sent, the failure goes to the server log and the share audit (`share_email_delivery_failed`); the visitor can ask for a new code. Before relying on email-validated links, check:
 
 ```bash
 vh email doctor
@@ -114,7 +114,7 @@ See [Operator Emails](/admin/operator-emails).
 
 ## Security Practices
 
-- Prefer email validation for sensitive shares.
+- Prefer email validation for sensitive shares, with operator email set up and tested.
 - Scope shares to the narrowest file or directory.
 - Use download-only links when browsing is not needed.
 - Rotate public URLs after accidental exposure.

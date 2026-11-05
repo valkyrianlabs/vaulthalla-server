@@ -27,6 +27,19 @@ using namespace vh::share;
 namespace vh::share::test_manager {
 constexpr std::time_t kManagerNow = 1'800'000'000;
 
+// Records codes instead of mailing them (#317).
+class RecordingCodeSender final : public ChallengeCodeSender {
+public:
+    bool canSend = true;
+    bool failSends = false;
+    std::vector<ChallengeCodeMessage> sent;
+    [[nodiscard]] bool available() const override { return canSend; }
+    void send(const ChallengeCodeMessage& message) override {
+        if (failSends) throw std::runtime_error("provider down");
+        sent.push_back(message);
+    }
+};
+
 std::string uuidFor(const uint32_t value) {
     return std::format("00000000-0000-4000-8000-{:012d}", value);
 }
@@ -482,6 +495,7 @@ protected:
     std::shared_ptr<FakeStore> store;
     std::shared_ptr<FakeAuthorizer> authorizer;
     std::unique_ptr<Manager> manager;
+    std::shared_ptr<RecordingCodeSender> sender;
     std::shared_ptr<identities::User> user;
 
     void SetUp() override {
@@ -493,6 +507,8 @@ protected:
         options.session_ttl_seconds = 600;
         options.challenge_ttl_seconds = 300;
         options.challenge_max_attempts = 3;
+        sender = std::make_shared<RecordingCodeSender>();
+        options.challenge_code_sender = sender;
         manager = std::make_unique<Manager>(store, authorizer, options);
 
         vh::identities::UserState userState;
@@ -1363,3 +1379,80 @@ TEST(SharePolicy, RefusalNamesTheSwitchThatIsOff) {
     EXPECT_EQ(policy::refusal(sharing), "Sharing is disabled on this server");
     EXPECT_EQ(policy::refusal(sharing, AccessMode::Public), "Sharing is disabled on this server");
 }
+
+// #317: codes were generated and returned internally but never sent, so email-validated links could not be opened.
+TEST_F(ShareManagerTest, EmailChallengeSendsTheCodeToTheListedRecipientOnly) {
+    const auto created = create(AccessMode::EmailValidated);
+    const auto listed = manager->startEmailChallenge(StartEmailChallengeRequest{
+        .public_token = created.public_token, .session_token = std::nullopt, .email = " Recipient@Example.COM ",
+        .ip_address = "127.0.0.1", .user_agent = "test"});
+    ASSERT_EQ(sender->sent.size(), 1u);
+    EXPECT_EQ(sender->sent.front().to, "recipient@example.com");
+    EXPECT_EQ(sender->sent.front().code, listed.verification_code);
+    EXPECT_EQ(sender->sent.front().challenge_id, listed.challenge->id);
+    EXPECT_EQ(sender->sent.front().expires_at, kManagerNow + 300);
+
+    // The code that was mailed opens the session.
+    const auto confirmed = manager->confirmEmailChallenge({
+        .challenge_id = listed.challenge->id, .session_id = listed.session->id,
+        .session_token = listed.session_token, .code = sender->sent.front().code});
+    EXPECT_TRUE(confirmed.verified);
+
+    // An address the link doesn't name gets the same kind of result and no email.
+    const auto stranger = manager->startEmailChallenge(StartEmailChallengeRequest{
+        .public_token = created.public_token, .session_token = std::nullopt, .email = "stranger@example.com",
+        .ip_address = "127.0.0.1", .user_agent = "test"});
+    ASSERT_NE(stranger.challenge, nullptr);
+    ASSERT_NE(stranger.session, nullptr);
+    EXPECT_EQ(sender->sent.size(), 1u) << "no email to an address the link doesn't name";
+    EXPECT_EQ(store->audits.back()->error_code.value_or(""), "share_email_recipient_not_listed");
+}
+
+TEST_F(ShareManagerTest, EmailValidatedLinksNeedEmailDelivery) {
+    sender->canSend = false;
+    try {
+        (void)create(AccessMode::EmailValidated);
+        FAIL() << "created an email-validated link that could never be opened";
+    } catch (const ops::Refused& e) {
+        EXPECT_EQ(e.code, kShareEmailUnavailableCode);
+    }
+    EXPECT_NO_THROW((void)create(AccessMode::Public)) << "other links don't need email";
+
+    // A link created while email worked: its challenge is refused with the same clear error, nothing is created.
+    sender->canSend = true;
+    const auto created = create(AccessMode::EmailValidated);
+    sender->canSend = false;
+    const auto challengesBefore = store->challenges.size();
+    try {
+        (void)manager->startEmailChallenge(StartEmailChallengeRequest{
+            .public_token = created.public_token, .session_token = std::nullopt, .email = "recipient@example.com",
+            .ip_address = std::nullopt, .user_agent = std::nullopt});
+        FAIL() << "started a challenge whose code can't be delivered";
+    } catch (const ops::Refused& e) {
+        EXPECT_EQ(e.code, kShareEmailUnavailableCode);
+    }
+    EXPECT_EQ(store->challenges.size(), challengesBefore);
+    EXPECT_TRUE(sender->sent.empty());
+}
+
+TEST_F(ShareManagerTest, AFailedSendIsAuditedNotReported) {
+    const auto created = create(AccessMode::EmailValidated);
+    sender->failSends = true;
+    const auto result = manager->startEmailChallenge(StartEmailChallengeRequest{
+        .public_token = created.public_token, .session_token = std::nullopt, .email = "recipient@example.com",
+        .ip_address = std::nullopt, .user_agent = std::nullopt});
+    ASSERT_NE(result.challenge, nullptr) << "the reply must not differ for listed recipients";
+    EXPECT_EQ(store->audits.back()->error_code.value_or(""), "share_email_delivery_failed");
+}
+
+TEST(ShareCodeEmail, CarriesTheCodeAndNothingAboutTheShare) {
+    const ChallengeCodeMessage message{.to = "r@example.com", .code = "042917", .expires_at = 1000 + 900, .challenge_id = "c1"};
+    const auto email = renderChallengeCodeEmail(message, 1000);
+    EXPECT_NE(email.text.find("042917"), std::string::npos);
+    EXPECT_NE(email.html.find("042917"), std::string::npos);
+    EXPECT_NE(email.text.find("15 minutes"), std::string::npos);
+    EXPECT_EQ(email.subject.find("042917"), std::string::npos) << "keep the code out of subject lines (notifications)";
+    EXPECT_THROW((void)renderChallengeCodeEmail({.to = "r@example.com", .code = "<b>1</b>", .expires_at = 0, .challenge_id = "c"}, 0),
+                 std::invalid_argument);
+}
+
