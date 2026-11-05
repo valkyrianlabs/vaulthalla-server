@@ -13,6 +13,10 @@ for users and operators; keep it representative of what actually ships.
   connection) and still be treated as uploaded. Vaulthalla cancelled the incomplete upload at the provider but then
   carried on as if the file had arrived, so the bucket could be missing a file that the vault showed as synced. A
   failed part now fails the upload, and the file stays pending for the next sync pass.
+- The installation guide now opens with an optional "Don't Trust Vaulthalla. Verify It." step. It shows how to
+  clone the source and have your own AI coding agent audit it before you install, using the read-only prompt in
+  `SECURITY_AUDIT_PROMPT.md`. The audit runs entirely on your side: nothing in Vaulthalla starts it or sends
+  anything to Valkyrian Labs.
 - Vaulthalla now starts its web console and HTTP listeners on hosts without outbound internet access. Until now
   the daemon downloaded password lists from GitHub every time it started, and on an offline, firewalled or
   air-gapped host that download failed and the web console and Desktop's HTTP lanes never came up. The lists now
