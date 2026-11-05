@@ -36,6 +36,11 @@ for users and operators; keep it representative of what actually ships.
   page shows the sign-in screen instead of signing you back in from the saved session. Change or turn off
   (`0`) the timeout with `services.connection_lifecycle_manager.idle_timeout_minutes` or under Settings →
   Services → Connections. Vaulthalla Desktop and share links aren't affected.
+- Share links are now verified with a key that is sealed under the server's master key, like vault keys,
+  instead of being stored in the database in readable form. The first start converts the existing key, so every
+  existing link keeps working. **Downgrading to an earlier release after this one makes existing share links stop
+  working** (they need to be created again). Share links also need the master key to be restored with a backup;
+  see "Backup and recovery".
 - A failed sign-in now always shows "Invalid username or password". The console used to say whether the account
   existed, was deactivated, or had a different password, which let anyone check which usernames exist. The exact
   reason is still in the server log.

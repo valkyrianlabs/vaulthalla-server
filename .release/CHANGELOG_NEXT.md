@@ -151,6 +151,12 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   session gate re-checks the session on reconnect. Tests: `IdleLogoff.*`,
   `UserParityTest.{IdleSessionsAreSignedOutAndCannotSignBackInSilently,APageLoadRefreshDoesNotRescueAnIdleSession,AnotherTabsActivityKeepsTheSharedSignInAlive,IdleSignOutCanBeTurnedOff}`,
   `web/src/lib/activity.test.ts`, `web/tests/e2e/idle-logoff.spec.ts` (offline scripted, plus a live variant).
+- Sharing (#322): the share-token pepper is sealed under the host master key (`crypto::secrets::Manager`, key
+  `share.token.pepper.sealed.v1`). The plaintext `share.token.pepper.v1` row from earlier releases is converted on
+  first use: the same value is sealed, read back and compared, then the plaintext row is deleted (resumes after an
+  interruption; idempotent). Fails closed, never regenerates, when the sealed copy can't be unsealed or disagrees
+  with a leftover plaintext copy. New `db::query::crypto::Secret::deleteSecret` (`delete_internal_secret`).
+  Downgrade below this release invalidates share links. Tests: `SharePepperSealing.*` (DB-backed).
 - Auth (#321): `auth::Manager::loginUser` refuses every failed sign-in with the same message (`Manager::kLoginFailed`)
   and logs the reason (unknown account, wrong password, deactivated, system-only) at warn. Unknown names are
   verified against a once-built Argon2id hash of a random secret, and the password is verified before the account
