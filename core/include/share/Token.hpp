@@ -35,6 +35,16 @@ class Token {
 
     static void setPepperForTesting(std::vector<uint8_t> pepper);
     static void clearPepperForTesting();
+
+    // The pepper is sealed under the host's master key (crypto::secrets::Manager) as kSealedPepperKey. Releases
+    // before #322 stored it in plaintext as kLegacyPepperKey; the first load converts it, keeping its value so every
+    // existing link keeps working, and deletes the plaintext only after the sealed copy reads back identical.
+    // Fails closed: a sealed pepper that can't be unsealed, or a plaintext one that disagrees with it, makes every
+    // token operation throw. A pepper is generated only when neither exists.
+    static constexpr const char* kSealedPepperKey = "share.token.pepper.sealed.v1";
+    static constexpr const char* kLegacyPepperKey = "share.token.pepper.v1";
+    // Tests only: forget the loaded pepper so the next use runs the load/convert path again.
+    static void resetPepperCacheForTesting();
 };
 
 [[nodiscard]] std::string to_string(TokenKind kind);

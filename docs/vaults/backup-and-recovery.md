@@ -141,6 +141,13 @@ Use this as a cautious outline, not a blind script:
 8. Run `vh status` and `vh vault keys status all`. A vault whose key shows as unavailable (the TPM or master key wasn't restored with it, or the database predates a key rotation) doesn't start, and `vh status` lists it; it needs its keys back: `vh vault keys import <vault> --file <export>`.
 9. Run `vh vault sync info <vault>` for S3/R2 vaults.
 10. Test read access to a known file in each vault.
+11. Open one existing share link. Share links are verified with a key sealed under the master key, like the vault keys, so they keep working only when the master key was restored too. If links fail with "share token pepper unavailable" in the log and the master key can't be recovered, start over deliberately: remove the sealed pepper and restart, which makes every existing link invalid, then create or rotate the links you still need:
+
+    ```bash
+    sudo -u postgres psql vaulthalla -c "DELETE FROM internal_secrets WHERE key = 'share.token.pepper.sealed.v1'"
+    ```
+
+    Vaulthalla never replaces this key on its own.
 
 Example service boundary:
 

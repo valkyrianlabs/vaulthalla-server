@@ -24,6 +24,12 @@ std::shared_ptr<S> Secret::getSecret(const std::string& key) {
     });
 }
 
+void Secret::deleteSecret(const std::string& key) {
+    Transactions::exec("Secret::deleteSecret", [&](pqxx::work& txn) {
+        txn.exec(pqxx::prepped{"delete_internal_secret"}, key);
+    });
+}
+
 bool Secret::secretExists(const std::string& key) {
     return Transactions::exec("Secret::secretExists", [&](pqxx::work& txn) -> bool {
         const auto res = txn.exec(pqxx::prepped{"internal_secret_exists"}, key);

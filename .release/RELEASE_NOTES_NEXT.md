@@ -36,6 +36,11 @@ for users and operators; keep it representative of what actually ships.
   page shows the sign-in screen instead of signing you back in from the saved session. Change or turn off
   (`0`) the timeout with `services.connection_lifecycle_manager.idle_timeout_minutes` or under Settings →
   Services → Connections. Vaulthalla Desktop and share links aren't affected.
+- Share links are now verified with a key that is sealed under the server's master key, like vault keys,
+  instead of being stored in the database in readable form. The first start converts the existing key, so every
+  existing link keeps working. **Downgrading to an earlier release after this one makes existing share links stop
+  working** (they need to be created again). Share links also need the master key to be restored with a backup;
+  see "Backup and recovery".
 - Email-verified share links now work. Vaulthalla emails the 6-digit code to the address the visitor enters, if
   that address is on the link's list, through the email provider set up under `vh email` (Resend or SES). Until
   now no code was ever sent, so these links couldn't be opened. Every address gets the same reply, and the email
