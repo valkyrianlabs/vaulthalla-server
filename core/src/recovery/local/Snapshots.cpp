@@ -15,6 +15,7 @@
 #include "fs/model/File.hpp"
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
+#include "log/Redact.hpp"
 #include "recovery/Model.hpp"
 #include "recovery/Store.hpp"
 #include "runtime/Deps.hpp"
@@ -391,7 +392,7 @@ Created create(const std::shared_ptr<storage::Engine>& engine, const std::shared
 
     out.skipped = std::move(skipped);
     log::Registry::audit()->info("[recovery] {} took snapshot snap-{} of {} in vault {} ({} files, {} new bytes, {} skipped)",
-                                 actor ? actor->name() : std::string("system"), snapshotId, rootPath.string(), vaultId,
+                                 actor ? actor->name() : std::string("system"), snapshotId, log::path(rootPath), vaultId,
                                  out.file_count, out.new_bytes, out.skipped.size());
     return out;
 }

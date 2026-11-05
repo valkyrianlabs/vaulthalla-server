@@ -1,5 +1,6 @@
 #include "log/Registry.hpp"
 #include "config/Registry.hpp"
+#include "log/Redact.hpp"
 #include "log/AuditOrigin.hpp"
 
 #include <spdlog/pattern_formatter.h>
@@ -88,6 +89,7 @@ void Registry::init() {
     if (!fs::exists(log_dir_)) fs::create_directories(log_dir_);
 
     const auto cnf = config::Registry::get().logging;
+    setFilePaths(cnf.file_paths == config::LogFilePaths::Full ? FilePaths::Full : FilePaths::Ids);
 
     // console
     console_sink_ = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();

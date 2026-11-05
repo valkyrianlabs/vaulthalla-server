@@ -6,7 +6,7 @@ import { onSessionReset } from '@/lib/session'
 import { randomId } from '@/lib/randomId'
 import { formatBytes } from '@/lib/format'
 import { normalizePath, parentOf } from '@/features/files/paths'
-import type { FsSource } from '@/features/files/source'
+import type { EntryRef, FsSource } from '@/features/files/source'
 import { RESUME_STORAGE_KEY } from '@/features/files/upload/resumeStore'
 
 export interface PickedFile {
@@ -342,9 +342,9 @@ export const startUpload = (source: FsSource, targetDir: string, files: PickedFi
 // permission) becomes a failed task instead of the browser navigating to an error page; then hands the URL to the
 // browser's own download manager, which the server streams to. Files and folder ZIPs have no size cap, and both
 // answer HEAD with their exact length (a folder's is computed from its listing, without reading any file).
-export const startDownload = async (source: FsSource, path: string, label: string, isDir: boolean) => {
+export const startDownload = async (source: FsSource, target: EntryRef, label: string, isDir: boolean) => {
   const id = randomId()
-  const url = source.downloadUrl(path)
+  const url = source.downloadUrl(target)
   addTask({
     id,
     kind: 'download',

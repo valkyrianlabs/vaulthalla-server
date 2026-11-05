@@ -5,6 +5,7 @@
 #include "db/query/recovery/Policy.hpp"
 #include "fs/model/File.hpp"
 #include "log/Registry.hpp"
+#include "log/Redact.hpp"
 #include "recovery/local/Backlog.hpp"
 #include "recovery/provider/State.hpp"
 #include "runtime/Deps.hpp"
@@ -268,7 +269,7 @@ void Pending::committed() noexcept {
     if (coalesced_) {
         coalescedCount += coalesced_;
         log::Registry::storage()->info("[LocalVersions] Vault {}: {} older unsent version(s) of {} coalesced (the "
-                                       "upstream backlog keeps the newest {})", vault_.id, coalesced_, generation_.path,
+                                       "upstream backlog keeps the newest {})", vault_.id, coalesced_, log::path(generation_.path),
                                        keepLast_ && *keepLast_ > 0 ? *keepLast_ : kDefaultPendingCap);
         coalesced_ = 0;
     }
@@ -322,7 +323,7 @@ Pending retain(const storage::Engine& engine, const fs::model::File& prior, cons
     } catch (const std::exception& e) {
         ++failedCount;
         log::Registry::storage()->error("[LocalVersions] Vault {}: could not keep the previous version of {} ({}): {}",
-                                        engine.vault->id, path, to_string(reason), e.what());
+                                        engine.vault->id, log::path(path), to_string(reason), e.what());
         return Pending{};
     }
 

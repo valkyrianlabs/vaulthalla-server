@@ -6,6 +6,7 @@
 #include "sync/model/Baseline.hpp"
 #include "fs/model/File.hpp"
 #include "log/Registry.hpp"
+#include "log/Redact.hpp"
 #include "recovery/local/Backlog.hpp"
 
 using namespace vh::sync;
@@ -62,7 +63,7 @@ std::vector<Action> Planner::build(
                     if (planningNotes) ++planningNotes->archive_tier_downloads_skipped;
                     log::Registry::sync()->warn(
                         "[SyncPlanner] Skipping automatic body GET for archived S3 object '{}'",
-                        R->path.string());
+                        log::path(R->path));
                     continue;
                 }
 
@@ -134,7 +135,7 @@ std::vector<Action> Planner::build(
                             if (planningNotes) ++planningNotes->archive_tier_downloads_skipped;
                             log::Registry::sync()->warn(
                                 "[SyncPlanner] Skipping automatic body GET for archived S3 object '{}'",
-                                R->path.string());
+                                log::path(R->path));
                             continue;
                         }
                         plan.push_back({ ActionType::Download, k, L, R });
@@ -171,7 +172,7 @@ std::vector<Action> Planner::build(
                     if (planningNotes) ++planningNotes->archive_tier_downloads_skipped;
                     log::Registry::sync()->warn(
                         "[SyncPlanner] Skipping automatic body GET for archived S3 object '{}'",
-                        R->path.string());
+                        log::path(R->path));
                     continue;
                 }
                 plan.push_back({ *a, k, L, R });

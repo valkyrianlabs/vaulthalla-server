@@ -12,6 +12,7 @@
 #include "fs/model/Entry.hpp"
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
+#include "log/Redact.hpp"
 #include "ops/RecoveryJson.hpp"
 #include "rbac/permission/vault/Filesystem.hpp"
 #include "rbac/resolver/Vault.hpp"
@@ -384,7 +385,7 @@ void deletePoint(const Actor& actor, const std::string& recoveryId, const bool c
     if (resolved.id.type == rec::RecoveryId::Type::Snapshot) rec::local::snapshots::remove(static_cast<int64_t>(resolved.id.id));
     else rec::local::removeVersion(static_cast<int64_t>(resolved.id.id));
     log::Registry::audit()->info("[ops::recovery] {} deleted recovery point {} ({}) in vault {}", actor->name(),
-                                 recoveryId, point.path, resolved.engine->vault->id);
+                                 recoveryId, log::path(point.path), resolved.engine->vault->id);
 }
 
 // ---- plans ---------------------------------------------------------------------------------------------------------

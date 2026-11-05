@@ -15,6 +15,7 @@
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
+#include "log/Redact.hpp"
 #include "ops/Error.hpp"
 #include "platform/Durable.hpp"
 #include "protocols/http/Access.hpp"
@@ -954,8 +955,8 @@ void markCommitted(const SessionPtr& s, const uint32_t ordinal, const std::share
     }
     removeQuietly(sealedPath(s->id, ordinal));
     s->cv.notify_all();
-    log::Registry::audit()->info("[http] upload.resumable.commit session={} file={} vault={} entry={} path={} ({} bytes)",
-                                 s->id, fileId, s->vaultId, file->id, file->path.string(), file->size_bytes);
+    log::Registry::audit()->info("[http] upload.resumable.commit session={} file={} vault={} {} ({} bytes)",
+                                 s->id, fileId, s->vaultId, log::file(file->id, file->path), file->size_bytes);
     try {
         if (const auto& sync = runtime::Deps::get().syncController) sync->runNow(engine->vault->id);
     } catch (const std::exception& e) {

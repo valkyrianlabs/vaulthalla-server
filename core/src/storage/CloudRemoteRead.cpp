@@ -14,6 +14,7 @@
 #include "fs/model/Path.hpp"
 #include "fs/ops/file.hpp"
 #include "log/Registry.hpp"
+#include "log/Redact.hpp"
 #include "runtime/Deps.hpp"
 #include "storage/GcmFileReader.hpp"
 #include "storage/RemoteRangedReader.hpp"
@@ -154,7 +155,7 @@ bool commitHydratedEncryption(const FileModel& updated, const std::string& expec
             }
         } catch (const std::exception& e) {
             log::Registry::cloud()->warn("[CloudStorageEngine] Could not refresh the cached row of {}: {}",
-                                         updated.path.string(), e.what());
+                                         log::path(updated.path), e.what());
         }
     }
     return true;
@@ -373,7 +374,7 @@ std::shared_ptr<vh::fs::model::File> CloudEngine::hydrateNow(const std::shared_p
         settle();
         if (!stored) return detail::currentRowOf(f);
 
-        log::Registry::cloud()->info("[CloudStorageEngine] Hydrated {} ({} bytes) for vault {}", f->path.string(),
+        log::Registry::cloud()->info("[CloudStorageEngine] Hydrated {} ({} bytes) for vault {}", log::file(f->id, f->path),
                                      f->size_bytes, vault ? vault->id : 0);
         return hydrated;
     } catch (const s3::RequestBudgetExceeded& e) {
