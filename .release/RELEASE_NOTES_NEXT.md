@@ -13,6 +13,10 @@ for users and operators; keep it representative of what actually ships.
   connection) and still be treated as uploaded. Vaulthalla cancelled the incomplete upload at the provider but then
   carried on as if the file had arrived, so the bucket could be missing a file that the vault showed as synced. A
   failed part now fails the upload, and the file stays pending for the next sync pass.
+- The installation guide now opens with an optional "Don't Trust Vaulthalla. Verify It." step. It shows how to
+  clone the source and have your own AI coding agent audit it before you install, using the read-only prompt in
+  `SECURITY_AUDIT_PROMPT.md`. The audit runs entirely on your side: nothing in Vaulthalla starts it or sends
+  anything to Valkyrian Labs.
 - A failed sign-in now always shows "Invalid username or password". The console used to say whether the account
   existed, was deactivated, or had a different password, which let anyone check which usernames exist. The exact
   reason is still in the server log.
