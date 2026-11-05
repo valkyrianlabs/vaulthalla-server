@@ -4,6 +4,7 @@
 
 #include "config/Config.hpp"
 #include "config/Registry.hpp"
+#include "protocols/ws/RefreshCookie.hpp"
 #include "config/config_yaml.hpp"
 #include "fuse/Service.hpp"
 #include "ops/Config.hpp"
@@ -402,6 +403,51 @@ TEST(ConfigSettingsSerialization, TransferRoundTripsAndSettingsUpdateRefusesOutO
     doc = current;
     doc["transfer"]["max_parts_in_flight"] = 8;
     EXPECT_NO_THROW(ops::config::validateSettings(doc));
+}
+
+
+// #320: the loader read auth.token_expiry_minutes, but the shipped config.yaml (and the docs) say
+// access_token_expiry_minutes, so an operator's access-token lifetime was silently ignored. Both spellings exist in
+// installed files (a console save wrote the old one), so the old key stays as a reported alias and the shipped key wins.
+TEST_F(ConfigSettingsTest, AccessTokenLifetimeHonoursTheShippedKey) {
+    std::vector<std::string> deprecations;
+    const auto shipped = load("auth:\n  access_token_expiry_minutes: 15\n  refresh_token_expiry_days: 2\n", &deprecations);
+    EXPECT_EQ(shipped.auth.access_token_expiry_minutes, 15u);
+    EXPECT_EQ(shipped.auth.refresh_token_expiry_days, 2u);
+    EXPECT_TRUE(deprecations.empty());
+
+    deprecations.clear();
+    const auto legacy = load("auth:\n  token_expiry_minutes: 20\n", &deprecations);
+    EXPECT_EQ(legacy.auth.access_token_expiry_minutes, 20u) << "the old spelling still applies";
+    ASSERT_EQ(deprecations.size(), 1u);
+    EXPECT_NE(deprecations.front().find("auth.token_expiry_minutes is deprecated"), std::string::npos);
+
+    deprecations.clear();
+    const auto both = load("auth:\n  token_expiry_minutes: 20\n  access_token_expiry_minutes: 5\n", &deprecations);
+    EXPECT_EQ(both.auth.access_token_expiry_minutes, 5u) << "the shipped key wins";
+    ASSERT_EQ(deprecations.size(), 1u);
+    EXPECT_NE(deprecations.front().find("ignored"), std::string::npos);
+}
+
+TEST(ConfigSettingsSerialization, AuthWritesTheShippedKey) {
+    config::AuthConfig auth;
+    auth.access_token_expiry_minutes = 42;
+    const auto node = YAML::convert<config::AuthConfig>::encode(auth);
+    EXPECT_FALSE(node["token_expiry_minutes"]);
+    ASSERT_TRUE(node["access_token_expiry_minutes"]);
+    config::AuthConfig back;
+    ASSERT_TRUE(YAML::convert<config::AuthConfig>::decode(YAML::Load(YAML::Dump(node)), back));
+    EXPECT_EQ(back.access_token_expiry_minutes, 42u);
+}
+
+// #320: the refresh cookie's Max-Age was a fixed 604800 (7 days) whatever auth.refresh_token_expiry_days said.
+TEST(RefreshCookie, MaxAgeFollowsTheConfiguredLifetime) {
+    using protocols::ws::refreshCookie;
+    EXPECT_NE(refreshCookie("refresh", "t", 1, false).find("; Max-Age=86400"), std::string::npos);
+    EXPECT_NE(refreshCookie("refresh", "t", 30, false).find("; Max-Age=2592000"), std::string::npos);
+    const auto cookie = refreshCookie("share_refresh", "abc", 7, true);
+    EXPECT_EQ(cookie, "share_refresh=abc; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800; Secure");
+    EXPECT_EQ(refreshCookie("refresh", "t", 7, false).find("Secure"), std::string::npos);
 }
 
 }

@@ -24,6 +24,13 @@ for users and operators; keep it representative of what actually ships.
 - Setting a password no longer fails when the server can't reach the Have I Been Pwned breach check. The check
   gives up after a few seconds, the bundled lists and the password rules decide, and the server log notes it. A
   password the service reports as breached is still refused.
+- The access-token lifetime set in `config.yaml` (`auth.access_token_expiry_minutes`) now takes effect. The
+  daemon was reading a different key, so a changed value was ignored and tokens always lasted 60 minutes.
+  Configs that use the older `token_expiry_minutes` keep working, and the daemon logs a note to rename it.
+- The sign-in cookie now lasts as long as `auth.refresh_token_expiry_days`. It was fixed at 7 days.
+- Contributor docs: a security-first compatibility policy (`docs/contributors/compatibility-policy.md`). Security
+  and recoverability of customer data take precedence over backward compatibility. Breaking changes are allowed
+  where they remove a real risk, but never at the cost of data, keys or recovery material.
 - A failed sign-in now always shows "Invalid username or password". The console used to say whether the account
   existed, was deactivated, or had a different password, which let anyone check which usernames exist. The exact
   reason is still in the server log.
