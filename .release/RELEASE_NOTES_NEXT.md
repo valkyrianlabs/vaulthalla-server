@@ -13,6 +13,13 @@ for users and operators; keep it representative of what actually ships.
   connection) and still be treated as uploaded. Vaulthalla cancelled the incomplete upload at the provider but then
   carried on as if the file had arrived, so the bucket could be missing a file that the vault showed as synced. A
   failed part now fails the upload, and the file stays pending for the next sync pass.
+- Vaulthalla now starts its web console and HTTP listeners on hosts without outbound internet access. Until now
+  the daemon downloaded password lists from GitHub every time it started, and on an offline, firewalled or
+  air-gapped host that download failed and the web console and Desktop's HTTP lanes never came up. The lists now
+  ship in the package (`/usr/share/vaulthalla/password-lists`) and change only with a release.
+- Setting a password no longer fails when the server can't reach the Have I Been Pwned breach check. The check
+  gives up after a few seconds, the bundled lists and the password rules decide, and the server log notes it. A
+  password the service reports as breached is still refused.
 
 ## S3 gateway
 

@@ -1,14 +1,159 @@
 #include "crypto/password/Strength.hpp"
 #include "crypto/util/SHA1.hpp"
+
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <curl/curl.h>
-#include <sstream>
+#include <fstream>
+#include <memory>
+#include <mutex>
 #include <ranges>
+#include <sstream>
+#include <stdexcept>
+#include <system_error>
+#include <unordered_set>
+#include <utility>
 
 namespace vh::crypto::password {
-std::unordered_set<std::string> Strength::dictionaryWords_;
-std::unordered_set<std::string> Strength::commonWeakPasswords_;
+
+namespace {
+
+using WordSet = std::unordered_set<std::string>;
+
+// Readers take a snapshot under the mutex and look up without it; loaders build a whole new set first and swap it in.
+struct Lists {
+    std::mutex mutex;
+    std::shared_ptr<const WordSet> dictionary = std::make_shared<const WordSet>();
+    std::shared_ptr<const WordSet> commonWeak = std::make_shared<const WordSet>();
+};
+
+Lists& lists() {
+    static Lists instance;
+    return instance;
+}
+
+std::shared_ptr<const WordSet> dictionarySnapshot() {
+    std::scoped_lock lock(lists().mutex);
+    return lists().dictionary;
+}
+
+std::shared_ptr<const WordSet> commonWeakSnapshot() {
+    std::scoped_lock lock(lists().mutex);
+    return lists().commonWeak;
+}
+
+void trim(std::string& s) {
+    s.erase(0, s.find_first_not_of(" \t\r\n"));
+    s.erase(s.find_last_not_of(" \t\r\n") + 1);
+}
+
+void lowercase(std::string& s) {
+    std::ranges::transform(s, s.begin(), [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+}
+
+WordSet readDictionary(std::istream& words) {
+    WordSet set;
+    std::string word;
+    while (std::getline(words, word)) {
+        trim(word);
+        if (word.length() < 3) continue;
+        lowercase(word);
+        set.insert(std::move(word));
+    }
+    return set;
+}
+
+WordSet readCommonPasswords(std::istream& passwords) {
+    WordSet set;
+    std::string password;
+    while (std::getline(passwords, password)) {
+        trim(password);
+        if (password.empty()) continue;
+        lowercase(password);
+        set.insert(std::move(password));
+    }
+    return set;
+}
+
+// Reads one bundled list file into a set; on any problem fills `file.problem` and returns nothing.
+template <typename Reader>
+std::shared_ptr<const WordSet> readListFile(Strength::ListFile& file, Reader read) noexcept {
+    try {
+        std::error_code ec;
+        const auto status = std::filesystem::status(file.path, ec);
+        if (status.type() == std::filesystem::file_type::not_found) {
+            file.problem = "missing";
+            return nullptr;
+        }
+        if (ec) {
+            file.problem = "unreadable: " + ec.message();
+            return nullptr;
+        }
+        if (status.type() != std::filesystem::file_type::regular) {
+            file.problem = "not a regular file";
+            return nullptr;
+        }
+        std::ifstream in(file.path);
+        if (!in) {
+            file.problem = "unreadable";
+            return nullptr;
+        }
+        auto set = std::make_shared<const WordSet>(read(in));
+        if (in.bad()) {
+            file.problem = "read error";
+            return nullptr;
+        }
+        if (set->empty()) {
+            file.problem = "empty";
+            return nullptr;
+        }
+        file.entries = set->size();
+        file.loaded = true;
+        return set;
+    } catch (const std::exception& e) {
+        file.problem = e.what();
+    } catch (...) {
+        file.problem = "unknown error";
+    }
+    return nullptr;
+}
+
+// Network settings for the breach lookup (the only outbound request this class makes).
+constexpr const char* kDefaultBreachEndpoint = "https://api.pwnedpasswords.com/range/";
+// A range response is ~35 bytes per suffix and about 1,000 suffixes; anything far larger is not a range response.
+constexpr std::size_t kMaxResponseBytes = 4 * 1024 * 1024;
+
+struct NetworkSettings {
+    std::mutex mutex;
+    std::string breachEndpoint = kDefaultBreachEndpoint;
+    Strength::NetworkTimeouts timeouts{};
+};
+
+NetworkSettings& network() {
+    static NetworkSettings instance;
+    return instance;
+}
+
+std::atomic<std::size_t> outboundRequests{0};
+
+struct ResponseBuffer {
+    std::string body;
+    bool overflow = false;
+};
+
+size_t appendCapped(void* contents, const size_t size, const size_t nmemb, void* userdata) {
+    auto* out = static_cast<ResponseBuffer*>(userdata);
+    const size_t length = size * nmemb;
+    if (out->body.size() + length > kMaxResponseBytes) {
+        out->overflow = true;
+        return 0;  // aborts the transfer (CURLE_WRITE_ERROR)
+    }
+    out->body.append(static_cast<const char*>(contents), length);
+    return length;
+}
+
+}
 
 unsigned short Strength::passwordStrengthCheck(const std::string& password) {
     if (password.empty()) return 1;
@@ -41,7 +186,8 @@ unsigned short Strength::passwordStrengthCheck(const std::string& password) {
 }
 
 bool Strength::isDictionaryWord(const std::string& password) {
-    if (dictionaryWords_.empty()) return false; // fallback if not loaded
+    const auto dictionary = dictionarySnapshot();
+    if (dictionary->empty()) return false; // fallback if not loaded
 
     const auto isLetter = [](const unsigned char c) { return std::isalpha(c) != 0; };
     const auto first = std::ranges::find_if(password, isLetter);
@@ -49,30 +195,33 @@ bool Strength::isDictionaryWord(const std::string& password) {
     const auto last = std::ranges::find_if(password.rbegin(), password.rend(), isLetter).base();
 
     std::string core(first, last);
-    std::ranges::transform(core.begin(), core.end(), core.begin(), ::tolower);
-    return dictionaryWords_.contains(core);
+    lowercase(core);
+    return dictionary->contains(core);
 }
 
 bool Strength::isCommonWeakPassword(const std::string& password) {
     std::string lowerPw = password;
-    std::ranges::transform(lowerPw.begin(), lowerPw.end(), lowerPw.begin(), ::tolower);
-    return commonWeakPasswords_.count(lowerPw) > 0;
+    lowercase(lowerPw);
+    return commonWeakSnapshot()->contains(lowerPw);
 }
 
-size_t writeCallback(void* contents, size_t size, size_t nmemb, std::string* s) {
-    const size_t newLength = size * nmemb;
-    s->append((char*)contents, newLength);
-    return newLength;
-}
-
-bool Strength::isPwnedPassword(const std::string& password) {
+Strength::BreachCheck Strength::checkPwnedPassword(const std::string& password) {
     const std::string sha1Hex = SHA1Hex(password); // Needs to be uppercase hex
     const std::string prefix = sha1Hex.substr(0, 5);
     const std::string suffix = sha1Hex.substr(5);
 
-    const std::string url = "https://api.pwnedpasswords.com/range/" + prefix;
+    std::string endpoint;
+    {
+        std::scoped_lock lock(network().mutex);
+        endpoint = network().breachEndpoint;
+    }
 
-    const auto response = downloadURL(url);
+    std::string response;
+    try {
+        response = fetchURL(endpoint + prefix);
+    } catch (...) {
+        return BreachCheck::Unavailable;
+    }
 
     std::istringstream stream(response);
     std::string line;
@@ -80,52 +229,47 @@ bool Strength::isPwnedPassword(const std::string& password) {
         const size_t delimPos = line.find(':');
         if (delimPos != std::string::npos) {
             const std::string hashSuffix = line.substr(0, delimPos);
-            if (hashSuffix == suffix) return true;
+            if (hashSuffix == suffix) return BreachCheck::Found;
         }
     }
 
-    return false;
-}
-
-void Strength::loadCommonWeakPasswordsFromURLs(const std::vector<std::string>& urls) {
-    commonWeakPasswords_.clear();
-
-    for (const auto& url : urls) {
-        std::istringstream stream(downloadURL(url));
-        loadCommonWeakPasswords(stream);
-    }
+    return BreachCheck::NotFound;
 }
 
 void Strength::loadCommonWeakPasswords(std::istream& passwords) {
-    std::string password;
-    while (std::getline(passwords, password)) {
-        password.erase(0, password.find_first_not_of(" \t\r\n"));
-        password.erase(password.find_last_not_of(" \t\r\n") + 1);
-        if (!password.empty()) {
-            std::transform(password.begin(), password.end(), password.begin(), ::tolower);
-            commonWeakPasswords_.insert(password);
-        }
-    }
-}
-
-void Strength::loadDictionaryFromURL(const std::string& url) {
-    dictionaryWords_.clear();
-
-    std::istringstream stream(downloadURL(url));
-    loadDictionary(stream);
+    auto set = std::make_shared<const WordSet>(readCommonPasswords(passwords));
+    std::scoped_lock lock(lists().mutex);
+    lists().commonWeak = std::move(set);
 }
 
 void Strength::loadDictionary(std::istream& words) {
-    std::string word;
-    while (std::getline(words, word)) {
-        word.erase(0, word.find_first_not_of(" \t\r\n"));
-        word.erase(word.find_last_not_of(" \t\r\n") + 1);
-        if (!word.empty() && word.length() >= 3) {
-            std::transform(word.begin(), word.end(), word.begin(), ::tolower);
-            dictionaryWords_.insert(word);
-        }
-    }
+    auto set = std::make_shared<const WordSet>(readDictionary(words));
+    std::scoped_lock lock(lists().mutex);
+    lists().dictionary = std::move(set);
 }
+
+Strength::BundledListReport Strength::loadBundledLists(const std::filesystem::path& dir) noexcept {
+    BundledListReport report;
+    try {
+        report.dictionary.path = dir / kDictionaryFile;
+        report.commonPasswords.path = dir / kCommonPasswordsFile;
+    } catch (...) {
+        report.dictionary.problem = report.commonPasswords.problem = "invalid directory";
+        return report;
+    }
+
+    auto dictionary = readListFile(report.dictionary, readDictionary);
+    auto common = readListFile(report.commonPasswords, readCommonPasswords);
+
+    std::scoped_lock lock(lists().mutex);
+    if (dictionary) lists().dictionary = std::move(dictionary);
+    if (common) lists().commonWeak = std::move(common);
+    return report;
+}
+
+std::size_t Strength::dictionarySize() { return dictionarySnapshot()->size(); }
+
+std::size_t Strength::commonWeakPasswordCount() { return commonWeakSnapshot()->size(); }
 
 std::string Strength::SHA1Hex(const std::string& input) {
     SHA1 sha1;
@@ -133,32 +277,57 @@ std::string Strength::SHA1Hex(const std::string& input) {
     std::string digest = sha1.final();
 
     // Convert to uppercase for HIBP
-    std::transform(digest.begin(), digest.end(), digest.begin(), ::toupper);
+    std::ranges::transform(digest, digest.begin(), [](const unsigned char c) { return static_cast<char>(std::toupper(c)); });
     return digest;
 }
 
-size_t Strength::curlWriteCallback(void* contents, size_t size, size_t nmemb, std::string* s) {
-    size_t newLength = size * nmemb;
-    s->append((char*)contents, newLength);
-    return newLength;
+Strength::NetworkTimeouts Strength::networkTimeouts() {
+    std::scoped_lock lock(network().mutex);
+    return network().timeouts;
 }
 
-std::string Strength::downloadURL(const std::string& url) {
-    CURL* curl = curl_easy_init();
+void Strength::setBreachEndpointForTesting(std::string urlPrefix) {
+    std::scoped_lock lock(network().mutex);
+    network().breachEndpoint = std::move(urlPrefix);
+}
+
+void Strength::setNetworkTimeoutsForTesting(const NetworkTimeouts timeouts) {
+    std::scoped_lock lock(network().mutex);
+    network().timeouts = timeouts;
+}
+
+void Strength::resetNetworkForTesting() {
+    std::scoped_lock lock(network().mutex);
+    network().breachEndpoint = kDefaultBreachEndpoint;
+    network().timeouts = NetworkTimeouts{};
+}
+
+std::size_t Strength::outboundRequestCount() { return outboundRequests.load(); }
+
+std::string Strength::fetchURL(const std::string& url) {
+    const auto timeouts = networkTimeouts();
+    outboundRequests.fetch_add(1);
+
+    std::unique_ptr<CURL, decltype(&curl_easy_cleanup)> curl(curl_easy_init(), &curl_easy_cleanup);
     if (!curl) throw std::runtime_error("Failed to init curl");
 
-    std::string response;
-    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curlWriteCallback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, "Vaulthalla-Password-Loader");
+    ResponseBuffer response;
+    curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, appendCapped);
+    curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(curl.get(), CURLOPT_USERAGENT, "Vaulthalla-Password-Check");
+    // Never block a caller (a ws handler thread) for long: an offline or firewalled host must fail fast.
+    curl_easy_setopt(curl.get(), CURLOPT_CONNECTTIMEOUT_MS, static_cast<long>(timeouts.connect.count()));
+    curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT_MS, static_cast<long>(timeouts.total.count()));
+    curl_easy_setopt(curl.get(), CURLOPT_NOSIGNAL, 1L);  // threaded caller: no SIGALRM-based DNS timeouts
+    curl_easy_setopt(curl.get(), CURLOPT_FAILONERROR, 1L);
+    curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 0L);
 
-    CURLcode res = curl_easy_perform(curl);
-    curl_easy_cleanup(curl);
+    const CURLcode res = curl_easy_perform(curl.get());
+    if (res != CURLE_OK || response.overflow)
+        throw std::runtime_error("Request failed: " + std::string(curl_easy_strerror(res)));
 
-    if (res != CURLE_OK) throw std::runtime_error("Failed to download URL: " + url);
-
-    return response;
+    return std::move(response.body);
 }
 
 }

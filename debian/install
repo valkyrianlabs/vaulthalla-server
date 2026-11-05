@@ -14,6 +14,7 @@ usr/share/doc/vaulthalla/copyright
 usr/share/man/man1/vh.1
 usr/share/vaulthalla/nginx/vaulthalla
 usr/share/vaulthalla/psql
+usr/share/vaulthalla/password-lists
 usr/lib/vaulthalla/lifecycle
 usr/share/vaulthalla-web usr/share/
 usr/lib/udev/rules.d/60-vaulthalla-tpm.rules

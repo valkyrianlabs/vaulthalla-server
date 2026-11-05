@@ -75,6 +75,9 @@ required_paths = [
   "usr/share/doc/vaulthalla/copyright",
   "usr/share/vaulthalla/nginx/vaulthalla",
   "usr/share/vaulthalla/psql/000_schema.sql",
+  # Password-strength lists read at startup instead of downloaded (#316).
+  "usr/share/vaulthalla/password-lists/dictionary.txt",
+  "usr/share/vaulthalla/password-lists/common-passwords.txt",
   "usr/share/vaulthalla-web/server.js",
 ]
 # Retired units (#110): vaulthalla-cli.socket was an orphaned listener on the daemon's CLI socket path that made

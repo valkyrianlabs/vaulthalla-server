@@ -298,7 +298,9 @@ class ReleaseTomlContractTests(unittest.TestCase):
         package = self._packages()["vaulthalla"]
         self.assertEqual(self.config["debian"]["packages"][0]["name"], "vaulthalla")
         for path in ("usr/bin/vh", "usr/lib/vaulthalla/lifecycle", "usr/share/vaulthalla-web/server.js",
-                     "usr/share/vaulthalla/psql/000_schema.sql", "lib/systemd/system/vaulthalla.service"):
+                     "usr/share/vaulthalla/psql/000_schema.sql", "lib/systemd/system/vaulthalla.service",
+                     "usr/share/vaulthalla/password-lists/dictionary.txt",
+                     "usr/share/vaulthalla/password-lists/common-passwords.txt"):
             self.assertIn(path, package["required_paths"])
         for path in ("lib/systemd/system/vaulthalla-cli.socket", "lib/systemd/system/vaulthalla-cli.service"):
             self.assertIn(path, package["forbidden_paths"])  # #110

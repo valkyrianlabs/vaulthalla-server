@@ -114,3 +114,13 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   `publish-pkg.sh` (`PKG_REPO_URL`, uploads carry `X-Checksum-SHA256`; immutable, read back as before) and the
   release job is `macos-publish-pkg`. README.Debian's needrestart example names a placeholder `example.service`
   instead of `nexus.service`.
+- Offline startup (#316): `ProtocolService` no longer downloads password lists before starting the ws/http
+  listeners (a failed download threw out of `runLoop` and the listeners never started without internet). The
+  lists ship as `/usr/share/vaulthalla/password-lists/{dictionary,common-passwords}.txt` (SecLists NCSC top 100k,
+  MIT; SCOWL size 50 dictionary, SCOWL licence; provenance in `deploy/password-lists/README.md`) and load once per
+  process from local files, never throwing. The unlicensed `dolph/dictionary` list is gone.
+  - `Strength::checkPwnedPassword` returns `NotFound`/`Found`/`Unavailable`, with a 3 s connect and 5 s total
+    timeout, a 4 MiB response cap and no redirects; `Unavailable` no longer blocks a password change.
+  - Lists swap in under a mutex (readers take snapshots). Tests: `OfflineStartup.*` (listeners up with no list
+    files and zero outbound requests; refused, blackholed, unresolvable and HTTP-error breach lookups).
+
