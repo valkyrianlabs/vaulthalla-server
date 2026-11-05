@@ -311,7 +311,7 @@ TEST(S3GatewayConfigTest, DefaultsToDisabledFiveGiBBodyLimit) {
     const vh::config::S3GatewayConfig cfg;
 
     EXPECT_FALSE(cfg.enabled);
-    EXPECT_EQ(cfg.host, "0.0.0.0");
+    EXPECT_EQ(cfg.host, "127.0.0.1");  // loopback by default (#324): nginx fronts it
     EXPECT_EQ(cfg.port, 39000);
     EXPECT_EQ(cfg.max_body_size_bytes, 5ull * 1024ull * 1024ull * 1024ull);
     EXPECT_TRUE(cfg.require_sigv4);
