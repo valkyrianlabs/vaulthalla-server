@@ -13,6 +13,10 @@ for users and operators; keep it representative of what actually ships.
   connection) and still be treated as uploaded. Vaulthalla cancelled the incomplete upload at the provider but then
   carried on as if the file had arrived, so the bucket could be missing a file that the vault showed as synced. A
   failed part now fails the upload, and the file stays pending for the next sync pass.
+- The access-token lifetime set in `config.yaml` (`auth.access_token_expiry_minutes`) now takes effect. The
+  daemon was reading a different key, so a changed value was ignored and tokens always lasted 60 minutes.
+  Configs that use the older `token_expiry_minutes` keep working, and the daemon logs a note to rename it.
+- The sign-in cookie now lasts as long as `auth.refresh_token_expiry_days`. It was fixed at 7 days.
 
 ## S3 gateway
 

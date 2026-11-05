@@ -114,3 +114,10 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   `publish-pkg.sh` (`PKG_REPO_URL`, uploads carry `X-Checksum-SHA256`; immutable, read back as before) and the
   release job is `macos-publish-pkg`. README.Debian's needrestart example names a placeholder `example.service`
   instead of `nexus.service`.
+- Auth config (#320): `convert<AuthConfig>` reads `access_token_expiry_minutes`, the shipped and documented key; it
+  read only `token_expiry_minutes`. The old key stays a reported alias (`Registry::deprecations`), and the shipped
+  key wins when both are set. Encode writes the shipped key. The refresh cookie's `Max-Age` follows
+  `refresh_token_expiry_days` (`protocols/ws/RefreshCookie.hpp`); it was hard-coded to 604800. Tests:
+  `ConfigSettingsTest.AccessTokenLifetimeHonoursTheShippedKey`, `ConfigSettingsSerialization.AuthWritesTheShippedKey`,
+  `RefreshCookie.MaxAgeFollowsTheConfiguredLifetime`.
+
