@@ -54,6 +54,12 @@ namespace vh::rbac::resolver {
     };
 
     template <>
+    struct AdminResolverTraits<permission::admin::AuditPermissions> {
+        static constexpr auto domain = Domain::Global;
+        static const auto& direct(const role::Admin& role) { return role.audits; }
+    };
+
+    template <>
     struct AdminResolverTraits<permission::admin::UpstreamPermissions> {
         static constexpr auto domain = Domain::Global;
         static const auto& direct(const role::Admin& role) { return role.upstream; }

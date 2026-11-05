@@ -1,4 +1,5 @@
 #include "protocols/ws/handler/fs/Storage.hpp"
+#include "audit/Trail.hpp"
 #include "protocols/ws/handler/RequestErrors.hpp"
 #include "db/encoding/timestamp.hpp"
 #include "db/query/sync/Operation.hpp"
@@ -46,6 +47,26 @@ using namespace vh::fs;
 using namespace vh::fs::model;
 
 namespace {
+
+// Console file operations go to the audit trail (#323), by entry id: never a file or folder name.
+std::optional<uint64_t> entryIdAt(const std::shared_ptr<vh::storage::Engine>& engine, const std::filesystem::path& path) {
+    try {
+        if (const auto entry = vh::runtime::Deps::get().fsCache->getEntry(engine->vaultPathToFusePath(path)))
+            return entry->id;
+    } catch (const std::exception&) {}
+    return std::nullopt;
+}
+
+void auditFs(const std::shared_ptr<vh::protocols::ws::Session>& session, const std::shared_ptr<vh::storage::Engine>& engine,
+             const std::string& action, const std::string& verb, const std::optional<uint64_t> entryId,
+             nlohmann::json details = nlohmann::json::object()) {
+    if (!session || !session->user) return;
+    vh::audit::record({.action = action, .actor_id = session->user->id, .actor = session->user->name(),
+                       .vault_id = engine->vault->id, .entry_id = entryId, .details = std::move(details)},
+                      "[fs] " + session->user->name() + " " + verb + " entry " +
+                          (entryId ? std::to_string(*entryId) : std::string("?")) + " in vault " +
+                          std::to_string(engine->vault->id));
+}
 enum class ShareReadPathStyle { Native, Compatibility };
 
 struct SharePathRequest {
@@ -368,6 +389,7 @@ json Storage::mkdir(const json& payload, const std::shared_ptr<Session>& session
         throw vh::ops::NotFound("Failed to create directory: " + path.string());
 
     engine->mkdir(path, session->user);
+    auditFs(session, engine, "fs.mkdir", "created folder", entryIdAt(engine, path));
     runtime::Deps::get().syncController->runNow(vaultId);
 
     return {{"path", path.string()}};
@@ -457,10 +479,12 @@ json Storage::move(const json& payload, const std::shared_ptr<Session>& session)
     enforceCreateAtDestination(session, engine, from, to);
     requireTransferEndpoints(engine, from, to);
 
+    const auto movedId = entryIdAt(engine, from);
     auto operation = startMutationOperation(engine, from, to, session->user->id, SyncOperation::Op::Move);
     try {
         engine->move(from, to, session->user);
         finishMutationOperation(operation, SyncOperation::Status::Success);
+        auditFs(session, engine, "fs.move", "moved", movedId);
     } catch (const std::exception& e) {
         finishMutationOperation(operation, SyncOperation::Status::Failed, e.what());
         rethrowTransferRefusal(engine, from, to, e);
@@ -494,9 +518,11 @@ json Storage::rename(const json& payload, const std::shared_ptr<Session>& sessio
     requireTransferEndpoints(engine, from, to);
 
     auto operation = startMutationOperation(engine, from, to, session->user->id, SyncOperation::Op::Rename);
+    const auto renamedId = entryIdAt(engine, from);
     try {
         engine->rename(from, to, session->user);
         finishMutationOperation(operation, SyncOperation::Status::Success);
+        auditFs(session, engine, "fs.rename", "renamed", renamedId);
     } catch (const std::exception& e) {
         finishMutationOperation(operation, SyncOperation::Status::Failed, e.what());
         rethrowTransferRefusal(engine, from, to, e);
@@ -548,6 +574,8 @@ json Storage::copy(const json& payload, const std::shared_ptr<Session>& session)
     try {
         engine->copy(from, to, session->user->id, authorize);
         finishMutationOperation(operation, SyncOperation::Status::Success);
+        auditFs(session, engine, "fs.copy", "copied", entryIdAt(engine, from),
+                {{"copy_entry_id", entryIdAt(engine, to).value_or(0)}});
     } catch (const std::exception& e) {
         finishMutationOperation(operation, SyncOperation::Status::Failed, e.what());
         rethrowTransferRefusal(engine, from, to, e);
@@ -691,7 +719,9 @@ json Storage::remove(const json& payload, const std::shared_ptr<Session>& sessio
         "Permission denied: User does not have delete permission for this path in the vault"
     );
 
+    const auto removedId = entryIdAt(engine, path);
     engine->remove(path, userId);
+    auditFs(session, engine, "fs.delete", "deleted", removedId);
     runtime::Deps::get().syncController->runNow(vaultId);
 
     return {{"path", path.string()}};

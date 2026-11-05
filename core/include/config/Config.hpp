@@ -325,8 +325,18 @@ struct FilesTrashedConfig {
     std::chrono::days retention_days = std::chrono::days(60);
 };
 
+// The tamper-evident audit trail in the database (#323, audit/Trail.hpp): retention, how often the chain head is
+// signed, and whether events are also sent to the local syslog (journald/rsyslog forward them to a SIEM).
+struct AuditTrailConfig {
+    std::chrono::days retention_days = std::chrono::days(2190);  // 6 years (HIPAA §164.316(b)(2)); minimum 30
+    unsigned int head_interval_minutes = 15;                    // 1..1440
+    bool syslog = false;
+    std::string syslog_facility = "authpriv";                  // auth | authpriv | local0..local7
+};
+
 struct AuditConfig {
     AuditLogConfig audit_log;
+    AuditTrailConfig trail;
     EncryptionWaiverConfig encryption_waivers;
     FilesTrashedConfig files_trashed;
 };
@@ -541,6 +551,10 @@ void to_json(nlohmann::json& j, const EncryptionWaiverConfig& c);
 void from_json(const nlohmann::json& j, EncryptionWaiverConfig& c);
 void to_json(nlohmann::json& j, const FilesTrashedConfig& c);
 void from_json(const nlohmann::json& j, FilesTrashedConfig& c);
+void to_json(nlohmann::json& j, const AuditTrailConfig& c);
+void from_json(const nlohmann::json& j, AuditTrailConfig& c);
+// Throws std::invalid_argument naming the bad auditing.trail setting.
+void validateAuditTrail(const AuditTrailConfig& c);
 void to_json(nlohmann::json& j, const AuditConfig& c);
 void from_json(const nlohmann::json& j, AuditConfig& c);
 void to_json(nlohmann::json& j, const DevConfig& c);

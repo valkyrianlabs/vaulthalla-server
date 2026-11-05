@@ -251,6 +251,12 @@ auditing:
     max_retained_logs_size: 1G      # Max total size for retained logs, minimum 100MB  (M for MB, G for GB)
     strict_retention: false         # Enforce strict retention_period, disables max_retained_logs_size
 
+  trail:                         # The tamper-evident audit trail in the database (docs: admin/audit-trail)
+    retention_days: 2190         # Keep audit events six years (HIPAA documentation retention), minimum 30 days
+    head_interval_minutes: 15    # Sign the chain head this often, 1..1440
+    syslog: false                # Also send audit events to the local syslog (forward them to a SIEM)
+    syslog_facility: authpriv    # auth | authpriv | local0..local7
+
   encryption_waivers:
     retention_days: 180          # Permanently delete encryption waivers after this many days, minimum 30 days
 

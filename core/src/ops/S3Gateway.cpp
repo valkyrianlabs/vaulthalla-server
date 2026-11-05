@@ -1,4 +1,5 @@
 #include "ops/S3Gateway.hpp"
+#include "audit/Trail.hpp"
 
 #include "ops/Vaults.hpp"
 #include "config/Registry.hpp"
@@ -35,6 +36,16 @@
 namespace vh::ops::s3_gateway {
 
 namespace {
+
+// Credential and scope changes go to the audit trail (#323), by credential id and access key id (never the secret).
+audit::OnSuccess s3Audited(const Actor& actor, const std::string& action, const std::string& what,
+                           const Credential& credential, const std::optional<uint32_t> vaultId = std::nullopt) {
+    return vh::audit::OnSuccess(
+        {.action = action, .actor_id = actor->id, .actor = actor->name(), .vault_id = vaultId,
+         .details = {{"credential_id", credential.id}, {"access_key_id", credential.access_key},
+                     {"principal_id", credential.principal_user_id}}},
+        "[s3] " + actor->name() + " " + what + " (credential " + std::to_string(credential.id) + ")");
+}
 
 using GwPerm = rbac::permission::admin::S3GatewayPermissions;
 using RolePerm = rbac::permission::vault::RolePermissions;
@@ -491,6 +502,7 @@ CreatedCredential createCredential(const Actor& actor, const CreateCredential& r
     options.vault_scopes = shorthandsOf(req.vault_access, 0);
     options.enforce_budget_for_local_requests = req.enforce_budget_for_local_requests;
     auto secret = protocols::s3::CredentialManager{}.createCredential(options);
+    { const auto audited = s3Audited(actor, "s3.credential.create", "created S3 gateway credential '" + req.name + "'", secret.credential); }
     return {.credential = std::move(secret.credential), .secret_access_key = std::move(secret.secret_access_key)};
 }
 
@@ -510,6 +522,7 @@ std::vector<Credential> listCredentials(const Actor& actor, const std::optional<
 
 Credential revokeCredential(const Actor& actor, const Ref& ref) {
     const auto credential = getCredential(actor, ref);
+    const auto audited = s3Audited(actor, "s3.credential.revoke", "revoked an S3 gateway credential", credential);
     if (!db::query::s3::Gateway::deleteCredentialByAccessKey(credential.access_key))
         throw NotFound("S3 gateway credential not found");
     return credential;
@@ -517,6 +530,7 @@ Credential revokeCredential(const Actor& actor, const Ref& ref) {
 
 Credential updateScope(const Actor& actor, const Ref& ref, const ScopeUpdate& req) {
     const auto credential = getCredential(actor, ref);
+    const auto audited = s3Audited(actor, "s3.credential.scope", "changed the scope of an S3 gateway credential", credential);
     if (!req.scope_mode && !req.principal_id && !req.description && !req.expires_at &&
         !req.enforce_budget_for_local_requests && !req.vault_access && !req.selected_vault_ids && !req.default_role_id)
         throw Invalid("nothing to update: give a scope or a setting");
@@ -552,6 +566,7 @@ Credential updateScope(const Actor& actor, const Ref& ref, const ScopeUpdate& re
 
 Credential allowVault(const Actor& actor, const Ref& ref, const VaultAccess& access) {
     const auto credential = getCredential(actor, ref);
+    const auto audited = s3Audited(actor, "s3.credential.vault.allow", "allowed a vault for an S3 gateway credential", credential);
     (void)requireVault(access.vault_id);
     auto selected = enabledSelected(credential.id);
     std::erase(selected, access.vault_id);
@@ -579,6 +594,7 @@ Credential allowVault(const Actor& actor, const Ref& ref, const VaultAccess& acc
 
 void removeVault(const Actor& actor, const Ref& ref, const uint32_t vaultId) {
     const auto credential = getCredential(actor, ref);
+    const auto audited = s3Audited(actor, "s3.credential.vault.remove", "removed vault " + std::to_string(vaultId) + " from an S3 gateway credential", credential, vaultId);
     // Dropping a vault grant is a vault-role revoke for the credential's principal, not just a scope edit.
     requireVaultRoleOver(actor, credential, vaultId, RolePerm::Revoke, "revoke S3 gateway vault access");
     const bool assignment = db::query::s3::Gateway::deleteCredentialVaultRoleAssignment(credential.id, vaultId);
@@ -592,6 +608,7 @@ std::optional<DefaultRole> getDefaultRole(const Actor& actor, const Ref& ref) {
 
 DefaultRole setDefaultRole(const Actor& actor, const Ref& ref, const uint32_t roleId, const bool enabled) {
     const auto credential = getCredential(actor, ref);
+    const auto audited = s3Audited(actor, "s3.credential.default_role.set", "set the default role of an S3 gateway credential", credential);
     if (credential.scope_mode == USER_ACCESS) throw Invalid("user-access credentials do not use gateway vault roles");
     const auto role = requireVaultRole(roleId);
     if (credential.scope_mode == GLOBAL) {
@@ -611,6 +628,7 @@ DefaultRole setDefaultRole(const Actor& actor, const Ref& ref, const uint32_t ro
 
 bool clearDefaultRole(const Actor& actor, const Ref& ref) {
     const auto credential = getCredential(actor, ref);
+    const auto audited = s3Audited(actor, "s3.credential.default_role.clear", "cleared the default role of an S3 gateway credential", credential);
     if (credential.scope_mode == GLOBAL)
         requireGw(actor, GwPerm::ManageCredentials, "manage_credentials", "clear a global credential's default role");
     return db::query::s3::Gateway::deleteCredentialDefaultVaultRole(credential.id);
@@ -622,6 +640,7 @@ std::vector<SelectedVault> listSelectedVaults(const Actor& actor, const Ref& ref
 
 std::vector<SelectedVault> replaceSelectedVaults(const Actor& actor, const Ref& ref, const std::vector<uint32_t>& vaultIds) {
     const auto credential = getCredential(actor, ref);
+    const auto audited = s3Audited(actor, "s3.credential.vaults.replace", "replaced the vault selection of an S3 gateway credential", credential);
     if (credential.scope_mode != VAULT_ALLOWLIST) throw Invalid("only vault-allowlist credentials select vaults");
     for (const auto vaultId : vaultIds) requireGrantVault(actor, credential, vaultId);
     db::query::s3::Gateway::replaceCredentialSelectedVaults(credential.id, vaultIds, actor->id);
@@ -630,6 +649,7 @@ std::vector<SelectedVault> replaceSelectedVaults(const Actor& actor, const Ref& 
 
 SelectedVault addSelectedVault(const Actor& actor, const Ref& ref, const uint32_t vaultId, const bool enabled) {
     const auto credential = getCredential(actor, ref);
+    const auto audited = s3Audited(actor, "s3.credential.vaults.add", "selected vault " + std::to_string(vaultId) + " for an S3 gateway credential", credential, vaultId);
     if (credential.scope_mode != VAULT_ALLOWLIST) throw Invalid("only vault-allowlist credentials select vaults");
     requireGrantVault(actor, credential, vaultId);
     return db::query::s3::Gateway::upsertCredentialSelectedVault(credential.id, vaultId, enabled, actor->id);
@@ -653,6 +673,7 @@ std::vector<Assignment> listRoleAssignments(const Actor& actor, const Ref& ref) 
 
 Assignment assignRole(const Actor& actor, const Ref& ref, const uint32_t vaultId, const uint32_t roleId, const bool enabled) {
     const auto credential = getCredential(actor, ref);
+    const auto audited = s3Audited(actor, "s3.credential.role.assign", "assigned role " + std::to_string(roleId) + " on vault " + std::to_string(vaultId) + " to an S3 gateway credential", credential, vaultId);
     (void)requireVault(vaultId);
     const auto role = requireVaultRole(roleId);
     if (credential.scope_mode == GLOBAL)
@@ -680,6 +701,7 @@ Assignment assignRole(const Actor& actor, const Ref& ref, const uint32_t vaultId
 
 void revokeRole(const Actor& actor, const Ref& ref, const uint32_t vaultId) {
     const auto credential = getCredential(actor, ref);
+    const auto audited = s3Audited(actor, "s3.credential.role.revoke", "revoked the role on vault " + std::to_string(vaultId) + " of an S3 gateway credential", credential, vaultId);
     requireVaultRoleOver(actor, credential, vaultId, RolePerm::Revoke, "revoke S3 gateway vault roles");
     if (!db::query::s3::Gateway::deleteCredentialVaultRoleAssignment(credential.id, vaultId))
         throw NotFound("no S3 gateway role is assigned on vault " + std::to_string(vaultId));
@@ -694,6 +716,7 @@ std::vector<Override> listDefaultRoleOverrides(const Actor& actor, const Ref& re
 
 Override addDefaultRoleOverride(const Actor& actor, const Ref& ref, const OverrideSpec& spec) {
     const auto credential = getCredential(actor, ref);
+    const auto audited = s3Audited(actor, "s3.credential.override.add", "added a default-role override to an S3 gateway credential", credential);
     if (credential.scope_mode == USER_ACCESS) throw Invalid("user-access credentials do not use gateway role overrides");
     if (!db::query::s3::Gateway::getCredentialDefaultVaultRole(credential.id))
         throw Invalid("set a default vault role before adding default overrides");
@@ -706,6 +729,7 @@ Override addDefaultRoleOverride(const Actor& actor, const Ref& ref, const Overri
 
 void removeDefaultRoleOverride(const Actor& actor, const Ref& ref, const uint32_t overrideId) {
     const auto credential = getCredential(actor, ref);
+    const auto audited = s3Audited(actor, "s3.credential.override.remove", "removed default-role override " + std::to_string(overrideId) + " of an S3 gateway credential", credential);
     requireDefaultOverrideAuthority(actor, credential, RolePerm::RevokeOverride, "remove default role overrides");
     if (!db::query::s3::Gateway::deleteCredentialDefaultVaultRoleOverride(credential.id, overrideId))
         throw NotFound("default role override not found: " + std::to_string(overrideId));
@@ -720,6 +744,7 @@ std::vector<Override> listRoleOverrides(const Actor& actor, const Ref& ref, cons
 
 Override addRoleOverride(const Actor& actor, const Ref& ref, const uint32_t vaultId, const OverrideSpec& spec) {
     const auto credential = getCredential(actor, ref);
+    const auto audited = s3Audited(actor, "s3.credential.override.add", "added a role override on vault " + std::to_string(vaultId) + " to an S3 gateway credential", credential, vaultId);
     requireVaultRoleOver(actor, credential, vaultId, RolePerm::AssignOverride, "add S3 gateway role overrides");
     if (credential.scope_mode == VAULT_ALLOWLIST && !std::ranges::contains(enabledSelected(credential.id), vaultId))
         throw Invalid("per-vault overrides need the vault to be selected for this credential");
@@ -739,6 +764,7 @@ Override addRoleOverride(const Actor& actor, const Ref& ref, const uint32_t vaul
 
 void removeRoleOverride(const Actor& actor, const Ref& ref, const uint32_t vaultId, const uint32_t overrideId) {
     const auto credential = getCredential(actor, ref);
+    const auto audited = s3Audited(actor, "s3.credential.override.remove", "removed role override " + std::to_string(overrideId) + " on vault " + std::to_string(vaultId) + " of an S3 gateway credential", credential, vaultId);
     requireVaultRoleOver(actor, credential, vaultId, RolePerm::RevokeOverride, "remove S3 gateway role overrides");
     if (!db::query::s3::Gateway::getCredentialVaultRoleForVault(credential.id, vaultId) ||
         !db::query::s3::Gateway::deleteCredentialVaultRoleOverride(credential.id, vaultId, overrideId))
