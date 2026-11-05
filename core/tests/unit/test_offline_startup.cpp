@@ -5,10 +5,13 @@
 // the outcome when the service can't be reached.
 
 #include "auth/registration/Validator.hpp"
+#include "auth/session/Manager.hpp"
 #include "config/Registry.hpp"
 #include "crypto/password/Strength.hpp"
 #include "crypto/util/hash.hpp"
 #include "protocols/ProtocolService.hpp"
+#include "protocols/ws/Session.hpp"
+#include "runtime/Deps.hpp"
 
 #include <gtest/gtest.h>
 
@@ -127,6 +130,10 @@ TEST(OfflineStartup, ListenersStartWithoutNetworkAndWithoutListFiles) {
     NetworkGuard network;
     Strength::setBreachEndpointForTesting("http://10.255.255.1/range/");  // unroutable: would hang if ever used
 
+    // The probe connections below are accepted by the real ws server, which hands them to the session manager the
+    // daemon always has (this test process has none until we give it one).
+    const auto previousSessions = runtime::Deps::get().sessionManager;
+    if (!previousSessions) runtime::Deps::get().sessionManager = std::make_shared<auth::session::Manager>();
     const auto previousConfig = config::Registry::get();
     const auto previousLists = paths::passwordListsPath;
     paths::passwordListsPath = scratchDir("missing") / "does-not-exist";
@@ -155,12 +162,17 @@ TEST(OfflineStartup, ListenersStartWithoutNetworkAndWithoutListFiles) {
         EXPECT_LT(std::chrono::steady_clock::now() - started, 5s) << "startup waited on something";
         EXPECT_TRUE(canConnect(cfg.websocket.port));
         EXPECT_TRUE(canConnect(cfg.http_preview.port));
+        // The ws probe can leave a cached session whose socket is bound to the service's io_context. Stopping the
+        // service used to free that context, so destroying the session afterwards (below, with the session manager)
+        // was a use-after-free: an intermittent SIGSEGV under MALLOC_PERTURB_ (meson test sets it). The service now
+        // keeps the context while any ws session object is alive.
         service.stop();
     }
     EXPECT_EQ(Strength::outboundRequestCount(), requestsBefore) << "startup made an outbound request";
 
     config::Registry::set(previousConfig);
     paths::passwordListsPath = previousLists;
+    runtime::Deps::get().sessionManager = previousSessions;
 }
 
 TEST(OfflineStartup, BundledListsLoadFromTheShippedFiles) {

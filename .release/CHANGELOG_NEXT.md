@@ -123,4 +123,9 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
     timeout, a 4 MiB response cap and no redirects; `Unavailable` no longer blocks a password change.
   - Lists swap in under a mutex (readers take snapshots). Tests: `OfflineStartup.*` (listeners up with no list
     files and zero outbound requests; refused, blackholed, unresolvable and HTTP-error breach lookups).
+- Protocols: `ProtocolService` and the device listener keep their io_context for the life of the process while any
+  `ws::Session` object is alive (new `ws::Session::liveCount()`, a `SessionLifetimes` token released after the
+  socket). ws sessions stay cached in the session manager across a listener restart; freeing the context made their
+  later destruction a use-after-free (intermittent SIGSEGV, found by `OfflineStartup.ListenersStart…` under
+  `MALLOC_PERTURB_`: 11/40 runs before, 0/80 after).
 

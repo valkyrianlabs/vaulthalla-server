@@ -3,6 +3,7 @@
 #include "config/Registry.hpp"
 #include "config/Config.hpp"
 #include "protocols/ws/Server.hpp"
+#include "protocols/ws/Session.hpp"
 #include "protocols/http/Server.hpp"
 #include "protocols/http/Session.hpp"
 #include "protocols/http/upload/Coordinator.hpp"
@@ -168,6 +169,13 @@ void ProtocolService::shutdownProtocols() noexcept {
     if (ioContext_ && !http::Session::waitUntilNoneAlive(kHttpSessionDrainTimeout)) {
         log::Registry::runtime()->error("[ProtocolService] HTTP sessions still running {}s after shutdown; keeping their io_context",
                                         kHttpSessionDrainTimeout.count());
+        retainForProcessLifetime(std::move(ioContext_));
+    }
+    // ws sessions stay cached in the session manager across a restart, their sockets still bound to ioContext_;
+    // freeing it here made their later destruction a use-after-free (found with #316's listener test).
+    if (ioContext_ && ws::Session::liveCount() > 0) {
+        log::Registry::runtime()->info("[ProtocolService] {} ws session object(s) outlive the listener; keeping their io_context",
+                                       ws::Session::liveCount());
         retainForProcessLifetime(std::move(ioContext_));
     }
     ioContext_.reset();
