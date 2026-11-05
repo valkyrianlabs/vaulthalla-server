@@ -3,6 +3,7 @@
 #include "config/Registry.hpp"
 #include "config/Config.hpp"
 #include "protocols/ws/Server.hpp"
+#include "protocols/ws/Session.hpp"
 #include "protocols/http/Server.hpp"
 #include "protocols/http/Session.hpp"
 #include "protocols/http/upload/Coordinator.hpp"
@@ -10,9 +11,12 @@
 #include "protocols/SessionLifetimes.hpp"
 #include "log/Registry.hpp"
 
+#include <paths.h>
+
 #include <boost/asio/io_context.hpp>
 #include <algorithm>
 #include <chrono>
+#include <mutex>
 #include <sodium.h>
 
 namespace vh::protocols {
@@ -36,9 +40,10 @@ ProtocolService::RuntimeStatus ProtocolService::protocolStatus() const noexcept 
 }
 
 void ProtocolService::runLoop() {
+    // Local files only, never throws: nothing here can keep the listeners from starting (#316).
+    initThreatIntelligence();
     try {
         if (sodium_init() < 0) throw std::runtime_error("libsodium initialization failed");
-        initThreatIntelligence();
         initProtocols();
 
         while (!shouldStop()) lazySleep(std::chrono::seconds(1));
@@ -166,19 +171,37 @@ void ProtocolService::shutdownProtocols() noexcept {
                                         kHttpSessionDrainTimeout.count());
         retainForProcessLifetime(std::move(ioContext_));
     }
+    // ws sessions stay cached in the session manager across a restart, their sockets still bound to ioContext_;
+    // freeing it here made their later destruction a use-after-free (found with #316's listener test).
+    if (ioContext_ && ws::Session::liveCount() > 0) {
+        log::Registry::runtime()->info("[ProtocolService] {} ws session object(s) outlive the listener; keeping their io_context",
+                                       ws::Session::liveCount());
+        retainForProcessLifetime(std::move(ioContext_));
+    }
     ioContext_.reset();
     ioContextInitialized_.store(false, std::memory_order_release);
 }
 
-void ProtocolService::initThreatIntelligence() {
-    vh::crypto::password::Strength::loadCommonWeakPasswordsFromURLs(
-            {"https://raw.githubusercontent.com/danielmiessler/SecLists/refs/heads/master/Passwords/Common-Credentials/"
-             "100k-most-used-passwords-NCSC.txt",
-             "https://raw.githubusercontent.com/danielmiessler/SecLists/refs/heads/master/Passwords/Common-Credentials/"
-             "probable-v2_top-12000.txt"});
-
-    vh::crypto::password::Strength::loadDictionaryFromURL(
-        "https://raw.githubusercontent.com/dolph/dictionary/refs/heads/master/popular.txt");
+void ProtocolService::initThreatIntelligence() noexcept {
+    // Once per process: a watchdog restart of this service keeps the lists it already has.
+    static std::once_flag loaded;
+    try {
+        std::call_once(loaded, [] {
+            using crypto::password::Strength;
+            const auto report = Strength::loadBundledLists(paths::passwordListsPath);
+            for (const auto* file : {&report.dictionary, &report.commonPasswords}) {
+                if (file->loaded)
+                    log::Registry::auth()->info("[ProtocolService] Loaded {} entries from {}", file->entries, file->path.string());
+                else
+                    log::Registry::auth()->warn("[ProtocolService] Password list {} not loaded ({}); that check is skipped "
+                                                "until the package is repaired", file->path.string(), file->problem);
+            }
+        });
+    } catch (const std::exception& e) {
+        log::Registry::runtime()->error("[ProtocolService] Loading password lists failed: {}", e.what());
+    } catch (...) {
+        log::Registry::runtime()->error("[ProtocolService] Loading password lists failed: unknown exception");
+    }
 }
 
 }

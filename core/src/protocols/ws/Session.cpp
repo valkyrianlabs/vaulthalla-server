@@ -653,6 +653,13 @@ void Session::onRead(const beast::error_code& ec, std::size_t) {
     doRead();
 }
 
+SessionLifetimes& Session::lifetimes() {
+    static SessionLifetimes value;
+    return value;
+}
+
+std::uint64_t Session::liveCount() { return lifetimes().live(); }
+
 std::string Session::generateUUIDv4() {
     static boost::uuids::random_generator generator;
     const boost::uuids::uuid uuid = generator();

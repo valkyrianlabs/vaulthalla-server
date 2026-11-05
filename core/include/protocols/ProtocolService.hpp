@@ -52,7 +52,7 @@ private:
     void initWebsocketServer();
     void initHttpServer();
     void shutdownProtocols() noexcept;
-    static void initThreatIntelligence();
+    static void initThreatIntelligence() noexcept;
 };
 
 }
