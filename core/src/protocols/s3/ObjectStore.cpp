@@ -630,7 +630,7 @@ db::query::s3::ObjectState ObjectStore::putObjectFromFile(
             .path = vaultPath,
             .fuse_path = bucket.engine->vaultPathToFusePath(vaultPath),
             .buffer = {},
-            .source_path = sourcePath,
+            .source = fs::sourceOf(sourcePath),
             .engine = bucket.engine,
             .user = bucket.actor,
             .overwrite = true

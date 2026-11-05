@@ -5,3 +5,7 @@
 namespace vh::crypto::secrets {
     class Manager;
 }
+
+namespace vh::crypto {
+    class ScratchFile;
+}

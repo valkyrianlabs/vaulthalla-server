@@ -14,6 +14,7 @@
 #include <ctime>
 #include <span>
 #include <filesystem>
+#include <functional>
 #include <shared_mutex>
 #include <stdexcept>
 
@@ -128,6 +129,11 @@ public:
     // Populates out_b64_iv with base64-encoded IV.
     [[nodiscard]] std::vector<uint8_t> encrypt(const std::vector<uint8_t>& plaintext, const std::shared_ptr<fs::model::File>& f) const;
 
+    // Streams plaintext into a new AES-256-GCM file (body‖tag) under the current key and records the IV and key
+    // version on f.
+    void encryptToFile(const fs::PlaintextSource& source, const std::filesystem::path& ciphertextPath,
+                       const std::shared_ptr<fs::model::File>& f) const;
+    // encryptToFile from a plaintext file on disk (Filesystem::repairAtRest: files older builds left unencrypted).
     void encryptFileToFile(const std::filesystem::path& plaintextPath,
                            const std::filesystem::path& ciphertextPath,
                            const std::shared_ptr<fs::model::File>& f) const;
@@ -149,11 +155,12 @@ public:
     [[nodiscard]] std::vector<uint8_t> decrypt(const std::vector<uint8_t>& ciphertext,
                                  const std::string& b64_iv, unsigned int keyVersion) const;
 
-    // Streams a ciphertext file (AES-256-GCM body followed by its 16-byte tag) into a plaintext file. Nothing is
-    // left at plaintextPath unless the tag verifies.
-    void decryptFileToFile(const std::filesystem::path& ciphertextPath,
-                           const std::filesystem::path& plaintextPath,
-                           const std::string& b64_iv, unsigned int keyVersion) const;
+    // Streams a ciphertext file (AES-256-GCM body followed by its 16-byte tag) into `sink`. The plaintext is
+    // authenticated only once this returns; on a throw the caller discards what the sink received
+    // (crypto::util::decrypt_aes256_gcm_file).
+    void decryptFileTo(const std::filesystem::path& ciphertextPath,
+                       const std::function<void(std::span<const uint8_t>)>& sink,
+                       const std::string& b64_iv, unsigned int keyVersion) const;
 
     [[nodiscard]] std::vector<uint8_t> get_key(const std::string& callingFunctionName) const;
 
