@@ -9,6 +9,7 @@ Run by module: python3 -m unittest tools.contracts.test_maintainer_script_behavi
 
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 import shutil
@@ -705,3 +706,58 @@ class PostinstOutputPolicyTests(unittest.TestCase):
         self._configure("PACKAGE_LOG_MAX_BYTES=1\nopen_package_log\n")
         self.assertTrue((self.h.tmp / "vaulthalla-package.log.1").read_text(encoding="utf-8").startswith("old\n"))
         self.assertNotIn("old", self._log())
+
+
+class PostinstNginxTlsUpgradeTests(unittest.TestCase):
+    """#324: an unmodified packaged plain-HTTP site becomes the HTTPS template on upgrade; anything else is left alone
+    (with a hint when it is plain HTTP)."""
+
+    def setUp(self) -> None:
+        self.h = _Harness("postinst")
+        self.addCleanup(self.h.cleanup)
+        self.site = self.h.tmp / "sites-available-vaulthalla"
+        self.template = self.h.tmp / "template"
+        self.template.write_text("server { listen 443 ssl; ssl_certificate /etc/vaulthalla/tls/local.crt; }\n")
+
+    def _upgrade(self, legacy_hashes: str) -> subprocess.CompletedProcess[str]:
+        body = f"""
+        NGINX_SITE_AVAIL="{self.site}"
+        NGINX_TEMPLATE="{self.template}"
+        LEGACY_HTTP_TEMPLATE_SHA256S="{legacy_hashes}"
+        upgrade_legacy_http_site
+        echo "RC=$?"
+        """
+        return self.h.run(body)
+
+    def test_unmodified_legacy_site_is_replaced_with_the_https_template(self) -> None:
+        self.site.write_text("server { listen 80; }\n")
+        legacy = hashlib.sha256(self.site.read_bytes()).hexdigest()
+        result = self._upgrade(f"0000 {legacy}")
+        self.assertIn("RC=0", result.stdout, result.stderr)
+        self.assertEqual(self.site.read_text(), self.template.read_text())
+        self.assertIn("now serves HTTPS", result.stdout + result.stderr)
+
+    def test_edited_plain_http_site_is_left_alone_with_a_hint(self) -> None:
+        self.site.write_text("server { listen 80; # operator edit }\n")
+        before = self.site.read_text()
+        result = self._upgrade("0000")
+        self.assertEqual(self.site.read_text(), before)
+        self.assertIn("serves plain HTTP", result.stderr + result.stdout)
+
+    def test_https_site_is_left_alone_silently(self) -> None:
+        self.site.write_text("server { listen 443 ssl; ssl_certificate /etc/letsencrypt/live/x/fullchain.pem; }\n")
+        before = self.site.read_text()
+        result = self._upgrade("0000")
+        self.assertEqual(self.site.read_text(), before)
+        self.assertNotIn("plain HTTP", result.stderr + result.stdout)
+
+    def test_the_shipped_template_is_https_and_not_listed_as_legacy(self) -> None:
+        template = (self.h.repo / "deploy" / "nginx" / "vaulthalla.conf").read_bytes()
+        postinst = (self.h.repo / "debian" / "postinst").read_text(encoding="utf-8")
+        self.assertNotIn(hashlib.sha256(template).hexdigest(), postinst)
+        text = template.decode()
+        self.assertIn("return 308 https://$host$request_uri;", text)
+        self.assertIn("ssl_certificate /etc/vaulthalla/tls/local.crt;", text)
+        self.assertIn("frame-ancestors 'none'", text)
+        self.assertNotIn("Strict-Transport-Security", text)
+

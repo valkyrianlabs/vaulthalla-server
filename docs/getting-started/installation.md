@@ -69,7 +69,7 @@ curl -fsSL https://apt.vaulthalla.sh/install.sh | bash
 
 The installer adds the signed Vaulthalla APT repository and installs the `vaulthalla` package with PostgreSQL and nginx. Add `-s -- --interactive` after `bash` to choose an install profile and the Linux user who administers Vaulthalla.
 
-Then sign in at `http://<host>/` as `admin` with the password in `/var/lib/vaulthalla/super_admin_initial_password`.
+Then sign in at `https://<host>/` as `admin` with the password in `/var/lib/vaulthalla/super_admin_initial_password`.
 
 Full guide: [Install On Linux](/linux/installation).
 :::

@@ -273,6 +273,7 @@ void checkSettings(Checker& c) {
     cfg.operator_emails.recipients.weekly = {"ops@example.com"};
     cfg.operator_emails.recipients.security = {"security@example.com"};
     cfg.device_server.advertise.hostnames = {"nas.home.arpa"};
+    cfg.websocket.allowed_origins = {"https://console.example.com"};
     cfg.device_server.advertise.public_ = {{.host = "device.example.com", .port = 443, .kind = "passthrough"}};
     c.check(json(cfg), "Settings", "every optional member set");
 }

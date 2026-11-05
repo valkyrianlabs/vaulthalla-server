@@ -272,6 +272,7 @@ static std::string lifecycle_subcommand(const std::vector<std::string>& argv_nor
         if (in({"db", "database", "postgres"})) return "db";
         if (in({"remote-db", "remote_db", "remote", "rdb"})) return "remote-db";
         if (in({"nginx", "proxy"})) return "nginx";
+        if (in({"local-tls", "tls"})) return "local-tls";
         if (in({"caddy", "https"})) return "caddy";
     } else if (cmd == "teardown") {
         if (in({"db", "database", "postgres"})) return "db";
