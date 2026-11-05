@@ -27,6 +27,10 @@ public:
     // backend, also used where no Secure Enclave key works).
     [[nodiscard]] static std::string_view backend() noexcept;
 
+    // A fresh master secret from libsodium's CSPRNG (the OS generator: getrandom(2) / arc4random). Throws if
+    // libsodium can't initialize. Never std::random_device, whose source is implementation-defined (#318).
+    [[nodiscard]] static std::vector<uint8_t> generateMasterSecret(std::size_t bytes = 32);
+
 private:
     std::vector<uint8_t> masterKey_;
     std::string name_;
