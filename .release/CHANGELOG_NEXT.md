@@ -128,4 +128,9 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   socket). ws sessions stay cached in the session manager across a listener restart; freeing the context made their
   later destruction a use-after-free (intermittent SIGSEGV, found by `OfflineStartup.ListenersStart…` under
   `MALLOC_PERTURB_`: 11/40 runs before, 0/80 after).
+- Crypto (#318): `KeyProvider` generates new master secrets with libsodium's `randombytes_buf`
+  (`KeyProvider::generateMasterSecret`); they came from `std::random_device`, one call per byte. Already-sealed
+  secrets are untouched (no reseal, no rotation). `fs::ops::generate_random_suffix` (the names of plaintext working
+  copies, staging and seal temporaries) uses `randombytes_uniform` instead of a `std::mt19937`. Contract
+  `tools/contracts/test_crypto_rng_contract.py` keeps `<random>` engines out of `core/`; tests `MasterSecretRng.*`.
 
