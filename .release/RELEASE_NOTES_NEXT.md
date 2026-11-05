@@ -46,6 +46,9 @@ for users and operators; keep it representative of what actually ships.
   now no code was ever sent, so these links couldn't be opened. Every address gets the same reply, and the email
   contains only the code, with no file or folder names. Without email set up, Vaulthalla refuses to create
   email-verified links instead of making links nobody can open.
+- A failed sign-in now always shows "Invalid username or password". The console used to say whether the account
+  existed, was deactivated, or had a different password, which let anyone check which usernames exist. The exact
+  reason is still in the server log.
 
 ## S3 gateway
 

@@ -16,8 +16,11 @@ public:
     // Creates the account (through identities::Manager) and its storage; returns the canonical user.
     std::shared_ptr<identities::User> registerUser(const identities::UserState& draft, const std::string& password);
 
+    // Throws std::runtime_error(kLoginFailed) for every refusal: unknown name, wrong password, deactivated or
+    // system-only account (#321). The specific reason is logged, never returned.
     void loginUser(const std::string& name, const std::string& password,
                                       const std::shared_ptr<protocols::ws::Session>& session);
+    static const char* const kLoginFailed;
 
     std::shared_ptr<identities::User> changePassword(uint32_t userId, const std::string& oldPassword,
                                                      const std::string& newPassword);

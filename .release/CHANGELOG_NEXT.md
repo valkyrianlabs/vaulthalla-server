@@ -166,4 +166,8 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   file, link or sharer. Tests: `ShareManagerTest.EmailChallengeSendsTheCodeToTheListedRecipientOnly`,
   `EmailValidatedLinksNeedEmailDelivery`, `AFailedSendIsAuditedNotReported`, `ShareCodeEmail.*`, and the ws
   challenge test now asserts delivery.
+- Auth (#321): `auth::Manager::loginUser` refuses every failed sign-in with the same message (`Manager::kLoginFailed`)
+  and logs the reason (unknown account, wrong password, deactivated, system-only) at warn. Unknown names are
+  verified against a once-built Argon2id hash of a random secret, and the password is verified before the account
+  state is checked, so each refusal costs one Argon2id verify. Test: `UserParityTest.RefusedSignInsLookTheSame`.
 

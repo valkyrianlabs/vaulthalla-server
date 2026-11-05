@@ -55,6 +55,7 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <vector>
 
 namespace vh::test_ops_parity_users {
 
@@ -443,6 +444,63 @@ TEST_F(UserParityTest, VaultOwnershipTransferIsForAdministrators) {
     EXPECT_TRUE(vh::identities::manager().user(leaving->id));
 }
 
+
+// #321: a refused sign-in said which part was wrong ("User not found: <name>", "This account is deactivated",
+// "Invalid password for user: <name>"), and unknown names skipped the Argon2 verify, so both the reply and its timing
+// told a caller which accounts exist. Now every refusal is the same message and costs one Argon2id verify.
+TEST_F(UserParityTest, RefusedSignInsLookTheSame) {
+    const auto active = seedUser("up_login", "unprivileged");
+    const auto disabled = seedUser("up_login_off", "unprivileged");
+    ASSERT_EQ(cli("user update " + disabled->name() + " --disable", superUser).first, 0);
+    const auto unknown = "up_nobody_" + usersTag();
+
+    const auto refusal = [&](const std::string& name, const std::string& password) {
+        try {
+            runtime::Deps::get().authManager->loginUser(name, password, connected());
+        } catch (const std::exception& e) {
+            return std::string(e.what());
+        }
+        return std::string("<signed in>");
+    };
+    const auto wrongPassword = refusal(active->name(), "Not-The-Password-42");
+    EXPECT_EQ(wrongPassword, auth::Manager::kLoginFailed);
+    EXPECT_EQ(refusal(unknown, PASSWORD), wrongPassword);
+    EXPECT_EQ(refusal(disabled->name(), PASSWORD), wrongPassword) << "a deactivated account, right password";
+    EXPECT_EQ(refusal(disabled->name(), "Not-The-Password-42"), wrongPassword);
+    EXPECT_EQ(wrongPassword.find(active->name()), std::string::npos) << "the reply must not echo the name";
+
+    // The ws handler sends exactly that message, with no distinguishing data.
+    const auto viaHandler = [&](const std::string& name) {
+        try {
+            (void)protocols::ws::handler::Auth::login(json{{"name", name}, {"password", "Not-The-Password-42"}}, connected());
+        } catch (const std::exception& e) {
+            return std::string(e.what());
+        }
+        return std::string("<signed in>");
+    };
+    EXPECT_EQ(viaHandler(unknown), viaHandler(active->name()));
+
+    // Timing: an unknown name now runs a full Argon2id verify. Warm the unknown-name hash first (built once), then
+    // compare medians; before the fix the unknown name took a DB lookup and no hashing at all.
+    (void)refusal(unknown, PASSWORD);
+    const auto median = [&](const std::string& name) {
+        std::vector<std::chrono::nanoseconds> samples;
+        for (int i = 0; i < 5; ++i) {
+            const auto t0 = std::chrono::steady_clock::now();
+            (void)refusal(name, "Not-The-Password-42");
+            samples.push_back(std::chrono::steady_clock::now() - t0);
+        }
+        std::ranges::sort(samples);
+        return samples[samples.size() / 2];
+    };
+    const auto known = median(active->name());
+    const auto missing = median(unknown);
+    EXPECT_GT(missing * 2, known) << "unknown names must cost about one Argon2id verify (known "
+                                  << known.count() << " ns, unknown " << missing.count() << " ns)";
+
+    // A correct password still signs in.
+    EXPECT_NO_THROW(loggedIn(active));
+}
 
 // #319: idle sign-out. The server stamps last_activity_at at sign-in and on auth.activity; a session idle past
 // idle_timeout_minutes is refused, its refresh token revoked, and the cookie can't bring it back (page loads,

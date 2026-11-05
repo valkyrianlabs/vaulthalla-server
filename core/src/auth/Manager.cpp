@@ -15,6 +15,7 @@
 #include "auth/Bootstrap.hpp"
 
 #include <sodium.h>
+#include <array>
 #include <stdexcept>
 #include <uuid/uuid.h>
 
@@ -62,19 +63,48 @@ std::shared_ptr<User> Manager::registerUser(const identities::UserState& draft, 
 // Credentials always come from the database (never from cached identity state): accounts change through the CLI and
 // the web alike, and a login or a password check against a cached copy honoured renamed, deactivated, demoted and
 // even deleted accounts.
+// Every refused sign-in looks the same to the client (#321): the same message, and one Argon2id verify whether or not
+// the account exists, so neither the reply nor its timing says which part was wrong. The reason goes to the server log.
+const char* const Manager::kLoginFailed = "Invalid username or password";
+
+namespace {
+// A valid Argon2id hash of a random secret nobody knows, made once (the first unknown name also pays for hashing it):
+// unknown names are verified against it so they cost what a real account costs.
+const std::string& unknownUserHash() {
+    static const std::string hash = [] {
+        std::array<unsigned char, 32> secret{};
+        randombytes_buf(secret.data(), secret.size());
+        std::string material(reinterpret_cast<const char*>(secret.data()), secret.size());
+        auto h = hash::password(material);
+        sodium_memzero(material.data(), material.size());
+        sodium_memzero(secret.data(), secret.size());
+        return h;
+    }();
+    return hash;
+}
+
+[[noreturn]] void refuseLogin(const std::string& name, const char* reason) {
+    log::Registry::auth()->warn("[AuthManager] Sign-in refused for '{}': {}", name, reason);
+    throw std::runtime_error(Manager::kLoginFailed);
+}
+}
+
 void Manager::loginUser(const std::string& name, const std::string& password, const std::shared_ptr<Session>& session) {
     const auto credentials = db::query::identities::Loader::credentialsByName(name);
-    if (!credentials) throw std::runtime_error("User not found: " + name);
-    if (credentials->systemOnly) throw std::runtime_error("System-only users cannot log in");
-    if (!credentials->active) throw std::runtime_error("This account is deactivated");
-
-    if (!hash::verifyPassword(password, credentials->passwordHash)) throw std::runtime_error(
-        "Invalid password for user: " + name);
+    if (!credentials) {
+        (void)hash::verifyPassword(password, unknownUserHash());
+        refuseLogin(name, "no such account");
+    }
+    // Verify first, whatever the account state, so a deactivated or system-only account costs the same.
+    const bool passwordOk = hash::verifyPassword(password, credentials->passwordHash);
+    if (credentials->systemOnly) refuseLogin(name, "system-only account");
+    if (!credentials->active) refuseLogin(name, "account deactivated");
+    if (!passwordOk) refuseLogin(name, "wrong password");
 
     auto& identities = vh::identities::manager();
     identities.recordLogin(credentials->id);
     const auto user = identities.user(credentials->id);
-    if (!user) throw std::runtime_error("User not found: " + name);
+    if (!user) refuseLogin(name, "account removed during sign-in");
 
     session->setAuthenticatedUser(user);
     runtime::Deps::get().sessionManager->promote(session);
