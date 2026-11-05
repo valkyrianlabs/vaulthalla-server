@@ -19,12 +19,14 @@ class ConnectionLifecycleManager final : public concurrency::AsyncService {
 
     // DeviceEnded: a paired device whose user can no longer sign in, or a pairing-only connection past
     // kDevicePairingLifetime (a pairing window lasts 10 minutes).
-    enum class SweepVerdict { Keep, UnauthenticatedTimeout, InvalidRefreshToken, DeviceEnded };
+    enum class SweepVerdict { Keep, UnauthenticatedTimeout, InvalidRefreshToken, DeviceEnded, IdleTimeout };
     static constexpr std::chrono::minutes kDevicePairingLifetime{15};
     // What the sweeper does with a session. One still in its handshake is only timed out: it is indexed at TCP
     // accept, before it has tokens, and closing it there made nginx answer 502 to a healthy connection.
+    // idleTimeout (0 = off) applies to signed-in web-console sessions only (#319, auth/session/Idle.hpp).
     [[nodiscard]] static SweepVerdict verdict(const Session& session, std::chrono::system_clock::time_point now,
-                                              std::chrono::seconds unauthenticatedTimeout);
+                                              std::chrono::seconds unauthenticatedTimeout,
+                                              std::chrono::minutes idleTimeout = std::chrono::minutes{0});
 
   private:
     void runLoop() override;

@@ -26,6 +26,7 @@ struct Auth {
 
     static json listUsers(const std::shared_ptr<Session>& session);
     static json logout(const std::shared_ptr<Session>& session);
+    static json activity(const std::shared_ptr<Session>& session);
 
     // {initial_password_file: path | null}: set for the super admin while its generated password is still in use
     // and the plaintext copy is still on disk.

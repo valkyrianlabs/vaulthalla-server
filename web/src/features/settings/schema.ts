@@ -349,7 +349,12 @@ export const SECTIONS: SectionDef[] = [
         key: 'connection_lifecycle_manager',
         label: 'Connections',
         fields: [
-          { key: 'idle_timeout_minutes', label: 'Close idle connections after', type: int('minutes', 5) },
+          {
+            key: 'idle_timeout_minutes',
+            label: 'Sign out idle web users after',
+            type: int('minutes', 0),
+            hint: 'Counts keyboard, pointer and scroll input only, not background activity. 0 turns it off. Vaulthalla Desktop is exempt.',
+          },
           {
             key: 'unauthenticated_timeout_seconds',
             label: 'Close unauthenticated connections after',

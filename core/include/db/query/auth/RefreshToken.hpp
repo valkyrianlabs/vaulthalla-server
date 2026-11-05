@@ -21,6 +21,8 @@ struct RefreshToken {
     static bool rewriteHash(const std::string& jti, const std::string& legacyHash, const std::string& digest);
 
     static void touch(const std::string& jti);
+    // Records user activity on the session (#319): last_activity_at = NOW() for a live token.
+    static void touchActivity(const std::string& jti);
     static void refresh(const std::string& jti);
     static void revokeAll(unsigned int userId);
 

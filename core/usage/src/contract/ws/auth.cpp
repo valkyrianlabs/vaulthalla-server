@@ -51,6 +51,17 @@ std::vector<WsCommandUsage> authCommands() {
     });
 
     out.push_back({
+        .command = "auth.activity",
+        .description = "Report that the person at the console is using it (keyboard, pointer, scroll), at most about "
+                       "once a minute. It resets the session's idle sign-out clock "
+                       "(services.connection_lifecycle_manager.idle_timeout_minutes) with the server's own time; "
+                       "background requests never do. An idle session is refused like any other expired one.",
+        .input = "none",
+        .response = {},
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
         .command = "auth.isAuthenticated",
         .description = "Whether the envelope token is a valid session for this socket.",
         .auth = "session",

@@ -28,6 +28,11 @@ for users and operators; keep it representative of what actually ships.
   daemon was reading a different key, so a changed value was ignored and tokens always lasted 60 minutes.
   Configs that use the older `token_expiry_minutes` keep working, and the daemon logs a note to rename it.
 - The sign-in cookie now lasts as long as `auth.refresh_token_expiry_days`. It was fixed at 7 days.
+- The web console now signs you out after 30 minutes without use. Only keyboard, pointer and scroll input counts,
+  so a tab left open in the background doesn't keep the session alive. After an idle sign-out, reloading the
+  page shows the sign-in screen instead of signing you back in from the saved session. Change or turn off
+  (`0`) the timeout with `services.connection_lifecycle_manager.idle_timeout_minutes` or under Settings →
+  Services → Connections. Vaulthalla Desktop and share links aren't affected.
 
 ## S3 gateway
 

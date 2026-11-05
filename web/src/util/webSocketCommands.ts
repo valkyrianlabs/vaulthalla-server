@@ -207,6 +207,9 @@ export interface WebSocketCommandMap {
 
   'auth.logout': WsContract['auth.logout']
 
+  // Real user input on the console (lib/activity.ts); resets the idle sign-out clock (#319).
+  'auth.activity': WsContract['auth.activity']
+
   // May carry slim users (admin_role without permissions): use only the role's id and name from it.
   'auth.users.list': { payload: null; response: { users: UserRecord[] } }
 

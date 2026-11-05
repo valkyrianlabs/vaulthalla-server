@@ -17,7 +17,9 @@ RefreshToken::RefreshToken(pqxx::row_ref row)
       hashedToken(row["token_hash"].as<std::string>()),
       userAgent(row["user_agent"].as<std::string>()),
       ipAddress(row["ip_address"].as<std::string>()),
-      lastUsed(std::chrono::system_clock::from_time_t(parsePostgresTimestamp(row["last_used"].as<std::string>()))) {}
+      lastUsed(std::chrono::system_clock::from_time_t(parsePostgresTimestamp(row["last_used"].as<std::string>()))),
+      lastActivity(std::chrono::system_clock::from_time_t(
+          parsePostgresTimestamp(row["last_activity_at"].as<std::string>()))) {}
 
 RefreshToken::RefreshToken(std::string rawToken) : Token(std::move(rawToken)) {}
 
