@@ -30,6 +30,7 @@ die() { printf 'build-pkg: error: %s\n' "$*" >&2; exit 1; }
 [ -f "$STAGE/usr/local/share/vaulthalla-web/server.js" ] || die "$STAGE has no web console"
 [ -x "$STAGE/usr/local/libexec/vaulthalla/node/bin/node" ] || die "$STAGE has no Node runtime"
 [ -f "$STAGE/usr/local/share/vaulthalla/magic.mgc" ] || die "$STAGE has no libmagic database"
+[ -f "$STAGE/usr/local/share/vaulthalla/password-lists/dictionary.txt" ] || die "$STAGE has no password lists (#316)"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/vh-pkg.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT

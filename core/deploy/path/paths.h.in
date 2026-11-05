@@ -23,6 +23,7 @@
 #define VH_S3_GATEWAY_MULTIPART_PARTS_DIRNAME @VH_S3_GATEWAY_MULTIPART_PARTS_DIRNAME@
 #define VH_PSQL_SCHEMAS_PATH @VH_PSQL_SCHEMAS_PATH@
 #define VH_MAGIC_DB_PATH @VH_MAGIC_DB_PATH@
+#define VH_PASSWORD_LISTS_PATH @VH_PASSWORD_LISTS_PATH@
 #define VH_CADDY_TOOL_PATH @VH_CADDY_TOOL_PATH@
 #define VH_PSQL_TEST_SCHEMAS_PATH @VH_PSQL_TEST_SCHEMAS_PATH@
 // The macOS sealer this build prefers: "secure-enclave" (default) or "file" (development). Unused on Linux.
@@ -41,6 +42,8 @@ inline std::filesystem::path mountPath = VH_MOUNT_PATH;
 inline std::filesystem::path runtimePath = VH_RUNTIME_PATH;
 inline std::filesystem::path psqlSchemaPath = VH_PSQL_SCHEMAS_PATH;
 inline std::filesystem::path psqlTestSchemaPath = VH_PSQL_TEST_SCHEMAS_PATH;
+// The bundled password-strength lists (dictionary.txt, common-passwords.txt). Tests point it elsewhere.
+inline std::filesystem::path passwordListsPath = VH_PASSWORD_LISTS_PATH;
 inline std::filesystem::path cliSocketPath = VH_CLI_SOCKET_PATH;
 // Set only by enableTestMode() from VH_TEST_CLI_SOCKET: a private test instance serves `vh` on its own socket.
 inline bool testCliSocket = false;
