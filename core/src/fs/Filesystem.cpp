@@ -23,6 +23,7 @@
 #include "runtime/Deps.hpp"
 #include "db/Transactions.hpp"
 #include "log/Registry.hpp"
+#include "log/Redact.hpp"
 #include "db/query/vault/Vault.hpp"
 #include "crypto/id/Generator.hpp"
 #include "fs/cache/Registry.hpp"
@@ -174,7 +175,7 @@ int Filesystem::mkdir(const MkdirContext& ctx) {
     const auto& absPath = ctx.path;
     auto engine = ctx.engine;
 
-    log::Registry::fs()->debug("Creating directory at: {}", absPath.string());
+    log::Registry::fs()->debug("Creating directory at: {}", log::path(absPath));
 
     std::scoped_lock lock(mutex_);
 
@@ -207,13 +208,13 @@ int Filesystem::mkdir(const MkdirContext& ctx) {
             engine = storageManager_->resolveStorageEngine(absPath);
 
         if (!engine) {
-            log::Registry::fs()->error("[Filesystem::mkdir] No storage engine found for path: {}", absPath.string());
+            log::Registry::fs()->error("[Filesystem::mkdir] No storage engine found for path: {}", log::path(absPath));
             return -EIO;
         }
 
         for (const auto& p : toCreate) {
             const auto path = makeAbsolute(p);
-            log::Registry::fs()->debug("[Filesystem::mkdir] Creating directory at: {}", path.string());
+            log::Registry::fs()->debug("[Filesystem::mkdir] Creating directory at: {}", log::path(path));
 
             auto dir = std::make_shared<Directory>();
 
@@ -227,7 +228,7 @@ int Filesystem::mkdir(const MkdirContext& ctx) {
             if (!parent) {
                 log::Registry::fs()->error(
                     "[Filesystem::mkdir] Parent directory does not exist: {}",
-                    path.parent_path().string());
+                    log::path(path.parent_path()));
                 return -ENOENT;
             }
 
@@ -253,7 +254,7 @@ int Filesystem::mkdir(const MkdirContext& ctx) {
             } catch (const std::filesystem::filesystem_error& e) {
                 log::Registry::fs()->error(
                     "[Filesystem::mkdir] Failed to create backing directory {}: {}",
-                    dir->backing_path.string(),
+                    log::file(dir->id, dir->backing_path),
                     e.what());
 
                 if (e.code())
@@ -263,19 +264,19 @@ int Filesystem::mkdir(const MkdirContext& ctx) {
             }
         }
 
-        log::Registry::fs()->debug("Successfully created directory at: {}", absPath.string());
+        log::Registry::fs()->debug("Successfully created directory at: {}", log::path(absPath));
         return 0;
     } catch (const std::bad_alloc& ex) {
-        log::Registry::fs()->error("[Filesystem::mkdir] Out of memory for {}: {}", absPath.string(), ex.what());
+        log::Registry::fs()->error("[Filesystem::mkdir] Out of memory for {}: {}", log::path(absPath), ex.what());
         return -ENOMEM;
     } catch (const std::filesystem::filesystem_error& ex) {
-        log::Registry::fs()->error("[Filesystem::mkdir] Filesystem error for {}: {}", absPath.string(), ex.what());
+        log::Registry::fs()->error("[Filesystem::mkdir] Filesystem error for {}: {}", log::path(absPath), ex.what());
         return ex.code() ? -ex.code().value() : -EIO;
     } catch (const std::exception& ex) {
-        log::Registry::fs()->error("[Filesystem::mkdir] Failed to create directory {}: {}", absPath.string(), ex.what());
+        log::Registry::fs()->error("[Filesystem::mkdir] Failed to create directory {}: {}", log::path(absPath), ex.what());
         return -EIO;
     } catch (...) {
-        log::Registry::fs()->error("[Filesystem::mkdir] Unknown failure creating directory: {}", absPath.string());
+        log::Registry::fs()->error("[Filesystem::mkdir] Unknown failure creating directory: {}", log::path(absPath));
         return -EIO;
     }
 }
@@ -304,7 +305,7 @@ std::pair<int, std::shared_ptr<model::Entry>> Filesystem::mkdir(const FuseMkdirC
 
 void Filesystem::mkVault(const std::filesystem::path& absPath, unsigned int vaultId, mode_t mode) {
     if (absPath.empty()) throw std::runtime_error("Cannot create directory at empty path");
-    log::Registry::fs()->debug("Creating vault directory at: {}", absPath.string());
+    log::Registry::fs()->debug("Creating vault directory at: {}", log::path(absPath));
 
     std::scoped_lock lock(mutex_);
     if (!storageManager_) throw std::runtime_error("StorageManager is not initialized");
@@ -335,9 +336,9 @@ void Filesystem::mkVault(const std::filesystem::path& absPath, unsigned int vaul
 
         if (!std::filesystem::exists(dir->backing_path)) std::filesystem::create_directories(dir->backing_path);
 
-        log::Registry::fs()->debug("Successfully created vault directory at: {}", absPath.string());
+        log::Registry::fs()->debug("Successfully created vault directory at: {}", log::path(absPath));
     } catch (const std::exception& ex) {
-        log::Registry::fs()->error("Failed to create vault directory: {} - {}", absPath.string(), ex.what());
+        log::Registry::fs()->error("Failed to create vault directory: {} - {}", log::path(absPath), ex.what());
         throw std::runtime_error("Failed to create vault directory: " + absPath.string() + " - " + ex.what());
     }
 }
@@ -346,7 +347,7 @@ bool Filesystem::exists(const std::filesystem::path& absPath) {
     try {
         return runtime::Deps::get().fsCache->entryExists(absPath);
     } catch (const std::exception& ex) {
-        log::Registry::fs()->error("Error checking existence of path {}: {}", absPath.string(), ex.what());
+        log::Registry::fs()->error("Error checking existence of path {}: {}", log::path(absPath), ex.what());
         return false;
     }
 }
@@ -430,7 +431,7 @@ Filesystem::createSymlink(const FuseCreateSymlinkContext& ctx) {
         if (!symlinkStatusExists(symlink->backing_path)) {
             log::Registry::fs()->error(
                 "[Filesystem::createSymlink] Failed to create backing symlink at: {}",
-                symlink->backing_path.string());
+                log::file(symlink->id, symlink->backing_path));
             return {-EIO, nullptr};
         }
 
@@ -521,12 +522,12 @@ int Filesystem::copy(const CopyContext& ctx) {
             }
             if (!engine) engine = storageManager_->resolveStorageEngine(from);
             if (!engine) {
-                log::Registry::fs()->error("[Filesystem::copy] No storage engine found for source path: {}", from.string());
+                log::Registry::fs()->error("[Filesystem::copy] No storage engine found for source path: {}", log::path(from));
                 return -EIO;
             }
             const auto toEngine = storageManager_->resolveStorageEngine(to);
             if (!toEngine) {
-                log::Registry::fs()->error("[Filesystem::copy] No storage engine found for destination path: {}", to.string());
+                log::Registry::fs()->error("[Filesystem::copy] No storage engine found for destination path: {}", log::path(to));
                 return -EIO;
             }
             if (toEngine->vault->id != engine->vault->id) {
@@ -539,7 +540,7 @@ int Filesystem::copy(const CopyContext& ctx) {
 
         const auto entry = cache->getEntry(from);
         if (!entry) {
-            log::Registry::fs()->error("[Filesystem::copy] Source path does not exist: {}", from.string());
+            log::Registry::fs()->error("[Filesystem::copy] Source path does not exist: {}", log::path(from));
             return -ENOENT;
         }
         if (entry->isDirectory() && (!entry->parent_id || isWithin(to, from))) {
@@ -590,7 +591,7 @@ int Filesystem::copy(const CopyContext& ctx) {
             if (source->isSymlink() &&
                 targetEscapesVaultRoot(item.toVault, std::static_pointer_cast<Symlink>(source)->target)) {
                 log::Registry::fs()->error("[Filesystem::copy] Symlink {} would point outside the vault at {}",
-                                           source->path.string(), item.toVault.string());
+                                           log::file(source->id, source->path), log::path(item.toVault));
                 return -EINVAL;
             }
             items.push_back(std::move(item));
@@ -622,7 +623,7 @@ int Filesystem::copy(const CopyContext& ctx) {
             if (item.source->isDirectory() || item.source->isSymlink()) continue;
             auto file = db::query::fs::File::getFileById(item.source->id);
             if (!file) {
-                log::Registry::fs()->error("[Filesystem::copy] Source file vanished: {}", item.source->path.string());
+                log::Registry::fs()->error("[Filesystem::copy] Source file vanished: {}", log::file(item.source->id, item.source->path));
                 return -ENOENT;
             }
             std::error_code ec;
@@ -631,7 +632,7 @@ int Filesystem::copy(const CopyContext& ctx) {
             else if (file->size_bytes > 0) {
                 if (!cloud) {
                     log::Registry::fs()->error("[Filesystem::copy] {} has no bytes on disk: refusing to create an unreadable copy",
-                                               file->path.string());
+                                               log::file(file->id, file->path));
                     return -EIO;
                 }
                 // The hydrated source copy and the new one both count against the quota.
@@ -678,7 +679,7 @@ int Filesystem::copy(const CopyContext& ctx) {
             if (std::filesystem::is_regular_file(current->backing_path, ec)) copyBackingBytes(current->backing_path, item.backing);
             else if (current->size_bytes == 0) writeFileAtomic(item.backing, {});
             else {
-                log::Registry::fs()->error("[Filesystem::copy] {} has no bytes on disk", current->path.string());
+                log::Registry::fs()->error("[Filesystem::copy] {} has no bytes on disk", log::file(current->id, current->path));
                 cleanup();
                 return -EIO;
             }
@@ -877,14 +878,14 @@ std::shared_ptr<File> Filesystem::createFile(const NewFileContext& ctx) {
     const auto engine = ctx.engine ? ctx.engine : storageManager_->resolveStorageEngine(ctx.path);
     if (!engine) throw std::runtime_error("[Filesystem] No storage engine found for file creation");
 
-    log::Registry::fs()->debug("Creating file at path: {}, fuse_path: {}", ctx.path.string(), ctx.fuse_path.string());
+    log::Registry::fs()->debug("Creating file at path: {}, fuse_path: {}", log::path(ctx.path), log::path(ctx.fuse_path));
 
     const auto& cache = runtime::Deps::get().fsCache;
 
     if (ctx.path.empty()) throw std::runtime_error("Cannot create file at empty path");
     if (cache->entryExists(ctx.fuse_path)) {
         if (!ctx.overwrite) {
-            log::Registry::fs()->warn("File already exists at path: {}", ctx.fuse_path.string());
+            log::Registry::fs()->warn("File already exists at path: {}", log::path(ctx.fuse_path));
             const auto entry = cache->getEntry(ctx.fuse_path);
             if (entry->isDirectory()) throw std::filesystem::filesystem_error(
                 "[Filesystem] Cannot create file at path, a directory already exists",
@@ -893,10 +894,10 @@ std::shared_ptr<File> Filesystem::createFile(const NewFileContext& ctx) {
             return std::static_pointer_cast<File>(entry);
         }
 
-        log::Registry::fs()->debug("File already exists at path: {}, overwriting", ctx.fuse_path.string());
+        log::Registry::fs()->debug("File already exists at path: {}, overwriting", log::path(ctx.fuse_path));
         auto entry = cache->getEntry(ctx.fuse_path);
         if (entry->isDirectory()) {
-            log::Registry::fs()->error("Cannot overwrite directory with file at path: {}", ctx.fuse_path.string());
+            log::Registry::fs()->error("Cannot overwrite directory with file at path: {}", log::path(ctx.fuse_path));
             throw std::filesystem::filesystem_error(
                 "[Filesystem] Cannot overwrite directory with file",
                 ctx.fuse_path,
@@ -1013,7 +1014,7 @@ std::shared_ptr<File> Filesystem::createFile(const NewFileContext& ctx) {
 
     const auto parent = runtime::Deps::get().fsCache->getEntry(resolveParent(ctx.fuse_path));
     if (!parent) {
-        log::Registry::fs()->error("Parent directory does not exist for path: {}", ctx.fuse_path.string());
+        log::Registry::fs()->error("Parent directory does not exist for path: {}", log::path(ctx.fuse_path));
         throw std::filesystem::filesystem_error(
             "[Filesystem] Parent directory does not exist",
             ctx.fuse_path,
@@ -1075,7 +1076,7 @@ std::shared_ptr<File> Filesystem::createFile(const NewFileContext& ctx) {
     if (f->size_bytes > 0 && f->mime_type && isPreviewable(*f->mime_type))
         preview::render::enqueueThumbnails(engine, f, ctx.buffer);
 
-    log::Registry::fs()->debug("Successfully created file at path: {}", ctx.path.string());
+    log::Registry::fs()->debug("Successfully created file at path: {}", log::path(ctx.path));
     return f;
 }
 
@@ -1100,20 +1101,20 @@ Filesystem::createFile(const FuseCreateFileContext& ctx) {
 
         const auto& cache = runtime::Deps::get().fsCache;
 
-        log::Registry::fs()->debug("[Filesystem::createFile] Creating file at path: {}", path.string());
+        log::Registry::fs()->debug("[Filesystem::createFile] Creating file at path: {}", log::path(path));
 
         const auto parent = resolved.parentEntry;
         if (!parent) {
             log::Registry::fs()->error(
                 "[Filesystem::createFile] Parent directory does not exist: {}",
-                path.parent_path().string());
+                log::path(path.parent_path()));
             return {-ENOENT, nullptr};
         }
 
         if (cache->entryExists(path)) {
             log::Registry::fs()->error(
                 "[Filesystem::createFile] File already exists: {}",
-                path.string());
+                log::path(path));
             return {-EEXIST, nullptr};
         }
 
@@ -1142,13 +1143,13 @@ Filesystem::createFile(const FuseCreateFileContext& ctx) {
         } catch (const std::filesystem::filesystem_error& ex) {
             log::Registry::fs()->error(
                 "[Filesystem::createFile] Failed to create backing file for {}: {}",
-                path.string(),
+                log::path(path),
                 ex.what());
             return {ex.code() ? -ex.code().value() : -EIO, nullptr};
         } catch (const std::exception& ex) {
             log::Registry::fs()->error(
                 "[Filesystem::createFile] Failed to create backing file for {}: {}",
-                path.string(),
+                log::path(path),
                 ex.what());
             return {-EIO, nullptr};
         }
@@ -1156,7 +1157,7 @@ Filesystem::createFile(const FuseCreateFileContext& ctx) {
         if (!std::filesystem::exists(f->backing_path)) {
             log::Registry::fs()->error(
                 "[Filesystem::createFile] Failed to create real file at: {}",
-                f->backing_path.string());
+                log::file(f->id, f->backing_path));
             return {-EIO, nullptr};
         }
 
@@ -1164,30 +1165,30 @@ Filesystem::createFile(const FuseCreateFileContext& ctx) {
         f->id = db::query::fs::File::upsertFile(f);
         cache->cacheEntry(f);
 
-        log::Registry::fs()->debug("[Filesystem::createFile] Successfully created file at path: {}", path.string());
+        log::Registry::fs()->debug("[Filesystem::createFile] Successfully created file at path: {}", log::path(path));
         return {0, f};
     } catch (const std::bad_alloc& ex) {
         log::Registry::fs()->error(
             "[Filesystem::createFile] Out of memory creating {}: {}",
-            path.string(),
+            log::path(path),
             ex.what());
         return {-ENOMEM, nullptr};
     } catch (const std::filesystem::filesystem_error& ex) {
         log::Registry::fs()->error(
             "[Filesystem::createFile] Filesystem error creating {}: {}",
-            path.string(),
+            log::path(path),
             ex.what());
         return {ex.code() ? -ex.code().value() : -EIO, nullptr};
     } catch (const std::exception& ex) {
         log::Registry::fs()->error(
             "[Filesystem::createFile] Failed to create file at path {}: {}",
-            path.string(),
+            log::path(path),
             ex.what());
         return {-EIO, nullptr};
     } catch (...) {
         log::Registry::fs()->error(
             "[Filesystem::createFile] Unknown failure creating file at path: {}",
-            path.string());
+            log::path(path));
         return {-EIO, nullptr};
     }
 }
@@ -1538,7 +1539,7 @@ int Filesystem::handleRename(const RenameContext& ctx) {
             if (!std::filesystem::exists(entry->backing_path)) {
                 log::Registry::fs()->error(
                     "[Filesystem::handleRename] Failed to create real file at: {}",
-                    entry->backing_path.string());
+                    log::file(entry->id, entry->backing_path));
                 return -EIO;
             }
         } else {
@@ -1619,7 +1620,7 @@ Filesystem::AtRestRepair Filesystem::repairAtRest(const std::shared_ptr<Engine>&
         } catch (const std::exception& e) {
             ++result.failed;
             log::Registry::fs()->warn("[Filesystem::repairAtRest] Vault {} file {}: {}",
-                                      engine->vault->id, listed->path.string(), e.what());
+                                      engine->vault->id, log::file(listed->id, listed->path), e.what());
         }
     }
 

@@ -339,6 +339,28 @@ PROJECTION = {
 }
 
 
+class RedactedAccessLogTests(unittest.TestCase):
+    """#327: every server block logs through the redacting format; the map and format are declared exactly once."""
+
+    def _check(self, rendered: str) -> None:
+        self.assertEqual(rendered.count("map $request_uri $vaulthalla_log_uri {"), 1)
+        self.assertEqual(rendered.count("log_format vaulthalla "), 1)
+        self.assertEqual(rendered.count("server {"), rendered.count(main.ACCESS_LOG_LINE.strip()))
+        self.assertIn('~^/share/                "/share/[redacted]";', rendered)
+        self.assertNotIn("$http_referer", rendered)
+        self.assertLess(rendered.index("log_format vaulthalla"), rendered.index("server {"))
+
+    def test_every_mode_logs_redacted(self) -> None:
+        self._check(main.render_managed_nginx_config(PROJECTION, None, local_tls=True))
+        self._check(main.render_managed_nginx_config(PROJECTION, None))
+        self._check(main.render_managed_nginx_config(PROJECTION, "vault.example.com", "s3.example.com",
+                                                     "vault.example.com"))
+
+    def test_packaged_site_logs_redacted(self) -> None:
+        packaged = (Path(__file__).resolve().parents[2] / "nginx" / "vaulthalla.conf").read_text()
+        self._check(packaged)
+
+
 class HttpsByDefaultTests(unittest.TestCase):
     """#324: the managed site is HTTPS by default (local certificate), HTTP redirects, security headers everywhere,
     HSTS only with a publicly trusted certificate."""

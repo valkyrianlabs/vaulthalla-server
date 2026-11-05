@@ -398,8 +398,12 @@ struct LogLevelsConfig {
     SubsystemLogLevelsConfig subsystem_levels;
 };
 
+// How log lines name files (#327, log/Redact.hpp): `ids` (entry ids and opaque per-run tags) or `full` (with paths).
+enum class LogFilePaths { Ids, Full };
+
 struct LoggingConfig {
     LogLevelsConfig levels;
+    LogFilePaths file_paths = LogFilePaths::Ids;
 };
 
 // How sealed secrets may be protected (#326, crypto/secrets/KeyProvider.hpp). Read from config.yaml at startup; not a
@@ -463,6 +467,8 @@ std::string previewRemoteModeToString(PreviewRemoteMode mode);
 PreviewRemoteMode previewRemoteModeFromString(std::string_view value);
 std::string previewHwaccelToString(PreviewHwaccel hwaccel);
 PreviewHwaccel previewHwaccelFromString(std::string_view value);
+std::string logFilePathsToString(LogFilePaths mode);
+LogFilePaths logFilePathsFromString(std::string_view value);
 std::string previewTranscodeModeToString(PreviewTranscodeMode mode);
 PreviewTranscodeMode previewTranscodeModeFromString(std::string_view value);
 void to_json(nlohmann::json& j, const Config& c);

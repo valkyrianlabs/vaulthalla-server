@@ -17,6 +17,7 @@
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
+#include "log/Redact.hpp"
 #include "platform/Durable.hpp"
 #include "rbac/fs/Visibility.hpp"
 #include "rbac/permission/vault/Filesystem.hpp"
@@ -266,15 +267,15 @@ CommandResult handleGet(const CommandCall& call) {
     try {
         reader->requireAuthenticated();
     } catch (const std::exception& e) {
-        log::Registry::audit()->warn("vh fs get: {} vault {} path {}: integrity check failed: {}", call.user->name(),
-                                     ref->vault->id, target.vaultPath, e.what());
+        log::Registry::audit()->warn("vh fs get: {} vault {} {}: integrity check failed: {}", call.user->name(),
+                                     ref->vault->id, log::file(target.entry->id, target.vaultPath), e.what());
         return fail(1, prefix, "the stored file failed its integrity check; discard what was received");
     }
     if (!stillAllowed(call, target.engine, target.vaultPath, FsAction::Read))
         return fail(tx::exitcode::kNoPerm, prefix, "permission revoked during the transfer");
 
-    log::Registry::audit()->info("vh fs get: {} read vault {} path {} ({} bytes)", call.user->name(), ref->vault->id,
-                                 target.vaultPath, size);
+    log::Registry::audit()->info("vh fs get: {} read vault {} {} ({} bytes)", call.user->name(), ref->vault->id,
+                                 log::file(target.entry->id, target.vaultPath), size);
     return {0, "", ""};
 }
 
@@ -426,6 +427,7 @@ CommandResult handlePut(const CommandCall& call) {
     if (!user || !stillAllowed(call, engine, vaultPath, commitAction))
         return fail(tx::exitcode::kNoPerm, prefix, "permission revoked during the transfer; nothing was stored");
 
+    uint32_t storedId = 0;
     try {
         if (!existing) {
             if (fs::Filesystem::mkdir({.path = fusePath.parent_path(), .engine = engine, .user = user}) != 0)
@@ -438,6 +440,7 @@ CommandResult handlePut(const CommandCall& call) {
                                                         .overwrite = static_cast<bool>(existing),
                                                         .expected_source_id = expectedSource});
         if (!stored) return fail(1, prefix, "the file could not be stored");
+        storedId = stored->id;
     } catch (const fs::ContentConflict& e) {
         return fail(1, prefix, std::string("the file changed while uploading (") + e.what() + "); nothing was stored");
     } catch (const std::filesystem::filesystem_error& e) {
@@ -451,8 +454,8 @@ CommandResult handlePut(const CommandCall& call) {
     } catch (const std::exception& e) {
         log::Registry::sync()->warn("[vh fs put] could not trigger sync for vault {}: {}", ref->vault->id, e.what());
     }
-    log::Registry::audit()->info("vh fs put: {} {} vault {} path {} ({} bytes)", user->name(),
-                                 existing ? "replaced" : "created", ref->vault->id, vaultPath, size);
+    log::Registry::audit()->info("vh fs put: {} {} vault {} {} ({} bytes)", user->name(),
+                                 existing ? "replaced" : "created", ref->vault->id, log::file(storedId, vaultPath), size);
     return {0, "stored " + humanSize(size) + " at " + vaultPath + "\n", ""};
 }
 

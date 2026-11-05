@@ -6,6 +6,7 @@
 #include "fs/model/File.hpp"
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
+#include "log/Redact.hpp"
 #include "protocols/cookie.hpp"
 #include "protocols/http/AccessHooks.hpp"
 #include "protocols/ws/Session.hpp"
@@ -147,6 +148,28 @@ void pruneLocked(const Clock::time_point now) {
 [[nodiscard]] std::string pathParam(const Params& params) {
     const auto it = params.find("path");
     return it == params.end() || it->second.empty() ? std::string{"/"} : it->second;
+}
+
+// `entry=<id>` (#327): the console addresses files by their opaque entry id, so names and paths stay out of URLs and
+// therefore out of proxy access logs and browser history. Present -> the id; absent -> nullopt; malformed -> 400.
+[[nodiscard]] std::optional<uint32_t> entryParam(const Params& params) {
+    const auto it = params.find("entry");
+    if (it == params.end()) return std::nullopt;
+    if (params.contains("path")) throw BadRequest("Address a file by either entry or path, not both");
+    uint32_t value = 0;
+    const auto& raw = it->second;
+    const auto [ptr, ec] = std::from_chars(raw.data(), raw.data() + raw.size(), value);
+    if (raw.empty() || ec != std::errc{} || ptr != raw.data() + raw.size() || value == 0)
+        throw BadRequest("Invalid numeric parameter: entry");
+    return value;
+}
+
+// The vault path of entry `id` when it belongs to `vaultId`, else nullopt.
+[[nodiscard]] std::optional<std::string> entryVaultPath(const uint32_t id, const uint32_t vaultId) {
+    const auto& cache = runtime::Deps::get().fsCache;
+    const auto entry = cache ? cache->getEntryById(id) : nullptr;
+    if (!entry || !entry->vault_id || static_cast<uint32_t>(*entry->vault_id) != vaultId) return std::nullopt;
+    return entry->path.string();
 }
 
 [[nodiscard]] std::shared_ptr<share::Principal> sharePrincipal(const Caller& caller,
@@ -372,7 +395,19 @@ Target resolvePath(const Caller& caller, const uint32_t vaultId, const std::stri
 }
 
 Target resolve(const Caller& caller, const Params& params, const Need need, const Expect expect) {
-    if (!caller.share) return resolvePath(caller, parseVaultId(params), pathParam(params), need, expect);
+    const auto entryId = entryParam(params);
+    if (!caller.share) {
+        const auto vaultId = parseVaultId(params);
+        if (!entryId) return resolvePath(caller, vaultId, pathParam(params), need, expect);
+        // By id: the same resolution as by path (one evaluator). An unknown id, or one from another vault, says no
+        // more than a missing path would: 404 only to a caller who can read the vault root, 403 otherwise.
+        if (const auto path = entryVaultPath(*entryId, vaultId))
+            return resolvePath(caller, vaultId, *path, need, expect);
+        const auto engine = hooks::engineResolver()(vaultId);
+        if (!engine) throw NotFound("Not found");
+        requireUserAction(caller.session ? caller.session->user : nullptr, engine, "/", FsAction::Read);
+        throw NotFound("Not found");
+    }
     if (need == Need::Overwrite) throw Forbidden("Editing through share links is not supported");
 
     const auto manager = hooks::shareManager()();
@@ -380,14 +415,26 @@ Target resolve(const Caller& caller, const Params& params, const Need need, cons
     if (!manager || !resolver) throw std::runtime_error("Share services are unavailable");
     const auto principal = sharePrincipal(caller, manager);
     const auto actor = caller.session->rbacActor();
-    const auto sharePath = pathParam(params);
+    // By id, the entry's vault path then goes through the same share scope check as a share-relative path. An id
+    // outside the link's root answers exactly like an unknown id (404), so a recipient can't probe which ids exist
+    // elsewhere in the vault.
+    std::string sharePath;
+    auto pathMode = share::TargetPathMode::ShareRelative;
+    if (entryId) {
+        const auto path = resolver->vaultPathOfEntry(*entryId, principal->vault_id);
+        if (!path || !share::Scope::contains(principal->root_path, *path)) throw NotFound("Not found");
+        sharePath = *path;
+        pathMode = share::TargetPathMode::VaultRelative;
+    } else {
+        sharePath = pathParam(params);
+    }
 
     share::ResolvedTarget resolved;
     try {
         resolved = resolver->resolve(actor, {
             .path = sharePath,
             .operation = shareOperationFor(need),
-            .path_mode = share::TargetPathMode::ShareRelative,
+            .path_mode = pathMode,
             .expected_target_type = expect == Expect::File ? std::make_optional(share::TargetType::File)
                                     : expect == Expect::Directory ? std::make_optional(share::TargetType::Directory)
                                                                   : std::nullopt
@@ -396,7 +443,7 @@ Target resolve(const Caller& caller, const Params& params, const Need need, cons
             (void)resolver->resolve(actor, {
                 .path = sharePath,
                 .operation = share::Operation::List,
-                .path_mode = share::TargetPathMode::ShareRelative,
+                .path_mode = pathMode,
                 .expected_target_type = share::TargetType::Directory
             });
     } catch (const std::exception& e) {
@@ -488,8 +535,8 @@ void recordHumanAccess(const Caller& caller, const Target& target, const std::st
     const auto key = std::string(eventType) + "|u" + std::to_string(caller.session->user->id) + "|" +
                      std::to_string(target.entry->id) + "|" + generation;
     if (!firstInWindow(key)) return;
-    log::Registry::audit()->info("[http] {} user={} vault={} entry={} path={}", eventType, caller.session->user->id,
-                                 target.vaultId, target.entry->id, target.vaultPath);
+    log::Registry::audit()->info("[http] {} user={} vault={} {}", eventType, caller.session->user->id,
+                                 target.vaultId, log::file(target.entry->id, target.vaultPath));
 }
 
 void clearCachesForTesting() {

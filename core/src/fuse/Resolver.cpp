@@ -7,6 +7,7 @@
 #include "identities/Group.hpp"
 #include "runtime/Deps.hpp"
 #include "log/Registry.hpp"
+#include "log/Redact.hpp"
 #include "fs/cache/Registry.hpp"
 #include "fs/model/Entry.hpp"
 #include "storage/Manager.hpp"
@@ -40,11 +41,6 @@ namespace vh::fuse {
         bool needsPath(const Request& req) {
             return resolver::hasFlag(req.target, Target::Path) ||
                    resolver::hasFlag(req.target, Target::EntryForPath);
-        }
-
-        [[nodiscard]]
-        std::string_view entryName(const std::shared_ptr<fs::model::Entry>& entry) {
-            return entry ? std::string_view(entry->name) : std::string_view("null");
         }
 
         [[nodiscard]]
@@ -153,7 +149,7 @@ namespace vh::fuse {
             } catch (const std::exception& e) {
                 log::Registry::auth()->warn(
                     "[fuse::Resolver] Failed to evaluate visibility of {} after a denial: {}",
-                    entry ? entry->fuse_path.string() : std::string("null"),
+                    entry ? log::file(entry->id, entry->fuse_path) : std::string("null"),
                     e.what()
                 );
                 return false;
@@ -197,8 +193,8 @@ namespace vh::fuse {
             log::Registry::fuse()->debug(
                 "[{}] Attempting to resolve inode from entry or path: entry: {}, path: {}",
                 req.caller,
-                std::string(entryName(res.entry)),
-                res.path && !res.path->empty() ? res.path->string() : "null"
+                res.entry ? log::file(res.entry->id, res.entry->path) : std::string("null"),
+                res.path && !res.path->empty() ? log::path(*res.path) : "null"
             );
 
             if (res.path)
@@ -263,12 +259,12 @@ namespace vh::fuse {
                 if (req.caller == "statfs")
                     log::Registry::fuse()->trace(
                         "[{}] Resolved entry from inode {}: {}",
-                        req.caller, *req.ino, out.entry->fuse_path.string()
+                        req.caller, *req.ino, log::file(out.entry->id, out.entry->fuse_path)
                     );
                 else
                     log::Registry::fuse()->debug(
                         "[{}] Resolved entry from inode {}: {}",
-                        req.caller, *req.ino, out.entry->fuse_path.string()
+                        req.caller, *req.ino, log::file(out.entry->id, out.entry->fuse_path)
                     );
                 return true;
             }
@@ -296,7 +292,7 @@ namespace vh::fuse {
 
                 log::Registry::fuse()->debug(
                     "[{}] Resolved path from parent/child: {}",
-                    req.caller, out.path->string()
+                    req.caller, log::path(*out.path)
                 );
                 return true;
             } catch (const std::exception& e) {
@@ -311,7 +307,7 @@ namespace vh::fuse {
             out.path = out.entry->fuse_path;
             log::Registry::fuse()->debug(
                 "[{}] Resolved path from entry: {}",
-                req.caller, out.path->string()
+                req.caller, log::path(*out.path)
             );
             return true;
         }
@@ -324,12 +320,12 @@ namespace vh::fuse {
                 if (req.caller == "statfs")
                     log::Registry::fuse()->trace(
                         "[{}] Resolved path from inode {} via entry: {}",
-                        req.caller, *req.ino, out.path->string()
+                        req.caller, *req.ino, log::path(*out.path)
                     );
                 else
                     log::Registry::fuse()->debug(
                         "[{}] Resolved path from inode {} via entry: {}",
-                        req.caller, *req.ino, out.path->string()
+                        req.caller, *req.ino, log::path(*out.path)
                     );
                 return true;
             }
@@ -350,9 +346,9 @@ namespace vh::fuse {
         log::Registry::fuse()->debug(
             "[{}] Resolving entry for path: {}, parent inode: {}, child name: {}",
             req.caller,
-            out.path ? out.path->string() : "null",
+            out.path ? log::path(*out.path) : "null",
             req.parentIno ? std::to_string(*req.parentIno) : "null",
-            req.childName ? *req.childName : "null"
+            req.childName ? log::path(*req.childName) : "null"
         );
 
         if (!out.path) {
@@ -363,7 +359,7 @@ namespace vh::fuse {
 
         out.entry = runtime::Deps::get().fsCache->getEntry(*out.path);
         if (!out.entry) {
-            log::Registry::fuse()->debug("[{}] Failed to resolve entry for path {}", req.caller, out.path->string());
+            log::Registry::fuse()->debug("[{}] Failed to resolve entry for path {}", req.caller, log::path(*out.path));
 
             // Important: for create/lookup of not-yet-existing children, missing entry may be acceptable.
             if (req.action == rbac::permission::vault::FilesystemAction::Write ||
@@ -395,9 +391,9 @@ namespace vh::fuse {
             return true;
 
         if (entry)
-            log::Registry::fuse()->warn("[auth] Access denied for user {} on path {}", user->name(), entry->path.string());
+            log::Registry::fuse()->warn("[auth] Access denied for user {} on path {}", user->name(), log::file(entry->id, entry->path));
         else if (path)
-            log::Registry::fuse()->warn("[auth] Access denied for user {} on path {}", user->name(), path->string());
+            log::Registry::fuse()->warn("[auth] Access denied for user {} on path {}", user->name(), log::path(*path));
         else
             log::Registry::fuse()->warn("[auth] Access denied for user {} with no resolved path/entry", user->name());
 

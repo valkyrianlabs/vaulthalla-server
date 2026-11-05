@@ -14,6 +14,7 @@
 #include "db/query/identities/User.hpp"
 #include "fs/cache/Registry.hpp"
 #include "log/Registry.hpp"
+#include "log/Redact.hpp"
 #include "runtime/Deps.hpp"
 #include "crypto/id/Generator.hpp"
 #include "sync/model/LocalPolicy.hpp"
@@ -146,10 +147,10 @@ std::shared_ptr<Engine> Manager::resolveStorageEngine(const fs::path& fusePath) 
         if (engines_.contains(currentStr)) return engines_.at(currentStr);
     }
 
-    log::Registry::storage()->warn("[StorageManager] No storage engine found for path: {}", fusePath.string());
+    log::Registry::storage()->warn("[StorageManager] No storage engine found for path: {}", log::path(fusePath));
     log::Registry::storage()->info("[StorageManager] Available storage engines:");
     for (const auto& [path, engine] : engines_)
-        log::Registry::storage()->info(" - {} (Vault ID: {}, Type: {})", path, engine->vault->id, to_string(engine->vault->type));
+        log::Registry::storage()->info(" - {} (Vault ID: {}, Type: {})", log::path(path), engine->vault->id, to_string(engine->vault->type));
 
     return nullptr;
 }

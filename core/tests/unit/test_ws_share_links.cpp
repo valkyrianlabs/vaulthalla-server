@@ -275,7 +275,7 @@ TEST_F(WsShareLinksTest, AuthenticatedCreateSucceedsWhenAuthorizerAllows) {
     ASSERT_TRUE(response.contains("share"));
     EXPECT_TRUE(response.at("public_token").get<std::string>().starts_with("vhs_"));
     EXPECT_EQ(
-        "/share/" + response.at("public_token").get<std::string>(),
+        "/share#" + response.at("public_token").get<std::string>(),
         response.at("public_url_path").get<std::string>()
     );
     EXPECT_EQ(9u, response.at("share").at("created_by").get<uint32_t>());

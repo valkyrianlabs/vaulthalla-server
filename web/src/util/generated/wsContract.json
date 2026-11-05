@@ -3768,6 +3768,18 @@
           "types": [
             "object"
           ]
+        },
+        {
+          "description": "How log lines name files: ids (entry ids, opaque per-run tags) or full (with vault paths).",
+          "enum": [
+            "ids",
+            "full"
+          ],
+          "name": "file_paths",
+          "required": false,
+          "types": [
+            "string"
+          ]
         }
       ],
       "name": "LoggingConfig"
@@ -17889,7 +17901,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "6c932e88fa08107d19070c5d8f8d142a9458815abc263ae8ecc4e1349cb6160d",
+  "models_hash": "0e7099c80fe633cb2599a7f526951d1943790d94893cf33616d40fa40339913e",
   "protocol": {
     "min": 1,
     "version": 1

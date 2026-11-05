@@ -53,7 +53,7 @@ const fetchText = async (url: string, signal: AbortSignal): Promise<Doc> => {
 // `PUT /upload/text` + `If-Match` so a concurrent change is a 412 conflict, never a silent overwrite.
 export default function TextRenderer({ source, entry, plan, onDownload, setDirty }: RendererProps) {
   const markdown = plan.renderer === 'markdown'
-  const contentUrl = source.contentUrl(entry.path, 'inline')
+  const contentUrl = source.contentUrl(entry, 'inline')
   const [load, setLoad] = useState<Load>(() => (entry.size !== null && entry.size > MAX_TEXT_BYTES ? { status: 'too-large' } : { status: 'loading' }))
   const [view, setView] = useState<'rendered' | 'source'>(markdown ? 'rendered' : 'source')
   const [editing, setEditing] = useState(false)
@@ -101,7 +101,7 @@ export default function TextRenderer({ source, entry, plan, onDownload, setDirty
   useEffect(() => () => setDirty(false), [setDirty])
 
   const doc = load.status === 'ready' ? load.doc : null
-  const saveUrl = source.caps.edit && source.textSaveUrl ? source.textSaveUrl(entry.path) : null
+  const saveUrl = source.caps.edit && source.textSaveUrl ? source.textSaveUrl(entry) : null
   const canEdit = Boolean(saveUrl && doc?.etag && !readOnly)
 
   const save = useCallback(

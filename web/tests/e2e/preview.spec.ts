@@ -103,7 +103,7 @@ const createFolderLink = async (page: Page) => {
   await page.getByRole('menuitem', { name: 'Share link…' }).click()
   await page.getByRole('button', { name: 'Create link' }).click()
   const url = ((await page.locator('code').first().textContent()) ?? '').trim()
-  expect(url).toMatch(/\/share\//)
+  expect(url).toMatch(/\/share#vhs_/)
   await page.keyboard.press('Escape')
   return url
 }

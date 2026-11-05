@@ -238,6 +238,13 @@ secrets:
   allow_development_file_backend: false   # macOS without a usable Secure Enclave: allow plain 0600 key files (development only)
 
 
+# === 📝 Logging ===
+# File and folder names can themselves be sensitive (a patient's name, a case number). By default log lines name files
+# by entry id, and paths with no id by an opaque tag that is only meaningful within one daemon run.
+logging:
+  file_paths: ids                   # ids | full (full adds vault paths to log lines; for hosts holding nothing sensitive)
+
+
 # === ⚖️ Auditing ===
 # Auditing settings manage log rotation, encryption waivers, and trashed files.
 # Logs are rotated to prevent excessive disk usage.

@@ -147,7 +147,7 @@ export function FileBrowser({ source, path, onNavigate, leading, onShare, onReco
     (entry: Entry) =>
       void startDownload(
         source,
-        entry.path,
+        entry,
         entry.kind === 'dir' ? entry.name || source.rootLabel : entry.name,
         entry.kind === 'dir',
       ),

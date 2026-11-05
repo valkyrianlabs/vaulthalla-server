@@ -8,6 +8,7 @@
 #include "fuse/WorkingCopies.hpp"
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
+#include "log/Redact.hpp"
 #include "platform/Durable.hpp"
 #include "protocols/http/Access.hpp"
 #include "protocols/http/handler/Common.hpp"
@@ -301,9 +302,9 @@ model::preview::Response Upload::commit(const request& req) {
         committed.vaultId = u.engine->vault->id;
         committed.vaultPath = u.vaultPath;
         access::recordHumanAccess(caller, committed, u.mode == Mode::Create ? "content.create" : "content.replace");
-        vh::log::Registry::audit()->info("PUT /upload/content: {} {} vault {} path {} ({} bytes)",
+        vh::log::Registry::audit()->info("PUT /upload/content: {} {} vault {} {} ({} bytes)",
                                      caller.session->user->name(), u.mode == Mode::Create ? "created" : "replaced",
-                                     committed.vaultId, u.vaultPath, saved->size_bytes);
+                                     committed.vaultId, vh::log::file(saved->id, u.vaultPath), saved->size_bytes);
         try {
             if (const auto& sync = vh::runtime::Deps::get().syncController) sync->runNow(committed.vaultId);
         } catch (const std::exception& e) {
