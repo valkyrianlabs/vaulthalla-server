@@ -377,11 +377,20 @@ void expectNoSecretFields(const nlohmann::json& value) {
     EXPECT_FALSE(value.dump().contains("email@example.com"));
 }
 
+// Accepts every code without mailing it (#317: the manager now sends codes).
+class NullCodeSender final : public vh::share::ChallengeCodeSender {
+public:
+    std::vector<vh::share::ChallengeCodeMessage> sent;
+    [[nodiscard]] bool available() const override { return true; }
+    void send(const vh::share::ChallengeCodeMessage& message) override { sent.push_back(message); }
+};
+
 class WsShareSessionsTest : public ::testing::Test {
 protected:
     std::shared_ptr<FakeStore> store;
     std::shared_ptr<FakeAuthorizer> authorizer;
     std::shared_ptr<vh::share::Manager> manager;
+    std::shared_ptr<NullCodeSender> codeSender = std::make_shared<NullCodeSender>();
     std::shared_ptr<identities::User> user;
     std::shared_ptr<vh::auth::session::Manager> oldSessionManager;
 
@@ -397,6 +406,7 @@ protected:
         options.challenge_ttl_seconds = 300;
         options.challenge_max_attempts = 3;
         options.challenge_code_generator = [] { return std::string(kChallengeCode); };
+        options.challenge_code_sender = codeSender;
         manager = std::make_shared<vh::share::Manager>(store, authorizer, options);
         Sessions::setManagerFactoryForTesting([this] { return manager; });
 
@@ -708,6 +718,10 @@ TEST_F(WsShareSessionsTest, ChallengeStartAndConfirmEstablishShareModeWithoutRet
     EXPECT_TRUE(session->isSharePending());
     EXPECT_FALSE(challenge.contains("verification_code"));
     expectNoSecretFields(challenge);
+    // #317: the code goes to the recipient by email, never in the reply.
+    ASSERT_EQ(codeSender->sent.size(), 1u);
+    EXPECT_EQ(codeSender->sent.front().code, std::string(kChallengeCode));
+    EXPECT_EQ(codeSender->sent.front().to, "email@example.com");
 
     EXPECT_THROW(Sessions::confirmEmailChallenge({
         {"challenge_id", challenge.at("challenge_id").get<std::string>()},

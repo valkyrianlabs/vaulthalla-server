@@ -13,6 +13,11 @@ for users and operators; keep it representative of what actually ships.
   connection) and still be treated as uploaded. Vaulthalla cancelled the incomplete upload at the provider but then
   carried on as if the file had arrived, so the bucket could be missing a file that the vault showed as synced. A
   failed part now fails the upload, and the file stays pending for the next sync pass.
+- Email-verified share links now work. Vaulthalla emails the 6-digit code to the address the visitor enters, if
+  that address is on the link's list, through the email provider set up under `vh email` (Resend or SES). Until
+  now no code was ever sent, so these links couldn't be opened. Every address gets the same reply, and the email
+  contains only the code, with no file or folder names. Without email set up, Vaulthalla refuses to create
+  email-verified links instead of making links nobody can open.
 
 ## S3 gateway
 

@@ -23,6 +23,7 @@
 #include "share/Policy.hpp"
 #include "share/PrincipalResolver.hpp"
 #include "share/Token.hpp"
+#include "log/Registry.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -780,6 +781,11 @@ Manager::Manager(
 ) : store_(std::move(store)), authorizer_(std::move(authorizer)), options_(std::move(options)) {
     if (!store_) throw std::invalid_argument("Share manager store is required");
     if (!authorizer_) throw std::invalid_argument("Share manager authorizer is required");
+    codeSender_ = options_.challenge_code_sender ? options_.challenge_code_sender : makeEmailChallengeCodeSender();
+}
+
+void Manager::requireCodeDelivery() const {
+    if (!codeSender_->available()) throw ops::Refused(kShareEmailUnavailableCode, kShareEmailUnavailableText);
 }
 
 CreateLinkResult Manager::createLink(const rbac::Actor& actor, CreateLinkRequest request) {
@@ -794,6 +800,7 @@ CreateLinkResult Manager::createLink(const rbac::Actor& actor, CreateLinkRequest
 
     try {
         policy::requireEnabled(link->access_mode);
+        if (link->requiresEmail()) requireCodeDelivery();
         requireAllowed(authorizer_->canCreateLink(actor, *link), "create");
         const auto token = Token::generate(TokenKind::PublicShare);
         link->token_lookup_id = token.lookup_id;
@@ -867,6 +874,8 @@ std::shared_ptr<Link> Manager::updateLink(const rbac::Actor& actor, UpdateLinkRe
     try {
         // An update can't move a link into a kind the operator turned off (or touch links while sharing is off).
         policy::requireEnabled(updated->access_mode);
+        // Only a move into email validation needs delivery; editing an existing email link while email is down is fine.
+        if (updated->requiresEmail() && !existing->requiresEmail()) requireCodeDelivery();
         requireAllowed(authorizer_->canUpdateLink(actor, *existing, *updated), "update");
         if (request.public_role) persistPublicAssignment(*store_, *updated, request.public_role);
         if (request.recipients) replaceRecipientAssignments(*store_, *updated, *request.recipients);
@@ -981,6 +990,7 @@ StartEmailChallengeResult Manager::startEmailChallenge(StartEmailChallengeReques
     if (!link->requiresEmail()) throw ops::Conflict("Share link does not require email verification");
     if (!link->isActive(now(options_))) throw ops::Denied("Share link is inactive");
     if (!session->isActive(now(options_))) throw ops::Denied("Share session is inactive");
+    requireCodeDelivery();
 
     const auto normalizedEmail = EmailChallenge::normalizeEmail(request.email);
     const auto emailHash = EmailChallenge::hashEmail(normalizedEmail);
@@ -1002,6 +1012,26 @@ StartEmailChallengeResult Manager::startEmailChallenge(StartEmailChallengeReques
     audit->ip_address = request.ip_address;
     audit->user_agent = request.user_agent;
     attachLink(*audit, *link);
+
+    // The code goes only to an address the link names (#317); any other address gets the same reply and no email, so
+    // the link can't be used to mail strangers or to learn who its recipients are. A failed send is logged and audited,
+    // not reported to the visitor (the reply would then differ for recipients); they can ask for a new code.
+    if (store_->getRecipientVaultRoleForShare(link->id, emailHash)) {
+        try {
+            codeSender_->send(ChallengeCodeMessage{
+                .to = normalizedEmail,
+                .code = code,
+                .expires_at = challenge->expires_at,
+                .challenge_id = created ? created->id : std::string{}
+            });
+        } catch (const std::exception& e) {
+            log::Registry::http()->error("[share::Manager] Verification code for challenge {} could not be sent: {}",
+                                           created ? created->id : std::string{"?"}, e.what());
+            audit->error_code = "share_email_delivery_failed";
+        }
+    } else {
+        audit->error_code = "share_email_recipient_not_listed";
+    }
     store_->appendAuditEvent(audit);
 
     return {

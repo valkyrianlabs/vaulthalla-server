@@ -114,3 +114,13 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   `publish-pkg.sh` (`PKG_REPO_URL`, uploads carry `X-Checksum-SHA256`; immutable, read back as before) and the
   release job is `macos-publish-pkg`. README.Debian's needrestart example names a placeholder `example.service`
   instead of `nexus.service`.
+- Sharing (#317): email-challenge codes are delivered. `share::Manager::startEmailChallenge` sends the code through
+  `ChallengeCodeSender` (`share/CodeDelivery.{hpp,cpp}`; default: the configured `email::Provider`, idempotency key
+  `share-challenge-<id>`), only when the address is a listed recipient; other addresses get the same reply and no
+  email (audit `share_email_recipient_not_listed`). Send failures are logged and audited
+  (`share_email_delivery_failed`), never reported. Without email delivery, `createLink`, an `updateLink` into
+  `email_validated`, and `startEmailChallenge` throw `ops::Refused{"share_email_unavailable"}`. The email names no
+  file, link or sharer. Tests: `ShareManagerTest.EmailChallengeSendsTheCodeToTheListedRecipientOnly`,
+  `EmailValidatedLinksNeedEmailDelivery`, `AFailedSendIsAuditedNotReported`, `ShareCodeEmail.*`, and the ws
+  challenge test now asserts delivery.
+
