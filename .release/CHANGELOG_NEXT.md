@@ -114,3 +114,9 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   `publish-pkg.sh` (`PKG_REPO_URL`, uploads carry `X-Checksum-SHA256`; immutable, read back as before) and the
   release job is `macos-publish-pkg`. README.Debian's needrestart example names a placeholder `example.service`
   instead of `nexus.service`.
+- Crypto (#318): `KeyProvider` generates new master secrets with libsodium's `randombytes_buf`
+  (`KeyProvider::generateMasterSecret`); they came from `std::random_device`, one call per byte. Already-sealed
+  secrets are untouched (no reseal, no rotation). `fs::ops::generate_random_suffix` (the names of plaintext working
+  copies, staging and seal temporaries) uses `randombytes_uniform` instead of a `std::mt19937`. Contract
+  `tools/contracts/test_crypto_rng_contract.py` keeps `<random>` engines out of `core/`; tests `MasterSecretRng.*`.
+

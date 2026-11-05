@@ -20,7 +20,7 @@
 #include <filesystem>
 #include <vector>
 #include <string>
-#include <random>
+#include <sodium.h>
 #include <array>
 #include <cmath>
 #include <fmt/format.h>
@@ -185,12 +185,12 @@ std::string generate_random_suffix(const size_t length) {
         "0123456789"
         "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
         "abcdefghijklmnopqrstuvwxyz";
-    thread_local std::mt19937 rng{std::random_device{}()};
-    thread_local std::uniform_int_distribution<> dist(0, sizeof(charset) - 2);
-
+    // libsodium's CSPRNG (unbiased via randombytes_uniform): these names sit next to plaintext working copies and
+    // staging files, so they shouldn't be predictable from earlier ones (#318; was a std::mt19937).
+    if (sodium_init() < 0) throw std::runtime_error("libsodium initialization failed");
     std::string result;
     result.reserve(length);
-    for (size_t i = 0; i < length; ++i) result += charset[dist(rng)];
+    for (size_t i = 0; i < length; ++i) result += charset[randombytes_uniform(sizeof(charset) - 1)];
     return result;
 }
 
