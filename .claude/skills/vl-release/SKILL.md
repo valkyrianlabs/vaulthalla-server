@@ -36,7 +36,9 @@ vlr help ci         # the release CI transaction and workflow conventions
      must never ship.
    - `[npm]` only if the repository publishes an npm package (`package.json` without
      `"private": true`), with a tarball contract (`package/...` paths it must and must never ship),
-     and `[[npm.aliases]]` only when the same build must also be published under another name.
+     `[[npm.aliases]]` only when the same build must also be published under another name, and
+     `[[npm.packages]]` for further, independently built packages (each its own `package_dir`,
+     whose package.json is a version target).
    - Publication (`[publish.apt]`, `[[publish.npm]]`, `[homebrew]`, `[source_archive]`):
      **ask the user** for repository URLs, registries, taps and which channels to enable; do not
      guess publication targets.
@@ -51,10 +53,15 @@ vlr help ci         # the release CI transaction and workflow conventions
 For any material change (user-visible behavior, operations/deployment, security,
 compatibility, packaging, or a substantial internal change) update in the **same change**:
 
-- **`.release/RELEASE_NOTES_NEXT.md`**: the user-facing release notes. Line 1 is
-  `# <release title>` without a version number; the rest is the Markdown body.
-- **`.release/CHANGELOG_NEXT.md`** (when Debian packaging is enabled): concise technical
-  `- ` bullets. `vlr prepare` renders the Debian stanza; write no boilerplate.
+- **A new fragment per change (preferred):** `.release/notes.d/<change>.md` (user-facing
+  Markdown, optionally starting with one `## Section` heading) and, when Debian packaging is
+  enabled, `.release/changelog.d/<change>.md` (concise technical `- ` bullets). Name them after the
+  change (`316-offline-startup.md`). New files never conflict with other branches or pull
+  requests; editing the shared `_NEXT` files does.
+- **`.release/RELEASE_NOTES_NEXT.md`**: line 1 is `# <release title>` without a version number;
+  it is written once per release (the body may stay empty when fragments carry the notes).
+- **`.release/CHANGELOG_NEXT.md`**: only for edits that must change what is already staged there.
+  `vlr prepare` renders the Debian stanza; write no boilerplate.
 
 Consolidate: rewrite and merge entries so they describe the resulting behavior; never append a
 log of commits, fix-ups or abandoned attempts. Remove entries for reverted changes. No

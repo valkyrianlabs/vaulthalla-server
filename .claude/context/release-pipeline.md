@@ -14,10 +14,15 @@ target: it is published history, extended only by `vlr prepare`. Tags are `vX.Y.
 
 ## Release docs are written while working, not generated
 
-- `.release/RELEASE_NOTES_NEXT.md`: user-facing notes. Line 1 `# <title>` (no version), then the body.
-- `.release/CHANGELOG_NEXT.md`: Debian-facing bullets under `## Section` headings (Security, Runtime, CLI, Web
-  console, Packaging); `vlr prepare` renders the stanza (urgency `high`, maintainer pinned in release.toml).
-- Update them in the same change as the code; consolidate (describe resulting behavior, not commits). Preview:
+- **Per change: fragments** (vl-release >= 0.7.0). Each PR adds `.release/notes.d/<issue>-<slug>.md` (user-facing
+  Markdown; may start with one `## Section` heading to group under it) and `.release/changelog.d/<issue>-<slug>.md`
+  (Debian-facing `- ` bullets). New files never conflict; editing the shared `_NEXT` files from parallel branches made
+  every merge conflict every other open PR (2026-11-05). `vlr prepare` assembles them in file-name order after the
+  `_NEXT` content and deletes them; `vlr finalize` keeps fragments merged after the cut.
+- `.release/RELEASE_NOTES_NEXT.md`: line 1 `# <title>` (no version), set once per release; its body may be empty.
+  `.release/CHANGELOG_NEXT.md`: only for edits to what is already staged there. `vlr prepare` renders the Debian
+  stanza (urgency `high`, maintainer pinned in release.toml).
+- Write them in the same change as the code; describe resulting behavior, not commits. Preview:
   `vlr prepare --dry-run`, `vlr release-title --staged`, `vlr release-body --staged`.
 - `RELEASE_NOTES.md` and `debian/changelog` are written only by `vlr prepare` (in CI) and persisted only by
   `vlr finalize` after publication succeeded. `RELEASE_NOTES.md` does not exist until the first vl-release release.

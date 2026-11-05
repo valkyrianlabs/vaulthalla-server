@@ -77,8 +77,11 @@ versions, cutting releases), `payload-markdown` + `payload-markdown-docs` (doc a
   `/etc/vaulthalla/vaulthalla.env`, `cloudflare.ini`, `config.yaml` at the repo root (gitignored override). Source them; don't cat them.
 - **No tags, pushes, releases, or workflow dispatches** without explicit instruction. A `v*` tag publishes to the real APT repo.
 - **Release history and versions are vl-release's:** never hand-edit `debian/changelog`, `RELEASE_NOTES.md` or version
-  numbers (`vlr version`). Material changes update `.release/RELEASE_NOTES_NEXT.md` and `.release/CHANGELOG_NEXT.md` in
-  the same change (see `/vl-release`); run `vlr check` before calling substantial work done.
+  numbers (`vlr version`). Material changes add **their own fragment files** in the same change:
+  `.release/notes.d/<issue>-<slug>.md` (user-facing) and `.release/changelog.d/<issue>-<slug>.md` (package-facing
+  bullets). Don't edit the shared `RELEASE_NOTES_NEXT.md`/`CHANGELOG_NEXT.md` from a feature branch: every PR that
+  did conflicted with every other open PR. The release title (line 1 of `RELEASE_NOTES_NEXT.md`) is set when the
+  release is planned. See `/vl-release` and `vlr help staging`; run `vlr check` before calling substantial work done.
 - **Builds are silent (AGENTS.md):** anything pushed to GitHub, branch or PR, compiles on Linux and macOS with no output
   but progress: no warnings, notes or chatter from `meson setup` or the build. Check with `tools/dev/quiet-build.sh`;
   CI fails on anything else. Fix causes, never suppress them.
@@ -107,7 +110,7 @@ Full text: `docs/contributors/compatibility-policy.md`. Binding for agents:
   safe migration, competing security properties that need a product decision, or a change to key custody or trust
   boundaries. Name the concrete risk and recommend a resolution.
 - **Document the decision** for every breaking change (rationale, affected interfaces/formats, operator migration
-  steps) in the PR and `.release/RELEASE_NOTES_NEXT.md`.
+  steps) in the PR and the change's release-note fragment (`.release/notes.d/`).
 
 ## Working conventions
 
