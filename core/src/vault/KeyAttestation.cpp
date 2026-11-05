@@ -10,6 +10,8 @@
 #include <paths.h>
 #include <sodium.h>
 
+#include <algorithm>
+
 #include <mutex>
 #include <stdexcept>
 
@@ -133,6 +135,41 @@ std::optional<Attestation> attest(const unsigned int vaultId, const unsigned int
                                        vaultId, e.what());
         return std::nullopt;
     }
+}
+
+namespace {
+
+bool hasAttestationDomain(const std::span<const uint8_t> msg) {
+    return msg.size() >= kDomain.size() && std::equal(kDomain.begin(), kDomain.end(), msg.begin());
+}
+
+}
+
+std::optional<Attestation> signNodeMessage(const std::span<const uint8_t> msg) {
+    if (msg.empty() || hasAttestationDomain(msg)) {
+        log::Registry::crypto()->error("[KeyAttestation] Refusing to sign a message without its own domain tag");
+        return std::nullopt;
+    }
+    try {
+        auto& s = signingSeed();
+        std::scoped_lock lock(s.mutex);
+        auto seed = loadSeedLocked(s);
+        const auto pk = publicKeyFromSeed(seed);
+        Attestation out{.key_id = db::query::vault::Key::attestationKeyId(pk), .signature = signWithSeed(seed, msg)};
+        sodium_memzero(seed.data(), seed.size());
+        return out;
+    } catch (const std::exception& e) {
+        log::Registry::crypto()->error("[KeyAttestation] Could not sign with this node's key: {}", e.what());
+        return std::nullopt;
+    }
+}
+
+Verdict checkNodeMessage(const Attestation& attestation, const std::span<const uint8_t> msg) {
+    if (attestation.signature.empty()) return Verdict::Missing;
+    if (hasAttestationDomain(msg)) return Verdict::BadSignature;
+    const auto pk = db::query::vault::Key::attestationPublicKey(attestation.key_id);
+    if (!pk) return Verdict::UnknownKey;
+    return verifySignature(*pk, msg, attestation.signature) ? Verdict::Valid : Verdict::BadSignature;
 }
 
 std::string to_string(const Verdict verdict) {

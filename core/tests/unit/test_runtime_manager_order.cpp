@@ -24,13 +24,16 @@ TEST(RuntimeManagerOrderTest, StopOrderClosesProtocolSocketsBeforeFuse) {
     EXPECT_LT(indexOf(names, "S3GatewayService"), indexOf(names, "ProtocolService"));
     EXPECT_LT(indexOf(names, "ShellServer"), indexOf(names, "FUSE"));
     EXPECT_LT(indexOf(names, "ConnectionLifecycleManager"), indexOf(names, "FUSE"));
-    EXPECT_EQ(names.back(), "FUSE");
+    // The audit trail outlives everything it records (#323).
+    EXPECT_EQ(names.back(), "AuditTrail");
+    EXPECT_EQ(names[names.size() - 2], "FUSE");
 }
 
 TEST(RuntimeManagerOrderTest, StartOrderIsExplicitAndDependencyAware) {
     const auto names = vh::runtime::Manager::serviceStartOrder(true);
 
-    EXPECT_EQ(names.front(), "FUSE");
+    EXPECT_EQ(names.front(), "AuditTrail");
+    EXPECT_EQ(names[1], "FUSE");
     EXPECT_LT(indexOf(names, "ConnectionLifecycleManager"), indexOf(names, "ProtocolService"));
     EXPECT_LT(indexOf(names, "ProtocolService"), indexOf(names, "S3GatewayService"));
     EXPECT_LT(indexOf(names, "S3GatewayService"), indexOf(names, "ShellServer"));
@@ -45,5 +48,5 @@ TEST(RuntimeManagerOrderTest, TestModeOrderOmitsShellServerWhenRequested) {
 
     EXPECT_EQ(indexOf(startNames, "ShellServer"), -1);
     EXPECT_EQ(indexOf(stopNames, "ShellServer"), -1);
-    EXPECT_EQ(stopNames.back(), "FUSE");
+    EXPECT_EQ(stopNames.back(), "AuditTrail");
 }
