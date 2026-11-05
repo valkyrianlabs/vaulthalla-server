@@ -1,5 +1,6 @@
 #pragma once
 
+#include "protocols/SessionLifetimes.hpp"
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/beast/core.hpp>
 #include <boost/beast/http.hpp>
@@ -124,6 +125,8 @@ public:
     void setHello(int protocolVersion, ClientInfo client);
 
     static std::string generateUUIDv4();
+    // Session objects alive in this process (see lifetime_).
+    [[nodiscard]] static std::uint64_t liveCount();
 
 private:
     // ---- lifecycle / io
@@ -150,6 +153,12 @@ private:
     void sendInternalError();
     [[nodiscard]] std::string getUserAgent() const;
     [[nodiscard]] std::string getIPAddress() const;
+
+    // Counts live Session objects. A session's stream holds a socket bound to its listener's io_context, and the
+    // session manager caches sessions past a listener restart, so a listener must not free its io_context while any
+    // Session exists (ProtocolService, the device listener). Declared before stream_: released after the socket.
+    static SessionLifetimes& lifetimes();
+    SessionLifetimes::Token lifetime_{lifetimes()};
 
     // The websocket, over TCP (ws::Server) or TLS (the device listener); Session.cpp defines it.
     struct Stream;

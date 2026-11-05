@@ -264,6 +264,9 @@ void Service::shutdown() noexcept {
                 log::Registry::runtime()->error("[DeviceServer] HTTP sessions still running {}s after shutdown; keeping "
                                                 "their io_context", kHttpDrainTimeout.count());
                 retainForProcessLifetime(std::move(ioc_));
+            } else if (protocols::ws::Session::liveCount() > 0) {
+                // Closed device ws sessions can stay cached in the session manager with sockets on this io_context.
+                retainForProcessLifetime(std::move(ioc_));
             }
             ioc_.reset();
         }

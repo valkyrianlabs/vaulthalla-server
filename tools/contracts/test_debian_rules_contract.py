@@ -134,6 +134,8 @@ class DebianRulesContractTests(unittest.TestCase):
             "usr/share/vaulthalla/psql",
             install_manifest,
         )
+        # #316: the lists ship with the package; nothing downloads them at startup.
+        self.assertIn("usr/share/vaulthalla/password-lists", install_manifest)
         self.assertIn(
             "usr/share/vaulthalla-web usr/share/",
             install_manifest,
