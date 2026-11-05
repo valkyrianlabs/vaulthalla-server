@@ -77,6 +77,15 @@ Config& Config::operator=(Config&&) noexcept = default;
                   "still applies)");
         }
 
+        // #320: the alias value is applied by convert<AuthConfig>::decode; only report it here.
+        if (const auto auth = root["auth"]; auth && auth.IsMap() && auth["token_expiry_minutes"]) {
+            noteDeprecation(deprecations, auth["access_token_expiry_minutes"]
+                ? "auth.token_expiry_minutes is deprecated and ignored because auth.access_token_expiry_minutes is set; "
+                  "remove it"
+                : "auth.token_expiry_minutes is deprecated: rename it to auth.access_token_expiry_minutes (its value "
+                  "still applies)");
+        }
+
         const auto gateway = root["s3_gateway"];
         if (!gateway || !gateway.IsMap()) return;
         const auto vaults = root["vaults"];

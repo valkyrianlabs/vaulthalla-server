@@ -24,6 +24,10 @@ for users and operators; keep it representative of what actually ships.
 - Setting a password no longer fails when the server can't reach the Have I Been Pwned breach check. The check
   gives up after a few seconds, the bundled lists and the password rules decide, and the server log notes it. A
   password the service reports as breached is still refused.
+- The access-token lifetime set in `config.yaml` (`auth.access_token_expiry_minutes`) now takes effect. The
+  daemon was reading a different key, so a changed value was ignored and tokens always lasted 60 minutes.
+  Configs that use the older `token_expiry_minutes` keep working, and the daemon logs a note to rename it.
+- The sign-in cookie now lasts as long as `auth.refresh_token_expiry_days`. It was fixed at 7 days.
 
 ## S3 gateway
 
