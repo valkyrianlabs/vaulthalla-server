@@ -19,15 +19,18 @@ constexpr static uintmax_t MAX_PREVIEW_SIZE_BYTES = 100 * 1024 * 1024;        //
 
 struct WebsocketConfig {
     bool enabled = true;
-    std::string host = "0.0.0.0";
+    std::string host = "127.0.0.1";  // loopback unless configured (#324): the proxy terminates TLS
     uint16_t port = 33369;
     unsigned int max_connections = 1024;
     uintmax_t max_upload_size_bytes = MAX_UPLOAD_SIZE_BYTES;
+    // Browser origins (scheme://host[:port]) allowed to open the websocket besides the one the request is addressed
+    // to (#324): for a console served from another host. Same-origin and non-browser clients (no Origin) need nothing.
+    std::vector<std::string> allowed_origins{};
 };
 
 struct HttpPreviewConfig {
     bool enabled = true;
-    std::string host = "0.0.0.0";
+    std::string host = "127.0.0.1";  // loopback unless configured (#324): the proxy terminates TLS
     uint16_t port = 33370;
     unsigned int max_connections = 512;
     uintmax_t max_preview_size_bytes = MAX_PREVIEW_SIZE_BYTES;
@@ -87,7 +90,7 @@ struct S3GatewaySyntheticLocalRequestCostConfig {
 
 struct S3GatewayConfig {
     bool enabled = false;
-    std::string host = "0.0.0.0";
+    std::string host = "127.0.0.1";  // loopback unless configured (#324): the proxy terminates TLS
     uint16_t port = 39000;
     unsigned int max_connections = 1024;
     uintmax_t max_body_size_bytes = 5ull * 1024ull * 1024ull * 1024ull;

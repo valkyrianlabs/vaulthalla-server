@@ -69,7 +69,7 @@ transfer:
 # buckets on an independent Watchdog-supervised runtime service.
 s3_gateway:
   enabled: false
-  host: 0.0.0.0
+  host: 127.0.0.1                     # loopback: clients reach it over HTTPS through nginx/Caddy (#324)
   port: 39000
   max_connections: 1024
   max_body_size_mb: 5120

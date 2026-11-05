@@ -21,8 +21,9 @@ On Linux, the Debian package integrates with the distribution's nginx. `sudo vh 
 ## Modes
 
 ```bash
-sudo vh setup nginx                                   # HTTP, catch-all server name
-sudo vh setup nginx --domain vault.example.com        # HTTP for one name
+sudo vh setup nginx                                   # HTTPS with the local certificate, catch-all server name
+sudo vh setup nginx --domain vault.example.com        # HTTPS with the local certificate, one name
+sudo vh setup nginx --plain-http                      # HTTP only, behind another TLS terminator
 sudo vh setup nginx --domain vault.example.com --certbot
 sudo vh setup nginx --domain vault.example.com --s3-domain s3.vault.example.com \
   --certbot-dns-cloudflare /etc/vaulthalla/certbot/cloudflare.ini
@@ -30,11 +31,20 @@ sudo vh setup nginx --domain vault.example.com --s3-domain s3.vault.example.com 
 
 | Mode | Certificate | Requirements |
 | --- | --- | --- |
-| No certificate option | None (HTTP) | Use only on a trusted network or behind another TLS terminator. |
+| No certificate option | The host's local certificate (self-signed), `/etc/vaulthalla/tls/local.crt` | None. Browsers ask you to trust the certificate once; compare the SHA-256 fingerprint `vh setup nginx` prints. |
+| `--plain-http` | None | Only behind another TLS terminator (a tunnel or load balancer that already serves HTTPS). |
 | `--certbot` | Let's Encrypt, HTTP-01, through Certbot's nginx plugin | The domain resolves to the host and port 80 reaches it from the internet. |
 | `--certbot-dns-cloudflare <credentials>` | Let's Encrypt, DNS-01 through Cloudflare | DNS on Cloudflare and a scoped API token; no inbound ports needed. The only mode that supports `--s3-domain`. |
 
-Package installation may already have run the HTTP mode when nginx was active and the checks were low risk. Running `vh setup nginx` again is safe: it regenerates the managed site and keeps the domain and S3 domain it recorded, so `sudo vh setup nginx --certbot` later adds a certificate for the domain already configured.
+Every mode except `--plain-http` redirects `http://` to `https://` and sends security headers (`X-Content-Type-Options`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`, `frame-ancestors 'none'`). With a Let's Encrypt certificate it also sends HSTS; with the local certificate it doesn't, because HSTS would stop browsers from letting you accept a self-signed certificate.
+
+### The Local Certificate
+
+Without a public certificate, the console is still encrypted with a certificate made for this host: ECDSA P-256, valid 825 days, covering the host name, `<host>.local`, `localhost` and the host's own addresses. The package creates it on installation and renews it on every upgrade when it's within 30 days of expiry or the host's names or addresses changed; `sudo vh setup local-tls` does the same on demand (`--force` regenerates it). The private key is `/etc/vaulthalla/tls/local.key`, readable by root only.
+
+Browsers show a warning the first time because no public authority signed it. Compare the fingerprint, then accept it, or import `/etc/vaulthalla/tls/local.crt` into the client's trust store (see [Trusting Certificates On Clients](/https/client-trust)). For a certificate browsers trust without that step, use `--certbot` or `--certbot-dns-cloudflare`.
+
+Package installation may already have set up the default HTTPS site when nginx was active and the checks were low risk. An unmodified packaged site from an earlier release, which served plain HTTP, is switched to HTTPS on upgrade; a site you changed, or one `vh setup nginx` generated without a certificate, is left alone and the upgrade prints a reminder. Running `vh setup nginx` again is safe: it regenerates the managed site and keeps the domain and S3 domain it recorded, so `sudo vh setup nginx --certbot` later adds a certificate for the domain already configured.
 
 ## Before It Changes Anything
 
@@ -52,7 +62,7 @@ It also checks the built-in `admin` password: if the generated initial password 
 | --- | --- |
 | Managed site | `/etc/nginx/sites-available/vaulthalla` and its `sites-enabled` symlink |
 | Managed marker | `/var/lib/vaulthalla/nginx_site_managed` |
-| Certificates | `/etc/letsencrypt/live/<domain>/` (Certbot) |
+| Certificates | `/etc/letsencrypt/live/<domain>/` (Certbot), or `/etc/vaulthalla/tls/local.{crt,key}` (local) |
 | Renewal hook (Cloudflare mode) | `/etc/letsencrypt/renewal-hooks/deploy/vaulthalla-nginx-reload.sh` |
 
 Routes are described in [What The Proxy Routes](/https#what-the-proxy-routes). The managed site turns proxy buffering off for `/preview`, `/download` and `/upload`, so decrypted downloads and media streams pass straight through and are never spooled to nginx's temporary files. Upgraded hosts with an older site still stream without buffering because the daemon sends `X-Accel-Buffering: no` on every streamed response.

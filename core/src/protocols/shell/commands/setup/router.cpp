@@ -24,6 +24,7 @@ CommandResult handleSetup(const CommandCall& call) {
     if (isSetupMatch("db", sub)) return setup::handleDb(subcall);
     if (isSetupMatch("remote-db", sub)) return setup::handleRemoteDb(subcall);
     if (isSetupMatch("nginx", sub)) return setup::handleNginx(subcall);
+    if (isSetupMatch("local-tls", sub)) return setup::handleLocalTls(subcall);
     if (isSetupMatch("set-super-admin-password", sub)) return setup::handleSetSuperAdminPassword(subcall);
 
     return invalid(call.constructFullArgs(), "Unknown setup subcommand: '" + std::string(sub) + "'");

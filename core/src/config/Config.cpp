@@ -293,16 +293,18 @@ Config& Config::operator=(Config&&) noexcept = default;
             {"host", c.host},
             {"port", c.port},
             {"max_connections", c.max_connections},
-            {"max_upload_size_bytes", c.max_upload_size_bytes}
+            {"max_upload_size_bytes", c.max_upload_size_bytes},
+            {"allowed_origins", c.allowed_origins}
         };
     }
 
     void from_json(const nlohmann::json &j, WebsocketConfig &c) {
         c.enabled = j.value("enabled", true);
-        c.host = j.value("host", "0.0.0.0");
+        c.host = j.value("host", "127.0.0.1");
         c.port = j.value("port", 33369);
         c.max_connections = j.value("max_connections", 1024u);
         c.max_upload_size_bytes = j.value("max_upload_size_bytes", MAX_UPLOAD_SIZE_BYTES);
+        c.allowed_origins = j.value("allowed_origins", std::vector<std::string>{});
     }
 
     void to_json(nlohmann::json &j, const HttpPreviewConfig &c) {
@@ -318,7 +320,7 @@ Config& Config::operator=(Config&&) noexcept = default;
 
     void from_json(const nlohmann::json &j, HttpPreviewConfig &c) {
         c.enabled = j.value("enabled", true);
-        c.host = j.value("host", "0.0.0.0");
+        c.host = j.value("host", "127.0.0.1");
         c.port = j.value("port", 33370);
         c.max_connections = j.value("max_connections", 512);
         c.max_preview_size_bytes = j.value("max_preview_size_bytes", MAX_PREVIEW_SIZE_BYTES);
@@ -452,7 +454,7 @@ Config& Config::operator=(Config&&) noexcept = default;
 
     void from_json(const nlohmann::json &j, S3GatewayConfig &c) {
         c.enabled = j.value("enabled", false);
-        c.host = j.value("host", "0.0.0.0");
+        c.host = j.value("host", "127.0.0.1");
         c.port = j.value("port", static_cast<uint16_t>(39000));
         c.max_connections = j.value("max_connections", 1024u);
         if (j.contains("max_body_size_bytes"))

@@ -17565,12 +17565,27 @@
           "types": [
             "integer"
           ]
+        },
+        {
+          "description": "Browser origins (scheme://host[:port]) allowed to open the websocket besides the request's own host.",
+          "element": {
+            "name": "origin",
+            "required": true,
+            "types": [
+              "string"
+            ]
+          },
+          "name": "allowed_origins",
+          "required": false,
+          "types": [
+            "array"
+          ]
         }
       ],
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "70ff22f2ae1a08d05456979e8d3aa75b6785bfb947ad03469844f2cd8ccc92d1",
+  "models_hash": "e2590d55563c48d0648d34a1be3659fffa0971e500b055839f4add6a0555077a",
   "protocol": {
     "min": 1,
     "version": 1

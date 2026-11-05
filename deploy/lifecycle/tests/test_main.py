@@ -42,7 +42,7 @@ database:
 
     def test_parse_projection_uses_s3_defaults_when_section_missing(self) -> None:
         projection = main.parse_config_projection_from_text("database:\n  host: localhost\n")
-        self.assertEqual(projection["s3_gateway"], {"enabled": False, "host": "0.0.0.0", "port": 39000})
+        self.assertEqual(projection["s3_gateway"], {"enabled": False, "host": "127.0.0.1", "port": 39000})
 
     def test_render_managed_nginx_config_includes_dedicated_https_s3_host(self) -> None:
         projection = {
@@ -328,6 +328,123 @@ server {
         self.assertTrue(main.server_name_matches_domain("*.vaulthalla.io", "demo.vaulthalla.io"))
         self.assertFalse(main.server_name_matches_domain("*.vaulthalla.io", "vaulthalla.io"))
         self.assertFalse(main.server_name_matches_domain("_", "demo.vaulthalla.io"))
+
+
+
+PROJECTION = {
+    "websocket_server": {"enabled": True, "host": "127.0.0.1", "port": 36969},
+    "http_preview_server": {"enabled": True, "host": "127.0.0.1", "port": 36970},
+    "s3_gateway": {"enabled": False, "host": "127.0.0.1", "port": 39000},
+    "database": {"host": "localhost", "port": 5432, "name": "vaulthalla", "user": "vaulthalla", "pool_size": 10},
+}
+
+
+class RedactedAccessLogTests(unittest.TestCase):
+    """#327: every server block logs through the redacting format; the map and format are declared exactly once."""
+
+    def _check(self, rendered: str) -> None:
+        self.assertEqual(rendered.count("map $request_uri $vaulthalla_log_uri {"), 1)
+        self.assertEqual(rendered.count("log_format vaulthalla "), 1)
+        self.assertEqual(rendered.count("server {"), rendered.count(main.ACCESS_LOG_LINE.strip()))
+        self.assertIn('~^/share/                "/share/[redacted]";', rendered)
+        self.assertNotIn("$http_referer", rendered)
+        self.assertLess(rendered.index("log_format vaulthalla"), rendered.index("server {"))
+
+    def test_every_mode_logs_redacted(self) -> None:
+        self._check(main.render_managed_nginx_config(PROJECTION, None, local_tls=True))
+        self._check(main.render_managed_nginx_config(PROJECTION, None))
+        self._check(main.render_managed_nginx_config(PROJECTION, "vault.example.com", "s3.example.com",
+                                                     "vault.example.com"))
+
+    def test_packaged_site_logs_redacted(self) -> None:
+        packaged = (Path(__file__).resolve().parents[2] / "nginx" / "vaulthalla.conf").read_text()
+        self._check(packaged)
+
+
+class HttpsByDefaultTests(unittest.TestCase):
+    """#324: the managed site is HTTPS by default (local certificate), HTTP redirects, security headers everywhere,
+    HSTS only with a publicly trusted certificate."""
+
+    def test_local_tls_renders_redirect_ssl_and_headers_without_hsts(self) -> None:
+        rendered = main.render_managed_nginx_config(PROJECTION, None, local_tls=True)
+        self.assertIn("return 308 https://$host$request_uri;", rendered)
+        self.assertIn("listen 443 ssl;", rendered)
+        self.assertIn(f"ssl_certificate {main.LOCAL_TLS_CERT};", rendered)
+        self.assertIn(f"ssl_certificate_key {main.LOCAL_TLS_KEY};", rendered)
+        self.assertIn('add_header X-Frame-Options "DENY" always;', rendered)
+        self.assertIn('add_header Referrer-Policy "no-referrer" always;', rendered)
+        self.assertIn("frame-ancestors 'none'", rendered)
+        self.assertNotIn("Strict-Transport-Security", rendered)
+        # The console is only served on 443; port 80 only redirects.
+        port80 = rendered.split("listen 443 ssl;")[0]
+        self.assertNotIn("location /", port80)
+
+    def test_public_certificate_adds_hsts(self) -> None:
+        rendered = main.render_managed_nginx_config(PROJECTION, "vault.example.com", None, "vault.example.com")
+        self.assertIn('add_header Strict-Transport-Security "max-age=31536000" always;', rendered)
+        self.assertIn("ssl_certificate /etc/letsencrypt/live/vault.example.com/fullchain.pem;", rendered)
+
+    def test_plain_http_still_sends_headers(self) -> None:
+        rendered = main.render_managed_nginx_config(PROJECTION, None)
+        self.assertNotIn("ssl_certificate", rendered)
+        self.assertIn('add_header X-Content-Type-Options "nosniff" always;', rendered)
+
+    def test_plain_http_and_certificate_modes_are_exclusive(self) -> None:
+        args = main.build_parser().parse_args(["setup", "nginx", "--plain-http", "--certbot", "--domain", "a.example.com"])
+        with self.assertRaisesRegex(main.LifecycleError, "--plain-http"):
+            main.setup_nginx(args)
+
+    def test_local_tls_subcommand_parses(self) -> None:
+        args = main.build_parser().parse_args(["setup", "local-tls", "--force", "--quiet"])
+        self.assertTrue(args.force and args.quiet)
+
+
+@unittest.skipUnless(main.command_exists("openssl"), "openssl not available")
+class LocalCertificateTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="vh-local-tls-"))
+        patches = [
+            mock.patch.object(main, "LOCAL_TLS_DIR", self.tmp / "tls"),
+            mock.patch.object(main, "LOCAL_TLS_CERT", self.tmp / "tls" / "local.crt"),
+            mock.patch.object(main, "LOCAL_TLS_KEY", self.tmp / "tls" / "local.key"),
+            mock.patch.object(main, "local_tls_names", lambda: (["vault-host", "vault-host.local", "localhost"],
+                                                                 ["127.0.0.1", "::1", "192.168.1.20"])),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        self.addCleanup(lambda: subprocess.run(["rm", "-rf", str(self.tmp)], check=False))
+
+    def test_creates_a_private_key_and_a_certificate_for_the_host(self) -> None:
+        self.assertEqual(main.ensure_local_certificate(), "created")
+        self.assertEqual(main.LOCAL_TLS_KEY.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(main.LOCAL_TLS_DIR.stat().st_mode & 0o777, 0o700)
+        names = main._certificate_names(main.LOCAL_TLS_CERT)
+        self.assertIsNotNone(names)
+        dns, ips = names
+        self.assertTrue({"vault-host", "vault-host.local", "localhost"} <= dns)
+        self.assertTrue({"127.0.0.1", "::1", "192.168.1.20"} <= ips)
+        text = subprocess.run(["openssl", "x509", "-in", str(main.LOCAL_TLS_CERT), "-noout", "-text"],
+                              capture_output=True, text=True, check=True).stdout
+        self.assertIn("CA:FALSE", text)
+        self.assertIn("TLS Web Server Authentication", text)
+        self.assertIsNotNone(main.local_certificate_fingerprint())
+
+    def test_current_certificate_is_kept_and_changes_regenerate_it(self) -> None:
+        main.ensure_local_certificate()
+        first = main.LOCAL_TLS_CERT.read_bytes()
+        self.assertEqual(main.ensure_local_certificate(), "current")
+        self.assertEqual(main.LOCAL_TLS_CERT.read_bytes(), first)
+        # The host got a new address: the certificate no longer covers it.
+        with mock.patch.object(main, "local_tls_names", lambda: (["vault-host"], ["127.0.0.1", "10.0.0.9"])):
+            self.assertEqual(main.ensure_local_certificate(), "created")
+        self.assertNotEqual(main.LOCAL_TLS_CERT.read_bytes(), first)
+        self.assertEqual(main.ensure_local_certificate(force=True), "created")
+
+    def test_expiring_certificate_is_renewed(self) -> None:
+        with mock.patch.object(main, "LOCAL_TLS_DAYS", 10):
+            main.ensure_local_certificate()
+        self.assertEqual(main.ensure_local_certificate(), "created")  # within the 30-day renewal window
 
 
 if __name__ == "__main__":

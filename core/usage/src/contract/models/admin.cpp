@@ -169,7 +169,9 @@ std::vector<WsModel> adminSettingsModels() {
 
     out.push_back(model("WebsocketServerConfig", "websocket_server.* (Config.cpp to_json(WebsocketConfig)).",
         {boolean("enabled"), str("host"), uinteger("port").max(65535), uinteger("max_connections"),
-         uinteger("max_upload_size_bytes")}));
+         uinteger("max_upload_size_bytes"),
+         arrayOf("allowed_origins", str("origin")).opt().desc(
+             "Browser origins (scheme://host[:port]) allowed to open the websocket besides the request's own host.")}));
     out.push_back(model("HttpPreviewServerConfig", "http_preview_server.* (Config.cpp to_json(HttpPreviewConfig)).",
         {boolean("enabled"), str("host"), uinteger("port").max(65535), uinteger("max_connections"),
          uinteger("max_preview_size_bytes")}));

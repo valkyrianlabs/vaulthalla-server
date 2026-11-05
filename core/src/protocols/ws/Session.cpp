@@ -1,5 +1,6 @@
 #include "protocols/ws/Session.hpp"
 #include "protocols/ws/RefreshCookie.hpp"
+#include "protocols/ws/OriginPolicy.hpp"
 
 #include "auth/Manager.hpp"
 #include "auth/model/RefreshToken.hpp"
@@ -184,6 +185,24 @@ void Session::onHeadersRead(const std::shared_ptr<RequestType>& req, const beast
         return close();
     }
     if (closing_.load(std::memory_order_acquire)) return;
+
+    // Cross-site websocket hijacking (#324): a page on another site must not open a socket that rides this browser's
+    // refresh cookie. Refused before hydration, so no cookie is read and no token minted.
+    {
+        const auto originHeader = std::string_view{(*req)[beast_http::field::origin].data(), (*req)[beast_http::field::origin].size()};
+        const auto host = std::string_view{(*req)[beast_http::field::host].data(), (*req)[beast_http::field::host].size()};
+        const auto forwardedHost = std::string_view{(*req)["X-Forwarded-Host"].data(), (*req)["X-Forwarded-Host"].size()};
+        if (!origin::allowed(originHeader, host, forwardedHost, config::Registry::get().websocket.allowed_origins)) {
+            log::Registry::ws()->warn("[ws::Session] Refused a websocket from origin '{}' for host '{}' (IP {}); "
+                                      "add it to websocket_server.allowed_origins if it is yours",
+                                      originHeader, host, getIPAddress());
+            static constexpr std::string_view kForbidden =
+                "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            boost::system::error_code wec;
+            asio::write(stream_->plain->next_layer(), asio::buffer(kForbidden.data(), kForbidden.size()), wec);
+            return close();
+        }
+    }
 
     // Hydration touches the DB and the secrets manager; a failure there must reject this one connection,
     // never escape into the shared io_context (which used to terminate the daemon, taking FUSE with it).

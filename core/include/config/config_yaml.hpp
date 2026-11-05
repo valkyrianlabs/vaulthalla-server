@@ -19,16 +19,19 @@ struct convert<WebsocketConfig> {
         node["port"] = rhs.port;
         node["max_connections"] = rhs.max_connections;
         node["max_upload_size_bytes"] = rhs.max_upload_size_bytes;
+        if (!rhs.allowed_origins.empty()) node["allowed_origins"] = rhs.allowed_origins;
         return node;
     }
 
     static bool decode(const Node& node, WebsocketConfig& rhs) {
         if (!node.IsMap()) return false;
         rhs.enabled = node["enabled"].as<bool>(true);
-        rhs.host = node["host"].as<std::string>("0.0.0.0");
+        rhs.host = node["host"].as<std::string>("127.0.0.1");
         rhs.port = node["port"].as<uint16_t>(8080);
         rhs.max_connections = node["max_connections"].as<unsigned int>(1024);
         rhs.max_upload_size_bytes = node["max_upload_size_mb"].as<uintmax_t>(2048) * 1024 * 1024; // Default 2GB
+        rhs.allowed_origins = node["allowed_origins"] ? node["allowed_origins"].as<std::vector<std::string>>()
+                                                      : std::vector<std::string>{};
         return true;
     }
 };
@@ -48,7 +51,7 @@ struct convert<HttpPreviewConfig> {
     static bool decode(const Node& node, HttpPreviewConfig& rhs) {
         if (!node.IsMap()) return false;
         rhs.enabled = node["enabled"].as<bool>(true);
-        rhs.host = node["host"].as<std::string>("0.0.0.0");
+        rhs.host = node["host"].as<std::string>("127.0.0.1");
         rhs.port = node["port"].as<uint16_t>(8081);
         rhs.max_connections = node["max_connections"].as<unsigned int>(512);
         rhs.max_preview_size_bytes = node["max_preview_size_mb"].as<uintmax_t>(100) * 1024 * 1024; // Default 100MB
@@ -204,7 +207,7 @@ struct convert<S3GatewayConfig> {
     static bool decode(const Node& node, S3GatewayConfig& rhs) {
         if (!node.IsMap()) return false;
         rhs.enabled = node["enabled"].as<bool>(false);
-        rhs.host = node["host"].as<std::string>("0.0.0.0");
+        rhs.host = node["host"].as<std::string>("127.0.0.1");
         rhs.port = node["port"].as<uint16_t>(39000);
         rhs.max_connections = node["max_connections"].as<unsigned int>(1024);
         if (node["max_body_size_bytes"]) rhs.max_body_size_bytes = node["max_body_size_bytes"].as<uintmax_t>();

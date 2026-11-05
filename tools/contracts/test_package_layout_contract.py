@@ -191,7 +191,7 @@ class PackageLayoutContractTests(unittest.TestCase):
 
         self.assertEqual(section_host("websocket_server"), "127.0.0.1")
         self.assertEqual(section_host("http_preview_server"), "127.0.0.1")
-        self.assertEqual(section_host("s3_gateway"), "0.0.0.0")
+        self.assertEqual(section_host("s3_gateway"), "127.0.0.1")  # #324: plain HTTP stays on loopback
         template = self._read("deploy/nginx/vaulthalla.conf")
         self.assertIn("proxy_pass http://127.0.0.1:36969;", template)
         self.assertIn("proxy_pass http://127.0.0.1:36970;", template)
