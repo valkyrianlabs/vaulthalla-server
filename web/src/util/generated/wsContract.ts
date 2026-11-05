@@ -6,7 +6,7 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = 'adc8d0db539312dec5e05ef49106ee41376ff4622a5ab257aee951c167344b2e'
+export const WS_CONTRACT_HASH = '3f461dbda227f2189f4691e7a2269b113c7663fa782ef6ec88f7f8be35157f76'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
 export const WS_MODELS_HASH = 'd027924cc65070807b32b2f2daba00e0707ae3f871cad44d826254dc6e12e67c'
@@ -2729,6 +2729,16 @@ export interface WsModels {
 }
 
 export interface WsContract {
+  /**
+   * Report that the person at the console is using it (keyboard, pointer, scroll), at most about once a
+   * minute. It resets the session's idle sign-out clock
+   * (services.connection_lifecycle_manager.idle_timeout_minutes) with the server's own time; background
+   * requests never do. An idle session is refused like any other expired one.
+   */
+  'auth.activity': {
+    payload: null
+    response: Record<string, never>
+  }
   /**
    * Whether the envelope token is a valid session for this socket.
    */
@@ -5517,6 +5527,7 @@ export interface WsContract {
 export type WsContractCommand = keyof WsContract
 
 export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
+  'auth.activity',
   'auth.isAuthenticated',
   'auth.login',
   'auth.logout',
@@ -5791,6 +5802,7 @@ export const WS_CONTRACT_CONFIRMATIONS: Readonly<
 
 // Client timeouts the server declares per command (a timeout means "no answer yet", never "failed").
 export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> = {
+  'auth.activity': 15000,
   'auth.isAuthenticated': 15000,
   'auth.login': 20000,
   'auth.logout': 15000,

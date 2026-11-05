@@ -150,7 +150,7 @@ services:
   db_sweeper:
     sweep_interval_minutes: 60             # Interval for sweeping old database events/conflicts, minimum 5 minutes
   connection_lifecycle_manager:
-    idle_timeout_minutes: 30              # Timeout for idle connections, minimum 5 minutes
+    idle_timeout_minutes: 30              # Sign web-console users out after this long without input; 0 = off (Desktop is exempt)
     unauthenticated_timeout_seconds: 60  # Timeout for unauthenticated connections, minimum 30 seconds
     sweep_interval_seconds: 60           # Interval for sweeping idle connections, minimum 15 seconds
 

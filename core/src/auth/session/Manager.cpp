@@ -1,4 +1,5 @@
 #include "auth/session/Manager.hpp"
+#include "auth/session/Idle.hpp"
 #include "rbac/PolicyEpoch.hpp"
 
 #include "auth/model/RefreshToken.hpp"
@@ -14,6 +15,8 @@
 #include "identities/User.hpp"
 #include "runtime/Deps.hpp"
 #include "protocols/ws/Router.hpp"
+
+#include <algorithm>
 
 using namespace vh::protocols::ws;
 using vh::identities::User;
@@ -145,6 +148,17 @@ void Manager::tryRehydrate(const std::shared_ptr<Session>& session) {
     }
 }
 
+namespace {
+// Signing in is user activity: the idle clock starts now (#319).
+void markSignIn(const std::shared_ptr<Session>& session) {
+    if (!session || !session->tokens || !session->tokens->refreshToken) return;
+    const auto& token = session->tokens->refreshToken;
+    if (token->jti.empty()) return;
+    db::query::auth::RefreshToken::touchActivity(token->jti);
+    token->lastActivity = std::chrono::system_clock::now();
+}
+}
+
 void Manager::promote(const std::shared_ptr<Session>& session) {
     if (!session || !session->user || !session->tokens) {
         log::Registry::ws()->debug("[session::Manager] Promotion failed due to missing session, user, or token state");
@@ -174,6 +188,7 @@ void Manager::promote(const std::shared_ptr<Session>& session) {
     if (const auto dbToken = db::query::auth::RefreshToken::get(session->tokens->refreshToken->jti)) {
         session->tokens->refreshToken = dbToken;
         cache(session);
+        markSignIn(session);
         log::Registry::ws()->debug("[session::Manager] Promoted session for user: {} (existing refresh token found)", session->user->name());
         return;
     }
@@ -190,6 +205,7 @@ void Manager::promote(const std::shared_ptr<Session>& session) {
     }
 
     cache(session);
+    markSignIn(session);
 
     log::Registry::ws()->debug(
         "[session::Manager] Promoted session for user: {}",
@@ -227,6 +243,9 @@ void Manager::renewAccessToken(const std::shared_ptr<Session>& session, const st
             throw std::invalid_argument("Invalid refresh token during access token renewal");
         }
     }
+
+    // #319: auth.refresh must not bring an idle session back (the console calls it on every page load).
+    if (expireIfIdle(session)) throw std::invalid_argument("Session ended after inactivity");
 
     Issuer::accessToken(session);
     cache(session);
@@ -417,10 +436,13 @@ bool Manager::validate(const std::shared_ptr<Session>& session, const std::strin
 
         if (!session->user) {
             Validator::validateRefreshToken(session);
+            if (expireIfIdle(session)) return false;
             Issuer::accessToken(session);
             cache(session);
             return true;
         }
+
+        if (expireIfIdle(session)) return false;  // #319: idle too long, whatever the access token says
 
         if (Validator::validateAccessToken(session, accessToken)) {
             if (session->tokens->accessToken->timeRemaining() < std::chrono::minutes(5)) Issuer::accessToken(session);
@@ -429,6 +451,7 @@ bool Manager::validate(const std::shared_ptr<Session>& session, const std::strin
         }
 
         Validator::validateRefreshToken(session); // May throw if invalid
+        if (expireIfIdle(session)) return false;
         Issuer::accessToken(session); // Assign new access token
         cache(session);
         return true;
@@ -476,6 +499,7 @@ std::shared_ptr<Session> Manager::validateRawRefreshToken(const std::string& ref
         throw std::invalid_argument("Refresh token did not resolve to a human session");
     if (session->user->systemOnly())
         throw std::invalid_argument("System-only users cannot use human refresh tokens");
+    if (expireIfIdle(session)) throw std::invalid_argument("Session ended after inactivity");  // #319: HTTP lanes
 
     return session;
 }
@@ -541,6 +565,33 @@ void Manager::invalidate(const std::shared_ptr<Session>& session) {
         "[session::Manager] Invalidated session with UUID: {}",
         uuid
     );
+}
+
+void Manager::noteUserActivity(const std::shared_ptr<Session>& session) {
+    if (!session || !idle::applies(*session)) return;
+    const auto& token = session->tokens->refreshToken;
+    if (token->jti.empty() || !token->isValid()) return;
+    const auto now = std::chrono::system_clock::now();
+    if (now - token->lastActivity < idle::kActivityWriteInterval) return;
+    db::query::auth::RefreshToken::touchActivity(token->jti);
+    token->lastActivity = now;
+}
+
+bool Manager::expireIfIdle(const std::shared_ptr<Session>& session) {
+    if (!session || !idle::sessionExpired(*session)) return false;
+    const auto token = session->tokens->refreshToken;
+    // Every tab holds its own copy of the token; the stored row is the one all of them update.
+    if (!token->jti.empty()) {
+        if (const auto stored = db::query::auth::RefreshToken::get(token->jti)) {
+            token->lastActivity = std::max(token->lastActivity, stored->lastActivity);
+            if (!idle::sessionExpired(*session)) return false;
+        }
+    }
+    log::Registry::auth()->info("[session::Manager] Signed out {} after {} min without activity",
+                                session->user ? session->user->name() : std::string{"?"}, idle::timeout().count());
+    token->hardInvalidate();  // revokes the stored row: no silent sign-in from the cookie afterwards
+    invalidate(session);
+    return true;
 }
 
 void Manager::invalidate(const std::string& token) {

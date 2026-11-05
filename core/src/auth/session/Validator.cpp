@@ -1,4 +1,5 @@
 #include "auth/session/Validator.hpp"
+#include "auth/session/Idle.hpp"
 #include "auth/session/Manager.hpp"
 #include "auth/model/RefreshToken.hpp"
 #include "auth/model/TokenPair.hpp"
@@ -125,6 +126,11 @@ void Validator::rehydrateFromStoredRefreshToken(const std::shared_ptr<Session>& 
     // A revoked token (logout elsewhere, account deleted/deactivated/re-roled) must not bring a session back.
     if (!storedToken->isValid())
         throw std::runtime_error("Stored refresh token is not valid");
+    // #319: a token idle past the timeout is revoked here, so the cookie can't silently sign the console back in.
+    if (idle::expired(storedToken->lastActivity, std::chrono::system_clock::now(), idle::timeout())) {
+        storedToken->hardInvalidate();
+        throw std::runtime_error("Session ended after inactivity");
+    }
 
     validateClaims(storedToken, claims);
 

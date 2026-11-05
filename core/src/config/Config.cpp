@@ -801,7 +801,9 @@ Config& Config::operator=(Config&&) noexcept = default;
     }
 
     void from_json(const nlohmann::json &j, ConnectionLifecycleManagerConfig &c) {
-        c.idle_timeout_minutes = std::max(5, j.value("idle_timeout_minutes", 30));
+        // 0 turns idle sign-out off (#319).
+        const int idle = j.value("idle_timeout_minutes", 30);
+        c.idle_timeout_minutes = idle <= 0 ? 0 : static_cast<uint32_t>(idle);
         c.unauthenticated_timeout_seconds = std::max(30, j.value("unauthenticated_timeout_seconds", 300));
         c.sweep_interval_seconds = std::max(15, j.value("sweep_interval_seconds", 60));
     }
