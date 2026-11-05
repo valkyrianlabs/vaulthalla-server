@@ -139,6 +139,18 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   `refresh_token_expiry_days` (`protocols/ws/RefreshCookie.hpp`); it was hard-coded to 604800. Tests:
   `ConfigSettingsTest.AccessTokenLifetimeHonoursTheShippedKey`, `ConfigSettingsSerialization.AuthWritesTheShippedKey`,
   `RefreshCookie.MaxAgeFollowsTheConfiguredLifetime`.
+- Auth (#319): idle sign-out for web-console sessions. Migration 116 adds `refresh_tokens.last_activity_at`
+  (server `NOW()` at sign-in and on the new ws command `auth.activity`, written at most every 30 s; background
+  traffic never touches it). `auth/session/Idle.hpp` holds the policy: human web sessions only (not device-listener
+  or share sessions), `idle_timeout_minutes` (default 30, `0` = off, the 5-minute minimum is gone). Enforced in
+  `session::Manager::validate`, `renewAccessToken` (`auth.refresh`), `validateRawRefreshToken` (HTTP lanes),
+  `Validator::rehydrateFromStoredRefreshToken` and the lifecycle sweep (`SweepVerdict::IdleTimeout`, frame
+  `session_idle_timeout`). Expiry revokes the refresh token (`hardInvalidate`), so the cookie can't sign back in.
+  The decision re-reads the stored row first, so a stale copy in one tab never signs out an active sign-in.
+  Console: `lib/activity.ts` reports pointer, keyboard, wheel, scroll and touch input at most once a minute; the
+  session gate re-checks the session on reconnect. Tests: `IdleLogoff.*`,
+  `UserParityTest.{IdleSessionsAreSignedOutAndCannotSignBackInSilently,APageLoadRefreshDoesNotRescueAnIdleSession,AnotherTabsActivityKeepsTheSharedSignInAlive,IdleSignOutCanBeTurnedOff}`,
+  `web/src/lib/activity.test.ts`, `web/tests/e2e/idle-logoff.spec.ts` (offline scripted, plus a live variant).
 - Auth (#321): `auth::Manager::loginUser` refuses every failed sign-in with the same message (`Manager::kLoginFailed`)
   and logs the reason (unknown account, wrong password, deactivated, system-only) at warn. Unknown names are
   verified against a once-built Argon2id hash of a random secret, and the password is verified before the account

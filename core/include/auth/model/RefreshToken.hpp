@@ -9,6 +9,8 @@ namespace vh::auth::model {
 struct RefreshToken final : Token {
     std::string hashedToken, userAgent, ipAddress;
     std::chrono::system_clock::time_point lastUsed = std::chrono::system_clock::now();
+    // When the server last saw a person use this session (sign-in, auth.activity); the idle clock (#319).
+    std::chrono::system_clock::time_point lastActivity = std::chrono::system_clock::now();
 
     ~RefreshToken() override = default;
     RefreshToken() = default;

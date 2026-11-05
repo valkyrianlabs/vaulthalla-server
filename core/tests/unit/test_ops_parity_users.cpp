@@ -9,6 +9,7 @@
 
 #include "../helpers/identities.hpp"
 #include "auth/Manager.hpp"
+#include "config/Registry.hpp"
 #include "auth/session/Issuer.hpp"
 #include "auth/session/Manager.hpp"
 #include "crypto/util/hash.hpp"
@@ -499,6 +500,95 @@ TEST_F(UserParityTest, RefusedSignInsLookTheSame) {
 
     // A correct password still signs in.
     EXPECT_NO_THROW(loggedIn(active));
+}
+
+// #319: idle sign-out. The server stamps last_activity_at at sign-in and on auth.activity; a session idle past
+// idle_timeout_minutes is refused, its refresh token revoked, and the cookie can't bring it back (page loads,
+// reconnects, the HTTP lanes). The decision consults the stored row, which every tab of the same sign-in updates.
+namespace {
+struct IdleTimeout {
+    config::Config previous = config::Registry::get();
+    explicit IdleTimeout(const unsigned minutes) {
+        auto cfg = previous;
+        cfg.services.connection_lifecycle_manager.idle_timeout_minutes = minutes;
+        config::Registry::set(cfg);
+    }
+    ~IdleTimeout() { config::Registry::set(previous); }
+};
+
+void ageActivity(const std::shared_ptr<protocols::ws::Session>& session, const std::chrono::minutes by,
+                 const bool stored = true) {
+    const auto& token = session->tokens->refreshToken;
+    token->lastActivity = std::chrono::system_clock::now() - by;
+    if (!stored) return;
+    db::Transactions::exec("test::ageActivity", [&](pqxx::work& txn) {
+        txn.exec("UPDATE refresh_tokens SET last_activity_at = NOW() - make_interval(mins => $2) WHERE jti = $1",
+                 pqxx::params{token->jti, static_cast<int>(by.count())});
+    });
+}
+
+std::chrono::system_clock::time_point storedActivity(const std::string& jti) {
+    return db::query::auth::RefreshToken::get(jti)->lastActivity;
+}
+}
+
+TEST_F(UserParityTest, IdleSessionsAreSignedOutAndCannotSignBackInSilently) {
+    const IdleTimeout thirty(30);
+    const auto& sessions = runtime::Deps::get().sessionManager;
+    const auto user = seedUser("up_idle", "unprivileged");
+    const auto session = loggedIn(user);
+    const auto jti = session->tokens->refreshToken->jti;
+    const auto rawRefresh = session->tokens->refreshToken->rawToken;
+    const auto access = session->tokens->accessToken->rawToken;
+
+    // Signing in starts the clock; auth.activity moves it (server time, not the client's).
+    EXPECT_LT(std::chrono::system_clock::now() - storedActivity(jti), std::chrono::minutes(2));
+    ageActivity(session, std::chrono::minutes(10));
+    (void)protocols::ws::handler::Auth::activity(session);
+    EXPECT_LT(std::chrono::system_clock::now() - storedActivity(jti), std::chrono::minutes(2));
+    EXPECT_TRUE(sessions->validate(session, access));
+
+    // 31 idle minutes: refused, revoked, and nothing brings it back.
+    ageActivity(session, std::chrono::minutes(31));
+    EXPECT_FALSE(sessions->validate(session, access)) << "an idle session must be refused even with a live access token";
+    EXPECT_TRUE(db::query::auth::RefreshToken::get(jti)->revoked) << "the refresh token is revoked, not just the socket";
+    EXPECT_THROW((void)sessions->validateRawRefreshToken(rawRefresh), std::exception) << "HTTP lanes (cookie)";
+    auto reconnect = connected();  // a new socket presenting the same cookie, as a page load would
+    reconnect->tokens->refreshToken = std::make_shared<auth::model::RefreshToken>(rawRefresh);
+    EXPECT_FALSE(sessions->validate(reconnect, "")) << "no silent sign-in from the cookie";
+}
+
+TEST_F(UserParityTest, APageLoadRefreshDoesNotRescueAnIdleSession) {
+    const IdleTimeout thirty(30);
+    const auto session = loggedIn(seedUser("up_idle_refresh", "unprivileged"));
+    ageActivity(session, std::chrono::minutes(45));
+    EXPECT_THROW(runtime::Deps::get().sessionManager->renewAccessToken(session, session->tokens->accessToken->rawToken),
+                 std::exception);
+    // The router refuses auth.activity on an idle session before the handler runs; called directly, the handler is a
+    // no-op on the revoked token and can't revive it.
+    const auto jti = session->tokens->refreshToken->jti;
+    EXPECT_TRUE(db::query::auth::RefreshToken::get(jti)->revoked);
+    (void)protocols::ws::handler::Auth::activity(session);
+    EXPECT_GT(std::chrono::system_clock::now() - storedActivity(jti), std::chrono::minutes(40));
+    EXPECT_FALSE(runtime::Deps::get().sessionManager->validate(session, session->tokens->accessToken->rawToken));
+}
+
+TEST_F(UserParityTest, AnotherTabsActivityKeepsTheSharedSignInAlive) {
+    const IdleTimeout thirty(30);
+    const auto& sessions = runtime::Deps::get().sessionManager;
+    const auto session = loggedIn(seedUser("up_idle_tabs", "unprivileged"));
+    // This tab's copy is stale; the stored row (written by an active tab) is fresh.
+    ageActivity(session, std::chrono::minutes(40), /*stored=*/false);
+    EXPECT_FALSE(sessions->expireIfIdle(session));
+    EXPECT_TRUE(sessions->validate(session, session->tokens->accessToken->rawToken));
+    EXPECT_FALSE(db::query::auth::RefreshToken::get(session->tokens->refreshToken->jti)->revoked);
+}
+
+TEST_F(UserParityTest, IdleSignOutCanBeTurnedOff) {
+    const IdleTimeout off(0);
+    const auto session = loggedIn(seedUser("up_idle_off", "unprivileged"));
+    ageActivity(session, std::chrono::hours(6));
+    EXPECT_TRUE(runtime::Deps::get().sessionManager->validate(session, session->tokens->accessToken->rawToken));
 }
 
 }

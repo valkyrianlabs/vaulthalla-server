@@ -35,6 +35,13 @@ public:
     void invalidate(const std::string& token);
     void invalidate(const std::shared_ptr<protocols::ws::Session>& session);
 
+    // Idle sign-out (#319, auth/session/Idle.hpp). noteUserActivity records real user input on a human session
+    // (server clock; database write at most every idle::kActivityWriteInterval). expireIfIdle revokes the refresh
+    // token and invalidates the session when it has been idle too long, and says so; the decision is confirmed against
+    // the stored token first, because other tabs share the token and may have been active.
+    void noteUserActivity(const std::shared_ptr<protocols::ws::Session>& session);
+    bool expireIfIdle(const std::shared_ptr<protocols::ws::Session>& session);
+
     std::shared_ptr<protocols::ws::Session> get(const std::string& token);
     std::shared_ptr<protocols::ws::Session> getShareByRefreshJti(const std::string& token);
     std::vector<std::shared_ptr<protocols::ws::Session>> getSessions(const std::shared_ptr<identities::User>& user);

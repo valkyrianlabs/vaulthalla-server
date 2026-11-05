@@ -75,7 +75,7 @@
   enum value, or a declared field no instance produces. `UsageContract.UnionsObjectsAndArraysAreSpelledOut` fails on
   an unspelled union or a shapeless object outside `opaqueObjects()` (free-form user/operator JSON only, each with
   its reason). The generated TS has `WsModels` and `WsPartial`.
-- The book covers every command the daemon registers (224; `UsageContract.EveryRegisteredWsCommandHasABookEntry` and
+- The book covers every command the daemon registers (229; `UsageContract.EveryRegisteredWsCommandHasABookEntry` and
   `test_ws_contract.py` fail on a registered command without an entry; an explicit, reasoned allowlist exists and is
   empty), so `COMMAND_TIMEOUTS` is just the server-declared `WS_CONTRACT_TIMEOUTS`.
 - Drift fails the meson test `ws_contract_drift` and `tools/contracts/test_ws_contract.py` (which also checks every

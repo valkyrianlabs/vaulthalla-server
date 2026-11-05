@@ -31,6 +31,11 @@ for users and operators; keep it representative of what actually ships.
 - Contributor docs: a security-first compatibility policy (`docs/contributors/compatibility-policy.md`). Security
   and recoverability of customer data take precedence over backward compatibility. Breaking changes are allowed
   where they remove a real risk, but never at the cost of data, keys or recovery material.
+- The web console now signs you out after 30 minutes without use. Only keyboard, pointer and scroll input counts,
+  so a tab left open in the background doesn't keep the session alive. After an idle sign-out, reloading the
+  page shows the sign-in screen instead of signing you back in from the saved session. Change or turn off
+  (`0`) the timeout with `services.connection_lifecycle_manager.idle_timeout_minutes` or under Settings →
+  Services → Connections. Vaulthalla Desktop and share links aren't affected.
 - A failed sign-in now always shows "Invalid username or password". The console used to say whether the account
   existed, was deactivated, or had a different password, which let anyone check which usernames exist. The exact
   reason is still in the server log.
