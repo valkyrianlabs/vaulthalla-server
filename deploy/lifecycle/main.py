@@ -5,11 +5,13 @@ import argparse
 from dataclasses import dataclass
 import filecmp
 import hashlib
+import ipaddress
 import os
 import pwd
 import re
 import secrets
 import shutil
+import socket
 import string
 import subprocess
 import sys
@@ -47,6 +49,15 @@ NGINX_DEFAULT_DISABLED_MARKER = Path("/var/lib/vaulthalla/nginx_default_site_dis
 NGINX_RENEWAL_DEPLOY_HOOK = Path("/etc/letsencrypt/renewal-hooks/deploy/vaulthalla-nginx-reload.sh")
 LETSENCRYPT_LIVE_DIR = Path("/etc/letsencrypt/live")
 CERTBOT_RENEWAL_WINDOW_SECONDS = 30 * 24 * 60 * 60
+
+# HTTPS by default (#324): without a public certificate, nginx serves the console with a locally generated
+# certificate (self-signed, ECDSA P-256, 825 days: the longest lifetime Apple platforms accept for a trusted
+# server certificate). Regenerated when it nears expiry or the host's names/addresses change.
+LOCAL_TLS_DIR = Path("/etc/vaulthalla/tls")
+LOCAL_TLS_CERT = LOCAL_TLS_DIR / "local.crt"
+LOCAL_TLS_KEY = LOCAL_TLS_DIR / "local.key"
+LOCAL_TLS_DAYS = 825
+LOCAL_TLS_RENEW_DAYS = 30
 
 WEB_UPSTREAM_HOST = "127.0.0.1"
 WEB_UPSTREAM_PORT = 36968
@@ -149,9 +160,9 @@ def parse_scalar(raw: str) -> Any:
 
 def parse_config_projection_from_text(text: str) -> dict[str, dict[str, Any]]:
     projection: dict[str, dict[str, Any]] = {
-        "websocket_server": {"enabled": True, "host": "0.0.0.0", "port": 33369},
-        "http_preview_server": {"enabled": True, "host": "0.0.0.0", "port": 33370},
-        "s3_gateway": {"enabled": False, "host": "0.0.0.0", "port": 39000},
+        "websocket_server": {"enabled": True, "host": "127.0.0.1", "port": 33369},
+        "http_preview_server": {"enabled": True, "host": "127.0.0.1", "port": 33370},
+        "s3_gateway": {"enabled": False, "host": "127.0.0.1", "port": 39000},
         "database": {"host": "localhost", "port": 5432, "name": DB_NAME, "user": DB_USER, "pool_size": 10},
     }
     section: str | None = None
@@ -683,11 +694,133 @@ def extract_managed_nginx_s3_domain(path: Path = NGINX_SITE_AVAILABLE) -> str | 
     return value if value and value != "_" else None
 
 
+def is_likely_hostname(raw: str) -> bool:
+    if not raw or len(raw) > 253 or raw[0] in ".-" or raw[-1] in ".-":
+        return False
+    return all(re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", label) for label in raw.split("."))
+
+
+def local_tls_names() -> tuple[list[str], list[str]]:
+    """The names and addresses the local certificate covers: this host's names, localhost, loopback, and the
+    host's own (non link-local) addresses, so https://<name or LAN address>/ matches."""
+    dns: list[str] = []
+    host = socket.gethostname().strip().lower()
+    for name in (host, socket.getfqdn().strip().lower(), f"{host.split('.')[0]}.local" if host else "", "localhost"):
+        if name and is_likely_hostname(name) and name not in dns:
+            dns.append(name)
+    ips: list[str] = ["127.0.0.1", "::1"]
+    if command_exists("hostname"):
+        listed = run_capture(["hostname", "-I"], timeout=10)
+        for token in listed.stdout.split() if listed.returncode == 0 else []:
+            try:
+                address = ipaddress.ip_address(token.split("%", 1)[0])
+            except ValueError:
+                continue
+            if address.is_link_local or address.is_multicast or str(address) in ips:
+                continue
+            ips.append(str(address))
+    return dns, ips
+
+
+def _certificate_names(cert: Path) -> tuple[set[str], set[str]] | None:
+    san = run_capture(["openssl", "x509", "-in", str(cert), "-noout", "-ext", "subjectAltName"], timeout=10)
+    if san.returncode != 0:
+        return None
+    dns = {m.lower() for m in re.findall(r"DNS:([^,\s]+)", san.stdout)}
+    ips: set[str] = set()
+    for raw in re.findall(r"IP(?: Address)?:([0-9A-Fa-f:.]+)", san.stdout):
+        try:
+            ips.add(str(ipaddress.ip_address(raw)))
+        except ValueError:
+            continue
+    return dns, ips
+
+
+def local_certificate_is_current(dns: list[str], ips: list[str]) -> bool:
+    if not LOCAL_TLS_CERT.is_file() or not LOCAL_TLS_KEY.is_file():
+        return False
+    fresh = run_capture(
+        ["openssl", "x509", "-in", str(LOCAL_TLS_CERT), "-noout", "-checkend", str(LOCAL_TLS_RENEW_DAYS * 86400)],
+        timeout=10,
+    )
+    if fresh.returncode != 0:
+        return False
+    covered = _certificate_names(LOCAL_TLS_CERT)
+    if covered is None:
+        return False
+    return set(dns) <= covered[0] and set(ips) <= covered[1]
+
+
+def local_certificate_fingerprint() -> str | None:
+    result = run_capture(["openssl", "x509", "-in", str(LOCAL_TLS_CERT), "-noout", "-fingerprint", "-sha256"], timeout=10)
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip().split("=", 1)[-1]
+
+
+def ensure_local_certificate(force: bool = False) -> str:
+    """Creates (or renews) the local HTTPS certificate nginx uses when no public certificate is configured.
+    The key is 0600 root in a 0700 directory; files are replaced atomically."""
+    if not command_exists("openssl"):
+        raise LifecycleError("openssl is required to create the local HTTPS certificate")
+    dns, ips = local_tls_names()
+    if not force and local_certificate_is_current(dns, ips):
+        return "current"
+    LOCAL_TLS_DIR.mkdir(parents=True, exist_ok=True)
+    os.chmod(LOCAL_TLS_DIR, 0o700)
+    tmp_key = LOCAL_TLS_DIR / ".local.key.tmp"
+    tmp_cert = LOCAL_TLS_DIR / ".local.crt.tmp"
+    for leftover in (tmp_key, tmp_cert):
+        leftover.unlink(missing_ok=True)
+    old_umask = os.umask(0o077)
+    try:
+        key = run_capture(["openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", str(tmp_key)], timeout=30)
+        if key.returncode != 0:
+            raise LifecycleError(format_failure("openssl ecparam (local HTTPS key)", key))
+        subject_host = (dns[0] if dns else "localhost")[:48]
+        san = ",".join([f"DNS:{name}" for name in dns] + [f"IP:{address}" for address in ips])
+        cert = run_capture(
+            [
+                "openssl", "req", "-new", "-x509", "-sha256", "-key", str(tmp_key), "-out", str(tmp_cert),
+                "-days", str(LOCAL_TLS_DAYS), "-subj", f"/O=Vaulthalla local certificate/CN={subject_host}",
+                "-addext", f"subjectAltName={san}",
+                "-addext", "basicConstraints=critical,CA:FALSE",
+                "-addext", "keyUsage=critical,digitalSignature",
+                "-addext", "extendedKeyUsage=serverAuth",
+            ],
+            timeout=30,
+        )
+        if cert.returncode != 0:
+            raise LifecycleError(format_failure("openssl req (local HTTPS certificate)", cert))
+    finally:
+        os.umask(old_umask)
+    os.chmod(tmp_key, 0o600)
+    os.chmod(tmp_cert, 0o644)
+    os.replace(tmp_key, LOCAL_TLS_KEY)
+    os.replace(tmp_cert, LOCAL_TLS_CERT)
+    return "created"
+
+
+def security_header_lines(hsts: bool) -> list[str]:
+    """Response headers for the console and its file lanes (#324). HSTS only with a publicly trusted certificate:
+    with the local self-signed one, browsers would refuse the click-through and lock people out."""
+    lines = [
+        "    add_header X-Content-Type-Options \"nosniff\" always;",
+        "    add_header Referrer-Policy \"no-referrer\" always;",
+        "    add_header X-Frame-Options \"DENY\" always;",
+        "    add_header Content-Security-Policy \"frame-ancestors 'none'\" always;",
+    ]
+    if hsts:
+        lines.append("    add_header Strict-Transport-Security \"max-age=31536000\" always;")
+    return lines + [""]
+
+
 def render_managed_nginx_config(
     projection: dict[str, dict[str, Any]],
     domain: str | None,
     s3_domain: str | None = None,
     cert_name: str | None = None,
+    local_tls: bool = False,
 ) -> str:
     server_name = domain if domain else "_"
     websocket = projection["websocket_server"]
@@ -708,17 +841,23 @@ def render_managed_nginx_config(
         out.append(f"# S3 domain: {s3_domain}")
 
     def add_ssl_lines() -> None:
-        if not cert_name:
+        if cert_name:
+            certificate = f"/etc/letsencrypt/live/{cert_name}/fullchain.pem"
+            key = f"/etc/letsencrypt/live/{cert_name}/privkey.pem"
+        elif local_tls:
+            certificate, key = str(LOCAL_TLS_CERT), str(LOCAL_TLS_KEY)
+        else:
             return
         out.extend([
-            f"    ssl_certificate /etc/letsencrypt/live/{cert_name}/fullchain.pem;",
-            f"    ssl_certificate_key /etc/letsencrypt/live/{cert_name}/privkey.pem;",
+            f"    ssl_certificate {certificate};",
+            f"    ssl_certificate_key {key};",
             "    ssl_protocols TLSv1.2 TLSv1.3;",
             "    ssl_prefer_server_ciphers off;",
             "",
         ])
 
     def add_web_locations() -> None:
+        out.extend(security_header_lines(hsts=bool(cert_name)))
         if bool(websocket.get("enabled", True)):
             ws_port = int(websocket.get("port", 33369))
             out.extend([
@@ -841,6 +980,26 @@ def render_managed_nginx_config(
             add_ssl_lines()
             add_s3_location()
             out.extend(["}", ""])
+        return "\n".join(out)
+
+    if local_tls:
+        out.extend([
+            "server {",
+            "    listen 80;",
+            "    listen [::]:80;",
+            f"    server_name {server_name};",
+            "    return 308 https://$host$request_uri;",
+            "}",
+            "",
+            "server {",
+            "    listen 443 ssl;",
+            "    listen [::]:443 ssl;",
+            f"    server_name {server_name};",
+            "",
+        ])
+        add_ssl_lines()
+        add_web_locations()
+        out.extend(["}", ""])
         return "\n".join(out)
 
     out.append("server {")
@@ -1403,8 +1562,11 @@ def setup_nginx(args: argparse.Namespace) -> int:
     cloudflare_credentials = dns_cloudflare_credentials_arg(args)
     dns_cloudflare = cloudflare_credentials is not None
 
+    plain_http = bool(getattr(args, "plain_http", False))
     if args.certbot and dns_cloudflare:
         raise LifecycleError("choose only one certificate mode: --certbot or --certbot-dns-cloudflare")
+    if plain_http and (args.certbot or dns_cloudflare):
+        raise LifecycleError("--plain-http can't be combined with a certificate mode")
 
     if domain and not is_likely_domain(domain):
         source = "--domain" if requested_domain else str(NGINX_SITE_AVAILABLE)
@@ -1456,7 +1618,12 @@ def setup_nginx(args: argparse.Namespace) -> int:
         install_nginx_renewal_deploy_hook()
         cert_name = domain
 
-    rendered = render_managed_nginx_config(projection, domain, s3_domain, cert_name)
+    # HTTPS by default (#324): without a certificate mode, serve the console with the local certificate. --certbot
+    # renders plain HTTP first (certbot --nginx adds the HTTPS server to it); --plain-http is the explicit opt-out for
+    # hosts behind another TLS terminator.
+    local_tls = not (args.certbot or dns_cloudflare or plain_http)
+    local_tls_status = ensure_local_certificate() if local_tls else None
+    rendered = render_managed_nginx_config(projection, domain, s3_domain, cert_name, local_tls=local_tls)
 
     NGINX_SITE_AVAILABLE.parent.mkdir(parents=True, exist_ok=True)
     NGINX_SITE_ENABLED.parent.mkdir(parents=True, exist_ok=True)
@@ -1524,6 +1691,7 @@ def setup_nginx(args: argparse.Namespace) -> int:
                 "--agree-tos",
                 "--register-unsafely-without-email",
                 "--keep-until-expiring",
+                "--hsts",
                 "--domain",
                 domain or "",
             ])
@@ -1544,6 +1712,14 @@ def setup_nginx(args: argparse.Namespace) -> int:
         if opted_back_in:
             print(f"  package nginx opt-out removed: {NGINX_OPTOUT_MARKER}")
         print(f"  config source: {config_path()}")
+        if local_tls:
+            print(f"  HTTPS: local certificate {LOCAL_TLS_CERT} ({local_tls_status}); http:// redirects to https://")
+            fingerprint = local_certificate_fingerprint()
+            if fingerprint:
+                print(f"  certificate SHA-256: {fingerprint} (compare it when your browser asks you to trust it)")
+            print("  for a publicly trusted certificate: sudo vh setup nginx --domain <fqdn> --certbot")
+        else:
+            print("  HTTPS: off (--plain-http); put TLS in front of this host before exposing it")
         print(f"  domain: {domain if domain else 'default catch-all (_)' }")
         if s3_domain:
             print(f"  s3 domain: {s3_domain} (HTTPS route not rendered without --certbot-dns-cloudflare <credentials>)")
@@ -1567,6 +1743,18 @@ def setup_nginx(args: argparse.Namespace) -> int:
     if dns_cloudflare:
         print(f"  renewal deploy hook: {NGINX_RENEWAL_DEPLOY_HOOK}")
     print(f"  reload: {reload_status}")
+    return 0
+
+
+def setup_local_tls(args: argparse.Namespace) -> int:
+    """Create or renew the local HTTPS certificate (also run by the package on install and upgrade)."""
+    status = ensure_local_certificate(force=bool(getattr(args, "force", False)))
+    if status == "created" and command_exists("nginx") and NGINX_SITE_ENABLED.exists():
+        content = NGINX_SITE_AVAILABLE.read_text(encoding="utf-8") if NGINX_SITE_AVAILABLE.exists() else ""
+        if str(LOCAL_TLS_CERT) in content:
+            validate_and_reload_nginx()
+    if not getattr(args, "quiet", False) or status == "created":
+        print(f"local HTTPS certificate: {status} ({LOCAL_TLS_CERT})")
     return 0
 
 
@@ -1696,8 +1884,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     setup_ng.add_argument(
         "--domain",
-        help="Set the nginx server_name. May be used without --certbot to configure HTTP-only nginx.",
+        help="Set the nginx server_name. Without a certificate mode the site uses the local HTTPS certificate.",
     )
+    setup_ng.add_argument(
+        "--plain-http",
+        action="store_true",
+        help="Serve plain HTTP only (no local certificate). Only behind another TLS terminator.",
+    )
+    setup_tls = setup_sub.add_parser("local-tls", help="Create or renew the local HTTPS certificate nginx uses")
+    setup_tls.add_argument("--force", action="store_true", help="Regenerate even if the current one is valid")
+    setup_tls.add_argument("--quiet", action="store_true", help="Print only when a certificate was created")
     setup_ng.add_argument(
         "--s3-domain",
         help="Set the dedicated HTTPS S3 server_name. Requires --certbot-dns-cloudflare for route rendering.",
@@ -1718,6 +1914,8 @@ def dispatch(args: argparse.Namespace) -> int:
         return setup_remote_db(args)
     if args.root == "setup" and args.setup_cmd == "nginx":
         return setup_nginx(args)
+    if args.root == "setup" and args.setup_cmd == "local-tls":
+        return setup_local_tls(args)
     if args.root == "teardown" and args.teardown_cmd == "nginx":
         return teardown_nginx(args)
     if args.root == "teardown" and args.teardown_cmd == "db":

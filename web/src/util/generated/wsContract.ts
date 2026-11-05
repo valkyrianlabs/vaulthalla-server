@@ -9,7 +9,7 @@ export const WS_CONTRACT_VERSION = 3
 export const WS_CONTRACT_HASH = '3f461dbda227f2189f4691e7a2269b113c7663fa782ef6ec88f7f8be35157f76'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = 'd027924cc65070807b32b2f2daba00e0707ae3f871cad44d826254dc6e12e67c'
+export const WS_MODELS_HASH = 'cae78e2e50581fd80a7c9f49bbf878535fe0521cade68dd31521e8dcf74e1828'
 
 // The ws protocol range this book is (core/usage WsProtocol.hpp): send it in meta.hello.
 export const WS_PROTOCOL_VERSION = 1
@@ -2725,7 +2725,14 @@ export interface WsModels {
   /**
    * websocket_server.* (Config.cpp to_json(WebsocketConfig)).
    */
-  'WebsocketServerConfig': { enabled: boolean; host: string; port: number; max_connections: number; max_upload_size_bytes: number }
+  'WebsocketServerConfig': {
+    enabled: boolean
+    host: string
+    port: number
+    max_connections: number
+    max_upload_size_bytes: number
+    allowed_origins?: (string)[]
+  }
 }
 
 export interface WsContract {

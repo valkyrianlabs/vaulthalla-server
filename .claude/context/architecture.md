@@ -75,9 +75,9 @@ ShellServer is not created in test mode (`paths::testMode`).
 
 | Surface | Code | Default bind (shipped `deploy/config/config.yaml`) |
 |---|---|---|
-| WebSocket `/ws` | `ws/Server.cpp`, `ws/Router.cpp`, `ws/Handler.cpp`, `ws/handler/*`, `ws/Session.cpp` | `0.0.0.0:36969` |
-| HTTP preview/download/upload/auth | `http/Server.cpp`, `http/Session.cpp`, `http/Router.cpp`, `http/Access.cpp`, `http/handler/*`, `http/upload/Coordinator.cpp`, `http/upload/Resumable.cpp` | `0.0.0.0:36970` (fresh installs: `127.0.0.1`) |
-| S3 gateway (SigV4, multipart) | `s3/*` (`GatewayService`, `Auth` (SigV4 via vl-sigv4), `ObjectStore`, `MultipartStore`, `CredentialManager`) | `0.0.0.0:39000`, disabled by default |
+| WebSocket `/ws` | `ws/Server.cpp`, `ws/Router.cpp`, `ws/Handler.cpp`, `ws/handler/*`, `ws/Session.cpp` (refuses a browser `Origin` that isn't the requested host or in `websocket_server.allowed_origins`, `ws/OriginPolicy.hpp`, #324) | `127.0.0.1:36969` |
+| HTTP preview/download/upload/auth | `http/Server.cpp`, `http/Session.cpp`, `http/Router.cpp`, `http/Access.cpp`, `http/handler/*`, `http/upload/Coordinator.cpp`, `http/upload/Resumable.cpp` | `127.0.0.1:36970` |
+| S3 gateway (SigV4, multipart) | `s3/*` (`GatewayService`, `Auth` (SigV4 via vl-sigv4), `ObjectStore`, `MultipartStore`, `CredentialManager`) | `127.0.0.1:39000`, disabled by default (remote clients go through the HTTPS proxy) |
 | Shell/CLI control | `shell/Server.cpp`, `shell/Router.cpp`, `shell/commands/*` | unix socket `/run/vaulthalla/cli.sock` |
 | Device listener (Vaulthalla Desktop, mutual TLS) | `device/Service.cpp`, `device/Listener.cpp` (`/ws` → the ws Router) | `127.0.0.1:36972` (+ `[::1]` when available); `[::]` dual-stack once `device_server.remote`, `0.0.0.0` where IPv6 is off (absent section = these defaults) |
 
@@ -107,7 +107,8 @@ unfinished bodies store nothing), `S3GatewayDbTest.RealMcUploadsOverPlainHttpWhe
 
 > `core/include/config/Config.hpp` compiled-in defaults are **33369/33370**, but the shipped config,
 > web fallbacks, and Caddyfile all use **36969/36970**. Trust the config file, and treat that
-> header/config mismatch as a known wart.
+> header/config mismatch as a known wart. Every listener's compiled-in host is `127.0.0.1` (#324): a config without
+> a `host` key never binds all interfaces.
 
 ### Shell CLI flow
 

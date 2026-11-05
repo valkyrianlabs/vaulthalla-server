@@ -31,12 +31,12 @@ vh s3-gateway disable
 
 ## Config
 
-The gateway is disabled by default:
+The gateway is disabled by default. It speaks plain HTTP and listens on loopback, so remote clients reach it over HTTPS through the nginx S3 hostname (`vh setup nginx --s3-domain`) or Caddy; set `host` to another address only on a trusted network:
 
 ```yaml
 s3_gateway:
   enabled: false
-  host: 0.0.0.0
+  host: 127.0.0.1
   port: 39000
   max_connections: 1024
   max_body_size_mb: 5120

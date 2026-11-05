@@ -55,7 +55,7 @@ Run `vh` from your own account, not with `sudo`.
 sudo cat /var/lib/vaulthalla/super_admin_initial_password
 ```
 
-Open `http://<host>/` (through the nginx site the package set up) and sign in as `admin`.
+Open `https://<host>/` (through the nginx site the package set up; your browser asks you to accept the host's local certificate the first time, see [nginx](/https/nginx#the-local-certificate)) and sign in as `admin`.
 :::
 
 :::tab[macOS]{value="macos"}

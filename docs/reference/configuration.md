@@ -113,7 +113,7 @@ The S3-compatible gateway is a separate runtime service and is disabled by defau
 ```yaml
 s3_gateway:
   enabled: false
-  host: 0.0.0.0
+  host: 127.0.0.1
   port: 39000
   require_sigv4: true
   allow_path_style: true

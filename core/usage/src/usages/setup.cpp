@@ -20,6 +20,9 @@ static const auto interactiveFlag = Flag::WithAliases("interactive_mode", "Promp
 static const auto nginxDomainOpt = Optional::ManyToOne("domain", "Domain to configure for Vaulthalla nginx integration", {"domain", "d"}, "domain");
 static const auto nginxS3DomainOpt = Optional::ManyToOne("s3_domain", "Dedicated HTTPS hostname for the S3 gateway (must differ from --domain). Requires --certbot-dns-cloudflare <credentials>; --certbot cannot be combined with it", {"s3-domain"}, "domain");
 static const auto nginxCertbotDnsCloudflareOpt = Optional::ManyToOne("certbot_dns_cloudflare", "Issue/renew one certificate covering --domain and --s3-domain through Cloudflare DNS-01 (python3-certbot-dns-cloudflare); no inbound port 80 is needed. <credentials> is a root-owned, mode 0600 file containing the line 'dns_cloudflare_api_token = <token>', where the token has Zone > DNS > Edit on the zones of both hostnames. Certbot renewals keep reading the file, so leave it in place. Conventional path: /etc/vaulthalla/certbot/cloudflare.ini", {"certbot-dns-cloudflare"}, "credentials");
+static const auto nginxPlainHttpFlag = Flag::WithAliases("plain_http", "Serve plain HTTP only, without the local HTTPS certificate. Only behind another TLS terminator (a tunnel or load balancer that already provides HTTPS)", {"plain-http"});
+static const auto localTlsForceFlag = Flag::WithAliases("force", "Regenerate the certificate even if the current one is still valid", {"force"});
+static const auto localTlsQuietFlag = Flag::WithAliases("quiet", "Print only when a new certificate was created", {"quiet"});
 static const auto nginxCertbotFlag = Flag::WithAliases("certbot_mode", "Issue/renew a Let's Encrypt certificate for --domain with the certbot nginx plugin (HTTP-01: the domain must reach this host on port 80). Not supported with --s3-domain", {"certbot"});
 
 // `vh setup caddy` (macOS): deploy/launchd/vaulthalla-caddy does the work; these are its options, for help and the manpage.
@@ -92,18 +95,38 @@ static std::shared_ptr<CommandUsage> nginx(const std::weak_ptr<CommandUsage>& pa
     cmd->aliases = {"nginx", "proxy"};
     cmd->effect = CommandEffect::Write;
     cmd->description = "Generate/deploy Vaulthalla-managed nginx config from canonical runtime config, then validate and reload conservatively. Requires sudo. "
-                       "TLS: --certbot issues a certificate for --domain over HTTP-01. --s3-domain needs --certbot-dns-cloudflare <credentials> instead, "
+                       "HTTPS by default: without a certificate option the console is served over HTTPS with a local certificate "
+                       "(/etc/vaulthalla/tls, see 'vh setup local-tls') and http:// redirects to https://; --plain-http turns that off. "
+                       "TLS: --certbot issues a certificate for --domain over HTTP-01 (with HSTS). --s3-domain needs --certbot-dns-cloudflare <credentials> instead, "
                        "which issues one certificate for both hostnames over Cloudflare DNS-01. Create the credentials file once with "
                        "'sudo install -d -m 0700 /etc/vaulthalla/certbot && sudo install -m 0600 /dev/null /etc/vaulthalla/certbot/cloudflare.ini "
                        "&& sudoedit /etc/vaulthalla/certbot/cloudflare.ini' and add the line 'dns_cloudflare_api_token = <token>' "
                        "(Cloudflare dashboard: My Profile > API Tokens > 'Edit zone DNS' template). Guide: https://vaulthalla.io/docs/s3-gateway/setup";
     cmd->optional = {nginxDomainOpt, nginxS3DomainOpt, nginxCertbotDnsCloudflareOpt};
-    cmd->optional_flags = {nginxCertbotFlag};
+    cmd->optional_flags = {nginxCertbotFlag, nginxPlainHttpFlag};
     cmd->examples = {
-        {"sudo vh setup nginx", "Regenerate and apply canonical Vaulthalla-managed nginx config, then validate/reload when safe."},
+        {"sudo vh setup nginx", "Regenerate and apply canonical Vaulthalla-managed nginx config (HTTPS with the local certificate), then validate/reload when safe."},
+        {"sudo vh setup nginx --plain-http", "Serve plain HTTP only, for a host behind another TLS terminator."},
         {"sudo vh setup nginx --certbot --domain vault.example.com", "Configure Vaulthalla nginx integration and run deterministic certbot issue/renew flow for the domain."},
         {"sudo vh setup nginx --domain vaulthalla.dev --s3-domain s3.vaulthalla.dev --certbot-dns-cloudflare /etc/vaulthalla/certbot/cloudflare.ini",
          "Configure HTTPS web and dedicated S3 hosts using Cloudflare DNS-01 certificates."}
+    };
+    return cmd;
+}
+
+static std::shared_ptr<CommandUsage> local_tls(const std::weak_ptr<CommandUsage>& parent) {
+    const auto cmd = buildBaseUsage(parent);
+    cmd->aliases = {"local-tls", "tls"};
+    cmd->effect = CommandEffect::Write;
+    cmd->description = "Create or renew the local HTTPS certificate (/etc/vaulthalla/tls/local.crt) that nginx serves when no public "
+                       "certificate is configured: self-signed, ECDSA P-256, valid 825 days, covering this host's names and addresses. "
+                       "The package runs it on install and upgrade; it renews within 30 days of expiry or when the host's names or "
+                       "addresses change, and reloads nginx. Requires sudo. Browsers ask you to trust it once; compare the SHA-256 "
+                       "fingerprint 'vh setup nginx' prints. For a publicly trusted certificate use 'vh setup nginx --certbot'.";
+    cmd->optional_flags = {localTlsForceFlag, localTlsQuietFlag};
+    cmd->examples = {
+        {"sudo vh setup local-tls", "Create the local HTTPS certificate if it is missing, expiring or no longer covers this host."},
+        {"sudo vh setup local-tls --force", "Regenerate it now (e.g. after renaming the host)."}
     };
     return cmd;
 }
@@ -153,6 +176,7 @@ static std::shared_ptr<CommandUsage> base(const std::weak_ptr<CommandUsage>& par
         db(cmd->weak_from_this()),
         remote_db(cmd->weak_from_this()),
         nginx(cmd->weak_from_this()),
+        local_tls(cmd->weak_from_this()),
         caddy(cmd->weak_from_this()),
         set_super_admin_password(cmd->weak_from_this())
     };

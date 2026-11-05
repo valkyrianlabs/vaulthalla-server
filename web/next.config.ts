@@ -17,6 +17,24 @@ const nextConfig: NextConfig = {
   allowedDevOrigins: ['vh.home.arpa'],
   images: { localPatterns: [{ pathname: '/preview**' }] },
 
+  // Security headers on every console response, whatever proxy is in front (nginx, Caddy, none in development).
+  // No HSTS here: the proxy adds it only with a publicly trusted certificate (#324).
+  async headers() {
+    return [
+      {
+        source: '/:path*',
+        headers: [
+          { key: 'X-Content-Type-Options', value: 'nosniff' },
+          // Share pages carry their token in the path: never leak it through Referer.
+          { key: 'Referrer-Policy', value: 'no-referrer' },
+          { key: 'X-Frame-Options', value: 'DENY' },
+          { key: 'Content-Security-Policy', value: "frame-ancestors 'none'" },
+          { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=(), payment=()' },
+        ],
+      },
+    ]
+  },
+
   // Old console URLs keep working (bookmarks, links in emails and docs).
   async redirects() {
     return [

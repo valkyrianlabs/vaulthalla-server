@@ -12,4 +12,10 @@ CommandResult handleNginx(const CommandCall& call) {
     return invalid("setup nginx: handled by the local lifecycle utility. Re-run this command via the local 'vh' CLI binary.");
 }
 
+CommandResult handleLocalTls(const CommandCall& call) {
+    const auto usage = resolveUsage({"setup", "local-tls"});
+    validatePositionals(call, usage);
+    return invalid("setup local-tls: handled by the local lifecycle utility. Re-run this command via the local 'vh' CLI binary.");
+}
+
 }
