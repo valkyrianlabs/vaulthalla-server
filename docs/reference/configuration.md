@@ -262,6 +262,21 @@ Config files written before this setting existed get `ids`. To look up an id, us
 
 The console keeps names out of web server logs too. It addresses files by entry id in download and preview URLs, and share links carry their token after `#` (`/share#vhs_…`), which browsers never send to the server.
 
+## Audit Trail
+
+The tamper-evident audit trail in the database ([Audit Trail](/admin/audit-trail)):
+
+```yaml
+auditing:
+  trail:
+    retention_days: 2190
+    head_interval_minutes: 15
+    syslog: false
+    syslog_facility: authpriv
+```
+
+`retention_days` is at least 30 (the default is six years). `head_interval_minutes` sets how often the chain head is signed (1 to 1440). `syslog` also sends audit events to the local syslog under `syslog_facility`.
+
 ## Sync Audit Retention
 
 Sync event audit settings control how long sync event details are retained:

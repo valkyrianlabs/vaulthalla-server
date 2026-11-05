@@ -57,7 +57,7 @@ void applyRetentionStatsConfig(RetentionModel& stats) {
     stats.trashRetentionDays = static_cast<std::uint64_t>(config.auditing.files_trashed.retention_days.count());
     stats.syncEventRetentionDays = config.sync.event_audit_retention_days;
     stats.syncEventMaxEntries = config.sync.event_audit_max_entries;
-    stats.auditLogRetentionDays = static_cast<std::uint64_t>(config.auditing.audit_log.retention_days.count());
+    stats.auditLogRetentionDays = static_cast<std::uint64_t>(config.auditing.trail.retention_days.count());
     stats.cacheExpiryDays = config.caching.thumbnails.expiry_days;
     stats.cacheMaxSizeBytes = static_cast<std::uint64_t>(config.caching.max_size_mb) * 1024ull * 1024ull;
 }

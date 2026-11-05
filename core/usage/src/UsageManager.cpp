@@ -36,6 +36,7 @@ UsageManager::UsageManager() {
     registerBook(aku::get(root_->weak_from_this()));
     registerBook(upstream_book::get(root_->weak_from_this()));
     registerBook(device_book::get(root_->weak_from_this()));
+    registerBook(audit_book::get(root_->weak_from_this()));
     registerBook(recovery_book::get(root_->weak_from_this()));
     registerBook(recovery_book::getSnapshot(root_->weak_from_this()));
     registerBook(role::get(root_->weak_from_this()));

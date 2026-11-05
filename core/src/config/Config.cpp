@@ -142,7 +142,14 @@ Config& Config::operator=(Config&&) noexcept = default;
         if (auto node = root["vaults"]) YAML::convert<VaultsConfig>::decode(node, cfg.vaults);
         if (auto node = root["email"]) YAML::convert<EmailConfig>::decode(node, cfg.email);
         if (auto node = root["operator_emails"]) YAML::convert<OperatorEmailsConfig>::decode(node, cfg.operator_emails);
-        if (auto node = root["auditing"]) YAML::convert<AuditConfig>::decode(node, cfg.auditing);
+        if (auto node = root["auditing"]) {
+            YAML::convert<AuditConfig>::decode(node, cfg.auditing);
+            try {
+                validateAuditTrail(cfg.auditing.trail);
+            } catch (const std::invalid_argument& e) {
+                throw std::invalid_argument(std::string("config.yaml: ") + e.what());
+            }
+        }
         if (auto node = root["dev"]) YAML::convert<DevConfig>::decode(node, cfg.dev);
         if (auto node = root["transfer"]) YAML::convert<TransferConfig>::decode(node, cfg.transfer);
         try {
@@ -1081,9 +1088,39 @@ Config& Config::operator=(Config&&) noexcept = default;
         c.retention_days = std::chrono::days(j.value("retention_days", 60));
     }
 
+    void to_json(nlohmann::json &j, const AuditTrailConfig &c) {
+        j = {
+            {"retention_days", c.retention_days.count()},
+            {"head_interval_minutes", c.head_interval_minutes},
+            {"syslog", c.syslog},
+            {"syslog_facility", c.syslog_facility}
+        };
+    }
+
+    void from_json(const nlohmann::json &j, AuditTrailConfig &c) {
+        const AuditTrailConfig defaults;
+        c.retention_days = std::chrono::days(j.value("retention_days", defaults.retention_days.count()));
+        c.head_interval_minutes = j.value("head_interval_minutes", defaults.head_interval_minutes);
+        c.syslog = j.value("syslog", defaults.syslog);
+        c.syslog_facility = j.value("syslog_facility", defaults.syslog_facility);
+        validateAuditTrail(c);
+    }
+
+    void validateAuditTrail(const AuditTrailConfig& c) {
+        if (c.retention_days.count() < 30)
+            throw std::invalid_argument("auditing.trail.retention_days must be at least 30");
+        if (c.head_interval_minutes < 1 || c.head_interval_minutes > 1440)
+            throw std::invalid_argument("auditing.trail.head_interval_minutes must be 1..1440");
+        static constexpr std::array facilities{"auth", "authpriv", "local0", "local1", "local2", "local3",
+                                               "local4", "local5", "local6", "local7"};
+        if (std::ranges::find(facilities, c.syslog_facility) == facilities.end())
+            throw std::invalid_argument("auditing.trail.syslog_facility must be auth, authpriv or local0..local7");
+    }
+
     void to_json(nlohmann::json &j, const AuditConfig &c) {
         j = {
             {"audit_log", c.audit_log},
+            {"trail", c.trail},
             {"encryption_waivers", c.encryption_waivers},
             {"files_trashed", c.files_trashed}
         };
@@ -1091,6 +1128,7 @@ Config& Config::operator=(Config&&) noexcept = default;
 
     void from_json(const nlohmann::json &j, AuditConfig &c) {
         j.at("audit_log").get_to(c.audit_log);
+        if (j.contains("trail")) j.at("trail").get_to(c.trail);
         j.at("encryption_waivers").get_to(c.encryption_waivers);
         j.at("files_trashed").get_to(c.files_trashed);
     }

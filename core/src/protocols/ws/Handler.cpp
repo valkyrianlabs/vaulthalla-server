@@ -6,6 +6,7 @@
 #include "protocols/ws/handler/fs/Storage.hpp"
 #include "protocols/ws/handler/rbac/Permissions.hpp"
 #include "protocols/ws/handler/Settings.hpp"
+#include "protocols/ws/handler/Audit.hpp"
 #include "protocols/ws/handler/Email.hpp"
 #include "protocols/ws/handler/Pricing.hpp"
 #include "protocols/ws/handler/S3Gateway.hpp"
@@ -225,6 +226,9 @@ void Handler::registerPermissionsHandlers(const std::shared_ptr<Router>& r) {
 }
 
 void Handler::registerSettingsHandlers(const std::shared_ptr<Router>& r) {
+    r->registerPayload("audit.list", &handler::Audit::list);
+    r->registerSessionOnlyHandler("audit.verify", &handler::Audit::verify);
+    r->registerPayload("audit.export", &handler::Audit::exportEvents);
     r->registerSessionOnlyHandler("settings.get", &handler::Settings::get);
     r->registerSessionOnlyHandler("settings.policy.get", &handler::Settings::policy);
     r->registerPayload("settings.update", &handler::Settings::update);

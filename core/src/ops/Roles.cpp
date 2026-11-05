@@ -1,4 +1,5 @@
 #include "ops/Roles.hpp"
+#include "audit/Trail.hpp"
 #include "rbac/PolicyEpoch.hpp"
 
 #include "db/query/identities/Group.hpp"
@@ -34,6 +35,17 @@
 namespace vh::ops::roles {
 
 namespace {
+
+// Role and permission changes go to the audit trail (#323), by id and name; never file paths (override patterns are
+// globs an admin wrote, kept as given).
+void auditRbac(const Actor& actor, const std::string& action, const std::string& what, nlohmann::json details,
+               const std::optional<uint32_t> vaultId = std::nullopt) {
+    vh::audit::record({.action = action, .actor_id = actor->id, .actor = actor->name(), .vault_id = vaultId,
+                   .details = std::move(details)},
+                  "[rbac] " + actor->name() + " " + what);
+}
+
+nlohmann::json subjectJson(const Subject& s) { return {{"type", s.type}, {"id", s.id}}; }
 // Authorization caches key on rbac::policyEpoch(); any vault role mutation (successful or not) invalidates them.
 struct PolicyEpochBump {
     ~PolicyEpochBump() { rbac::bumpPolicyEpoch(); }
@@ -206,6 +218,7 @@ AdminRolePtr createAdminRole(const Actor& actor, const CreateRole& req, const st
     auto created = AdminRoleQuery::get(id);
     if (!created) throw std::runtime_error("admin role '" + req.name + "' was created but could not be read back");
     notifications::enqueueAdminRoleCreated(created, notifications::actorFromUser(std::string(auditSource), actor));
+auditRbac(actor, "rbac.admin_role.create", "created admin role " + created->name, {{"role_id", created->id}, {"role", created->name}, {"source", std::string(auditSource)}});
     return created;
 }
 
@@ -238,6 +251,7 @@ AdminRolePtr updateAdminRole(const Actor& actor, const UpdateRole& req, const st
     auto updated = AdminRoleQuery::get(existing->id);
     if (!updated) throw std::runtime_error("admin role " + std::to_string(existing->id) + " could not be read back");
     notifications::enqueueAdminRoleUpdated(updated, notifications::actorFromUser(std::string(auditSource), actor));
+auditRbac(actor, "rbac.admin_role.update", "updated admin role " + updated->name, {{"role_id", updated->id}, {"role", updated->name}, {"source", std::string(auditSource)}});
     return updated;
 }
 
@@ -256,6 +270,7 @@ AdminRolePtr removeAdminRole(const Actor& actor, const Ref& ref, const std::stri
 
     AdminRoleQuery::remove(existing->id);
     notifications::enqueueAdminRoleDeleted(existing, notifications::actorFromUser(std::string(auditSource), actor));
+auditRbac(actor, "rbac.admin_role.delete", "deleted admin role " + existing->name, {{"role_id", existing->id}, {"role", existing->name}, {"source", std::string(auditSource)}});
     return existing;
 }
 
@@ -298,6 +313,7 @@ VaultRolePtr createVaultRole(const Actor& actor, const CreateRole& req) {
     }
     auto created = VaultRoleQuery::get(id);
     if (!created) throw std::runtime_error("vault role '" + req.name + "' was created but could not be read back");
+auditRbac(actor, "rbac.vault_role.create", "created vault role " + created->name, {{"role_id", created->id}, {"role", created->name}});
     return created;
 }
 
@@ -320,6 +336,7 @@ VaultRolePtr updateVaultRole(const Actor& actor, const UpdateRole& req) {
     identities::manager().mutate({.everyone = true}, [&] { VaultRoleQuery::upsert(staged); });
     auto updated = VaultRoleQuery::get(existing->id);
     if (!updated) throw std::runtime_error("vault role " + std::to_string(existing->id) + " could not be read back");
+auditRbac(actor, "rbac.vault_role.update", "updated vault role " + updated->name, {{"role_id", updated->id}, {"role", updated->name}});
     return updated;
 }
 
@@ -333,6 +350,7 @@ VaultRolePtr removeVaultRole(const Actor& actor, const Ref& ref) {
         throw Conflict("cannot delete vault role '" + existing->name +
                        "' because it has active assignments; remove those assignments first");
     VaultRoleQuery::remove(existing->id);
+auditRbac(actor, "rbac.vault_role.delete", "deleted vault role " + existing->name, {{"role_id", existing->id}, {"role", existing->name}});
     return existing;
 }
 
@@ -364,6 +382,7 @@ VaultRolePtr assignVaultRole(const Actor& actor, const AssignVaultRole& req) {
     });
     auto assignment = VaultAssignments::get(req.target.vault_id, req.target.subject.type, req.target.subject.id);
     if (!assignment) throw std::runtime_error("vault role assignment could not be read back");
+auditRbac(actor, "rbac.vault_role.assign", "assigned vault role " + role->name + " to " + req.target.subject.type + " " + std::to_string(req.target.subject.id) + " on vault " + std::to_string(req.target.vault_id), {{"role_id", role->id}, {"subject", subjectJson(req.target.subject)}}, req.target.vault_id);
     return assignment;
 }
 
@@ -376,6 +395,7 @@ VaultRolePtr unassignVaultRole(const Actor& actor, const VaultSubject& target) {
     identities::manager().mutate(touchedBy(target.subject), [&] {
         VaultAssignments::unassign(target.vault_id, target.subject.type, target.subject.id);
     });
+auditRbac(actor, "rbac.vault_role.unassign", "removed the vault role of " + target.subject.type + " " + std::to_string(target.subject.id) + " on vault " + std::to_string(target.vault_id), {{"subject", subjectJson(target.subject)}}, target.vault_id);
     return assignment;
 }
 
@@ -437,6 +457,7 @@ std::vector<rbac::permission::Override> addVaultRoleOverrides(const Actor& actor
             created.push_back(*ov);
         }
     });
+auditRbac(actor, "rbac.override.add", "added " + std::to_string(created.size()) + " permission override(s) for " + req.target.subject.type + " " + std::to_string(req.target.subject.id) + " on vault " + std::to_string(req.target.vault_id), {{"subject", subjectJson(req.target.subject)}, {"count", created.size()}, {"pattern", req.pattern}, {"enabled", req.enabled}}, req.target.vault_id);
     return created;
 }
 
@@ -458,6 +479,7 @@ rbac::permission::Override updateVaultRoleOverride(const Actor& actor, const Upd
     if (req.enabled) ov->enabled = *req.enabled;
     identities::manager().mutate(touchedBy(req.target.subject),
                                  [&] { db::query::rbac::permission::Override::update(ov); });
+auditRbac(actor, "rbac.override.update", "updated permission override " + std::to_string(req.override_id) + " on vault " + std::to_string(req.target.vault_id), {{"override_id", req.override_id}, {"subject", subjectJson(req.target.subject)}}, req.target.vault_id);
     return *db::query::rbac::permission::Override::get(req.override_id);
 }
 
@@ -472,6 +494,7 @@ void removeVaultRoleOverride(const Actor& actor, const VaultSubject& target, con
         throw NotFound("override " + std::to_string(overrideId) + " not found on this assignment");
     identities::manager().mutate(touchedBy(target.subject),
                                  [&] { db::query::rbac::permission::Override::remove(overrideId); });
+    auditRbac(actor, "rbac.override.remove", "removed permission override " + std::to_string(overrideId) + " on vault " + std::to_string(target.vault_id), {{"override_id", overrideId}, {"subject", subjectJson(target.subject)}}, target.vault_id);
 }
 
 std::vector<rbac::permission::Override> listVaultRoleOverrides(const Actor& actor, const VaultSubject& target) {

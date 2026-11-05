@@ -13,9 +13,9 @@ void vh::db::Connection::initPreparedRetentionStats() const {
                 (SELECT COUNT(*) FROM sync_event) AS sync_events_total,
                 (SELECT COUNT(*) FROM sync_event WHERE timestamp_begin < CURRENT_TIMESTAMP - ($2::int * INTERVAL '1 day')) AS sync_events_past_retention_count,
 
-                (SELECT COUNT(*) FROM audit_log) AS audit_log_entries_total,
-                (SELECT EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - MIN(timestamp))) FROM audit_log) AS oldest_audit_log_age_seconds,
-                (SELECT COUNT(*) FROM audit_log WHERE timestamp < CURRENT_TIMESTAMP - ($3::int * INTERVAL '1 day')) AS audit_log_entries_past_retention_count,
+                (SELECT COUNT(*) FROM audit_event) AS audit_log_entries_total,
+                (SELECT EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) - MIN(occurred_us) / 1000000.0 FROM audit_event) AS oldest_audit_log_age_seconds,
+                (SELECT COUNT(*) FROM audit_event WHERE occurred_us < (EXTRACT(EPOCH FROM CURRENT_TIMESTAMP - ($3::int * INTERVAL '1 day')) * 1000000)::bigint) AS audit_log_entries_past_retention_count,
 
                 (SELECT COUNT(*) FROM share_access_event) AS share_access_events_total,
                 (SELECT EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - MIN(created_at))) FROM share_access_event) AS oldest_share_access_event_age_seconds,
@@ -45,25 +45,9 @@ void vh::db::Connection::initPreparedRetentionStats() const {
                 (SELECT COUNT(*) FROM sync_event WHERE vault_id = $1) AS sync_events_total,
                 (SELECT COUNT(*) FROM sync_event WHERE vault_id = $1 AND timestamp_begin < CURRENT_TIMESTAMP - ($3::int * INTERVAL '1 day')) AS sync_events_past_retention_count,
 
-                (
-                    SELECT COUNT(*)
-                    FROM audit_log al
-                    JOIN fs_entry fs ON fs.id = al.target_file_id
-                    WHERE fs.vault_id = $1
-                ) AS audit_log_entries_total,
-                (
-                    SELECT EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - MIN(al.timestamp)))
-                    FROM audit_log al
-                    JOIN fs_entry fs ON fs.id = al.target_file_id
-                    WHERE fs.vault_id = $1
-                ) AS oldest_audit_log_age_seconds,
-                (
-                    SELECT COUNT(*)
-                    FROM audit_log al
-                    JOIN fs_entry fs ON fs.id = al.target_file_id
-                    WHERE fs.vault_id = $1
-                      AND al.timestamp < CURRENT_TIMESTAMP - ($4::int * INTERVAL '1 day')
-                ) AS audit_log_entries_past_retention_count,
+                (SELECT COUNT(*) FROM audit_event WHERE vault_id = $1) AS audit_log_entries_total,
+                (SELECT EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) - MIN(occurred_us) / 1000000.0 FROM audit_event WHERE vault_id = $1) AS oldest_audit_log_age_seconds,
+                (SELECT COUNT(*) FROM audit_event WHERE vault_id = $1 AND occurred_us < (EXTRACT(EPOCH FROM CURRENT_TIMESTAMP - ($4::int * INTERVAL '1 day')) * 1000000)::bigint) AS audit_log_entries_past_retention_count,
 
                 (SELECT COUNT(*) FROM share_access_event WHERE vault_id = $1) AS share_access_events_total,
                 (SELECT EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - MIN(created_at))) FROM share_access_event WHERE vault_id = $1) AS oldest_share_access_event_age_seconds,
