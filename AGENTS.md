@@ -1,7 +1,16 @@
 # Agent instructions
 
 `CLAUDE.md` is the full project guide (map, commands, hard rules, conventions); every rule there applies to any agent
-working in this repository. This file states the rule that is checked on every push.
+working in this repository. This file states the rule that is checked on every push, and points to the compatibility policy every change follows.
+
+## Compatibility policy
+
+Security and data recoverability take precedence over backward compatibility. Without a verified customer
+dependency, build the cleanest secure design (no transitional releases, legacy fallbacks or downgrade paths); breaking
+changes are allowed, but customer data, keys and recovery material must stay recoverable. Escalate only for
+irreversible data or decryptability risk, a disrupted verified customer, a product-level security trade-off, or a
+change to key custody or trust boundaries. Full policy: `docs/contributors/compatibility-policy.md`; summary in
+`CLAUDE.md`.
 
 ## Builds are silent
 
