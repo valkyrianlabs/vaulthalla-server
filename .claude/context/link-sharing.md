@@ -83,9 +83,11 @@ generates a fresh plaintext pepper). Restore without the master key: the operato
 
 ## Open items (verified 2026-09-30)
 
-1. **Email-challenge codes are never delivered.** `share::Manager::startEmailChallenge` returns a
-   `verification_code`, but the ws handler drops it and nothing calls `email::Provider`. Email-validated shares
-   can't be completed by a real recipient. This is the highest-value gap, and the email providers already exist.
+1. ~~Email-challenge codes are never delivered.~~ Fixed (#317): `startEmailChallenge` sends the code through
+   `share::ChallengeCodeSender` (default: the operator's `email::Provider`, `share/CodeDelivery.hpp`) to listed
+   recipients only, with the same reply for any address. Without email delivery, creating or switching to an
+   email-validated link and starting a challenge fail with `ops::Refused{"share_email_unavailable"}`. A failed
+   send is logged and audited (`share_email_delivery_failed`), not reported to the visitor.
 2. Actor-native RBAC is incomplete. `rbac/resolver/vault/Context.hpp` and `rbac/fs/policy/Request.hpp`
    still carry `shared_ptr<identities::User>`.
 3. `fs.dir.create` isn't in the share allowlists, so share mkdir is unsupported.

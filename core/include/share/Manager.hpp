@@ -1,5 +1,6 @@
 #pragma once
 
+#include "share/CodeDelivery.hpp"
 #include "db/model/ListQueryParams.hpp"
 #include "rbac/Actor.hpp"
 #include "rbac/permission/Override.hpp"
@@ -199,6 +200,8 @@ struct ManagerOptions {
     uint64_t stale_upload_sweep_limit{100};
     std::function<std::time_t()> clock{[] { return std::time(nullptr); }};
     std::function<std::string()> challenge_code_generator{};
+    // How verification codes reach recipients (#317). Null: the operator's email provider (makeEmailChallengeCodeSender).
+    std::shared_ptr<ChallengeCodeSender> challenge_code_sender{};
 };
 
 struct RoleAssignmentRequest {
@@ -392,6 +395,11 @@ private:
     std::shared_ptr<ShareStore> store_;
     std::shared_ptr<ShareAuthorizer> authorizer_;
     ManagerOptions options_;
+    std::shared_ptr<ChallengeCodeSender> codeSender_;
+
+    // Email-validated links can't be opened without email delivery: refuse creating them, and refuse starting their
+    // challenges, with a clear error instead of a code nobody receives (#317).
+    void requireCodeDelivery() const;
 };
 
 }

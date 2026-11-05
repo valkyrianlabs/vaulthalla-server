@@ -157,6 +157,15 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   interruption; idempotent). Fails closed, never regenerates, when the sealed copy can't be unsealed or disagrees
   with a leftover plaintext copy. New `db::query::crypto::Secret::deleteSecret` (`delete_internal_secret`).
   Downgrade below this release invalidates share links. Tests: `SharePepperSealing.*` (DB-backed).
+- Sharing (#317): email-challenge codes are delivered. `share::Manager::startEmailChallenge` sends the code through
+  `ChallengeCodeSender` (`share/CodeDelivery.{hpp,cpp}`; default: the configured `email::Provider`, idempotency key
+  `share-challenge-<id>`), only when the address is a listed recipient; other addresses get the same reply and no
+  email (audit `share_email_recipient_not_listed`). Send failures are logged and audited
+  (`share_email_delivery_failed`), never reported. Without email delivery, `createLink`, an `updateLink` into
+  `email_validated`, and `startEmailChallenge` throw `ops::Refused{"share_email_unavailable"}`. The email names no
+  file, link or sharer. Tests: `ShareManagerTest.EmailChallengeSendsTheCodeToTheListedRecipientOnly`,
+  `EmailValidatedLinksNeedEmailDelivery`, `AFailedSendIsAuditedNotReported`, `ShareCodeEmail.*`, and the ws
+  challenge test now asserts delivery.
 - Auth (#321): `auth::Manager::loginUser` refuses every failed sign-in with the same message (`Manager::kLoginFailed`)
   and logs the reason (unknown account, wrong password, deactivated, system-only) at warn. Unknown names are
   verified against a once-built Argon2id hash of a random secret, and the password is verified before the account

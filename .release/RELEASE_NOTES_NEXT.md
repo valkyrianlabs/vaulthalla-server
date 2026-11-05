@@ -41,6 +41,11 @@ for users and operators; keep it representative of what actually ships.
   existing link keeps working. **Downgrading to an earlier release after this one makes existing share links stop
   working** (they need to be created again). Share links also need the master key to be restored with a backup;
   see "Backup and recovery".
+- Email-verified share links now work. Vaulthalla emails the 6-digit code to the address the visitor enters, if
+  that address is on the link's list, through the email provider set up under `vh email` (Resend or SES). Until
+  now no code was ever sent, so these links couldn't be opened. Every address gets the same reply, and the email
+  contains only the code, with no file or folder names. Without email set up, Vaulthalla refuses to create
+  email-verified links instead of making links nobody can open.
 - A failed sign-in now always shows "Invalid username or password". The console used to say whether the account
   existed, was deactivated, or had a different password, which let anyone check which usernames exist. The exact
   reason is still in the server log.
