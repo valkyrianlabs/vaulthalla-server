@@ -77,7 +77,7 @@ For a breaking change, record:
 - the affected interfaces or data formats;
 - the migration actions operators must take.
 
-Put them in the pull request and in the staged release notes (`.release/RELEASE_NOTES_NEXT.md`).
+Put them in the pull request and in the change's release-note fragment (`.release/notes.d/`).
 
 Don't introduce multi-release compatibility machinery, redundant secret representations or downgrade paths unless a concrete operational requirement justifies them.
 

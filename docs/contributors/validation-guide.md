@@ -274,9 +274,10 @@ vlr prepare --dry-run               # preview the release notes and Debian chang
 
 If the change affects packaging outputs, add `make deb`.
 
-Changes users or operators would notice also update `.release/RELEASE_NOTES_NEXT.md`, and packaging-facing ones
-`.release/CHANGELOG_NEXT.md`, in the same pull request. Never edit `debian/changelog`, `RELEASE_NOTES.md` or version
-numbers by hand.
+Changes users or operators would notice also add a release-note fragment, `.release/notes.d/<issue>-<slug>.md`, and
+packaging-facing ones a changelog fragment, `.release/changelog.d/<issue>-<slug>.md`, in the same pull request. Use
+new files rather than editing `.release/RELEASE_NOTES_NEXT.md` or `CHANGELOG_NEXT.md`, which every open pull request
+would otherwise conflict on. Never edit `debian/changelog`, `RELEASE_NOTES.md` or version numbers by hand.
 
 ## What To Put In The PR
 
