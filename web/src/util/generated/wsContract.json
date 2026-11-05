@@ -17565,6 +17565,22 @@
   },
   "ws": [
     {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "auth.activity",
+      "confirmations": [],
+      "description": "Report that the person at the console is using it (keyboard, pointer, scroll), at most about once a minute. It resets the session's idle sign-out clock (services.connection_lifecycle_manager.idle_timeout_minutes) with the server's own time; background requests never do. An idle session is refused like any other expired one.",
+      "input": "none",
+      "operation": null,
+      "payload": [],
+      "refusal_codes": [],
+      "refusal_kinds": [],
+      "response": [],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
       "auth": "session",
       "client_timeout_ms": 15000,
       "command": "auth.isAuthenticated",
@@ -39402,5 +39418,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "adc8d0db539312dec5e05ef49106ee41376ff4622a5ab257aee951c167344b2e"
+  "ws_hash": "3f461dbda227f2189f4691e7a2269b113c7663fa782ef6ec88f7f8be35157f76"
 }

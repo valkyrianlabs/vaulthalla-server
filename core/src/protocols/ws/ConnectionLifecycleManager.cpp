@@ -1,6 +1,7 @@
 #include "protocols/ws/ConnectionLifecycleManager.hpp"
 #include "auth/session/Manager.hpp"
 #include "auth/session/Validator.hpp"
+#include "auth/session/Idle.hpp"
 #include "protocols/ws/Session.hpp"
 #include "protocols/ws/model/Response.hpp"
 #include "runtime/Deps.hpp"
@@ -20,7 +21,7 @@ ConnectionLifecycleManager::ConnectionLifecycleManager()
     const auto& config = Registry::get().services.connection_lifecycle_manager;
     sweep_interval_ = seconds(config.sweep_interval_seconds);
     unauthenticated_session_timeout_ = seconds(config.unauthenticated_timeout_seconds);
-    idle_timeout_ = minutes(config.idle_timeout_minutes); // TODO: implement idle timeout logic
+    idle_timeout_ = minutes(config.idle_timeout_minutes);  // 0 = off; signed-in web sessions only (#319)
 }
 
 ConnectionLifecycleManager::~ConnectionLifecycleManager() {
@@ -48,7 +49,8 @@ void ConnectionLifecycleManager::runLoop() {
 }
 
 ConnectionLifecycleManager::SweepVerdict ConnectionLifecycleManager::verdict(
-    const Session& session, const system_clock::time_point now, const seconds unauthenticatedTimeout) {
+    const Session& session, const system_clock::time_point now, const seconds unauthenticatedTimeout,
+    const minutes idleTimeout) {
     const bool expired = session.connectionOpenedAt + unauthenticatedTimeout < now;
     if (!session.handshakeComplete()) return expired ? SweepVerdict::UnauthenticatedTimeout : SweepVerdict::Keep;
     // The device listener's sessions have no refresh token (the client certificate authenticated them).
@@ -63,14 +65,29 @@ ConnectionLifecycleManager::SweepVerdict ConnectionLifecycleManager::verdict(
                                                                   : session.tokens->shareRefreshToken)
                                   : nullptr;
     if (!refreshToken || !refreshToken->isValid()) return SweepVerdict::InvalidRefreshToken;
+    if (vh::auth::session::idle::applies(session) && vh::auth::session::idle::expired(refreshToken->lastActivity, now, idleTimeout))
+        return SweepVerdict::IdleTimeout;
     return SweepVerdict::Keep;
 }
 
 void ConnectionLifecycleManager::sweepActiveSessions() const {
     for (const auto& [_, session] : runtime::Deps::get().sessionManager->getActive()) {
         if (!session) continue;
-        const auto decision = verdict(*session, system_clock::now(), unauthenticated_session_timeout_);
+        const auto decision = verdict(*session, system_clock::now(), unauthenticated_session_timeout_,
+                                      minutes(Registry::get().services.connection_lifecycle_manager.idle_timeout_minutes));
         if (decision == SweepVerdict::Keep) continue;
+        if (decision == SweepVerdict::IdleTimeout) {
+            // expireIfIdle re-checks the stored token (another tab may have been active), then revokes it.
+            try {
+                if (!runtime::Deps::get().sessionManager->expireIfIdle(session)) continue;
+                model::Response::UNAUTHORIZED("session_idle_timeout",
+                                              "Signed out after a period without activity. Sign in again to continue.")(session);
+            } catch (const std::exception& e) {
+                log::Registry::ws()->error("[LifecycleManager] Error while ending an idle session: {}", e.what());
+            }
+            session->close();
+            continue;
+        }
         try {
             log::Registry::ws()->debug("[LifecycleManager] Closing {} session opened at {}",
                                        decision == SweepVerdict::UnauthenticatedTimeout ? "unauthenticated"

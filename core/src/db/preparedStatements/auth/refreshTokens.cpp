@@ -27,6 +27,14 @@ void vh::db::Connection::initPreparedRefreshTokens() const {
         "WHERE jti = $1"
     );
 
+    // Idle sign-out (#319): the server's own clock, only for a live token.
+    conn_->prepare(
+        "touch_refresh_token_activity",
+        "UPDATE refresh_tokens "
+        "SET last_activity_at = NOW() "
+        "WHERE jti = $1 AND revoked = FALSE"
+    );
+
     conn_->prepare(
         "revoke_refresh_token_by_jti",
         "UPDATE refresh_tokens "

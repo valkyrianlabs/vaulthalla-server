@@ -181,6 +181,21 @@ auth:
 
 Changing token lifetimes affects web and API sessions. Use short access tokens and rotate secrets deliberately.
 
+### Idle Sign-Out
+
+Web-console users are signed out after a period without using the console:
+
+```yaml
+services:
+  connection_lifecycle_manager:
+    idle_timeout_minutes: 30     # 0 turns idle sign-out off
+    sweep_interval_seconds: 60   # how often open connections are checked
+```
+
+Only real input counts: keyboard, pointer and scrolling in an open console tab. Background activity (pages refreshing their data, reconnects, token renewal) never keeps a session alive, and the server keeps the time itself. Once a session has been idle for longer than the timeout, its sign-in is revoked: the page shows the sign-in screen, and reloading or reopening the console doesn't sign in again until the password is entered. Several tabs of one sign-in count as one, so working in any of them keeps all of them signed in.
+
+Vaulthalla Desktop (paired devices) and share links aren't affected. Change the value in `config.yaml` or under **Settings → Services → Connections** in the web console.
+
 Both `max_connections` caps are read for every new connection, so a change made in the web console applies at once; the minimum is 1.
 
 ## Sharing

@@ -3,6 +3,7 @@
 import React, { useEffect } from 'react'
 import { usePathname } from 'next/navigation'
 import { api, endSession, refreshSession, useSession } from '@/lib/session'
+import { createActivityReporter, trackActivity } from '@/lib/activity'
 import { useConnectionStatus } from '@/components/shell/ConnectionIndicator'
 import { Spinner } from '@/components/ui/Spinner'
 
@@ -26,6 +27,19 @@ export const SessionGate = ({ children }: { children: React.ReactNode }) => {
   useEffect(() => {
     if (status === 'unauthenticated') endSession(`${window.location.pathname}${window.location.search}`)
   }, [status, pathname])
+
+  // Idle sign-out (#319): report real input so the server's idle clock only counts a person using the console.
+  useEffect(() => {
+    if (status !== 'authenticated') return
+    const reporter = createActivityReporter({ send: () => api.send('auth.activity', null) })
+    return trackActivity(window, reporter)
+  }, [status])
+
+  // A socket the server closed (an idle sign-out among other reasons) gets its session re-checked as soon as it
+  // reconnects, so an ended session reaches the sign-in page at once instead of on the next poll.
+  useEffect(() => {
+    if (connection === 'open' && useSession.getState().status === 'authenticated') void refreshSession()
+  }, [connection])
 
   // Access tokens live ~60 minutes; refresh well before that, and right after the tab wakes up.
   useEffect(() => {

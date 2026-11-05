@@ -55,6 +55,8 @@ public:
     std::shared_ptr<auth::model::TokenPair> tokens;
     // True once the websocket handshake finished. Until then the session is still being set up (tokens included).
     [[nodiscard]] bool handshakeComplete() const noexcept { return handshakeComplete_.load(std::memory_order_acquire); }
+    // Tests only: a session past its websocket handshake without a socket (lifecycle sweep verdicts).
+    void markHandshakeCompleteForTesting() noexcept { handshakeComplete_.store(true, std::memory_order_release); }
 
     std::string userAgent, ipAddress;
     // Who is on the other end for rate limiting: the forwarded client behind the local proxy, else the peer.
