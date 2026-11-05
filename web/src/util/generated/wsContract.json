@@ -662,6 +662,14 @@
           ]
         },
         {
+          "model": "AuditTrailConfig",
+          "name": "trail",
+          "required": false,
+          "types": [
+            "object"
+          ]
+        },
+        {
           "model": "EncryptionWaiverConfig",
           "name": "encryption_waivers",
           "required": true,
@@ -679,6 +687,140 @@
         }
       ],
       "name": "AuditConfig"
+    },
+    {
+      "description": "One event of the audit trail (ops::audit::toJson(Record), core/src/ops/Audit.cpp; migration 117).",
+      "fields": [
+        {
+          "description": "Position in the hash chain.",
+          "minimum": 0,
+          "name": "seq",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "µs since the Unix epoch (UTC).",
+          "minimum": 0,
+          "name": "occurred_us",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "ISO-8601 UTC.",
+          "name": "occurred_at",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "level",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Dotted: auth.login.success, rbac.role.update, fs.delete, ...",
+          "name": "action",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "enum": [
+            "success",
+            "failure",
+            "denied",
+            "info"
+          ],
+          "name": "outcome",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "actor_id",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "name": "actor",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Where it came from when known (\"device <id>\" for a paired device).",
+          "name": "origin",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "The file or folder, by id (never its name).",
+          "minimum": 0,
+          "name": "entry_id",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "name": "message",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "A JSON object as text: the exact bytes the hash covers.",
+          "name": "details",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "SHA-256, hex.",
+          "name": "prev_hash",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "SHA-256, hex (audit/Chain.hpp has the byte layout).",
+          "name": "hash",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "name": "AuditEvent"
     },
     {
       "description": "auditing.audit_log.* (Config.cpp to_json(AuditLogConfig)). Sizes are \"<n>MB\"/\"<n>GB\", the interval \"<n>h\"/\"<n>d\".",
@@ -733,6 +875,166 @@
         }
       ],
       "name": "AuditLogConfig"
+    },
+    {
+      "description": "auditing.trail.*: the hash-chained audit trail in the database (Config.cpp to_json(AuditTrailConfig)).",
+      "fields": [
+        {
+          "description": "Days of audit events kept (minimum 30; default 2190, six years).",
+          "minimum": 0,
+          "name": "retention_days",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "How often the chain head is signed (1..1440).",
+          "minimum": 0,
+          "name": "head_interval_minutes",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Also send audit events to the local syslog.",
+          "name": "syslog",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "enum": [
+            "auth",
+            "authpriv",
+            "local0",
+            "local1",
+            "local2",
+            "local3",
+            "local4",
+            "local5",
+            "local6",
+            "local7"
+          ],
+          "name": "syslog_facility",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "name": "AuditTrailConfig"
+    },
+    {
+      "description": "audit.verify's answer (ops::audit::toJson(Verification)).",
+      "fields": [
+        {
+          "description": "The chain is intact and every signed head checks out.",
+          "name": "ok",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "events_checked",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "first_seq",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "last_seq",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "The retention checkpoint the chain starts after.",
+          "minimum": 0,
+          "name": "anchor_seq",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "The first event that fails.",
+          "minimum": 0,
+          "name": "broken_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "name": "problem",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "heads_valid",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "heads_invalid",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "last_signed_seq",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "Events after the newest valid signed head (signed at the next interval).",
+          "minimum": 0,
+          "name": "unsigned_events",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "items": "string",
+          "name": "head_problems",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        }
+      ],
+      "name": "AuditVerification"
     },
     {
       "description": "auth.* (Config.cpp to_json(AuthConfig)); the JWT secret is never part of it.",
@@ -17573,12 +17875,227 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "cae78e2e50581fd80a7c9f49bbf878535fe0521cade68dd31521e8dcf74e1828",
+  "models_hash": "b0720995e740138fba5f6b6cd747ae68ec56d60650f54b7f86010ad883cbd85f",
   "protocol": {
     "min": 1,
     "version": 1
   },
   "ws": [
+    {
+      "auth": "human",
+      "client_timeout_ms": 120000,
+      "command": "audit.export",
+      "confirmations": [],
+      "description": "The events in [since_us, until_us) as NDJSON (vh-audit-export-v1: a header line, the events with their hashes, then the signed heads that cover them), verifiable offline. Up to 32 MiB; use `vh audit export` for more. Needs admin.audits.view; recorded as audit.export.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "minimum": 0,
+          "name": "since_us",
+          "required": false,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "until_us",
+          "required": false,
+          "types": [
+            "integer",
+            "null"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "unauthorized",
+        "denied",
+        "invalid"
+      ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied",
+        "invalid"
+      ],
+      "response": [
+        {
+          "name": "ndjson",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "events",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "audit.list",
+      "confirmations": [],
+      "description": "The tamper-evident audit trail, newest first, filtered. Needs admin.audits.view; the first page is itself recorded (audit.view).",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Paging: events older than this seq (next_before).",
+          "minimum": 0,
+          "name": "before_seq",
+          "required": false,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "Events at or after this time (µs since the epoch).",
+          "minimum": 0,
+          "name": "since_us",
+          "required": false,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "Events before this time (µs since the epoch).",
+          "minimum": 0,
+          "name": "until_us",
+          "required": false,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "Action prefix: \"auth.\" matches auth.login.success.",
+          "name": "action",
+          "required": false,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "actor_id",
+          "required": false,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "vault_id",
+          "required": false,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "enum": [
+            "success",
+            "failure",
+            "denied",
+            "info"
+          ],
+          "name": "outcome",
+          "required": false,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "1..1000 (default 100).",
+          "minimum": 0,
+          "name": "limit",
+          "required": false,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "unauthorized",
+        "denied",
+        "invalid"
+      ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied",
+        "invalid"
+      ],
+      "response": [
+        {
+          "items": "object",
+          "model": "AuditEvent",
+          "name": "events",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "Pass as before_seq for older events; null at the end.",
+          "minimum": 0,
+          "name": "next_before",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 120000,
+      "command": "audit.verify",
+      "confirmations": [],
+      "description": "Recomputes the whole retained hash chain and checks every signed head (signature, and that the chain still holds the hash it signed). Needs admin.audits.view; recorded as audit.verify (or audit.verify.failed).",
+      "input": "none",
+      "operation": null,
+      "payload": [],
+      "refusal_codes": [
+        "unauthorized",
+        "denied"
+      ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied"
+      ],
+      "response": [
+        {
+          "model": "AuditVerification",
+          "name": "verification",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
     {
       "auth": "human",
       "client_timeout_ms": 15000,
@@ -39433,5 +39950,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "3f461dbda227f2189f4691e7a2269b113c7663fa782ef6ec88f7f8be35157f76"
+  "ws_hash": "799049bb18175a04a74f8728b1c348617c1eb3e1868321c538e7240eeaba36d9"
 }

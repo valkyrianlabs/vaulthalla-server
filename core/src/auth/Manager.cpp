@@ -9,6 +9,7 @@
 #include "storage/Manager.hpp"
 #include "protocols/ws/Session.hpp"
 #include "log/Registry.hpp"
+#include "audit/Trail.hpp"
 #include "crypto/secrets/Manager.hpp"
 #include "runtime/Deps.hpp"
 #include "auth/session/Issuer.hpp"
@@ -83,8 +84,13 @@ const std::string& unknownUserHash() {
     return hash;
 }
 
-[[noreturn]] void refuseLogin(const std::string& name, const char* reason) {
+// The account name as typed (it may name no account) and why, never the password.
+[[noreturn]] void refuseLogin(const std::string& name, const char* reason, const std::shared_ptr<Session>& session,
+                              const std::optional<uint32_t> userId = std::nullopt) {
     log::Registry::auth()->warn("[AuthManager] Sign-in refused for '{}': {}", name, reason);
+    audit::record({.action = "auth.login.failure", .outcome = audit::Outcome::Failure, .actor_id = userId,
+                   .actor = name, .details = {{"reason", reason}, {"ip", session ? session->ipAddress : ""}}},
+                  "[auth] sign-in refused for '" + name + "': " + reason, spdlog::level::warn);
     throw std::runtime_error(Manager::kLoginFailed);
 }
 }
@@ -93,23 +99,26 @@ void Manager::loginUser(const std::string& name, const std::string& password, co
     const auto credentials = db::query::identities::Loader::credentialsByName(name);
     if (!credentials) {
         (void)hash::verifyPassword(password, unknownUserHash());
-        refuseLogin(name, "no such account");
+        refuseLogin(name, "no such account", session);
     }
     // Verify first, whatever the account state, so a deactivated or system-only account costs the same.
     const bool passwordOk = hash::verifyPassword(password, credentials->passwordHash);
-    if (credentials->systemOnly) refuseLogin(name, "system-only account");
-    if (!credentials->active) refuseLogin(name, "account deactivated");
-    if (!passwordOk) refuseLogin(name, "wrong password");
+    if (credentials->systemOnly) refuseLogin(name, "system-only account", session, credentials->id);
+    if (!credentials->active) refuseLogin(name, "account deactivated", session, credentials->id);
+    if (!passwordOk) refuseLogin(name, "wrong password", session, credentials->id);
 
     auto& identities = vh::identities::manager();
     identities.recordLogin(credentials->id);
     const auto user = identities.user(credentials->id);
-    if (!user) refuseLogin(name, "account removed during sign-in");
+    if (!user) refuseLogin(name, "account removed during sign-in", session, credentials->id);
 
     session->setAuthenticatedUser(user);
     runtime::Deps::get().sessionManager->promote(session);
 
     log::Registry::auth()->info("[AuthManager] User logged in: {}", name);
+    audit::record({.action = "auth.login.success", .actor_id = user->id, .actor = name,
+                   .details = {{"method", "password"}, {"ip", session->ipAddress}}},
+                  "[auth] " + name + " signed in");
 }
 
 std::shared_ptr<User> Manager::changePassword(const uint32_t userId, const std::string& oldPassword,
@@ -125,7 +134,8 @@ std::shared_ptr<User> Manager::changePassword(const uint32_t userId, const std::
 
     vh::identities::manager().setPasswordHash(userId, hashNewPassword(newPassword));
 
-    log::Registry::audit()->info("[AuthManager] User {} is changing password", name);
+    audit::record({.action = "auth.password.change", .actor_id = userId, .actor = name},
+                  "[auth] " + name + " changed their password");
     log::Registry::auth()->info("[AuthManager] Changing password for user: {}", name);
     if (name == bootstrap::kSuperAdminName) (void)bootstrap::onSuperAdminPasswordChanged();
 
@@ -139,7 +149,9 @@ std::shared_ptr<User> Manager::resetPassword(const uint32_t userId, const std::s
     vh::identities::manager().setPasswordHash(userId, hashNewPassword(newPassword));
 
     const auto name = user->name();
-    log::Registry::audit()->info("[AuthManager] Password reset for user {}", name);
+    audit::record({.action = "auth.password.reset", .vault_id = std::nullopt,
+                   .details = {{"user_id", userId}, {"user", name}}},
+                  "[auth] the password of " + name + " was reset");
     log::Registry::auth()->info("[AuthManager] Reset password for user: {}", name);
     if (name == bootstrap::kSuperAdminName) (void)bootstrap::onSuperAdminPasswordChanged();
 

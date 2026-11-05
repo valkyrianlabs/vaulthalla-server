@@ -246,6 +246,21 @@ Remote refresh is opt-in. If you enforce price budgets, review catalog freshness
 
 S3 gateway per-key budgets use the same price-budget service and pricing catalogs. Remote-backed gateway operations evaluate global, provider, vault, gateway credential, and gateway credential/vault policies before upstream-costing work. Local-only gateway buckets do not consume remote provider price budgets.
 
+## Audit Trail
+
+The tamper-evident audit trail in the database ([Audit Trail](/admin/audit-trail)):
+
+```yaml
+auditing:
+  trail:
+    retention_days: 2190
+    head_interval_minutes: 15
+    syslog: false
+    syslog_facility: authpriv
+```
+
+`retention_days` is at least 30 (the default is six years). `head_interval_minutes` sets how often the chain head is signed (1 to 1440). `syslog` also sends audit events to the local syslog under `syslog_facility`.
+
 ## Sync Audit Retention
 
 Sync event audit settings control how long sync event details are retained:

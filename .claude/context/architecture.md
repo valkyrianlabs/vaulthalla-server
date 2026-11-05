@@ -906,6 +906,15 @@ subject's assignment; both `vh vault role override ...` and ws `role.vault.overr
 
 ## Subsystem invariants (enforced in code, keep them)
 
+- **Audit trail (#323, migration 117).** Everything written to `log::Registry::audit()` also enters the hash-chained
+  `audit_event` table through `audit::makeChainSink()` → `audit::Trail` (an `AsyncService`, first to start and last to
+  stop). Writers never touch the DB: the sink only queues (bounded; overflow becomes one `audit.gap` event). Use
+  `audit::record(Event, message)` (or `audit::OnSuccess` for multi-return ops) for new events: a dotted `action`, the
+  actor, `vault_id`/`entry_id` by id, never a file name or path. Inside `vh::ops`, spell it `vh::audit::` (`ops::audit` is
+  the reader). The chain layout is pinned in `audit/Chain.hpp` and mirrored by `tools/audit/verify_export.py` (shared
+  vector). Heads are signed with the node attestation key under the `vh-audit-head-v1` domain
+  (`vault::attestation::signNodeMessage`); the tables are append-only except `vh_audit_purge_before`.
+
 **Filesystem RBAC paths, FS cache and account deletion** (#178–#180, `VaultLifecycleRegressionTest`)
 - `rbac::resolver::vault::Context::path` (and `fs::policy::Request::path`) is a **FUSE** path. Callers holding a vault
   path convert it with `engine->vaultPathToFusePath()` first; `share::Manager` once didn't, so only share root `/`

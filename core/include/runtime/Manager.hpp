@@ -27,6 +27,7 @@ namespace vh::concurrency { class AsyncService; }
 namespace vh::db { class Janitor; }
 namespace vh::fuse { class Service; }
 namespace vh::log { class RotationService; }
+namespace vh::audit { class Trail; }
 namespace vh::notifications { class OperatorEmailService; }
 namespace vh::stats { class SnapshotService; }
 
@@ -99,6 +100,7 @@ private:
     std::shared_ptr<stats::SnapshotService> statsSnapshotService;
     std::shared_ptr<notifications::OperatorEmailService> operatorEmailService;
     std::shared_ptr<sync::events::Service> upstreamEventService;
+    std::shared_ptr<audit::Trail> auditTrail;
 
     mutable std::mutex mutex_;
     std::map<std::string, std::shared_ptr<concurrency::AsyncService>> services_;
