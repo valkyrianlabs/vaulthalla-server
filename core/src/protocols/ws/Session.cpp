@@ -1,4 +1,5 @@
 #include "protocols/ws/Session.hpp"
+#include "protocols/ws/RefreshCookie.hpp"
 
 #include "auth/Manager.hpp"
 #include "auth/model/RefreshToken.hpp"
@@ -347,23 +348,12 @@ void Session::installHandshakeDecorator() const {
     const auto t = token->rawToken;
     const auto cookieName = shareHandshake_ ? std::string{"share_refresh"} : std::string{"refresh"};
     const bool secureCookie = externallyHttps_;
+    const auto cookie = refreshCookie(cookieName, t, config::Registry::get().auth.refresh_token_expiry_days, secureCookie);
     ws->set_option(websocket::stream_base::timeout::suggested(beast::role_type::server));
     ws->set_option(websocket::stream_base::decorator(
-        [t, cookieName, secureCookie](websocket::response_type& res) {
+        [cookie](websocket::response_type& res) {
             res.set(beast_http::field::server, "Vaulthalla");
-
-            const bool isDev = config::Registry::get().dev.enabled;
-            const std::string sameSite = isDev ? "Lax" : "Lax"; // keep Lax unless *need* Strict
-
-            std::string cookie = cookieName + "=" + t +
-                "; Path=/" +
-                "; HttpOnly" +
-                "; SameSite=" + sameSite +
-                "; Max-Age=604800";
-
-            if (secureCookie) cookie += "; Secure";
-
-            // IMPORTANT: use insert to avoid clobbering other Set-Cookie headers
+            // insert, not set: never clobber other Set-Cookie headers
             res.insert(beast_http::field::set_cookie, cookie);
         }
     ));

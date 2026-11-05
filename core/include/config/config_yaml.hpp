@@ -466,14 +466,19 @@ template<>
 struct convert<AuthConfig> {
     static Node encode(const AuthConfig& rhs) {
         Node node;
-        node["token_expiry_minutes"] = rhs.access_token_expiry_minutes;
+        node["access_token_expiry_minutes"] = rhs.access_token_expiry_minutes;
         node["refresh_token_expiry_days"] = rhs.refresh_token_expiry_days;
         return node;
     }
 
     static bool decode(const Node& node, AuthConfig& rhs) {
         if (!node.IsMap()) return false;
-        rhs.access_token_expiry_minutes = node["token_expiry_minutes"].as<int>(60);
+        // access_token_expiry_minutes is the shipped key; this decoder used to read only token_expiry_minutes (#320), the
+        // spelling a console save wrote, so both exist in installed config.yaml files. The shipped key wins.
+        if (node["access_token_expiry_minutes"])
+            rhs.access_token_expiry_minutes = node["access_token_expiry_minutes"].as<int>(60);
+        else
+            rhs.access_token_expiry_minutes = node["token_expiry_minutes"].as<int>(60);
         rhs.refresh_token_expiry_days = node["refresh_token_expiry_days"].as<int>(7);
         return true;
     }

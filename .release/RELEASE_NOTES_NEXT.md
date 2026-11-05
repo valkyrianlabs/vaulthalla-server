@@ -24,6 +24,13 @@ for users and operators; keep it representative of what actually ships.
 - Setting a password no longer fails when the server can't reach the Have I Been Pwned breach check. The check
   gives up after a few seconds, the bundled lists and the password rules decide, and the server log notes it. A
   password the service reports as breached is still refused.
+- The access-token lifetime set in `config.yaml` (`auth.access_token_expiry_minutes`) now takes effect. The
+  daemon was reading a different key, so a changed value was ignored and tokens always lasted 60 minutes.
+  Configs that use the older `token_expiry_minutes` keep working, and the daemon logs a note to rename it.
+- The sign-in cookie now lasts as long as `auth.refresh_token_expiry_days`. It was fixed at 7 days.
+- Contributor docs: a security-first compatibility policy (`docs/contributors/compatibility-policy.md`). Security
+  and recoverability of customer data take precedence over backward compatibility. Breaking changes are allowed
+  where they remove a real risk, but never at the cost of data, keys or recovery material.
 - Email-verified share links now work. Vaulthalla emails the 6-digit code to the address the visitor enters, if
   that address is on the link's list, through the email provider set up under `vh email` (Resend or SES). Until
   now no code was ever sent, so these links couldn't be opened. Every address gets the same reply, and the email

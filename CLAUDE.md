@@ -91,6 +91,24 @@ versions, cutting releases), `payload-markdown` + `payload-markdown-docs` (doc a
 - **Share overwrite goes through filesystem RBAC** (`FilesystemAction::Overwrite`), never a share-only shortcut.
 - **Stats never fake health.** Unknown values are `null`/`"not_available"`, and the backend owns severity.
 
+## Compatibility policy (security first)
+
+Full text: `docs/contributors/compatibility-policy.md`. Binding for agents:
+
+- **No hypothetical compatibility.** Without a verified customer dependency, build the cleanest secure design: no
+  transitional releases, legacy fallbacks, redundant secret copies or downgrade paths unless a concrete operational
+  need is recorded. Don't stop to ask the maintainer about hypothetical deployments.
+- **Security beats compatibility.** A confirmed vulnerability, insecure default or unsafe trust boundary may, and
+  may have to, be fixed with a breaking change.
+- **Breaking never means losing data.** Customer data, encryption keys and recovery material stay recoverable:
+  verify conversions before removing the old form, never silently regenerate an irreplaceable secret, never leave
+  encrypted storage undecryptable.
+- **Escalate only** for risk of irreversible data or decryptability loss, a verified customer disrupted without a
+  safe migration, competing security properties that need a product decision, or a change to key custody or trust
+  boundaries. Name the concrete risk and recommend a resolution.
+- **Document the decision** for every breaking change (rationale, affected interfaces/formats, operator migration
+  steps) in the PR and `.release/RELEASE_NOTES_NEXT.md`.
+
 ## Working conventions
 
 - Root-cause first: find where state diverges, fix it at the source, and add a regression guard (test or contract check).
