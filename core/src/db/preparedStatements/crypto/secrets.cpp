@@ -9,4 +9,6 @@ void vh::db::Connection::initPreparedSecrets() const {
     conn_->prepare("get_internal_secret", "SELECT * FROM internal_secrets WHERE key = $1");
 
     conn_->prepare("internal_secret_exists", "SELECT EXISTS(SELECT 1 FROM internal_secrets WHERE key = $1) AS exists");
+
+    conn_->prepare("delete_internal_secret", "DELETE FROM internal_secrets WHERE key = $1");
 }
