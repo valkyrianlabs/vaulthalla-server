@@ -114,3 +114,8 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   `publish-pkg.sh` (`PKG_REPO_URL`, uploads carry `X-Checksum-SHA256`; immutable, read back as before) and the
   release job is `macos-publish-pkg`. README.Debian's needrestart example names a placeholder `example.service`
   instead of `nexus.service`.
+- Auth (#321): `auth::Manager::loginUser` refuses every failed sign-in with the same message (`Manager::kLoginFailed`)
+  and logs the reason (unknown account, wrong password, deactivated, system-only) at warn. Unknown names are
+  verified against a once-built Argon2id hash of a random secret, and the password is verified before the account
+  state is checked, so each refusal costs one Argon2id verify. Test: `UserParityTest.RefusedSignInsLookTheSame`.
+

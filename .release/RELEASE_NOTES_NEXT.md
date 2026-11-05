@@ -13,6 +13,9 @@ for users and operators; keep it representative of what actually ships.
   connection) and still be treated as uploaded. Vaulthalla cancelled the incomplete upload at the provider but then
   carried on as if the file had arrived, so the bucket could be missing a file that the vault showed as synced. A
   failed part now fails the upload, and the file stays pending for the next sync pass.
+- A failed sign-in now always shows "Invalid username or password". The console used to say whether the account
+  existed, was deactivated, or had a different password, which let anyone check which usernames exist. The exact
+  reason is still in the server log.
 
 ## S3 gateway
 
