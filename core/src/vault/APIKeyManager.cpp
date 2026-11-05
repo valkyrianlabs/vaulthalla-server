@@ -1,4 +1,5 @@
 #include "vault/APIKeyManager.hpp"
+#include "crypto/secrets/Dependents.hpp"
 #include "db/query/vault/APIKey.hpp"
 #include "db/query/identities/User.hpp"
 #include "crypto/util/encrypt.hpp"
@@ -18,7 +19,7 @@ using namespace vh::vault::model;
 APIKeyManager::APIKeyManager() {
     const std::string tpmKeyName = paths::testMode ? "test_ak_master" : "ak_master";
     tpmKeyProvider_ = std::make_unique<secrets::KeyProvider>(tpmKeyName);
-    tpmKeyProvider_->init();
+    tpmKeyProvider_->initGuarded(secrets::dependents::apiKeyMaster());
 
     initAPIKeys();
 }

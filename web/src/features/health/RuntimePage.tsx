@@ -29,6 +29,13 @@ const FactGrid = ({ items, className = 'sm:grid-cols-2 xl:grid-cols-3' }: { item
   </ul>
 )
 
+// What protects the sealed secrets when it isn't hardware (#326).
+const POSTURE_NOTE: Record<string, string> = {
+  software: 'software TPM, no hardware binding',
+  development: 'development files, no hardware binding',
+  unknown: 'protection unknown',
+}
+
 const DEP_LABELS: Record<string, string> = {
   storage_manager: 'Storage manager',
   api_key_manager: 'Provider credentials',
@@ -110,7 +117,7 @@ const SystemHealthBody = ({ stats }: { stats: Raw }) => {
                 .map((k): [string, boolean | null] => [DEP_LABELS[k], bool(deps[k])]),
               ...(typeof deps.fuse_mount === 'string' ? [['Filesystem mount', mountSummary(deps)] as [string, string]] : []),
               ...(typeof deps.secrets_backend === 'string' && deps.secrets_backend
-                ? [['Secrets backend', deps.secrets_backend === 'file' ? 'file (development, no hardware binding)' : deps.secrets_backend] as [string, string]]
+                ? [['Secrets backend', `${deps.secrets_backend}${typeof deps.secrets_posture === 'string' && deps.secrets_posture !== 'hardware' ? ` (${POSTURE_NOTE[deps.secrets_posture] ?? deps.secrets_posture})` : ''}`] as [string, string]]
                 : []),
             ]}
           />

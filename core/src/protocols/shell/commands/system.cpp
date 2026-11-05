@@ -104,8 +104,10 @@ CommandResult handleStatus(const CommandCall& call) {
     out << "\n";
     if (health.deps.fuseMount != "disabled")
         out << "  fuse session: " << (health.deps.fuseSession ? "present" : "missing") << "\n";
-    out << "  secrets backend: " << health.deps.secretsBackend
-        << (health.deps.secretsBackend == "file" ? " (development: no hardware binding)" : "") << "\n";
+    out << "  secrets backend: " << health.deps.secretsBackend << " (" << health.deps.secretsPosture
+        << (health.deps.secretsPosture == "hardware" ? "" : health.deps.secretsPosture == "software"
+                ? ": swtpm, no hardware binding" : health.deps.secretsPosture == "development"
+                ? ": plain files, no hardware binding" : "") << ")\n";
     if (health.shell.adminUidBound) {
         out << "  shell admin uid bound: " << yesNo(*health.shell.adminUidBound);
         if (!*health.shell.adminUidBound) out << " (setup advisory)";

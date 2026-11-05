@@ -231,6 +231,13 @@ caching:
 #    max_edit_bytes: 2097152         # Largest text file the web editor saves (2 MiB)
 
 
+# === 🔐 Sealed Secrets ===
+# Master secrets are sealed to this machine: a TPM on Linux, the Secure Enclave on macOS (docs: vaults/secrets-and-key-export).
+secrets:
+  require_hardware: false                 # true: refuse to start unless a hardware TPM / the Secure Enclave seals them (no swtpm, no files)
+  allow_development_file_backend: false   # macOS without a usable Secure Enclave: allow plain 0600 key files (development only)
+
+
 # === ⚖️ Auditing ===
 # Auditing settings manage log rotation, encryption waivers, and trashed files.
 # Logs are rotated to prevent excessive disk usage.

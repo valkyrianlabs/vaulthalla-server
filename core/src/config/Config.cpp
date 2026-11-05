@@ -169,6 +169,11 @@ Config& Config::operator=(Config&&) noexcept = default;
         }
 
         if (auto node = root["logging"]) YAML::convert<LoggingConfig>::decode(node, cfg.logging);
+        // Read-only here like `mount`: config.yaml only, never written back or exposed through settings (#326).
+        if (auto node = root["secrets"]; node && node.IsMap()) {
+            cfg.secrets.require_hardware = node["require_hardware"].as<bool>(false);
+            cfg.secrets.allow_development_file_backend = node["allow_development_file_backend"].as<bool>(false);
+        }
 
         applyLegacyKeys(root, cfg, deprecations);
         requireRemoteDefaults(cfg.vaults.s3);
