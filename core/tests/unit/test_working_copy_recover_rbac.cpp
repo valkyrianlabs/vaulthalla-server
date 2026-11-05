@@ -108,10 +108,18 @@ TEST_F(WorkingCopyRecoverRbacTest, AWriterWhoMayNoLongerWriteThereGetsNothingCre
     const auto hooks = vh::fuse::WorkingCopies::daemonHooks();
     ASSERT_TRUE(hooks.recover);
     const auto last = lastSeen("/notes-reader.txt");
-    EXPECT_THROW(hooks.recover(last, wcrbac::bytes("unsaved"), static_cast<int32_t>(reader->id)), std::runtime_error);
+    const auto refusal = [&](const std::optional<int32_t> writer) -> std::string {
+        try {
+            hooks.recover(last, wcrbac::bytes("unsaved"), writer);
+        } catch (const std::runtime_error& e) {
+            return e.what();
+        }
+        return "";
+    };
+    EXPECT_NE(refusal(static_cast<int32_t>(reader->id)).find("may not create files there"), std::string::npos);
     EXPECT_FALSE(vh::runtime::Deps::get().fsCache->entryExists(last.fuse_path));
     // An unknown writer is refused too.
-    EXPECT_THROW(hooks.recover(last, wcrbac::bytes("unsaved"), std::nullopt), std::runtime_error);
+    EXPECT_NE(refusal(std::nullopt).find("not an account"), std::string::npos);
     EXPECT_FALSE(vh::runtime::Deps::get().fsCache->entryExists(last.fuse_path));
 }
 
