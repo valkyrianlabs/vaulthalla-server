@@ -28,6 +28,11 @@ for users and operators; keep it representative of what actually ships.
   daemon was reading a different key, so a changed value was ignored and tokens always lasted 60 minutes.
   Configs that use the older `token_expiry_minutes` keep working, and the daemon logs a note to rename it.
 - The sign-in cookie now lasts as long as `auth.refresh_token_expiry_days`. It was fixed at 7 days.
+- Share links are now verified with a key that is sealed under the server's master key, like vault keys,
+  instead of being stored in the database in readable form. The first start converts the existing key, so every
+  existing link keeps working. **Downgrading to an earlier release after this one makes existing share links stop
+  working** (they need to be created again). Share links also need the master key to be restored with a backup;
+  see "Backup and recovery".
 
 ## S3 gateway
 

@@ -139,4 +139,10 @@ One level of nested "  - " detail bullets is allowed. Consolidate; don't paste c
   `refresh_token_expiry_days` (`protocols/ws/RefreshCookie.hpp`); it was hard-coded to 604800. Tests:
   `ConfigSettingsTest.AccessTokenLifetimeHonoursTheShippedKey`, `ConfigSettingsSerialization.AuthWritesTheShippedKey`,
   `RefreshCookie.MaxAgeFollowsTheConfiguredLifetime`.
+- Sharing (#322): the share-token pepper is sealed under the host master key (`crypto::secrets::Manager`, key
+  `share.token.pepper.sealed.v1`). The plaintext `share.token.pepper.v1` row from earlier releases is converted on
+  first use: the same value is sealed, read back and compared, then the plaintext row is deleted (resumes after an
+  interruption; idempotent). Fails closed, never regenerates, when the sealed copy can't be unsealed or disagrees
+  with a leftover plaintext copy. New `db::query::crypto::Secret::deleteSecret` (`delete_internal_secret`).
+  Downgrade below this release invalidates share links. Tests: `SharePepperSealing.*` (DB-backed).
 

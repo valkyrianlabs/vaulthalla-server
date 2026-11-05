@@ -73,6 +73,14 @@ for archaeology, because parts of it are stale (for example, it says uploads sta
   update/revoke/rotation bump. The console share dialog doesn't set `max_downloads` (ws `share.link.create/update`
   accept it).
 
+**Share-token pepper (#322).** The keyed BLAKE2b pepper behind every token hash is sealed under the host master key by
+`crypto::secrets::Manager` as `share.token.pepper.sealed.v1`. Releases before #322 kept it in plaintext as
+`share.token.pepper.v1`; `share/Token.cpp` converts it once (seal, read back identical, then delete the plaintext;
+resumes if interrupted) and fails closed if the sealed copy can't be unsealed or disagrees with a leftover plaintext
+one. It is generated only when neither exists. Downgrading below this release breaks share links (the old code
+generates a fresh plaintext pepper). Restore without the master key: the operator deletes the sealed row on purpose
+(docs/vaults/backup-and-recovery.md).
+
 ## Open items (verified 2026-09-30)
 
 1. **Email-challenge codes are never delivered.** `share::Manager::startEmailChallenge` returns a
