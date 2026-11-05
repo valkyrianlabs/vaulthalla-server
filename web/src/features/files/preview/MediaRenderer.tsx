@@ -36,7 +36,7 @@ function MediaRenderer({ source, entry, plan, onDownload, kind }: RendererProps 
     if (media.current && media.current !== element) release(media.current)
     media.current = element
   }, [])
-  const original = source.contentUrl(entry.path, 'inline')
+  const original = source.contentUrl(entry, 'inline')
   const [src, setSrc] = useState(original)
   const [failure, setFailure] = useState<Failure | null>(null)
   const [converting, setConverting] = useState<number | null>(null)
@@ -95,7 +95,7 @@ function MediaRenderer({ source, entry, plan, onDownload, kind }: RendererProps 
     conversion.current = controller
     setConverting(0)
     try {
-      const url = source.derivedUrl(entry.path, transcodeKind)
+      const url = source.derivedUrl(entry, transcodeKind)
       const response = await pollDerived(url, { signal: controller.signal, probe: true, onQueued: setConverting })
       void response.body?.cancel().catch(() => undefined)
       setFailure(null)

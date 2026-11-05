@@ -221,6 +221,10 @@ struct CreateLinkRequest {
     std::vector<RecipientRoleAssignmentRequest> recipients{};
 };
 
+// The console path a link opens at. The token goes in the URL fragment, which browsers never send to the server or
+// put in `Referer`, so it stays out of access logs and other sites (#327).
+inline constexpr std::string_view kPublicSharePath = "/share#";
+
 struct CreateLinkResult {
     std::shared_ptr<Link> link;
     std::string public_token;

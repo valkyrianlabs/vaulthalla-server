@@ -295,12 +295,14 @@ struct convert<LoggingConfig> {
     static Node encode(const LoggingConfig& rhs) {
         Node node;
         node["log_levels"] = rhs.levels;
+        node["file_paths"] = logFilePathsToString(rhs.file_paths);
         return node;
     }
 
     static bool decode(const Node& node, LoggingConfig& rhs) {
         if (!node.IsMap()) return false;
-        rhs.levels = node["log_levels"].as<LogLevelsConfig>();
+        if (node["log_levels"]) rhs.levels = node["log_levels"].as<LogLevelsConfig>();
+        if (node["file_paths"]) rhs.file_paths = logFilePathsFromString(node["file_paths"].as<std::string>());
         return true;
     }
 };

@@ -801,6 +801,38 @@ def ensure_local_certificate(force: bool = False) -> str:
     return "created"
 
 
+ACCESS_LOG_PRELUDE = [
+    "# Access logs never record a share token, a file name or a query string (#327): old /share/<token> links and",
+    "# every ?query are replaced before logging, and Referer is not logged. (error_log lines can still quote a",
+    "# request line; they are written only on errors.)",
+    "map $request_uri $vaulthalla_log_uri {",
+    "    ~^/share/                \"/share/[redacted]\";",
+    "    ~^(?<vh_log_path>[^?]*)\\?  \"$vh_log_path?[redacted]\";",
+    "    default                  $request_uri;",
+    "}",
+    "log_format vaulthalla '$remote_addr - $remote_user [$time_local] \"$request_method $vaulthalla_log_uri "
+    "$server_protocol\" $status $body_bytes_sent \"-\" \"$http_user_agent\"';",
+    "",
+]
+ACCESS_LOG_LINE = "    access_log /var/log/nginx/access.log vaulthalla;"
+
+
+def with_redacted_access_logs(lines: list[str]) -> str:
+    """The site with the redacting log format declared once and used by every server block (#327)."""
+    out: list[str] = []
+    prelude_done = False
+    for line in lines:
+        if line == "server {":
+            if not prelude_done:
+                out.extend(ACCESS_LOG_PRELUDE)
+                prelude_done = True
+            out.append(line)
+            out.append(ACCESS_LOG_LINE)
+            continue
+        out.append(line)
+    return "\n".join(out)
+
+
 def security_header_lines(hsts: bool) -> list[str]:
     """Response headers for the console and its file lanes (#324). HSTS only with a publicly trusted certificate:
     with the local self-signed one, browsers would refuse the click-through and lock people out."""
@@ -980,7 +1012,7 @@ def render_managed_nginx_config(
             add_ssl_lines()
             add_s3_location()
             out.extend(["}", ""])
-        return "\n".join(out)
+        return with_redacted_access_logs(out)
 
     if local_tls:
         out.extend([
@@ -1000,7 +1032,7 @@ def render_managed_nginx_config(
         add_ssl_lines()
         add_web_locations()
         out.extend(["}", ""])
-        return "\n".join(out)
+        return with_redacted_access_logs(out)
 
     out.append("server {")
     out.append("    listen 80;")
@@ -1009,7 +1041,7 @@ def render_managed_nginx_config(
     out.append("")
     add_web_locations()
     out.extend(["}", ""])
-    return "\n".join(out)
+    return with_redacted_access_logs(out)
 
 
 def is_managed_site_symlink_target(path: Path) -> bool:

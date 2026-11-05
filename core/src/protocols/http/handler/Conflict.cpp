@@ -3,6 +3,7 @@
 #include "fs/model/File.hpp"
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
+#include "log/Redact.hpp"
 #include "ops/Conflicts.hpp"
 #include "protocols/http/Access.hpp"
 #include "protocols/http/handler/Common.hpp"
@@ -130,7 +131,7 @@ model::preview::Response conflictSide(request&& req) {
         if (req.method() == verb::get)
             log::Registry::audit()->info("[http] {} previewed the {} side of sync conflict {} ('{}', vault {})",
                                          caller.session->user->name(), wantsRemote ? "remote" : "local", id,
-                                         t.record.path, t.record.vault_id);
+                                         log::path(t.record.path), t.record.vault_id);
         return wantsRemote ? remote(req, t) : local(req, t);
     } catch (const std::exception& e) {
         return errorFor(req, e);

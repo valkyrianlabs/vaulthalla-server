@@ -2,6 +2,7 @@
 #include "storage/CloudEngine.hpp"
 #include "fs/model/File.hpp"
 #include "log/Registry.hpp"
+#include "log/Redact.hpp"
 #include "recovery/local/Backlog.hpp"
 #include "sync/model/ScopedOp.hpp"
 #include "sync/model/Baseline.hpp"
@@ -26,7 +27,7 @@ void Upload::operator()() {
         op->success = true;
         recordBaseline(engine, vh::sync::model::Baseline::afterUpload(*file));
     } catch (const std::exception& e) {
-        log::Registry::sync()->error("[UploadTask] Failed to upload file: {} - {}", file->path.string(), e.what());
+        log::Registry::sync()->error("[UploadTask] Failed to upload file: {} - {}", log::file(file->id, file->path), e.what());
     }
 
     if (op) op->stop();

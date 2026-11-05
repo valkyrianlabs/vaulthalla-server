@@ -5,6 +5,7 @@
 #include "fs/model/Path.hpp"
 #include "runtime/Deps.hpp"
 #include "log/Registry.hpp"
+#include "log/Redact.hpp"
 #include "fs/cache/Registry.hpp"
 #include "platform/Durable.hpp"
 
@@ -161,7 +162,7 @@ void replaceFileAtomic(const std::filesystem::path& absPath,
         fsyncDirectory(dir);
     } catch (const std::exception& e) {
         log::Registry::fs()->error("[replaceFileAtomic] Replaced {} but could not fsync its directory: {}",
-                                   absPath.string(), e.what());
+                                   log::path(absPath), e.what());
     }
 }
 
@@ -200,7 +201,7 @@ std::vector<uint8_t> decrypt_file_to_memory(const unsigned int /*vault_id*/,
     const auto abs_path = engine->vaultPathToFusePath(rel_path);
     const auto entry = runtime::Deps::get().fsCache->getEntry(abs_path);
     if (!entry) {
-        log::Registry::storage()->error("[decrypt_file_to_memory] Entry not found for path: {}", abs_path.string());
+        log::Registry::storage()->error("[decrypt_file_to_memory] Entry not found for path: {}", log::path(abs_path));
         throw std::runtime_error("Entry not found for path: " + abs_path.string());
     }
 

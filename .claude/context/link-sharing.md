@@ -12,7 +12,9 @@ for archaeology, because parts of it are stale (for example, it says uploads sta
   per-assignment filesystem overrides (`072_share_vault_role_assignments.sql`).
   `link_share_vault_role` is legacy and read-only.
 - Core: `core/include/share/*`: `Manager`, `TargetResolver`, `PrincipalResolver`, `Scope`, `RateLimiter`.
-- Web: `/share/[token]/[[...path]]` renders `features/share/SharePage.tsx`, which reuses the console
+- Web: `/share#<token>[/<path>]` renders `features/share/SharePage.tsx`. The token and folder live in the URL fragment
+  (`features/share/shareLocation.ts`, #327), so they never reach access logs or `Referer`. `middleware.ts` redirects
+  pre-#327 `/share/<token>/<path>` links to that form. `share::kPublicSharePath` builds `public_url_path`. The page reuses the console
   `features/files/FileBrowser` with a share `FsSource` (`features/files/source.ts`: share caps, `share=1` URLs, no
   `edit`). `features/share/shareSession.ts` (zustand) holds **only** bootstrap, session and email-challenge state and
   its own `WsClient`.

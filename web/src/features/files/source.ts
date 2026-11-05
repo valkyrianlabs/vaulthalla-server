@@ -34,19 +34,28 @@ export interface FsSource {
   move: (from: string, to: string) => Promise<void>
   copy: (from: string, to: string) => Promise<void>
   remove: (path: string) => Promise<void>
-  previewUrl: (path: string, size?: number, page?: number) => string
-  downloadUrl: (path: string) => string
+  // File lanes address an entry by its opaque id (`entry=<id>`) whenever the id is known, so file names and paths
+  // never appear in URLs, proxy access logs or browser history (#327). A bare path (a sibling resource of a 3D model,
+  // an entry without an id) still works.
+  previewUrl: (target: EntryRef, size?: number, page?: number) => string
+  downloadUrl: (target: EntryRef) => string
   // Range-capable original bytes for in-browser viewers.
-  contentUrl: (path: string, disposition?: 'inline' | 'attachment') => string
+  contentUrl: (target: EntryRef, disposition?: 'inline' | 'attachment') => string
   // A server-derived artifact (STEP → GLB, transcodes): 200 bytes, 202 queued, 422 failed, 503 helper missing.
-  derivedUrl: (path: string, kind: string) => string
+  derivedUrl: (target: EntryRef, kind: string) => string
   // Text save target (`PUT` with If-Match); null where editing isn't offered.
-  textSaveUrl: ((path: string) => string) | null
+  textSaveUrl: ((target: EntryRef) => string) | null
   uploadQuery: string
   uploadSessionBody: (vaultFields: { path: string; filename: string; size: number; mime: string | null; fileId: string }[]) => unknown
 }
 
 const query = (params: Record<string, string | number>) => new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)])).toString()
+
+export type EntryRef = string | { id?: number; path: string }
+
+// `entry=<id>` when the id is known, else the normalized path.
+export const addressOf = (target: EntryRef): Record<string, string | number> =>
+  typeof target !== 'string' && target.id && target.id > 0 ? { entry: target.id } : { path: normalizePath(typeof target === 'string' ? target : target.path) }
 
 export const authSource = (vault: { id: number; name: string }): FsSource => ({
   key: `vault:${vault.id}`,
@@ -78,11 +87,11 @@ export const authSource = (vault: { id: number; name: string }): FsSource => ({
   remove: async path => {
     await api.send('fs.entry.delete', { vault_id: vault.id, path })
   },
-  previewUrl: (path, size = 128, page) => `/preview?${query({ vault_id: vault.id, path, size, ...(page ? { page } : {}) })}`,
-  downloadUrl: path => `/download?${query({ vault_id: vault.id, path })}`,
-  contentUrl: (path, disposition = 'inline') => `/download/content?${query({ vault_id: vault.id, path, disposition })}`,
-  derivedUrl: (path, kind) => `/preview/derived?${query({ vault_id: vault.id, path, kind })}`,
-  textSaveUrl: path => `/upload/text?${query({ vault_id: vault.id, path })}`,
+  previewUrl: (target, size = 128, page) => `/preview?${query({ vault_id: vault.id, ...addressOf(target), size, ...(page ? { page } : {}) })}`,
+  downloadUrl: target => `/download?${query({ vault_id: vault.id, ...addressOf(target) })}`,
+  contentUrl: (target, disposition = 'inline') => `/download/content?${query({ vault_id: vault.id, ...addressOf(target), disposition })}`,
+  derivedUrl: (target, kind) => `/preview/derived?${query({ vault_id: vault.id, ...addressOf(target), kind })}`,
+  textSaveUrl: target => `/upload/text?${query({ vault_id: vault.id, ...addressOf(target) })}`,
   uploadQuery: '',
   uploadSessionBody: files => ({
     vault_id: vault.id,
@@ -132,10 +141,10 @@ export const shareSource = (publicToken: string, share: PublicShare): FsSource =
     move: notInShares,
     copy: notInShares,
     remove: notInShares,
-    previewUrl: (path, size = 128, page) => `/preview?${query({ share: 1, path: normalizePath(path), size, ...(page ? { page } : {}) })}`,
-    downloadUrl: path => `/download?${query({ share: 1, path: normalizePath(path) })}`,
-    contentUrl: (path, disposition = 'inline') => `/download/content?${query({ share: 1, path: normalizePath(path), disposition })}`,
-    derivedUrl: (path, kind) => `/preview/derived?${query({ share: 1, path: normalizePath(path), kind })}`,
+    previewUrl: (target, size = 128, page) => `/preview?${query({ share: 1, ...addressOf(target), size, ...(page ? { page } : {}) })}`,
+    downloadUrl: target => `/download?${query({ share: 1, ...addressOf(target) })}`,
+    contentUrl: (target, disposition = 'inline') => `/download/content?${query({ share: 1, ...addressOf(target), disposition })}`,
+    derivedUrl: (target, kind) => `/preview/derived?${query({ share: 1, ...addressOf(target), kind })}`,
     textSaveUrl: null,
     uploadQuery: '?share=1',
     uploadSessionBody: files => ({

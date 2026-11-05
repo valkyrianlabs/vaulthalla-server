@@ -246,6 +246,22 @@ Remote refresh is opt-in. If you enforce price budgets, review catalog freshness
 
 S3 gateway per-key budgets use the same price-budget service and pricing catalogs. Remote-backed gateway operations evaluate global, provider, vault, gateway credential, and gateway credential/vault policies before upstream-costing work. Local-only gateway buckets do not consume remote provider price budgets.
 
+## Logging
+
+File and folder names can be sensitive in their own right: a patient's name, a case number, a client. By default, log lines in `vaulthalla.log` and `audit.log` name a file by its entry id (`entry 42`). A path that has no entry yet (a failed create, for instance) appears as an opaque tag such as `path#3f9a1c2e5b7d0a46`.
+
+```yaml
+logging:
+  file_paths: ids    # ids | full
+```
+
+- `ids` (the default): entry ids and tags only. A tag stays the same for one path while the daemon runs, so you can follow one file through the log. The tag's key is random for each run and never stored, so a tag can't be matched against guessed names.
+- `full`: adds the vault path after the id, for example `entry 42 (/Reports/q3.pdf)`. Use it only on hosts that hold nothing sensitive.
+
+Config files written before this setting existed get `ids`. To look up an id, use `vh fs` or the console.
+
+The console keeps names out of web server logs too. It addresses files by entry id in download and preview URLs, and share links carry their token after `#` (`/share#vhs_…`), which browsers never send to the server.
+
 ## Audit Trail
 
 The tamper-evident audit trail in the database ([Audit Trail](/admin/audit-trail)):
