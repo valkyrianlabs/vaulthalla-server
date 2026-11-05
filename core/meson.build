@@ -103,6 +103,8 @@ conf.set_quoted('VH_S3_GATEWAY_MULTIPART_PARTS_DIRNAME', '.8f3a9c1d6e2b4f70')
 conf.set_quoted('VH_PSQL_SCHEMAS_PATH', psql_dir)
 # A libmagic database shipped with the install (the macOS package bundles one); absent on Debian, which has its own.
 conf.set_quoted('VH_MAGIC_DB_PATH', join_paths(data_dir, 'magic.mgc'))
+# Bundled password-strength lists (deploy/password-lists, #316): read at startup, never downloaded.
+conf.set_quoted('VH_PASSWORD_LISTS_PATH', join_paths(data_dir, 'password-lists'))
 conf.set_quoted('VH_PSQL_TEST_SCHEMAS_PATH', join_paths(repo_root, 'deploy/psql'))
 # The macOS sealer this build prefers (platform/darwin/Sealer.cpp); Linux always seals with TPM2.
 conf.set_quoted('VH_DARWIN_SEALER', get_option('darwin_sealer'))
@@ -307,6 +309,7 @@ if get_option('build_unit_tests')
         '-DVH_TEST_FAKE_HELPER="' + fake_derive_helper.full_path() + '"',
         '-DVH_TEST_CAD_HELPER="' + cad_helper_path + '"',
         '-DVH_TEST_ASSETS_DIR="' + join_paths(core_root, 'test-assets') + '"',
+        '-DVH_TEST_PASSWORD_LISTS_DIR="' + join_paths(repo_root, 'deploy', 'password-lists') + '"',
     ]
 
     unit_test_objects = static_library(

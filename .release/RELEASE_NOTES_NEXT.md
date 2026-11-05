@@ -17,6 +17,13 @@ for users and operators; keep it representative of what actually ships.
   clone the source and have your own AI coding agent audit it before you install, using the read-only prompt in
   `SECURITY_AUDIT_PROMPT.md`. The audit runs entirely on your side: nothing in Vaulthalla starts it or sends
   anything to Valkyrian Labs.
+- Vaulthalla now starts its web console and HTTP listeners on hosts without outbound internet access. Until now
+  the daemon downloaded password lists from GitHub every time it started, and on an offline, firewalled or
+  air-gapped host that download failed and the web console and Desktop's HTTP lanes never came up. The lists now
+  ship in the package (`/usr/share/vaulthalla/password-lists`) and change only with a release.
+- Setting a password no longer fails when the server can't reach the Have I Been Pwned breach check. The check
+  gives up after a few seconds, the bundled lists and the password rules decide, and the server log notes it. A
+  password the service reports as breached is still refused.
 
 ## S3 gateway
 

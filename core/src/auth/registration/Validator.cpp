@@ -51,8 +51,18 @@ bool Validator::isValidPassword(const std::string& password) {
 std::optional<std::string> Validator::passwordPolicyViolation(const std::string& password) {
     if (paths::testMode) return std::nullopt;
     if (auto violation = localPasswordPolicyViolation(password)) return violation;
-    if (crypto::password::Strength::isPwnedPassword(password))
-        return "Password has been found in public breaches; choose a different one.";
+    using crypto::password::Strength;
+    switch (Strength::checkPwnedPassword(password)) {
+        case Strength::BreachCheck::Found:
+            return "Password has been found in public breaches; choose a different one.";
+        case Strength::BreachCheck::Unavailable:
+            // Offline or firewalled hosts (#316): the breach corpus can't be asked, so the bundled lists and the local
+            // policy above decide. Refusing every password here made users impossible to create or update offline.
+            log::Registry::auth()->warn("[Validator] Breach-corpus lookup unavailable; password judged by the local policy only");
+            break;
+        case Strength::BreachCheck::NotFound:
+            break;
+    }
     return std::nullopt;
 }
 

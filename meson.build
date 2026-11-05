@@ -91,6 +91,14 @@ if get_option('install_data')
         install_dir: data_dir,
     )
 
+    # Password-strength lists read at startup from local files (#316); provenance in deploy/password-lists/README.md.
+    install_data(
+        'deploy/password-lists/dictionary.txt',
+        'deploy/password-lists/common-passwords.txt',
+        'deploy/password-lists/SCOWL-COPYRIGHT',
+        install_dir: data_dir / 'password-lists',
+    )
+
     install_data(
         'deploy/nginx/vaulthalla.conf',
         install_dir: data_dir / 'nginx',
