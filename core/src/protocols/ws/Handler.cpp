@@ -74,6 +74,7 @@ void Handler::registerAuthHandlers(const std::shared_ptr<Router>& r) {
     r->registerSessionOnlyHandler("auth.users.list", &handler::Auth::listUsers);
     r->registerSessionOnlyHandler("auth.security.status", &handler::Auth::securityStatus);
     r->registerHandlerWithToken("auth.refresh", &handler::Auth::refreshToken);
+    r->registerSessionOnlyHandler("auth.activity", &handler::Auth::activity);
 }
 
 // Paired devices (ops::devices). Which sessions reach which is the router's decision (classifyCommand).

@@ -589,7 +589,9 @@ struct convert<ConnectionLifecycleManagerConfig> {
 
     static bool decode(const Node& node, ConnectionLifecycleManagerConfig& rhs) {
         if (!node.IsMap()) return false;
-        rhs.idle_timeout_minutes = std::max(5, node["idle_timeout_minutes"].as<int>(30));
+        // 0 turns idle sign-out off (#319); otherwise at least a minute.
+        const int idle = node["idle_timeout_minutes"].as<int>(30);
+        rhs.idle_timeout_minutes = idle <= 0 ? 0 : static_cast<uint32_t>(idle);
         rhs.unauthenticated_timeout_seconds = std::max(30, node["unauthenticated_timeout_seconds"].as<int>(300));
         rhs.sweep_interval_seconds = std::max(15, node["sweep_interval_seconds"].as<int>(60));
         return true;

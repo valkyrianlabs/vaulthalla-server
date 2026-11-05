@@ -135,6 +135,13 @@ json Auth::getUser(const json &payload, const std::shared_ptr<Session> &session)
     return {{"user", *ops::users::get(requireSessionUser(session), payload.at("id").get<unsigned int>())}};
 }
 
+// The console reports real user input (#319). The router has already validated the session (an idle one is refused
+// there), and the server records its own clock, never a time the client supplies.
+json Auth::activity(const std::shared_ptr<Session> &session) {
+    runtime::Deps::get().sessionManager->noteUserActivity(session);
+    return {};
+}
+
 json Auth::logout(const std::shared_ptr<Session> &session) {
     runtime::Deps::get().sessionManager->invalidate(session);
     return {};

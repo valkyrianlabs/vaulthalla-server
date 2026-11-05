@@ -72,6 +72,12 @@ namespace vh::db::query::auth {
         });
     }
 
+    void RefreshToken::touchActivity(const std::string& jti) {
+        Transactions::exec("RefreshToken::touchActivity", [&](pqxx::work& txn) {
+            txn.exec(pqxx::prepped{"touch_refresh_token_activity"}, pqxx::params{jti});
+        });
+    }
+
     void RefreshToken::touch(const std::string& jti) {
         Transactions::exec("RefreshToken::touchRefreshToken", [&](pqxx::work& txn) {
             txn.exec(pqxx::prepped{"touch_refresh_token_last_used"}, pqxx::params{jti});
