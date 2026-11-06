@@ -13000,6 +13000,36 @@
               "types": [
                 "string"
               ]
+            },
+            {
+              "description": "secrets.tpm_pcr_policy: bind newly sealed secrets to TPM PCR 7 (Linux TPM only).",
+              "enum": [
+                "none",
+                "pcr7"
+              ],
+              "name": "secrets_policy",
+              "required": false,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "Sealed secrets that carry a PCR 7 binding.",
+              "minimum": 0,
+              "name": "secrets_pcr_bound",
+              "required": false,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "PCR-bound with no `vh secret export all` newer than 30 days, or blobs that don't match the configured policy.",
+              "name": "secrets_warning",
+              "required": false,
+              "types": [
+                "string",
+                "null"
+              ]
             }
           ],
           "name": "deps",
@@ -19685,7 +19715,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "d80bf7be73109849c82ac954c063e30efdcb6b59168998ee7e6004062d876e69",
+  "models_hash": "c6ffc0ab0514560fb143d15db092a29c0f9b782e56e7698ccaced1bbd2291e06",
   "protocol": {
     "min": 1,
     "version": 1

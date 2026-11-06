@@ -204,7 +204,10 @@ SystemHealth SystemHealth::snapshot() {
         .mountIsolation = mount.isolation,
         .mountDetail = mount.detail,
         .secretsBackend = std::string(crypto::secrets::KeyProvider::backend()),
-        .secretsPosture = std::string(crypto::secrets::KeyProvider::posture())
+        .secretsPosture = std::string(crypto::secrets::KeyProvider::posture()),
+        .secretsPolicy = "none",
+        .secretsPcrBound = 0,
+        .secretsWarning = {}
     };
 
     out.shell.adminUidBound = shellServer ? std::optional<bool>(shellServer->adminUIDSet()) : std::nullopt;
