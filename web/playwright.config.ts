@@ -47,6 +47,17 @@ export default defineConfig({
     {
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
+      testIgnore: /mfa\.spec\.ts$/,
+    },
+    // mfa.spec.ts on its own, after every other spec: the daemon allows 30 auth.passkey.options/login requests per
+    // client address per minute (protocols/ws/ShareRateLimit.cpp), every /login load in Chromium spends one (the
+    // username field's passkey autofill), and all workers share 127.0.0.1. Run it alone with
+    // `--project=passkeys --no-deps`.
+    {
+      name: 'passkeys',
+      use: { ...devices['Desktop Chrome'] },
+      testMatch: /mfa\.spec\.ts$/,
+      dependencies: ['chromium'],
     },
   ],
 })

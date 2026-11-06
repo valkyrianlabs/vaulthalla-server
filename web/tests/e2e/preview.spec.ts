@@ -167,19 +167,45 @@ test.describe.serial('rich previews', () => {
   })
 
   test('a PDF pages through server renders', async ({ page }) => {
+    // The sheet addresses the file by entry id, never by its name (#327): learn doc.pdf's id from the listing.
+    let pdfId = 0
+    page.on('websocket', ws => {
+      if (new URL(ws.url()).pathname !== '/ws') return
+      ws.on('framereceived', frame => {
+        if (pdfId || typeof frame.payload !== 'string' || !frame.payload.includes('doc.pdf')) return
+        try {
+          const files = (JSON.parse(frame.payload)?.data?.files ?? []) as { name?: string; id?: number }[]
+          pdfId = files.find(file => file.name === 'doc.pdf')?.id ?? 0
+        } catch {
+          // not a listing frame
+        }
+      })
+    })
     const pages: string[] = []
+    const named: string[] = []
+    const isPdfPage = (url: URL) => url.pathname === '/preview' && pdfId > 0 && url.searchParams.get('entry') === String(pdfId)
     page.on('response', response => {
       const url = new URL(response.url())
-      if (url.pathname === '/preview' && url.searchParams.get('path') === filePath('doc.pdf')) pages.push(`${url.searchParams.get('page') ?? '0'}:${response.status()}`)
+      if (!isPdfPage(url)) return
+      pages.push(`${url.searchParams.get('page') ?? '0'}:${response.status()}`)
+      if (url.searchParams.has('path')) named.push(url.search)
     })
     await gotoFolder(page)
+    await expect.poll(() => pdfId, { message: 'doc.pdf is listed with its id' }).toBeGreaterThan(0)
     const sheet = await openPreview(page, 'doc.pdf')
     const indicator = sheet.getByTestId('pdf-page-indicator')
     await expect(indicator).toHaveText('Page 1 of 2')
     await expect(sheet.getByTestId('pdf-page')).toBeVisible()
     await expect(sheet.getByRole('button', { name: 'Previous page' })).toBeDisabled()
+    // The indicator moves at the click; wait for page 2's render itself before paging back (that would cancel it).
+    const second = page.waitForResponse(response => {
+      const url = new URL(response.url())
+      return isPdfPage(url) && url.searchParams.get('page') === '1'
+    })
     await sheet.getByRole('button', { name: 'Next page' }).click()
     await expect(indicator).toHaveText('Page 2 of 2')
+    expect((await second).status()).toBe(200)
+    await expect(sheet.getByRole('img', { name: 'doc.pdf, page 2' })).toBeVisible()
     await expect(sheet.getByRole('button', { name: 'Next page' })).toBeDisabled()
     // PageUp goes back; ←/→ stay with the sheet's file navigation.
     await page.keyboard.press('PageUp')
@@ -188,6 +214,7 @@ test.describe.serial('rich previews', () => {
     await expect(sheet.getByTestId('pdf-page')).toBeVisible()
     expect(pages).toContain('0:200')
     expect(pages).toContain('1:200')
+    expect(named).toEqual([])
     await closeSheet(page, sheet)
   })
 
