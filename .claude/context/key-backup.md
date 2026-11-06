@@ -284,7 +284,7 @@ envelope in the vault's own bucket (`.vaulthalla/key/<kid>`). Custody amendment 
 | Operation | CLI | ws | Who | Where |
 |---|---|---|---|---|
 | list | `vh vault keys recipient list <vault> [--json]` | `vault.keys.recipients.list {vault_id}` | encryption-key View | any session |
-| add | `vh vault keys recipient add <vault> --public-key <b64\|hex> [--label]` | `vault.keys.recipients.add {vault_id, public_key, label?}` | encryption-key Export + keys step-up (vault-bound) | CLI or a paired device (`recipient_requires_device` elsewhere; devices refused by step-up until #361) |
+| add | `vh vault keys recipient add <vault> --public-key <b64\|hex> [--label]` | `vault.keys.recipients.add {vault_id, public_key, label?}` | encryption-key Export + keys step-up (vault-bound) | CLI or a paired device (`recipient_requires_device` elsewhere; a device needs a device approval for the keys step-up, #361) |
 | revoke | `vh vault keys recipient revoke <vault> <grant_id>` | `vault.keys.recipients.revoke {vault_id, grant_id}` | same | same |
 | kit import | `vh vault keys import <vault> --recovery-kit <file\|->` | (none) | as import | CLI (import's channels) |
 
