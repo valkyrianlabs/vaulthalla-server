@@ -475,7 +475,7 @@ TEST_F(LiveR2, EventNotificationsOnTheRunBucket) {
 // deletion empties), sent under the controller's opaque_v1 request rules. Each object carries no x-amz-meta-*, is
 // application/octet-stream and exactly its VHF1 size; the requests are what spec 01 §5 says (1 PUT per small object,
 // initiate + parts + complete for a multipart one, 1 GET per read, no HEAD for metadata).
-TEST_F(LiveR2Test, OpaqueObjectsCarryNoMetadataAndCostWhatSpec01Says) {
+TEST_F(LiveR2, OpaqueObjectsCarryNoMetadataAndCostWhatSpec01Says) {
     ASSERT_GE(sodium_init(), 0);
     constexpr unsigned kVault = 990'369;
     constexpr unsigned kKeyVersion = 1;
@@ -546,9 +546,12 @@ TEST_F(LiveR2Test, OpaqueObjectsCarryNoMetadataAndCostWhatSpec01Says) {
                 std::string lower = name;
                 std::ranges::transform(lower, lower.begin(), [](const unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
                 EXPECT_FALSE(lower.starts_with("x-amz-meta-")) << key << ": " << name;
-                if (lower == "content-type") EXPECT_EQ(value, "application/octet-stream") << key;
-                if (lower == "content-length")
+                if (lower == "content-type") {
+                    EXPECT_EQ(value, "application/octet-stream") << key;
+                }
+                if (lower == "content-length") {
                     EXPECT_EQ(value, std::to_string(vault::content::newSealedSize(c.plaintext.size()))) << key;
+                }
             }
             data->resetRequestMetrics();
             std::vector<uint8_t> payload;

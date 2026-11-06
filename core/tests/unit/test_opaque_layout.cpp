@@ -603,8 +603,11 @@ TEST_F(OpaqueLayoutTest, OpaqueRequestAudit) {
     std::set<std::string> headerNames;
     for (const auto& r : requests) {
         SCOPED_TRACE(r.key);
-        if (r.op == VersionedBucket::Op::List) EXPECT_TRUE(keys::isAllowedListPrefix(r.key));
-        else EXPECT_TRUE(keys::isAllowedKey(r.key)) << "key outside the allowlist";
+        if (r.op == VersionedBucket::Op::List) {
+            EXPECT_TRUE(keys::isAllowedListPrefix(r.key));
+        } else {
+            EXPECT_TRUE(keys::isAllowedKey(r.key)) << "key outside the allowlist";
+        }
         EXPECT_EQ(leaks(r.key), "");
         EXPECT_EQ(leaks(r.second), "");
         EXPECT_TRUE(r.metadata.empty()) << "x-amz-meta-*";

@@ -38,5 +38,5 @@
   `OpaqueRenameCostsNothing`, `OpaqueRequestCountsMatchSpec01Section5`, `OpaqueCopyReseals`,
   `OpaqueReadsRequireTheFilesObjectUid`, `OpaqueForeignObjectsAndOrphans`,
   `OpaqueManifestNamesTheObjectsItsFilesAreStoredIn`, `OpaqueCreationIsRefusedOutsideTestMode`) and
-  `LiveR2Test.OpaqueObjectsCarryNoMetadataAndCostWhatSpec01Says`. The versioned fake bucket records every request
+  `LiveR2.OpaqueObjectsCarryNoMetadataAndCostWhatSpec01Says`. The versioned fake bucket records every request
   (`VersionedBucket::requests()`) and runs the request policy like the network paths.

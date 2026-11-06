@@ -349,7 +349,7 @@ Dev mode requires both `VH_BUILD_MODE=dev` and the gitignored `enable_dev_mode` 
   like the network paths. `OpaqueRequestAudit` walks create, overwrite, backlog replay, rename, move, copy,
   rotation, provider restore and delete and checks every request and every stored byte for names; `OpaqueObjectCount`,
   `OpaqueRenameCostsNothing` (1,000-file folder) and `OpaqueRequestCountsMatchSpec01Section5` count requests per
-  operation. Live: `LiveR2Test.OpaqueObjectsCarryNoMetadataAndCostWhatSpec01Says` (o/ objects at the run bucket's
+  operation. Live: `LiveR2.OpaqueObjectsCarryNoMetadataAndCostWhatSpec01Says` (o/ objects at the run bucket's
   root, deleted by the test and again by the bucket's deletion).
 - Recovery recipients (#370): `Kev1Vectors`, `Kev1ReservedFields`, `RecoverySeedVectors`, `RecoveryKit`
   (`test_kev1.cpp`, DB-free, CI: every `kev1` / `recovery_seed` vector, P-256 included). `RecoveryRecipient.*`,
