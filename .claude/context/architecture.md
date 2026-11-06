@@ -667,7 +667,7 @@ decides validity (see `web-client.md`). The daemon's HTTP `GET /auth/session` re
 Routes (nginx prefixes `/preview`, `/download`, `/upload` only; never add prefixes), all cookie-authenticated
 (`refresh`, or `share_refresh` with `?share=1`; no tokens in URLs): `GET /preview?vault_id&path&size&page`
 (RenderedImage plans only, JPEG; `size` clamped 16-2048, default 1024; `page` 0-based; `X-Vaulthalla-Page-Count`
-for PDFs; `scale` accepted and ignored), `POST /preview/batch` (≤ 200 items, per-item RBAC, readiness from one index query per engine (`ready` / `queued` /
+for PDFs; `scale` accepted and ignored), `POST /preview/batch` (≤ 200 items, per-item RBAC, ready URLs are `entry=<id>` (vault or `share=1`), never a path or name (#417), readiness from one index query per engine (`ready` / `queued` /
 `failed` (final: the source doesn't render) / `missing` / `unsupported`), never opening or decrypting an artifact,
 `ready|queued|missing|unsupported|error`, never fetches remote-only files), `GET|HEAD /download/content` (original
 bytes, inline by default), `GET|HEAD /download` (files stream with no size cap; directories stream a STORE ZIP,
