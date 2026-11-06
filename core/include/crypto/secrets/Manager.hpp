@@ -1,5 +1,6 @@
 #pragma once
 
+#include "crypto/SecretBytes.hpp"
 #include "crypto/secrets/KeyProvider.hpp"
 
 #include "concurrency/AtomicSharedPtr.hpp"
@@ -24,6 +25,15 @@ public:
     [[nodiscard]] std::optional<std::string> getSecret(const std::string& key) const;
     void setSecret(const std::string& key, const std::string& value) const;
     [[nodiscard]] bool hasSecret(const std::string& key) const;
+
+    // A data-wrapping key of exactly `size` bytes kept in internal_secrets under `key`, sealed under the host master
+    // like the share pepper (MFA's mfa_seal and mfa_pepper, #356). When the row exists it is unsealed; a row the
+    // master can't open, or one of the wrong length, throws (fail closed: it is never replaced). When there is no row,
+    // `dependents` is asked first: records that a fresh key could never open make it MasterSecretLost, never a
+    // regeneration. Otherwise a fresh key is generated, sealed and read back, and only counts as stored once the read
+    // returns the same bytes. Every plain copy on the way is wiped.
+    [[nodiscard]] crypto::SecretBytes sealedKey(const std::string& key, std::size_t size,
+                                                const DependentsCheck& dependents) const;
 
 private:
     explicit Manager(std::unordered_map<std::string, std::string> testSecrets);

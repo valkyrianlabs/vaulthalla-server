@@ -181,6 +181,40 @@ auth:
 
 Changing token lifetimes affects web and API sessions. Use short access tokens and rotate secrets deliberately.
 
+### Passkeys (WebAuthn)
+
+Passkeys and security keys are bound to the host name people open the console at, the *relying party ID*. Vaulthalla
+never derives it from request headers, so a misconfigured reverse proxy can't widen it: you set it here or in
+**Settings › Security › Passkeys / security keys**.
+
+```yaml
+auth:
+  webauthn:
+    rp_id: vault.example.com
+    rp_name: Vaulthalla
+    origins:
+      - https://vault.example.com
+```
+
+- `rp_id`: a lowercase host name, never an IP address (browsers refuse passkeys for IP addresses). Internationalized
+  names use their `xn--` form. Empty (the default) leaves passkeys unavailable.
+- `rp_name`: the name authenticators show, 1 to 64 characters.
+- `origins`: the exact console origins, `https://host` or `https://host:port`, whose host is `rp_id` or a subdomain
+  of it; `http://localhost:<port>` is allowed for development. Write them as the browser shows them: lowercase, no
+  path or trailing slash, and no `:443`. Required when `rp_id` is set, at most 16.
+
+The daemon refuses to start, and the settings page refuses to save, when these rules are broken.
+
+:::callout{theme="warning" title="Changing rp_id"}
+Each passkey belongs to the `rp_id` it was registered for. After a change, passkeys registered for the old one no
+longer work. They are kept, not deleted; their owners sign in another way and register new ones.
+:::
+
+:::callout{theme="info" title="Not multi-factor sign-in yet"}
+This release adds the verifier and its settings only. Passkey enrollment and sign-in arrive in a later release; until
+then these settings have no effect on how anyone signs in.
+:::
+
 ### Idle Sign-Out
 
 Web-console users are signed out after a period without using the console:

@@ -112,6 +112,14 @@ database:
 auth:
   access_token_expiry_minutes: 60          # JWT access token TTL
   refresh_token_expiry_days: 7      # Refresh token TTL
+  # Passkeys / security keys (WebAuthn). Explicit on purpose: nothing is read from request headers. Leave rp_id empty
+  # to keep passkeys unavailable. rp_id is the host name users open the console at (never an IP address); origins
+  # are the exact console origins, e.g. https://vault.example.com or https://vault.example.com:8443
+  # (http://localhost:<port> for development). Changing rp_id makes passkeys registered for the old one unusable.
+  webauthn:
+    rp_id: ""
+    rp_name: Vaulthalla
+    origins: []
 
 
 # === 🔃 SYNC SETTINGS ===

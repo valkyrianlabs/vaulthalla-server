@@ -136,7 +136,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertEqual(ci.count(f"shell: {CONTAINER_SHELL}"), 2)
         self.assertEqual(ci.count('"self-hosted","Linux","X64","vps-ci"'), 2)
         self.assertNotIn("sudo", _code(ci))
-        for action in ("build", "test", "setup_web", "build_web", "test_web", "sync_web_icons"):
+        for action in ("build", "test", "fuzz", "setup_web", "build_web", "test_web", "sync_web_icons"):
             text = _read(f".github/actions/{action}/action.yml")
             with self.subTest(action=action):
                 shells = re.findall(r"(?m)^\s+shell: (.+)$", text)

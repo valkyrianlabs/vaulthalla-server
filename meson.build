@@ -33,6 +33,16 @@ if meson.get_compiler('cpp').get_id() == 'gcc'
                           language: 'cpp')
 endif
 
+# -Dfuzz=true: a clang build of the WebAuthn verifier's libFuzzer targets only (core/src/auth/webauthn/fuzz), which
+# needs none of the daemon's other dependencies.
+if get_option('fuzz')
+    if meson.get_compiler('cpp').get_id() != 'clang'
+        error('-Dfuzz=true needs clang with libFuzzer (e.g. CXX=clang++-18; see tools/dev/fuzz-webauthn.sh)')
+    endif
+    subdir('core/src/auth/webauthn')
+    subdir_done()
+endif
+
 subdir('core')
 
 if get_option('install_data')

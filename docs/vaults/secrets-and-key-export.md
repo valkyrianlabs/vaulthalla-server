@@ -23,6 +23,8 @@ Vaulthalla separates vault encryption keys from internal runtime secrets. Export
 | Vault keys | `vh vault keys export` | Required to recover encrypted vault content outside the original TPM context. |
 | Database password | `vh secret export db-password` | Required to reconnect services to an existing PostgreSQL database. |
 | JWT secret | `vh secret export jwt-secret` | Required to preserve token/session behavior across recovery where applicable. |
+| MFA seal | `vh secret export mfa-seal` | The key that seals TOTP authenticator seeds (base64). Exists once someone has enrolled a TOTP factor. Without it, TOTP factors stop working and must be reset; passkeys are unaffected. |
+| MFA pepper | `vh secret export mfa-pepper` | The key that hashes recovery codes (base64). Exists once a recovery code batch has been generated. Without it, recovery codes stop working. |
 | All internal secrets | `vh secret export all` | Convenient recovery bundle for internal non-vault secrets. |
 
 ## Export Vault Keys
