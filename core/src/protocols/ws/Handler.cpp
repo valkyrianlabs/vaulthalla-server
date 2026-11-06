@@ -1,6 +1,7 @@
 #include "protocols/ws/Handler.hpp"
 #include "protocols/ws/Router.hpp"
 #include "protocols/ws/handler/Auth.hpp"
+#include "protocols/ws/handler/Mfa.hpp"
 #include "protocols/ws/handler/Devices.hpp"
 #include "protocols/ws/handler/fs/Changes.hpp"
 #include "protocols/ws/handler/fs/Storage.hpp"
@@ -78,6 +79,17 @@ void Handler::registerAuthHandlers(const std::shared_ptr<Router>& r) {
     r->registerSessionOnlyHandler("auth.activity", &handler::Auth::activity);
     r->registerSessionOnlyHandler("auth.sessions.list", &handler::Auth::listSessions);
     r->registerPayload("auth.sessions.revoke", &handler::Auth::revokeSessions);
+    // #357: the second sign-in step, guided enrollment and the account's factors (handler/Mfa.hpp).
+    r->registerPayload("auth.mfa.verify", &handler::Mfa::verify);
+    r->registerSessionOnlyHandler("auth.mfa.cancel", &handler::Mfa::cancel);
+    r->registerSessionOnlyHandler("auth.mfa.status", &handler::Mfa::status);
+    r->registerPayload("auth.mfa.webauthn.register.options", &handler::Mfa::registerOptions);
+    r->registerPayload("auth.mfa.webauthn.register.finish", &handler::Mfa::registerFinish);
+    r->registerPayload("auth.mfa.totp.enroll.start", &handler::Mfa::totpStart);
+    r->registerPayload("auth.mfa.totp.enroll.confirm", &handler::Mfa::totpConfirm);
+    r->registerPayload("auth.mfa.factor.rename", &handler::Mfa::renameFactor);
+    r->registerSessionOnlyHandler("auth.mfa.recovery.generate", &handler::Mfa::generateRecovery);
+    r->registerPayload("auth.mfa.recovery.acknowledge", &handler::Mfa::acknowledgeRecovery);
 }
 
 // Paired devices (ops::devices). Which sessions reach which is the router's decision (classifyCommand).

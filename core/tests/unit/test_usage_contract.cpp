@@ -166,7 +166,8 @@ TEST(UsageContract, WsBookCoversTheEngineAndConsoleCommands) {
         EXPECT_FALSE(cmd.description.empty()) << cmd.command;
         EXPECT_TRUE(cmd.input == "payload" || cmd.input == "none" || cmd.input == "token") << cmd.command;
         EXPECT_TRUE(cmd.auth == "human" || cmd.auth == "session" || cmd.auth == "share" || cmd.auth == "public" ||
-                    cmd.auth == "pairing" || cmd.auth == "device")
+                    cmd.auth == "pairing" || cmd.auth == "device" || cmd.auth == "pending" ||
+                    cmd.auth == "enrollment")
             << cmd.command;
         if (cmd.input != "payload") {
             EXPECT_TRUE(cmd.payload.empty()) << cmd.command << " takes no payload";
@@ -340,14 +341,25 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
     // pairing's, the vault key commands' D4 channel refusals (a session that isn't a paired device's), meta.hello's
     // protocol_unsupported (no protocol version in common) and auth.login's already_signed_in (#354).
     static const std::map<std::string, std::set<std::string>> kRefusedCodes{
-        {"no_pairing_window", {}}, {"rate_limited", {}}, {"device_unknown", {}},
+        {"no_pairing_window", {}}, {"rate_limited", {"auth.mfa.verify"}}, {"device_unknown", {}},
         {"export_requires_device", {"vault.keys.export", "vault.keys.export.confirm"}},
         {"import_requires_device", {"vault.keys.import"}},
         {"protocol_unsupported", {"meta.hello"}},
-        {"already_signed_in", {"auth.login"}}};
+        {"already_signed_in", {"auth.login"}},
+        // #357: the pending-MFA sign-in and the enrollment commands.
+        {"mfa_required", {"auth.login", "auth.mfa.verify"}},
+        {"mfa_enrollment_required", {"auth.login"}},
+        {"mfa_unavailable", {"auth.login"}},
+        {"mfa_invalid", {"auth.mfa.verify"}},
+        {"mfa_expired", {"auth.mfa.verify", "auth.mfa.webauthn.register.options", "auth.mfa.webauthn.register.finish",
+                         "auth.mfa.totp.enroll.start", "auth.mfa.totp.enroll.confirm",
+                         "auth.mfa.recovery.acknowledge"}},
+        {"step_up_required", {"auth.mfa.recovery.generate"}}};
     const auto refusedCodeAllowed = [](const std::string& code, const std::string& command) {
         const auto it = kRefusedCodes.find(code);
         if (it == kRefusedCodes.end()) return false;
+        // rate_limited is device pairing's and auth.mfa.verify's.
+        if (code == "rate_limited") return command.starts_with("device.") || it->second.contains(command);
         return it->second.empty() ? command.starts_with("device.") : it->second.contains(command);
     };
     int confirmations = 0;

@@ -7,6 +7,7 @@
 #include <boost/beast/websocket.hpp>
 
 #include "WsProtocol.hpp"
+#include "auth/Fwd.hpp"
 #include "rbac/Actor.hpp"
 #include "device/Fwd.hpp"
 #include "identities/Fwd.hpp"
@@ -97,6 +98,10 @@ public:
 
     void sendAccessTokenOnNextResponse() { sendAccessToken_ = true; }
 
+    // The socket's MFA state (auth/mfa/Pending.hpp): a pending-MFA sign-in, which is not a signed-in session (`user`
+    // stays null until the factor succeeds), and an open passkey registration. Dies with the socket.
+    [[nodiscard]] auth::mfa::SessionState& mfa() const noexcept { return *mfa_; }
+
     std::shared_ptr<handler::fs::Upload> getUploadHandler();
     [[nodiscard]] SessionMode mode() const noexcept { return mode_; }
     [[nodiscard]] bool isSharePending() const noexcept { return mode_ == SessionMode::SharePending; }
@@ -174,6 +179,7 @@ private:
     std::shared_ptr<handler::fs::Upload> uploadHandler_{nullptr};
 
     std::shared_ptr<Router> router_;
+    std::unique_ptr<auth::mfa::SessionState> mfa_;
     SessionMode mode_{SessionMode::Unauthenticated};
     std::shared_ptr<vh::share::Principal> sharePrincipal_{nullptr};
     std::string shareSessionId_;

@@ -1,4 +1,7 @@
 #include "protocols/ws/handler/Auth.hpp"
+#include "protocols/ws/handler/Mfa.hpp"
+#include "auth/mfa/Pending.hpp"
+#include "auth/mfa/SignIn.hpp"
 #include "audit/Trail.hpp"
 #include "ops/Error.hpp"
 #include "runtime/Deps.hpp"
@@ -66,13 +69,17 @@ json Auth::login(const json &payload, const std::shared_ptr<Session> &session) {
     if (session && session->user)
         throw vh::ops::Refused(std::string(vh::auth::Manager::kAlreadySignedIn), "This connection is already signed in");
 
+    bool signedIn = false;
     try {
-        runtime::Deps::get().authManager->loginUser(username, password, session);
+        signedIn = runtime::Deps::get().authManager->loginUser(username, password, session);
     } catch (...) {
         // Only failed attempts count toward the auth.login rate limit (#103).
         if (session) vh::protocols::ws::ShareRateLimit::instance().recordLoginFailure(username, *session);
         throw;
     }
+    // #357: the password was right and a second factor (or a first one, for an account that must have MFA) is due.
+    // The socket is pending: no user, no access token, no refresh row. The answer says what it may do next.
+    if (!signedIn) Mfa::throwPending(session);
     if (!session::Validator::softValidateActiveSession(session)) throw std::runtime_error(
         "Failed to validate session after login");
 
@@ -173,6 +180,7 @@ json Auth::revokeSessions(const json &payload, const std::shared_ptr<Session> &s
 }
 
 json Auth::logout(const std::shared_ptr<Session> &session) {
+    if (session && session->mfa().pendingKind()) vh::auth::mfa::signin::end(session, "signed_out");
     if (session && session->user)
         audit::record({.action = "auth.logout", .actor_id = session->user->id, .actor = session->user->name(),
                        .details = {{"ip", session->ipAddress}}},

@@ -153,6 +153,21 @@ std::vector<WsModel> identityModels() {
          str("ip_address").desc("The address it signed in from."),
          str("user_agent")}));
 
+    out.push_back(model("MfaFactor",
+        "One of the account's sign-in factors (#356/#357): auth::mfa::to_json(Factor), core/src/auth/mfa/Factors.cpp. "
+        "Carries no secret and no credential id. id is unique per kind only: name a factor by {kind, id}.",
+        {uinteger("id"),
+         str("kind").oneOf({"webauthn", "totp"}).desc("webauthn: a passkey or security key; totp: an authenticator app."),
+         str("label").desc("1..64 characters, the person's own name for it."),
+         integer("created_at").desc("Unix seconds."),
+         integer("last_used_at").nullable().desc("Unix seconds; null until first used to sign in."),
+         boolean("suspended").desc("A passkey refused after a sign-count regression (possible clone)."),
+         boolean("created_during_recovery").desc("Enrolled from a recovery-code sign-in."),
+         boolean("backup_eligible").opt().desc("Passkeys: a synced passkey (1Password, iCloud Keychain, Google)."),
+         boolean("backup_state").opt().desc("Passkeys: currently backed up, as last reported."),
+         strArray("transports").opt().desc("Passkeys: the browser's transport hints (usb, nfc, ble, internal, hybrid)."),
+         str("aaguid").opt().nullable().desc("Passkeys: the authenticator model's AAGUID, when it reported one.")}));
+
     out.push_back(model("RoleSummary",
         "A role's identity without its permissions (identities::to_list_json's roleSummary).",
         {uinteger("id"),

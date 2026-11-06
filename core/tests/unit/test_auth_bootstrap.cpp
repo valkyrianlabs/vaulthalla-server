@@ -3,6 +3,7 @@
 // file's deletion reset it; `vh setup set-super-admin-password` (the configured super-admin UID only) rotates it.
 // The web console only warns, for the super admin, while the generated password and its file both remain.
 
+#include "auth/mfa/Pending.hpp"
 #include "db/query/identities/Loader.hpp"
 #include "auth/Bootstrap.hpp"
 #include "auth/Manager.hpp"
@@ -313,11 +314,18 @@ TEST_F(AuthBootstrapDbTest, AChangeFromTheWebConsoleCountsAsARotation) {
 TEST_F(AuthBootstrapDbTest, TheWebWarningIsForTheSuperAdminOnlyAndClearsWhenTheFileGoes) {
     const auto generated = freshGenerated();
 
-    // Signing in with the generated password gives a normal, fully usable session.
-    auto session = wsFor(nullptr);
-    runtime::Deps::get().sessionManager->rotateRefreshToken(session);
-    ASSERT_NO_THROW(runtime::Deps::get().authManager->loginUser("admin", generated, session));
-    ASSERT_TRUE(session->user);
+    // The generated password is accepted. Under the default MFA policy (`admins`, #357 D2) it leads the super admin
+    // into the guided first-factor enrollment, not straight into a session: a password alone never signs it in.
+    auto pending = wsFor(nullptr);
+    runtime::Deps::get().sessionManager->rotateRefreshToken(pending);
+    bool signedIn = true;
+    ASSERT_NO_THROW(signedIn = runtime::Deps::get().authManager->loginUser("admin", generated, pending));
+    EXPECT_FALSE(signedIn);
+    EXPECT_FALSE(pending->user);
+    EXPECT_EQ(pending->mfa().pendingKind(), auth::mfa::PendingKind::Enrollment);
+
+    // Once signed in (after enrollment), the session carries the warning.
+    const auto session = wsFor(admin());
 
     const auto status = protocols::ws::handler::Auth::securityStatus(session);
     ASSERT_TRUE(status.at("initial_password_file").is_string());

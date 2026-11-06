@@ -227,6 +227,16 @@ std::optional<UserMfa> userState(const uint32_t userId) {
     });
 }
 
+int64_t startRecoveryCooldown(const uint32_t userId, const std::chrono::hours duration) {
+    (void)ensureUser(userId);
+    return db::Transactions::exec("auth::mfa::startRecoveryCooldown", [&](pqxx::work& txn) {
+        return txn.exec("UPDATE user_mfa SET recovery_cooldown_until = GREATEST(COALESCE(recovery_cooldown_until, "
+                        "NOW()), NOW() + make_interval(hours => $2)) WHERE user_id = $1 "
+                        "RETURNING EXTRACT(EPOCH FROM recovery_cooldown_until)::BIGINT",
+                        pqxx::params{userId, static_cast<int>(duration.count())}).one_field().as<int64_t>();
+    });
+}
+
 std::vector<Factor> factors(const uint32_t userId) {
     std::vector<Factor> out;
     for (const auto& c : webAuthnCredentials(userId)) out.push_back(factorFrom(c));

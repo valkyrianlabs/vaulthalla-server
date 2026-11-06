@@ -89,7 +89,9 @@ struct WsCommandUsage {
     // What a session needs before the router runs it: "public" (no session), "session" (any socket, the
     // session-lifecycle set), "human" (a signed-in user with a valid access token, or a paired device's session on
     // the device listener: a device acts as its user), "share" (a share session), "pairing" (the device listener's
-    // pairing-only connections, and a paired device's session), "device" (a paired device's own session only).
+    // pairing-only connections, and a paired device's session), "device" (a paired device's own session only),
+    // "pending" (a pending-MFA sign-in only, #357: auth/mfa/Pending.hpp), "enrollment" ("human", or a pending-MFA
+    // sign-in that is enrolling its first factor).
     std::string auth = "human";
     // Where the handler reads its input: "payload" (the `payload` object), "none" (nothing), "token" (the envelope
     // `token`, payload ignored).

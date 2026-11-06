@@ -1,6 +1,7 @@
 'use client'
 
 import React, { useMemo, useState } from 'react'
+import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -24,12 +25,18 @@ import { passwordPair } from '@/features/access/users/schemas'
 import { GroupsPanel, ProfilePanel, VaultAccessPanel } from '@/features/access/users/UserSections'
 import { SessionsPanel } from '@/features/account/SessionsPanel'
 
+// Sign-in factors (#357) load after the page: /account's first-load budget (perf-budgets.json) has no room for them.
+const MfaPanel = dynamic(() => import('@/features/account/MfaPanel').then(m => m.MfaPanel), {
+  ssr: false,
+  loading: () => <Panel title="Sign-in factors">{null}</Panel>,
+})
+
 export function AccountPage() {
   const id = useSession(state => state.user?.id)
   const query = useWs('auth.user.get', { id: id ?? 0 }, { enabled: id !== undefined })
   return (
     <>
-      <PageHeader title="Your account" description="Your profile, password, sessions and what you have access to." />
+      <PageHeader title="Your account" description="Your profile, sign-in factors, password, sessions and what you have access to." />
       <QueryState query={query}>{data => <Account user={data.user} />}</QueryState>
     </>
   )
@@ -50,10 +57,11 @@ const Account = ({ user }: { user: UserRecord }) => {
           </Notice>
         ) : null}
         <ProfilePanel user={user} rules={rules} quiet={user.is_protected} />
-        <section aria-labelledby="security-title" className="space-y-5">
+        <section id="security" aria-labelledby="security-title" className="space-y-5">
           <h2 id="security-title" className="text-xs font-semibold tracking-wide text-fg-subtle uppercase">
             Security
           </h2>
+          <MfaPanel />
           <PasswordPanel user={user} />
           <SessionsPanel />
         </section>

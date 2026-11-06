@@ -62,6 +62,12 @@ struct UserMfa {
 [[nodiscard]] UserMfa ensureUser(uint32_t userId);
 [[nodiscard]] std::optional<UserMfa> userState(uint32_t userId);
 
+// A recovery-code sign-in (#357, design section 7.4): starts the account's recovery cooldown,
+// recovery_cooldown_until = now + `duration` (never shortening one already running). Returns it, Unix seconds. What
+// the cooldown refuses is the policy issue's (#360).
+inline constexpr std::chrono::hours kRecoveryCooldown{24};
+int64_t startRecoveryCooldown(uint32_t userId, std::chrono::hours duration = kRecoveryCooldown);
+
 // The account's factors that are enrolled and not removed (confirmed TOTP, passkeys including suspended ones), oldest
 // first.
 [[nodiscard]] std::vector<Factor> factors(uint32_t userId);

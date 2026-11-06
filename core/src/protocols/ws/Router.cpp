@@ -1,5 +1,6 @@
 #include "protocols/ws/Router.hpp"
 
+#include "auth/mfa/Pending.hpp"
 #include "auth/session/Manager.hpp"
 #include "log/Registry.hpp"
 #include "config/Config.hpp"
@@ -274,6 +275,11 @@ Router::CommandAuthDecision Router::classifyCommand(const std::string_view comma
     if (session.isShareMode()) {
         return isShareModeCommand(command) ? CommandAuthDecision::Allow : CommandAuthDecision::Deny;
     }
+
+    // #357: pending-MFA. A correct password and a factor still owed: not signed in (no user, no token, no row), and
+    // only the exact allowlist of auth/mfa/Pending.hpp runs (auth.login and meta.hello included in what doesn't).
+    if (const auto pending = session.mfa().pendingKind(); pending && !session.user)
+        return auth::mfa::pendingAllows(*pending, command) ? CommandAuthDecision::Allow : CommandAuthDecision::Deny;
 
     if (session.user) {
         // The session holds the canonical user: a deactivation or deletion is seen here on the very next command.

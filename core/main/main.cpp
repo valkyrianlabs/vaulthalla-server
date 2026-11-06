@@ -1,4 +1,5 @@
 // Services
+#include "auth/mfa/Policy.hpp"
 #include "identities/Manager.hpp"
 #include "../include/protocols/ProtocolService.hpp"
 #include "runtime/Manager.hpp"
@@ -150,6 +151,9 @@ void initDB() {
 
 void initDeps() {
     vh::runtime::Deps::init();
+    // #357 (D2): the MFA policy (`admins`) is checked against every signed-in web session's refresh row from the first
+    // request on: an aal 1 session of an account that must have MFA is never grandfathered.
+    vh::auth::mfa::policy::install();
 
     // Every account and group in one snapshot: FUSE, HTTP, S3 and session checks answer identity lookups from memory
     // from here on. A failure is not fatal: lookups then load (and remember) what they need on first use.

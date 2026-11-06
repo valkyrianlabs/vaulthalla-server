@@ -6,10 +6,10 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = '523f85def9d6794eba2f6baa4438b4757ce700d37b4b62d2d1282a81f8a7f007'
+export const WS_CONTRACT_HASH = 'a0833cc2acdf26a6666f0c4a7c3ba141a2626cf2cc93e40dbf773a7268c74521'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = 'd75335fcf8465799923514c6f3987bfda145b113b5e517773a4be63ed103c3e6'
+export const WS_MODELS_HASH = '39845cd85756810670c2f82f033274e36f3716318f2b049d9f98d8f78db1604f'
 
 // The ws protocol range this book is (core/usage WsProtocol.hpp): send it in meta.hello.
 export const WS_PROTOCOL_VERSION = 1
@@ -613,6 +613,24 @@ export interface WsModels {
    * logging.* (Config.cpp to_json(LoggingConfig)).
    */
   'LoggingConfig': { levels: WsModels['LogLevelsConfig']; file_paths?: 'ids' | 'full' }
+  /**
+   * One of the account's sign-in factors (#356/#357): auth::mfa::to_json(Factor),
+   * core/src/auth/mfa/Factors.cpp. Carries no secret and no credential id. id is unique per kind only: name a
+   * factor by {kind, id}.
+   */
+  'MfaFactor': {
+    id: number
+    kind: 'webauthn' | 'totp'
+    label: string
+    created_at: number
+    last_used_at: number | null
+    suspended: boolean
+    created_during_recovery: boolean
+    backup_eligible?: boolean
+    backup_state?: boolean
+    transports?: string[]
+    aaguid?: string | null
+  }
   /**
    * Filesystem operation queue and share upload figures, one vault or the system
    * (core/src/stats/model/OperationStats.cpp to_json).
@@ -2863,7 +2881,16 @@ export interface WsContract {
    * Sign in with a username and password. The access token comes back in the response envelope (`token`), the
    * refresh token as an HttpOnly cookie set at the handshake. A connection signs in once: one that already
    * has a user (signed in, or restored from its cookie) is refused with data.code already_signed_in; sign in
-   * again on a new connection. The session's sign-in is recorded as aal 1, amr ["pwd"] (auth.sessions.list).
+   * again on a new connection. A password alone signs in (aal 1, amr ["pwd"]) only an account with no factor
+   * that need not have MFA. Otherwise the right password answers ERROR mfa_required (a factor is enrolled:
+   * finish with auth.mfa.verify) or mfa_enrollment_required (the MFA policy requires one and there is none:
+   * set it up with the enrollment commands), and the connection is pending: not signed in, no access token,
+   * no session row, so auth.refresh, a reconnect, another tab and the HTTP lanes all refuse it. It may run
+   * only auth.mfa.verify, auth.mfa.cancel and auth.logout (plus the enrollment commands while enrolling) and
+   * ends after 5 minutes (10 enrolling), 5 failed factors or with the socket. mfa_unavailable: the account's
+   * factors can't be used on this server. data.pending is {kind: "mfa" | "enrollment", expires_at (Unix
+   * seconds), methods: ["webauthn" | "totp" | "recovery_code"], attempts_remaining, webauthn?: {publicKey:
+   * PublicKeyCredentialRequestOptionsJSON}}.
    */
   'auth.login': {
     payload: { name: string; password: string }
@@ -2875,6 +2902,162 @@ export interface WsContract {
   'auth.logout': {
     payload: null
     response: Record<string, never>
+  }
+  /**
+   * End a pending sign-in now; the connection is anonymous again (sign in again with the password).
+   */
+  'auth.mfa.cancel': {
+    payload: null
+    response: Record<string, never>
+  }
+  /**
+   * Rename one of the caller's factors (named by kind and id).
+   */
+  'auth.mfa.factor.rename': {
+    payload: { kind: 'webauthn' | 'totp'; id: number; label: string }
+    response: { factor: WsModels['MfaFactor'] }
+  }
+  /**
+   * The person saved the codes of batch_id: they come into force and the previous batch stops working. On a
+   * pending enrollment this completes the sign-in (aal 2, amr ["pwd", the new factor's]) and answers the
+   * user, with the access token in the envelope.
+   */
+  'auth.mfa.recovery.acknowledge': {
+    payload: { batch_id: string }
+    response: { remaining: number; user?: WsModels['SessionUser']; aal?: number }
+  }
+  /**
+   * Make ten new recovery codes, shown once. They replace the current ones only when acknowledged. The
+   * account needs a factor (invalid otherwise). Replacing codes that are in force needs a second factor
+   * proven on this session within the last 5 minutes (or a recovery-code sign-in): step_up_required {family,
+   * max_age_seconds} otherwise.
+   */
+  'auth.mfa.recovery.generate': {
+    payload: null
+    response: { batch_id: string; codes: string[] }
+  }
+  /**
+   * The caller's MFA: whether the policy requires it and why (policy admins: the super admin and accounts
+   * whose admin role may add, edit or delete users or admins or reset their passwords, add, edit or delete
+   * admin or vault roles, edit any settings section, or export or rotate encryption keys; policy all: every
+   * account; user_required: set for this account), whether passkeys are configured, the factors, the recovery
+   * codes, and the recovery cooldown. Web sessions only (a paired device is denied).
+   */
+  'auth.mfa.status': {
+    payload: null
+    response: {
+      policy: {
+        level: 'optional' | 'admins' | 'all'
+        required: boolean
+        reason: 'none' | 'policy_admins' | 'policy_all' | 'user_required'
+        webauthn_available: boolean
+        admin_webauthn_only: boolean
+        admin_device_bound_only: boolean
+      }
+      factors: WsModels['MfaFactor'][]
+      recovery: { active: boolean; remaining: number; acknowledged: boolean; pending: boolean }
+      cooldown_until: number | null
+      recovery_restricted: boolean
+    }
+  }
+  /**
+   * Finish the authenticator setup with its current code (one step of drift either way). The account's first
+   * factor answers its recovery codes too. invalid: the code didn't match; not_found: the setup expired or is
+   * finished.
+   */
+  'auth.mfa.totp.enroll.confirm': {
+    payload: { enrollment_id: number; code: string }
+    response: { factor: WsModels['MfaFactor']; recovery_codes?: { batch_id: string; codes: string[] } }
+  }
+  /**
+   * Start setting up an authenticator app (RFC 6238, SHA-1, 6 digits, 30 s). The secret and otpauth URI are
+   * shown once (the console draws the QR code itself); the factor is unusable until
+   * auth.mfa.totp.enroll.confirm, within 10 minutes. Starting again replaces an unfinished setup.
+   */
+  'auth.mfa.totp.enroll.start': {
+    payload: { label?: string }
+    response: { enrollment_id: number; secret_base32: string; otpauth_uri: string; expires_at: number }
+  }
+  /**
+   * Finish a pending sign-in with a second factor: {method: "webauthn", credential} (a UV assertion over the
+   * pending challenge), or {method: "totp" | "recovery_code", code}. Success signs the connection in: one
+   * session row at aal 2 with amr ["pwd", "hwk" | "swk" | "otp" | "rec"], the access token in the envelope. A
+   * recovery code signs every other web session of the account out (paired devices are not touched), starts
+   * the recovery cooldown and answers `recovery`. Refusals: mfa_invalid {attempts_remaining, pending?} (the
+   * 5th ends the sign-in), mfa_expired (start again with the password), rate_limited {retry_after} (5 failed
+   * factors on the account in 15 minutes), mfa_required {pending} for {method: "webauthn"} without a
+   * credential: a fresh passkey challenge, not an attempt. data.pending is {kind: "mfa" | "enrollment",
+   * expires_at (Unix seconds), methods: ["webauthn" | "totp" | "recovery_code"], attempts_remaining,
+   * webauthn?: {publicKey: PublicKeyCredentialRequestOptionsJSON}}.
+   */
+  'auth.mfa.verify': {
+    payload: {
+      method: 'webauthn' | 'totp' | 'recovery_code'
+      credential?: {
+        id: string
+        rawId: string
+        type: 'public-key'
+        response: { clientDataJSON: string; authenticatorData: string; signature: string; userHandle?: string | null }
+        authenticatorAttachment?: string | null
+        clientExtensionResults?: { credProps?: { rk?: boolean } }
+      }
+      code?: string
+    }
+    response: {
+      user: WsModels['SessionUser']
+      aal: number
+      recovery?: { codes_remaining: number; cooldown_until: number; sessions_revoked: number }
+    }
+  }
+  /**
+   * Verify and store the passkey (attestation none or packed self; UV required). The account's first factor
+   * answers its recovery codes too; a pending enrollment then finishes with auth.mfa.recovery.acknowledge.
+   * invalid: the ceremony didn't verify; not_found: the registration expired (120 s) or was used.
+   */
+  'auth.mfa.webauthn.register.finish': {
+    payload: {
+      registration_id: string
+      credential: {
+        id: string
+        rawId: string
+        type: 'public-key'
+        response: {
+          clientDataJSON: string
+          attestationObject: string
+          transports?: string[]
+          authenticatorData?: string
+          publicKey?: string
+          publicKeyAlgorithm?: number
+        }
+        authenticatorAttachment?: string | null
+        clientExtensionResults?: { credProps?: { rk?: boolean } }
+      }
+      label?: string
+    }
+    response: { factor: WsModels['MfaFactor']; recovery_codes?: { batch_id: string; codes: string[] } }
+  }
+  /**
+   * Start registering a passkey ("Passkey / Security key": 1Password, the device's passkey manager, a
+   * security key) on the caller's account, or as the first factor of a pending enrollment. Pass publicKey to
+   * navigator.credentials.create() and the result to auth.mfa.webauthn.register.finish with registration_id.
+   * invalid when passkeys are not configured (auth.webauthn.rp_id).
+   */
+  'auth.mfa.webauthn.register.options': {
+    payload: { label?: string }
+    response: {
+      registration_id: string
+      publicKey: {
+        rp: { id: string; name: string }
+        user: { id: string; name: string; displayName: string }
+        challenge: string
+        pubKeyCredParams: { type: 'public-key'; alg: number }[]
+        timeout: number
+        excludeCredentials: { type: 'public-key'; id: string; transports: string[] }[]
+        authenticatorSelection: { residentKey: 'preferred'; requireResidentKey: boolean; userVerification: 'required' }
+        attestation: 'none'
+        extensions: { credProps: boolean }
+      }
+    }
   }
   /**
    * Issue a new access token from the envelope token or the refresh cookie.
@@ -5668,6 +5851,16 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'auth.isAuthenticated',
   'auth.login',
   'auth.logout',
+  'auth.mfa.cancel',
+  'auth.mfa.factor.rename',
+  'auth.mfa.recovery.acknowledge',
+  'auth.mfa.recovery.generate',
+  'auth.mfa.status',
+  'auth.mfa.totp.enroll.confirm',
+  'auth.mfa.totp.enroll.start',
+  'auth.mfa.verify',
+  'auth.mfa.webauthn.register.finish',
+  'auth.mfa.webauthn.register.options',
   'auth.refresh',
   'auth.register',
   'auth.security.status',
@@ -5948,6 +6141,16 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'auth.isAuthenticated': 15000,
   'auth.login': 20000,
   'auth.logout': 15000,
+  'auth.mfa.cancel': 15000,
+  'auth.mfa.factor.rename': 15000,
+  'auth.mfa.recovery.acknowledge': 15000,
+  'auth.mfa.recovery.generate': 15000,
+  'auth.mfa.status': 15000,
+  'auth.mfa.totp.enroll.confirm': 15000,
+  'auth.mfa.totp.enroll.start': 15000,
+  'auth.mfa.verify': 20000,
+  'auth.mfa.webauthn.register.finish': 20000,
+  'auth.mfa.webauthn.register.options': 15000,
   'auth.refresh': 15000,
   'auth.register': 15000,
   'auth.security.status': 15000,

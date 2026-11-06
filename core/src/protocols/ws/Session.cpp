@@ -3,6 +3,8 @@
 #include "protocols/ws/OriginPolicy.hpp"
 
 #include "auth/Manager.hpp"
+#include "auth/mfa/Passkeys.hpp"
+#include "auth/mfa/Pending.hpp"
 #include "auth/model/RefreshToken.hpp"
 #include "auth/model/TokenPair.hpp"
 #include "log/Registry.hpp"
@@ -72,7 +74,8 @@ struct Session::Stream {
 };
 
 Session::Session(const std::shared_ptr<Router>& router)
-    : tokens(std::make_shared<auth::model::TokenPair>()), router_(router) {
+    : tokens(std::make_shared<auth::model::TokenPair>()), router_(router),
+      mfa_(std::make_unique<auth::mfa::SessionState>()) {
     buffer_.max_size(kWebSocketReadBufferMaxBytes);
 }
 
@@ -419,6 +422,9 @@ void Session::close() {
         if (const auto manager = runtime::Deps::get().sessionManager)
             manager->remove(self);
     }
+    // A pending-MFA sign-in ends with its socket (#357), and so do its open WebAuthn challenges.
+    mfa_->clear();
+    auth::mfa::passkeys::forgetSession(uuid);
 
     if (uploadHandler_)
         uploadHandler_->abortActiveUpload("websocket_session_closed");
