@@ -98,6 +98,7 @@ Design and invariants: `recovery.md`.
 | `RecoveryVersionsTest` (`test_recovery_versions.cpp`) | local versioning capture/no-capture, off path, retention, upstream backlog replay order |
 | `RecoverySnapshotsTest` (`test_recovery_snapshots.cpp`) | snapshot capture/skips, mode gate, dedupe, quotas, RBAC, crash cleanup, deletion |
 | `RecoveryLocalRestoreTest` (`test_recovery_local_restore.cpp`) | local plans/restores: original and alternate destinations, conflicts, re-seal across rotations |
+| `FormatMigrationTest` (`test_format_migration.cpp`, DB-free, CI) / `FormatMigrationDbTest` (`test_format_migration_db.cpp`, db-only) | local conversion to VHF1 (#372): digests, crash at every step + restart (sidecar recovery, store sweep), hard-linked blobs once, no plaintext on disk, refusals, rotation/salvage, pacing / snapshots, local versions and retired-key generations restore after conversion, status, blocked during rotation |
 | `RecoveryProviderTest` (`test_recovery_provider.cpp`) | version index, provider points, point-in-time plans, provider copy / bounded transfer |
 | `RecoverySmartCacheTest` (`test_recovery_smart_cache.cpp`) | release-blocking acceptance: cache vault, history only in the bucket, restore without a second upload; one manifest publish per pass (#248: first pass, early stop, a manifest written after the LIST never replaces the listed index) |
 | `RecoveryPolicyTest`, `RecoveryDisclosureToken`, `RecoveryManifestRule` (`test_recovery_policy.cpp`) | status/update/disclosure/suspend/costs ordering, R2 refusal, protection, adoption, retention lifecycle |
@@ -245,6 +246,11 @@ bash tools/dev/verify.sh harness                                   # unit + self
 - Surfaces: `ws` (the console: ws for metadata, HTTP lanes for bytes), `fuse` (vh_fs_actor per actor account),
   `cli_sock` / `cli_bin` (real peer uid via the `vhh-actor-NN` accounts). Admin-side provisioning reuses the pentest
   `Seeder` against the private socket.
+- Console writes (#404): the HTTP lane reads the target's entry over the session's ws (`fs.metadata`) first. An
+  existing file is replaced with `PUT /upload/content` and `If-Match: <content_version>` (#258); a 412 (changed since
+  that read, or open on the mount) is a typed `conflict`, which the judges accept as a lost concurrent write, and a
+  404 (removed meanwhile) is retried once as a create. Anything else goes through the create-only `POST
+  /upload/session` lane, which refuses an existing target with an untyped 400.
 - MFA (#395): admins must sign in with a second factor (#357), and the clients do the real flow, with no daemon bypass.
   The Seeder signs every active fixture user in once and enrolls a TOTP authenticator for each account the daemon
   asks to (`u-admin`). The seed and recovery codes stay in the run's memory (Seeder state, then `IdentityBroker.
