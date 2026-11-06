@@ -1,7 +1,7 @@
 ---
 title: MFA, Step-Up And Device Approvals (Design Note)
 navTitle: MFA Design Note
-description: Design for multi-factor sign-in, step-up re-authentication and device approvals in Vaulthalla (#325), for maintainer review before implementation.
+description: Approved design for multi-factor sign-in, step-up re-authentication and device approvals in Vaulthalla (#325). A specification, not an implementation.
 order: 941
 status: draft
 tags:
@@ -12,17 +12,23 @@ tags:
 
 # MFA, Step-Up And Device Approvals
 
-Design note for [#325](https://github.com/valkyrianlabs/vaulthalla-server/issues/325). It is for review: nothing here
-is implemented. The three maintainer comments on #325 (the design review, the 1Password/WebAuthn addendum and the
-Desktop clarification) are binding inputs; section 1 maps each of them to the decision that encodes it. Implementation
-is split into the issues in section 13 after review. The open maintainer decisions are in section 14.
+Design for [#325](https://github.com/valkyrianlabs/vaulthalla-server/issues/325), **approved** (PR #343,
+2026-11-05). Binding inputs: the three maintainer comments on #325 (the design review, the 1Password/WebAuthn addendum
+and the Desktop clarification) and the maintainer's decisions on PR #343. Section 1 maps each of them to the part of
+the design that encodes it, and section 14 records the decisions. The work is split into the issues in section 13.
+
+:::callout{theme="warning" title="Implementation boundary"}
+This is a specification. Approving it is not a claim that any of it is implemented or validated at runtime. Until the
+issues in section 13 land with their tests, Desktop interop tests and the recorded browser demos (with and without
+1Password), Vaulthalla has no MFA, and nothing may describe it as having MFA.
+:::
 
 :::toc[On this page]{depth="2" theme="compact"}
 :::
 
 ## 1. Decisions At A Glance
 
-| Maintainer requirement (#325 comments) | Decision in this design |
+| Maintainer requirement (#325 comments, PR #343 decisions) | Decision in this design |
 | --- | --- |
 | Password login must not get a full session until required MFA succeeds | A **pending-MFA** state that is not a signed-in session: no `session->user`, no access token, no refresh-token row, and a five-command allowlist (section 5.2). |
 | Passkeys first, standard WebAuthn, no 1Password SDK | WebAuthn Level 3 with `userVerification: "required"` everywhere; 1Password, Apple Passwords, Windows Hello, Google Password Manager and FIDO2 keys all go through the same code path (section 4). |
@@ -31,31 +37,34 @@ is split into the issues in section 13 after review. The open maintainer decisio
 | Step-up is fresh, scoped, short-lived, bound to user/session/action, never implied by a refresh token, open session or mTLS | Step-up **grants**: in memory, bound to session, refresh `jti`, user, action family and (for the riskiest families) the exact target; 5 minutes; single-use where target-bound (section 5.4). |
 | Desktop routine sync never prompts; no WebAuthn/cookies on device connects | Device sessions keep mTLS-only authentication and never see `step_up_required` for routine commands. A contract test enumerates them (section 6). |
 | No client-supplied `biometric_ok` / `touch_id` flag | Every approval is a signature the server verifies: a WebAuthn assertion with the UV flag, or an action-bound signature by a registered Secure Enclave approval key (section 6.2). |
-| 1Password per-vault key backup must not become a prompt per backup | A narrow, revocable, device-bound **key-backup grant**, created once by a deliberate approval (section 6.4). The upgrade path for existing Desktops is open decision D1. |
+| 1Password per-vault key backup must not become a prompt per backup | A narrow, revocable, device-bound **key-backup grant**, created once by a deliberate approval (section 6.4). Existing Desktops keep backing up through `migrated` grants that carry exactly their current authority (D1). |
+| No forever-authorized, general-purpose key-export channel | A grant covers named vaults on one device, is capped, audited per use and revoked by the triggers in section 6.4. Exports outside it always need a target-bound step-up |
+| Refresh cookies, pairing and recovery never bypass enrollment | Policy is checked against the refresh row on every use (section 5.3). Pairing needs `device.trust`. Recovery ends in enrollment plus a cooldown (section 7.4) |
 | Recovery without a one-click takeover; email reset never bypasses MFA | Recovery codes need the password too; recovery sign-in revokes other sessions, starts a cooldown on sensitive actions and notifies (section 7.4). |
 | Required admin enrollment with a guided, recoverable first run | Policy `admins` by default: password-OK admins without a factor land in a pending-enrollment state that can only enroll (section 7.1). |
 | Design note with a state diagram and walkthroughs | Sections 5.1 and 8. |
-| Browser demo with and without 1Password | Section 12, run at implementation time. |
+| Browser demo with and without 1Password; Desktop interop tests; an auditable recovery path | Sections 11 and 12, required by the implementation issues. Every MFA, step-up, approval, grant and recovery event goes to the tamper-evident audit trail (#323, section 7.5). |
 
 ## 2. Where The Code Is Today
 
 | Area | Today | File |
 | --- | --- | --- |
-| Password sign-in | Argon2id verify, uniform failure (#321), then `setAuthenticatedUser` + `promote()` straight to a full session | `core/src/auth/Manager.cpp:92-113` |
-| Session promotion | Stores the socket's refresh token as a `refresh_tokens` row, issues the access token, starts the idle clock; adopts an existing row when the `jti` already has one | `core/src/auth/session/Manager.cpp:162-214` (row adoption `:188-194`) |
+| Password sign-in | Argon2id verify, uniform failure (#321), then `setAuthenticatedUser` + `promote()` straight to a full session | `core/src/auth/Manager.cpp:98-122` |
+| Session promotion | Stores the socket's refresh token as a `refresh_tokens` row, issues the access token, starts the idle clock; adopts an existing row when the `jti` already has one | `core/src/auth/session/Manager.cpp:163-215` (row adoption `:189-195`) |
 | Token minting | HS256 JWTs: random `jti`, `token_kind`, subject `ip:user-agent`; refresh rows store `sha256:` digests (#171) | `core/src/auth/session/Issuer.cpp:51-122`, `:181-183` |
 | Refresh cookie | Set only on the ws handshake of an **anonymous** socket, which gets a fresh refresh JWT with no row | `core/src/protocols/ws/Session.cpp:332-351`, `:355-378`; `core/include/protocols/ws/RefreshCookie.hpp:11-16` |
-| Rehydration | Every cookie use reads the stored row (revocation, owner, `authorizing()`), cached 30 s per `jti` and policy epoch | `core/src/auth/session/Manager.cpp:55-85`, `:468-505` |
+| Rehydration | Every cookie use reads the stored row (revocation, owner, `authorizing()`), cached 30 s per `jti` and policy epoch | `core/src/auth/session/Manager.cpp:56-86`, `:469-506` |
 | Router gate | Exact per-mode allowlists; only `auth.login/logout/refresh/isAuthenticated` skip token validation | `core/src/protocols/ws/Router.cpp:38-46`, `:248-294`, `:315-335` |
-| Idle sign-out (#319) | `refresh_tokens.last_activity_at` (migration 116), server clock, human web sessions only | `core/include/auth/session/Idle.hpp:7-27`, `core/src/auth/session/Idle.cpp:14-17`, `Manager.cpp:570-595` |
+| Idle sign-out (#319) | `refresh_tokens.last_activity_at` (migration 116), server clock, human web sessions only | `core/include/auth/session/Idle.hpp:7-27`, `core/src/auth/session/Idle.cpp:14-17`, `Manager.cpp:571-602` |
 | Login throttling | `auth.login`: 10/min per IP + account, 30/15 min sustained; failures only | `core/src/protocols/ws/ShareRateLimit.cpp:16-23`, `:159-177` |
-| Device sessions | TLS 1.3 client key authorized once at the handshake; no tokens; `validate()` is true while the user may sign in | `core/src/auth/session/Manager.cpp:431-435`; `.claude/context/architecture.md` "Device listener and pairing" |
+| Device sessions | TLS 1.3 client key authorized once at the handshake; no tokens; `validate()` is true while the user may sign in | `core/src/auth/session/Manager.cpp:432-436`; `.claude/context/architecture.md` "Device listener and pairing" |
 | Device pairing | Windows, commit-then-reveal requests, number matching, `approve` inserts the `devices` row | `core/src/ops/Devices.cpp:119-198` |
-| Key export (D4) | Bytes only to the CLI or a paired device; console sessions get `export_requires_device` | `core/src/ops/VaultKeys.cpp:76-80` |
+| Key export (Desktop decision D4) | Bytes only to the CLI or a paired device; console sessions get `export_requires_device` | `core/src/ops/VaultKeys.cpp:77-81` |
 | CLI | Unix socket, peer credentials (UID in the `vaulthalla` group, UID-to-user mapping) | `core/src/protocols/shell/Server.cpp:235-245` |
 | Hashed one-time codes | Share email challenge (#336): domain-separated keyed hash, constant-time compare, attempts, single use | `core/src/share/EmailChallenge.cpp:60-81` |
 | Sealed server secrets | `crypto::secrets::Manager` over the TPM2 / Secure Enclave master; seal-and-read-back, fail closed, never regenerate (#338) | `core/src/share/Token.cpp:55-105`, `core/include/crypto/secrets/Manager.hpp` |
 | Console login | `auth.login` then `auth.refresh` on every load; access token in memory only | `web/src/lib/session.ts:22-61`, `web/src/features/auth/LoginForm.tsx`, `web/src/components/shell/SessionGate.tsx` |
+| Audit trail (#323) | `audit::record(Event, message)`: structured, hash-chained `audit_event` rows with signed heads; `vh audit list|verify|export` | `core/include/audit/Trail.hpp`, `deploy/psql/117_audit_trail.sql`, `docs/admin/audit-trail.md` |
 
 Two facts shape the design:
 
@@ -106,7 +115,21 @@ an operator compliant, and the docs must not say it does.
 **Verifier.** An in-tree verifier in `core/src/auth/webauthn/` on **libcbor** (CBOR, Ubuntu `libcbor-dev`, Homebrew
 `libcbor`) and the **OpenSSL 3** and **libsodium** already linked (`core/meson.build:156`, `:170`). It handles
 registration (`none` and `packed` self attestation) and assertions, with an interface clean enough to extract later
-as a `vl-*` library like `vl-sigv4`. Considered and not chosen (open decision D5):
+as a `vl-*` library like `vl-sigv4` (decision D5).
+
+The verifier is acceptable only when all of these hold:
+
+- every check in the table below is implemented;
+- the published W3C WebAuthn L3 test vectors pass;
+- every check has a negative test;
+- CBOR, COSE and `authenticatorData` are parsed strictly (definite lengths, no trailing bytes, no duplicate map keys,
+  bounded nesting and sizes);
+- libFuzzer targets for the CBOR/COSE, `authenticatorData` and `clientDataJSON` parsers run in CI.
+
+The verifier invents no cryptography and skips no WebAuthn check to simplify packaging. If a maintained verifier turns
+out to carry measurably lower risk, the choice is reopened.
+
+Considered and not chosen:
 
 - **libfido2** (Yubico): pam-u2f uses it as a verifier, but it's a client library that links a HID stack into a
   network daemon. It doesn't check `clientDataJSON` or BE/BS, so most checks would be ours anyway.
@@ -139,7 +162,7 @@ for it.
 | --- | --- | --- | --- |
 | 0 | 0 | any | accept |
 | n | > n | any | accept, store |
-| n > 0 | ≤ n | 1 (synced) | accept, audit `webauthn.counter_regression` |
+| n > 0 | ≤ n | 1 (synced) | accept, audit `auth.mfa.webauthn.counter_regression` |
 | n > 0 | ≤ n | 0 (device-bound) | refuse, suspend the credential (possible clone), audit and notify. The user removes it or an admin clears the suspension |
 
 **Ceremony options.** Registration: `attestation: "none"`, `authenticatorSelection: {residentKey: "preferred",
@@ -263,7 +286,7 @@ A password-verified session that still owes a factor:
   by construction.
 - **No authority in any token.** No access token is issued. The cookie's refresh JWT (minted at this socket's
   handshake) has **no row** until completion, so `auth.refresh`, a reconnect, another tab or an HTTP lane presenting it
-  find nothing and fail like an unknown token (`Manager.cpp:55-61`).
+  find nothing and fail like an unknown token (`Manager.cpp:56-62`).
 - **Allowlist** (new router mode, exact): `auth.mfa.verify`, `auth.mfa.cancel`, `auth.logout`, plus the enrollment
   commands while `kind = enrollment` (`auth.mfa.webauthn.register.*`, `auth.mfa.totp.enroll.*`,
   `auth.mfa.recovery.acknowledge`). Anything else is UNAUTHORIZED, including `auth.login` (no second password
@@ -278,7 +301,7 @@ On completion (`auth.mfa.verify`, `auth.passkey.login`, finished enrollment, or 
 factor):
 
 1. `setAuthenticatedUser` and `promote()` write the row **once**: `INSERT` with `aal`, `amr`, `auth_time = NOW()`.
-   The "existing row" branch (`Manager.cpp:188-194`) is removed: a `jti` that already has a row is never promoted
+   The "existing row" branch (`Manager.cpp:189-195`) is removed: a `jti` that already has a row is never promoted
    again, and `auth.login` on a socket that already has a user is refused (`already_signed_in`). The row is new and
    its JWT was minted by this server for this socket's handshake, so a planted cookie can't become an authenticated
    session (fixation regression test).
@@ -286,7 +309,7 @@ factor):
 3. Every later use of the cookie reads the row (rehydrate, `validate`, HTTP lanes, which already happens) and also
    checks **policy against the row**: if MFA is required for the user and the row's `aal` is 1, the row is revoked and
    the session refused. This is how a policy raise, an upgrade or an admin "require MFA" takes effect: at next use,
-   not by trusting claims. The 30 s validation cache (`Manager.cpp:482-497`) is keyed to `rbac::policyEpoch()`; MFA
+   not by trusting claims. The 30 s validation cache (`Manager.cpp:483-498`) is keyed to `rbac::policyEpoch()`; MFA
    policy changes and factor resets bump it.
 
 The JWT carries no level. It's minted before anyone signs in, and the row is the authority anyway.
@@ -320,7 +343,7 @@ export` stay CLI-only and are exempt as host actions (section 5.6).
   target; or
 - **password + TOTP** together (a TOTP code alone is never enough, matching "password + approved factor"); or
 - for a user with no factor under policy `optional`: the password alone, except for `keys`, `device.trust` and
-  `data.destroy`, which always need a factor (open decision D3);
+  `data.destroy`, which always need a factor (decision D3). The server enforces this in `auth::stepup`, not the console;
 - a fresh sign-in counts for family grants (not target-bound ones) when the row is `aal` 2 and `auth_time` is within
   the step-up window, so enrolling a second passkey right after signing in doesn't prompt twice.
 
@@ -397,8 +420,11 @@ families in section 5.4.
 - **What it doesn't verify:** that the key's access control really requires user presence. macOS gives the server no
   attestation of that. The key is trusted because a human registered it through a step-up-protected action, it's
   non-exportable, and every signature is bound to one action. That's weaker than a WebAuthn UV flag, so an approval
-  key is accepted only for `device.trust`, `keys` and the key-backup grant (open decision D6). Other families from a
-  Desktop go through a console approval.
+  key is accepted only for `device.trust`, `keys` and the key-backup grant (decision D6). Every other privileged
+  family needs console WebAuthn: a console approval (section 6.3) or doing the action in the console.
+- **Never human presence:** a routine mTLS connection, a Desktop reporting that the OS checked a biometric, or any
+  client flag. Only a verified signature over a fresh, single-use, server-issued challenge bound to the action,
+  target and device session counts.
 - For a future E2EE design: adding a device authorized for encryption keys must also need an existing device's
   approval. Server-side MFA alone isn't enough. The approval key is the hook for that.
 
@@ -410,15 +436,16 @@ For a Desktop without an approval key, or a family the key can't approve:
    expires_at}` (5 min, at most 3 open per device, rate limited).
 2. The user's signed-in console sessions get a ws push `auth.approval.pending`, and **Settings → Security → Pending
    approvals** lists it with the device name, action and target.
-3. The person approves with a UV passkey or password+TOTP, bound to `approval_id` (`auth.approval.approve`) or
-   declines (`auth.approval.deny`).
+3. The person approves with a **UV passkey** bound to `approval_id` (`auth.approval.approve`) or declines
+   (`auth.approval.deny`). A TOTP-only user can't approve a device's request and does the action in the console
+   instead (with password+TOTP step-up where the family allows it).
 4. The device polls `device.approval.status` and gets a grant on **its** session, with the same binding rules as a
    web grant.
 
 ### 6.4 Key-backup grant (1Password backup of vault keys)
 
 Vaulthalla Desktop backs up every needed version of each vault key to 1Password in the background
-(`.claude/context/key-backup.md`; D4: key bytes only to the CLI or a paired device). Three things are kept apart:
+(`.claude/context/key-backup.md`; Desktop decision D4: key bytes only to the CLI or a paired device). Three things are kept apart:
 
 | Act | Prompt | Mechanism |
 | --- | --- | --- |
@@ -433,7 +460,13 @@ Grant properties:
 - Revoked automatically when: the device is revoked; the user is deactivated or loses encryption-key Export
   permission; an admin resets the user's MFA; a recovery-code sign-in happens (section 7.4); the device hasn't
   connected for 90 days. Revocable by hand from the console and Desktop.
-- Audited per use: `[via device <id16>] grant <id>`, vault and versions. `last_used_at` is shown next to the device.
+- Audited per use in the audit trail (`audit::record`, action `keys.backup.export`, details `{grant_id, device,
+  versions}`, origin `device <id16>`). `last_used_at` is shown next to the device. Grant create, extend, confirm,
+  suspend and revoke are audit events too (section 7.5).
+- After a recovery-code sign-in revokes the grant, the same device may re-create it during the cooldown with its
+  **approval key**, but only if that key was registered before the recovery, and only for the vaults the revoked
+  grant listed. That avoids a backup gap on the legitimate Mac without letting a factor enrolled during recovery
+  widen anything (section 7.4).
 - Exports via a grant return only the needed versions (`historical_keys` rules unchanged) and are capped at 60 vault
   exports per hour per grant. Above that the grant is suspended and the user notified (a stolen Mac sweeping keys).
 - `vault.keys.export.confirm` stays the device's statement that 1Password stored the key. The server records it and
@@ -442,12 +475,24 @@ Grant properties:
 **Exposure:** a Mac that holds a grant is a sensitive endpoint. Malware running as the logged-in user can get every
 granted key without a prompt. The grant makes this explicit, narrow and revocable. It doesn't remove it.
 
-**Upgrade (escalated, D1):** existing paired Desktops already export automatically. Requiring a fresh consent
-pauses backup until the user acts, and a rotation in that gap would leave a key version that isn't backed up (a
-recoverability risk, compatibility rule 3). Recommended: migration 118 creates `origin = 'migrated'` grants for every
-live device whose user holds encryption-key Export permission, covering the vaults they can export today. That's
-exactly today's effective authority, no wider. The console and Desktop show "Confirm or revoke automatic key backup",
-and confirming (one approval) turns it into `origin = 'approved'`.
+**Upgrade (decision D1).** Existing paired Desktops keep their automatic backup. Pausing it until consent would leave
+any key version created by a rotation in the gap without a backup (compatibility rule 3).
+
+- **What the migration creates.** The device-approvals migration creates one `origin = 'migrated'` grant per live
+  (non-revoked) device whose user holds encryption-key Export permission at migration time. The grant covers exactly
+  the vaults that user may export then. Nothing is created for anyone else, and no vault is added that the user
+  couldn't export before.
+- **Confirming.** The console and Desktop show a non-blocking "Confirm or revoke automatic key backup". It never
+  interrupts sync, backup or rotation. Confirming takes one deliberate approval (approval key or console) and turns
+  the grant into `origin = 'approved'`. Revoking stops backup for that device.
+- **The same rules as any grant.** Migrated grants are visible, revocable, device-bound, audited (the migration
+  writes one `keys.backup.grant.migrate` event per grant) and subject to the triggers above. They never widen on
+  their own: a later vault is added only through `extend`.
+- **Verification**, required by the implementation issue:
+  - a migration test asserts that, for every seeded device, the set of vaults it may export is identical before and
+    after the migration (no escalation, no loss);
+  - a rotation run in the same test window shows that every needed version stays exportable through the grant
+    (no backup gap).
 
 ### 6.5 New-device approval
 
@@ -488,9 +533,11 @@ auth:
 - An admin can set `required` for one user (`user_mfa.required`).
 - Changing policy or `auth.webauthn.*` is `settings` step-up. Weakening it (to `optional`, admin-only flags off, or
   `rp_id` changes) is audited and sent to `operator_emails.recipients.security`.
-- **Upgrade effect:** under `admins`, existing admin refresh rows are `aal` 1 and are refused at next use (section
-  5.3). Those admins sign in once more and go through enrollment. Documented in the release fragment (open decision
-  D2).
+- **Upgrade effect (decision D2):** under `admins`, existing admin refresh rows are `aal` 1. They are refused at next
+  use (section 5.3) and never grandfathered into elevated authority. Those admins sign in once more and go through
+  guided enrollment (passkey or TOTP, then recovery codes). The release fragment documents this, and the local CLI
+  recovery (`vh user mfa reset`, `vh setup set-super-admin-password`) stays available. Device sessions aren't
+  affected.
 
 ### 7.2 Enrollment
 
@@ -521,12 +568,50 @@ auth:
 | Lost | Path | Effect |
 | --- | --- | --- |
 | One factor, another remains | Sign in with the other, remove the lost one, revoke the lost Mac in Devices | Normal step-up |
-| All factors, recovery codes kept | Password + recovery code → **RecoveryRestricted** | Every other refresh row of the user is revoked; key-backup grants revoked; codes remaining shown; must enroll a new factor and acknowledge new codes; `keys`, `device.trust`, `identity.admin`, `secrets` and `settings` are refused (`recovery_cooldown`) until `recovery_cooldown_hours` elapse; user and security recipients notified at once. Revoking paired devices is offered with the list, not automatic (D4) |
+| All factors, recovery codes kept | Password + recovery code → **RecoveryRestricted** | See below (decision D4) |
 | Everything, another admin exists | `auth.mfa.admin.reset {user_id, reason}` by a user with users-manage permission, under `account.credentials` step-up; a super admin's MFA only by another super admin | Factors disabled (kept for audit), codes voided, sessions and grants revoked, enrollment required at next sign-in, the same cooldown, notifications to the target and security recipients |
 | Everything, sole super admin | `vh user mfa reset <user>` on the host, by the UID bound to that user or a CLI user with users-manage (root/sudo refused, like `vh setup set-super-admin-password`) | As above. This is the documented self-hosted manual recovery |
 | Password | Unchanged (another admin, or `vh setup set-super-admin-password`). A password reset never touches factors | MFA still applies at next sign-in |
 
+**Recovery-code sign-in (decision D4)** leads to **RecoveryRestricted** and these effects:
+
+- **Automatic at sign-in:** every other refresh row of the user (all other web sessions) is revoked, and their
+  key-backup grants are revoked. The user and the security recipients are notified.
+- **Required next:** enroll a new factor and acknowledge new recovery codes. The number of codes remaining is shown.
+- **Offered, not automatic:** the user's paired devices are listed with targeted revocation. A lost browser factor
+  doesn't break a legitimate Desktop's sync, so nothing is revoked without the user choosing it.
+- **Cooldown:** until `recovery_cooldown_hours` elapse, `keys`, `device.trust`, `identity.admin`, `secrets` and
+  `settings` are refused (`recovery_cooldown`). Factors enrolled during recovery are marked
+  `created_during_recovery` and don't count as step-up for those families until the cooldown ends.
+- **The one exception:** a device approval key registered before the recovery may re-create that device's revoked
+  key-backup grant, for the same vaults only (section 6.4).
+
 There is no email reset, and none is added. If one ever is, it resets only the password.
+
+### 7.5 Audit
+
+Every MFA, step-up, approval and grant change is written with `audit::record` (#323) to the hash-chained audit
+trail. These events show in `vh audit list --action auth.mfa.` and are covered by `vh audit verify` and the signed
+heads. `details` holds ids, methods and outcomes only: never codes, secrets, credential ids in full, assertions,
+names or paths (#327).
+
+| Action | Outcome values | Details |
+| --- | --- | --- |
+| `auth.mfa.challenge` (pending started) | info | `{methods}` |
+| `auth.mfa.verify` | success, failure, denied | `{method, factor_id, attempts}` |
+| `auth.passkey.login` | success, failure | `{factor_id}` |
+| `auth.mfa.factor.enroll` / `.remove` / `.rename` / `.suspend` | success | `{factor_id, kind, during_recovery}` |
+| `auth.mfa.recovery.generate` / `.acknowledge` / `.use` | success, failure | `{batch_id, remaining}` |
+| `auth.mfa.admin.reset` / `.require` | success, denied | `{target_id, reason, channel}` (actor = the admin or CLI user) |
+| `auth.mfa.policy.change` | success | `{from, to}` |
+| `auth.stepup.grant` / `.fail` | success, failure | `{family, target, method}` |
+| `device.approval.submit` / `auth.approval.approve` / `.deny` | success, failure, denied | `{family, target, approval_id, device}` |
+| `keys.backup.grant.create` / `.extend` / `.confirm` / `.migrate` / `.suspend` / `.revoke` | success | `{grant_id, device, vault_count, reason}` |
+| `keys.backup.export` | success | `{grant_id, versions}` (vault in `vault_id`) |
+
+**Auditable recovery path.** A recovery is reconstructible from the trail alone: the recovery code use, the revoked
+sessions and grants, factor enrollments flagged `during_recovery`, cooldown refusals, and any admin or CLI reset.
+`vh audit verify` proves the trail is intact. An implementation test asserts this sequence.
 
 ## 8. Walkthroughs
 
@@ -697,11 +782,11 @@ nothing in the server or console differs.
 
 ## 9. Data Model
 
-The highest migration on `main` is `116_refresh_token_activity.sql`. Numbers are re-checked when each issue lands.
+Migrations use **the next free numbers at implementation time** (`117_audit_trail.sql` is on `main` now, and other work may take more). Each issue below owns its own migration file, named by content (`NNN_refresh_token_assurance.sql`, `NNN_mfa_factors.sql`, `NNN_device_approval_keys.sql`, `NNN_key_backup_grants.sql`).
 Every statement is additive and idempotent (`IF NOT EXISTS`), safe on upgraded installs, and covered by a
 `SqlDeployerHistoryDb` test.
 
-**117_mfa.sql**
+**MFA core** (issue 1 takes the `refresh_tokens` columns; issue 3 the factor tables)
 
 ```sql
 ALTER TABLE refresh_tokens
@@ -785,7 +870,7 @@ MFA state stays out of `users` and out of `identities::UserState`: the identity 
 the "state never carries credentials" rule stay as they are. `mfa_seal` and `mfa_pepper` live in `internal_secrets`
 through `crypto::secrets::Manager`, sealed like the JWT secret and the share pepper.
 
-**118_device_approvals.sql**
+**Device approvals** (issue 8 takes `device_approval_keys`; issue 9 the grant tables)
 
 ```sql
 CREATE TABLE IF NOT EXISTS device_approval_keys (
@@ -817,7 +902,8 @@ CREATE TABLE IF NOT EXISTS key_backup_grant_vaults (
     vault_id INTEGER NOT NULL REFERENCES vault (id) ON DELETE CASCADE,
     PRIMARY KEY (grant_id, vault_id)
 );
--- D1 (if accepted): one 'migrated' grant per live device whose user may export, over the vaults they may export.
+-- D1: one 'migrated' grant per live device whose user may export at migration time, over exactly the vaults they may
+-- export then (section 6.4), each with a keys.backup.grant.migrate audit event.
 ```
 
 ## 10. ws Contract Additions
@@ -868,7 +954,7 @@ server answers `mfa_required` with a generic error and fails closed. No protocol
 | `auth.stepup.finish` | human | `{stepup_id, method: "webauthn", credential}` or `{stepup_id, method: "password_totp", password, code}` or `{stepup_id, method: "password", password}` (D3) | `{family, target, expires_at, uses}` |
 | `auth.sessions.list` | human | none | `{sessions: [{id, current, aal, amr, auth_time, last_activity_at, ip_address, user_agent}]}` (`id` is an opaque handle, never the `jti`) |
 | `auth.sessions.revoke` | human | `{id}` or `{all_others: true}` | `{revoked}` |
-| `auth.approval.list` / `.approve` / `.deny` | human | `{approval_id, credential? \| password+code?}` | `{approval}` |
+| `auth.approval.list` / `.approve` / `.deny` | human | `{approval_id, credential}` (`.approve`: a UV WebAuthn assertion, nothing else) | `{approval}` |
 | `auth.mfa.admin.status` | human (users-manage) | `{user_id}` | `{factors: [MfaFactor without secrets], recovery: {remaining}, required}` |
 | `auth.mfa.admin.reset` | human + `account.credentials` | `{user_id, reason}` | `{}` |
 | `auth.mfa.admin.require` | human + `identity.admin` | `{user_id, required}` | `{}` |
@@ -910,7 +996,7 @@ mirrored and checked by the existing `WsAuthRouting` tests. `WebSocketCommandMap
 - Device approval signatures: canonical payload vector shared with Desktop; wrong node, server SPKI, device, target,
   expiry, reused challenge.
 
-**DB-backed (`make test`)**: migrations 117/118 additive and idempotent on an upgraded schema; old refresh rows read
+**DB-backed (`make test`)**: the new migrations additive and idempotent on an upgraded schema; old refresh rows read
 as `aal 1`; policy `admins` refuses an old admin row at next use; admin reset effects; grant revocation triggers.
 
 **ws contract and routing**
@@ -934,6 +1020,21 @@ as `aal 1`; policy `admins` refuses an old admin row at next use; admin reset ef
 | Session fixation | A planted cookie (valid JWT with no row, and a valid row for another user) never becomes the victim's session after their sign-in |
 | Privilege elevation | `auth.user.update` role change, `role.admin.update`, `group.member.add` without a grant → refused; with a grant for another family → refused |
 | Factor loss | Last-factor removal refused under policy; admin reset and `vh user mfa reset` paths, cooldown enforced |
+
+**Fuzzing (decision D5)**: libFuzzer targets (clang, `-Dfuzz=true`, off in normal builds) for the CBOR/COSE decoder,
+the `authenticatorData` parser and the `clientDataJSON` parser, seeded with the vectors. CI runs them for a bounded
+time on every change under `core/src/auth/webauthn/`, and any crash becomes a regression vector.
+
+**Audit**: each flow in section 8 asserts its `audit_event` actions and outcomes (section 7.5), and `vh audit verify`
+passes afterwards. The recovery-code flow is reconstructed from the trail alone.
+
+**Desktop interop** (vaulthalla-desktop CI against a dev daemon built from the matching server branch):
+- 30 minutes of routine sync, File Provider activity, reconnects and a key rotation, with zero `step_up_required`
+  answers and zero prompts;
+- the approval-key payload vector, computed identically in Swift and C++;
+- pairing a second device approved by the first's approval key;
+- discretionary export prompts once;
+- a migrated grant keeps backing up across the upgrade, then is confirmed and revoked from Desktop.
 
 **Tier B harness (`tools/harness`)**: CLI and ws parity for admin reset and policy; a device session and a web session
 of the same user (grant on one never visible to the other); daemon restart drops pending states and grants.
@@ -969,41 +1070,41 @@ on vh-storage without approval. Record each run (screen capture) and attach it t
 | 6 | Desktop: background sync and file-provider activity for 10 minutes with no prompt; approve a second Mac from the first with Touch ID; manual key export outside the grant prompts once | Same |
 | 7 | Recovery: sign in with a recovery code, see the cooldown and notification, enroll a new passkey | Same |
 
-## 13. Proposed Implementation Issues
+## 13. Implementation Issues
 
-In order; none are opened yet. Each lands with tests, `.claude/context` updates and release fragments.
+In dependency order. Each issue lands with its tests, `.claude/context` updates and release fragments, and owns its
+own migration at the next free number.
 
-1. **Session prerequisites.** `refresh_tokens.aal/amr/auth_time` (117, part 1); promote writes a row once (the
-   adoption branch goes); `auth.login` refused on a signed-in socket; policy checked against the row on every use;
-   `auth.sessions.list/revoke` and the console's Sessions panel.
-2. **WebAuthn verifier.** `core/src/auth/webauthn/` on libcbor + OpenSSL + libsodium, the checks of 4.1, vectors;
-   `libcbor` in `debian/control`, the macOS package and `docs/stack.toml`; `auth.webauthn.*` config and the Settings
-   → Security form.
-3. **Factor storage.** `user_mfa`, `totp_factors`, recovery tables (117, part 2); `mfa_seal` / `mfa_pepper` sealed;
-   TOTP and recovery code cores; `LogRedaction` additions.
-4. **Pending-MFA sign-in and enrollment.** Router pending mode and allowlist; `auth.mfa.*`; console second step,
-   enrollment wizard, recovery-code screen; Playwright with the virtual authenticator.
-5. **Passkey sign-in.** `auth.passkey.options/login`; console "Sign in with passkey".
-6. **Step-up framework.** Families, `auth::stepup::Scope`, grants, `step_up_required`, contract annotations and the
-   table-driven tests; console Step-up dialog; applied to `account.credentials`, `identity.admin`, `secrets`,
-   `settings`, `data.destroy`.
-7. **Policy, lockout, admin reset, recovery.** `auth.mfa.policy` and admin enforcement; backoff; admin reset (ws +
-   `vh user mfa reset`); recovery cooldown; notifications through operator email.
-8. **Device approvals (server).** `device_approval_keys` (118), the approval challenge and signature, console-mediated
-   approvals with the push, `device.trust` on pairing approval. Companion issue in vaulthalla-desktop: the Secure
-   Enclave approval key, `docs/pairing.md` update, Touch ID approvals.
-9. **Key-backup grants.** `key_backup_grants` (118), grant-scoped export, rate cap, revocation triggers, the D1 upgrade
-   path; Desktop companion for consent and confirm.
-10. **Docs and demo.** `docs/admin/mfa.md` (policy, passkeys and RP ID, IP-only hosts, recovery, HIPAA wording),
-    updates to `docs/admin/devices.md` and `docs/reference/configuration.md`, and the section 12 demo recordings.
-
-## 14. Open Maintainer Decisions
-
-| # | Decision | Recommendation |
+| # | Issue | Depends on |
 | --- | --- | --- |
-| D1 | Existing Desktops' automatic 1Password key backup at upgrade (escalated: custody and recoverability) | Migrate them to `origin = 'migrated'` grants with exactly today's authority, plus a "confirm or revoke" prompt, instead of pausing backup until consent |
-| D2 | Default policy `admins` on upgrade, which signs existing admin sessions out once and requires enrollment at next sign-in | Yes. Documented in the release fragment; the CLI reset is the fallback |
-| D3 | Users without a factor under `optional`: step-up by password re-entry, except `keys`, `device.trust` and `data.destroy`, which always need a factor (so remote Desktop pairing from the console requires enrolling one; local CLI pairing doesn't) | Yes |
-| D4 | After a recovery-code sign-in, revoke paired devices automatically or offer it | Offer it, with the device list (a lost phone shouldn't stop the Mac's sync); revoke web sessions and key-backup grants automatically |
-| D5 | WebAuthn verifier: in-tree on libcbor + OpenSSL vs libfido2 vs a `vl-webauthn` library now | In-tree with an extractable interface; extract when a second consumer (Apthalla) needs it |
-| D6 | Accept the Desktop approval key (Secure Enclave, user-presence access control the server can't attest) for `device.trust`, `keys` and key-backup grants only | Yes; other families from Desktop go through console approval |
+| 1 | #354 Session assurance on refresh tokens, write-once promotion, session list/revoke | none |
+| 2 | #355 WebAuthn verifier (vectors, negative tests, strict parsing, fuzzing, libcbor packaging, `auth.webauthn.*`) | none |
+| 3 | #356 Factor storage: sealed TOTP, hashed recovery codes | #354 |
+| 4 | #357 Pending-MFA sign-in and guided enrollment (server and console, Playwright virtual authenticator) | #354, #355, #356 |
+| 5 | #358 Discoverable passkey sign-in | #357 |
+| 6 | #359 Step-up framework and families | #357 |
+| 7 | #360 Policy, lockout, admin and CLI reset, auditable recovery | #359 |
+| 8 | #361 Device approval keys and action-bound approvals (server) | #359 |
+| 8a | valkyrianlabs/vaulthalla-desktop#47 Secure Enclave approval key, Touch ID approvals, `docs/pairing.md`, interop tests | #361 |
+| 9 | #362 Key-backup grants and the migrated-grant upgrade | #361 |
+| 9a | valkyrianlabs/vaulthalla-desktop#48 Grant consent, confirm-or-revoke, 1Password backup interop | #362, desktop#47 |
+| 10 | #363 Operator docs and the end-to-end browser demo with and without 1Password | #358, #360, #362 |
+
+## 14. Decisions
+
+Decided by the maintainer on PR #343 (2026-11-05) and folded into the sections cited.
+
+| # | Decision | Where |
+| --- | --- | --- |
+| D1 | Existing Desktops keep automatic 1Password key backup through `origin = 'migrated'` grants with exactly their existing export authority. A non-blocking confirm-or-revoke prompt, no prompt per sync, backup or rotation, no silent expansion; visible, revocable, device-bound, audited; migration verified for no backup gap and no escalation | 6.4, 9, 11 |
+| D2 | Default policy `admins`. AAL1 admin sessions are not grandfathered; admins enroll at next sign-in; local CLI recovery stays | 5.3, 7.1 |
+| D3 | Password-only step-up only for an explicitly `optional` account with no factor, and never for `keys`, `device.trust` or `data.destroy`. The server enforces this | 5.4 |
+| D4 | A recovery-code sign-in revokes other web sessions and key-backup grants automatically. It offers targeted device revocation and never breaks a legitimate Desktop's sync on its own | 7.4, 6.4 |
+| D5 | In-tree verifier behind an extractable interface (libcbor + OpenSSL/libsodium), accepted only with every spec check, published vectors, negative tests, strict parsing and fuzzing. Reopen if a maintained verifier is measurably lower risk | 4.1, 11 |
+| D6 | The Secure Enclave approval key authorizes only `device.trust`, `keys` and key-backup grants, through signed single-use challenges bound to action, target and session. mTLS and OS biometric claims never count as presence; other privileged families need console WebAuthn | 6.2, 6.3 |
+
+**Non-negotiable.** Passkeys (including 1Password's) apply to console sign-in and step-up. The pinned mTLS Desktop
+tunnel reconnects, syncs and backs up approved vault keys with no recurring MFA prompt. There is no general-purpose,
+forever-authorized key-export channel. Refresh cookies, pairing and recovery never bypass enrollment.
+
+Escalate only a new concrete key-custody threat, irreversible data loss or a real product-policy contradiction.
