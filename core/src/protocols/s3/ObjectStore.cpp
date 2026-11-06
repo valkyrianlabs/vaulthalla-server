@@ -33,7 +33,6 @@
 #include <cerrno>
 #include <cctype>
 #include <filesystem>
-#include <fstream>
 #include <iomanip>
 #include <openssl/md5.h>
 #include "crypto/util/digest.hpp"
@@ -70,17 +69,9 @@ std::vector<uint8_t> md5Raw(const std::vector<uint8_t>& bytes) {
     return {digest.begin(), digest.end()};
 }
 
-std::string objectMd5FileHex(const std::filesystem::path& path) {
-    std::ifstream in(path, std::ios::binary);
-    if (!in) throw std::runtime_error("Failed to read object source file: " + path.string());
-
+std::string sourceMd5Hex(const fs::PlaintextSource& source) {
     crypto::util::EvpDigest md5(EVP_md5());
-    std::array<char, 64 * 1024> buffer{};
-    while (in) {
-        in.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
-        const auto count = in.gcount();
-        if (count > 0) md5.update(buffer.data(), static_cast<std::size_t>(count));
-    }
+    fs::forEachChunk(source, [&](const std::span<const uint8_t> chunk) { md5.update(chunk.data(), chunk.size()); });
     const auto digest = md5.finish();
     return toHex(digest.data(), digest.size());
 }
@@ -603,26 +594,20 @@ db::query::s3::ObjectState ObjectStore::putObject(
     return *db::query::s3::Gateway::getObjectState(bucket.vault_id, objectKey);
 }
 
-db::query::s3::ObjectState ObjectStore::putObjectFromFile(
+db::query::s3::ObjectState ObjectStore::putObjectFromSource(
     const ResolvedBucket& bucket,
     const std::string& key,
-    const std::filesystem::path& sourcePath,
-    const uint64_t sourceSize,
+    const fs::PlaintextSource& source,
     const PutObjectOptions& options) const {
     const auto vaultPath = keyToVaultPath(key);
     requireS3Permission(bucket, vaultPath, S3Action::PutObject);
-
-    if (!std::filesystem::exists(sourcePath) || !std::filesystem::is_regular_file(sourcePath))
-        throw invalidArgument("Object source file is unavailable", sourcePath.string());
-    const auto actualSize = std::filesystem::file_size(sourcePath);
-    if (actualSize != sourceSize)
-        throw std::runtime_error("S3 request body temp file size changed before commit");
+    const auto sourceSize = source.size;
 
     const auto directoryMarker = isDirectoryMarker(key);
     if (directoryMarker && sourceSize != 0)
         throw invalidArgument("Directory marker objects must be zero-byte objects", key);
 
-    const auto etag = options.etag_override.value_or(quoted(objectMd5FileHex(sourcePath)));
+    const auto etag = options.etag_override ? *options.etag_override : quoted(sourceMd5Hex(source));
     const auto objectKey = vaultPathToKey(vaultPath);
 
     if (!directoryMarker) {
@@ -631,7 +616,7 @@ db::query::s3::ObjectState ObjectStore::putObjectFromFile(
             .path = vaultPath,
             .fuse_path = bucket.engine->vaultPathToFusePath(vaultPath),
             .buffer = {},
-            .source = fs::sourceOf(sourcePath),
+            .source = source,
             .engine = bucket.engine,
             .user = bucket.actor,
             .overwrite = true

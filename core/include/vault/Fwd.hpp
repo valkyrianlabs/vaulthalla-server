@@ -3,6 +3,7 @@
 // Forward declarations for the vault subsystem. Declarations only: include the defining header to use a type.
 
 namespace vh::vault {
+    class EncryptionManager;
     class RetentionService;
 }
 

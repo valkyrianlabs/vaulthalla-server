@@ -4,10 +4,12 @@
 #include "protocols/s3/Error.hpp"
 #include "protocols/s3/MultipartStore.hpp"
 #include "protocols/s3/ObjectStore.hpp"
+#include "crypto/Fwd.hpp"
 
 #include <boost/beast/http.hpp>
 #include <filesystem>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -39,7 +41,9 @@ public:
     };
 
     struct BodyPayload {
-        std::optional<std::filesystem::path> temp_file;
+        // A streamed body: ciphertext under the process key (crypto::ScratchFile, #345), unlinked with its last
+        // reference. Unset for a buffered body (request.body()).
+        std::shared_ptr<crypto::ScratchFile> file;
         uint64_t size = 0;
         std::map<std::string, std::string> trailer_headers;
         std::optional<std::string> sha256_hex;
@@ -47,9 +51,9 @@ public:
         std::optional<std::string> md5_base64;
         std::optional<std::string> md5_hex;
         std::optional<std::string> crc32_base64;
-        // Set when temp_file still holds the aws-chunked encoding as received: route() decodes it into this path
-        // (after authenticating, for signed chunks) and acts only once every chunk verified. The digests above are
-        // then those of the encoded body; route() replaces them with the decoded body's.
+        // Set when `file` still holds the aws-chunked encoding as received: route() decodes it into a new scratch file
+        // at this path (after authenticating, for signed chunks) and acts only once every chunk verified. The digests
+        // above are then those of the encoded body; route() replaces them (and `file`) with the decoded body's.
         std::optional<std::filesystem::path> aws_chunked_decode_to;
     };
 

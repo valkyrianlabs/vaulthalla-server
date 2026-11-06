@@ -15,6 +15,11 @@
 #include "ops/S3Gateway.hpp"
 #include "protocols/s3/MultipartStore.hpp"
 #include "protocols/s3/ObjectStore.hpp"
+#include "protocols/s3/PartCipher.hpp"
+#include "crypto/ScratchFile.hpp"
+#include "crypto/util/digest.hpp"
+#include "vault/EncryptionManager.hpp"
+#include "protocols/s3/RequestBody.hpp"
 #include "protocols/s3/GatewayService.hpp"
 #include "protocols/s3/Router.hpp"
 #include "protocols/s3/Session.hpp"
@@ -2911,7 +2916,8 @@ TEST_F(S3GatewayDbTest, MultipartUploadUsesOpaquePartDirAndCompleteKeepsRoot) {
 
     const auto part = store.uploadPart(bucket, key, uploadId, 1, {'p', 'a', 'r', 't'});
     const auto partDir = vh::protocols::s3::MultipartStore::partRoot() / upload->parts_dir_id;
-    EXPECT_EQ(part.path, partDir / "1");
+    EXPECT_EQ(part.path.parent_path(), partDir);
+    EXPECT_TRUE(part.path.filename().string().starts_with("1."));
     EXPECT_TRUE(std::filesystem::exists(part.path));
     EXPECT_EQ(part.path.string().find(bucketName), std::string::npos);
     EXPECT_EQ(part.path.string().find(key), std::string::npos);
@@ -3011,7 +3017,9 @@ TEST_F(S3GatewayDbTest, AbortExpiredMultipartUploadsUsesConfiguredRetention) {
         .size_bytes = 8,
         .md5 = std::vector<uint8_t>(16, 0),
         .path = oldPartPath,
-        .created_at = std::time(nullptr)
+        .created_at = std::time(nullptr),
+        .encryption_iv = std::nullopt,
+        .key_version = std::nullopt
     });
 
     const auto cutoffTime = std::time(nullptr) - 2 * 24 * 60 * 60;
@@ -3032,6 +3040,389 @@ TEST_F(S3GatewayDbTest, AbortExpiredMultipartUploadsUsesConfiguredRetention) {
     EXPECT_TRUE(vh::db::query::s3::Gateway::getMultipartUpload(freshUpload));
 
     std::filesystem::remove_all(vh::protocols::s3::MultipartStore::partRoot());
+}
+
+// ---- staging at rest (#345) --------------------------------------------------------------------------------------
+
+namespace {
+
+constexpr std::string_view kS3StagingNeedle = "VH-S3-DB-STAGING-NEEDLE";
+
+std::vector<uint8_t> s3StagingPlain(const std::size_t size, const char salt) {
+    std::vector<uint8_t> out;
+    out.reserve(size);
+    while (out.size() < size) {
+        out.insert(out.end(), kS3StagingNeedle.begin(), kS3StagingNeedle.end());
+        out.push_back(static_cast<uint8_t>(salt));
+    }
+    out.resize(size);
+    return out;
+}
+
+bool s3StagingFileHoldsNeedle(const std::filesystem::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    const std::string bytes{std::istreambuf_iterator<char>(in), {}};
+    return bytes.find(kS3StagingNeedle) != std::string::npos;
+}
+
+std::string s3StagingMd5Hex(const std::vector<uint8_t>& bytes) {
+    return vh::protocols::s3::ObjectStore::md5Hex(bytes);
+}
+
+struct S3StagingMinPartSize {
+    ConfigRestore restore{vh::config::Registry::get()};
+    S3StagingMinPartSize() {
+        auto cfg = vh::config::Registry::get();
+        cfg.s3_gateway.multipart.min_part_size_mb = 0;
+        vh::config::Registry::set(cfg);
+    }
+};
+
+void s3StagingFlipByte(const std::filesystem::path& path, const std::streamoff at) {
+    std::fstream f(path, std::ios::in | std::ios::out | std::ios::binary);
+    f.seekg(at);
+    const auto c = static_cast<char>(f.get());
+    f.seekp(at);
+    f.put(static_cast<char>(c ^ 0x01));
+}
+
+}
+
+// Parts are sealed under the vault's key with their plaintext MD5 and size recorded (the ETags and sizes S3 clients
+// see), and Complete streams them into the object, whose ETag is the usual multipart one.
+TEST_F(S3GatewayDbTest, MultipartPartsAreSealedAtRestWithPlaintextEtagsAndSizes) {
+    std::filesystem::remove_all(vh::protocols::s3::MultipartStore::partRoot());
+    S3StagingMinPartSize minPartSize;
+    const auto admin = vh::identities::manager().userByName("admin");
+    ASSERT_TRUE(admin);
+    const std::string bucketName = "multipart-sealed-" + std::to_string(vaultId);
+    vh::db::query::s3::Gateway::bindBucket({.vault_id = vaultId, .bucket_name = bucketName, .api_exclusive = true,
+                                            .mode = "local", .created_by = admin->id});
+    const vh::protocols::s3::ObjectStore objects;
+    const auto bucket = objects.resolveBucket(bucketName, admin);
+    const auto keyVersion = bucket.engine->encryptionManager->currentKey().version;
+
+    const vh::protocols::s3::MultipartStore store;
+    const std::string key = "sealed/object.bin";
+    const auto uploadId = store.createUpload(bucket, key, {});
+
+    const std::vector<std::vector<uint8_t>> plains{s3StagingPlain(300 * 1024, 'a'), s3StagingPlain(70000, 'b'),
+                                                   s3StagingPlain(11, 'c')};
+    std::vector<std::vector<uint8_t>> md5s;
+    std::vector<uint8_t> whole;
+    for (uint32_t n = 1; n <= plains.size(); ++n) {
+        const auto& plain = plains[n - 1];
+        const auto part = store.uploadPart(bucket, key, uploadId, n, plain);
+        EXPECT_EQ(part.etag, "\"" + s3StagingMd5Hex(plain) + "\"");
+        EXPECT_EQ(part.size_bytes, plain.size());
+        ASSERT_TRUE(part.encryption_iv);
+        EXPECT_EQ(part.key_version, keyVersion);
+        EXPECT_EQ(std::filesystem::file_size(part.path), plain.size() + 16);
+        EXPECT_FALSE(s3StagingFileHoldsNeedle(part.path)) << "part " << n;
+        md5s.push_back(part.md5);
+        whole.insert(whole.end(), plain.begin(), plain.end());
+    }
+    // Re-uploading a part replaces its file (a new name, a new IV) and removes the old one.
+    const auto before = *vh::db::query::s3::Gateway::getMultipartPart(uploadId, 3);
+    const auto again = store.uploadPart(bucket, key, uploadId, 3, plains[2]);
+    EXPECT_NE(again.path, before.path);
+    EXPECT_NE(again.encryption_iv, before.encryption_iv);
+    EXPECT_FALSE(std::filesystem::exists(before.path));
+    EXPECT_EQ(again.etag, before.etag);
+
+    const auto state = store.completeUpload(bucket, key, uploadId, {});
+    EXPECT_EQ(state.etag, vh::protocols::s3::ObjectStore::multipartEtag(md5s));
+    EXPECT_EQ(state.size_bytes, whole.size());
+    EXPECT_EQ(state.part_count, 3u);
+    const auto body = objects.getObject(bucket, key);
+    EXPECT_EQ(body.bytes, whole);
+    EXPECT_TRUE(vh::db::query::s3::Gateway::listMultipartParts(uploadId).empty());
+    std::filesystem::remove_all(vh::protocols::s3::MultipartStore::partRoot());
+}
+
+// An upload resumes after a daemon restart: its parts need only the vault's key (a new process has a new scratch key
+// and none of the old one's memory), and a new store completes it.
+TEST_F(S3GatewayDbTest, MultipartUploadSurvivesARestart) {
+    std::filesystem::remove_all(vh::protocols::s3::MultipartStore::partRoot());
+    S3StagingMinPartSize minPartSize;
+    const auto admin = vh::identities::manager().userByName("admin");
+    ASSERT_TRUE(admin);
+    const std::string bucketName = "multipart-restart-" + std::to_string(vaultId);
+    vh::db::query::s3::Gateway::bindBucket({.vault_id = vaultId, .bucket_name = bucketName, .api_exclusive = true,
+                                            .mode = "local", .created_by = admin->id});
+    const vh::protocols::s3::ObjectStore objects;
+    const auto bucket = objects.resolveBucket(bucketName, admin);
+    const std::string key = "restart.bin";
+    const auto one = s3StagingPlain(100000, 'r'), two = s3StagingPlain(5000, 's');
+
+    std::string uploadId;
+    {
+        const vh::protocols::s3::MultipartStore before;
+        uploadId = before.createUpload(bucket, key, {});
+        (void)before.uploadPart(bucket, key, uploadId, 1, one);
+        (void)before.uploadPart(bucket, key, uploadId, 2, two);
+    }
+
+    // The new process: only the vault key, as it unseals it at start.
+    const auto current = bucket.engine->encryptionManager->currentKey();
+    const vh::vault::EncryptionManager restarted(vh::vault::EncryptionManager::ForTesting{}, vaultId,
+                                                 current.key->bytes(), current.version);
+    std::vector<vh::protocols::s3::part_cipher::Stored> stored;
+    for (const auto& part : vh::db::query::s3::Gateway::listMultipartParts(uploadId))
+        stored.push_back({.binding = {.vault_id = vaultId, .upload_id = uploadId, .part_number = part.part_number},
+                          .path = part.path, .encryption_iv = *part.encryption_iv, .key_version = *part.key_version,
+                          .size_bytes = part.size_bytes});
+    std::vector<uint8_t> whole = one;
+    whole.insert(whole.end(), two.begin(), two.end());
+    std::vector<uint8_t> read;
+    vh::fs::forEachChunk(vh::protocols::s3::part_cipher::open(restarted, stored),
+                         [&](const std::span<const uint8_t> c) { read.insert(read.end(), c.begin(), c.end()); });
+    EXPECT_EQ(read, whole);
+
+    const vh::protocols::s3::MultipartStore after;
+    (void)after.completeUpload(bucket, key, uploadId, {});
+    EXPECT_EQ(objects.getObject(bucket, key).bytes, whole);
+    std::filesystem::remove_all(vh::protocols::s3::MultipartStore::partRoot());
+}
+
+// A tampered or swapped part fails Complete closed: no object, the upload stays open with its parts, and uploading
+// the part again lets it complete.
+TEST_F(S3GatewayDbTest, TamperedOrSwappedPartFailsCompleteAndKeepsTheUpload) {
+    std::filesystem::remove_all(vh::protocols::s3::MultipartStore::partRoot());
+    S3StagingMinPartSize minPartSize;
+    const auto admin = vh::identities::manager().userByName("admin");
+    ASSERT_TRUE(admin);
+    const std::string bucketName = "multipart-tamper-" + std::to_string(vaultId);
+    vh::db::query::s3::Gateway::bindBucket({.vault_id = vaultId, .bucket_name = bucketName, .api_exclusive = true,
+                                            .mode = "local", .created_by = admin->id});
+    const vh::protocols::s3::ObjectStore objects;
+    const auto bucket = objects.resolveBucket(bucketName, admin);
+    const vh::protocols::s3::MultipartStore store;
+    const std::string key = "tampered.bin";
+    const auto one = s3StagingPlain(40000, '1'), two = s3StagingPlain(40000, '2');
+    const auto uploadId = store.createUpload(bucket, key, {});
+    const auto p1 = store.uploadPart(bucket, key, uploadId, 1, one);
+    const auto p2 = store.uploadPart(bucket, key, uploadId, 2, two);
+
+    const auto expectInvalidPart = [&](const std::string& what) {
+        try {
+            (void)store.completeUpload(bucket, key, uploadId, {});
+            ADD_FAILURE() << what << ": completed";
+        } catch (const vh::protocols::s3::S3Error& e) {
+            EXPECT_EQ(e.code, "InvalidPart") << what << ": " << e.what();
+        }
+        EXPECT_FALSE(vh::db::query::s3::Gateway::getObjectState(vaultId, key)) << what;
+        EXPECT_TRUE(vh::db::query::s3::Gateway::getMultipartUpload(uploadId)) << what;
+        EXPECT_EQ(vh::db::query::s3::Gateway::listMultipartParts(uploadId).size(), 2u) << what;
+    };
+
+    // Swapped files (both rows point at the other part's file).
+    vh::db::Transactions::exec("S3StagingTest::swapParts", [&](pqxx::work& txn) {
+        txn.exec("UPDATE s3_gateway_multipart_part SET path = CASE part_number WHEN 1 THEN $2 ELSE $1 END "
+                 "WHERE upload_id = $3",
+                 pqxx::params{p1.path.string(), p2.path.string(), uploadId});
+    });
+    expectInvalidPart("swapped");
+    vh::db::Transactions::exec("S3StagingTest::unswapParts", [&](pqxx::work& txn) {
+        txn.exec("UPDATE s3_gateway_multipart_part SET path = CASE part_number WHEN 1 THEN $1 ELSE $2 END "
+                 "WHERE upload_id = $3",
+                 pqxx::params{p1.path.string(), p2.path.string(), uploadId});
+    });
+
+    // A flipped byte.
+    s3StagingFlipByte(p2.path, 1000);
+    expectInvalidPart("flipped");
+
+    // The client uploads part 2 again and completes.
+    (void)store.uploadPart(bucket, key, uploadId, 2, two);
+    (void)store.completeUpload(bucket, key, uploadId, {});
+    std::vector<uint8_t> whole = one;
+    whole.insert(whole.end(), two.begin(), two.end());
+    EXPECT_EQ(objects.getObject(bucket, key).bytes, whole);
+    std::filesystem::remove_all(vh::protocols::s3::MultipartStore::partRoot());
+}
+
+// Parts written as plaintext before #345 are sealed at startup (checked against their MD5 first, the plaintext then
+// deleted) or, if the vault wasn't there at startup, before Complete. One that no longer matches its ETag is left as
+// it is (never deleted, never committed); leftovers no open upload references are removed.
+TEST_F(S3GatewayDbTest, LegacyPlaintextPartsAreSealedAndStrayStagingIsRemoved) {
+    std::filesystem::remove_all(vh::protocols::s3::MultipartStore::partRoot());
+    S3StagingMinPartSize minPartSize;
+    const auto admin = vh::identities::manager().userByName("admin");
+    ASSERT_TRUE(admin);
+    const std::string bucketName = "multipart-legacy-" + std::to_string(vaultId);
+    vh::db::query::s3::Gateway::bindBucket({.vault_id = vaultId, .bucket_name = bucketName, .api_exclusive = true,
+                                            .mode = "local", .created_by = admin->id});
+    const vh::protocols::s3::ObjectStore objects;
+    const auto bucket = objects.resolveBucket(bucketName, admin);
+    const vh::protocols::s3::MultipartStore store;
+
+    // As an older version left it: <parts dir>/<part number>, plaintext, no IV.
+    const auto legacyPart = [&](const std::string& uploadId, const uint32_t n, const std::vector<uint8_t>& plain,
+                                const std::vector<uint8_t>& recordedMd5) {
+        const auto upload = *vh::db::query::s3::Gateway::getMultipartUpload(uploadId);
+        const auto dir = vh::protocols::s3::MultipartStore::partRoot() / upload.parts_dir_id;
+        std::filesystem::create_directories(dir);
+        const auto path = dir / std::to_string(n);
+        std::ofstream(path, std::ios::binary).write(reinterpret_cast<const char*>(plain.data()),
+                                                    static_cast<std::streamsize>(plain.size()));
+        const auto hex = s3StagingMd5Hex(std::vector<uint8_t>(plain));
+        (void)vh::db::query::s3::Gateway::upsertMultipartPart({.upload_id = uploadId, .part_number = n,
+                                                               .etag = "\"" + hex + "\"", .size_bytes = plain.size(),
+                                                               .md5 = recordedMd5, .path = path,
+                                                               .created_at = std::time(nullptr),
+                                                               .encryption_iv = std::nullopt,
+                                                               .key_version = std::nullopt});
+        return path;
+    };
+    const auto md5Of = [](const std::vector<uint8_t>& b) {
+        const auto d = vh::crypto::util::EvpDigest::of(EVP_md5(), b.data(), b.size());
+        return std::vector<uint8_t>(d.begin(), d.end());
+    };
+
+    const std::string key = "legacy.bin";
+    const auto good = s3StagingPlain(90000, 'g'), bad = s3StagingPlain(1000, 'h');
+    const auto uploadId = store.createUpload(bucket, key, {});
+    const auto goodPath = legacyPart(uploadId, 1, good, md5Of(good));
+    const auto badPath = legacyPart(uploadId, 2, bad, md5Of(s3StagingPlain(1000, 'X')));  // bytes changed on disk
+    const auto upload = *vh::db::query::s3::Gateway::getMultipartUpload(uploadId);
+    const auto dir = vh::protocols::s3::MultipartStore::partRoot() / upload.parts_dir_id;
+    std::ofstream(dir / ".complete-object") << kS3StagingNeedle;  // a crashed Complete's plaintext concatenation
+    const auto orphan = vh::protocols::s3::MultipartStore::partRoot() / "finished-upload-dir";
+    std::filesystem::create_directories(orphan);
+    std::ofstream(orphan / "1") << kS3StagingNeedle;
+
+    const auto sweep = store.sweepAtStartup();
+    EXPECT_EQ(sweep.sealed, 1u);
+    EXPECT_EQ(sweep.unconvertible, 1u);
+    EXPECT_EQ(sweep.strays, 1u);
+    EXPECT_EQ(sweep.orphanDirs, 1u);
+    EXPECT_FALSE(std::filesystem::exists(goodPath));
+    EXPECT_FALSE(std::filesystem::exists(dir / ".complete-object"));
+    EXPECT_FALSE(std::filesystem::exists(orphan));
+    EXPECT_TRUE(std::filesystem::exists(badPath));  // not ours to delete: the upload is still open
+    const auto sealed = *vh::db::query::s3::Gateway::getMultipartPart(uploadId, 1);
+    ASSERT_TRUE(sealed.encryption_iv);
+    EXPECT_EQ(sealed.md5, md5Of(good));
+    EXPECT_EQ(sealed.size_bytes, good.size());
+    EXPECT_FALSE(s3StagingFileHoldsNeedle(sealed.path));
+
+    // Part 2 can't be completed (its bytes aren't what its ETag says); part 1 alone can.
+    try {
+        (void)store.completeUpload(bucket, key, uploadId, {{1, ""}, {2, ""}});
+        ADD_FAILURE() << "completed with a corrupt legacy part";
+    } catch (const vh::protocols::s3::S3Error& e) {
+        EXPECT_EQ(e.code, "InvalidPart") << e.what();
+    }
+    EXPECT_FALSE(vh::db::query::s3::Gateway::getObjectState(vaultId, key));
+    const auto state = store.completeUpload(bucket, key, uploadId, {{1, sealed.etag}});
+    EXPECT_EQ(state.etag, vh::protocols::s3::ObjectStore::multipartEtag({md5Of(good)}));
+    EXPECT_EQ(objects.getObject(bucket, key).bytes, good);
+
+    // A plaintext part the startup sweep didn't reach (vault not loaded then) is sealed by Complete.
+    const std::string key2 = "legacy-late.bin";
+    const auto late = s3StagingPlain(3000, 'l');
+    const auto lateUpload = store.createUpload(bucket, key2, {});
+    const auto latePath = legacyPart(lateUpload, 1, late, md5Of(late));
+    (void)store.completeUpload(bucket, key2, lateUpload, {});
+    EXPECT_FALSE(std::filesystem::exists(latePath));
+    EXPECT_EQ(objects.getObject(bucket, key2).bytes, late);
+    std::filesystem::remove_all(vh::protocols::s3::MultipartStore::partRoot());
+}
+
+// A streamed PUT's body is on disk only as scratch ciphertext, also while it is still arriving, and nothing is left
+// once it is answered; leftovers of earlier runs (and the plaintext spool of older versions) go at startup.
+TEST_F(S3GatewayDbTest, StagedRequestBodiesAreCiphertextAndSweptAtStartup) {
+    ConfigRestore restoreConfig(vh::config::Registry::get());
+    auto cfg = vh::config::Registry::get();
+    cfg.s3_gateway.enabled = true;
+    cfg.s3_gateway.host = "127.0.0.1";
+    cfg.s3_gateway.port = freeLoopbackPort();
+    cfg.s3_gateway.require_sigv4 = true;
+    cfg.s3_gateway.allow_path_style = true;
+    vh::config::Registry::set(cfg);
+
+    const auto admin = vh::identities::manager().userByName("admin");
+    ASSERT_TRUE(admin);
+    const std::string bucketName = "staged-body-" + std::to_string(vaultId);
+    vh::db::query::s3::Gateway::bindBucket({.vault_id = vaultId, .bucket_name = bucketName, .api_exclusive = true,
+                                            .mode = "local", .created_by = admin->id});
+    const vh::protocols::s3::CredentialManager manager;
+    const auto secret = manager.createCredential({
+        .created_by = admin->id,
+        .principal_user_id = admin->id,
+        .name = "staged-body-" + s3GatewayUniqueSuffix("credential"),
+        .scope_mode = "vault_allowlist",
+        .description = std::nullopt,
+        .expires_at = std::nullopt,
+        .vault_scopes = {{.credential_id = 0, .vault_id = vaultId, .can_list = true, .can_read = true,
+                          .can_write = true, .can_delete = false, .can_admin = false}}
+    });
+
+    vh::concurrency::ThreadPoolManager::instance().init();
+    ThreadPoolShutdown shutdownPools{true};
+    vh::protocols::s3::GatewayService service;
+    service.start();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!service.gatewayStatus().ready && service.isRunning() && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+    ASSERT_TRUE(service.gatewayStatus().ready);
+    const auto port = cfg.s3_gateway.port;
+
+    const auto plain = s3StagingPlain(300000, 'q');
+    const std::string payload(plain.begin(), plain.end());
+    const auto wire = mcStylePut(port, "/" + bucketName + "/staged.txt", secret.credential.access_key,
+                                 secret.secret_access_key, payload);
+
+    boost::asio::io_context ioc;
+    tcp::socket socket(ioc);
+    socket.connect(tcp::endpoint(boost::asio::ip::make_address("127.0.0.1"), port));
+    timeval timeout{.tv_sec = 10, .tv_usec = 0};
+    (void)::setsockopt(socket.native_handle(), SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    boost::asio::write(socket, boost::asio::buffer(wire.data(), wire.size() - 100));
+
+    // Mid-request: the staged body is there (blocks of it on disk), and it is ciphertext.
+    const auto root = vh::protocols::s3::requestBodyRoot();
+    std::vector<std::filesystem::path> staged;
+    const auto waitUntil = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (std::chrono::steady_clock::now() < waitUntil) {
+        staged.clear();
+        uint64_t bytes = 0;
+        std::error_code ec;
+        for (const auto& e : std::filesystem::directory_iterator(root, ec)) {
+            staged.push_back(e.path());
+            bytes += std::filesystem::file_size(e.path(), ec);
+        }
+        if (bytes >= 2 * vh::crypto::ScratchFile::kRecordSize) break;  // the block being filled stays in memory
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    ASSERT_FALSE(staged.empty());
+    EXPECT_LT(std::chrono::steady_clock::now(), waitUntil) << "the staged body never reached the disk";
+    EXPECT_EQ(std::filesystem::status(root).permissions() & std::filesystem::perms::all,
+              std::filesystem::perms::owner_all);
+    for (const auto& p : staged) EXPECT_FALSE(s3StagingFileHoldsNeedle(p)) << p;
+
+    boost::asio::write(socket, boost::asio::buffer(wire.data() + wire.size() - 100, 100));
+    beast::flat_buffer buffer;
+    http::response<http::string_body> res;
+    http::read(socket, buffer, res);
+    EXPECT_EQ(res.result(), http::status::ok) << res.body();
+    socket.close();
+    service.stop();
+
+    const auto objects = vh::protocols::s3::ObjectStore{};
+    EXPECT_EQ(objects.getObject(objects.resolveBucket(bucketName, admin), "staged.txt").bytes, plain);
+    std::error_code ec;
+    EXPECT_TRUE(std::filesystem::is_empty(root, ec) || !std::filesystem::exists(root));
+
+    // Startup: an earlier run's scratch body and the pre-#345 plaintext spool are removed.
+    std::ofstream(root / "crashed.body") << "ciphertext of a dead key";
+    const auto legacy = vh::paths::getBackingPath() / "s3-request-body";
+    std::filesystem::create_directories(legacy);
+    std::ofstream(legacy / "old.body") << kS3StagingNeedle;
+    EXPECT_EQ(vh::protocols::s3::sweepRequestBodiesAtStartup(), 2u);
+    EXPECT_FALSE(std::filesystem::exists(legacy));
+    EXPECT_FALSE(std::filesystem::exists(root / "crashed.body"));
 }
 
 TEST_F(S3GatewayDbTest, DeleteObjectStateAndRemoteIndexRemovesGatewayAndRemoteRows) {
@@ -3403,7 +3794,7 @@ TEST_F(S3GatewayDbTest, SignedStreamingUploadsStoreOnlyFullyVerifiedBodies) {
     // ListObjectsV2 of a local bucket lists the vault's files as well as gateway rows.
     const auto listed = [&] { return get("?list-type=2").body(); };
     const auto tempBodies = [] {
-        const auto root = vh::paths::getBackingPath() / "s3-request-body";
+        const auto root = vh::protocols::s3::requestBodyRoot();
         std::size_t n = 0;
         if (std::filesystem::exists(root))
             for ([[maybe_unused]] const auto& entry : std::filesystem::directory_iterator(root)) ++n;
@@ -3551,6 +3942,18 @@ TEST_F(S3GatewayDbTest, RealMcUploadsOverPlainHttpWhenMcIsInstalled) {
     EXPECT_EQ(mc("cp --checksum CRC32C '" + (work / "big.txt").string() + "' vhtest/" + bucketName + "/mc/sum.txt"), 0)
         << log();
     EXPECT_EQ(stored("mc/sum.txt"), payload);
+    // Multipart (minio-go splits anything over 16 MiB): the parts are sealed at rest (#345), the object reads back,
+    // and its ETag is the multipart one.
+    std::string large(20u * 1024u * 1024u + 12345u, '\0');
+    for (std::size_t i = 0; i < large.size(); ++i) large[i] = static_cast<char>('A' + (i * 13 + i / 4096) % 26);
+    std::ofstream(work / "large.bin", std::ios::binary) << large;
+    EXPECT_EQ(mc("cp '" + (work / "large.bin").string() + "' vhtest/" + bucketName + "/mc/large.bin"), 0) << log();
+    EXPECT_EQ(stored("mc/large.bin"), large);
+    const auto largeState = vh::db::query::s3::Gateway::getObjectState(vaultId, "mc/large.bin");
+    ASSERT_TRUE(largeState);
+    EXPECT_TRUE(largeState->multipart);
+    EXPECT_EQ(largeState->size_bytes, large.size());
+    EXPECT_TRUE(largeState->etag.ends_with("-2\"")) << largeState->etag;
 
     std::filesystem::remove_all(work);
     service.stop();

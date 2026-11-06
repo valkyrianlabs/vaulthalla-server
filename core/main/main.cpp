@@ -18,6 +18,7 @@
 #include "preview/cache/Maintenance.hpp"
 #include "preview/derive/Queue.hpp"
 #include "protocols/http/upload/Staging.hpp"
+#include "protocols/s3/GatewayService.hpp"
 #include "protocols/http/upload/Resumable.hpp"
 #include "preview/render/Raster.hpp"
 
@@ -178,6 +179,9 @@ void wireStorage() {
 
     // Private HTTP upload staging (protocols/http/upload/Staging.hpp): a crash can leave partial uploads behind.
     vh::protocols::http::upload::staging::sweepAtStartup();
+
+    // S3 gateway staging (#345): crashed request bodies go, plaintext multipart parts from older versions are sealed.
+    vh::protocols::s3::sweepStagingAtStartup();
 
     // Resumable uploads (migration 114): sessions back in memory, the spool reconciled with the rows, interrupted
     // sealing and commits resumed on the upload workers.
