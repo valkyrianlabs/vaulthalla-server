@@ -1,4 +1,6 @@
+#include "../helpers/db_suite.hpp"
 #include "../helpers/identities.hpp"
+#include "../helpers/web_session.hpp"
 #include "auth/model/RefreshToken.hpp"
 #include "auth/model/TokenPair.hpp"
 #include "auth/session/Issuer.hpp"
@@ -131,29 +133,13 @@ TEST_F(RefreshTokenDigestIssuer, NewHumanAndShareRefreshTokensAreStoredAsDigest)
 
 // ── DB-backed: stored rows, legacy rewrite ──────────────────────────────────────────────────────────────────────────
 
-struct ScopedRuntimeSessionManager {
-    std::shared_ptr<Manager> previous;
-
-    explicit ScopedRuntimeSessionManager(std::shared_ptr<Manager> manager)
-        : previous(vh::runtime::Deps::get().sessionManager) {
-        vh::runtime::Deps::get().sessionManager = std::move(manager);
-    }
-
-    ~ScopedRuntimeSessionManager() { vh::runtime::Deps::get().sessionManager = std::move(previous); }
-};
-
 class RefreshTokenDigestDb : public ::testing::Test {
 protected:
     inline static bool skipTests = false;
     inline static std::shared_ptr<identities::User> user;
 
-    static bool hasDbEnv() {
-        return std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-               std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME");
-    }
-
     static void SetUpTestSuite() {
-        if (!hasDbEnv()) {
+        if (!vh::test::db::available()) {
             skipTests = true;
             std::cout << "[test_refresh_token_digest] Skipping db tests due to missing environment variables." << std::endl;
             return;
@@ -205,7 +191,7 @@ protected:
 
     // The ws handshake path: a fresh socket carrying the refresh cookie.
     static std::shared_ptr<protocols::ws::Session> validateViaSocket(const std::string& raw) {
-        ScopedRuntimeSessionManager scoped(std::make_shared<Manager>());
+        const vh::test::web::ScopedDep<Manager> scoped(vh::runtime::Deps::get().sessionManager, std::make_shared<Manager>());
         auto session = baseSession();
         model::RefreshToken::addToSession(session, raw);
         Validator::validateRefreshToken(session);

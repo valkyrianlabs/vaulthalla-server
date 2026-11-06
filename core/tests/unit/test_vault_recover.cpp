@@ -10,94 +10,50 @@
 //                              rotation and sync afterwards; a second restore of the same bucket on a third node;
 //                              dry run; salvage; missing versions; rollback; wrong material; lost manifest objects.
 
+#include "../helpers/bytes.hpp"
+#include "../helpers/db_suite.hpp"
 #include "../helpers/versioned_bucket.hpp"
 
 #include "crypto/recovery/Kit.hpp"
 #include "crypto/recovery/Seed.hpp"
 #include "crypto/secrets/KeyProvider.hpp"
 #include "crypto/util/encrypt.hpp"
-#include "db/Transactions.hpp"
 #include "db/query/fs/File.hpp"
 #include "db/query/sync/Manifest.hpp"
 #include "db/query/vault/Key.hpp"
 #include "db/query/vault/Vault.hpp"
-#include "fs/Filesystem.hpp"
-#include "fs/cache/Registry.hpp"
 #include "fs/model/File.hpp"
-#include "identities/Manager.hpp"
-#include "identities/User.hpp"
 #include "ops/Error.hpp"
 #include "ops/RecoveryRecipients.hpp"
 #include "ops/VaultKeys.hpp"
 #include "ops/VaultRecover.hpp"
-#include "ops/Vaults.hpp"
-#include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
-#include "storage/CloudEngine.hpp"
-#include "storage/Manager.hpp"
 #include "storage/ObjectKeys.hpp"
 #include "storage/PlaintextReader.hpp"
-#include "sync/Cloud.hpp"
 #include "sync/manifest/Objects.hpp"
 #include "sync/manifest/Store.hpp"
-#include "sync/model/Event.hpp"
-#include "sync/model/RemotePolicy.hpp"
-#include "sync/model/Throughput.hpp"
 #include "sync/rotation/Runtime.hpp"
-#include "sync/tasks/Upload.hpp"
-#include "db/query/sync/Event.hpp"
-#include "vault/APIKeyManager.hpp"
 #include "vault/EncryptionManager.hpp"
 #include "vault/KeyAttestation.hpp"
 #include "vault/KeyCheck.hpp"
 #include "vault/Recover.hpp"
 #include "vault/RecoveryEnvelopes.hpp"
-#include "vault/model/APIKey.hpp"
-#include "vault/model/S3Vault.hpp"
 
-#include <gtest/gtest.h>
-#include <nlohmann/json.hpp>
-#include <paths.h>
-#include <sodium.h>
-
-#include <algorithm>
-#include <atomic>
-#include <chrono>
-#include <cstdlib>
-#include <filesystem>
-#include <iostream>
-#include <map>
-#include <random>
 #include <set>
-#include <string>
-#include <vector>
 
 namespace vh::test_vault_recover {
 
 using json = nlohmann::json;
 using Bytes = std::vector<uint8_t>;
+using vh::test::bin::bytes;
+using vh::test::bin::randomBytes;
+using vh::test::bin::str;
 namespace rec = vault::recover;
 namespace mf = sync::manifest;
 namespace keys = ops::vault_keys;
 using test_support::versioned::VersionedBucket;
 using test_support::versioned::Versioning;
 
-std::string tag() {
-    static std::atomic<unsigned> n{0};
-    static const auto run = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count() % 100000);
-    return run + "v" + std::to_string(n.fetch_add(1));
-}
-
-Bytes bytes(const std::string& s) { return {s.begin(), s.end()}; }
-std::string str(const Bytes& b) { return {b.begin(), b.end()}; }
-
-Bytes randomBytes(const std::size_t n, const unsigned seed) {
-    std::mt19937 rng(seed);
-    Bytes out(n);
-    for (auto& b : out) b = static_cast<uint8_t>(rng());
-    return out;
-}
+std::string tag() { return test::uniqueTag('v'); }
 
 // ---- VaultRecoverTrustAnchor: the D1 rule ---------------------------------------------------------------------------
 
@@ -271,36 +227,18 @@ TEST_F(VaultRecoverTrustAnchor, PinsComeFromTheKitEntryAndExportsOfThisVault) {
 
 // ---- VaultRecoverDb -------------------------------------------------------------------------------------------------
 
-class VaultRecoverDb : public ::testing::Test {
+class VaultRecoverDb : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
-    inline static std::shared_ptr<identities::User> superUser;
-
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            std::cout << "[test_vault_recover] Skipping db tests due to missing environment variables." << std::endl;
-            return;
-        }
-        paths::enableTestMode();
-        const auto root = std::filesystem::temp_directory_path() / ("vh_vault_recover_" + tag());
-        paths::backingPath = root / "backing";
-        paths::mountPath = root / "mount";
-        std::filesystem::create_directories(paths::backingPath);
-        std::filesystem::create_directories(paths::mountPath);
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        runtime::Deps::init();
-        fs::Filesystem::init(runtime::Deps::get().storageManager);
+        if (!setUpDbSuite("test_vault_recover", {.freshEngines = false})) return;
         if (!runtime::Deps::get().fsCache) runtime::Deps::get().fsCache = std::make_shared<fs::cache::Registry>();
-        superUser = identities::manager().userByName("admin");
     }
 
+    static void TearDownTestSuite() { tearDownDbSuite(); }
+
     void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
+        Suite::SetUp();
+        if (IsSkipped()) return;
         vault::attestation::resetForTesting();
     }
 
@@ -346,27 +284,14 @@ protected:
     }
 
     static Origin origin(const Versioning versioning = Versioning::Enabled) {
+        const auto v = test_support::versioned::makeCloudVault(superUser, "vr", versioning, true);
         Origin o;
-        o.name = "vr_vault_" + tag();
-        const auto bucketName = "vr-" + tag();
-        const auto created = ops::vaults::create(superUser, {.name = o.name, .type = vault::model::VaultType::S3,
-                                                             .s3 = ops::vaults::S3Spec{.api_key_id = apiKey(),
-                                                                                       .bucket = bucketName}});
-        db::Transactions::exec("VaultRecoverDb::origin", [&](pqxx::work& txn) {
-            txn.exec("UPDATE s3 SET storage_layout = 'opaque_v1' WHERE vault_id = $1", pqxx::params{created->id});
-        });
-        o.id = created->id;
-        o.uid = *created->uid;
-        o.engine = std::static_pointer_cast<storage::CloudEngine>(runtime::Deps::get().storageManager->getEngine(o.id));
-        std::static_pointer_cast<vault::model::S3Vault>(o.engine->vault)->storage_layout =
-            vault::model::StorageLayout::OpaqueV1;
-        o.bucket = std::make_shared<VersionedBucket>(versioning, bucketName);
-        o.bucketName = bucketName;
-        o.engine->setS3ControllerForTesting(o.bucket);
-        o.engine->setRemoteFetchGate([](const storage::CloudEngine&, const storage::RemoteFetchRequest&) {
-            return std::unique_ptr<storage::RemoteFetchReservation>{};
-        });
-        o.engine->remote_policy()->strategy = sync::model::RemotePolicy::Strategy::Sync;
+        o.engine = v.engine;
+        o.bucket = v.bucket;
+        o.bucketName = v.bucketName;
+        o.id = v.id();
+        o.name = v.engine->vault->name;
+        o.uid = *v.engine->vault->uid;
         useBucket(o.bucket);
         return o;
     }
@@ -377,25 +302,9 @@ protected:
         o.files[path] = str(content);
     }
 
+    // One pass: trash purge, the plan, the uploads (each must succeed), the index and the manifest.
     static void pass(const std::shared_ptr<storage::CloudEngine>& engine) {
-        auto cloud = std::make_shared<sync::Cloud>(engine);
-        cloud->event = std::make_shared<sync::model::Event>();
-        cloud->event->vault_id = engine->vault->id;
-        cloud->event->timestamp_begin = std::time(nullptr);
-        db::query::sync::Event::create(cloud->event);
-        cloud->removeTrashedFiles();
-        cloud->processFutures();
-        cloud->initBins();
-        const auto plan = cloud->planPass();
-        for (const auto& a : plan)
-            if (a.type == sync::model::ActionType::Upload) {
-                sync::tasks::Upload task(engine, a.local, cloud->op(sync::model::Throughput::Metric::UPLOAD));
-                auto done = task.promise.get_future();
-                task();
-                EXPECT_TRUE(std::get<bool>(done.get()));
-            }
-        engine->applyRemoteIndexMutation(plan);
-        cloud->clearBins();
+        (void)test_support::versioned::runSyncPass(engine, {.purgeTrash = true, .downloads = false, .expectOk = true});
     }
 
     static void rotate(Origin& o) {

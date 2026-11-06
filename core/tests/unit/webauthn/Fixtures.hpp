@@ -7,6 +7,7 @@
 #include "auth/webauthn/Base64Url.hpp"
 #include "auth/webauthn/Types.hpp"
 
+#include <nlohmann/json.hpp>
 #include <openssl/bn.h>
 #include <openssl/core_names.h>
 #include <openssl/evp.h>
@@ -271,5 +272,24 @@ public:
         return rows.back();
     }
 };
+
+// A software authenticator for the DB-backed MFA tests (ES256, none attestation).
+struct Authenticator {
+    TestKey key{wa::Algorithm::ES256};
+    Bytes credentialId = randomBytes(32);
+    std::uint32_t signCount = 0;
+};
+
+// navigator.credentials.get()'s answer to `publicKey` (the server's request options), as the ws client sends it.
+inline nlohmann::json assertionJson(Authenticator& a, const nlohmann::json& publicKey,
+                                    const std::uint8_t flagByte = flags::UP | flags::UV) {
+    const auto cd = bytesOf(clientDataJSON("webauthn.get", *wa::base64urlDecode(publicKey.at("challenge").get<std::string>())));
+    const auto ad = authenticatorData(flagByte, ++a.signCount);
+    const auto sig = a.key.sign(concat({ad, sha256(cd)}));
+    const auto id = wa::base64urlEncode(a.credentialId);
+    return {{"id", id}, {"rawId", id}, {"type", "public-key"},
+            {"response", {{"clientDataJSON", wa::base64urlEncode(cd)}, {"authenticatorData", wa::base64urlEncode(ad)},
+                          {"signature", wa::base64urlEncode(sig)}}}};
+}
 
 }

@@ -7,7 +7,9 @@
 // a deactivated account could still log in; the web could rename the super admin the daemon looks up by name;
 // and auth::Manager served logins from a cache the CLI never updated. ops::users now owns all of it.
 
+#include "../helpers/db_suite.hpp"
 #include "../helpers/identities.hpp"
+#include "../helpers/parity.hpp"
 #include "auth/Manager.hpp"
 #include "config/Registry.hpp"
 #include "auth/session/Issuer.hpp"
@@ -18,7 +20,6 @@
 #include "db/query/identities/User.hpp"
 #include "db/query/rbac/role/Admin.hpp"
 #include "db/query/vault/Vault.hpp"
-#include "fs/Filesystem.hpp"
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "auth/model/RefreshToken.hpp"
@@ -36,22 +37,14 @@
 #include "protocols/ws/handler/Auth.hpp"
 #include "rbac/role/Admin.hpp"
 #include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
-#include "storage/Manager.hpp"
-#include "UsageManager.hpp"
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
-#include <paths.h>
 
 #include <algorithm>
-#include <atomic>
 #include <chrono>
-#include <cstdlib>
 #include <filesystem>
 #include <functional>
-#include <iostream>
 #include <memory>
 #include <set>
 #include <string>
@@ -62,29 +55,23 @@ namespace vh::test_ops_parity_users {
 using json = nlohmann::json;
 using UserPtr = std::shared_ptr<identities::User>;
 
-std::string usersTag() {
-    static std::atomic<unsigned> n{0};
-    static const auto run = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count() % 100000);
-    return run + "x" + std::to_string(n.fetch_add(1));
-}
+using vh::test::parity::tag;
 
 constexpr const char* PASSWORD = "Correct-Horse-Battery-9";
 
-class UserParityTest : public ::testing::Test {
+class UserParityTest : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
     inline static std::shared_ptr<protocols::shell::Router> router;
-    inline static UserPtr superUser;
 
     // Seeded straight into the DB, as an existing account would be.
     static UserPtr seedUser(const std::string& prefix, const std::string& roleName) {
-        const auto name = prefix + "_" + usersTag();
+        const auto name = prefix + "_" + tag();
         return test::identities::createUser(name, db::query::rbac::role::Admin::get(roleName), name + "@vaulthalla.test",
                                             crypto::hash::password(PASSWORD));
     }
 
     static std::string customRole(const std::vector<std::string>& permissions) {
-        const auto name = "up_role_" + usersTag();
+        const auto name = "up_role_" + tag();
         std::vector<std::pair<std::string, bool>> changes;
         for (const auto& p : permissions) changes.emplace_back(p, true);
         (void)ops::roles::createAdminRole(superUser, {.name = name, .permissions = {.changes = changes}}, "test");
@@ -92,30 +79,10 @@ protected:
     }
 
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            std::cout << "[test_ops_parity_users] Skipping db tests due to missing environment variables." << std::endl;
-            return;
-        }
-        paths::enableTestMode();
-        const auto root = std::filesystem::temp_directory_path() / ("vh_user_parity_" + usersTag());
-        paths::backingPath = root / "backing";
-        paths::mountPath = root / "mount";
-        std::filesystem::create_directories(paths::backingPath);
-        std::filesystem::create_directories(paths::mountPath);
-
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        runtime::Deps::init();
-        fs::Filesystem::init(runtime::Deps::get().storageManager);
+        if (!setUpDbSuite("test_ops_parity_users", {.freshEngines = false})) return;
         auth::session::Issuer::setJwtSecretForTesting("user-parity-test-secret");
 
-        if (!runtime::Deps::get().shellUsageManager)
-            runtime::Deps::get().shellUsageManager = std::make_shared<protocols::shell::UsageManager>();
-        router = std::make_shared<protocols::shell::Router>();
+        router = test::parity::shellRouter();
         protocols::shell::commands::registerUserCommands(router);
 
         superUser = seedUser("up_super", "super_admin");
@@ -125,19 +92,11 @@ protected:
         if (skipTests) return;
         (void)runtime::Deps::releaseSessions();  // the signed-in sessions this suite cached (#397)
         auth::session::Issuer::clearJwtSecretForTesting();
-    }
-
-    void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
+        tearDownDbSuite();
     }
 
     static std::pair<int, std::string> cli(const std::string& line, const UserPtr& user) {
-        try {
-            const auto res = router->executeLine(line, user, nullptr);
-            return {res.exit_code, res.stdout_text + res.stderr_text};
-        } catch (const std::exception& e) {
-            return {1, e.what()};
-        }
+        return test::parity::cli(*router, line, user);
     }
 
     static std::shared_ptr<protocols::ws::Session> ws(const UserPtr& user) {
@@ -148,14 +107,7 @@ protected:
         return s;
     }
 
-    static bool wsOk(const std::function<void()>& fn) {
-        try {
-            fn();
-            return true;
-        } catch (const std::exception&) {
-            return false;
-        }
-    }
+    static bool wsOk(const std::function<void()>& fn) { return test::parity::succeeds(fn); }
 
     static std::string roleOf(const unsigned int id) {
         const auto u = vh::identities::manager().user(id);
@@ -185,7 +137,7 @@ protected:
 };
 
 TEST_F(UserParityTest, CreateMakesTheSameAccountAndDefaultVaultOnBothSurfaces) {
-    const auto cliName = "up_cli_" + usersTag(), wsName = "up_ws_" + usersTag();
+    const auto cliName = "up_cli_" + tag(), wsName = "up_ws_" + tag();
     const auto [code, out] = cli("user create " + cliName + " --role unprivileged --email " + cliName + "@x.test", superUser);
     ASSERT_EQ(code, 0) << out;
     EXPECT_NE(out.find("Password: "), std::string::npos) << "the generated password is shown once";
@@ -200,9 +152,9 @@ TEST_F(UserParityTest, CreateMakesTheSameAccountAndDefaultVaultOnBothSurfaces) {
     EXPECT_EQ(db::query::vault::Vault::listUserVaults(a->id).size(), db::query::vault::Vault::listUserVaults(b->id).size());
 
     // Validation is the same too: a bad email is refused on both.
-    EXPECT_NE(cli("user create up_bad_" + usersTag() + " --role unprivileged --email nope", superUser).first, 0);
+    EXPECT_NE(cli("user create up_bad_" + tag() + " --role unprivileged --email nope", superUser).first, 0);
     EXPECT_FALSE(wsOk([&] {
-        (void)protocols::ws::handler::Auth::registerUser(json{{"name", "up_bad_" + usersTag()}, {"email", "nope"},
+        (void)protocols::ws::handler::Auth::registerUser(json{{"name", "up_bad_" + tag()}, {"email", "nope"},
             {"password", PASSWORD}, {"role", "unprivileged"}}, ws(superUser));
     }));
 }
@@ -217,9 +169,9 @@ TEST_F(UserParityTest, BuiltInRolesClassifyAsAdminsExceptUnprivileged) {
 TEST_F(UserParityTest, NobodyMintsOrPromotesAccountsAboveThemselves) {
     // identity_admin may add and edit users, but holds far less than the built-in admin role (S3).
     const auto idAdmin = seedUser("up_idadmin", "identity_admin");
-    EXPECT_NE(cli("user create up_mint_" + usersTag() + " --role admin", idAdmin).first, 0);
+    EXPECT_NE(cli("user create up_mint_" + tag() + " --role admin", idAdmin).first, 0);
     EXPECT_FALSE(wsOk([&] {
-        (void)protocols::ws::handler::Auth::registerUser(json{{"name", "up_mint_" + usersTag()},
+        (void)protocols::ws::handler::Auth::registerUser(json{{"name", "up_mint_" + tag()},
             {"password", PASSWORD}, {"role", "admin"}}, ws(idAdmin));
     }));
 
@@ -231,7 +183,7 @@ TEST_F(UserParityTest, NobodyMintsOrPromotesAccountsAboveThemselves) {
     EXPECT_EQ(roleOf(plain->id), "unprivileged");
 
     // Ordinary account management still works for them.
-    const auto [code, out] = cli("user create up_ok_" + usersTag() + " --role unprivileged", idAdmin);
+    const auto [code, out] = cli("user create up_ok_" + tag() + " --role unprivileged", idAdmin);
     EXPECT_EQ(code, 0) << out;
 }
 
@@ -294,7 +246,7 @@ TEST_F(UserParityTest, LoginReadsTheAccountAsItIsNow) {
     const auto user = seedUser("up_renamed", "unprivileged");
     (void)loggedIn(user);
     const auto oldName = user->name();
-    const auto newName = "up_newname_" + usersTag();
+    const auto newName = "up_newname_" + tag();
     ASSERT_EQ(cli("user update " + oldName + " --name " + newName, superUser).first, 0);
     EXPECT_EQ(user->name(), newName) << "the reference held across the rename sees it";
     EXPECT_THROW((void)loggedIn(oldName), std::exception);
@@ -382,7 +334,7 @@ TEST_F(UserParityTest, ListShowsWhatTheActorMayViewOnBothSurfaces) {
 // #133: deleting an account used to leave its vaults ownerless. Now it asks first, then transfers or destroys them.
 TEST_F(UserParityTest, DeletingAnAccountAsksAndThenTransfersOrDestroysItsVaults) {
     const auto vaultFor = [](const UserPtr& owner) {
-        return ops::vaults::create(superUser, {.name = "up_v_" + usersTag(), .type = vault::model::VaultType::Local,
+        return ops::vaults::create(superUser, {.name = "up_v_" + tag(), .type = vault::model::VaultType::Local,
                                                .owner_id = owner->id});
     };
     const auto ownerOf = [](const unsigned int vaultId) -> std::optional<uint32_t> {
@@ -429,7 +381,7 @@ TEST_F(UserParityTest, VaultOwnershipTransferIsForAdministrators) {
     // May delete plain accounts but holds no vault rights: deleting is not a licence to move vaults between users.
     const auto deleter = seedUser("up_deleter", customRole({"admin.identities.users.delete", "admin.identities.users.view"}));
     const auto leaving = seedUser("up_leaving2", "unprivileged"), heir = seedUser("up_heir2", "unprivileged");
-    const auto v = ops::vaults::create(superUser, {.name = "up_v2_" + usersTag(), .type = vault::model::VaultType::Local,
+    const auto v = ops::vaults::create(superUser, {.name = "up_v2_" + tag(), .type = vault::model::VaultType::Local,
                                                    .owner_id = leaving->id});
     EXPECT_THROW((void)ops::users::remove(deleter, {.id = leaving->id, .transfer_to = heir->id, .confirmed = true}), ops::Denied);
     EXPECT_TRUE(vh::identities::manager().user(leaving->id)) << "a refused transfer must change nothing";
@@ -454,7 +406,7 @@ TEST_F(UserParityTest, RefusedSignInsLookTheSame) {
     const auto active = seedUser("up_login", "unprivileged");
     const auto disabled = seedUser("up_login_off", "unprivileged");
     ASSERT_EQ(cli("user update " + disabled->name() + " --disable", superUser).first, 0);
-    const auto unknown = "up_nobody_" + usersTag();
+    const auto unknown = "up_nobody_" + tag();
 
     const auto refusal = [&](const std::string& name, const std::string& password) {
         try {

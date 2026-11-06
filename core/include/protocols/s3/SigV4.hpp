@@ -11,8 +11,8 @@
 // RETIRED from production: the gateway (Authenticator::authenticate, protocols/s3/Auth.hpp) verifies with vl::sigv4
 // (the vl-sigv4 library, subprojects/vl-sigv4.wrap), which reproduces this verifier's canonical requests and
 // signatures for every S3 golden record (core/tests/unit/test_sigv4_goldens.cpp). This copy stays only as the
-// reference the goldens and the S3GatewaySigV4Test cases compare against, until a release with vl-sigv4 is verified on
-// the VPS; then it is deleted (shared-infrastructure extraction, Phase 1 step 5). Don't add callers.
+// reference the goldens compare against, until a release with vl-sigv4 is verified on the VPS; then it is
+// deleted (shared-infrastructure extraction, Phase 1 step 5). Don't add callers.
 
 namespace vh::protocols::s3::sigv4 {
 

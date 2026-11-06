@@ -10,6 +10,8 @@
 //   Vhf1Upload*        one object per file version on a fake S3 (0 bytes, small, multipart), part failure, a lost
 //                      Complete response, retries.
 
+#include "../helpers/temp_dir.hpp"
+#include "../helpers/bytes.hpp"
 #include "../helpers/versioned_bucket.hpp"
 
 #include "crypto/IntegrityRegistry.hpp"
@@ -19,29 +21,16 @@
 #include "crypto/vhf1/Format.hpp"
 #include "fs/PlaintextSource.hpp"
 #include "fs/model/File.hpp"
-#include "storage/CloudEngine.hpp"
 #include "storage/Engine.hpp"
 #include "storage/PlaintextReader.hpp"
-#include "storage/s3/Controller.hpp"
 #include "sync/rotation/Rotation.hpp"
 #include "sync/rotation/Runtime.hpp"
 #include "vault/Content.hpp"
 #include "vault/EncryptionManager.hpp"
 #include "vault/PrefixSealer.hpp"
-#include "vault/model/S3Vault.hpp"
 #include "vault/model/Vault.hpp"
 
-#include <gtest/gtest.h>
-#include <sodium.h>
-
-#include <algorithm>
-#include <atomic>
 #include <fcntl.h>
-#include <filesystem>
-#include <fstream>
-#include <random>
-#include <unistd.h>
-#include <vector>
 
 namespace vh::test_vhf1_at_rest {
 
@@ -49,29 +38,15 @@ namespace stdfs = std::filesystem;
 namespace content = vault::content;
 using Bytes = std::vector<uint8_t>;
 using FileSP = std::shared_ptr<fs::model::File>;
+using vh::test::bin::randomBytes;
+using vh::test::bin::slurp;
+using vh::test::bin::spit;
+using test::TempDir;
 
 constexpr unsigned int kVault = 31;
 constexpr unsigned int kKeyVersion = 4;
 constexpr uint64_t kChunk = 64 * 1024;
 constexpr uint64_t kSealedChunk = kChunk + 16;
-
-Bytes randomBytes(const std::size_t n, const unsigned seed) {
-    std::mt19937 rng(seed);
-    Bytes out(n);
-    for (auto& b : out) b = static_cast<uint8_t>(rng());
-    return out;
-}
-
-Bytes slurp(const stdfs::path& p) {
-    std::ifstream in(p, std::ios::binary);
-    return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
-}
-
-void spit(const stdfs::path& p, const Bytes& bytes) {
-    stdfs::create_directories(p.parent_path());
-    std::ofstream out(p, std::ios::binary | std::ios::trunc);
-    out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-}
 
 // XORs one byte in place (a write of a fixed value would leave the file unchanged 1 time in 256).
 void flipByte(const stdfs::path& p, const uint64_t offset) {
@@ -79,24 +54,6 @@ void flipByte(const stdfs::path& p, const uint64_t offset) {
     bytes.at(static_cast<std::size_t>(offset)) ^= 0x5a;
     spit(p, bytes);
 }
-
-class TempDir {
-public:
-    TempDir() : path_(stdfs::temp_directory_path() / ("vh_vhf1_at_rest_" + std::to_string(::getpid()) + "_" +
-                                                       std::to_string(counter_++))) {
-        stdfs::remove_all(path_);
-        stdfs::create_directories(path_);
-    }
-    ~TempDir() {
-        std::error_code ec;
-        stdfs::remove_all(path_, ec);
-    }
-    [[nodiscard]] const stdfs::path& path() const { return path_; }
-
-private:
-    stdfs::path path_;
-    static inline std::atomic<int> counter_{0};
-};
 
 struct Fd {
     explicit Fd(const int f) : fd(f) {}
@@ -135,7 +92,7 @@ protected:
         return {.vaultUid = em_->vaultUid(), .generation = f.encryption_iv, .keyVersion = f.encrypted_with_key_version};
     }
 
-    TempDir dir_;
+    TempDir dir_{"vh_vhf1_at_rest"};
     Bytes key_;
     std::shared_ptr<vault::EncryptionManager> em_;
     std::shared_ptr<storage::Engine> engine_;
@@ -615,7 +572,7 @@ protected:
         f->backing_path = dir_.path() / ("UP" + std::to_string(f->id));
         f->size_bytes = plaintext.size();
         if (plaintext.empty()) {
-            spit(f->backing_path, {});  // every empty file is stored as nothing
+            spit(f->backing_path, Bytes{});  // every empty file is stored as nothing
         } else {
             spit(f->backing_path, em_->encrypt(plaintext, f));
         }

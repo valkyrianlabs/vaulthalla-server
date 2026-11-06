@@ -2,6 +2,7 @@
 // policy off, and D11 (paths that read a cloud file prefer its local ciphertext copy over an S3 GET). DB-free: a fake
 // S3 transport behind the real s3::Controller::streamObject metering, an injected price gate and catalog commit.
 
+#include "../helpers/temp_dir.hpp"
 #include "crypto/util/Gcm.hpp"
 #include "crypto/util/encrypt.hpp"
 #include "fs/model/File.hpp"
@@ -223,24 +224,6 @@ private:
     bool settled_{false};
 };
 
-class TempDir {
-public:
-    TempDir() {
-        path_ = std::filesystem::temp_directory_path() /
-                ("vh_cloud_remote_read_" + std::to_string(::getpid()) + "_" + std::to_string(counter_++));
-        std::filesystem::create_directories(path_);
-    }
-    ~TempDir() {
-        std::error_code ec;
-        std::filesystem::remove_all(path_, ec);
-    }
-    [[nodiscard]] const std::filesystem::path& path() const { return path_; }
-
-private:
-    std::filesystem::path path_;
-    static inline std::atomic<int> counter_{0};
-};
-
 }
 
 class CloudRemoteReadTest : public ::testing::Test {
@@ -335,7 +318,7 @@ protected:
 
     static constexpr ReaderOptions kHydrateStrict{.integrity = IntegrityPolicy::Strict, .remote = RemoteFetchPolicy::Hydrate};
 
-    TempDir dir_;
+    ::vh::test::TempDir dir_{"vh_cloud_remote_read"};
     std::vector<uint8_t> key_;
     std::shared_ptr<vault::model::S3Vault> vault_;
     std::shared_ptr<FakeBucket> bucket_ = std::make_shared<FakeBucket>();

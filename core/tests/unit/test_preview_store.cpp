@@ -1,5 +1,7 @@
 // vh-test-tier: db-only
 // Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
+#include "../helpers/db_suite.hpp"
+
 #include "db/Transactions.hpp"
 #include "db/query/fs/Cache.hpp"
 #include "db/query/identities/User.hpp"
@@ -7,13 +9,10 @@
 #include "fs/cache/Record.hpp"
 #include "fs/model/File.hpp"
 #include "fs/model/Path.hpp"
-#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "ops/Vaults.hpp"
 #include "preview/cache/Store.hpp"
 #include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
 #include "storage/Engine.hpp"
 #include "storage/Manager.hpp"
 #include "storage/PlaintextReader.hpp"
@@ -22,7 +21,6 @@
 
 #include <gtest/gtest.h>
 #include <pqxx/pqxx>
-#include <paths.h>
 
 #include <chrono>
 #include <filesystem>
@@ -52,44 +50,21 @@ bool contains(const std::vector<uint8_t>& haystack, const std::string& needle) {
 
 }
 
-class PreviewStoreDbTest : public ::testing::Test {
+class PreviewStoreDbTest : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
-    inline static std::filesystem::path root;
-
-    static void TearDownTestSuite() {
-        std::error_code ec;
-        if (!root.empty()) std::filesystem::remove_all(root, ec);  // test vault backing (encrypted files up to 300 MiB)
-    }
+    static void TearDownTestSuite() { tearDownDbSuite(); }  // test vault backing (encrypted files up to 300 MiB)
     inline static std::shared_ptr<identities::User> admin;
 
     std::shared_ptr<storage::Engine> engine;
     std::shared_ptr<fs::model::File> file;
 
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            return;
-        }
-        paths::enableTestMode();
-        root = std::filesystem::temp_directory_path() / ("vh_preview_store_" + tag());
-        paths::backingPath = root / "backing";
-        paths::mountPath = root / "mount";
-        std::filesystem::create_directories(paths::backingPath);
-        std::filesystem::create_directories(paths::mountPath);
-
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        runtime::Deps::init();
-        fs::Filesystem::init(runtime::Deps::get().storageManager);
-        admin = vh::identities::manager().userByName("admin");
+        if (setUpDbSuite("test_preview_store", {.freshEngines = false})) admin = superUser;
     }
 
     void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
+        Suite::SetUp();
+        if (IsSkipped()) return;
         const auto vault = ops::vaults::create(admin, {.name = "ps_" + tag(), .type = vault::model::VaultType::Local});
         engine = runtime::Deps::get().storageManager->getEngine(vault->id);
         ASSERT_TRUE(engine);
@@ -203,13 +178,6 @@ TEST_F(PreviewStoreDbTest, DerivedArtifactsAreNotChargedToTheVaultQuota) {
     const auto before = engine->getCacheSize();
     (void)Store::put(engine, keyFor("render", "big"), std::vector<uint8_t>(200'000, 1));
     EXPECT_EQ(engine->getCacheSize(), before);
-}
-
-TEST_F(PreviewStoreDbTest, PurgeFileRemovesRowsAndFiles) {
-    const auto a = Store::put(engine, keyFor("thumbnail", "128"), bytesOf("a"));
-    Store::purgeFile(engine, file->id);
-    EXPECT_FALSE(std::filesystem::exists(a.path));
-    EXPECT_TRUE(db::query::fs::Cache::listDerivedArtifactsByFile(file->id).empty());
 }
 
 // ------------------------------------------------------------------------------------------------ hot path

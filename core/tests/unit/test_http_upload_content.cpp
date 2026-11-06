@@ -6,7 +6,9 @@
 // whole-file buffer, a failed per-file PUT sent again). Real vaults, users, RBAC and encrypted files; the large-file
 // cases stream through a real HTTP session over a socket and sample the process's resident memory while they run.
 
-#include "db/Transactions.hpp"
+#include "../helpers/db_suite.hpp"
+#include "../helpers/http_upload.hpp"
+
 #include "fs/Filesystem.hpp"
 #include "fs/cache/Registry.hpp"
 #include "fs/model/File.hpp"
@@ -25,8 +27,6 @@
 #include "protocols/ws/Router.hpp"
 #include "protocols/ws/Session.hpp"
 #include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
 #include "storage/Engine.hpp"
 #include "storage/Manager.hpp"
 #include "storage/PlaintextReader.hpp"
@@ -39,9 +39,6 @@
 #include <paths.h>
 #include <iterator>
 
-#if defined(__APPLE__)
-#include <mach/mach.h>
-#endif
 #include <fcntl.h>
 #include <unistd.h>
 
@@ -50,7 +47,6 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
-#include <iostream>
 #include <memory>
 #include <optional>
 #include <string>
@@ -63,6 +59,8 @@ using json = nlohmann::json;
 using UserPtr = std::shared_ptr<identities::User>;
 using Response = model::preview::Response;
 
+using namespace vh::test::http_upload;
+
 namespace {
 
 std::string ucTag() {
@@ -71,134 +69,29 @@ std::string ucTag() {
     return run + "u" + std::to_string(n.fetch_add(1));
 }
 
-status statusOf(const Response& r) {
-    return std::visit([](const auto& res) { return res.result(); }, r);
-}
-
-std::string headerOf(const Response& r, const field name) {
-    return std::visit([&](const auto& res) -> std::string {
-        const auto it = res.find(name);
-        return it == res.end() ? std::string{} : std::string(it->value());
-    }, r);
-}
-
-json jsonOf(const Response& r) {
-    const auto* s = std::get_if<string_response>(&r);
-    return s && !s->body().empty() ? json::parse(s->body()) : json{};
-}
-
 std::string encodePath(const std::string& path) {
     std::string out;
     for (const char c : path) out += c == '/' ? std::string("%2F") : std::string(1, c);
     return out;
 }
 
-// Deterministic content, generated a chunk at a time so no test holds a large file in memory.
-uint8_t patternByte(const uint64_t offset) { return static_cast<uint8_t>((offset * 131u + (offset >> 13)) & 0xff); }
-
 void fillPattern(std::vector<char>& chunk, const uint64_t offset) {
     for (std::size_t i = 0; i < chunk.size(); ++i) chunk[i] = static_cast<char>(patternByte(offset + i));
 }
 
-// The process's resident set now (not a high-water mark: earlier suites in this binary may have peaked higher).
-uint64_t residentBytes() {
-#if defined(__APPLE__)
-    mach_task_basic_info info{};
-    mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
-    if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, reinterpret_cast<task_info_t>(&info), &count) != KERN_SUCCESS)
-        return 0;
-    return info.resident_size;
-#else
-    std::ifstream statm("/proc/self/statm");
-    uint64_t size = 0, resident = 0;
-    statm >> size >> resident;
-    return resident * static_cast<uint64_t>(::sysconf(_SC_PAGESIZE));
-#endif
 }
 
-// Samples the resident set every few milliseconds while it lives; peakGrowth() is the most it rose above the value
-// at construction.
-class RssSampler {
-public:
-    RssSampler() : base_(residentBytes()), peak_(base_) {
-        thread_ = std::thread([this] {
-            while (!stop_.load()) {
-                const auto now = residentBytes();
-                if (now > peak_.load()) peak_.store(now);
-                std::this_thread::sleep_for(std::chrono::milliseconds(2));
-            }
-        });
-    }
-    ~RssSampler() { finish(); }
-    uint64_t finish() {
-        if (thread_.joinable()) {
-            stop_.store(true);
-            thread_.join();
-        }
-        const auto now = residentBytes();
-        if (now > peak_.load()) peak_.store(now);
-        return peak_.load() > base_ ? peak_.load() - base_ : 0;
-    }
-
-private:
-    uint64_t base_;
-    std::atomic<uint64_t> peak_;
-    std::atomic<bool> stop_{false};
-    std::thread thread_;
-};
-
-// The plaintext of a stored file compared with the pattern, read a window at a time.
-bool matchesPattern(const std::shared_ptr<storage::Engine>& engine, const std::shared_ptr<fs::model::File>& file,
-                    const uint64_t size) {
-    auto reader = engine->openPlaintextReader(file);
-    if (reader->size() != size) return false;
-    std::vector<uint8_t> window(1 << 20);
-    for (uint64_t off = 0; off < size;) {
-        const auto n = reader->read(off, std::span<uint8_t>(window.data(), window.size()));
-        if (n == 0) return false;
-        for (std::size_t i = 0; i < n; ++i)
-            if (window[i] != patternByte(off + i)) return false;
-        off += n;
-    }
-    return true;
-}
-
-}
-
-class HttpUploadContentDbTest : public ::testing::Test {
+class HttpUploadContentDbTest : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
     inline static UserPtr admin;
     inline static std::shared_ptr<sync::Controller> previousController;
-    inline static std::filesystem::path root;
 
     std::shared_ptr<storage::Engine> engine;
     std::shared_ptr<ws::Session> session;
 
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            std::cout << "[test_http_upload_content] Skipping db tests due to missing environment variables." << std::endl;
-            return;
-        }
-        paths::enableTestMode();
-        root = std::filesystem::temp_directory_path() / ("vh_upload_content_" + ucTag());
-        paths::backingPath = root / "backing";
-        paths::mountPath = root / "mount";
-        std::filesystem::create_directories(paths::backingPath);
-        std::filesystem::create_directories(paths::mountPath);
-
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        runtime::Deps::init();
-        fs::Filesystem::init(runtime::Deps::get().storageManager);
-        runtime::Deps::get().fsCache = std::make_shared<fs::cache::Registry>();
-        runtime::Deps::get().storageManager->initStorageEngines();
-        admin = vh::identities::manager().userByName("admin");
-
+        if (!setUpDbSuite("test_http_upload_content")) return;
+        admin = superUser;
         previousController = runtime::Deps::get().syncController;
         runtime::Deps::setSyncController(std::make_shared<sync::Controller>());
     }
@@ -206,12 +99,12 @@ protected:
     static void TearDownTestSuite() {
         if (skipTests) return;
         runtime::Deps::setSyncController(previousController);
-        std::error_code ec;
-        std::filesystem::remove_all(root, ec);
+        tearDownDbSuite();
     }
 
     void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
+        Suite::SetUp();
+        if (IsSkipped()) return;
         access::clearCachesForTesting();
         const auto vault = ops::vaults::create(admin, {.name = "uc_" + ucTag(), .type = vault::model::VaultType::Local});
         engine = runtime::Deps::get().storageManager->getEngine(vault->id);

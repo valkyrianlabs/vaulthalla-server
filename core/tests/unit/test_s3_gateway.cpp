@@ -1,3 +1,5 @@
+#include "../helpers/db_suite.hpp"
+#include "../helpers/s3_gateway.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/identities/User.hpp"
 #include "db/query/s3/Gateway.hpp"
@@ -23,7 +25,6 @@
 #include "protocols/s3/GatewayService.hpp"
 #include "protocols/s3/Router.hpp"
 #include "protocols/s3/Session.hpp"
-#include "protocols/s3/SigV4.hpp"
 #include "protocols/s3/Xml.hpp"
 #include "protocols/shell/Router.hpp"
 #include "protocols/shell/commands/all.hpp"
@@ -36,8 +37,6 @@
 #include "rbac/role/Admin.hpp"
 #include "runtime/Deps.hpp"
 #include "UsageManager.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
 #include "storage/CloudEngine.hpp"
 #include "storage/Engine.hpp"
 #include "storage/Manager.hpp"
@@ -65,36 +64,17 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
-#include <iomanip>
-#include <iostream>
 #include <optional>
-#include <sstream>
 #include <thread>
 #include <utility>
 #include <vector>
 
 namespace {
 namespace beast = boost::beast;
-
-// Own helper (not the identically named one in test_s3_cost_safety.cpp): unity builds only share it when both
-// files land in the same chunk.
-std::string s3GatewayUniqueSuffix(const std::string& label) {
-    return label + "_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
-}
+namespace s3gw = vh::test::s3gw;
 
 namespace http = beast::http;
 using tcp = boost::asio::ip::tcp;
-
-struct ConfigRestore {
-    vh::config::Config previous;
-
-    explicit ConfigRestore(vh::config::Config cfg)
-        : previous(std::move(cfg)) {}
-
-    ~ConfigRestore() {
-        vh::config::Registry::set(previous);
-    }
-};
 
 struct ThreadPoolShutdown {
     bool active = false;
@@ -184,116 +164,6 @@ std::string mcStylePut(const uint16_t port, const std::string& path, const std::
     return wire;
 }
 
-std::string amzNow() {
-    const auto now = std::chrono::system_clock::now();
-    const auto ts = std::chrono::system_clock::to_time_t(now);
-    std::tm tm{};
-    gmtime_r(&ts, &tm);
-    std::ostringstream out;
-    out << std::put_time(&tm, "%Y%m%dT%H%M%SZ");
-    return out.str();
-}
-
-std::string amzAfter(const std::chrono::seconds offset) {
-    const auto ts = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now() + offset);
-    std::tm tm{};
-    gmtime_r(&ts, &tm);
-    std::ostringstream out;
-    out << std::put_time(&tm, "%Y%m%dT%H%M%SZ");
-    return out.str();
-}
-
-std::string scopeDate(const std::string& amzDate) {
-    return amzDate.substr(0, 8);
-}
-
-void signS3GatewayRequest(
-    vh::protocols::s3::Router::Request& request,
-    const std::string& accessKey,
-    const std::string& secretKey,
-    const std::string& signedHeaders = "host;x-amz-content-sha256;x-amz-date") {
-    using namespace vh::protocols::s3::sigv4;
-
-    const auto bodyHash = sha256Hex(request.body());
-    const auto amzDate = amzNow();
-    request.set("x-amz-content-sha256", bodyHash);
-    request.set("x-amz-date", amzDate);
-
-    VerificationInput input = inputFromRequest(request, request.body());
-    ParsedAuth auth{
-        .credential = {
-            .access_key = accessKey,
-            .date = scopeDate(amzDate),
-            .region = "us-east-1",
-            .service = "s3"
-        },
-        .signed_headers = signedHeaders,
-        .signature = {},
-        .amz_date = amzDate,
-        .payload_hash = bodyHash
-    };
-    auth.signature = signatureFor(input, auth, secretKey);
-    request.set(
-        http::field::authorization,
-        "AWS4-HMAC-SHA256 Credential=" + accessKey + "/" + auth.credential.date + "/us-east-1/s3/aws4_request, "
-        "SignedHeaders=" + auth.signed_headers + ", Signature=" + auth.signature);
-}
-
-uint32_t ensureS3GatewayAdminRole(pqxx::work& txn, const vh::rbac::role::Admin& role) {
-    return txn.exec(
-        R"SQL(
-            INSERT INTO admin_role (
-                name,
-                description,
-                identity_permissions,
-                audit_permissions,
-                settings_permissions,
-                roles_permissions,
-                vaults_permissions,
-                keys_permissions,
-                s3_gateway_permissions
-            )
-            VALUES ($1, $2, $3::bit(32), $4::bit(8), $5::bit(64), $6::bit(16), $7::bit(32), $8::bit(32), $9::bit(8))
-            ON CONFLICT (name) DO UPDATE SET
-                description = EXCLUDED.description,
-                identity_permissions = EXCLUDED.identity_permissions,
-                audit_permissions = EXCLUDED.audit_permissions,
-                settings_permissions = EXCLUDED.settings_permissions,
-                roles_permissions = EXCLUDED.roles_permissions,
-                vaults_permissions = EXCLUDED.vaults_permissions,
-                keys_permissions = EXCLUDED.keys_permissions,
-                s3_gateway_permissions = EXCLUDED.s3_gateway_permissions
-            RETURNING id
-        )SQL",
-        pqxx::params{
-            role.name,
-            role.description,
-            role.identities.toBitString(),
-            role.audits.toBitString(),
-            role.settings.toBitString(),
-            role.roles.toBitString(),
-            role.vaults.toBitString(),
-            role.keys.toBitString(),
-            role.s3Gateway.toBitString()
-        }).one_field_ref().as<uint32_t>();
-}
-
-uint32_t insertS3GatewayHydratableTestUser(
-    pqxx::work& txn,
-    const std::string& name,
-    const std::string& email,
-    const vh::rbac::role::Admin& role = vh::rbac::role::Admin::None()) {
-    const auto userId = txn.exec(
-        "INSERT INTO users (name, email, password_hash) VALUES ($1, $2, $3) RETURNING id",
-        pqxx::params{name, email, "hash"}
-    ).one_field_ref().as<uint32_t>();
-    const auto roleId = ensureS3GatewayAdminRole(txn, role);
-    txn.exec(
-        "INSERT INTO admin_role_assignments (user_id, role_id) VALUES ($1, $2)",
-        pqxx::params{userId, roleId});
-    return userId;
-}
-
 std::vector<uint8_t> hexBytes(const std::string& hex) {
     std::vector<uint8_t> out;
     out.reserve(hex.size() / 2);
@@ -303,7 +173,7 @@ std::vector<uint8_t> hexBytes(const std::string& hex) {
 }
 
 std::string uniqueS3Name(const std::string& label) {
-    auto out = vh::vault::model::slugifyName(s3GatewayUniqueSuffix(label));
+    auto out = vh::vault::model::slugifyName(s3gw::uniqueSuffix(label));
     if (out.size() > 63) out.resize(63);
     while (!out.empty() && out.back() == '-') out.pop_back();
     if (out.size() < 3) out = "s3-" + out;
@@ -423,7 +293,7 @@ multipart:
 
 TEST(S3GatewayMultipartTest, PartRootUsesGeneratedHiddenBackingPath) {
     const auto oldBackingPath = vh::paths::backingPath;
-    const auto tempBacking = std::filesystem::temp_directory_path() / s3GatewayUniqueSuffix("vh_s3_gateway_parts_root");
+    const auto tempBacking = std::filesystem::temp_directory_path() / s3gw::uniqueSuffix("vh_s3_gateway_parts_root");
     vh::paths::backingPath = tempBacking;
 
     EXPECT_EQ(vh::protocols::s3::MultipartStore::partRoot(),
@@ -661,7 +531,7 @@ TEST(S3GatewayRouterTest, FalsePathStyleOnlyMarkerLeavesVirtualHostedBucketEnabl
 }
 
 TEST(S3GatewayRouterTest, RejectsPathStyleWhenDisabled) {
-    ConfigRestore restoreConfig(vh::config::Registry::get());
+    s3gw::ConfigRestore restoreConfig(vh::config::Registry::get());
 
     auto cfg = vh::config::Registry::get();
     cfg.s3_gateway.allow_path_style = false;
@@ -676,7 +546,7 @@ TEST(S3GatewayRouterTest, RejectsPathStyleWhenDisabled) {
 }
 
 TEST(S3GatewayRouterTest, HonorsVirtualHostedStyleDisabled) {
-    ConfigRestore restoreConfig(vh::config::Registry::get());
+    s3gw::ConfigRestore restoreConfig(vh::config::Registry::get());
 
     auto cfg = vh::config::Registry::get();
     cfg.s3_gateway.allow_path_style = true;
@@ -710,327 +580,8 @@ TEST(S3GatewayRouterTest, ComputesAwsChecksumHeaderValues) {
     EXPECT_EQ(Router::checksumSha256Base64(hello), "LPJNul+wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ=");
 }
 
-TEST(S3GatewaySigV4Test, CanonicalizesUriAndQuery) {
-    using namespace vh::protocols::s3::sigv4;
-
-    EXPECT_EQ(canonicalUri("/photos/a b/%7Efile.txt"), "/photos/a%20b/~file.txt");
-    EXPECT_EQ(canonicalUri("/photos/a+b.txt"), "/photos/a%2Bb.txt");
-    EXPECT_EQ(canonicalQueryString("b=two&a=1&X-Amz-Signature=dead&a=0&space=a%20b"),
-              "a=0&a=1&b=two&space=a%20b");
-    EXPECT_EQ(canonicalQueryString("prefix=a+b&space=a%20b"), "prefix=a%2Bb&space=a%20b");
-}
-
-TEST(S3GatewaySigV4Test, VerifiesHeaderSignatureAndRejectsTampering) {
-    using namespace vh::protocols::s3::sigv4;
-
-    const std::string secret = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY";
-    const std::string accessKey = "VHTESTACCESSKEY";
-    const std::string amzDate = amzNow();
-
-    VerificationInput input{
-        .method = "PUT",
-        .target = "/bucket/path/to/object.txt?partNumber=1&uploadId=upload",
-        .host = "localhost:39000",
-        .headers = {
-            {"host", "localhost:39000"},
-            {"x-amz-content-sha256", sha256Hex("payload")},
-            {"x-amz-date", amzDate}
-        },
-        .body = "payload",
-        .body_sha256 = std::nullopt
-    };
-
-    ParsedAuth auth{
-        .credential = {
-            .access_key = accessKey,
-            .date = scopeDate(amzDate),
-            .region = "us-east-1",
-            .service = "s3"
-        },
-        .signed_headers = "host;x-amz-content-sha256;x-amz-date",
-        .signature = {},
-        .amz_date = amzDate,
-        .payload_hash = sha256Hex("payload")
-    };
-
-    auth.signature = signatureFor(input, auth, secret);
-    input.headers["authorization"] =
-        "AWS4-HMAC-SHA256 Credential=" + accessKey + "/" + auth.credential.date + "/us-east-1/s3/aws4_request, "
-        "SignedHeaders=" + auth.signed_headers + ", Signature=" + auth.signature;
-
-    auto ok = verify(input, secret);
-    EXPECT_TRUE(ok.ok) << ok.error;
-    EXPECT_EQ(ok.access_key, accessKey);
-
-    input.body.clear();
-    input.body_sha256 = sha256Hex("payload");
-    auto streamedOk = verify(input, secret);
-    EXPECT_TRUE(streamedOk.ok) << streamedOk.error;
-
-    input.body_sha256 = sha256Hex("tampered");
-    auto bad = verify(input, secret);
-    EXPECT_FALSE(bad.ok);
-}
-
-TEST(S3GatewaySigV4Test, AcceptsAwsStreamingUnsignedPayloadTrailerHashConstant) {
-    using namespace vh::protocols::s3::sigv4;
-
-    const std::string secret = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY";
-    const std::string accessKey = "VHTESTACCESSKEY";
-    const std::string amzDate = amzNow();
-    constexpr std::string_view payloadMode = "STREAMING-UNSIGNED-PAYLOAD-TRAILER";
-
-    VerificationInput input{
-        .method = "PUT",
-        .target = "/bucket/object.txt",
-        .host = "localhost:39000",
-        .headers = {
-            {"host", "localhost:39000"},
-            {"x-amz-content-sha256", std::string(payloadMode)},
-            {"x-amz-date", amzDate},
-            {"x-amz-decoded-content-length", "5"},
-            {"x-amz-trailer", "x-amz-checksum-crc32"}
-        },
-        .body = "aws-chunked-wire-body",
-        .body_sha256 = sha256Hex("decoded")
-    };
-
-    ParsedAuth auth{
-        .credential = {
-            .access_key = accessKey,
-            .date = scopeDate(amzDate),
-            .region = "us-east-1",
-            .service = "s3"
-        },
-        .signed_headers = "host;x-amz-content-sha256;x-amz-date;x-amz-decoded-content-length;x-amz-trailer",
-        .signature = {},
-        .amz_date = amzDate,
-        .payload_hash = std::string(payloadMode)
-    };
-    auth.signature = signatureFor(input, auth, secret);
-    input.headers["authorization"] =
-        "AWS4-HMAC-SHA256 Credential=" + accessKey + "/" + auth.credential.date + "/us-east-1/s3/aws4_request, "
-        "SignedHeaders=" + auth.signed_headers + ", Signature=" + auth.signature;
-
-    const auto ok = verify(input, secret);
-    EXPECT_TRUE(ok.ok) << ok.error;
-    EXPECT_EQ(ok.access_key, accessKey);
-}
-
-TEST(S3GatewaySigV4Test, RejectsMissingSignedHeader) {
-    using namespace vh::protocols::s3::sigv4;
-
-    const std::string secret = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY";
-    const std::string accessKey = "VHTESTACCESSKEY";
-    const std::string amzDate = amzNow();
-
-    VerificationInput input{
-        .method = "GET",
-        .target = "/bucket/object.txt",
-        .host = "localhost:39000",
-        .headers = {
-            {"host", "localhost:39000"},
-            {"x-amz-content-sha256", "UNSIGNED-PAYLOAD"},
-            {"x-amz-date", amzDate}
-        },
-        .body = {},
-        .body_sha256 = std::nullopt
-    };
-
-    ParsedAuth auth{
-        .credential = {
-            .access_key = accessKey,
-            .date = scopeDate(amzDate),
-            .region = "us-east-1",
-            .service = "s3"
-        },
-        .signed_headers = "host;x-amz-content-sha256;x-amz-date;x-amz-meta-missing",
-        .signature = {},
-        .amz_date = amzDate,
-        .payload_hash = "UNSIGNED-PAYLOAD"
-    };
-    auth.signature = signatureFor(input, auth, secret);
-    input.headers["authorization"] =
-        "AWS4-HMAC-SHA256 Credential=" + accessKey + "/" + auth.credential.date + "/us-east-1/s3/aws4_request, "
-        "SignedHeaders=" + auth.signed_headers + ", Signature=" + auth.signature;
-
-    const auto result = verify(input, secret);
-    EXPECT_FALSE(result.ok);
-    EXPECT_NE(result.error.find("Signed header missing"), std::string::npos);
-}
-
-namespace {
-
-// What the AWS CLI's CRT transfer client sends: "Content-Length: 0" on a bodiless request, signed.
-vh::protocols::s3::sigv4::VerificationInput signedWithZeroContentLength(
-    const std::string& method, const std::string& secret, const std::string& accessKey) {
-    using namespace vh::protocols::s3::sigv4;
-
-    const std::string amzDate = amzNow();
-    VerificationInput input{
-        .method = method,
-        .target = "/bucket/object.txt",
-        .host = "s3.example.test",
-        .headers = {
-            {"Host", "s3.example.test"},
-            {"Content-Length", "0"},
-            {"x-amz-content-sha256", sha256Hex("")},
-            {"x-amz-date", amzDate}
-        },
-        .body = {},
-        .body_sha256 = std::nullopt
-    };
-    ParsedAuth auth{
-        .credential = {.access_key = accessKey, .date = scopeDate(amzDate), .region = "us-east-1", .service = "s3"},
-        .signed_headers = "content-length;host;x-amz-content-sha256;x-amz-date",
-        .signature = {},
-        .amz_date = amzDate,
-        .payload_hash = sha256Hex("")
-    };
-    auth.signature = signatureFor(input, auth, secret);
-    input.headers["Authorization"] =
-        "AWS4-HMAC-SHA256 Credential=" + accessKey + "/" + auth.credential.date + "/us-east-1/s3/aws4_request, "
-        "SignedHeaders=" + auth.signed_headers + ", Signature=" + auth.signature;
-    return input;
-}
-
-}
-
-// Cloudflare (and other proxies) drop "Content-Length: 0" from bodiless requests; the signature still covers it.
-TEST(S3GatewaySigV4Test, CanonicalizesSignedContentLengthStrippedByProxyAsZero) {
-    using namespace vh::protocols::s3::sigv4;
-
-    const std::string secret = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY";
-    const std::string accessKey = "VHTESTACCESSKEY";
-
-    for (const std::string method : {"GET", "HEAD", "DELETE", "POST"}) {
-        auto input = signedWithZeroContentLength(method, secret, accessKey);
-        const auto direct = verify(input, secret);
-        EXPECT_TRUE(direct.ok) << method << ": " << direct.error;
-
-        input.headers.erase("Content-Length");
-        const auto proxied = verify(input, secret);
-        EXPECT_TRUE(proxied.ok) << method << " without Content-Length: " << proxied.error;
-        EXPECT_EQ(proxied.access_key, accessKey);
-    }
-}
-
-// The implied length is the body the gateway actually read, never a free pass for content-length.
-TEST(S3GatewaySigV4Test, MissingSignedContentLengthIsOnlyImpliedForAnEmptyUnchunkedBody) {
-    using namespace vh::protocols::s3::sigv4;
-
-    const std::string secret = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY";
-    const std::string accessKey = "VHTESTACCESSKEY";
-
-    {
-        auto input = signedWithZeroContentLength("PUT", secret, accessKey);
-        input.headers.erase("Content-Length");
-        input.headers["Transfer-Encoding"] = "chunked";
-        const auto result = verify(input, secret);
-        EXPECT_FALSE(result.ok);
-        EXPECT_EQ(result.error, "Signed header missing from request: content-length");
-    }
-    {
-        auto input = signedWithZeroContentLength("PUT", secret, accessKey);
-        input.headers.erase("Content-Length");
-        input.headers["x-amz-content-sha256"] = "UNSIGNED-PAYLOAD";
-        input.body = "payload";
-        const auto result = verify(input, secret);
-        EXPECT_FALSE(result.ok);
-        EXPECT_EQ(result.error, "Signed header missing from request: content-length");
-    }
-    {
-        auto input = signedWithZeroContentLength("PUT", secret, accessKey);
-        input.headers.erase("Content-Length");
-        input.body_sha256 = sha256Hex("streamed");
-        const auto result = verify(input, secret);
-        EXPECT_FALSE(result.ok);
-    }
-    {
-        // A length the client signed as non-zero cannot be satisfied by an empty request.
-        const std::string amzDate = amzNow();
-        VerificationInput input{
-            .method = "PUT",
-            .target = "/bucket/object.txt",
-            .host = "s3.example.test",
-            .headers = {
-                {"host", "s3.example.test"},
-                {"content-length", "5"},
-                {"x-amz-content-sha256", "UNSIGNED-PAYLOAD"},
-                {"x-amz-date", amzDate}
-            },
-            .body = {},
-            .body_sha256 = std::nullopt
-        };
-        ParsedAuth auth{
-            .credential = {.access_key = accessKey, .date = scopeDate(amzDate), .region = "us-east-1", .service = "s3"},
-            .signed_headers = "content-length;host;x-amz-content-sha256;x-amz-date",
-            .signature = {},
-            .amz_date = amzDate,
-            .payload_hash = "UNSIGNED-PAYLOAD"
-        };
-        auth.signature = signatureFor(input, auth, secret);
-        input.headers.erase("content-length");
-        input.headers["authorization"] =
-            "AWS4-HMAC-SHA256 Credential=" + accessKey + "/" + auth.credential.date + "/us-east-1/s3/aws4_request, "
-            "SignedHeaders=" + auth.signed_headers + ", Signature=" + auth.signature;
-        const auto result = verify(input, secret);
-        EXPECT_FALSE(result.ok);
-        EXPECT_EQ(result.error, "Signature mismatch");
-    }
-}
-
-TEST(S3GatewaySigV4Test, RejectsMalformedPresignedExpiresWithoutThrowing) {
-    using namespace vh::protocols::s3::sigv4;
-
-    VerificationInput input{
-        .method = "GET",
-        .target = "/bucket/object.txt"
-                  "?X-Amz-Algorithm=AWS4-HMAC-SHA256"
-                  "&X-Amz-Credential=VHTESTACCESSKEY%2F20260531%2Fus-east-1%2Fs3%2Faws4_request"
-                  "&X-Amz-Date=20260531T120000Z"
-                  "&X-Amz-Expires=not-a-number"
-                  "&X-Amz-SignedHeaders=host"
-                  "&X-Amz-Signature=deadbeef",
-        .host = "localhost:39000",
-        .headers = {{"host", "localhost:39000"}},
-        .body = {},
-        .body_sha256 = std::nullopt
-    };
-
-    EXPECT_NO_THROW({
-        const auto result = verify(input, "secret");
-        EXPECT_FALSE(result.ok);
-        EXPECT_EQ(result.error, "Invalid X-Amz-Expires");
-    });
-}
-
-TEST(S3GatewaySigV4Test, RejectsPresignedUrlsDatedTooFarInFuture) {
-    using namespace vh::protocols::s3::sigv4;
-
-    const std::string amzDate = amzAfter(std::chrono::hours(1));
-    VerificationInput input{
-        .method = "GET",
-        .target = "/bucket/object.txt"
-                  "?X-Amz-Algorithm=AWS4-HMAC-SHA256"
-                  "&X-Amz-Credential=VHTESTACCESSKEY%2F" + scopeDate(amzDate) + "%2Fus-east-1%2Fs3%2Faws4_request"
-                  "&X-Amz-Date=" + amzDate +
-                  "&X-Amz-Expires=60"
-                  "&X-Amz-SignedHeaders=host"
-                  "&X-Amz-Signature=deadbeef",
-        .host = "localhost:39000",
-        .headers = {{"host", "localhost:39000"}},
-        .body = {},
-        .body_sha256 = std::nullopt
-    };
-
-    const auto result = verify(input, "secret");
-    EXPECT_FALSE(result.ok);
-    EXPECT_EQ(result.error, "Signature date is outside allowed skew");
-}
-
 TEST(S3GatewayServiceTest, EnabledServiceBindsAndReturnsS3XmlErrors) {
-    ConfigRestore restoreConfig(vh::config::Registry::get());
+    s3gw::ConfigRestore restoreConfig(vh::config::Registry::get());
 
     auto cfg = vh::config::Registry::get();
     cfg.s3_gateway.enabled = true;
@@ -1073,7 +624,7 @@ TEST(S3GatewayServiceTest, EnabledServiceBindsAndReturnsS3XmlErrors) {
 // Sessions run on pool threads with sockets bound to the gateway's io_context: stopping must not free the context
 // while one is still alive (heap-use-after-free under ASan), and must end idle keep-alive connections.
 TEST(S3GatewayServiceTest, StopEndsOpenConnectionsBeforeFreeingTheirContext) {
-    ConfigRestore restoreConfig(vh::config::Registry::get());
+    s3gw::ConfigRestore restoreConfig(vh::config::Registry::get());
 
     auto cfg = vh::config::Registry::get();
     cfg.s3_gateway.enabled = true;
@@ -1113,7 +664,7 @@ TEST(S3GatewayServiceTest, StopEndsOpenConnectionsBeforeFreeingTheirContext) {
 }
 
 TEST(S3GatewayServiceTest, DisabledServiceReportsNotConfiguredWithoutFailing) {
-    ConfigRestore restoreConfig(vh::config::Registry::get());
+    s3gw::ConfigRestore restoreConfig(vh::config::Registry::get());
 
     auto cfg = vh::config::Registry::get();
     cfg.s3_gateway.enabled = false;
@@ -1140,62 +691,24 @@ TEST(S3GatewayServiceTest, DisabledServiceReportsNotConfiguredWithoutFailing) {
     service.stop();
 }
 
-class S3GatewayDbTest : public ::testing::Test {
+class S3GatewayDbTest : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
     inline static uint32_t userId = 0;
     inline static uint32_t vaultId = 0;
 
-    static bool hasDbEnv() {
-        return std::getenv("VH_TEST_DB_USER") &&
-               std::getenv("VH_TEST_DB_PASS") &&
-               std::getenv("VH_TEST_DB_HOST") &&
-               std::getenv("VH_TEST_DB_PORT") &&
-               std::getenv("VH_TEST_DB_NAME");
-    }
-
     static void SetUpTestSuite() {
-        if (!hasDbEnv()) {
-            skipTests = true;
-            std::cout << "[test_s3_gateway] Skipping db tests due to missing environment variables." << std::endl;
-            return;
-        }
-
-        vh::paths::enableTestMode();
-        const auto pathRoot = std::filesystem::temp_directory_path() / s3GatewayUniqueSuffix("vh_s3_gateway_db_paths");
-        std::filesystem::remove_all(pathRoot);
-        vh::paths::backingPath = pathRoot / "backing";
-        vh::paths::mountPath = pathRoot / "mount";
-        std::filesystem::create_directories(vh::paths::backingPath);
-        std::filesystem::create_directories(vh::paths::mountPath);
-        vh::db::Transactions::init();
-        vh::db::seed::nuke_and_recreate_schema_public();
-        vh::db::Transactions::dbPool_->initPreparedStatements();
-        vh::seed::seed_database();
-
-        vaultId = vh::db::Transactions::exec("S3GatewayDbTest::seed", [](pqxx::work& txn) {
-            S3GatewayDbTest::userId = insertS3GatewayHydratableTestUser(
-                txn,
-                "s3_gateway_user",
-                "s3-gateway@vaulthalla.test");
-
-            const auto seededVaultId = txn.exec(
-                "INSERT INTO vault (type, name, owner_id, mount_point, description, uid) VALUES ($1, $2, $3, $4, $5, gen_random_uuid()) RETURNING id",
-                pqxx::params{"local", "S3 Gateway Test Vault", userId, "s3_gateway_test", ""}
-            ).one_field_ref().as<uint32_t>();
-            txn.exec(
-                "WITH ins AS (INSERT INTO sync (vault_id, interval) VALUES ($1, 300) RETURNING id) "
-                "INSERT INTO fsync (sync_id, conflict_policy) SELECT id, 'keep_both' FROM ins",
-                pqxx::params{seededVaultId});
-            return seededVaultId;
+        if (!setUpDbSuite("test_s3_gateway", {.freshEngines = false})) return;
+        userId = vh::db::Transactions::exec("S3GatewayDbTest::seed", [](pqxx::work& txn) {
+            return s3gw::insertUser(txn, "s3_gateway_user", "s3-gateway@vaulthalla.test");
         });
-        vh::runtime::Deps::init();
-        vh::fs::Filesystem::init(vh::runtime::Deps::get().storageManager);
-        vh::runtime::Deps::get().storageManager->initStorageEngines();
+        vaultId = createLocalVault("Test Vault", userId, "s3_gateway_test");
     }
+
+    static void TearDownTestSuite() { tearDownDbSuite(); }
 
     void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
+        Suite::SetUp();
+        if (IsSkipped()) return;
         vh::db::Transactions::exec("S3GatewayDbTest::clearObjects", [](pqxx::work& txn) {
             txn.exec("DELETE FROM s3_gateway_bucket");
             txn.exec("DELETE FROM s3_gateway_credentials");
@@ -1220,12 +733,13 @@ protected:
         });
     }
 
-    static uint32_t createLocalVault(const std::string& label, const uint32_t ownerId) {
+    // A local vault (with its fsync row) named "S3 Gateway <label>"; the mount point is unique unless given.
+    static uint32_t createLocalVault(const std::string& label, const uint32_t ownerId, std::string mountPoint = {}) {
+        if (mountPoint.empty()) mountPoint = s3gw::uniqueSuffix("s3gw").substr(0, 33);
         const auto newVaultId = vh::db::Transactions::exec("S3GatewayDbTest::createLocalVault", [&](pqxx::work& txn) {
-            const auto mountPoint = s3GatewayUniqueSuffix("s3gw");
             const auto seededVaultId = txn.exec(
                 "INSERT INTO vault (type, name, owner_id, mount_point, description, uid) VALUES ($1, $2, $3, $4, $5, gen_random_uuid()) RETURNING id",
-                pqxx::params{"local", "S3 Gateway " + label, ownerId, mountPoint.substr(0, 33), ""}
+                pqxx::params{"local", "S3 Gateway " + label, ownerId, mountPoint, ""}
             ).one_field_ref().as<uint32_t>();
             txn.exec(
                 "WITH ins AS (INSERT INTO sync (vault_id, interval) VALUES ($1, 300) RETURNING id) "
@@ -1249,10 +763,10 @@ protected:
 
     static uint32_t userWithAdminRole(const std::string& label, const vh::rbac::role::Admin& role) {
         return vh::db::Transactions::exec("S3GatewayDbTest::userWithAdminRole", [&](pqxx::work& txn) {
-            return insertS3GatewayHydratableTestUser(
+            return s3gw::insertUser(
                 txn,
-                "s3_gateway_" + label + "_" + s3GatewayUniqueSuffix("user"),
-                "s3-gateway-" + label + "-" + s3GatewayUniqueSuffix("email") + "@vaulthalla.test",
+                "s3_gateway_" + label + "_" + s3gw::uniqueSuffix("user"),
+                "s3-gateway-" + label + "-" + s3gw::uniqueSuffix("email") + "@vaulthalla.test",
                 role);
         });
     }
@@ -1309,8 +823,8 @@ protected:
         credential.user_id = principalUserId;
         credential.principal_user_id = principalUserId;
         credential.created_by = principalUserId;
-        credential.name = "s3gw-" + scopeMode + "-" + s3GatewayUniqueSuffix("credential");
-        credential.access_key = "VHTEST" + s3GatewayUniqueSuffix("ACCESS").substr(0, 24);
+        credential.name = "s3gw-" + scopeMode + "-" + s3gw::uniqueSuffix("credential");
+        credential.access_key = "VHTEST" + s3gw::uniqueSuffix("ACCESS").substr(0, 24);
         credential.encrypted_secret_access_key = {1, 2, 3};
         credential.iv = {4, 5, 6};
         credential.enabled = true;
@@ -1472,7 +986,7 @@ TEST_F(S3GatewayDbTest, UserAccessCredentialUsesPrincipalRbacWithoutGatewayRoleA
 TEST_F(S3GatewayDbTest, UserAccessCredentialCannotExceedPrincipalRbac) {
     const auto admin = vh::identities::manager().userByName("admin");
     ASSERT_TRUE(admin);
-    const auto unownedVaultId = createLocalVault(s3GatewayUniqueSuffix("user_access_denied"), admin->id);
+    const auto unownedVaultId = createLocalVault(s3gw::uniqueSuffix("user_access_denied"), admin->id);
     vh::db::query::s3::Gateway::bindBucket({
         .vault_id = unownedVaultId,
         .bucket_name = "binding-no-access-" + std::to_string(unownedVaultId),
@@ -1558,7 +1072,7 @@ TEST_F(S3GatewayDbTest, VaultAllowlistDefaultRoleRequiresPrincipalAndCredentialA
     EXPECT_FALSE(write.allowed);
     EXPECT_EQ(vh::rbac::s3::policy::Decision::Reason::EffectiveCredentialRoleDenied, write.reason);
 
-    const auto adminOwnedVaultId = createLocalVault(s3GatewayUniqueSuffix("allowlist_principal_denied"), admin->id);
+    const auto adminOwnedVaultId = createLocalVault(s3gw::uniqueSuffix("allowlist_principal_denied"), admin->id);
     const auto principal = vh::identities::manager().user(userId);
     ASSERT_TRUE(principal);
     credential = createCredential(principal->id, "vault_allowlist");
@@ -1580,7 +1094,7 @@ TEST_F(S3GatewayDbTest, VaultAllowlistPerVaultRoleOverridesDefaultRoleForOneVaul
     const auto admin = vh::identities::manager().userByName("admin");
     ASSERT_TRUE(admin);
     ASSERT_TRUE(admin->isSuperAdmin());
-    const auto secondVaultId = createLocalVault(s3GatewayUniqueSuffix("allowlist_role_override"), admin->id);
+    const auto secondVaultId = createLocalVault(s3gw::uniqueSuffix("allowlist_role_override"), admin->id);
     const auto credential = createCredential(admin->id, "vault_allowlist");
     setCredentialDefaultVaultRole(credential.id, "reader", admin->id);
     selectCredentialVault(credential.id, vaultId, admin->id);
@@ -1645,7 +1159,7 @@ TEST_F(S3GatewayDbTest, VaultAllowlistRoleOverridesApplyToCredentialAperture) {
     EXPECT_EQ(vh::rbac::fs::policy::Decision::Reason::DeniedByOverride,
               privateRead.credential_decision->reason);
 
-    const auto secondVaultId = createLocalVault(s3GatewayUniqueSuffix("allowlist_override_narrow"), admin->id);
+    const auto secondVaultId = createLocalVault(s3gw::uniqueSuffix("allowlist_override_narrow"), admin->id);
     const auto perVaultCredential = createCredential(admin->id, "vault_allowlist");
     setCredentialDefaultVaultRole(perVaultCredential.id, "reader", admin->id);
     selectCredentialVault(perVaultCredential.id, vaultId, admin->id);
@@ -1711,7 +1225,7 @@ TEST_F(S3GatewayDbTest, GlobalCredentialUsesPrincipalRbacAndRequiresAdminPrincip
     ASSERT_TRUE(admin);
     ASSERT_TRUE(admin->isSuperAdmin());
     const auto globalAdminCredential = createCredential(admin->id, "global");
-    const auto secondVaultId = createLocalVault(s3GatewayUniqueSuffix("global_default"), admin->id);
+    const auto secondVaultId = createLocalVault(s3gw::uniqueSuffix("global_default"), admin->id);
 
     auto missingDefault = evaluateS3(
         admin,
@@ -1882,7 +1396,7 @@ TEST_F(S3GatewayDbTest, VaultAllowlistScopesMirrorToGatewayVaultRoles) {
 }
 
 TEST_F(S3GatewayDbTest, SignedDeleteBucketUsesCanAdminWithoutCanDeleteScope) {
-    ConfigRestore restoreConfig(vh::config::Registry::get());
+    s3gw::ConfigRestore restoreConfig(vh::config::Registry::get());
 
     auto cfg = vh::config::Registry::get();
     cfg.s3_gateway.require_sigv4 = true;
@@ -1906,7 +1420,7 @@ TEST_F(S3GatewayDbTest, SignedDeleteBucketUsesCanAdminWithoutCanDeleteScope) {
     auto secret = manager.createCredential({
         .created_by = admin->id,
         .principal_user_id = admin->id,
-        .name = "route-admin-delete-" + s3GatewayUniqueSuffix("credential"),
+        .name = "route-admin-delete-" + s3gw::uniqueSuffix("credential"),
         .scope_mode = "vault_allowlist",
         .description = std::nullopt,
         .expires_at = std::nullopt,
@@ -1923,7 +1437,7 @@ TEST_F(S3GatewayDbTest, SignedDeleteBucketUsesCanAdminWithoutCanDeleteScope) {
 
     vh::protocols::s3::Router::Request request{http::verb::delete_, "/" + bucketName, 11};
     request.set(http::field::host, "localhost:39000");
-    signS3GatewayRequest(request, secret.credential.access_key, secret.secret_access_key);
+    s3gw::signRequest(request, secret.credential.access_key, secret.secret_access_key);
 
     const vh::protocols::s3::Router router;
     const auto response = router.route(std::move(request));
@@ -1933,7 +1447,7 @@ TEST_F(S3GatewayDbTest, SignedDeleteBucketUsesCanAdminWithoutCanDeleteScope) {
 }
 
 TEST_F(S3GatewayDbTest, SignedDedicatedHostRootListsBuckets) {
-    ConfigRestore restoreConfig(vh::config::Registry::get());
+    s3gw::ConfigRestore restoreConfig(vh::config::Registry::get());
 
     auto cfg = vh::config::Registry::get();
     cfg.s3_gateway.require_sigv4 = true;
@@ -1948,7 +1462,7 @@ TEST_F(S3GatewayDbTest, SignedDedicatedHostRootListsBuckets) {
     auto secret = manager.createCredential({
         .created_by = admin->id,
         .principal_user_id = admin->id,
-        .name = "dedicated-root-" + s3GatewayUniqueSuffix("credential"),
+        .name = "dedicated-root-" + s3gw::uniqueSuffix("credential"),
         .scope_mode = "user_access",
         .description = std::nullopt,
         .expires_at = std::nullopt,
@@ -1958,7 +1472,7 @@ TEST_F(S3GatewayDbTest, SignedDedicatedHostRootListsBuckets) {
     vh::protocols::s3::Router::Request request{http::verb::get, "/", 11};
     request.set(http::field::host, "s3.vaulthalla.dev");
     request.set("X-Vaulthalla-S3-Path-Style-Only", "true");
-    signS3GatewayRequest(request, secret.credential.access_key, secret.secret_access_key);
+    s3gw::signRequest(request, secret.credential.access_key, secret.secret_access_key);
 
     const vh::protocols::s3::Router router;
     const auto response = router.route(std::move(request));
@@ -1969,7 +1483,7 @@ TEST_F(S3GatewayDbTest, SignedDedicatedHostRootListsBuckets) {
 
 // The request the AWS CLI CRT client makes through Cloudflare: content-length signed as 0, the header stripped.
 TEST_F(S3GatewayDbTest, SignedListBucketsSurvivesProxyStrippedContentLengthAndIsNeverCacheable) {
-    ConfigRestore restoreConfig(vh::config::Registry::get());
+    s3gw::ConfigRestore restoreConfig(vh::config::Registry::get());
 
     auto cfg = vh::config::Registry::get();
     cfg.s3_gateway.require_sigv4 = true;
@@ -1983,7 +1497,7 @@ TEST_F(S3GatewayDbTest, SignedListBucketsSurvivesProxyStrippedContentLengthAndIs
     auto secret = manager.createCredential({
         .created_by = admin->id,
         .principal_user_id = admin->id,
-        .name = "stripped-length-" + s3GatewayUniqueSuffix("credential"),
+        .name = "stripped-length-" + s3gw::uniqueSuffix("credential"),
         .scope_mode = "user_access",
         .description = std::nullopt,
         .expires_at = std::nullopt,
@@ -1992,9 +1506,7 @@ TEST_F(S3GatewayDbTest, SignedListBucketsSurvivesProxyStrippedContentLengthAndIs
 
     vh::protocols::s3::Router::Request request{http::verb::get, "/", 11};
     request.set(http::field::host, "localhost:39000");
-    request.set(http::field::content_length, "0");
-    signS3GatewayRequest(request, secret.credential.access_key, secret.secret_access_key,
-                         "content-length;host;x-amz-content-sha256;x-amz-date");
+    s3gw::signRequest(request, secret.credential.access_key, secret.secret_access_key, {{"content-length", "0"}});
     request.erase(http::field::content_length);
 
     const vh::protocols::s3::Router router;
@@ -2006,7 +1518,7 @@ TEST_F(S3GatewayDbTest, SignedListBucketsSurvivesProxyStrippedContentLengthAndIs
 }
 
 TEST_F(S3GatewayDbTest, SignedDedicatedHostPutAndGetAuthenticateAndRoutePathStyle) {
-    ConfigRestore restoreConfig(vh::config::Registry::get());
+    s3gw::ConfigRestore restoreConfig(vh::config::Registry::get());
 
     auto cfg = vh::config::Registry::get();
     cfg.s3_gateway.require_sigv4 = true;
@@ -2031,7 +1543,7 @@ TEST_F(S3GatewayDbTest, SignedDedicatedHostPutAndGetAuthenticateAndRoutePathStyl
     auto secret = manager.createCredential({
         .created_by = admin->id,
         .principal_user_id = admin->id,
-        .name = "dedicated-object-" + s3GatewayUniqueSuffix("credential"),
+        .name = "dedicated-object-" + s3gw::uniqueSuffix("credential"),
         .scope_mode = "vault_allowlist",
         .description = std::nullopt,
         .expires_at = std::nullopt,
@@ -2055,7 +1567,7 @@ TEST_F(S3GatewayDbTest, SignedDedicatedHostPutAndGetAuthenticateAndRoutePathStyl
     put.body() = "dedicated host body";
     put.prepare_payload();
     addDedicatedHostHeaders(put);
-    signS3GatewayRequest(put, secret.credential.access_key, secret.secret_access_key);
+    s3gw::signRequest(put, secret.credential.access_key, secret.secret_access_key);
 
     const vh::protocols::s3::Router router;
     auto response = router.route(std::move(put));
@@ -2064,7 +1576,7 @@ TEST_F(S3GatewayDbTest, SignedDedicatedHostPutAndGetAuthenticateAndRoutePathStyl
 
     vh::protocols::s3::Router::Request get{http::verb::get, "/" + bucketName + "/key.txt", 11};
     addDedicatedHostHeaders(get);
-    signS3GatewayRequest(get, secret.credential.access_key, secret.secret_access_key);
+    s3gw::signRequest(get, secret.credential.access_key, secret.secret_access_key);
     response = router.route(std::move(get));
 
     EXPECT_EQ(response.result(), http::status::ok) << response.body();
@@ -2078,7 +1590,7 @@ TEST_F(S3GatewayDbTest, NonAdminScopeMutationCannotGrantGatewayAdminScope) {
     ASSERT_TRUE(user);
     EXPECT_THROW(
         (void)vh::ops::s3_gateway::createCredential(user, {
-            .name = "non-admin-admin-scope-" + s3GatewayUniqueSuffix("credential"),
+            .name = "non-admin-admin-scope-" + s3gw::uniqueSuffix("credential"),
             .scope_mode = std::string{"vault_allowlist"},
             .vault_access = {{
                 .vault_id = vaultId,
@@ -2092,28 +1604,15 @@ TEST_F(S3GatewayDbTest, NonAdminScopeMutationCannotGrantGatewayAdminScope) {
 }
 
 TEST_F(S3GatewayDbTest, NonAdminScopeMutationCannotNameUnownedVaultEvenWithNoActions) {
-    const auto unownedVaultId = vh::db::Transactions::exec(
-        "S3GatewayDbTest::seedUnownedScopeVault",
-        [](pqxx::work& txn) {
-            const auto admin = vh::identities::manager().userByName("admin");
-            if (!admin) throw std::runtime_error("admin user not available");
-            const auto mount = s3GatewayUniqueSuffix("s3gw_unscope").substr(0, 33);
-            const auto seededVaultId = txn.exec(
-                "INSERT INTO vault (type, name, owner_id, mount_point, description, uid) VALUES ($1, $2, $3, $4, $5, gen_random_uuid()) RETURNING id",
-                pqxx::params{"local", "S3 Gateway Unowned Scope Vault", admin->id, mount, ""}
-            ).one_field_ref().as<uint32_t>();
-            txn.exec(
-                "WITH ins AS (INSERT INTO sync (vault_id, interval) VALUES ($1, 300) RETURNING id) "
-                "INSERT INTO fsync (sync_id, conflict_policy) SELECT id, 'keep_both' FROM ins",
-                pqxx::params{seededVaultId});
-            return seededVaultId;
-        });
+    const auto admin = vh::identities::manager().userByName("admin");
+    ASSERT_TRUE(admin);
+    const auto unownedVaultId = createLocalVault("Unowned Scope Vault", admin->id);
 
     const auto user = vh::identities::manager().user(userId);
     ASSERT_TRUE(user);
     EXPECT_THROW(
         (void)vh::ops::s3_gateway::createCredential(user, {
-            .name = "non-admin-unowned-" + s3GatewayUniqueSuffix("credential"),
+            .name = "non-admin-unowned-" + s3gw::uniqueSuffix("credential"),
             .scope_mode = std::string{"vault_allowlist"},
             .vault_access = {{
                 .vault_id = unownedVaultId,
@@ -2167,7 +1666,7 @@ TEST_F(S3GatewayDbTest, S3GatewayWebSocketNormalizesCredentialScopeNames) {
     ASSERT_TRUE(session->user->isAdmin());
 
     const auto created = vh::protocols::ws::handler::S3Gateway::credentialsCreate({
-        {"name", "ws-normalized-scope-" + s3GatewayUniqueSuffix("credential")},
+        {"name", "ws-normalized-scope-" + s3gw::uniqueSuffix("credential")},
         {"scope_mode", "vault-allowlist"},
         {"vault_scopes", nlohmann::json::array({
             {
@@ -2277,7 +1776,7 @@ TEST_F(S3GatewayDbTest, S3GatewayWebSocketDefaultRoleSelectedVaultAndDefaultOver
     ASSERT_TRUE(admin);
     ASSERT_TRUE(admin->isSuperAdmin());
     const auto session = wsSessionForUser(admin->id);
-    const auto secondVaultId = createLocalVault(s3GatewayUniqueSuffix("ws_selected"), admin->id);
+    const auto secondVaultId = createLocalVault(s3gw::uniqueSuffix("ws_selected"), admin->id);
     const auto credential = createCredential(admin->id, "vault_allowlist");
 
     const auto initialDefault = vh::protocols::ws::handler::S3Gateway::credentialsDefaultRoleGet({
@@ -2602,7 +2101,7 @@ TEST_F(S3GatewayDbTest, VaultSlugDefaultsAndDisplayRenameDoesNotRewriteBindings)
 
 TEST_F(S3GatewayDbTest, SlugAndFuseOverrideControlOnlyDefaultFuseBinding) {
     auto vault = std::make_shared<vh::vault::model::Vault>();
-    vault->name = "Slug Update " + s3GatewayUniqueSuffix("vault");
+    vault->name = "Slug Update " + s3gw::uniqueSuffix("vault");
     vault->description = "Slug update test";
     vault->owner_id = userId;
     vault->type = vh::vault::model::VaultType::Local;
@@ -2650,7 +2149,7 @@ TEST_F(S3GatewayDbTest, ExplicitS3BucketBindingSurvivesVaultNameAndSlugUpdates) 
     ASSERT_TRUE(session->user);
     ASSERT_TRUE(session->user->isSuperAdmin());
 
-    const auto targetVaultId = createLocalVault(s3GatewayUniqueSuffix("explicit_bucket"), userId);
+    const auto targetVaultId = createLocalVault(s3gw::uniqueSuffix("explicit_bucket"), userId);
     const auto bucketName = "explicit-binding-" + std::to_string(targetVaultId);
     const auto bound = vh::protocols::ws::handler::S3Gateway::bucketsBind({
         {"vault_id", targetVaultId},
@@ -2670,7 +2169,7 @@ TEST_F(S3GatewayDbTest, ExplicitS3BucketBindingSurvivesVaultNameAndSlugUpdates) 
 
 TEST_F(S3GatewayDbTest, RejectsInvalidAndDuplicateExternalNames) {
     auto vault = std::make_shared<vh::vault::model::Vault>();
-    vault->name = "Invalid Slug " + s3GatewayUniqueSuffix("vault");
+    vault->name = "Invalid Slug " + s3gw::uniqueSuffix("vault");
     vault->slug = "Invalid_Slug";
     vault->owner_id = userId;
     vault->type = vh::vault::model::VaultType::Local;
@@ -2679,7 +2178,7 @@ TEST_F(S3GatewayDbTest, RejectsInvalidAndDuplicateExternalNames) {
     EXPECT_THROW((void)vh::db::query::vault::Vault::upsertVault(vault, sync), std::invalid_argument);
 
     auto first = std::make_shared<vh::vault::model::Vault>();
-    first->name = "Duplicate Slug A " + s3GatewayUniqueSuffix("vault");
+    first->name = "Duplicate Slug A " + s3gw::uniqueSuffix("vault");
     first->slug = uniqueS3Name("duplicate-slug");
     first->owner_id = userId;
     first->type = vh::vault::model::VaultType::Local;
@@ -2687,7 +2186,7 @@ TEST_F(S3GatewayDbTest, RejectsInvalidAndDuplicateExternalNames) {
     first->id = vh::db::query::vault::Vault::upsertVault(first, std::make_shared<vh::sync::model::LocalPolicy>());
 
     auto second = std::make_shared<vh::vault::model::Vault>();
-    second->name = "Duplicate Slug B " + s3GatewayUniqueSuffix("vault");
+    second->name = "Duplicate Slug B " + s3gw::uniqueSuffix("vault");
     second->slug = duplicateSlug;
     second->owner_id = userId;
     second->type = vh::vault::model::VaultType::Local;
@@ -2699,7 +2198,7 @@ TEST_F(S3GatewayDbTest, RejectsInvalidAndDuplicateExternalNames) {
     vh::db::query::vault::Vault::upsertVault(fuseA);
 
     auto fuseB = std::make_shared<vh::vault::model::Vault>();
-    fuseB->name = "Duplicate Fuse " + s3GatewayUniqueSuffix("vault");
+    fuseB->name = "Duplicate Fuse " + s3gw::uniqueSuffix("vault");
     fuseB->slug = uniqueS3Name("duplicate-fuse");
     fuseB->fuse_name = fuseA->fuse_name;
     fuseB->owner_id = userId;
@@ -2720,7 +2219,7 @@ TEST_F(S3GatewayDbTest, DisabledAndExpiredCredentialsDoNotAuthenticate) {
     auto active = manager.createCredential({
         .created_by = userId,
         .principal_user_id = userId,
-        .name = "disabled-auth-" + s3GatewayUniqueSuffix("credential"),
+        .name = "disabled-auth-" + s3gw::uniqueSuffix("credential"),
         .scope_mode = "user_access",
         .description = std::nullopt,
         .expires_at = std::nullopt,
@@ -2738,7 +2237,7 @@ TEST_F(S3GatewayDbTest, DisabledAndExpiredCredentialsDoNotAuthenticate) {
     auto expired = manager.createCredential({
         .created_by = userId,
         .principal_user_id = userId,
-        .name = "expired-auth-" + s3GatewayUniqueSuffix("credential"),
+        .name = "expired-auth-" + s3gw::uniqueSuffix("credential"),
         .scope_mode = "user_access",
         .description = std::nullopt,
         .expires_at = std::time(nullptr) - 60,
@@ -2748,13 +2247,13 @@ TEST_F(S3GatewayDbTest, DisabledAndExpiredCredentialsDoNotAuthenticate) {
 }
 
 TEST_F(S3GatewayDbTest, CredentialScopeShorthandWritesFinalRbacTablesAndGatesActions) {
-    const auto secondVaultId = createLocalVault(s3GatewayUniqueSuffix("scope"), userId);
+    const auto secondVaultId = createLocalVault(s3gw::uniqueSuffix("scope"), userId);
 
     vh::db::query::s3::GatewayCredential credential;
     credential.user_id = userId;
     credential.principal_user_id = userId;
     credential.created_by = userId;
-    credential.name = "scope-query-" + s3GatewayUniqueSuffix("credential");
+    credential.name = "scope-query-" + s3gw::uniqueSuffix("credential");
     credential.access_key = "VHTESTSCOPEQUERY" + std::to_string(vaultId);
     credential.encrypted_secret_access_key = {1, 2, 3};
     credential.iv = {4, 5, 6};
@@ -2843,7 +2342,7 @@ TEST_F(S3GatewayDbTest, CredentialScopeShorthandWritesFinalRbacTablesAndGatesAct
 }
 
 TEST_F(S3GatewayDbTest, SignedRouteScopeDeniedReturnsS3XmlAccessDenied) {
-    ConfigRestore restoreConfig(vh::config::Registry::get());
+    s3gw::ConfigRestore restoreConfig(vh::config::Registry::get());
 
     auto cfg = vh::config::Registry::get();
     cfg.s3_gateway.require_sigv4 = true;
@@ -2863,12 +2362,12 @@ TEST_F(S3GatewayDbTest, SignedRouteScopeDeniedReturnsS3XmlAccessDenied) {
         .created_by = admin->id
     });
 
-    const auto selectedOtherVaultId = createLocalVault(s3GatewayUniqueSuffix("scope_denied_selected"), admin->id);
+    const auto selectedOtherVaultId = createLocalVault(s3gw::uniqueSuffix("scope_denied_selected"), admin->id);
     const vh::protocols::s3::CredentialManager manager;
     auto secret = manager.createCredential({
         .created_by = admin->id,
         .principal_user_id = admin->id,
-        .name = "route-scope-denied-" + s3GatewayUniqueSuffix("credential"),
+        .name = "route-scope-denied-" + s3gw::uniqueSuffix("credential"),
         .scope_mode = "vault_allowlist",
         .description = std::nullopt,
         .expires_at = std::nullopt,
@@ -2879,7 +2378,7 @@ TEST_F(S3GatewayDbTest, SignedRouteScopeDeniedReturnsS3XmlAccessDenied) {
 
     vh::protocols::s3::Router::Request request{http::verb::head, "/" + bucketName, 11};
     request.set(http::field::host, "localhost:39000");
-    signS3GatewayRequest(request, secret.credential.access_key, secret.secret_access_key);
+    s3gw::signRequest(request, secret.credential.access_key, secret.secret_access_key);
 
     const vh::protocols::s3::Router router;
     const auto response = router.route(std::move(request));
@@ -2973,7 +2472,7 @@ TEST_F(S3GatewayDbTest, AbortMultipartUploadRemovesOpaquePartDirAndKeepsRoot) {
 }
 
 TEST_F(S3GatewayDbTest, AbortExpiredMultipartUploadsUsesConfiguredRetention) {
-    ConfigRestore restoreConfig(vh::config::Registry::get());
+    s3gw::ConfigRestore restoreConfig(vh::config::Registry::get());
 
     std::filesystem::remove_all(vh::protocols::s3::MultipartStore::partRoot());
 
@@ -3070,7 +2569,7 @@ std::string s3StagingMd5Hex(const std::vector<uint8_t>& bytes) {
 }
 
 struct S3StagingMinPartSize {
-    ConfigRestore restore{vh::config::Registry::get()};
+    s3gw::ConfigRestore restore{vh::config::Registry::get()};
     S3StagingMinPartSize() {
         auto cfg = vh::config::Registry::get();
         cfg.s3_gateway.multipart.min_part_size_mb = 0;
@@ -3333,7 +2832,7 @@ TEST_F(S3GatewayDbTest, LegacyPlaintextPartsAreSealedAndStrayStagingIsRemoved) {
 // A streamed PUT's body is on disk only as scratch ciphertext, also while it is still arriving, and nothing is left
 // once it is answered; leftovers of earlier runs (and the plaintext spool of older versions) go at startup.
 TEST_F(S3GatewayDbTest, StagedRequestBodiesAreCiphertextAndSweptAtStartup) {
-    ConfigRestore restoreConfig(vh::config::Registry::get());
+    s3gw::ConfigRestore restoreConfig(vh::config::Registry::get());
     auto cfg = vh::config::Registry::get();
     cfg.s3_gateway.enabled = true;
     cfg.s3_gateway.host = "127.0.0.1";
@@ -3351,7 +2850,7 @@ TEST_F(S3GatewayDbTest, StagedRequestBodiesAreCiphertextAndSweptAtStartup) {
     const auto secret = manager.createCredential({
         .created_by = admin->id,
         .principal_user_id = admin->id,
-        .name = "staged-body-" + s3GatewayUniqueSuffix("credential"),
+        .name = "staged-body-" + s3gw::uniqueSuffix("credential"),
         .scope_mode = "vault_allowlist",
         .description = std::nullopt,
         .expires_at = std::nullopt,
@@ -3502,7 +3001,7 @@ TEST_F(S3GatewayDbTest, RemoteBackedListDetectsStaleRemoteIndex) {
 }
 
 TEST_F(S3GatewayDbTest, GatewayServiceBindsAndServesS3XmlWhenEnabled) {
-    ConfigRestore restoreConfig(vh::config::Registry::get());
+    s3gw::ConfigRestore restoreConfig(vh::config::Registry::get());
 
     auto cfg = vh::config::Registry::get();
     cfg.s3_gateway.enabled = true;
@@ -3572,7 +3071,7 @@ TEST_F(S3GatewayDbTest, ObjectStoreLocalListUsesMetadataEtagsForFilesystemEntrie
     ASSERT_TRUE(admin);
     ASSERT_TRUE(admin->isSuperAdmin());
 
-    const auto localVaultId = createLocalVault(s3GatewayUniqueSuffix("metadata_list_local"), admin->id);
+    const auto localVaultId = createLocalVault(s3gw::uniqueSuffix("metadata_list_local"), admin->id);
     const auto engine = vh::runtime::Deps::get().storageManager->getEngine(localVaultId);
     ASSERT_TRUE(engine);
     const std::filesystem::path vaultPath = "/metadata-only-list.txt";
@@ -3610,7 +3109,7 @@ TEST_F(S3GatewayDbTest, ObjectStoreRemoteListUsesRemoteIndexWithoutGatewayRows) 
     ASSERT_TRUE(admin);
     ASSERT_TRUE(admin->isSuperAdmin());
 
-    const auto remoteVaultId = createLocalVault(s3GatewayUniqueSuffix("metadata_list_remote"), admin->id);
+    const auto remoteVaultId = createLocalVault(s3gw::uniqueSuffix("metadata_list_remote"), admin->id);
     const auto bucketName = "remote-index-list-" + std::to_string(remoteVaultId);
     vh::db::query::s3::Gateway::bindBucket({
         .vault_id = remoteVaultId,
@@ -3645,7 +3144,7 @@ TEST_F(S3GatewayDbTest, DeleteBucketRejectsLocalFilesystemEntriesWithoutGatewayR
     ASSERT_TRUE(admin);
     ASSERT_TRUE(admin->isSuperAdmin());
 
-    const auto localVaultId = createLocalVault(s3GatewayUniqueSuffix("delete_bucket_local"), admin->id);
+    const auto localVaultId = createLocalVault(s3gw::uniqueSuffix("delete_bucket_local"), admin->id);
     const auto engine = vh::runtime::Deps::get().storageManager->getEngine(localVaultId);
     ASSERT_TRUE(engine);
     const std::filesystem::path vaultPath = "/only-in-fs.txt";
@@ -3682,7 +3181,7 @@ TEST_F(S3GatewayDbTest, DeleteBucketRejectsRemoteIndexLiveObjects) {
     ASSERT_TRUE(admin);
     ASSERT_TRUE(admin->isSuperAdmin());
 
-    const auto remoteVaultId = createLocalVault(s3GatewayUniqueSuffix("delete_bucket_remote"), admin->id);
+    const auto remoteVaultId = createLocalVault(s3gw::uniqueSuffix("delete_bucket_remote"), admin->id);
     const auto bucketName = "delete-remote-non-empty-" + std::to_string(remoteVaultId);
     vh::db::query::s3::Gateway::bindBucket({
         .vault_id = remoteVaultId,
@@ -3715,7 +3214,7 @@ TEST_F(S3GatewayDbTest, DeleteBucketAllowsTrulyEmptyApiExclusiveBucket) {
     ASSERT_TRUE(admin);
     ASSERT_TRUE(admin->isSuperAdmin());
 
-    const auto emptyVaultId = createLocalVault(s3GatewayUniqueSuffix("delete_bucket_empty"), admin->id);
+    const auto emptyVaultId = createLocalVault(s3gw::uniqueSuffix("delete_bucket_empty"), admin->id);
     const auto bucketName = "delete-empty-" + std::to_string(emptyVaultId);
     vh::db::query::s3::Gateway::bindBucket({
         .vault_id = emptyVaultId,
@@ -3735,7 +3234,7 @@ TEST_F(S3GatewayDbTest, DeleteBucketAllowsTrulyEmptyApiExclusiveBucket) {
 // verifier, and only then stores. A body that fails anywhere leaves nothing behind: no object row, no file, no
 // change to an existing object, no request-body temp file.
 TEST_F(S3GatewayDbTest, SignedStreamingUploadsStoreOnlyFullyVerifiedBodies) {
-    ConfigRestore restoreConfig(vh::config::Registry::get());
+    s3gw::ConfigRestore restoreConfig(vh::config::Registry::get());
     auto cfg = vh::config::Registry::get();
     cfg.s3_gateway.enabled = true;
     cfg.s3_gateway.host = "127.0.0.1";
@@ -3758,7 +3257,7 @@ TEST_F(S3GatewayDbTest, SignedStreamingUploadsStoreOnlyFullyVerifiedBodies) {
     const auto secret = manager.createCredential({
         .created_by = admin->id,
         .principal_user_id = admin->id,
-        .name = "streaming-" + s3GatewayUniqueSuffix("credential"),
+        .name = "streaming-" + s3gw::uniqueSuffix("credential"),
         .scope_mode = "vault_allowlist",
         .description = std::nullopt,
         .expires_at = std::nullopt,
@@ -3788,7 +3287,7 @@ TEST_F(S3GatewayDbTest, SignedStreamingUploadsStoreOnlyFullyVerifiedBodies) {
     const auto get = [&](const std::string& target) {
         vh::protocols::s3::Router::Request request{http::verb::get, "/" + bucketName + target, 11};
         request.set(http::field::host, "127.0.0.1:" + std::to_string(port));
-        signS3GatewayRequest(request, accessKey, secretKey);
+        s3gw::signRequest(request, accessKey, secretKey);
         return vh::protocols::s3::Router{}.route(std::move(request));
     };
     // ListObjectsV2 of a local bucket lists the vault's files as well as gateway rows.
@@ -3859,7 +3358,7 @@ TEST_F(S3GatewayDbTest, RealMcUploadsOverPlainHttpWhenMcIsInstalled) {
         if (mcBinary.empty() && ::access(candidate, X_OK) == 0) mcBinary = candidate;
     if (mcBinary.empty()) GTEST_SKIP() << "mc is not installed";
 
-    ConfigRestore restoreConfig(vh::config::Registry::get());
+    s3gw::ConfigRestore restoreConfig(vh::config::Registry::get());
     auto cfg = vh::config::Registry::get();
     cfg.s3_gateway.enabled = true;
     cfg.s3_gateway.host = "127.0.0.1";
@@ -3882,7 +3381,7 @@ TEST_F(S3GatewayDbTest, RealMcUploadsOverPlainHttpWhenMcIsInstalled) {
     const auto secret = manager.createCredential({
         .created_by = admin->id,
         .principal_user_id = admin->id,
-        .name = "mc-" + s3GatewayUniqueSuffix("credential"),
+        .name = "mc-" + s3gw::uniqueSuffix("credential"),
         .scope_mode = "vault_allowlist",
         .description = std::nullopt,
         .expires_at = std::nullopt,
@@ -3906,7 +3405,7 @@ TEST_F(S3GatewayDbTest, RealMcUploadsOverPlainHttpWhenMcIsInstalled) {
         std::this_thread::sleep_for(std::chrono::milliseconds(25));
     ASSERT_TRUE(service.gatewayStatus().ready);
 
-    const auto work = std::filesystem::temp_directory_path() / s3GatewayUniqueSuffix("vh_mc");
+    const auto work = std::filesystem::temp_directory_path() / s3gw::uniqueSuffix("vh_mc");
     std::filesystem::create_directories(work / "config");
     std::string payload(150000, '\0');
     for (std::size_t i = 0; i < payload.size(); ++i) payload[i] = static_cast<char>('a' + (i * 11) % 26);
@@ -3924,7 +3423,7 @@ TEST_F(S3GatewayDbTest, RealMcUploadsOverPlainHttpWhenMcIsInstalled) {
     const auto stored = [&](const std::string& key) {
         vh::protocols::s3::Router::Request request{http::verb::get, "/" + bucketName + "/" + key, 11};
         request.set(http::field::host, "127.0.0.1:" + std::to_string(cfg.s3_gateway.port));
-        signS3GatewayRequest(request, secret.credential.access_key, secret.secret_access_key);
+        s3gw::signRequest(request, secret.credential.access_key, secret.secret_access_key);
         auto response = vh::protocols::s3::Router{}.route(std::move(request));
         return response.result() == http::status::ok ? response.body() : std::string{};
     };

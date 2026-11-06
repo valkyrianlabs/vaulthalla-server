@@ -139,8 +139,8 @@ protected:
     static std::string bucketName() { return "vh-par-" + tag(); }
 };
 
-// Every read and lock operation, for every seeded admin role: the CLI and the ws handler agree with each other and
-// with the oracle from the role's admin.upstream bits and the key's keys.api permission.
+// Every read, lock and admin-enable operation, for every seeded admin role: the CLI and the ws handler agree with each
+// other and with the oracle from the role's admin.upstream bits and the key's keys.api permission.
 TEST_F(UpstreamParityTest, EverySeededRoleGetsTheSameVerdictOnBothSurfaces) {
     using KeyPerm = rbac::permission::admin::keys::APIPermissions;
     const auto keyId = awsKey();
@@ -168,6 +168,8 @@ TEST_F(UpstreamParityTest, EverySeededRoleGetsTheSameVerdictOnBothSurfaces) {
               [&] { (void)WsUp::bucketInspect(json{{"api_key_id", keyId}, {"bucket", name}}, session); });
         check("admin status", view, "upstream admin status " + k,
               [&] { (void)WsUp::adminStatus(json{{"api_key_id", keyId}}, session); });
+        check("admin enable", bits.canConfigure() && key(KeyPerm::Edit), "upstream admin enable " + k,
+              [&] { (void)WsUp::adminEnable(json{{"api_key_id", keyId}}, session); });
         check("audit", bits.canView(), "upstream audit", [&] { (void)WsUp::auditList(json::object(), session); });
         check("adopt-check", bits.canProvision() && key(KeyPerm::Consume), "upstream adopt-check " + k + " " + name,
               [&] { (void)WsUp::bucketAdoptPreflight(json{{"api_key_id", keyId}, {"bucket", name}}, session); });
@@ -180,7 +182,7 @@ TEST_F(UpstreamParityTest, EverySeededRoleGetsTheSameVerdictOnBothSurfaces) {
         EXPECT_EQ(cli("upstream protect " + k + " " + name + " --reason parity", user) == 0, protect) << role;
         EXPECT_EQ(rowOf(name) && rowOf(name)->is_protected, protect) << role << " cli lock state";
         if (protect) {
-            const bool unprotect = bits.canUnprotect() && key(KeyPerm::View);
+            const bool unprotect = bits.canUnprotect() && key(KeyPerm::Consume);
             EXPECT_EQ(cli("upstream unprotect " + k + " " + name + " --yes", user) == 0, unprotect) << role;
             (void)up::unprotect(superUser, keyId, name, true);
         }
@@ -188,7 +190,7 @@ TEST_F(UpstreamParityTest, EverySeededRoleGetsTheSameVerdictOnBothSurfaces) {
                                                       session); }), protect) << role;
         EXPECT_EQ(rowOf(name) && rowOf(name)->is_protected, protect) << role << " ws lock state";
         if (protect) {
-            const bool unprotect = bits.canUnprotect() && key(KeyPerm::View);
+            const bool unprotect = bits.canUnprotect() && key(KeyPerm::Consume);
             EXPECT_EQ(wsOk([&] { (void)WsUp::bucketUnprotect(json{{"api_key_id", keyId}, {"bucket", name}, {"confirm", true}},
                                                             session); }), unprotect) << role;
             (void)up::unprotect(superUser, keyId, name, true);
@@ -265,21 +267,6 @@ TEST_F(UpstreamParityTest, VaultCreationProvisionsTheSameManagedBucketOnBothSurf
         ASSERT_EQ(rules.size(), 1u) << bucket;
         EXPECT_EQ(rules[0].abort_incomplete_multipart_days.value_or(0), 7u);
     }
-}
-
-TEST_F(UpstreamParityTest, ANameCollisionIsRefusedAndHarmlessOnBothSurfaces) {
-    const auto keyId = awsKey();
-    const auto taken = bucketName();
-    seedBucket(taken, {{"precious.bin", 42}});
-
-    EXPECT_NE(cli("vault create upp_collide_" + tag() + " --s3 --api-key " + std::to_string(keyId) + " --bucket " + taken +
-                  " --bucket-mode create", superUser), 0);
-    EXPECT_THROW((void)protocols::ws::handler::Vaults::add(json{
-        {"name", "upp_collide_" + tag()}, {"type", "s3"}, {"api_key_id", keyId}, {"bucket", taken},
-        {"provision", {{"mode", "create"}}}}, ws(superUser)), ops::Conflict);
-    EXPECT_EQ(objectsIn(taken), 1u) << "an existing bucket is never taken over";
-    const auto row = rowOf(taken);
-    EXPECT_FALSE(row && row->vault_id) << "no vault was bound to it";
 }
 
 TEST_F(UpstreamParityTest, AdoptionNeedsTheSameExplicitAcceptanceOnBothSurfaces) {

@@ -1,91 +1,20 @@
+#include "../helpers/share_fakes.hpp"
 #include "config/Config.hpp"
 #include "config/Registry.hpp"
-#include "fs/model/Directory.hpp"
-#include "fs/model/File.hpp"
 #include "ops/Error.hpp"
 #include "share/TargetResolver.hpp"
 
 #include <gtest/gtest.h>
 
-#include <filesystem>
 #include <memory>
 #include <optional>
 #include <stdexcept>
-#include <unordered_map>
 
 using namespace vh::share;
 
 namespace {
 
-std::shared_ptr<vh::fs::model::Directory> dir(
-    const uint32_t id,
-    const uint32_t vaultId,
-    const std::string& path,
-    const std::optional<int32_t> parentId = std::nullopt
-) {
-    auto entry = std::make_shared<vh::fs::model::Directory>();
-    entry->id = id;
-    entry->vault_id = vaultId;
-    entry->parent_id = parentId;
-    entry->path = path;
-    entry->name = path == "/" ? "" : std::filesystem::path(path).filename().string();
-    entry->created_at = entry->updated_at = 1'800'000'000;
-    return entry;
-}
-
-std::shared_ptr<vh::fs::model::File> makeFile(
-    const uint32_t id,
-    const uint32_t vaultId,
-    const std::string& path,
-    const std::optional<int32_t> parentId = std::nullopt
-) {
-    auto entry = std::make_shared<vh::fs::model::File>();
-    entry->id = id;
-    entry->vault_id = vaultId;
-    entry->parent_id = parentId;
-    entry->path = path;
-    entry->name = std::filesystem::path(path).filename().string();
-    entry->mime_type = "application/pdf";
-    entry->created_at = entry->updated_at = 1'800'000'000;
-    return entry;
-}
-
-class FakeEntryProvider final : public TargetEntryProvider {
-public:
-    std::unordered_map<uint32_t, std::shared_ptr<vh::fs::model::Entry>> by_id;
-    std::unordered_map<std::string, std::shared_ptr<vh::fs::model::Entry>> by_path;
-    std::unordered_map<uint32_t, std::vector<std::shared_ptr<vh::fs::model::Entry>>> children;
-
-    void add(const std::shared_ptr<vh::fs::model::Entry>& entry) {
-        by_id[entry->id] = entry;
-        by_path[key(*entry->vault_id, entry->path.string())] = entry;
-        if (entry->parent_id) children[*entry->parent_id].push_back(entry);
-    }
-
-    std::shared_ptr<vh::fs::model::Entry> getEntryById(const uint32_t entryId) override {
-        if (!by_id.contains(entryId)) return nullptr;
-        return by_id.at(entryId);
-    }
-
-    std::shared_ptr<vh::fs::model::Entry> getEntryByVaultPath(
-        const uint32_t vaultId,
-        const std::string_view vaultPath
-    ) override {
-        const auto k = key(vaultId, std::string(vaultPath));
-        if (!by_path.contains(k)) return nullptr;
-        return by_path.at(k);
-    }
-
-    std::vector<std::shared_ptr<vh::fs::model::Entry>> listChildren(const uint32_t parentEntryId) override {
-        if (!children.contains(parentEntryId)) return {};
-        return children.at(parentEntryId);
-    }
-
-private:
-    static std::string key(const uint32_t vaultId, const std::string& path) {
-        return std::to_string(vaultId) + ":" + path;
-    }
-};
+namespace share_fx = vh::test::shares;
 
 Principal makeFsPrincipal() {
     Principal principal;
@@ -103,13 +32,13 @@ Principal makeFsPrincipal() {
     return principal;
 }
 
-std::shared_ptr<FakeEntryProvider> providerWithSharedTree() {
-    auto provider = std::make_shared<FakeEntryProvider>();
-    provider->add(dir(10, 42, "/shared"));
-    provider->add(dir(11, 42, "/shared/reports", 10));
-    provider->add(makeFile(12, 42, "/shared/reports/q1.pdf", 11));
-    provider->add(makeFile(13, 42, "/shared/readme.txt", 10));
-    provider->add(dir(20, 42, "/shared_evil"));
+std::shared_ptr<share_fx::FakeEntryProvider> providerWithSharedTree() {
+    auto provider = std::make_shared<share_fx::FakeEntryProvider>();
+    provider->add(share_fx::makeDir(10, 42, "/shared"));
+    provider->add(share_fx::makeDir(11, 42, "/shared/reports", 10));
+    provider->add(share_fx::makeFile(12, 42, "/shared/reports/q1.pdf", 11, "application/pdf"));
+    provider->add(share_fx::makeFile(13, 42, "/shared/readme.txt", 10, "application/pdf"));
+    provider->add(share_fx::makeDir(20, 42, "/shared_evil"));
     return provider;
 }
 
@@ -250,7 +179,7 @@ TEST(ShareFsResolutionTest, ListsChildrenOnlyWhenTheyRemainInsideScope) {
     auto children = resolver.listChildren(principal, target);
     ASSERT_EQ(children.size(), 2u);
 
-    provider->children[10].push_back(makeFile(99, 42, "/outside.txt", 10));
+    provider->children[10].push_back(share_fx::makeFile(99, 42, "/outside.txt", 10, "application/pdf"));
     EXPECT_THROW({ (void)resolver.listChildren(principal, target); }, std::runtime_error);
 }
 
@@ -377,9 +306,9 @@ TEST(ShareFsResolutionTest, ResolveListedChildRefusesEntriesThatAreNotListedChil
     // A grandchild (not a child of the listed directory), outside the share, another vault, a missing entry.
     EXPECT_THROW({ (void)resolver.resolveListedChild(principal, parent, provider->by_id.at(12), Operation::Download); },
                  std::runtime_error);
-    EXPECT_THROW({ (void)resolver.resolveListedChild(principal, parent, makeFile(98, 42, "/outside.txt", 10),
+    EXPECT_THROW({ (void)resolver.resolveListedChild(principal, parent, share_fx::makeFile(98, 42, "/outside.txt", 10),
                                                      Operation::Download); }, std::runtime_error);
-    EXPECT_THROW({ (void)resolver.resolveListedChild(principal, parent, makeFile(97, 43, "/shared/x.txt", 10),
+    EXPECT_THROW({ (void)resolver.resolveListedChild(principal, parent, share_fx::makeFile(97, 43, "/shared/x.txt", 10),
                                                      Operation::Download); }, std::runtime_error);
     EXPECT_THROW({ (void)resolver.resolveListedChild(principal, parent, nullptr, Operation::Download); },
                  std::runtime_error);

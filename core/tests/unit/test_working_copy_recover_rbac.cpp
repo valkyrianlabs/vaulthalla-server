@@ -1,5 +1,4 @@
-#include "db/Transactions.hpp"
-#include "fs/Filesystem.hpp"
+#include "../helpers/db_suite.hpp"
 #include "fs/PlaintextSource.hpp"
 #include "fs/cache/Registry.hpp"
 #include "fs/model/File.hpp"
@@ -10,14 +9,11 @@
 #include "ops/Users.hpp"
 #include "ops/Vaults.hpp"
 #include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
 #include "storage/Engine.hpp"
 #include "storage/Manager.hpp"
 #include "vault/model/Vault.hpp"
 
 #include <gtest/gtest.h>
-#include <paths.h>
 
 #include <algorithm>
 #include <chrono>
@@ -49,32 +45,14 @@ vh::fs::PlaintextSource bytes(const std::string& text) {
 
 }
 
-class WorkingCopyRecoverRbacTest : public ::testing::Test {
+class WorkingCopyRecoverRbacTest : public vh::test::db::Suite {
 protected:
-    inline static bool skip = false;
-    inline static std::filesystem::path root;
     inline static wcrbac::UserPtr admin, reader;
     inline static std::shared_ptr<vh::storage::Engine> vault;
 
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skip = true;
-            return;
-        }
-        vh::paths::enableTestMode();
-        root = std::filesystem::temp_directory_path() / ("vh_wc_recover_" + wcrbac::tag());
-        vh::paths::backingPath = root / "backing";
-        vh::paths::mountPath = root / "mount";
-        std::filesystem::create_directories(vh::paths::backingPath);
-        std::filesystem::create_directories(vh::paths::mountPath);
-        vh::db::Transactions::init();
-        vh::db::seed::nuke_and_recreate_schema_public();
-        vh::db::Transactions::dbPool_->initPreparedStatements();
-        vh::seed::seed_database();
-        vh::runtime::Deps::init();
-        vh::fs::Filesystem::init(vh::runtime::Deps::get().storageManager);
-        admin = vh::identities::manager().userByName("admin");
+        if (!setUpDbSuite("test_working_copy_recover_rbac", {.freshEngines = false})) return;
+        admin = superUser;
         const auto v = vh::ops::vaults::create(admin, {.name = "wcr_" + wcrbac::tag(), .type = vh::vault::model::VaultType::Local});
         vault = vh::runtime::Deps::get().storageManager->getEngine(v->id);
         const auto created = vh::ops::users::create(admin, {.name = "wcr_reader_" + wcrbac::tag(), .role = "unprivileged",
@@ -84,14 +62,7 @@ protected:
         reader = vh::identities::manager().user(created.user->id);
     }
 
-    static void TearDownTestSuite() {
-        std::error_code ec;
-        if (!root.empty()) std::filesystem::remove_all(root, ec);
-    }
-
-    void SetUp() override {
-        if (skip) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
-    }
+    static void TearDownTestSuite() { tearDownDbSuite(); }
 
     // The row the working copy remembers for a file that has since been deleted.
     static vh::fs::model::File lastSeen(const std::string& path) {

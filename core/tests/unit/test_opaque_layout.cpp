@@ -8,72 +8,37 @@
 //                            bucket that records every request (OpaqueRequestAudit, OpaqueObjectCount,
 //                            OpaqueRenameCostsNothing, OpaqueRequestCounts, copies, foreign objects, orphans)
 
+#include "../helpers/bytes.hpp"
+#include "../helpers/db_suite.hpp"
 #include "../helpers/versioned_bucket.hpp"
 
 #include "crypto/recovery/Kev1.hpp"
 #include "crypto/recovery/Seed.hpp"
 #include "crypto/util/encrypt.hpp"
 #include "crypto/vhf1/Format.hpp"
-#include "db/Transactions.hpp"
 #include "db/query/fs/File.hpp"
 #include "db/query/recovery/ObjectVersion.hpp"
 #include "db/query/recovery/Policy.hpp"
-#include "db/query/sync/Event.hpp"
 #include "db/query/sync/Manifest.hpp"
 #include "db/query/sync/RemoteObjectIndex.hpp"
 #include "db/query/vault/Vault.hpp"
-#include "fs/Filesystem.hpp"
 #include "fs/model/File.hpp"
 #include "fs/model/file/Trashed.hpp"
-#include "identities/Manager.hpp"
-#include "identities/User.hpp"
 #include "ops/RecoveryRecipients.hpp"
-#include "ops/Vaults.hpp"
 #include "recovery/local/Backlog.hpp"
 #include "recovery/local/Versions.hpp"
 #include "recovery/provider/Restore.hpp"
-#include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
-#include "storage/CloudEngine.hpp"
-#include "storage/Manager.hpp"
 #include "storage/ObjectKeys.hpp"
 #include "storage/PlaintextReader.hpp"
-#include "storage/s3/Controller.hpp"
-#include "sync/Cloud.hpp"
 #include "sync/Planner.hpp"
 #include "sync/manifest/Store.hpp"
-#include "sync/model/Action.hpp"
-#include "sync/model/Event.hpp"
-#include "sync/model/RemotePolicy.hpp"
-#include "sync/model/Throughput.hpp"
 #include "sync/rotation/Runtime.hpp"
-#include "sync/tasks/Download.hpp"
-#include "sync/tasks/Upload.hpp"
-#include "vault/APIKeyManager.hpp"
 #include "vault/Content.hpp"
 #include "vault/EncryptionManager.hpp"
 #include "vault/RecoveryEnvelopes.hpp"
-#include "vault/model/APIKey.hpp"
-#include "vault/model/S3Vault.hpp"
 
-#include <gtest/gtest.h>
-#include <paths.h>
-#include <sodium.h>
-
-#include <algorithm>
-#include <atomic>
-#include <chrono>
-#include <cstdlib>
-#include <filesystem>
-#include <fstream>
 #include <functional>
-#include <iostream>
-#include <random>
 #include <set>
-#include <string>
-#include <unistd.h>
-#include <vector>
 
 namespace vh::test_opaque_layout {
 
@@ -83,33 +48,17 @@ namespace sfs = std::filesystem;
 using test_support::versioned::VersionedBucket;
 using test_support::versioned::Versioning;
 using Bytes = std::vector<uint8_t>;
+using vh::test::bin::bytes;
+using vh::test::bin::randomBytes;
+using vh::test::bin::spit;
+using vh::test::bin::str;
 using RequestOp = storage::s3::RequestOp;
 using Refused = storage::s3::OpaqueRequestRefused;
 
 constexpr uint64_t kMiB = 1024ull * 1024;
 constexpr uint64_t kGiB = 1024ull * kMiB;
 
-std::string tag() {
-    static std::atomic<unsigned> n{0};
-    static const auto run = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count() % 100000);
-    return run + "o" + std::to_string(n.fetch_add(1));
-}
-
-Bytes bytes(const std::string& s) { return {s.begin(), s.end()}; }
-std::string str(const Bytes& b) { return {b.begin(), b.end()}; }
-
-Bytes randomBytes(const std::size_t n, const unsigned seed) {
-    std::mt19937 rng(seed);
-    Bytes out(n);
-    for (auto& b : out) b = static_cast<uint8_t>(rng());
-    return out;
-}
-
-void spit(const sfs::path& p, const Bytes& b) {
-    sfs::create_directories(p.parent_path());
-    std::ofstream out(p, std::ios::binary | std::ios::trunc);
-    out.write(reinterpret_cast<const char*>(b.data()), static_cast<std::streamsize>(b.size()));
-}
+std::string tag() { return test::uniqueTag('o'); }
 
 std::string lower(std::string s) {
     std::ranges::transform(s, s.begin(), [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -222,15 +171,16 @@ TEST(OpaqueRequestPolicy, RefusesNamesMetadataAndForeignKeysBeforeAnythingIsSent
 // ---- OpaqueMultipart ----------------------------------------------------------------------------------------------
 
 // Counts what a multipart upload sends and keeps none of it: a 60 GiB object without 60 GiB anywhere.
+// Records the multipart plan CloudEngine asks for. The 60 GiB of holes are never streamed (that took ~27 s): the
+// plan is the subject here, and the driver's split into parts is Controller's (S3DataPathWire, S3VersionedFake).
 class PartCounter final : public storage::s3::Controller {
 public:
     using Controller::initiateMultipartUpload;
+    using Controller::uploadLargeObject;
 
     PartCounter() : Controller(test_support::versioned::versionedBucketKey(), "vh-part-counter") {}
 
-    mutable std::atomic<uint64_t> initiated{0}, parts{0}, completed{0}, aborted{0}, bytesSent{0}, largestPart{0};
-    mutable std::atomic<uint64_t> smallestNonFinal{UINT64_MAX};
-    mutable std::atomic<uint64_t> lastPart{0};
+    mutable std::atomic<uint64_t> initiated{0}, completed{0}, partSize{0}, sourceBytes{0};
     mutable std::string contentKey;
 
     std::string initiateMultipartUpload(const sfs::path& key, const storage::s3::RequestOptions& options) const override {
@@ -240,26 +190,19 @@ public:
         return "upload-1";
     }
 
-    void uploadPart(const sfs::path& key, const std::string&, const int partNumber, const std::string& partData,
-                    std::string& etagOut) const override {
-        enforceRequestPolicy(RequestOp::Put, key.string());
-        if (lastPart.load() > 0) smallestNonFinal = std::min<uint64_t>(smallestNonFinal.load(), lastPart.load());
-        lastPart = partData.size();
-        ++parts;
-        bytesSent += partData.size();
-        largestPart = std::max<uint64_t>(largestPart.load(), partData.size());
-        etagOut = "\"part-" + std::to_string(partNumber) + "\"";
+    void uploadLargeObject(const sfs::path& key, const sfs::path& filePath, const uintmax_t part,
+                           const storage::s3::RequestOptions& options) const override {
+        const auto uploadId = initiateMultipartUpload(key, options);
+        partSize = part;
+        sourceBytes = sfs::file_size(filePath);
+        std::vector<std::string> etags(keys::partCountFor(sourceBytes.load(), part));
+        completeMultipartUpload(key, uploadId, etags);
     }
 
     void completeMultipartUpload(const sfs::path& key, const std::string&, const std::vector<std::string>& etags) const override {
         enforceRequestPolicy(RequestOp::Put, key.string());
         ++completed;
         recordPutOutcomeForTesting({.etag = "\"multi-" + std::to_string(etags.size()) + "\"", .version_id = std::nullopt});
-    }
-
-    void abortMultipartUpload(const sfs::path& key, const std::string&) const override {
-        enforceRequestPolicy(RequestOp::Delete, key.string());
-        ++aborted;
     }
 };
 
@@ -304,96 +247,43 @@ TEST(OpaqueMultipart, ASixtyGiBObjectUploadsInAtMost10000Parts) {
     EXPECT_EQ(counter->contentKey, keys::contentKey(*f->object_uid));
     EXPECT_EQ(counter->initiated.load(), 1u);
     EXPECT_EQ(counter->completed.load(), 1u);
-    EXPECT_EQ(counter->aborted.load(), 0u);
-    EXPECT_LE(counter->parts.load(), keys::kMaxParts);
-    EXPECT_EQ(counter->parts.load(), keys::partCountFor(kSize, 7 * kMiB));
-    EXPECT_EQ(counter->bytesSent.load(), kSize) << "every byte once, one object";
-    EXPECT_EQ(counter->largestPart.load(), 7 * kMiB);
-    EXPECT_EQ(counter->smallestNonFinal.load(), 7 * kMiB) << "equal parts but the last (R2 requires it)";
-    EXPECT_EQ(f->remote_etag, "\"multi-" + std::to_string(counter->parts.load()) + "\"");
+    EXPECT_EQ(counter->sourceBytes.load(), kSize) << "the sealed file as it is, one object";
+    EXPECT_EQ(counter->partSize.load(), 7 * kMiB) << "not the fixed 5 MiB part";
+    EXPECT_LE(keys::partCountFor(kSize, counter->partSize.load()), keys::kMaxParts);
+    EXPECT_EQ(f->remote_etag, "\"multi-" + std::to_string(keys::partCountFor(kSize, 7 * kMiB)) + "\"");
 }
 
 // ---- DB-backed --------------------------------------------------------------------------------------------------------
 
-class OpaqueLayoutTest : public ::testing::Test {
+class OpaqueLayoutTest : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
-    inline static std::shared_ptr<identities::User> superUser;
-
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            std::cout << "[test_opaque_layout] Skipping db tests due to missing environment variables." << std::endl;
-            return;
-        }
-        paths::enableTestMode();
-        const auto root = sfs::temp_directory_path() / ("vh_opaque_layout_" + tag());
-        paths::backingPath = root / "backing";
-        paths::mountPath = root / "mount";
-        sfs::create_directories(paths::backingPath);
-        sfs::create_directories(paths::mountPath);
-
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        runtime::Deps::init();
-        fs::Filesystem::init(runtime::Deps::get().storageManager);
-        superUser = vh::identities::manager().userByName("admin");
+        if (!setUpDbSuite("test_opaque_layout", {.freshEngines = false})) return;
         recovery::local::invalidateAllPolicies();
     }
+    static void TearDownTestSuite() { tearDownDbSuite(); }
 
-    void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
-    }
-
-    struct Vault {
-        std::shared_ptr<storage::CloudEngine> engine;
-        std::shared_ptr<VersionedBucket> bucket;
-        std::string bucketName;
-        [[nodiscard]] uint32_t id() const { return engine->vault->id; }
-    };
+    using Vault = test_support::versioned::CloudVault;
 
     // An encrypting cloud vault made opaque_v1 before it holds anything (opaque_v1 is internal: test mode only).
     static Vault opaqueVault(const bool localVersioning = false,
                              const sync::model::RemotePolicy::Strategy strategy = sync::model::RemotePolicy::Strategy::Sync) {
-        auto apiKey = std::make_shared<vault::model::APIKey>(superUser->id, "ol_key_" + tag(), vault::model::S3Provider::AWS,
-                                                             "AKIATESTACCESSKEY000", "secret-value-0000000000000000000000000",
-                                                             "us-east-1", "https://s3.example.com");
-        const auto keyId = runtime::Deps::get().apiKeyManager->addAPIKey(apiKey);
-        Vault v;
-        v.bucketName = "ol-" + tag();
-        const auto created = ops::vaults::create(superUser, {.name = "ol_vault_" + tag(), .type = vault::model::VaultType::S3,
-                                                             .s3 = ops::vaults::S3Spec{.api_key_id = keyId,
-                                                                                       .bucket = v.bucketName}});
-        db::Transactions::exec("OpaqueLayoutTest::opaqueVault", [&](pqxx::work& txn) {
-            txn.exec("UPDATE s3 SET storage_layout = 'opaque_v1' WHERE vault_id = $1", pqxx::params{created->id});
-        });
-        v.engine = std::static_pointer_cast<storage::CloudEngine>(runtime::Deps::get().storageManager->getEngine(created->id));
-        std::static_pointer_cast<vault::model::S3Vault>(v.engine->vault)->storage_layout = vault::model::StorageLayout::OpaqueV1;
-        v.bucket = std::make_shared<VersionedBucket>(Versioning::Enabled, v.bucketName);
-        v.engine->setS3ControllerForTesting(v.bucket);
-        v.engine->setRemoteFetchGate([](const storage::CloudEngine&, const storage::RemoteFetchRequest&) {
-            return std::unique_ptr<storage::RemoteFetchReservation>{};
-        });
-        const auto rp = v.engine->remote_policy();
-        rp->strategy = strategy;
-        rp->conflict_policy = sync::model::RemotePolicy::ConflictPolicy::KeepLocal;
+        auto v = test_support::versioned::makeCloudVault(superUser, "ol", Versioning::Enabled, true, strategy);
+        v.engine->remote_policy()->conflict_policy = sync::model::RemotePolicy::ConflictPolicy::KeepLocal;
         db::Transactions::exec("OpaqueLayoutTest::bucketVersioning", [&](pqxx::work& txn) {
             txn.exec(R"SQL(
                 INSERT INTO upstream_bucket (provider, account_ref, bucket, vault_id, versioning_status, versioning_settles_at)
                 VALUES ('aws-s3', 'ol-test', $1, $2, 'enabled', now() - interval '1 minute')
                 ON CONFLICT (provider, account_ref, bucket) DO UPDATE SET versioning_status = 'enabled'
-            )SQL", pqxx::params{v.bucketName, created->id});
+            )SQL", pqxx::params{v.bucketName, v.id()});
         });
         if (localVersioning) {
             db::query::recovery::PolicyRow row;
-            row.vault_id = created->id;
+            row.vault_id = v.id();
             row.local_versioning = {.enabled = true, .keep_last = std::nullopt, .max_age_days = std::nullopt,
                                     .quota_bytes = std::nullopt};
             db::query::recovery::Policy::upsert(row);
-            recovery::local::invalidatePolicy(created->id);
+            recovery::local::invalidatePolicy(v.id());
         }
         EXPECT_TRUE(v.engine->opaqueLayout());
         EXPECT_TRUE(v.bucket->opaqueLayout()) << "the controller enforces the request rules";
@@ -426,41 +316,9 @@ protected:
 
     // One regular pass inline, as sync::Cloud runs it: the trash purge, the bins, the plan, the transfers, then the
     // index and the manifest. Returns the pass (its plan and tally).
-    struct Pass {
-        std::vector<sync::model::Action> plan;
-        sync::Cloud::OpaqueTally tally;
-    };
+    using Pass = test_support::versioned::SyncPass;
     static Pass pass(const Vault& v) {
-        auto cloud = std::make_shared<sync::Cloud>(v.engine);
-        cloud->event = std::make_shared<sync::model::Event>();
-        cloud->event->vault_id = v.id();
-        cloud->event->timestamp_begin = std::time(nullptr);
-        db::query::sync::Event::create(cloud->event);
-        cloud->removeTrashedFiles();
-        cloud->processFutures();
-        cloud->initBins();
-        Pass out;
-        out.plan = cloud->planPass();
-        bool ok = true;
-        for (const auto& a : out.plan) {
-            using AT = sync::model::ActionType;
-            if (a.type == AT::Upload) {
-                sync::tasks::Upload task(v.engine, a.local, cloud->op(sync::model::Throughput::Metric::UPLOAD));
-                auto done = task.promise.get_future();
-                task();
-                ok = std::get<bool>(done.get()) && ok;
-            } else if (a.type == AT::Download) {
-                sync::tasks::Download task(v.engine, a.remote, cloud->op(sync::model::Throughput::Metric::DOWNLOAD), false);
-                auto done = task.promise.get_future();
-                task();
-                ok = std::get<bool>(done.get()) && ok;
-            }
-        }
-        EXPECT_TRUE(ok) << "every transfer of the pass succeeded";
-        if (ok) v.engine->applyRemoteIndexMutation(out.plan);
-        out.tally = cloud->opaqueTally;
-        cloud->clearBins();
-        return out;
+        return test_support::versioned::runSyncPass(v.engine, {.purgeTrash = true, .requireOk = true, .expectOk = true});
     }
 
     static unsigned planned(const Pass& p, const sync::model::ActionType type) {
@@ -665,7 +523,7 @@ TEST_F(OpaqueLayoutTest, OpaqueRequestAudit) {
 }
 
 // Spec 01 §8 OpaqueObjectCount: one object per live file (0-byte, small, multipart), provider versions = content
-// versions, bounded metadata, no object per AEAD chunk, and renames add none.
+// versions, bounded metadata, no object per AEAD chunk (renames add none: OpaqueRequestCountsMatchSpec01Section5).
 TEST_F(OpaqueLayoutTest, OpaqueObjectCount) {
     const auto v = opaqueVault();
     write(v, "/zero.bin", "");
@@ -676,7 +534,7 @@ TEST_F(OpaqueLayoutTest, OpaqueObjectCount) {
     write(v, "/small.bin", randomBytes(300 * 1024, 3));   // a second content version
     (void)pass(v);
 
-    auto objects = contentKeys(v);
+    const auto objects = contentKeys(v);
     EXPECT_EQ(objects.size(), 3u) << "live files";
     uint64_t versions = 0;
     for (const auto& k : objects) versions += v.bucket->history(k).size();
@@ -702,56 +560,32 @@ TEST_F(OpaqueLayoutTest, OpaqueObjectCount) {
     EXPECT_LE(segments, 2u) << "a segment per publish that changed it";
     EXPECT_TRUE(v.bucket->current(".vaulthalla/root"));
     EXPECT_TRUE(v.bucket->current(".vaulthalla/layout.json"));
-
-    const auto before = v.bucket->keys().size();
-    rename(v, "/large.bin", "/renamed-large.bin");
-    (void)pass(v);
-    EXPECT_EQ(contentKeys(v), objects) << "a rename adds no object";
-    EXPECT_EQ(v.bucket->history(keys::contentKey(*large->object_uid)).size(), 1u) << "and no version";
-    EXPECT_EQ(v.bucket->keys().size(), before + 1) << "one new segment for the changed entry";
 }
 
-// Spec 01 §8 OpaqueRenameCostsNothing: a file rename and a 1,000-file folder rename issue 0 object requests.
+// Spec 01 §8 OpaqueRenameCostsNothing: a 1,000-file folder rename issues 0 object requests (a one-file rename:
+// OpaqueRequestCountsMatchSpec01Section5).
 TEST_F(OpaqueLayoutTest, OpaqueRenameCostsNothing) {
     const auto v = opaqueVault();
-    write(v, "/plan.txt", "the plan");
     mkdir(v, "/many");
     for (int i = 0; i < 1000; ++i) write(v, "/many/f" + std::to_string(i) + ".txt", "file " + std::to_string(i));
     const auto first = pass(v);
-    EXPECT_EQ(planned(first, sync::model::ActionType::Upload), 1001u);
+    EXPECT_EQ(planned(first, sync::model::ActionType::Upload), 1000u);
     (void)pass(v);   // settles (nothing to do)
 
     v.bucket->clearRequests();
-    rename(v, "/plan.txt", "/plan-renamed.txt");
-    auto p = pass(v);
-    EXPECT_TRUE(p.plan.empty());
-    auto t = tally(v);
-    EXPECT_EQ(t.object, 0u) << "a file rename sends no object request";
-    EXPECT_EQ(t.rootPut, 1u) << "one publish";
-    EXPECT_LE(t.segmentPut, 1u);
-    EXPECT_EQ(t.list, 0u);
-
-    v.bucket->clearRequests();
     rename(v, "/many", "/many-renamed");
-    p = pass(v);
+    const auto p = pass(v);
     EXPECT_TRUE(p.plan.empty());
-    t = tally(v);
+    const auto t = tally(v);
     EXPECT_EQ(t.object, 0u) << "a 1,000-file folder rename sends no object request";
     EXPECT_EQ(t.rootPut, 1u);
     EXPECT_LE(t.segmentPut, 1u) << "the folder's entry changes one segment";
     EXPECT_EQ(t.list, 0u);
     EXPECT_EQ(readLocal(v, "/many-renamed/f999.txt"), "file 999");
-
-    // The next pass finds nothing to do: one HEAD of the root, nothing else.
-    v.bucket->clearRequests();
-    p = pass(v);
-    EXPECT_TRUE(p.plan.empty());
-    t = tally(v);
-    EXPECT_EQ(v.bucket->requests().size(), 1u);
-    EXPECT_EQ(t.rootHead, 1u);
 }
 
-// Spec 01 §5: the requests of each operation on opaque_v1.
+// Spec 01 §5: the requests of each operation on opaque_v1 (a one-file rename: no object request, so no object or
+// version added; a pass with nothing to do: one HEAD of the root).
 TEST_F(OpaqueLayoutTest, OpaqueRequestCountsMatchSpec01Section5) {
     const auto v = opaqueVault();
     write(v, "/seed.txt", "seed");
@@ -952,40 +786,6 @@ TEST_F(OpaqueLayoutTest, RotationRereadBindsTheObjectUid) {
     EXPECT_EQ(row(v, "/a.txt")->encrypted_with_key_version, aRow->encrypted_with_key_version) << "nothing committed";
     (void)a;
     (void)b;
-}
-
-// Since the restore drill passed (#371), every new encrypting vault is opaque_v1, outside test mode too; a vault
-// that doesn't encrypt can't be opaque_v1, and an existing one keeps its layout when encryption is turned on.
-TEST_F(OpaqueLayoutTest, NewEncryptingVaultsAreOpaqueV1) {
-    auto apiKey = std::make_shared<vault::model::APIKey>(superUser->id, "ol_gate_" + tag(), vault::model::S3Provider::AWS,
-                                                         "AKIATESTACCESSKEY000", "secret-value-0000000000000000000000000",
-                                                         "us-east-1", "https://s3.example.com");
-    const auto keyId = runtime::Deps::get().apiKeyManager->addAPIKey(apiKey);
-    const auto make = [&](const bool encrypt) {
-        auto s3 = std::make_shared<vault::model::S3Vault>("ol_gate_" + tag(), keyId, "ol-gate-" + tag());
-        s3->owner_id = superUser->id;
-        s3->mount_point = "ol_gate_" + tag();
-        s3->encrypt_upstream = encrypt;
-        return s3;
-    };
-    vault::model::setNewEncryptingLayoutForTesting(std::nullopt);
-    paths::testMode = false;
-    auto created = make(true);
-    EXPECT_NO_THROW((void)db::query::vault::Vault::upsertVault(created, std::make_shared<sync::model::RemotePolicy>()));
-    EXPECT_EQ(created->storage_layout, vault::model::StorageLayout::OpaqueV1);
-    auto plain = make(false);
-    EXPECT_NO_THROW(plain->id = db::query::vault::Vault::upsertVault(plain, std::make_shared<sync::model::RemotePolicy>()));
-    EXPECT_EQ(plain->storage_layout, vault::model::StorageLayout::Transparent);
-    auto refused = make(false);
-    refused->storage_layout = vault::model::StorageLayout::OpaqueV1;
-    EXPECT_THROW((void)db::query::vault::Vault::upsertVault(refused, std::make_shared<sync::model::RemotePolicy>()),
-                 std::invalid_argument);
-    paths::testMode = true;
-    vault::model::setNewEncryptingLayoutForTesting(vault::model::StorageLayout::PathV0);  // this binary's default
-    // An existing transparent vault that starts encrypting moves to path_v0 (into opaque_v1 only by WS1-c).
-    plain->encrypt_upstream = true;
-    EXPECT_NO_THROW((void)db::query::vault::Vault::upsertVault(plain));
-    EXPECT_EQ(plain->storage_layout, vault::model::StorageLayout::PathV0);
 }
 
 }

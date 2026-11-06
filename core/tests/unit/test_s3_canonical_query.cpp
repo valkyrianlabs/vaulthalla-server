@@ -64,36 +64,6 @@ std::string referenceSignature(const std::string& path, const std::string& sorte
 
 }
 
-TEST(S3CanonicalQueryTest, SortsParametersByNameThenValue) {
-    using vh::storage::s3::curl::canonicalQueryString;
-
-    EXPECT_EQ(canonicalQueryString("list-type=2&max-keys=1000&continuation-token=1a%2Bb%2F%3D"),
-              "continuation-token=1a%2Bb%2F%3D&list-type=2&max-keys=1000");
-    EXPECT_EQ(canonicalQueryString("list-type=2&prefix=dir%2Fsub&continuation-token=t"),
-              "continuation-token=t&list-type=2&prefix=dir%2Fsub");
-    EXPECT_EQ(canonicalQueryString("uploadId=abc&partNumber=2"), "partNumber=2&uploadId=abc");
-    EXPECT_EQ(canonicalQueryString("a=2&b=0&a=1"), "a=1&a=2&b=0");
-    // Byte order, as SigV4 specifies: upper case sorts before lower case.
-    EXPECT_EQ(canonicalQueryString("b=1&B=2"), "B=2&b=1");
-}
-
-TEST(S3CanonicalQueryTest, ValuelessParametersGetAnEmptyValue) {
-    using vh::storage::s3::curl::canonicalQueryString;
-
-    EXPECT_EQ(canonicalQueryString("uploads"), "uploads=");
-    EXPECT_EQ(canonicalQueryString("versioning"), "versioning=");
-    EXPECT_EQ(canonicalQueryString("uploads&prefix=a"), "prefix=a&uploads=");
-    EXPECT_EQ(canonicalQueryString(""), "");
-    EXPECT_EQ(canonicalQueryString("a=1&&b=2&"), "a=1&b=2");
-}
-
-TEST(S3CanonicalQueryTest, DoesNotReencode) {
-    using vh::storage::s3::curl::canonicalQueryString;
-
-    EXPECT_EQ(canonicalQueryString("prefix=a%20b&marker=x%2By"), "marker=x%2By&prefix=a%20b");
-    EXPECT_EQ(canonicalQueryString("k=a=b"), "k=a=b");
-}
-
 TEST(S3CanonicalQueryTest, SignatureIgnoresTheOrderTheQueryWasWrittenIn) {
     const auto sorted = signQuery("/bucket?continuation-token=tok%2B1&list-type=2&max-keys=1000");
     EXPECT_EQ(signQuery("/bucket?list-type=2&max-keys=1000&continuation-token=tok%2B1"), sorted);

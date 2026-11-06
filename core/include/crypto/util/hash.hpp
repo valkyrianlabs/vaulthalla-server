@@ -11,6 +11,10 @@ std::string blake2b(const std::filesystem::path& filepath);
 // Hashes a password with Argon2id using libsodium
 std::string password(const std::string& password);
 
+// Unit tests only (refused outside test mode): new password hashes use libsodium's minimum Argon2id cost instead of
+// MODERATE (~0.5 s and 256 MiB each). The daemon, test instances included, never calls it.
+void setMinimalPasswordCostForTesting();
+
 // Verifies a password against a given Argon2id hash
 bool verifyPassword(const std::string& password, const std::string& hash);
 

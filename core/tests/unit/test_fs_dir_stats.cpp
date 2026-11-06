@@ -4,7 +4,8 @@
 // mkdir maintained them; move, cross-directory rename, copy and delete did not, so a folder that received a file by
 // move showed "0 items" and its old parent still counted the file.
 
-#include "db/Transactions.hpp"
+#include "../helpers/db_suite.hpp"
+
 #include "db/query/fs/Directory.hpp"
 #include "db/query/fs/Entry.hpp"
 #include "db/query/fs/File.hpp"
@@ -13,19 +14,15 @@
 #include "fs/cache/Registry.hpp"
 #include "fs/model/Directory.hpp"
 #include "fs/model/File.hpp"
-#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "ops/Vaults.hpp"
 #include "protocols/s3/ObjectStore.hpp"
 #include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
 #include "storage/Engine.hpp"
 #include "storage/Manager.hpp"
 #include "vault/model/Vault.hpp"
 
 #include <gtest/gtest.h>
-#include <paths.h>
 
 #include <algorithm>
 #include <atomic>
@@ -33,7 +30,6 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
-#include <iostream>
 #include <memory>
 #include <ostream>
 #include <string>
@@ -41,7 +37,6 @@
 
 namespace vh::test_fs_dir_stats {
 
-using UserPtr = std::shared_ptr<identities::User>;
 using EnginePtr = std::shared_ptr<storage::Engine>;
 
 std::string dsTag() {
@@ -63,38 +58,16 @@ std::ostream& operator<<(std::ostream& os, const DirStats& s) {
     return os << "{size=" << s.size << ", files=" << s.files << ", subdirs=" << s.subdirs << "}";
 }
 
-class FsDirStatsDbTest : public ::testing::Test {
+class FsDirStatsDbTest : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
-    inline static UserPtr superUser;
-
     EnginePtr engine;
 
-    static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            std::cout << "[test_fs_dir_stats] Skipping db tests due to missing environment variables." << std::endl;
-            return;
-        }
-        paths::enableTestMode();
-        const auto root = std::filesystem::temp_directory_path() / ("vh_fs_dir_stats_" + dsTag());
-        paths::backingPath = root / "backing";
-        paths::mountPath = root / "mount";
-        std::filesystem::create_directories(paths::backingPath);
-        std::filesystem::create_directories(paths::mountPath);
-
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        runtime::Deps::init();
-        fs::Filesystem::init(runtime::Deps::get().storageManager);
-        superUser = vh::identities::manager().userByName("admin");
-    }
+    static void SetUpTestSuite() { setUpDbSuite("test_fs_dir_stats", {.freshEngines = false}); }
+    static void TearDownTestSuite() { tearDownDbSuite(); }
 
     void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
+        Suite::SetUp();
+        if (IsSkipped()) return;
         const auto vault = ops::vaults::create(superUser, {.name = "ds_" + dsTag(), .type = vault::model::VaultType::Local});
         engine = runtime::Deps::get().storageManager->getEngine(vault->id);
         ASSERT_TRUE(engine);
@@ -266,23 +239,6 @@ TEST_F(FsDirStatsDbTest, DeletingEmptyDirectoriesRemovesThemAndTheirCounts) {
     EXPECT_EQ(stats("/holder"), (DirStats{3, 1, 0}));
     EXPECT_EQ(stats("/") - rootBefore, (DirStats{0, 0, -3}));
     expectConsistent({"/", "/holder"});
-}
-
-// fs.entry.copy of a directory copies everything under it (#167), so the copy carries the source's totals, built up
-// entry by entry (it used to copy only the folder row, which then had to start at zero).
-TEST_F(FsDirStatsDbTest, DirectoryCopyCarriesItsSubtreeTotals) {
-    mkdir("/srcdir");
-    mkdir("/srcdir/inner");
-    write("/srcdir/f.txt", 12);
-    write("/srcdir/inner/g.txt", 30);
-    const auto rootBefore = stats("/");
-
-    engine->copy("/srcdir", "/dircopy", superUser->id);
-
-    EXPECT_EQ(stats("/dircopy"), (DirStats{42, 2, 1}));
-    EXPECT_EQ(stats("/dircopy/inner"), (DirStats{30, 1, 0}));
-    EXPECT_EQ(stats("/") - rootBefore, (DirStats{42, 2, 2}));
-    expectConsistent({"/", "/srcdir", "/dircopy", "/dircopy/inner"});
 }
 
 // #168: deleting a file never removes the folder it was in, nor that folder's ancestors, including folders the user

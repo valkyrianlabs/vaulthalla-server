@@ -6,17 +6,13 @@
 // vault's files read again, a wrong key or one the host can still unseal is refused, partial version sets, deleted
 // vaults within retention. The device listener itself (real TLS) is covered in test_device_http.cpp.
 
+#include "../helpers/db_suite.hpp"
 #include "crypto/secrets/KeyProvider.hpp"
 #include "crypto/util/encrypt.hpp"
-#include "db/Transactions.hpp"
 #include "db/encoding/bytea.hpp"
 #include "db/query/fs/File.hpp"
 #include "db/query/vault/Key.hpp"
-#include "fs/Filesystem.hpp"
-#include "fs/cache/Registry.hpp"
 #include "fs/model/File.hpp"
-#include "identities/Manager.hpp"
-#include "identities/User.hpp"
 #include "ops/Error.hpp"
 #include "ops/Users.hpp"
 #include "ops/VaultKeys.hpp"
@@ -38,11 +34,7 @@
 #include "protocols/ws/Session.hpp"
 #include "protocols/ws/handler/vault/Keys.hpp"
 #include "rbac/permission/admin/Keys.hpp"
-#include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
 #include "storage/Engine.hpp"
-#include "storage/Manager.hpp"
 #include "UsageManager.hpp"
 #include "vault/EncryptionManager.hpp"
 #include "vault/KeyAttestation.hpp"
@@ -51,9 +43,7 @@
 #include "vault/model/Vault.hpp"
 #include "sync/rotation/Rotation.hpp"
 
-#include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
-#include <paths.h>
 #include <sodium.h>
 
 #include <array>
@@ -62,15 +52,9 @@
 #include <mutex>
 #include <span>
 #include <unordered_map>
-#include <atomic>
-#include <chrono>
-#include <cstdlib>
-#include <filesystem>
 #include <fstream>
 #include <iterator>
-#include <iostream>
 #include <numeric>
-#include <string>
 #include <vector>
 
 namespace vh::test_vault_keys {
@@ -92,12 +76,7 @@ std::vector<uint8_t> unb64(const std::string& text) {
     return out;
 }
 
-std::string tag() {
-    static std::atomic<unsigned> n{0};
-    static const auto run = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count() % 100000);
-    return run + "v" + std::to_string(n.fetch_add(1));
-}
-
+std::string tag() { return test::uniqueTag('v'); }
 
 // ---- an in-memory bucket for upstream key verification (the production streamObject over a fake wire) -------------
 
@@ -256,38 +235,12 @@ TEST(VaultKeyAttestation, MatchesTheDocumentedVector) {
 
 // ---- against the test database ------------------------------------------------------------------------------------
 
-class VaultKeysDbTest : public ::testing::Test {
+class VaultKeysDbTest : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
-    inline static UserPtr superUser;
     inline static std::shared_ptr<protocols::shell::Router> router;
-    inline static std::filesystem::path root;
 
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            std::cout << "[test_vault_keys] Skipping db tests due to missing environment variables." << std::endl;
-            return;
-        }
-        paths::enableTestMode();
-        root = std::filesystem::temp_directory_path() / ("vh_vault_keys_" + tag());
-        paths::backingPath = root / "backing";
-        paths::mountPath = root / "mount";
-        std::filesystem::create_directories(paths::backingPath);
-        std::filesystem::create_directories(paths::mountPath);
-
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        runtime::Deps::init();
-        fs::Filesystem::init(runtime::Deps::get().storageManager);
-        // Earlier suites in this binary used their own schema: their cached entries and engines would answer for ours.
-        runtime::Deps::get().fsCache = std::make_shared<fs::cache::Registry>();
-        runtime::Deps::get().storageManager->initStorageEngines();
-        superUser = identities::manager().userByName("admin");
-
+        if (!setUpDbSuite("test_vault_keys")) return;
         if (!runtime::Deps::get().shellUsageManager)
             runtime::Deps::get().shellUsageManager = std::make_shared<protocols::shell::UsageManager>();
         router = std::make_shared<protocols::shell::Router>();
@@ -297,12 +250,7 @@ protected:
     static void TearDownTestSuite() {
         if (skipTests) return;
         (void)runtime::Deps::releaseSessions();  // the console/device sessions this suite cached (#397)
-        std::error_code ec;
-        std::filesystem::remove_all(root, ec);
-    }
-
-    void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
+        tearDownDbSuite();
     }
 
     static EnginePtr newVault(const std::string& prefix = "vk") {
@@ -747,7 +695,6 @@ TEST_F(VaultKeysDbTest, EverySeededRoleGetsTheSameVerdictOnBothSurfaces) {
     }
 }
 
-
 // ---- import (S6; revision 3: recovery restores only attested versions, salvage re-keys the rest) ------------------
 
 TEST_F(VaultKeysDbTest, ProvenanceIsRecordedOnCreateAndRotateAndBackfilledWhenAVersionUnseals) {
@@ -976,7 +923,6 @@ TEST_F(VaultKeysDbTest, ImportIntoADeletedVaultWithinRetentionThenRestoreIt) {
     ASSERT_TRUE(hasEngine(id));
     EXPECT_EQ(readFile(id, "/kept.txt"), "kept through deletion");
 }
-
 
 // ---- revision 2 (still true): no key is minted over sealed content ------------------------------------------------
 
@@ -1208,7 +1154,6 @@ TEST_F(VaultKeysDbTest, ANewSigningKeyAfterATpmResetKeepsOldAttestationsValid) {
     EXPECT_EQ(outcome(r, keys.at("key_info").at("key_version").get<unsigned int>()), "restored") << r.dump();
     EXPECT_EQ(readFile(id, "/a.txt"), "alpha");
 }
-
 
 // ---- salvage -------------------------------------------------------------------------------------------------------
 

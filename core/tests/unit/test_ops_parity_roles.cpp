@@ -5,7 +5,9 @@
 // ignored, unknown keys vanished, and CLI vault-role overrides were never persisted. Every check below compares
 // stored permission state, never output text.
 
+#include "../helpers/db_suite.hpp"
 #include "../helpers/identities.hpp"
+#include "../helpers/parity.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/identities/User.hpp"
 #include "db/query/rbac/Permission.hpp"
@@ -28,20 +30,12 @@
 #include "rbac/resolver/permission/EnumPack.hpp"
 #include "rbac/role/Admin.hpp"
 #include "rbac/role/Vault.hpp"
-#include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
 #include "seed/include/seed_db.hpp"
-#include "UsageManager.hpp"
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
-#include <paths.h>
 #include <pqxx/pqxx>
 
-#include <atomic>
-#include <chrono>
-#include <cstdlib>
-#include <iostream>
 #include <memory>
 #include <set>
 #include <string>
@@ -51,12 +45,7 @@ namespace vh::test_ops_parity_roles {
 using json = nlohmann::json;
 using UserPtr = std::shared_ptr<identities::User>;
 using AdminResolver = rbac::resolver::PermissionResolverEnumPack<std::shared_ptr<rbac::role::Admin>>::type;
-
-std::string rolesTag() {
-    static std::atomic<unsigned> n{0};
-    static const auto run = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count() % 100000);
-    return run + "x" + std::to_string(n.fetch_add(1));
-}
+using vh::test::parity::tag;
 
 std::string adminBits(const std::string& name) {
     const auto r = db::query::rbac::role::Admin::get(name);
@@ -82,59 +71,33 @@ std::set<std::string> grantedAdmin(const std::string& name) {
     return out;
 }
 
-class RoleParityTest : public ::testing::Test {
+class RoleParityTest : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
     inline static std::shared_ptr<protocols::shell::Router> router;
-    inline static UserPtr superUser, orgAdmin;
+    inline static UserPtr orgAdmin;
 
     static UserPtr createUser(const std::string& name, const std::string& roleName) {
         return test::identities::createUser(name, db::query::rbac::role::Admin::get(roleName), name + "@vaulthalla.test");
     }
 
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            std::cout << "[test_ops_parity_roles] Skipping db tests due to missing environment variables." << std::endl;
-            return;
-        }
-        paths::enableTestMode();
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::seed::init_tables_if_not_exists();
-        db::Transactions::dbPool_->initPreparedStatements();
+        if (!setUpDbSuite("test_ops_parity_roles", {.seed = false, .runtime = false})) return;
         seed::initPermissions();
         seed::initRoles();
 
-        if (!runtime::Deps::get().shellUsageManager)
-            runtime::Deps::get().shellUsageManager = std::make_shared<protocols::shell::UsageManager>();
-        router = std::make_shared<protocols::shell::Router>();
+        router = test::parity::shellRouter();
         protocols::shell::commands::rbac::registerCommands(router);
         protocols::shell::commands::vault::registerCommands(router);
 
-        superUser = createUser("rp_super_" + rolesTag(), "super_admin");
-        orgAdmin = createUser("rp_admin_" + rolesTag(), "admin");
+        superUser = createUser("rp_super_" + tag(), "super_admin");
+        orgAdmin = createUser("rp_admin_" + tag(), "admin");
     }
-
-    void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
-    }
+    static void TearDownTestSuite() { tearDownDbSuite(); }
 
     static std::pair<int, std::string> cli(const std::string& line, const UserPtr& user) {
-        try {
-            const auto res = router->executeLine(line, user, nullptr);
-            return {res.exit_code, res.stdout_text + res.stderr_text};
-        } catch (const std::exception& e) {
-            return {1, e.what()};
-        }
+        return test::parity::cli(*router, line, user);
     }
-
-    static std::shared_ptr<protocols::ws::Session> ws(const UserPtr& user) {
-        auto s = std::make_shared<protocols::ws::Session>(std::make_shared<protocols::ws::Router>());
-        s->user = user;
-        return s;
-    }
+    static std::shared_ptr<protocols::ws::Session> ws(const UserPtr& user) { return test::parity::ws(user); }
 
     // A complete web snapshot granting exactly `granted`.
     static json adminSnapshot(const std::set<std::string>& granted) {
@@ -158,7 +121,7 @@ protected:
 
 TEST_F(RoleParityTest, CliFlagsAndWebSnapshotProduceTheSameAdminRole) {
     const std::set<std::string> want{"admin.identities.users.view", "admin.audits.view"};
-    const auto cliName = "rp_cli_" + rolesTag(), wsName = "rp_ws_" + rolesTag();
+    const auto cliName = "rp_cli_" + tag(), wsName = "rp_ws_" + tag();
 
     const auto [code, out] = cli("role admin create " + cliName + " --allow-users-view --allow-audit-view", superUser);
     ASSERT_EQ(code, 0) << out;
@@ -173,7 +136,7 @@ TEST_F(RoleParityTest, CliFlagsAndWebSnapshotProduceTheSameAdminRole) {
 // store the same bit, and the plain `admin` role (which holds it) may grant it under the escalation ceiling.
 TEST_F(RoleParityTest, StatsViewIsGrantedTheSameWayOnBothSurfaces) {
     const std::set<std::string> want{"admin.stats.view"};
-    const auto cliName = "rp_stats_cli_" + rolesTag(), wsName = "rp_stats_ws_" + rolesTag();
+    const auto cliName = "rp_stats_cli_" + tag(), wsName = "rp_stats_ws_" + tag();
 
     const auto [code, out] = cli("role admin create " + cliName + " --allow-stats-view", orgAdmin);
     ASSERT_EQ(code, 0) << out;
@@ -193,7 +156,7 @@ TEST_F(RoleParityTest, StatsViewIsGrantedTheSameWayOnBothSurfaces) {
 // view|configure|provision|protect, so it may grant protect but not unprotect (escalation ceiling); super_admin may.
 TEST_F(RoleParityTest, UpstreamPermissionsAreGrantedTheSameWayOnBothSurfaces) {
     const std::set<std::string> want{"admin.upstream.view", "admin.upstream.protect"};
-    const auto cliName = "rp_up_cli_" + rolesTag(), wsName = "rp_up_ws_" + rolesTag();
+    const auto cliName = "rp_up_cli_" + tag(), wsName = "rp_up_ws_" + tag();
 
     const auto [code, out] = cli("role admin create " + cliName + " --allow-upstream-view --allow-upstream-protect", orgAdmin);
     ASSERT_EQ(code, 0) << out;
@@ -218,7 +181,7 @@ TEST_F(RoleParityTest, UpstreamPermissionsAreGrantedTheSameWayOnBothSurfaces) {
 }
 
 TEST_F(RoleParityTest, CliCreateFromInheritsAndDenyRevokes) {
-    const auto name = "rp_from_" + rolesTag();
+    const auto name = "rp_from_" + tag();
     const auto [code, out] = cli("role admin create " + name + " --from auditor --deny-audit-view", superUser);
     ASSERT_EQ(code, 0) << out;
 
@@ -229,7 +192,7 @@ TEST_F(RoleParityTest, CliCreateFromInheritsAndDenyRevokes) {
 }
 
 TEST_F(RoleParityTest, CliUpdateAppliesFlagsAndWebUpdateAppliesSnapshot) {
-    const auto name = "rp_upd_" + rolesTag();
+    const auto name = "rp_upd_" + tag();
     ASSERT_EQ(cli("role admin create " + name + " --allow-users-view", superUser).first, 0);
 
     const auto [code, out] = cli("role admin update " + name + " --deny-users-view --allow-groups-view", superUser);
@@ -243,7 +206,7 @@ TEST_F(RoleParityTest, CliUpdateAppliesFlagsAndWebUpdateAppliesSnapshot) {
 }
 
 TEST_F(RoleParityTest, UnknownFlagsAndBadSnapshotsAreRefusedNotDropped) {
-    const auto name = "rp_bad_" + rolesTag();
+    const auto name = "rp_bad_" + tag();
     EXPECT_NE(cli("role admin create " + name + " --allow-not-a-permission", superUser).first, 0);
     EXPECT_EQ(db::query::rbac::role::Admin::get(name), nullptr);
 
@@ -266,7 +229,7 @@ TEST_F(RoleParityTest, NobodyGrantsAdminPermissionsTheyDoNotHold) {
         return std::shared_ptr<rbac::permission::Permission>{};
     }()));
 
-    const auto cliName = "rp_ceil_cli_" + rolesTag(), wsName = "rp_ceil_ws_" + rolesTag();
+    const auto cliName = "rp_ceil_cli_" + tag(), wsName = "rp_ceil_ws_" + tag();
     EXPECT_NE(cli("role admin create " + cliName + " --allow-users-delete", orgAdmin).first, 0);
     EXPECT_THROW((void)protocols::ws::handler::rbac::roles::Admin::add(
         json{{"name", wsName}, {"permissions", adminSnapshot({"admin.identities.users.delete"})}}, ws(orgAdmin)), std::exception);
@@ -280,7 +243,7 @@ TEST_F(RoleParityTest, NobodyGrantsAdminPermissionsTheyDoNotHold) {
 }
 
 TEST_F(RoleParityTest, VaultRoleFlagsIncludingShareApply) {
-    const auto cliName = "rp_vr_cli_" + rolesTag(), wsName = "rp_vr_ws_" + rolesTag();
+    const auto cliName = "rp_vr_cli_" + tag(), wsName = "rp_vr_ws_" + tag();
     const auto [code, out] = cli("role vault create " + cliName + " --allow-files-upload --allow-files-share-public", superUser);
     ASSERT_EQ(code, 0) << out;
     const auto role = db::query::rbac::role::Vault::get(cliName);
@@ -296,9 +259,9 @@ TEST_F(RoleParityTest, VaultRoleFlagsIncludingShareApply) {
 }
 
 TEST_F(RoleParityTest, AssignmentsAndOverridesPersistAndUnassigningNothingFails) {
-    const auto member = createUser("rp_member_" + rolesTag(), "unprivileged");
-    const auto vaultId = createVault("rp_vault_" + rolesTag(), superUser->id);
-    const auto roleName = "rp_assign_" + rolesTag();
+    const auto member = createUser("rp_member_" + tag(), "unprivileged");
+    const auto vaultId = createVault("rp_vault_" + tag(), superUser->id);
+    const auto roleName = "rp_assign_" + tag();
     ASSERT_EQ(cli("role vault create " + roleName + " --allow-files-download", superUser).first, 0);
 
     // Removing a role nobody holds used to report success (and `vault role remove` was not even reachable).
@@ -395,10 +358,10 @@ TEST_F(RoleParityTest, SeededPermissionsMatchWhatRolesExport) {
 // a role users held was deleted anyway and ON DELETE CASCADE silently stripped their admin role, while an unassigned
 // role could be refused because a vault role with the same id had assignments. Found by the Tier A proofs.
 TEST_F(RoleParityTest, AnAdminRoleThatUsersHoldCannotBeDeleted) {
-    const auto roleName = "rp_held_" + rolesTag();
+    const auto roleName = "rp_held_" + tag();
     const auto role = ops::roles::createAdminRole(superUser, {.name = roleName, .from = std::string("unprivileged")},
                                                   "test");
-    const auto holder = createUser("rp_holder_" + rolesTag(), roleName);
+    const auto holder = createUser("rp_holder_" + tag(), roleName);
 
     EXPECT_THROW((void)ops::roles::removeAdminRole(superUser, role->id, "test"), ops::Conflict);
     ASSERT_TRUE(db::query::rbac::role::Admin::get(roleName));
@@ -408,7 +371,7 @@ TEST_F(RoleParityTest, AnAdminRoleThatUsersHoldCannotBeDeleted) {
     ASSERT_TRUE(reloaded->state()->roles.admin);
     EXPECT_EQ(reloaded->state()->roles.admin->id, role->id);
 
-    const auto unheld = ops::roles::createAdminRole(superUser, {.name = "rp_unheld_" + rolesTag()}, "test");
+    const auto unheld = ops::roles::createAdminRole(superUser, {.name = "rp_unheld_" + tag()}, "test");
     EXPECT_NO_THROW((void)ops::roles::removeAdminRole(superUser, unheld->id, "test"));
 }
 

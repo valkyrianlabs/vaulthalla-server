@@ -1,3 +1,5 @@
+#include "../helpers/bytes.hpp"
+#include "../helpers/temp_dir.hpp"
 #include "crypto/IntegrityRegistry.hpp"
 #include "crypto/util/Gcm.hpp"
 #include "crypto/util/encrypt.hpp"
@@ -10,15 +12,8 @@
 #include "vault/model/Vault.hpp"
 
 #include <gtest/gtest.h>
-#include <sodium.h>
 
-#include <atomic>
-#include <chrono>
-#include <filesystem>
-#include <fstream>
-#include <random>
 #include <thread>
-#include <vector>
 
 namespace vh::crypto::test_gcm_range {
 
@@ -26,22 +21,13 @@ using namespace std::chrono_literals;
 
 namespace {
 
-std::vector<uint8_t> randomBytes(const std::size_t n, const uint32_t seed) {
-    std::vector<uint8_t> out(n);
-    std::mt19937 rng(seed);
-    for (auto& b : out) b = static_cast<uint8_t>(rng());
-    return out;
-}
+using vh::test::bin::randomBytes;
+using vh::test::bin::spit;
 
 std::vector<uint8_t> randomKey() {
     std::vector<uint8_t> key(util::AES_KEY_SIZE);
     randombytes_buf(key.data(), key.size());
     return key;
-}
-
-void writeBytes(const std::filesystem::path& path, const std::vector<uint8_t>& bytes) {
-    std::ofstream out(path, std::ios::binary | std::ios::trunc);
-    out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
 }
 
 struct Sealed {
@@ -58,23 +44,7 @@ Sealed seal(const std::size_t size, const uint32_t seed) {
 
 }
 
-class TempDir {
-public:
-    TempDir() {
-        path_ = std::filesystem::temp_directory_path() / ("vh_gcm_range_" + std::to_string(::getpid()) + "_" +
-                                                          std::to_string(counter_++));
-        std::filesystem::create_directories(path_);
-    }
-    ~TempDir() {
-        std::error_code ec;
-        std::filesystem::remove_all(path_, ec);
-    }
-    [[nodiscard]] const std::filesystem::path& path() const { return path_; }
-
-private:
-    std::filesystem::path path_;
-    static inline std::atomic<int> counter_{0};
-};
+using vh::test::TempDir;
 
 namespace {
 
@@ -175,13 +145,13 @@ TEST(GcmStreamVerifier, AuthenticatesWithAndWithoutAad) {
 class GcmFileReaderTest : public ::testing::Test {
 protected:
     void SetUp() override { IntegrityRegistry::instance().clearForTesting(); }
-    TempDir dir;
+    TempDir dir{"vh_gcm_range"};
 };
 
 TEST_F(GcmFileReaderTest, ServesArbitraryRangesOfASealedFile) {
     const auto s = seal(3 * 1024 * 1024 + 11, 5);
     const auto path = dir.path() / "f.bin";
-    writeBytes(path, s.ciphertext);
+    spit(path, s.ciphertext);
     storage::GcmFileReader reader(paramsFor(path, s, false, "test:ranges"));
     EXPECT_EQ(reader.size(), s.plaintext.size());
 
@@ -205,7 +175,7 @@ TEST_F(GcmFileReaderTest, OptimisticReaderAbortsOnceBackgroundVerificationFails)
     auto tampered = s.ciphertext;
     tampered[tampered.size() - 1] ^= 0xff;  // corrupt the tag
     const auto path = dir.path() / "bad.bin";
-    writeBytes(path, tampered);
+    spit(path, tampered);
 
     storage::GcmFileReader reader(paramsFor(path, s, false, "test:optimistic-bad"));
     std::vector<uint8_t> out(4096);
@@ -231,28 +201,28 @@ TEST_F(GcmFileReaderTest, CorruptedCiphertextBodyIsDetected) {
     auto tampered = s.ciphertext;
     tampered[150'000] ^= 0x40;
     const auto path = dir.path() / "body.bin";
-    writeBytes(path, tampered);
+    spit(path, tampered);
     EXPECT_THROW(storage::GcmFileReader(paramsFor(path, s, true, "test:body")), storage::IntegrityError);
 }
 
 TEST_F(GcmFileReaderTest, StrictReaderVerifiesBeforeReleasingAnyByte) {
     const auto s = seal(1'000'000, 8);
     const auto good = dir.path() / "good.bin";
-    writeBytes(good, s.ciphertext);
+    spit(good, s.ciphertext);
     storage::GcmFileReader reader(paramsFor(good, s, true, "test:strict-good"));
     EXPECT_EQ(reader.integrityState(), IntegrityState::Verified);
 
     auto tampered = s.ciphertext;
     tampered[0] ^= 1;
     const auto bad = dir.path() / "strict-bad.bin";
-    writeBytes(bad, tampered);
+    spit(bad, tampered);
     EXPECT_THROW(storage::GcmFileReader(paramsFor(bad, s, true, "test:strict-bad")), storage::IntegrityError);
 }
 
 TEST_F(GcmFileReaderTest, SizeMismatchIsRefused) {
     const auto s = seal(1000, 9);
     const auto path = dir.path() / "short.bin";
-    writeBytes(path, std::vector<uint8_t>(s.ciphertext.begin(), s.ciphertext.end() - 3));
+    spit(path, std::vector<uint8_t>(s.ciphertext.begin(), s.ciphertext.end() - 3));
     EXPECT_THROW(storage::GcmFileReader(paramsFor(path, s, false, "test:short")), storage::IntegrityError);
 }
 
@@ -261,7 +231,7 @@ TEST_F(GcmFileReaderTest, ReplacementDuringVerificationIsSupersededNotCorruption
     auto tampered = s.ciphertext;
     tampered[42] ^= 1;
     const auto path = dir.path() / "replaced.bin";
-    writeBytes(path, tampered);
+    spit(path, tampered);
     auto p = paramsFor(path, s, true, "test:superseded");
     p.stillCurrent = [] { return false; };  // the file got a new IV meanwhile
     try {
@@ -276,7 +246,7 @@ TEST_F(GcmFileReaderTest, ReplacementDuringVerificationIsSupersededNotCorruption
 TEST_F(GcmFileReaderTest, ReadAllAuthenticatedIsOnePassAndRecordsTheVerdict) {
     const auto s = seal(70'000, 12);
     const auto path = dir.path() / "all.bin";
-    writeBytes(path, s.ciphertext);
+    spit(path, s.ciphertext);
     storage::GcmFileReader reader(paramsFor(path, s, false, "test:all"));
     EXPECT_EQ(storage::readAll(reader, 1 << 20), s.plaintext);
     EXPECT_THROW((void)storage::readAll(reader, 10), std::length_error);
@@ -286,7 +256,7 @@ TEST_F(GcmFileReaderTest, ReadAllAuthenticatedIsOnePassAndRecordsTheVerdict) {
 TEST_F(GcmFileReaderTest, ConcurrentReadersShareOneVerification) {
     const auto s = seal(4 * 1024 * 1024, 13);
     const auto path = dir.path() / "concurrent.bin";
-    writeBytes(path, s.ciphertext);
+    spit(path, s.ciphertext);
 
     std::atomic<int> mismatches{0};
     std::vector<std::thread> threads;
@@ -310,7 +280,7 @@ TEST_F(GcmFileReaderTest, ConcurrentReadersShareOneVerification) {
 }
 
 TEST(EngineReader, OpensEncryptedVaultFilesThroughTheEncryptionManager) {
-    TempDir dir;
+    TempDir dir{"vh_gcm_range"};
     IntegrityRegistry::instance().clearForTesting();
     const auto key = randomKey();
     auto engine = std::make_shared<storage::Engine>();
@@ -325,7 +295,7 @@ TEST(EngineReader, OpensEncryptedVaultFilesThroughTheEncryptionManager) {
     file->path = "/clip.bin";
     file->backing_path = dir.path() / "ALIAS";
     file->size_bytes = plaintext.size();
-    writeBytes(file->backing_path, engine->encryptionManager->encrypt(plaintext, file));
+    spit(file->backing_path, engine->encryptionManager->encrypt(plaintext, file));
     EXPECT_EQ(file->encrypted_with_key_version, 3u);
 
     const auto reader = engine->openPlaintextReader(file, {.integrity = storage::IntegrityPolicy::Strict});

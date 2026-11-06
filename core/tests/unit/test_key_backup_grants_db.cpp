@@ -12,30 +12,17 @@
 //   - D4: during a recovery cooldown only the device's approval key registered before the recovery re-creates the
 //     revoked grant, and only for the vaults it named;
 //   - the audit events of every grant change and use.
-#include "../helpers/identities.hpp"
+#include "../helpers/db_suite.hpp"
+#include "../helpers/web_session.hpp"
 #include "audit/Trail.hpp"
 #include "auth/approval/Approvals.hpp"
-#include "auth/mfa/Factors.hpp"
-#include "auth/mfa/Policy.hpp"
-#include "auth/session/Issuer.hpp"
-#include "auth/session/Manager.hpp"
-#include "auth/stepup/StepUp.hpp"
-#include "config/Registry.hpp"
-#include "crypto/util/hash.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/device/ApprovalKey.hpp"
 #include "db/query/device/BackupGrant.hpp"
-#include "db/query/device/Device.hpp"
-#include "db/query/rbac/role/Admin.hpp"
 #include "db/query/vault/Vault.hpp"
-#include "device/Crypto.hpp"
 #include "device/Pairing.hpp"
-#include "device/Peer.hpp"
 #include "device/ServerIdentity.hpp"
 #include "fs/Filesystem.hpp"
-#include "fs/cache/Registry.hpp"
-#include "identities/Manager.hpp"
-#include "identities/User.hpp"
 #include "ops/BackupGrants.hpp"
 #include "ops/Devices.hpp"
 #include "ops/Error.hpp"
@@ -43,16 +30,9 @@
 #include "ops/VaultKeys.hpp"
 #include "ops/Vaults.hpp"
 #include "protocols/device/Endpoints.hpp"
-#include "protocols/ws/Router.hpp"
-#include "protocols/ws/Session.hpp"
-#include "protocols/ws/core/Refusal.hpp"
-#include "protocols/ws/handler/Approvals.hpp"
 #include "protocols/ws/handler/Devices.hpp"
 #include "protocols/ws/handler/vault/Keys.hpp"
-#include "runtime/Deps.hpp"
 #include "seed/include/SqlDeployer.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
 #include "storage/Engine.hpp"
 #include "storage/Manager.hpp"
 #include "vault/EncryptionManager.hpp"
@@ -60,18 +40,12 @@
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
-#include <openssl/evp.h>
-#include <openssl/x509.h>
 #include <paths.h>
 #include <pqxx/pqxx>
-#include <unistd.h>
 
-#include <atomic>
 #include <chrono>
-#include <cstdlib>
 #include <filesystem>
 #include <functional>
-#include <iostream>
 #include <map>
 #include <memory>
 #include <set>
@@ -80,9 +54,7 @@
 
 namespace vh::test_key_backup_grants_db {
 
-using json = nlohmann::json;
-using SessionPtr = std::shared_ptr<protocols::ws::Session>;
-using UserPtr = std::shared_ptr<identities::User>;
+using namespace vh::test::web;
 using Grant = db::query::device::BackupGrant;
 using Grants = db::query::device::BackupGrants;
 namespace bg = ops::backup_grants;
@@ -90,117 +62,27 @@ namespace crypto = vh::device::crypto;
 namespace h = protocols::ws::handler;
 using auth::stepup::Scope;
 
-struct Answer {
-    bool ok{false};
-    json data{};
-    std::string code{};
-    std::string message{};
-};
-
-Answer call(const std::function<json()>& fn) {
-    try {
-        return {.ok = true, .data = fn()};
-    } catch (...) {
-        auto reply = protocols::ws::core::describeCurrentError();
-        const auto code = reply.data.is_object() ? reply.data.value("code", std::string{}) : std::string{};
-        return {.ok = false, .data = reply.data, .code = code, .message = reply.message};
-    }
-}
-
-// A command as the router runs it: under the request's step-up scope.
-Answer run(const SessionPtr& s, const std::function<json()>& fn) {
-    const Scope scope(s);
-    return call(fn);
-}
-
-// A P-256 key standing in for Desktop's Secure Enclave approval key.
-class ApprovalKey {
-public:
-    ApprovalKey() : key_(EVP_PKEY_Q_keygen(nullptr, nullptr, "EC", "P-256")) {
-        if (!key_) throw std::runtime_error("keygen");
-    }
-    ~ApprovalKey() { EVP_PKEY_free(key_); }
-    ApprovalKey(const ApprovalKey&) = delete;
-    ApprovalKey& operator=(const ApprovalKey&) = delete;
-
-    [[nodiscard]] std::vector<uint8_t> spki() const {
-        unsigned char* der = nullptr;
-        const int len = i2d_PUBKEY(key_, &der);
-        std::vector<uint8_t> out(der, der + len);
-        OPENSSL_free(der);
-        return out;
-    }
-    [[nodiscard]] std::string spkiHex() const { return crypto::toHex(crypto::sha256(spki())); }
-
-    [[nodiscard]] std::vector<uint8_t> sign(const std::vector<uint8_t>& message) const {
-        EVP_MD_CTX* ctx = EVP_MD_CTX_new();
-        std::size_t len = 0;
-        EVP_DigestSignInit(ctx, nullptr, EVP_sha256(), nullptr, key_);
-        EVP_DigestSign(ctx, nullptr, &len, message.data(), message.size());
-        std::vector<uint8_t> sig(len);
-        EVP_DigestSign(ctx, sig.data(), &len, message.data(), message.size());
-        EVP_MD_CTX_free(ctx);
-        sig.resize(len);
-        return sig;
-    }
-
-private:
-    EVP_PKEY* key_;
-};
-
-std::string uniqueTag() {
-    static std::atomic<unsigned> n{0};
-    return std::to_string(::getpid()) + "_" + std::to_string(n.fetch_add(1));
-}
-
-class KeyBackupGrantsDb : public ::testing::Test {
+class KeyBackupGrantsDb : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
-    inline static UserPtr superUser;
-    inline static std::filesystem::path root;
-    std::shared_ptr<auth::session::Manager> previousSessions;
+    AuthRuntime auth_{{.level = auth::mfa::policy::Level::Optional, .webauthn = false}};
     std::shared_ptr<const vh::device::ServerIdentity> previousIdentity;
     std::vector<Grant> notices;
 
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            std::cout << "[test_key_backup_grants] Skipping db tests due to missing environment variables." << std::endl;
-            return;
-        }
-        paths::enableTestMode();
-        root = std::filesystem::temp_directory_path() / ("vh_key_backup_grants_" + std::to_string(::getpid()));
-        paths::backingPath = root / "backing";
-        paths::mountPath = root / "mount";
-        std::filesystem::create_directories(paths::backingPath);
-        std::filesystem::create_directories(paths::mountPath);
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        runtime::Deps::init();
-        fs::Filesystem::init(runtime::Deps::get().storageManager);
-        runtime::Deps::get().fsCache = std::make_shared<fs::cache::Registry>();
-        runtime::Deps::get().storageManager->initStorageEngines();
+        if (!setUpDbSuite("key_backup_grants")) return;
         protocols::device::endpoints::clearNodeIdForTesting();
         audit::Trail::instance()->resetForTesting();
-        superUser = identities::manager().userByName("admin");
     }
 
     static void TearDownTestSuite() {
         if (skipTests) return;
         identities::Manager::setPublishedHook({});
-        std::error_code ec;
-        std::filesystem::remove_all(root, ec);
+        tearDownDbSuite();
     }
 
     void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
-        auth::session::Issuer::setJwtSecretForTesting("key-backup-grants-test-secret");
-        previousSessions = runtime::Deps::get().sessionManager;
-        runtime::Deps::get().sessionManager = std::make_shared<auth::session::Manager>();
-        auth::mfa::policy::setLevel(auth::mfa::policy::Level::Optional);
+        Suite::SetUp();
+        if (IsSkipped()) return;
         previousIdentity = vh::device::currentServerIdentity();
         vh::device::setCurrentServerIdentity(vh::device::ServerIdentity::generate());
         auth::approval::resetForTesting();
@@ -216,21 +98,10 @@ protected:
         bg::resetExportWindowsForTesting();
         auth::approval::resetForTesting();
         vh::device::setCurrentServerIdentity(previousIdentity);
-        auth::mfa::policy::setLevel(auth::mfa::policy::Level::Admins);
-        runtime::Deps::get().sessionManager = previousSessions;
-        auth::session::Issuer::clearJwtSecretForTesting();
-    }
-
-    static UserPtr newUser(const std::string& role) {
-        const auto r = db::query::rbac::role::Admin::get(role);
-        if (!r) throw std::runtime_error("Missing role " + role);
-        return identities::manager().user(
-            test::identities::createUser("kbg_" + role + "_" + uniqueTag(), r, std::nullopt,
-                                         vh::crypto::hash::password("Key-Backup-Grants-1-xyz"))->id);
     }
 
     static std::shared_ptr<storage::Engine> newVault() {
-        const auto v = ops::vaults::create(superUser, {.name = "kbg_" + uniqueTag(), .type = vault::model::VaultType::Local});
+        const auto v = ops::vaults::create(superUser, {.name = "kbg_" + tag(), .type = vault::model::VaultType::Local});
         return runtime::Deps::get().storageManager->getEngine(v->id);
     }
 
@@ -238,46 +109,6 @@ protected:
         ASSERT_TRUE(fs::Filesystem::createFile({.path = path, .fuse_path = engine->vaultPathToFusePath(path),
                                                 .buffer = std::vector<uint8_t>(text.begin(), text.end()),
                                                 .engine = engine, .user = superUser, .overwrite = true}));
-    }
-
-    struct Paired {
-        vh::device::Device row;
-        std::shared_ptr<vh::device::Peer> peer;
-        SessionPtr session;
-    };
-
-    static Paired pairedDevice(const UserPtr& user, const ApprovalKey* approvalKey = nullptr) {
-        auto peer = std::make_shared<vh::device::Peer>();
-        peer->spki = crypto::randomNonce();
-        peer->spkiHex = crypto::toHex(peer->spki);
-        peer->address = "192.0.2.30";
-        db::query::device::NewDevice d{.user_id = user->id, .approved_by = user->id, .name = "Mac " + uniqueTag(),
-                                       .platform = "macOS", .app_version = "1.0", .spki_sha256 = peer->spkiHex,
-                                       .last_ip = "192.0.2.30"};
-        if (approvalKey) {
-            d.approval_key_spki = approvalKey->spki();
-            d.approval_key_sha256 = approvalKey->spkiHex();
-        }
-        const auto row = db::query::device::Devices::insert(d);
-        peer->deviceRowId = row.id;
-        return {.row = row, .peer = peer, .session = protocols::ws::Session::devicePrincipal(peer, user, [] {})};
-    }
-
-    static SessionPtr reconnect(const Paired& d, const UserPtr& user) {
-        return protocols::ws::Session::devicePrincipal(d.peer, user, [] {});
-    }
-
-    // The device's approval key answers a challenge for family/target on its session.
-    static Answer approveWithKey(const SessionPtr& s, const ApprovalKey& key, const std::string& family,
-                                 const std::string& target) {
-        const auto c = run(s, [&] { return h::Approvals::challenge(json{{"family", family}, {"target", target}}, s); });
-        if (!c.ok) return c;
-        const auto payload = *crypto::fromBase64(c.data.at("payload_b64").get<std::string>());
-        return run(s, [&] {
-            return h::Approvals::submit(json{{"challenge_id", c.data.at("challenge_id")},
-                                             {"signature_b64", crypto::toBase64(key.sign(payload))}},
-                                        s);
-        });
     }
 
     static Answer exportVia(const SessionPtr& s, const uint32_t vaultId) {

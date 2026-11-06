@@ -4,22 +4,16 @@
 // conversion keeps the value (so existing links keep working), deletes the plaintext only after the sealed copy reads
 // back identical, can resume after a crash between those steps, and fails closed instead of ever replacing a pepper.
 
+#include "../helpers/db_suite.hpp"
 #include "crypto/model/Secret.hpp"
 #include "crypto/secrets/Manager.hpp"
-#include "db/Transactions.hpp"
 #include "db/query/crypto/Secret.hpp"
 #include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
 #include "share/Token.hpp"
 
 #include <gtest/gtest.h>
-#include <paths.h>
 #include <sodium.h>
 
-#include <cstdlib>
-#include <filesystem>
-#include <iostream>
 #include <memory>
 #include <string>
 #include <vector>
@@ -31,30 +25,17 @@ using share::TokenKind;
 using SecretRow = crypto::model::Secret;
 namespace q = db::query::crypto;
 
-class SharePepperSealing : public ::testing::Test {
+class SharePepperSealing : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
-
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            std::cout << "[test_share_pepper_sealing] Skipping db tests due to missing environment variables." << std::endl;
-            return;
-        }
-        paths::enableTestMode();
-        const auto root = std::filesystem::temp_directory_path() / ("vh_pepper_" + std::to_string(::getpid()));
-        paths::backingPath = root / "backing";
-        std::filesystem::create_directories(paths::backingPath);
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        runtime::Deps::init();
+        if (setUpDbSuite("test_share_pepper_sealing", {.runtime = false})) runtime::Deps::init();
     }
 
+    static void TearDownTestSuite() { tearDownDbSuite(); }
+
     void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
+        Suite::SetUp();
+        if (IsSkipped()) return;
         Token::clearPepperForTesting();
         wipe();
     }

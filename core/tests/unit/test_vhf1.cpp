@@ -3,6 +3,7 @@
 // negatives, range negatives, manifest objects and manifest negatives) is exercised, and a section or error code this
 // suite doesn't know fails Vhf1Vectors.EverySectionIsClassified, so the file and this suite can't drift apart
 // (tools/contracts/test_vhf1_vectors_contract.py checks the same from the Python side and runs --check).
+#include "../helpers/bytes.hpp"
 #include "crypto/SecretKey.hpp"
 #include "crypto/vhf1/Format.hpp"
 #include "crypto/vhf1/Reader.hpp"
@@ -10,17 +11,12 @@
 #include "../fuzz/vhf1_fuzz_body.hpp"
 
 #include <gtest/gtest.h>
-#include <nlohmann/json.hpp>
 #include <openssl/evp.h>
 
 #include <algorithm>
-#include <filesystem>
-#include <fstream>
 #include <map>
 #include <optional>
 #include <set>
-#include <string>
-#include <vector>
 
 namespace vh::crypto::vhf1::test_vhf1 {
 
@@ -37,33 +33,10 @@ const std::set<std::string> kTopLevel = {"schema", "generated_by", "conventions"
 const std::set<std::string> kVhf1Sections = {"positive", "range_reads", "negative", "range_negative"};
 const std::set<std::string> kManifestSections = {"objects", "chain", "negative"};  // chain: test_manifest.cpp
 
-const Json& vectors() {
-    static const Json doc = [] {
-        const auto path = std::filesystem::path(VH_TEST_VECTORS_DIR) / "vectors.json";
-        std::ifstream in(path);
-        if (!in) throw std::runtime_error("missing golden vectors: " + path.string());
-        return Json::parse(in);
-    }();
-    return doc;
-}
+const Json& vectors() { return vh::test::bin::goldenVectors(); }
 
-Bytes fromHex(const std::string& hex) {
-    if (hex.size() % 2 != 0) throw std::invalid_argument("odd hex length");
-    Bytes out(hex.size() / 2);
-    for (std::size_t i = 0; i < out.size(); ++i) out[i] = static_cast<uint8_t>(std::stoul(hex.substr(2 * i, 2), nullptr, 16));
-    return out;
-}
-
-std::string toHex(const std::span<const uint8_t> bytes) {
-    static constexpr char kDigits[] = "0123456789abcdef";
-    std::string out;
-    out.reserve(bytes.size() * 2);
-    for (const auto b : bytes) {
-        out += kDigits[b >> 4];
-        out += kDigits[b & 0xF];
-    }
-    return out;
-}
+using vh::test::bin::fromHex;
+using vh::test::bin::toHex;
 
 Bytes fromHex(const Json& hex) { return fromHex(hex.get<std::string>()); }
 

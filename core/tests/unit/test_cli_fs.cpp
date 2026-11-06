@@ -1,8 +1,9 @@
 // `vh fs ls|get|put` (#229): the transfer protocol's bounds and codec, the client's local plan, and the daemon handlers
 // over a real socketpair against real vaults, users and RBAC: allow/deny parity with the HTTP lanes (no existence
 // oracle), overwrite policy, malformed/cancelled/oversized transfers, revocation mid-stream, and staging hygiene.
+#include "../helpers/db_suite.hpp"
+
 #include "crypto/ScratchFile.hpp"
-#include "db/Transactions.hpp"
 #include "fs/Filesystem.hpp"
 #include "fs/cache/Registry.hpp"
 #include "fs/model/File.hpp"
@@ -17,8 +18,6 @@
 #include "protocols/shell/commands/all.hpp"
 #include "protocols/shell/commands/fs.hpp"
 #include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
 #include "storage/Engine.hpp"
 #include "storage/Manager.hpp"
 #include "storage/PlaintextReader.hpp"
@@ -167,40 +166,21 @@ struct Outcome {
     uint64_t chunks{0};
 };
 
-class CliFsDbTest : public ::testing::Test {
+class CliFsDbTest : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
-    inline static std::filesystem::path root;
     inline static UserPtr admin, reader, plain, writer;
     inline static std::shared_ptr<storage::Engine> vaultA, vaultB;
     inline static std::shared_ptr<Router> router;
     inline static std::vector<uint8_t> big;
 
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            return;
-        }
-        paths::enableTestMode();
-        root = std::filesystem::temp_directory_path() / ("vh_cli_fs_" + tag());
-        paths::backingPath = root / "backing";
-        paths::mountPath = root / "mount";
-        std::filesystem::create_directories(paths::backingPath);
-        std::filesystem::create_directories(paths::mountPath);
-
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        runtime::Deps::init();
-        fs::Filesystem::init(runtime::Deps::get().storageManager);
+        if (!setUpDbSuite("test_cli_fs", {.freshEngines = false})) return;
         if (!runtime::Deps::get().shellUsageManager)
             runtime::Deps::get().shellUsageManager = std::make_shared<UsageManager>();
         router = std::make_shared<Router>();
         commands::registerAllCommands(router);
 
-        admin = identities::manager().userByName("admin");
+        admin = superUser;
         const auto a = ops::vaults::create(admin, {.name = "fa_" + tag(), .type = vault::model::VaultType::Local});
         const auto b = ops::vaults::create(admin, {.name = "fb_" + tag(), .type = vault::model::VaultType::Local});
         vaultA = runtime::Deps::get().storageManager->getEngine(a->id);
@@ -219,14 +199,7 @@ protected:
         write(vaultB, "/other.bin", randomBytes(1000, 3));
     }
 
-    static void TearDownTestSuite() {
-        std::error_code ec;
-        if (!root.empty()) std::filesystem::remove_all(root, ec);
-    }
-
-    void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
-    }
+    static void TearDownTestSuite() { tearDownDbSuite(); }
 
     static UserPtr makeUser(const std::string& prefix) {
         const auto created = ops::users::create(admin, {.name = prefix + "_" + tag(), .role = "unprivileged",

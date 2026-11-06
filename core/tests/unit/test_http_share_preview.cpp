@@ -1,3 +1,4 @@
+#include "../helpers/share_fakes.hpp"
 #include "../helpers/temp_dir.hpp"
 #include "fs/model/Directory.hpp"
 #include "fs/model/File.hpp"
@@ -13,8 +14,6 @@
 #include "protocols/http/handler/Archive.hpp"
 #include "protocols/ws/Session.hpp"
 #include "runtime/Deps.hpp"
-#include "share/AuditEvent.hpp"
-#include "share/EmailChallenge.hpp"
 #include "share/Manager.hpp"
 #include "share/TargetResolver.hpp"
 #include "share/Token.hpp"
@@ -35,12 +34,15 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
-#include <unordered_map>
 #include <vector>
 #include <variant>
 
 namespace vh::protocols::http::test_share_preview {
-constexpr std::time_t kNow = 1'800'000'000;
+using vh::test::shares::FakeAuthorizer;
+using vh::test::shares::FakeEntryProvider;
+using vh::test::shares::FakeStore;
+using vh::test::shares::kNow;
+
 constexpr uint32_t kVaultId = 42;
 constexpr uint32_t kRootEntryId = 10;
 
@@ -73,158 +75,11 @@ std::string svgBody() {
     return R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect width="16" height="16" fill="#0891b2"/></svg>)";
 }
 
-class FakeAuthorizer final : public vh::share::ShareAuthorizer {
-public:
-    vh::share::AuthorizationDecision canCreateLink(const rbac::Actor& actor, const vh::share::Link&) const override {
-        return {actor.isHuman(), actor.isHuman() ? "allowed" : "not_human"};
-    }
-
-    vh::share::AuthorizationDecision canUpdateLink(
-        const rbac::Actor& actor,
-        const vh::share::Link&,
-        const vh::share::Link&
-    ) const override {
-        return {actor.isHuman(), actor.isHuman() ? "allowed" : "not_human"};
-    }
-
-    vh::share::AuthorizationDecision canManageLink(const rbac::Actor& actor, const vh::share::Link&) const override {
-        return {actor.isHuman(), actor.isHuman() ? "allowed" : "not_human"};
-    }
-
-    vh::share::AuthorizationDecision canListVaultLinks(const rbac::Actor& actor, uint32_t) const override {
-        return {actor.isHuman(), actor.isHuman() ? "allowed" : "not_human"};
-    }
-};
-
-class FakeStore final : public vh::share::ShareStore {
-public:
-    std::unordered_map<std::string, std::shared_ptr<vh::share::Link>> links;
-    std::unordered_map<std::string, std::shared_ptr<vh::share::Session>> sessions;
-    std::unordered_map<std::string, std::string> sessionByLookup;
-    std::unordered_map<std::string, std::shared_ptr<vh::rbac::role::Vault>> vaultRoles;
-    std::vector<std::shared_ptr<vh::share::AuditEvent>> audits;
-
-    std::shared_ptr<vh::share::Link> createLink(const std::shared_ptr<vh::share::Link>& link) override {
-        links[link->id] = std::make_shared<vh::share::Link>(*link);
-        return links.at(link->id);
-    }
-
-    std::shared_ptr<vh::share::Link> getLink(const std::string& id) override {
-        if (!links.contains(id)) return nullptr;
-        return links.at(id);
-    }
-
-    std::shared_ptr<vh::share::Link> getLinkByLookupId(const std::string&) override { return nullptr; }
-
-    std::vector<std::shared_ptr<vh::share::Link>> listLinksForUser(
-        uint32_t,
-        const db::model::ListQueryParams&
-    ) override {
-        return {};
-    }
-
-    std::vector<std::shared_ptr<vh::share::Link>> listLinksForVault(
-        uint32_t,
-        const db::model::ListQueryParams&
-    ) override {
-        return {};
-    }
-
-    std::shared_ptr<vh::share::Link> updateLink(const std::shared_ptr<vh::share::Link>& link) override {
-        links[link->id] = std::make_shared<vh::share::Link>(*link);
-        return links.at(link->id);
-    }
-
-    void revokeLink(const std::string&, uint32_t) override {}
-    void rotateLinkToken(const std::string&, const std::string&, const std::vector<uint8_t>&, uint32_t) override {}
-    void touchLinkAccess(const std::string&) override {}
-    void incrementDownload(const std::string& id) override {
-        if (links.contains(id)) ++links.at(id)->download_count;
-    }
-
-    void upsertVaultRoleForShare(
-        const std::string& shareId,
-        uint32_t,
-        const std::shared_ptr<vh::rbac::role::Vault>& role
-    ) override {
-        vaultRoles[shareId] = std::make_shared<vh::rbac::role::Vault>(*role);
-    }
-
-    std::shared_ptr<vh::rbac::role::Vault> getVaultRoleForShare(const std::string& shareId) override {
-        if (!vaultRoles.contains(shareId)) return nullptr;
-        return std::make_shared<vh::rbac::role::Vault>(*vaultRoles.at(shareId));
-    }
-
-    std::shared_ptr<vh::share::Session> createSession(const std::shared_ptr<vh::share::Session>& session) override {
-        sessions[session->id] = std::make_shared<vh::share::Session>(*session);
-        sessionByLookup[session->session_token_lookup_id] = session->id;
-        return sessions.at(session->id);
-    }
-
-    std::shared_ptr<vh::share::Session> getSession(const std::string& id) override {
-        if (!sessions.contains(id)) return nullptr;
-        return sessions.at(id);
-    }
-
-    std::shared_ptr<vh::share::Session> getSessionByLookupId(const std::string& lookupId) override {
-        if (!sessionByLookup.contains(lookupId)) return nullptr;
-        return getSession(sessionByLookup.at(lookupId));
-    }
-
-    void verifySession(const std::string&, const std::vector<uint8_t>&) override {}
-    void touchSession(const std::string& sessionId) override {
-        if (auto session = getSession(sessionId)) session->last_seen_at = kNow + 1;
-    }
-    void revokeSession(const std::string&) override {}
-    void revokeSessionsForShare(const std::string&) override {}
-
-    std::shared_ptr<vh::share::EmailChallenge> createEmailChallenge(
-        const std::shared_ptr<vh::share::EmailChallenge>&
-    ) override {
-        return nullptr;
-    }
-    std::shared_ptr<vh::share::EmailChallenge> getEmailChallenge(const std::string&) override { return nullptr; }
-    std::shared_ptr<vh::share::EmailChallenge> getActiveEmailChallenge(
-        const std::string&,
-        const std::vector<uint8_t>&
-    ) override {
-        return nullptr;
-    }
-    void recordEmailChallengeAttempt(const std::string&) override {}
-    void consumeEmailChallenge(const std::string&) override {}
-    void appendAuditEvent(const std::shared_ptr<vh::share::AuditEvent>& event) override { audits.push_back(event); }
-};
-
-class FakeTargetProvider final : public vh::share::TargetEntryProvider {
-public:
-    std::unordered_map<uint32_t, std::shared_ptr<vh::fs::model::Entry>> byId;
-    std::unordered_map<std::string, std::shared_ptr<vh::fs::model::Entry>> byPath;
-    std::unordered_map<uint32_t, std::vector<std::shared_ptr<vh::fs::model::Entry>>> children;
-
-    std::shared_ptr<vh::fs::model::Entry> getEntryById(const uint32_t entryId) override {
-        if (!byId.contains(entryId)) return nullptr;
-        return byId.at(entryId);
-    }
-
-    std::shared_ptr<vh::fs::model::Entry> getEntryByVaultPath(
-        uint32_t,
-        const std::string_view vaultPath
-    ) override {
-        const auto key = std::string(vaultPath);
-        if (!byPath.contains(key)) return nullptr;
-        return byPath.at(key);
-    }
-
-    std::vector<std::shared_ptr<vh::fs::model::Entry>> listChildren(uint32_t parentEntryId) override {
-        if (!children.contains(parentEntryId)) return {};
-        return children.at(parentEntryId);
-    }
-};
 
 class HttpSharePreviewTest : public ::testing::Test {
 protected:
     std::shared_ptr<FakeStore> store;
-    std::shared_ptr<FakeTargetProvider> provider;
+    std::shared_ptr<FakeEntryProvider> provider;
     std::shared_ptr<vh::share::Manager> manager;
     std::shared_ptr<vh::storage::Engine> engine;
     std::shared_ptr<vh::fs::model::File> file;
@@ -255,7 +110,7 @@ protected:
         if (!configuredSizes.empty()) previewSize = configuredSizes.front();
 
         store = std::make_shared<FakeStore>();
-        provider = std::make_shared<FakeTargetProvider>();
+        provider = std::make_shared<FakeEntryProvider>();
         auto options = vh::share::ManagerOptions{.clock = [] { return kNow; }};
         manager = std::make_shared<vh::share::Manager>(store, std::make_shared<FakeAuthorizer>(), options);
 
@@ -289,11 +144,8 @@ protected:
             file->size_bytes = png.size();
         }
 
-        provider->byId[root->id] = root;
-        provider->byPath[root->path.string()] = root;
-        provider->byId[file->id] = file;
-        provider->byPath[file->path.string()] = file;
-        provider->children[root->id].push_back(file);
+        provider->add(root);
+        provider->add(file);
 
     }
 
@@ -398,9 +250,7 @@ protected:
         std::filesystem::create_directories(svg->backing_path.parent_path());
         std::ofstream(svg->backing_path, std::ios::binary) << svgBody();
 
-        provider->byId[svg->id] = svg;
-        provider->byPath[svg->path.string()] = svg;
-        provider->children[kRootEntryId].push_back(svg);
+        provider->add(svg);
         return svg;
     }
 
@@ -420,9 +270,7 @@ protected:
         std::ofstream out(webp->backing_path, std::ios::binary);
         out.write(reinterpret_cast<const char*>(payload.data()), static_cast<std::streamsize>(payload.size()));
 
-        provider->byId[webp->id] = webp;
-        provider->byPath[webp->path.string()] = webp;
-        provider->children[kRootEntryId].push_back(webp);
+        provider->add(webp);
         return webp;
     }
 };
@@ -715,8 +563,7 @@ TEST_F(HttpSharePreviewTest, ShareContentByEntryIdStaysInsideTheShare) {
     outside->id = 77;
     outside->parent_id = std::nullopt;
     outside->path = "/private/vector.svg";
-    provider->byId[outside->id] = outside;
-    provider->byPath[outside->path.string()] = outside;
+    provider->add(outside);
     // Outside the share, and unknown: the same answer, so ids elsewhere in the vault can't be probed.
     EXPECT_EQ(status::not_found, responseStatus(Router::handleDownload(previewRequest("/download/content?share=1&entry=77"))));
     EXPECT_EQ(status::not_found, responseStatus(Router::handleDownload(previewRequest("/download/content?share=1&entry=4242"))));
@@ -760,8 +607,7 @@ TEST_F(HttpSharePreviewTest, SharePreviewBatchReportsReadyUnsupportedAndMissingI
     unsupported->vault_id = static_cast<int32_t>(kVaultId);
     unsupported->path = "/shared/readme.txt";
     unsupported->mime_type = "text/plain";
-    provider->byId[unsupported->id] = unsupported;
-    provider->byPath[unsupported->path.string()] = unsupported;
+    provider->add(unsupported);
 
     auto response = Router::handlePreviewBatch(previewBatchRequest({
         {"size", previewSize},
@@ -1046,12 +892,8 @@ TEST_F(HttpSharePreviewTest, ShareDirectoryArchiveContainsScopedRelativeEntries)
     nestedFile->mime_type = "text/plain";
     nestedFile->size_bytes = 0;
 
-    provider->byId[nested->id] = nested;
-    provider->byPath[nested->path.string()] = nested;
-    provider->byId[nestedFile->id] = nestedFile;
-    provider->byPath[nestedFile->path.string()] = nestedFile;
-    provider->children[kRootEntryId].push_back(nested);
-    provider->children[nested->id].push_back(nestedFile);
+    provider->add(nested);
+    provider->add(nestedFile);
 
     auto outside = std::make_shared<vh::fs::model::File>();
     outside->id = 14;
@@ -1059,8 +901,7 @@ TEST_F(HttpSharePreviewTest, ShareDirectoryArchiveContainsScopedRelativeEntries)
     outside->vault_id = static_cast<int32_t>(kVaultId);
     outside->path = "/secret.txt";
     outside->size_bytes = 0;
-    provider->byId[outside->id] = outside;
-    provider->byPath[outside->path.string()] = outside;
+    provider->add(outside);
 
     auto session = readySession(vh::share::bit(vh::share::Operation::Download) | vh::share::bit(vh::share::Operation::List));
     installSharePreviewHooks(session);
@@ -1126,9 +967,7 @@ TEST_F(HttpSharePreviewTest, ShareDirectoryArchiveOverTheEntryLimitIsRefusedBefo
         extra->id = 1000 + i;
         extra->name = "f" + std::to_string(i);
         extra->path = "/shared/" + extra->name;
-        provider->byId[extra->id] = extra;
-        provider->byPath[extra->path.string()] = extra;
-        provider->children[kRootEntryId].push_back(extra);
+        provider->add(extra);
     }
     auto session = readySession(vh::share::bit(vh::share::Operation::Download) | vh::share::bit(vh::share::Operation::List));
     installSharePreviewHooks(session);

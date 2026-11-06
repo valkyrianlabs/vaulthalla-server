@@ -3,10 +3,11 @@
 // roles loaded from admin_role carry no preset, so no account but the super admin (who bypasses the check) could use
 // a vault through its global policy, its own default vault included.
 
+#include "../helpers/db_suite.hpp"
+
 #include "db/Transactions.hpp"
 #include "db/query/identities/User.hpp"
 #include "db/query/vault/Vault.hpp"
-#include "fs/Filesystem.hpp"
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "ops/Roles.hpp"
@@ -16,21 +17,17 @@
 #include "rbac/resolver/vault/all.hpp"
 #include "rbac/role/Admin.hpp"
 #include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
 #include "seed/include/seed_db.hpp"
 #include "storage/Engine.hpp"
 #include "storage/Manager.hpp"
 #include "vault/model/Vault.hpp"
 
 #include <gtest/gtest.h>
-#include <paths.h>
 #include <pqxx/pqxx>
 
 #include <atomic>
 #include <chrono>
-#include <cstdlib>
 #include <filesystem>
-#include <iostream>
 #include <map>
 #include <memory>
 #include <string>
@@ -73,37 +70,10 @@ TEST(GlobalVaultPolicy, BuiltinPresetIsBoundToTheUser) {
     EXPECT_FALSE(rbac::role::Admin::builtin("not_a_builtin_role", 7));
 }
 
-class GlobalVaultPolicyDbTest : public ::testing::Test {
+class GlobalVaultPolicyDbTest : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
-    inline static UserPtr superUser;
-
-    static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            std::cout << "[test_global_vault_policy] Skipping db tests due to missing environment variables." << std::endl;
-            return;
-        }
-        paths::enableTestMode();
-        const auto root = std::filesystem::temp_directory_path() / ("vh_gvp_" + gvpTag());
-        paths::backingPath = root / "backing";
-        paths::mountPath = root / "mount";
-        std::filesystem::create_directories(paths::backingPath);
-        std::filesystem::create_directories(paths::mountPath);
-
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        runtime::Deps::init();
-        fs::Filesystem::init(runtime::Deps::get().storageManager);
-        superUser = vh::identities::manager().userByName("admin");
-    }
-
-    void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
-    }
+    static void SetUpTestSuite() { setUpDbSuite("test_global_vault_policy", {.freshEngines = false}); }
+    static void TearDownTestSuite() { tearDownDbSuite(); }
 
     static UserPtr create(const std::string& prefix, const std::string& role) {
         const auto created = ops::users::create(superUser, {.name = prefix + "_" + gvpTag(), .role = role,

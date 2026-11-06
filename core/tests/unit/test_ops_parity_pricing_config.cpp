@@ -6,12 +6,12 @@
 // live database probe, so it could read healthy while PostgreSQL was down (S11). ops::pricing and ops::config
 // now hold those rules, and SystemHealth owns the probe.
 
+#include "../helpers/db_suite.hpp"
 #include "../helpers/identities.hpp"
 #include "config/Registry.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/identities/User.hpp"
 #include "db/query/rbac/role/Admin.hpp"
-#include "fs/Filesystem.hpp"
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "ops/Config.hpp"
@@ -27,8 +27,6 @@
 #include "protocols/ws/handler/Settings.hpp"
 #include "rbac/role/Admin.hpp"
 #include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
 #include "stats/model/SystemHealth.hpp"
 #include "storage/Manager.hpp"
 #include "storage/s3/pricing/PriceBudget.hpp"
@@ -39,14 +37,11 @@
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
-#include <paths.h>
 
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
-#include <filesystem>
 #include <functional>
-#include <iostream>
 #include <memory>
 #include <string>
 
@@ -62,9 +57,8 @@ std::string pcTag() {
     return run + "x" + std::to_string(n.fetch_add(1));
 }
 
-class PricingConfigParityTest : public ::testing::Test {
+class PricingConfigParityTest : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
     inline static std::shared_ptr<protocols::shell::Router> router;
     inline static UserPtr superUser;
 
@@ -85,25 +79,7 @@ protected:
     }
 
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            std::cout << "[test_ops_parity_pricing_config] Skipping db tests due to missing environment variables." << std::endl;
-            return;
-        }
-        paths::enableTestMode();
-        const auto root = std::filesystem::temp_directory_path() / ("vh_pc_parity_" + pcTag());
-        paths::backingPath = root / "backing";
-        paths::mountPath = root / "mount";
-        std::filesystem::create_directories(paths::backingPath);
-        std::filesystem::create_directories(paths::mountPath);
-
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        runtime::Deps::init();
-        fs::Filesystem::init(runtime::Deps::get().storageManager);
+        if (!setUpDbSuite("test_ops_parity_pricing_config", {.freshEngines = false})) return;
 
         if (!runtime::Deps::get().shellUsageManager)
             runtime::Deps::get().shellUsageManager = std::make_shared<protocols::shell::UsageManager>();
@@ -115,9 +91,7 @@ protected:
         superUser = seedUser("pc_super", "super_admin");
     }
 
-    void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
-    }
+    static void TearDownTestSuite() { tearDownDbSuite(); }
 
     static int cli(const std::string& line, const UserPtr& user) {
         try {

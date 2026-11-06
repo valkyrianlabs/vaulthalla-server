@@ -1063,3 +1063,127 @@ private:
 };
 
 }
+
+// ---- DB-backed: a cloud vault on a VersionedBucket, and one sync pass run inline ------------------------------------
+
+#include "../helpers/temp_dir.hpp"
+
+#include "db/Transactions.hpp"
+#include "db/query/sync/Event.hpp"
+#include "identities/User.hpp"
+#include "ops/Vaults.hpp"
+#include "runtime/Deps.hpp"
+#include "storage/CloudEngine.hpp"
+#include "storage/Manager.hpp"
+#include "sync/Cloud.hpp"
+#include "sync/model/Action.hpp"
+#include "sync/model/Event.hpp"
+#include "sync/model/RemotePolicy.hpp"
+#include "sync/model/Throughput.hpp"
+#include "sync/tasks/Download.hpp"
+#include "sync/tasks/Upload.hpp"
+#include "vault/APIKeyManager.hpp"
+#include "vault/model/S3Vault.hpp"
+
+#include <gtest/gtest.h>
+
+namespace vh::test_support::versioned {
+
+struct CloudVault {
+    std::shared_ptr<storage::CloudEngine> engine;
+    std::shared_ptr<VersionedBucket> bucket;
+    std::string bucketName;
+    [[nodiscard]] uint32_t id() const { return engine->vault->id; }
+};
+
+// An S3 vault of `owner` (a new API key; `<prefix>_vault_<tag>` on bucket `<prefix>-<tag>`) whose controller is a
+// VersionedBucket of that name, every remote fetch allowed, sync strategy `strategy`. With `opaque`, it is made
+// opaque_v1 before it holds anything (opaque_v1 is internal: test mode only).
+inline CloudVault makeCloudVault(const std::shared_ptr<identities::User>& owner, const std::string& prefix,
+                                 const Versioning mode, const bool opaque,
+                                 const sync::model::RemotePolicy::Strategy strategy =
+                                     sync::model::RemotePolicy::Strategy::Sync) {
+    auto apiKey = std::make_shared<vault::model::APIKey>(owner->id, prefix + "_key_" + vh::test::uniqueTag('c'),
+                                                         vault::model::S3Provider::AWS, "AKIATESTACCESSKEY000",
+                                                         "secret-value-0000000000000000000000000", "us-east-1",
+                                                         "https://s3.example.com");
+    const auto keyId = runtime::Deps::get().apiKeyManager->addAPIKey(apiKey);
+    CloudVault v;
+    v.bucketName = prefix + "-" + vh::test::uniqueTag('c');
+    const auto created = ops::vaults::create(owner, {.name = prefix + "_vault_" + vh::test::uniqueTag('c'),
+                                                     .type = vault::model::VaultType::S3,
+                                                     .s3 = ops::vaults::S3Spec{.api_key_id = keyId,
+                                                                               .bucket = v.bucketName}});
+    if (opaque)
+        db::Transactions::exec("makeCloudVault::opaque", [&](pqxx::work& txn) {
+            txn.exec("UPDATE s3 SET storage_layout = 'opaque_v1' WHERE vault_id = $1", pqxx::params{created->id});
+        });
+    v.engine = std::static_pointer_cast<storage::CloudEngine>(runtime::Deps::get().storageManager->getEngine(created->id));
+    if (opaque)
+        std::static_pointer_cast<vault::model::S3Vault>(v.engine->vault)->storage_layout =
+            vault::model::StorageLayout::OpaqueV1;
+    v.bucket = std::make_shared<VersionedBucket>(mode, v.bucketName);
+    v.engine->setS3ControllerForTesting(v.bucket);
+    v.engine->setRemoteFetchGate([](const storage::CloudEngine&, const storage::RemoteFetchRequest&) {
+        return std::unique_ptr<storage::RemoteFetchReservation>{};
+    });
+    v.engine->remote_policy()->strategy = strategy;
+    return v;
+}
+
+struct SyncPassOptions {
+    bool purgeTrash = false;         // removeTrashedFiles and processFutures first, as sync::Cloud's regular pass does
+    bool remoteOnlyActions = false;  // EnsureDirectories and IndexRemoteOnly run too
+    bool downloads = true;           // Download actions run
+    bool requireOk = false;          // the index mutation (and manifest) only when every transfer succeeded
+    bool expectOk = false;           // and EXPECT that they all did
+};
+
+struct SyncPass {
+    std::vector<sync::model::Action> plan;
+    bool ok = true;
+    sync::Cloud::OpaqueTally tally;
+};
+
+// One sync pass inline: the real planner and transfer tasks, then the index mutation and the manifest.
+inline SyncPass runSyncPass(const std::shared_ptr<storage::CloudEngine>& engine, const SyncPassOptions& options = {}) {
+    using AT = sync::model::ActionType;
+    using Metric = sync::model::Throughput::Metric;
+    auto cloud = std::make_shared<sync::Cloud>(engine);
+    cloud->event = std::make_shared<sync::model::Event>();
+    cloud->event->vault_id = engine->vault->id;
+    cloud->event->timestamp_begin = std::time(nullptr);
+    db::query::sync::Event::create(cloud->event);
+    if (options.purgeTrash) {
+        cloud->removeTrashedFiles();
+        cloud->processFutures();
+    }
+    cloud->initBins();
+    SyncPass out;
+    out.plan = cloud->planPass();
+    const auto run = [&](auto&& task) {
+        auto done = task.promise.get_future();
+        task();
+        out.ok = std::get<bool>(done.get()) && out.ok;
+    };
+    for (const auto& a : out.plan) {
+        if (a.type == AT::EnsureDirectories && options.remoteOnlyActions) {
+            cloud->ensureDirectoriesFromRemote();
+        } else if (a.type == AT::Upload) {
+            run(sync::tasks::Upload(engine, a.local, cloud->op(Metric::UPLOAD)));
+        } else if (a.type == AT::Download && options.downloads) {
+            run(sync::tasks::Download(engine, a.remote, cloud->op(Metric::DOWNLOAD), false));
+        } else if (a.type == AT::IndexRemoteOnly && options.remoteOnlyActions) {
+            run(sync::tasks::Download(engine, a.remote, cloud->op(Metric::INDEX), true));
+        }
+    }
+    if (options.expectOk) {
+        EXPECT_TRUE(out.ok) << "every transfer of the pass succeeded";
+    }
+    if (out.ok || !options.requireOk) engine->applyRemoteIndexMutation(out.plan);
+    out.tally = cloud->opaqueTally;
+    cloud->clearBins();
+    return out;
+}
+
+}

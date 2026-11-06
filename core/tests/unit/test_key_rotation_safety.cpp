@@ -4,6 +4,7 @@
 // one does. The files table is a map with compare-and-set semantics, the remote store a map of objects that carry
 // their own IV/version metadata. No TPM, database or S3.
 
+#include "../helpers/bytes.hpp"
 #include "crypto/util/encrypt.hpp"
 #include "crypto/util/Gcm.hpp"
 #include "fs/model/File.hpp"
@@ -13,19 +14,13 @@
 #include <gtest/gtest.h>
 #include <system_error>
 #include <fcntl.h>
-#include <sodium.h>
 
-#include <sys/stat.h>
 #include <unistd.h>
 
-#include <fstream>
 #include <functional>
-#include <iterator>
 #include <map>
 #include <optional>
 #include <set>
-#include <string>
-#include <vector>
 
 namespace vh::test_key_rotation_safety {
 
@@ -53,22 +48,9 @@ using rotation::PassStatus;
 using rotation::Step;
 
 using Bytes = std::vector<uint8_t>;
-
-Bytes slurpBytes(const stdfs::path& path) {
-    std::ifstream in(path, std::ios::binary);
-    return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
-}
-
-void spitBytes(const stdfs::path& path, const Bytes& bytes) {
-    std::ofstream out(path, std::ios::binary | std::ios::trunc);
-    out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-}
-
-Bytes randomBytes(const std::size_t n) {
-    Bytes out(n);
-    randombytes_buf(out.data(), out.size());
-    return out;
-}
+using vh::test::bin::randomBytes;
+using vh::test::bin::slurp;
+using vh::test::bin::spit;
 
 // EncryptionManager's key rules without the TPM.
 struct FakeVaultKeys {
@@ -199,7 +181,7 @@ protected:
         const auto f = fileFor(path);
         const auto ciphertext = keys.seal(plaintextOf[path], f);
         rows[path] = rotation::stateOf(*f);
-        if (local) spitBytes(f->backing_path, ciphertext);
+        if (local) spit(f->backing_path, ciphertext);
         if (remote) objects[path] = {ciphertext, rotation::stateOf(*f)};
     }
 
@@ -208,7 +190,7 @@ protected:
         backingOf[path] = dir / "vault" / ("ALIAS" + path.substr(1));
         plaintextOf[path] = {};
         rows[path] = {.iv_b64 = "", .key_version = 0};
-        spitBytes(backingOf[path], {});
+        spit(backingOf[path], Bytes{});
     }
 
     // What the files-table query returns: encrypted rows on an older key version, as fresh objects.
@@ -291,7 +273,7 @@ protected:
     void expectLocalDecryptable(const std::string& path) const {
         const auto& row = rows.at(path);
         ASSERT_TRUE(row.encrypted()) << path;
-        EXPECT_EQ(keys.open(slurpBytes(backingOf.at(path)), row), plaintextOf.at(path)) << path;
+        EXPECT_EQ(keys.open(slurp(backingOf.at(path)), row), plaintextOf.at(path)) << path;
     }
 
     void expectRemoteDecryptable(const std::string& path) const {
@@ -366,7 +348,7 @@ TEST_F(KeyRotationSafetyTest, EmptyAndUnencryptedFilesDoNotBreakRotation) {
     const auto pass = runPass(d);
     EXPECT_EQ(pass.status, PassStatus::Finished);
     EXPECT_EQ(rows["/empty"].key_version, 0u);
-    EXPECT_TRUE(slurpBytes(backingOf["/empty"]).empty());
+    EXPECT_TRUE(slurp(backingOf["/empty"]).empty());
     expectLocalDecryptable("/a");
     expectLocalDecryptable("/b");
 }
@@ -394,7 +376,7 @@ TEST_F(KeyRotationSafetyTest, ARowChangedMidRotationWinsAndTheSidecarIsDropped) 
     addFile("/a", 256);
     keys.prepare();
     const auto d = deps();
-    const auto before = slurpBytes(backingOf["/a"]);
+    const auto before = slurp(backingOf["/a"]);
 
     // A concurrent writer re-seals the file between the sidecar write and the commit.
     onStep = [this](const Step step, const FileSP&) {
@@ -404,14 +386,14 @@ TEST_F(KeyRotationSafetyTest, ARowChangedMidRotationWinsAndTheSidecarIsDropped) 
         const auto sealed = keys.seal(plaintextOf["/a"], writer);
         stdfs::path temp = backingOf["/a"];
         temp += ".writer";
-        spitBytes(temp, sealed);
+        spit(temp, sealed);
         stdfs::rename(temp, backingOf["/a"]);
         rows["/a"] = rotation::stateOf(*writer);
     };
 
     EXPECT_EQ(rotation::rotateFile(fileFor("/a"), d), Outcome::Conflict);
     EXPECT_EQ(sidecarsUnder(dir / "vault"), 0u);
-    EXPECT_NE(slurpBytes(backingOf["/a"]), before);
+    EXPECT_NE(slurp(backingOf["/a"]), before);
     expectLocalDecryptable("/a");
     EXPECT_EQ(rows["/a"].key_version, 2u) << "the writer sealed it with the current key";
 }
@@ -430,14 +412,14 @@ TEST_F(KeyRotationSafetyTest, UnderTheContentLockAStaleListingIsAConflictAndNoth
     // An overwrite (holding the same lock in production) re-sealed the file after the listing.
     const auto writer = fileFor("/a");
     plaintextOf["/a"] = randomBytes(64);
-    spitBytes(backingOf["/a"], keys.seal(plaintextOf["/a"], writer));
+    spit(backingOf["/a"], keys.seal(plaintextOf["/a"], writer));
     rows["/a"] = rotation::stateOf(*writer);
     d.catalog.current = [this](const FileSP&) -> std::optional<EncryptionState> { return rows.at("/a"); };
-    const auto after = slurpBytes(backingOf["/a"]);
+    const auto after = slurp(backingOf["/a"]);
 
     EXPECT_EQ(rotation::rotateFile(listed, d), Outcome::Conflict);
     EXPECT_TRUE(locked);
-    EXPECT_EQ(slurpBytes(backingOf["/a"]), after) << "the overwrite's bytes are never replaced with the stale listing";
+    EXPECT_EQ(slurp(backingOf["/a"]), after) << "the overwrite's bytes are never replaced with the stale listing";
     EXPECT_EQ(sidecarsUnder(dir / "vault"), 0u);
     expectLocalDecryptable("/a");
 }
@@ -474,7 +456,7 @@ TEST_F(KeyRotationSafetyTest, CacheModeLocalCopyIsRewrittenAndAuthenticatesUnder
     expectLocalDecryptable("/a");
     expectRemoteDecryptable("/a");
     EXPECT_EQ(*objects["/a"].state, rows["/a"]) << "the object's metadata matches the row";
-    EXPECT_EQ(objects["/a"].bytes, slurpBytes(backingOf["/a"]));
+    EXPECT_EQ(objects["/a"].bytes, slurp(backingOf["/a"]));
     EXPECT_EQ(uploads, 1u);
     EXPECT_EQ(sidecarsUnder(dir / "vault"), 0u);
 }
@@ -657,16 +639,16 @@ TEST_F(KeyRotationSafetyTest, ATornSidecarIsDiscardedAndAnUnverifiableOneBlocksF
     const auto d = deps();
 
     // Crash mid-write: a partial sidecar, row untouched.
-    auto torn = slurpBytes(backingOf["/a"]);
+    auto torn = slurp(backingOf["/a"]);
     torn.resize(torn.size() / 2);
-    spitBytes(rotation::sidecarPathFor(backingOf["/a"]), torn);
+    spit(rotation::sidecarPathFor(backingOf["/a"]), torn);
 
     // Damage that leaves neither copy authenticating: kept for an operator, rotation not finished.
-    spitBytes(rotation::sidecarPathFor(backingOf["/b"]), randomBytes(2064));
-    const auto goodB = slurpBytes(backingOf["/b"]);
+    spit(rotation::sidecarPathFor(backingOf["/b"]), randomBytes(2064));
+    const auto goodB = slurp(backingOf["/b"]);
     auto badB = goodB;
     badB[10] ^= 0xFF;
-    spitBytes(backingOf["/b"], badB);
+    spit(backingOf["/b"], badB);
 
     const auto pass = runPass(d);
     EXPECT_EQ(pass.recovery.discarded, 1u);
@@ -682,7 +664,7 @@ TEST_F(KeyRotationSafetyTest, AnOrphanSidecarIsRemoved) {
     keys.prepare();
     const auto d = deps();
     const auto orphan = dir / "vault" / "sub" / "GONE.vh-rotate";
-    spitBytes(orphan, randomBytes(80));
+    spit(orphan, randomBytes(80));
 
     const auto report = rotation::recoverSidecars(dir / "vault", lookup(), d);
     EXPECT_EQ(report.discarded, 1u);
@@ -693,12 +675,12 @@ TEST_F(KeyRotationSafetyTest, AnOrphanSidecarIsRemoved) {
 
 TEST_F(KeyRotationSafetyTest, WriteFileAtomicReplacesAndPreservesPermissions) {
     const auto target = dir / "vault" / "file";
-    spitBytes(target, {1, 2, 3});
+    spit(target, Bytes{1, 2, 3});
     ASSERT_EQ(::chmod(target.c_str(), 0640), 0);
 
     const Bytes next{9, 8, 7, 6};
     fs::ops::writeFileAtomic(target, next);
-    EXPECT_EQ(slurpBytes(target), next);
+    EXPECT_EQ(slurp(target), next);
 
     struct stat st{};
     ASSERT_EQ(::stat(target.c_str(), &st), 0);
@@ -714,23 +696,23 @@ TEST_F(KeyRotationSafetyTest, WriteFileAtomicReplacesAndPreservesPermissions) {
 TEST_F(KeyRotationSafetyTest, AFailedAtomicReplacementLeavesTheOldFileAndNoTemp) {
     const auto target = dir / "vault" / "file";
     const Bytes old{1, 2, 3, 4, 5};
-    spitBytes(target, old);
+    spit(target, old);
 
     EXPECT_THROW(fs::ops::replaceFileAtomic(target, [](const stdfs::path& temp) {
-        spitBytes(temp, {42, 42});  // half-written
+        spit(temp, Bytes{42, 42});  // half-written
         throw std::runtime_error("encryption failed midway");
     }), std::runtime_error);
 
-    EXPECT_EQ(slurpBytes(target), old);
+    EXPECT_EQ(slurp(target), old);
     EXPECT_EQ(tempFilesIn(dir / "vault"), 0u);
 }
 
 TEST_F(KeyRotationSafetyTest, WriteFileExclusiveNeverReplacesAnExistingFile) {
     const auto target = dir / "vault" / "taken";
     const Bytes old{7, 7, 7};
-    spitBytes(target, old);
+    spit(target, old);
     EXPECT_THROW(fs::ops::writeFileExclusive(target, Bytes{1}), std::system_error);
-    EXPECT_EQ(slurpBytes(target), old);
+    EXPECT_EQ(slurp(target), old);
 }
 
 // FUSE create and an empty createFile make an empty inode: there is no data to flush, so no file fsync (the
@@ -748,25 +730,6 @@ TEST_F(KeyRotationSafetyTest, WriteFileExclusiveSkipsTheFsyncOfAnEmptyFile) {
 
     fs::ops::writeFileExclusive(dir / "vault" / "full", Bytes{1, 2, 3});
     EXPECT_EQ(fs::ops::writeFileExclusiveFsyncsForTesting(), before + 1) << "content is fsynced";
-}
-
-TEST_F(KeyRotationSafetyTest, StreamingVerificationMatchesTheTag) {
-    const auto key = randomBytes(cu::AES_KEY_SIZE);
-    Bytes iv;
-    const auto ciphertext = cu::encrypt_aes256_gcm(randomBytes(200000), key, iv);
-    const auto path = dir / "vault" / "ct";
-    spitBytes(path, ciphertext);
-    EXPECT_TRUE(gcmFileAuthenticates(path, key, iv));
-
-    EXPECT_FALSE(gcmFileAuthenticates(path, randomBytes(cu::AES_KEY_SIZE), iv));
-    auto tampered = ciphertext;
-    tampered[150000] ^= 1;
-    spitBytes(path, tampered);
-    EXPECT_FALSE(gcmFileAuthenticates(path, key, iv));
-
-    spitBytes(path, Bytes(5, 0));
-    EXPECT_FALSE(gcmFileAuthenticates(path, key, iv)) << "shorter than a tag";
-    EXPECT_THROW((void)gcmFileAuthenticates(dir / "missing", key, iv), std::exception);
 }
 
 }

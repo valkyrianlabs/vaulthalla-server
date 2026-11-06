@@ -5,6 +5,8 @@
 // acknowledgement and single use under concurrency; passkey storage; and a missing or unreadable mfa_seal / mfa_pepper
 // that refuses its own factor without ever being regenerated, while passkeys keep working. No code, seed or URI
 // reaches the audit trail.
+#include "../helpers/db_suite.hpp"
+#include "../helpers/web_session.hpp"
 #include "audit/Trail.hpp"
 #include "auth/mfa/Factors.hpp"
 #include "auth/mfa/Keys.hpp"
@@ -15,21 +17,15 @@
 #include "db/query/crypto/Secret.hpp"
 #include "ops/Error.hpp"
 #include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
-#include <paths.h>
 
 #include <algorithm>
 #include <atomic>
 #include <cctype>
 #include <chrono>
-#include <cstdlib>
-#include <filesystem>
 #include <format>
-#include <iostream>
 #include <latch>
 #include <string>
 #include <thread>
@@ -42,48 +38,22 @@ namespace vh::auth::mfa::test_factors {
 namespace q = db::query::crypto;
 using Clock = std::chrono::system_clock;
 
-std::vector<uint8_t> fromBase32(const std::string& text) {
-    static constexpr std::string_view kAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
-    std::vector<uint8_t> out;
-    uint32_t buffer = 0;
-    int bits = 0;
-    for (const char c : text) {
-        buffer = (buffer << 5) | static_cast<uint32_t>(kAlphabet.find(c));
-        bits += 5;
-        if (bits >= 8) {
-            bits -= 8;
-            out.push_back(static_cast<uint8_t>((buffer >> bits) & 0xff));
-        }
-    }
-    return out;
-}
+using vh::test::web::fromBase32;
 
-class MfaFactorsDb : public ::testing::Test {
+class MfaFactorsDb : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
     inline static int counter = 0;
 
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            std::cout << "[test_mfa_factors] Skipping db tests due to missing environment variables." << std::endl;
-            return;
-        }
-        paths::enableTestMode();
-        const auto root = std::filesystem::temp_directory_path() / ("vh_mfa_factors_" + std::to_string(::getpid()));
-        paths::backingPath = root / "backing";
-        std::filesystem::create_directories(paths::backingPath);
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        runtime::Deps::init();
+        if (!setUpDbSuite("mfa_factors", {.freshEngines = false})) return;
         audit::Trail::instance()->resetForTesting();
     }
 
+    static void TearDownTestSuite() { tearDownDbSuite(); }
+
     void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
+        Suite::SetUp();
+        if (IsSkipped()) return;
         keys::resetForTesting();
     }
 

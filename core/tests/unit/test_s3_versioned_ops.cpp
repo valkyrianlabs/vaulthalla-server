@@ -1,7 +1,7 @@
 // Version-aware S3 data plane (file recovery, .claude/context/recovery.md), DB-free.
 //
 // S3VersionedOps*: the real storage::s3::Controller against curl::http's test transport (what is signed and sent,
-// how answers are parsed, metering, the protection lock) and the legacy signer's canonical query.
+// how answers are parsed, metering, the protection lock), version-id signing and the response-header lookup.
 // S3VersionedFake*: the semantics of tests/helpers/versioned_bucket.hpp that later suites rely on.
 
 #include "fs/model/File.hpp"
@@ -13,7 +13,6 @@
 #include "../helpers/versioned_bucket.hpp"
 
 #include <gtest/gtest.h>
-#include <vl/sigv4/types.hpp>
 
 #include <unistd.h>
 
@@ -122,33 +121,6 @@ protected:
         guard::clearForTesting();
     }
 };
-
-TEST(S3VersionedOpsSigning, LegacyCanonicalQueryIsSortedAndUnchangedWhenAlreadyCanonical) {
-    using vh::storage::s3::curl::canonicalQueryString;
-    EXPECT_EQ("continuation-token=abc%2Bdef&list-type=2&max-keys=1000",
-              canonicalQueryString("list-type=2&max-keys=1000&continuation-token=abc%2Bdef"));
-    EXPECT_EQ("uploads=", canonicalQueryString("uploads"));
-    EXPECT_EQ("partNumber=3&uploadId=xyz", canonicalQueryString("partNumber=3&uploadId=xyz"));
-    EXPECT_EQ("list-type=2&max-keys=1", canonicalQueryString("list-type=2&max-keys=1"));
-    EXPECT_EQ("versionId=a%2Fb%3D", canonicalQueryString("versionId=a%2Fb%3D"));
-    // Sorted by name, then value: "a" before "a-b" although '-' < '='.
-    EXPECT_EQ("a=1&a-b=2", canonicalQueryString("a-b=2&a=1"));
-    EXPECT_EQ("", canonicalQueryString(""));
-
-    // The data-path signer signs the canonical order whatever order the URL carries.
-    const auto key = awsKey();
-    const std::map<std::string, std::string> headers{{"host", "s3.us-east-2.amazonaws.com"},
-                                                     {"x-amz-content-sha256", "UNSIGNED-PAYLOAD"}};
-    const auto signedAt = vl::sigv4::Clock::from_time_t(1792152000);   // 2026-10-16T12:00:00Z
-    using vh::storage::s3::curl::buildAuthorizationHeader;
-    auto headersA = headers;
-    auto headersB = headers;
-    const auto a = buildAuthorizationHeader(key, "GET", "/b?list-type=2&continuation-token=t", headersA,
-                                            "UNSIGNED-PAYLOAD", "", signedAt);
-    const auto b = buildAuthorizationHeader(key, "GET", "/b?continuation-token=t&list-type=2", headersB,
-                                            "UNSIGNED-PAYLOAD", "", signedAt);
-    EXPECT_EQ(a, b);
-}
 
 TEST(S3VersionedOpsSigning, HeaderLookupTakesTheFinalResponseBlock) {
     using vh::storage::s3::curl::lastHeaderValue;

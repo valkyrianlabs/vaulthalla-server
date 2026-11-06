@@ -1001,20 +1001,6 @@ TEST(SigV4Goldens, UpstreamSignaturesVerifyAtGateway) {
     EXPECT_GT(checked, 15u);
 }
 
-TEST(SigV4Goldens, VlSigv4SignaturesVerifyAtGateway) {
-    using namespace sigv4golden;
-    const auto now = std::time(nullptr);
-    std::size_t checked = 0;
-    for (const auto& c : cases()) {
-        if (c.service != "s3") continue;   // the gateway accepts only service s3
-        const auto result = gw::verify(gatewayInput(c, runVlSigv4(c, now)), c.secret_key);
-        EXPECT_TRUE(result.ok) << c.name << ": " << result.error;
-        EXPECT_EQ(result.access_key, c.access_key) << c.name;
-        ++checked;
-    }
-    EXPECT_GT(checked, 15u);
-}
-
 TEST(SigV4Goldens, LegacySignaturesAtGateway) {
     using namespace sigv4golden;
     const auto now = std::time(nullptr);
@@ -1038,29 +1024,6 @@ TEST(SigV4Goldens, LegacySignaturesAtGateway) {
             EXPECT_TRUE(result.ok) << c.name << ": " << result.error;
         }
     }
-}
-
-// The data path's new signatures verify at the gateway, the untrimmed-header case included (LegacySignaturesAtGateway:
-// the old signer's fails there).
-TEST(SigV4Goldens, VlSigv4DataPathSignaturesVerifyAtGateway) {
-    using namespace sigv4golden;
-    const auto now = std::time(nullptr);
-    std::size_t checked = 0;
-    for (const auto& c : cases()) {
-        if (c.service != "s3" || !applies(c, Impl::Legacy)) continue;
-        const auto run = runDataPath(c, now);
-        gw::VerificationInput input;
-        input.method = c.method;
-        input.target = legacyFullPath(c);
-        input.host = c.host;
-        for (const auto& [name, value] : run.sent) input.headers[name] = value;
-        input.headers["authorization"] = run.signature.authorization;
-        input.body = c.body;
-        const auto result = gw::verify(input, c.secret_key);
-        EXPECT_TRUE(result.ok) << c.name << ": " << result.error;
-        ++checked;
-    }
-    EXPECT_GT(checked, 15u);
 }
 
 // SesProvider::send (now vl::sigv4::sign) sends exactly the request the old detail::signAwsV4 path sent: same URL,

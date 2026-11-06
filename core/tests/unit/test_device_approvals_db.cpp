@@ -12,60 +12,26 @@
 //   - table-driven over the contract: every command a paired device may run that has no step_up annotation never
 //     answers step_up_required (Desktop's routine traffic never prompts).
 // DB-free half: test_device_approvals.cpp.
-#include "../helpers/identities.hpp"
+#include "../helpers/db_suite.hpp"
+#include "../helpers/web_session.hpp"
 #include "Contract.hpp"
 #include "audit/Trail.hpp"
-#include "auth/Manager.hpp"
 #include "auth/approval/Approvals.hpp"
-#include "auth/mfa/Factors.hpp"
-#include "auth/mfa/Policy.hpp"
-#include "auth/mfa/SignIn.hpp"
-#include "auth/model/RefreshToken.hpp"
-#include "auth/model/TokenPair.hpp"
-#include "auth/session/Assurance.hpp"
-#include "auth/session/Issuer.hpp"
-#include "auth/session/Manager.hpp"
-#include "auth/stepup/StepUp.hpp"
-#include "auth/webauthn/Base64Url.hpp"
-#include "config/Registry.hpp"
-#include "crypto/util/hash.hpp"
-#include "db/Transactions.hpp"
 #include "db/query/device/ApprovalKey.hpp"
-#include "db/query/device/Device.hpp"
-#include "db/query/rbac/role/Admin.hpp"
-#include "device/Crypto.hpp"
 #include "device/Pairing.hpp"
-#include "device/Peer.hpp"
 #include "device/ServerIdentity.hpp"
-#include "fs/Filesystem.hpp"
-#include "identities/Manager.hpp"
-#include "identities/User.hpp"
 #include "ops/Devices.hpp"
 #include "ops/Error.hpp"
 #include "protocols/device/Endpoints.hpp"
 #include "protocols/ws/Handler.hpp"
-#include "protocols/ws/Router.hpp"
-#include "protocols/ws/Session.hpp"
-#include "protocols/ws/core/Refusal.hpp"
-#include "protocols/ws/handler/Approvals.hpp"
 #include "protocols/ws/handler/Devices.hpp"
-#include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
-#include "webauthn/Fixtures.hpp"
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
-#include <openssl/evp.h>
-#include <openssl/x509.h>
-#include <paths.h>
 #include <pqxx/pqxx>
-#include <unistd.h>
 
 #include <chrono>
-#include <cstdlib>
 #include <functional>
-#include <iostream>
 #include <map>
 #include <memory>
 #include <set>
@@ -73,122 +39,30 @@
 
 namespace vh::auth::approval::test_device_approvals_db {
 
-using json = nlohmann::json;
-using SessionPtr = std::shared_ptr<protocols::ws::Session>;
+using namespace vh::test::web;
 using SysClock = std::chrono::system_clock;
 namespace crypto = vh::device::crypto;
 namespace h = protocols::ws::handler;
-namespace wa = vh::auth::webauthn;
 namespace tw = vh::test_webauthn;
 using stepup::Family;
 using stepup::Scope;
 
-struct Answer {
-    bool ok{false};
-    json data{};
-    std::string code{};
-    std::string message{};
-};
-
-Answer call(const std::function<json()>& fn) {
-    try {
-        return {.ok = true, .data = fn()};
-    } catch (...) {
-        auto reply = protocols::ws::core::describeCurrentError();
-        const auto code = reply.data.is_object() ? reply.data.value("code", std::string{}) : std::string{};
-        return {.ok = false, .data = reply.data, .code = code, .message = reply.message};
-    }
-}
-
-// A command as the router runs it: under the request's step-up scope.
-Answer run(const SessionPtr& s, const std::function<json()>& fn) {
-    const Scope scope(s);
-    return call(fn);
-}
-
-// A P-256 key standing in for Desktop's Secure Enclave approval key.
-class ApprovalKey {
-public:
-    ApprovalKey() : key_(EVP_PKEY_Q_keygen(nullptr, nullptr, "EC", "P-256")) {
-        if (!key_) throw std::runtime_error("keygen");
-    }
-    ~ApprovalKey() { EVP_PKEY_free(key_); }
-    ApprovalKey(const ApprovalKey&) = delete;
-    ApprovalKey& operator=(const ApprovalKey&) = delete;
-
-    [[nodiscard]] std::vector<uint8_t> spki() const {
-        unsigned char* der = nullptr;
-        const int len = i2d_PUBKEY(key_, &der);
-        std::vector<uint8_t> out(der, der + len);
-        OPENSSL_free(der);
-        return out;
-    }
-    [[nodiscard]] std::string spkiB64() const { return crypto::toBase64(spki()); }
-    [[nodiscard]] std::string spkiHex() const { return crypto::toHex(crypto::sha256(spki())); }
-
-    [[nodiscard]] std::vector<uint8_t> sign(const std::vector<uint8_t>& message) const {
-        EVP_MD_CTX* ctx = EVP_MD_CTX_new();
-        std::size_t len = 0;
-        EVP_DigestSignInit(ctx, nullptr, EVP_sha256(), nullptr, key_);
-        EVP_DigestSign(ctx, nullptr, &len, message.data(), message.size());
-        std::vector<uint8_t> sig(len);
-        EVP_DigestSign(ctx, sig.data(), &len, message.data(), message.size());
-        EVP_MD_CTX_free(ctx);
-        sig.resize(len);
-        return sig;
-    }
-
-private:
-    EVP_PKEY* key_;
-};
-
-constexpr auto kPassword = "Approvals-Pass-1-xyz";
-
-class DeviceApprovalsDb : public ::testing::Test {
+class DeviceApprovalsDb : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
-    inline static int counter = 0;
-    std::shared_ptr<session::Manager> previousSessions;
-    std::shared_ptr<auth::Manager> previousAuth;
-    std::optional<config::Config> previousConfig;
+    AuthRuntime auth_{{.level = mfa::policy::Level::Optional}};
     std::shared_ptr<const vh::device::ServerIdentity> previousIdentity;
 
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            std::cout << "[test_device_approvals] Skipping db tests due to missing environment variables." << std::endl;
-            return;
-        }
-        paths::enableTestMode();
-        const auto root = std::filesystem::temp_directory_path() / ("vh_device_approvals_" + std::to_string(::getpid()));
-        paths::backingPath = root / "backing";
-        std::filesystem::create_directories(paths::backingPath);
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        runtime::Deps::init();
-        fs::Filesystem::init(runtime::Deps::get().storageManager);
+        if (!setUpDbSuite("device_approvals", {.freshEngines = false})) return;
         protocols::device::endpoints::clearNodeIdForTesting();
         audit::Trail::instance()->resetForTesting();
     }
 
+    static void TearDownTestSuite() { tearDownDbSuite(); }
+
     void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
-        session::Issuer::setJwtSecretForTesting("device-approvals-test-secret");
-        previousSessions = runtime::Deps::get().sessionManager;
-        previousAuth = runtime::Deps::get().authManager;
-        runtime::Deps::get().sessionManager = std::make_shared<session::Manager>();
-        runtime::Deps::get().authManager = std::make_shared<auth::Manager>();
-        previousConfig = config::Registry::get();
-        auto cfg = *previousConfig;
-        cfg.auth.webauthn.rp_id = std::string(tw::kRpId);
-        cfg.auth.webauthn.origins = {std::string(tw::kOrigin)};
-        config::Registry::set(cfg);
-        mfa::policy::setLevel(mfa::policy::Level::Optional);
-        session::assurance::setPolicy(nullptr);
-        mfa::signin::resetAccountFailuresForTesting();
+        Suite::SetUp();
+        if (IsSkipped()) return;
         previousIdentity = vh::device::currentServerIdentity();
         vh::device::setCurrentServerIdentity(vh::device::ServerIdentity::generate());
         vh::device::Pairing::instance().resetForTesting();
@@ -202,66 +76,15 @@ protected:
         resetForTesting();
         vh::device::Pairing::instance().resetForTesting();
         vh::device::setCurrentServerIdentity(previousIdentity);
-        mfa::policy::setLevel(mfa::policy::Level::Admins);
-        if (previousConfig) config::Registry::set(*previousConfig);
-        runtime::Deps::get().sessionManager = previousSessions;
-        runtime::Deps::get().authManager = previousAuth;
-        session::Issuer::clearJwtSecretForTesting();
     }
-
-    static std::string tag() { return std::to_string(::getpid()) + "_" + std::to_string(++counter); }
-
-    static std::shared_ptr<identities::User> newUser(const std::string& role) {
-        const auto r = db::query::rbac::role::Admin::get(role);
-        if (!r) throw std::runtime_error("Missing role " + role);
-        return vh::identities::manager().user(
-            test::identities::createUser("da_" + role + "_" + tag(), r, std::nullopt,
-                                         vh::crypto::hash::password(kPassword))->id);
-    }
-
-    static session::Manager& sessions() { return *runtime::Deps::get().sessionManager; }
 
     // A signed-in console session (aal 1, an old sign-in: it never stands in for a step-up).
-    static SessionPtr console(const std::shared_ptr<identities::User>& user) {
-        auto s = std::make_shared<protocols::ws::Session>(std::make_shared<protocols::ws::Router>());
-        s->ipAddress = "127.0.0.1";
-        s->userAgent = "approvals-browser";
-        model::RefreshToken::addToSession(s, {});
-        sessions().tryRehydrate(s);
+    static SessionPtr console(const UserPtr& user) {
+        auto s = connect({}, "approvals-browser");
         s->setAuthenticatedUser(user);
         sessions().promote(s);
         s->tokens->refreshToken->authTime = SysClock::now() - std::chrono::hours(2);
         return s;
-    }
-
-    struct Paired {
-        vh::device::Device row;
-        std::shared_ptr<vh::device::Peer> peer;
-        SessionPtr session;
-    };
-
-    // A paired device of `user` (its mTLS key a fixed fake hash), with `approvalKey` registered at pairing if given.
-    static Paired pairedDevice(const std::shared_ptr<identities::User>& user, const ApprovalKey* approvalKey = nullptr) {
-        auto peer = std::make_shared<vh::device::Peer>();
-        peer->spki = crypto::randomNonce();
-        peer->spkiHex = crypto::toHex(peer->spki);
-        peer->address = "192.0.2.10";
-        db::query::device::NewDevice d{.user_id = user->id, .approved_by = user->id, .name = "Mac " + tag(),
-                                       .platform = "macOS", .app_version = "1.0", .spki_sha256 = peer->spkiHex,
-                                       .last_ip = "192.0.2.10"};
-        if (approvalKey) {
-            d.approval_key_spki = approvalKey->spki();
-            d.approval_key_sha256 = approvalKey->spkiHex();
-        }
-        const auto row = db::query::device::Devices::insert(d);
-        peer->deviceRowId = row.id;
-        auto session = protocols::ws::Session::devicePrincipal(peer, user, [] {});
-        return {.row = row, .peer = peer, .session = session};
-    }
-
-    // Another session of the same device (a reconnect).
-    static SessionPtr reconnect(const Paired& d, const std::shared_ptr<identities::User>& user) {
-        return protocols::ws::Session::devicePrincipal(d.peer, user, [] {});
     }
 
     // A pairing request from a new device, confirmed: what the window's owner sees.
@@ -284,21 +107,6 @@ protected:
                 .code = *vh::device::Pairing::instance().codeForTesting(receipt.request_id)};
     }
 
-    // Asks for a challenge and answers it with `key` over the payload `edit` makes of the canonical one.
-    static Answer approveWithKey(const SessionPtr& s, const ApprovalKey& key, const std::string& family,
-                                 const std::string& target,
-                                 const std::function<std::vector<uint8_t>(const json&, std::vector<uint8_t>)>& edit = {}) {
-        const auto c = run(s, [&] { return h::Approvals::challenge(json{{"family", family}, {"target", target}}, s); });
-        if (!c.ok) return c;
-        auto payload = *crypto::fromBase64(c.data.at("payload_b64").get<std::string>());
-        if (edit) payload = edit(c.data, payload);
-        return run(s, [&] {
-            return h::Approvals::submit(json{{"challenge_id", c.data.at("challenge_id")},
-                                             {"signature_b64", crypto::toBase64(key.sign(payload))}},
-                                        s);
-        });
-    }
-
     // The canonical payload of a challenge answer, with one field replaced.
     struct PayloadFields {
         std::string node;
@@ -319,39 +127,12 @@ protected:
         return *crypto::approvalMessage(f.node, f.server, f.device, f.challenge, f.family, f.target, f.expires);
     }
 
-    // ---- a software authenticator (real WebAuthn: ES256)
-
-    struct Authenticator {
-        tw::TestKey key{wa::Algorithm::ES256};
-        wa::Bytes credentialId = tw::randomBytes(32);
-        uint32_t signCount = 0;
-    };
-
-    static void enrollPasskey(const std::shared_ptr<identities::User>& user, Authenticator& a) {
-        (void)mfa::ensureUser(user->id);
-        (void)mfa::addWebAuthnCredential(user->id, {.credential_id = a.credentialId, .public_key_cose = a.key.cose(),
-                                                    .cose_alg = -7, .rp_id = std::string(tw::kRpId),
-                                                    .attestation_fmt = "none", .label = "Laptop"});
-    }
-
-    static json assertion(Authenticator& a, const json& publicKey, const uint8_t flags = tw::flags::UP | tw::flags::UV) {
-        const auto challenge = *wa::base64urlDecode(publicKey.at("challenge").get<std::string>());
-        const auto cd = tw::bytesOf(tw::clientDataJSON("webauthn.get", challenge));
-        const auto ad = tw::authenticatorData(flags, ++a.signCount);
-        const auto sig = a.key.sign(tw::concat({ad, tw::sha256(cd)}));
-        const auto id = wa::base64urlEncode(a.credentialId);
-        return {{"id", id}, {"rawId", id}, {"type", "public-key"},
-                {"response", {{"clientDataJSON", wa::base64urlEncode(cd)},
-                              {"authenticatorData", wa::base64urlEncode(ad)},
-                              {"signature", wa::base64urlEncode(sig)}}}};
-    }
-
     // A person approving `approvalId` on `web` with their passkey.
-    static Answer consoleApprove(const SessionPtr& web, Authenticator& a, const std::string& approvalId,
+    static Answer consoleApprove(const SessionPtr& web, tw::Authenticator& a, const std::string& approvalId,
                                  const uint8_t flags = tw::flags::UP | tw::flags::UV) {
         const auto begun = run(web, [&] { return h::Approvals::approve(json{{"approval_id", approvalId}}, web); });
         if (!begun.ok) return begun;
-        const auto credential = assertion(a, begun.data.at("webauthn").at("publicKey"), flags);
+        const auto credential = tw::assertionJson(a, begun.data.at("webauthn").at("publicKey"), flags);
         return run(web, [&] {
             return h::Approvals::approve(json{{"approval_id", approvalId}, {"credential", credential}}, web);
         });
@@ -603,7 +384,7 @@ TEST_F(DeviceApprovalsDb, AnApprovalKeySignatureMustMatchEverythingOnce) {
 // lands on the session that asked.
 TEST_F(DeviceApprovalsDb, AConsoleApprovalTakesAPasskeyAndLandsOnTheAskingSession) {
     const auto owner = newUser("unprivileged");
-    Authenticator passkey;
+    tw::Authenticator passkey;
     enrollPasskey(owner, passkey);
     const auto web = console(owner);
     const auto stranger = console(newUser("unprivileged"));
@@ -748,7 +529,7 @@ TEST_F(DeviceApprovalsDb, ConsoleApprovalRequestsAreRateLimitedPerDevice) {
 // An already-paired Desktop registers its approval key once, approved by a person in the console.
 TEST_F(DeviceApprovalsDb, AnApprovalKeyIsRegisteredLaterThroughAConsoleApproval) {
     const auto owner = newUser("unprivileged");
-    Authenticator passkey;
+    tw::Authenticator passkey;
     enrollPasskey(owner, passkey);
     const auto web = console(owner);
     const auto paired = pairedDevice(owner);

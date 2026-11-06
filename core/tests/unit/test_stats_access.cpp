@@ -6,6 +6,7 @@
 // #160: 24 h trends read the same rollups as 7 d (never more points), unknown amounts are null rather than fake
 // zeros, counts carry numeric_value, money carries numeric_value + currency, and hrefs are console routes.
 
+#include "../helpers/db_suite.hpp"
 #include "../helpers/identities.hpp"
 #include "config/Registry.hpp"
 #include "db/Transactions.hpp"
@@ -13,8 +14,6 @@
 #include "db/query/rbac/role/Admin.hpp"
 #include "db/query/stats/MetricSamples.hpp"
 #include "db/query/stats/Snapshot.hpp"
-#include "fs/Filesystem.hpp"
-#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "ops/Error.hpp"
 #include "ops/Stats.hpp"
@@ -24,9 +23,6 @@
 #include "protocols/ws/Session.hpp"
 #include "protocols/ws/handler/Stats.hpp"
 #include "rbac/role/Admin.hpp"
-#include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
 #include "stats/model/CacheStats.hpp"
 #include "stats/model/DashboardOverview.hpp"
 #include "stats/model/StatsTrends.hpp"
@@ -35,14 +31,12 @@
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
-#include <paths.h>
 
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <functional>
-#include <iostream>
 #include <memory>
 #include <regex>
 #include <set>
@@ -159,10 +153,9 @@ TEST(StatsPayloads, CacheCapacityIsNullWhenTheCacheHasNoCap) {
 // DB-backed: real users, roles and vaults
 // ---------------------------------------------------------------------------------------------------------------
 
-class StatsAccessTest : public ::testing::Test {
+class StatsAccessTest : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
-    inline static UserPtr superUser, orgAdmin, auditor, vaultAdmin, support, alice, bob;
+    inline static UserPtr orgAdmin, auditor, vaultAdmin, support, alice, bob;
     inline static uint32_t aliceVault = 0, bobVault = 0;
 
     static UserPtr createUser(const std::string& prefix, const std::string& roleName) {
@@ -176,26 +169,7 @@ protected:
     }
 
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            std::cout << "[test_stats_access] Skipping db tests due to missing environment variables." << std::endl;
-            return;
-        }
-        paths::enableTestMode();
-        const auto root = std::filesystem::temp_directory_path() / ("vh_stats_access_" + statsTag());
-        paths::backingPath = root / "backing";
-        paths::mountPath = root / "mount";
-        std::filesystem::create_directories(paths::backingPath);
-        std::filesystem::create_directories(paths::mountPath);
-
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        runtime::Deps::init();
-        fs::Filesystem::init(runtime::Deps::get().storageManager);
-
+        if (!setUpDbSuite("test_stats_access", {.freshEngines = false})) return;
         superUser = createUser("sa_super", "super_admin");
         orgAdmin = createUser("sa_admin", "admin");
         auditor = createUser("sa_auditor", "auditor");
@@ -207,9 +181,7 @@ protected:
         bobVault = vaultFor(bob);
     }
 
-    void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
-    }
+    static void TearDownTestSuite() { tearDownDbSuite(); }
 
     static bool allowed(const std::function<void()>& fn) {
         try {

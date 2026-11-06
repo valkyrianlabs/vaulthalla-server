@@ -3,81 +3,34 @@
 // #161: every vault reported (and was quota-checked against) the size of the whole shared backing root, so an empty
 // vault showed the default vault's bytes. A vault's physical size is now its own backing tree only.
 
-#include "db/Transactions.hpp"
+#include "../helpers/db_suite.hpp"
 #include "db/query/identities/User.hpp"
-#include "fs/Filesystem.hpp"
 #include "fs/model/File.hpp"
 #include "fs/model/Path.hpp"
-#include "identities/Manager.hpp"
-#include "identities/User.hpp"
 #include "ops/Vaults.hpp"
 #include "protocols/ws/Router.hpp"
 #include "protocols/ws/Session.hpp"
 #include "protocols/ws/handler/vault/Vaults.hpp"
-#include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
 #include "stats/model/StorageBackendStats.hpp"
 #include "storage/Engine.hpp"
-#include "storage/Manager.hpp"
 #include "vault/model/Capacity.hpp"
 #include "vault/model/Vault.hpp"
 
-#include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
-#include <paths.h>
 
-#include <atomic>
-#include <chrono>
 #include <cstdint>
-#include <cstdlib>
-#include <filesystem>
-#include <iostream>
-#include <memory>
-#include <string>
 #include <vector>
 
 namespace vh::test_vault_size {
 
 using UserPtr = std::shared_ptr<identities::User>;
 
-std::string vsTag() {
-    static std::atomic<unsigned> n{0};
-    static const auto run = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count() % 100000);
-    return run + "x" + std::to_string(n.fetch_add(1));
-}
+std::string vsTag() { return test::uniqueTag('x'); }
 
-class VaultSizeDbTest : public ::testing::Test {
+class VaultSizeDbTest : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
-    inline static UserPtr superUser;
-
-    static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            std::cout << "[test_vault_size] Skipping db tests due to missing environment variables." << std::endl;
-            return;
-        }
-        paths::enableTestMode();
-        const auto root = std::filesystem::temp_directory_path() / ("vh_vault_size_" + vsTag());
-        paths::backingPath = root / "backing";
-        paths::mountPath = root / "mount";
-        std::filesystem::create_directories(paths::backingPath);
-        std::filesystem::create_directories(paths::mountPath);
-
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        runtime::Deps::init();
-        fs::Filesystem::init(runtime::Deps::get().storageManager);
-        superUser = vh::identities::manager().userByName("admin");
-    }
-
-    void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
-    }
+    static void SetUpTestSuite() { (void)setUpDbSuite("test_vault_size", {.freshEngines = false}); }
+    static void TearDownTestSuite() { tearDownDbSuite(); }
 
     static std::shared_ptr<storage::Engine> newLocalVault(const std::string& prefix, const uintmax_t quota = 0) {
         const auto vault = ops::vaults::create(superUser, {.name = prefix + "_" + vsTag(),

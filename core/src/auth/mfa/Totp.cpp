@@ -3,6 +3,9 @@
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
 #include <sodium.h>
+#include <paths.h>
+
+#include <atomic>
 
 #include <array>
 #include <cctype>
@@ -55,6 +58,21 @@ void appendTotpPercentEncoded(std::string& out, const std::string_view text) {
 }
 
 crypto::SecretBytes generateSecret() { return crypto::SecretBytes::random(kSecretBytes); }
+
+namespace {
+std::atomic<int64_t> clockOffsetSecondsForTesting{0};
+}
+
+std::chrono::system_clock::time_point now() {
+    return std::chrono::system_clock::now() + std::chrono::seconds(clockOffsetSecondsForTesting.load());
+}
+
+void advanceClockForTesting(const std::chrono::seconds by) {
+    if (!paths::isTestMode()) throw std::logic_error("totp::advanceClockForTesting: refused outside test mode");
+    clockOffsetSecondsForTesting += by.count();
+}
+
+void resetClockForTesting() { clockOffsetSecondsForTesting = 0; }
 
 int64_t stepAt(const std::chrono::system_clock::time_point t) {
     const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(t.time_since_epoch()).count();

@@ -91,26 +91,7 @@ protected:
 
     // One regular sync pass, inline: the real planner, transfers and index/manifest bookkeeping.
     static std::vector<sync::model::Action> runPass(const VFixture& f) {
-        auto cloud = std::make_shared<sync::Cloud>(f.engine);
-        cloud->event = std::make_shared<sync::model::Event>();
-        cloud->event->vault_id = f.vault->id;
-        cloud->event->timestamp_begin = std::time(nullptr);
-        db::query::sync::Event::create(cloud->event);
-        cloud->initBins();
-        const auto plan = cloud->planPass();
-        for (const auto& a : plan) {
-            using AT = sync::model::ActionType;
-            if (a.type == AT::EnsureDirectories) cloud->ensureDirectoriesFromRemote();
-            else if (a.type == AT::Upload)
-                sync::tasks::Upload(f.engine, a.local, cloud->op(sync::model::Throughput::Metric::UPLOAD))();
-            else if (a.type == AT::Download)
-                sync::tasks::Download(f.engine, a.remote, cloud->op(sync::model::Throughput::Metric::DOWNLOAD), false)();
-            else if (a.type == AT::IndexRemoteOnly)
-                sync::tasks::Download(f.engine, a.remote, cloud->op(sync::model::Throughput::Metric::INDEX), true)();
-        }
-        f.engine->applyRemoteIndexMutation(plan);
-        cloud->clearBins();
-        return plan;
+        return test_support::versioned::runSyncPass(f.engine, {.remoteOnlyActions = true}).plan;
     }
 
     static unsigned transfers(const std::vector<sync::model::Action>& plan) {

@@ -1,23 +1,20 @@
+#include "../helpers/db_suite.hpp"
+
 #include "audit/Chain.hpp"
 #include "audit/Trail.hpp"
 #include "config/Config.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/audit/Trail.hpp"
-#include "fs/Filesystem.hpp"
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
 #include "ops/Audit.hpp"
 #include "ops/Error.hpp"
 #include "ops/Users.hpp"
-#include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 #include <pqxx/pqxx>
-#include <paths.h>
 
 #include <chrono>
 #include <filesystem>
@@ -200,36 +197,15 @@ TEST(AuditTrailConfig, ValidatesRetentionIntervalAndFacility) {
 
 // ---- against the database ----------------------------------------------------------------------------------------
 
-class AuditTrailDbTest : public ::testing::Test {
+class AuditTrailDbTest : public vh::test::db::Suite {
 protected:
-    inline static bool skip = false;
     inline static std::shared_ptr<vh::identities::User> admin, plain;
-    inline static std::filesystem::path root;
 
-    static void TearDownTestSuite() {
-        std::error_code ec;
-        if (!root.empty()) std::filesystem::remove_all(root, ec);
-    }
+    static void TearDownTestSuite() { tearDownDbSuite(); }
 
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skip = true;
-            return;
-        }
-        vh::paths::enableTestMode();
-        root = std::filesystem::temp_directory_path() / ("vh_audit_trail_" + std::to_string(::getpid()));
-        vh::paths::backingPath = root / "backing";
-        vh::paths::mountPath = root / "mount";
-        std::filesystem::create_directories(vh::paths::backingPath);
-        std::filesystem::create_directories(vh::paths::mountPath);
-        vh::db::Transactions::init();
-        vh::db::seed::nuke_and_recreate_schema_public();
-        vh::db::Transactions::dbPool_->initPreparedStatements();
-        vh::seed::seed_database();
-        vh::runtime::Deps::init();
-        vh::fs::Filesystem::init(vh::runtime::Deps::get().storageManager);
-        admin = vh::identities::manager().userByName("admin");
+        if (!setUpDbSuite("test_audit_trail", {.freshEngines = false})) return;
+        admin = superUser;
         const auto created = vh::ops::users::create(
             admin, {.name = "audit_plain_" + std::to_string(::getpid()), .role = "unprivileged",
                     .password = std::string("Audit-Trail-Pass-123")});
@@ -238,7 +214,8 @@ protected:
     }
 
     void SetUp() override {
-        if (skip) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
+        Suite::SetUp();
+        if (IsSkipped()) return;
         ASSERT_TRUE(vh::audit::Trail::instance()->flushNow());
     }
 

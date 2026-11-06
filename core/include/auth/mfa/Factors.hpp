@@ -1,5 +1,6 @@
 #pragma once
 
+#include "auth/mfa/Totp.hpp"
 #include "auth/webauthn/Types.hpp"
 
 #include <nlohmann/json_fwd.hpp>
@@ -118,15 +119,13 @@ struct TotpEnrollment {
 // factor becomes usable and the code's step is spent. nullopt for a wrong code; ops::NotFound when there is no such
 // pending enrollment (unknown, already confirmed or expired). Audited as auth.mfa.factor.enroll.
 [[nodiscard]] std::optional<Factor> confirmTotp(uint32_t userId, uint32_t factorId, std::string_view code,
-                                                std::chrono::system_clock::time_point now =
-                                                    std::chrono::system_clock::now());
+                                                std::chrono::system_clock::time_point now = totp::now());
 
 // A sign-in or step-up code: the id of the confirmed factor it matched, claiming its step, or nullopt (wrong code,
 // replayed step, drift beyond one step, no TOTP factor). keys::Unavailable without mfa_seal. Not audited here: the
 // flow records auth.mfa.verify with its attempt count.
 [[nodiscard]] std::optional<uint32_t> verifyTotp(uint32_t userId, std::string_view code,
-                                                 std::chrono::system_clock::time_point now =
-                                                     std::chrono::system_clock::now());
+                                                 std::chrono::system_clock::time_point now = totp::now());
 
 // Deletes enrollments never confirmed within kTotpEnrollmentTtl (the database sweeper). Returns how many.
 std::size_t purgeExpiredTotpEnrollments();

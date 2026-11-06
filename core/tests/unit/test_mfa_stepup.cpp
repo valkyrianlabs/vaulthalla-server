@@ -4,18 +4,12 @@
 // single-use grant once); a fresh aal 2 sign-in standing in for family-wide grants; the ws refusal's shape; the router
 // setting the scope; and the contract annotations (every annotated command booked with the refusal, no other command
 // declaring it, Desktop's routine commands unannotated). The DB-backed half is test_mfa_stepup_db.cpp.
+#include "../helpers/web_session.hpp"
 #include "Contract.hpp"
 #include "WsProtocol.hpp"
-#include "auth/model/RefreshToken.hpp"
-#include "auth/model/TokenPair.hpp"
 #include "auth/mfa/Recovery.hpp"
-#include "auth/stepup/StepUp.hpp"
-#include "identities/User.hpp"
 #include "ops/BackupGrants.hpp"
 #include "ops/Error.hpp"
-#include "protocols/ws/Router.hpp"
-#include "protocols/ws/Session.hpp"
-#include "protocols/ws/core/Refusal.hpp"
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
@@ -30,49 +24,8 @@
 
 namespace vh::auth::stepup::test_stepup {
 
-using json = nlohmann::json;
-using SessionPtr = std::shared_ptr<protocols::ws::Session>;
+using namespace vh::test::web;
 using SysClock = std::chrono::system_clock;
-
-struct Answer {
-    bool ok{false};
-    json data{};
-    std::string code{};
-    std::string message{};
-};
-
-Answer call(const std::function<json()>& fn) {
-    try {
-        return {.ok = true, .data = fn()};
-    } catch (...) {
-        auto reply = protocols::ws::core::describeCurrentError();
-        const auto code = reply.data.is_object() ? reply.data.value("code", std::string{}) : std::string{};
-        return {.ok = false, .data = reply.data, .code = code, .message = reply.message};
-    }
-}
-
-// A signed-in web socket without a database: a detached user and a refresh row in memory.
-SessionPtr detachedWebSession(const uint32_t userId, const uint8_t aal = 1,
-                              std::vector<std::string> amr = {"pwd"},
-                              const SysClock::time_point authTime = SysClock::now() - std::chrono::hours(1)) {
-    auto s = std::make_shared<protocols::ws::Session>(std::make_shared<protocols::ws::Router>());
-    identities::UserState state;
-    state.name = "stepup-" + std::to_string(userId);
-    s->user = identities::User::detached(userId, std::move(state));
-    s->tokens->refreshToken = std::make_shared<model::RefreshToken>();
-    s->tokens->refreshToken->jti = "jti-" + std::to_string(userId);
-    s->tokens->refreshToken->aal = aal;
-    s->tokens->refreshToken->amr = std::move(amr);
-    s->tokens->refreshToken->authTime = authTime;
-    return s;
-}
-
-Grant grantFor(const SessionPtr& s, const Family family, std::optional<std::string> target = std::nullopt,
-               const std::chrono::seconds ttl = std::chrono::seconds(300)) {
-    return {.user_id = s->user->id, .refresh_jti = s->tokens->refreshToken->jti, .family = family,
-            .target = targetBound(family) ? std::move(target) : std::nullopt, .method = "test",
-            .expires_at = SysClock::now() + ttl};
-}
 
 // ── DB-free ───────────────────────────────────────────────────────────────────────────────────────────────────────────
 

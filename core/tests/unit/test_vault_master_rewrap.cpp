@@ -1,42 +1,29 @@
-// Versioned vault_master rewrap (#352, design/sealing/master-secrets.md §6, migration 121). The acceptance matrix:
-// interrupted staging at every batch boundary and at every other crash point (between verify and switch included),
-// writes during staging and during the window, an old/new master mismatch and a tampered staged wrap, TPM loss mid
-// staging and mid window, live/retired/deleted vault keys, explicit rollback (staging and window), finalize (by hand
-// and on expiry), and a restore on a new host from the database, the vault-key exports and the attestation records.
-// Every crash point is followed by the same proof: every key row unwraps under the master it names and is its
+// Versioned vault_master rewrap (#352, design/sealing/master-secrets.md §6, migration 121). The engine is generic
+// (crypto/secrets/Rewrap.cpp); its slot-independent matrix (expiry, an old/new master mismatch, an unreadable row, TPM
+// loss mid staging, rollback while staging and inside the window, the --slot CLI) runs in test_master_secret_rotation.
+// Here what is the vault master's own: live/retired/deleted vault keys across three tables, interrupted staging at
+// every batch boundary and crash point, writes during staging, a staged wrap of another key, TPM loss mid window, the
+// CLI without --slot, and a restore on a new host from the database, the vault-key exports and the attestation
+// records. Every step is followed by the same proof: every key row unwraps under the master it names and is its
 // recorded key, every row names the current master, and no file body changed.
 
-#include "audit/Trail.hpp"
+#include "../helpers/rewrap_fixture.hpp"
+
 #include "crypto/SecretBytes.hpp"
-#include "crypto/secrets/KeyProvider.hpp"
 #include "crypto/util/encrypt.hpp"
-#include "db/Transactions.hpp"
 #include "db/encoding/bytea.hpp"
 #include "db/query/fs/File.hpp"
 #include "device/Peer.hpp"
-#include "fs/Filesystem.hpp"
-#include "fs/cache/Registry.hpp"
 #include "fs/model/File.hpp"
-#include "identities/Manager.hpp"
-#include "identities/User.hpp"
 #include "ops/Error.hpp"
-#include "ops/Users.hpp"
 #include "ops/VaultKeys.hpp"
 #include "ops/MasterSecrets.hpp"
 #include "ops/Vaults.hpp"
-#include "protocols/shell/Router.hpp"
-#include "protocols/shell/commands/all.hpp"
-#include "protocols/shell/types.hpp"
 #include "protocols/ws/Router.hpp"
 #include "protocols/ws/Session.hpp"
 #include "protocols/ws/handler/vault/Keys.hpp"
-#include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
 #include "storage/Engine.hpp"
-#include "storage/Manager.hpp"
 #include "storage/PlaintextReader.hpp"
-#include "UsageManager.hpp"
 #include "vault/EncryptionManager.hpp"
 #include "vault/KeyAttestation.hpp"
 #include "vault/KeyCheck.hpp"
@@ -46,23 +33,13 @@
 #include "vault/model/Key.hpp"
 #include "vault/model/Vault.hpp"
 
-#include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
-#include <paths.h>
 #include <sodium.h>
 
-#include <algorithm>
-#include <atomic>
-#include <chrono>
-#include <cstdlib>
-#include <filesystem>
 #include <fstream>
-#include <iostream>
 #include <iterator>
 #include <map>
 #include <set>
-#include <string>
-#include <vector>
 
 namespace vh::test_vault_master_rewrap {
 
@@ -73,15 +50,10 @@ namespace rw = vault::master::rewrap;
 namespace vm = vault::master;
 using WsKeys = protocols::ws::handler::VaultKeys;
 
-struct SimulatedCrash : std::runtime_error {
-    SimulatedCrash() : std::runtime_error("simulated crash") {}
-};
+using test::rewrap::crashAt;
+using test::rewrap::SimulatedCrash;
 
-std::string tag() {
-    static std::atomic<unsigned> n{0};
-    static const auto run = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count() % 100000);
-    return run + "m" + std::to_string(n.fetch_add(1));
-}
+std::string tag() { return test::uniqueTag('m'); }
 
 // One vault key row, as stored.
 struct StoredRow {
@@ -92,64 +64,16 @@ struct StoredRow {
     bool next{false}, prev{false};
 };
 
-class VaultMasterRewrapTest : public ::testing::Test {
+class VaultMasterRewrapTest : public test::rewrap::Fixture {
 protected:
-    inline static bool skipTests = false;
-    inline static UserPtr superUser;
-    inline static std::shared_ptr<protocols::shell::Router> router;
-    inline static std::filesystem::path root;
-
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            std::cout << "[test_vault_master_rewrap] Skipping db tests due to missing environment variables." << std::endl;
-            return;
-        }
-        paths::enableTestMode();
-        root = std::filesystem::temp_directory_path() / ("vh_master_rewrap_" + tag());
-        paths::backingPath = root / "backing";
-        paths::mountPath = root / "mount";
-        std::filesystem::create_directories(paths::backingPath);
-        std::filesystem::create_directories(paths::mountPath);
-
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        vm::resetForTesting();
-        vault::attestation::resetForTesting();
-        runtime::Deps::init();
-        fs::Filesystem::init(runtime::Deps::get().storageManager);
-        runtime::Deps::get().fsCache = std::make_shared<fs::cache::Registry>();
-        runtime::Deps::get().storageManager->initStorageEngines();
-        superUser = identities::manager().userByName("admin");
-
-        if (!runtime::Deps::get().shellUsageManager)
-            runtime::Deps::get().shellUsageManager = std::make_shared<protocols::shell::UsageManager>();
-        router = std::make_shared<protocols::shell::Router>();
-        protocols::shell::commands::registerSecretsCommands(router);
+        if (setUpRewrapSuite("master_rewrap", true, false)) vault::attestation::resetForTesting();
     }
 
     static void TearDownTestSuite() {
-        if (skipTests) return;
-        (void)runtime::Deps::releaseSessions();  // the sessions this suite cached (#397)
-        rw::setCrashHookForTesting(nullptr);
-        vm::resetForTesting();
-        std::error_code ec;
-        std::filesystem::remove_all(root, ec);
+        if (!skipTests) (void)runtime::Deps::releaseSessions();  // the sessions this suite cached (#397)
+        tearDownRewrapSuite();
     }
-
-    void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
-        rw::setCrashHookForTesting(nullptr);
-        // Every test starts with no rotation in progress (a previous one may have left a window open).
-        const auto st = rw::state();
-        if (st.previous_version) (void)rw::finalize();
-        else if (st.staging_version) (void)rw::rollback();
-    }
-
-    void TearDown() override { rw::setCrashHookForTesting(nullptr); }
 
     // ---- fixtures
 
@@ -275,17 +199,7 @@ protected:
         return n;
     }
 
-    static bool slotOnHost(const unsigned int version) {
-        return crypto::secrets::KeyProvider(vm::slotName(version)).sealedExists();
-    }
-
-    // A crash hook that throws at the n-th time `point` is reached (1-based).
-    static rw::CrashHook crashAt(const std::string& point, const int n = 1) {
-        auto seen = std::make_shared<int>(0);
-        return [point, n, seen](const std::string_view p) {
-            if (p == point && ++*seen == n) throw SimulatedCrash();
-        };
-    }
+    static bool slotOnHost(const unsigned int version) { return test::rewrap::slotOnHost(rw::kSlot, version); }
 
     // A vault with files, a retired key version (a finished key rotation), and a deleted vault's retained keys.
     struct World {
@@ -345,25 +259,6 @@ protected:
         }
     }
 
-    static UserPtr createUser(const std::string& prefix, const std::string& role) {
-        const auto created = ops::users::create(superUser, {.name = prefix + "_" + tag(), .role = role,
-                                                            .password = std::string("Master-Rewrap-Pass-123")});
-        return identities::manager().user(created.user->id);
-    }
-
-    static protocols::shell::CommandResult cli(const std::string& line, const UserPtr& user) {
-        return router->executeLine(line, user, nullptr);
-    }
-
-    static long long auditCount(const std::string& action, const std::string& outcome) {
-        (void)audit::Trail::instance()->flushNow();
-        return db::Transactions::exec("rewrapTest::audit", [&](pqxx::work& txn) {
-            return txn.exec("SELECT COUNT(*) FROM audit_event WHERE action = $1 AND outcome = $2",
-                            pqxx::params{action, outcome})
-                .one_field_ref()
-                .as<long long>();
-        });
-    }
 };
 
 // ---- the migration and its guard ----------------------------------------------------------------------------------
@@ -407,6 +302,29 @@ TEST_F(VaultMasterRewrapTest, RowsStartOnVersionOneAndTheGuardRefusesAWrapUnderA
     EXPECT_FALSE(mine().next);
     EXPECT_FALSE(mine().prev);
     expectEveryKeyReadable({}, "after the guard checks");
+
+    // A row that doesn't unwrap refuses the rotation and names the way back (the generic refusal, nothing sealed:
+    // WrappingMasterRotationTest.ARowThatDoesNotUnwrapRefusesBeforeAnythingIsSealed).
+    const auto setKey = [&](const std::vector<uint8_t>& bytes) {
+        db::Transactions::exec("rewrapTest::setKey", [&](pqxx::work& txn) {
+            txn.exec("UPDATE vault_keys SET encrypted_key = $2 WHERE vault_id = $1",
+                     pqxx::params{id, db::encoding::to_hex_bytea(bytes)});
+        });
+    };
+    std::vector<uint8_t> junk(row.encrypted_key.size());
+    randombytes_buf(junk.data(), junk.size());
+    setKey(junk);
+    try {
+        (void)rw::rotate();
+        ADD_FAILURE() << "an unreadable row must refuse the rotation";
+    } catch (const ops::Refused& e) {
+        EXPECT_EQ(e.code, "unreadable_rows");
+        EXPECT_NE(std::string(e.what()).find("vh vault keys import"), std::string::npos) << e.what();
+    }
+    EXPECT_EQ(rw::state().version, st.version);
+    EXPECT_FALSE(rw::state().staging_version);
+    setKey(row.encrypted_key);
+    expectEveryKeyReadable({}, "restored");
 }
 
 // ---- rotate, finalize -------------------------------------------------------------------------------------------
@@ -455,20 +373,6 @@ TEST_F(VaultMasterRewrapTest, RotateRewrapsLiveRetiredAndDeletedKeysAndNeverTouc
     expectWorldReads(w, "after finalize");
     // A second finalize has nothing to do.
     EXPECT_FALSE(rw::finalize().finalized);
-}
-
-TEST_F(VaultMasterRewrapTest, TheWindowEndsByItselfWhenItExpires) {
-    const auto w = world();
-    const auto before = keyBytes();
-    const auto r = rw::rotate({.window = std::chrono::hours(2)});
-    EXPECT_FALSE(rw::expireIfDue(std::chrono::system_clock::now()).finalized) << "not due yet";
-    EXPECT_TRUE(rw::state().previous_version);
-    const auto f = rw::expireIfDue(std::chrono::system_clock::now() + std::chrono::hours(3));
-    EXPECT_TRUE(f.finalized);
-    EXPECT_FALSE(rw::state().previous_version);
-    EXPECT_FALSE(slotOnHost(r.from));
-    expectEveryKeyReadable(before, "after expiry");
-    expectWorldReads(w, "after expiry");
 }
 
 // ---- interrupted rotations -----------------------------------------------------------------------------------------
@@ -617,91 +521,7 @@ TEST_F(VaultMasterRewrapTest, AStagedWrapThatIsNotTheRowsKeyAbortsBeforeTheSwitc
     expectWorldReads(w, "after the retry");
 }
 
-TEST_F(VaultMasterRewrapTest, AStagedMasterReplacedByAnotherSecretNeverSwitches) {
-    const auto w = world();
-    const auto before = keyBytes();
-    rw::setCrashHookForTesting(crashAt("verified"));
-    EXPECT_THROW((void)rw::rotate(), SimulatedCrash);
-    rw::setCrashHookForTesting(nullptr);
-    const auto from = rw::state().version;
-    const auto target = *rw::state().staging_version;
-
-    // The staged slot now holds a different secret than the one the rows were staged under (old/new mismatch).
-    {
-        crypto::secrets::KeyProvider slot(vm::slotName(target));
-        slot.destroySealed();
-        slot.init();
-    }
-    vm::resetForTesting();
-    try {
-        (void)rw::rotate();
-        ADD_FAILURE() << "wraps under another master must abort the rotation";
-    } catch (const ops::Refused& e) {
-        EXPECT_EQ(e.code, "mismatch") << e.what();
-    }
-    EXPECT_EQ(rw::state().version, from);
-    expectEveryKeyReadable(before, "after an old/new master mismatch");
-
-    const auto r = rw::rotate();
-    EXPECT_EQ(r.to, target);
-    expectEveryKeyReadable(before, "after restaging");
-    expectWorldReads(w, "after restaging");
-}
-
-TEST_F(VaultMasterRewrapTest, ARowThatDoesNotUnwrapRefusesBeforeAnythingIsSealed) {
-    const auto engine = newVault("mrbad");
-    const auto id = engine->vault->id;
-    const auto st = rw::state();
-    const auto original = [&] {
-        for (const auto& r : storedRows())
-            if (r.table == "vault_keys" && r.vault_id == id) return r.encrypted_key;
-        return std::vector<uint8_t>{};
-    }();
-    std::vector<uint8_t> junk(original.size());
-    randombytes_buf(junk.data(), junk.size());
-    const auto setKey = [&](const std::vector<uint8_t>& bytes) {
-        db::Transactions::exec("rewrapTest::setKey", [&](pqxx::work& txn) {
-            txn.exec("UPDATE vault_keys SET encrypted_key = $2 WHERE vault_id = $1",
-                     pqxx::params{id, db::encoding::to_hex_bytea(bytes)});
-        });
-    };
-    setKey(junk);
-    try {
-        (void)rw::rotate();
-        ADD_FAILURE() << "an unreadable row must refuse the rotation";
-    } catch (const ops::Refused& e) {
-        EXPECT_EQ(e.code, "unreadable_rows");
-        EXPECT_NE(std::string(e.what()).find("vh vault keys import"), std::string::npos) << e.what();
-    }
-    const auto after = rw::state();
-    EXPECT_EQ(after.version, st.version);
-    EXPECT_FALSE(after.staging_version);
-    EXPECT_EQ(after.highest_version, st.highest_version);
-    EXPECT_FALSE(slotOnHost(st.highest_version + 1)) << "nothing was sealed";
-    setKey(original);
-    expectEveryKeyReadable({}, "restored");
-}
-
 // ---- TPM loss -----------------------------------------------------------------------------------------------------
-
-TEST_F(VaultMasterRewrapTest, TpmLossMidStagingRestagesUnderAFreshMaster) {
-    const auto w = world();
-    const auto before = keyBytes();
-    rw::setCrashHookForTesting(crashAt("batch", 2));
-    EXPECT_THROW((void)rw::rotate({.batch = 1}), SimulatedCrash);
-    rw::setCrashHookForTesting(nullptr);
-    const auto target = *rw::state().staging_version;
-    EXPECT_GT(rw::status().staged, 0u);
-
-    // The staged master's sealed state is gone. Nothing was switched to it, so it is simply replaced.
-    crypto::secrets::KeyProvider(vm::slotName(target)).destroySealed();
-    vm::resetForTesting();
-    const auto r = rw::rotate();
-    EXPECT_EQ(r.to, target);
-    EXPECT_EQ(r.staged_now, before.size()) << "every row is staged again under the new secret";
-    expectEveryKeyReadable(before, "after restaging");
-    expectWorldReads(w, "after restaging");
-}
 
 TEST_F(VaultMasterRewrapTest, TpmLossMidWindowRollsBackFromTheRetainedWraps) {
     const auto w = world();
@@ -737,82 +557,15 @@ TEST_F(VaultMasterRewrapTest, TpmLossMidWindowRollsBackFromTheRetainedWraps) {
     expectWorldReads(w, "after the rollback");
 }
 
-// ---- rollback -----------------------------------------------------------------------------------------------------
-
-TEST_F(VaultMasterRewrapTest, RollbackInsideTheWindowRewrapsWhatChangedDuringIt) {
-    const auto w = world();
-    const auto r = rw::rotate();
-
-    // During the window: a vault key rotation and a new vault (both wrapped under the new master, no retained wrap).
-    w.rotated->encryptionManager->prepare_key_rotation();
-    w.rotated->encryptionManager->finish_key_rotation();
-    const auto fresh = newVault("mrwin");
-    write(fresh, "/x.txt", "created inside the window");
-    const auto before = keyBytes();
-
-    rw::setCrashHookForTesting(crashAt("rollback_committed"));
-    EXPECT_THROW((void)rw::rollback(), SimulatedCrash);
-    rw::setCrashHookForTesting(nullptr);
-    const auto st = rw::state();
-    EXPECT_EQ(st.version, r.from);
-    EXPECT_FALSE(st.previous_version);
-    EXPECT_EQ(st.discard_versions, std::vector<unsigned int>{r.to});
-    expectEveryKeyReadable(before, "after an interrupted rollback");
-    // The next finalize (or the retention loop) deletes the rolled-back master.
-    EXPECT_EQ(rw::finalize().deleted, std::vector<unsigned int>{r.to});
-    EXPECT_FALSE(slotOnHost(r.to));
-    expectEveryKeyReadable(before, "after the rollback");
-    EXPECT_EQ(readFile(fresh->vault->id, "/x.txt"), "created inside the window");
-    EXPECT_EQ(loadedKey(fresh->vault->id), engineKey(fresh));
-    EXPECT_EQ(readFile(w.live->vault->id, "/a.txt"), "alpha");
-    EXPECT_EQ(loadedKey(w.rotated->vault->id), engineKey(w.rotated));
-
-    // A later rotation never reuses the rolled-back version's number.
-    const auto again = rw::rotate();
-    EXPECT_GT(again.to, r.to);
-    expectEveryKeyReadable(before, "after another rotation");
-    (void)rw::finalize();
-}
-
-TEST_F(VaultMasterRewrapTest, RollbackWhileStagingAbandonsIt) {
-    const auto w = world();
-    const auto before = keyBytes();
-    const auto from = rw::state().version;
-    rw::setCrashHookForTesting(crashAt("batch"));
-    EXPECT_THROW((void)rw::rotate({.batch = 1}), SimulatedCrash);
-    rw::setCrashHookForTesting(nullptr);
-    const auto target = *rw::state().staging_version;
-
-    const auto r = rw::rollback();
-    EXPECT_EQ(r.kind, rw::RollbackResult::Kind::AbandonedStaging);
-    EXPECT_EQ(r.from, target);
-    EXPECT_FALSE(rw::state().staging_version);
-    EXPECT_EQ(rw::state().version, from);
-    EXPECT_FALSE(slotOnHost(target));
-    for (const auto& row : storedRows()) EXPECT_FALSE(row.next);
-    expectEveryKeyReadable(before, "after abandoning");
-    expectWorldReads(w, "after abandoning");
-    try {
-        (void)rw::rollback();
-        ADD_FAILURE() << "nothing left to roll back";
-    } catch (const ops::Refused& e) {
-        EXPECT_EQ(e.code, "no_window");
-    }
-}
-
 // ---- the CLI ------------------------------------------------------------------------------------------------------
 
-TEST_F(VaultMasterRewrapTest, TheCliIsSuperAdminOnlyConfirmsAndAuditsEveryStep) {
-    const auto w = world();
-    const auto admin = createUser("mradm", "admin");
-    const auto deniedBefore = auditCount("secrets.master.rotate", "denied");
-    EXPECT_NE(cli("secret master status", admin).exit_code, 0);
-    EXPECT_NE(cli("secret master rotate --yes", admin).exit_code, 0);
-    EXPECT_GT(auditCount("secrets.master.rotate", "denied"), deniedBefore);
-
+// The full CLI round trip (super-admin only, confirmation, agents refused, audit) is
+// WrappingMasterRotationTest.TheCliIsSuperAdminOnlyConfirmsAndAuditsEveryStep; without --slot it is the vault master.
+TEST_F(VaultMasterRewrapTest, TheCliWithoutASlotIsTheVaultMaster) {
     const auto s = cli("secret master status --json", superUser);
     ASSERT_EQ(s.exit_code, 0) << s.stderr_text << s.stdout_text;
     const auto status = json::parse(s.stdout_text);
+    EXPECT_EQ(status.at("slot"), "vault_master");
     EXPECT_EQ(status.at("phase"), "idle");
     EXPECT_EQ(status.at("rows").get<unsigned>(), storedRows().size());
     EXPECT_EQ(s.stdout_text.find("\"key\""), std::string::npos);
@@ -824,35 +577,6 @@ TEST_F(VaultMasterRewrapTest, TheCliIsSuperAdminOnlyConfirmsAndAuditsEveryStep) 
     ASSERT_TRUE(refused.confirmation);
     EXPECT_EQ(refused.confirmation->code, "vault_master_rotate");
     EXPECT_EQ(rw::state().version, from);
-
-    // An agent never rotates it, even with --yes.
-    {
-        const protocols::shell::AgentCallScope agent;
-        EXPECT_NE(cli("secret master rotate --yes", superUser).exit_code, 0);
-    }
-    EXPECT_EQ(rw::state().version, from);
-
-    const auto okBefore = auditCount("secrets.master.rotate", "success");
-    const auto rotated = cli("secret master rotate --yes --window-hours 24 --json", superUser);
-    ASSERT_EQ(rotated.exit_code, 0) << rotated.stderr_text << rotated.stdout_text;
-    EXPECT_EQ(json::parse(rotated.stdout_text).at("from").get<unsigned>(), from);
-    EXPECT_EQ(auditCount("secrets.master.rotate", "success"), okBefore + 1);
-    EXPECT_EQ(json::parse(cli("secret master status --json", superUser).stdout_text).at("phase"), "recovery_window");
-
-    const auto rb = cli("secret master rollback --yes", superUser);
-    ASSERT_EQ(rb.exit_code, 0) << rb.stderr_text << rb.stdout_text;
-    EXPECT_EQ(rw::state().version, from);
-    EXPECT_GE(auditCount("secrets.master.rollback", "success"), 1);
-    const auto none = cli("secret master rollback --yes", superUser);
-    EXPECT_NE(none.exit_code, 0);
-    EXPECT_GE(auditCount("secrets.master.rollback", "failure"), 1);
-
-    ASSERT_EQ(cli("secret master rotate --yes", superUser).exit_code, 0);
-    const auto fin = cli("secret master finalize --yes", superUser);
-    ASSERT_EQ(fin.exit_code, 0) << fin.stderr_text << fin.stdout_text;
-    EXPECT_GE(auditCount("secrets.master.finalize", "success"), 1);
-    expectEveryKeyReadable({}, "after the CLI round trip");
-    expectWorldReads(w, "after the CLI round trip");
 }
 
 // ---- new host (last: it discards every sealed secret of this suite) ------------------------------------------------

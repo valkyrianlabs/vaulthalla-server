@@ -11,7 +11,6 @@
 // The suite only touches the two surfaces' entry points and db::query, so it also builds against code from before
 // the ops::groups migration; that is how the pre-migration divergences were recorded.
 
-#include "db/Transactions.hpp"
 #include "db/query/identities/Group.hpp"
 #include "db/query/identities/User.hpp"
 #include "db/query/rbac/role/Admin.hpp"
@@ -25,18 +24,13 @@
 #include "protocols/ws/handler/Groups.hpp"
 #include "rbac/permission/admin/identities/Groups.hpp"
 #include "rbac/role/Admin.hpp"
-#include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
 #include "seed/include/seed_db.hpp"
-#include "UsageManager.hpp"
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
-#include <paths.h>
 
 #include <algorithm>
 #include <atomic>
-#include <chrono>
 #include <cstdlib>
 #include <functional>
 #include <iostream>
@@ -44,7 +38,9 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include "../helpers/db_suite.hpp"
 #include "../helpers/identities.hpp"
+#include "../helpers/parity.hpp"
 
 namespace vh::test_ops_parity_groups {
 
@@ -53,12 +49,6 @@ using UserPtr = std::shared_ptr<identities::User>;
 using GroupPtr = std::shared_ptr<identities::Group>;
 using GroupPerms = rbac::permission::admin::identities::Groups;
 using SessionPtr = std::shared_ptr<protocols::ws::Session>;
-
-std::string uniqueTag() {
-    static std::atomic<unsigned> counter{0};
-    static const auto run = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count() % 100000);
-    return run + "x" + std::to_string(counter.fetch_add(1));
-}
 
 UserPtr createUser(const std::string& name, const std::shared_ptr<rbac::role::Admin>& role) {
     return test::identities::createUser(name, role, name + "@vaulthalla.test");
@@ -111,54 +101,38 @@ struct Outcome {
     std::string detail;
 };
 
-class GroupParityTest : public ::testing::Test {
+class GroupParityTest : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
     inline static std::shared_ptr<protocols::shell::Router> router;
     inline static std::vector<std::pair<std::string, UserPtr>> callers; // one per seeded admin role
 
-    static bool hasDbEnv() {
-        return std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-               std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME");
-    }
-
     static void SetUpTestSuite() {
-        if (!hasDbEnv()) {
-            skipTests = true;
-            std::cout << "[test_ops_parity_groups] Skipping db tests due to missing environment variables." << std::endl;
-            return;
-        }
-
-        paths::enableTestMode();
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::seed::init_tables_if_not_exists();
-        db::Transactions::dbPool_->initPreparedStatements();
+        if (!setUpDbSuite("test_ops_parity_groups", {.seed = false, .runtime = false})) return;
         seed::initPermissions();
         seed::initRoles();
 
-        if (!runtime::Deps::get().shellUsageManager)
-            runtime::Deps::get().shellUsageManager = std::make_shared<protocols::shell::UsageManager>();
-        router = std::make_shared<protocols::shell::Router>();
+        router = test::parity::shellRouter();
         protocols::shell::commands::registerGroupCommands(router);
 
         callers.clear();
         std::string roleNames;
         for (const auto& role : db::query::rbac::role::Admin::list()) {
-            callers.emplace_back(role->name, createUser("gp_caller_" + uniqueTag(), role));
+            callers.emplace_back(role->name, createUser("gp_caller_" + test::parity::tag(), role));
             roleNames += " " + role->name;
         }
         std::cout << "[test_ops_parity_groups] callers:" << roleNames << std::endl;
     }
+    static void TearDownTestSuite() { tearDownDbSuite(); }
 
     void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
+        Suite::SetUp();
+        if (IsSkipped()) return;
         ASSERT_GE(callers.size(), 2u) << "expected the seeded admin roles";
     }
 
     static World makeWorld() {
         World w;
-        w.tag = uniqueTag();
+        w.tag = test::parity::tag();
         const auto unprivileged = db::query::rbac::role::Admin::get("unprivileged");
         w.member = createUser("gpm_" + w.tag, unprivileged);
         w.outsider = createUser("gpo_" + w.tag, unprivileged);
@@ -192,8 +166,7 @@ protected:
 
     static Outcome runWs(const Case& c, World& w, const UserPtr& caller) {
         if (c.prepare) c.prepare(w, caller);
-        auto session = std::make_shared<protocols::ws::Session>(std::make_shared<protocols::ws::Router>());
-        session->user = caller;
+        const auto session = test::parity::ws(caller);
         Outcome out;
         json data;
         try {
@@ -429,8 +402,7 @@ namespace vh::test_ops_parity_groups {
 TEST_F(GroupParityTest, WsLegacyMemberPayloadsStillAccepted) {
     const auto it = std::ranges::find_if(callers, [](const auto& c) { return c.first == "super_admin"; });
     ASSERT_NE(it, callers.end());
-    auto session = std::make_shared<protocols::ws::Session>(std::make_shared<protocols::ws::Router>());
-    session->user = it->second;
+    const auto session = test::parity::ws(it->second);
     const auto w = makeWorld();
 
     const auto added = protocols::ws::handler::Groups::addMember(

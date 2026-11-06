@@ -665,23 +665,11 @@ TEST_F(SqlDeployerHistoryDb, FileRecoveryMigrationKeepsGenerationsWhenTheLiveFil
         EXPECT_TRUE(txn.exec("SELECT file_id FROM file_versions WHERE id = $1", pqxx::params{versionId})
                         .one_field_ref().is_null());
 
-        // Every vault starts without a policy; the trigger guards retired keys still needed by recoverable data.
+        // Every vault starts without a policy; the trigger that guards retired keys exists (its behavior:
+        // test_recovery_keys.cpp TheGuardTriggerKeepsReferencedRetiredKeysAndVaultDeletionStillCascades).
         EXPECT_EQ(txn.exec("SELECT count(*) FROM vault_recovery_policy").one_field_ref().as<int>(), 0);
         EXPECT_EQ(txn.exec("SELECT count(*) FROM pg_trigger WHERE tgname = 'recovery_guard_retired_vault_key' "
                            "AND tgrelid = 'vault_keys_trashed'::regclass").one_field_ref().as<int>(), 1);
-        txn.exec("INSERT INTO vault_keys_trashed (vault_id, version, encrypted_key, iv) VALUES ($1, 1, '\\x00', '\\x00')",
-                 pqxx::params{vaultId});
-        txn.exec("INSERT INTO recovery_blob (vault_id, storage_name, encryption_iv, key_version, cipher_bytes, "
-                 "plaintext_bytes) VALUES ($1, 'abcdefghijklmnopqrstuvwxyz012345', 'iv', 1, 16, 0)",
-                 pqxx::params{vaultId});
-        {
-            pqxx::subtransaction guarded(txn, "guarded");
-            EXPECT_THROW(guarded.exec("DELETE FROM vault_keys_trashed WHERE vault_id = $1", pqxx::params{vaultId}),
-                         pqxx::foreign_key_violation);
-        }
-        txn.exec("DELETE FROM vault WHERE id = $1", pqxx::params{vaultId});   // the vault's own deletion still cascades
-        EXPECT_EQ(txn.exec("SELECT count(*) FROM vault_keys_trashed WHERE vault_id = $1", pqxx::params{vaultId})
-                      .one_field_ref().as<int>(), 0);
 
         // Applying again does nothing; executing the file again changes nothing either (idempotent on upgraded installs).
         migseed::SqlDeployReport again;
@@ -1062,7 +1050,8 @@ TEST_F(SqlDeployerHistoryDb, LayoutCheckConstraintRefusesMismatchedPairsAndUidsA
 
 // 125 (#368, manifest v2) on a 124-era database: additive (chain position and refused root on remote_manifest_state,
 // the root history, directory/symlink uids, the trashed file's object uid), existing manifest rows keep their values,
-// the new uids are immutable once set, the CHECKs hold, and running the file again changes nothing.
+// the CHECKs hold, and running the file again changes nothing (uid immutability: test_manifest_db.cpp
+// UidsAreAssignedOnceAndTrashKeepsTheObjectUid).
 TEST_F(SqlDeployerHistoryDb, ManifestV2MigrationIsAdditiveAndIdempotent) {
     inRolledBackTxn([](pqxx::work& txn) {
         txn.exec("DROP TABLE IF EXISTS remote_manifest_root");
@@ -1119,13 +1108,6 @@ TEST_F(SqlDeployerHistoryDb, ManifestV2MigrationIsAdditiveAndIdempotent) {
         EXPECT_FALSE(refused("UPDATE remote_manifest_state SET epoch = 3, root_sha256 = repeat('a', 64), "
                              "refused_reason = 'fork' WHERE vault_id = $1"));
         EXPECT_TRUE(refused("INSERT INTO remote_manifest_root (vault_id, epoch, root_sha256) VALUES ($1, 0, repeat('a', 64))"));
-
-        txn.exec("UPDATE directories SET uid = gen_random_uuid() WHERE fs_entry_id = $1", pqxx::params{dir});
-        {
-            pqxx::subtransaction change(txn, "dir_uid");
-            EXPECT_THROW(change.exec("UPDATE directories SET uid = gen_random_uuid() WHERE fs_entry_id = $1",
-                                     pqxx::params{dir}), pqxx::sql_error) << "a directory uid never changes once set";
-        }
 
         migseed::SqlDeployReport again;
         ASSERT_NO_THROW(again = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));

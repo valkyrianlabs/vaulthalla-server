@@ -6,6 +6,7 @@
 // SQL is picked up by reconcile() into the same objects; an authorization view never mixes two publications; and once
 // the index is warm, identity lookups cost no database round trip.
 
+#include "../helpers/db_suite.hpp"
 #include "../helpers/identities.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/identities/Loader.hpp"
@@ -27,24 +28,18 @@
 #include "rbac/role/Admin.hpp"
 #include "rbac/role/Vault.hpp"
 #include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
 #include "storage/Engine.hpp"
 #include "storage/Manager.hpp"
 #include "vault/model/Vault.hpp"
-#include "fs/Filesystem.hpp"
 #include "fs/model/Directory.hpp"
 #include "fs/model/File.hpp"
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
-#include <paths.h>
 #include <pqxx/pqxx>
 
 #include <atomic>
 #include <chrono>
-#include <cstdlib>
-#include <iostream>
 #include <memory>
 #include <string>
 #include <thread>
@@ -110,41 +105,19 @@ TEST(IdentitiesDetached, NonAuthorizingStatesDenyEverything) {
 
 // ------------------------------------------------------------------------------------------------ DB-backed
 
-class IdentitiesManagerDbTest : public ::testing::Test {
+class IdentitiesManagerDbTest : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
     inline static std::shared_ptr<User> superAdmin;
     inline static uint32_t vaultId = 0;
 
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            std::cout << "[test_identities_manager] Skipping db tests due to missing environment variables." << std::endl;
-            return;
-        }
-        paths::enableTestMode();
-        const auto root = std::filesystem::temp_directory_path() / ("vh_identities_manager_" + tag());
-        paths::backingPath = root / "backing";
-        paths::mountPath = root / "mount";
-        std::filesystem::create_directories(paths::backingPath);
-        std::filesystem::create_directories(paths::mountPath);
-
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        runtime::Deps::init();
-        fs::Filesystem::init(runtime::Deps::get().storageManager);
-        runtime::Deps::get().storageManager->initStorageEngines();
-        superAdmin = identities::manager().userByName("admin");
+        if (!setUpDbSuite("test_identities_manager", {.freshEngines = false})) return;
+        runtime::Deps::get().storageManager->initStorageEngines();  // fresh engines, but the cache stays
+        superAdmin = superUser;
         ASSERT_TRUE(superAdmin);
         vaultId = db::query::vault::Vault::listUserVaults(superAdmin->id).front()->id;
     }
-
-    void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
-    }
+    static void TearDownTestSuite() { tearDownDbSuite(); }
 
     static std::shared_ptr<User> makeUser(const std::string& prefix, const std::string& role = "unprivileged") {
         const auto name = prefix + "_" + tag();

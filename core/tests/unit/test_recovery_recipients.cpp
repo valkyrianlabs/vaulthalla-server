@@ -5,6 +5,7 @@
 // requirement in status and health, no silent custody, exports that name their signing key, and
 // `vh vault keys import --recovery-kit` after the vault master is lost.
 
+#include "../helpers/temp_dir.hpp"
 #include "auth/stepup/StepUp.hpp"
 #include "audit/Trail.hpp"
 #include "crypto/id/ObjectUid.hpp"
@@ -58,15 +59,11 @@
 #include <sodium.h>
 
 #include <algorithm>
-#include <atomic>
-#include <chrono>
 #include <cstdlib>
-#include <filesystem>
 #include <iostream>
 #include <map>
 #include <mutex>
 #include <set>
-#include <string>
 #include <vector>
 
 namespace vh::test_recovery_recipients {
@@ -80,11 +77,7 @@ namespace kev1 = crypto::kev1;
 using Channel = keys::Channel;
 using WsKeys = protocols::ws::handler::VaultKeys;
 
-std::string tag() {
-    static std::atomic<unsigned> n{0};
-    static const auto run = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count() % 100000);
-    return run + "r" + std::to_string(n.fetch_add(1));
-}
+std::string tag() { return test::uniqueTag('r'); }
 
 std::string b64(const std::vector<uint8_t>& bytes) { return crypto::util::b64_encode(bytes); }
 

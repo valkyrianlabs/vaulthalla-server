@@ -6,7 +6,8 @@
 // replaced the way POSIX rename replaces it: its old content goes exactly as an unlink would take it (trashed, backing
 // bytes and derived artifacts removed), and the source takes its place, in one transaction.
 
-#include "db/Transactions.hpp"
+#include "../helpers/db_suite.hpp"
+
 #include "db/query/fs/Directory.hpp"
 #include "db/query/fs/Entry.hpp"
 #include "db/query/fs/File.hpp"
@@ -15,12 +16,9 @@
 #include "fs/model/Directory.hpp"
 #include "fs/model/File.hpp"
 #include "fs/model/file/Trashed.hpp"
-#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "ops/Vaults.hpp"
 #include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
 #include "storage/Engine.hpp"
 #include "storage/Manager.hpp"
 #include "storage/PlaintextReader.hpp"
@@ -28,7 +26,6 @@
 #include "vault/model/Vault.hpp"
 
 #include <gtest/gtest.h>
-#include <paths.h>
 
 #include <atomic>
 #include <cerrno>
@@ -36,7 +33,6 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
-#include <iostream>
 #include <memory>
 #include <ostream>
 #include <string>
@@ -44,7 +40,6 @@
 
 namespace vh::test_fs_rename {
 
-using UserPtr = std::shared_ptr<identities::User>;
 using EnginePtr = std::shared_ptr<storage::Engine>;
 
 std::string rnTag() {
@@ -66,40 +61,14 @@ std::ostream& operator<<(std::ostream& os, const Totals& s) {
     return os << "{size=" << s.size << ", files=" << s.files << ", subdirs=" << s.subdirs << "}";
 }
 
-class FsRenameDbTest : public ::testing::Test {
+class FsRenameDbTest : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
-    inline static UserPtr superUser;
     inline static std::shared_ptr<sync::Controller> previousController;
-    inline static std::filesystem::path root;
 
     EnginePtr engine;
 
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            std::cout << "[test_fs_rename] Skipping db tests due to missing environment variables." << std::endl;
-            return;
-        }
-        paths::enableTestMode();
-        root = std::filesystem::temp_directory_path() / ("vh_fs_rename_" + rnTag());
-        paths::backingPath = root / "backing";
-        paths::mountPath = root / "mount";
-        std::filesystem::create_directories(paths::backingPath);
-        std::filesystem::create_directories(paths::mountPath);
-
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        runtime::Deps::init();
-        fs::Filesystem::init(runtime::Deps::get().storageManager);
-        // Earlier suites in this binary used their own schema: start from a fresh cache and fresh engines.
-        runtime::Deps::get().fsCache = std::make_shared<fs::cache::Registry>();
-        runtime::Deps::get().storageManager->initStorageEngines();
-        superUser = vh::identities::manager().userByName("admin");
-
+        if (!setUpDbSuite("test_fs_rename")) return;
         previousController = runtime::Deps::get().syncController;
         runtime::Deps::setSyncController(std::make_shared<sync::Controller>());
     }
@@ -107,12 +76,12 @@ protected:
     static void TearDownTestSuite() {
         if (skipTests) return;
         runtime::Deps::setSyncController(previousController);
-        std::error_code ec;
-        std::filesystem::remove_all(root, ec);
+        tearDownDbSuite();
     }
 
     void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
+        Suite::SetUp();
+        if (IsSkipped()) return;
         const auto vault = ops::vaults::create(superUser, {.name = "rn_" + rnTag(), .type = vault::model::VaultType::Local});
         engine = runtime::Deps::get().storageManager->getEngine(vault->id);
         ASSERT_TRUE(engine);

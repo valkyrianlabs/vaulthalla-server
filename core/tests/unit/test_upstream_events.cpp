@@ -46,6 +46,13 @@ protected:
         installFakeProvider();
         storage::upstream::guard::clearForTesting();
         sync::events::subscriptions::invalidateCache();
+        // The suite's vaults share one channel (same provider, account, region). A continuity break or DLQ depth an
+        // earlier test left on it held this test's events whenever both fell in the same second (continuity is
+        // compared in whole seconds), which made ShutdownIsBoundedDuringAnApplyBatch flaky.
+        db::Transactions::exec("UpstreamEventsTest::SetUp", [](pqxx::work& txn) {
+            txn.exec("UPDATE upstream_event_channel SET continuity_broken_at = NULL, continuity_note = NULL, "
+                     "dlq_depth = NULL");
+        });
     }
 
     void TearDown() override {
@@ -275,6 +282,7 @@ TEST_F(UpstreamEventsTest, VaulthallasOwnWritesAreNotSyncedBack) {
     const auto out = applier.applyVault(v.f.vault->id);
     EXPECT_EQ(out.self, 1u);
     EXPECT_EQ(passes, 0u) << "no pass for our own write";
+    EXPECT_EQ(ops::upstream::eventStatus(superUser, v.f.vault->id).at(0).inbox_self_24h, 1u);
     const auto after = db::query::sync::RemoteObjectIndex::getFile(v.f.vault->id, "mine.txt");
     ASSERT_NE(after, nullptr);
     EXPECT_EQ(after->encryption_iv, indexed->encryption_iv) << "the row keeps Vaulthalla's encryption metadata";

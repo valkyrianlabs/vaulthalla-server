@@ -1,23 +1,13 @@
+#include "../helpers/share_fakes.hpp"
 #include "../helpers/temp_dir.hpp"
-#include "fs/model/Directory.hpp"
-#include "protocols/http/upload/Staging.hpp"
-#include "fs/model/File.hpp"
 #include "fs/model/Path.hpp"
-#include "identities/User.hpp"
 #include "protocols/http/upload/Coordinator.hpp"
-#include "protocols/ws/Router.hpp"
-#include "protocols/ws/Session.hpp"
+#include "protocols/http/upload/Staging.hpp"
 #include "protocols/ws/handler/fs/Upload.hpp"
 #include "protocols/ws/handler/share/Upload.hpp"
 #include "rbac/fs/policy/Share.hpp"
-#include "rbac/role/Vault.hpp"
 #include "runtime/Deps.hpp"
 #include "seed/include/seed_db.hpp"
-#include "share/AuditEvent.hpp"
-#include "share/EmailChallenge.hpp"
-#include "share/Manager.hpp"
-#include "share/TargetResolver.hpp"
-#include "share/Token.hpp"
 #include "stats/model/FuseStats.hpp"
 #include "storage/Engine.hpp"
 #include "vault/model/Vault.hpp"
@@ -31,11 +21,9 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
-#include <format>
 #include <functional>
 #include <iterator>
 #include <memory>
-#include <optional>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -45,302 +33,10 @@
 using WsShareUploadHandler = vh::protocols::ws::handler::share::Upload;
 
 namespace vh::protocols::ws::handler::share::test_upload {
-constexpr std::time_t kNow = 1'800'000'000;
-
-std::string uuidFor(const uint32_t value) {
-    return std::format("00000000-0000-4000-8000-{:012d}", value);
-}
-
-class FakeAuthorizer final : public vh::share::ShareAuthorizer {
-public:
-    vh::share::AuthorizationDecision canCreateLink(const rbac::Actor& actor, const vh::share::Link&) const override {
-        return {actor.isHuman(), actor.isHuman() ? "allowed" : "not_human"};
-    }
-
-    vh::share::AuthorizationDecision canUpdateLink(
-        const rbac::Actor& actor,
-        const vh::share::Link&,
-        const vh::share::Link&
-    ) const override {
-        return {actor.isHuman(), actor.isHuman() ? "allowed" : "not_human"};
-    }
-
-    vh::share::AuthorizationDecision canManageLink(const rbac::Actor& actor, const vh::share::Link&) const override {
-        return {actor.isHuman(), actor.isHuman() ? "allowed" : "not_human"};
-    }
-
-    vh::share::AuthorizationDecision canListVaultLinks(const rbac::Actor& actor, uint32_t) const override {
-        return {actor.isHuman(), actor.isHuman() ? "allowed" : "not_human"};
-    }
-};
-
-class FakeStore final : public vh::share::ShareStore {
-public:
-    std::unordered_map<std::string, std::shared_ptr<vh::share::Link>> links;
-    std::unordered_map<std::string, std::string> link_by_lookup;
-    std::unordered_map<std::string, std::shared_ptr<vh::share::Session>> sessions;
-    std::unordered_map<std::string, std::string> session_by_lookup;
-    std::unordered_map<std::string, std::shared_ptr<vh::share::EmailChallenge>> challenges;
-    std::unordered_map<std::string, std::shared_ptr<vh::share::Upload>> uploads;
-    std::unordered_map<std::string, std::shared_ptr<vh::rbac::role::Vault>> vault_roles;
-    std::vector<std::shared_ptr<vh::share::AuditEvent>> audits;
-    uint32_t next_link{100};
-    uint32_t next_session{200};
-    uint32_t next_challenge{300};
-    uint32_t next_upload{400};
-
-    std::shared_ptr<vh::share::Link> createLink(const std::shared_ptr<vh::share::Link>& link) override {
-        auto stored = std::make_shared<vh::share::Link>(*link);
-        if (stored->id.empty()) stored->id = uuidFor(next_link++);
-        stored->created_at = kNow;
-        stored->updated_at = kNow;
-        links[stored->id] = stored;
-        link_by_lookup[stored->token_lookup_id] = stored->id;
-        return stored;
-    }
-
-    std::shared_ptr<vh::share::Link> getLink(const std::string& id) override {
-        if (!links.contains(id)) return nullptr;
-        return links.at(id);
-    }
-
-    std::shared_ptr<vh::share::Link> getLinkByLookupId(const std::string& lookupId) override {
-        if (!link_by_lookup.contains(lookupId)) return nullptr;
-        return getLink(link_by_lookup.at(lookupId));
-    }
-
-    std::vector<std::shared_ptr<vh::share::Link>> listLinksForUser(uint32_t userId, const db::model::ListQueryParams&) override {
-        std::vector<std::shared_ptr<vh::share::Link>> out;
-        for (auto& [_, link] : links)
-            if (link->created_by == userId) out.push_back(link);
-        return out;
-    }
-
-    std::vector<std::shared_ptr<vh::share::Link>> listLinksForVault(uint32_t vaultId, const db::model::ListQueryParams&) override {
-        std::vector<std::shared_ptr<vh::share::Link>> out;
-        for (auto& [_, link] : links)
-            if (link->vault_id == vaultId) out.push_back(link);
-        return out;
-    }
-
-    std::shared_ptr<vh::share::Link> updateLink(const std::shared_ptr<vh::share::Link>& link) override {
-        links[link->id] = link;
-        link_by_lookup[link->token_lookup_id] = link->id;
-        return link;
-    }
-
-    void revokeLink(const std::string& id, uint32_t revokedBy) override {
-        auto link = getLink(id);
-        if (!link) throw std::runtime_error("missing link");
-        link->revoked_at = kNow;
-        link->revoked_by = revokedBy;
-    }
-
-    void rotateLinkToken(const std::string& id, const std::string& lookupId, const std::vector<uint8_t>& tokenHash, uint32_t updatedBy) override {
-        auto link = getLink(id);
-        if (!link) throw std::runtime_error("missing link");
-        link_by_lookup.erase(link->token_lookup_id);
-        link->token_lookup_id = lookupId;
-        link->token_hash = tokenHash;
-        link->updated_by = updatedBy;
-        link_by_lookup[lookupId] = id;
-    }
-
-    void touchLinkAccess(const std::string& id) override {
-        auto link = getLink(id);
-        if (!link) throw std::runtime_error("missing link");
-        ++link->access_count;
-        link->last_accessed_at = kNow;
-    }
-
-    void incrementDownload(const std::string&) override {}
-
-    void incrementUpload(const std::string& id) override {
-        auto link = getLink(id);
-        if (!link) throw std::runtime_error("missing link");
-        ++link->upload_count;
-    }
-
-    void upsertVaultRoleForShare(
-        const std::string& shareId,
-        uint32_t,
-        const std::shared_ptr<vh::rbac::role::Vault>& role
-    ) override {
-        if (!role) {
-            vault_roles.erase(shareId);
-            return;
-        }
-        vault_roles[shareId] = std::make_shared<vh::rbac::role::Vault>(*role);
-    }
-
-    std::shared_ptr<vh::rbac::role::Vault> getVaultRoleForShare(const std::string& shareId) override {
-        if (!vault_roles.contains(shareId)) return nullptr;
-        return std::make_shared<vh::rbac::role::Vault>(*vault_roles.at(shareId));
-    }
-
-    void removeVaultRoleForShare(const std::string& shareId) override {
-        vault_roles.erase(shareId);
-    }
-
-    std::shared_ptr<vh::share::Session> createSession(const std::shared_ptr<vh::share::Session>& session) override {
-        auto stored = std::make_shared<vh::share::Session>(*session);
-        if (stored->id.empty()) stored->id = uuidFor(next_session++);
-        stored->created_at = kNow;
-        stored->last_seen_at = kNow;
-        sessions[stored->id] = stored;
-        session_by_lookup[stored->session_token_lookup_id] = stored->id;
-        return stored;
-    }
-
-    std::shared_ptr<vh::share::Session> getSession(const std::string& id) override {
-        if (!sessions.contains(id)) return nullptr;
-        return sessions.at(id);
-    }
-
-    std::shared_ptr<vh::share::Session> getSessionByLookupId(const std::string& lookupId) override {
-        if (!session_by_lookup.contains(lookupId)) return nullptr;
-        return getSession(session_by_lookup.at(lookupId));
-    }
-
-    void verifySession(const std::string& sessionId, const std::vector<uint8_t>& emailHash) override {
-        auto session = getSession(sessionId);
-        if (!session) throw std::runtime_error("missing session");
-        session->email_hash = emailHash;
-        session->verified_at = kNow;
-    }
-
-    void touchSession(const std::string& sessionId) override {
-        auto session = getSession(sessionId);
-        if (!session) throw std::runtime_error("missing session");
-        session->last_seen_at = kNow + 1;
-    }
-
-    void revokeSession(const std::string& sessionId) override {
-        auto session = getSession(sessionId);
-        if (!session) throw std::runtime_error("missing session");
-        session->revoked_at = kNow;
-    }
-
-    void revokeSessionsForShare(const std::string& shareId) override {
-        for (auto& [_, session] : sessions)
-            if (session->share_id == shareId && !session->revoked_at) session->revoked_at = kNow;
-    }
-
-    std::shared_ptr<vh::share::EmailChallenge> createEmailChallenge(const std::shared_ptr<vh::share::EmailChallenge>& challenge) override {
-        auto stored = std::make_shared<vh::share::EmailChallenge>(*challenge);
-        if (stored->id.empty()) stored->id = uuidFor(next_challenge++);
-        stored->created_at = kNow;
-        challenges[stored->id] = stored;
-        return stored;
-    }
-
-    std::shared_ptr<vh::share::EmailChallenge> getEmailChallenge(const std::string& id) override {
-        if (!challenges.contains(id)) return nullptr;
-        return challenges.at(id);
-    }
-
-    std::shared_ptr<vh::share::EmailChallenge> getActiveEmailChallenge(const std::string&, const std::vector<uint8_t>&) override {
-        return nullptr;
-    }
-
-    void recordEmailChallengeAttempt(const std::string&) override {}
-    void consumeEmailChallenge(const std::string&) override {}
-
-    void appendAuditEvent(const std::shared_ptr<vh::share::AuditEvent>& event) override {
-        audits.push_back(std::make_shared<vh::share::AuditEvent>(*event));
-    }
-
-    std::shared_ptr<vh::share::Upload> createUpload(const std::shared_ptr<vh::share::Upload>& upload) override {
-        auto stored = std::make_shared<vh::share::Upload>(*upload);
-        if (stored->id.empty()) stored->id = uuidFor(next_upload++);
-        stored->started_at = kNow;
-        uploads[stored->id] = stored;
-        return stored;
-    }
-
-    std::shared_ptr<vh::share::Upload> getUpload(const std::string& uploadId) override {
-        if (!uploads.contains(uploadId)) return nullptr;
-        return uploads.at(uploadId);
-    }
-
-    void addUploadReceivedBytes(const std::string& uploadId, const uint64_t bytes) override {
-        auto upload = getUpload(uploadId);
-        if (!upload) throw std::runtime_error("missing upload");
-        if (upload->exceedsExpectedSize(bytes)) throw std::runtime_error("too large");
-        upload->received_size_bytes += bytes;
-        upload->status = vh::share::UploadStatus::Receiving;
-    }
-
-    void completeUpload(const std::string& uploadId, uint32_t entryId, const std::string& contentHash, const std::string& mimeType) override {
-        auto upload = getUpload(uploadId);
-        if (!upload) throw std::runtime_error("missing upload");
-        upload->created_entry_id = entryId;
-        upload->content_hash = contentHash;
-        upload->mime_type = mimeType;
-        upload->status = vh::share::UploadStatus::Complete;
-        upload->completed_at = kNow + 2;
-    }
-
-    void failUpload(const std::string& uploadId, const std::string& error) override {
-        auto upload = getUpload(uploadId);
-        if (!upload) throw std::runtime_error("missing upload");
-        upload->error = error;
-        upload->status = vh::share::UploadStatus::Failed;
-        upload->completed_at = kNow + 2;
-    }
-
-    void cancelUpload(const std::string& uploadId) override {
-        auto upload = getUpload(uploadId);
-        if (!upload) throw std::runtime_error("missing upload");
-        upload->status = vh::share::UploadStatus::Cancelled;
-        upload->completed_at = kNow + 2;
-    }
-
-    uint64_t sumCompletedUploadBytes(const std::string& shareId) override {
-        uint64_t total = 0;
-        for (const auto& [_, upload] : uploads)
-            if (upload->share_id == shareId && upload->status == vh::share::UploadStatus::Complete)
-                total += upload->received_size_bytes;
-        return total;
-    }
-
-    uint64_t countCompletedUploadFiles(const std::string& shareId) override {
-        uint64_t total = 0;
-        for (const auto& [_, upload] : uploads)
-            if (upload->share_id == shareId && upload->status == vh::share::UploadStatus::Complete)
-                ++total;
-        return total;
-    }
-};
-
-class FakeEntryProvider final : public vh::share::TargetEntryProvider {
-public:
-    std::unordered_map<uint32_t, std::shared_ptr<vh::fs::model::Entry>> by_id;
-    std::unordered_map<std::string, std::shared_ptr<vh::fs::model::Entry>> by_path;
-
-    void add(const std::shared_ptr<vh::fs::model::Entry>& entry) {
-        by_id[entry->id] = entry;
-        by_path[key(*entry->vault_id, entry->path.string())] = entry;
-    }
-
-    std::shared_ptr<vh::fs::model::Entry> getEntryById(uint32_t entryId) override {
-        if (!by_id.contains(entryId)) return nullptr;
-        return by_id.at(entryId);
-    }
-
-    std::shared_ptr<vh::fs::model::Entry> getEntryByVaultPath(uint32_t vaultId, std::string_view vaultPath) override {
-        const auto k = key(vaultId, std::string(vaultPath));
-        if (!by_path.contains(k)) return nullptr;
-        return by_path.at(k);
-    }
-
-    std::vector<std::shared_ptr<vh::fs::model::Entry>> listChildren(uint32_t) override { return {}; }
-
-private:
-    static std::string key(const uint32_t vaultId, const std::string& path) {
-        return std::to_string(vaultId) + ":" + path;
-    }
-};
+using vh::test::shares::humanSession;
+using vh::test::shares::kNow;
+using vh::test::shares::publicSession;
+using vh::test::shares::uuidFor;
 
 class FakeUploadWriter final : public UploadWriter {
 public:
@@ -368,71 +64,6 @@ public:
     }
 };
 
-std::shared_ptr<vh::fs::model::Directory> dir(
-    const uint32_t id,
-    const uint32_t vaultId,
-    const std::string& path,
-    const std::optional<int32_t> parentId = std::nullopt
-) {
-    auto entry = std::make_shared<vh::fs::model::Directory>();
-    entry->id = id;
-    entry->vault_id = vaultId;
-    entry->parent_id = parentId;
-    entry->path = path;
-    entry->name = path == "/" ? "" : std::filesystem::path(path).filename().string();
-    entry->created_at = entry->updated_at = kNow;
-    return entry;
-}
-
-std::shared_ptr<vh::fs::model::File> file(
-    const uint32_t id,
-    const uint32_t vaultId,
-    const std::string& path,
-    const std::optional<int32_t> parentId = std::nullopt
-) {
-    auto entry = std::make_shared<vh::fs::model::File>();
-    entry->id = id;
-    entry->vault_id = vaultId;
-    entry->parent_id = parentId;
-    entry->path = path;
-    entry->name = std::filesystem::path(path).filename().string();
-    entry->mime_type = "text/plain";
-    entry->size_bytes = 3;
-    entry->created_at = entry->updated_at = kNow;
-    return entry;
-}
-
-vh::share::Link makeLink(const uint32_t ops) {
-    vh::share::Link link;
-    link.vault_id = 42;
-    link.root_entry_id = 77;
-    link.root_path = "/reports";
-    link.target_type = vh::share::TargetType::Directory;
-    link.link_type = vh::share::LinkType::Access;
-    link.access_mode = vh::share::AccessMode::Public;
-    link.allowed_ops = ops;
-    link.expires_at = kNow + 3600;
-    link.max_upload_size_bytes = 1024;
-    link.duplicate_policy = vh::share::DuplicatePolicy::Reject;
-    return link;
-}
-
-std::shared_ptr<Session> publicSession() {
-    auto session = std::make_shared<Session>(std::make_shared<Router>());
-    session->ipAddress = "127.0.0.1";
-    session->userAgent = "ws-share-upload-test";
-    return session;
-}
-
-std::shared_ptr<Session> humanSession() {
-    auto session = publicSession();
-    vh::identities::UserState userState;
-    userState.name = "human";
-    auto user = vh::identities::User::detached(9, std::move(userState));
-    session->user = user;
-    return session;
-}
-
 boost::beast::flat_buffer binaryBuffer(const std::vector<uint8_t>& bytes) {
     boost::beast::flat_buffer buffer;
     auto prepared = buffer.prepare(bytes.size());
@@ -443,14 +74,8 @@ boost::beast::flat_buffer binaryBuffer(const std::vector<uint8_t>& bytes) {
 
 void expectNoSecretOrInternalFields(const nlohmann::json& value) {
     const auto dump = value.dump();
-    EXPECT_FALSE(dump.contains("token"));
-    EXPECT_FALSE(dump.contains("hash"));
-    EXPECT_FALSE(dump.contains("email"));
-    EXPECT_FALSE(dump.contains("challenge"));
-    EXPECT_FALSE(dump.contains("backing"));
-    EXPECT_FALSE(dump.contains("tmp_path"));
-    EXPECT_FALSE(dump.contains("abs_path"));
-    EXPECT_FALSE(dump.contains("vault_id"));
+    for (const auto* field : {"token", "hash", "email", "challenge", "backing", "tmp_path", "abs_path", "vault_id"})
+        EXPECT_FALSE(dump.contains(field)) << field;
 }
 
 class FuseStatsRuntimeGuard {
@@ -468,22 +93,15 @@ private:
     std::shared_ptr<vh::stats::model::FuseStats> previous;
 };
 
-class WsShareUploadTest : public ::testing::Test {
+class WsShareUploadTest : public vh::test::shares::Harness {
 protected:
-    std::shared_ptr<FakeStore> store;
-    std::shared_ptr<FakeAuthorizer> authorizer;
-    std::shared_ptr<vh::share::Manager> manager;
-    std::shared_ptr<FakeEntryProvider> provider;
-    std::shared_ptr<vh::share::TargetResolver> resolver;
-    std::shared_ptr<FakeUploadWriter> writer;
-    std::shared_ptr<identities::User> user;
+    std::shared_ptr<FakeUploadWriter> writer = std::make_shared<FakeUploadWriter>();
     std::shared_ptr<vh::storage::Engine> httpEngine;
     std::filesystem::path oldBackingPath;
     std::filesystem::path oldMountPath;
     std::filesystem::path testRoot;
 
     void SetUp() override {
-        vh::share::Token::setPepperForTesting(std::vector<uint8_t>(32, 0x61));
         oldBackingPath = vh::paths::backingPath;
         oldMountPath = vh::paths::mountPath;
         testRoot = vh::test::uniqueTempRoot("vh_http_share_upload_unit");
@@ -493,23 +111,17 @@ protected:
         std::filesystem::create_directories(vh::paths::backingPath);
         std::filesystem::create_directories(vh::paths::mountPath);
 
-        store = std::make_shared<FakeStore>();
-        authorizer = std::make_shared<FakeAuthorizer>();
-        vh::share::ManagerOptions options;
-        options.clock = [] { return kNow; };
-        options.session_ttl_seconds = 600;
-        options.default_max_upload_size_bytes = 1024;
-        options.max_upload_chunk_size_bytes = 8;
-        manager = std::make_shared<vh::share::Manager>(store, authorizer, options);
+        startManager({.default_max_upload_size_bytes = 1024, .max_upload_chunk_size_bytes = 8});
+        link.max_upload_size_bytes = 1024;
+        publicRole = rbac::role::Vault::Contributor().name;
+        readyOps = vh::share::bit(vh::share::Operation::Upload);
 
-        provider = std::make_shared<FakeEntryProvider>();
-        provider->add(dir(77, 42, "/reports"));
-        provider->add(dir(78, 42, "/reports/team", 77));
-        provider->add(file(79, 42, "/reports/existing.txt", 77));
-        provider->add(dir(99, 42, "/reports_evil"));
-        resolver = std::make_shared<vh::share::TargetResolver>(provider);
+        using vh::test::shares::makeDir;
+        provider->add(makeDir(77, 42, "/reports"));
+        provider->add(makeDir(78, 42, "/reports/team", 77));
+        provider->add(vh::test::shares::makeFile(79, 42, "/reports/existing.txt", 77, "text/plain", 3));
+        provider->add(makeDir(99, 42, "/reports_evil"));
 
-        writer = std::make_shared<FakeUploadWriter>();
         WsShareUploadHandler::setManagerFactoryForTesting([this] { return manager; });
         WsShareUploadHandler::setResolverFactoryForTesting([this] { return resolver; });
         WsShareUploadHandler::setWriterFactoryForTesting([this] { return writer; });
@@ -530,10 +142,6 @@ protected:
         vh::protocols::http::upload::Coordinator::setEngineResolverForTesting([this](const uint32_t vaultId) {
             return vaultId == 42 ? httpEngine : nullptr;
         });
-
-        vh::identities::UserState userState;
-        userState.name = "share-owner";
-        user = vh::identities::User::detached(7, std::move(userState));
     }
 
     void TearDown() override {
@@ -549,23 +157,7 @@ protected:
         std::filesystem::remove_all(testRoot);
         vh::paths::backingPath = oldBackingPath;
         vh::paths::mountPath = oldMountPath;
-        vh::share::Token::clearPepperForTesting();
-    }
-
-    vh::share::CreateLinkResult create(const uint32_t ops) {
-        return manager->createLink(rbac::Actor::human(user), {
-            .link = makeLink(ops),
-            .public_role = vh::share::RoleAssignmentRequest{.vault_role_name = rbac::role::Vault::Contributor().name}
-        });
-    }
-
-    std::shared_ptr<Session> readySession(const uint32_t ops = vh::share::bit(vh::share::Operation::Upload)) {
-        const auto created = create(ops);
-        auto opened = manager->openPublicSession(created.public_token);
-        auto principal = manager->resolvePrincipal(opened.session_token);
-        auto session = publicSession();
-        session->setSharePrincipal(std::move(principal), opened.session_token);
-        return session;
+        Harness::TearDown();
     }
 };
 }

@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
-# DB-backed unit tests (vh_unit_tests) against a per-run database: `make test`.
+# DB-backed unit tests (vh_unit_tests) against per-run databases: `make test`.
 #
-#   bin/tests/run_unit.sh [--build-dir DIR] [--keep-db] [-- <gtest args>]     e.g. -- --gtest_filter='RoleParity*'
+#   bin/tests/run_unit.sh [--build-dir DIR] [--keep-db] [-j N] [-- <gtest args>]   e.g. -- --gtest_filter='RoleParity*'
 #
-# The database (vh_harness_unit_<run>, owned by the vh_harness role) is created for this run and always dropped. The
-# suites recreate their schema themselves, so it starts empty. The tests run as you, not root (permission tests
-# would mean something else as root); the role's settings are read from the root-only file and handed only to the
-# test process's environment. Nothing is installed, no role is rotated, no other database is touched.
+# Linux runs N processes at once (-j, default VH_UNIT_JOBS or 4), each a shard of whole suites (VH_UNIT_SHARD, 3N of
+# them) with a database of its own (vh_harness_unit_<run>_s<i>, owned by the vh_harness role), created for this run
+# and always dropped; each shard's output goes to <build>/unit-logs/shard-<i>.log, printed when all are done. -j 1
+# runs one process on one database and streams its output (macOS always does). The suites recreate their schema
+# themselves, so the databases start empty. The tests run as you, not root (permission tests would mean something
+# else as root); the role's settings are read from the root-only file and handed only to the test process's
+# environment. Nothing is installed, no role is rotated, no other database is touched.
 #
 # Live R2 tests (LiveR2.*, tests/helpers/live_bucket.hpp, never CI) are opt-in: they read VH_LIVE_TESTS=1 and the R2
 # admin key from the environment, which the `env -i` below clears. Only with VH_LIVE_TESTS=1 in the caller's
@@ -29,12 +32,14 @@ BUILD_DIR="$REPO_ROOT/build-itest"
 KEEP_DB=false
 TIMEOUT_SECS="${VH_UNIT_TIMEOUT:-3600}"
 GTEST_ARGS=()
+JOBS="${VH_UNIT_JOBS:-4}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --build-dir) BUILD_DIR="$(itest_abspath "$2")"; shift 2 ;;
     --keep-db) KEEP_DB=true; shift ;;
     --) shift; GTEST_ARGS=("$@"); break ;;
-    -h|--help) sed -n '2,9p' "$0"; exit 0 ;;
+    -j|--jobs) JOBS="$2"; shift 2 ;;
+    -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
     *) itest_die "unknown option: $1 (gtest arguments go after --)" ;;
   esac
 done
@@ -45,9 +50,10 @@ itest_ensure_build "$BUILD_DIR" core/vh_unit_tests core/vh_unit_test_helpers  # 
 BIN="$BUILD_DIR/core/vh_unit_tests"
 [[ -x "$BIN" ]] || itest_die "not built: $BIN"
 
+[[ "$JOBS" =~ ^[1-9][0-9]?$ ]] || itest_die "-j takes 1-99 jobs, got: $JOBS"
 RUN_ID="$(date -u +%Y%m%dt%H%M%S)_$$"
 DB_NAME="vh_harness_unit_${RUN_ID}"
-DB_CREATED=false
+DB_NAMES=()  # the databases this run created (Linux), each dropped by cleanup
 PG_DIR=""  # macOS: the per-run cluster's directory, set before tools/macos/test-db.sh starts it
 cleanup() {
   local rc=$?
@@ -61,15 +67,16 @@ cleanup() {
       itest_log "error: could not remove the test cluster in $PG_DIR"; rc=1
     fi
   fi
-  if [[ "$DB_CREATED" == true ]]; then
+  local db
+  for db in ${DB_NAMES[@]+"${DB_NAMES[@]}"}; do
     if [[ "$KEEP_DB" == true ]]; then
-      itest_log "keeping $DB_NAME (--keep-db); drop it with: sudo -u postgres dropdb --force $DB_NAME"
-    elif itest_drop_db "$DB_NAME"; then
-      itest_log "database dropped: $DB_NAME"
+      itest_log "keeping $db (--keep-db); drop it with: sudo -u postgres dropdb --force $db"
+    elif itest_drop_db "$db"; then
+      itest_log "database dropped: $db"
     else
-      itest_log "error: could not drop $DB_NAME"; rc=1
+      itest_log "error: could not drop $db"; rc=1
     fi
-  fi
+  done
   exit "$rc"
 }
 trap cleanup EXIT
@@ -110,19 +117,59 @@ if [[ "$(uname -s)" == Darwin ]]; then
   exit "$rc"
 fi
 
-itest_create_db "$DB_NAME"
-DB_CREATED=true
-itest_log "database $DB_NAME; running $BIN ${GTEST_ARGS[*]}"
-
 # Root reads the settings file, then drops back to the invoking user with the settings in the environment only.
 # stdin carries the live-test exports (usually nothing); the tests themselves get /dev/null.
-live_env_exports | sudo -n env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 bash -c '
-  set -a; . "$1"; set +a
-  live_exports="$(cat)"; eval "$live_exports"; unset live_exports
-  export VH_TEST_DB_NAME="$2" VH_PATH_TO_CONFIG="$3" HOME="$4"
-  uid="$5" gid="$6" dir="$7" timeout_s="$8"
-  shift 8
-  cd "$dir"
-  exec setpriv --reuid="$uid" --regid="$gid" --init-groups -- timeout --signal=TERM --kill-after=30 "$timeout_s" "$@" </dev/null
-' bash "$ITEST_DB_ENV" "$DB_NAME" "$REPO_ROOT/deploy/config/config.yaml" "$HOME" "$(id -u)" "$(id -g)" \
-  "$(dirname "$BIN")" "$TIMEOUT_SECS" "$BIN" "${GTEST_ARGS[@]}"
+# run_shard DB SHARD: runs the binary on DB; SHARD ("<i>/<n>", or empty for the whole binary) becomes VH_UNIT_SHARD.
+run_shard() {
+  live_env_exports | sudo -n env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 bash -c '
+    set -a; . "$1"; set +a
+    live_exports="$(cat)"; eval "$live_exports"; unset live_exports
+    export VH_TEST_DB_NAME="$2" VH_PATH_TO_CONFIG="$3" HOME="$4"
+    [[ -n "$9" ]] && export VH_UNIT_SHARD="$9"
+    uid="$5" gid="$6" dir="$7" timeout_s="$8"
+    shift 9
+    cd "$dir"
+    exec setpriv --reuid="$uid" --regid="$gid" --init-groups -- timeout --signal=TERM --kill-after=30 "$timeout_s" "$@" </dev/null
+  ' bash "$ITEST_DB_ENV" "$1" "$REPO_ROOT/deploy/config/config.yaml" "$HOME" "$(id -u)" "$(id -g)" \
+    "$(dirname "$BIN")" "$TIMEOUT_SECS" "$2" "$BIN" ${GTEST_ARGS[@]+"${GTEST_ARGS[@]}"}
+}
+
+if [[ "$JOBS" == 1 ]]; then
+  itest_create_db "$DB_NAME"
+  DB_NAMES+=("$DB_NAME")
+  itest_log "database $DB_NAME; running $BIN ${GTEST_ARGS[*]-}"
+  run_shard "$DB_NAME" ""
+  exit $?
+fi
+
+# Three shards per job, started as jobs free up: a shard with a slow suite doesn't hold the run's end on its own.
+SHARDS=$((JOBS * 3))
+LOG_DIR="$BUILD_DIR/unit-logs"
+rm -rf "$LOG_DIR" && mkdir -p "$LOG_DIR"
+for ((i = 0; i < SHARDS; i++)); do
+  itest_create_db "${DB_NAME}_s$i"
+  DB_NAMES+=("${DB_NAME}_s$i")
+done
+itest_log "$SHARDS shards, $JOBS at a time, on ${DB_NAME}_s*; running $BIN ${GTEST_ARGS[*]-} (logs: $LOG_DIR)"
+running=0
+for ((i = 0; i < SHARDS; i++)); do
+  if [[ "$running" -ge "$JOBS" ]]; then wait -n || true; running=$((running - 1)); fi
+  (
+    rc=0
+    run_shard "${DB_NAME}_s$i" "$i/$SHARDS" >"$LOG_DIR/shard-$i.log" 2>&1 || rc=$?
+    echo "$rc" >"$LOG_DIR/shard-$i.rc"
+  ) &
+  running=$((running + 1))
+done
+wait
+rc=0
+for ((i = 0; i < SHARDS; i++)); do
+  printf '\n===== shard %d/%d (%s) =====\n' "$i" "$SHARDS" "$LOG_DIR/shard-$i.log"
+  cat "$LOG_DIR/shard-$i.log"
+done
+for ((i = 0; i < SHARDS; i++)); do
+  shard_rc="$(cat "$LOG_DIR/shard-$i.rc" 2>/dev/null || echo missing)"
+  [[ "$shard_rc" == 0 ]] || rc=1
+  itest_log "shard $i/$SHARDS exited $shard_rc"
+done
+exit "$rc"

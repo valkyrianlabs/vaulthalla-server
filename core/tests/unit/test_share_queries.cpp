@@ -1,5 +1,6 @@
 // vh-test-tier: db-only
 // Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
+#include "../helpers/db_suite.hpp"
 #include "db/Transactions.hpp"
 #include "db/encoding/bytea.hpp"
 #include "db/query/share/AuditEvent.hpp"
@@ -24,37 +25,18 @@
 #include "share/Token.hpp"
 #include "share/Upload.hpp"
 
-#include <paths.h>
 #include <gtest/gtest.h>
 
 using namespace vh;
 
-class ShareQueryTest : public ::testing::Test {
+class ShareQueryTest : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
     inline static uint32_t userId = 0;
     inline static uint32_t vaultId = 0;
     inline static uint32_t rootEntryId = 0;
 
-    static bool hasDbEnv() {
-        return std::getenv("VH_TEST_DB_USER") &&
-               std::getenv("VH_TEST_DB_PASS") &&
-               std::getenv("VH_TEST_DB_HOST") &&
-               std::getenv("VH_TEST_DB_PORT") &&
-               std::getenv("VH_TEST_DB_NAME");
-    }
-
     static void SetUpTestSuite() {
-        if (!hasDbEnv()) {
-            skipTests = true;
-            std::cout << "[test_share_queries] Skipping db tests due to missing environment variables." << std::endl;
-            return;
-        }
-
-        paths::enableTestMode();
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
+        if (!setUpDbSuite("test_share_queries", {.seed = false, .runtime = false})) return;
         seed::initPermissions();
         seed::initRoles();
         share::Token::setPepperForTesting(std::vector<uint8_t>(32, 0x51));
@@ -81,10 +63,7 @@ protected:
 
     static void TearDownTestSuite() {
         share::Token::clearPepperForTesting();
-    }
-
-    void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
+        tearDownDbSuite();
     }
 
     static std::shared_ptr<share::Link> makeLink() {

@@ -26,6 +26,14 @@ inline constexpr int64_t kWindowSteps = 1;  // the step before and after the cur
 // A fresh seed from libsodium's CSPRNG, in locked memory.
 [[nodiscard]] crypto::SecretBytes generateSecret();
 
+// The clock codes are checked against (Factors.hpp's default `now`): the system clock, plus what a test moved it by.
+[[nodiscard]] std::chrono::system_clock::time_point now();
+
+// Tests only (refused outside test mode): moves now() forward, so a sign-in after a spent step doesn't wait up to 30 s
+// for the next one in real time. resetClockForTesting() goes back to the system clock.
+void advanceClockForTesting(std::chrono::seconds by);
+void resetClockForTesting();
+
 // The RFC 6238 time step of `t`: floor(unix seconds / 30).
 [[nodiscard]] int64_t stepAt(std::chrono::system_clock::time_point t);
 

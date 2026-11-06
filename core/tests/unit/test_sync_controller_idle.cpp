@@ -4,13 +4,11 @@
 // in a tight loop whenever that task was scheduled in the future, which is always once a vault has synced: one
 // core at 100% for the daemon's whole life (seen on vh-storage: 1d 4h of CPU in 28.6h of uptime).
 
+#include "../helpers/db_suite.hpp"
 #include "../helpers/temp_dir.hpp"
 #include "concurrency/ThreadPoolManager.hpp"
-#include "db/Transactions.hpp"
 #include "fs/Filesystem.hpp"
 #include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
 #include "storage/Manager.hpp"
 #include "sync/Controller.hpp"
 #include "sync/Local.hpp"
@@ -20,7 +18,6 @@
 #include <sys/resource.h>
 
 #include <chrono>
-#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <thread>
@@ -35,9 +32,7 @@ double processCpuSeconds() {
 }
 
 TEST(SyncControllerIdle, SleepsWhileNoSyncIsDue) {
-    if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-          std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME")))
-        GTEST_SKIP() << "Skipping db test due to missing environment variables.";
+    if (!test::db::available()) GTEST_SKIP() << "Skipping db test due to missing environment variables.";
 
     paths::enableTestMode();
     const auto root = vh::test::uniqueTempRoot("vh_sync_idle");
@@ -53,10 +48,7 @@ TEST(SyncControllerIdle, SleepsWhileNoSyncIsDue) {
     std::filesystem::create_directories(paths::backingPath);
     std::filesystem::create_directories(paths::mountPath);
 
-    db::Transactions::init();
-    db::seed::nuke_and_recreate_schema_public();
-    db::Transactions::dbPool_->initPreparedStatements();
-    seed::seed_database();
+    test::db::freshSchema();
     runtime::Deps::init();
     fs::Filesystem::init(runtime::Deps::get().storageManager);
     runtime::Deps::get().storageManager->initStorageEngines();   // as the daemon does at startup
