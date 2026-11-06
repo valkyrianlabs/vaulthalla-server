@@ -1,0 +1,18 @@
+name: 'Fuzz the WebAuthn parsers'
+description: 'Builds the libFuzzer targets of core/src/auth/webauthn (clang, ASan/UBSan) and runs each for a bounded time.'
+# Decision D5 (docs/dev/mfa-design.md section 11): the CBOR/COSE, authenticatorData and clientDataJSON parsers are
+# fuzzed on every change. Every pull request runs them (the build is a few files, the three targets run in parallel),
+# a 60 s budget each. A crash, leak or sanitizer report fails the job; the reproducer is uploaded as an artifact.
+runs:
+  using: "composite"
+  steps:
+    - name: Fuzz (60 s per target)
+      shell: bash ./ci/run-ci bash -euo pipefail {0}
+      run: bash tools/dev/fuzz-webauthn.sh --seconds 60 --build-dir build-fuzz
+    - name: Upload fuzz reproducers
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: webauthn-fuzz-artifacts
+        path: build-fuzz/fuzz-*
+        if-no-files-found: ignore
