@@ -62,8 +62,18 @@ async function enrollThroughConsole(page: Page, user: string) {
 // Step-up (#359): a sensitive command (deleting a vault, changing accounts, secrets, settings once the sign-in is older
 // than auth.mfa.step_up_ttl_seconds) opens the Step-up dialog. This answers it the way a person with an authenticator
 // app does: the password and a fresh code, then the console resends the command once.
+const answering = new WeakSet<Page>()
 export async function confirmStepUp(page: Page, account = e2eCredentials()) {
   allowForTotpQueue()
+  answering.add(page)
+  try {
+    await answerStepUp(page, account)
+  } finally {
+    answering.delete(page)
+  }
+}
+
+async function answerStepUp(page: Page, account: { user: string; password: string }) {
   const dialog = page.getByTestId('stepup-dialog')
   await expect(dialog.getByTestId('stepup-password')).toBeVisible()
   await expect(dialog.getByTestId('stepup-submit')).toBeEnabled()
@@ -82,6 +92,20 @@ export async function confirmStepUp(page: Page, account = e2eCredentials()) {
   }
 }
 
+// Waits for `done` (a navigation, a toast), answering the Step-up dialog if the command asks for one first. A locator
+// handler (armStepUp) only runs before an action or an assertion, never while page.waitForURL waits, so a step that
+// ends in a wait (a vault deletion: data.destroy, always confirmed) says so here.
+export async function settleStepUp(page: Page, done: Promise<unknown>, account?: { user: string; password: string }) {
+  done.catch(() => undefined) // awaited below; never an unhandled rejection if the step-up fails first
+  const dialog = page.getByTestId('stepup-dialog')
+  const first = await Promise.race([
+    done.then(() => 'done' as const),
+    dialog.waitFor({ timeout: 60_000 }).then(() => 'stepup' as const, () => 'done' as const),
+  ])
+  if (first === 'stepup') await confirmStepUp(page, account ?? e2eCredentials())
+  await done
+}
+
 // Answers every Step-up dialog on this page as it appears, whatever the spec was doing (Playwright locator handler).
 const armedPages = new WeakSet<Page>()
 // Without an account (an offline run of scripted specs, VAULTHALLA_E2E_OFFLINE) there is nothing to confirm with.
@@ -89,7 +113,11 @@ export async function armStepUp(page: Page, account?: { user: string; password: 
   const who = account ?? (process.env.VAULTHALLA_E2E_USER && process.env.VAULTHALLA_E2E_PASSWORD ? e2eCredentials() : null)
   if (!who || armedPages.has(page)) return
   armedPages.add(page)
-  await page.addLocatorHandler(page.getByTestId('stepup-dialog'), () => confirmStepUp(page, who))
+  // The fills inside confirmStepUp are actions too, so the handler also fires for the dialog being answered: it
+  // returns at once then (noWaitAfter), or it would wait on the TOTP lock its own caller holds.
+  await page.addLocatorHandler(page.getByTestId('stepup-dialog'), async () => {
+    if (!answering.has(page)) await confirmStepUp(page, who)
+  }, { noWaitAfter: true })
 }
 
 // The console's sign-in form (labelled fields; the session cookie is HttpOnly, the access token lives in memory),

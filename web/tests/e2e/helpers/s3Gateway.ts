@@ -1,5 +1,5 @@
 import { expect, type Page } from '@playwright/test'
-import { armStepUp } from './auth'
+import { settleStepUp } from './auth'
 
 export function uniqueE2EName(prefix: string) {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
@@ -192,7 +192,6 @@ export async function saveKeyVaultBudget(page: Page, amount: string, vaultName?:
 // Deletes a vault through the console: Vaults → the vault → Settings → Delete vault → Delete now (typed confirmation).
 // Deleting a vault is a data.destroy step-up (#359): the dialog is answered with the e2e account's password and code.
 export async function deleteVault(page: Page, name: string) {
-  await armStepUp(page)
   await page.goto('/vaults')
   // The row link's name also carries the vault's description.
   await page.getByRole('link').filter({ hasText: name }).first().click()
@@ -204,7 +203,7 @@ export async function deleteVault(page: Page, name: string) {
   await dialog.getByTestId('vault-delete-now').click()
   await dialog.getByLabel(`Type “${name}” to confirm`).fill(name)
   await dialog.getByTestId('vault-delete-now-confirm').click()
-  await page.waitForURL(/\/vaults$/)
+  await settleStepUp(page, page.waitForURL(/\/vaults$/, { timeout: 120_000 }))
 }
 
 // Price budget policies this run saved. Saving or disabling a policy raises a "S3 price budget policy <id> was
