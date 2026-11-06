@@ -6,6 +6,24 @@ meaning lives in `.github/project/schema.yml`: fields, options, `area:*` labels,
 Ready gate. `tools/project/board.py` reconciles a project to it. Read the schema before triaging
 or picking up board work; do not infer field meaning from option names.
 
+## Products
+
+The Roadmap covers the Vaulthalla product family. An issue lives in the repository whose code it changes, and the
+repository is the product:
+
+| Product | Repository | View |
+|---|---|---|
+| Vaulthalla Server (daemon, CLI, web console, packaging) | `valkyrianlabs/vaulthalla-server` (public) | Server |
+| Vaulthalla Desktop (macOS app, File Provider) | `valkyrianlabs/vaulthalla-desktop` (public) | Desktop |
+| Vaulthalla Cloud (vaulthalla.cloud services daemon) | `valkyrianlabs/vaulthalla-cloud` (private) | Cloud |
+
+- **Cross-product work:** split it into one issue per repository, linked as sub-issues or blocked-by. A server change
+  that Desktop consumes is a server issue plus a desktop issue, never one issue covering both repositories.
+- **Private repositories:** the board is public, but items from vaulthalla-cloud are visible only to org members.
+- **Auto-add:** each repository needs its own Auto-add workflow on the board (Team plan allows several; set in the
+  board's Workflows page, there is no API).
+- **Not on this board:** Apthalla and the shared `vl-*` libraries are separate products.
+
 ## Model
 
 - **On the issue** (travels with it): Issue Type (org-level: Bug, Feature, Task, Docs, Packaging,
