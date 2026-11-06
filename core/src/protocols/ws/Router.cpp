@@ -1,6 +1,7 @@
 #include "protocols/ws/Router.hpp"
 
 #include "auth/mfa/Pending.hpp"
+#include "auth/stepup/StepUp.hpp"
 #include "auth/session/Manager.hpp"
 #include "log/Registry.hpp"
 #include "config/Config.hpp"
@@ -368,6 +369,8 @@ void Router::routeMessage(json&& msg, const SessionPtr& session) {
                                        commandForLog(command));
         }
 
+        // #359: who is asking, for the step-up check in the operations this command runs (auth/stepup/StepUp.hpp).
+        const auth::stepup::Scope stepUpScope(session);
         if (handlers_.contains(command)) handlers_[command](std::move(msg), session);
         else {
             log::Registry::ws()->warn("[Router] Unknown command: {}", printableCommand(command));

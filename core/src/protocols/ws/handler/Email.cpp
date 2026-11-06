@@ -1,4 +1,5 @@
 #include "protocols/ws/handler/Email.hpp"
+#include "auth/stepup/StepUp.hpp"
 #include "ops/Error.hpp"
 
 #include "config/Registry.hpp"
@@ -186,6 +187,7 @@ json Email::setProviderSecret(const json& payload, const std::shared_ptr<Session
     const auto provider = invalidOnBadInput([&] {
         return ::vh::config::emailProviderKindFromString(payload.at("provider").get<std::string>());
     });
+    vh::auth::stepup::require(vh::auth::stepup::Family::Secrets);  // #359: a provider credential
     if (provider == ::vh::config::EmailProviderKind::Resend) {
         const auto apiKey = payload.at("api_key").get<std::string>();
         if (apiKey.empty()) throw vh::ops::Invalid("Resend API key cannot be empty");

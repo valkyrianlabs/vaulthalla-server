@@ -356,8 +356,15 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
         {"mfa_expired", {"auth.mfa.verify", "auth.mfa.webauthn.register.options", "auth.mfa.webauthn.register.finish",
                          "auth.mfa.totp.enroll.start", "auth.mfa.totp.enroll.confirm",
                          "auth.mfa.recovery.acknowledge"}},
-        {"step_up_required", {"auth.mfa.recovery.generate"}}};
-    const auto refusedCodeAllowed = [](const std::string& code, const std::string& command) {
+        // #359: step-up (step_up_required: exactly the step-up table's commands, below).
+        {"step_up_unavailable", {"auth.stepup.begin"}},
+        {"step_up_failed", {"auth.stepup.finish"}},
+        {"mfa_last_factor", {"auth.mfa.factor.remove"}}};
+    const auto stepUp = contract::stepUpTable();
+    const auto refusedCodeAllowed = [&](const std::string& code, const std::string& command) {
+        if (code == "step_up_required")
+            return std::ranges::any_of(stepUp, [&](const contract::WsStepUp& r) { return r.command == command; });
+        if (code == "rate_limited" && command == "auth.stepup.begin") return true;  // the passkey challenge store
         const auto it = kRefusedCodes.find(code);
         if (it == kRefusedCodes.end()) return false;
         // rate_limited is device pairing's, auth.mfa.verify's and auth.passkey.options'.

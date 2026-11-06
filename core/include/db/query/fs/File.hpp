@@ -7,6 +7,7 @@
 #include <vector>
 #include <optional>
 #include <pqxx/pqxx>
+#include "crypto/id/ObjectUid.hpp"
 #include "fs/Fwd.hpp"
 
 namespace vh::fs::model {
@@ -41,6 +42,8 @@ public:
     [[nodiscard]] static bool isFile(unsigned int vaultId, const std::filesystem::path& relPath);
 
     static FilePtr getFileById(unsigned int id);
+    // The object uid of the file row holding this inode, if there is one.
+    [[nodiscard]] static std::optional<vh::crypto::id::ObjectUid> objectUidByInode(uint64_t inode);
 
     static FilePtr getFileByPath(unsigned int vaultId, const std::filesystem::path& relPath);
 

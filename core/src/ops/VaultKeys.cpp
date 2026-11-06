@@ -1,4 +1,5 @@
 #include "ops/VaultKeys.hpp"
+#include "auth/stepup/StepUp.hpp"
 
 #include "crypto/id/ObjectUid.hpp"
 #include "crypto/recovery/Kev1.hpp"
@@ -41,6 +42,7 @@
 #include "vault/model/Key.hpp"
 #include "vault/model/S3Vault.hpp"
 #include "vault/model/Vault.hpp"
+#include "vault/Content.hpp"
 
 #include <fcntl.h>
 #include <paths.h>
@@ -565,6 +567,9 @@ nlohmann::json toJson(const RecoveryMaterial& m) {
 VaultExport exportVault(const Actor& actor, const unsigned int vaultId, const Channel channel) {
     requireExport(actor);
     requireKeyChannel(channel);
+    // #359: keys, bound to the vault; never inside a paired device's key-backup grant (Desktop's 1Password backup).
+    if (!auth::stepup::keyBackupGrantCovers(vaultId))
+        auth::stepup::require(auth::stepup::Family::Keys, "vault.keys.export:" + std::to_string(vaultId));
     auto out = exportFrom(sourceFor(actor, vaultId));
     log::Registry::audit()->warn("[ops::vault_keys] {} exported {} and {} other needed version(s) through {}",
                                  actor->name(), auditName(out), out.historical.size(), channelName(channel));
@@ -574,6 +579,8 @@ VaultExport exportVault(const Actor& actor, const unsigned int vaultId, const Ch
 ExportAll exportAll(const Actor& actor, const Channel channel) {
     requireExport(actor);
     requireKeyChannel(channel);
+    if (!auth::stepup::keyBackupGrantCovers(0))
+        auth::stepup::require(auth::stepup::Family::Keys, std::string("vault.keys.export:all"));
     ExportAll out;
     for (const auto& vault : db::query::vault::Vault::listLiveVaults()) {
         try {
@@ -1071,39 +1078,32 @@ struct SalvageGuard {
     SalvageGuard& operator=(const SalvageGuard&) = delete;
 };
 
-std::vector<uint8_t> keyCopy(const crypto::SecretKey& key) { return {key.bytes().begin(), key.bytes().end()}; }
-
-// Decrypts `ciphertext` sealed under (iv, key) and re-seals it under `next` with a fresh IV: {sealed, iv}. Throws
-// SalvageAuthFailure when the tag doesn't verify. No plaintext survives this frame.
-std::pair<std::vector<uint8_t>, std::vector<uint8_t>> resealWith(const std::vector<uint8_t>& ciphertext,
-                                                                 const crypto::SecretKey& key, const std::string& ivB64,
-                                                                 const crypto::SecretKey& next) {
-    auto from = keyCopy(key), to = keyCopy(next);
+// Opens `ciphertext` (either format) sealed under (generation, key) and re-seals it as a new VHF1 generation under
+// `next`: {sealed, generation}. Throws SalvageAuthFailure when it doesn't authenticate. No plaintext survives this
+// frame.
+std::pair<std::vector<uint8_t>, std::string> resealWith(const std::vector<uint8_t>& ciphertext,
+                                                        const vh::vault::content::Binding& from,
+                                                        const crypto::SecretKey& key, const crypto::SecretKey& next,
+                                                        const unsigned int nextVersion,
+                                                        const crypto::id::ObjectUid& objectUid) {
     std::vector<uint8_t> plaintext;
     try {
-        plaintext = crypto::util::decrypt_aes256_gcm(ciphertext, from, crypto::util::b64_decode(ivB64));
+        plaintext = vh::vault::content::openBuffer(ciphertext, from, key);
     } catch (const std::exception& e) {
-        sodium_memzero(from.data(), from.size());
-        sodium_memzero(to.data(), to.size());
         throw SalvageAuthFailure(std::string("does not authenticate under the supplied key: ") + e.what());
     }
-    std::vector<uint8_t> iv;
-    auto sealed = crypto::util::encrypt_aes256_gcm(plaintext, to, iv);
+    auto sealed = vh::vault::content::sealBuffer(plaintext, next, nextVersion, from.vaultUid, objectUid);
     sodium_memzero(plaintext.data(), plaintext.size());
-    sodium_memzero(from.data(), from.size());
-    sodium_memzero(to.data(), to.size());
-    return {std::move(sealed), std::move(iv)};
+    return {std::move(sealed.bytes), std::move(sealed.generation)};
 }
 
-bool bufferOpensWith(const std::vector<uint8_t>& bytes, const crypto::SecretKey& key, const std::string& ivB64) {
-    auto k = keyCopy(key);
+bool bufferOpensWith(const std::vector<uint8_t>& bytes, const crypto::SecretKey& key,
+                     const vh::vault::content::Binding& binding) {
     try {
-        auto plaintext = crypto::util::decrypt_aes256_gcm(bytes, k, crypto::util::b64_decode(ivB64));
+        auto plaintext = vh::vault::content::openBuffer(bytes, binding, key);
         sodium_memzero(plaintext.data(), plaintext.size());
-        sodium_memzero(k.data(), k.size());
         return true;
     } catch (const std::exception&) {
-        sodium_memzero(k.data(), k.size());
         return false;
     }
 }
@@ -1126,49 +1126,49 @@ struct SalvageKeys {
 sync::rotation::Deps salvageDeps(const EnginePtr& engine, const std::shared_ptr<const SalvageKeys>& keys) {
     auto deps = sync::rotation::runtimeDeps(engine);
     deps.crypto.currentKeyVersion = [keys] { return keys->fresh_version; };
-    deps.crypto.reseal = [keys](const std::vector<uint8_t>& ciphertext, const FileSP& file) {
+    const auto vaultUid = engine->encryptionManager->vaultUid();
+    const auto bindingOf = [vaultUid](const std::string& generation, const unsigned int version) {
+        return vh::vault::content::Binding{.vaultUid = vaultUid, .generation = generation, .keyVersion = version};
+    };
+    deps.crypto.reseal = [keys, bindingOf](const std::vector<uint8_t>& ciphertext, const FileSP& file) {
         const auto from = keys->keyFor(file->encrypted_with_key_version);
         if (!from || file->encrypted_with_key_version == keys->fresh_version)
             throw std::runtime_error("no supplied key for key version " + std::to_string(file->encrypted_with_key_version));
-        auto [sealed, iv] = resealWith(ciphertext, *from, file->encryption_iv, *keys->fresh);
-        file->encryption_iv = crypto::util::b64_encode(iv);
+        if (!file->object_uid) file->object_uid = crypto::id::newObjectUid();
+        auto [sealed, generation] = resealWith(ciphertext, bindingOf(file->encryption_iv, file->encrypted_with_key_version),
+                                               *from, *keys->fresh, keys->fresh_version, *file->object_uid);
+        file->encryption_iv = std::move(generation);
         file->encrypted_with_key_version = keys->fresh_version;
         return sealed;
     };
-    deps.crypto.seal = [keys](const std::vector<uint8_t>& plaintext, const FileSP& file) {
-        auto to = keyCopy(*keys->fresh);
-        std::vector<uint8_t> iv;
-        auto sealed = crypto::util::encrypt_aes256_gcm(plaintext, to, iv);
-        sodium_memzero(to.data(), to.size());
-        file->encryption_iv = crypto::util::b64_encode(iv);
+    deps.crypto.seal = [keys, vaultUid](const std::vector<uint8_t>& plaintext, const FileSP& file) {
+        if (!file->object_uid) file->object_uid = crypto::id::newObjectUid();
+        auto sealed = vh::vault::content::sealBuffer(plaintext, *keys->fresh, keys->fresh_version, vaultUid,
+                                                     *file->object_uid);
+        file->encryption_iv = std::move(sealed.generation);
         file->encrypted_with_key_version = keys->fresh_version;
-        return sealed;
+        return std::move(sealed.bytes);
     };
-    deps.crypto.open = [keys](const std::vector<uint8_t>& ciphertext, const sync::rotation::EncryptionState& state) {
+    deps.crypto.open = [keys, bindingOf](const std::vector<uint8_t>& ciphertext,
+                                         const sync::rotation::EncryptionState& state) {
         const auto key = keys->keyFor(state.key_version);
         if (!key) throw std::runtime_error("no key for key version " + std::to_string(state.key_version));
-        auto k = keyCopy(*key);
-        auto out = crypto::util::decrypt_aes256_gcm(ciphertext, k, crypto::util::b64_decode(state.iv_b64));
-        sodium_memzero(k.data(), k.size());
-        return out;
+        return vh::vault::content::openBuffer(ciphertext, bindingOf(state.iv_b64, state.key_version), *key);
     };
-    deps.crypto.bufferAuthenticates = [keys](const std::vector<uint8_t>& bytes,
-                                             const sync::rotation::EncryptionState& state) {
+    deps.crypto.bufferAuthenticates = [keys, bindingOf](const std::vector<uint8_t>& bytes,
+                                                        const sync::rotation::EncryptionState& state) {
         const auto key = state.encrypted() ? keys->keyFor(state.key_version) : nullptr;
-        return key && bytes.size() >= crypto::util::AES_TAG_SIZE && bufferOpensWith(bytes, *key, state.iv_b64);
+        return key && bytes.size() >= crypto::util::AES_TAG_SIZE &&
+               bufferOpensWith(bytes, *key, bindingOf(state.iv_b64, state.key_version));
     };
-    deps.crypto.fileAuthenticates = [keys](const std::filesystem::path& path,
-                                           const sync::rotation::EncryptionState& state) {
+    deps.crypto.fileAuthenticates = [keys, bindingOf](const std::filesystem::path& path,
+                                                      const sync::rotation::EncryptionState& state) {
         const auto key = state.encrypted() ? keys->keyFor(state.key_version) : nullptr;
         if (!key) return false;
-        auto k = keyCopy(*key);
         try {
-            const bool ok = crypto::util::aes256_gcm_file_authenticates(path, k, crypto::util::b64_decode(state.iv_b64));
-            sodium_memzero(k.data(), k.size());
-            return ok;
-        } catch (...) {
-            sodium_memzero(k.data(), k.size());
-            throw;
+            return vh::vault::content::verifyWholeFile(path, bindingOf(state.iv_b64, state.key_version), *key);
+        } catch (const std::invalid_argument&) {
+            return false;
         }
     };
     if (deps.remote) {
@@ -1177,7 +1177,7 @@ sync::rotation::Deps salvageDeps(const EnginePtr& engine, const std::shared_ptr<
         auto states = std::make_shared<std::map<std::string, sync::rotation::EncryptionState>>();
         deps.remote->download = [cloud, states](const FileSP& file) {
             const auto key = file->path.string().substr(file->path.string().starts_with('/') ? 1 : 0);
-            const auto stored = file->size_bytes + crypto::util::AES_TAG_SIZE;
+            const auto stored = vh::vault::content::sealedSizeOf(file->size_bytes, file->encryption_iv);
             try {
                 auto bytes = cloud->fetchSealedObject(key, stored, file->encryption_iv, file->encrypted_with_key_version,
                                                       "key_salvage");
@@ -1610,6 +1610,10 @@ ImportResult importKeys(const Actor& actor, const ImportRequest& request, const 
             throw NeedsConfirmation(salvageMode ? "vault_key_salvage" : "vault_key_import", text);
         }
     }
+
+    // #359: keys, bound to the vault, after the typed confirmation and before anything is written or salvaged.
+    if (!writes.empty() || salvageRun)
+        auth::stepup::require(auth::stepup::Family::Keys, "vault.keys.import:" + std::to_string(target.vault_id));
 
     if (!writes.empty()) {
         KeyQ::writeImported(target.vault_id, writes);

@@ -19,6 +19,7 @@
 #include "sync/model/Baseline.hpp"
 #include "sync/model/RemotePolicy.hpp"
 #include "vault/model/Vault.hpp"
+#include "vault/Content.hpp"
 
 #include <boost/uuid/uuid.hpp>
 #include <boost/uuid/uuid_generators.hpp>
@@ -186,7 +187,8 @@ storage::CloudEngine::RemoteObjectHead requireRemoteUnchanged(const storage::Clo
     else if (recorded.content_hash && head->content_hash) same = *recorded.content_hash == *head->content_hash;
     else if (head->content_length)
         same = *head->content_length == recorded.size_bytes ||
-               (head->encrypted && *head->content_length == recorded.size_bytes + kGcmTagBytes);
+               (head->encrypted && (*head->content_length == recorded.size_bytes + kGcmTagBytes ||
+                                    *head->content_length == vh::vault::content::newSealedSize(recorded.size_bytes)));
     else same = true;  // nothing to compare against: the GET below is still pinned with If-Match
     if (!same)
         throw ConflictStale("the remote object changed after the conflict was recorded; the next sync refreshes it, "
@@ -291,7 +293,7 @@ std::vector<uint8_t> ConflictResolver::fetchRemoteForPreview(const std::shared_p
     if (!local || local->vault_id != engine->vault->id) throw ConflictStale("the file no longer exists");
     const auto remote = remoteFileFor(*engine, conflict, *local);
     const auto recordedSize = conflict.remote.size_bytes;
-    if (recordedSize > maxBytes + kGcmTagBytes)
+    if (recordedSize > vh::vault::content::newSealedSize(maxBytes))
         throw ContentTooLarge("the remote copy is too large to preview", maxBytes);
     if (remote->requiresArchiveRestoreForBodyGet())
         throw storage::ContentUnavailable("the remote object is in an archive tier and needs a restore first");
@@ -306,22 +308,23 @@ std::vector<uint8_t> ConflictResolver::fetchRemoteForPreview(const std::shared_p
 
     std::vector<uint8_t> plaintext;
     {
-        // One HEAD, one GET, at most the cap plus the GCM tag, inside the vault's request budget.
+        // One HEAD, one GET, at most the cap sealed (VHF1 ≥ legacy GCM), inside the vault's request budget.
         auto budget = policy->s3_request_budget;
         budget.max_head_requests = 1;
         budget.max_get_requests = 1;
-        budget.max_downloaded_bytes = maxBytes + kGcmTagBytes;
+        budget.max_downloaded_bytes = vh::vault::content::newSealedSize(maxBytes);
         const storage::ScopedS3RequestUsageCapture capture(*engine, budget);
         const auto head = engine->headRemoteObject(local->path);
         if (!head) throw ConflictStale("the remote object no longer exists");
         if (head->requires_restore)
             throw storage::ContentUnavailable("the remote object is in an archive tier and needs a restore first");
-        if (head->content_length && *head->content_length > maxBytes + kGcmTagBytes)
+        if (head->content_length && *head->content_length > vh::vault::content::newSealedSize(maxBytes))
             throw ContentTooLarge("the remote copy is too large to preview", maxBytes);
         adoptHead(*remote, *head);
         try {
             plaintext = engine->fetchRemotePlaintext(
-                remote, head->etag.empty() ? std::nullopt : std::make_optional(head->etag), maxBytes + kGcmTagBytes);
+                remote, head->etag.empty() ? std::nullopt : std::make_optional(head->etag),
+                vh::vault::content::newSealedSize(maxBytes));
         } catch (const storage::s3::ConditionalRequestFailed&) {
             throw ConflictStale("the remote object changed while it was being fetched; try again");
         }

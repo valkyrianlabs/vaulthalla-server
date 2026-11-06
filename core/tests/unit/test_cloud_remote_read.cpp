@@ -15,6 +15,7 @@
 #include "storage/RemoteRangedReader.hpp"
 #include "storage/ScopedS3RequestUsageCapture.hpp"
 #include "storage/s3/Controller.hpp"
+#include "vault/Content.hpp"
 #include "vault/EncryptionManager.hpp"
 #include "vault/model/APIKey.hpp"
 #include "vault/model/S3Vault.hpp"
@@ -287,6 +288,19 @@ protected:
         return rowFor(path, plaintext.size(), ivB64, kKeyVersion);
     }
 
+    // A remote-only VHF1 object as this vault seals it (#367), with the index-only row carrying its generation.
+    std::shared_ptr<FileModel> remoteVhf1(const std::string& path, const std::vector<uint8_t>& plaintext) {
+        auto sealedAs = std::make_shared<FileModel>();
+        const auto sealed = engine_->encryptionManager->encrypt(plaintext, sealedAs);
+        bucket_->put(path.substr(1), FakeBucket::Object{
+            .body = sealed,
+            .etag = "\"etag-" + std::to_string(++etagCounter_) + "\"",
+            .meta = {{"x-amz-meta-vh-encrypted", "true"},
+                     {"x-amz-meta-vh-iv", sealedAs->encryption_iv},
+                     {"x-amz-meta-vh-key-version", std::to_string(kKeyVersion)}}});
+        return rowFor(path, plaintext.size(), sealedAs->encryption_iv, kKeyVersion);
+    }
+
     std::shared_ptr<FileModel> rowFor(const std::string& path, const uint64_t size, const std::string& ivB64,
                                       const unsigned int version) {
         auto file = std::make_shared<FileModel>();
@@ -528,7 +542,8 @@ TEST_F(CloudRemoteReadTest, PlaintextUpstreamHydrateStoresCiphertextOnly) {
     const auto reader = engine_->openPlaintextReader(file, kHydrateStrict);
 
     const auto stored = readFile(file->backing_path);
-    ASSERT_EQ(plaintext.size() + crypto::util::AES_TAG_SIZE, stored.size());
+    // Sealed on the way in as a new VHF1 generation (#367).
+    ASSERT_EQ(vault::content::newSealedSize(plaintext.size()), stored.size());
     EXPECT_EQ(stored.end(), std::search(stored.begin(), stored.end(), plaintext.begin() + 1000, plaintext.begin() + 1064))
         << "plaintext reached the disk";
 
@@ -539,7 +554,8 @@ TEST_F(CloudRemoteReadTest, PlaintextUpstreamHydrateStoresCiphertextOnly) {
     EXPECT_EQ(0u, catalogCommits_[0].expectedVersion);
     EXPECT_EQ(kKeyVersion, catalogCommits_[0].version);
     EXPECT_EQ(catalogCommits_[0].iv, reader->generation().iv_b64);
-    EXPECT_EQ(plaintext, crypto::util::decrypt_aes256_gcm(stored, key_, crypto::util::b64_decode(catalogCommits_[0].iv)));
+    EXPECT_TRUE(vault::content::isVhf1(catalogCommits_[0].iv));
+    EXPECT_EQ(plaintext, engine_->encryptionManager->decrypt(stored, catalogCommits_[0].iv, kKeyVersion));
     EXPECT_EQ(plaintext, readAll(*reader, plaintext.size()));
 }
 
@@ -717,6 +733,88 @@ TEST_F(CloudRemoteReadTest, GatewayHydratesAnIndexOnlyRow) {
     } catch (const protocols::s3::S3Error& e) {
         EXPECT_EQ("ServiceUnavailable", e.code);
     }
+}
+
+// ---- VHF1 remote objects (#367) ----------------------------------------------------------------------------------
+
+TEST_F(CloudRemoteReadTest, Vhf1RemoteHydrateAuthenticatesEveryChunkAndKeepsTheObjectBytes) {
+    const auto plaintext = randomBytes(200 * 1024 + 7, 41);
+    const auto file = remoteVhf1("/media/v1.bin", plaintext);
+    const auto reader = engine_->openPlaintextReader(file, kHydrateStrict);
+    EXPECT_EQ(plaintext, readAll(*reader, plaintext.size()));
+    FakeBucket::Object object;
+    bucket_->peek("media/v1.bin", object);
+    EXPECT_EQ(object.body, readFile(file->backing_path)) << "the local copy is the upstream object, byte for byte";
+    EXPECT_EQ(file->encryption_iv, reader->generation().iv_b64);
+}
+
+TEST_F(CloudRemoteReadTest, Vhf1RemoteHydrateRefusesATamperedChunkAndStoresNothing) {
+    const auto plaintext = randomBytes(150 * 1024, 42);
+    const auto file = remoteVhf1("/media/v1-bad.bin", plaintext);
+    bucket_->mutate("media/v1-bad.bin", [](FakeBucket::Object& o) { o.body[o.body.size() - 30] ^= 0x01; });
+    EXPECT_THROW((void)engine_->openPlaintextReader(file, kHydrateStrict), IntegrityError);
+    EXPECT_FALSE(std::filesystem::exists(file->backing_path));
+}
+
+TEST_F(CloudRemoteReadTest, Vhf1RangedReadsAreAuthenticatedChunkWindows) {
+    engine_->setRangedReadLimits({.window_bytes = 100 * 1024, .cached_windows = 2,
+                                  .max_get_requests = std::nullopt, .max_downloaded_bytes = std::nullopt});
+    const auto plaintext = randomBytes(300 * 1024 + 5, 43);
+    const auto file = remoteVhf1("/media/v1-ranged.bin", plaintext);
+    const ReaderOptions ranged{.integrity = IntegrityPolicy::Strict, .remote = RemoteFetchPolicy::Ranged};
+
+    const auto ctrBefore = crypto::util::gcmCtrDecryptAtCallsForTesting();
+    auto reader = engine_->openPlaintextReader(file, ranged);
+    EXPECT_FALSE(std::filesystem::exists(file->backing_path));
+    std::vector<uint8_t> out(1000);
+    ASSERT_EQ(out.size(), reader->read(70'000, out));
+    EXPECT_TRUE(std::equal(out.begin(), out.end(), plaintext.begin() + 70'000));
+    std::vector<uint8_t> tail(100);
+    ASSERT_EQ(5u, reader->read(plaintext.size() - 5, tail));
+    EXPECT_TRUE(std::equal(tail.begin(), tail.begin() + 5, plaintext.end() - 5));
+    EXPECT_EQ(ctrBefore, crypto::util::gcmCtrDecryptAtCallsForTesting()) << "VHF1 ranged reads never use the CTR keystream";
+
+    // The header first (bytes 0-119), then whole-chunk windows (64 KiB chunks: the 100 KiB window rounds down to one
+    // chunk ‖ tag), every GET bound to the version seen at open.
+    const auto gets = bucket_->gets();
+    ASSERT_EQ(3u, gets.size());
+    EXPECT_EQ("bytes=0-119", gets[0].range.value_or(""));
+    EXPECT_EQ("bytes=" + std::to_string(120 + 65'552) + "-" + std::to_string(120 + 2 * 65'552 - 1),
+              gets[1].range.value_or(""));
+    for (const auto& get : gets) EXPECT_FALSE(get.ifMatch.value_or("").empty());
+}
+
+TEST_F(CloudRemoteReadTest, Vhf1RangedReadNeverReturnsBytesOfAFailedChunk) {
+    engine_->setRangedReadLimits({.window_bytes = 64 * 1024, .cached_windows = 1,
+                                  .max_get_requests = std::nullopt, .max_downloaded_bytes = std::nullopt});
+    const auto plaintext = randomBytes(200 * 1024, 44);
+    const auto file = remoteVhf1("/media/v1-flip.bin", plaintext);
+    // Flip a byte inside chunk 1's ciphertext.
+    bucket_->mutate("media/v1-flip.bin", [](FakeBucket::Object& o) { o.body[120 + 65'552 + 10] ^= 0x40; });
+    auto reader = engine_->openPlaintextReader(file, {.integrity = IntegrityPolicy::Strict,
+                                                      .remote = RemoteFetchPolicy::Ranged});
+    std::vector<uint8_t> out(100, 0xAB);
+    ASSERT_EQ(out.size(), reader->read(10, out));  // chunk 0 is intact
+    std::vector<uint8_t> bad(100, 0xAB);
+    EXPECT_THROW((void)reader->read(65'536 + 5, bad), IntegrityError);
+    EXPECT_TRUE(std::ranges::all_of(bad, [](const uint8_t b) { return b == 0xAB; })) << "no byte of a failed chunk";
+    EXPECT_THROW((void)reader->read(65'536 + 5, bad), IntegrityError) << "the failure is sticky";
+}
+
+TEST_F(CloudRemoteReadTest, Vhf1RangedReaderRefusesAnObjectOfAnotherGeneration) {
+    const auto plaintext = randomBytes(80 * 1024, 45);
+    const auto file = remoteVhf1("/media/v1-gen.bin", plaintext);
+    const auto other = remoteVhf1("/media/v1-other.bin", plaintext);
+    // The provider serves another sealing (same size) under this key, with this row's metadata.
+    bucket_->mutate("media/v1-gen.bin", [&](FakeBucket::Object& o) {
+        FakeBucket::Object copy;
+        bucket_->peek("media/v1-other.bin", copy);
+        o.body = copy.body;
+    });
+    EXPECT_THROW((void)engine_->openPlaintextReader(file, {.integrity = IntegrityPolicy::Strict,
+                                                           .remote = RemoteFetchPolicy::Ranged}),
+                 IntegrityError);
+    (void)other;
 }
 
 }

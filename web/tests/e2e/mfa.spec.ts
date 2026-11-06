@@ -16,11 +16,20 @@ import { nextTotpStep, totpCode, totpStep } from './helpers/totp'
 //      NEXT_PUBLIC_VAULTHALLA_WS_ORIGIN=ws://localhost:<port> VAULTHALLA_E2E_SKIP=1 pnpm exec playwright test tests/e2e/mfa.spec.ts
 
 const VH = process.env.VAULTHALLA_E2E_MFA_VH
+// The step-up spec waits out the sign-in's own freshness (an aal 2 sign-in stands in for a step-up within
+// auth.mfa.step_up_ttl_seconds): run that daemon with auth.mfa.step_up_ttl_seconds: 60 and say so here.
+const STEP_UP_TTL_SECONDS = Number(process.env.VAULTHALLA_E2E_STEP_UP_TTL ?? '60')
 
 test.skip(!VH, 'needs VAULTHALLA_E2E_MFA_VH and a daemon with auth.webauthn for this origin (see the header)')
 test.describe.configure({ mode: 'serial' })
 
 let counter = 0
+const newAccount = (role: string) => {
+  const name = `e2e_su_${Date.now().toString(36)}_${++counter}`
+  execFileSync(VH as string, ['user', 'create', name, '--role', role], { encoding: 'utf8' })
+  return name
+}
+
 const newAdmin = () => {
   const name = `e2e_mfa_${Date.now().toString(36)}_${++counter}`
   const out = execFileSync(VH as string, ['user', 'create', name, '--role', 'admin'], { encoding: 'utf8' })
@@ -316,5 +325,44 @@ test('a synced passkey whose counter does not grow still signs in', async ({ pag
     await expect(thisSession(page)).toContainText('Synced passkey')
     await expect(page.getByTestId('mfa-factor')).toHaveCount(1)
     await expect(page.getByTestId('mfa-factor')).toContainText('Synced passkey')
+  })
+})
+
+// Step-up (#359): a role change answers step_up_required once the sign-in is older than the step-up window; the
+// Step-up dialog confirms with the passkey and the change goes through; a second change within the window doesn't
+// prompt (the family-wide identity.admin grant).
+test('step-up dialog on a role change; a second change within the window does not prompt', async ({ page }) => {
+  test.setTimeout(STEP_UP_TTL_SECONDS * 1000 + 90_000)
+  const admin = newAdmin()
+  const target = newAccount('unprivileged')
+  await authenticator(page)
+  await enrollPasskey(page, admin)
+
+  await test.step('wait until the sign-in no longer stands in for a step-up', async () => {
+    await page.waitForTimeout((STEP_UP_TTL_SECONDS + 2) * 1000)
+  })
+
+  // A grant lives on the page's connection (never another's): the second change stays on the page, as a person would;
+  // a reload is a new connection and asks again.
+  await page.goto(`/users/${encodeURIComponent(target)}`)
+  const changeRole = async (role: string) => {
+    await page.locator('#access-role').selectOption(role)
+    await page.getByRole('button', { name: 'Change role' }).click()
+    await page.getByRole('dialog').getByRole('button', { name: 'Change role' }).click() // the confirm dialog
+  }
+
+  await test.step('the first change asks for the passkey, then goes through', async () => {
+    await changeRole('auditor')
+    await expect(page.getByTestId('stepup-dialog')).toBeVisible()
+    await expect(page.getByTestId('stepup-dialog')).toContainText(/Change accounts, roles or groups/)
+    await page.getByTestId('stepup-use-passkey').click()
+    await expect(page.getByTestId('stepup-dialog')).toHaveCount(0)
+    await expect(page.getByText(new RegExp(`${target} is now`, 'i'))).toBeVisible()
+  })
+
+  await test.step('a second change within the window does not prompt', async () => {
+    await changeRole('unprivileged')
+    await expect(page.getByText(new RegExp(`${target} is now unprivileged`, 'i'))).toBeVisible()
+    await expect(page.getByTestId('stepup-dialog')).toHaveCount(0)
   })
 })

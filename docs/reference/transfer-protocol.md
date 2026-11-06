@@ -283,8 +283,11 @@ last. `max_in_flight` bounds concurrent part requests per session; more get 429.
 
 ### 3.5 Encryption of parts (no plaintext at rest)
 
-The vault file format is unchanged: AES-256-GCM over the whole file, body ‖ 16-byte tag, one IV per file, empty
-AAD. At create the server picks the file's IV and the vault key version and stores both.
+The vault file is sealed in VHF1, the authenticated chunked format every new content generation uses: a 120-byte
+authenticated header, then 64 KiB AES-256-GCM chunks, each with its own tag and bound to its index and to whether it
+is the last chunk. At create the server picks the file's VHF1 salt (its generation id, recorded where the IV used to
+be) and the vault key version and stores both. An upload created by a version before VHF1 (its row carries a 12-byte
+IV) finishes in the legacy format it started in: AES-256-GCM over the whole file, body ‖ 16-byte tag.
 
 Parts are **not** written under the file's keystream. A part attempt that fails half way (the connection drops, the
 digest is wrong, the daemon dies before the part is recorded) is not recorded, and the range may later be filled
@@ -296,14 +299,23 @@ random IV, written to `<ordinal>.<offset>.<random>.tmp` and renamed to `<ordinal
 part row records that IV. No keystream is ever used twice, and every stored part is authenticated.
 
 A per-file sealing cursor builds the vault-format file: it reads the stored parts in order as the contiguous prefix
-grows, decrypts and authenticates each (a failure fails the file with `integrity`), and re-encrypts the plaintext
-through the file's own GCM stream into `<ordinal>.sealed`, feeding the BLAKE2b content hash at the same time
-(`createFile` then doesn't read the file back). Plaintext exists only in bounded memory buffers. The durable sealed
-prefix is flushed and recorded (`sealed_bytes`) at least every 256 MiB and at the end of every pass; parts below it
-are then deleted. The cursor lives in memory; after a restart it is rebuilt by reading the sealed prefix back
-(decrypted at its offset and re-encrypted, which must reproduce it byte for byte) and the file is cut to that
-prefix. Positions of the sealed file only ever receive the decided bytes, so rewriting a prefix after a restart
-writes the same ciphertext again.
+grows, decrypts and authenticates each (a failure fails the file with `integrity`), and seals the plaintext into
+`<ordinal>.sealed` one whole 64 KiB chunk at a time, as soon as the chunk is complete (the last one, marked final,
+once the whole size is in); the partial chunk at the end of the prefix is held back in memory, never written. The
+BLAKE2b content hash of the sealed bytes is computed at the same time (`createFile` then doesn't read the file back).
+Plaintext exists only in bounded memory buffers. The durable sealed prefix (whole chunks) is flushed and recorded
+(`sealed_bytes`) at least every 256 MiB and at the end of every pass; parts the prefix covers completely are then
+deleted, and the part the prefix ends inside is kept.
+
+The cursor lives in memory. After a restart it is rebuilt by authenticating the recorded prefix (the header against
+the vault, the salt and the key version, every chunk with its index): nothing is encrypted again, and a prefix that
+doesn't authenticate fails the file with `integrity`. A sealing never seals one chunk index twice under one salt:
+bytes found past the recorded prefix (a crash between writing and recording) and stored bytes that differ from what
+was already sealed for their range make the sealing continue under a fresh salt, which re-seals the authenticated
+plaintext kept so far into `<ordinal>.sealed.resalt`, records the new salt and prefix, and renames it into place (a
+crash in between is settled at the next start: the `.resalt` file wins only if it authenticates under the recorded
+salt). Legacy-format uploads keep the old cursor: the sealed prefix is read back, decrypted at its offset and
+re-encrypted, which must reproduce it byte for byte, and the file is cut to that prefix.
 
 The vault key version must still be the current one when a part arrives and when the file commits; otherwise the
 file fails with `key_rotated` and the client uploads it again (a rotation re-keys only committed files, so a file
@@ -313,9 +325,10 @@ committed under an outgoing version after the rotation pass had run would become
 
 - Sessions, files and parts are rows (migration 114); spool files live in `<backing>/.upload-spool/<upload_id>/`
   (0700, outside the FUSE mount and every vault tree, ciphertext only): `<ordinal>.<offset>.part` stored parts,
-  `<ordinal>.sealed` the file being sealed. Nothing else (FUSE, snapshots, versions, archives, copy, sync) reads
+  `<ordinal>.sealed` the file being sealed (`<ordinal>.sealed.resalt` while a sealing moves to a new salt). Nothing else (FUSE, snapshots, versions, archives, copy, sync) reads
   them. Restart keeps both; at startup attempt files, parts without a row and session directories without a session
-  are removed, and part rows above the sealed prefix whose file is gone are dropped (they become gaps again).
+  are removed, and part rows the sealed prefix doesn't cover completely whose file is gone are dropped (they become
+  gaps again).
 - Disk use: a file's stored parts plus its sealed prefix, at most about twice the parts not yet sealed.
 - A session expires `transfer.session_idle_ttl_hours` (default 24) after its last part, and at the latest
   `transfer.session_max_age_hours` (default 168) after creation; the DB janitor deletes expired sessions' rows and

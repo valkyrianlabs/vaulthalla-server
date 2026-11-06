@@ -1,4 +1,5 @@
 #include "ops/Roles.hpp"
+#include "auth/stepup/StepUp.hpp"
 #include "audit/Trail.hpp"
 #include "rbac/PolicyEpoch.hpp"
 
@@ -209,6 +210,7 @@ AdminRolePtr createAdminRole(const Actor& actor, const CreateRole& req, const st
     applyEdit<AdminResolver>(staged, req.permissions);
     requireWithinCeiling(actor, *staged, nullptr);
 
+    auth::stepup::require(auth::stepup::Family::IdentityAdmin);
     unsigned int id = 0;
     try {
         id = AdminRoleQuery::insert(staged);
@@ -247,6 +249,7 @@ AdminRolePtr updateAdminRole(const Actor& actor, const UpdateRole& req, const st
     requireWithinCeiling(actor, *staged, existing.get());
 
     // Every holder's published state carries the role's permissions.
+    auth::stepup::require(auth::stepup::Family::IdentityAdmin);
     identities::manager().mutate({.everyone = true}, [&] { AdminRoleQuery::upsert(staged); });
     auto updated = AdminRoleQuery::get(existing->id);
     if (!updated) throw std::runtime_error("admin role " + std::to_string(existing->id) + " could not be read back");
@@ -268,6 +271,7 @@ AdminRolePtr removeAdminRole(const Actor& actor, const Ref& ref, const std::stri
         throw Conflict("cannot delete role '" + existing->name +
                        "' because it has active assignments; remove those assignments first");
 
+    auth::stepup::require(auth::stepup::Family::IdentityAdmin);
     AdminRoleQuery::remove(existing->id);
     notifications::enqueueAdminRoleDeleted(existing, notifications::actorFromUser(std::string(auditSource), actor));
 auditRbac(actor, "rbac.admin_role.delete", "deleted admin role " + existing->name, {{"role_id", existing->id}, {"role", existing->name}, {"source", std::string(auditSource)}});
@@ -305,6 +309,7 @@ VaultRolePtr createVaultRole(const Actor& actor, const CreateRole& req) {
     staged->description = req.description;
     applyEdit<VaultResolver>(staged, req.permissions);
 
+    auth::stepup::require(auth::stepup::Family::IdentityAdmin);
     unsigned int id = 0;
     try {
         id = VaultRoleQuery::insert(staged);
@@ -333,6 +338,7 @@ VaultRolePtr updateVaultRole(const Actor& actor, const UpdateRole& req) {
     if (req.description) staged->description = *req.description;
     applyEdit<VaultResolver>(staged, req.permissions);
 
+    auth::stepup::require(auth::stepup::Family::IdentityAdmin);
     identities::manager().mutate({.everyone = true}, [&] { VaultRoleQuery::upsert(staged); });
     auto updated = VaultRoleQuery::get(existing->id);
     if (!updated) throw std::runtime_error("vault role " + std::to_string(existing->id) + " could not be read back");
@@ -349,6 +355,7 @@ VaultRolePtr removeVaultRole(const Actor& actor, const Ref& ref) {
     if (VaultAssignments::countAssignmentsForRole(existing->id) > 0)
         throw Conflict("cannot delete vault role '" + existing->name +
                        "' because it has active assignments; remove those assignments first");
+    auth::stepup::require(auth::stepup::Family::IdentityAdmin);
     VaultRoleQuery::remove(existing->id);
 auditRbac(actor, "rbac.vault_role.delete", "deleted vault role " + existing->name, {{"role_id", existing->id}, {"role", existing->name}});
     return existing;
@@ -377,6 +384,7 @@ VaultRolePtr assignVaultRole(const Actor& actor, const AssignVaultRole& req) {
     requireSubjectExists(req.target.subject);
     const auto role = requireVaultRole(req.role);
 
+    auth::stepup::require(auth::stepup::Family::IdentityAdmin);
     identities::manager().mutate(touchedBy(req.target.subject), [&] {
         VaultAssignments::assign(req.target.vault_id, req.target.subject.type, req.target.subject.id, role->id);
     });
@@ -392,6 +400,7 @@ VaultRolePtr unassignVaultRole(const Actor& actor, const VaultSubject& target) {
     requireVaultRolePermission(actor, target, RolePerm::Revoke,
                                "you do not have permission to remove vault roles from this subject on this vault");
     auto assignment = requireAssignment(target);
+    auth::stepup::require(auth::stepup::Family::IdentityAdmin);
     identities::manager().mutate(touchedBy(target.subject), [&] {
         VaultAssignments::unassign(target.vault_id, target.subject.type, target.subject.id);
     });
@@ -450,6 +459,7 @@ std::vector<rbac::permission::Override> addVaultRoleOverrides(const Actor& actor
     }
     throwProblems("invalid overrides", problems);
 
+    auth::stepup::require(auth::stepup::Family::IdentityAdmin);
     std::vector<rbac::permission::Override> created;
     identities::manager().mutate(touchedBy(req.target.subject), [&] {
         for (const auto& ov : staged) {
@@ -477,6 +487,7 @@ rbac::permission::Override updateVaultRoleOverride(const Actor& actor, const Upd
         ov->pattern = rbac::fs::glob::model::Pattern::make(*req.pattern);
     }
     if (req.enabled) ov->enabled = *req.enabled;
+    auth::stepup::require(auth::stepup::Family::IdentityAdmin);
     identities::manager().mutate(touchedBy(req.target.subject),
                                  [&] { db::query::rbac::permission::Override::update(ov); });
 auditRbac(actor, "rbac.override.update", "updated permission override " + std::to_string(req.override_id) + " on vault " + std::to_string(req.target.vault_id), {{"override_id", req.override_id}, {"subject", subjectJson(req.target.subject)}}, req.target.vault_id);
@@ -492,6 +503,7 @@ void removeVaultRoleOverride(const Actor& actor, const VaultSubject& target, con
     const auto ov = db::query::rbac::permission::Override::get(overrideId);
     if (!ov || ov->assignment_id != assignment->assignment_id)
         throw NotFound("override " + std::to_string(overrideId) + " not found on this assignment");
+    auth::stepup::require(auth::stepup::Family::IdentityAdmin);
     identities::manager().mutate(touchedBy(target.subject),
                                  [&] { db::query::rbac::permission::Override::remove(overrideId); });
     auditRbac(actor, "rbac.override.remove", "removed permission override " + std::to_string(overrideId) + " on vault " + std::to_string(target.vault_id), {{"override_id", overrideId}, {"subject", subjectJson(target.subject)}}, target.vault_id);

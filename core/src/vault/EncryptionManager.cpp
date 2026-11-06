@@ -1,5 +1,8 @@
 #include "vault/EncryptionManager.hpp"
+#include "vault/Content.hpp"
 #include "crypto/SecretBytes.hpp"
+#include "db/query/vault/Vault.hpp"
+#include "vault/model/Vault.hpp"
 #include "crypto/util/encrypt.hpp"
 #include "crypto/util/Gcm.hpp"
 #include "crypto/util/reseal.hpp"
@@ -100,19 +103,43 @@ SecretKeyPtr unsealKeyRowOrThrow(const unsigned int vaultId, const vh::vault::mo
 }
 }
 
-EncryptionManager::EncryptionManager(const unsigned int vault_id)
+EncryptionManager::EncryptionManager(const unsigned int vault_id, const std::optional<vh::crypto::id::ObjectUid> vaultUid)
     : sealed_(true), vault_id_(vault_id) {
     (void)master::provider(master::currentVersion());  // MasterSecretLost here, as before, when the master is gone
+    if (vaultUid) {
+        vaultUid_ = *vaultUid;
+    } else {
+        const auto vault = db::query::vault::Vault::getVault(vault_id);
+        if (!vault || !vault->uid)
+            throw std::runtime_error(fmt::format("Vault {} has no uid: its content can't be sealed", vault_id));
+        vaultUid_ = *vault->uid;
+    }
     load_key();
 }
 
 EncryptionManager::EncryptionManager(ForTesting, const unsigned int vault_id, const std::span<const uint8_t> key,
                                      const unsigned int version, const std::span<const uint8_t> oldKey)
-    : vault_id_(vault_id), version_(version), key_(std::make_shared<const SecretKey>(key)) {
+    : vault_id_(vault_id), vaultUid_(testVaultUid(vault_id)), version_(version),
+      key_(std::make_shared<const SecretKey>(key)) {
     if (!oldKey.empty()) {
         old_key_ = std::make_shared<const SecretKey>(oldKey);
         rotation_in_progress_.store(true);
     }
+}
+
+vh::crypto::id::ObjectUid EncryptionManager::testVaultUid(const unsigned int vault_id) {
+    vh::crypto::id::ObjectUid uid{};
+    uid.fill(0x5a);
+    uid[0] = static_cast<uint8_t>(vault_id >> 24);
+    uid[1] = static_cast<uint8_t>(vault_id >> 16);
+    uid[2] = static_cast<uint8_t>(vault_id >> 8);
+    uid[3] = static_cast<uint8_t>(vault_id);
+    return uid;
+}
+
+vh::crypto::id::ObjectUid EncryptionManager::objectUidFor(const std::shared_ptr<File>& f) {
+    if (!f->object_uid) f->object_uid = vh::crypto::id::newObjectUid();
+    return *f->object_uid;
 }
 
 void EncryptionManager::addHistoricalKeyForTesting(const unsigned int version, const std::span<const uint8_t> key) {
@@ -342,18 +369,18 @@ std::vector<uint8_t> EncryptionManager::rotateDecryptEncrypt(const std::vector<u
             log::Registry::crypto()->warn("[VaultEncryptionManager] Key version {} is not the previous version {}, using the previous key",
                                         f->encrypted_with_key_version, version - 1);
 
-        const WipedKeyCopy decrypted(decrypt_aes256_gcm(ciphertext, oldKey->bytes(), b64_decode(f->encryption_iv)));
-
-        std::vector<uint8_t> iv;
-        const auto encrypted = encrypt_aes256_gcm(decrypted.bytes, newKey->bytes(), iv);
-
-        if (encrypted.size() != ciphertext.size()) {
+        const WipedKeyCopy decrypted(content::openBuffer(
+            ciphertext, {.vaultUid = vaultUid_, .generation = f->encryption_iv, .keyVersion = f->encrypted_with_key_version},
+            *oldKey));
+        auto sealed = content::sealBuffer(decrypted.bytes, *newKey, version, vaultUid_, objectUidFor(f));
+        if (sealed.bytes.size() != content::newSealedSize(decrypted.bytes.size())) {
             log::Registry::crypto()->error("[VaultEncryptionManager] Encrypted data size mismatch after key rotation");
             throw std::runtime_error("Encrypted data size mismatch after key rotation");
         }
 
-        f->encryption_iv = b64_encode(iv);
+        f->encryption_iv = std::move(sealed.generation);
         f->encrypted_with_key_version = version;
+        auto encrypted = std::move(sealed.bytes);
 
         return encrypted;
     } catch (const std::exception& e) {
@@ -363,12 +390,12 @@ std::vector<uint8_t> EncryptionManager::rotateDecryptEncrypt(const std::vector<u
 }
 
 std::vector<uint8_t> EncryptionManager::encrypt(const std::vector<uint8_t>& plaintext, const std::shared_ptr<File>& f) const {
+    if (!f) throw std::invalid_argument("Cannot encrypt without file metadata");
     const auto [key, version] = currentKey();
-    std::vector<uint8_t> iv;
-    auto ciphertext = encrypt_aes256_gcm(plaintext, key->bytes(), iv);
-    f->encryption_iv = b64_encode(iv);
+    auto sealed = content::sealBuffer(plaintext, *key, version, vaultUid_, objectUidFor(f));
+    f->encryption_iv = std::move(sealed.generation);
     f->encrypted_with_key_version = version;
-    return ciphertext;
+    return std::move(sealed.bytes);
 }
 
 void EncryptionManager::encryptToFile(
@@ -377,28 +404,7 @@ void EncryptionManager::encryptToFile(
     const std::shared_ptr<File>& f) const {
     if (!f) throw std::invalid_argument("Cannot encrypt file without file metadata");
     const auto [key, version] = currentKey();
-
-    std::filesystem::create_directories(ciphertextPath.parent_path());
-    std::ofstream out(ciphertextPath, std::ios::binary | std::ios::trunc);
-    if (!out) throw std::runtime_error("Failed to open ciphertext file for encryption: " + ciphertextPath.string());
-
-    std::array<uint8_t, AES_IV_SIZE> iv{};
-    randombytes_buf(iv.data(), iv.size());
-
-    GcmStreamEncryptor encryptor(key->bytes(), iv);
-    std::array<unsigned char, 64 * 1024> output{};
-    vh::fs::forEachChunk(source, [&](const std::span<const uint8_t> chunk) {
-        encryptor.update(chunk, {output.data(), chunk.size()});
-        out.write(reinterpret_cast<const char*>(output.data()), static_cast<std::streamsize>(chunk.size()));
-        if (!out) throw std::runtime_error("Failed writing ciphertext file: " + ciphertextPath.string());
-    });
-
-    const auto tag = encryptor.finish();
-    out.write(reinterpret_cast<const char*>(tag.data()), static_cast<std::streamsize>(tag.size()));
-    out.close();
-    if (!out) throw std::runtime_error("Failed writing AES-GCM tag: " + ciphertextPath.string());
-
-    f->encryption_iv = b64_encode(std::vector<uint8_t>(iv.begin(), iv.end()));
+    f->encryption_iv = content::sealSourceToFile(source, ciphertextPath, *key, version, vaultUid_, objectUidFor(f));
     f->encrypted_with_key_version = version;
 }
 
@@ -548,13 +554,13 @@ EncryptionManager::ReferencedHistoricalKeys EncryptionManager::referencedHistori
     return out;
 }
 
-void EncryptionManager::resealFileToCurrent(const std::filesystem::path& src, const std::string& srcIvB64,
+void EncryptionManager::resealFileToCurrent(const std::filesystem::path& src, const std::string& srcGeneration,
                                             const unsigned int srcKeyVersion, const std::filesystem::path& dst,
                                             const std::shared_ptr<File>& f) const {
     if (!f) throw std::invalid_argument("Cannot re-seal a file without file metadata");
 
-    if (srcIvB64.empty()) {
-        // Every empty file is stored unencrypted (no IV, version 0, zero bytes); anything else here is plaintext.
+    if (srcGeneration.empty()) {
+        // Every empty file is stored unencrypted (no generation, version 0, zero bytes); anything else is plaintext.
         if (std::filesystem::file_size(src) != 0)
             throw std::invalid_argument("Refusing to re-seal an unencrypted generation: " + src.string());
         if (dst.has_parent_path()) std::filesystem::create_directories(dst.parent_path());
@@ -568,16 +574,18 @@ void EncryptionManager::resealFileToCurrent(const std::filesystem::path& src, co
 
     const auto oldKey = historicalKeySnapshot(srcKeyVersion);
     const auto [newKey, version] = currentKey();
-    f->encryption_iv = resealFile(src, *oldKey, srcIvB64, dst, *newKey);
+    f->encryption_iv = content::resealFile(
+        src, {.vaultUid = vaultUid_, .generation = srcGeneration, .keyVersion = srcKeyVersion}, *oldKey, dst, *newKey,
+        version, objectUidFor(f));
     f->encrypted_with_key_version = version;
 }
 
 std::vector<uint8_t> EncryptionManager::resealToCurrent(const std::vector<uint8_t>& ciphertext,
-                                                        const std::string& srcIvB64, const unsigned int srcKeyVersion,
+                                                        const std::string& srcGeneration, const unsigned int srcKeyVersion,
                                                         const std::shared_ptr<File>& f) const {
     if (!f) throw std::invalid_argument("Cannot re-seal a file without file metadata");
 
-    if (srcIvB64.empty()) {
+    if (srcGeneration.empty()) {
         if (!ciphertext.empty()) throw std::invalid_argument("Refusing to re-seal an unencrypted generation");
         f->encryption_iv.clear();
         f->encrypted_with_key_version = 0;
@@ -586,25 +594,36 @@ std::vector<uint8_t> EncryptionManager::resealToCurrent(const std::vector<uint8_
 
     const auto oldKey = historicalKeySnapshot(srcKeyVersion);
     const auto [newKey, version] = currentKey();
-    std::vector<uint8_t> iv;
-    auto out = resealBuffer(ciphertext, *oldKey, b64_decode(srcIvB64), *newKey, iv);
-    f->encryption_iv = b64_encode(iv);
+    const WipedKeyCopy plain(content::openBuffer(
+        ciphertext, {.vaultUid = vaultUid_, .generation = srcGeneration, .keyVersion = srcKeyVersion}, *oldKey));
+    auto sealed = content::sealBuffer(plain.bytes, *newKey, version, vaultUid_, objectUidFor(f));
+    f->encryption_iv = std::move(sealed.generation);
     f->encrypted_with_key_version = version;
-    return out;
+    return std::move(sealed.bytes);
 }
 
-std::vector<uint8_t> EncryptionManager::decrypt(const std::vector<uint8_t>& ciphertext, const std::string& b64_iv, const unsigned int keyVersion) const {
+std::vector<uint8_t> EncryptionManager::decrypt(const std::vector<uint8_t>& ciphertext, const std::string& generation,
+                                                const unsigned int keyVersion) const {
     const auto key = keySnapshot(keyVersion);
-    return decrypt_aes256_gcm(ciphertext, key->bytes(), b64_decode(b64_iv));
+    return content::openBuffer(ciphertext, {.vaultUid = vaultUid_, .generation = generation, .keyVersion = keyVersion},
+                               *key);
 }
 
 void EncryptionManager::decryptFileTo(
     const std::filesystem::path& ciphertextPath,
     const std::function<void(std::span<const uint8_t>)>& sink,
-    const std::string& b64_iv,
+    const std::string& generation,
     const unsigned int keyVersion) const {
     const auto key = keySnapshot(keyVersion);
-    decrypt_aes256_gcm_file(ciphertextPath, sink, key->bytes(), b64_decode(b64_iv));
+    content::openFileTo(ciphertextPath, {.vaultUid = vaultUid_, .generation = generation, .keyVersion = keyVersion},
+                        *key, sink);
+}
+
+bool EncryptionManager::verifyFile(const std::filesystem::path& path, const uint64_t plaintextSize,
+                                   const std::string& generation, const unsigned int keyVersion) const {
+    const auto key = keySnapshot(keyVersion);
+    return content::verifyFile(path, plaintextSize,
+                               {.vaultUid = vaultUid_, .generation = generation, .keyVersion = keyVersion}, *key);
 }
 
 std::vector<uint8_t> EncryptionManager::get_key(const std::string& callingFunctionName) const {

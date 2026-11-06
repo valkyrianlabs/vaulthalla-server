@@ -5,19 +5,20 @@ import dynamic from 'next/dynamic'
 import { api } from '@/lib/session'
 import { invalidate, useWs } from '@/lib/query'
 import { formatDateTime, formatRelative } from '@/lib/format'
-import { isWsError } from '@/lib/ws/errors'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Field'
 import { Panel } from '@/components/ui/Panel'
 import { InlineError, QueryState } from '@/components/ui/State'
 import { notify } from '@/components/ui/Toast'
+import { confirm } from '@/components/ui/Confirm'
 import { Notice } from '@/features/access/shared'
 import { PASSKEY_HINT, PASSKEY_LABEL, type MfaFactor } from '@/models/mfa'
 import type { Enrolled, RecoveryBatch } from '@/features/auth/mfa/setup'
 
 // Account → Security → Sign-in factors (#357): the account's passkeys and authenticator apps, its recovery codes,
-// and whether the MFA policy requires them. Removing a factor needs step-up (#359) and is not offered yet.
+// and whether the MFA policy requires them. Adding a second factor, removing one and replacing recovery codes are
+// account.credentials step-up (#359): the command answers step_up_required and the shell's Step-up dialog takes it.
 
 // The setup dialog (Radix, the QR encoder, WebAuthn) loads when it opens: none of it is in /account's first load.
 const MfaSetupDialog = dynamic(() => import('./MfaSetupDialog').then(m => m.MfaSetupDialog), { ssr: false })
@@ -64,11 +65,7 @@ export const MfaPanel = () => {
       const batch = await api.send('auth.mfa.recovery.generate', null)
       setOpen({ at: 'codes', batch })
     } catch (err) {
-      setError(
-        isWsError(err) && err.code === 'step_up_required'
-          ? new Error('To replace working recovery codes, sign out and sign in again with your passkey or app, then make them within 5 minutes.')
-          : err,
-      )
+      setError(err)
     } finally {
       setGenerating(false)
     }
@@ -92,7 +89,7 @@ export const MfaPanel = () => {
             {status.factors.length ? (
               <ul className="divide-y divide-line" data-testid="mfa-factors">
                 {status.factors.map(f => (
-                  <FactorRow key={`${f.kind}-${f.id}`} factor={f} onRenamed={refresh} />
+                  <FactorRow key={`${f.kind}-${f.id}`} factor={f} onChanged={refresh} />
                 ))}
               </ul>
             ) : (
@@ -134,7 +131,7 @@ export const MfaPanel = () => {
   )
 }
 
-const FactorRow = ({ factor, onRenamed }: { factor: MfaFactor; onRenamed: () => void }) => {
+const FactorRow = ({ factor, onChanged }: { factor: MfaFactor; onChanged: () => void }) => {
   const [editing, setEditing] = useState(false)
   const [label, setLabel] = useState(factor.label)
   const [busy, setBusy] = useState(false)
@@ -145,9 +142,29 @@ const FactorRow = ({ factor, onRenamed }: { factor: MfaFactor; onRenamed: () => 
     try {
       await api.send('auth.mfa.factor.rename', { kind: factor.kind, id: factor.id, label: label.trim() })
       setEditing(false)
-      onRenamed()
+      onChanged()
     } catch (err) {
       notify.error(err, 'The name was not changed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const remove = async () => {
+    const ok = await confirm({
+      title: `Remove ${factor.label}?`,
+      description: 'It stops working for sign-in right away, and your other browsers are signed out.',
+      confirmLabel: 'Remove',
+      tone: 'danger',
+    })
+    if (!ok) return
+    setBusy(true)
+    try {
+      await api.send('auth.mfa.factor.remove', { kind: factor.kind, id: factor.id })
+      notify.success('Factor removed')
+      onChanged()
+    } catch (err) {
+      notify.error(err, 'The factor was not removed')
     } finally {
       setBusy(false)
     }
@@ -183,9 +200,14 @@ const FactorRow = ({ factor, onRenamed }: { factor: MfaFactor; onRenamed: () => 
         </div>
       </div>
       {editing ? null : (
-        <Button size="sm" variant="ghost" onClick={() => setEditing(true)}>
-          Rename
-        </Button>
+        <div className="flex gap-1">
+          <Button size="sm" variant="ghost" onClick={() => setEditing(true)}>
+            Rename
+          </Button>
+          <Button size="sm" variant="ghost" onClick={remove} loading={busy} data-testid="mfa-factor-remove">
+            Remove
+          </Button>
+        </div>
       )}
     </li>
   )

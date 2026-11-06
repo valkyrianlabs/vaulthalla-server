@@ -5,6 +5,9 @@
 #include "storage/CloudEngine.hpp"
 #include "storage/ScopedS3RequestUsageCapture.hpp"
 #include "storage/s3/Controller.hpp"
+#include "crypto/vhf1/Reader.hpp"
+
+#include <sodium.h>
 
 #include <fmt/format.h>
 
@@ -34,7 +37,23 @@ uint64_t RemoteRangedReader::defaultMaxGetRequests(const uint64_t plaintextSize,
 
 uint64_t RemoteRangedReader::defaultMaxDownloadedBytes(const uint64_t plaintextSize, const RangedReadLimits& limits) {
     if (limits.max_downloaded_bytes) return *limits.max_downloaded_bytes;
-    return 2 * (plaintextSize + crypto::util::AES_TAG_SIZE + ranged_reader_detail::effectiveWindow(limits));
+    // The largest the object can be (VHF1: header + a tag per chunk) plus a window of over-read, twice.
+    return 2 * (vh::vault::content::newSealedSize(plaintextSize) + ranged_reader_detail::effectiveWindow(limits));
+}
+
+struct RemoteRangedReader::Vhf1State {
+    std::optional<crypto::vhf1::RangeReader> range;
+};
+
+RemoteRangedReader::Window::~Window() {
+    if (!bytes.empty()) sodium_memzero(bytes.data(), bytes.size());
+}
+
+uint64_t RemoteRangedReader::windowBytes() const {
+    if (!vhf1_) return params_.limits.window_bytes;
+    // Whole chunks: a VHF1 window is authenticated chunk by chunk.
+    const auto c = vhf1_->range->header().chunkSize();
+    return std::max<uint64_t>(c, params_.limits.window_bytes - params_.limits.window_bytes % c);
 }
 
 RemoteRangedReader::RemoteRangedReader(Params params) : params_(std::move(params)) {
@@ -46,6 +65,22 @@ RemoteRangedReader::RemoteRangedReader(Params params) : params_(std::move(params
     maxGets_ = defaultMaxGetRequests(params_.plaintextSize, params_.limits);
     maxBytes_ = defaultMaxDownloadedBytes(params_.plaintextSize, params_.limits);
     usage_ = params_.initialUsage;
+
+    if (params_.vhf1) {
+        if (!params_.key) throw std::invalid_argument("RemoteRangedReader needs the vault key for a VHF1 object");
+        const auto expected = vh::vault::content::sealedSize(params_.plaintextSize, vh::vault::content::Format::Vhf1);
+        if (params_.vhf1->objectSize != expected)
+            throw IntegrityError("Remote object size does not match its metadata: " + params_.objectKey.string());
+        // One ranged GET for the header (the catalog doesn't carry it yet), authenticated before any chunk is read.
+        std::vector<uint8_t> header;
+        {
+            std::scoped_lock lock(mutex_);
+            fetchRange(0, crypto::vhf1::kHeaderSize - 1, header);
+        }
+        auto opened = vh::vault::content::openHeader(header, params_.vhf1->binding, params_.key);
+        vhf1_ = std::make_unique<Vhf1State>();
+        vhf1_->range.emplace(std::move(opened), params_.vhf1->objectSize, expected);
+    }
 }
 
 RemoteRangedReader::~RemoteRangedReader() {
@@ -118,10 +153,25 @@ const RemoteRangedReader::Window& RemoteRangedReader::window(const uint64_t inde
         return windows_.front();
     }
 
-    const auto first = index * params_.limits.window_bytes;
-    const auto last = std::min(first + params_.limits.window_bytes, params_.plaintextSize) - 1;
-    Window fresh{.index = index, .bytes = {}};
-    fetchRange(first, last, fresh.bytes);
+    Window fresh;
+    fresh.index = index;
+    const auto first = index * windowBytes();
+    const auto end = std::min(first + windowBytes(), params_.plaintextSize);
+    if (vhf1_) {
+        auto& range = *vhf1_->range;
+        if (range.failed()) throw IntegrityError("Remote object failed authentication: " + params_.objectKey.string());
+        const auto plan = range.plan(first, end);
+        std::vector<uint8_t> sealed;
+        fetchRange(plan.objectRange->begin, plan.objectRange->end - 1, sealed);
+        try {
+            const auto plain = range.read(first, end, sealed);
+            fresh.bytes.assign(plain.span().begin(), plain.span().end());
+        } catch (const crypto::vhf1::Error& e) {
+            vh::vault::content::throwIntegrity(e, "Remote object " + params_.objectKey.string());
+        }
+    } else {
+        fetchRange(first, end - 1, fresh.bytes);
+    }
 
     windows_.push_front(std::move(fresh));
     while (windows_.size() > params_.limits.cached_windows) windows_.pop_back();
@@ -136,13 +186,13 @@ std::size_t RemoteRangedReader::read(const uint64_t offset, const std::span<uint
     std::size_t done = 0;
     while (done < n) {
         const auto pos = offset + done;
-        const auto index = pos / params_.limits.window_bytes;
+        const auto index = pos / windowBytes();
         const auto& win = window(index);
-        const auto inWindow = static_cast<std::size_t>(pos - index * params_.limits.window_bytes);
+        const auto inWindow = static_cast<std::size_t>(pos - index * windowBytes());
         const auto take = std::min(n - done, win.bytes.size() - inWindow);
         const std::span<const uint8_t> source(win.bytes.data() + inWindow, take);
         const auto target = out.subspan(done, take);
-        if (params_.key) {
+        if (params_.key && !vhf1_) {
             const crypto::util::GcmIv iv(params_.iv.data(), crypto::util::AES_IV_SIZE);
             crypto::util::gcmCtrDecryptAt(params_.key->bytes(), iv, pos, source, target);
         } else {
@@ -159,6 +209,11 @@ std::vector<uint8_t> RemoteRangedReader::readAllAuthenticated(const uint64_t max
     if (size > maxBytes) throw std::length_error("Content exceeds the allowed size");
     if (size == 0) return {};
 
+    if (vhf1_) {
+        std::vector<uint8_t> object;
+        fetchRange(0, params_.vhf1->objectSize - 1, object);
+        return vh::vault::content::openBuffer(object, params_.vhf1->binding, *params_.key);
+    }
     const auto stored = size + (params_.key ? crypto::util::AES_TAG_SIZE : 0);
     std::vector<uint8_t> sealed;
     fetchRange(0, stored - 1, sealed);

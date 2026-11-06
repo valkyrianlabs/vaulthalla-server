@@ -1,6 +1,7 @@
 #pragma once
 
 #include "crypto/SecretKey.hpp"
+#include "crypto/id/ObjectUid.hpp"
 #include "crypto/secrets/KeyProvider.hpp"
 #include "fs/Fwd.hpp"
 
@@ -8,6 +9,7 @@
 #include <vector>
 #include <map>
 #include <memory>
+#include <optional>
 #include <mutex>
 #include <atomic>
 #include <chrono>
@@ -48,12 +50,21 @@ private:
 
 class EncryptionManager {
 public:
-    explicit EncryptionManager(unsigned int vault_id);
+    // vaultUid: vault.uid, which every VHF1 header of the vault names (read from the database when not given).
+    explicit EncryptionManager(unsigned int vault_id, std::optional<crypto::id::ObjectUid> vaultUid = std::nullopt);
 
-    // Test-only: a manager over an in-memory key, no TPM or database (optionally mid-rotation with oldKey).
+    // Test-only: a manager over an in-memory key, no TPM or database (optionally mid-rotation with oldKey). Its vault
+    // uid is testVaultUid(vault_id) unless setVaultUidForTesting changes it.
     struct ForTesting {};
     EncryptionManager(ForTesting, unsigned int vault_id, std::span<const uint8_t> key, unsigned int version,
                       std::span<const uint8_t> oldKey = {});
+    void setVaultUidForTesting(const crypto::id::ObjectUid& uid) { vaultUid_ = uid; }
+    // The deterministic vault uid ForTesting managers use: the vault id big-endian in the first 4 bytes, then 0x5a.
+    [[nodiscard]] static crypto::id::ObjectUid testVaultUid(unsigned int vault_id);
+
+    // vault.uid: the vault every VHF1 object of this vault is bound to (spec 02 §3.2).
+    [[nodiscard]] const crypto::id::ObjectUid& vaultUid() const { return vaultUid_; }
+    [[nodiscard]] unsigned int vaultId() const { return vault_id_; }
     // Test-only (ForTesting managers): a retired version historicalKeySnapshot() serves without a database.
     void addHistoricalKeyForTesting(unsigned int version, std::span<const uint8_t> key);
 
@@ -122,15 +133,21 @@ public:
     // files). Returns the version.
     [[nodiscard]] static unsigned int mintSalvageKey(unsigned int vaultId, unsigned int expectedVersion, bool outgoingHeld);
 
+    // Key rotation of an in-memory generation: opens `ciphertext` (sealed as f records it, any format, under the
+    // rotation's outgoing key) and seals it as a new VHF1 generation under the current key; f's generation and key
+    // version follow. Unchanged when f is already on the current version.
     [[nodiscard]] std::vector<uint8_t>
     rotateDecryptEncrypt(const std::vector<uint8_t>& ciphertext, const std::shared_ptr<fs::model::File>& f) const;
 
-    // Encrypt data with vault key, returns ciphertext.
-    // Populates out_b64_iv with base64-encoded IV.
+    // Every write below seals a new VHF1 generation (spec 02 §3.8) under the current key, bound to this vault's uid and
+    // f's object uid (drawn onto f when it has none yet: a new file), and records the generation id (the salt, base64)
+    // in f->encryption_iv and the key version in f->encrypted_with_key_version. Reads take the generation id the
+    // catalog recorded and open whatever format it names (vault/Content.hpp): legacy GCM stays readable.
+
+    // Seals plaintext, returns the object bytes.
     [[nodiscard]] std::vector<uint8_t> encrypt(const std::vector<uint8_t>& plaintext, const std::shared_ptr<fs::model::File>& f) const;
 
-    // Streams plaintext into a new AES-256-GCM file (body‖tag) under the current key and records the IV and key
-    // version on f.
+    // Streams plaintext into a new VHF1 file at ciphertextPath.
     void encryptToFile(const fs::PlaintextSource& source, const std::filesystem::path& ciphertextPath,
                        const std::shared_ptr<fs::model::File>& f) const;
     // encryptToFile from a plaintext file on disk (Filesystem::repairAtRest: files older builds left unencrypted).
@@ -138,29 +155,36 @@ public:
                            const std::filesystem::path& ciphertextPath,
                            const std::shared_ptr<fs::model::File>& f) const;
 
-    // Re-seals a retained generation (sealed under srcKeyVersion with srcIvB64) into dst under the current key with
-    // a fresh IV, streaming, and records the new IV and version on f like encryptFileToFile. dst holds the result
-    // only once this returns: a source that fails authentication throws storage::IntegrityError and leaves no dst.
-    // An unencrypted empty generation (empty IV, version 0, zero bytes) yields an empty dst and an empty IV/version
-    // 0 on f, as every empty file is stored; a non-empty unencrypted source is refused (std::invalid_argument).
-    void resealFileToCurrent(const std::filesystem::path& src, const std::string& srcIvB64, unsigned int srcKeyVersion,
+    // Re-seals a retained generation (sealed under srcKeyVersion as srcGeneration names it, any format) into dst as a
+    // new VHF1 generation under the current key, streaming, and records it on f like encryptFileToFile. dst holds the
+    // result only once this returns: a source that fails authentication throws storage::IntegrityError and leaves no
+    // dst. An unencrypted empty generation (no generation, version 0, zero bytes) yields an empty dst and an empty
+    // generation/version 0 on f, as every empty file is stored; a non-empty unencrypted source is refused
+    // (std::invalid_argument).
+    void resealFileToCurrent(const std::filesystem::path& src, const std::string& srcGeneration, unsigned int srcKeyVersion,
                              const std::filesystem::path& dst, const std::shared_ptr<fs::model::File>& f) const;
 
-    // In-memory form of resealFileToCurrent for a sealed buffer (body‖tag).
-    [[nodiscard]] std::vector<uint8_t> resealToCurrent(const std::vector<uint8_t>& ciphertext, const std::string& srcIvB64,
+    // In-memory form of resealFileToCurrent for a sealed buffer.
+    [[nodiscard]] std::vector<uint8_t> resealToCurrent(const std::vector<uint8_t>& ciphertext, const std::string& srcGeneration,
                                                        unsigned int srcKeyVersion,
                                                        const std::shared_ptr<fs::model::File>& f) const;
 
-    // Decrypt using base64-encoded IV and ciphertext
+    // The authenticated plaintext of a sealed buffer (any format; storage::IntegrityError when it doesn't
+    // authenticate as the generation `generation` of this vault under keyVersion).
     [[nodiscard]] std::vector<uint8_t> decrypt(const std::vector<uint8_t>& ciphertext,
-                                 const std::string& b64_iv, unsigned int keyVersion) const;
+                                 const std::string& generation, unsigned int keyVersion) const;
 
-    // Streams a ciphertext file (AES-256-GCM body followed by its 16-byte tag) into `sink`. The plaintext is
-    // authenticated only once this returns; on a throw the caller discards what the sink received
-    // (crypto::util::decrypt_aes256_gcm_file).
+    // Streams a sealed file into `sink` (vault/Content.hpp openFileTo: VHF1 passes on authenticated chunks only; for
+    // legacy GCM the plaintext is authenticated only once this returns, and on a throw the caller discards what the
+    // sink received).
     void decryptFileTo(const std::filesystem::path& ciphertextPath,
                        const std::function<void(std::span<const uint8_t>)>& sink,
-                       const std::string& b64_iv, unsigned int keyVersion) const;
+                       const std::string& generation, unsigned int keyVersion) const;
+
+    // Authenticates a whole sealed file (size, every chunk or the tag) without releasing plaintext. Live key versions
+    // only, like decrypt().
+    [[nodiscard]] bool verifyFile(const std::filesystem::path& path, uint64_t plaintextSize,
+                                  const std::string& generation, unsigned int keyVersion) const;
 
     [[nodiscard]] std::vector<uint8_t> get_key(const std::string& callingFunctionName) const;
 
@@ -173,6 +197,10 @@ private:
     bool sealed_{false};
     std::atomic<bool> rotation_in_progress_{false};
     unsigned int vault_id_;
+    crypto::id::ObjectUid vaultUid_{};
+
+    // The object uid a new generation of f is sealed under: f's own, else a fresh one recorded on f.
+    [[nodiscard]] static crypto::id::ObjectUid objectUidFor(const std::shared_ptr<fs::model::File>& f);
 
     // Guards version_, key_ and old_key_ as one unit. Readers copy the shared_ptr snapshots under a shared lock;
     // rotation replaces them under an exclusive lock. Key bytes are immutable and wiped on last release.

@@ -15,6 +15,7 @@
 #include "ops/Error.hpp"
 #include "recovery/Store.hpp"
 #include "runtime/Deps.hpp"
+#include "vault/Content.hpp"
 #include "storage/Engine.hpp"
 #include "storage/Manager.hpp"
 #include "storage/PlaintextReader.hpp"
@@ -223,7 +224,7 @@ void addWarningsAndBlockers(LocalPlan& plan, const storage::Engine& engine) {
     for (const auto& item : plan.items) {
         if (item.action != ItemAction::Create && item.action != ItemAction::Overwrite) continue;
         if (item.method == "local_reseal") ++reseals;
-        if (item.size_bytes && *item.size_bytes > 0) bytes += *item.size_bytes + crypto::util::AES_TAG_SIZE;
+        if (item.size_bytes && *item.size_bytes > 0) bytes += vh::vault::content::newSealedSize(*item.size_bytes);
     }
     if (reseals > 0)
         plan.warnings.push_back(std::to_string(reseals) +
@@ -414,23 +415,19 @@ ItemOutcome restore(const std::shared_ptr<storage::Engine>& engine, const std::s
             }
             if (blob.key_version == em->currentKey().version) {
                 // Same key: the sealed bytes are reused (same IV, same plaintext, as copy does), once they authenticate.
-                if (blob.cipher_bytes < crypto::util::AES_TAG_SIZE ||
-                    blob.cipher_bytes - crypto::util::AES_TAG_SIZE != blob.plaintext_bytes)
+                vh::vault::content::Format format{};
+                try {
+                    format = vh::vault::content::formatOf(blob.encryption_iv);
+                } catch (const std::invalid_argument&) {
+                    throw storage::IntegrityError("the retained generation has a bad generation id");
+                }
+                if (vh::vault::content::plaintextSizeOf(blob.cipher_bytes, format) != blob.plaintext_bytes)
                     throw storage::IntegrityError("the retained generation's size does not match its record");
                 const auto key = em->historicalKeySnapshot(blob.key_version);
-                const auto iv = crypto::util::b64_decode(blob.encryption_iv);
-                if (iv.size() != crypto::util::AES_IV_SIZE) throw storage::IntegrityError("the retained generation has a bad IV");
-                const int fd = ::open(blobPath.c_str(), O_RDONLY | O_CLOEXEC);
-                if (fd < 0) throw std::system_error(errno, std::generic_category(), "open " + blobPath.string());
-                bool ok = false;
-                try {
-                    ok = crypto::util::gcmVerifyFd(fd, 0, blob.plaintext_bytes, key->bytes(),
-                                                   crypto::util::GcmIv(iv.data(), crypto::util::AES_IV_SIZE));
-                } catch (...) {
-                    ::close(fd);
-                    throw;
-                }
-                ::close(fd);
+                const bool ok = vh::vault::content::verifyFile(
+                    blobPath, blob.plaintext_bytes,
+                    {.vaultUid = em->vaultUid(), .generation = blob.encryption_iv, .keyVersion = blob.key_version},
+                    *key);
                 if (!ok) throw storage::IntegrityError("the retained generation failed authentication");
                 sfs::copy_file(blobPath, dst, sfs::copy_options::none);
                 return {.encryption_iv = blob.encryption_iv, .key_version = blob.key_version,

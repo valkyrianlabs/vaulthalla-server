@@ -1,4 +1,5 @@
 #include "protocols/shell/commands/all.hpp"
+#include "auth/stepup/StepUp.hpp"
 #include "protocols/shell/commands/helpers.hpp"
 #include "protocols/shell/Router.hpp"
 #include "protocols/shell/util/argsHelpers.hpp"
@@ -74,6 +75,7 @@ static CommandResult handle_secrets_set(const CommandCall& call) {
     if (secret.empty()) return invalid("secrets set: secret file is empty: " + fileArg);
 
     if (secretArg == "jwt-secret") {
+        vh::auth::stepup::require(vh::auth::stepup::Family::Secrets);  // #359: host-exempt, never an agent
         runtime::Deps::get().secretsManager->setJWTSecret({secret.begin(), secret.end()});
         return ok("Successfully updated JWT secret");
     }
@@ -183,6 +185,7 @@ static CommandResult handle_secrets_export(const CommandCall& call) {
     }
 
     if (out.empty()) return invalid("secrets export: unknown secret '" + std::string(secretArg) + "'. Valid secrets are: db-password, jwt-secret, mfa-seal, mfa-pepper, all");
+    vh::auth::stepup::require(vh::auth::stepup::Family::Secrets);  // #359: host-exempt, never an agent
     return handle_secret_encrypt_and_response(call, out, usage);
 }
 

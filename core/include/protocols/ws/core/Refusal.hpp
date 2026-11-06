@@ -33,6 +33,12 @@ namespace vh::protocols::ws::core {
             throw;
         } catch (const ops::NeedsConfirmation &e) {
             return {e.what(), nlohmann::json{{"code", e.code}}};
+        } catch (const ops::StepUpRequired &e) {
+            return {e.what(), nlohmann::json{{"code", e.code},
+                                             {"family", e.family},
+                                             {"target", e.target ? nlohmann::json(*e.target) : nlohmann::json(nullptr)},
+                                             {"methods", e.methods},
+                                             {"max_age_seconds", e.max_age_seconds}}};
         } catch (const DetailedRefusal &e) {
             nlohmann::json data = e.details.is_object() ? e.details : nlohmann::json::object();
             data["code"] = e.code;

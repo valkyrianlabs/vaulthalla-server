@@ -1,4 +1,5 @@
 #include "ops/Vaults.hpp"
+#include "auth/stepup/StepUp.hpp"
 
 #include "ops/Users.hpp"
 
@@ -458,6 +459,14 @@ void refuseUpstreamDeleteOfAdoptedBucket(const unsigned int vaultId, const bool 
 
 }
 
+namespace {
+// data.destroy (#359) is bound to the vault and to what the removal does: a grant for a soft delete never purges it now
+// or takes its upstream data.
+std::string vaultRemoveStepUpTarget(const unsigned int vaultId, const bool now, const bool deleteUpstream) {
+    return "storage.vault.remove:" + std::to_string(vaultId) + (now ? ":now" : "") + (deleteUpstream ? ":upstream" : "");
+}
+}
+
 DeletionPtr remove(const Actor& actor, const Remove& req) {
     requireActor(actor);
     if (req.id == 0) throw Invalid("vault ID must be a positive integer");
@@ -485,6 +494,8 @@ DeletionPtr remove(const Actor& actor, const Remove& req) {
                                vault::model::keyExportCommand(req.id),
                                std::chrono::seconds(pending->key_retain_until - pending->deleted_at));
         requireNowConfirmed(req.confirm_now, pending->vault_name);
+        auth::stepup::require(auth::stepup::Family::DataDestroy,
+                              vaultRemoveStepUpTarget(req.id, true, deleteUpstream));
         if (!vault::retention::expedite(req.id, pending->isS3() ? std::optional<bool>(deleteUpstream) : std::nullopt))
             throw Conflict("vault '" + pending->vault_name + "' was purged meanwhile");
         log::Registry::audit()->info("[ops::vaults] {} expedited the purge of deleted vault {} ('{}')", actor->name(), req.id,
@@ -506,6 +517,8 @@ DeletionPtr remove(const Actor& actor, const Remove& req) {
                                vault::retention::windowsFor(live->type).key_retention_window);
     }
     if (req.now) requireNowConfirmed(req.confirm_now, live->name);
+    auth::stepup::require(auth::stepup::Family::DataDestroy,
+                          vaultRemoveStepUpTarget(req.id, req.now, deleteUpstream));
 
     try {
         auto record = vault::retention::schedule(req.id, actor->id, req.now, deleteUpstream);

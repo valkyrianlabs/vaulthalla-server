@@ -6,6 +6,7 @@
 #include "log/Registry.hpp"
 #include "log/Redact.hpp"
 #include "storage/s3/Controller.hpp"
+#include "vault/Content.hpp"
 
 #include <fmt/format.h>
 #include <sodium.h>
@@ -82,7 +83,11 @@ Outcome rotateLocalCopy(const FileSP& file, const EncryptionState& expected, con
         failRotation(file, fmt::format("backing file is {} bytes, shorter than an AES-GCM tag", ciphertext.size()));
 
     const auto next = deps.crypto.reseal(ciphertext, file);
-    if (next.size() != ciphertext.size()) failRotation(file, "re-encrypted size differs from the original");
+    // A re-seal is a new generation (VHF1 for the daemon's crypto) of the same plaintext: whatever the formats, both
+    // sizes must hold the same plaintext length.
+    const auto before = vh::vault::content::plaintextSizeOfGeneration(ciphertext.size(), expected.iv_b64);
+    if (!before || *before != vh::vault::content::plaintextSizeOfGeneration(next.size(), file->encryption_iv))
+        failRotation(file, "re-encrypted size differs from the original's plaintext size");
     if (stateOf(*file) == expected) failRotation(file, "re-encryption did not produce a new IV");
 
     bool created = false;

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cerrno>
 #include <limits>
 #include <stdexcept>
@@ -52,8 +53,15 @@ void addAad(EVP_CIPHER_CTX* ctx, const std::span<const uint8_t> aad, const bool 
 
 }
 
+namespace gcm_detail {
+std::atomic<uint64_t> ctrCalls{0};
+}
+
+uint64_t gcmCtrDecryptAtCallsForTesting() { return gcm_detail::ctrCalls.load(); }
+
 void gcmCtrDecryptAt(const GcmKey key, const GcmIv iv, const uint64_t plaintextOffset,
                      const std::span<const uint8_t> ciphertext, const std::span<uint8_t> out) {
+    gcm_detail::ctrCalls.fetch_add(1, std::memory_order_relaxed);
     if (out.size() < ciphertext.size()) throw std::invalid_argument("gcmCtrDecryptAt: output buffer too small");
     if (ciphertext.empty()) return;
     if (plaintextOffset > kGcmMaxPlaintextBytes || ciphertext.size() > kGcmMaxPlaintextBytes - plaintextOffset)
