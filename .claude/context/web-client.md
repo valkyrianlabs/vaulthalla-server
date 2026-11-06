@@ -46,6 +46,16 @@
   `next/dynamic` for the `/account` budget; dialog in `MfaSetupDialog.tsx`): `auth.mfa.status`, rename, add passkey /
   authenticator app, recovery codes remaining and "Make new codes" (`step_up_required` explained), the recovery
   banner. No factor removal yet (step-up, #359).
+- **Passkey sign-in (#358):** `LoginForm` has **Sign in with passkey** (`data-testid="passkey-sign-in"`, hidden when
+  the browser has no WebAuthn or the server answers `invalid`: no `auth.webauthn.rp_id`) and the username field is
+  `autocomplete="username webauthn"`. The ceremony is `features/auth/passkeySignIn.ts`, imported on demand (not in
+  `/login`'s first load, 168.9 of 170 KB): the button reconnects (like `login()`, #354), asks `auth.passkey.options`,
+  runs `navigator.credentials.get` and sends `auth.passkey.login` on the same socket (the challenge is bound to it);
+  where `PublicKeyCredential.isConditionalMediationAvailable()` the page also keeps an autofill request
+  (`mediation: 'conditional'`) open, renewed before its 120 s challenge lapses, and aborts (and awaits) it before a
+  password sign-in or the button. `auth.passkey.*` are in `LIFECYCLE`. Chrome's virtual authenticator answers a
+  conditional request by itself, so `mfa.spec.ts` turns the autofill off (`withoutAutofill`) except in the spec that
+  tests it.
 - **Server data:** TanStack Query over ws (`src/lib/query.ts`: `useWs`, `useWsMutation`, `invalidate`, `fetchWs`).
   Polling = `refetchInterval` (deduped, ref-counted, paused in hidden tabs). No Zustand stores for server data;
   Zustand only for client state (transfers, UI prefs, confirm/palette state).

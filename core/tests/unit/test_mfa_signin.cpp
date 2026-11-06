@@ -9,10 +9,16 @@
 // pending sign-in ends when it expires, after 5 failures, on cancel and on sign-out; an aal 1 admin session from
 // before the policy is refused at next use (D2); and a passkey (a software authenticator speaking real WebAuthn)
 // enrolls and signs in, while one without user verification is refused.
+//
+// Discoverable passkey sign-in (#358; sections 4.1, 7.3 and 8.6): auth.passkey.options names no account and is the
+// same for every caller; auth.passkey.login needs the credential owner's user handle and UV, signs in at aal 2 through
+// signin::complete, and refuses everything else with one answer; `login` and `mfa` challenges never answer for each
+// other; a synced passkey's 0/0 counter is accepted and another server's passkey is not.
 #include "../helpers/identities.hpp"
 #include "auth/Manager.hpp"
 #include "auth/mfa/Factors.hpp"
 #include "auth/mfa/Keys.hpp"
+#include "auth/mfa/Passkeys.hpp"
 #include "auth/mfa/Pending.hpp"
 #include "auth/mfa/Policy.hpp"
 #include "auth/mfa/SignIn.hpp"
@@ -33,6 +39,7 @@
 #include "ops/Error.hpp"
 #include "protocols/ws/Router.hpp"
 #include "protocols/ws/Session.hpp"
+#include "protocols/ws/ShareRateLimit.hpp"
 #include "protocols/ws/core/Refusal.hpp"
 #include "protocols/ws/handler/Auth.hpp"
 #include "protocols/ws/handler/Mfa.hpp"
@@ -155,6 +162,47 @@ TEST(WsAuthRouting, APendingSessionReachesNoOtherHandler) {
     router->routeMessage(json{{"command", "auth.mfa.cancel"}}, session);
     EXPECT_EQ(reached, 0) << "a command outside the pending allowlist ran";
     EXPECT_EQ(allowed, 1);
+}
+
+// #358: discoverable passkey sign-in runs on an anonymous web socket. A pending socket (its password is in) can't
+// start another sign-in, and the handlers refuse a signed-in one.
+TEST(WsAuthRouting, PasskeySignInIsForAnonymousWebSocketsOnly) {
+    const auto anonymous = std::make_shared<protocols::ws::Session>(std::make_shared<protocols::ws::Router>());
+    const auto human = std::make_shared<protocols::ws::Session>(std::make_shared<protocols::ws::Router>());
+    vh::identities::UserState state;
+    state.name = "routing-passkey";
+    human->user = vh::identities::User::detached(11, std::move(state));
+    for (const auto cmd : {"auth.passkey.options", "auth.passkey.login"}) {
+        EXPECT_EQ(Decision::Allow, protocols::ws::Router::classifyCommand(cmd, *anonymous)) << cmd;
+        EXPECT_EQ(Decision::Deny, protocols::ws::Router::classifyCommand(cmd, *pendingSocket(PendingKind::Mfa))) << cmd;
+        EXPECT_EQ(Decision::Deny, protocols::ws::Router::classifyCommand(cmd, *pendingSocket(PendingKind::Enrollment)))
+            << cmd;
+    }
+    EXPECT_EQ(call([&] { return Mfa::passkeyOptions(human); }).code, "already_signed_in");
+    EXPECT_EQ(call([&] { return Mfa::passkeyLogin(json{{"credential", json::object()}}, human); }).code,
+              "already_signed_in");
+    const auto pending = pendingSocket(PendingKind::Mfa);
+    EXPECT_EQ(call([&] { return Mfa::passkeyOptions(pending); }).code, "denied");
+    EXPECT_EQ(call([&] { return Mfa::passkeyLogin(json{{"credential", json::object()}}, pending); }).code, "denied");
+}
+
+// Design 7.3: 30 passkey challenges a minute per client address (and as many sign-ins), whoever asks.
+TEST(PasskeyRateLimit, ThirtyAMinutePerClientAddress) {
+    protocols::ws::ShareRateLimit limiter;
+    const auto session = std::make_shared<protocols::ws::Session>(std::make_shared<protocols::ws::Router>());
+    session->ipAddress = "127.0.0.1";
+    session->clientAddress = "198.51.100.7";
+    const auto other = std::make_shared<protocols::ws::Session>(std::make_shared<protocols::ws::Router>());
+    other->ipAddress = "127.0.0.1";
+    other->clientAddress = "198.51.100.8";
+    const auto t0 = protocols::ws::ShareRateLimit::Clock::now();
+    for (const auto* cmd : {"auth.passkey.options", "auth.passkey.login"}) {
+        const json message{{"command", cmd}};
+        for (int i = 0; i < 30; ++i) EXPECT_TRUE(limiter.check(cmd, message, *session, t0).allowed) << cmd << " " << i;
+        EXPECT_FALSE(limiter.check(cmd, message, *session, t0).allowed) << cmd;
+        EXPECT_TRUE(limiter.check(cmd, message, *other, t0).allowed) << cmd << ": another client";
+        EXPECT_TRUE(limiter.check(cmd, message, *session, t0 + std::chrono::minutes(1)).allowed) << cmd;
+    }
 }
 
 // ── DB-backed ──────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -369,6 +417,57 @@ protected:
                 {"response", {{"clientDataJSON", wa::base64urlEncode(cd)},
                               {"authenticatorData", wa::base64urlEncode(ad)},
                               {"signature", wa::base64urlEncode(sig)}}}};
+    }
+
+    // ---- discoverable sign-in (#358)
+
+    // A passkey stored as a verified registration would store it (no recovery codes, so no sealed key is needed).
+    // Returns the account's WebAuthn user handle.
+    static wa::Bytes storePasskey(const std::shared_ptr<identities::User>& user, Authenticator& a, const bool synced,
+                                  const std::string& rpId = std::string(tw::kRpId)) {
+        const auto handle = ensureUser(user->id).webauthn_user_handle;
+        (void)addWebAuthnCredential(user->id, {.credential_id = a.credentialId, .public_key_cose = a.key.cose(),
+                                               .cose_alg = -7, .rp_id = rpId, .sign_count = a.signCount,
+                                               .backup_eligible = synced, .backup_state = synced,
+                                               .discoverable = true, .transports = {"internal"},
+                                               .attestation_fmt = "none", .label = "Passkey"});
+        return {handle.begin(), handle.end()};
+    }
+
+    // An assertion as a discoverable credential answers: userHandle set (unless empty), the counter the authenticator
+    // reports (a synced passkey reports 0 forever), authenticatorData for `rpId`.
+    static json loginAssertion(const Authenticator& a, const json& publicKey, const uint8_t flags,
+                               const wa::Bytes& userHandle, const uint32_t signCount,
+                               const std::string_view rpId = tw::kRpId) {
+        const auto cd = tw::bytesOf(tw::clientDataJSON("webauthn.get", challengeOf(publicKey)));
+        const auto ad = tw::authenticatorData(flags, signCount, std::nullopt, rpId);
+        const auto sig = a.key.sign(tw::concat({ad, tw::sha256(cd)}));
+        const auto id = wa::base64urlEncode(a.credentialId);
+        json response{{"clientDataJSON", wa::base64urlEncode(cd)}, {"authenticatorData", wa::base64urlEncode(ad)},
+                      {"signature", wa::base64urlEncode(sig)}};
+        if (!userHandle.empty()) response["userHandle"] = wa::base64urlEncode(userHandle);
+        return {{"id", id}, {"rawId", id}, {"type", "public-key"}, {"response", std::move(response)}};
+    }
+
+    static Answer passkeyLogin(const SessionPtr& socket, const json& credential) {
+        return call([&] { return Mfa::passkeyLogin(json{{"credential", credential}}, socket); });
+    }
+
+    // A fresh anonymous socket and its sign-in challenge.
+    static std::pair<SessionPtr, json> passkeyCeremony() {
+        auto socket = connect();
+        auto options = Mfa::passkeyOptions(socket);
+        return {socket, options.at("publicKey")};
+    }
+
+    // Every refusal is the same answer, and the socket is still anonymous with no row.
+    void expectPasskeyRefused(const Answer& answer, const SessionPtr& socket, const std::string& why) {
+        EXPECT_FALSE(answer.ok) << why;
+        EXPECT_EQ(answer.code, "") << why;
+        EXPECT_EQ(answer.message, "That passkey couldn't sign you in. Try again, or sign in with your password.")
+            << why;
+        EXPECT_FALSE(socket->user) << why;
+        EXPECT_FALSE(db::query::auth::RefreshToken::get(jtiOf(socket))) << why;
     }
 };
 
@@ -761,6 +860,187 @@ TEST_F(MfaSignInDb, APasskeyEnrollsAtFirstRunAndSignsInAndUvIsRequired) {
     });
     EXPECT_EQ(crossed.code, "mfa_invalid");
     EXPECT_FALSE(fourth->user);
+}
+
+// ── discoverable passkey sign-in (#358) ────────────────────────────────────────────────────────────────────────────
+
+TEST_F(MfaSignInDb, PasskeySignInOptionsAreTheSameForEveryCaller) {
+    const auto admin = newUser("super_admin");
+    Authenticator key;
+    (void)storePasskey(admin, key, false);
+
+    const auto a = Mfa::passkeyOptions(connect());
+    const auto b = Mfa::passkeyOptions(connect("", "203.0.113.50"));
+    EXPECT_NE(a.at("publicKey").at("challenge"), b.at("publicKey").at("challenge"));
+    EXPECT_EQ(wa::base64urlDecode(a.at("publicKey").at("challenge").get<std::string>())->size(), 32u);
+    auto strip = [](json j) {
+        j.at("publicKey").erase("challenge");
+        j.erase("expires_at");
+        return j;
+    };
+    EXPECT_EQ(strip(a), strip(b));
+    EXPECT_EQ(strip(a), (json{{"publicKey", {{"rpId", tw::kRpId}, {"timeout", 120000}, {"userVerification", "required"},
+                                             {"allowCredentials", json::array()}}}}));
+    EXPECT_GT(a.at("expires_at").get<int64_t>(), 0);
+
+    // No relying party configured: unavailable, for everyone alike.
+    auto cfg = config::Registry::get();
+    cfg.auth.webauthn.rp_id.clear();
+    cfg.auth.webauthn.origins.clear();
+    config::Registry::set(cfg);
+    EXPECT_EQ(call([&] { return Mfa::passkeyOptions(connect()); }).code, "invalid");
+}
+
+TEST_F(MfaSignInDb, APasskeyAloneSignsInAtAal2WithOneRow) {
+    const auto admin = newUser("super_admin");
+    ASSERT_TRUE(policy::requirement(*admin).required);
+    Authenticator key;
+    const auto handle = storePasskey(admin, key, false);
+
+    auto [socket, publicKey] = passkeyCeremony();
+    expectNoSessionFor(socket);
+    const auto credential = loginAssertion(key, publicKey, kUv, handle, ++key.signCount);
+    const auto ok = passkeyLogin(socket, credential);
+    ASSERT_TRUE(ok.ok) << ok.message;
+    EXPECT_EQ(ok.data.at("aal"), 2);
+    EXPECT_EQ(ok.data.at("user").at("name"), admin->name());
+    ASSERT_TRUE(socket->user);
+    EXPECT_EQ(socket->user->id, admin->id);
+    const auto row = db::query::auth::RefreshToken::get(jtiOf(socket));
+    ASSERT_TRUE(row);
+    EXPECT_EQ(row->aal, 2);
+    EXPECT_EQ(row->amr, (std::vector<std::string>{"hwk"}));
+    EXPECT_EQ(liveRows(admin).size(), 1u);
+    // The admin policy is satisfied by the passkey: the session holds on use.
+    EXPECT_TRUE(sessions().validate(socket, socket->tokens->accessToken->rawToken));
+    EXPECT_FALSE(sessions().endIfBelowPolicy(socket));
+    // Its counter was written back.
+    EXPECT_EQ(webAuthnCredential(key.credentialId)->sign_count, key.signCount);
+
+    // A connection signs in once.
+    EXPECT_EQ(passkeyLogin(socket, credential).code, "already_signed_in");
+    EXPECT_EQ(call([&] { return Mfa::passkeyOptions(socket); }).code, "already_signed_in");
+    // The challenge is spent: the same assertion on another connection is refused.
+    const auto replay = connect();
+    (void)Mfa::passkeyOptions(replay);
+    expectPasskeyRefused(passkeyLogin(replay, credential), replay, "replayed assertion");
+}
+
+TEST_F(MfaSignInDb, PasskeySignInRefusesWithOneAnswer) {
+    const auto user = newUser("unprivileged");
+    const auto other = newUser("unprivileged");
+    Authenticator key;
+    const auto handle = storePasskey(user, key, false);
+    Authenticator otherKey;
+    const auto otherHandle = storePasskey(other, otherKey, false);
+    Authenticator foreign;  // registered for another relying party
+    const auto foreignHandle = storePasskey(user, foreign, false, "other.example.test");
+    Authenticator unknown;  // never registered
+
+    const auto refused = [&](const std::string& why, const std::function<json(const json&)>& make) {
+        auto [socket, publicKey] = passkeyCeremony();
+        expectPasskeyRefused(passkeyLogin(socket, make(publicKey)), socket, why);
+    };
+    refused("no userHandle", [&](const json& pk) { return loginAssertion(key, pk, kUv, {}, ++key.signCount); });
+    refused("another account's userHandle",
+            [&](const json& pk) { return loginAssertion(key, pk, kUv, otherHandle, ++key.signCount); });
+    refused("no user verification",
+            [&](const json& pk) { return loginAssertion(key, pk, tw::flags::UP, handle, ++key.signCount); });
+    refused("an unknown credential",
+            [&](const json& pk) { return loginAssertion(unknown, pk, kUv, handle, ++unknown.signCount); });
+    refused("signed for another rp_id", [&](const json& pk) {
+        return loginAssertion(key, pk, kUv, handle, ++key.signCount, "other.example.test");
+    });
+    refused("a credential made for another rp_id",
+            [&](const json& pk) { return loginAssertion(foreign, pk, kUv, foreignHandle, ++foreign.signCount); });
+    refused("a forged signature", [&](const json& pk) {
+        auto c = loginAssertion(key, pk, kUv, handle, ++key.signCount);
+        c["response"]["signature"] = loginAssertion(otherKey, pk, kUv, handle, 1).at("response").at("signature");
+        return c;
+    });
+    refused("no challenge of this connection", [&](const json&) {
+        auto [_, elsewhere] = passkeyCeremony();
+        return loginAssertion(key, elsewhere, kUv, handle, ++key.signCount);
+    });
+    {
+        auto socket = connect();  // never asked for options
+        expectPasskeyRefused(passkeyLogin(socket, loginAssertion(key, json{{"challenge", wa::base64urlEncode(
+                                                                              tw::randomBytes(32))}},
+                                                                 kUv, handle, ++key.signCount)),
+                             socket, "a challenge never issued");
+    }
+    EXPECT_EQ(call([&] { return Mfa::passkeyLogin(json::object(), connect()); }).code, "invalid");
+
+    // The account itself must be able to sign in.
+    (void)vh::identities::manager().updateUser(user->id, [](vh::identities::UserState& s) { s.meta.is_active = false; });
+    refused("a deactivated account", [&](const json& pk) { return loginAssertion(key, pk, kUv, handle, ++key.signCount); });
+    EXPECT_TRUE(liveRows(user).empty());
+    EXPECT_TRUE(liveRows(other).empty());
+}
+
+// Check 1: a challenge is good for its own purpose only. A discoverable `login` challenge never answers the second
+// factor of a password sign-in (`mfa`), nor the reverse, even on the same connection with a valid assertion.
+TEST_F(MfaSignInDb, LoginAndMfaChallengesNeverAnswerForEachOther) {
+    const auto user = newUser("unprivileged");
+    Authenticator key;
+    const auto handle = storePasskey(user, key, false);
+    const auto socket = connect();
+    const auto& uuid = socket->uuid;
+
+    const auto mfaOptions = passkeys::requestOptions(uuid, user->id, passkeys::usableCredentials(user->id));
+    EXPECT_FALSE(passkeys::verifyLogin(uuid, loginAssertion(key, mfaOptions, kUv, handle, ++key.signCount).dump()))
+        << "an mfa challenge signed a discoverable sign-in in";
+    const auto loginOptions = passkeys::loginOptions(uuid);
+    EXPECT_FALSE(passkeys::verifyAssertion(uuid, user->id,
+                                           loginAssertion(key, loginOptions, kUv, handle, ++key.signCount).dump()))
+        << "a login challenge answered a second factor";
+
+    // Each one still works for its own purpose.
+    const auto mfaAgain = passkeys::requestOptions(uuid, user->id, passkeys::usableCredentials(user->id));
+    EXPECT_TRUE(passkeys::verifyAssertion(uuid, user->id,
+                                          loginAssertion(key, mfaAgain, kUv, handle, ++key.signCount).dump()));
+    const auto loginAgain = passkeys::loginOptions(uuid);
+    const auto signedIn = passkeys::verifyLogin(uuid, loginAssertion(key, loginAgain, kUv, handle, ++key.signCount).dump());
+    ASSERT_TRUE(signedIn);
+    EXPECT_EQ(signedIn->user_id, user->id);
+    EXPECT_FALSE(signedIn->factor.backup_eligible);
+    // A socket's challenges go with it.
+    const auto dropped = passkeys::loginOptions(uuid);
+    passkeys::forgetSession(uuid);
+    EXPECT_FALSE(passkeys::verifyLogin(uuid, loginAssertion(key, dropped, kUv, handle, ++key.signCount).dump()));
+}
+
+// A synced passkey (1Password, iCloud Keychain, Google) reports signCount 0 forever: 0/0 signs in, again and again,
+// as amr swk. A device-bound one whose counter goes back is refused and suspended (possible clone).
+TEST_F(MfaSignInDb, ASyncedPasskeyWithACounterOfZeroSignsInAndADeviceBoundRegressionIsSuspended) {
+    const auto user = newUser("unprivileged");
+    Authenticator synced;
+    const auto handle = storePasskey(user, synced, true);
+    constexpr uint8_t kSynced = kUv | tw::flags::BE | tw::flags::BS;
+    for (int i = 0; i < 2; ++i) {
+        auto [socket, publicKey] = passkeyCeremony();
+        const auto ok = passkeyLogin(socket, loginAssertion(synced, publicKey, kSynced, handle, 0));
+        ASSERT_TRUE(ok.ok) << ok.message;
+        EXPECT_EQ(db::query::auth::RefreshToken::get(jtiOf(socket))->amr, (std::vector<std::string>{"swk"}));
+    }
+    EXPECT_EQ(webAuthnCredential(synced.credentialId)->sign_count, 0);
+    {
+        // BE never changes for a credential.
+        auto [socket, publicKey] = passkeyCeremony();
+        expectPasskeyRefused(passkeyLogin(socket, loginAssertion(synced, publicKey, kUv, handle, 0)), socket,
+                             "backup eligibility flipped");
+    }
+
+    Authenticator bound;
+    bound.signCount = 5;
+    const auto boundHandle = storePasskey(user, bound, false);
+    auto [socket, publicKey] = passkeyCeremony();
+    expectPasskeyRefused(passkeyLogin(socket, loginAssertion(bound, publicKey, kUv, boundHandle, 3)), socket,
+                         "device-bound counter regression");
+    EXPECT_TRUE(webAuthnCredential(bound.credentialId)->suspended_at);
+    auto [later, laterKey] = passkeyCeremony();
+    expectPasskeyRefused(passkeyLogin(later, loginAssertion(bound, laterKey, kUv, boundHandle, 9)), later,
+                         "a suspended credential");
 }
 
 }

@@ -35,13 +35,17 @@ constexpr std::string_view kHelloCommand{"meta.hello"};
 // Commands that establish, refresh, inspect or end a session. They must work before (or without a valid) access
 // token. Everything else under `auth.` (user register/update/delete/get/list, password change) is account
 // management and goes through RequireHumanAuth like any other command; a `starts_with("auth")` rule used to
-// let unauthenticated sockets reach handlers that dereference session->user.
+// let unauthenticated sockets reach handlers that dereference session->user. The two auth.passkey commands (#358) are
+// discoverable sign-in: their handlers refuse a socket that is signed in, and the device listener and the pending
+// mode never reach them.
 bool isSessionLifecycleCommand(const std::string_view command) {
     constexpr std::array commands{
         std::string_view{"auth.login"},
         std::string_view{"auth.logout"},
         std::string_view{"auth.refresh"},
-        std::string_view{"auth.isAuthenticated"}
+        std::string_view{"auth.isAuthenticated"},
+        std::string_view{"auth.passkey.options"},
+        std::string_view{"auth.passkey.login"}
     };
     return containsCommand(commands, command);
 }
