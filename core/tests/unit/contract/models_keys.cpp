@@ -6,6 +6,7 @@
 #include "crypto/SecretKey.hpp"
 #include "crypto/util/encrypt.hpp"
 #include "ops/Error.hpp"
+#include "ops/RecoveryRecipients.hpp"
 #include "ops/VaultKeys.hpp"
 #include "vault/KeyAttestation.hpp"
 
@@ -33,7 +34,13 @@ crypto::SecretKeyPtr keyOf(const uint8_t fill) {
 }
 
 keys::KeyAttestationInfo attestationOf(const unsigned int keyId) {
-    return {.key_id = keyId, .signature = std::string(86, 'A') + "=="};
+    return {.key_id = keyId, .signature = std::string(86, 'A') + "==", .public_key = std::string(43, 'B') + "="};
+}
+
+keys::RecoveryMaterial missingMaterial() {
+    return {.required = true, .state = "recovery_material_missing", .recipients = 1, .uncovered_versions = {3},
+            .export_current = false, .rotation_needed = true,
+            .detail = "recovery envelopes are missing for key version(s) 3"};
 }
 
 keys::SalvageReport salvageReport() {
@@ -68,7 +75,13 @@ keys::KeyStatus unavailableStatus() {
                                  .attestation = attestationOf(1)}},
             .missing_versions = {2},
             .attestation = attestationOf(1),
-            .last_salvage = salvageReport()};
+            .last_salvage = salvageReport(),
+            .vault_uid = std::nullopt,
+            .node_id = "00000000-0000-4000-8000-000000000001",
+            .attestation_public_keys = {{.key_id = 1, .public_key = std::string(43, 'B') + "=", .retired_at = 1760000000},
+                                        {.key_id = 2, .public_key = std::string(43, 'C') + "=", .retired_at = std::nullopt}},
+            .checkpoint = keys::ManifestCheckpoint{.epoch = 812, .root_sha256 = std::string(64, 'a')},
+            .recovery = missingMaterial()};
 }
 
 // A healthy live vault never exported: the nullable members null.
@@ -78,7 +91,23 @@ keys::KeyStatus freshStatus() {
             .version = 1,
             .key_check = std::string(32, 'c'),
             .needed_versions = {{.version = 1, .key_check = std::string(32, 'c')}},
-            .missing_versions = {}};
+            .missing_versions = {},
+            .vault_uid = "as4f38nkrkaydxr834n3pk2xdr",
+            .recovery = {.required = true, .state = "recipient", .recipients = 1}};
+}
+
+ops::recovery_recipients::Recipient recipient(const bool revoked) {
+    ops::recovery_recipients::Recipient r{.grant_id = "79y1x7s0pkawdszr14d2pf2dbr", .recipient_id = std::string(64, 'e'),
+                                          .public_key = std::string(43, 'D') + "=", .suite = 1,
+                                          .recipient_class = "customer", .label = "Recovery kit 2026-11",
+                                          .added_at = 1770000000, .authorized_by = "user:1 via cli",
+                                          .envelope_versions = {1, 2}};
+    if (revoked) {
+        r.label = std::nullopt;
+        r.revoked_at = 1770000100;
+        r.revoked_by = "user:1 via device";
+    }
+    return r;
 }
 
 // A deleted vault mid-rotation whose recovery-referenced version 1 is gone: every optional member present.
@@ -141,6 +170,13 @@ keys::ImportResult partialDeletedImport() {
                           .detail = "the backup carries no attestation by this node for it; not restored"}}};
 }
 
+keys::ImportResult kitImport() {
+    auto r = restoredImport();
+    r.recovery_kit = keys::KitImportReport{.envelopes = 5, .unwrapped = 3, .skipped = 1, .rejected = 0, .ignored = 1,
+                                           .root_consulted = true};
+    return r;
+}
+
 keys::ImportResult salvageImport() {
     return {.vault_id = 12,
             .vault_name = "archive",
@@ -170,6 +206,23 @@ void checkVaultKeyModels(Checker& c) {
     c.check(keys::toJson(t::restoredImport()), "VaultKeyImportResult", "vault.keys.import (restored)");
     c.check(keys::toJson(t::partialDeletedImport()), "VaultKeyImportResult", "vault.keys.import (deleted, skipped)");
     c.check(keys::toJson(t::salvageImport()), "VaultKeyImportResult", "vault.keys.import (salvage)");
+    c.check(keys::toJson(t::kitImport()), "VaultKeyImportResult", "vh vault keys import --recovery-kit --json");
+
+    namespace rr = ops::recovery_recipients;
+    c.check(rr::toJson(rr::RecipientList{.vault_id = 12, .vault_name = "archive",
+                                         .vault_uid = "as4f38nkrkaydxr834n3pk2xdr",
+                                         .recipients = {t::recipient(false), t::recipient(true)},
+                                         .recovery = t::missingMaterial()}),
+            "VaultRecoveryRecipientList", "vault.keys.recipients.list");
+    c.check(rr::toJson(rr::RecipientList{.vault_id = 1, .vault_name = "photos", .vault_uid = "as4f38nkrkaydxr834n3pk2xdr",
+                                         .recipients = {}, .recovery = {.state = "not_required"}}),
+            "VaultRecoveryRecipientList", "vault.keys.recipients.list (none)");
+    c.check(rr::toJson(rr::AddResult{.recipient = t::recipient(false), .envelopes_written = 2, .versions = {1, 2},
+                                     .note = "the next sync pass writes the missing ones",
+                                     .recovery = {.required = true, .state = "recipient", .recipients = 1}}),
+            "VaultRecoveryRecipientAdd", "vault.keys.recipients.add");
+    c.check(rr::toJson(rr::RevokeResult{.recipient = t::recipient(true), .recovery = t::missingMaterial()}),
+            "VaultRecoveryRecipientRevoke", "vault.keys.recipients.revoke");
 }
 
 }

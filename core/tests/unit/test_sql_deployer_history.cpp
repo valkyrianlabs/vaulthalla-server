@@ -1134,24 +1134,70 @@ TEST_F(SqlDeployerHistoryDb, ManifestV2MigrationIsAdditiveAndIdempotent) {
     });
 }
 
-// 127 (#360, MFA recovery effects on paired devices): on a 126-era database devices has no key_backup_revoked_* columns.
+TEST_F(SqlDeployerHistoryDb, RecoveryRecipientsMigrationIsAdditiveIdempotentAndCustomerOnly) {
+    inRolledBackTxn([](pqxx::work& txn) {
+        txn.exec("DROP TABLE IF EXISTS vault_key_envelope");
+        txn.exec("DROP TABLE IF EXISTS vault_recovery_grant");
+        txn.exec("DELETE FROM schema_migrations WHERE filename = '127_recovery_recipients.sql'");
+
+        const auto owner = txn.exec("INSERT INTO users (name, password_hash) VALUES ('claude_test_127_owner', 'x') "
+                                    "RETURNING id").one_field_ref().as<int>();
+        const auto vault = txn.exec("INSERT INTO vault (name, owner_id, type, mount_point, uid) VALUES "
+                                    "('claude_test_127', $1, 's3', 'claude_test_127', gen_random_uuid()) RETURNING id",
+                                    pqxx::params{owner}).one_field_ref().as<int>();
+
+        migseed::SqlDeployReport report;
+        ASSERT_NO_THROW(report = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(applied(report, "127_recovery_recipients.sql"));
+        EXPECT_EQ(recordedHash(txn, "127_recovery_recipients.sql"), currentHash("127_recovery_recipients.sql"));
+        EXPECT_EQ(txn.exec("SELECT COUNT(*) FROM vault_recovery_grant").one_field_ref().as<int>(), 0)
+            << "an upgrade enrolls no recipient";
+
+        const auto insert = [&](const std::string& cls, const int suite, const int keyBytes, const std::string& grant) {
+            pqxx::subtransaction sub(txn, "grant");
+            try {
+                sub.exec("INSERT INTO vault_recovery_grant (vault_id, grant_id, recipient_id, public_key, suite, class, "
+                         "authorized_by) VALUES ($1, $2, repeat('a', 64), decode(repeat('01', $4), 'hex'), $3, $5, 'test')",
+                         pqxx::params{vault, grant, suite, keyBytes, cls});
+                sub.commit();
+                return true;
+            } catch (const pqxx::sql_error&) {
+                return false;
+            }
+        };
+        EXPECT_FALSE(insert("custodian", 1, 32, "00000000000000000000000000")) << "only customer grants exist";
+        EXPECT_FALSE(insert("customer", 2, 65, "00000000000000000000000000")) << "recovery recipients are X25519";
+        EXPECT_FALSE(insert("customer", 1, 32, "not-a-grant-id")) << "grant ids are base32 uids";
+        EXPECT_TRUE(insert("customer", 1, 32, "00000000000000000000000000"));
+        EXPECT_FALSE(insert("customer", 1, 32, "00000000000000000000000004")) << "one active grant per recipient";
+
+        migseed::SqlDeployReport again;
+        ASSERT_NO_THROW(again = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(again.applied.empty());
+        ASSERT_NO_THROW(txn.exec(migseed::readFileToString(repoPsqlDir() / "127_recovery_recipients.sql")));
+        EXPECT_EQ(txn.exec("SELECT COUNT(*) FROM vault_recovery_grant").one_field_ref().as<int>(), 1)
+            << "re-running keeps existing grants";
+    });
+}
+
+// 128 (#360, MFA recovery effects on paired devices): on a 127-era database devices has no key_backup_revoked_* columns.
 // The file adds them, nullable, keeps every row as it was (an existing device's grant is not revoked), refuses an
 // unknown reason, and re-running it changes nothing.
 TEST_F(SqlDeployerHistoryDb, MfaRecoveryGrantsMigrationIsAdditiveAndIdempotent) {
     inRolledBackTxn([](pqxx::work& txn) {
         txn.exec("ALTER TABLE devices DROP COLUMN IF EXISTS key_backup_revoked_reason, "
                  "DROP COLUMN IF EXISTS key_backup_revoked_at");
-        txn.exec("DELETE FROM schema_migrations WHERE filename = '127_mfa_recovery_grants.sql'");
-        const auto owner = txn.exec("INSERT INTO users (name, password_hash) VALUES ('claude_test_127_owner', 'x') "
+        txn.exec("DELETE FROM schema_migrations WHERE filename = '128_mfa_recovery_grants.sql'");
+        const auto owner = txn.exec("INSERT INTO users (name, password_hash) VALUES ('claude_test_128_owner', 'x') "
                                     "RETURNING id").one_field_ref().as<int>();
         const auto device = txn.exec("INSERT INTO devices (user_id, name, platform, spki_sha256) VALUES "
-                                     "($1, 'Mac', 'macOS', repeat('c', 64)) RETURNING id",
+                                     "($1, 'Mac', 'macOS', repeat('d', 64)) RETURNING id",
                                      pqxx::params{owner}).one_field_ref().as<int>();
 
         migseed::SqlDeployReport report;
         ASSERT_NO_THROW(report = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
-        EXPECT_TRUE(applied(report, "127_mfa_recovery_grants.sql"));
-        EXPECT_EQ(recordedHash(txn, "127_mfa_recovery_grants.sql"), currentHash("127_mfa_recovery_grants.sql"));
+        EXPECT_TRUE(applied(report, "128_mfa_recovery_grants.sql"));
+        EXPECT_EQ(recordedHash(txn, "128_mfa_recovery_grants.sql"), currentHash("128_mfa_recovery_grants.sql"));
         EXPECT_TRUE(txn.exec("SELECT key_backup_revoked_at IS NULL AND key_backup_revoked_reason IS NULL "
                              "FROM devices WHERE id = $1", pqxx::params{device}).one_field_ref().as<bool>())
             << "an existing device keeps its grant";
@@ -1166,7 +1212,7 @@ TEST_F(SqlDeployerHistoryDb, MfaRecoveryGrantsMigrationIsAdditiveAndIdempotent) 
         migseed::SqlDeployReport again;
         ASSERT_NO_THROW(again = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
         EXPECT_TRUE(again.applied.empty());
-        ASSERT_NO_THROW(txn.exec(migseed::readFileToString(repoPsqlDir() / "127_mfa_recovery_grants.sql")));
+        ASSERT_NO_THROW(txn.exec(migseed::readFileToString(repoPsqlDir() / "128_mfa_recovery_grants.sql")));
         EXPECT_EQ(txn.exec("SELECT key_backup_revoked_reason FROM devices WHERE id = $1", pqxx::params{device})
                       .one_field_ref().as<std::string>(), "recovery_code") << "re-running keeps the values";
     });

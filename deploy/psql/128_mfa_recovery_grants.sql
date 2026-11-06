@@ -1,4 +1,4 @@
--- MFA recovery effects on paired devices (#360; MFA design note docs/dev/mfa-design.md sections 6.4 and 7.4, D4).
+-- MFA recovery effects on paired devices (#360, migration 128; MFA design note docs/dev/mfa-design.md sections 6.4 and 7.4, D4).
 --
 -- A recovery-code sign-in, an admin MFA reset (auth.mfa.admin.reset) and `vh user mfa reset` revoke the account's
 -- key-backup grants: the authority a paired Vaulthalla Desktop has to export vault keys without a step-up (its

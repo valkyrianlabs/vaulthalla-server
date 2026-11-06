@@ -6,10 +6,10 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = '9b6d468921dd72f13e101201fd2fc60deb4730545135a9f025947287674f58a6'
+export const WS_CONTRACT_HASH = 'b66f8ffc53eb88e855d3cfacc6a2d393811f354bb1b1bda45663a2863087292d'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = 'da700568f0a7910d2ee04d7ad0231ad43de2b4ad7ed70c9346d8db1fd43109ce'
+export const WS_MODELS_HASH = 'c9d08760af47b94daddf016ec824a1a3a966c12a9f0283dd0dd350f9184c9913'
 
 // The ws protocol range this book is (core/usage WsProtocol.hpp): send it in meta.hello.
 export const WS_PROTOCOL_VERSION = 1
@@ -2039,6 +2039,7 @@ export interface WsModels {
       reason: 'key_missing' | 'key_unsealable' | 'version_missing' | 'engine_failed'
       detail: string
     }[]
+    vaults_recovery_material_missing?: { vault_id: number; vault_name: string; reason: 'recovery_material_missing'; detail: string }[]
     summary: {
       services_ready: number
       services_total: number
@@ -2473,7 +2474,17 @@ export interface WsModels {
    * node_id ‖ UInt64BE(vault_id) ‖ UInt32BE(version) ‖ key_check (16 bytes). `vh vault keys import` restores
    * a version as canonical only when it verifies under one of this node's attestation keys.
    */
-  'VaultKeyAttestation': { key_id: number; signature: string }
+  'VaultKeyAttestation': { key_id: number; signature: string; public_key?: string | null }
+  /**
+   * One of this node's attestation signing keys (key_attestation_keys): what a recovery kit pins as
+   * attestation_public_keys (spec 03 §5.3). Public.
+   */
+  'VaultKeyAttestationKey': { key_id: number; public_key: string; retired_at: number | null }
+  /**
+   * The vault's manifest v2 chain position (opaque_v1 vaults): a recovery kit's checkpoint bounds rollback
+   * (spec 03 §4.5).
+   */
+  'VaultKeyCheckpoint': { epoch: number; root_sha256: string }
   /**
    * One vault's export document: ops::vault_keys::toJson(VaultExport) (core/src/ops/VaultKeys.cpp), the CLI's
    * `vh vault keys export` shape (vault::model::generate_json_key_object) plus key_check and every needed
@@ -2554,6 +2565,14 @@ export interface WsModels {
       detail: string
     }[]
     salvage: WsModels['VaultKeySalvageReport'] | null
+    recovery_kit?: {
+      envelopes: number
+      unwrapped: number
+      skipped: number
+      rejected: number
+      ignored: number
+      root_consulted: boolean
+    }
   }
   /**
    * A key version still needed to decrypt the vault's data, identified by its key check (never key bytes):
@@ -2614,7 +2633,68 @@ export interface WsModels {
     missing_versions: number[]
     attestation: WsModels['VaultKeyAttestation'] | null
     last_salvage: WsModels['VaultKeySalvageReport'] | null
+    vault_uid?: string | null
+    node_id?: string
+    attestation_public_keys?: WsModels['VaultKeyAttestationKey'][]
+    checkpoint?: WsModels['VaultKeyCheckpoint'] | null
+    recovery?: WsModels['VaultRecoveryMaterial']
   }
+  /**
+   * D2 (spec 03 §5.5): whether the vault has recovery material independent of this host.
+   * ops::vault_keys::toJson(RecoveryMaterial) (core/src/ops/VaultKeys.cpp).
+   */
+  'VaultRecoveryMaterial': {
+    required: boolean
+    state: 'not_required' | 'recipient' | 'export' | 'recovery_material_missing'
+    recipients: number
+    uncovered_versions: number[]
+    export_current: boolean
+    rotation_needed: boolean
+    detail: string | null
+  }
+  /**
+   * A recovery recipient: an independently revocable grant of the vault's key versions to a customer-held
+   * X25519 public key (spec 03 §5.7). ops::recovery_recipients::toJson(Recipient)
+   * (core/src/ops/RecoveryRecipients.cpp). Public: never a seed or key.
+   */
+  'VaultRecoveryRecipient': {
+    grant_id: string
+    recipient_id: string
+    public_key: string
+    suite: number
+    class: 'customer'
+    label: string | null
+    added_at: number
+    authorized_by: string
+    revoked_at: number | null
+    revoked_by: string | null
+    envelope_versions: number[]
+  }
+  /**
+   * An enrollment: ops::recovery_recipients::toJson(AddResult).
+   */
+  'VaultRecoveryRecipientAdd': {
+    recipient: WsModels['VaultRecoveryRecipient']
+    envelopes_written: number
+    versions: number[]
+    note: string | null
+    recovery: WsModels['VaultRecoveryMaterial']
+  }
+  /**
+   * A vault's recovery recipients: ops::recovery_recipients::toJson(RecipientList).
+   */
+  'VaultRecoveryRecipientList': {
+    vault_id: number
+    vault_name: string
+    vault_uid: string
+    recipients: WsModels['VaultRecoveryRecipient'][]
+    recovery: WsModels['VaultRecoveryMaterial']
+  }
+  /**
+   * A revocation: ops::recovery_recipients::toJson(RevokeResult). recovery.rotation_needed says whether a key
+   * rotation is needed to cut the recipient off from new data.
+   */
+  'VaultRecoveryRecipientRevoke': { recipient: WsModels['VaultRecoveryRecipient']; recovery: WsModels['VaultRecoveryMaterial'] }
   /**
    * A vault's backup/recovery posture (core/src/stats/model/VaultRecovery.cpp to_json; C++
    * stats::model::VaultRecovery).
@@ -5988,7 +6068,58 @@ export interface WsContract {
         detail: string
       }[]
       salvage: WsModels['VaultKeySalvageReport'] | null
+      recovery_kit?: {
+        envelopes: number
+        unwrapped: number
+        skipped: number
+        rejected: number
+        ignored: number
+        root_consulted: boolean
+      }
     }
+  }
+  /**
+   * Enroll a recovery recipient: an X25519 public key generated on the customer's own device (Vaulthalla
+   * Desktop, or the offline `vh-recovery kit create`); the server never receives the seed. Every key version
+   * the vault holds is wrapped to it now and every future version at rotation, into the vault's bucket only.
+   * Customer-controlled (class customer) is the only kind. S3 vaults only (conflict otherwise). Paired
+   * devices only (recipient_requires_device otherwise), with a keys step-up bound to the vault (#359); the
+   * encryption-key Export permission.
+   */
+  'vault.keys.recipients.add': {
+    payload: { vault_id: number; public_key: string; label?: string | null }
+    response: {
+      recipient: WsModels['VaultRecoveryRecipient']
+      envelopes_written: number
+      versions: number[]
+      note: string | null
+      recovery: WsModels['VaultRecoveryMaterial']
+    }
+  }
+  /**
+   * The vault's recovery recipients (spec 03 §5; #370): customer-held X25519 public keys every key version is
+   * wrapped to (KEV1 envelopes in the vault's own bucket), revoked ones included, with the vault's D2
+   * recovery state. Public data only; the encryption-key View permission.
+   */
+  'vault.keys.recipients.list': {
+    payload: { vault_id: number }
+    response: {
+      vault_id: number
+      vault_name: string
+      vault_uid: string
+      recipients: WsModels['VaultRecoveryRecipient'][]
+      recovery: WsModels['VaultRecoveryMaterial']
+    }
+  }
+  /**
+   * Revoke a recovery recipient: no new envelopes are written for it. Access it already has is not revoked
+   * (an envelope keeps unwrapping the versions it covers): recovery.rotation_needed says when a key rotation
+   * is needed to cut it off from new data. Paired devices only (recipient_requires_device otherwise), with a
+   * keys step-up bound to the vault (#359); the encryption-key Export permission.
+   */
+  'vault.keys.recipients.revoke': {
+    payload: { vault_id: number; grant_id: string }
+    response: { recipient: WsModels['VaultRecoveryRecipient']; recovery: WsModels['VaultRecoveryMaterial'] }
   }
   /**
    * Key backup state of every vault the caller may inspect (the encryption-key View permission; deleted
@@ -6304,6 +6435,9 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'vault.keys.export',
   'vault.keys.export.confirm',
   'vault.keys.import',
+  'vault.keys.recipients.add',
+  'vault.keys.recipients.list',
+  'vault.keys.recipients.revoke',
   'vault.keys.status',
   'vault.recovery.disclosure',
   'vault.recovery.status',
@@ -6407,6 +6541,8 @@ export const WS_CONTRACT_STEP_UP: Readonly<Partial<Record<WsContractCommand, str
   'upstream.bucket.unprotect': 'data.destroy',
   'vault.keys.export': 'keys',
   'vault.keys.import': 'keys',
+  'vault.keys.recipients.add': 'keys',
+  'vault.keys.recipients.revoke': 'keys',
   'vault.recovery.suspend': 'data.destroy',
 }
 
@@ -6659,6 +6795,9 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'vault.keys.export': 15000,
   'vault.keys.export.confirm': 15000,
   'vault.keys.import': 600000,
+  'vault.keys.recipients.add': 120000,
+  'vault.keys.recipients.list': 15000,
+  'vault.keys.recipients.revoke': 15000,
   'vault.keys.status': 15000,
   'vault.recovery.disclosure': 60000,
   'vault.recovery.status': 60000,

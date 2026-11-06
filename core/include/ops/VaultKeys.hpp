@@ -44,7 +44,39 @@ enum class NeedReason { Current, Rotation, Recovery };
 struct KeyAttestationInfo {
     unsigned int key_id{};
     std::string signature{};  // base64 (64 bytes)
+    // base64 (32 bytes): the signing key's public key (key_attestation_keys), so the export can anchor provenance on
+    // another node (spec 03 §5.4). An import on this node checks it against its own key of that id; older exports
+    // without it still import here.
+    std::optional<std::string> public_key{};
 };
+
+// One of this node's attestation signing keys: what a recovery kit pins (spec 03 §5.3, attestation_public_keys).
+struct AttestationPublicKey {
+    unsigned int key_id{};
+    std::string public_key{};  // base64 (32 bytes)
+    std::optional<std::time_t> retired_at{};
+};
+
+// The vault's manifest v2 chain position (opaque_v1 vaults): a recovery kit's checkpoint (spec 03 §4.5).
+struct ManifestCheckpoint {
+    uint64_t epoch{};
+    std::string root_sha256{};
+};
+
+// D2 (spec 03 §5.5): whether the vault has recovery material independent of this host (vault::envelopes::material).
+struct RecoveryMaterial {
+    bool required{false};          // a self-hosted S3 vault that encrypts upstream
+    std::string state{};           // not_required | recipient | export | recovery_material_missing
+    unsigned int recipients{};     // usable recovery recipients
+    std::vector<unsigned int> uncovered_versions{};  // needed versions without an envelope (with recipients)
+    bool export_current{false};    // the recorded export is of the current version
+    bool rotation_needed{false};   // a revoked recipient still holds envelopes of needed versions
+    std::optional<std::string> detail{};
+};
+// `needed` empty: read from the database (health).
+[[nodiscard]] RecoveryMaterial recoveryMaterialOf(unsigned int vaultId, const std::vector<unsigned int>& needed = {},
+                                                  unsigned int current = 0);
+[[nodiscard]] nlohmann::json toJson(const RecoveryMaterial& material);
 
 struct NeededVersion {
     unsigned int version{};
@@ -89,6 +121,13 @@ struct KeyStatus {
     std::vector<unsigned int> missing_versions{};   // needed, but no key for them is held
     std::optional<KeyAttestationInfo> attestation{};  // the current version's
     std::optional<SalvageReport> last_salvage{};
+    // What a recovery kit records about the vault (spec 03 §5.3): its uid, this node, this node's attestation keys and
+    // the manifest checkpoint. Public, like the key checks.
+    std::optional<std::string> vault_uid{};  // base32
+    std::string node_id{};
+    std::vector<AttestationPublicKey> attestation_public_keys{};
+    std::optional<ManifestCheckpoint> checkpoint{};
+    RecoveryMaterial recovery{};
 };
 
 // Every vault the caller may inspect (live, and deleted ones within key retention they may remove), or one vault.
@@ -160,6 +199,10 @@ struct ImportRequest {
     nlohmann::json const* keys{};  // the export document (not owned)
     std::optional<std::string> confirm_name{};
     ImportMode mode{ImportMode::Recover};
+    // Instead of `keys`: a recovery kit (spec 03 §5.6, `vh vault keys import --recovery-kit`). Its seed unwraps the
+    // vault's KEV1 envelopes from the vault's bucket; the versions they hold go through the same recover rules, proven
+    // by the attestations this node recorded for them (and the manifest root's key history). Recover mode only.
+    nlohmann::json const* recovery_kit{};
 };
 
 // How importKeys reads `keys` (the ws contract's VaultKeyImportDocument): the versions the document carries for
@@ -188,6 +231,16 @@ struct ImportedVersion {
     std::string detail{};
 };
 
+// What a recovery-kit import found in the bucket.
+struct KitImportReport {
+    unsigned int envelopes{};   // objects under .vaulthalla/key/
+    unsigned int unwrapped{};   // addressed to the kit's recipient and authentic
+    unsigned int skipped{};     // another recipient's, or a reserved purpose or recipient class (never fatal)
+    unsigned int rejected{};    // damaged, for another vault, or not KEV1
+    unsigned int ignored{};     // unwrapped, but not the key the vault's records name for that version
+    bool root_consulted{false}; // the manifest root's key history supplied attestations the database lacked
+};
+
 struct ImportResult {
     unsigned int vault_id{};
     std::string vault_name{};
@@ -198,6 +251,7 @@ struct ImportResult {
     std::optional<std::string> note{};
     std::vector<ImportedVersion> versions{};
     std::optional<SalvageReport> salvage{};
+    std::optional<KitImportReport> recovery_kit{};
 };
 
 [[nodiscard]] ImportResult importKeys(const Actor& actor, const ImportRequest& request, Channel channel);

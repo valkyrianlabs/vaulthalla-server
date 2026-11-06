@@ -223,6 +223,13 @@ vaults:
     default_remote_sync_strategy: cache        # cache (index the bucket, fetch files on demand) | sync | mirror
     default_remote_conflict_policy: ask        # ask (record it; resolve with `vh sync resolve` or the console) | keep_local | keep_remote | keep_newest
     tpm_retention_window: 180d                 # Key retention for S3-backed vaults (their data may stay upstream)
+  # Background conversion of content stored in the legacy encryption format to VHF1 (`vh vault format status`).
+  # It never rotates a key and verifies every item before the legacy form is removed.
+  format_conversion:
+    enabled: true                              # Convert legacy-format files and recovery generations in the background
+    max_mib_per_second: 32                     # Sealed bytes read per second (0 = unlimited)
+    max_cpu_percent: 25                        # Share of one CPU core, 1 to 100
+    pass_interval: 10m                         # How often a pass looks for work
 
 
 # === ⚡ Caching & Previews ===

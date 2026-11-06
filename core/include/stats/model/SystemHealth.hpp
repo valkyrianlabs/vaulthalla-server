@@ -109,6 +109,16 @@ struct VaultUnavailableHealth {
     std::string detail;
 };
 
+// A self-hosted vault that encrypts upstream but has no recovery material independent of this host (D2, design/encryption/
+// 03-metadata-recovery.md §5.5; vault::envelopes::material): no recovery recipient with envelopes for every needed key
+// version and no export of the current version. Degraded, never hidden: if the host's database or TPM is lost, the
+// vault can't be decrypted.
+struct VaultRecoveryMaterialHealth {
+    unsigned int vaultId = 0;
+    std::string vaultName;
+    std::string detail;
+};
+
 struct HealthSummary {
     std::size_t servicesReady = 0;
     std::size_t servicesTotal = 0;
@@ -128,6 +138,7 @@ struct SystemHealth {
     ShellHealth shell;
     std::optional<DatabaseHealth> database; // nullopt until the pool exists (critical)
     std::vector<VaultUnavailableHealth> vaultsUnavailable;
+    std::vector<VaultRecoveryMaterialHealth> vaultsRecoveryMaterialMissing;
     HealthSummary summary;
 
     [[nodiscard]] bool healthy() const noexcept;
@@ -147,6 +158,7 @@ void to_json(nlohmann::json& j, const ShellHealth& health);
 void to_json(nlohmann::json& j, const DatabaseHealth& health);
 void to_json(nlohmann::json& j, const HealthSummary& health);
 void to_json(nlohmann::json& j, const VaultUnavailableHealth& health);
+void to_json(nlohmann::json& j, const VaultRecoveryMaterialHealth& health);
 void to_json(nlohmann::json& j, const SystemHealth& health);
 
 }

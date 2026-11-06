@@ -282,6 +282,16 @@ struct VaultsS3Config {
     std::chrono::seconds tpm_retention_window = std::chrono::days(180);
 };
 
+// vaults.format_conversion.*: the background conversion of legacy (gcm0) local content to VHF1 (#372,
+// vault/FormatConversion.hpp). Read from config.yaml (kept when settings are saved), not exposed through the settings
+// API. Limits apply between items; a single file is converted at full speed and the pause after it keeps the average.
+struct VaultsFormatConversionConfig {
+    bool enabled = true;
+    uint32_t max_mib_per_second = 32;                                   // sealed bytes read; 0 = unlimited
+    uint32_t max_cpu_percent = 25;                                      // of one core, 1..100
+    std::chrono::seconds pass_interval = std::chrono::minutes(10);      // between passes over the vaults
+};
+
 // vaults.* retention (#162). Durations are config duration strings ("30s", "5m", "12h", "90d", "2w"; util.hpp). A
 // window applies to vaults deleted after it changes: each deletion records its own purge and key-retention deadlines.
 struct VaultsConfig {
@@ -290,6 +300,7 @@ struct VaultsConfig {
     // How long a deleted vault's sealed key is kept (always the full period, even for "delete now").
     std::chrono::seconds tpm_retention_window = std::chrono::days(90);
     VaultsS3Config s3;
+    VaultsFormatConversionConfig format_conversion;
 };
 
 enum class EmailProviderKind {

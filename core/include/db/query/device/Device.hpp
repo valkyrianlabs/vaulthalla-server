@@ -44,7 +44,7 @@ public:
     [[nodiscard]] static std::optional<Device> revoke(uint32_t id);
     // Revokes every device that is not revoked yet (a server identity rotation, #353); how many.
     static std::size_t revokeAll();
-    // Revokes the key-backup grant of every live device of `userId` that still has one (migration 127; reason
+    // Revokes the key-backup grant of every live device of `userId` that still has one (migration 128; reason
     // recovery_code, admin_reset or cli_reset). The devices stay paired. Returns their ids, ascending.
     [[nodiscard]] static std::vector<uint32_t> revokeKeyBackup(uint32_t userId, const std::string& reason);
     [[nodiscard]] static std::size_t countActive();

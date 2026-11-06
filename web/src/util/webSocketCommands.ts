@@ -1017,6 +1017,11 @@ export interface WebSocketCommandMap {
   'vault.keys.export': WsContract['vault.keys.export']
   'vault.keys.export.confirm': WsContract['vault.keys.export.confirm']
   'vault.keys.import': WsContract['vault.keys.import']
+  // Recovery recipients (#370): customer-held public keys the vault's key versions are wrapped to. List is public data;
+  // add and revoke answer only a paired device's session (recipient_requires_device elsewhere) with a keys step-up.
+  'vault.keys.recipients.list': WsContract['vault.keys.recipients.list']
+  'vault.keys.recipients.add': WsContract['vault.keys.recipients.add']
+  'vault.keys.recipients.revoke': WsContract['vault.keys.recipients.revoke']
 }
 
 export type WSCommandPayload<K extends keyof WebSocketCommandMap> = WebSocketCommandMap[K]['payload']

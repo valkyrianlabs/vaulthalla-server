@@ -5,6 +5,7 @@
 namespace vh::vault {
     class EncryptionManager;
     class RetentionService;
+    class FormatConversionService;
 }
 
 namespace vh::vault::model {

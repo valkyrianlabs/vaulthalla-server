@@ -26,7 +26,7 @@ struct Device {
     std::optional<std::string> last_ip;
     std::optional<std::time_t> revoked_at;
     // The device's key-backup grant was revoked (a recovery-code sign-in or an MFA reset of its user, #360; migration
-    // 127): its key exports need a person's approval again. The device itself stays paired and keeps syncing.
+    // 128): its key exports need a person's approval again. The device itself stays paired and keeps syncing.
     std::optional<std::time_t> key_backup_revoked_at;
 
     [[nodiscard]] bool revoked() const noexcept { return revoked_at.has_value(); }

@@ -592,10 +592,16 @@ static std::shared_ptr<CommandUsage> key_import(const std::weak_ptr<CommandUsage
                        "Writing asks you to type the vault's name (--confirm-name without a terminal). Deleted vaults "
                        "that are still restorable can be recovered (not salvaged).";
     cmd->positionals = {vaultPos};
-    cmd->required = {Option::Multi("key_file", "The key export to read (on your side; - for standard input)",
-                                   {"file", "f"}, {"path"})
-                         .withGen("path", contract::gen::constant("keys.json"))};
-    cmd->optional = {owner,
+    cmd->optional = {Optional::Multi("key_file", "The key export to read (on your side; - for standard input)",
+                                     {"file", "f"}, {"path"})
+                         .withGen("path", contract::gen::constant("keys.json")),
+                     Optional::Multi("recovery_kit",
+                                     "Instead of --file: a recovery kit (vh-recovery kit create). Its seed unwraps the "
+                                     "vault's key envelopes from the vault's bucket; only versions this node attested "
+                                     "are restored. Read on your side; - for standard input",
+                                     {"recovery-kit", "kit"}, {"path"})
+                         .withGen("path", contract::gen::constant("kit.json")),
+                     owner,
                      Optional::ManyToOne("confirm_name", "The vault's name, confirming the import without a terminal",
                                          {"confirm-name"}, "name")};
     cmd->optional_flags = {jsonFlag,
@@ -608,7 +614,79 @@ static std::shared_ptr<CommandUsage> key_import(const std::weak_ptr<CommandUsage
         {"vh vault keys import archive --owner alice --file - --confirm-name archive",
          "Read the export from standard input (e.g. piped from gpg --decrypt, so the keys never touch disk)."},
         {"vh vault keys import 12 --file old-export.json --salvage",
-         "Salvage vault 12's files with keys this node can't attest (asks to confirm; prints a report)."}
+         "Salvage vault 12's files with keys this node can't attest (asks to confirm; prints a report)."},
+        {"vh vault keys import 12 --recovery-kit kit.json",
+         "After the vault master was lost: recover vault 12's keys from its recovery envelopes with the kit's seed."}
+    };
+    return cmd;
+}
+
+static const Positional grantPos = Positional::Same("grant_id", "The recovery recipient's grant id (vh vault keys "
+                                                                "recipient list)",
+                                                    contract::gen::ref("vault.recipient", {"grant_id"}));
+
+static std::shared_ptr<CommandUsage> key_recipient_list(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = buildBaseUsage(parent);
+    cmd->aliases = {"list", "ls"};
+    cmd->effect = CommandEffect::Read;
+    cmd->description = "List the vault's recovery recipients (revoked ones included), the key versions wrapped to each "
+                       "and the vault's recovery state (D2): whether a recipient or a current export covers it, or it is "
+                       "recovery_material_missing. Public keys only, never key material.";
+    cmd->positionals = {vaultPos};
+    cmd->optional = {owner};
+    cmd->optional_flags = {jsonFlag};
+    cmd->examples = {{"vh vault keys recipient list 42", "Recovery recipients of the vault with ID 42."}};
+    return cmd;
+}
+
+static std::shared_ptr<CommandUsage> key_recipient_add(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = buildBaseUsage(parent);
+    cmd->aliases = {"add", "enroll"};
+    cmd->effect = CommandEffect::Write;
+    cmd->description = "Enroll a recovery recipient on an S3 vault: an X25519 public key from a recovery kit made on "
+                       "your own device (vh-recovery kit create, or Vaulthalla Desktop). The daemon wraps every key "
+                       "version the vault holds, and every future one at rotation, to it as KEV1 envelopes in the "
+                       "vault's own bucket, so the vault can be recovered with the kit after this host's database or TPM "
+                       "is lost. The server only ever sees the public key; recovery stays under your control and nothing "
+                       "is sent anywhere but the bucket.";
+    cmd->positionals = {vaultPos};
+    cmd->required = {Option::Multi("public_key", "The recipient's X25519 public key (base64 or 64 hex digits)",
+                                   {"public-key", "key"}, {"key"})
+                         .withGen("key", contract::gen::constant("9jB0b7LvRAo3+fTz//m8OhJQkp39Kcd1PjiFpjtmrTs="))};
+    cmd->optional = {owner, Optional::ManyToOne("label", "A name you recognize the kit by", {"label"}, "label")};
+    cmd->optional_flags = {jsonFlag};
+    cmd->examples = {{"vh vault keys recipient add 42 --public-key 9jB0b7LvRAo3+fTz//m8OhJQkp39Kcd1PjiFpjtmrTs= "
+                      "--label \"Recovery kit 2026-11\"",
+                      "Enroll the kit's public key on vault 42 and wrap its keys to it."}};
+    return cmd;
+}
+
+static std::shared_ptr<CommandUsage> key_recipient_revoke(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = buildBaseUsage(parent);
+    cmd->aliases = {"revoke", "remove", "rm"};
+    cmd->effect = CommandEffect::Destructive;
+    cmd->description = "Revoke a recovery recipient: no new envelopes are written for it. Access it already has is not "
+                       "revoked (its envelopes keep unwrapping the key versions they cover): rotate the vault's key "
+                       "(vh vault keys rotate) to cut it off from new data; the command says when that is needed.";
+    cmd->positionals = {vaultPos, grantPos};
+    cmd->optional = {owner};
+    cmd->optional_flags = {jsonFlag};
+    cmd->examples = {{"vh vault keys recipient revoke 42 79y1x7s0pkawdszr14d2pf2dbr",
+                      "Stop wrapping vault 42's keys to that recipient."}};
+    return cmd;
+}
+
+static std::shared_ptr<CommandUsage> key_recipient(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = buildBaseUsage(parent);
+    cmd->aliases = {"recipient", "recipients"};
+    cmd->pluralAliasImpliesList = true;
+    cmd->description = "Manage a vault's recovery recipients: customer-held public keys its key versions are wrapped "
+                       "to (design: spec 03 §5).";
+    cmd->examples = {{"vh vault keys recipient list 42", "Recovery recipients of the vault with ID 42."}};
+    cmd->subcommands = {
+        key_recipient_list(cmd->weak_from_this()),
+        key_recipient_add(cmd->weak_from_this()),
+        key_recipient_revoke(cmd->weak_from_this())
     };
     return cmd;
 }
@@ -647,8 +725,39 @@ static std::shared_ptr<CommandUsage> key(const std::weak_ptr<CommandUsage>& pare
         key_export(cmd->weak_from_this()),
         key_import(cmd->weak_from_this()),
         key_rotate(cmd->weak_from_this()),
-        key_inspect(cmd->weak_from_this())
+        key_inspect(cmd->weak_from_this()),
+        key_recipient(cmd->weak_from_this())
     };
+    return cmd;
+}
+
+static std::shared_ptr<CommandUsage> format_status(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = buildBaseUsage(parent);
+    cmd->aliases = {"status"};
+    cmd->effect = CommandEffect::Read;
+    cmd->description = "Show the progress of the local format conversion: how many live files and recovery blobs "
+                       "(snapshots, local versions, upstream backlog) of each vault are still in the legacy "
+                       "encryption format and how many bytes they hold, the conversion's state (converted, pending, "
+                       "converting, blocked by a key rotation or salvage, disabled) and what its last pass did. The "
+                       "conversion runs in the background (vaults.format_conversion in config.yaml), never rotates a "
+                       "key and verifies every item before the legacy form is removed. A cloud vault that encrypts "
+                       "upstream converts its live files with the bucket's layout migration instead.";
+    cmd->positionals = {vaultOrAll};
+    cmd->optional = {owner};
+    cmd->optional_flags = {jsonFlag};
+    cmd->examples = {
+        {"vh vault format status all", "Conversion progress of every vault."},
+        {"vh vault format status 42 --json", "The same for the vault with ID 42, as JSON."}
+    };
+    return cmd;
+}
+
+static std::shared_ptr<CommandUsage> vault_format(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = buildBaseUsage(parent);
+    cmd->aliases = {"format"};
+    cmd->description = "Inspect the at-rest format of vault content (legacy GCM or VHF1).";
+    cmd->examples = {{"vh vault format status all", "Conversion progress of every vault."}};
+    cmd->subcommands = {format_status(cmd->weak_from_this())};
     return cmd;
 }
 
@@ -814,6 +923,7 @@ static std::shared_ptr<CommandUsage> base(const std::weak_ptr<CommandUsage>& par
 
     const auto vroleCmd = vrole(cmd->weak_from_this());
     const auto keyCmd = key(cmd->weak_from_this());
+    const auto formatCmd = vault_format(cmd->weak_from_this());
     const auto syncCmd = sync(cmd->weak_from_this()); // executable (manual sync) + has subcommands
     const auto recoveryCmd = recovery_book::vaultRecovery(cmd->weak_from_this());
 
@@ -963,6 +1073,7 @@ static std::shared_ptr<CommandUsage> base(const std::weak_ptr<CommandUsage>& par
         updateCmd,
         vroleCmd,
         keyCmd,
+        formatCmd,
         syncCmd,
         recoveryCmd
     };

@@ -13,6 +13,9 @@ from pathlib import Path
 
 from vhh.redact import Redactor
 
+import vhh._repo  # noqa: F401  (puts the repo root on sys.path for tools.lab)
+from tools.lab.mfa import Totp
+
 
 class MissingCredential(LookupError):
     """No secret for a principal or share: the engine turns this into a failing harness verdict."""
@@ -36,12 +39,22 @@ class IdentityBroker:
     def __init__(self, redactor: Redactor):
         self.redactor = redactor
         self._creds: dict[str, Credential] = {}
+        self._totp: dict[str, Totp] = {}
 
     def register(self, ref: str, kind: str, secret: str, username: str = "") -> None:
         if not secret:
             raise MissingCredential(f"empty secret for {ref}")
         self.redactor.register_secret(secret)
         self._creds[ref] = Credential(ref, kind, username, secret)
+
+    def register_totp(self, ref: str, totp: Totp) -> None:
+        """The principal's TOTP authenticator (#357: an admin signs in with a second factor). The Totp object keeps the
+        last step spent, so every session of this principal draws codes from the one instance."""
+        self.redactor.register_secret(totp.secret_base32)
+        self._totp[ref] = totp
+
+    def totp(self, ref: str) -> Totp | None:
+        return self._totp.get(ref)
 
     def register_canaries(self, canaries: dict[str, str]) -> None:
         """Canary markers are secrets per the fixture format: traces and reports must never contain them."""
@@ -74,6 +87,8 @@ class IdentityBroker:
             if isinstance(rec, dict) and rec.get("password"):
                 self.register(pid, "password", rec["password"], rec.get("username", ""))
                 n += 1
+                if isinstance(rec.get("totp"), dict) and rec["totp"].get("secret_base32"):
+                    self.register_totp(pid, Totp.from_json(rec["totp"]))
         for sid, rec in (doc.get("shares") or {}).items():
             token = rec.get("token") if isinstance(rec, dict) else rec
             if token:
