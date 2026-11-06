@@ -153,6 +153,10 @@ namespace vh::storage {
         // rebuild (markRemoteIndexRebuilt) the index is the bucket's truth: it publishes even without changes and a
         // conflict refreshes the ETag (as the post-LIST publish did) instead of reloading the index from the manifest.
         void applyRemoteIndexMutation(const std::vector<sync::model::Action>& plan) const;
+        // The index row of one object Vaulthalla just PUT for `f` (o/<uid> under opaque_v1, with the PUT's ETag and
+        // version id), without publishing: key rotation and salvage re-seal objects outside a sync plan, and the
+        // manifest's object reference must name the object the bucket now holds (#371).
+        void recordOwnUpload(const std::shared_ptr<vh::fs::model::File>& f) const;
         [[nodiscard]] bool selectedDownloadRequiresRestore(const std::shared_ptr<vh::fs::model::File>& remoteFile) const;
 
         std::vector<std::shared_ptr<vh::fs::model::Directory> > extractDirectories(

@@ -373,6 +373,14 @@ Json toJson(const RootDocument& r) {
             kj["attestation"] = std::move(a);
         }
         if (k.envelopes) kj["envelopes"] = *k.envelopes;
+        if (k.origin) {
+            Json a = {{"key_id", k.origin->attestation.key_id}, {"signature", k.origin->attestation.signature}};
+            putIf(a, "public_key", k.origin->attestation.public_key);
+            Json o = {{"node_id", k.origin->node_id}, {"vault_id", k.origin->vault_id},
+                      {"key_check", k.origin->key_check}, {"attestation", std::move(a)}};
+            putIf(o, "recovered_at", k.origin->recovered_at);
+            kj["origin"] = std::move(o);
+        }
         keys.push_back(std::move(kj));
     }
     Json segments = Json::array();
@@ -410,6 +418,7 @@ Json toJson(const RootDocument& r) {
             putIf(gj, "label", g.label);
             putIf(gj, "added_at", g.added_at);
             putIf(gj, "authorized_by", g.authorized_by);
+            putIf(gj, "public_key", g.public_key);
             grants.push_back(std::move(gj));
         }
         j["recovery_policy"] = {{"v", r.recovery_policy->v}, {"threshold", nullptr}, {"grants", std::move(grants)}};
@@ -479,6 +488,18 @@ RootDocument rootFromJson(const Json& j, const Uid& expectedVaultUid) {
             }
             rec.envelopes = std::move(kids);
         }
+        if (k.present("origin")) {
+            const Fields o(k.at("origin"), kBadRoot, "key origin");
+            KeyOrigin origin;
+            origin.node_id = o.str("node_id");
+            origin.vault_id = o.u64("vault_id");
+            origin.key_check = o.str("key_check");
+            if (!isLowerHex(origin.key_check, 32)) f.fail("has an origin key check that is not 16 bytes of hex");
+            const Fields a(o.at("attestation"), kBadRoot, "origin attestation");
+            origin.attestation = KeyAttestation{a.u32("key_id"), a.optStr("public_key"), a.str("signature")};
+            origin.recovered_at = o.optStr("recovered_at");
+            rec.origin = std::move(origin);
+        }
         r.keys.push_back(std::move(rec));
     }
 
@@ -501,6 +522,7 @@ RootDocument rootFromJson(const Json& j, const Uid& expectedVaultUid) {
                 grant.added_at = g.optStr("added_at");
                 grant.authorized_by = g.optStr("authorized_by");
                 grant.revoked_at = g.optStr("revoked_at");
+                grant.public_key = g.optStr("public_key");
                 policy.grants.push_back(std::move(grant));
             }
         }

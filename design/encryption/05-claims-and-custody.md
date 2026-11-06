@@ -21,7 +21,9 @@ removes the operator's. Therefore:
 - Support access is customer-initiated, scoped, expiring and audited (§5).
 
 Release gate (#344): until spec 03's manifest, recovery recipients/exports and the catastrophic restore drill pass,
-`opaque_v1` is staged internally and **no claim says or implies that a vault is recoverable from the bucket**.
+`opaque_v1` is staged internally and **no claim says or implies that a vault is recoverable from the bucket**. Passed
+by #371 (the drill result is in its release note): new encrypting vaults are `opaque_v1`, and the recovery claim
+reads "from your bucket and your recovery kit", never from the bucket alone.
 After that, the recovery claim for a vault also requires its recovery material to be in place (spec 03 §5.5); a
 vault reporting `recovery_material_missing` gets no recovery claim. A vault whose migration is `cleanup_blocked`
 carries the qualifier from spec 01 §6.4 (earlier names remain in provider history until a date).
@@ -144,8 +146,8 @@ Never: "military-grade", "unbreakable", "unhackable", "bank-level".
 
 | Where | Today | Action |
 |---|---|---|
-| `docs/vaults/encryption.md:89-94` | lists provider-visible names correctly | keep until `opaque_v1` ships; then replace with the `opaque_v1` sentence and add the leak list and the claim matrix |
-| `docs/vaults/secrets-and-key-export.md:180` | "Restoring a vault from its encrypted files alone … is not possible" | true until WS3-c ships; then link the restore procedure |
+| `docs/vaults/encryption.md:89-94` | lists provider-visible names correctly | done (#371): the `opaque_v1` sentence for new vaults, the `path_v0` caveat for older ones |
+| `docs/vaults/secrets-and-key-export.md:180` | "Restoring a vault from its encrypted files alone … is not possible" | done (#371): "Restore A Vault From Its Bucket" (bucket + kit) |
 | Website and README feature lists | (not in this repo) | audit against §6 before any managed-storage or hosted offer launches |
 
 No product text promises a capability before it ships (`.claude/context/docs-authoring.md`: never imply a full

@@ -16072,6 +16072,23 @@
           ]
         },
         {
+          "description": "This node's id (device_node.node_id): the node the attestations are over (#371).",
+          "name": "node_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The vault's uid (26 base32 symbols; #371); null for a deleted vault.",
+          "name": "vault_uid",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
           "description": "The current key, base64 (32 bytes).",
           "name": "key",
           "required": true,
@@ -16689,6 +16706,64 @@
             "object",
             "null"
           ]
+        },
+        {
+          "description": "Recovered by `vh vault recover` (#371): attested by its original node, verified with a key the customer pinned; null for versions this node minted.",
+          "fields": [
+            {
+              "description": "The node that minted the version.",
+              "name": "node_id",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "The vault's id on that node.",
+              "minimum": 0,
+              "name": "vault_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "That node's attestation key that signed it.",
+              "minimum": 0,
+              "name": "key_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "The customer material whose pinned key verified it.",
+              "enum": [
+                "kit",
+                "export"
+              ],
+              "name": "anchor",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "Unix seconds.",
+              "minimum": 0,
+              "name": "recovered_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "origin",
+          "required": false,
+          "types": [
+            "object",
+            "null"
+          ]
         }
       ],
       "name": "VaultKeyNeededVersion"
@@ -17060,6 +17135,753 @@
         }
       ],
       "name": "VaultKeyStatus"
+    },
+    {
+      "description": "What `vh vault recover` / vault.recover read and did (#371, spec 03 §6): ops::vault_recover::toJson (core/src/ops/VaultRecover.cpp) over vault::recover::toJson(Plan). Public data only: key checks, attestation verdicts and counts, never key material.",
+      "fields": [
+        {
+          "description": "The vault's uid (26 base32 symbols): the same as in the bucket.",
+          "name": "vault_uid",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Where the manifest was produced (the root's producer), or what the material says without one.",
+          "fields": [
+            {
+              "name": "node_id",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "vault_id",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            }
+          ],
+          "name": "origin",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "The manifest's name for the vault; null in a blind rebuild.",
+          "name": "manifest_vault_name",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "No usable manifest root: content recovered under /Recovered without names (§4.3).",
+          "name": "blind",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "The loaded root's epoch.",
+          "minimum": 0,
+          "name": "epoch",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "name": "root_sha256",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "enum": [
+            "unverified",
+            "verified",
+            "rollback_accepted"
+          ],
+          "name": "freshness",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "\"freshness unverified: no checkpoint supplied\" without a kit checkpoint.",
+          "name": "freshness_report",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Manifest fallbacks and adjustments (segments from versions or older roots, ...).",
+          "items": "string",
+          "name": "issues",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "files",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "folders",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "symlinks",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "trashed",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "tombstones",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "provider_versions",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "bytes",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "snapshots",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "snapshot_members",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "snapshot_members_restorable",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "counts",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "version",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "D1: verified = attested by the original node under a key the customer pinned.",
+              "enum": [
+                "verified",
+                "no_anchor",
+                "empty_anchor",
+                "unattested",
+                "unverified",
+                "wrong_node",
+                "wrong_vault",
+                "self_attested",
+                "key_check_mismatch"
+              ],
+              "name": "verdict",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "detail",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "held",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "name": "key_source",
+              "required": false,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "current",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "Live files are sealed under it (or it is current).",
+              "name": "needed",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "enum": [
+                "canonical",
+                "salvage_only",
+                "refused",
+                "missing"
+              ],
+              "name": "state",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "minimum": 0,
+                  "name": "key_id",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "enum": [
+                    "kit",
+                    "export"
+                  ],
+                  "name": "source",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "name": "anchor",
+              "required": false,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "name": "node_id",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "vault_id",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "enum": [
+                    "root",
+                    "origin",
+                    "export"
+                  ],
+                  "name": "source",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "name": "origin",
+              "required": false,
+              "types": [
+                "object"
+              ]
+            }
+          ],
+          "items": "object",
+          "name": "key_versions",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "current_version",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "highest_version_seen",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "items": "integer",
+          "name": "canonical_versions",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "items": "integer",
+          "name": "blocking_versions",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "items": "integer",
+          "name": "salvageable_versions",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "Uids of objects no manifest entry names, restored under /Recovered.",
+          "items": "string",
+          "name": "orphans",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "Uids of files whose object the bucket doesn't hold (restored unavailable).",
+          "items": "string",
+          "name": "missing_objects",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "Objects that did not authenticate (left untouched).",
+          "items": "string",
+          "name": "rejected_objects",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "listed",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "unwrapped",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "skipped",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "rejected",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "envelopes",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "name": "supplied",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "keys",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "anchors",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "What the restore read: never a file's content (content_bytes stays 0).",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "manifest_bytes",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "envelope_bytes",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "header_bytes",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "content_bytes",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "other_bytes",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "gets",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "ranged_gets",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "lists",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "version_lists",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "downloads",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "enum": [
+            "canonical",
+            "salvage"
+          ],
+          "name": "mode",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Files sealed under a version no material holds (left out).",
+          "minimum": 0,
+          "name": "unrecoverable_files",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "What was written (absent on a dry run).",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "vault_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "files",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "folders",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "symlinks",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "trashed",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "index_rows",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "provider_versions",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "snapshots",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "snapshot_members",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "left_out",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "items": "string",
+              "name": "notes",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "fresh_version",
+              "required": false,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "restored",
+          "required": false,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "name": "dry_run",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "name": "written",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "name": "vault_name",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "key_available",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "published_epoch",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "model": "VaultKeySalvageReport",
+          "name": "salvage",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "name": "note",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        }
+      ],
+      "name": "VaultRecoverResult"
     },
     {
       "description": "D2 (spec 03 §5.5): whether the vault has recovery material independent of this host. ops::vault_keys::toJson(RecoveryMaterial) (core/src/ops/VaultKeys.cpp).",
@@ -18863,7 +19685,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "c8b13d36df1fd170345a1a299de881c9cb59ed806326e26ab04d4929229393fd",
+  "models_hash": "d80bf7be73109849c82ac954c063e30efdcb6b59168998ee7e6004062d876e69",
   "protocol": {
     "min": 1,
     "version": 1
@@ -44132,6 +44954,23 @@
           ]
         },
         {
+          "description": "This node's id (device_node.node_id): the node the attestations are over (#371).",
+          "name": "node_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The vault's uid (26 base32 symbols; #371); null for a deleted vault.",
+          "name": "vault_uid",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
           "description": "The current key, base64 (32 bytes).",
           "name": "key",
           "required": true,
@@ -45166,6 +46005,937 @@
     },
     {
       "auth": "human",
+      "client_timeout_ms": 600000,
+      "command": "vault.recover",
+      "confirmations": [
+        {
+          "accept_field": "confirm_name",
+          "code": "vault_recover_salvage",
+          "description": "A salvage restore would create a fresh key on this node and re-encrypt every file the supplied keys decrypt (the text says which versions); resend with confirm_name set to the restored vault's name once the person typed it."
+        }
+      ],
+      "description": "Rebuild a vault on this instance from its bucket and the customer's recovery material (#371, spec 03 §6): a recovery kit (its seed unwraps the vault's KEV1 envelopes) and/or a key export. A key version is restored only when its original node's attestation verifies against an attestation key the material pins (D1); otherwise the answer is salvage_required with the per-version verdicts, and salvage (confirmed with confirm_name) re-encrypts what the supplied keys decrypt under a fresh key, never storing them. dry_run reads and reports, writing nothing. The vault starts in the cache strategy: nothing beyond headers, the manifest and envelopes is downloaded until a file is read. Paired devices only (recover_requires_device otherwise), with a keys step-up bound to the bucket; the encryption-key Export permission and vault Create.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "The API key that reaches the bucket.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "api_key",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "api_key_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The bucket holding the vault.",
+          "generator": {
+            "kind": "pattern",
+            "pattern": "vh-test-{a}{a}{a}{9}{9}"
+          },
+          "name": "bucket",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The recovery kit (vh.recovery-kit v1).",
+          "name": "kit",
+          "required": false,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "description": "A key export (its keys, and the attestation public keys it carries as anchors).",
+          "name": "export",
+          "one_of": [
+            {
+              "description": "One vault's entry of an export.",
+              "model": "VaultKeyImportDocument",
+              "name": "",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "description": "The CLI's `vh vault keys export all` array; the entry whose vault_uid matches the bucket's vault is used.",
+              "items": "object",
+              "model": "VaultKeyImportDocument",
+              "name": "",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            }
+          ],
+          "required": false,
+          "types": [
+            "object",
+            "array",
+            "null"
+          ]
+        },
+        {
+          "description": "The restored vault's name (default: the manifest's).",
+          "name": "into",
+          "required": false,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "Which vault of the bucket (default: the kit's).",
+          "name": "vault_uid",
+          "required": false,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "The owner (default: the caller).",
+          "minimum": 0,
+          "name": "owner_id",
+          "required": false,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "Restore a root older than the kit's checkpoint.",
+          "name": "accept_rollback",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "Report only; write nothing.",
+          "name": "dry_run",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "Re-encrypt what unproven versions decrypt under a fresh key.",
+          "name": "salvage",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "The restored vault's name: the person confirmed a salvage.",
+          "name": "confirm_name",
+          "required": false,
+          "types": [
+            "string",
+            "null"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "recover_requires_device",
+        "salvage_required",
+        "rollback",
+        "fork",
+        "kit_vault_mismatch",
+        "export_vault_mismatch",
+        "recovery_material_mismatch",
+        "no_key_material",
+        "vault_unknown",
+        "step_up_required",
+        "recovery_cooldown",
+        "vault_recover_salvage"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "recover_requires_device",
+        "salvage_required",
+        "rollback",
+        "fork",
+        "kit_vault_mismatch",
+        "export_vault_mismatch",
+        "recovery_material_mismatch",
+        "no_key_material",
+        "vault_unknown",
+        "step_up_required",
+        "recovery_cooldown"
+      ],
+      "response": [
+        {
+          "description": "The vault's uid (26 base32 symbols): the same as in the bucket.",
+          "name": "vault_uid",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Where the manifest was produced (the root's producer), or what the material says without one.",
+          "fields": [
+            {
+              "name": "node_id",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "vault_id",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            }
+          ],
+          "name": "origin",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "The manifest's name for the vault; null in a blind rebuild.",
+          "name": "manifest_vault_name",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "No usable manifest root: content recovered under /Recovered without names (§4.3).",
+          "name": "blind",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "The loaded root's epoch.",
+          "minimum": 0,
+          "name": "epoch",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "name": "root_sha256",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "enum": [
+            "unverified",
+            "verified",
+            "rollback_accepted"
+          ],
+          "name": "freshness",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "\"freshness unverified: no checkpoint supplied\" without a kit checkpoint.",
+          "name": "freshness_report",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Manifest fallbacks and adjustments (segments from versions or older roots, ...).",
+          "items": "string",
+          "name": "issues",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "files",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "folders",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "symlinks",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "trashed",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "tombstones",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "provider_versions",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "bytes",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "snapshots",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "snapshot_members",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "snapshot_members_restorable",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "counts",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "version",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "D1: verified = attested by the original node under a key the customer pinned.",
+              "enum": [
+                "verified",
+                "no_anchor",
+                "empty_anchor",
+                "unattested",
+                "unverified",
+                "wrong_node",
+                "wrong_vault",
+                "self_attested",
+                "key_check_mismatch"
+              ],
+              "name": "verdict",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "detail",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "held",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "name": "key_source",
+              "required": false,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "current",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "Live files are sealed under it (or it is current).",
+              "name": "needed",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "enum": [
+                "canonical",
+                "salvage_only",
+                "refused",
+                "missing"
+              ],
+              "name": "state",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "minimum": 0,
+                  "name": "key_id",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "enum": [
+                    "kit",
+                    "export"
+                  ],
+                  "name": "source",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "name": "anchor",
+              "required": false,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "name": "node_id",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "vault_id",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "enum": [
+                    "root",
+                    "origin",
+                    "export"
+                  ],
+                  "name": "source",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "name": "origin",
+              "required": false,
+              "types": [
+                "object"
+              ]
+            }
+          ],
+          "items": "object",
+          "name": "key_versions",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "current_version",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "highest_version_seen",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "items": "integer",
+          "name": "canonical_versions",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "items": "integer",
+          "name": "blocking_versions",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "items": "integer",
+          "name": "salvageable_versions",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "Uids of objects no manifest entry names, restored under /Recovered.",
+          "items": "string",
+          "name": "orphans",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "Uids of files whose object the bucket doesn't hold (restored unavailable).",
+          "items": "string",
+          "name": "missing_objects",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "Objects that did not authenticate (left untouched).",
+          "items": "string",
+          "name": "rejected_objects",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "listed",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "unwrapped",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "skipped",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "rejected",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "envelopes",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "name": "supplied",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "keys",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "anchors",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "What the restore read: never a file's content (content_bytes stays 0).",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "manifest_bytes",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "envelope_bytes",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "header_bytes",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "content_bytes",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "other_bytes",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "gets",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "ranged_gets",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "lists",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "version_lists",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "downloads",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "enum": [
+            "canonical",
+            "salvage"
+          ],
+          "name": "mode",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Files sealed under a version no material holds (left out).",
+          "minimum": 0,
+          "name": "unrecoverable_files",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "What was written (absent on a dry run).",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "vault_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "files",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "folders",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "symlinks",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "trashed",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "index_rows",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "provider_versions",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "snapshots",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "snapshot_members",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "left_out",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "items": "string",
+              "name": "notes",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "fresh_version",
+              "required": false,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "restored",
+          "required": false,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "name": "dry_run",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "name": "written",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "name": "vault_name",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "key_available",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "published_epoch",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "model": "VaultKeySalvageReport",
+          "name": "salvage",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "name": "note",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        }
+      ],
+      "response_model": "VaultRecoverResult",
+      "step_up": "keys",
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
       "client_timeout_ms": 60000,
       "command": "vault.recovery.disclosure",
       "confirmations": [],
@@ -45652,5 +47422,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "fca3c5501a21dbdd267531f3aac6d27c35202a88cfa59757f61bb84e42eed1fe"
+  "ws_hash": "823f296278f5b2dcb63769625b5793547aa7dad36f6b9a675ada8df5c8e05a6c"
 }

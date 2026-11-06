@@ -23,6 +23,9 @@
 
 #include <sodium.h>
 
+#include <algorithm>
+#include <span>
+
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -79,7 +82,30 @@ std::optional<Remote> remoteFor(const std::shared_ptr<storage::Engine>& engine) 
 
     Remote remote;
     remote.encryptUpstream = !s3 || s3->encrypt_upstream;
-    remote.download = [cloud](const FileSP& file) { return cloud->downloadToBuffer(file->path); };
+    remote.download = [cloud](const FileSP& file) {
+        auto bytes = cloud->downloadToBuffer(file->path);
+        // opaque_v1 (#369/#371): what the bucket holds at o/<uid> must be this file's object. Its header binds the
+        // vault, the object uid and the key version; the generation check against the row comes later (the object may
+        // already be on the current key). A swapped or foreign object fails here, before anything trusts it.
+        if (cloud->opaqueLayout() && file->object_uid && !bytes.empty()) {
+            const auto& em = *cloud->encryptionManager;
+            try {
+                (void)crypto::vhf1::openHeader(
+                    std::span<const uint8_t>(bytes).first(std::min<std::size_t>(bytes.size(), crypto::vhf1::kHeaderSize)),
+                    {crypto::vhf1::Kind::FileContent, em.vaultUid(), *file->object_uid, std::nullopt},
+                    [&em](const uint32_t v) -> crypto::SecretKeyPtr {
+                        try {
+                            return em.historicalKeySnapshot(v);
+                        } catch (const std::exception&) {
+                            return nullptr;
+                        }
+                    });
+            } catch (const crypto::vhf1::Error& e) {
+                vault::content::throwIntegrity(e, "the object of " + std::to_string(file->id));
+            }
+        }
+        return bytes;
+    };
     remote.objectState = [cloud](const FileSP& file) -> std::optional<EncryptionState> {
         if (!cloud->remoteFileIsEncrypted(file->path)) return std::nullopt;
         if (const auto payload = cloud->getRemoteIVBase64AndVersion(file->path))
@@ -93,6 +119,9 @@ std::optional<Remote> remoteFor(const std::shared_ptr<storage::Engine>& engine) 
             throw std::runtime_error("earlier versions could not be replayed upstream first: " +
                                      replay.error.value_or("unknown"));
         cloud->upload(file, bytes, isCiphertext);
+        // opaque_v1: the index row (and so the next manifest) names the object the bucket now holds. Path-keyed
+        // layouts are reconciled after the pass (reconcileRemoteIndex), which can't match o/<uid> rows by path.
+        if (cloud->opaqueLayout() && isCiphertext) cloud->recordOwnUpload(file);
     };
     return remote;
 }

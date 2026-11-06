@@ -34,6 +34,7 @@ struct ListedObject {
     std::string key;
     uint64_t size{};
     std::optional<std::time_t> last_modified;
+    std::optional<std::string> etag;  // as listed (quoted); a restore compares it with the manifest's (#371)
 };
 
 struct StoredVersion {

@@ -2,7 +2,8 @@
 // Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
 // #366 (WS1-a): every path that creates a files row assigns an object uid (uploads' createFile, which sync downloads
 // also use; FUSE create; copy), rename, move and overwrite keep it, a copy gets its own; vaults get a uid when they are
-// created; s3.storage_layout follows encrypt_upstream and opaque_v1 stays internal (test mode only).
+// created; s3.storage_layout follows encrypt_upstream: a new encrypting vault is opaque_v1 (since #371), an existing
+// vault that starts encrypting is path_v0 (the layout migration, WS1-c, moves it on).
 
 #include "crypto/id/ObjectUid.hpp"
 #include "db/Transactions.hpp"
@@ -222,7 +223,11 @@ TEST_F(ObjectUidDbTest, VaultsGetAUidAndALayoutThatFollowsEncryption) {
     using vault::model::StorageLayout;
 
     // A request can't pick the layout: it follows encrypt_upstream.
+    // The path_v0 data plane's seam (test mode only; gtest_main sets it for this binary): new encrypting vaults
+    // otherwise get opaque_v1, below.
+    vault::model::setNewEncryptingLayoutForTesting(StorageLayout::PathV0);
     const auto encrypting = create(true, StorageLayout::Transparent);
+    vault::model::setNewEncryptingLayoutForTesting(std::nullopt);
     EXPECT_EQ(storedLayout(encrypting->id), "path_v0");
     EXPECT_EQ(encrypting->storage_layout, StorageLayout::PathV0);
     ASSERT_TRUE(encrypting->uid);
@@ -248,15 +253,17 @@ TEST_F(ObjectUidDbTest, VaultsGetAUidAndALayoutThatFollowsEncryption) {
     (void)db::query::vault::Vault::upsertVault(reread, nullptr);
     EXPECT_EQ(storedLayout(reread->id), "path_v0");
 
-    // opaque_v1 is internal: test mode creates it, nothing else does, and its encryption can't be turned off here.
-    const auto opaque = create(true, StorageLayout::OpaqueV1);
+    // A new encrypting vault is opaque_v1 (#371), and its encryption can't be turned off here.
+    const auto opaque = create(true, StorageLayout::Transparent);
     EXPECT_EQ(storedLayout(opaque->id), "opaque_v1");
     opaque->encrypt_upstream = false;
     EXPECT_THROW((void)db::query::vault::Vault::upsertVault(opaque, nullptr), std::invalid_argument);
     EXPECT_EQ(storedLayout(opaque->id), "opaque_v1");
 
     paths::testMode = false;
-    EXPECT_THROW((void)create(true, StorageLayout::OpaqueV1), std::invalid_argument);
+    EXPECT_EQ(storedLayout(create(true, StorageLayout::PathV0)->id), "opaque_v1") << "outside test mode too";
+    vault::model::setNewEncryptingLayoutForTesting(StorageLayout::PathV0);
+    EXPECT_EQ(storedLayout(create(true, StorageLayout::PathV0)->id), "opaque_v1") << "the seam is test mode's only";
     paths::testMode = true;
 }
 

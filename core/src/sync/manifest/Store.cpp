@@ -106,6 +106,7 @@ std::vector<ListedObject> S3Store::list(const std::string& prefix) {
             if (!o.key.starts_with(prefix)) continue;
             o.size = std::strtoull(contents.child_value("Size"), nullptr, 10);
             o.last_modified = store_detail::parseListTime(contents.child_value("LastModified"));
+            if (const std::string etag = contents.child_value("ETag"); !etag.empty()) o.etag = etag;
             out.push_back(std::move(o));
         }
     }

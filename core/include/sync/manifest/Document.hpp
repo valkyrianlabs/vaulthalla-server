@@ -226,6 +226,20 @@ struct KeyAttestation {
     [[nodiscard]] bool operator==(const KeyAttestation&) const = default;
 };
 
+// Where a key version a restore recovered (#371, spec 03 §6.2 step 5) was minted: the original node, the vault id it
+// had there, the key check over that id, and that node's attestation. The restoring node re-attests the version over
+// its own id and vault id (`attestation` above); `origin` keeps the original proof, so a later restore from this
+// bucket can still anchor the version with a kit that pins only the original node's keys. Absent for versions this
+// node minted (their attestation is the original).
+struct KeyOrigin {
+    std::string node_id;
+    uint64_t vault_id{};
+    std::string key_check;
+    KeyAttestation attestation;
+    std::optional<std::string> recovered_at;
+    [[nodiscard]] bool operator==(const KeyOrigin&) const = default;
+};
+
 // One key version of the vault's complete key history (§3.2), with the version's key check and this node's
 // attestation (migration 113). `envelopes` names KEV1 envelopes (`.vaulthalla/key/<kid>`) for this version: absent
 // until recovery recipients exist (#370).
@@ -236,6 +250,7 @@ struct KeyRecord {
     std::optional<std::string> created_at;
     std::optional<std::string> retired_at;
     std::optional<std::vector<std::string>> envelopes;
+    std::optional<KeyOrigin> origin;
     [[nodiscard]] bool operator==(const KeyRecord&) const = default;
 };
 
@@ -251,6 +266,9 @@ struct Grant {
     std::optional<std::string> added_at;
     std::optional<std::string> authorized_by;
     std::optional<std::string> revoked_at;
+    // base64 of the recipient's public key (32 bytes for suite 1), so a restore can re-enroll the grant: public, like
+    // recipient_id (its hash). Absent in roots written before #371.
+    std::optional<std::string> public_key;
     [[nodiscard]] bool operator==(const Grant&) const = default;
     // Customer class, not revoked: the only grants a reader may unwrap envelopes for.
     [[nodiscard]] bool usableForDecryption() const;

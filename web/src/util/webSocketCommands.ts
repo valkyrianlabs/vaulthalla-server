@@ -1040,6 +1040,9 @@ export interface WebSocketCommandMap {
   'vault.keys.recipients.list': WsContract['vault.keys.recipients.list']
   'vault.keys.recipients.add': WsContract['vault.keys.recipients.add']
   'vault.keys.recipients.revoke': WsContract['vault.keys.recipients.revoke']
+  // #371: a vault rebuilt from its bucket and the customer's recovery material. Paired devices only
+  // (recover_requires_device elsewhere) with a keys step-up; the console never sends it.
+  'vault.recover': WsContract['vault.recover']
 }
 
 export type WSCommandPayload<K extends keyof WebSocketCommandMap> = WebSocketCommandMap[K]['payload']

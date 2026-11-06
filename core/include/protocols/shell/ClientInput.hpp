@@ -2,7 +2,8 @@
 
 // A document the `vh` client reads on the caller's side and attaches to its request, so the daemon never opens a path
 // the caller names: `vh vault keys import <vault> --file <path|->` (a key export) or `--recovery-kit <path|->` (a
-// recovery kit, #370). Header-only, shared by the client (core/main/cli.cpp) and the daemon (shell/Server.cpp).
+// recovery kit, #370), and `vh vault recover --kit <path|-> --export <path|->` (#371: both, bundled as one JSON
+// document, kBundleType). Header-only, shared by the client (core/main/cli.cpp) and the daemon (shell/Server.cpp).
 //
 //   request frame: {..., "input": {"v": 1, "text": "<the file's contents>"}}
 //
@@ -23,10 +24,15 @@ namespace vh::protocols::shell::client_input {
 inline constexpr int kVersion = 1;
 inline constexpr std::size_t kMaxBytes = 512 * 1024;
 
+// `vh vault recover`'s documents travel as one text: {"type": kBundleType, "kit": "<text>"|null, "export": ...}.
+inline constexpr std::string_view kBundleType = "vh.cli-input-bundle";
+
 struct Plan {
     bool active = false;       // this command takes a client-side document
     std::string path{};        // "-" = stdin
     std::string error{};       // a usage error to print instead of connecting
+    // A bundle (vault recover): the documents by name ("kit", "export"), each a path or "-" (at most one may be "-").
+    std::vector<std::pair<std::string, std::string>> bundle{};
 };
 
 namespace detail {
@@ -42,6 +48,30 @@ inline std::string lower(std::string_view s) {
     Plan p;
     if (argv.size() < 3) return p;
     const auto a = detail::lower(argv[0]), b = detail::lower(argv[1]), c = detail::lower(argv[2]);
+    if ((a == "vault" || a == "vaults" || a == "v") && b == "recover") {
+        p.active = true;
+        for (std::size_t i = 2; i < argv.size(); ++i) {
+            const bool isKit = argv[i] == "--kit" || argv[i] == "--recovery-kit";
+            const bool isExport = argv[i] == "--export" || argv[i] == "--key-file";
+            if (!isKit && !isExport) continue;
+            if (i + 1 >= argv.size() || argv[i + 1].empty()) {
+                p.error = argv[i] + " needs a file name (or - for stdin)";
+                return p;
+            }
+            const std::string name = isKit ? "kit" : "export";
+            if (std::ranges::any_of(p.bundle, [&](const auto& d) { return d.first == name; })) {
+                p.error = "--" + name + " given twice";
+                return p;
+            }
+            p.bundle.emplace_back(name, argv[i + 1]);
+        }
+        if (std::ranges::count_if(p.bundle, [](const auto& d) { return d.second == "-"; }) > 1)
+            p.error = "only one of --kit and --export can read standard input";
+        else if (p.bundle.empty())
+            p.error = "usage: vh vault recover --api-key <key> --bucket <bucket> --kit <kit.json|-> [--export "
+                      "<keys.json|->] [--into <name>] [--dry-run]";
+        return p;
+    }
     if (!(a == "vault" || a == "vaults" || a == "v") || !(b == "key" || b == "keys" || b == "k") || c != "import")
         return p;
     p.active = true;

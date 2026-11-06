@@ -848,7 +848,7 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   (`-Dfuzz=true`, clang; see testing.md).
 - **Encrypted manifest v2** (`sync::manifest`, `core/include/sync/manifest/`; #368, spec
   `design/encryption/03-metadata-recovery.md` §3-§4; migration 125). Replaces `.vaulthalla/index-v1.json` for
-  `opaque_v1` vaults only (test mode until #371). `Document` (root, segment, snapshot schemas; readers ignore unknown
+  `opaque_v1` vaults only (every new encrypting vault since #371). `Document` (root, segment, snapshot schemas; readers ignore unknown
   members; `recovery_policy` v1 of revocable grants, only class `customer` usable, other versions "not understood"),
   `Objects` (VHF1 kind 3 root with object uid = vault uid, kind 2 segments with object uid = sid), `Chain` (rollback,
   fork, gap walked through retained root versions), `Partition` (by first uid byte; split > 8,192 entries or 4 MiB,
@@ -865,7 +865,16 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   a pass publishes only when the collected content moved since the service's last publish (`publishIfChanged`); a
   refused root stalls the pass (`SyncStalled`) and raises one
   `manifest_rollback` / `manifest_fork` operator notification per root. The root carries the vault's recovery grants
-  and each key version's envelope kids (#370, below); `vh vault recover` and the scratch-schema restore are #371.
+  and each key version's envelope kids (#370, below; since #371 grants carry their public key and recovered versions
+  their `origin`).
+- **`vh vault recover`** (#371, spec 03 §6.4): `vault::recover` (plan: envelopes, export, `loadForRestore` with the
+  kit's checkpoint or blind, D1 `prove` against the customer's pinned attestation keys, reconciliation, `MeteredStore`
+  download budget), `db::query::vault::Recover` (one transaction: vault, tree with inodes, trash, index, provider
+  versions, snapshot records, keys re-sealed and re-attested with `vault_key_origin`, migration 131, grants, envelope
+  rows, chain position), `ops::vault_recover` (permission/channel/step-up, `salvage_required` /
+  `vault_recover_salvage`, salvage via `ops::vault_keys::salvageRecoveredVault`, reinstate, publish epoch + 1), CLI
+  `vh vault recover` (kit and export read by `vh`, sent as one `client_input` bundle), ws `vault.recover` (paired
+  devices). Rotation and salvage PUTs update the remote index (`CloudEngine::recordOwnUpload`).
 - **Recovery recipients and KEV1 envelopes** (#370, spec 03 §5, §5.8; migration 127). `crypto::kev1` and
   `crypto::recovery::{RecoverySeed, Kit}` (`crypto/recovery/`, self-contained: the offline `vh-recovery` tool,
   `core/main/recovery.cpp`, links only them, libsodium and OpenSSL). `db::query::vault::RecoveryGrants`
@@ -879,8 +888,9 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   `vault.keys.recipients.*` (`handler::VaultKeys`), CLI `vh vault keys recipient …`, kit import through
   `ops::vault_keys::importKeys` (`ImportRequest::recovery_kit`; `candidatesFromKit`). Health
   `vaults_recovery_material_missing` (`stats::model::SystemHealth`) makes the node degraded.
-- **opaque_v1 data plane** (#369, spec `design/encryption/01-provider-blind-storage.md` §4-§5; test mode only until
-  #371). Keys: `storage/ObjectKeys.hpp` (`o/<file uid>`, `.vaulthalla/{layout.json,root,seg/<sid>,key/<kid>}`,
+- **opaque_v1 data plane** (#369, spec `design/encryption/01-provider-blind-storage.md` §4-§5; the layout of every new
+  encrypting vault since #371, `vault::model::layoutForNewVault`; path-keyed fake-bucket suites pin path_v0 with
+  `setNewEncryptingLayoutForTesting`, test mode only). Keys: `storage/ObjectKeys.hpp` (`o/<file uid>`, `.vaulthalla/{layout.json,root,seg/<sid>,key/<kid>}`,
   classify Content/Metadata/Foreign, `partSizeFor` = max(5 MiB, ceil(size/10,000)) whole MiB, used by every layout).
   `CloudEngine::objectKeyOf(File|Trashed)` / `objectKeyForPath` (opaque: the uid via
   `db::query::sync::ObjectIdentity`: live file, else the newest trashed one) replace `stripLeadingSlash(path)`; path

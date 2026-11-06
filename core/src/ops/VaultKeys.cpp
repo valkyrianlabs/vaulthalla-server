@@ -350,12 +350,20 @@ KeyStatus statusOf(const Source& s, Unsealer& unsealer) {
                   .key_retain_until = s.key_retain_until, .version = s.current,
                   .exported_version = s.exported_version, .exported_at = s.exported_at,
                   .rotation_in_progress = s.rotating};
+    std::map<unsigned int, KeyQ::Origin> origins;
+    if (!s.deleted)
+        for (auto& o : KeyQ::origins(s.vault_id)) origins.emplace(o.version, std::move(o));
     for (const auto& [version, reason] : neededVersions(s)) {
         auto check = checkOf(s, version, unsealer);
         if (!check) out.missing_versions.push_back(version);
         auto att = check ? recordedAttestation(s, version, *check) : std::nullopt;
+        std::optional<KeyOriginInfo> origin;
+        if (const auto it = origins.find(version); it != origins.end())
+            origin = KeyOriginInfo{.node_id = it->second.node_id, .vault_id = it->second.vault_id,
+                                   .key_id = it->second.attestation_key_id, .anchor = it->second.anchor,
+                                   .recovered_at = it->second.recovered_at};
         out.needed_versions.push_back({.version = version, .key_check = check, .reason = reason,
-                                       .attestation = std::move(att)});
+                                       .attestation = std::move(att), .origin = std::move(origin)});
     }
     out.key_check = out.needed_versions.front().key_check;
     out.attestation = out.needed_versions.front().attestation;
@@ -416,6 +424,9 @@ std::time_t retiredAtOf(const Source& s, const unsigned int version) {
 VaultExport exportFrom(const Source& s) {
     Unsealer unsealer;
     VaultExport out{.vault_id = s.vault_id, .vault_name = s.vault_name, .deleted = s.deleted};
+    out.node_id = db::query::device::Devices::nodeId();
+    if (const auto live = db::query::vault::Vault::getVault(s.vault_id); live && live->uid)
+        out.vault_uid = crypto::id::toBase32(*live->uid);
     for (const auto& [version, reason] : neededVersions(s)) {
         std::string why;
         auto key = keyOf(s, version, unsealer, why);
@@ -515,7 +526,13 @@ nlohmann::json toJson(const KeyStatus& s) {
         needed.push_back({{"version", n.version},
                           {"key_check", n.key_check ? nlohmann::json(*n.key_check) : nlohmann::json(nullptr)},
                           {"reason", to_string(n.reason)},
-                          {"attestation", attestationJson(n.attestation)}});
+                          {"attestation", attestationJson(n.attestation)},
+                          {"origin", n.origin ? nlohmann::json{{"node_id", n.origin->node_id},
+                                                               {"vault_id", n.origin->vault_id},
+                                                               {"key_id", n.origin->key_id},
+                                                               {"anchor", n.origin->anchor},
+                                                               {"recovered_at", static_cast<int64_t>(n.origin->recovered_at)}}
+                                              : nlohmann::json(nullptr)}});
     auto keys = nlohmann::json::array();
     for (const auto& k : s.attestation_public_keys)
         keys.push_back({{"key_id", k.key_id}, {"public_key", k.public_key}, {"retired_at", time(k.retired_at)}});
@@ -643,6 +660,10 @@ nlohmann::json toJson(const VaultExport& exported, const std::string& exportedBy
     out["key_info"]["key_check"] = exported.current.key_check;
     out["attestation"] = attestationJson(exported.current.attestation);
     out["key_info"]["attestation"] = attestationJson(exported.current.attestation);
+    // Where the attestations were made (#371): `vh vault recover --export` verifies them on another node over this
+    // node's id and this vault id, against the attestation public keys the export carries.
+    out["node_id"] = exported.node_id;
+    out["vault_uid"] = exported.vault_uid ? nlohmann::json(*exported.vault_uid) : nlohmann::json(nullptr);
 
     if (!exported.historical.empty()) {
         auto historical = nlohmann::json::array();
@@ -1410,6 +1431,22 @@ SalvageReport runSalvage(const Actor& actor, const ImportTarget& target, std::ma
     return out;
 }
 
+}
+
+void requireKeyMaterialAccess(const Actor& actor, const Channel channel, const std::string& refusalCode) {
+    requireExport(actor);
+    if (channel == Channel::Console)
+        throw Refused(refusalCode, "vault key material is handled only through a paired device (Vaulthalla Desktop) or "
+                                   "the local vh CLI, never through the browser");
+    requireKeyChannel(channel);
+}
+
+SalvageReport salvageRecoveredVault(const Actor& actor, const unsigned int vaultId,
+                                    std::map<unsigned int, crypto::SecretKeyPtr> supplied, const Channel channel) {
+    requireKeyMaterialAccess(actor, channel, "recover_requires_device");
+    const auto target = importTarget(actor, vaultId);
+    Unsealer unsealer;
+    return runSalvage(actor, target, std::move(supplied), unsealer, channel);
 }
 
 std::vector<ImportDocumentVersion> readImportDocument(const nlohmann::json& keys, const unsigned int vaultId) {

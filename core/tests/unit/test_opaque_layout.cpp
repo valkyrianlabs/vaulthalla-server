@@ -933,21 +933,59 @@ TEST_F(OpaqueLayoutTest, OpaqueManifestNamesTheObjectsItsFilesAreStoredIn) {
     EXPECT_EQ(entry->versions[0].version_id, object->version_id);
 }
 
-// opaque_v1 creation stays internal: refused outside test mode (also ObjectUidDbTest).
-TEST_F(OpaqueLayoutTest, OpaqueCreationIsRefusedOutsideTestMode) {
+// Key rotation's remote re-read of an index-only file (#369 open item, done in #371): the object at o/<uid> must be this
+// file's (its header binds the object uid), not another file's sealed object of the same vault planted there.
+TEST_F(OpaqueLayoutTest, RotationRereadBindsTheObjectUid) {
+    const auto v = opaqueVault();
+    const auto a = write(v, "/a.txt", "the file being rotated");
+    const auto b = write(v, "/b.txt", "another file of the vault");
+    (void)pass(v);
+    const auto aKey = keys::contentKey(*row(v, "/a.txt")->object_uid);
+    const auto bObject = v.bucket->current(keys::contentKey(*row(v, "/b.txt")->object_uid));
+    ASSERT_TRUE(bObject);
+    (void)v.bucket->seed(aKey, bObject->body);  // b's sealed bytes under a's key
+    const auto aRow = row(v, "/a.txt");
+    sfs::remove(aRow->backing_path);            // index-only: rotation re-reads the bucket
+    v.engine->encryptionManager->prepare_key_rotation();
+    const auto deps = sync::rotation::runtimeDeps(v.engine);
+    EXPECT_ANY_THROW((void)sync::rotation::rotateFile(row(v, "/a.txt"), deps));
+    EXPECT_EQ(row(v, "/a.txt")->encrypted_with_key_version, aRow->encrypted_with_key_version) << "nothing committed";
+    (void)a;
+    (void)b;
+}
+
+// Since the restore drill passed (#371), every new encrypting vault is opaque_v1, outside test mode too; a vault
+// that doesn't encrypt can't be opaque_v1, and an existing one keeps its layout when encryption is turned on.
+TEST_F(OpaqueLayoutTest, NewEncryptingVaultsAreOpaqueV1) {
     auto apiKey = std::make_shared<vault::model::APIKey>(superUser->id, "ol_gate_" + tag(), vault::model::S3Provider::AWS,
                                                          "AKIATESTACCESSKEY000", "secret-value-0000000000000000000000000",
                                                          "us-east-1", "https://s3.example.com");
     const auto keyId = runtime::Deps::get().apiKeyManager->addAPIKey(apiKey);
-    auto s3 = std::make_shared<vault::model::S3Vault>("ol_gate_" + tag(), keyId, "ol-gate-" + tag());
-    s3->owner_id = superUser->id;
-    s3->mount_point = "ol_gate_" + tag();
-    s3->encrypt_upstream = true;
-    s3->storage_layout = vault::model::StorageLayout::OpaqueV1;
+    const auto make = [&](const bool encrypt) {
+        auto s3 = std::make_shared<vault::model::S3Vault>("ol_gate_" + tag(), keyId, "ol-gate-" + tag());
+        s3->owner_id = superUser->id;
+        s3->mount_point = "ol_gate_" + tag();
+        s3->encrypt_upstream = encrypt;
+        return s3;
+    };
+    vault::model::setNewEncryptingLayoutForTesting(std::nullopt);
     paths::testMode = false;
-    EXPECT_THROW((void)db::query::vault::Vault::upsertVault(s3, std::make_shared<sync::model::RemotePolicy>()),
+    auto created = make(true);
+    EXPECT_NO_THROW((void)db::query::vault::Vault::upsertVault(created, std::make_shared<sync::model::RemotePolicy>()));
+    EXPECT_EQ(created->storage_layout, vault::model::StorageLayout::OpaqueV1);
+    auto plain = make(false);
+    EXPECT_NO_THROW(plain->id = db::query::vault::Vault::upsertVault(plain, std::make_shared<sync::model::RemotePolicy>()));
+    EXPECT_EQ(plain->storage_layout, vault::model::StorageLayout::Transparent);
+    auto refused = make(false);
+    refused->storage_layout = vault::model::StorageLayout::OpaqueV1;
+    EXPECT_THROW((void)db::query::vault::Vault::upsertVault(refused, std::make_shared<sync::model::RemotePolicy>()),
                  std::invalid_argument);
     paths::testMode = true;
+    vault::model::setNewEncryptingLayoutForTesting(vault::model::StorageLayout::PathV0);  // this binary's default
+    // An existing transparent vault that starts encrypting moves to path_v0 (into opaque_v1 only by WS1-c).
+    plain->encrypt_upstream = true;
+    EXPECT_NO_THROW((void)db::query::vault::Vault::upsertVault(plain));
+    EXPECT_EQ(plain->storage_layout, vault::model::StorageLayout::PathV0);
 }
 
 }

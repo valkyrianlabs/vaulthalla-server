@@ -1019,7 +1019,26 @@ int main(const int argc, char** argv) {
             return tx::exitcode::kUsage;
         }
         std::string error;
-        attached = read_client_input(inputPlan.path, error);
+        if (!inputPlan.bundle.empty()) {
+            // `vh vault recover`: every document read here, sent as one bundle.
+            nlohmann::json bundle{{"type", std::string(ci::kBundleType)}};
+            for (const auto& [name, path] : inputPlan.bundle) {
+                auto text = read_client_input(path, error);
+                if (!text) {
+                    fmt::print(stderr, "vh: {}\n", error);
+                    return tx::exitcode::kNoInput;
+                }
+                bundle[name] = std::move(*text);
+            }
+            attached = bundle.dump();
+            for (auto& [name, value] : bundle.items())
+                if (value.is_string()) {
+                    auto& t = value.get_ref<std::string&>();
+                    std::fill(t.begin(), t.end(), '\0');
+                }
+        } else {
+            attached = read_client_input(inputPlan.path, error);
+        }
         if (!attached) {
             fmt::print(stderr, "vh: {}\n", error);
             return tx::exitcode::kNoInput;

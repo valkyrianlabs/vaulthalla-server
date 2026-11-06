@@ -51,6 +51,11 @@ WRITERS: dict[str, dict[tuple[str, str], int]] = {
     "core/src/db/preparedStatements/fs/fsEntries.cpp": {("UPDATE", "fs_entry"): 2, ("DELETE FROM", "fs_entry"): 3},
     # insert_symlink_full: create (symlinks insert).
     "core/src/db/preparedStatements/fs/symlinks.cpp": {("INSERT INTO", "fs_entry"): 1, ("INSERT INTO", "symlinks"): 1},
+    # `vh vault recover` (#371): the restored vault's tree, created in one transaction: creates (the typed inserts).
+    "core/src/db/query/vault/Recover.cpp": {
+        ("INSERT INTO", "fs_entry"): 1, ("INSERT INTO", "directories"): 2, ("INSERT INTO", "files"): 1,
+        ("INSERT INTO", "symlinks"): 1,
+    },
     # Vault deletion/revival re-parents the vault root and clears inodes: the root is never journaled, inodes aren't
     # changes, and a purge's cascade skips a deleted vault.
     "core/src/db/query/vault/Deletion.cpp": {("UPDATE", "fs_entry"): 3},

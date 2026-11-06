@@ -57,7 +57,7 @@ inline constexpr const char* kRunBucketPattern = R"(^vh-test-[a-z0-9]{1,24}-[0-9
 // Fixed test buckets of tooling (tools/smoke), created and deleted by vh_live_bucket (live_bucket_tool.cpp). Never swept:
 // their tool removes a leftover before it creates one.
 inline const std::vector<std::string>& fixedTestBuckets() {
-    static const std::vector<std::string> names{"vh-test-gateway-smoke"};
+    static const std::vector<std::string> names{"vh-test-gateway-smoke", "vh-test-recover-drill"};
     return names;
 }
 // A run whose bucket is older than this crashed or was killed (a run takes minutes).

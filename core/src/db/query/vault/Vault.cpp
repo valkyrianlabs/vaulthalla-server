@@ -67,8 +67,8 @@ namespace {
     }
 
     // The storage layout to store (spec 01 §4.6). It follows encrypt_upstream and is never taken from a request:
-    //  - a new vault gets transparent or path_v0; opaque_v1 only when asked for in test mode (internal staging until
-    //    the restore drill passes, #371);
+    //  - a new vault gets transparent or, when it encrypts upstream, opaque_v1 (since the restore drill passed, #371;
+    //    vault::model::layoutForNewVault; a test may still ask for opaque_v1 explicitly, never without encryption);
     //  - an existing vault keeps its layout while encrypt_upstream stays; flipping encrypt_upstream moves between
     //    transparent and path_v0, and is refused for an opaque_v1 vault (converting it is the layout migration's job).
     vh::vault::model::StorageLayout resolveStorageLayout(pqxx::work& txn, const unsigned int vaultId, const bool exists,
@@ -79,11 +79,10 @@ namespace {
                        pqxx::params{vaultId})
             : pqxx::result{};
         if (stored.empty()) {
-            if (s3.storage_layout != StorageLayout::OpaqueV1) return vh::vault::model::layoutFor(s3.encrypt_upstream);
-            if (!paths::isTestMode())
-                throw std::invalid_argument("the opaque_v1 storage layout is not available yet");
-            if (!s3.encrypt_upstream) throw std::invalid_argument("the opaque_v1 storage layout requires upstream encryption");
-            return StorageLayout::OpaqueV1;
+            if (s3.storage_layout == StorageLayout::OpaqueV1 && !s3.encrypt_upstream)
+                throw std::invalid_argument("the opaque_v1 storage layout requires upstream encryption");
+            if (s3.storage_layout == StorageLayout::OpaqueV1) return StorageLayout::OpaqueV1;
+            return vh::vault::model::layoutForNewVault(s3.encrypt_upstream);
         }
         const auto row = stored.one_row_ref();
         const auto layout = vh::vault::model::storageLayoutFromString(row["storage_layout"].as<std::string>());

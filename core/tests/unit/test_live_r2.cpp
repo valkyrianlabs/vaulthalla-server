@@ -231,7 +231,7 @@ TEST_F(LiveBucketGuard, NamesAndTheOrphanSweep) {
     EXPECT_TRUE(std::regex_match(mine, std::regex(live::kRunBucketPattern))) << mine;
     EXPECT_EQ(live::runStartOf(mine), std::optional<std::time_t>(live::runStarted()));
     for (const auto& b : kNotTestBuckets) EXPECT_FALSE(live::isTestBucketName(b)) << b;
-    EXPECT_EQ(live::fixedTestBuckets(), (std::vector<std::string>{"vh-test-gateway-smoke"}));
+    EXPECT_EQ(live::fixedTestBuckets(), (std::vector<std::string>{"vh-test-gateway-smoke", "vh-test-recover-drill"}));
     EXPECT_TRUE(live::isTestBucketName("vh-test-gateway-smoke"));
     EXPECT_FALSE(live::isRunBucketName("vh-test-gateway-smoke")) << "the sweep never considers the fixed bucket";
 

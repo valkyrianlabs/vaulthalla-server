@@ -67,6 +67,17 @@ public:
         std::optional<std::time_t> retired_at{};
     };
     [[nodiscard]] static std::vector<AttestationKey> attestationKeys();
+    // Versions `vh vault recover` recovered (vault_key_origin, migration 131, #371): where each was minted and which
+    // customer material anchored it. Empty for vaults this node created.
+    struct Origin {
+        unsigned int version{};
+        std::string node_id{};
+        uint64_t vault_id{};
+        unsigned int attestation_key_id{};
+        std::string anchor{};  // kit | export
+        std::time_t recovered_at{};
+    };
+    [[nodiscard]] static std::vector<Origin> origins(unsigned int vaultId);
     static void markKeyRotationFinished(unsigned int vaultId);
     [[nodiscard]] static bool keyRotationInProgress(unsigned int vaultId);
     [[nodiscard]] static KeyPtr getRotationInProgressOldKey(unsigned int vaultId);

@@ -243,6 +243,24 @@ PolicyPtr currentPolicy(const unsigned int vaultId) {
 
 }
 
+void requireCanRecoverInto(const Actor& actor, const unsigned int ownerId, const unsigned int apiKeyId,
+                           const std::string& bucket, const std::optional<std::string>& name) {
+    requireActor(actor);
+    if (!vh::identities::manager().user(ownerId)) throw NotFound("owner not found: " + std::to_string(ownerId));
+    if (!canCreateFor(actor, ownerId)) throw Denied("you do not have permission to create vaults for this owner");
+    if (name && name->empty()) throw Invalid("vault name is required");
+    if (name && db::query::vault::Vault::vaultExists(*name, ownerId))
+        throw Conflict("a vault named '" + *name + "' already exists for this owner; choose another name (--into)");
+    if (bucket.empty()) throw Invalid("bucket is required");
+    requireValidBucket(bucket);
+    requireConsume(actor, apiKeyId);
+    requireBucketUnprotected(apiKeyId, bucket);
+    if (const auto owner = db::query::vault::Vault::bucketOwner(apiKeyId, bucket))
+        throw Conflict("bucket '" + bucket + "' is already the storage of vault '" + owner->vault_name + "' (ID " +
+                       std::to_string(owner->vault_id) + ") with this API key" +
+                       (owner->deleted ? ", pending purge" : "") + ": a recovered vault needs a bucket no vault holds");
+}
+
 VaultPtr create(const Actor& actor, const Create& req) {
     requireActor(actor);
     const auto ownerId = req.owner_id.value_or(actor->id);

@@ -7,6 +7,7 @@
 #include "vault/Fwd.hpp"
 
 #include <functional>
+#include <map>
 #include <memory>
 
 #include <ctime>
@@ -78,11 +79,22 @@ struct RecoveryMaterial {
                                                   unsigned int current = 0);
 [[nodiscard]] nlohmann::json toJson(const RecoveryMaterial& material);
 
+// A version `vh vault recover` recovered on this node (#371): attested by the node that minted it, verified with an
+// attestation key the customer's material pinned (vault_key_origin).
+struct KeyOriginInfo {
+    std::string node_id{};
+    uint64_t vault_id{};
+    unsigned int key_id{};
+    std::string anchor{};  // kit | export
+    std::time_t recovered_at{};
+};
+
 struct NeededVersion {
     unsigned int version{};
     std::optional<std::string> key_check{};  // null when this host can't read that version
     NeedReason reason{NeedReason::Current};
     std::optional<KeyAttestationInfo> attestation{};  // null when none is recorded (or the version isn't readable)
+    std::optional<KeyOriginInfo> origin{};            // recovered from another node (vh vault recover)
 };
 
 // A key salvage pass (import mode salvage; key-backup.md "Salvage"): what it re-keyed and what it couldn't.
@@ -152,6 +164,10 @@ struct VaultExport {
     ExportedKey current{};
     std::vector<ExportedKey> historical{};  // every other needed version, ascending
     std::vector<unsigned int> missing{};    // needed versions the vault no longer holds
+    // Where the attestations were made (#371): this node's id and the vault's uid (base32; null for a deleted vault),
+    // so `vh vault recover --export` can verify them on another node.
+    std::string node_id{};
+    std::optional<std::string> vault_uid{};
 };
 
 // The vaults `actor` may export now: every live vault, and every deleted vault whose key is retained and that the actor
@@ -262,6 +278,17 @@ struct ImportResult {
 };
 
 [[nodiscard]] ImportResult importKeys(const Actor& actor, const ImportRequest& request, Channel channel);
+
+// ---- for `vh vault recover` (ops::vault_recover, #371): the same rules for whoever handles key material
+
+// The encryption-key Export permission (super admins hold it) and D4's channels: `refusalCode` for a browser session,
+// Denied for an agent.
+void requireKeyMaterialAccess(const Actor& actor, Channel channel, const std::string& refusalCode);
+// The salvage pass of a vault a restore just created: its vault_key_salvage row (state running, new_version = the
+// fresh current key) names `supplied`'s versions; their files are re-encrypted under the fresh key exactly as an
+// import's salvage does, and the supplied keys are never stored.
+[[nodiscard]] SalvageReport salvageRecoveredVault(const Actor& actor, unsigned int vaultId,
+                                                  std::map<unsigned int, crypto::SecretKeyPtr> supplied, Channel channel);
 
 // Test seam: called after each step of a salvage pass's per-file protocol (sync::rotation's Step, as an int so this
 // header stays light); throwing sync::rotation::SimulatedCrash from it simulates a crash there. Empty: none.

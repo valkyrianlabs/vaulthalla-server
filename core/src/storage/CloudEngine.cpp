@@ -650,6 +650,22 @@ void CloudEngine::publishPendingRemoteIndexManifest() const noexcept {
     }
 }
 
+void CloudEngine::recordOwnUpload(const std::shared_ptr<File>& f) const {
+    if (!f) return;
+    auto indexed = std::make_shared<File>(*f);
+    // opaque_v1: the row is the object o/<uid> (with the ETag and version id the PUT returned).
+    if (opaqueLayout()) indexed->path = "/" + objectKeyOf(*f);
+    if (s3Vault()->encrypt_upstream) {
+        indexed->remote_encrypted = true;
+    } else {
+        indexed->remote_encrypted = false;
+        indexed->encryption_iv.clear();
+        indexed->encrypted_with_key_version = 0;
+    }
+    indexed->remote_storage_class = configuredStorageClass();
+    db::query::sync::RemoteObjectIndex::upsertFile(vault->id, indexed);
+}
+
 void CloudEngine::applyRemoteIndexMutation(const std::vector<Action>& plan) const {
     const auto replayMutation = [&]() {
         bool mutated = false;
@@ -658,18 +674,7 @@ void CloudEngine::applyRemoteIndexMutation(const std::vector<Action>& plan) cons
             switch (action.type) {
             case ActionType::Upload:
                 if (action.local) {
-                    auto indexed = std::make_shared<File>(*action.local);
-                    // opaque_v1: the row is the object o/<uid> (with the ETag and version id the PUT returned).
-                    if (opaqueLayout()) indexed->path = "/" + objectKeyOf(*action.local);
-                    if (s3Vault()->encrypt_upstream) {
-                        indexed->remote_encrypted = true;
-                    } else {
-                        indexed->remote_encrypted = false;
-                        indexed->encryption_iv.clear();
-                        indexed->encrypted_with_key_version = 0;
-                    }
-                    indexed->remote_storage_class = configuredStorageClass();
-                    db::query::sync::RemoteObjectIndex::upsertFile(vault->id, indexed);
+                    recordOwnUpload(action.local);
                     mutated = true;
                 }
                 break;
