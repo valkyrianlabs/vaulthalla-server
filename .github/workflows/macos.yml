@@ -86,7 +86,9 @@ jobs:
     if: ${{ !cancelled() && needs.gate.outputs.run != 'false' }}
     # GitHub-hosted Apple Silicon on macOS 27 (the `xcode-27` image, public preview; there is no macos-27 label yet),
     # matching the maintainer's macOS 27 hosts. macos-26 is the fallback label if the preview image misbehaves.
-    runs-on: xcode-27
+    # Self-hosted Tart VMs on the Mac Studio when the org variable CI_MACOS_RUNNER is set
+    # ('["self-hosted","macOS","ARM64","vl-macos"]'); GitHub-hosted xcode-27 when it isn't, and always for fork PRs.
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork) && 'xcode-27' || fromJSON(vars.CI_MACOS_RUNNER || '"xcode-27"') }}
     timeout-minutes: 90
     continue-on-error: false
     defaults:
@@ -166,7 +168,9 @@ jobs:
     name: Installer package (macOS arm64)
     needs: gate
     if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && !inputs.upload_check }}
-    runs-on: xcode-27
+    # Self-hosted Tart VMs on the Mac Studio when the org variable CI_MACOS_RUNNER is set
+    # ('["self-hosted","macOS","ARM64","vl-macos"]'); GitHub-hosted xcode-27 when it isn't, and always for fork PRs.
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork) && 'xcode-27' || fromJSON(vars.CI_MACOS_RUNNER || '"xcode-27"') }}
     timeout-minutes: 90
     defaults:
       run:
