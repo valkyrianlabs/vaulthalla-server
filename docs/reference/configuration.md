@@ -196,7 +196,7 @@ auth:
       - https://vault.example.com
 ```
 
-- `rp_id`: a lowercase host name, never an IP address (browsers refuse passkeys for IP addresses). Internationalized
+- `rp_id`: a lowercase host name, never an IP address (browsers refuse passkeys for IP addresses, so a console reached only by IP can't use passkeys). Internationalized
   names use their `xn--` form. Empty (the default) leaves passkeys unavailable.
 - `rp_name`: the name authenticators show, 1 to 64 characters.
 - `origins`: the exact console origins, `https://host` or `https://host:port`, whose host is `rp_id` or a subdomain
@@ -236,6 +236,8 @@ auth:
 - `recovery_cooldown_hours`: after a recovery-code sign-in or an MFA reset, key export, device approval, account and
   role administration, secrets and settings changes wait this long.
 - `step_up_ttl_seconds`: how long confirming a sensitive change (step-up) lasts.
+
+How the policy, step-up, recovery and lockout behave is described in [Multi-Factor Sign-In](/admin/mfa).
 
 Changing the policy, the two admin flags or `auth.webauthn.rp_id` is a settings change (it asks for a step-up),
 recorded as `auth.mfa.policy.change` in the [audit trail](/admin/audit-trail). Weakening it (a lower policy, an

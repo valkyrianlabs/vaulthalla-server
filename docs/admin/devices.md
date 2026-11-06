@@ -150,6 +150,41 @@ A device follows its account:
 - Deactivating the account refuses the device's requests; reactivating it restores them.
 - A password reset, role change or deactivation closes the device's open connections, which then reconnect.
 - Deleting the account deletes its devices.
+- Resetting the account's MFA or signing in with a recovery code revokes the devices' key-backup grants; the devices stay paired.
+
+## Approvals And Key-Backup Grants
+
+A paired Mac proves which device is connecting, never that a person is there. Sync, file access and transfers never
+ask for anything. A few actions need a person's approval, and the Mac asks for it in one of two ways:
+
+- **Touch ID on the Mac,** through a separate key Desktop keeps in the Secure Enclave (its *approval key*). It
+  approves only vault-key operations and approving another device, one action and one target each, and expires after
+  two minutes.
+- **A passkey in the web console.** Anything else Desktop asks for appears for every console tab you are signed in
+  to, and only a passkey approves it. An authenticator code or a password can't. Without a passkey, do the action in
+  the console or with `vh`.
+
+A new Mac can be approved from a Mac you already paired, with Touch ID, instead of from the console. Pairing from the
+console or with `vh device pair` works as before, and the local CLI never asks for an approval.
+
+**Key backup.** Automatic 1Password key backup is a *key-backup grant*: it lets one paired Mac back up the keys of the
+vaults it names, with no prompt, on every reconnect and after every key rotation. Any other key export from that Mac
+(another vault, a manual export) needs your approval each time. **Devices › My devices** has a Key backup column to
+confirm or turn off a grant.
+
+- Every Mac that was paired before grants existed kept backing up: it got a *migrated* grant over exactly the vaults
+  its account could export at upgrade time. Confirm it or turn it off. A Mac paired later asks once, when you turn
+  backup on, and a new vault is added deliberately, never automatically.
+- More than 60 vault key exports in an hour pauses the grant and notifies you; confirm it to resume.
+- A grant ends when the Mac is unpaired, the account is deactivated, deleted or loses the export permission, its MFA is
+  reset, someone signs in with a recovery code, or the Mac hasn't connected for 90 days. After a recovery-code
+  sign-in the same Mac can turn backup back on with Touch ID during the cooldown, for the same vaults only.
+- Grant changes and backups are in the audit trail: `vh audit list --action keys.backup.` (approvals:
+  `--action device.approval.` and `--action auth.approval.`).
+
+The Desktop side (the prompts, turning backup on per vault) ships in Vaulthalla Desktop. See
+[Multi-Factor Sign-In](/admin/mfa#desktop-approvals-and-key-backup-grants) and the protocol in
+[Device Approvals](/reference/device-approvals).
 
 ## Remote connections
 
