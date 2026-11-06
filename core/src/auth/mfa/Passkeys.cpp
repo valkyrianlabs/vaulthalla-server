@@ -64,18 +64,35 @@ std::vector<WebAuthnCredential> usableCredentials(const uint32_t userId) {
     return out;
 }
 
-nlohmann::json requestOptions(const std::string& sessionUuid, const uint32_t userId,
-                              const std::vector<WebAuthnCredential>& credentials) {
+namespace {
+
+nlohmann::json passkeyRequestOptions(const webauthn::Expectation& binding,
+                                     const std::vector<WebAuthnCredential>& credentials) {
     const auto rp = relyingParty();
     if (!rp.configured()) throw ops::Invalid("Passkeys are not configured on this server");
     nlohmann::json allow = nlohmann::json::array();
     for (const auto& c : credentials) allow.push_back(passkeyDescriptor(c));
-    return {{"challenge", passkeyChallenge({.session = sessionUuid, .purpose = webauthn::Purpose::Mfa,
-                                            .user = static_cast<int64_t>(userId), .scope = {}})},
+    return {{"challenge", passkeyChallenge(binding)},
             {"rpId", rp.id},
             {"timeout", std::chrono::milliseconds(kChallengeTtl).count()},
             {"userVerification", "required"},
             {"allowCredentials", std::move(allow)}};
+}
+
+}
+
+nlohmann::json requestOptions(const std::string& sessionUuid, const uint32_t userId,
+                              const std::vector<WebAuthnCredential>& credentials) {
+    return passkeyRequestOptions({.session = sessionUuid, .purpose = webauthn::Purpose::Mfa,
+                                  .user = static_cast<int64_t>(userId), .scope = {}},
+                                 credentials);
+}
+
+nlohmann::json stepUpOptions(const std::string& sessionUuid, const uint32_t userId,
+                             const std::vector<WebAuthnCredential>& credentials, const std::string& scope) {
+    return passkeyRequestOptions({.session = sessionUuid, .purpose = webauthn::Purpose::StepUp,
+                                  .user = static_cast<int64_t>(userId), .scope = scope},
+                                 credentials);
 }
 
 nlohmann::json creationOptions(const std::string& sessionUuid, const uint32_t userId, const std::string& userName) {
@@ -131,8 +148,11 @@ std::optional<WebAuthnCredential> registerCredential(const std::string& sessionU
     }
 }
 
-std::optional<VerifiedFactor> verifyAssertion(const std::string& sessionUuid, const uint32_t userId,
-                                              const std::string_view credentialJson) {
+namespace {
+
+std::optional<VerifiedFactor> passkeyAssertion(const webauthn::Expectation& expected,
+                                               const std::string_view credentialJson) {
+    const auto userId = static_cast<uint32_t>(*expected.user);
     const auto response = webauthn::wire::parseAssertion(credentialJson);
     if (!response) {
         passkeyRefusal("assertion", userId, webauthn::Failure::MalformedResponse);
@@ -141,9 +161,7 @@ std::optional<VerifiedFactor> verifyAssertion(const std::string& sessionUuid, co
     const CredentialStore store;
     const auto before = store.find(response->rawId);  // the count the write-back compares against
     const webauthn::Verifier verifier(relyingParty(), passkeyChallenges(), store);
-    const auto outcome = verifier.assertion(*response, {.session = sessionUuid,
-                                                        .purpose = webauthn::Purpose::Mfa,
-                                                        .user = static_cast<int64_t>(userId), .scope = {}});
+    const auto outcome = verifier.assertion(*response, expected);
     const auto row = webAuthnCredential(response->rawId);
     if (!outcome) {
         passkeyRefusal("assertion", userId, outcome.failure);
@@ -162,6 +180,22 @@ std::optional<VerifiedFactor> verifyAssertion(const std::string& sessionUuid, co
                       "[auth::mfa] a synced passkey of user " + std::to_string(userId) +
                           " reported a sign count that did not grow");
     return VerifiedFactor{.factor_id = row->id, .backup_eligible = row->backup_eligible};
+}
+
+}
+
+std::optional<VerifiedFactor> verifyAssertion(const std::string& sessionUuid, const uint32_t userId,
+                                              const std::string_view credentialJson) {
+    return passkeyAssertion({.session = sessionUuid, .purpose = webauthn::Purpose::Mfa,
+                             .user = static_cast<int64_t>(userId), .scope = {}},
+                            credentialJson);
+}
+
+std::optional<VerifiedFactor> verifyStepUp(const std::string& sessionUuid, const uint32_t userId,
+                                           const std::string_view credentialJson, const std::string& scope) {
+    return passkeyAssertion({.session = sessionUuid, .purpose = webauthn::Purpose::StepUp,
+                             .user = static_cast<int64_t>(userId), .scope = scope},
+                            credentialJson);
 }
 
 }

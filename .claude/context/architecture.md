@@ -479,12 +479,40 @@ session revoked through `ops::sessions::revoke(all_others)` (paired devices unto
 Enrollment: the first factor (UV passkey registration or a confirmed TOTP code) answers ten recovery codes; on a
 pending socket `auth.mfa.recovery.acknowledge` of that batch completes the sign-in at aal 2. The same commands
 (plus `auth.mfa.status`, `auth.mfa.factor.rename {kind, id, label}`, `auth.mfa.recovery.generate`) serve signed-in web
-sessions (Account › Security); device sessions are denied (Desktop never sees an MFA prompt). Replacing an active
-recovery batch needs a second factor proven on the session within 5 min (or a recovery sign-in) until step-up (#359):
-`step_up_required {family: account.credentials, max_age_seconds}`. No factor removal yet (#359). Contract auth levels
+sessions (Account › Security); device sessions are denied (Desktop never sees an MFA prompt). Adding a second factor,
+removing one (`auth.mfa.factor.remove`) and replacing an active recovery batch are account.credentials step-up (#359,
+below). Contract auth levels
 `pending` / `enrollment`; model `MfaFactor`. Tests: `test_mfa_signin.cpp` (`WsAuthRouting.APending*`,
 `MfaSignInDb.*`: no session during pending, one aal 2 row, drift/replay, recovery replay and revocation, expiry,
 5 failures, account throttle, D2 aal 1 refusal, passkey enroll/sign-in/UV refused with a software authenticator).
+
+**Step-up (#359; MFA design note §5.4, D3, D6).** `auth::stepup` (`core/{include,src}/auth/stepup/`):
+`require(family, target?)` is called in the ops layer (and the MFA factor handlers) after validation and typed
+confirmations, right before the mutation. Families: `keys`, `device.trust`, `data.destroy` (target-bound, single use;
+targets name the action and object: `vault.keys.export:<id>|all`, `vault.keys.import:<id>`,
+`device.pairing.approve:<request>:<spki>:<sha256(code)[:16]>`, `device.remote.enable`,
+`storage.vault.remove:<id>[:now][:upstream]`, `recovery.point.delete:<id>`, `vault.recovery.suspend:<id>`,
+`upstream.bucket.{cleanup,unprotect,lifecycle.set}:<bucket row>`), and `account.credentials`, `identity.admin`,
+`secrets`, `settings` (family-wide). The command → family table is `contract::stepUpTable()`
+(`core/usage/src/contract/ws/stepup.cpp`), exported as `step_up` on annotated commands and as `WS_CONTRACT_STEP_UP`.
+Who asks is a thread-local `stepup::Scope`: the ws router sets it per routed command (Web, or Device on the device
+listener), the CLI server Host (exempt: peer credentials, design 5.6) or Agent (`vh mcp` agent: true), `/mcp` Agent;
+no scope = the daemon's own callers and tests (exempt, like `ops::Actor`'s internal callers). Agent and Device always
+refuse (`methods: []`; #361 adds device approvals for keys/device.trust only, D6); a device's `vault.keys.export` is
+inside its key-backup grant (`keyBackupGrantCovers`: every paired device until #362, D1). Web: a grant on
+`ws::Session::stepUp()` bound to user + refresh jti + family (+ target), `auth.mfa.step_up_ttl_seconds` (default 300,
+60..900); or, family-wide only, an aal 2 sign-in (not `rec`) within the TTL. Refusal `ops::StepUpRequired` → ERROR
+`step_up_required {family, target, methods, max_age_seconds}`. `auth.stepup.begin {family, target?}` → `{stepup_id,
+methods, webauthn?: {publicKey}}` (purpose `stepup`, challenge scope `stepup␟family␟target`); `auth.stepup.finish`
+with a UV assertion, password + TOTP, or D3's password alone (`methods()`: account need not have MFA, no usable
+factor, never keys/device.trust/data.destroy; rechecked at finish). 5 failures in 15 min revoke the session
+(`ops::sessions::revoke`). Grants die in `session::Manager::invalidate` (logout, idle, revocation, policy) and
+`Session::close`. `stepup::Covered`: an op's nested ops ride its step-up (user deletion removing its vaults). Audit:
+`auth.stepup.grant|fail|required`. A recovery-code session may still enroll its replacement factor and new codes
+without step-up (design 7.4). Capability `auth.step_up`. Console: `WsClient` `onStepUp` → `lib/stepUp.ts` →
+`features/auth/stepup/StepUpDialog.tsx` (lazy), then one resend. Tests: `test_mfa_stepup.cpp` (DB-free),
+`test_mfa_stepup_db.cpp` (table-driven over the annotations, D3, passkey binding, devices/recovery/refresh never
+satisfy, revocation, regression list).
 
 **Identities (`identities::Manager`, `core/{include,src}/identities/`).** One canonical `User`/`Group` object per id,
 handed out as the same `shared_ptr` everywhere (sessions, engines, FUSE, HTTP, S3). Each holds an immutable

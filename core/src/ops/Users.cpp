@@ -1,4 +1,5 @@
 #include "ops/Users.hpp"
+#include "auth/stepup/StepUp.hpp"
 
 #include "ops/Roles.hpp"
 #include "ops/Vaults.hpp"
@@ -206,6 +207,7 @@ Created create(const Actor& actor, const Create& req) {
     draft.meta.created_by = actor->id;
     draft.meta.updated_by = actor->id;
 
+    auth::stepup::require(auth::stepup::Family::IdentityAdmin);
     Created out;
     if (!req.password) out.generated_password = generatePassword();
     try {
@@ -274,6 +276,10 @@ UserPtr update(const Actor& actor, const Update& req) {
         linuxUid = req.linux_uid;
     }
 
+    // #359: a role or activation change, or any change to another account, is identity.admin. Your own name or email
+    // is not.
+    if (newRole || active || (!isSelf && (name || email || linuxUid)))
+        auth::stepup::require(auth::stepup::Family::IdentityAdmin);
     (void)vh::identities::manager().updateUser(target->id, [&](identities::UserState& s) {
         if (name) s.name = *name;
         if (email) s.email = *email;
@@ -347,6 +353,9 @@ UserPtr remove(const Actor& actor, const Remove& req) {
         if (heir) vaults::requireTransferable(actor, v->id, heir->id);
         else vaults::requireRemovable(actor, v->id);
     }
+    auth::stepup::require(auth::stepup::Family::IdentityAdmin);
+    // The step-up covers what the confirmation listed: the account's vaults, transferred or deleted with it.
+    const auth::stepup::Covered covered;
     for (const auto& v : owned) {
         if (heir) (void)vaults::update(actor, {.id = v->id, .owner_id = heir->id});
         // The user_delete confirmation above listed the key warnings: it is the acceptance.
@@ -408,6 +417,7 @@ UserPtr requireSuperAdminOperator(const Actor& actor) {
 
 SuperAdminPasswordSet setSuperAdminPassword(const Actor& actor, const std::string& newPassword) {
     const auto admin = requireSuperAdminOperator(actor);
+    auth::stepup::require(auth::stepup::Family::AccountCredentials);
     const auto& auth = runtime::Deps::get().authManager;
     SuperAdminPasswordSet out;
     try {
@@ -430,9 +440,11 @@ UserPtr changePassword(const Actor& actor, const uint32_t id, const std::optiona
     try {
         if (target->id == actor->id) {
             if (!currentPassword || currentPassword->empty()) throw Invalid("your current password is required");
+            vh::auth::stepup::require(vh::auth::stepup::Family::AccountCredentials);
             return auth->changePassword(target->id, *currentPassword, newPassword);
         }
         requireManage(actor, *target->state(), IdPerm::ResetPassword, "reset");
+        vh::auth::stepup::require(vh::auth::stepup::Family::AccountCredentials);
         auto updated = auth->resetPassword(target->id, newPassword);
         auth->revokeSessions(target->id);
         return updated;

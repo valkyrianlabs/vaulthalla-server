@@ -22,6 +22,7 @@
 #include "auth/session/Assurance.hpp"
 #include "auth/session/Issuer.hpp"
 #include "auth/session/Manager.hpp"
+#include "auth/stepup/StepUp.hpp"
 #include "config/Registry.hpp"
 #include "crypto/util/hash.hpp"
 #include "db/Transactions.hpp"
@@ -651,19 +652,26 @@ TEST_F(MfaSignInDb, AnOptionalAccountWithAFactorIsAlwaysAskedForIt) {
     expectNoSessionFor(again);
 }
 
-TEST_F(MfaSignInDb, ReplacingRecoveryCodesNeedsAFreshSecondFactor) {
+TEST_F(MfaSignInDb, ReplacingRecoveryCodesNeedsAStepUp) {
     needSealing();
     const auto admin = newUser("super_admin");
     SessionPtr socket;
     (void)enrollTotpAtSignIn(admin, socket);
-    const auto fresh = call([&] { return Mfa::generateRecovery(socket); });
+    // As the router runs it: under the request's step-up scope (#359). A fresh aal 2 sign-in stands in for the
+    // account.credentials step-up.
+    const auto asRouted = [&](const std::function<json()>& fn) {
+        const stepup::Scope scope(socket);
+        return call(fn);
+    };
+    const auto fresh = asRouted([&] { return Mfa::generateRecovery(socket); });
     ASSERT_TRUE(fresh.ok) << fresh.message;
     EXPECT_EQ(fresh.data.at("codes").size(), 10u);
 
     socket->tokens->refreshToken->authTime -= std::chrono::minutes(10);
-    const auto stale = call([&] { return Mfa::generateRecovery(socket); });
+    const auto stale = asRouted([&] { return Mfa::generateRecovery(socket); });
     EXPECT_EQ(stale.code, "step_up_required");
     EXPECT_EQ(stale.data.at("family"), "account.credentials");
+    EXPECT_EQ(stale.data.at("methods"), json::array({"password_totp"})) << "an account with a factor: never a password";
 }
 
 // The pinned mTLS Desktop tunnel never prompts: a paired device of an admin without any factor keeps working under the

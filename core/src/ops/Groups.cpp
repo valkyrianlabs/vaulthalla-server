@@ -1,4 +1,5 @@
 #include "ops/Groups.hpp"
+#include "auth/stepup/StepUp.hpp"
 #include "audit/Trail.hpp"
 #include "rbac/PolicyEpoch.hpp"
 
@@ -127,6 +128,7 @@ GroupPtr remove(const Actor& actor, const Ref& ref) {
     if (!perms(actor).canDelete()) throw Denied("you do not have permission to delete groups");
 
     auto group = requireGroup(ref);
+    auth::stepup::require(auth::stepup::Family::IdentityAdmin);
     identities::manager().deleteGroup(group->id);
     auditGroup(actor, "rbac.group.delete", "deleted group " + group->name(), *group);
     return group;
@@ -155,6 +157,7 @@ GroupPtr addMember(const Actor& actor, const Membership& req) {
 
     const auto group = requireGroup(req.group);
     const auto user = requireUser(req.user);
+    auth::stepup::require(auth::stepup::Family::IdentityAdmin);
     identities::manager().addMembers(group->id, {user->id});
     auditGroup(actor, "rbac.group.member.add", "added " + user->name() + " to group " + group->name(), *group,
                {{"user_id", user->id}, {"user", user->name()}});
@@ -167,6 +170,7 @@ GroupPtr removeMember(const Actor& actor, const Membership& req) {
 
     const auto group = requireGroup(req.group);
     const auto user = requireUser(req.user);
+    auth::stepup::require(auth::stepup::Family::IdentityAdmin);
     identities::manager().removeMembers(group->id, {user->id});
     auditGroup(actor, "rbac.group.member.remove", "removed " + user->name() + " from group " + group->name(), *group,
                {{"user_id", user->id}, {"user", user->name()}});

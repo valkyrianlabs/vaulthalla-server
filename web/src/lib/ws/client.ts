@@ -31,6 +31,9 @@ interface WsClientOptions {
   onToken?: (token: string) => void
   // Called once per UNAUTHORIZED rejection; resolve true to retry the command once (the server never ran it).
   onUnauthorized?: (command: Command) => Promise<boolean>
+  // Called when a command refused with data.code step_up_required (#359: the server ran nothing); resolve true once the
+  // person stepped up to resend it once.
+  onStepUp?: (command: Command, error: WsError) => Promise<boolean>
   // Called each time a socket opens (first connect and every reconnect).
   onOpen?: () => void
   // Commands that must never trigger the unauthorized retry (they are the session lifecycle itself).
@@ -129,6 +132,17 @@ export class WsClient {
   }
 
   async send<C extends Command>(command: C, payload: Payload<C>, options: SendOptions = {}): Promise<Response<C>> {
+    try {
+      return await this.sendAuthorized(command, payload, options)
+    } catch (error) {
+      // #359: the operation refused before its mutation, so resending after a step-up runs it exactly once.
+      if (!(error instanceof WsError) || error.code !== 'step_up_required' || !this.options.onStepUp) throw error
+      if (!(await this.options.onStepUp(command, error))) throw error
+      return this.sendAuthorized(command, payload, options)
+    }
+  }
+
+  private async sendAuthorized<C extends Command>(command: C, payload: Payload<C>, options: SendOptions): Promise<Response<C>> {
     try {
       return await this.sendOnce(command, payload, options)
     } catch (error) {

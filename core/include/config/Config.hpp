@@ -173,10 +173,20 @@ struct WebAuthnConfig {
 // Throws std::invalid_argument naming the first rule a WebAuthnConfig breaks.
 void validateWebAuthn(const WebAuthnConfig& c);
 
+// auth.mfa.* (#359, docs/dev/mfa-design.md section 7.1): step_up_ttl_seconds is how long a step-up grant lasts (and how
+// recent an aal 2 sign-in must be to stand in for one), 60..900. config.yaml and settings.update refuse other values.
+struct MfaConfig {
+    unsigned int step_up_ttl_seconds = 300;
+};
+
+// Throws std::invalid_argument naming the first rule a MfaConfig breaks.
+void validateMfa(const MfaConfig& c);
+
 struct AuthConfig {
     unsigned int access_token_expiry_minutes = 60;
     unsigned int refresh_token_expiry_days = 7;
     WebAuthnConfig webauthn;
+    MfaConfig mfa;
 };
 
 struct SyncConfig {
@@ -531,6 +541,8 @@ void to_json(nlohmann::json& j, const AuthConfig& c);
 void from_json(const nlohmann::json& j, AuthConfig& c);
 void to_json(nlohmann::json& j, const WebAuthnConfig& c);
 void from_json(const nlohmann::json& j, WebAuthnConfig& c);
+void to_json(nlohmann::json& j, const MfaConfig& c);
+void from_json(const nlohmann::json& j, MfaConfig& c);
 void to_json(nlohmann::json& j, const SyncConfig& c);
 void from_json(const nlohmann::json& j, SyncConfig& c);
 void to_json(nlohmann::json& j, const StorageRatesApiConfig& c);

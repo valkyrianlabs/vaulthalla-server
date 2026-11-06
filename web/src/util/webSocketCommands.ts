@@ -245,8 +245,12 @@ export interface WebSocketCommandMap {
   'auth.mfa.totp.enroll.start': WsContract['auth.mfa.totp.enroll.start']
   'auth.mfa.totp.enroll.confirm': WsContract['auth.mfa.totp.enroll.confirm']
   'auth.mfa.factor.rename': WsContract['auth.mfa.factor.rename']
+  'auth.mfa.factor.remove': WsContract['auth.mfa.factor.remove']
   'auth.mfa.recovery.generate': WsContract['auth.mfa.recovery.generate']
   'auth.mfa.recovery.acknowledge': WsContract['auth.mfa.recovery.acknowledge']
+  // Step-up (#359): a command that answered step_up_required is confirmed here, then resent (lib/stepUp.ts).
+  'auth.stepup.begin': WsContract['auth.stepup.begin']
+  'auth.stepup.finish': WsContract['auth.stepup.finish']
 
   // Vault commands
 

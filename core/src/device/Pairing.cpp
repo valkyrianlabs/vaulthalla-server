@@ -147,6 +147,20 @@ ApprovalClaim Pairing::beginApproval(const uint32_t ownerId, const std::string& 
                          .source_ip = r.source_ip};
 }
 
+std::string Pairing::checkApproval(const uint32_t ownerId, const std::string& requestId, const std::string& code,
+                                   const time_point now) {
+    std::scoped_lock lock(mutex_);
+    expireLocked(now);
+    const auto it = ownedLocked(ownerId, requestId);
+    const auto chosen = crypto::normalizeCode(code).value_or("");
+    if (chosen.empty() || !crypto::constantTimeEqual(chosen, it->second.code)) {
+        finishLocked(it, RequestState::Denied, std::nullopt, now);
+        throw ops::Invalid("that is not the code the device shows: the request was denied (pair again from the "
+                           "device and compare the codes)");
+    }
+    return crypto::toHex(it->second.device_spki);
+}
+
 void Pairing::finishApproval(const std::string& requestId, const uint32_t deviceRowId, const time_point now) {
     std::scoped_lock lock(mutex_);
     if (const auto it = requests_.find(requestId); it != requests_.end())

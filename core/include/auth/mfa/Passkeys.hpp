@@ -58,4 +58,13 @@ struct VerifiedFactor {
 [[nodiscard]] std::optional<VerifiedFactor> verifyAssertion(const std::string& sessionUuid, uint32_t userId,
                                                             std::string_view credentialJson);
 
+// Step-up (#359, purpose stepup; auth/stepup/StepUp.hpp): the same request options and assertion check as the
+// sign-in second factor, with the challenge bound to `scope` (the step-up's family and target) as well, so an assertion
+// made for one step-up never satisfies another, a sign-in, or another session's.
+[[nodiscard]] nlohmann::json stepUpOptions(const std::string& sessionUuid, uint32_t userId,
+                                           const std::vector<WebAuthnCredential>& credentials,
+                                           const std::string& scope);
+[[nodiscard]] std::optional<VerifiedFactor> verifyStepUp(const std::string& sessionUuid, uint32_t userId,
+                                                         std::string_view credentialJson, const std::string& scope);
+
 }

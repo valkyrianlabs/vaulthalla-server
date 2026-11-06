@@ -45,7 +45,13 @@
   (`PASSKEY_LABEL`, `PASSKEY_HINT`). Account › Security › Sign-in factors (`features/account/MfaPanel.tsx`, itself
   `next/dynamic` for the `/account` budget; dialog in `MfaSetupDialog.tsx`): `auth.mfa.status`, rename, add passkey /
   authenticator app, recovery codes remaining and "Make new codes" (`step_up_required` explained), the recovery
-  banner. No factor removal yet (step-up, #359).
+  banner, and Remove per factor (#359).
+- **Step-up (#359):** a command refused with `step_up_required` (`WS_CONTRACT_STEP_UP` lists the annotated ones) is
+  handed by `WsClient` (`onStepUp`) to `lib/stepUp.ts` (a tiny store in every first load); `AppShell`'s `StepUpMount`
+  loads `features/auth/stepup/StepUpDialog.tsx` on first use. The dialog names the action (`models/stepUp.ts`
+  `STEP_UP_ACTION`), runs `auth.stepup.begin` and `auth.stepup.finish` (passkey; password + authenticator code; or the
+  password alone where the server offers it), and the client resends the original request once. Cancel rethrows the
+  refusal. Within a family grant's window the server doesn't ask again. `mfa.spec.ts` covers a role change.
 - **Server data:** TanStack Query over ws (`src/lib/query.ts`: `useWs`, `useWsMutation`, `invalidate`, `fetchWs`).
   Polling = `refetchInterval` (deduped, ref-counted, paused in hidden tabs). No Zustand stores for server data;
   Zustand only for client state (transfers, UI prefs, confirm/palette state).

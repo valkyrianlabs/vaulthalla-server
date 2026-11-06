@@ -1,4 +1,5 @@
 #include "ops/S3Gateway.hpp"
+#include "auth/stepup/StepUp.hpp"
 #include "audit/Trail.hpp"
 
 #include "ops/Vaults.hpp"
@@ -501,6 +502,7 @@ CreatedCredential createCredential(const Actor& actor, const CreateCredential& r
     options.selected_vault_ids = req.selected_vault_ids;
     options.vault_scopes = shorthandsOf(req.vault_access, 0);
     options.enforce_budget_for_local_requests = req.enforce_budget_for_local_requests;
+    auth::stepup::require(auth::stepup::Family::Secrets);
     auto secret = protocols::s3::CredentialManager{}.createCredential(options);
     { const auto audited = s3Audited(actor, "s3.credential.create", "created S3 gateway credential '" + req.name + "'", secret.credential); }
     return {.credential = std::move(secret.credential), .secret_access_key = std::move(secret.secret_access_key)};
@@ -546,6 +548,7 @@ Credential updateScope(const Actor& actor, const Ref& ref, const ScopeUpdate& re
     const auto access = req.vault_access.value_or(std::vector<VaultAccess>{});
     requireScopeMutation(actor, principalId, mode, access, selected, effectiveDefault);
 
+    auth::stepup::require(auth::stepup::Family::Secrets);
     db::query::s3::Gateway::updateCredentialScopeMode(
         credential.id, mode, principalId, mode == GLOBAL ? std::make_optional(actor->id) : credential.created_by,
         req.description ? *req.description : credential.description,
@@ -620,6 +623,7 @@ DefaultRole setDefaultRole(const Actor& actor, const Ref& ref, const uint32_t ro
             requireRoleWithinPrincipal(actor, credential, vaultId, *role);
         }
     }
+    auth::stepup::require(auth::stepup::Family::Secrets);
     (void)db::query::s3::Gateway::upsertCredentialDefaultVaultRole(credential.id, role->id, enabled, actor->id);
     auto saved = db::query::s3::Gateway::getCredentialDefaultVaultRole(credential.id);
     if (!saved) throw std::runtime_error("the default role was not saved");
@@ -631,6 +635,7 @@ bool clearDefaultRole(const Actor& actor, const Ref& ref) {
     const auto audited = s3Audited(actor, "s3.credential.default_role.clear", "cleared the default role of an S3 gateway credential", credential);
     if (credential.scope_mode == GLOBAL)
         requireGw(actor, GwPerm::ManageCredentials, "manage_credentials", "clear a global credential's default role");
+    auth::stepup::require(auth::stepup::Family::Secrets);
     return db::query::s3::Gateway::deleteCredentialDefaultVaultRole(credential.id);
 }
 
@@ -681,6 +686,7 @@ Assignment assignRole(const Actor& actor, const Ref& ref, const uint32_t vaultId
     // S7: the web only checked Assign; the role must also fit the principal, and role administration needs an admin.
     requireRoleWithinPrincipal(actor, credential, vaultId, *role);
 
+    auth::stepup::require(auth::stepup::Family::Secrets);
     const auto nextMode = credential.scope_mode == GLOBAL ? GLOBAL : VAULT_ALLOWLIST;
     db::query::s3::Gateway::updateCredentialScopeMode(credential.id, nextMode, credential.principal_user_id,
                                                       credential.created_by, credential.description, credential.expires_at);
@@ -703,6 +709,7 @@ void revokeRole(const Actor& actor, const Ref& ref, const uint32_t vaultId) {
     const auto credential = getCredential(actor, ref);
     const auto audited = s3Audited(actor, "s3.credential.role.revoke", "revoked the role on vault " + std::to_string(vaultId) + " of an S3 gateway credential", credential, vaultId);
     requireVaultRoleOver(actor, credential, vaultId, RolePerm::Revoke, "revoke S3 gateway vault roles");
+    auth::stepup::require(auth::stepup::Family::Secrets);
     if (!db::query::s3::Gateway::deleteCredentialVaultRoleAssignment(credential.id, vaultId))
         throw NotFound("no S3 gateway role is assigned on vault " + std::to_string(vaultId));
 }
@@ -721,6 +728,7 @@ Override addDefaultRoleOverride(const Actor& actor, const Ref& ref, const Overri
     if (!db::query::s3::Gateway::getCredentialDefaultVaultRole(credential.id))
         throw Invalid("set a default vault role before adding default overrides");
     requireDefaultOverrideAuthority(actor, credential, RolePerm::AssignOverride, "add default role overrides");
+    auth::stepup::require(auth::stepup::Family::Secrets);
     const auto id = db::query::s3::Gateway::upsertCredentialDefaultVaultRoleOverride(credential.id, overrideFrom(spec));
     for (const auto& saved : db::query::s3::Gateway::listCredentialDefaultVaultRoleOverrides(credential.id))
         if (saved.id == id) return saved;
@@ -731,6 +739,7 @@ void removeDefaultRoleOverride(const Actor& actor, const Ref& ref, const uint32_
     const auto credential = getCredential(actor, ref);
     const auto audited = s3Audited(actor, "s3.credential.override.remove", "removed default-role override " + std::to_string(overrideId) + " of an S3 gateway credential", credential);
     requireDefaultOverrideAuthority(actor, credential, RolePerm::RevokeOverride, "remove default role overrides");
+    auth::stepup::require(auth::stepup::Family::Secrets);
     if (!db::query::s3::Gateway::deleteCredentialDefaultVaultRoleOverride(credential.id, overrideId))
         throw NotFound("default role override not found: " + std::to_string(overrideId));
 }
@@ -748,6 +757,7 @@ Override addRoleOverride(const Actor& actor, const Ref& ref, const uint32_t vaul
     requireVaultRoleOver(actor, credential, vaultId, RolePerm::AssignOverride, "add S3 gateway role overrides");
     if (credential.scope_mode == VAULT_ALLOWLIST && !std::ranges::contains(enabledSelected(credential.id), vaultId))
         throw Invalid("per-vault overrides need the vault to be selected for this credential");
+    auth::stepup::require(auth::stepup::Family::Secrets);
     const auto rule = overrideFrom(spec);
     if (!db::query::s3::Gateway::getCredentialVaultRoleForVault(credential.id, vaultId)) {
         const auto defaultRole = db::query::s3::Gateway::getCredentialDefaultVaultRole(credential.id);
@@ -766,6 +776,7 @@ void removeRoleOverride(const Actor& actor, const Ref& ref, const uint32_t vault
     const auto credential = getCredential(actor, ref);
     const auto audited = s3Audited(actor, "s3.credential.override.remove", "removed role override " + std::to_string(overrideId) + " on vault " + std::to_string(vaultId) + " of an S3 gateway credential", credential, vaultId);
     requireVaultRoleOver(actor, credential, vaultId, RolePerm::RevokeOverride, "remove S3 gateway role overrides");
+    auth::stepup::require(auth::stepup::Family::Secrets);
     if (!db::query::s3::Gateway::getCredentialVaultRoleForVault(credential.id, vaultId) ||
         !db::query::s3::Gateway::deleteCredentialVaultRoleOverride(credential.id, vaultId, overrideId))
         throw NotFound("role override not found: " + std::to_string(overrideId));

@@ -1,4 +1,5 @@
 #include "ops/MasterSecrets.hpp"
+#include "auth/stepup/StepUp.hpp"
 
 #include "audit/Trail.hpp"
 #include "auth/session/Manager.hpp"
@@ -142,6 +143,7 @@ rw::RotateResult rotate(const Actor& actor, const RotateRequest& request) {
     auto details = slotDetails(slot);
     details["window_seconds"] = options.window.count();
     auditAs(actor, action, vh::audit::Outcome::Info, details, "started a " + nounOf(slot) + " rotation");
+    auth::stepup::require(auth::stepup::Family::Secrets);  // #359
     return audited(actor, action, slotDetails(slot), [&] {
         auto r = rw::rotate(slot, options);
         auditAs(actor, action, vh::audit::Outcome::Success,
@@ -173,6 +175,7 @@ rw::FinalizeResult finalize(const Actor& actor, const Slot slot, const bool conf
                             : slot == Slot::ApiKeyMaster ? "their API keys entered again"
                                                          : "their gateway credentials reissued"));
     }
+    auth::stepup::require(auth::stepup::Family::Secrets);  // #359
     return audited(actor, action, slotDetails(slot), [&] {
         auto r = rw::finalize(slot);
         if (r.finalized)
@@ -204,6 +207,7 @@ rw::RollbackResult rollback(const Actor& actor, const Slot slot, const bool conf
                                                 "yet). Continue?",
                                                 nounOf(slot), *st.staging_version));
     }
+    auth::stepup::require(auth::stepup::Family::Secrets);  // #359
     return audited(actor, action, slotDetails(slot), [&] {
         auto r = rw::rollback(slot);
         const bool abandoned = r.kind == rw::RollbackResult::Kind::AbandonedStaging;
@@ -232,6 +236,7 @@ JwtRotation rotateJwtSecret(const Actor& actor, const bool confirmed) {
             "devices reconnect by themselves with their device keys; share-link visitors keep their share sessions). "
             "There is no rollback: the old secret is discarded. Continue?");
     auditAs(actor, action, vh::audit::Outcome::Info, nlohmann::json::object(), "started a JWT secret rotation");
+    auth::stepup::require(auth::stepup::Family::Secrets);  // #359
     return audited(actor, action, nlohmann::json::object(), [&] {
         const auto& deps = runtime::Deps::get();
         if (!deps.secretsManager) throw std::runtime_error("the secrets manager is not running");
@@ -266,6 +271,7 @@ DeviceIdentityRotation rotateDeviceIdentity(const Actor& actor, const bool confi
                         Devices::countActive()));
     auditAs(actor, action, vh::audit::Outcome::Info, nlohmann::json::object(),
             "started a device identity rotation");
+    auth::stepup::require(auth::stepup::Family::Secrets);  // #359
     return audited(actor, action, nlohmann::json::object(), [&] {
         auto& pairing = vh::device::Pairing::instance();
         DeviceIdentityRotation out;
