@@ -89,7 +89,12 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("--buildtype=${{ inputs.build_type }} -Dwerror=true -Dbuild_unit_tests=true", action)
         runner = _read(".github/actions/runner/action.yml")
         self.assertRegex(runner, r"uses: \./\.github/actions/build\n\s+with:\n\s+build_type: debug")
-        self.assertIn("meson test -C build", _read(".github/actions/test/action.yml"))
+        # The suite runs through tools/dev/ci-test.sh: vh_unit_tests in parallel gtest shards beside the other meson tests.
+        self.assertIn("tools/dev/ci-test.sh build", _read(".github/actions/test/action.yml"))
+        sharded = _read("tools/dev/ci-test.sh")
+        self.assertIn("GTEST_TOTAL_SHARDS", sharded)
+        self.assertIn("meson test", sharded)
+        self.assertNotIn("--no-suite", sharded)
         self.assertIn("test: 'true'", _read(".github/workflows/build_and_test.yml"))
 
     def test_publication_order_and_finalize_last(self) -> None:
@@ -133,8 +138,9 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
 
     def test_ci_and_its_composite_actions_run_in_the_ci_container(self) -> None:
         ci = _read(".github/workflows/build_and_test.yml")
-        self.assertEqual(ci.count(f"shell: {CONTAINER_SHELL}"), 2)
-        self.assertEqual(ci.count('"self-hosted","Linux","X64","vps-ci"'), 2)
+        # build, web, fuzz and tooling
+        self.assertEqual(ci.count(f"shell: {CONTAINER_SHELL}"), 4)
+        self.assertEqual(ci.count('"self-hosted","Linux","X64","vps-ci"'), 4)
         self.assertNotIn("sudo", _code(ci))
         for action in ("build", "test", "fuzz", "setup_web", "build_web", "test_web", "sync_web_icons"):
             text = _read(f".github/actions/{action}/action.yml")
