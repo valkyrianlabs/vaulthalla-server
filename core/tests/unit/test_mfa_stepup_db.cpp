@@ -327,6 +327,10 @@ TEST_F(StepUpDb, EveryAnnotatedCommandRefusesWithoutAGrantAndRunsWithOne) {
     const std::map<std::string, std::string> elsewhere{
         {"vault.keys.export", "console: export_requires_device first; device: inside the backup grant (below)"},
         {"vault.keys.import", "console: import_requires_device first; needs a sealed vault key (test_vault_keys)"},
+        {"vault.keys.recipients.add", "console: recipient_requires_device first; device refusal and host exemption in "
+                                      "RecoveryRecipient.EnrollmentIsForTheCliAndPairedDevicesWithTheExportPermission"},
+        {"vault.keys.recipients.revoke", "console: recipient_requires_device first; same gate as .add (an S3 vault and "
+                                         "its bucket: test_recovery_recipients)"},
         {"device.remote.enable", "writes the daemon's config file: refusal in AStolenBrowserSessionCantApprove..."},
         {"settings.update", "writes the daemon's config file: refusal in AStolenBrowserSessionCantApprove..."},
         {"auth.mfa.factor.remove", "covered by APasskeyStepUpIsBoundToItsSessionFamilyAndTarget"},
