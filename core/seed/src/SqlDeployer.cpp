@@ -1,5 +1,6 @@
 #include "seed/include/SqlDeployer.hpp"
 
+#include "crypto/id/ObjectUid.hpp"
 #include "log/Registry.hpp"
 
 #include <fmt/format.h>
@@ -79,6 +80,44 @@ bool SqlDeployer::filenameExists(pqxx::work& txn, const std::string& filename, s
     return true;
 }
 
+namespace {
+
+// One table's missing uids, 10,000 rows per statement. Ids and uids travel as array literals (integers and UUID text
+// need no quoting).
+void assignUids(pqxx::work& txn, const std::string& table, const std::string& key, const std::string& column) {
+    constexpr int kBatch = 10000;
+    std::size_t assigned = 0;
+    while (true) {
+        const auto rows = txn.exec(fmt::format("SELECT {0} FROM {1} WHERE {2} IS NULL ORDER BY {0} LIMIT {3}",
+                                               key, table, column, kBatch));
+        if (rows.empty()) break;
+        std::string ids = "{", uids = "{";
+        for (const auto& row : rows) {
+            if (ids.size() > 1) {
+                ids += ',';
+                uids += ',';
+            }
+            ids += row[0].c_str();
+            uids += vh::crypto::id::toUuid(vh::crypto::id::newObjectUid());
+        }
+        ids += '}';
+        uids += '}';
+        txn.exec(fmt::format("UPDATE {1} t SET {2} = u.uid FROM unnest($1::int[], $2::uuid[]) AS u(id, uid) "
+                             "WHERE t.{0} = u.id AND t.{2} IS NULL", key, table, column),
+                 pqxx::params{ids, uids});
+        assigned += rows.size();
+    }
+    if (assigned)
+        log::Registry::vaulthalla()->info("[SqlDeployer] Assigned {} {}.{} value(s)", assigned, table, column);
+}
+
+}
+
+void assignObjectUids(pqxx::work& txn) {
+    assignUids(txn, "vault", "id", "uid");
+    assignUids(txn, "files", "fs_entry_id", "object_uid");
+}
+
 SqlDeployReport SqlDeployer::applyDir(pqxx::work& txn, const fs::path& dir) {
     if (!fs::exists(dir)) throw std::runtime_error("SQL deploy dir does not exist: " + dir.string());
     if (!fs::is_directory(dir)) throw std::runtime_error("SQL deploy path is not a directory: " + dir.string());
@@ -130,6 +169,8 @@ SqlDeployReport SqlDeployer::applyDir(pqxx::work& txn, const fs::path& dir) {
         }
 
         txn.exec(sql);
+        for (const auto& step : kMigrationDataSteps)
+            if (step.filename == filename) step.run(txn);
         markApplied(txn, filename, hash);
         report.applied.push_back(filename);
     }

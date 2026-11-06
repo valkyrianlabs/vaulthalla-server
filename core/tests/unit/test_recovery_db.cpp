@@ -287,7 +287,7 @@ protected:
             const auto res = txn.exec("INSERT INTO fs_entry (vault_id, name, path) VALUES ($1, $2, $3) RETURNING id",
                                       pqxx::params{vaultId, name + "_" + recoveryDbTag(), path});
             const auto id = res.one_field_ref().as<uint32_t>();
-            txn.exec("INSERT INTO files (fs_entry_id, size_bytes) VALUES ($1, 1)", pqxx::params{id});
+            txn.exec("INSERT INTO files (fs_entry_id, size_bytes, object_uid) VALUES ($1, 1, gen_random_uuid())", pqxx::params{id});
             return id;
         });
     }

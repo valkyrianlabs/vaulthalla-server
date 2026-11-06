@@ -748,6 +748,7 @@ int Filesystem::copy(const CopyContext& ctx) {
                 // The row the bytes were copied with: same IV, key version, plaintext size and content hash.
                 auto file = std::make_shared<File>(*item.content);
                 stamp(*file);
+                file->object_uid.reset();   // a copy is a new file: upsertFile draws its own object uid
                 file->inode = cache->getOrAssignInode(item.to);
                 file->id = db::query::fs::File::upsertFile(file);
                 created = file;

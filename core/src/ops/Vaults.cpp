@@ -387,6 +387,10 @@ VaultPtr update(const Actor& actor, const Update& req) {
         if (req.storage_tier || s3->api_key_id != before->api_key_id)
             s3->storage_tier_id = normalizedTier(s3->api_key_id, req.storage_tier ? *req.storage_tier : s3->storage_tier_id);
         if (req.encrypt_upstream && *req.encrypt_upstream != before->encrypt_upstream) {
+            // An opaque_v1 bucket holds no readable names: turning encryption off is a conversion of every object,
+            // which only the layout migration (WS1-c) will do.
+            if (before->storage_layout == vault::model::StorageLayout::OpaqueV1)
+                throw Conflict("upstream encryption of a vault with the opaque storage layout can't be changed yet");
             s3->encrypt_upstream = *req.encrypt_upstream;
             encryptionChanged = true;
         }

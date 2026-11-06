@@ -147,7 +147,7 @@ protected:
     static unsigned int createVault(const std::string& name, const unsigned int ownerId) {
         return db::Transactions::exec("RoleParityTest::createVault", [&](pqxx::work& txn) {
             const auto id = txn.exec(
-                "INSERT INTO vault (type, name, owner_id, mount_point, description) VALUES ('local', $1, $2, $3, '') RETURNING id",
+                "INSERT INTO vault (type, name, owner_id, mount_point, description, uid) VALUES ('local', $1, $2, $3, '', gen_random_uuid()) RETURNING id",
                 pqxx::params{name, ownerId, name.substr(0, 30)}).one_field_ref().as<unsigned int>();
             txn.exec("WITH ins AS (INSERT INTO sync (vault_id, interval) VALUES ($1, 300) RETURNING id) "
                      "INSERT INTO fsync (sync_id, conflict_policy) SELECT id, 'keep_both' FROM ins", pqxx::params{id});

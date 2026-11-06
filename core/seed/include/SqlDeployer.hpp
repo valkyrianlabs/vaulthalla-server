@@ -67,6 +67,26 @@ inline bool isAcceptedHistoricalChecksum(const std::string_view filename, const 
     });
 }
 
+// C++ data steps: work a migration file can't do in SQL, run right after that file is applied, inside the same
+// transaction (a failure rolls the whole deploy back). They run only when their file is applied in this run, so each
+// must be idempotent and leave the schema to the SQL files.
+//
+//  - 122_storage_layout.sql: every existing vault and file gets its uid from libsodium (assignObjectUids), before
+//    123_object_uids_required.sql makes the columns NOT NULL. PostgreSQL must not generate them: its UUIDs carry
+//    version bits, and spec 01 §4.1 names the CSPRNG.
+struct MigrationDataStep {
+    std::string_view filename;
+    void (*run)(pqxx::work&);
+};
+
+// Assigns a fresh vh::crypto::id::newObjectUid() to every vault without a uid and every file without an object uid, in
+// batches. Rows that already have one are left alone.
+void assignObjectUids(pqxx::work& txn);
+
+inline constexpr std::array kMigrationDataSteps{
+    MigrationDataStep{"122_storage_layout.sql", &assignObjectUids},
+};
+
 struct ReconciledMigration {
     std::string filename;
     std::string previous_sha256;
@@ -103,6 +123,7 @@ struct SqlDeployer {
     //  - Recorded hash is an accepted historical hash (kHistoricalMigrationChecksums) => skip WITHOUT executing,
     //    rewrite the recorded hash to the current one, and log it. A forward migration owns the schema delta.
     //  - Any other mismatch => throw: a shipped migration was edited. Create a new migration instead.
+    //  - A file with a data step (kMigrationDataSteps) runs it right after the file itself.
     static SqlDeployReport applyDir(pqxx::work& txn, const fs::path& dir);
 };
 

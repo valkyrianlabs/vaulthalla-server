@@ -1180,7 +1180,7 @@ protected:
                 "s3-gateway@vaulthalla.test");
 
             const auto seededVaultId = txn.exec(
-                "INSERT INTO vault (type, name, owner_id, mount_point, description) VALUES ($1, $2, $3, $4, $5) RETURNING id",
+                "INSERT INTO vault (type, name, owner_id, mount_point, description, uid) VALUES ($1, $2, $3, $4, $5, gen_random_uuid()) RETURNING id",
                 pqxx::params{"local", "S3 Gateway Test Vault", userId, "s3_gateway_test", ""}
             ).one_field_ref().as<uint32_t>();
             txn.exec(
@@ -1224,7 +1224,7 @@ protected:
         const auto newVaultId = vh::db::Transactions::exec("S3GatewayDbTest::createLocalVault", [&](pqxx::work& txn) {
             const auto mountPoint = s3GatewayUniqueSuffix("s3gw");
             const auto seededVaultId = txn.exec(
-                "INSERT INTO vault (type, name, owner_id, mount_point, description) VALUES ($1, $2, $3, $4, $5) RETURNING id",
+                "INSERT INTO vault (type, name, owner_id, mount_point, description, uid) VALUES ($1, $2, $3, $4, $5, gen_random_uuid()) RETURNING id",
                 pqxx::params{"local", "S3 Gateway " + label, ownerId, mountPoint.substr(0, 33), ""}
             ).one_field_ref().as<uint32_t>();
             txn.exec(
@@ -2099,7 +2099,7 @@ TEST_F(S3GatewayDbTest, NonAdminScopeMutationCannotNameUnownedVaultEvenWithNoAct
             if (!admin) throw std::runtime_error("admin user not available");
             const auto mount = s3GatewayUniqueSuffix("s3gw_unscope").substr(0, 33);
             const auto seededVaultId = txn.exec(
-                "INSERT INTO vault (type, name, owner_id, mount_point, description) VALUES ($1, $2, $3, $4, $5) RETURNING id",
+                "INSERT INTO vault (type, name, owner_id, mount_point, description, uid) VALUES ($1, $2, $3, $4, $5, gen_random_uuid()) RETURNING id",
                 pqxx::params{"local", "S3 Gateway Unowned Scope Vault", admin->id, mount, ""}
             ).one_field_ref().as<uint32_t>();
             txn.exec(
