@@ -65,6 +65,17 @@ std::vector<uint8_t> stagingReadAll(const vh::fs::PlaintextSource& source) {
     return out;
 }
 
+// Flips one bit at `at`: always a change (writing a fixed byte would leave random ciphertext unchanged 1 time in 256).
+void stagingFlipBit(const std::filesystem::path& path, const std::streamoff at) {
+    std::fstream f(path, std::ios::in | std::ios::out | std::ios::binary);
+    f.seekg(at);
+    const auto c = static_cast<char>(f.get());
+    f.seekp(at);
+    f.put(static_cast<char>(c ^ 0x01));
+    f.close();
+    ASSERT_TRUE(f) << "could not flip a byte of " << path;
+}
+
 std::vector<uint8_t> stagingMd5(const std::vector<uint8_t>& bytes) {
     const auto d = vh::crypto::util::EvpDigest::of(EVP_md5(), bytes.data(), bytes.size());
     return {d.begin(), d.end()};
@@ -158,10 +169,7 @@ TEST_F(S3GatewayPartCipher, TamperedSwappedReplayedOrForeignPartsFailClosed) {
     {
         const auto copy = dir_ / "flipped";
         std::filesystem::copy_file(one.stored.path, copy);
-        std::fstream f(copy, std::ios::in | std::ios::out | std::ios::binary);
-        f.seekp(5000);
-        f.put('\x7f');
-        f.close();
+        stagingFlipBit(copy, 5000);
         auto flipped = one.stored;
         flipped.path = copy;
         expectTampered({flipped, two.stored}, "flipped byte");
@@ -222,10 +230,7 @@ TEST_F(S3GatewayPartCipher, PartChangedWhileReadingFailsTheReadThatFinishesIt) {
     const auto two = write(*keys, 2, stagingPlaintext(150000, 'q'));
     const auto source = pc::open(*keys, {one.stored, two.stored});
 
-    std::fstream f(two.stored.path, std::ios::in | std::ios::out | std::ios::binary);
-    f.seekp(100);
-    f.put('\x01');
-    f.close();
+    stagingFlipBit(two.stored.path, 100);
 
     EXPECT_THROW((void)stagingReadAll(source), pc::Tampered);
 }
