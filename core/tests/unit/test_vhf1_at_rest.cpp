@@ -73,6 +73,13 @@ void spit(const stdfs::path& p, const Bytes& bytes) {
     out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
 }
 
+// XORs one byte in place (a write of a fixed value would leave the file unchanged 1 time in 256).
+void flipByte(const stdfs::path& p, const uint64_t offset) {
+    auto bytes = slurp(p);
+    bytes.at(static_cast<std::size_t>(offset)) ^= 0x5a;
+    spit(p, bytes);
+}
+
 class TempDir {
 public:
     TempDir() : path_(stdfs::temp_directory_path() / ("vh_vhf1_at_rest_" + std::to_string(::getpid()) + "_" +
@@ -303,12 +310,7 @@ TEST_F(Vhf1AtRestTest, Vhf1RangeReaderServesEveryRangeOfTheGeneration) {
 TEST_F(Vhf1AtRestTest, Vhf1RangeReaderNeverReturnsBytesOfAFailedChunkAndTheFailureIsSticky) {
     const auto plaintext = randomBytes(4 * kChunk, 7);
     const auto f = sealedFile(plaintext);
-    {
-        std::fstream io(f->backing_path, std::ios::binary | std::ios::in | std::ios::out);
-        io.seekp(static_cast<std::streamoff>(120 + 2 * kSealedChunk + 100));
-        const char flip = 0x5a;
-        io.write(&flip, 1);
-    }
+    flipByte(f->backing_path, 120 + 2 * kSealedChunk + 100);
     const auto reader = engine_->openPlaintextReader(f);
     Bytes good(100);
     ASSERT_EQ(reader->read(10, good), good.size());  // chunk 0 authenticates
@@ -352,12 +354,7 @@ TEST_F(Vhf1AtRestTest, Vhf1RangeReaderRequiresTheCatalogsSizeAndGeneration) {
 TEST_F(Vhf1AtRestTest, Vhf1RangeReaderRequireAuthenticatedChecksChunksNotReadYet) {
     const auto plaintext = randomBytes(3 * kChunk, 9);
     const auto f = sealedFile(plaintext);
-    {
-        std::fstream io(f->backing_path, std::ios::binary | std::ios::in | std::ios::out);
-        io.seekp(-5, std::ios::end);  // the last chunk's tag
-        const char flip = 0x01;
-        io.write(&flip, 1);
-    }
+    flipByte(f->backing_path, stdfs::file_size(f->backing_path) - 5);  // the last chunk's tag
     const auto reader = engine_->openPlaintextReader(f);
     Bytes head(kChunk);
     ASSERT_EQ(reader->read(0, head), head.size());

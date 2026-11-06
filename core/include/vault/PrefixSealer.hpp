@@ -109,7 +109,6 @@ private:
     crypto::vhf1::SecureBytes pending_;       // plaintext of the chunk being filled
     std::vector<uint8_t> out_;                // one sealed chunk (ciphertext)
     crypto_generichash_state hash_{};
-    bool hashFinal_{false};
 };
 
 }
