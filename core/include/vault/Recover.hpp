@@ -108,7 +108,6 @@ struct Evidence {
     uint64_t vault_id{};
     std::optional<std::string> key_check;
     std::optional<attestation::Attestation> attestation;
-    [[nodiscard]] bool operator==(const Evidence&) const = default;
 };
 
 struct Proof {
