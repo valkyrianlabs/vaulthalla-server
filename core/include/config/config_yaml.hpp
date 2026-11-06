@@ -713,12 +713,38 @@ struct convert<VaultsS3Config> {
 };
 
 template<>
+struct convert<VaultsFormatConversionConfig> {
+    static Node encode(const VaultsFormatConversionConfig& rhs) {
+        Node node;
+        node["enabled"] = rhs.enabled;
+        node["max_mib_per_second"] = rhs.max_mib_per_second;
+        node["max_cpu_percent"] = rhs.max_cpu_percent;
+        node["pass_interval"] = durationToString(rhs.pass_interval);
+        return node;
+    }
+
+    static bool decode(const Node& node, VaultsFormatConversionConfig& rhs) {
+        if (!node.IsMap()) return false;
+        rhs.enabled = node["enabled"].as<bool>(rhs.enabled);
+        rhs.max_mib_per_second = node["max_mib_per_second"].as<uint32_t>(rhs.max_mib_per_second);
+        rhs.max_cpu_percent = node["max_cpu_percent"].as<uint32_t>(rhs.max_cpu_percent);
+        if (rhs.max_cpu_percent < 1 || rhs.max_cpu_percent > 100)
+            throw std::invalid_argument("vaults.format_conversion.max_cpu_percent must be 1..100");
+        if (node["pass_interval"]) rhs.pass_interval = parseDuration(node["pass_interval"].as<std::string>());
+        if (rhs.pass_interval < std::chrono::seconds(1))
+            throw std::invalid_argument("vaults.format_conversion.pass_interval must be at least 1s");
+        return true;
+    }
+};
+
+template<>
 struct convert<VaultsConfig> {
     static Node encode(const VaultsConfig& rhs) {
         Node node;
         node["retention_window"] = durationToString(rhs.retention_window);
         node["tpm_retention_window"] = durationToString(rhs.tpm_retention_window);
         node["s3"] = rhs.s3;
+        node["format_conversion"] = rhs.format_conversion;
         return node;
     }
 
@@ -727,6 +753,8 @@ struct convert<VaultsConfig> {
         if (node["retention_window"]) rhs.retention_window = parseDuration(node["retention_window"].as<std::string>());
         if (node["tpm_retention_window"]) rhs.tpm_retention_window = parseDuration(node["tpm_retention_window"].as<std::string>());
         if (node["s3"]) YAML::convert<VaultsS3Config>::decode(node["s3"], rhs.s3);
+        if (node["format_conversion"])
+            YAML::convert<VaultsFormatConversionConfig>::decode(node["format_conversion"], rhs.format_conversion);
         return true;
     }
 };

@@ -62,6 +62,9 @@ namespace vh::protocols::shell::commands::vault {
     // keys.cpp
     CommandResult handle_vault_keys(const CommandCall &call);
 
+    // format.cpp: `vh vault format status` (ops::vault_format).
+    CommandResult handle_vault_format(const CommandCall &call);
+
     // sync.cpp
     CommandResult handle_sync(const CommandCall &call);
 

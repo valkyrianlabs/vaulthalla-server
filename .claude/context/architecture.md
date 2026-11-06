@@ -696,6 +696,25 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   rewritten when their content is (an overwrite, a rotation, a restore under an older key); #372 converts the rest.
   A contract test (`Vhf1AtRestTest.IntegrityContract*`, counter `crypto::util::gcmCtrDecryptAtCallsForTesting`)
   proves no VHF1 read reaches `gcmCtrDecryptAt`.
+- **Local format conversion (#372).** `vault::conversion` (`vault/FormatConversion.hpp`) re-seals legacy `gcm0` live
+  backing files and `.vh-recovery` blobs as VHF1 under the same key version (never a rotation). Per item: legacy tag
+  over the whole input + plaintext BLAKE2b while streaming (`content::openFileTo` → `content::Sealer`), then a full
+  chunk walk of the output bound to vault/salt/key version/object with its own BLAKE2b; digests, sizes and the
+  catalog's recorded plaintext size must match before anything is replaced. Live files: the rotation sidecar protocol
+  under `contentWriteMutex` (seams reused from `sync::rotation::runtimeDeps`): `<backing>.vh-rotate` → (a blob holding
+  the same generation is `link(2)`ed from the sidecar under a new store name) → one transaction (files CAS with
+  rotation's prepared statement + the blob row's CAS) → rename → unlink the old blob file; so a hard-linked blob
+  converts once and stays a link. Other blobs: new store name (O_EXCL) → CAS of the `recovery_blob` row (generation,
+  storage name, size) → unlink. Crashes are settled by the existing startup sidecar recovery and the store sweep
+  (unreferenced files). `content_hash` columns are kept (sync change detectors; rotation keeps them too). Live files
+  of encrypt-upstream cloud vaults are not converted here (local == bucket bytes; the layout migration, spec 01 §6,
+  converts both); plaintext-upstream rows without local bytes get their stale legacy id cleared, as rotation does.
+  `vault::FormatConversionService` (after VaultRetentionService; first pass 60 s after start) runs
+  `conversion::convertVault` every `vaults.format_conversion.pass_interval` for vaults with legacy rows
+  (`db::query::vault::FormatConversion`, migration 126's `content_format` + partial indexes), paced between items by
+  `max_mib_per_second` / `max_cpu_percent` (`conversion::pauseAfter`), blocked per item while
+  `rotation_in_progress()` or a `vault_key_salvage` row is running. Config is YAML-only (not in the settings JSON).
+  `vh vault format status` = `ops::vault_format::status` (encryption-key View permission).
 - **VHF1 codec** (`crypto::vhf1`, `core/include/crypto/vhf1/{Format,Writer,Reader}.hpp`; #365, spec
   `design/encryption/02-authenticated-file-format.md`). The library under VHF1 at rest (above) and the manifest v2
   objects below: the 120-byte header (HMAC-SHA-256 tag), per-sealing HKDF-SHA-256 keys from vault key + salt,
