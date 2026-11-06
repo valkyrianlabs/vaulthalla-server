@@ -293,7 +293,8 @@ def run(build: Path, *, files: int = 2000, s3: str = "fake", negative: bool = Tr
         cp = a.vh("vault", "create", "drill", "--s3", "--api-key", "drill", "--bucket", bucket.name)
         vid = vault_id_of(cp.stdout)
         report.check("A: a new encrypting vault is opaque_v1", "opaque (v1)" in cp.stdout)
-        a.vh("vault", "sync", "set", str(vid), "--sync-strategy", "sync")
+        # A drill writes thousands of objects in one pass: no per-run request budget.
+        a.vh("vault", "sync", "set", str(vid), "--sync-strategy", "sync", "--s3-budget-preset", "unlimited")
         a.vh("vault", "recovery", "set", str(vid), "--mode", "local-snapshots", check=False)
         staging = private / "staging"
         staging.mkdir()
@@ -413,7 +414,7 @@ def run(build: Path, *, files: int = 2000, s3: str = "fake", negative: bool = Tr
         report.check("B: every file's bytes equal node A's (read through the mount)", not wrong, json.dumps(wrong[:10]))
 
         # the vault rotates and syncs afterwards
-        b.vh("vault", "sync", "set", str(rvid), "--sync-strategy", "sync")
+        b.vh("vault", "sync", "set", str(rvid), "--sync-strategy", "sync", "--s3-budget-preset", "unlimited")
         b.vh("vault", "keys", "rotate", str(rvid), "--sync-now")
         b.sync(rvid)
         b.sh("printf 'written on node B\\n' > MNT/drill/after-restore.txt")
@@ -450,8 +451,8 @@ def run(build: Path, *, files: int = 2000, s3: str = "fake", negative: bool = Tr
         c.close()
         c.inst.stop()
         nodes.remove(c)
-    except DrillError as e:
-        report.check("drill completed", False, str(e))
+    except (DrillError, KeyboardInterrupt) as e:
+        report.check("drill completed", False, str(e) or type(e).__name__)
     finally:
         for n in nodes:
             n.close()

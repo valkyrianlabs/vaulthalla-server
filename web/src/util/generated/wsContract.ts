@@ -6,10 +6,10 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = 'c8235c517daa4798cc53d56cd7e1a241871ab6799071a757ed6451592585d7d5'
+export const WS_CONTRACT_HASH = '4bf2db17f1b0a409329311aaadb210ffa7b70dd526bd910c21a5e2f5001e1478'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = 'c9d08760af47b94daddf016ec824a1a3a966c12a9f0283dd0dd350f9184c9913'
+export const WS_MODELS_HASH = '6efaac4235d9c6d9e26d539f478a73d601a5498e52e6d21fc6460220bc73542d'
 
 // The ws protocol range this book is (core/usage WsProtocol.hpp): send it in meta.hello.
 export const WS_PROTOCOL_VERSION = 1
@@ -2493,6 +2493,8 @@ export interface WsModels {
   'VaultKeyExport': {
     vault_id: number
     vault_name: string
+    node_id: string
+    vault_uid: string | null
     key: string
     key_check: string
     attestation?: WsModels['VaultKeyAttestation'] | null
@@ -2583,6 +2585,7 @@ export interface WsModels {
     key_check: string | null
     reason: 'current' | 'rotation' | 'recovery'
     attestation: WsModels['VaultKeyAttestation'] | null
+    origin?: { node_id: string; vault_id: number; key_id: number; anchor: 'kit' | 'export'; recovered_at: number } | null
   }
   /**
    * One file a key salvage could not re-encrypt.
@@ -2638,6 +2641,91 @@ export interface WsModels {
     attestation_public_keys?: WsModels['VaultKeyAttestationKey'][]
     checkpoint?: WsModels['VaultKeyCheckpoint'] | null
     recovery?: WsModels['VaultRecoveryMaterial']
+  }
+  /**
+   * What `vh vault recover` / vault.recover read and did (#371, spec 03 §6): ops::vault_recover::toJson
+   * (core/src/ops/VaultRecover.cpp) over vault::recover::toJson(Plan). Public data only: key checks,
+   * attestation verdicts and counts, never key material.
+   */
+  'VaultRecoverResult': {
+    vault_uid: string
+    origin: { node_id: string | null; vault_id: number | null }
+    vault_name: string | null
+    blind: boolean
+    epoch: number | null
+    root_sha256: string | null
+    freshness: 'unverified' | 'verified' | 'rollback_accepted'
+    freshness_report: string
+    issues: string[]
+    counts: {
+      files: number
+      folders: number
+      symlinks: number
+      trashed: number
+      tombstones: number
+      provider_versions: number
+      bytes: number
+      snapshots: number
+      snapshot_members: number
+      snapshot_members_restorable: number
+    }
+    key_versions: {
+      version: number
+      verdict: 'verified' | 'no_anchor' | 'empty_anchor' | 'unattested' | 'unverified' | 'wrong_node' | 'wrong_vault' | 'self_attested' | 'key_check_mismatch'
+      detail: string
+      held: boolean
+      key_source?: string
+      current: boolean
+      needed: boolean
+      state: 'canonical' | 'salvage_only' | 'refused' | 'missing'
+      anchor?: { key_id: number; source: 'kit' | 'export' }
+      origin?: { node_id: string; vault_id: number; source: 'root' | 'origin' | 'export' }
+    }[]
+    current_version: number
+    highest_version_seen: number
+    canonical_versions: number[]
+    blocking_versions: number[]
+    salvageable_versions: number[]
+    orphans: string[]
+    missing_objects: string[]
+    rejected_objects: string[]
+    envelopes: { listed: number; unwrapped: number; skipped: number; rejected: number }
+    anchors: { supplied: boolean; keys: number }
+    downloads: {
+      manifest_bytes: number
+      envelope_bytes: number
+      header_bytes: number
+      content_bytes: number
+      other_bytes: number
+      gets: number
+      ranged_gets: number
+      lists: number
+      version_lists: number
+    }
+    mode: 'canonical' | 'salvage'
+    unrecoverable_files: number
+    restored?: {
+      vault_id: number
+      files: number
+      folders: number
+      symlinks: number
+      trashed: number
+      index_rows: number
+      provider_versions: number
+      snapshots: number
+      snapshot_members: number
+      left_out: number
+      notes: string[]
+      fresh_version?: number
+    }
+    dry_run: boolean
+    written: boolean
+    vault_id: number | null
+    vault_name: string
+    key_available: boolean
+    published_epoch: number | null
+    salvage: WsModels['VaultKeySalvageReport'] | null
+    note: string | null
   }
   /**
    * D2 (spec 03 §5.5): whether the vault has recovery material independent of this host.
@@ -6164,6 +6252,8 @@ export interface WsContract {
     response: {
       vault_id: number
       vault_name: string
+      node_id: string
+      vault_uid: string | null
       key: string
       key_check: string
       attestation?: WsModels['VaultKeyAttestation'] | null
@@ -6301,6 +6391,112 @@ export interface WsContract {
   'vault.keys.status': {
     payload: { vault_id?: number | null }
     response: { vaults: WsModels['VaultKeyStatus'][] }
+  }
+  /**
+   * Rebuild a vault on this instance from its bucket and the customer's recovery material (#371, spec 03 §6):
+   * a recovery kit (its seed unwraps the vault's KEV1 envelopes) and/or a key export. A key version is
+   * restored only when its original node's attestation verifies against an attestation key the material pins
+   * (D1); otherwise the answer is salvage_required with the per-version verdicts, and salvage (confirmed with
+   * confirm_name) re-encrypts what the supplied keys decrypt under a fresh key, never storing them. dry_run
+   * reads and reports, writing nothing. The vault starts in the cache strategy: nothing beyond headers, the
+   * manifest and envelopes is downloaded until a file is read. Paired devices only (recover_requires_device
+   * otherwise), with a keys step-up bound to the bucket; the encryption-key Export permission and vault
+   * Create.
+   */
+  'vault.recover': {
+    payload: {
+      api_key_id: number
+      bucket: string
+      kit?: object | null
+      export?: WsModels['VaultKeyImportDocument'] | WsModels['VaultKeyImportDocument'][] | null
+      into?: string | null
+      vault_uid?: string | null
+      owner_id?: number | null
+      accept_rollback?: boolean
+      dry_run?: boolean
+      salvage?: boolean
+      confirm_name?: string | null
+    }
+    response: {
+      vault_uid: string
+      origin: { node_id: string | null; vault_id: number | null }
+      vault_name: string | null
+      blind: boolean
+      epoch: number | null
+      root_sha256: string | null
+      freshness: 'unverified' | 'verified' | 'rollback_accepted'
+      freshness_report: string
+      issues: string[]
+      counts: {
+        files: number
+        folders: number
+        symlinks: number
+        trashed: number
+        tombstones: number
+        provider_versions: number
+        bytes: number
+        snapshots: number
+        snapshot_members: number
+        snapshot_members_restorable: number
+      }
+      key_versions: {
+        version: number
+        verdict: 'verified' | 'no_anchor' | 'empty_anchor' | 'unattested' | 'unverified' | 'wrong_node' | 'wrong_vault' | 'self_attested' | 'key_check_mismatch'
+        detail: string
+        held: boolean
+        key_source?: string
+        current: boolean
+        needed: boolean
+        state: 'canonical' | 'salvage_only' | 'refused' | 'missing'
+        anchor?: { key_id: number; source: 'kit' | 'export' }
+        origin?: { node_id: string; vault_id: number; source: 'root' | 'origin' | 'export' }
+      }[]
+      current_version: number
+      highest_version_seen: number
+      canonical_versions: number[]
+      blocking_versions: number[]
+      salvageable_versions: number[]
+      orphans: string[]
+      missing_objects: string[]
+      rejected_objects: string[]
+      envelopes: { listed: number; unwrapped: number; skipped: number; rejected: number }
+      anchors: { supplied: boolean; keys: number }
+      downloads: {
+        manifest_bytes: number
+        envelope_bytes: number
+        header_bytes: number
+        content_bytes: number
+        other_bytes: number
+        gets: number
+        ranged_gets: number
+        lists: number
+        version_lists: number
+      }
+      mode: 'canonical' | 'salvage'
+      unrecoverable_files: number
+      restored?: {
+        vault_id: number
+        files: number
+        folders: number
+        symlinks: number
+        trashed: number
+        index_rows: number
+        provider_versions: number
+        snapshots: number
+        snapshot_members: number
+        left_out: number
+        notes: string[]
+        fresh_version?: number
+      }
+      dry_run: boolean
+      written: boolean
+      vault_id: number | null
+      vault_name: string
+      key_available: boolean
+      published_epoch: number | null
+      salvage: WsModels['VaultKeySalvageReport'] | null
+      note: string | null
+    }
   }
   /**
    * The cost disclosure a person must see before provider versioning is enabled, with the token
@@ -6619,6 +6815,7 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'vault.keys.recipients.list',
   'vault.keys.recipients.revoke',
   'vault.keys.status',
+  'vault.recover',
   'vault.recovery.disclosure',
   'vault.recovery.status',
   'vault.recovery.suspend',
@@ -6658,6 +6855,7 @@ export const WS_CONTRACT_CONFIRMATIONS: Readonly<
     { code: 'vault_key_import', accept_field: 'confirm_name' },
     { code: 'vault_key_salvage', accept_field: 'confirm_name' },
   ],
+  'vault.recover': [{ code: 'vault_recover_salvage', accept_field: 'confirm_name' }],
   'vault.recovery.suspend': [{ code: 'recovery_versioning_suspend', accept_field: 'confirm' }],
   'vault.recovery.update': [
     { code: 'recovery_versioning_disclosure', accept_field: 'disclosure_token' },
@@ -6725,6 +6923,7 @@ export const WS_CONTRACT_STEP_UP: Readonly<Partial<Record<WsContractCommand, str
   'vault.keys.import': 'keys',
   'vault.keys.recipients.add': 'keys',
   'vault.keys.recipients.revoke': 'keys',
+  'vault.recover': 'keys',
   'vault.recovery.suspend': 'data.destroy',
 }
 
@@ -6989,6 +7188,7 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'vault.keys.recipients.list': 15000,
   'vault.keys.recipients.revoke': 15000,
   'vault.keys.status': 15000,
+  'vault.recover': 600000,
   'vault.recovery.disclosure': 60000,
   'vault.recovery.status': 60000,
   'vault.recovery.suspend': 60000,
