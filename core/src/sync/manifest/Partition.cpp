@@ -59,10 +59,10 @@ std::vector<PlannedSegment> partition(const std::vector<Entry>& entries, const s
             slots.clear();
             break;
         }
-        slots.push_back({r});
+        slots.push_back(Slot{.range = r});
         next = r.hi + 1;
     }
-    if (slots.empty() || next != 0x100) slots = {Slot{Range{0x00, 0xff}}};
+    if (slots.empty() || next != 0x100) slots = {Slot{.range = Range{0x00, 0xff}}};
 
     for (bool changed = true; changed;) {
         changed = false;
@@ -72,7 +72,8 @@ std::vector<PlannedSegment> partition(const std::vector<Entry>& entries, const s
             if (partition_detail::tooBig(slots[i], limits) && r.lo < r.hi) {
                 const auto mid = static_cast<uint8_t>(r.lo + (r.hi - r.lo) / 2);
                 slots[i].range = {r.lo, mid};
-                slots.insert(slots.begin() + static_cast<std::ptrdiff_t>(i) + 1, Slot{Range{static_cast<uint8_t>(mid + 1), r.hi}});
+                slots.insert(slots.begin() + static_cast<std::ptrdiff_t>(i) + 1,
+                             Slot{.range = Range{static_cast<uint8_t>(mid + 1), r.hi}});
                 changed = true;
                 break;
             }
