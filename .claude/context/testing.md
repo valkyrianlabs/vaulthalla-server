@@ -331,6 +331,13 @@ Dev mode requires both `VH_BUILD_MODE=dev` and the gitignored `enable_dev_mode` 
   that every chain error/warning is one `sync::manifest` knows). `ManifestDbTest.*` (`test_manifest_db.cpp`,
   db-only) compares DB → collect → publish → load → a scratch schema with an independent SQL projection of the live
   tables, and covers `remote_manifest_state`, the refused-root alert and the opaque_v1 `CloudEngine` path.
+- Recovery recipients (#370): `Kev1Vectors`, `Kev1ReservedFields`, `RecoverySeedVectors`, `RecoveryKit`
+  (`test_kev1.cpp`, DB-free, CI: every `kev1` / `recovery_seed` vector, P-256 included). `RecoveryRecipient.*`,
+  `RecoveryRequirement.*`, `RecoveryNoSilentCustody.*`, `KeysImportFromKit.*`, `VaultKeyExportProvenance.*`
+  (`test_recovery_recipients.cpp`, db-only) run on S3 vaults whose bucket is an in-memory `ObjectStore`
+  (`vault::envelopes::setStoreFactoryForTesting`, which also records which vault asked for a bucket);
+  `SqlDeployerHistoryDb.RecoveryRecipientsMigrationIsAdditiveIdempotentAndCustomerOnly` (migration 127).
+  `recovery_tool` (meson, `core/tests/cli/test_recovery_tool.py`) runs the real `vh-recovery` in a temp dir.
 
 ## Known test gaps
 

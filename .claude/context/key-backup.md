@@ -272,3 +272,29 @@ provenance computed before the transaction, `recordProvenance`, `attestationKeyI
 `setSalvageStepHookForTesting` (crash after a protocol step), `setSalvageEngineHookForTesting` (fake bucket, price
 gate). Limits: salvage runs inside the request (ws client timeout 600 s); recovery blobs and provider versions sealed
 under a salvaged version are not re-keyed; a re-run after a finished pass reuses its key only while it is current.
+
+## Recovery recipients and recovery kits (#370)
+
+Design: spec 03 §5 (as built: §5.8). A recovery recipient is a customer-held X25519 public key (from a kit made on the
+customer's device: Desktop or `vh-recovery kit create`); every held and future key version is wrapped to it as a KEV1
+envelope in the vault's own bucket (`.vaulthalla/key/<kid>`). Custody amendment (#344): only class `customer` exists
+(DB CHECK), the server sees only public keys, envelopes go to the bucket and nowhere else, and nothing but a person's
+`recipient add` enrolls one (`RecoveryNoSilentCustody`).
+
+| Operation | CLI | ws | Who | Where |
+|---|---|---|---|---|
+| list | `vh vault keys recipient list <vault> [--json]` | `vault.keys.recipients.list {vault_id}` | encryption-key View | any session |
+| add | `vh vault keys recipient add <vault> --public-key <b64\|hex> [--label]` | `vault.keys.recipients.add {vault_id, public_key, label?}` | encryption-key Export + keys step-up (vault-bound) | CLI or a paired device (`recipient_requires_device` elsewhere; devices refused by step-up until #361) |
+| revoke | `vh vault keys recipient revoke <vault> <grant_id>` | `vault.keys.recipients.revoke {vault_id, grant_id}` | same | same |
+| kit import | `vh vault keys import <vault> --recovery-kit <file\|->` | (none) | as import | CLI (import's channels) |
+
+- A revocation stops new envelopes; `recovery.rotation_needed` says when a rotation is needed to cut the recipient off.
+- Status gains `recovery` (D2), `vault_uid`, `node_id`, `attestation_public_keys`, `checkpoint`; exports' attestations
+  gain `public_key` (an import checks it against this node's key of that id). Health gains
+  `vaults_recovery_material_missing`. "Verified export" = `exported_version` is the current version.
+- Kit import: envelopes are untrusted (anyone with bucket write can wrap to a public key), so they only supply bytes;
+  each version needs the attestation this node recorded (rows, else the opaque_v1 root's key history), keys whose
+  check differs from the recorded one are `ignored`, and the import's recover rules apply unchanged.
+- Managed-storage enforcement (recipient required, last one not removable) is #375; the fresh-node restore with the
+  kit's pinned keys as trust anchor is #371.
+
