@@ -4,6 +4,7 @@
 // in a tight loop whenever that task was scheduled in the future, which is always once a vault has synced: one
 // core at 100% for the daemon's whole life (seen on vh-storage: 1d 4h of CPU in 28.6h of uptime).
 
+#include "../helpers/temp_dir.hpp"
 #include "concurrency/ThreadPoolManager.hpp"
 #include "db/Transactions.hpp"
 #include "fs/Filesystem.hpp"
@@ -39,8 +40,14 @@ TEST(SyncControllerIdle, SleepsWhileNoSyncIsDue) {
         GTEST_SKIP() << "Skipping db test due to missing environment variables.";
 
     paths::enableTestMode();
-    const auto root = std::filesystem::temp_directory_path() / "vh_sync_idle";
-    std::filesystem::remove_all(root);
+    const auto root = vh::test::uniqueTempRoot("vh_sync_idle");
+    struct RemoveRoot {
+        std::filesystem::path p;
+        ~RemoveRoot() {
+            std::error_code ec;
+            std::filesystem::remove_all(p, ec);
+        }
+    } removeRoot{root};
     paths::backingPath = root / "backing";
     paths::mountPath = root / "mount";
     std::filesystem::create_directories(paths::backingPath);

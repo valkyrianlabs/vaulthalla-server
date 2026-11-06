@@ -1,3 +1,4 @@
+#include "../helpers/temp_dir.hpp"
 #include "fs/model/Directory.hpp"
 #include "fs/model/File.hpp"
 #include "fs/model/Path.hpp"
@@ -244,7 +245,7 @@ protected:
         vh::auth::session::Issuer::setJwtSecretForTesting("http-share-preview-test-secret");
         oldBackingPath = vh::paths::backingPath;
         oldMountPath = vh::paths::mountPath;
-        testRoot = std::filesystem::temp_directory_path() / "vh_http_share_preview_unit";
+        testRoot = vh::test::uniqueTempRoot("vh_http_share_preview_unit");
         std::filesystem::remove_all(testRoot);
         vh::paths::backingPath = testRoot / "backing";
         vh::paths::mountPath = testRoot / "mount";
