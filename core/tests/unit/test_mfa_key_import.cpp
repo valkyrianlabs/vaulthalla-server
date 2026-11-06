@@ -76,6 +76,7 @@ protected:
     inline static std::shared_ptr<protocols::shell::Router> router;
     inline static std::filesystem::path root;
     inline static std::atomic<int> counter{0};
+    inline static std::shared_ptr<crypto::secrets::Manager> originalSecrets;  // Deps outlive this suite
 
     static void SetUpTestSuite() {
         if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
@@ -93,6 +94,7 @@ protected:
         db::Transactions::dbPool_->initPreparedStatements();
         seed::seed_database();
         runtime::Deps::init();
+        originalSecrets = runtime::Deps::get().secretsManager;
         fs::Filesystem::init(runtime::Deps::get().storageManager);
         runtime::Deps::get().fsCache = std::make_shared<fs::cache::Registry>();
         audit::Trail::instance()->resetForTesting();
@@ -105,6 +107,7 @@ protected:
 
     static void TearDownTestSuite() {
         if (skipTests) return;
+        runtime::Deps::get().secretsManager = originalSecrets;
         keys::resetForTesting();
         std::error_code ec;
         std::filesystem::remove_all(root, ec);
