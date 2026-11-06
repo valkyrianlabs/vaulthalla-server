@@ -1,8 +1,9 @@
 """The web console's ws surface ("web-CLI"), straight to a private instance's ws port.
 
 Reuses tools/lab/pentest/client.py (Ws) in its plain-loopback mode. Login goes through the identity broker: the
-session is given a principal id and a broker that supplies the password at send time; the password never enters an
-Op, a Result or the trace. The refresh cookie the handshake sets is what the HTTP driver uses for this principal.
+session is given a principal id and a broker that supplies the password (and, for an account that must have MFA, its
+TOTP authenticator: #357) at send time; neither the password, the seed nor a code ever enters an Op, a Result or the
+trace. A step_up_required refusal (#359) is answered with the password and a TOTP code, and the request resent once. The refresh cookie the handshake sets is what the HTTP driver uses for this principal.
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ _FS_BINDINGS = {
     "fs.stat": ("fs.metadata", {"vault": "vault_id", "path": "path"}),
 }
 _LOGIN_TIMEOUT_S = 15.0
+_TOTP_WAIT_S = 35.0  # at most one TOTP period (30 s) until the next unspent step, plus margin
 _CLOSE_TIMEOUT_S = 5.0
 
 
@@ -106,6 +108,7 @@ class WsDriver:
                 self.ws.send("auth.login", {"name": credential.username, "password": password},
                              timeout=_LOGIN_TIMEOUT_S), timeout=_LOGIN_TIMEOUT_S)
             self._register_session_secrets()
+            msg = await self._second_factor(msg)
             self.login_result = self._response(msg, rendered, t0)
             if self.login_result.outcome == "ok":
                 return
@@ -118,6 +121,58 @@ class WsDriver:
         await self.close()
         # The engine records repr(exc) on open failure. Never include a transport exception or credentials there.
         raise RuntimeError(f"websocket open failed: {self.login_result.outcome}") from None
+
+    def _totp(self):
+        lookup = getattr(self.broker, "totp", None)
+        return lookup(self.principal) if callable(lookup) and self.principal is not None else None
+
+    async def _code(self, totp) -> str:
+        # A code is a secret too (core/auth/mfa/Totp.hpp). Waiting for an unspent step is bounded by one period.
+        code = await asyncio.wait_for(totp.next_code(), timeout=_TOTP_WAIT_S)
+        self.redactor.register_secret(code)
+        return code
+
+    async def _second_factor(self, msg: dict) -> dict:
+        """#357: an account that must have MFA answers auth.login with mfa_required; finish with the principal's
+        TOTP from the broker (provisioning enrolled it). The login result is the final answer, as the console sees it.
+        mfa_enrollment_required is left as the answer: provisioning enrolls, a session never does."""
+        data = msg.get("data") if isinstance(msg, dict) else None
+        if not isinstance(data, dict) or data.get("code") != "mfa_required":
+            return msg
+        totp = self._totp()
+        if totp is None or "totp" not in ((data.get("pending") or {}).get("methods") or []):
+            return msg
+        payload = {"method": "totp", "code": await self._code(totp)}
+        msg = await asyncio.wait_for(self.ws.send("auth.mfa.verify", payload, timeout=_LOGIN_TIMEOUT_S),
+                                     timeout=_LOGIN_TIMEOUT_S)
+        self._register_session_secrets()
+        return msg
+
+    async def _step_up(self, refusal: dict, deadline: float) -> bool:
+        """#359: answer a step_up_required refusal as the console does (auth.stepup.begin, then .finish with the
+        password and a TOTP code). True when a grant was made and the request may be resent once."""
+        if self.broker is None or self.principal is None:
+            return False
+        credential = self.broker.credential(self.principal)
+        totp = self._totp()
+        data = refusal.get("data") or {}
+        remaining = lambda: max(0.001, deadline - time.monotonic())  # noqa: E731
+        begin = await self.ws.send("auth.stepup.begin", {"family": data.get("family"), "target": data.get("target")},
+                                   timeout=remaining())
+        if classify(begin)[0] != "ok":
+            return False
+        ceremony = begin.get("data") or {}
+        methods = ceremony.get("methods") or []
+        payload = {"stepup_id": ceremony.get("stepup_id"), "password": credential.secret()}
+        if totp is not None and "password_totp" in methods:
+            payload.update(method="password_totp", code=await self._code(totp))
+        elif "password" in methods:
+            payload["method"] = "password"
+        else:
+            return False
+        done = await self.ws.send("auth.stepup.finish", payload, timeout=remaining())
+        self._register_session_secrets()
+        return classify(done)[0] == "ok"
 
     def _register_session_secrets(self) -> None:
         if self.ws is not None and self.redactor is not None:
@@ -203,8 +258,14 @@ class WsDriver:
             async with self._requests:
                 if self.ws is None:
                     return self._result("disconnected", rendered, t0, detail="websocket session is not open")
+                deadline = time.monotonic() + deadline_s
                 msg = await self.ws.send(command, payload, timeout=deadline_s)
                 self._register_session_secrets()
+                if (isinstance(msg, dict) and isinstance(msg.get("data"), dict)
+                        and msg["data"].get("code") == "step_up_required" and await self._step_up(msg, deadline)):
+                    # The refused request never ran: resend it once under the new grant, as the console does.
+                    msg = await self.ws.send(command, payload, timeout=max(0.001, deadline - time.monotonic()))
+                    self._register_session_secrets()
                 return self._response(msg, rendered, t0)
 
         try:
