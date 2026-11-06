@@ -1,6 +1,7 @@
 #include "ops/RecoveryRecipients.hpp"
 
 #include "audit/Trail.hpp"
+#include "auth/stepup/StepUp.hpp"
 #include "crypto/SecretKey.hpp"
 #include "crypto/id/ObjectUid.hpp"
 #include "crypto/recovery/Kev1.hpp"
@@ -178,6 +179,9 @@ AddResult add(const Actor& actor, const AddRequest& request, const vault_keys::C
     g.recipient_class = "customer";
     g.label = request.label;
     g.authorized_by = fmt::format("user:{} via {}", actor->id, channelName(channel));
+    // Step-up (#359): a recipient is a decryption path for the vault. The host CLI is exempt by design; a paired
+    // device is refused until device approvals (#361) can answer it.
+    auth::stepup::require(auth::stepup::Family::Keys, "vault.keys.recipients.add:" + std::to_string(vault->id));
     if (!Grants::add(g))
         throw Conflict("this public key is already an active recovery recipient of vault '" + vault->name + "'");
 
@@ -223,6 +227,7 @@ RevokeResult revoke(const Actor& actor, const unsigned int vaultId, const std::s
     const auto existing = Grants::get(vault->id, grantId);
     if (!existing) throw NotFound("vault '" + vault->name + "' has no recovery recipient " + grantId);
     if (existing->revoked_at) throw Conflict("recovery recipient " + grantId + " is already revoked");
+    auth::stepup::require(auth::stepup::Family::Keys, "vault.keys.recipients.revoke:" + std::to_string(vault->id));
     if (!Grants::revoke(vault->id, grantId, fmt::format("user:{} via {}", actor->id, channelName(channel))))
         throw Conflict("recovery recipient " + grantId + " is already revoked");
     requestPublish(engineFor(vault->id));

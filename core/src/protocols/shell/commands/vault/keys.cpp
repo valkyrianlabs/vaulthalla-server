@@ -271,7 +271,7 @@ static std::string status_text(const keys_ops::KeyStatus& s) {
                            n.key_check.value_or("MISSING"));
     if (s.key_retain_until)
         out += "  key kept until " + db::encoding::timestampToString(*s.key_retain_until) + "\n";
-    if (s.recovery.state != vault::envelopes::kMaterialNotRequired || s.recovery.recipients > 0)
+    if (s.recovery.state != ::vh::vault::envelopes::kMaterialNotRequired || s.recovery.recipients > 0)
         out += fmt::format("  recovery:      {} ({} recipient(s){})\n", s.recovery.state, s.recovery.recipients,
                            s.recovery.export_current ? ", current export" : "");
     if (s.recovery.detail) out += "                 " + *s.recovery.detail + "\n";

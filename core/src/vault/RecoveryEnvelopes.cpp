@@ -8,6 +8,7 @@
 #include "storage/s3/Controller.hpp"
 #include "sync/manifest/Store.hpp"
 #include "vault/APIKeyManager.hpp"
+#include "vault/model/Key.hpp"
 #include "vault/model/S3Vault.hpp"
 
 #include <algorithm>

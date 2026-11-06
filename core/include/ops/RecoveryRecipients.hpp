@@ -21,7 +21,8 @@
 //
 // Who: list needs the encryption-key View permission; add and revoke the Export permission (super admins hold both),
 // on the local CLI or a paired device (D4; a browser session gets recipient_requires_device, an agent is denied).
-// MFA step-up (#325/#359) gates enrollment once it lands; until then the RBAC and channel checks above are the gate.
+// Both also need a step-up of family keys bound to the vault (#359, auth::stepup::require) right before they write: the
+// host CLI is exempt by design; a paired device is refused until device approvals (#361) can answer it.
 namespace vh::ops::recovery_recipients {
 
 struct Recipient {

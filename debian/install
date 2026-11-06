@@ -1,5 +1,6 @@
 usr/bin/vaulthalla-server
 usr/bin/vaulthalla-cli
+usr/bin/vh-recovery
 usr/bin/vaulthalla
 usr/bin/vh
 var/lib/vaulthalla

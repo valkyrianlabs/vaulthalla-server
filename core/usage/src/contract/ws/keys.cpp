@@ -133,7 +133,8 @@ std::vector<WsCommandUsage> vaultKeyCommands() {
                        "seed. Every key version the vault holds is wrapped to it now and every future version at "
                        "rotation, into the vault's bucket only. Customer-controlled (class customer) is the only kind. "
                        "S3 vaults only (conflict otherwise). Paired devices only (recipient_requires_device "
-                       "otherwise); the encryption-key Export permission.",
+                       "otherwise), with a keys step-up bound to the vault (#359); the encryption-key Export "
+                       "permission.",
         .payload = {vaultId(),
                     str("public_key").desc("The recipient's X25519 public key: base64 (32 bytes) or 64 hex digits."),
                     str("label").opt().nullable().desc("A name the customer recognizes (at most 200 characters).")},
@@ -148,7 +149,8 @@ std::vector<WsCommandUsage> vaultKeyCommands() {
         .description = "Revoke a recovery recipient: no new envelopes are written for it. Access it already has is "
                        "not revoked (an envelope keeps unwrapping the versions it covers): recovery.rotation_needed "
                        "says when a key rotation is needed to cut it off from new data. Paired devices only "
-                       "(recipient_requires_device otherwise); the encryption-key Export permission.",
+                       "(recipient_requires_device otherwise), with a keys step-up bound to the vault (#359); the "
+                       "encryption-key Export permission.",
         .payload = {vaultId(), str("grant_id").desc("The recipient's grant_id (vault.keys.recipients.list).")},
         .response = modelFields("VaultRecoveryRecipientRevoke"),
         .refusal_codes = {"denied", "invalid", "not_found", "conflict", "unauthorized", "recipient_requires_device"},
