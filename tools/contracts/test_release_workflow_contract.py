@@ -140,7 +140,9 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         ci = _read(".github/workflows/build_and_test.yml")
         # build, web and tooling (the fuzz step lives in tooling: the vps-ci pool has three runners)
         self.assertEqual(ci.count(f"shell: {CONTAINER_SHELL}"), 3)
-        self.assertEqual(ci.count('"self-hosted","Linux","X64","vps-ci"'), 3)
+        self.assertEqual(ci.count('"self-hosted","Linux","X64","vps-ci"'), 2)
+        # The compile-heavy build job runs on the ci-heavy VM runners; CI_HEAVY_LABEL=vps-ci fails it over to the VPS.
+        self.assertEqual(ci.count("vars.CI_HEAVY_LABEL || 'ci-heavy'"), 1)
         self.assertNotIn("sudo", _code(ci))
         for action in ("build", "test", "fuzz", "setup_web", "build_web", "test_web", "sync_web_icons"):
             text = _read(f".github/actions/{action}/action.yml")
@@ -266,9 +268,9 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
     def test_cpp_and_web_builds_sync_private_icons_through_one_script(self) -> None:
         self.assertIn("web/bin/sync_private_icons.sh", _read(".github/actions/sync_web_icons/action.yml"))
         self.assertIn("sync_private_icons.sh", _read("web/bin/build_release_payload.sh"))
-        for action in ("build", "build_web"):
-            with self.subTest(action=action):
-                self.assertIn("./.github/actions/sync_web_icons", _read(f".github/actions/{action}/action.yml"))
+        # The CI C++ build job runs on the ci-heavy VM, which has no icon store: only the web build syncs icons.
+        self.assertIn("./.github/actions/sync_web_icons", _read(".github/actions/build_web/action.yml"))
+        self.assertNotIn("sync_web_icons", _read(".github/actions/build/action.yml"))
 
 
 class ReleaseTomlContractTests(unittest.TestCase):
