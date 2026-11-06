@@ -323,7 +323,9 @@ def vhf1_range(obj: bytes, ex: Expect, start: int, end: int, expected_size: int 
 KEV1_MAGIC = bytes([0x89, 0x56, 0x48, 0x4B, 0x0D, 0x0A, 0x1A, 0x0A])  # "\x89VHK\r\n\x1a\n"
 KEV1_VERSION = 1
 KEV1_SUITE_X25519, KEV1_SUITE_P256 = 1, 2
-KEV1_PURPOSE_VAULT_KEY = 1
+KEV1_PURPOSE_VAULT_KEY = 1  # registry (03 §5.2): 1 = a whole vault key version; 2-255 reserved (e.g. threshold shares)
+KEV1_CLASS_CUSTOMER = 0     # registry (03 §5.2): 0 = customer-controlled (recovery recipients, owner devices);
+                            # 1-255 reserved for separately authorized recipient classes (custodian, threshold participant)
 KEV1_INFO = b"vh.kev1.wrap"
 KEV1_EPK_LEN = {KEV1_SUITE_X25519: 32, KEV1_SUITE_P256: 65}
 
@@ -371,7 +373,8 @@ class KevError(Exception):
 
 
 def kev1_prefix(suite: int, key_version: int, vault_uid: bytes, recipient_pub: bytes, epk: bytes) -> bytes:
-    return (KEV1_MAGIC + struct.pack(">HHB", KEV1_VERSION, suite, KEV1_PURPOSE_VAULT_KEY) + b"\x00\x00\x00"
+    return (KEV1_MAGIC + struct.pack(">HHBB", KEV1_VERSION, suite, KEV1_PURPOSE_VAULT_KEY, KEV1_CLASS_CUSTOMER)
+            + b"\x00\x00"
             + struct.pack(">I", key_version) + vault_uid + sha256(recipient_pub)
             + struct.pack(">H", len(epk)) + epk)
 
@@ -396,8 +399,12 @@ def kev1_unwrap(env: bytes, recipient_sk: bytes, suite_expected: int, vault_uid:
         raise KevError("unsupported_version")
     if suite != suite_expected or suite not in KEV1_EPK_LEN:
         raise KevError("unsupported_suite")
-    if purpose != KEV1_PURPOSE_VAULT_KEY or env[13:16] != b"\x00\x00\x00":
-        raise KevError("bad_purpose")
+    if purpose != KEV1_PURPOSE_VAULT_KEY:
+        raise KevError("bad_purpose")  # a restore skips such envelopes (unknown kind of payload), it doesn't fail
+    if env[13] != KEV1_CLASS_CUSTOMER:
+        raise KevError("unsupported_recipient_class")  # likewise skipped: never decrypted by a v1 reader
+    if env[14:16] != b"\x00\x00":
+        raise KevError("reserved_nonzero")
     key_version = struct.unpack(">I", env[16:20])[0]
     if env[20:36] != vault_uid:
         raise KevError("vault_mismatch")
@@ -706,6 +713,13 @@ def build() -> dict:
          {"error": "bad_ephemeral"}),
         ("suite_confusion", "X25519 envelope read as a P-256 one", e, rcpt_p, KEV1_SUITE_P256, VAULT_UID,
          {"error": "unsupported_suite"}),
+        ("reserved_purpose_threshold_share", "purpose 2 (reserved, e.g. a future threshold share): skipped by v1 readers",
+         e[:12] + b"\x02" + e[13:], rcpt_x, KEV1_SUITE_X25519, VAULT_UID, {"error": "bad_purpose"}),
+        ("reserved_recipient_class", "recipient class 1 (reserved for separately authorized recipients): skipped by "
+         "v1 readers", e[:13] + b"\x01" + e[14:], rcpt_x, KEV1_SUITE_X25519, VAULT_UID,
+         {"error": "unsupported_recipient_class"}),
+        ("reserved_nonzero", "reserved bytes 14-15 set", e[:15] + b"\x01" + e[16:], rcpt_x, KEV1_SUITE_X25519,
+         VAULT_UID, {"error": "reserved_nonzero"}),
     ]
     out["kev1"] = {
         "positive": kev,

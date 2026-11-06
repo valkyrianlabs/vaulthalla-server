@@ -19,7 +19,13 @@ and `kev1`.
   re-encryption. A fresh server's self-attestation never proves old provenance (§6.2).
 - **D2 (#344):** customer-held recovery recipients are mandatory for managed storage and sealed vaults before
   creation or writes; recommended but optional for self-hosted BYOS when an independently verified key export gives
-  a viable recovery path. No content-decryption material is escrowed to Valkyrian Labs (§5.5).
+  a viable recovery path (§5.5).
+- **Recovery custody amendment (#344):** "Sovereignty is the default. Custody is an option. Neither should compromise
+  the other." By default, Vaulthalla recovery is independently customer-controlled. Valkyrian Labs receives no
+  recovery keys or decryption authority unless a customer separately enrolls in an explicitly authorized custodial
+  recovery service. D2's "do not escrow content-decryption material to Valkyrian Labs" is the default for every vault;
+  custody exists only through tier C (spec 05 §3.1) after its own approval, and is **not implemented**. The formats
+  are extensible for separately authorized recipients and threshold participants without a redesign (§5.2, §5.7).
 - **Replay limit (#344):** an untrusted bucket can replay an older valid state unless the customer keeps an
   independent freshness checkpoint (§4.5).
 - **Quality gate (#344):** `opaque_v1` creation is not offered as fully recoverable until the manifest, recovery
@@ -72,8 +78,10 @@ sorted keys without whitespace to be reproducible.
      "created_at": "…", "retired_at": "…", "envelopes": ["<kid>", "…"]},
     {"version": 2, "key_check": "<hex>", "attestation": {…}, "created_at": "…", "retired_at": null, "envelopes": […]}
   ],
-  "recipients": [{"id": "<hex SHA-256 of the recipient public key>", "suite": 1, "label": "Recovery kit 2026-11",
-                  "added_at": "…"}],
+  "recovery_policy": {"v": 1, "threshold": null, "grants": [
+    {"grant_id": "<b32>", "recipient_id": "<hex SHA-256 of the recipient public key>", "class": "customer",
+     "suite": 1, "label": "Recovery kit 2026-11", "added_at": "…", "authorized_by": "<entry id or device id>",
+     "revoked_at": null}]},
   "segments": [{"sid": "<b32>", "range": ["00", "7f"], "count": 4096, "object_sha256": "<hex>", "size": 391104}],
   "snapshots": [{"sid": "<b32>", "object_sha256": "<hex>", "size": 1234}],
   "stats": {"files": 7311, "dirs": 402, "bytes": 18234411231}
@@ -239,7 +247,9 @@ to it and stores the envelopes in the bucket. The private key never reaches the 
 customer runs (spec 05 §3).
 
 This is the customer-wrapped escrow the maintainer's custody comment describes. It adds a customer-held decryption
-path; it does not add one for Valkyrian Labs.
+path; it does not add one for Valkyrian Labs. Customer-controlled recipients are the default and the only recipient
+class this design implements (tier A, spec 05 §3.1); restore with them needs nothing from Valkyrian Labs: no
+account, payment, registration or VL infrastructure.
 
 ### 5.2 Envelope format (KEV1)
 
@@ -248,8 +258,9 @@ path; it does not add one for Valkyrian Labs.
 | 0 | 8 | magic | `89 56 48 4B 0D 0A 1A 0A` (`\x89VHK\r\n\x1a\n`) |
 | 8 | 2 | version | `1` |
 | 10 | 2 | suite | `1` X25519 + HKDF-SHA-256 + AES-256-GCM (recovery recipients); `2` P-256 ECDH + HKDF-SHA-256 + AES-256-GCM (device grants, spec 04: Secure Enclave keys are P-256) |
-| 12 | 1 | purpose | `1` = a vault key version |
-| 13 | 3 | reserved | `0` |
+| 12 | 1 | purpose | registry: `1` = a whole vault key version (32 bytes); `2`-`255` reserved (e.g. a threshold share, whose payload a future spec defines) |
+| 13 | 1 | recipient_class | registry: `0` = customer-controlled (recovery recipients and owner devices: every envelope this design writes); `1`-`255` reserved for separately authorized classes (e.g. custodian, threshold participant) |
+| 14 | 2 | reserved | `0` |
 | 16 | 4 | key_version | ≥ 1 |
 | 20 | 16 | vault_uid | |
 | 36 | 32 | recipient_id | SHA-256 of the recipient public key (32 raw bytes for X25519; 65-byte uncompressed SEC1 point for P-256) |
@@ -265,7 +276,7 @@ K_wrap = HKDF-Expand(HKDF-Extract(salt = epk ‖ rpk, IKM = Z), "vh.kev1.wrap" �
 
 The zero nonce is safe because `K_wrap` is single-use (fresh ephemeral key). Sizes: 150 bytes (X25519), 183 bytes
 (P-256). Reader checks, in order: `bad_magic`, `unsupported_version`, `unsupported_suite`, `bad_purpose`,
-`vault_mismatch`, `recipient_mismatch`, `bad_length`, `bad_ephemeral`, `wrap_auth_failed`. All primitives exist in
+`unsupported_recipient_class`, `reserved_nonzero`, `vault_mismatch`, `recipient_mismatch`, `bad_length`, `bad_ephemeral`, `wrap_auth_failed`. All primitives exist in
 OpenSSL 3.0, libsodium, Python `cryptography` and CryptoKit (`Curve25519.KeyAgreement`, `P256.KeyAgreement`
 including `SecureEnclave.P256`, `HKDF<SHA256>`, `AES.GCM`); HPKE (RFC 9180) was not chosen because Ubuntu 24.04's
 OpenSSL 3.0 lacks it.
@@ -312,10 +323,13 @@ server. One kit can serve many vaults.
 | Self-hosted BYOS, `encrypt_upstream=true` | recommended, optional. Without a recipient, the vault must have a **verified export** covering every needed version (`vault.keys.status`: current `exported_version`, a Desktop confirmation with a matching key check, and no `missing_versions`); otherwise status and health report `recovery_material_missing` (degraded, never hidden) and the console shows the recommendation prominently. A rotation makes an export stale, which returns the vault to `recovery_material_missing` until re-exported. | status, health, console |
 | Local vaults, `transparent` vaults | the existing export guidance | — |
 
-Valkyrian Labs never holds a recipient's private key or seed: kits are generated on customer devices (§5.3), the
-server only ever receives public keys, and managed-storage onboarding never generates a seed server-side. The
-server can't verify who holds a public key; the product and the docs say plainly that a recipient VL generated
-would be escrow and is not offered (spec 05).
+By default, Vaulthalla recovery is independently customer-controlled: kits are generated on customer devices
+(§5.3), the server only ever receives public keys, and neither managed-storage onboarding nor account creation,
+adding a payment method or upgrading Vaulthalla generates a seed, uploads a key or enrolls a recipient. Valkyrian
+Labs receives no recovery keys or decryption authority unless a customer separately enrolls in an explicitly
+authorized custodial recovery service (tier C, spec 05 §3.1; planned, not implemented). The server can't verify
+who holds a public key, so the class in the envelope and the root is what the customer declared and authorized;
+a recipient Valkyrian Labs holds is never offered as class `0`.
 
 ### 5.6 The same host after a TPM loss
 
@@ -325,6 +339,24 @@ generate a new `vault_master` while vault keys depend on it and throws `MasterSe
 key backups) plus one: `vh vault keys import <vault> --recovery-kit <file>` unwraps the vault's envelopes from the
 bucket with the kit's seed and feeds them to the normal import, which verifies attestations against this node's
 own `key_attestation_keys` (revision 3, unchanged). No bucket-level restore is needed in that case.
+
+### 5.7 Extensibility for separately authorized recipients (no implementation)
+
+The recipient system must be able to accept, later, recipients that are not customer devices (a custodian's key,
+threshold participants) without a destructive change to VHF1, KEV1 or the manifest. Checked concretely:
+
+| Surface | How a future recipient type fits | Effect on existing data |
+|---|---|---|
+| VHF1 objects | content keys are independent of who can unwrap them | none |
+| KEV1 | `recipient_class` (byte 13) names the class and `purpose` (byte 12) the payload type, both inside the authenticated prefix; a new suite can be added for a custodian's key type | every envelope written now has class `0` and purpose `1` and stays byte-identical (vectors unchanged); v1 readers reject (and a restore skips, without failing) classes and purposes they don't know: vectors `reserved_recipient_class`, `reserved_purpose_threshold_share` |
+| Manifest root | `recovery_policy` is versioned (`v`); each recipient is an **independently revocable grant** (`grant_id`, `class`, `authorized_by`, `revoked_at`); `threshold` is reserved (`null`); readers ignore unknown members and never use a grant of an unknown class to decrypt | none |
+| Sealed vault chain (spec 04 §5) | a future op (e.g. a custodial grant) would be a new `op` signed by an owner device, never by the server | none |
+
+Revocation of a grant stops new envelopes for it. It does not revoke access the recipient already had: an envelope
+it received keeps unwrapping the versions it covers, so a revocation is followed by a key rotation (and, where the
+recipient could have read old data, re-encryption of that data) when the customer needs the recipient's access cut
+off. Nothing here adds an API, table, billing hook or code path for custodians, and no recovery material may be
+sent to Valkyrian Labs until such a service is designed, approved and explicitly enabled by the customer.
 
 ## 6. Restore into a new instance
 
@@ -338,7 +370,7 @@ command (key material never travels through browser sessions, D4).
 
 1. Read `.vaulthalla/layout.json` as a hint; list `.vaulthalla/key/`.
 2. Derive the recipient key from the seed; unwrap every envelope addressed to it for the kit's `vault_uid`
-   (`recipient_mismatch` envelopes are skipped). Add versions from `--export` if given.
+   (`recipient_mismatch`, `bad_purpose` and `unsupported_recipient_class` envelopes are skipped, never fatal). Add versions from `--export` if given.
 3. Open the root with the held versions; apply the chain rules with the kit's checkpoint as `known` (§4.1).
 4. **Provenance (the key-import rule, carried to a new node).** A version becomes canonical in the new vault only if
    its `key_check` (recomputed from the bytes, with the *origin* vault id) matches the root's and its attestation
@@ -423,6 +455,8 @@ nothing shared but the bucket and the customer material.
 | `VaultRecover*` | §6.2 steps incl. the provenance rule; dry run writes nothing |
 | `VaultRecoverTrustAnchor*` | every row of the §6.2 step 4 table: verified, missing, empty, wrong-node, wrong-vault, self-attested and key-check mismatch anchors |
 | `RecoveryRequirement*` | managed-storage creation and writes refused without a recipient; last-recipient removal refused; BYOS without a recipient or a verified, current export reports `recovery_material_missing`; a rotation makes an export stale |
+| `Kev1ReservedFields` | envelopes of a reserved purpose or recipient class are rejected by the reader and skipped by a restore that still succeeds from the customer's envelopes |
+| `RecoveryNoSilentCustody` | creating an account-free vault, upgrading, adding managed storage or enrolling a recipient never adds a non-customer grant or sends key material anywhere but the bucket (request capture) |
 | `KeysImportFromKit*` | `MasterSecretLost` on the same host, then import from the kit's envelopes restores the vault under the existing attestation rules |
 | `ManifestReplay*` | an older complete state (root + segments + object versions) authenticates; without a checkpoint the report says "freshness unverified"; with one, older states are refused |
 | Drill (§7) | the north star, end to end |

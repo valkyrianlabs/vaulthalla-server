@@ -13,7 +13,7 @@ encrypted bucket reconstructs files, names, versions and layout after the old se
 | [03 Metadata recovery](03-metadata-recovery.md) | 3 | encrypted copy-on-write manifest (root + segments) with epochs, KEV1 key envelopes to a customer recovery recipient, the recovery kit, `vh vault recover`, the catastrophic restore drill |
 | [04 Sealed vaults](04-sealed-vaults.md) | 4 | device-held keys, a signed membership chain, SAS-verified device approval, recovery seed; the server stores ciphertext, encrypted names and envelopes; blocked on #325 |
 | [05 Claims and custody](05-claims-and-custody.md) | 5 | provider-blind vs operator-blind vs device E2EE by deployment model, support-access rules, allowed wording |
-| [`vectors/`](vectors/) | 2, 3 | `vh_crypto_vectors.py` (reference implementation) and `vectors.json` (66 vectors: object ids, VHF1, range reads, negatives, KEV1, recovery seed, manifest chain). `python3 vectors/vh_crypto_vectors.py --check` |
+| [`vectors/`](vectors/) | 2, 3 | `vh_crypto_vectors.py` (reference implementation) and `vectors.json` (69 vectors: object ids, VHF1, range reads, negatives, KEV1, recovery seed, manifest chain). `python3 vectors/vh_crypto_vectors.py --check` |
 
 ## Dependencies
 
@@ -74,6 +74,8 @@ flowchart TD
    **WS1-d** docs.
 9. **WS2-d**: retire the legacy format behind a version floor and local upgrade gates.
 10. **#325** (in parallel with 2-9), then **WS5-b** and **WS4** (sealed vaults) with the Desktop work.
+11. **Vaulthalla Cloud Recovery (Tiers B, C)**: a separate design workstream, not implemented, product-owner approval
+    required (05 §9).
 
 Each step is a separate PR with its own tests; none rotates an existing key. Steps 8 and 9 are the only ones that
 rewrite stored data, and both are verified before anything old is removed.
@@ -85,9 +87,28 @@ The four questions raised in review were decided on #344; the specs encode them.
 | | Decision | Where |
 |---|---|---|
 | **D1** | On a fresh node, a key version is canonical only when its original-node attestation verifies against the original public key pinned in customer-held recovery material (the kit, or an export that carries the public key). Otherwise explicit salvage and re-encryption. A fresh server's self-attestation never proves old provenance. Empty, missing and wrong anchors and an independent-host restore are tested. | 03 §5.4, §6.2, §7, §8 |
-| **D2** | Customer-held recovery recipients are mandatory for managed storage and sealed vaults before creation or writes. Self-hosted BYOS: prominently recommended, optional when an independently verified, current key export exists; otherwise `recovery_material_missing`. No content-decryption material is escrowed to Valkyrian Labs. | 03 §5.5, 04 §6, 05 |
+| **D2** | Customer-held recovery recipients are mandatory for managed storage and sealed vaults before creation or writes. Self-hosted BYOS: prominently recommended, optional when an independently verified, current key export exists; otherwise `recovery_material_missing`. Read with the custody amendment below: no escrow of content-decryption material to Valkyrian Labs is the default for every vault. | 03 §5.5, 04 §6, 05 |
 | **D3** | Every required retained upstream version and recovery generation is re-sealed into the opaque layout. Inventories and actual decryption are verified before anything path-keyed is deleted. Object Lock, provider retention, incomplete history and failed deletes are respected; the migration is never reported finished while names remain in provider history. Bounded verify/soak/rollback period; destructive-cleanup guardrails. | 01 §6 |
 | **D4** | Sealed vault v1: single owner, multiple owner-approved devices, macOS Desktop first; sharing and web access in phase 2. The server never receives plaintext, names or unwrapped content keys, and never enrolls an encryption-capable device on its own. | 04 |
+
+### Recovery custody amendment (product owner, #344)
+
+> **Sovereignty is the default. Custody is an option. Neither should compromise the other.**
+
+- By default, Vaulthalla recovery is independently customer-controlled. Valkyrian Labs receives no recovery keys or
+  decryption authority unless a customer separately enrolls in an explicitly authorized custodial recovery service.
+- Self-hosted and BYOS work fully without a vaulthalla.cloud account, payment, VL-held keys or plaintext, VL
+  infrastructure, telemetry, registration or central authorization; restore works with the original server,
+  database, TPM and all VL infrastructure gone. This is never removed, weakened or commercially restricted.
+- Three recovery tiers: **A Self-Managed** (these specs), **B Cloud Assisted** and **C Cloud Custodial**, both
+  **planned, not implemented** (05 §3.1). Payment is never cryptographic consent; custody needs its own explicit
+  authorization; no account, payment, managed-storage subscription or upgrade changes a vault's recovery properties.
+- No vault is called operator-blind while its recovery configuration gives Valkyrian Labs unilateral plaintext
+  recovery. Noncustodial sealed vaults and fully self-managed deployments keep the stronger guarantee.
+- Formats are extensible without a redesign: KEV1's `recipient_class` and `purpose` registries and the root's
+  versioned `recovery_policy` of independently revocable grants (03 §5.2, §5.7); existing envelopes are byte-identical
+  and the vectors include the reserved values. No code, APIs, tables or billing hooks for Tiers B and C.
+- The future service is a separate workstream that needs product-owner approval (05 §9).
 
 Settled earlier on #329 and not reopened: opaque ids are intrinsic to `encrypt_upstream=true` (no second switch;
 readable paths only for `encrypt_upstream=false`); AEAD chunks live inside one object per file version, with

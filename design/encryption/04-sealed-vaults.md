@@ -20,6 +20,8 @@ hardening) before implementation starts. Uses VHF1 ([02](02-authenticated-file-f
   enrolls an encryption-capable device on its own: only a chain entry signed by an existing device of the owner (or
   the owner's recovery key) adds one.
 - **D2 (#344):** a recovery recipient is mandatory before the vault is created or written (§6).
+- **Custody amendment (#344):** sovereignty is the default. Sealed vaults stay noncustodial; nothing here holds or
+  sends recovery material to Valkyrian Labs (§6).
 
 ## 2. Threat model
 
@@ -156,8 +158,12 @@ device-run job ("re-seal everything"), never server-run.
 
 Creating a sealed vault requires a recovery recipient (the genesis entry must name one; the server refuses a
 genesis without one and refuses every write before a valid genesis is stored) and asks the user to store the kit
-(1Password item or print) before the first file is written. There is no operator escrow and no "reset" by
-an administrator: a super admin can delete a sealed vault, not open it.
+(1Password item or print) before the first file is written. Sealed vaults are noncustodial: there is no operator
+escrow and no "reset" by an administrator; a super admin can delete a sealed vault, not open it. This stronger
+guarantee holds for every sealed vault this design creates. A future custodial option (tier C, spec 05 §3.1;
+planned, not implemented, separate approval) could only be added by an owner device signing a new chain entry for
+it; the server can't add one, every device shows the vault's recipients, and a sealed vault with such a grant would
+lose the operator-blind claim (spec 05 §3).
 
 ## 7. Migration
 

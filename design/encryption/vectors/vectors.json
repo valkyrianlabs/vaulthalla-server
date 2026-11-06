@@ -78,6 +78,39 @@
         "recipient_sk_hex": "63d680232d64f5efb3d697ed9242be00fe8ab5fb9331cd597b6ce88c63354a97",
         "suite_expected": 2,
         "vault_uid_hex": "5648f1a2b3c4d5e6f708192a3b4c5d6e"
+      },
+      {
+        "description": "purpose 2 (reserved, e.g. a future threshold share): skipped by v1 readers",
+        "envelope_hex": "8956484b0d0a1a0a0001000102000000000000015648f1a2b3c4d5e6f708192a3b4c5d6eacb70488ca498248ed2f741dddc1f3dc38a1f6389f0e3f9bcbf00f95275fdb950020f6ce2b0688a33f5c9bc8245ad2fe513e3c3c6ecb8d8147a87dbbee0f5fce993a35ebaf43a18039e11965e32782830668498b5778e7d77e9bafccff28e698ce955fbdc44f465482750f45cb393c4e6671",
+        "expect": {
+          "error": "bad_purpose"
+        },
+        "name": "reserved_purpose_threshold_share",
+        "recipient_sk_hex": "81536b561f79b8bfd3c3b1fd8136e66ca251f79564915431585d1e28766a8141",
+        "suite_expected": 1,
+        "vault_uid_hex": "5648f1a2b3c4d5e6f708192a3b4c5d6e"
+      },
+      {
+        "description": "recipient class 1 (reserved for separately authorized recipients): skipped by v1 readers",
+        "envelope_hex": "8956484b0d0a1a0a0001000101010000000000015648f1a2b3c4d5e6f708192a3b4c5d6eacb70488ca498248ed2f741dddc1f3dc38a1f6389f0e3f9bcbf00f95275fdb950020f6ce2b0688a33f5c9bc8245ad2fe513e3c3c6ecb8d8147a87dbbee0f5fce993a35ebaf43a18039e11965e32782830668498b5778e7d77e9bafccff28e698ce955fbdc44f465482750f45cb393c4e6671",
+        "expect": {
+          "error": "unsupported_recipient_class"
+        },
+        "name": "reserved_recipient_class",
+        "recipient_sk_hex": "81536b561f79b8bfd3c3b1fd8136e66ca251f79564915431585d1e28766a8141",
+        "suite_expected": 1,
+        "vault_uid_hex": "5648f1a2b3c4d5e6f708192a3b4c5d6e"
+      },
+      {
+        "description": "reserved bytes 14-15 set",
+        "envelope_hex": "8956484b0d0a1a0a0001000101000001000000015648f1a2b3c4d5e6f708192a3b4c5d6eacb70488ca498248ed2f741dddc1f3dc38a1f6389f0e3f9bcbf00f95275fdb950020f6ce2b0688a33f5c9bc8245ad2fe513e3c3c6ecb8d8147a87dbbee0f5fce993a35ebaf43a18039e11965e32782830668498b5778e7d77e9bafccff28e698ce955fbdc44f465482750f45cb393c4e6671",
+        "expect": {
+          "error": "reserved_nonzero"
+        },
+        "name": "reserved_nonzero",
+        "recipient_sk_hex": "81536b561f79b8bfd3c3b1fd8136e66ca251f79564915431585d1e28766a8141",
+        "suite_expected": 1,
+        "vault_uid_hex": "5648f1a2b3c4d5e6f708192a3b4c5d6e"
       }
     ],
     "positive": [
