@@ -1,6 +1,7 @@
 #pragma once
 
 #include "crypto/SecretBytes.hpp"
+#include "platform/Sealer.hpp"
 
 #include <span>
 #include <vector>
@@ -48,6 +49,22 @@ public:
     void updateMasterKey(std::span<const uint8_t> newMasterKey);
 
     [[nodiscard]] bool sealedExists() const;
+
+    // The policy the stored blob is bound to (read from its public part; None when there is none).
+    [[nodiscard]] platform::sealer::Policy policy() const;
+    // Replaces the stored blob with one bound to `to` at the current PCR values, staged and verified (platform::
+    // sealer::reseal): the secret itself is unchanged and never regenerated. PolicyUnsatisfied when the blob can no
+    // longer be unsealed. Not for the held copy: this provider keeps what it unsealed.
+    platform::sealer::ResealResult reseal(platform::sealer::Policy to);
+
+    // secrets.tpm_pcr_policy (#351): what a secret sealed now is bound to. None unless the config says pcr7 and this
+    // platform has PCRs (macOS: the Secure Enclave is unaffected).
+    [[nodiscard]] static platform::sealer::Policy configuredPolicy();
+    // The names of every sealed secret on this host (the `.sealed_<name>.blob` directories of the state directory),
+    // ascending.
+    [[nodiscard]] static std::vector<std::string> sealedNames();
+    // Tests only: report this posture ("hardware", ...) instead of the real one; nullptr restores it.
+    static void setPostureForTesting(const char* posture) noexcept;
 
     // Deletes this secret's sealed state from the host and wipes the held copy. Irreversible: only for a secret
     // nothing is wrapped under any more, verified by the caller (a rewrap's finalized or discarded vault master

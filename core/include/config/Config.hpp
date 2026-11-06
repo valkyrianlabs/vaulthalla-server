@@ -468,6 +468,10 @@ struct SecretsConfig {
     bool require_hardware = false;
     // macOS without a usable Secure Enclave: allow the plain-file development backend instead of refusing to start.
     bool allow_development_file_backend = false;
+    // "none" (default) or "pcr7" (#351): secrets sealed from now on are bound to TPM PCR 7, the secure-boot state, so
+    // they unseal only while it holds the value they were sealed under. Linux TPM only: the Secure Enclave is
+    // unaffected. Existing blobs are never rebound by this setting; `vh secret reseal` does that, explicitly.
+    std::string tpm_pcr_policy = "none";
 };
 
 struct Config {

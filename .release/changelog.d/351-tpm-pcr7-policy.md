@@ -1,0 +1,4 @@
+- platform::sealer: Policy {None, Pcr7}; TPM seal with PolicyPCR over PCR 7 (no USERWITHAUTH), unseal through a policy session, typed PolicyUnsatisfied on TPM_RC_POLICY_FAIL; staged, verified reseal() (<name>.staged.*, <name>.prev.*) with recover() run by KeyProvider::init/initGuarded; macOS ignores the policy (#351).
+- secrets.tpm_pcr_policy none|pcr7 (default none) binds newly sealed secrets only; crypto/secrets/Reseal (inventory, run) never calls init/initGuarded.
+- `vh secret reseal [--pcr7|--none]` (gate: hardware posture, vault key backups, `vh secret export all` < 24 h; audited secrets.reseal, confirmation sealing_policy_reseal, stepup Secrets, excluded from MCP) and `vh secret policy`; migration 132 secret_exports records exports; health deps.secrets_policy, secrets_pcr_bound, secrets_warning (degraded when PCR-bound and no export in 30 days).
+- Key attestation key and the DB password are never regenerated on PolicyUnsatisfied.

@@ -66,15 +66,17 @@ the same lock-and-wipe behavior (`crypto/SecretBytes.hpp`, which also holds `Wip
 
 ## 5. Part 3: PCR 7 policy (opt-in, never silent)
 
-- `secrets.tpm_pcr_policy: none | pcr7` (default `none`) applies only when an operator reseals explicitly: `sudo vh secret reseal --pcr7`. Existing blobs are never rebound behind the operator's back.
-- `vh secret reseal --pcr7` refuses unless:
-  - every vault's current and historical key versions have a confirmed backup (`vault.keys.status`);
-  - a `vh secret export` was taken in the last 24 hours;
-  - a hardware TPM is present.
-- The reseal is staged and verified: write the new blob beside the old, unseal it, compare, then rename.
-- The firmware-update hazard: a firmware or Secure Boot change alters PCR 7, and unseal fails until the secrets are restored from the exports.
-  - The docs give the recovery drill: export, update, then import, or `vh secret reseal --pcr7` before rebooting into new firmware.
-  - Health turns `warning` when the posture is PCR-bound and no export is newer than 30 days.
+Status: implemented (#351), Linux TPM only. macOS (the Secure Enclave) is unaffected: it has no PCRs, `secrets.tpm_pcr_policy` does nothing there and `vh secret reseal` reports that there is nothing to reseal.
+
+As built:
+- **Seal.** `secrets.tpm_pcr_policy: none | pcr7` (default `none`, config.yaml only, invalid values refuse to start). A secret sealed while it is `pcr7` is a KEYEDHASH object whose auth policy is a PolicyPCR digest over PCR 7 (SHA-256 bank) at the current value, with `USERWITHAUTH` off so the empty password is no way in. `platform::sealer::seal(..., Policy)`; `KeyProvider::sealAndKeep` passes the configured one. The setting never touches an existing blob.
+- **Unseal.** The blob's public part says whether it is bound (non-empty auth policy), so no configuration is needed to open one: a policy session runs PolicyPCR and authorizes the unseal. `TPM_RC_POLICY_FAIL` becomes the typed `platform::sealer::PolicyUnsatisfied`, whose message names the two recoveries. It is never turned into "missing": the DB password, `initGuarded`, the key attestation key (which otherwise regenerates when it cannot unseal) and the vault masters all let it propagate, so nothing is minted over records and no blob is overwritten.
+- **Reseal.** `vh secret reseal [--pcr7|--none]` reseals every `.sealed_*.blob` of the state directory to the configured policy at the current PCR values (the flags assert what config.yaml says; the daemon reads config at start, so the order is edit, restart, reseal). `crypto/secrets/Reseal` never calls `init`/`initGuarded`, so it cannot mint a secret over existing rows; the dependent rows are wrapped by the secrets, not the blobs, and are not touched. Per blob (`platform::sealer::reseal`): unseal under the old policy, write `<name>.staged.*`, unseal it and compare byte for byte, keep the old pair as `<name>.prev.*`, rename the new pair in (`.pub` then `.priv`), unseal the live blob again, delete the kept pair. A blob already at the target policy and PCR value is skipped, so a run that stopped (a broken blob, a crash) is repeated until done.
+- **Crash recovery** (`sealer::recover`, run by `KeyProvider::init`/`initGuarded` before every unseal): a live pair that unseals stays and the leftovers go; a torn pair (new `.pub` over old `.priv`) is rolled back to the kept pair; while PCR 7 does not match nothing is deleted. Tested at every stage on swtpm.
+- **Gate for `--pcr7`:** a hardware TPM (posture `hardware`; swtpm is refused), every vault's keys backed up (current version exported, or covered by recovery recipients, none missing, none unreadable), and a `vh secret export all` under 24 hours old. Exports are recorded in `secret_exports` (migration 132: when, by whom, which secrets; never the secrets). All reasons are reported at once. `--none` needs only the confirmation. Audited as `secrets.reseal`, step-up family Secrets, never an agent.
+- **Health:** `deps.secrets_policy`, `secrets_pcr_bound` and `secrets_warning`; `degraded` with the warning when secrets are PCR-bound and no export is newer than 30 days, or when the blobs do not match the configured policy. `vh secret policy` shows the detail.
+- **Firmware hazard and the drill.** A change to PCR 7 locks the bound secrets until PCR 7 matches again. Recovery is a recovery boot (then `reseal --none`, or update again) or the exports (`vh secret set`, `vh vault keys import`, as for a lost master). One correction to the original sketch: resealing before rebooting into new firmware cannot carry the secrets across, because the TPM cannot bind to a value it has not measured. The planned drill is therefore: export, set the policy to `none` and reseal, update, then bind again.
+- **Tests:** swtpm (PCR 7 extended to simulate the change, restarted to simulate a recovery boot): bound unseal and fail-closed, no password path, reseal and idempotence, reseal to none from a recovery boot, a crash at every stage, a torn pair, the full recovery drill, `reseal::run` over many names and a broken blob; the gate, health warning and policy names without a TPM. They skip where `sealingUnusable()` (the CI container's TPM) or swtpm is missing, and run on the dev box. Unverified on a hardware TPM; the behavior is the same TPM2 policy flow, and the reseal on real hardware is not proven here.
 
 ## 6. Part 4: versioned master-key rewrap (`vault_master` first)
 
@@ -161,7 +163,7 @@ Recommendation: (A) now. (B) as an opt-in later if a customer needs software-onl
 ## 8. Implementation issues (to open)
 
 1. Part 2: `SecretKey` for master secrets (#350, done).
-2. Part 3: PCR 7 opt-in with reseal, health warning and drill docs.
+2. Part 3: PCR 7 opt-in with reseal, health warning and drill docs (#351, done).
 3. Part 4a: versioned rewrap engine with staging columns and the `vault_master` rotation command (#352, done).
 4. Part 4b: `ak_master` and `s3gw_master` rewrap, and JWT and device-identity rotation commands (#353, done).
 5. swtpm state key, if option (B) is chosen.

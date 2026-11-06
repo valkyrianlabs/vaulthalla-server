@@ -193,7 +193,18 @@ static CommandResult handle_secrets_export(const CommandCall& call) {
 
     if (out.empty()) return invalid("secrets export: unknown secret '" + std::string(secretArg) + "'. Valid secrets are: db-password, jwt-secret, mfa-seal, mfa-pepper, all");
     vh::auth::stepup::require(vh::auth::stepup::Family::Secrets);  // #359: host-exempt, never an agent
-    return handle_secret_encrypt_and_response(call, out, usage);
+    auto result = handle_secret_encrypt_and_response(call, out, usage);
+    // A complete export is what `vh secret reseal --pcr7` and the PCR 7 health warning look for (#351).
+    if (result.exit_code == 0 && secretArg == "all") {
+        try {
+            std::vector<std::string> names;
+            for (const auto& entry : out) names.push_back(entry.value("name", ""));
+            vh::ops::master_secrets::recordSecretsExport(call.user, names);
+        } catch (const std::exception& e) {
+            log::Registry::audit()->warn("[shell::secrets] could not record the export: {}", e.what());
+        }
+    }
+    return result;
 }
 
 // ---- vh secret master (#352, #353) ----------------------------------------------------------------------------
@@ -437,6 +448,57 @@ static CommandResult handle_secrets_device_identity(const CommandCall& call) {
     });
 }
 
+// ---- vh secret policy, vh secret reseal (#351) ---------------------------------------------------------------------
+
+static std::string policy_status_text(const master_ops::PolicyStatus& s) {
+    std::string out = fmt::format("Sealing policy: {} (secrets.tpm_pcr_policy), {} sealing\n", s.configured, s.posture);
+    if (!s.supported) {
+        out += "  The Secure Enclave has no PCR policy: it is unaffected by secrets.tpm_pcr_policy.\n";
+        return out;
+    }
+    for (const auto& e : s.secrets)
+        out += fmt::format("  {:<22} {}{}\n", e.name, e.policy, e.complete ? "" : "  [INCOMPLETE BLOB]");
+    out += fmt::format("  {} of {} sealed secret(s) bound to PCR 7\n", s.bound, s.secrets.size());
+    out += fmt::format("  last `vh secret export all`: {}\n", iso(s.last_export_at));
+    if (s.warning) out += "  WARNING: " + *s.warning + "\n";
+    return out;
+}
+
+static CommandResult handle_secrets_policy(const CommandCall& call) {
+    const bool json = hasFlag(call, "json") || hasFlag(call, "j");
+    try {
+        const auto s = master_ops::policyStatus(call.user);
+        return ok(json ? master_ops::toJson(s).dump(4) : policy_status_text(s));
+    } catch (const ops::Error& e) {
+        return invalid(std::string("secret policy: ") + e.what());
+    }
+}
+
+static CommandResult handle_secrets_reseal(const CommandCall& call) {
+    if (AgentCallScope::active())
+        return invalid("secret reseal: sealed secrets are rebound by a human at the terminal, never by an agent");
+    const bool json = hasFlag(call, "json") || hasFlag(call, "j");
+    const bool pcr7 = hasFlag(call, "pcr7"), none = hasFlag(call, "none");
+    if (pcr7 && none) return invalid("secret reseal: --pcr7 and --none exclude each other");
+    master_ops::ResealRequest req;
+    if (pcr7) req.expect = vh::platform::sealer::Policy::Pcr7;
+    if (none) req.expect = vh::platform::sealer::Policy::None;
+    return runConfirmable(call, "secret reseal", [&](const bool yes) {
+        req.confirmed = yes;
+        const auto r = master_ops::reseal(call.user, req);
+        if (json) return ok(master_ops::toJson(r).dump(4));
+        std::string out = fmt::format("Resealed under policy {}: {} of {} sealed secret(s) changed, each unsealed and "
+                                      "compared before it replaced the old blob. No secret changed.\n",
+                                      vh::platform::sealer::policyName(r.target), r.changed(), r.items.size());
+        for (const auto& i : r.items)
+            out += fmt::format("  {:<22} {} -> {}{}\n", i.name, vh::platform::sealer::policyName(i.from),
+                               vh::platform::sealer::policyName(i.to), i.changed ? "" : "  (already)");
+        if (r.target == vh::platform::sealer::Policy::Pcr7)
+            out += "Run this again after a planned firmware or Secure Boot update, before rebooting into it.";
+        return ok(out);
+    });
+}
+
 static bool isSecretsMatch(const std::string& cmd, const std::string_view input) {
     return isCommandMatch({"secrets", cmd}, input);
 }
@@ -454,6 +516,14 @@ static CommandResult handle_secrets(const CommandCall& call) {
     if (!call.positionals.empty() && isSecretsMatch("device-identity", call.positionals[0])) {
         const auto [_, subcall] = descend(call);
         return handle_secrets_device_identity(subcall);
+    }
+    if (!call.positionals.empty() && isSecretsMatch("policy", call.positionals[0])) {
+        const auto [_, subcall] = descend(call);
+        return handle_secrets_policy(subcall);
+    }
+    if (!call.positionals.empty() && isSecretsMatch("reseal", call.positionals[0])) {
+        const auto [_, subcall] = descend(call);
+        return handle_secrets_reseal(subcall);
     }
     if (!call.user->encryptionKeysPerms().canExport())
         return invalid("secrets export: insufficient permissions to export secrets. Requires encryption keys export permission.");

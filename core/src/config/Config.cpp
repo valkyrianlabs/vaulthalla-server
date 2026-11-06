@@ -188,6 +188,10 @@ Config& Config::operator=(Config&&) noexcept = default;
         if (auto node = root["secrets"]; node && node.IsMap()) {
             cfg.secrets.require_hardware = node["require_hardware"].as<bool>(false);
             cfg.secrets.allow_development_file_backend = node["allow_development_file_backend"].as<bool>(false);
+            cfg.secrets.tpm_pcr_policy = node["tpm_pcr_policy"].as<std::string>("none");
+            if (cfg.secrets.tpm_pcr_policy != "none" && cfg.secrets.tpm_pcr_policy != "pcr7")
+                throw std::invalid_argument("config.yaml: secrets.tpm_pcr_policy must be none|pcr7, got '" +
+                                            cfg.secrets.tpm_pcr_policy + "'");
         }
 
         applyLegacyKeys(root, cfg, deprecations);

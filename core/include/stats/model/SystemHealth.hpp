@@ -75,6 +75,12 @@ struct DependencyHealth {
     std::string secretsBackend;
     // What actually protects them (#326): "hardware", "software" (swtpm), "development" (files) or "unknown".
     std::string secretsPosture{"unknown"};
+    // The TPM PCR 7 policy (#351): the configured one ("none" | "pcr7"), how many sealed secrets carry a PCR 7
+    // binding, and a warning (a bound host with no `vh secret export all` newer than 30 days, or blobs that do not
+    // match the configured policy). Empty warning: none.
+    std::string secretsPolicy{"none"};
+    std::size_t secretsPcrBound = 0;
+    std::string secretsWarning;
 };
 
 struct ShellHealth {

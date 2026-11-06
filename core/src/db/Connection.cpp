@@ -2,6 +2,7 @@
 #include "config/Config.hpp"
 #include "config/Registry.hpp"
 #include "crypto/secrets/KeyProvider.hpp"
+#include "platform/Sealer.hpp"
 #include "crypto/SecretBytes.hpp"
 #include "log/Registry.hpp"
 
@@ -127,6 +128,10 @@ Connection::Connection() : tpmKeyProvider_(
     if (tpmKeyProvider_->sealedExists()) {
         try {
             tpmKeyProvider_->init();
+        } catch (const platform::sealer::PolicyUnsatisfied& e) {
+            // Typed and unwrapped (#351): the message names the recovery paths; nothing was regenerated.
+            log::Registry::runtime()->error("[DBConnection] {}", e.what());
+            throw;
         } catch (const std::exception& e) {
             const auto msg = std::string("Database password failed to initialize: could not unseal the stored DB "
                                          "password with the TPM (sealed under ") + paths::getBackingPath().string() +

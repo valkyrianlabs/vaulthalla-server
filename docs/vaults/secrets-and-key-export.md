@@ -286,6 +286,53 @@ SQL
 
 Then start Vaulthalla. It creates a new host master, and with it a new JWT secret (everyone signs in again), new MFA keys and a new share-link pepper. Users enroll TOTP and print recovery codes again, existing share links stop resolving (create or rotate the ones you still need), and email provider credentials have to be entered again. Vault keys are not affected: they have their own master and their own exports ([Restore Vault Keys](#restore-vault-keys)).
 
+## Bind Secrets To Secure Boot (TPM PCR 7)
+
+By default a sealed secret opens for anyone who can read the state directory and reach this machine's TPM, which stops copying the disk to another machine but not booting this one into another operating system. On Linux you can additionally bind sealed secrets to **PCR 7**, the TPM register that records the secure-boot state (whether Secure Boot is on, its keys and which authorities verified the boot). A bound secret opens only while PCR 7 holds the value it had when it was sealed.
+
+The binding is opt-in and never silent:
+
+1. **Prerequisites.** A hardware TPM (`vh status` shows `hardware`; swtpm is refused, because its state sits on the same disk), a backup of every vault's keys (`vh vault keys status all` shows each current version exported, or covered by recovery recipients), and a `vh secret export all` taken in the last 24 hours, stored off this host.
+2. **Turn it on** in `config.yaml` and restart Vaulthalla:
+
+   ```yaml
+   secrets:
+     tpm_pcr_policy: pcr7
+   ```
+
+   Secrets sealed from now on are bound. Secrets that already exist are **not** touched by the setting.
+3. **Bind the existing secrets**, as a super admin at the terminal:
+
+   ```bash
+   sudo vh secret reseal --pcr7
+   ```
+
+   It refuses, listing every reason at once, unless a hardware TPM seals the secrets, every vault's keys have a confirmed backup and the export is under 24 hours old. Then it asks to confirm. Each sealed secret is unsealed, sealed again beside the old blob, unsealed and compared byte for byte, and only then swapped in; a crash at any point leaves a blob that opens (the next start finishes or rolls back the swap). No secret changes, nothing is re-encrypted and no database row is touched. Agents can't run it, and it is audited as `secrets.reseal`.
+
+`vh secret policy` shows the configured policy, what every sealed secret carries, the age of the last export and any warning. **Health** and `vh status` turn to `degraded` with a warning when secrets are PCR-bound and no `vh secret export all` is newer than 30 days, or when the sealed secrets do not match the configured policy.
+
+macOS is not affected: the Secure Enclave has no PCRs, `tpm_pcr_policy` does nothing there and `vh secret reseal` reports that there is nothing to reseal.
+
+### Firmware And Secure Boot Updates
+
+A firmware update, a change to the Secure Boot keys (PK, KEK, db, dbx) or a different boot configuration changes PCR 7. After that the bound secrets do not open. Vaulthalla fails closed: it refuses to start with an error naming PCR 7 and the recovery paths, it never creates new secrets over the ones it cannot open, and it never regenerates the key attestation key. Nothing is lost; the blobs are intact and open again as soon as PCR 7 has its old value.
+
+**Planned update (the drill).** The TPM cannot bind to a value it has not measured yet, so resealing before the reboot cannot carry the secrets across a change of PCR 7. Take the binding off for the update and put it back after:
+
+1. `vh secret export all --output <file> --recipient <fingerprint>` and `vh vault keys status all`; store the export off this host.
+2. Set `tpm_pcr_policy: none` in `config.yaml`, restart Vaulthalla and run `sudo vh secret reseal --none`. `vh secret policy` shows every secret unbound.
+3. Apply the update and reboot. Start Vaulthalla and check `vh status`.
+4. Set `tpm_pcr_policy: pcr7` again, restart, take a fresh export and run `sudo vh secret reseal --pcr7`.
+
+If the update turns out not to change PCR 7 (most BIOS updates do, a kernel update does not), the secrets stay bound and nothing in this list is needed.
+
+**Recovery after an unplanned change**, either way:
+
+- **A recovery boot.** Boot the configuration the secrets were sealed under (the previous firmware, or Secure Boot settings as they were). Start Vaulthalla there. To turn the policy off for good, set `tpm_pcr_policy: none` in `config.yaml`, restart and run `sudo vh secret reseal --none`; to keep it, update the firmware again and use the planned procedure.
+- **The exports.** If the old state cannot be recovered, set the unusable `.sealed_*.blob` directories in the state directory aside and restore as for a lost master: the host master from the internal secret exports ([A Lost Host Master](#a-lost-host-master), `vh secret set`), the vault keys from their backups ([Restore Vault Keys](#restore-vault-keys)). The restored secrets are sealed under the new PCR 7. Vaulthalla refuses to mint replacements over the stored records, so this needs the exports; keep them current.
+
+Test the drill on a non-production host before relying on it: enable the policy, take the exports, change the secure-boot state, confirm the typed refusal, then recover both ways.
+
 ## Rotate The Vault Master
 
 The vault master is the installation secret that wraps every vault key. Rotating it replaces that secret without re-encrypting a single file: only the wraps of the vault keys change, and the vault keys themselves stay the same. Rotation is for super admins, from a terminal; agents and the web console can't do it.

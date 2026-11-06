@@ -801,6 +801,14 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   a sealer's return) goes in `crypto::WipedKeyCopy`. The share pepper and attestation seed are cached as
   `shared_ptr<const SecretBytes>`. `crypto::setWipeObserverForTesting` and `KeyProvider::setUnsealHookForTesting` are
   the test seams (`test_master_secret_memory.cpp`).
+- **TPM PCR 7 policy (#351).** `platform::sealer::Policy {None, Pcr7}` (Linux TPM only; the Secure Enclave ignores it).
+  `secrets.tpm_pcr_policy` binds newly sealed secrets only (PolicyPCR digest as the object's auth policy, no
+  USERWITHAUTH); unseal reads the policy off the blob and fails with the typed `PolicyUnsatisfied` once PCR 7 changed,
+  which the DB password, `initGuarded` and the attestation key let propagate (nothing is minted or overwritten).
+  `vh secret reseal [--pcr7|--none]` (`ops::master_secrets::reseal`, `crypto/secrets/Reseal`) reseals every
+  `.sealed_*.blob` staged and verified (`<name>.staged.*`, `<name>.prev.*`; `sealer::recover` from `KeyProvider::init`),
+  gated for pcr7 on hardware posture, vault key backups and a `vh secret export all` under 24 h (`secret_exports`,
+  migration 132). Health: `deps.secrets_policy|secrets_pcr_bound|secrets_warning`. Design: `design/sealing/master-secrets.md` §5.
 - **Verify-once integrity.** `crypto::IntegrityRegistry` keys a verdict on (domain, IV, key version, dev, ino, size,
   mtime_ns) and runs one streaming tag check per key on 2 workers (capacity 8192 settled verdicts). `optimistic`
   (default, `preview.media.integrity`) serves at once and every live reader throws `IntegrityError` on its next read
