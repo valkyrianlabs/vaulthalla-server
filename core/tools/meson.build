@@ -7,6 +7,7 @@
 #   helper_inc            core/tools + core/vendor: include "common/protocol.hpp", <nlohmann/json.hpp>
 #   seccomp_dep           libseccomp (every helper links it through helper_common_lib)
 #   helper_common_lib     protocol + Landlock/seccomp sandbox (core/tools/common)
+#   helper_sanitize       override_options for every helper target: never sanitized (see below)
 #   preview_cad_helper    the CAD helper executable (set only when built)
 #   preview_media_helper  the media helper executable (set by preview-media/meson.build when built)
 
@@ -27,6 +28,12 @@ seccomp_dep = dependency(
     required: preview_cad_option.enabled() or (preview_media_present and preview_media_option.enabled()),
 )
 
+# Helpers are never sanitized, not even in a -Db_sanitize build (`make test`): they run under the Runner's RLIMIT_AS
+# cap and their own seccomp filter, where an ASan/UBSan runtime can't reserve its shadow memory ("ReserveShadowMemoryRange
+# failed"), so a sanitized helper aborts before main and every helper test fails. `helper_sanitize` goes on each helper
+# target and on the library they link (a sanitized static library can't link into an unsanitized executable).
+helper_sanitize = ['b_sanitize=none']
+
 helper_common_lib = disabler()
 if seccomp_dep.found()
     helper_common_lib = static_library(
@@ -34,6 +41,7 @@ if seccomp_dep.found()
         files('common/protocol.cpp', 'common/sandbox.cpp'),
         include_directories: helper_inc,
         dependencies: seccomp_dep,
+        override_options: helper_sanitize,
         install: false,
     )
     if not preview_cad_option.disabled()

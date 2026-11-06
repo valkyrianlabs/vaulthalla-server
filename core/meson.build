@@ -470,6 +470,9 @@ if get_option('build_unit_tests')
     # DB-backed suites make one run take several minutes (#123); 120s always timed out.
     test('vh_unit_tests', vh_unit_tests, env: unit_test_env, workdir: meson.current_build_dir(), timeout: 1800,
          depends: unit_test_helper_targets)
+    # Every helper the suites spawn, as this build makes it (bin/tests/run_unit.sh builds it with the test binary, so a
+    # helper left over from another configuration, e.g. a sanitized one, is never what the tests run).
+    alias_target('vh_unit_test_helpers', unit_test_helper_targets)
 endif
 
 # Drift: the committed web contract (web/src/util/generated/wsContract.{json,ts}) must be what this build's usage

@@ -123,6 +123,20 @@ std::string digestHeader(const std::string& body) {
     return "sha-256=:" + b64 + ":";
 }
 
+// AddressSanitizer keeps freed blocks in its quarantine (256 MiB by default) and adds shadow memory, so resident memory
+// says nothing about what the code keeps live: a bounded-memory assertion is only meaningful in an uninstrumented build.
+#if defined(__SANITIZE_ADDRESS__)
+constexpr bool kResidentMemoryIsMeasurable = false;
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+constexpr bool kResidentMemoryIsMeasurable = false;
+#else
+constexpr bool kResidentMemoryIsMeasurable = true;
+#endif
+#else
+constexpr bool kResidentMemoryIsMeasurable = true;
+#endif
+
 uint64_t residentBytes() {
 #if defined(__APPLE__)
     mach_task_basic_info info{};
@@ -935,13 +949,18 @@ TEST_F(ResumableUploadDbTest, LargeFilesInManyPartsAndALargePartInBoundedMemory)
     const std::string raw{asio::buffers_begin(response.data()), asio::buffers_end(response.data())};
     ASSERT_TRUE(raw.starts_with("HTTP/1.1 200")) << raw.substr(0, 400);
     EXPECT_NE(raw.find("Server-Timing"), std::string::npos);
-    EXPECT_LT(growth, 64ull << 20) << "resident memory grew by " << (growth >> 20) << " MiB for a 256 MiB part";
+    if (kResidentMemoryIsMeasurable)
+        EXPECT_LT(growth, 64ull << 20) << "resident memory grew by " << (growth >> 20) << " MiB for a 256 MiB part";
 
     RssSampler sealSampler;
     ASSERT_EQ(statusOf(finishDone(big)), status::ok);
     const auto sealGrowth = sealSampler.finish();
-    EXPECT_LT(sealGrowth, 64ull << 20) << "sealing and commit grew resident memory by " << (sealGrowth >> 20) << " MiB";
+    if (kResidentMemoryIsMeasurable)
+        EXPECT_LT(sealGrowth, 64ull << 20) << "sealing and commit grew resident memory by " << (sealGrowth >> 20) << " MiB";
     EXPECT_TRUE(matchesPattern(engine, file("/large/one-part.bin"), kBig, 6));
+    if (!kResidentMemoryIsMeasurable)
+        GTEST_SKIP() << "uploads checked; the resident-memory bound is not measurable under AddressSanitizer (its "
+                        "quarantine holds freed blocks): run an uninstrumented build for it";
 }
 
 // ---- benchmarks (DISABLED_: run with --gtest_also_run_disabled_tests --gtest_filter='*DISABLED_ResumableBench*') --
