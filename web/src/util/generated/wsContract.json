@@ -1,6 +1,11 @@
 {
   "capabilities": [
     {
+      "description": "Sensitive commands (their contract entries carry step_up: <family>) may answer ERROR step_up_required {family, target, methods, max_age_seconds}; a web session confirms with auth.stepup.begin and auth.stepup.finish and resends the request. Paired devices and agents can't step up; routine device commands never ask (#359).",
+      "name": "auth.step_up",
+      "since": "1.22.0"
+    },
+    {
       "description": "ws device.endpoints answers a paired device with where the listener can be reached; device.pairing.open carries node_id, server_spki_sha256 and endpoints; device.remote.status carries diagnostics (docs/reference/transfer-protocol.md §1).",
       "name": "device.endpoints",
       "since": "1.20.0"
@@ -1058,6 +1063,14 @@
         {
           "model": "WebAuthnConfig",
           "name": "webauthn",
+          "required": false,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "model": "MfaConfig",
+          "name": "mfa",
           "required": false,
           "types": [
             "object"
@@ -3870,6 +3883,22 @@
         }
       ],
       "name": "LoggingConfig"
+    },
+    {
+      "description": "auth.mfa.* (Config.cpp to_json(MfaConfig), #359): multi-factor authentication settings.",
+      "fields": [
+        {
+          "description": "How long a step-up grant lasts, and how recent an aal 2 sign-in must be to stand in for a family-wide one.",
+          "maximum": 900,
+          "minimum": 60,
+          "name": "step_up_ttl_seconds",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "name": "MfaConfig"
     },
     {
       "description": "One of the account's sign-in factors (#356/#357): auth::mfa::to_json(Factor), core/src/auth/mfa/Factors.cpp. Carries no secret and no credential id. id is unique per kind only: name a factor by {kind, id}.",
@@ -18133,7 +18162,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "adece020e347877b41fa73042a73e55267d7acc9d2ad7ae3bf1208f0c66e1136",
+  "models_hash": "144e2cc1625766141f2fb45d5358956cac3188d29eb60c77a7ee9798baf55c4a",
   "protocol": {
     "min": 1,
     "version": 1
@@ -18505,6 +18534,71 @@
     {
       "auth": "human",
       "client_timeout_ms": 15000,
+      "command": "auth.mfa.factor.remove",
+      "confirmations": [],
+      "description": "Remove one of the caller's factors (named by kind and id): it is disabled, kept for the audit trail and never usable again, and the account's other web sessions are signed out (one of them may hold it). mfa_last_factor: it is the last usable factor of an account that must have MFA (add another first). account.credentials step-up.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "enum": [
+            "webauthn",
+            "totp"
+          ],
+          "name": "kind",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "kind": "int_range",
+            "max": 1000,
+            "min": 1
+          },
+          "minimum": 0,
+          "name": "id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "not_found",
+        "invalid",
+        "unauthorized",
+        "mfa_last_factor",
+        "step_up_required"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "not_found",
+        "invalid",
+        "unauthorized",
+        "mfa_last_factor",
+        "step_up_required"
+      ],
+      "response": [
+        {
+          "minimum": 0,
+          "name": "sessions_revoked",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "response_model": null,
+      "step_up": "account.credentials",
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
       "command": "auth.mfa.factor.rename",
       "confirmations": [],
       "description": "Rename one of the caller's factors (named by kind and id).",
@@ -18653,7 +18747,7 @@
       "client_timeout_ms": 15000,
       "command": "auth.mfa.recovery.generate",
       "confirmations": [],
-      "description": "Make ten new recovery codes, shown once. They replace the current ones only when acknowledged. The account needs a factor (invalid otherwise). Replacing codes that are in force needs a second factor proven on this session within the last 5 minutes (or a recovery-code sign-in): step_up_required {family, max_age_seconds} otherwise.",
+      "description": "Make ten new recovery codes, shown once. They replace the current ones only when acknowledged. The account needs a factor (invalid otherwise). Replacing codes that are in force is account.credentials step-up (except on the recovery-code session spending them).",
       "input": "none",
       "operation": null,
       "payload": [],
@@ -18690,6 +18784,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "account.credentials",
       "untyped_refusals": [],
       "variants": []
     },
@@ -18846,6 +18941,50 @@
           "types": [
             "boolean"
           ]
+        },
+        {
+          "description": "This session's live step-up grants (#359); never another session's.",
+          "fields": [
+            {
+              "enum": [
+                "keys",
+                "device.trust",
+                "account.credentials",
+                "identity.admin",
+                "secrets",
+                "settings",
+                "data.destroy"
+              ],
+              "name": "family",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "Target-bound families: what the grant is for.",
+              "name": "target",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "Unix seconds.",
+              "name": "expires_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "items": "object",
+          "name": "step_up",
+          "required": true,
+          "types": [
+            "array"
+          ]
         }
       ],
       "response_model": null,
@@ -18893,7 +19032,8 @@
         "conflict",
         "unauthorized",
         "error",
-        "mfa_expired"
+        "mfa_expired",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -18902,7 +19042,8 @@
         "conflict",
         "unauthorized",
         "error",
-        "mfa_expired"
+        "mfa_expired",
+        "step_up_required"
       ],
       "response": [
         {
@@ -18941,6 +19082,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "account.credentials",
       "untyped_refusals": [],
       "variants": []
     },
@@ -18974,7 +19116,8 @@
         "conflict",
         "unauthorized",
         "error",
-        "mfa_expired"
+        "mfa_expired",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -18983,7 +19126,8 @@
         "conflict",
         "unauthorized",
         "error",
-        "mfa_expired"
+        "mfa_expired",
+        "step_up_required"
       ],
       "response": [
         {
@@ -19018,6 +19162,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "account.credentials",
       "untyped_refusals": [],
       "variants": []
     },
@@ -19422,7 +19567,8 @@
         "conflict",
         "unauthorized",
         "error",
-        "mfa_expired"
+        "mfa_expired",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -19431,7 +19577,8 @@
         "conflict",
         "unauthorized",
         "error",
-        "mfa_expired"
+        "mfa_expired",
+        "step_up_required"
       ],
       "response": [
         {
@@ -19470,6 +19617,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "account.credentials",
       "untyped_refusals": [],
       "variants": []
     },
@@ -19503,7 +19651,8 @@
         "conflict",
         "unauthorized",
         "error",
-        "mfa_expired"
+        "mfa_expired",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -19512,7 +19661,8 @@
         "conflict",
         "unauthorized",
         "error",
-        "mfa_expired"
+        "mfa_expired",
+        "step_up_required"
       ],
       "response": [
         {
@@ -19732,6 +19882,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "account.credentials",
       "untyped_refusals": [],
       "variants": []
     },
@@ -20116,14 +20267,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -20136,6 +20289,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "identity.admin",
       "untyped_refusals": [],
       "variants": []
     },
@@ -20274,6 +20428,442 @@
     {
       "auth": "human",
       "client_timeout_ms": 15000,
+      "command": "auth.stepup.begin",
+      "confirmations": [],
+      "description": "Start confirming a sensitive change that answered step_up_required: name its family and, for keys, device.trust and data.destroy, the target the refusal named. Answers the methods the account can use (webauthn: pass webauthn.publicKey to navigator.credentials.get(); password_totp: the password and an authenticator code together; password: only for an account that need not have MFA and has no factor, never for keys, device.trust or data.destroy) and a ceremony id valid for 120 s. A new begin replaces the open ceremony. step_up_unavailable: the account has nothing that can confirm this family (add a passkey or an authenticator app). Web sessions only: a paired device is denied.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "enum": [
+            "keys",
+            "device.trust",
+            "account.credentials",
+            "identity.admin",
+            "secrets",
+            "settings",
+            "data.destroy"
+          ],
+          "name": "family",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The refusal's target (keys, device.trust, data.destroy); ignored for the others.",
+          "name": "target",
+          "required": false,
+          "types": [
+            "string",
+            "null"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "unauthorized",
+        "rate_limited",
+        "step_up_unavailable"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "unauthorized",
+        "rate_limited",
+        "step_up_unavailable"
+      ],
+      "response": [
+        {
+          "name": "stepup_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "enum": [
+            "keys",
+            "device.trust",
+            "account.credentials",
+            "identity.admin",
+            "secrets",
+            "settings",
+            "data.destroy"
+          ],
+          "name": "family",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "target",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "webauthn, password_totp, password: in this order of preference.",
+          "items": "string",
+          "name": "methods",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "Present when webauthn is offered.",
+          "fields": [
+            {
+              "description": "PublicKeyCredentialRequestOptionsJSON for navigator.credentials.get().",
+              "fields": [
+                {
+                  "description": "base64url, 32 bytes, single use, 120 s, bound to this connection, the purpose and (step-up) the family and target.",
+                  "name": "challenge",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "rpId",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "Milliseconds.",
+                  "minimum": 0,
+                  "name": "timeout",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "enum": [
+                    "required"
+                  ],
+                  "name": "userVerification",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "The account's usable passkeys.",
+                  "fields": [
+                    {
+                      "enum": [
+                        "public-key"
+                      ],
+                      "name": "type",
+                      "required": true,
+                      "types": [
+                        "string"
+                      ]
+                    },
+                    {
+                      "description": "base64url credential id.",
+                      "name": "id",
+                      "required": true,
+                      "types": [
+                        "string"
+                      ]
+                    },
+                    {
+                      "items": "string",
+                      "name": "transports",
+                      "required": true,
+                      "types": [
+                        "array"
+                      ]
+                    }
+                  ],
+                  "items": "object",
+                  "name": "allowCredentials",
+                  "required": true,
+                  "types": [
+                    "array"
+                  ]
+                }
+              ],
+              "name": "publicKey",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            }
+          ],
+          "name": "webauthn",
+          "required": false,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "Unix seconds: finish before this.",
+          "name": "expires_at",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "How long the grant will last (auth.mfa.step_up_ttl_seconds).",
+          "minimum": 0,
+          "name": "max_age_seconds",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 20000,
+      "command": "auth.stepup.finish",
+      "confirmations": [],
+      "description": "Answer the ceremony: {method: webauthn, credential} (a UV assertion over its challenge), {method: password_totp, password, code} or {method: password, password}. On success this session holds a grant for the family (and target): family grants last max_age_seconds, target-bound ones are spent by one use. Then resend the refused request. step_up_failed {attempts_remaining}: the answer didn't hold; the fifth failure within 15 minutes signs this session out. not_found: the ceremony expired or was used (begin again). Recovery codes, refresh tokens and Desktop mTLS never satisfy a step-up.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "kind": "pattern",
+            "pattern": "{*}{*}{*}{*}{*}{*}{*}{*}"
+          },
+          "name": "stepup_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "enum": [
+            "webauthn",
+            "password_totp",
+            "password"
+          ],
+          "name": "method",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "method webauthn: AuthenticationResponseJSON.",
+          "fields": [
+            {
+              "name": "id",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "base64url; equals id.",
+              "name": "rawId",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "public-key"
+              ],
+              "name": "type",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "description": "base64url.",
+                  "name": "clientDataJSON",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "base64url.",
+                  "name": "authenticatorData",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "base64url.",
+                  "name": "signature",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "base64url.",
+                  "name": "userHandle",
+                  "required": false,
+                  "types": [
+                    "string",
+                    "null"
+                  ]
+                }
+              ],
+              "name": "response",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "name": "authenticatorAttachment",
+              "required": false,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "fields": [
+                    {
+                      "name": "rk",
+                      "required": false,
+                      "types": [
+                        "boolean"
+                      ]
+                    }
+                  ],
+                  "name": "credProps",
+                  "required": false,
+                  "types": [
+                    "object"
+                  ]
+                }
+              ],
+              "name": "clientExtensionResults",
+              "required": false,
+              "types": [
+                "object"
+              ]
+            }
+          ],
+          "generator": {
+            "kind": "const",
+            "values": [
+              "{}"
+            ]
+          },
+          "name": "credential",
+          "required": false,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "method password_totp or password.",
+          "name": "password",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "method password_totp: the authenticator code.",
+          "generator": {
+            "kind": "pattern",
+            "pattern": "{9}{9}{9}{9}{9}{9}"
+          },
+          "name": "code",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "unauthorized",
+        "error",
+        "step_up_failed"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "unauthorized",
+        "error",
+        "step_up_failed"
+      ],
+      "response": [
+        {
+          "enum": [
+            "keys",
+            "device.trust",
+            "account.credentials",
+            "identity.admin",
+            "secrets",
+            "settings",
+            "data.destroy"
+          ],
+          "name": "family",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "target",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "name": "expires_at",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "1 for a target-bound grant; null: any number until it expires.",
+          "minimum": 0,
+          "name": "uses",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
       "command": "auth.user.change_password",
       "confirmations": [],
       "description": "Change (own, with old_password) or reset (another user's) a password.",
@@ -20321,14 +20911,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -20341,6 +20933,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "account.credentials",
       "untyped_refusals": [],
       "variants": []
     },
@@ -20406,6 +20999,7 @@
         "not_found",
         "conflict",
         "unauthorized",
+        "step_up_required",
         "user_delete"
       ],
       "refusal_kinds": [
@@ -20413,7 +21007,8 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -20426,6 +21021,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "identity.admin",
       "untyped_refusals": [],
       "variants": []
     },
@@ -20616,14 +21212,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -20636,6 +21234,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "identity.admin",
       "untyped_refusals": [],
       "variants": []
     },
@@ -21447,14 +22046,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -21467,6 +22068,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "device.trust",
       "untyped_refusals": [],
       "variants": []
     },
@@ -22055,14 +22657,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -22144,6 +22748,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "device.trust",
       "untyped_refusals": [],
       "variants": []
     },
@@ -22822,12 +23427,14 @@
       "refusal_codes": [
         "denied",
         "invalid",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -22870,6 +23477,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "secrets",
       "untyped_refusals": [],
       "variants": []
     },
@@ -24898,14 +25506,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -24935,6 +25545,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "identity.admin",
       "untyped_refusals": [],
       "variants": []
     },
@@ -24987,14 +25598,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -25024,6 +25637,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "identity.admin",
       "untyped_refusals": [],
       "variants": []
     },
@@ -25058,14 +25672,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -25078,6 +25694,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "identity.admin",
       "untyped_refusals": [],
       "variants": []
     },
@@ -27210,6 +27827,7 @@
         "not_found",
         "conflict",
         "unauthorized",
+        "step_up_required",
         "recovery_point_delete"
       ],
       "refusal_kinds": [
@@ -27217,7 +27835,8 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -27229,6 +27848,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "data.destroy",
       "untyped_refusals": [],
       "variants": []
     },
@@ -27458,14 +28078,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -27478,6 +28100,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "identity.admin",
       "untyped_refusals": [],
       "variants": []
     },
@@ -27512,14 +28135,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -27533,6 +28158,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "identity.admin",
       "untyped_refusals": [],
       "variants": []
     },
@@ -27721,14 +28347,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -27741,6 +28369,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "identity.admin",
       "untyped_refusals": [],
       "variants": []
     },
@@ -27808,14 +28437,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -27828,6 +28459,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "identity.admin",
       "untyped_refusals": [],
       "variants": []
     },
@@ -27908,14 +28540,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -27928,6 +28562,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "identity.admin",
       "untyped_refusals": [],
       "variants": []
     },
@@ -27962,14 +28597,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -27982,6 +28619,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "identity.admin",
       "untyped_refusals": [],
       "variants": []
     },
@@ -28200,14 +28838,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -28222,6 +28862,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "identity.admin",
       "untyped_refusals": [],
       "variants": []
     },
@@ -28386,14 +29027,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -28405,6 +29048,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "identity.admin",
       "untyped_refusals": [],
       "variants": []
     },
@@ -28513,14 +29157,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -28533,6 +29179,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "identity.admin",
       "untyped_refusals": [],
       "variants": []
     },
@@ -28596,14 +29243,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -28615,6 +29264,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "identity.admin",
       "untyped_refusals": [],
       "variants": []
     },
@@ -28696,14 +29346,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -28716,6 +29368,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "identity.admin",
       "untyped_refusals": [],
       "variants": []
     },
@@ -30172,14 +30825,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -30200,6 +30855,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "secrets",
       "untyped_refusals": [],
       "variants": []
     },
@@ -30275,14 +30931,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -30303,6 +30961,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "secrets",
       "untyped_refusals": [],
       "variants": []
     },
@@ -30556,14 +31215,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -30576,6 +31237,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "secrets",
       "untyped_refusals": [],
       "variants": []
     },
@@ -30781,14 +31443,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -30808,6 +31472,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "secrets",
       "untyped_refusals": [],
       "variants": []
     },
@@ -30941,14 +31606,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -30969,6 +31636,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "secrets",
       "untyped_refusals": [],
       "variants": []
     },
@@ -31252,14 +31920,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -31281,6 +31951,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "secrets",
       "untyped_refusals": [],
       "variants": []
     },
@@ -31595,14 +32266,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -31615,6 +32288,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "secrets",
       "untyped_refusals": [],
       "variants": []
     },
@@ -31923,14 +32597,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -31960,6 +32636,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "secrets",
       "untyped_refusals": [],
       "variants": []
     },
@@ -32086,14 +32763,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -32123,6 +32802,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "secrets",
       "untyped_refusals": [],
       "variants": []
     },
@@ -32515,14 +33195,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -32535,6 +33217,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "secrets",
       "untyped_refusals": [],
       "variants": []
     },
@@ -33613,12 +34296,14 @@
       "refusal_codes": [
         "denied",
         "invalid",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -33631,6 +34316,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "settings",
       "untyped_refusals": [],
       "variants": []
     },
@@ -37575,14 +38261,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -37596,6 +38284,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "secrets",
       "untyped_refusals": [],
       "variants": []
     },
@@ -37725,17 +38414,20 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [],
       "response_model": null,
+      "step_up": "secrets",
       "untyped_refusals": [],
       "variants": []
     },
@@ -37830,14 +38522,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -37851,6 +38545,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "secrets",
       "untyped_refusals": [],
       "variants": []
     },
@@ -38572,6 +39267,7 @@
         "not_found",
         "conflict",
         "unauthorized",
+        "step_up_required",
         "vault_upstream_key_loss",
         "vault_delete_now"
       ],
@@ -38580,7 +39276,8 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -38594,6 +39291,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "data.destroy",
       "untyped_refusals": [],
       "variants": []
     },
@@ -39487,14 +40185,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -39507,6 +40207,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "secrets",
       "untyped_refusals": [],
       "variants": []
     },
@@ -39785,6 +40486,7 @@
         "not_found",
         "conflict",
         "unauthorized",
+        "step_up_required",
         "upstream_cleanup"
       ],
       "refusal_kinds": [
@@ -39792,7 +40494,8 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -39805,6 +40508,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "data.destroy",
       "untyped_refusals": [],
       "variants": []
     },
@@ -40115,6 +40819,7 @@
         "not_found",
         "conflict",
         "unauthorized",
+        "step_up_required",
         "upstream_destructive_lifecycle"
       ],
       "refusal_kinds": [
@@ -40122,7 +40827,8 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -40135,6 +40841,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "data.destroy",
       "untyped_refusals": [],
       "variants": []
     },
@@ -40372,6 +41079,7 @@
         "not_found",
         "conflict",
         "unauthorized",
+        "step_up_required",
         "upstream_unprotect"
       ],
       "refusal_kinds": [
@@ -40379,7 +41087,8 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -40392,6 +41101,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "data.destroy",
       "untyped_refusals": [],
       "variants": []
     },
@@ -40671,7 +41381,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "export_requires_device"
+        "export_requires_device",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -40679,7 +41390,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "export_requires_device"
+        "export_requires_device",
+        "step_up_required"
       ],
       "response": [
         {
@@ -40957,6 +41669,7 @@
         }
       ],
       "response_model": "VaultKeyExport",
+      "step_up": "keys",
       "untyped_refusals": [],
       "variants": []
     },
@@ -41178,6 +41891,7 @@
         "conflict",
         "unauthorized",
         "import_requires_device",
+        "step_up_required",
         "vault_key_import",
         "vault_key_salvage"
       ],
@@ -41187,7 +41901,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "import_requires_device"
+        "import_requires_device",
+        "step_up_required"
       ],
       "response": [
         {
@@ -41311,6 +42026,7 @@
         }
       ],
       "response_model": "VaultKeyImportResult",
+      "step_up": "keys",
       "untyped_refusals": [],
       "variants": []
     },
@@ -41591,6 +42307,7 @@
         "not_found",
         "conflict",
         "unauthorized",
+        "step_up_required",
         "recovery_versioning_suspend"
       ],
       "refusal_kinds": [
@@ -41598,7 +42315,8 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -41611,6 +42329,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "data.destroy",
       "untyped_refusals": [],
       "variants": []
     },
@@ -41854,5 +42573,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "03e5d43516b1128c3420b4f00607f0d059ce2be6a1ad34cc2ccf3cfa937cec55"
+  "ws_hash": "a6f7dbcc6f7d12f43951e18ad9a76f711d8aef21a5d3eebe0b633610dc0defc2"
 }
