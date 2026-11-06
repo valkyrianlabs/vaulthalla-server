@@ -86,7 +86,7 @@ nlohmann::json grantOptJson(const std::optional<int64_t>& v) { return v ? nlohma
 void grantAudit(const std::string& action, const Grant& g, const std::optional<uint32_t> actorId,
                 const std::string& actorName, nlohmann::json extra, const std::string& message,
                 const spdlog::level::level_enum level = spdlog::level::info) {
-    nlohmann::json details{{"grant_id", g.id}, {"device", g.device_id}, {"user", g.user_id},
+    nlohmann::json details{{"grant_id", g.id}, {"device", g.device_id}, {"user_id", g.user_id},
                            {"vault_count", static_cast<int64_t>(g.vault_ids.size())}};
     for (auto& [k, v] : extra.items()) details[k] = std::move(v);
     vh::audit::record({.action = action, .actor_id = actorId, .actor = actorName, .details = std::move(details)},
@@ -335,7 +335,8 @@ Grant create(const Actor& actor, const vh::device::Peer* self, const std::option
                 return g.family == auth::stepup::Family::DeviceTrust && g.target == target &&
                        g.method == auth::stepup::kDeviceApprovalMethod;
             });
-            approved = byKey && session->stepUp().use(actor->id, {}, auth::stepup::Family::DeviceTrust, target).has_value();
+            approved = byKey &&
+                       session->stepUp().use(actor->id, {}, auth::stepup::Family::DeviceTrust, target).has_value();
         }
         if (!approved)
             auth::stepup::refuse(auth::stepup::Family::DeviceTrust, target,

@@ -2586,15 +2586,6 @@
           "types": [
             "boolean"
           ]
-        },
-        {
-          "description": "When the device's key-backup grant was revoked (a recovery-code sign-in or an MFA reset of its user): it stays paired and syncs, but its key exports need a person's approval again.",
-          "name": "key_backup_revoked_at",
-          "required": false,
-          "types": [
-            "integer",
-            "null"
-          ]
         }
       ],
       "name": "Device"
@@ -3832,6 +3823,143 @@
         }
       ],
       "name": "HttpPreviewServerConfig"
+    },
+    {
+      "description": "A paired device's key-backup grant (#362, migration 130; MFA design note section 6.4): ops::backup_grants::toJson, core/src/ops/BackupGrants.cpp.",
+      "fields": [
+        {
+          "minimum": 0,
+          "name": "id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The device the grant is bound to (null once the device row is gone).",
+          "name": "device_id",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "name": "device_name",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "approved: made or confirmed by a person's approval; migrated: carried over from before grants existed (D1), with exactly the authority the device had then. Confirm or revoke it.",
+          "enum": [
+            "approved",
+            "migrated"
+          ],
+          "name": "origin",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "How the latest approval was given; null for a migrated grant never confirmed.",
+          "enum": [
+            "webauthn",
+            "password_totp",
+            "device_approval",
+            "console_approval"
+          ],
+          "name": "approved_via",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "The vaults whose keys the device may export without a prompt, ascending.",
+          "items": "integer",
+          "name": "vault_ids",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "name": "created_at",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "name": "confirmed_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "The latest export under the grant.",
+          "name": "last_used_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "Set when more than 60 vault keys were exported in an hour; exports then need a person's approval until the grant is confirmed again.",
+          "name": "suspended_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "name": "revoked_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "enum": [
+            "manual",
+            "device_revoked",
+            "user_inactive",
+            "export_permission",
+            "recovery_code",
+            "admin_reset",
+            "cli_reset",
+            "device_idle"
+          ],
+          "name": "revoked_reason",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "Live and not suspended: exports of its vaults need no prompt.",
+          "name": "active",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "name": "KeyBackupGrant"
     },
     {
       "description": "logging.levels.* (Config.cpp to_json(LogLevelsConfig)).",
@@ -18735,7 +18863,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "c9d08760af47b94daddf016ec824a1a3a966c12a9f0283dd0dd350f9184c9913",
+  "models_hash": "c8b13d36df1fd170345a1a299de881c9cb59ed806326e26ab04d4929229393fd",
   "protocol": {
     "min": 1,
     "version": 1
@@ -21042,6 +21170,7 @@
                   ]
                 },
                 {
+                  "description": "The device holds no live key-backup grant now (#362): its key exports need a person's approval until it re-creates one.",
                   "name": "key_backup_revoked",
                   "required": true,
                   "types": [
@@ -23668,6 +23797,300 @@
           "required": true,
           "types": [
             "integer"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "device.backup.grant.confirm",
+      "confirmations": [],
+      "description": "Confirm a live grant: a migrated one becomes approved, a suspended one exports again. device.trust approval for target device.backup.grant.confirm:<grant>.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "From device.backup.grant.list.",
+          "generator": {
+            "kind": "int_range",
+            "max": 100000,
+            "min": 1
+          },
+          "minimum": 0,
+          "name": "grant_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "step_up_required",
+        "recovery_cooldown"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "step_up_required",
+        "recovery_cooldown"
+      ],
+      "response": [
+        {
+          "model": "KeyBackupGrant",
+          "name": "grant",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": null,
+      "step_up": "device.trust",
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "device.backup.grant.create",
+      "confirmations": [],
+      "description": "Turn on key backup for vaults on one of the caller's devices: on its own session the device itself, on a console session device_id. Needs the export encryption keys permission (or super admin) and a device.trust approval for target device.backup.grant.create:<device row>:<vault ids> (step_up_required names it). conflict: the device already has a grant (extend it). During a recovery cooldown only the device re-creates the grant the recovery revoked, with its approval key registered before the recovery, for vaults that grant named (recovery_cooldown otherwise).",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Vault ids (each one the caller may export).",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "items": "integer",
+          "name": "vault_ids",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "The device (console sessions); a device names itself.",
+          "generator": {
+            "attrs": [
+              "device_id"
+            ],
+            "entity": "device",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "device_id",
+          "required": false,
+          "types": [
+            "string",
+            "null"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "device_unknown",
+        "recovery_cooldown",
+        "step_up_required"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "device_unknown",
+        "recovery_cooldown",
+        "step_up_required"
+      ],
+      "response": [
+        {
+          "model": "KeyBackupGrant",
+          "name": "grant",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": null,
+      "step_up": "device.trust",
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "device.backup.grant.extend",
+      "confirmations": [],
+      "description": "Add vaults to a live grant of the caller's (a new vault, one deliberate approval). device.trust approval for target device.backup.grant.extend:<grant>:<vault ids>. conflict: it names them all already, or it was revoked.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "From device.backup.grant.list.",
+          "generator": {
+            "kind": "int_range",
+            "max": 100000,
+            "min": 1
+          },
+          "minimum": 0,
+          "name": "grant_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Vault ids (each one the caller may export).",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "items": "integer",
+          "name": "vault_ids",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "step_up_required",
+        "recovery_cooldown"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "step_up_required",
+        "recovery_cooldown"
+      ],
+      "response": [
+        {
+          "model": "KeyBackupGrant",
+          "name": "grant",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": null,
+      "step_up": "device.trust",
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "device.backup.grant.list",
+      "confirmations": [],
+      "description": "Key-backup grants: on a console session the caller's (every device, live first, revoked ones after); on a paired device's session that device's only. A grant lets its device export the keys of the vaults it names with no prompt (Desktop's background 1Password backup). A grant whose revocation trigger holds (device revoked or idle 90 days, account deactivated or without the Export permission) is revoked before it is listed.",
+      "input": "none",
+      "operation": null,
+      "payload": [],
+      "refusal_codes": [
+        "unauthorized",
+        "denied"
+      ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied"
+      ],
+      "response": [
+        {
+          "items": "object",
+          "model": "KeyBackupGrant",
+          "name": "grants",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "device.backup.grant.revoke",
+      "confirmations": [],
+      "description": "Turn key backup off for a device: revokes the grant (its owner, the device itself, or a super admin). Needs no approval. Final: a new grant is a new create.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "From device.backup.grant.list.",
+          "generator": {
+            "kind": "int_range",
+            "max": 100000,
+            "min": 1
+          },
+          "minimum": 0,
+          "name": "grant_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "model": "KeyBackupGrant",
+          "name": "grant",
+          "required": true,
+          "types": [
+            "object"
           ]
         }
       ],
@@ -45229,5 +45652,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "c8235c517daa4798cc53d56cd7e1a241871ab6799071a757ed6451592585d7d5"
+  "ws_hash": "fca3c5501a21dbdd267531f3aac6d27c35202a88cfa59757f61bb84e42eed1fe"
 }

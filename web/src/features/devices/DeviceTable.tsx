@@ -13,7 +13,8 @@ import { confirm } from '@/components/ui/Confirm'
 import { notify } from '@/components/ui/Toast'
 import { BanIcon, CheckIcon, CopyIcon, PenIcon } from '@/components/ui/icons'
 import type { Device } from '@/models/device'
-import { DEVICE_READS, byStatus, deviceLabel, shortDeviceId } from '@/features/devices/model'
+import { DEVICE_READS, byStatus, deviceLabel, shortDeviceId, type KeyBackupGrant } from '@/features/devices/model'
+import { KeyBackupCell } from '@/features/devices/KeyBackupCell'
 
 // Mounted only while renaming (Radix Dialog stays out of the route's first load).
 const RenameDeviceDialog = dynamic(() => import('@/features/devices/RenameDeviceDialog'), { ssr: false })
@@ -54,11 +55,14 @@ export const DeviceTable = ({
   showOwner = false,
   empty,
   toolbar,
+  grants,
 }: {
   devices: Device[]
   showOwner?: boolean
   empty?: React.ReactNode
   toolbar?: React.ReactNode
+  // The caller's key-backup grants by device id (their own devices only): adds the Key backup column.
+  grants?: Map<string, KeyBackupGrant>
 }) => {
   const [showRevoked, setShowRevoked] = useState(false)
   const [renaming, setRenaming] = useState<Device | null>(null)
@@ -145,6 +149,16 @@ export const DeviceTable = ({
       cell: d => <span className="font-mono text-xs text-fg-muted">{d.last_ip || '—'}</span>,
       hideBelow: 'md',
     },
+    ...(grants
+      ? [
+          {
+            key: 'backup',
+            header: 'Key backup',
+            cell: (d: Device) =>
+              d.revoked ? <span className="text-fg-muted">—</span> : <KeyBackupCell grant={grants.get(d.device_id)} deviceName={deviceLabel(d)} />,
+          } satisfies Column<Device>,
+        ]
+      : []),
     { key: 'id', header: 'Device id', cell: d => <CopyDeviceId deviceId={d.device_id} />, hideBelow: 'xl' },
   ]
 

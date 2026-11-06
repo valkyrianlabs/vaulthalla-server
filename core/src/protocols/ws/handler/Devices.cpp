@@ -51,8 +51,8 @@ const vh::device::Peer* selfOf(const std::shared_ptr<Session>& session) {
 }
 
 uint32_t requiredGrantId(const json& payload) {
-    if (!payload.is_object() || !payload.contains("grant_id") || !payload.at("grant_id").is_number_unsigned() ||
-        payload.at("grant_id").get<uint64_t>() == 0 || payload.at("grant_id").get<uint64_t>() > 0x7fffffffULL)
+    if (!payload.is_object() || !payload.contains("grant_id") || !payload.at("grant_id").is_number_integer() ||
+        payload.at("grant_id").get<int64_t>() < 1 || payload.at("grant_id").get<int64_t>() > 0x7fffffffLL)
         throw ops::Invalid("grant_id is required (a positive integer)");
     return payload.at("grant_id").get<uint32_t>();
 }
@@ -62,7 +62,7 @@ std::vector<uint32_t> requiredVaultIds(const json& payload) {
         throw ops::Invalid("vault_ids is required (an array of vault IDs)");
     std::vector<uint32_t> out;
     for (const auto& v : payload.at("vault_ids")) {
-        if (!v.is_number_unsigned() || v.get<uint64_t>() == 0 || v.get<uint64_t>() > 0x7fffffffULL)
+        if (!v.is_number_integer() || v.get<int64_t>() < 1 || v.get<int64_t>() > 0x7fffffffLL)
             throw ops::Invalid("vault_ids must hold positive integer vault IDs");
         out.push_back(v.get<uint32_t>());
     }

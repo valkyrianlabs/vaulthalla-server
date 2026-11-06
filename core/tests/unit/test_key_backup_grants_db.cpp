@@ -308,8 +308,8 @@ protected:
         EXPECT_TRUE(audit::Trail::instance()->flushNow());
         return db::Transactions::exec("kbg audit", [&](pqxx::work& txn) {
             std::vector<std::string> out;
-            for (const auto& r : txn.exec("SELECT action, COALESCE(details->>'reason', '') FROM audit_event "
-                                          "WHERE action LIKE 'keys.backup.%' AND (details->>'grant_id')::BIGINT = $1 "
+            for (const auto& r : txn.exec("SELECT action, COALESCE(details::jsonb->>'reason', '') FROM audit_event "
+                                          "WHERE action LIKE 'keys.backup.%' AND (details::jsonb->>'grant_id')::BIGINT = $1 "
                                           "AND seq > $2 ORDER BY seq",
                                           pqxx::params{grantId, afterSeq})) {
                 auto a = r[0].as<std::string>();
@@ -524,7 +524,7 @@ TEST_F(KeyBackupGrantsDb, CreateExtendAndConfirmNeedADeviceTrustApprovalAndRevok
     const auto ids = [](const auto& e) { return static_cast<uint32_t>(e->vault->id); };
     const auto s = mac.session;
 
-    const auto createIt = [&] { return h::Devices::backupGrantCreate(json{{"vault_ids", {ids(first)}}}, s); };
+    const auto createIt = [&] { return h::Devices::backupGrantCreate(json{{"vault_ids", json::array({ids(first)})}}, s); };
     const auto refused = run(s, createIt);
     ASSERT_EQ(refused.code, "step_up_required") << refused.message;
     EXPECT_EQ(refused.data.at("family"), "device.trust");
@@ -544,14 +544,14 @@ TEST_F(KeyBackupGrantsDb, CreateExtendAndConfirmNeedADeviceTrustApprovalAndRevok
     EXPECT_EQ(run(s, createIt).code, "conflict") << "one live grant per device: extend it";
 
     const auto extendIt = [&] {
-        return h::Devices::backupGrantExtend(json{{"grant_id", grantId}, {"vault_ids", {ids(second)}}}, s);
+        return h::Devices::backupGrantExtend(json{{"grant_id", grantId}, {"vault_ids", json::array({ids(second)})}}, s);
     };
     EXPECT_EQ(run(s, extendIt).code, "step_up_required");
     const auto extended = approvedWithKey(s, key, extendIt);
     ASSERT_TRUE(extended.ok) << extended.message;
     EXPECT_EQ(extended.data.at("grant").at("vault_ids"), json::array({ids(first), ids(second)}));
     EXPECT_EQ(run(s, [&] {
-                  return h::Devices::backupGrantExtend(json{{"grant_id", grantId}, {"vault_ids", {999'999}}}, s);
+                  return h::Devices::backupGrantExtend(json{{"grant_id", grantId}, {"vault_ids", json::array({999'999})}}, s);
               }).code,
               "not_found")
         << "only vaults the user may export";
@@ -578,16 +578,16 @@ TEST_F(KeyBackupGrantsDb, CreateExtendAndConfirmNeedADeviceTrustApprovalAndRevok
     const auto plain = newUser("unprivileged");
     const auto theirs = pairedDevice(plain);
     EXPECT_EQ(run(theirs.session, [&] {
-                  return h::Devices::backupGrantCreate(json{{"vault_ids", {ids(first)}}}, theirs.session);
+                  return h::Devices::backupGrantCreate(json{{"vault_ids", json::array({ids(first)})}}, theirs.session);
               }).code,
               "denied");
     const auto web = std::make_shared<protocols::ws::Session>(std::make_shared<protocols::ws::Router>());
     web->user = superUser;
-    EXPECT_EQ(call([&] { return h::Devices::backupGrantCreate(json{{"vault_ids", {ids(first)}}}, web); }).code,
+    EXPECT_EQ(call([&] { return h::Devices::backupGrantCreate(json{{"vault_ids", json::array({ids(first)})}}, web); }).code,
               "invalid")
         << "device_id is required on a console session";
     EXPECT_EQ(call([&] {
-                  return h::Devices::backupGrantCreate(json{{"vault_ids", {ids(first)}}, {"device_id", theirs.row.spki_sha256}},
+                  return h::Devices::backupGrantCreate(json{{"vault_ids", json::array({ids(first)})}, {"device_id", theirs.row.spki_sha256}},
                                                        web);
               }).code,
               "not_found")
@@ -730,7 +730,7 @@ TEST_F(KeyBackupGrantsDb, DuringTheRecoveryCooldownOnlyAPreRecoveryApprovalKeyRe
     const auto web = std::make_shared<protocols::ws::Session>(std::make_shared<protocols::ws::Router>());
     web->user = user;
     EXPECT_EQ(call([&] {
-                  return h::Devices::backupGrantCreate(json{{"vault_ids", {ids(a)}}, {"device_id", mac.row.spki_sha256}},
+                  return h::Devices::backupGrantCreate(json{{"vault_ids", json::array({ids(a)})}, {"device_id", mac.row.spki_sha256}},
                                                        web);
               }).code,
               "recovery_cooldown")
