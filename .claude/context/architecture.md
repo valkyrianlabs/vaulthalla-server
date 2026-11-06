@@ -653,6 +653,15 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   object version, no per-range authentication), `off` (`storage::ContentUnavailable` → HTTP 503
   `content_unavailable`). Grid thumbnails always use `off`. Chunked AEAD at rest would only be needed for
   *authenticated* random access to remote-only objects.
+- **VHF1 codec** (`crypto::vhf1`, `core/include/crypto/vhf1/{Format,Writer,Reader}.hpp`; #365, spec
+  `design/encryption/02-authenticated-file-format.md`). A pure library, not yet wired into any read or write path
+  (that is #367/WS2-b): the 120-byte header (HMAC-SHA-256 tag), per-sealing HKDF-SHA-256 keys from vault key + salt,
+  64 KiB AES-256-GCM chunks with AAD = header hash ‖ index ‖ final flag, a streaming `Writer` (final-chunk hold-back),
+  `open()` / `ChunkWalker` (whole and streamed reads, only authenticated chunks reach the sink) and `RangeReader`
+  (authenticated object size required, sticky failure). Errors are `vhf1::Error` with the spec's codes in the §3.6
+  check order. Primitives are OpenSSL (HKDF, HMAC, SHA-256, AES-GCM via `crypto::util::Gcm`) and libsodium.
+  Proven byte for byte by `Vhf1Vectors` against `design/encryption/vectors/vectors.json`; fuzz target `vh_fuzz_vhf1`
+  (`-Dfuzz=true`, clang; see testing.md).
 - **Derived cache** (`preview::cache::Store`, `cache_index` rows `type='derived'`, migration 103). One encrypted,
   disposable cache for thumbnails (`thumbnail`/`<size>`), sheet and PDF page renders (`render`/`p<page>-s<size>`),
   posters, probes, GLB, transcodes. File: `<cacheRoot>/derived/<file_id>/<kind>.<variant>.vhd` = 64-byte header
