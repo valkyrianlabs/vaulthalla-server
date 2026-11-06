@@ -31,6 +31,19 @@ namespace vh::recovery::provider::versions {
 [[nodiscard]] std::string directoryPrefixOf(const std::filesystem::path& vaultPath);
 [[nodiscard]] std::filesystem::path vaultPathOf(const std::string& objectKey);
 
+// The same for one vault, by its storage layout. opaque_v1 (design/encryption/01 §4.4): a file's key is o/<its uid>
+// (the live file at the path, else the newest trashed one that was there; "" when none: a directory or nothing),
+// a directory has no prefix (every content object, "o/", filtered by the paths the database gives them), and an
+// object's path is its file's (live, else where it was trashed from; /Recovered/<uid> for a file no row names).
+// liveObjectKeyOf: the key of the live file at the path only (what a restore onto it writes).
+[[nodiscard]] std::string objectKeyOf(const storage::CloudEngine& engine, const std::filesystem::path& vaultPath);
+[[nodiscard]] std::string liveObjectKeyOf(const storage::CloudEngine& engine, const std::filesystem::path& vaultPath);
+[[nodiscard]] std::string directoryPrefixOf(const storage::CloudEngine& engine, const std::filesystem::path& vaultPath);
+[[nodiscard]] std::filesystem::path vaultPathOf(const storage::CloudEngine& engine, const std::string& objectKey);
+// Whether a version row's object lies under a directory of the vault (opaque_v1: by its file's path).
+[[nodiscard]] bool keyUnder(const storage::CloudEngine& engine, const std::string& objectKey,
+                            const std::filesystem::path& directory);
+
 // Vaulthalla's own objects (the .vaulthalla/ index manifest): never vault content, never a recovery point.
 [[nodiscard]] bool isInternalKey(const std::string& objectKey);
 

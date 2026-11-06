@@ -41,6 +41,8 @@ std::vector<WsStepUp> stepUpTable() {
          "when the account already has a usable factor (not during pending enrollment or a recovery-code session)"},
         {"auth.mfa.recovery.generate", "account.credentials", false,
          "when recovery codes are in force (not on the recovery-code session spending them)"},
+        {"auth.mfa.admin.reset", "account.credentials", false, ""},
+        {"auth.mfa.admin.require", "identity.admin", false, ""},
         // identity.admin: family-wide
         {"auth.register", "identity.admin", false, ""},
         {"auth.user.update", "identity.admin", false, "a role or activation change, or any change to another account"},

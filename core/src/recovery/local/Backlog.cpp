@@ -5,6 +5,7 @@
 #include "db/query/recovery/Generation.hpp"
 #include "db/query/recovery/ObjectVersion.hpp"
 #include "db/query/sync/Conflict.hpp"
+#include "db/query/sync/ObjectIdentity.hpp"
 #include "db/query/sync/RemoteObjectIndex.hpp"
 #include "fs/model/File.hpp"
 #include "log/Registry.hpp"
@@ -15,6 +16,7 @@
 #include "recovery/provider/Versions.hpp"
 #include "runtime/Deps.hpp"
 #include "storage/CloudEngine.hpp"
+#include "storage/ObjectKeys.hpp"
 #include "storage/PlaintextReader.hpp"
 #include "storage/s3/Controller.hpp"
 #include "sync/Controller.hpp"
@@ -46,6 +48,11 @@ std::string backlogVaultPath(const std::filesystem::path& p) {
 
 std::string backlogKey(const std::filesystem::path& p) { return backlogVaultPath(p).substr(1); }
 
+// The key a live file's backlog replays to: o/<uid> under opaque_v1 (renames keep it), else its path.
+std::string backlogKeyOf(const storage::CloudEngine& engine, const fs::model::File& file) {
+    return engine.opaqueLayout() ? engine.objectKeyOf(file) : backlogKey(file.path);
+}
+
 // What both sides last agreed on for the file: the provider holds that content already.
 std::optional<std::string> agreedContentHash(const uint32_t vaultId, const uint32_t fileId) {
     return db::Transactions::read("recovery::backlog::agreedContentHash", [&](pqxx::transaction_base& txn) {
@@ -70,6 +77,12 @@ bool anyPendingFor(const uint32_t vaultId, const std::optional<uint32_t> fileId,
 std::vector<rq::GenerationRow> pendingUnderKey(const uint32_t vaultId, const std::string& vaultPath,
                                                const std::string& key) {
     std::vector<rq::GenerationRow> out;
+    // opaque_v1: the key is the file's uid, wherever the file was when each generation was retained.
+    if (storage::object_keys::uidOfContentKey(key)) {
+        for (auto& g : rq::Generation::listPending(vaultId, 10000))
+            if (g.upstream_state == rq::UpstreamState::Pending && g.upstream_key == key) out.push_back(std::move(g));
+        return out;
+    }
     for (auto& g : rq::Generation::listByPath(vaultId, vaultPath, rq::Origin::Version, 10000))
         if (g.upstream_state == rq::UpstreamState::Pending && g.upstream_key == key) out.push_back(std::move(g));
     return out;
@@ -113,7 +126,8 @@ void recordReplayed(const storage::CloudEngine& engine, const rq::GenerationRow&
         const auto vaultId = engine.vault->id;
         auto f = std::make_shared<fs::model::File>();
         f->vault_id = static_cast<int32_t>(vaultId);
-        f->path = g.path;
+        // The index row is the object: o/<uid> under opaque_v1, the generation's path otherwise.
+        f->path = engine.opaqueLayout() && g.upstream_key ? "/" + *g.upstream_key : g.path;
         f->name = std::filesystem::path(g.path).filename().string();
         f->size_bytes = g.size_bytes;
         f->content_hash = g.content_hash;
@@ -250,7 +264,7 @@ ReplayReport replayBeforeUpload(const storage::CloudEngine& engine, const fs::mo
     return guarded("replay before upload", [&] {
         const auto vaultId = engine.vault->id;
         const auto vaultPath = backlogVaultPath(file.path);
-        const auto key = backlogKey(file.path);
+        const auto key = backlogKeyOf(engine, file);
         if (!mayHaveBacklog(vaultId) || !anyPendingFor(vaultId, file.id, key)) return ReplayReport{};
 
         ReplayReport renamedAway;
@@ -277,8 +291,14 @@ ReplayReport replayBeforeUpload(const storage::CloudEngine& engine, const fs::mo
 
 ReplayReport replayBeforeRemoteDelete(const storage::CloudEngine& engine, const std::filesystem::path& vaultPath) {
     if (!engine.vault) return {};
+    if (engine.opaqueLayout()) return replayBeforeRemoteDelete(engine, vaultPath, engine.objectKeyForPath(vaultPath));
+    return replayBeforeRemoteDelete(engine, vaultPath, backlogKey(vaultPath));
+}
+
+ReplayReport replayBeforeRemoteDelete(const storage::CloudEngine& engine, const std::filesystem::path& vaultPath,
+                                      const std::string& key) {
+    if (!engine.vault) return {};
     return guarded("replay before remote delete", [&] {
-        const auto key = backlogKey(vaultPath);
         if (!mayHaveBacklog(engine.vault->id) || !anyPendingFor(engine.vault->id, std::nullopt, key)) return ReplayReport{};
         return replay(engine, key, pendingUnderKey(engine.vault->id, backlogVaultPath(vaultPath), key), std::nullopt,
                       std::nullopt);
@@ -286,12 +306,20 @@ ReplayReport replayBeforeRemoteDelete(const storage::CloudEngine& engine, const 
 }
 
 void addPlannedReplays(const uint32_t vaultId, const std::vector<sync::model::Action>& plan,
-                       sync::model::S3CostEstimate& estimate) noexcept {
+                       sync::model::S3CostEstimate& estimate, const bool opaque) noexcept {
     try {
+        // opaque_v1 keys are the files' uids (o/<uid>), whatever their paths.
+        const auto keyOf = [opaque](const fs::model::File& f) -> std::optional<std::string> {
+            if (!opaque) return backlogKey(f.path);
+            if (!f.object_uid) return std::nullopt;
+            return storage::object_keys::contentKey(*f.object_uid);
+        };
         auto keys = nlohmann::json::array();
         for (const auto& a : plan) {
-            if (a.type == sync::model::ActionType::Upload && a.local) keys.push_back(backlogKey(a.local->path));
-            else if (a.type == sync::model::ActionType::DeleteRemote && a.remote) keys.push_back(backlogKey(a.remote->path));
+            std::optional<std::string> key;
+            if (a.type == sync::model::ActionType::Upload && a.local) key = keyOf(*a.local);
+            else if (a.type == sync::model::ActionType::DeleteRemote && a.remote) key = keyOf(*a.remote);
+            if (key) keys.push_back(*key);
         }
         if (keys.empty()) return;
 
@@ -339,7 +367,14 @@ std::vector<std::string> orphanedKeys(const uint32_t vaultId, const std::size_t 
             GROUP BY fv.upstream_key ORDER BY min(fv.id) LIMIT $2
         )SQL", pqxx::params{vaultId, static_cast<int64_t>(limit)});
         std::vector<std::string> keys;
-        for (const auto row : res) keys.push_back(row[0].as<std::string>());
+        for (const auto row : res) {
+            auto key = row[0].as<std::string>();
+            // An o/<uid> key (opaque_v1) belongs to whichever file has that uid, live or trashed, at any path.
+            if (const auto uid = storage::object_keys::uidOfContentKey(key);
+                uid && db::query::sync::ObjectIdentity::known(vaultId, *uid))
+                continue;
+            keys.push_back(std::move(key));
+        }
         return keys;
     });
 }
@@ -430,7 +465,7 @@ SettleReport settleOrphaned(const storage::CloudEngine& engine, const std::size_
 
             // The index says the object is gone; the provider decides. Present after all (another writer, an index
             // behind the bucket): a pass reconciles the key, these rows stay as they are.
-            if (engine.headRemoteObjectStrict(vaultPath)) {
+            if (engine.headObjectKeyStrict(key)) {
                 price.release();
                 continue;
             }
@@ -443,7 +478,7 @@ SettleReport settleOrphaned(const storage::CloudEngine& engine, const std::size_
             report.failed += replayed.failed;
             if (replayed.sent > 0) {
                 // The last replay made an old generation the key's current object: the file stays deleted.
-                engine.removeRemotely(vaultPath);
+                engine.removeRemoteKey(key, vaultPath);
                 db::query::sync::RemoteObjectIndex::deleteKey(vaultId, vaultPath);
             }
             price.commit();

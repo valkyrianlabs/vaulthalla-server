@@ -226,6 +226,13 @@ bucket: choosing `off`/`local_snapshots` does not suspend a bucket that is versi
 
 ### Provider recovery as built (`recovery/provider/*`, `storage/CloudEngineRestore.cpp`)
 
+opaque_v1 vaults (#369): version rows, backlog `upstream_key`s and restore keys are `o/<uid>`, never paths; the path
+of a version is its file's (live, else where it was trashed from; `/Recovered/<uid>` once no row names the uid) and a
+directory's versions are the `o/` rows the database places under it (`provider::versions::*(engine, …)`). No version
+carries metadata: the generation comes from Vaulthalla's own write row or the version's authenticated header. A
+restore onto the file's own object is a CopyObject (same key only); any other restore (another destination, a retired
+key) is a transfer re-sealed into the destination's uid.
+
 - **Own writes** (`provider::noteOwnWrite`, fired by `CloudEngine::OwnWrite::done()` through `hooks::afterUpstreamWrite`):
   a PUT/COPY response with `x-amz-version-id` upserts an origin `vaulthalla` row (etag, object size, last_modified =
   now, IV/key version/hash/plaintext size from the written generation; sealed iff the generation says so, else

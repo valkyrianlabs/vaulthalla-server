@@ -1,6 +1,7 @@
 // `vh audit list|verify|export` (#323): ops::audit, the same checks as ws audit.* (admin.audits.view).
 
 #include "protocols/shell/commands/all.hpp"
+#include "protocols/shell/commands/helpers.hpp"
 #include "protocols/shell/Router.hpp"
 #include "protocols/shell/util/argsHelpers.hpp"
 #include "protocols/shell/util/runOp.hpp"
@@ -66,7 +67,8 @@ std::string formatVerification(const ops::audit::Verification& v) {
 }
 
 CommandResult list(const CommandCall& call) {
-    const bool json = hasFlag(call, "json_output");
+    // The flag's tokens (--json), not its label: hasFlag sees what was typed.
+    const bool json = hasFlag(call, resolveUsage({"audit", "list"})->resolveFlag("json_output")->aliases);
     return runOp("audit list", [&] {
         ops::audit::Filter filter;
         filter.action_prefix = optVal(call, "action");
@@ -87,7 +89,7 @@ CommandResult list(const CommandCall& call) {
 }
 
 CommandResult verify(const CommandCall& call) {
-    const bool json = hasFlag(call, "json_output");
+    const bool json = hasFlag(call, resolveUsage({"audit", "verify"})->resolveFlag("json_output")->aliases);
     std::optional<ops::audit::Verification> result;
     auto out = runOp("audit verify", [&] { return ops::audit::verify(call.user); },
                      [&](const ops::audit::Verification& v) {

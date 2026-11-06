@@ -65,6 +65,16 @@ std::optional<std::vector<uint8_t>> S3Store::getRange(const std::string& key, co
     return out;
 }
 
+std::optional<std::string> S3Store::headEtag(const std::string& key) {
+    const auto head = s3_->getHeadObject(key);
+    if (!head) return std::nullopt;
+    for (const auto& [name, value] : *head)
+        if (name.size() == 4 && (name[0] == 'E' || name[0] == 'e') && (name[1] == 'T' || name[1] == 't') &&
+            (name[2] == 'a' || name[2] == 'A') && (name[3] == 'g' || name[3] == 'G'))
+            return value;
+    return std::string{};
+}
+
 std::string S3Store::put(const std::string& key, const std::vector<uint8_t>& bytes,
                          const std::optional<std::string>& ifMatch, const std::optional<std::string>& ifNoneMatch) {
     try {

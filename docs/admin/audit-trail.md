@@ -19,6 +19,7 @@ Vaulthalla records security-relevant actions in a tamper-evident audit trail. Ev
 | Area | Events |
 | --- | --- |
 | Sign-in | Successful and refused sign-ins (with the reason and client address), sign-outs, idle sign-outs, password changes and resets |
+| Multi-factor sign-in | Second-factor challenges and results, delays after repeated failures (`auth.mfa.lockout`), factors enrolled, renamed, suspended and removed (flagged when enrolled during a recovery), recovery codes made, saved and used, recovery-code sign-ins (`auth.mfa.recovery.signin`, with the sessions signed out and device key backups paused), MFA resets and requirements by an administrator or `vh` (`auth.mfa.admin.reset`, `.require`, with the channel and reason), policy changes (`auth.mfa.policy.change`), step-ups granted, failed and required (refusals during a recovery cooldown say so) |
 | Access control | Admin and vault role changes, role assignments, permission overrides, group changes and membership |
 | Files | Folder creation, deletes, renames, moves and copies from the console; downloads, previews and uploads over HTTP; `vh fs get` and `vh fs put` |
 | S3 gateway | Credential creation, revocation, scope, vault, role and override changes |
@@ -59,6 +60,24 @@ vh audit export --since 2026-01-01 > audit-2026.ndjson
 `vh audit verify` exits with status 1 when the trail fails verification, and names the first bad event.
 :::
 ::::
+
+### Reconstruct an MFA recovery
+
+Every recovery path can be followed from the trail alone. `vh audit list --action auth.mfa.` (add `keys.backup.` for the
+device side) shows, in order:
+
+- **A recovery-code sign-in:** `auth.mfa.challenge`, `auth.mfa.recovery.use` (the batch and the codes left),
+  `auth.login.success`, `auth.mfa.verify` (method `recovery_code`), one `keys.backup.grant.revoke` per paired device,
+  `auth.mfa.recovery.signin` (sessions signed out, grants revoked, the cooldown's end), then any refusals during the
+  cooldown (`auth.stepup.required`, denied, reason `recovery_cooldown`), the replacement factor
+  (`auth.mfa.factor.enroll` with `during_recovery: true`) and the new codes (`auth.mfa.recovery.generate`,
+  `.acknowledge`).
+- **An administrator's or `vh` reset:** one `auth.mfa.factor.remove` per disabled factor and one
+  `keys.backup.grant.revoke` per device (the administrator or CLI user as actor, the account as `target_id` /
+  `user_id`), `auth.mfa.admin.reset` (channel `admin_reset` or `cli_reset`, the reason, the counts), then the
+  account's guided enrollment at its next sign-in. Refused resets are recorded too (outcome `denied`).
+
+Run `vh audit verify` afterwards: it proves nothing in between was changed or removed.
 
 A verification reports how many events it checked, the first event that fails (if any) and why, how many signed heads are valid, and how many events came after the newest signed head. Those events get signed at the next interval.
 

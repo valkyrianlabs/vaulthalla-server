@@ -169,7 +169,7 @@ void initDeps() {
     );
 
     // #362 (D1): devices paired before key-backup grants existed keep their automatic key backup through a migrated
-    // grant over exactly what their user may export now, made once from migration 129's snapshot, before any device
+    // grant over exactly what their user may export now, made once from migration 130's snapshot, before any device
     // can connect. Then every grant is checked against its revocation triggers, and every later account change is.
     if (const auto migrated = vh::ops::backup_grants::migratePending(); migrated > 0)
         vh::log::Registry::vaulthalla()->info("[*] {} paired device(s) keep automatic key backup (migrated grants)",

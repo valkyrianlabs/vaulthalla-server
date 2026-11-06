@@ -38,7 +38,7 @@ std::vector<WsModel> deviceModels() {
          boolean("revoked").desc("Revoked devices stay listed; their key never pairs again.")}));
 
     out.push_back(model("KeyBackupGrant",
-        "A paired device's key-backup grant (#362, migration 129; MFA design note section 6.4): "
+        "A paired device's key-backup grant (#362, migration 130; MFA design note section 6.4): "
         "ops::backup_grants::toJson, core/src/ops/BackupGrants.cpp.",
         {uinteger("id"),
          deviceSpki("device_id").nullable().desc("The device the grant is bound to (null once the device row is gone)."),

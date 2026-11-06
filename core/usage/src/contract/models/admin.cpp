@@ -250,8 +250,20 @@ std::vector<WsModel> adminSettingsModels() {
         {uinteger("access_token_expiry_minutes"), uinteger("refresh_token_expiry_days"),
          object("webauthn", "WebAuthnConfig").opt(), object("mfa", "MfaConfig").opt()}));
     out.push_back(model("MfaConfig",
-        "auth.mfa.* (Config.cpp to_json(MfaConfig), #359): multi-factor authentication settings.",
-        {uinteger("step_up_ttl_seconds").min(60).max(900).desc(
+        "auth.mfa.* (Config.cpp to_json(MfaConfig), #359, #360): multi-factor authentication settings. Changing policy, "
+        "the admin flags or auth.webauthn.rp_id is audited (auth.mfa.policy.change); weakening them is mailed to "
+        "operator_emails.recipients.security.",
+        {str("policy").oneOf({"optional", "admins", "all"}).opt().desc(
+             "Who must sign in with a second factor: nobody (per-account requirements still apply), the super admin and "
+             "privileged admins (the default), or every account. Applied at each session's next use."),
+         boolean("admin_webauthn_only").opt().desc("Privileged admins may use passkeys only (no authenticator apps). "
+                                                   "Needs auth.webauthn.rp_id."),
+         boolean("admin_device_bound_only").opt().desc("Privileged admins may use device-bound passkeys only (no synced "
+                                                       "ones); implies admin_webauthn_only. Needs auth.webauthn.rp_id."),
+         uinteger("recovery_cooldown_hours").min(1).max(168).opt().desc(
+             "After a recovery-code sign-in or an MFA reset, keys, device.trust, identity.admin, secrets and settings "
+             "are refused (recovery_cooldown) for this long."),
+         uinteger("step_up_ttl_seconds").min(60).max(900).desc(
             "How long a step-up grant lasts, and how recent an aal 2 sign-in must be to stand in for a family-wide one.")}));
     out.push_back(model("WebAuthnConfig",
         "auth.webauthn.* (Config.cpp to_json(WebAuthnConfig), #355): the passkey relying party, explicit configuration "

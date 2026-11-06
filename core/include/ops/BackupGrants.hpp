@@ -41,7 +41,7 @@
 //
 // D1: devices paired before the grant table existed keep their automatic backup through an origin 'migrated' grant
 // over exactly the vaults their user could export at migration time (migratePending, once, at the first start after
-// migration 129). Nothing is made for a user without the Export permission, and no vault is added that the user
+// migration 130). Nothing is made for a user without the Export permission, and no vault is added that the user
 // couldn't export then. confirm turns it into 'approved'; revoke ends it.
 //
 // D4: after a recovery-code sign-in revoked the grant, and while the recovery cooldown runs, the same device may
@@ -102,6 +102,10 @@ enum class Revocation : uint8_t {
 [[nodiscard]] std::string createTarget(uint32_t deviceRowId, std::vector<uint32_t> vaultIds);
 [[nodiscard]] std::string extendTarget(uint32_t grantId, std::vector<uint32_t> vaultIds);
 [[nodiscard]] std::string confirmTarget(uint32_t grantId);
+// D4's exception to the recovery cooldown, for auth::approval: whether `target` is a create target for this device
+// whose latest grant a recovery-code sign-in revoked and whose live approval key predates that revocation. Only then
+// may the device's approval key be challenged for device.trust while the cooldown runs; create still checks the vaults.
+[[nodiscard]] bool recoveryRecreateTarget(uint32_t deviceRowId, const std::string& target);
 
 // ---- the export path (ops::vault_keys)
 
@@ -139,7 +143,9 @@ void installIdentityHook();
 // ---- D1
 
 // Turns the migration's snapshot into origin 'migrated' grants (see the namespace comment). Idempotent: each snapshot
-// row is claimed once. Returns how many grants it made.
+// row is claimed once. A device whose authority migration 129's interim column had revoked (#360) gets its grant
+// already revoked (time and reason carried over): no live authority, only D4's re-creation record. Returns how many
+// live grants it made.
 std::size_t migratePending();
 
 // ---- notices and tests

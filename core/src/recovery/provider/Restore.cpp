@@ -23,6 +23,8 @@
 #include "recovery/provider/Versions.hpp"
 #include "runtime/Deps.hpp"
 #include "storage/CloudEngine.hpp"
+#include "storage/ObjectKeys.hpp"
+#include "crypto/vhf1/Format.hpp"
 #include "storage/PlaintextReader.hpp"
 #include "storage/ScopedS3RequestUsageCapture.hpp"
 #include "storage/s3/Controller.hpp"
@@ -46,6 +48,7 @@
 #include <cerrno>
 #include <ctime>
 #include <fcntl.h>
+#include <fstream>
 #include <system_error>
 #include <unistd.h>
 #include <unordered_map>
@@ -137,6 +140,26 @@ VersionMeta metaFromHead(const storage::s3::ObjectVersionHead& head) {
         m.plaintext_size = *plain;
     } else {
         m.plaintext_size = m.object_size;
+    }
+    return m;
+}
+
+// opaque_v1 (spec 01 §4.3): no version carries metadata; every o/<uid> version is sealed. The generation and key
+// version are what our own write recorded (the row); a version the row knows nothing about learns them from its
+// authenticated header once fetched (iv empty, key_version 0 until then).
+VersionMeta opaqueMeta(const storage::s3::ObjectVersionHead& head, const db::query::recovery::ObjectVersionRow& row) {
+    VersionMeta m;
+    m.encrypted = true;
+    m.object_size = head.content_length;
+    m.etag = head.etag;
+    m.storage_class = head.storage_class;
+    m.content_hash = row.content_hash;
+    if (row.encryption_iv && !row.encryption_iv->empty() && row.key_version && *row.key_version > 0) {
+        m.iv = *row.encryption_iv;
+        m.key_version = *row.key_version;
+        const auto plain = vh::vault::content::plaintextSizeOfGeneration(m.object_size, m.iv);
+        if (!plain) throw storage::IntegrityError("the version's size is no valid sealed object for its generation");
+        m.plaintext_size = *plain;
     }
     return m;
 }
@@ -439,7 +462,7 @@ PlanItem itemFor(const PlanContext& ctx, const VersionRow& v, const std::filesys
     const auto& engine = ctx.engine;
     PlanItem item;
     item.source_id = RecoveryId{.type = RecoveryId::Type::ProviderVersion, .id = static_cast<uint64_t>(v.id)}.str();
-    item.source_path = versions::vaultPathOf(v.object_key).string();
+    item.source_path = versions::vaultPathOf(*engine, v.object_key).string();
     item.destination_path = destination.string();
     const bool encrypted = v.encrypted.value_or(false);
     if (v.plaintext_bytes) item.size_bytes = v.plaintext_bytes;
@@ -464,7 +487,7 @@ PlanItem itemFor(const PlanContext& ctx, const VersionRow& v, const std::filesys
     if (encrypted && v.key_version && engine->encryptionManager && !engine->encryptionManager->hasKeyVersion(*v.key_version))
         return unavailable("sealed under key version " + std::to_string(*v.key_version) + ", which this vault no longer holds");
 
-    const auto destKey = versions::objectKeyOf(destination);
+    const auto destKey = versions::liveObjectKeyOf(*engine, destination);
     const bool sameKey = destKey == v.object_key;
     const bool fitsCopy = !v.size_bytes || *v.size_bytes <= storage::s3::Controller::MAX_SINGLE_COPY_BYTES;
     const bool keyOk = !v.encrypted.has_value() ? true   // unknown metadata: decided after the HEAD
@@ -603,7 +626,8 @@ PlanItem planFor(const std::shared_ptr<storage::CloudEngine>& engine, const db::
     const restore_detail::PlanContext ctx(engine);
     if (version.vault_id != engine->vault->id) throw std::invalid_argument("the version belongs to another vault");
     return restore_detail::itemFor(ctx, version,
-                                   destination ? destination->lexically_normal() : versions::vaultPathOf(version.object_key));
+                                   destination ? destination->lexically_normal()
+                                               : versions::vaultPathOf(*engine, version.object_key));
 }
 
 Plan planOne(const std::shared_ptr<storage::CloudEngine>& engine, const uint64_t versionRowId,
@@ -630,7 +654,8 @@ Plan planAt(const std::shared_ptr<storage::CloudEngine>& engine, const std::file
     const restore_detail::PlanContext ctx(engine);
     const auto vaultId = engine->vault->id;
     const auto root = path.empty() ? std::filesystem::path("/") : path.lexically_normal();
-    const auto fileKey = versions::objectKeyOf(root);
+    const auto fileKey = versions::objectKeyOf(*engine, root);
+    const bool opaque = engine->opaqueLayout();
 
     // A file when the index knows its exact key (or the vault has a file there); otherwise a directory prefix.
     auto rows = db::query::recovery::ObjectVersion::listAsOf(vaultId, fileKey, at, limit);
@@ -638,7 +663,11 @@ Plan planAt(const std::shared_ptr<storage::CloudEngine>& engine, const std::file
                             (std::ranges::any_of(rows, [&](const auto& r) { return r.object_key == fileKey; }) ||
                              db::query::fs::File::getFileByPath(vaultId, root) != nullptr);
     if (rootIsFile) std::erase_if(rows, [&](const auto& r) { return r.object_key != fileKey; });
-    else rows = db::query::recovery::ObjectVersion::listAsOf(vaultId, versions::directoryPrefixOf(root), at, limit);
+    else {
+        rows = db::query::recovery::ObjectVersion::listAsOf(vaultId, versions::directoryPrefixOf(*engine, root), at, limit);
+        // opaque_v1: the objects of the files the database places under the directory (at their current paths).
+        if (opaque) std::erase_if(rows, [&](const auto& r) { return !versions::keyUnder(*engine, r.object_key, root); });
+    }
 
     Plan plan;
     plan.vault_id = vaultId;
@@ -657,7 +686,7 @@ Plan planAt(const std::shared_ptr<storage::CloudEngine>& engine, const std::file
     std::unordered_set<std::string> presentAt;
     for (const auto& r : rows) {
         if (versions::isInternalKey(r.object_key)) continue;
-        const auto source = versions::vaultPathOf(r.object_key);
+        const auto source = versions::vaultPathOf(*engine, r.object_key);
         const auto dest = restore_detail::rerooted(source, root, destination, rootIsFile);
         if (r.is_delete_marker) continue;   // absent at `at`: handled with the files that had no version below
         presentAt.insert(dest.string());
@@ -674,7 +703,8 @@ Plan planAt(const std::shared_ptr<storage::CloudEngine>& engine, const std::file
     }
     uint64_t kept = 0;
     for (const auto& f : current) {
-        if (!f || presentAt.contains(f->path.string()) || versions::isInternalKey(versions::objectKeyOf(f->path))) continue;
+        if (!f || presentAt.contains(f->path.string()) || versions::isInternalKey(versions::objectKeyOf(*engine, f->path)))
+            continue;
         if (!prune) {
             ++kept;
             continue;
@@ -750,10 +780,11 @@ RestoreOutcome restore(const std::shared_ptr<storage::CloudEngine>& engine, cons
     const auto row = db::query::recovery::ObjectVersion::get(static_cast<int64_t>(id.id));
     if (!row || row->vault_id != vaultId || versions::isInternalKey(row->object_key))
         throw std::invalid_argument("no such provider version in this vault: " + item.source_id);
-    const auto destPath = item.destination_path.empty() ? versions::vaultPathOf(row->object_key)
+    const auto destPath = item.destination_path.empty() ? versions::vaultPathOf(*engine, row->object_key)
                                                         : std::filesystem::path(item.destination_path).lexically_normal();
     const auto srcKey = row->object_key;
-    const auto destKey = versions::objectKeyOf(destPath);
+    const auto destKey = versions::liveObjectKeyOf(*engine, destPath);
+    const bool opaque = engine->opaqueLayout();
 
     if (row->gone_at) return result("unavailable", "the provider no longer lists this version");
     if (row->is_delete_marker) return result("unavailable", "a delete marker is not content");
@@ -810,8 +841,9 @@ RestoreOutcome restore(const std::shared_ptr<storage::CloudEngine>& engine, cons
         if (head->delete_marker) return result("unavailable", "a delete marker is not content");
         if (points::isArchiveClass(head->storage_class))
             return result("unavailable", "archived storage class: the provider must restore it first");
-        const auto meta = d::metaFromHead(*head);
-        if (meta.encrypted && !engine->encryptionManager->hasKeyVersion(meta.key_version))
+        const auto meta = opaque ? d::opaqueMeta(*head, *row) : d::metaFromHead(*head);
+        if (meta.encrypted && (!opaque || meta.key_version != 0) &&
+            !engine->encryptionManager->hasKeyVersion(meta.key_version))
             return result("unavailable", "sealed under key version " + std::to_string(meta.key_version) +
                                          ", which this vault no longer holds");
 
@@ -851,6 +883,7 @@ RestoreOutcome restore(const std::shared_ptr<storage::CloudEngine>& engine, cons
             auto gen = std::make_shared<fs::model::File>();
             gen->vault_id = vaultId;
             gen->path = destPath;
+            if (opaque) gen->object_uid = storage::object_keys::uidOfContentKey(destKey);   // the same file's object
             gen->name = destPath.filename().string();
             gen->size_bytes = meta.plaintext_size;
             gen->encryption_iv = meta.encrypted ? meta.iv : std::string{};
@@ -916,6 +949,121 @@ RestoreOutcome restore(const std::shared_ptr<storage::CloudEngine>& engine, cons
             price->commit();
             log::Registry::cloud()->info("[Recovery] Vault {}: restored {} onto '{}' by provider copy (version {})",
                                          vaultId, item.source_id, destPath.string(), newVersionId.value_or("-"));
+            return result("restored");
+        }
+
+        if (opaque) {
+            // 2c. opaque_v1 transfer: GET ?versionId into a private temp, opened against its own object's uid, and
+            //     re-sealed under the current key into the destination's uid (another file, or the same one under a
+            //     new key). The destination exists first, so its uid is known before anything is sealed for it.
+            out.method = "provider_transfer";
+            const auto srcUid = storage::object_keys::uidOfContentKey(srcKey);
+            if (!srcUid) return result("unavailable", "the version is no file's object");
+            const bool creating = !dest;
+            if (creating) d::ensureParentDirectories(engine, destPath, user);
+            const auto dir = creating ? d::directoryBacking(*engine, destPath)
+                                      : d::backingOf(*engine, *dest).parent_path();
+            d::RestoreTemp fetched(dir);
+            {
+                s3::S3RequestBudget cap;
+                cap.max_get_requests = 1;
+                cap.max_head_requests = 0;
+                cap.max_downloaded_bytes = meta.object_size + d::kRestoreErrorSlack;
+                const storage::ScopedS3RequestUsageCapture getCap(*engine, cap);
+                const auto got = engine->streamObjectVersion(
+                    srcKey, row->version_id, meta.etag.empty() ? std::nullopt : std::make_optional(meta.etag),
+                    meta.object_size, [&](const std::span<const uint8_t> bytes) { fetched.write(bytes); });
+                if (got.body_bytes != meta.object_size)
+                    throw std::runtime_error(fmt::format("the provider returned {} of {} bytes", got.body_bytes,
+                                                         meta.object_size));
+            }
+            fetched.sync();
+            fetched.closeFd();
+
+            // The version's generation: what our write recorded, else what its authenticated header names.
+            vh::vault::content::Binding from{.vaultUid = engine->encryptionManager->vaultUid(), .generation = meta.iv,
+                                             .keyVersion = meta.key_version, .objectUid = srcUid};
+            if (from.generation.empty() || from.keyVersion == 0) {
+                std::vector<uint8_t> header(std::min<uint64_t>(meta.object_size, crypto::vhf1::kHeaderSize));
+                std::ifstream in(fetched.path(), std::ios::binary);
+                in.read(reinterpret_cast<char*>(header.data()), static_cast<std::streamsize>(header.size()));
+                try {
+                    const auto opened = crypto::vhf1::openHeader(
+                        header, {.kind = crypto::vhf1::Kind::FileContent, .vaultUid = from.vaultUid,
+                                 .objectUid = srcUid, .generation = std::nullopt},
+                        [&](const uint32_t v) -> crypto::SecretKeyPtr {
+                            try {
+                                return engine->encryptionManager->historicalKeySnapshot(v);
+                            } catch (const std::exception&) {
+                                return nullptr;
+                            }
+                        });
+                    from.generation = vh::vault::content::generationOf(opened.params().salt);
+                    from.keyVersion = opened.params().keyVersion;
+                } catch (const crypto::vhf1::Error& e) {
+                    vh::vault::content::throwIntegrity(e, "the version's header");
+                }
+            }
+            const auto plain = vh::vault::content::plaintextSizeOfGeneration(meta.object_size, from.generation);
+            if (!plain) throw storage::IntegrityError("the version's size is no valid sealed object for its generation");
+            if (!engine->encryptionManager->hasKeyVersion(from.keyVersion))
+                return result("unavailable", "sealed under key version " + std::to_string(from.keyVersion) +
+                                             ", which this vault no longer holds");
+
+            std::string expectedNow;
+            d::FilePtr target = dest;
+            if (creating) {
+                target = fs::Filesystem::createFile({.path = destPath, .fuse_path = engine->vaultPathToFusePath(destPath),
+                                                     .buffer = {}, .engine = engine, .user = user, .overwrite = false});
+                if (!target || target->size_bytes != 0 || !target->encryption_iv.empty() ||
+                    std::time(nullptr) - target->created_at > 60)
+                    throw fs::ContentConflict("a file appeared at the destination meanwhile");
+                expectedNow = *d::sourceIdOf(target);
+            } else {
+                expectedNow = *expectedDestinationSourceId;
+            }
+            std::shared_ptr<fs::model::File> committed;
+            try {
+                if (!target->object_uid) throw std::runtime_error("the destination has no object uid");
+                d::RestoreTemp resealed(dir, ".sealed");
+                resealed.closeFd();
+                const auto current = engine->encryptionManager->currentKey();
+                const auto generation = vh::vault::content::resealFile(
+                    fetched.path(), from, *engine->encryptionManager->historicalKeySnapshot(from.keyVersion),
+                    resealed.path(), *current.key, current.version, *target->object_uid);
+                committed = d::commitSealed(engine, destPath, resealed, generation, current.version, *plain,
+                                            expectedNow, user);
+            } catch (...) {
+                if (creating) {
+                    try {
+                        engine->removeLocally(destPath);
+                    } catch (const std::exception& e) {
+                        log::Registry::cloud()->warn("[Recovery] Could not remove the empty restore target {}: {}",
+                                                     destPath.string(), e.what());
+                    }
+                }
+                throw;
+            }
+            try {
+                if (const auto replay = local::backlog::replayBeforeUpload(*engine, *committed); replay.blocked)
+                    throw std::runtime_error("earlier versions could not be replayed upstream first: " +
+                                             replay.error.value_or("unknown"));
+                engine->upload(committed);
+                const auto put = s3::Controller::lastPutOutcome();
+                if (!put.etag.empty()) out.new_etag = put.etag;
+                out.new_version_id = put.version_id;
+                out.provider_changed = true;
+                auto indexRow = std::make_shared<fs::model::File>(*committed);
+                if (out.new_etag) indexRow->remote_etag = out.new_etag;
+                indexRow->remote_version_id = out.new_version_id;
+                d::publishRestored(engine, indexRow, sync::model::Baseline::afterUpload(*committed), out);
+            } catch (const std::exception& e) {
+                out.notes.push_back(std::string("restored locally; the upload failed and the next sync uploads it: ") +
+                                    e.what());
+            }
+            price->commit();
+            log::Registry::cloud()->info("[Recovery] Vault {}: restored {} onto '{}' by transfer", vaultId,
+                                         item.source_id, destPath.string());
             return result("restored");
         }
 

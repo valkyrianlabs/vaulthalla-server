@@ -7,6 +7,8 @@
 
 #include <pqxx/pqxx>
 
+#include <algorithm>
+
 namespace vh::db::query::device {
 
 namespace {
@@ -215,5 +217,6 @@ std::string Devices::nodeId() {
         return txn.exec("SELECT node_id FROM device_node WHERE singleton").one_field_ref().as<std::string>();
     });
 }
+
 
 }

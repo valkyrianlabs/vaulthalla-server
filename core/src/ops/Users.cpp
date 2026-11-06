@@ -435,6 +435,32 @@ SuperAdminPasswordSet setSuperAdminPassword(const Actor& actor, const std::strin
     return out;
 }
 
+UserPtr requireMfaManager(const Actor& actor, const uint32_t targetId) {
+    requireActor(actor);
+    const auto target = requireUser(targetId);
+    const auto state = target->state();
+    if (state->isProtected || state->systemOnly)
+        throw Denied("protected accounts cannot have their MFA managed here: " + state->name);
+    if (state->hasSuperAdminRole()) {
+        if (!actor->isSuperAdmin()) throw Denied("only a super admin may manage a super admin's MFA");
+        return target;
+    }
+    const auto role = adminRoleOf(*state);
+    if (!can(actor, IdPerm::ResetPassword, role))
+        throw Denied(std::string("you do not have permission to manage the MFA of ") + kindOf(role));
+    requireWithinActor(actor, role, "you cannot manage an account whose role grants admin permissions you do not hold");
+    return target;
+}
+
+bool mayManageMfa(const Actor& actor, const identities::User& target) {
+    try {
+        (void)requireMfaManager(actor, target.id);
+        return true;
+    } catch (const Error&) {
+        return false;
+    }
+}
+
 UserPtr changePassword(const Actor& actor, const uint32_t id, const std::optional<std::string>& currentPassword,
                        const std::string& newPassword) {
     requireActor(actor);

@@ -72,6 +72,16 @@ inline constexpr std::array<Family, 7> kFamilies{Family::Keys,          Family::
 // key-backup grant commands are device.trust).
 [[nodiscard]] bool deviceApprovalMaySatisfy(Family family) noexcept;
 
+// The recovery cooldown's families (#360; design 7.4, D4): keys, device.trust, identity.admin, secrets, settings. While
+// the account's cooldown runs (a recovery-code sign-in or an MFA reset, auth/mfa/Recovery.hpp) require() refuses them
+// on web and device sessions with ops::RecoveryCooldown, before any grant is looked at, and no ceremony for them
+// begins. Factors enrolled meanwhile are marked created_during_recovery and are not offered for these families until
+// the cooldown ends. account.credentials (enrolling the replacement factor, removing the lost one) and data.destroy are
+// not held back.
+[[nodiscard]] bool cooldownFamily(Family family) noexcept;
+// Throws ops::RecoveryCooldown when `family` is a cooldown family and `userId`'s cooldown runs.
+void requireNoCooldown(uint32_t userId, Family family);
+
 // The grant window: auth.mfa.step_up_ttl_seconds, clamped to 60..900.
 [[nodiscard]] std::chrono::seconds ttl();
 inline constexpr std::chrono::seconds kMinTtl{60};
@@ -145,7 +155,9 @@ void require(Family family, const std::optional<std::string>& target = std::null
 
 // What `user` can answer a step-up of `family` with on a web session: "webauthn" (a usable passkey and passkeys
 // configured), "password_totp" (a confirmed authenticator app), "password" (D3). Empty when nothing can (an account
-// with no factor asked for keys, device.trust or data.destroy).
+// with no factor asked for keys, device.trust or data.destroy). Factors the account's policy rule refuses
+// (auth.mfa.admin_webauthn_only / admin_device_bound_only) are never offered, nor, for a cooldown family while the
+// cooldown runs, factors enrolled during recovery.
 [[nodiscard]] std::vector<std::string> methods(const identities::User& user, Family family);
 
 // The refusal for `family`/`target` as the caller in scope sees it (methods for its channel). Not audited.

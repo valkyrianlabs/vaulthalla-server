@@ -95,6 +95,7 @@ Controller::TransportResponse Controller::transportGet(
 
 GetObjectResult Controller::streamObject(const fs::path& key, const GetObjectOptions& options,
                                          const BodySink& sink) const {
+    enforceRequestPolicy(RequestOp::Get, key.string());
     if (options.range && options.range->first > options.range->second)
         throw std::invalid_argument("S3 GET range is inverted for " + key.string());
     if (options.version_id && options.version_id->empty())

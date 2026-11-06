@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-// The `key_backup_grants`, `key_backup_grant_vaults` and `key_backup_grant_migration` tables (migration 129, #362).
+// The `key_backup_grants`, `key_backup_grant_vaults` and `key_backup_grant_migration` tables (migration 130, #362).
 // Trusted primitives: callers (device::backup, ops::backup_grants) authorize, decide and audit.
 namespace vh::db::query::device {
 
@@ -43,6 +43,8 @@ struct PendingMigration {
     uint32_t device_id{};
     uint32_t user_id{};
     bool device_live{};
+    // Migration 129's interim revocation (#360): the device's authority was already revoked, and why.
+    std::optional<std::string> revoked_reason{};
 };
 
 class BackupGrants {
@@ -82,7 +84,8 @@ public:
     // ---- D1 (the migration's snapshot)
     [[nodiscard]] static std::vector<PendingMigration> pendingMigration();
     // In one transaction: removes the device's snapshot row and, when `vaultIds` is set and the device is live and
-    // has no grant yet, inserts its origin 'migrated' grant. The grant, if one was made.
+    // has no grant yet, inserts its origin 'migrated' grant, revoked with the snapshot's time and reason when the
+    // snapshot carries an interim revocation. The grant, if one was made.
     [[nodiscard]] static std::optional<BackupGrant> migrate(uint32_t deviceId, uint32_t userId,
                                                             const std::optional<std::vector<uint32_t>>& vaultIds);
 };

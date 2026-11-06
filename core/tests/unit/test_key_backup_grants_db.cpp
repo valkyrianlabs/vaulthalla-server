@@ -327,14 +327,16 @@ protected:
         });
     }
 
-    // Re-runs migration 129 on this database as an upgrade would: the grant tables emptied and the snapshot dropped,
+    // Re-runs migration 130 on this database as an upgrade would: the grant tables emptied and the snapshot dropped,
     // then the file itself (it snapshots the live devices) and the daemon's first-start step.
-    static std::size_t rerunMigration() {
-        db::Transactions::exec("kbg rerun migration", [](pqxx::work& txn) {
+    // `before` sets up what a 129-era database held (the interim columns of #360).
+    static std::size_t rerunMigration(const std::function<void(pqxx::work&)>& before = {}) {
+        db::Transactions::exec("kbg rerun migration", [&](pqxx::work& txn) {
             txn.exec("DELETE FROM key_backup_grants");
             txn.exec("DROP TABLE IF EXISTS key_backup_grant_migration");
+            if (before) before(txn);
             txn.exec(db::seed::readFileToString(std::filesystem::path(paths::getPsqlSchemasPath()) /
-                                                "129_key_backup_grants.sql"));
+                                                "130_key_backup_grants.sql"));
         });
         return bg::migratePending();
     }
@@ -423,10 +425,54 @@ TEST_F(KeyBackupGrantsDb, TheMigrationCarriesExactlyTheExportAuthorityAndOpensNo
     // Never twice: the snapshot row is spent, and running the file again snapshots nothing.
     EXPECT_EQ(bg::migratePending(), 0u);
     db::Transactions::exec("kbg rerun file", [](pqxx::work& txn) {
-        txn.exec(db::seed::readFileToString(std::filesystem::path(paths::getPsqlSchemasPath()) / "129_key_backup_grants.sql"));
+        txn.exec(db::seed::readFileToString(std::filesystem::path(paths::getPsqlSchemasPath()) / "130_key_backup_grants.sql"));
     });
     EXPECT_EQ(bg::migratePending(), 0u);
     EXPECT_FALSE(live(plainMac));
+}
+
+// #360's interim column (migration 129): a device whose implicit authority a recovery-code sign-in revoked gets no live
+// grant, only a revoked migrated one over what it could export then; during the cooldown its approval key from before
+// the recovery re-creates it for those vaults, and nothing wider.
+TEST_F(KeyBackupGrantsDb, AnInterimRevocationCarriesOverAsARevokedGrantOnlyThePreRecoveryKeyReCreates) {
+    const ApprovalKey key;
+    const auto user = newUser("key_custodian");
+    const auto mac = pairedDevice(user, &key);
+    const auto kept = pairedDevice(user);
+    const auto vault = newVault();
+    const auto exportable = ops::vault_keys::exportableVaults(user);
+    ASSERT_FALSE(exportable.empty());
+
+    (void)rerunMigration([&](pqxx::work& txn) {
+        txn.exec("ALTER TABLE devices ADD COLUMN IF NOT EXISTS key_backup_revoked_at TIMESTAMPTZ, "
+                 "ADD COLUMN IF NOT EXISTS key_backup_revoked_reason TEXT");
+        txn.exec("UPDATE devices SET key_backup_revoked_at = NOW(), key_backup_revoked_reason = 'recovery_code' "
+                 "WHERE id = $1", pqxx::params{mac.row.id});
+    });
+    EXPECT_FALSE(live(mac)) << "no migrated grant for a device whose key backup was revoked";
+    const auto carried = Grants::lastRevokedForDevice(mac.row.id);
+    ASSERT_TRUE(carried);
+    EXPECT_EQ(carried->origin, "migrated");
+    EXPECT_EQ(carried->revoked_reason, std::optional<std::string>("recovery_code"));
+    EXPECT_EQ(carried->vault_ids, std::vector<uint32_t>(exportable.begin(), exportable.end()));
+    EXPECT_TRUE(coveredBy(mac, carried->vault_ids).empty());
+    ASSERT_TRUE(live(kept)) << "the user's other device keeps its authority";
+    EXPECT_EQ(auditFor(carried->id), std::vector<std::string>{"keys.backup.grant.migrate/d1"});
+    EXPECT_TRUE(db::Transactions::exec("kbg columns", [](pqxx::work& txn) {
+        return txn.exec("SELECT 1 FROM information_schema.columns WHERE table_name = 'devices' "
+                        "AND column_name LIKE 'key_backup_revoked%'").empty();
+    })) << "the interim columns are dropped once carried over";
+
+    (void)auth::mfa::startRecoveryCooldown(user->id);
+    const auto s = mac.session;
+    const auto id = static_cast<uint32_t>(vault->vault->id);
+    const std::vector<uint32_t> all(exportable.begin(), exportable.end());
+    const auto recreated = approvedWithKey(s, key, [&] {
+        return h::Devices::backupGrantCreate(json{{"vault_ids", all}}, s);
+    });
+    ASSERT_TRUE(recreated.ok) << recreated.code << " " << recreated.message;
+    EXPECT_EQ(recreated.data.at("grant").at("vault_ids"), json(all));
+    EXPECT_TRUE(exportVia(s, id).ok);
 }
 
 // A vault the grant names exports with no prompt; any other export is the keys step-up bound to its target, which a
@@ -696,6 +742,9 @@ TEST_F(KeyBackupGrantsDb, DuringTheRecoveryCooldownOnlyAPreRecoveryApprovalKeyRe
     const auto refused = run(s, createFor(s, {ids(a)}));
     ASSERT_EQ(refused.code, "step_up_required");
     EXPECT_EQ(refused.data.at("methods"), json::array({"device_approval"})) << "the approval key, nothing else";
+    // The exception is that target only: the approval key approves no other device.trust action in the cooldown.
+    EXPECT_EQ(approveWithKey(s, key, "device.trust", "device.pairing.approve:r:k:c").code, "recovery_cooldown");
+    EXPECT_EQ(approveWithKey(s, key, "keys", "vault.keys.export:" + std::to_string(ids(a))).code, "recovery_cooldown");
     // A console approval (a passkey possibly enrolled during the recovery) is not enough.
     s->stepUp().addGrant({.user_id = user->id, .family = auth::stepup::Family::DeviceTrust,
                           .target = refused.data.at("target").get<std::string>(),

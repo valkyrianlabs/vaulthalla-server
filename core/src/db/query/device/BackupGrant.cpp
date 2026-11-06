@@ -243,10 +243,13 @@ bool BackupGrants::approvalKeyPredatesRevocation(const uint32_t deviceId, const 
 std::vector<PendingMigration> BackupGrants::pendingMigration() {
     return Transactions::read("BackupGrants::pendingMigration", [&](pqxx::transaction_base& txn) {
         std::vector<PendingMigration> out;
-        for (const auto& r : txn.exec("SELECT m.device_id, d.user_id, d.revoked_at IS NULL FROM key_backup_grant_migration m "
-                                      "JOIN devices d ON d.id = m.device_id ORDER BY m.device_id"))
+        for (const auto& r : txn.exec("SELECT m.device_id, d.user_id, d.revoked_at IS NULL, m.revoked_reason "
+                                      "FROM key_backup_grant_migration m JOIN devices d ON d.id = m.device_id "
+                                      "ORDER BY m.device_id"))
             out.push_back({.device_id = r[0].as<uint32_t>(), .user_id = r[1].as<uint32_t>(),
-                           .device_live = r[2].as<bool>()});
+                           .device_live = r[2].as<bool>(),
+                           .revoked_reason = r[3].is_null() ? std::nullopt
+                                                            : std::optional<std::string>(r[3].as<std::string>())});
         return out;
     });
 }
@@ -255,9 +258,14 @@ std::optional<BackupGrant> BackupGrants::migrate(const uint32_t deviceId, const 
                                                  const std::optional<std::vector<uint32_t>>& vaultIds) {
     return Transactions::exec("BackupGrants::migrate", [&](pqxx::work& txn) -> std::optional<BackupGrant> {
         // The snapshot row is the claim: only the transaction that removes it migrates the device.
-        if (txn.exec("DELETE FROM key_backup_grant_migration WHERE device_id = $1", pqxx::params{deviceId})
-                .affected_rows() == 0)
-            return std::nullopt;
+        const auto claimed = txn.exec("DELETE FROM key_backup_grant_migration WHERE device_id = $1 "
+                                      "RETURNING revoked_at, revoked_reason",
+                                      pqxx::params{deviceId});
+        if (claimed.empty()) return std::nullopt;
+        const auto revokedAt = claimed[0][0].is_null() ? std::nullopt
+                                                       : std::optional<std::string>(claimed[0][0].as<std::string>());
+        const auto revokedReason = claimed[0][1].is_null() ? std::nullopt
+                                                           : std::optional<std::string>(claimed[0][1].as<std::string>());
         if (!vaultIds) return std::nullopt;
         if (txn.exec("SELECT 1 FROM devices WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL FOR UPDATE",
                      pqxx::params{deviceId, userId})
@@ -265,9 +273,9 @@ std::optional<BackupGrant> BackupGrants::migrate(const uint32_t deviceId, const 
             return std::nullopt;
         if (!txn.exec("SELECT 1 FROM key_backup_grants WHERE device_id = $1", pqxx::params{deviceId}).empty())
             return std::nullopt;
-        const auto id = txn.exec("INSERT INTO key_backup_grants (device_id, user_id, origin) VALUES ($1, $2, 'migrated') "
-                                 "RETURNING id",
-                                 pqxx::params{deviceId, userId})
+        const auto id = txn.exec("INSERT INTO key_backup_grants (device_id, user_id, origin, revoked_at, revoked_reason) "
+                                 "VALUES ($1, $2, 'migrated', $3::TIMESTAMPTZ, $4) RETURNING id",
+                                 pqxx::params{deviceId, userId, revokedAt, revokedReason})
                             .one_field_ref()
                             .as<uint32_t>();
         backupGrantAddVaults(txn, id, *vaultIds);

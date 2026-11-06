@@ -1,4 +1,5 @@
 -- Key-backup grants (#362, MFA design note docs/dev/mfa-design.md sections 6.4 and 9; decisions D1 and D4).
+-- Replaces migration 129's interim devices.key_backup_revoked_* columns (#360).
 --
 -- Vaulthalla Desktop backs up every needed version of each vault key to 1Password in the background. A key-backup
 -- grant is the narrow, device-bound authority that lets it do so without a person's approval each time: one paired
@@ -22,7 +23,15 @@
 --                            snapshot is taken only when the table is created, so re-running this file never adds a
 --                            device paired later.
 --
--- Additive and idempotent: new tables only, safe on upgraded installs. No existing row changes.
+-- Migration 129 (#360) recorded a recovery-code sign-in or MFA reset that revoked a device's implicit key-backup
+-- authority in devices.key_backup_revoked_at / _reason, until this table existed. The snapshot carries both over: such
+-- a device gets no live grant. Its migrated grant is made already revoked, with that time and reason, over the vaults
+-- it could export then: it grants nothing, and is what D4's re-creation during the recovery cooldown may restore (the
+-- same vaults, the device's approval key from before the recovery). Then the interim columns go: their meaning lives
+-- in key_backup_grants from here on, and nothing reads them.
+--
+-- Idempotent and safe on upgraded installs: new tables; the snapshot once; the two interim columns dropped after the
+-- snapshot read them. No other existing row changes.
 
 CREATE TABLE IF NOT EXISTS key_backup_grants
 (
@@ -58,11 +67,29 @@ $$
         IF to_regclass('public.key_backup_grant_migration') IS NULL THEN
             CREATE TABLE key_backup_grant_migration
             (
-                device_id   INTEGER PRIMARY KEY REFERENCES devices (id) ON DELETE CASCADE,
-                snapshot_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                device_id      INTEGER PRIMARY KEY REFERENCES devices (id) ON DELETE CASCADE,
+                snapshot_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                revoked_at     TIMESTAMPTZ,
+                revoked_reason TEXT CHECK (revoked_reason IS NULL OR
+                                           revoked_reason IN ('recovery_code', 'admin_reset', 'cli_reset')),
+                CHECK ((revoked_at IS NULL) = (revoked_reason IS NULL))
             );
-            INSERT INTO key_backup_grant_migration (device_id)
-            SELECT id FROM devices WHERE revoked_at IS NULL;
+            IF EXISTS (SELECT 1 FROM information_schema.columns
+                       WHERE table_schema = 'public' AND table_name = 'devices'
+                         AND column_name = 'key_backup_revoked_at') THEN
+                EXECUTE 'INSERT INTO key_backup_grant_migration (device_id, revoked_at, revoked_reason) '
+                        'SELECT id, key_backup_revoked_at, '
+                        'CASE WHEN key_backup_revoked_at IS NULL THEN NULL '
+                        'ELSE COALESCE(key_backup_revoked_reason, ''recovery_code'') END '
+                        'FROM devices WHERE revoked_at IS NULL';
+            ELSE
+                INSERT INTO key_backup_grant_migration (device_id)
+                SELECT id FROM devices WHERE revoked_at IS NULL;
+            END IF;
         END IF;
     END
 $$;
+
+ALTER TABLE devices
+    DROP COLUMN IF EXISTS key_backup_revoked_reason,
+    DROP COLUMN IF EXISTS key_backup_revoked_at;

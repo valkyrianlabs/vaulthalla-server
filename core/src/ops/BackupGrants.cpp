@@ -1,7 +1,7 @@
 #include "ops/BackupGrants.hpp"
 
 #include "audit/Trail.hpp"
-#include "auth/mfa/Factors.hpp"
+#include "auth/mfa/Recovery.hpp"
 #include "auth/stepup/StepUp.hpp"
 #include "db/query/device/Device.hpp"
 #include "device/Crypto.hpp"
@@ -9,6 +9,7 @@
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
+#include "notifications/AccountSecurity.hpp"
 #include "ops/Devices.hpp"
 #include "ops/VaultKeys.hpp"
 #include "protocols/ws/Session.hpp"
@@ -180,13 +181,8 @@ std::optional<std::string> grantApprovalMethod(const std::string& target) {
     return std::nullopt;
 }
 
-[[noreturn]] void grantRefuseCooldown(const std::string& why) {
-    throw Refused("recovery_cooldown", "This account recently signed in with a recovery code: " + why);
-}
-
-bool grantCooldownRunning(const uint32_t userId) {
-    const auto state = auth::mfa::userState(userId);
-    return state && state->recovery_cooldown_until && *state->recovery_cooldown_until > std::time(nullptr);
+[[noreturn]] void grantRefuseCooldown(const int64_t until, const std::string& why) {
+    throw RecoveryCooldown("device.trust", until, "This account recently recovered its sign-in: " + why);
 }
 
 std::string grantDeviceShort(const uint32_t deviceId) {
@@ -201,7 +197,21 @@ void grantNotifySuspended(const Grant& g) {
         sink = grantNoticeSink();
     }
     try {
-        if (sink) sink(g);
+        if (sink) {
+            sink(g);
+            return;
+        }
+        notifications::account::send({
+            .event = "keys.backup_grant_suspended",
+            .title = "Automatic key backup paused on a device",
+            .summary = "A paired device exported more than " + std::to_string(kMaxExportsPerHour) +
+                       " vault keys within an hour, so its automatic key backup was suspended.",
+            .user_id = g.user_id,
+            .facts = {{"Grant", std::to_string(g.id)}, {"Device", grantDeviceShort(g.device_id)},
+                      {"Vaults", std::to_string(g.vault_ids.size())}},
+            .advice = std::string("If this was not a key backup you expected, revoke the device in Devices. Otherwise "
+                                  "confirm its key backup there to resume it."),
+        });
     } catch (const std::exception& e) {
         log::Registry::auth()->warn("[ops::backup_grants] suspension notice failed: {}", e.what());
     }
@@ -269,6 +279,14 @@ std::string extendTarget(const uint32_t grantId, std::vector<uint32_t> vaultIds)
 
 std::string confirmTarget(const uint32_t grantId) { return "device.backup.grant.confirm:" + std::to_string(grantId); }
 
+bool recoveryRecreateTarget(const uint32_t deviceRowId, const std::string& target) {
+    if (!target.starts_with("device.backup.grant.create:" + std::to_string(deviceRowId) + ":")) return false;
+    if (Grants::liveForDevice(deviceRowId)) return false;
+    const auto last = Grants::lastRevokedForDevice(deviceRowId);
+    return last && last->revoked_reason == std::string(to_string(Revocation::RecoveryCode)) &&
+           Grants::approvalKeyPredatesRevocation(deviceRowId, last->id);
+}
+
 // ---- commands ---------------------------------------------------------------------------------------------------------
 
 std::vector<Grant> list(const Actor& actor, const vh::device::Peer* self) {
@@ -292,17 +310,22 @@ Grant create(const Actor& actor, const vh::device::Peer* self, const std::option
 
     std::optional<std::string> via;
     bool recreated = false;
-    if (grantCooldownRunning(actor->id)) {
-        // D4: during the recovery cooldown only the same device re-creates the grant the recovery revoked, with its
-        // approval key registered before the recovery, for vaults that grant named.
-        if (!self) grantRefuseCooldown("a key-backup grant can only be re-created on the device itself until the cooldown ends");
+    if (const auto until = auth::mfa::recovery::cooldownUntil(actor->id)) {
+        // D4, the one exception to the recovery cooldown (auth::stepup refuses device.trust while it runs, before any
+        // grant counts): the same device re-creates the grant the recovery-code sign-in revoked, with its approval key
+        // registered before the recovery, for vaults that grant named. Nothing else: no console approval (a passkey
+        // may have been enrolled during the recovery), no other device, no wider vault set, no MFA reset.
+        if (!self)
+            grantRefuseCooldown(*until, "a key-backup grant can only be re-created on the device itself until the "
+                                        "cooldown ends");
         const auto last = Grants::lastRevokedForDevice(row.id);
         if (!last || last->revoked_reason != std::string(to_string(Revocation::RecoveryCode)))
-            grantRefuseCooldown("new key-backup grants wait until the recovery cooldown ends");
+            grantRefuseCooldown(*until, "new key-backup grants wait until the recovery cooldown ends");
         if (!std::ranges::includes(last->vault_ids, ids))
-            grantRefuseCooldown("the re-created grant may only name vaults the revoked one named");
+            grantRefuseCooldown(*until, "the re-created grant may only name vaults the revoked one named");
         if (!Grants::approvalKeyPredatesRevocation(row.id, last->id))
-            grantRefuseCooldown("only this device's approval key registered before the recovery can re-create its grant");
+            grantRefuseCooldown(*until, "only this device's approval key registered before the recovery can re-create "
+                                        "its grant");
         const auto* scope = auth::stepup::Scope::current();
         const auto& session = scope ? scope->session() : nullptr;
         bool approved = !scope;  // no request: the daemon's own callers and tests
@@ -498,6 +521,15 @@ std::size_t migratePending() {
             log::Registry::auth()->info("[ops::backup_grants] D1: device {} gets no key-backup grant (its user may not "
                                         "export vault keys, or it was revoked)",
                                         p.device_id);
+            continue;
+        }
+        if (g->revoked_at) {
+            // #360's interim revocation, carried over: a record of what the device could export, granting nothing.
+            grantAudit("keys.backup.grant.migrate", *g, std::nullopt, "vaulthalla",
+                       {{"reason", "d1"}, {"revoked_reason", g->revoked_reason.value_or("")}},
+                       "[ops::backup_grants] D1: device " + grantDeviceShort(g->device_id) + " of " + user->name() +
+                           " had its key backup revoked (" + g->revoked_reason.value_or("") +
+                           "); its migrated grant is recorded revoked");
             continue;
         }
         ++made;

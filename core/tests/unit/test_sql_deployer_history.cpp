@@ -1233,15 +1233,53 @@ TEST_F(SqlDeployerHistoryDb, DeviceApprovalKeysMigrationIsAdditiveAndIdempotent)
     });
 }
 
-// 129 (#362, key-backup grants) on a 128-era database: new tables only, nothing existing changes; D1's snapshot holds
+// 129 (#360, MFA recovery effects on paired devices): on a 128-era database devices has no key_backup_revoked_* columns.
+// The file adds them, nullable, keeps every row as it was (an existing device's grant is not revoked), refuses an
+// unknown reason, and re-running it changes nothing.
+TEST_F(SqlDeployerHistoryDb, MfaRecoveryGrantsMigrationIsAdditiveAndIdempotent) {
+    inRolledBackTxn([](pqxx::work& txn) {
+        txn.exec("ALTER TABLE devices DROP COLUMN IF EXISTS key_backup_revoked_reason, "
+                 "DROP COLUMN IF EXISTS key_backup_revoked_at");
+        txn.exec("DELETE FROM schema_migrations WHERE filename = '129_mfa_recovery_grants.sql'");
+        const auto owner = txn.exec("INSERT INTO users (name, password_hash) VALUES ('claude_test_129_owner', 'x') "
+                                    "RETURNING id").one_field_ref().as<int>();
+        const auto device = txn.exec("INSERT INTO devices (user_id, name, platform, spki_sha256) VALUES "
+                                     "($1, 'Mac', 'macOS', repeat('d', 64)) RETURNING id",
+                                     pqxx::params{owner}).one_field_ref().as<int>();
+
+        migseed::SqlDeployReport report;
+        ASSERT_NO_THROW(report = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(applied(report, "129_mfa_recovery_grants.sql"));
+        EXPECT_EQ(recordedHash(txn, "129_mfa_recovery_grants.sql"), currentHash("129_mfa_recovery_grants.sql"));
+        EXPECT_TRUE(txn.exec("SELECT key_backup_revoked_at IS NULL AND key_backup_revoked_reason IS NULL "
+                             "FROM devices WHERE id = $1", pqxx::params{device}).one_field_ref().as<bool>())
+            << "an existing device keeps its grant";
+        {
+            pqxx::subtransaction bad(txn, "bad_reason");
+            EXPECT_THROW(bad.exec("UPDATE devices SET key_backup_revoked_reason = 'whim' WHERE id = $1",
+                                  pqxx::params{device}), pqxx::check_violation);
+        }
+        txn.exec("UPDATE devices SET key_backup_revoked_at = NOW(), key_backup_revoked_reason = 'recovery_code' "
+                 "WHERE id = $1", pqxx::params{device});
+
+        migseed::SqlDeployReport again;
+        ASSERT_NO_THROW(again = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(again.applied.empty());
+        ASSERT_NO_THROW(txn.exec(migseed::readFileToString(repoPsqlDir() / "129_mfa_recovery_grants.sql")));
+        EXPECT_EQ(txn.exec("SELECT key_backup_revoked_reason FROM devices WHERE id = $1", pqxx::params{device})
+                      .one_field_ref().as<std::string>(), "recovery_code") << "re-running keeps the values";
+    });
+}
+
+// 130 (#362, key-backup grants) on a 129-era database: new tables only, nothing existing changes; D1's snapshot holds
 // exactly the devices live when the migration ran, and running the file again never adds a device paired since.
 TEST_F(SqlDeployerHistoryDb, KeyBackupGrantsMigrationIsAdditiveIdempotentAndSnapshotsLiveDevicesOnce) {
     inRolledBackTxn([](pqxx::work& txn) {
         txn.exec("DROP TABLE IF EXISTS key_backup_grant_vaults");
         txn.exec("DROP TABLE IF EXISTS key_backup_grants");
         txn.exec("DROP TABLE IF EXISTS key_backup_grant_migration");
-        txn.exec("DELETE FROM schema_migrations WHERE filename = '129_key_backup_grants.sql'");
-        const auto owner = txn.exec("INSERT INTO users (name, password_hash) VALUES ('claude_test_129_owner', 'x') "
+        txn.exec("DELETE FROM schema_migrations WHERE filename = '130_key_backup_grants.sql'");
+        const auto owner = txn.exec("INSERT INTO users (name, password_hash) VALUES ('claude_test_130_owner', 'x') "
                                     "RETURNING id").one_field_ref().as<int>();
         const auto live = txn.exec("INSERT INTO devices (user_id, name, platform, spki_sha256) VALUES ($1, 'Mac', "
                                    "'macOS', repeat('d', 64)) RETURNING id",
@@ -1249,11 +1287,18 @@ TEST_F(SqlDeployerHistoryDb, KeyBackupGrantsMigrationIsAdditiveIdempotentAndSnap
         const auto revoked = txn.exec("INSERT INTO devices (user_id, name, platform, spki_sha256, revoked_at) VALUES "
                                       "($1, 'Old Mac', 'macOS', repeat('e', 64), NOW()) RETURNING id",
                                       pqxx::params{owner}).one_field_ref().as<int>();
+        // 129's interim columns (#360), as a 129-era database has them: one device's authority was revoked.
+        txn.exec("ALTER TABLE devices ADD COLUMN IF NOT EXISTS key_backup_revoked_at TIMESTAMPTZ, "
+                 "ADD COLUMN IF NOT EXISTS key_backup_revoked_reason TEXT");
+        const auto recovered = txn.exec("INSERT INTO devices (user_id, name, platform, spki_sha256, "
+                                        "key_backup_revoked_at, key_backup_revoked_reason) VALUES ($1, 'Mac 2', 'macOS', "
+                                        "repeat('9', 64), NOW(), 'admin_reset') RETURNING id",
+                                        pqxx::params{owner}).one_field_ref().as<int>();
 
         migseed::SqlDeployReport report;
         ASSERT_NO_THROW(report = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
-        EXPECT_TRUE(applied(report, "129_key_backup_grants.sql"));
-        EXPECT_EQ(recordedHash(txn, "129_key_backup_grants.sql"), currentHash("129_key_backup_grants.sql"));
+        EXPECT_TRUE(applied(report, "130_key_backup_grants.sql"));
+        EXPECT_EQ(recordedHash(txn, "130_key_backup_grants.sql"), currentHash("130_key_backup_grants.sql"));
         EXPECT_TRUE(columnExists(txn, "key_backup_grants", "revoked_reason"));
         EXPECT_TRUE(columnExists(txn, "key_backup_grant_vaults", "vault_id"));
         EXPECT_EQ(txn.exec("SELECT name FROM devices WHERE id = $1", pqxx::params{live}).one_field_ref().as<std::string>(),
@@ -1262,7 +1307,14 @@ TEST_F(SqlDeployerHistoryDb, KeyBackupGrantsMigrationIsAdditiveIdempotentAndSnap
         std::vector<int> snapshot;
         for (const auto& r : txn.exec("SELECT device_id FROM key_backup_grant_migration ORDER BY device_id"))
             snapshot.push_back(r[0].as<int>());
-        EXPECT_EQ(snapshot, std::vector<int>{live}) << "live devices only, not device " << revoked;
+        EXPECT_EQ(snapshot, (std::vector<int>{live, recovered})) << "live devices only, not device " << revoked;
+        EXPECT_EQ(txn.exec("SELECT revoked_reason FROM key_backup_grant_migration WHERE device_id = $1",
+                           pqxx::params{recovered}).one_field_ref().as<std::string>(),
+                  "admin_reset") << "the interim revocation is carried over";
+        EXPECT_TRUE(txn.exec("SELECT revoked_at IS NULL FROM key_backup_grant_migration WHERE device_id = $1",
+                             pqxx::params{live}).one_field_ref().as<bool>());
+        EXPECT_FALSE(columnExists(txn, "devices", "key_backup_revoked_at")) << "the interim columns are gone";
+        EXPECT_FALSE(columnExists(txn, "devices", "key_backup_revoked_reason"));
 
         const auto refused = [&](const std::string& sql) {
             pqxx::subtransaction sub(txn, "check");
@@ -1297,7 +1349,7 @@ TEST_F(SqlDeployerHistoryDb, KeyBackupGrantsMigrationIsAdditiveIdempotentAndSnap
         migseed::SqlDeployReport again;
         ASSERT_NO_THROW(again = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
         EXPECT_TRUE(again.applied.empty());
-        ASSERT_NO_THROW(txn.exec(migseed::readFileToString(repoPsqlDir() / "129_key_backup_grants.sql")));
+        ASSERT_NO_THROW(txn.exec(migseed::readFileToString(repoPsqlDir() / "130_key_backup_grants.sql")));
         EXPECT_TRUE(txn.exec("SELECT 1 FROM key_backup_grant_migration WHERE device_id = $1", pqxx::params{later}).empty());
 
         txn.exec("DELETE FROM devices WHERE id = $1", pqxx::params{live});

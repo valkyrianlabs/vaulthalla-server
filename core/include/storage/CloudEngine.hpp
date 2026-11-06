@@ -1,5 +1,6 @@
 #pragma once
 
+#include "crypto/id/ObjectUid.hpp"
 #include "recovery/Fwd.hpp"
 #include "recovery/Hooks.hpp"
 #include "storage/Engine.hpp"
@@ -60,6 +61,33 @@ namespace vh::storage {
 
         [[nodiscard]] StorageType type() const override { return StorageType::Cloud; }
 
+        // ---- storage layout (design/encryption/01-provider-blind-storage.md §4; storage/ObjectKeys.hpp) ------------
+        // opaque_v1: objects are o/<file uid> and .vaulthalla/…, requests carry no x-amz-meta-* and no names (the
+        // controller enforces §4.3), sync is keyed by file uid, and a rename or move is a manifest-only change.
+        [[nodiscard]] bool opaqueLayout() const;
+        // The object key of a file's content: o/<object uid> under opaque_v1 (std::runtime_error when the row has no
+        // uid), the vault path without its leading slash otherwise.
+        [[nodiscard]] std::string objectKeyOf(const vh::fs::model::File &f) const;
+        [[nodiscard]] std::string objectKeyOf(const vh::fs::model::file::Trashed &f) const;
+        // The object key of the file at rel_path. opaque_v1 resolves the path through the database (the live file,
+        // else the newest trashed file that was there): ObjectNotFound-free callers get std::runtime_error when
+        // nothing is there. path_v0 / transparent: the path without its leading slash, as before.
+        [[nodiscard]] std::string objectKeyForPath(const std::filesystem::path &rel_path) const;
+
+        // opaque_v1: one full listing of the bucket (no prefix: no name in the query), classified (spec 01 §4.4).
+        // objects: the o/<uid> content objects as remote rows (path "/o/<uid>", object_uid set, sealed size, ETag,
+        // storage class); foreign: every key that is neither content nor .vaulthalla/ metadata.
+        struct OpaqueListing {
+            std::vector<std::shared_ptr<vh::fs::model::File>> objects;
+            std::vector<std::string> foreign;
+        };
+        [[nodiscard]] OpaqueListing listOpaqueBucket() const;
+        // opaque_v1, foreign_objects = import (spec 01 §4.4): reads the foreign object at `key` as plaintext (one
+        // GET, the only request of an opaque_v1 vault that names a foreign key) and seals it into a new file at
+        // /Imported/<key> (a new uid; the next pass uploads it as o/<uid>). The original is left untouched. nullptr
+        // when /Imported/<key> exists already (live or in the trash): an object is imported once.
+        std::shared_ptr<vh::fs::model::File> importForeignObject(const std::string &key);
+
         void purge(const std::filesystem::path &rel_path) const;
 
         void purge(const std::shared_ptr<vh::fs::model::file::Trashed> &f) const;
@@ -67,6 +95,9 @@ namespace vh::storage {
         void removeRemotely(const std::filesystem::path &rel_path) const;
 
         void removeRemotely(const std::shared_ptr<vh::fs::model::file::Trashed> &f) const;
+
+        // DELETE of one object as Vaulthalla's own write; rel_path names the file whose derived artifacts go with it.
+        void removeRemoteKey(const std::string &key, const std::filesystem::path &rel_path) const;
 
         void upload(const std::shared_ptr<vh::fs::model::File> &f) const;
 
@@ -177,11 +208,15 @@ namespace vh::storage {
             std::optional<std::string> content_hash;  // Vaulthalla's content-hash metadata, when present
         };
 
-        // One metered HEAD; nullopt when the object does not exist.
+        // One metered HEAD of the file at rel_path (objectKeyForPath); nullopt when the object does not exist.
         [[nodiscard]] std::optional<RemoteObjectHead> headRemoteObject(const std::filesystem::path &rel_path) const;
         // Like headRemoteObject, but nullopt only for a confirmed absence (404): a refused or failed HEAD throws, so
         // an outage can never read as a deletion.
         [[nodiscard]] std::optional<RemoteObjectHead> headRemoteObjectStrict(const std::filesystem::path &rel_path) const;
+        // The same by object key (a leading '/' ignored): event keys, backlog keys, key salvage. Under opaque_v1 an
+        // o/<uid> object always counts as sealed (it carries no metadata; its header names the generation).
+        [[nodiscard]] std::optional<RemoteObjectHead> headObjectKey(const std::string &key) const;
+        [[nodiscard]] std::optional<RemoteObjectHead> headObjectKeyStrict(const std::string &key) const;
 
         // Sync conflict resolution and previews (#187). One metered GET of the object (If-Match `ifMatch` when
         // given: ConditionalRequestFailed when it changed), aborted past `maxBytes`, decrypted (authenticated) with
@@ -284,8 +319,8 @@ namespace vh::storage {
         [[nodiscard]] std::shared_ptr<sync::manifest::Service> manifestV2() const;
         // Publishes the vault's manifest v2 (and collects superseded segments once a day). A refused root (rollback,
         // fork) or repeated conflicts stall the pass (SyncStalled): nothing is written over a root the chain rules
-        // refuse.
-        void publishManifestV2() const;
+        // refuse. onlyIfChanged: nothing is written when the vault's content equals what the last publish produced.
+        void publishManifestV2(bool onlyIfChanged = false) const;
 
         std::shared_ptr<vault::model::S3Vault> s3Vault() const;
         void resolveS3ProviderConfiguration();
@@ -316,6 +351,32 @@ namespace vh::storage {
                                             std::optional<uint64_t> objectSize,
                                             const std::shared_ptr<vh::fs::model::File> &file = nullptr) const;
         [[nodiscard]] s3::RequestOptions requestOptionsFor(s3::provider::RequestOperation operation) const;
+        // What an upload of a content object sends: the provider's mutation and, except under opaque_v1, the file's
+        // x-amz-meta-* (opaque_v1 sends none, spec 01 §4.3).
+        [[nodiscard]] s3::RequestOptions uploadOptionsFor(s3::provider::RequestOperation operation,
+                                                          const std::shared_ptr<vh::fs::model::File> &f) const;
+        // One content object PUT (single request below the multipart threshold, else multipart with the adaptive
+        // part size, storage/ObjectKeys.hpp partSizeFor). opaque_v1 records the PUT's ETag and version id on f, for
+        // the index row and the manifest's object reference.
+        void putContent(const std::string &key, const std::shared_ptr<vh::fs::model::File> &f,
+                        const std::filesystem::path &source, uint64_t size) const;
+        void putContent(const std::string &key, const std::shared_ptr<vh::fs::model::File> &f,
+                        const std::vector<uint8_t> &bytes) const;
+        // Sets the controller's opaque_v1 request policy from the vault's layout (constructors, test seams).
+        void applyLayoutPolicy() const;
+
+        // opaque_v1 reads (spec 01 §4.4, 03 §4.4): the sealed bytes of the file's object opened against this vault and
+        // the file's uid (mandatory), and the generation and key version the row records when it records one; a row
+        // without one (indexed from a listing) learns them from the authenticated header.
+        [[nodiscard]] std::vector<uint8_t> openOpaqueObject(const std::vector<uint8_t> &sealed,
+                                                            const std::shared_ptr<vh::fs::model::File> &f) const;
+        // opaque_v1: the generation and key version an o/<uid> object's header names (one ranged GET of the 120-byte
+        // header, authenticated against this vault and the uid). Throws IntegrityError when it doesn't authenticate.
+        [[nodiscard]] std::pair<std::string, unsigned int> opaqueObjectGeneration(const crypto::id::ObjectUid &uid) const;
+        // opaque_v1: what goes up as o/<uid> must be readable as o/<uid>: its header (the first 120 bytes) must
+        // authenticate as this vault's, this generation's and this file's (storage::IntegrityError otherwise, before
+        // any request).
+        void requireOpaqueHeader(std::span<const uint8_t> sealed, const vh::fs::model::File &f) const;
         [[nodiscard]] std::optional<std::string> configuredStorageClass() const;
 
         std::unordered_map<std::string, std::string> getMetaMapFromFile(

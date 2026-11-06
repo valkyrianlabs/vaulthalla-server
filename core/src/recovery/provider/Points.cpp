@@ -117,14 +117,22 @@ std::vector<RecoveryPoint> forPath(const std::shared_ptr<storage::CloudEngine>& 
     const auto vaultId = engine->vault->id;
     const auto* keys = engine->encryptionManager.get();
     std::vector<db::query::recovery::ObjectVersionRow> rows;
-    if (directory) rows = db::query::recovery::ObjectVersion::listUnderPrefix(vaultId, versions::directoryPrefixOf(vaultPath),
-                                                                              includeGone, limit);
-    else rows = db::query::recovery::ObjectVersion::listForKey(vaultId, versions::objectKeyOf(vaultPath), includeGone, limit);
+    if (directory) rows = db::query::recovery::ObjectVersion::listUnderPrefix(
+                       vaultId, versions::directoryPrefixOf(*engine, vaultPath), includeGone, limit);
+    else if (const auto key = versions::objectKeyOf(*engine, vaultPath); !key.empty())
+        rows = db::query::recovery::ObjectVersion::listForKey(vaultId, key, includeGone, limit);
 
+    // opaque_v1: object keys name no folders; the database says which objects lie under the directory.
+    const bool opaque = engine->opaqueLayout();
     std::vector<RecoveryPoint> out;
     out.reserve(rows.size());
-    for (const auto& row : rows)
-        if (!versions::isInternalKey(row.object_key)) out.push_back(fromRow(row, keys, retention));
+    for (const auto& row : rows) {
+        if (versions::isInternalKey(row.object_key)) continue;
+        if (opaque && directory && !versions::keyUnder(*engine, row.object_key, vaultPath)) continue;
+        auto p = fromRow(row, keys, retention);
+        if (opaque) p.path = versions::vaultPathOf(*engine, row.object_key).string();
+        out.push_back(std::move(p));
+    }
     return out;
 }
 
@@ -133,7 +141,9 @@ std::optional<RecoveryPoint> byId(const std::shared_ptr<storage::CloudEngine>& e
     if (!engine || !engine->vault) throw std::invalid_argument("provider recovery points need a cloud vault engine");
     const auto row = db::query::recovery::ObjectVersion::get(static_cast<int64_t>(id));
     if (!row || row->vault_id != engine->vault->id || versions::isInternalKey(row->object_key)) return std::nullopt;
-    return fromRow(*row, engine->encryptionManager.get(), retention);
+    auto p = fromRow(*row, engine->encryptionManager.get(), retention);
+    if (engine->opaqueLayout()) p.path = versions::vaultPathOf(*engine, row->object_key).string();
+    return p;
 }
 
 }
