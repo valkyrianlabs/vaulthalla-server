@@ -11,7 +11,7 @@
   - deleting a vault or a recovery point, suspending provider versioning, cleaning up, unprotecting or setting a
     destructive lifecycle rule on a bucket;
   - exporting or importing vault keys outside a paired device's automatic backup.
-- Confirming covers similar changes for 5 minutes (`auth.mfa.step_up_ttl_seconds`, 60 to 900). Device approvals, key
+- Confirming covers similar changes in that browser tab for 5 minutes (`auth.mfa.step_up_ttl_seconds`, 60 to 900; reloading the page asks again). Device approvals, key
   operations and data removal confirm exactly one change each time. Signing in with a passkey or an authenticator code
   counts as a confirmation for the next 5 minutes.
 - An account that doesn't need MFA and has no second factor confirms with its password, but never for vault keys,

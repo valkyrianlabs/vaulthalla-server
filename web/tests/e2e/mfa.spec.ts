@@ -342,8 +342,10 @@ test('step-up dialog on a role change; a second change within the window does no
     await page.waitForTimeout((STEP_UP_TTL_SECONDS + 2) * 1000)
   })
 
+  // A grant lives on the page's connection (never another's): the second change stays on the page, as a person would;
+  // a reload is a new connection and asks again.
+  await page.goto(`/users/${encodeURIComponent(target)}`)
   const changeRole = async (role: string) => {
-    await page.goto(`/users/${encodeURIComponent(target)}`)
     await page.locator('#access-role').selectOption(role)
     await page.getByRole('button', { name: 'Change role' }).click()
     await page.getByRole('dialog').getByRole('button', { name: 'Change role' }).click() // the confirm dialog
@@ -360,7 +362,7 @@ test('step-up dialog on a role change; a second change within the window does no
 
   await test.step('a second change within the window does not prompt', async () => {
     await changeRole('unprivileged')
-    await expect(page.getByText(new RegExp(`${target} is now`, 'i')).last()).toBeVisible()
+    await expect(page.getByText(new RegExp(`${target} is now unprivileged`, 'i'))).toBeVisible()
     await expect(page.getByTestId('stepup-dialog')).toHaveCount(0)
   })
 })
