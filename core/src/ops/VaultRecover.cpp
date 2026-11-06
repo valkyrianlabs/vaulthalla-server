@@ -9,6 +9,7 @@
 #include "db/query/vault/Recover.hpp"
 #include "fs/cache/Registry.hpp"
 #include "fs/model/Path.hpp"
+#include "identities/User.hpp"
 #include "log/Registry.hpp"
 #include "ops/Error.hpp"
 #include "ops/Vaults.hpp"
