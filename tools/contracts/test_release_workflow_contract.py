@@ -212,10 +212,11 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertEqual(writers, {"github-release", "finalize", "macos-publish"})
 
     def test_macos_package_jobs_never_gate_the_apt_release(self) -> None:
-        # The macOS package builds on GitHub-hosted Apple Silicon and publishes only after the GitHub release exists.
+        # The macOS package builds on Apple Silicon (the self-hosted Tart VMs, or GitHub-hosted xcode-27 when CI_MACOS_RUNNER
+        # is unset) and publishes only after the GitHub release exists.
         # Nothing on the publication path waits for it (APT, the GitHub release, docs), so a macOS failure can't fail or
         # hold a live APT release. Only finalize waits: the release is recorded on main once every channel published.
-        self.assertIn("    runs-on: xcode-27\n", self.jobs["macos-package"])
+        self.assertIn("""runs-on: ${{ fromJSON(vars.CI_MACOS_RUNNER || '"xcode-27"') }}""", self.jobs["macos-package"])
         publish = self.jobs["macos-publish"]
         self.assertIn("needs.github-release.result == 'success'", publish)
         self.assertIn("needs.macos-package.result == 'success'", publish)

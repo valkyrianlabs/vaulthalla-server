@@ -320,7 +320,9 @@ jobs:
   # re-run it with "Re-run failed jobs".
   macos-package:
     name: macOS installer package
-    runs-on: xcode-27
+    # The self-hosted Tart VMs on the Mac Studio when CI_MACOS_RUNNER is set (one fresh VM per job, deleted after it,
+    # so the signing identity lives only in that job's VM); GitHub-hosted xcode-27 when it isn't.
+    runs-on: ${{ fromJSON(vars.CI_MACOS_RUNNER || '"xcode-27"') }}
     needs:
       - release-check
       - release-artifacts

@@ -97,6 +97,17 @@ no_app || die "$APP already exists on this runner"
 
 echo "== brew install --cask vaulthalla-server"
 brew install --cask "$TAP/vaulthalla-server"
+# A virtual Mac (GitHub's xcode-27 runners, the self-hosted Tart VMs) has no usable Secure Enclave, and since #326 the
+# server refuses to keep secrets in plain files unless that's chosen explicitly. Opt in the way an operator would, then
+# restart the server and re-run the (idempotent) provisioning so enrollment completes against a running server.
+if [ "$VIRTUAL" = 1 ]; then
+  echo "::notice::virtual Mac without a usable Secure Enclave: enabling secrets.allow_development_file_backend (#326)"
+  sudo /usr/bin/sed -i '' -E 's/^(  allow_development_file_backend:) false/\1 true/' "$SUPPORT/config.yaml"
+  sudo grep -q '^  allow_development_file_backend: true' "$SUPPORT/config.yaml" ||
+    die "couldn't enable secrets.allow_development_file_backend in $SUPPORT/config.yaml"
+  sudo launchctl kickstart -k system/sh.vaulthalla.server
+  sudo "$SUPPORT/vaulthalla-provision" --apply ${CONSOLE:+--enroll "$CONSOLE"}
+fi
 check "the server becomes ready" wait_for 180 ready
 for label in sh.vaulthalla.postgres sh.vaulthalla.server sh.vaulthalla.web; do
   check "$label runs as _vaulthalla" running "$label"
