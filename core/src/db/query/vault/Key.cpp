@@ -28,7 +28,7 @@ void storeProvenance(pqxx::work& txn, const std::string& table, const unsigned i
 
 unsigned int Key::addVaultKey(const KeyPtr& key, const std::optional<Provenance>& provenance) {
     return Transactions::exec("Key::addVaultKey", [&](pqxx::work& txn) {
-        pqxx::params p{key->vaultId, to_hex_bytea(key->encrypted_key), to_hex_bytea(key->iv)};
+        pqxx::params p{key->vaultId, to_hex_bytea(key->encrypted_key), to_hex_bytea(key->iv), key->master_version};
         const auto res = txn.exec(pqxx::prepped{"insert_vault_key"}, p);
         if (res.empty()) throw std::runtime_error("Failed to add vault key: no result returned");
         const auto version = res.one_field_ref().as<unsigned int>();
@@ -45,7 +45,7 @@ void Key::deleteVaultKey(unsigned int vaultId) {
 
 void Key::updateVaultKey(const KeyPtr& key) {
     Transactions::exec("Key::updateVaultKey", [&](pqxx::work& txn) {
-        pqxx::params p{key->vaultId, to_hex_bytea(key->encrypted_key), to_hex_bytea(key->iv)};
+        pqxx::params p{key->vaultId, to_hex_bytea(key->encrypted_key), to_hex_bytea(key->iv), key->master_version};
         txn.exec(pqxx::prepped{"update_vault_key"}, p);
     });
 }
@@ -71,11 +71,13 @@ unsigned int Key::rotateVaultKey(const KeyPtr& newKey, const NewVersion& expecte
         if (txn.exec("SELECT 1 FROM vault_keys WHERE vault_id = $1 FOR UPDATE", pqxx::params{newKey->vaultId}).empty()) {
             // No current row (salvage over a lost key record): the next version is the caller's, never 0.
             if (expected.version == 0) throw std::invalid_argument("a key version is a positive integer");
-            txn.exec("INSERT INTO vault_keys (vault_id, encrypted_key, iv, version, created_at) VALUES ($1, $2, $3, $4, "
-                     "CURRENT_TIMESTAMP)", pqxx::params{newKey->vaultId, key, iv, expected.version});
+            txn.exec("INSERT INTO vault_keys (vault_id, encrypted_key, iv, version, created_at, master_version) VALUES "
+                     "($1, $2, $3, $4, CURRENT_TIMESTAMP, $5)",
+                     pqxx::params{newKey->vaultId, key, iv, expected.version, newKey->master_version});
             version = expected.version;
         } else {
-            const auto res = txn.exec(pqxx::prepped{"rotate_vault_key"}, pqxx::params{newKey->vaultId, key, iv});
+            const auto res = txn.exec(pqxx::prepped{"rotate_vault_key"},
+                                      pqxx::params{newKey->vaultId, key, iv, newKey->master_version});
             if (res.empty() || res.one_field_ref().is_null())
                 throw std::runtime_error("Failed to rotate vault key: no result returned");
             version = res.one_field_ref().as<unsigned int>();
@@ -221,31 +223,33 @@ void Key::writeImported(const unsigned int vaultId, const std::vector<SealedWrit
             if (w.expected) {
                 const auto oldKey = to_hex_bytea(w.expected->first), oldIv = to_hex_bytea(w.expected->second);
                 res = txn.exec("UPDATE " + table + " SET encrypted_key = $3, iv = $4, key_check = $7, "
-                               "attestation_key_id = $8, attestation = $9::bytea WHERE vault_id = $1 AND version = $2 "
-                               "AND encrypted_key = $5 AND iv = $6",
+                               "attestation_key_id = $8, attestation = $9::bytea, master_version = $10 "
+                               "WHERE vault_id = $1 AND version = $2 AND encrypted_key = $5 AND iv = $6",
                                pqxx::params{vaultId, w.version, key, iv, oldKey, oldIv, p.key_check,
-                                            p.attestation_key_id, sig});
+                                            p.attestation_key_id, sig, w.master_version});
             } else {
                 switch (w.table) {
                     case SealedTable::Current:
                         res = txn.exec("INSERT INTO vault_keys (vault_id, encrypted_key, iv, version, key_check, "
-                                       "attestation_key_id, attestation) VALUES ($1, $3, $4, $2, $5, $6, $7::bytea) "
-                                       "ON CONFLICT (vault_id) DO NOTHING",
-                                       pqxx::params{vaultId, w.version, key, iv, p.key_check, p.attestation_key_id, sig});
+                                       "attestation_key_id, attestation, master_version) VALUES ($1, $3, $4, $2, $5, "
+                                       "$6, $7::bytea, $8) ON CONFLICT (vault_id) DO NOTHING",
+                                       pqxx::params{vaultId, w.version, key, iv, p.key_check, p.attestation_key_id, sig,
+                                                    w.master_version});
                         break;
                     case SealedTable::Retired:
                         res = txn.exec("INSERT INTO vault_keys_trashed (vault_id, version, encrypted_key, iv, created_at, "
-                                       "trashed_at, rotation_completed_at, key_check, attestation_key_id, attestation) "
-                                       "VALUES ($1, $2, $3, $4, NOW(), NOW(), CASE WHEN $5 THEN NULL ELSE NOW() END, $6, "
-                                       "$7, $8::bytea) ON CONFLICT (vault_id, version) DO NOTHING",
+                                       "trashed_at, rotation_completed_at, key_check, attestation_key_id, attestation, "
+                                       "master_version) VALUES ($1, $2, $3, $4, NOW(), NOW(), CASE WHEN $5 THEN NULL "
+                                       "ELSE NOW() END, $6, $7, $8::bytea, $9) ON CONFLICT (vault_id, version) DO NOTHING",
                                        pqxx::params{vaultId, w.version, key, iv, w.rotation_pending, p.key_check,
-                                                    p.attestation_key_id, sig});
+                                                    p.attestation_key_id, sig, w.master_version});
                         break;
                     case SealedTable::DeletionCopy:
                         res = txn.exec("INSERT INTO vault_deletion_key (vault_id, version, encrypted_key, iv, key_check, "
-                                       "attestation_key_id, attestation) VALUES ($1, $2, $3, $4, $5, $6, $7::bytea) "
-                                       "ON CONFLICT (vault_id, version) DO NOTHING",
-                                       pqxx::params{vaultId, w.version, key, iv, p.key_check, p.attestation_key_id, sig});
+                                       "attestation_key_id, attestation, master_version) VALUES ($1, $2, $3, $4, $5, "
+                                       "$6, $7::bytea, $8) ON CONFLICT (vault_id, version) DO NOTHING",
+                                       pqxx::params{vaultId, w.version, key, iv, p.key_check, p.attestation_key_id, sig,
+                                                    w.master_version});
                         break;
                 }
             }

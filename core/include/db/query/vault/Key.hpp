@@ -99,6 +99,7 @@ public:
         SealedTable table{SealedTable::Current};
         unsigned int version{};
         std::vector<uint8_t> encrypted_key{}, iv{};
+        unsigned int master_version{1};  // the vault master that wrapped encrypted_key (vault::master::Writer)
         // What the row held when the import was planned (encrypted_key, iv); nullopt = there was no row (insert).
         std::optional<std::pair<std::vector<uint8_t>, std::vector<uint8_t>>> expected{};
         bool rotation_pending{false};  // a new retired row whose rotation hasn't finished re-encrypting the vault
