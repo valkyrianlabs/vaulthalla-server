@@ -26,7 +26,6 @@ void to_json(nlohmann::json& j, const Device& d) {
         {"last_ip", d.last_ip ? nlohmann::json(*d.last_ip) : nlohmann::json(nullptr)},
         {"revoked_at", optTime(d.revoked_at)},
         {"revoked", d.revoked()},
-        {"key_backup_revoked_at", optTime(d.key_backup_revoked_at)},
     };
 }
 

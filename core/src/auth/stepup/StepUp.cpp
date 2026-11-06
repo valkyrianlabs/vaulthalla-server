@@ -189,18 +189,6 @@ void refuse(const Family family, const std::optional<std::string>& target, std::
                               ttl().count(), text);
 }
 
-bool keyBackupGrantCovers(const uint32_t vaultId) {
-    (void)vaultId;  // #362: the device's grant lists its vaults explicitly
-    const auto* scope = Scope::current();
-    if (!scope || scope->channel() != Channel::Device) return false;
-    // #360 (D4): a recovery-code sign-in or an MFA reset of the device's user revoked its grant.
-    const auto& session = scope->session();
-    const auto& peer = session ? session->devicePeer() : nullptr;
-    if (!peer || !peer->deviceRowId) return false;
-    const auto device = db::query::device::Devices::byId(*peer->deviceRowId);
-    return device && !device->revoked() && !device->key_backup_revoked_at;
-}
-
 void require(const Family family, const std::optional<std::string>& target) {
     auto* scope = Scope::current();
     if (!scope) return;  // no request: the daemon's own callers and tests (see the header)

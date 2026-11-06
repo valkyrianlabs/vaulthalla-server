@@ -4,6 +4,7 @@
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
+#include "ops/BackupGrants.hpp"
 
 #include <chrono>
 
@@ -31,6 +32,13 @@ Authorization authorize(const crypto::PublicKey& key, const std::string& address
     if (!user || user->systemOnly()) return out;
 
     peer->deviceRowId = row->id;
+    // #362: a device that hasn't connected for 90 days loses its key-backup grant before this connection counts.
+    try {
+        (void)ops::backup_grants::revokeIfIdle(*row);
+    } catch (const std::exception& e) {
+        log::Registry::ws()->warn("[device] idle key-backup grant check for device {} failed: {}", peer->shortId(),
+                                  e.what());
+    }
     peer->viaPreviousKey = row->spki_sha256 != peer->spkiHex;
     if (!peer->viaPreviousKey && row->previous_spki_sha256)
         db::query::device::Devices::clearPrevious(row->id, row->spki_sha256);

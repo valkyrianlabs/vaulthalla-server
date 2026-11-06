@@ -17,8 +17,7 @@ constexpr const char* kColumns = R"SQL(
     d.id, d.user_id, COALESCE(u.name, '') AS user_name, d.name, d.platform, d.app_version, d.spki_sha256,
     d.previous_spki_sha256, d.approved_by, EXTRACT(EPOCH FROM d.created_at)::BIGINT AS created_at,
     EXTRACT(EPOCH FROM d.last_seen_at)::BIGINT AS last_seen_at, d.last_ip,
-    EXTRACT(EPOCH FROM d.revoked_at)::BIGINT AS revoked_at,
-    EXTRACT(EPOCH FROM d.key_backup_revoked_at)::BIGINT AS key_backup_revoked_at
+    EXTRACT(EPOCH FROM d.revoked_at)::BIGINT AS revoked_at
 )SQL";
 
 std::string select(const std::string& where) {
@@ -46,8 +45,6 @@ Device fromRow(const pqxx::row_ref row) {
     if (const auto t = opt<int64_t>(row["last_seen_at"])) d.last_seen_at = static_cast<std::time_t>(*t);
     d.last_ip = opt<std::string>(row["last_ip"]);
     if (const auto t = opt<int64_t>(row["revoked_at"])) d.revoked_at = static_cast<std::time_t>(*t);
-    if (const auto t = opt<int64_t>(row["key_backup_revoked_at"]))
-        d.key_backup_revoked_at = static_cast<std::time_t>(*t);
     return d;
 }
 
@@ -149,6 +146,10 @@ std::optional<Device> Devices::revoke(const uint32_t id) {
                  pqxx::params{id});
         txn.exec("UPDATE device_approval_keys SET revoked_at = NOW() WHERE device_id = $1 AND revoked_at IS NULL",
                  pqxx::params{id});
+        // #362: its key-backup grant ends with it.
+        txn.exec("UPDATE key_backup_grants SET revoked_at = NOW(), revoked_reason = 'device_revoked' "
+                 "WHERE device_id = $1 AND revoked_at IS NULL",
+                 pqxx::params{id});
         const auto res = txn.exec(select("WHERE d.id = $1"), pqxx::params{id});
         return one(res);
     });
@@ -157,6 +158,8 @@ std::optional<Device> Devices::revoke(const uint32_t id) {
 std::size_t Devices::revokeAll() {
     return Transactions::exec("Devices::revokeAll", [](pqxx::work& txn) {
         txn.exec("UPDATE device_approval_keys SET revoked_at = NOW() WHERE revoked_at IS NULL");
+        txn.exec("UPDATE key_backup_grants SET revoked_at = NOW(), revoked_reason = 'device_revoked' "
+                 "WHERE revoked_at IS NULL");
         return static_cast<std::size_t>(
             txn.exec("UPDATE devices SET revoked_at = CURRENT_TIMESTAMP WHERE revoked_at IS NULL").affected_rows());
     });
@@ -215,17 +218,5 @@ std::string Devices::nodeId() {
     });
 }
 
-std::vector<uint32_t> Devices::revokeKeyBackup(const uint32_t userId, const std::string& reason) {
-    return Transactions::exec("Devices::revokeKeyBackup", [&](pqxx::work& txn) {
-        std::vector<uint32_t> out;
-        for (const auto& r : txn.exec("UPDATE devices SET key_backup_revoked_at = CURRENT_TIMESTAMP, "
-                                      "key_backup_revoked_reason = $2 WHERE user_id = $1 AND revoked_at IS NULL "
-                                      "AND key_backup_revoked_at IS NULL RETURNING id",
-                                      pqxx::params{userId, reason}))
-            out.push_back(r[0].as<uint32_t>());
-        std::ranges::sort(out);
-        return out;
-    });
-}
 
 }

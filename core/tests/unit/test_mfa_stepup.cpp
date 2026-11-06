@@ -11,6 +11,7 @@
 #include "auth/mfa/Recovery.hpp"
 #include "auth/stepup/StepUp.hpp"
 #include "identities/User.hpp"
+#include "ops/BackupGrants.hpp"
 #include "ops/Error.hpp"
 #include "protocols/ws/Router.hpp"
 #include "protocols/ws/Session.hpp"
@@ -153,12 +154,12 @@ TEST(StepUpScope, TheHostIsExemptAgentsAreRefusedAndNoScopeIsTheDaemonsOwn) {
                 EXPECT_EQ(e.family, "settings");
                 EXPECT_TRUE(e.methods.empty()) << "agents can't produce a step-up";
             }
-            EXPECT_FALSE(keyBackupGrantCovers(1));
+            EXPECT_FALSE(ops::backup_grants::covering({1})) << "an agent's export is never inside a key-backup grant";
         }
         EXPECT_EQ(Scope::current(), &host) << "scopes nest";
     }
     EXPECT_EQ(Scope::current(), nullptr);
-    EXPECT_FALSE(keyBackupGrantCovers(1)) << "only a paired device's export is inside its backup grant";
+    EXPECT_FALSE(ops::backup_grants::covering({1})) << "only a paired device's export is inside its backup grant";
 }
 
 TEST(StepUpScope, ACoveredOperationNeedsNoSecondStepUp) {
@@ -258,7 +259,7 @@ TEST(StepUpContract, EveryAnnotatedCommandIsBookedAndDeclaresTheRefusal) {
 }
 
 // Design 5.4/6.1: routine Desktop traffic never prompts. The commands Vaulthalla Desktop runs routinely over its
-// device session carry no family (vault.keys.export is inside the key-backup grant on a device: see the DB test).
+// device session carry no family (vault.keys.export is inside the key-backup grant on a device: test_key_backup_grants_db.cpp).
 TEST(StepUpContract, DesktopsRoutineCommandsAreNeverAnnotated) {
     const auto table = contract::stepUpTable();
     const auto annotated = [&](const std::string_view command) {
@@ -266,7 +267,8 @@ TEST(StepUpContract, DesktopsRoutineCommandsAreNeverAnnotated) {
     };
     for (const auto* cmd : {"meta.hello", "meta.contract.get", "auth.isAuthenticated", "device.server.identity",
                             "device.endpoints", "device.identity.rotate", "device.list", "device.remote.status",
-                            "device.revoke", "device.pairing.open", "storage.vault.list",
+                            "device.revoke", "device.pairing.open", "device.backup.grant.list",
+                            "device.backup.grant.revoke", "storage.vault.list",
                             "storage.vault.accessible.list", "storage.vault.get", "storage.vault.sync", "fs.list",
                             "fs.dir.list", "fs.metadata", "fs.dir.create", "fs.entry.delete", "fs.entry.move",
                             "fs.entry.rename", "fs.entry.copy", "fs.upload.start", "fs.upload.finish",

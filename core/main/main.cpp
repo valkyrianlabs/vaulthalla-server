@@ -25,6 +25,7 @@
 
 // Seed
 #include "seed/include/seed_db.hpp"
+#include "ops/BackupGrants.hpp"
 #include "storage/upstream/Guard.hpp"
 #include "seed/include/init_db_tables.hpp"
 
@@ -166,6 +167,19 @@ void initDeps() {
     vh::runtime::Deps::setSyncController(
         vh::runtime::Manager::instance().getSyncController()
     );
+
+    // #362 (D1): devices paired before key-backup grants existed keep their automatic key backup through a migrated
+    // grant over exactly what their user may export now, made once from migration 130's snapshot, before any device
+    // can connect. Then every grant is checked against its revocation triggers, and every later account change is.
+    if (const auto migrated = vh::ops::backup_grants::migratePending(); migrated > 0)
+        vh::log::Registry::vaulthalla()->info("[*] {} paired device(s) keep automatic key backup (migrated grants)",
+                                              migrated);
+    try {
+        (void)vh::ops::backup_grants::reconcile();
+    } catch (const std::exception& e) {
+        vh::log::Registry::vaulthalla()->warn("[!] Key-backup grant check failed: {}", e.what());
+    }
+    vh::ops::backup_grants::installIdentityHook();
 }
 
 // --- Wiring ---

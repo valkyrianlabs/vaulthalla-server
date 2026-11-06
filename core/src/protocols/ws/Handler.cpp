@@ -134,6 +134,12 @@ void Handler::registerDeviceHandlers(const std::shared_ptr<Router>& r) {
     r->registerPayload("device.approval.request", &handler::Approvals::request);
     r->registerPayload("device.approval.status", &handler::Approvals::status);
     r->registerPayload("device.approval.key.register", &handler::Approvals::keyRegister);
+    // #362: key-backup grants (a console session for its own devices, a device for itself).
+    r->registerSessionOnlyHandler("device.backup.grant.list", &handler::Devices::backupGrantList);
+    r->registerPayload("device.backup.grant.create", &handler::Devices::backupGrantCreate);
+    r->registerPayload("device.backup.grant.extend", &handler::Devices::backupGrantExtend);
+    r->registerPayload("device.backup.grant.confirm", &handler::Devices::backupGrantConfirm);
+    r->registerPayload("device.backup.grant.revoke", &handler::Devices::backupGrantRevoke);
 }
 
 // Vault key backup (ops::vault_keys). Export, confirm and import answer only a paired device's session; the ops

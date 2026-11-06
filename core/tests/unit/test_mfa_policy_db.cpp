@@ -41,6 +41,8 @@
 #include "db/Transactions.hpp"
 #include "db/query/auth/RefreshToken.hpp"
 #include "db/query/device/Device.hpp"
+#include "ops/BackupGrants.hpp"
+#include "db/query/device/BackupGrant.hpp"
 #include "db/query/rbac/role/Admin.hpp"
 #include "device/Peer.hpp"
 #include "identities/Manager.hpp"
@@ -329,12 +331,21 @@ protected:
         return s;
     }
 
+    // A paired Desktop with a key-backup grant (#362) over vault 1.
     static vh::device::Device pairDevice(const UserPtr& user) {
-        return db::query::device::Devices::insert({.user_id = user->id,
-                                                   .approved_by = user->id,
-                                                   .name = "Mac " + std::to_string(++counter),
-                                                   .platform = "macOS",
-                                                   .spki_sha256 = std::format("{:032x}{:032x}", ::getpid(), ++counter)});
+        auto d = db::query::device::Devices::insert({.user_id = user->id,
+                                                     .approved_by = user->id,
+                                                     .name = "Mac " + std::to_string(++counter),
+                                                     .platform = "macOS",
+                                                     .spki_sha256 = std::format("{:032x}{:032x}", ::getpid(), ++counter)});
+        (void)db::query::device::BackupGrants::create({.device_id = d.id, .user_id = user->id, .vault_ids = {1}});
+        return d;
+    }
+
+    static std::optional<std::string> grantRevokedFor(const uint32_t deviceId) {
+        if (db::query::device::BackupGrants::liveForDevice(deviceId)) return std::nullopt;
+        const auto g = db::query::device::BackupGrants::lastRevokedForDevice(deviceId);
+        return g ? g->revoked_reason : std::nullopt;
     }
 
     // A step-up grant on a signed-in web session, as auth.stepup.finish leaves it.
@@ -563,7 +574,7 @@ TEST_F(MfaPolicyDb, ARecoveryCodeSignInRevokesSessionsAndGrantsStartsTheCooldown
     const auto device = db::query::device::Devices::byId(mac.id);
     ASSERT_TRUE(device);
     EXPECT_FALSE(device->revoked()) << "a lost browser factor never breaks a legitimate Desktop's sync";
-    EXPECT_TRUE(device->key_backup_revoked_at);
+    EXPECT_EQ(grantRevokedFor(mac.id), std::optional<std::string>("recovery_code"));
     EXPECT_TRUE(notices.has("mfa.recovery_signin", admin->id));
 
     // The cooldown: a cooldown family is refused before any grant counts, even one this session holds.
@@ -601,7 +612,7 @@ TEST_F(MfaPolicyDb, ARecoveryCodeSignInRevokesSessionsAndGrantsStartsTheCooldown
         {
             const stepup::Scope scope(device);
             EXPECT_THROW(stepup::require(stepup::Family::Secrets), ops::RecoveryCooldown);
-            EXPECT_FALSE(stepup::keyBackupGrantCovers(1)) << "its key-backup grant was revoked";
+            EXPECT_FALSE(ops::backup_grants::covering({1})) << "its key-backup grant was revoked";
         }
         EXPECT_EQ(call([&] {
                       (void)auth::approval::request(device, stepup::Family::Settings, std::nullopt, "change settings");
@@ -750,7 +761,8 @@ TEST_F(MfaPolicyDb, AnAdminResetDisablesFactorsRevokesEverythingAndRequiresEnrol
     EXPECT_FALSE(recoveryStatus(target->id).active_batch) << "codes voided";
     EXPECT_FALSE(rowLive(jtiOf(targetSession)));
     const auto device = db::query::device::Devices::byId(mac.id);
-    EXPECT_TRUE(device && !device->revoked() && device->key_backup_revoked_at);
+    EXPECT_TRUE(device && !device->revoked());
+    EXPECT_EQ(grantRevokedFor(mac.id), std::optional<std::string>("admin_reset"));
     const auto state = userState(target->id);
     ASSERT_TRUE(state);
     EXPECT_TRUE(state->required) << "enrollment at the next sign-in, whatever the policy";

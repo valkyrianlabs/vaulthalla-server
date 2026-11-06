@@ -907,9 +907,12 @@ CREATE TABLE IF NOT EXISTS key_backup_grant_vaults (
 -- export then (section 6.4), each with a keys.backup.grant.migrate audit event.
 ```
 
-Until the grant tables land (#362), a paired device's implicit grant is revoked by setting
-`devices.key_backup_revoked_at` / `key_backup_revoked_reason` (`recovery_code`, `admin_reset`, `cli_reset`; migration
-129, #360). #362's migration must not create a `migrated` grant for such a device.
+As built (#362, migration 130): migration 129's interim `devices.key_backup_revoked_at` / `key_backup_revoked_reason`
+(#360) are carried into the D1 snapshot (`key_backup_grant_migration`) and dropped. A device whose implicit grant they
+had revoked gets no live grant: its migrated grant is recorded already revoked, with that time and reason, over what it
+could export then (D4's re-creation may restore exactly that). `key_backup_grant_vaults.vault_id` has no foreign key
+to `vault` (a deleted vault's key stays exportable while it is retained; ids are never reused), and the daemon, not
+SQL, decides who may export (`ops::backup_grants::migratePending` at the first start after the migration).
 
 ## 10. ws Contract Additions
 

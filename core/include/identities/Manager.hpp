@@ -133,6 +133,12 @@ public:
     // Reloads and publishes `touched` now.
     void refresh(const Touched& touched);
 
+    // Called after every publication by a write or an out-of-band change, outside the Manager's locks, with the
+    // accounts it reloaded (`everyone`: all it holds). One hook per process: ops::backup_grants revokes the key-backup
+    // grants of accounts that may no longer hold one (#362). It must not write identities; what it throws is logged.
+    using PublishedHook = std::function<void(const std::vector<uint32_t>& userIds, bool everyone)>;
+    static void setPublishedHook(PublishedHook hook);
+
     // Publishes a snapshot read earlier (tests: a slow cold load finishing after a newer write).
     void publishSnapshotForTesting(db::query::identities::IdentitySnapshot snap) { apply(std::move(snap), false); }
 

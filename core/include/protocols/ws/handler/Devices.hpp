@@ -30,6 +30,13 @@ struct Devices {
     static json list(const json& payload, const std::shared_ptr<Session>& session);
     static json rename(const json& payload, const std::shared_ptr<Session>& session);
     static json revoke(const json& payload, const std::shared_ptr<Session>& session);
+    // Key-backup grants (#362, ops/BackupGrants.hpp): a console session manages its own devices' grants, a device's
+    // session its own.
+    static json backupGrantList(const std::shared_ptr<Session>& session);
+    static json backupGrantCreate(const json& payload, const std::shared_ptr<Session>& session);
+    static json backupGrantExtend(const json& payload, const std::shared_ptr<Session>& session);
+    static json backupGrantConfirm(const json& payload, const std::shared_ptr<Session>& session);
+    static json backupGrantRevoke(const json& payload, const std::shared_ptr<Session>& session);
     // The listener's exposure (super admins).
     static json remoteStatus(const std::shared_ptr<Session>& session);
     static json remoteEnable(const std::shared_ptr<Session>& session);
