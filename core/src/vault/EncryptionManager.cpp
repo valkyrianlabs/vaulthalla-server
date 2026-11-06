@@ -1,4 +1,5 @@
 #include "vault/EncryptionManager.hpp"
+#include "crypto/secrets/Dependents.hpp"
 #include "crypto/util/encrypt.hpp"
 #include "crypto/util/Gcm.hpp"
 #include "crypto/util/reseal.hpp"
@@ -75,7 +76,7 @@ std::vector<uint8_t> unsealKeyRowOrThrow(const unsigned int vaultId, const vh::v
 EncryptionManager::EncryptionManager(const unsigned int vault_id)
     : vault_id_(vault_id) {
     tpmKeyProvider_ = std::make_unique<secrets::KeyProvider>(paths::testMode ? "test_vault_master" : "vault_master");
-    tpmKeyProvider_->init();
+    tpmKeyProvider_->initGuarded(secrets::dependents::vaultMaster());
     load_key();
 }
 
@@ -239,7 +240,7 @@ void EncryptionManager::prepare_key_rotation() {
 unsigned int EncryptionManager::mintSalvageKey(const unsigned int vaultId, const unsigned int expectedVersion,
                                                const bool outgoingHeld) {
     secrets::KeyProvider provider(paths::testMode ? "test_vault_master" : "vault_master");
-    provider.init();
+    provider.initGuarded(secrets::dependents::vaultMaster());
     const auto next = SecretKey::random();
     const WipedKeyCopy raw(next);
     std::vector<uint8_t> iv;

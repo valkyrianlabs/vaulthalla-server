@@ -12579,9 +12579,23 @@
               ]
             },
             {
-              "description": "\"tpm2\" (Linux), \"secure-enclave\" (macOS), or \"file\" (macOS development backend, no hardware binding).",
+              "description": "\"tpm2\" (Linux), \"secure-enclave\" (macOS), \"file\" (macOS development backend, no hardware binding) or \"unavailable\" (macOS without a usable Secure Enclave: sealing refuses).",
               "name": "secrets_backend",
               "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "What protects the sealed secrets: hardware (TPM, Secure Enclave), software (swtpm), development (files).",
+              "enum": [
+                "hardware",
+                "software",
+                "development",
+                "unknown"
+              ],
+              "name": "secrets_posture",
+              "required": false,
               "types": [
                 "string"
               ]
@@ -17887,7 +17901,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "cf6983ce81554b4659c07b61a135da2640649d96b9d9ab73bee765f56b47b9e5",
+  "models_hash": "0e7099c80fe633cb2599a7f526951d1943790d94893cf33616d40fa40339913e",
   "protocol": {
     "min": 1,
     "version": 1

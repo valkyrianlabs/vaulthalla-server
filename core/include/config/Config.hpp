@@ -406,6 +406,15 @@ struct LoggingConfig {
     LogFilePaths file_paths = LogFilePaths::Ids;
 };
 
+// How sealed secrets may be protected (#326, crypto/secrets/KeyProvider.hpp). Read from config.yaml at startup; not a
+// console setting.
+struct SecretsConfig {
+    // Refuse to seal or unseal unless a hardware TPM or the Secure Enclave protects the secrets (no swtpm, no files).
+    bool require_hardware = false;
+    // macOS without a usable Secure Enclave: allow the plain-file development backend instead of refusing to start.
+    bool allow_development_file_backend = false;
+};
+
 struct Config {
     WebsocketConfig websocket;
     HttpPreviewConfig http_preview;
@@ -440,6 +449,7 @@ struct Config {
     Config& operator=(Config&&) noexcept;
 
     void save() const;
+    SecretsConfig secrets;
 };
 
 // Deprecated keys found while loading (one message each, e.g. a renamed key). The daemon logs them once at startup,

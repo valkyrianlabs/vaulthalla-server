@@ -159,6 +159,31 @@ Key and secret exports require elevated Vaulthalla permissions. Super admins can
 
 Exports are audit-sensitive operations. Treat them as operational events, not routine casual diagnostics.
 
+## How Secrets Are Sealed
+
+Vaulthalla seals its master secrets to the machine: a TPM on Linux, the Secure Enclave on macOS. `vh status` and **Health › Runtime** show the backend and what actually protects it:
+
+| Posture | Means |
+| --- | --- |
+| `hardware` | A hardware TPM or the Secure Enclave. The sealed files are useless on another machine. |
+| `software` | swtpm, a software TPM. The files have no hardware binding, and anyone who can read the swtpm state and the sealed files can unseal them. |
+| `development` | Plain files, for development only. |
+
+For hosts that hold regulated data, require hardware sealing in `config.yaml`:
+
+```yaml
+secrets:
+  require_hardware: true
+```
+
+With this setting, Vaulthalla refuses to seal or unseal anything unless a hardware TPM or the Secure Enclave protects it. The setting is read from `config.yaml` only; the console cannot change it.
+
+On macOS, Vaulthalla refuses to start its sealing when the Secure Enclave can't be used (an Intel Mac without a T2 chip, or a daemon not running under launchd). Earlier versions silently fell back to plain files instead. A development machine may opt in to the file backend with `secrets.allow_development_file_backend: true`.
+
+:::callout[A lost master secret is never replaced silently]{variant="warning"}
+If the sealed master that protects vault keys, provider API keys or S3 gateway credentials is missing while those records still exist, Vaulthalla refuses to create a new one, because a new one could never decrypt them. The affected vaults don't start, and the log says why. Restore the state directory (with the same TPM or Secure Enclave), or import the vault key backups ([Restore Vault Keys](#restore-vault-keys)) and the internal secrets ([Seed Internal Secrets](#seed-internal-secrets)).
+:::
+
 ## Storage Rules
 
 Use these rules for recovery material:
