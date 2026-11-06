@@ -949,14 +949,16 @@ TEST_F(ResumableUploadDbTest, LargeFilesInManyPartsAndALargePartInBoundedMemory)
     const std::string raw{asio::buffers_begin(response.data()), asio::buffers_end(response.data())};
     ASSERT_TRUE(raw.starts_with("HTTP/1.1 200")) << raw.substr(0, 400);
     EXPECT_NE(raw.find("Server-Timing"), std::string::npos);
-    if (kResidentMemoryIsMeasurable)
+    if (kResidentMemoryIsMeasurable) {
         EXPECT_LT(growth, 64ull << 20) << "resident memory grew by " << (growth >> 20) << " MiB for a 256 MiB part";
+    }
 
     RssSampler sealSampler;
     ASSERT_EQ(statusOf(finishDone(big)), status::ok);
     const auto sealGrowth = sealSampler.finish();
-    if (kResidentMemoryIsMeasurable)
+    if (kResidentMemoryIsMeasurable) {
         EXPECT_LT(sealGrowth, 64ull << 20) << "sealing and commit grew resident memory by " << (sealGrowth >> 20) << " MiB";
+    }
     EXPECT_TRUE(matchesPattern(engine, file("/large/one-part.bin"), kBig, 6));
     if (!kResidentMemoryIsMeasurable)
         GTEST_SKIP() << "uploads checked; the resident-memory bound is not measurable under AddressSanitizer (its "
