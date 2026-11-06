@@ -132,9 +132,9 @@ protected:
         if (name.empty()) name = "ak_vault_" + keysTag();
         return db::Transactions::exec("APIKeyParityTest::bindS3Vault", [&](pqxx::work& txn) {
             const auto id = txn.exec(
-                "INSERT INTO vault (type, name, owner_id, mount_point, description) VALUES ('s3', $1, $2, $3, '') RETURNING id",
+                "INSERT INTO vault (type, name, owner_id, mount_point, description, uid) VALUES ('s3', $1, $2, $3, '', gen_random_uuid()) RETURNING id",
                 pqxx::params{name, owner->id, name.substr(0, 30)}).one_field_ref().as<unsigned int>();
-            txn.exec("INSERT INTO s3 (vault_id, api_key_id, bucket) VALUES ($1, $2, $3)", pqxx::params{id, keyId, bucket});
+            txn.exec("INSERT INTO s3 (vault_id, api_key_id, bucket, storage_layout) VALUES ($1, $2, $3, 'path_v0')", pqxx::params{id, keyId, bucket});
             txn.exec("WITH ins AS (INSERT INTO sync (vault_id, interval) VALUES ($1, 300) RETURNING id) "
                      "INSERT INTO rsync (sync_id, strategy, conflict_policy) SELECT id, 'cache', 'keep_remote' FROM ins",
                      pqxx::params{id});
@@ -287,9 +287,9 @@ TEST_F(APIKeyParityTest, VaultUsingAConsumableKeyOfAnotherOwnerBuildsItsEngine) 
     const auto vaultId = db::Transactions::exec("APIKeyParityTest::s3Vault", [&](pqxx::work& txn) {
         const auto name = "ak_vault_" + keysTag();
         const auto id = txn.exec(
-            "INSERT INTO vault (type, name, owner_id, mount_point, description) VALUES ('s3', $1, $2, $3, '') RETURNING id",
+            "INSERT INTO vault (type, name, owner_id, mount_point, description, uid) VALUES ('s3', $1, $2, $3, '', gen_random_uuid()) RETURNING id",
             pqxx::params{name, alice->id, name.substr(0, 30)}).one_field_ref().as<unsigned int>();
-        txn.exec("INSERT INTO s3 (vault_id, api_key_id, bucket) VALUES ($1, $2, 'ak-bucket')", pqxx::params{id, adminKey});
+        txn.exec("INSERT INTO s3 (vault_id, api_key_id, bucket, storage_layout) VALUES ($1, $2, 'ak-bucket', 'path_v0')", pqxx::params{id, adminKey});
         txn.exec("WITH ins AS (INSERT INTO sync (vault_id, interval) VALUES ($1, 300) RETURNING id) "
                  "INSERT INTO rsync (sync_id, strategy, conflict_policy) SELECT id, 'cache', 'keep_remote' FROM ins",
                  pqxx::params{id});

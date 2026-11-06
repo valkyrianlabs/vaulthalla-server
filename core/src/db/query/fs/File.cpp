@@ -11,6 +11,7 @@
 #include "fs/cache/Registry.hpp"
 #include "fs/model/stats/Extension.hpp"
 #include "crypto/id/Generator.hpp"
+#include "crypto/id/ObjectUid.hpp"
 
 #include <optional>
 #include <stdexcept>
@@ -19,6 +20,44 @@
 namespace vh::db::query::fs {
 
 using vh::db::encoding::to_utf8_string;
+
+namespace {
+
+// The file's object uid for upsert_file_full: its own, else that of the row it replaces (same inode: the same file
+// written again), else a new one. upsert_file_full keeps the stored uid of a row it updates in place.
+std::string objectUidFor(pqxx::work& txn, const std::shared_ptr<vh::fs::model::File>& file) {
+    if (!file->object_uid && file->inode) {
+        const auto res = txn.exec(pqxx::prepped{"get_file_object_uid_by_inode"}, *file->inode);
+        if (!res.empty()) file->object_uid = crypto::id::fromUuid(res.one_field_ref().as<std::string>());
+    }
+    return crypto::id::toUuid(file->object_uid.value_or(crypto::id::newObjectUid()));
+}
+
+pqxx::params upsertFileParams(pqxx::work& txn, const std::shared_ptr<vh::fs::model::File>& file) {
+    pqxx::params p;
+    p.append(file->vault_id);
+    p.append(file->parent_id);
+    p.append(file->name);
+    p.append(file->base32_alias);
+    p.append(file->created_by);
+    p.append(file->last_modified_by);
+    p.append(to_utf8_string(file->path.u8string()));
+    p.append(file->inode);
+    p.append(file->mode);
+    p.append(file->owner_uid);
+    p.append(file->group_gid);
+    p.append(file->is_hidden);
+    p.append(file->is_system);
+    p.append(file->size_bytes);
+    p.append(file->mime_type);
+    p.append(file->content_hash);
+    p.append(file->encryption_iv);
+    p.append(file->encrypted_with_key_version);
+    p.append(objectUidFor(txn, file));
+    return p;
+}
+
+}
 
 unsigned int File::upsertFile(const FilePtr& file) {
     if (!file) throw std::invalid_argument("File cannot be null");
@@ -30,29 +69,12 @@ unsigned int File::upsertFile(const FilePtr& file) {
         const auto exists = txn.exec(pqxx::prepped{"fs_entry_exists_by_inode"}, file->inode).one_field_ref().as<bool>();
         const auto sizeRes = txn.exec(pqxx::prepped{"get_file_size_by_inode"}, file->inode);
         const auto existingSize = sizeRes.empty() ? 0 : sizeRes.one_field_ref().as<uintmax_t>();
+        auto p = upsertFileParams(txn, file);   // before the delete: a rewritten file keeps its object uid
         if (file->inode) txn.exec(pqxx::prepped{"delete_fs_entry_by_inode"}, file->inode);
 
-        pqxx::params p;
-        p.append(file->vault_id);
-        p.append(file->parent_id);
-        p.append(file->name);
-        p.append(file->base32_alias);
-        p.append(file->created_by);
-        p.append(file->last_modified_by);
-        p.append(to_utf8_string(file->path.u8string()));
-        p.append(file->inode);
-        p.append(file->mode);
-        p.append(file->owner_uid);
-        p.append(file->group_gid);
-        p.append(file->is_hidden);
-        p.append(file->is_system);
-        p.append(file->size_bytes);
-        p.append(file->mime_type);
-        p.append(file->content_hash);
-        p.append(file->encryption_iv);
-        p.append(file->encrypted_with_key_version);
-
-        const auto fileId = txn.exec(pqxx::prepped{"upsert_file_full"}, p).one_row_ref()["fs_entry_id"].as<unsigned int>();
+        const auto stored = txn.exec(pqxx::prepped{"upsert_file_full"}, p).one_row();
+        const auto fileId = stored["fs_entry_id"].as<unsigned int>();
+        file->object_uid = crypto::id::fromUuid(stored["object_uid"].as<std::string>());
         txn.exec(
             pqxx::prepped{"insert_file_activity"},
             pqxx::params{
@@ -154,27 +176,8 @@ void File::moveFile(const FilePtr& file, const std::filesystem::path& newPath, u
         file->parent_id = txn.exec(pqxx::prepped{"get_fs_entry_id_by_path"}, search_params).one_field_ref().as<unsigned int>();
         file->last_modified_by = userId;
 
-        pqxx::params p;
-        p.append(file->vault_id);
-        p.append(file->parent_id);
-        p.append(file->name);
-        p.append(file->base32_alias);
-        p.append(file->created_by);
-        p.append(file->last_modified_by);
-        p.append(to_utf8_string(file->path.u8string()));
-        p.append(file->inode);
-        p.append(file->mode);
-        p.append(file->owner_uid);
-        p.append(file->group_gid);
-        p.append(file->is_hidden);
-        p.append(file->is_system);
-        p.append(file->size_bytes);
-        p.append(file->mime_type);
-        p.append(file->content_hash);
-        p.append(file->encryption_iv);
-        p.append(file->encrypted_with_key_version);
-
-        txn.exec(pqxx::prepped{"upsert_file_full"}, p);
+        const auto stored = txn.exec(pqxx::prepped{"upsert_file_full"}, upsertFileParams(txn, file)).one_row();
+        file->object_uid = crypto::id::fromUuid(stored["object_uid"].as<std::string>());
 
         // Update parent directories stats
         parentId = file->parent_id;

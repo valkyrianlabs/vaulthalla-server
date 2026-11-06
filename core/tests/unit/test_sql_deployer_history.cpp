@@ -461,12 +461,12 @@ TEST_F(SqlDeployerHistoryDb, SyncConflictMigrationGrantsResolveWhereTriggerIsAnd
                    ($1, 'user', B'00000000000000000000000000000000', B'00000000000000000000000000000000', $3::bit(32),
                     B'0000000000000000')
         )SQL", pqxx::params{userId, trigger.sync.toBitString(), none.sync.toBitString()});
-        const auto vaultId = txn.exec("INSERT INTO vault (type, name, owner_id, mount_point) "
-                                      "VALUES ('s3', 'claude_test_107_vault', $1, '0123456789ABCDEFGHJKMNPQRSTVWX107') "
+        const auto vaultId = txn.exec("INSERT INTO vault (type, name, owner_id, mount_point, uid) "
+                                      "VALUES ('s3', 'claude_test_107_vault', $1, '0123456789ABCDEFGHJKMNPQRSTVWX107', gen_random_uuid()) "
                                       "RETURNING id", pqxx::params{userId}).one_field_ref().as<int>();
         const auto fileId = txn.exec("INSERT INTO fs_entry (vault_id, name, path) VALUES ($1, 'f.txt', '/f.txt') "
                                      "RETURNING id", pqxx::params{vaultId}).one_field_ref().as<int>();
-        txn.exec("INSERT INTO files (fs_entry_id, size_bytes) VALUES ($1, 1)", pqxx::params{fileId});
+        txn.exec("INSERT INTO files (fs_entry_id, size_bytes, object_uid) VALUES ($1, 1, gen_random_uuid())", pqxx::params{fileId});
         std::vector<int> conflicts;
         for (const auto* resolution : {"kept_local", "unresolved", "unresolved"}) {
             const auto eventId = txn.exec("INSERT INTO sync_event (vault_id) VALUES ($1) RETURNING id",
@@ -635,12 +635,12 @@ TEST_F(SqlDeployerHistoryDb, FileRecoveryMigrationKeepsGenerationsWhenTheLiveFil
         // A 110-era row (the table existed, unused): file_id cascades.
         const auto userId = txn.exec("INSERT INTO users (name, password_hash) VALUES ('claude_test_111_user', 'x') "
                                      "RETURNING id").one_field_ref().as<int>();
-        const auto vaultId = txn.exec("INSERT INTO vault (type, name, owner_id, mount_point) "
-                                      "VALUES ('local', 'claude_test_111_vault', $1, '0123456789ABCDEFGHJKMNPQRSTVWX111') "
+        const auto vaultId = txn.exec("INSERT INTO vault (type, name, owner_id, mount_point, uid) "
+                                      "VALUES ('local', 'claude_test_111_vault', $1, '0123456789ABCDEFGHJKMNPQRSTVWX111', gen_random_uuid()) "
                                       "RETURNING id", pqxx::params{userId}).one_field_ref().as<int>();
         const auto fileId = txn.exec("INSERT INTO fs_entry (vault_id, name, path) VALUES ($1, 'v.txt', '/v.txt') "
                                      "RETURNING id", pqxx::params{vaultId}).one_field_ref().as<int>();
-        txn.exec("INSERT INTO files (fs_entry_id, size_bytes) VALUES ($1, 5)", pqxx::params{fileId});
+        txn.exec("INSERT INTO files (fs_entry_id, size_bytes, object_uid) VALUES ($1, 5, gen_random_uuid())", pqxx::params{fileId});
         const auto versionId = txn.exec("INSERT INTO file_versions (file_id, version_number, content_hash, size_bytes, path) "
                                         "VALUES ($1, 1, 'h', 5, '/v.txt') RETURNING id",
                                         pqxx::params{fileId}).one_field_ref().as<int>();
@@ -756,8 +756,8 @@ TEST_F(SqlDeployerHistoryDb, KeyProvenanceMigrationIsAdditiveAndIdempotent) {
         txn.exec("DELETE FROM schema_migrations WHERE filename = '113_vault_key_provenance.sql'");
         const auto owner = txn.exec("INSERT INTO users (name, password_hash) VALUES ('claude_test_113_owner', 'x') "
                                     "RETURNING id").one_field_ref().as<int>();
-        const auto vault = txn.exec("INSERT INTO vault (name, owner_id, type, mount_point) VALUES "
-                                    "('claude_test_113', $1, 'local', 'claude_test_113') RETURNING id",
+        const auto vault = txn.exec("INSERT INTO vault (name, owner_id, type, mount_point, uid) VALUES "
+                                    "('claude_test_113', $1, 'local', 'claude_test_113', gen_random_uuid()) RETURNING id",
                                     pqxx::params{owner}).one_field_ref().as<int>();
         txn.exec("INSERT INTO vault_keys (vault_id, encrypted_key, iv, version) VALUES ($1, '\\x00', '\\x00', 2) "
                  "ON CONFLICT (vault_id) DO UPDATE SET version = 2", pqxx::params{vault});
@@ -794,6 +794,152 @@ TEST_F(SqlDeployerHistoryDb, KeyProvenanceMigrationIsAdditiveAndIdempotent) {
         txn.exec("DELETE FROM vault WHERE id = $1", pqxx::params{vault});
         EXPECT_EQ(txn.exec("SELECT count(*) FROM vault_key_salvage WHERE vault_id = $1", pqxx::params{vault})
                       .one_field_ref().as<int>(), 0);
+    });
+}
+
+// 120 + 121 (#366, provider-blind storage schema) on a 117-era database: every existing vault and file gets a uid from
+// the deployer's data step (distinct, never PostgreSQL's v4 UUIDs), encrypting vaults get path_v0 and the others
+// transparent (a NULL encrypt_upstream counts as encrypting, as the daemon always read it), the uids become NOT NULL,
+// and nothing changes when the deploy or the files run again.
+TEST_F(SqlDeployerHistoryDb, StorageLayoutMigrationBackfillsUidsAndLayoutsAndIsIdempotent) {
+    inRolledBackTxn([](pqxx::work& txn) {
+        txn.exec("DROP TRIGGER IF EXISTS vh_uid_immutable ON vault");
+        txn.exec("DROP TRIGGER IF EXISTS vh_uid_immutable ON files");
+        txn.exec("DROP FUNCTION IF EXISTS vh_uid_immutable()");
+        txn.exec("ALTER TABLE s3 DROP CONSTRAINT IF EXISTS s3_storage_layout_check");
+        txn.exec("ALTER TABLE s3 DROP COLUMN IF EXISTS storage_layout");
+        txn.exec("ALTER TABLE s3 ALTER COLUMN encrypt_upstream DROP NOT NULL");
+        txn.exec("ALTER TABLE vault DROP COLUMN IF EXISTS uid");
+        txn.exec("ALTER TABLE files DROP COLUMN IF EXISTS object_uid");
+        txn.exec("DELETE FROM schema_migrations WHERE filename IN ('120_storage_layout.sql', '121_object_uids_required.sql')");
+        ASSERT_FALSE(columnExists(txn, "vault", "uid"));
+
+        const auto owner = txn.exec("INSERT INTO users (name, password_hash) VALUES ('claude_test_120_owner', 'x') "
+                                    "RETURNING id").one_field_ref().as<int>();
+        const auto vault = [&](const std::string& name, const std::string& type) {
+            return txn.exec("INSERT INTO vault (name, owner_id, type, mount_point) VALUES ($1, $2, $3, $1) RETURNING id",
+                            pqxx::params{name, owner, type}).one_field_ref().as<int>();
+        };
+        const auto local = vault("claude_test_120_local", "local");
+        const auto encrypting = vault("claude_test_120_enc", "s3");
+        const auto plain = vault("claude_test_120_plain", "s3");
+        const auto unset = vault("claude_test_120_null", "s3");
+        txn.exec("INSERT INTO s3 (vault_id, bucket, encrypt_upstream) VALUES ($1, 'b120-enc', TRUE), "
+                 "($2, 'b120-plain', FALSE), ($3, 'b120-null', NULL)", pqxx::params{encrypting, plain, unset});
+        std::vector<int> files;
+        for (int i = 0; i < 3; ++i) {
+            const auto name = "f" + std::to_string(i);
+            const auto id = txn.exec("INSERT INTO fs_entry (vault_id, name, path) VALUES ($1, $2, '/' || $2) RETURNING id",
+                                     pqxx::params{i == 0 ? local : encrypting, name}).one_field_ref().as<int>();
+            txn.exec("INSERT INTO files (fs_entry_id, size_bytes) VALUES ($1, 1)", pqxx::params{id});
+            files.push_back(id);
+        }
+
+        migseed::SqlDeployReport report;
+        ASSERT_NO_THROW(report = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(applied(report, "120_storage_layout.sql"));
+        EXPECT_TRUE(applied(report, "121_object_uids_required.sql"));
+        EXPECT_EQ(recordedHash(txn, "120_storage_layout.sql"), currentHash("120_storage_layout.sql"));
+
+        EXPECT_EQ(txn.exec("SELECT count(*) FROM vault WHERE uid IS NULL").one_field_ref().as<int>(), 0);
+        EXPECT_EQ(txn.exec("SELECT count(*) FROM files WHERE object_uid IS NULL").one_field_ref().as<int>(), 0);
+        const auto snapshot = [&] {
+            return txn.exec("SELECT string_agg(uid::text, ',' ORDER BY id) FROM vault").one_field_ref().as<std::string>() +
+                   "|" + txn.exec("SELECT string_agg(object_uid::text, ',' ORDER BY fs_entry_id) FROM files")
+                             .one_field_ref().as<std::string>();
+        };
+        const auto before = snapshot();
+        EXPECT_EQ(txn.exec("SELECT count(DISTINCT object_uid) FROM files WHERE fs_entry_id = ANY($1::int[])",
+                           pqxx::params{"{" + std::to_string(files[0]) + "," + std::to_string(files[1]) + "," +
+                                        std::to_string(files[2]) + "}"}).one_field_ref().as<int>(), 3);
+        // Raw CSPRNG bytes: across a backfill, not every uid has the version-4 nibble PostgreSQL's would.
+        EXPECT_GT(txn.exec("SELECT count(*) FROM (SELECT uid::text AS t FROM vault UNION ALL "
+                           "SELECT object_uid::text FROM files) u WHERE substr(t, 15, 1) <> '4'").one_field_ref().as<int>(), 0)
+            << "uids must come from libsodium, not gen_random_uuid()";
+
+        const auto layout = [&](const int id) {
+            return txn.exec("SELECT storage_layout || '/' || encrypt_upstream::text FROM s3 WHERE vault_id = $1",
+                            pqxx::params{id}).one_field_ref().as<std::string>();
+        };
+        EXPECT_EQ(layout(encrypting), "path_v0/true");
+        EXPECT_EQ(layout(plain), "transparent/false");
+        EXPECT_EQ(layout(unset), "path_v0/true");
+
+        {
+            pqxx::subtransaction noUid(txn, "no_uid");
+            EXPECT_THROW(noUid.exec("INSERT INTO vault (name, owner_id, type, mount_point) VALUES "
+                                    "('claude_test_120_nouid', $1, 'local', 'x')", pqxx::params{owner}),
+                         pqxx::not_null_violation);
+        }
+
+        // Applying again does nothing; executing both files again changes nothing (idempotent on upgraded installs).
+        migseed::SqlDeployReport again;
+        ASSERT_NO_THROW(again = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(again.applied.empty());
+        ASSERT_NO_THROW(txn.exec(migseed::readFileToString(repoPsqlDir() / "120_storage_layout.sql")));
+        ASSERT_NO_THROW(txn.exec(migseed::readFileToString(repoPsqlDir() / "121_object_uids_required.sql")));
+        ASSERT_NO_THROW(migseed::assignObjectUids(txn));
+        EXPECT_EQ(snapshot(), before);
+        EXPECT_EQ(layout(plain), "transparent/false");
+        EXPECT_EQ(txn.exec("SELECT count(*) FROM pg_constraint WHERE conrelid = 's3'::regclass AND "
+                           "conname = 's3_storage_layout_check'").one_field_ref().as<int>(), 1);
+    });
+}
+
+// LayoutCheckConstraint (spec 01 §4.6): the database refuses a layout that contradicts encrypt_upstream, and a uid
+// never changes once assigned.
+TEST_F(SqlDeployerHistoryDb, LayoutCheckConstraintRefusesMismatchedPairsAndUidsAreImmutable) {
+    inRolledBackTxn([](pqxx::work& txn) {
+        const auto owner = txn.exec("INSERT INTO users (name, password_hash) VALUES ('claude_test_120c_owner', 'x') "
+                                    "RETURNING id").one_field_ref().as<int>();
+        const auto vault = txn.exec("INSERT INTO vault (name, owner_id, type, mount_point, uid) VALUES "
+                                    "('claude_test_120c', $1, 's3', 'claude_test_120c', gen_random_uuid()) RETURNING id",
+                                    pqxx::params{owner}).one_field_ref().as<int>();
+        const auto refused = [&](const std::string& encrypt, const std::string& layout) {
+            pqxx::subtransaction sub(txn, "check");
+            try {
+                sub.exec("INSERT INTO s3 (vault_id, bucket, encrypt_upstream, storage_layout) VALUES ($1, 'b120c', " +
+                         encrypt + ", $2)", pqxx::params{vault, layout});
+            } catch (const pqxx::check_violation&) {
+                return true;
+            }
+            sub.abort();
+            return false;
+        };
+        EXPECT_TRUE(refused("TRUE", "transparent"));
+        EXPECT_TRUE(refused("FALSE", "path_v0"));
+        EXPECT_TRUE(refused("FALSE", "opaque_v1"));
+        EXPECT_TRUE(refused("TRUE", "opaque"));
+        EXPECT_FALSE(refused("TRUE", "path_v0"));
+        EXPECT_FALSE(refused("TRUE", "opaque_v1"));
+        EXPECT_FALSE(refused("FALSE", "transparent"));
+
+        txn.exec("INSERT INTO s3 (vault_id, bucket, encrypt_upstream, storage_layout) VALUES ($1, 'b120c', TRUE, "
+                 "'path_v0')", pqxx::params{vault});
+        {
+            pqxx::subtransaction flip(txn, "flip");
+            EXPECT_THROW(flip.exec("UPDATE s3 SET encrypt_upstream = FALSE WHERE vault_id = $1", pqxx::params{vault}),
+                         pqxx::check_violation) << "turning encryption off must move the layout too";
+        }
+        txn.exec("UPDATE s3 SET encrypt_upstream = FALSE, storage_layout = 'transparent' WHERE vault_id = $1",
+                 pqxx::params{vault});
+
+        const auto file = txn.exec("INSERT INTO fs_entry (vault_id, name, path) VALUES ($1, 'u', '/u') RETURNING id",
+                                   pqxx::params{vault}).one_field_ref().as<int>();
+        txn.exec("INSERT INTO files (fs_entry_id, size_bytes, object_uid) VALUES ($1, 1, gen_random_uuid())",
+                 pqxx::params{file});
+        {
+            pqxx::subtransaction change(txn, "vault_uid");
+            EXPECT_THROW(change.exec("UPDATE vault SET uid = gen_random_uuid() WHERE id = $1", pqxx::params{vault}),
+                         pqxx::sql_error);
+        }
+        {
+            pqxx::subtransaction change(txn, "file_uid");
+            EXPECT_THROW(change.exec("UPDATE files SET object_uid = gen_random_uuid() WHERE fs_entry_id = $1",
+                                     pqxx::params{file}), pqxx::sql_error);
+        }
+        // Content changes and same-value writes pass.
+        txn.exec("UPDATE files SET size_bytes = 2, object_uid = object_uid WHERE fs_entry_id = $1", pqxx::params{file});
     });
 }
 

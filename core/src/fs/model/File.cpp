@@ -4,6 +4,7 @@
 #include "log/Redact.hpp"
 #include "db/query/fs/Entry.hpp"
 #include "sync/model/RemoteManifest.hpp"
+#include "db/encoding/has.hpp"
 
 #include <nlohmann/json.hpp>
 #include <pqxx/result>
@@ -19,7 +20,9 @@ File::File(pqxx::row_ref row, const pqxx::result& parentRows)
       encryption_iv(row.at("encryption_iv").as<std::string>()),
       mime_type(row.at("mime_type").as<std::optional<std::string>>()),
       content_hash(row.at("content_hash").as<std::optional<std::string>>()),
-      encrypted_with_key_version(row.at("encrypted_with_key_version").as<unsigned int>()) {}
+      encrypted_with_key_version(row.at("encrypted_with_key_version").as<unsigned int>()),
+      object_uid(vh::db::encoding::try_get<std::string>(row, "object_uid")
+                     .transform([](const std::string& text) { return vh::crypto::id::fromUuid(text); })) {}
 
 File::File(const std::string& s3_key, const uint64_t size, const std::optional<std::time_t>& updated)
     : Entry(s3_key) {

@@ -9,6 +9,7 @@
 #include <nlohmann/json_fwd.hpp>
 #include <filesystem>
 #include "db/Fwd.hpp"
+#include "crypto/id/ObjectUid.hpp"
 
 namespace vh::vault::model {
 
@@ -19,6 +20,9 @@ VaultType from_string(const std::string& type);
 
 struct Vault {
     uint32_t id{}, owner_id{};
+    // vault.uid (spec 01 §4.1): drawn by Vault::upsertVault when the vault is created, never changed. Empty only on a
+    // vault not yet stored.
+    std::optional<crypto::id::ObjectUid> uid{};
     std::string name, description{};
     std::string slug{};
     std::optional<std::string> fuse_name{};
