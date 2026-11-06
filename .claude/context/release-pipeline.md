@@ -64,8 +64,13 @@ The build needs the private icons (`$VAULTHALLA_WEB_ICON_SRC`, default `~/vaulth
   `-Dwerror=true`, `hardening=+all`, dpkg's `-O2` stripped, no LTO). A release never rebuilds or reruns the suite;
   `tools/dev/check_build_flags.py` checks the package's compile lines (-O3, hardening, -Werror, no diagnostics).
   1.8.x packages shipped -O0 and unhardened: a `cpp_args` default_option made meson drop dpkg-buildflags.
-- `build_and_test.yml` (push/PR to main): `build` (composite `runner`: core build at -O0 with -Werror → tests → web)
-  and `tooling` (installs `vl-release`, `bash tools/dev/verify.sh release packaging lifecycle`, shellcheck).
+- `build_and_test.yml` (push/PR to main): three independent jobs (one per `vps-ci` runner) that run side by side: `build` (composite `runner`:
+  core build at -O0 with -Werror → tests, `tools/dev/ci-test.sh` runs `vh_unit_tests` as 4 parallel gtest shards),
+  `web` (typecheck, lint, build, budgets) and `tooling` (installs `vl-release`,
+  `bash tools/dev/verify.sh release packaging lifecycle`, shellcheck, then the WebAuthn fuzz step: targets always
+  build; the 60 s run happens on pushes to main and on PRs touching the parsers or build inputs). ccache works with the -O0 PCH only because
+  `ci/Containerfile` sets `CCACHE_SLOPPINESS=pch_defines,time_macros,include_file_mtime,include_file_ctime`; without
+  it every PCH compile is "uncacheable" and each run is a cold build (check `ccache -s` in the build log).
   - **Push gate (#185, 2026-10-10):** on pushes, a `gate` job (`ubuntu-latest`, seconds, `.github/scripts/ci_gate.py`)
     skips `build`/`tooling` when CI already tested the exact tree: a merged PR whose head has the pushed commit's tree
     and a `pull_request` run whose `build` job succeeded (i.e. the branch was up to date), or a `vlr cut` commit

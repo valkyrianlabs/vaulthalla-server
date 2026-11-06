@@ -177,7 +177,7 @@ Web: `web/tests/e2e/recovery.spec.ts` (scripted ws answers; see `web-client.md`)
 | `WebAuthnCbor`, `WebAuthnCose`, `WebAuthnAuthenticatorData`, `WebAuthnAttestationObject`, `WebAuthnClientData`, `WebAuthnBase64Url`, `WebAuthnWire`, `WebAuthnChallengeStore`, `WebAuthnRelyingParty`, `WebAuthnFuzzCorpus` (`test_webauthn_parsers.cpp`) | strict parsing, config rules, and a replay of every committed fuzz input (`core/src/auth/webauthn/fuzz/corpus/`) | nothing |
 
 libFuzzer: `tools/dev/fuzz-webauthn.sh [--seconds N] [--merge]` (clang `CXX`, `build-fuzz`, `-Dfuzz=true` builds only
-the verifier, ASan/UBSan). PR CI runs it for 60 s per target (`.github/actions/fuzz`). A crash's reproducer goes into
+the verifier, ASan/UBSan). CI (`.github/actions/fuzz`) always builds the targets (`--build-only`) and runs 60 s per target on pushes to main and PRs that touch the parsers, their headers, the fuzz build or `meson*`/`subprojects`/`ci`. A crash's reproducer goes into
 the target's corpus with the fix; `--merge` folds new coverage into the committed corpus.
 
 ## Device approval suites (#361)

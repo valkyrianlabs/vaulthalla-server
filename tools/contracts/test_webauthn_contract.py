@@ -87,11 +87,13 @@ class WebAuthnPackagingContract(unittest.TestCase):
     def test_ci_fuzzes_every_pull_request(self) -> None:
         self.assertRegex(read("ci/Containerfile"), r"(?m)^\s+clang-18 libclang-rt-18-dev \\$")
         workflow = read(".github/workflows/build_and_test.yml")
-        self.assertIn("fuzz: 'true'", workflow)
-        runner = read(".github/actions/runner/action.yml")
-        self.assertIn("uses: ./.github/actions/fuzz", runner)
+        # The tooling job runs the fuzz action on every pull request: the targets always build, and it runs them for
+        # the 60 s budget when the diff touches the parsers or build inputs (and on every push to main).
+        self.assertIn("uses: ./.github/actions/fuzz", workflow)
         action = read(".github/actions/fuzz/action.yml")
         self.assertIn("bash tools/dev/fuzz-webauthn.sh --seconds 60", action)
+        self.assertIn("bash tools/dev/fuzz-webauthn.sh --build-only", action)
+        self.assertIn("core/src/auth/webauthn/", action)
         script = read("tools/dev/fuzz-webauthn.sh")
         self.assertIn("-Dfuzz=true -Db_sanitize=address,undefined", script)
         for target in ("cbor_cose", "authenticator_data", "client_data"):

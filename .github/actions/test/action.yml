@@ -8,4 +8,5 @@ runs:
       run: |
         export PATH_TO_TEST_DATA="$GITHUB_WORKSPACE/test-assets"
         echo "Using test data path $PATH_TO_TEST_DATA"
-        meson test -C build --print-errorlogs
+        # vh_unit_tests in 4 parallel gtest shards beside the other tests (tools/dev/ci-test.sh); same cases, less wall time.
+        bash tools/dev/ci-test.sh build 4

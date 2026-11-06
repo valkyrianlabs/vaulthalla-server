@@ -20,9 +20,9 @@ runs:
     - name: Make clean
       shell: bash ./ci/run-ci bash -euo pipefail {0}
       run: make clean || true
-    - name: Show ccache stats
+    - name: Reset ccache statistics
       shell: bash ./ci/run-ci bash -euo pipefail {0}
-      run: ccache -s
+      run: ccache -z >/dev/null
     - name: Build
       shell: bash ./ci/run-ci bash -euo pipefail {0}
       run: |
@@ -32,3 +32,6 @@ runs:
         bash tools/dev/quiet-build.sh build "$RUNNER_TEMP/meson-setup.log"
         sudo meson install -C build
         sudo ldconfig
+    - name: ccache statistics (this build)
+      shell: bash ./ci/run-ci bash -euo pipefail {0}
+      run: ccache -s

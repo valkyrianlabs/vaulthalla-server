@@ -41,7 +41,7 @@ runs:
       uses: ./.github/actions/fuzz
 
     - name: Setup Web
-      if: ${{ inputs.build_web == 'true' || inputs.test_web == 'true' }}
+      if: ${{ inputs.test_web == 'true' && inputs.build_web != 'true' }}
       uses: ./.github/actions/setup_web
 
     - name: Build Web

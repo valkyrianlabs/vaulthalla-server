@@ -1,26 +1,29 @@
 #!/bin/bash
 # Builds and runs the WebAuthn verifier's libFuzzer targets for a bounded time (#355; design section 11, decision D5).
 #
-#   tools/dev/fuzz-webauthn.sh [--seconds N] [--build-dir DIR] [--merge]
+#   tools/dev/fuzz-webauthn.sh [--seconds N] [--build-dir DIR] [--merge] [--build-only]
 #
 # Configures DIR (default build-fuzz) with clang, -Dfuzz=true and ASan/UBSan, which builds only
 # core/src/auth/webauthn and its three targets, then runs each target for N seconds (default 60) in parallel over a
 # scratch copy of its committed corpus (core/src/auth/webauthn/fuzz/corpus/<target>/). Any crash, leak, timeout or
 # sanitizer report fails the run; the reproducer is left in DIR/fuzz-artifacts/ and belongs in the target's corpus
 # once fixed, so the unit tests replay it from then on (WebAuthnFuzzCorpus). --merge folds new coverage back into
-# the committed corpus (libFuzzer -merge=1). CXX selects the compiler (default clang++-18, then clang++).
+# the committed corpus (libFuzzer -merge=1). --build-only stops after the build: pull requests that touch nothing
+# fuzz-relevant still prove the targets compile. CXX selects the compiler (default clang++-18, then clang++).
 # Bash 3.2 compatible.
 set -euo pipefail
 
 seconds=60
 dir=build-fuzz
 merge=false
+build_only=false
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --seconds) seconds=$2; shift 2 ;;
     --build-dir) dir=$2; shift 2 ;;
     --merge) merge=true; shift ;;
-    *) echo "usage: $0 [--seconds N] [--build-dir DIR] [--merge]" >&2; exit 2 ;;
+    --build-only) build_only=true; shift ;;
+    *) echo "usage: $0 [--seconds N] [--build-dir DIR] [--merge] [--build-only]" >&2; exit 2 ;;
   esac
 done
 
@@ -40,6 +43,8 @@ if [ ! -f "$dir/build.ninja" ]; then
 else
   bash tools/dev/quiet-build.sh "$dir"
 fi
+
+if $build_only; then exit 0; fi
 
 corpus_root=core/src/auth/webauthn/fuzz/corpus
 artifacts="$dir/fuzz-artifacts"

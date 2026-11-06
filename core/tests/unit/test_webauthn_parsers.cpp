@@ -181,7 +181,9 @@ TEST(WebAuthnCose, RefusesKeysOutsideTheProfile) {
     big[0] = 0x01;
     big.back() |= 1;
     EXPECT_EQ(rsaKey(big, rsa.e), Failure::RsaKeySize) << "4097 bits";
-    EXPECT_EQ(rsaKey(Bytes(rsa.n.begin() + 1, rsa.n.end()), rsa.e), Failure::RsaKeySize) << "2040 bits";
+    Bytes shortModulus(rsa.n.begin() + 1, rsa.n.end());
+    shortModulus[0] |= 0x80;  // a random key's second byte is 0x00 about once in 256 runs: that is a leading zero, not a short key
+    EXPECT_EQ(rsaKey(shortModulus, rsa.e), Failure::RsaKeySize) << "2040 bits";
 
     CborWriter trailing;
     trailing.raw(es.cose()).byte(0x00);
