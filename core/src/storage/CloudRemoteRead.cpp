@@ -21,6 +21,7 @@
 #include "storage/ScopedS3RequestUsageCapture.hpp"
 #include "storage/s3/Controller.hpp"
 #include "vault/EncryptionManager.hpp"
+#include "vault/Content.hpp"
 #include "vault/APIKeyManager.hpp"
 #include "vault/model/S3Vault.hpp"
 
@@ -161,6 +162,15 @@ bool commitHydratedEncryption(const FileModel& updated, const std::string& expec
     return true;
 }
 
+// The format a remote generation id names; a malformed one (neither a GCM IV nor a VHF1 salt) is refused.
+vh::vault::content::Format formatOf(const std::string& ivB64, const std::filesystem::path& path) {
+    try {
+        return vh::vault::content::formatOf(ivB64);
+    } catch (const std::invalid_argument&) {
+        throw std::runtime_error("Invalid remote IV for " + path.string());
+    }
+}
+
 std::array<uint8_t, crypto::util::AES_IV_SIZE> decodeIv(const std::string& ivB64, const std::filesystem::path& path) {
     const auto raw = crypto::util::b64_decode(ivB64);
     if (raw.size() != crypto::util::AES_IV_SIZE) throw std::runtime_error("Invalid remote IV for " + path.string());
@@ -255,7 +265,8 @@ std::shared_ptr<vh::fs::model::File> CloudEngine::hydrateNow(const std::shared_p
     if (!encryptionManager) throw std::runtime_error("Vault has no encryption key loaded");
 
     const auto objectKey = ::vh::fs::model::stripLeadingSlash(f->path);
-    const auto maxStored = f->size_bytes + crypto::util::AES_TAG_SIZE;
+    // The most a generation of this size can take upstream (VHF1 ≥ legacy GCM ≥ plaintext).
+    const auto maxStored = vh::vault::content::newSealedSize(f->size_bytes);
 
     // 1. Price preflight before anything upstream (HEAD + one GET of the whole object).
     auto reservation = reserveRemoteFetch({
@@ -284,16 +295,10 @@ std::shared_ptr<vh::fs::model::File> CloudEngine::hydrateNow(const std::shared_p
         if (head->requires_restore)
             throw ContentUnavailable("Remote object is in an archive tier and must be restored first: " + f->path.string());
 
-        const uint64_t expected = f->size_bytes + (head->encrypted ? crypto::util::AES_TAG_SIZE : 0);
-        if (head->content_length && *head->content_length != expected)
-            throw ContentUnavailable(fmt::format("Remote object {} is {} bytes but the index expects {}; sync the vault",
-                                                 f->path.string(), *head->content_length, expected));
-
         std::string ivB64;
         unsigned int keyVersion = 0;
         crypto::SecretKeyPtr key;
-        std::array<uint8_t, crypto::util::AES_IV_SIZE> iv{};
-        std::optional<crypto::util::GcmStreamEncryptor> sealer;
+        bool sealOnTheWayIn = false;
         const bool rowEncrypted = !f->encryption_iv.empty();
         if (!head->encrypted && rowEncrypted && !vh::sync::events::subscriptions::importsForeignObjects(vault->id))
             // A bucket that now claims plaintext for a file whose row records its encryption (an IV) is a downgrade,
@@ -313,45 +318,54 @@ std::shared_ptr<vh::fs::model::File> CloudEngine::hydrateNow(const std::shared_p
             keyVersion = head->iv_b64.empty() ? f->encrypted_with_key_version : head->key_version;
             if (ivB64.empty() || keyVersion == 0)
                 throw ContentUnavailable("Remote object has no encryption context: " + f->path.string());
-            iv = detail::decodeIv(ivB64, f->path);
+            if (detail::formatOf(ivB64, f->path) == vh::vault::content::Format::Plain)
+                throw ContentUnavailable("Remote object has no encryption context: " + f->path.string());
             key = encryptionManager->keySnapshot(keyVersion);
         } else {
-            // Plaintext upstream: seal it on the way in, under a fresh IV and the current key.
+            // Plaintext upstream: sealed on the way in as a new VHF1 generation under the current key.
             const auto current = encryptionManager->currentKey();
             key = current.key;
             keyVersion = current.version;
-            if (sodium_init() < 0) throw std::runtime_error("libsodium init failed");
-            randombytes_buf(iv.data(), iv.size());
-            ivB64 = crypto::util::b64_encode(std::vector<uint8_t>(iv.begin(), iv.end()));
-            sealer.emplace(key->bytes(), crypto::util::GcmIv(iv.data(), iv.size()));
+            sealOnTheWayIn = true;
         }
         if (!key) throw std::runtime_error("No vault key for key version " + std::to_string(keyVersion));
 
+        // What the object must be: its sealed size in the format its generation names (plaintext: the plain size).
+        const uint64_t expected = head->encrypted ? vh::vault::content::sealedSizeOf(f->size_bytes, ivB64) : f->size_bytes;
+        if (head->content_length && *head->content_length != expected)
+            throw ContentUnavailable(fmt::format("Remote object {} is {} bytes but the index expects {}; sync the vault",
+                                                 f->path.string(), *head->content_length, expected));
+
         // 4. One GET bound to the HEAD's version, streamed into an unnamed file next to the backing path.
         detail::StagedFile staged(f->backing_path);
-        std::vector<uint8_t> sealed;
+        std::optional<vh::vault::content::Sealer> sealer;
+        if (sealOnTheWayIn) {
+            sealer.emplace(*key, keyVersion, encryptionManager->vaultUid(),
+                           f->object_uid ? *f->object_uid : crypto::id::newObjectUid(),
+                           [&](const std::span<const uint8_t> bytes) {
+                               detail::writeAllTo(staged.fd(), bytes, f->backing_path);
+                           });
+            ivB64 = sealer->generation();
+        }
         s3::GetObjectOptions options;
         if (!head->etag.empty()) options.if_match = head->etag;
         options.max_body_bytes = expected;
         const auto result = s3Provider_->streamObject(objectKey, options, [&](const std::span<const uint8_t> bytes) {
-            if (sealer) {
-                sealed.resize(bytes.size());
-                sealer->update(bytes, sealed);
-                detail::writeAllTo(staged.fd(), sealed, f->backing_path);
-            } else {
-                detail::writeAllTo(staged.fd(), bytes, f->backing_path);
-            }
+            if (sealer) sealer->write(bytes);
+            else detail::writeAllTo(staged.fd(), bytes, f->backing_path);
         });
         if (result.body_bytes != expected)
             throw std::runtime_error(fmt::format("Remote object {} returned {} of {} bytes", f->path.string(),
                                                  result.body_bytes, expected));
 
-        // 5. Seal or authenticate the whole message before anything becomes visible.
+        // 5. Seal or authenticate the whole object before anything becomes visible (VHF1: every chunk with its index
+        //    and final flag, the header against this vault, generation and key version; legacy GCM: the tag).
         if (sealer) {
-            const auto tag = sealer->finish();
-            detail::writeAllTo(staged.fd(), tag, f->backing_path);
-        } else if (!crypto::util::gcmVerifyFd(staged.fd(), 0, f->size_bytes, key->bytes(),
-                                              crypto::util::GcmIv(iv.data(), iv.size()))) {
+            sealer->finish();
+        } else if (!vh::vault::content::verifyFd(staged.fd(), f->size_bytes,
+                                             {.vaultUid = encryptionManager->vaultUid(), .generation = ivB64,
+                                              .keyVersion = keyVersion},
+                                             *key)) {
             throw IntegrityError("Remote object failed authentication; nothing was stored: " + f->path.string());
         }
 
@@ -399,7 +413,9 @@ std::vector<uint8_t> CloudEngine::fetchSealedObject(const std::string& objectKey
     const std::string& kOperation = operation;
     if (!s3Provider_) throw std::runtime_error("Cloud engine has no S3 controller");
     const std::filesystem::path path = "/" + objectKey;
-    (void)detail::decodeIv(ivB64, path);  // a malformed IV is refused before anything is fetched
+    // A malformed generation id is refused before anything is fetched.
+    const auto format = detail::formatOf(ivB64, path);
+    if (format == vh::vault::content::Format::Plain) throw std::runtime_error("Invalid remote IV for " + path.string());
 
     auto reservation = reserveRemoteFetch({.path = path, .operation = kOperation, .head_requests = 1,
                                            .get_requests = 1, .download_bytes = storedBytes});
@@ -425,7 +441,7 @@ std::vector<uint8_t> CloudEngine::fetchSealedObject(const std::string& objectKey
             throw ContentUnavailable("Remote object " + objectKey + " is no longer sealed under key version " +
                                      std::to_string(keyVersion) + " as indexed; sync the vault");
         const uint64_t length = head->content_length.value_or(storedBytes);
-        if (length < crypto::util::AES_TAG_SIZE || length > storedBytes)
+        if (!vh::vault::content::plaintextSizeOf(length, format) || length > storedBytes)
             throw ContentUnavailable(fmt::format("Remote object {} is {} bytes but the index expects {}", objectKey,
                                                  length, storedBytes));
 
@@ -504,7 +520,11 @@ std::unique_ptr<PlaintextReader> CloudEngine::openRangedReader(const std::shared
             throw ContentUnavailable("Remote object is in an archive tier and must be restored first: " + f->path.string());
         if (head->etag.empty())
             throw ContentUnavailable("Remote object has no ETag to bind ranged reads to: " + f->path.string());
-        const uint64_t expected = f->size_bytes + (head->encrypted ? crypto::util::AES_TAG_SIZE : 0);
+        const auto remoteIv = head->iv_b64.empty() ? f->encryption_iv : head->iv_b64;
+        const uint64_t expected =
+            head->encrypted && !remoteIv.empty()
+                ? vh::vault::content::sealedSize(f->size_bytes, detail::formatOf(remoteIv, f->path))
+                : f->size_bytes + (head->encrypted ? crypto::util::AES_TAG_SIZE : 0);
         if (head->content_length && *head->content_length != expected)
             throw ContentUnavailable(fmt::format("Remote object {} is {} bytes but the index expects {}; sync the vault",
                                                  f->path.string(), *head->content_length, expected));
@@ -524,8 +544,17 @@ std::unique_ptr<PlaintextReader> CloudEngine::openRangedReader(const std::shared
             if (ivB64.empty() || keyVersion == 0)
                 throw ContentUnavailable("Remote object has no encryption context: " + f->path.string());
             if (!encryptionManager) throw std::runtime_error("Vault has no encryption key loaded");
-            params.iv = detail::decodeIv(ivB64, f->path);
             params.key = encryptionManager->keySnapshot(keyVersion);
+            if (vh::vault::content::isVhf1(ivB64)) {
+                // Authenticated ranged reads (spec 02 §3.7): the header is fetched and checked when the reader
+                // opens; the object size is the catalog's (authenticated) one and must equal the provider's.
+                params.vhf1 = RemoteRangedReader::Params::Vhf1Object{
+                    .binding = {.vaultUid = encryptionManager->vaultUid(), .generation = ivB64,
+                                .keyVersion = keyVersion},
+                    .objectSize = expected};
+            } else {
+                params.iv = detail::decodeIv(ivB64, f->path);
+            }
             // The remote generation: the object's own IV (local and remote IVs differ after a normal download).
             params.generation.iv_b64 = ivB64;
             params.generation.key_version = keyVersion;

@@ -285,7 +285,8 @@ std::string b64_encode(const std::vector<uint8_t>& data) {
 }
 
 std::vector<uint8_t> b64_decode(const std::string& b64) {
-    std::vector<uint8_t> decoded(AES_IV_SIZE);
+    // Any length: GCM IVs (12 bytes) and VHF1 salts (32 bytes) both travel as base64 generation ids.
+    std::vector<uint8_t> decoded(b64.size() / 4 * 3 + 3);
     size_t out_len = 0;
     if (sodium_base642bin(decoded.data(), decoded.size(),
                           b64.c_str(), b64.size(),

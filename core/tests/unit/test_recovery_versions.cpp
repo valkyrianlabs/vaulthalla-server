@@ -56,6 +56,7 @@
 #include "vault/model/APIKey.hpp"
 #include "vault/model/S3Vault.hpp"
 #include "vault/model/Vault.hpp"
+#include "vault/Content.hpp"
 
 #include <gtest/gtest.h>
 #include <paths.h>
@@ -225,8 +226,9 @@ protected:
     static std::string open(const std::shared_ptr<storage::Engine>& engine, const std::vector<uint8_t>& sealed,
                             const std::string& iv, const unsigned int keyVersion) {
         const auto key = engine->encryptionManager->historicalKeySnapshot(keyVersion);
-        const std::vector<uint8_t> raw(key->bytes().begin(), key->bytes().end());
-        return str(crypto::util::decrypt_aes256_gcm(sealed, raw, crypto::util::b64_decode(iv)));
+        return str(vh::vault::content::openBuffer(
+            sealed, {.vaultUid = engine->encryptionManager->vaultUid(), .generation = iv, .keyVersion = keyVersion},
+            *key));
     }
 
     static std::string decryptVersion(const std::shared_ptr<storage::Engine>& engine, const rq::GenerationRow& g) {

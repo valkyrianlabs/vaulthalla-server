@@ -26,8 +26,9 @@ bucket: choosing `off`/`local_snapshots` does not suspend a bucket that is versi
 
 - Blobs: `<backing>/.vh-recovery/<vault mount_point>/<aa>/<storage_name>` (storage_name = 32 `[a-z0-9]`, `aa` its first
   two chars). Outside `backingVaultRoot`, so the rotation sidecar walk (`*.vh-rotate`), `repairAtRest` and size walks
-  never see it. A blob is the file's sealed bytes exactly as they were (AES-256-GCM body‖tag, no header); IV + key
-  version live in `recovery_blob`. Never plaintext.
+  never see it. A blob is the file's sealed bytes exactly as they were (VHF1 for every generation written since #367, legacy
+  AES-256-GCM body‖tag before); the generation id (VHF1 salt or GCM IV) + key version live in `recovery_blob`
+  (`content_format`, migration 126, is generated from the id). Never plaintext.
 - Capturing a generation is zero-copy where possible: every content write in Vaulthalla is sidecar → fsync → row →
   `rename` over the backing path (FUSE seal, `createFile` overwrite, rotation, copy), so the old inode is never written
   again. Retaining = `link(backing, blob)` *before* the rename (fsync blob dir). Deletes link the backing file in too
@@ -225,7 +226,7 @@ bucket: choosing `off`/`local_snapshots` does not suspend a bucket that is versi
 - **Own writes** (`provider::noteOwnWrite`, fired by `CloudEngine::OwnWrite::done()` through `hooks::afterUpstreamWrite`):
   a PUT/COPY response with `x-amz-version-id` upserts an origin `vaulthalla` row (etag, object size, last_modified =
   now, IV/key version/hash/plaintext size from the written generation; sealed iff the generation says so, else
-  object size = plaintext + 16) and supersedes the key's previous latest. No version id (unversioned) → no row.
+  object size = the sealed size of the plaintext in the generation's format, `vault::content`) and supersedes the key's previous latest. No version id (unversioned) → no row.
   Our own DELETE supersedes the key's latest (it is hidden by a marker now) but records no marker: DeleteObject's
   response id isn't surfaced, so the next listing learns the marker. `.vaulthalla/` keys are never indexed.
 - **Write intents carry the ETag**: `OwnWrite::done()` completes the event intent with the stored object's unquoted

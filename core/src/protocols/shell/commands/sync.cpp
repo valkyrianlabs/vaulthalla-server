@@ -17,6 +17,7 @@
 #include "sync/ConflictResolver.hpp"
 #include "usage/include/UsageManager.hpp"
 #include "vault/model/Vault.hpp"
+#include "vault/Content.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -221,7 +222,7 @@ std::string lineDiff(const std::vector<std::string>& a, const std::vector<std::s
 
 std::string diffFor(const CommandCall& call, const conflicts::ConflictView& v) {
     const auto& r = v.record;
-    if (r.local.size_bytes > kDiffMaxBytes || r.remote.size_bytes > kDiffMaxBytes + 16)
+    if (r.local.size_bytes > kDiffMaxBytes || r.remote.size_bytes > vh::vault::content::newSealedSize(kDiffMaxBytes))
         return "Too large for a text diff (limit " + humanBytes(kDiffMaxBytes) + " per side).\n";
     const auto target = conflicts::previewTarget(call.user, r.id);
     std::vector<uint8_t> localBytes;

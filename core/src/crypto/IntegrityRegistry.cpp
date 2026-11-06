@@ -90,6 +90,13 @@ void IntegrityRegistry::record(const IntegrityKey& key, const bool verified) {
     else if (!ticket->failed()) ticket->settle(IntegrityState::Verified);
 }
 
+std::optional<IntegrityState> IntegrityRegistry::peek(const IntegrityKey& key) const {
+    std::scoped_lock lock(mutex_);
+    const auto it = tickets_.find(key.str());
+    if (it == tickets_.end() || !it->second) return std::nullopt;
+    return it->second->state();
+}
+
 IntegrityRegistry::Stats IntegrityRegistry::stats() const {
     std::scoped_lock lock(mutex_);
     return stats_;

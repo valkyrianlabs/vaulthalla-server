@@ -63,6 +63,10 @@ public:
     static void deletePart(const std::string& uploadId, const std::string& fileId, uint64_t offset);
     static void deleteParts(const std::string& uploadId, const std::string& fileId);
     static void setSealed(const std::string& uploadId, const std::string& fileId, uint64_t sealedBytes);
+    // The file's sealing continues under a new generation (VHF1 salt) with this durable prefix (#367: a resumed
+    // sealing never seals an index twice under one salt).
+    static void setSealing(const std::string& uploadId, const std::string& fileId, const std::string& generation,
+                           uint64_t sealedBytes);
     static void setFileState(const std::string& uploadId, const std::string& fileId, const std::string& state);
     static void markCommitted(const std::string& uploadId, const std::string& fileId, uint32_t entryId);
     static void markFailed(const std::string& uploadId, const std::string& fileId, const std::string& code,

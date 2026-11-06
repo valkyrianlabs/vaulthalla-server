@@ -4,6 +4,7 @@
 #include "fs/model/File.hpp"
 #include "log/Registry.hpp"
 #include "recovery/provider/Versions.hpp"
+#include "vault/Content.hpp"
 
 #include <ctime>
 
@@ -11,17 +12,16 @@ namespace vh::recovery::provider {
 
 namespace {
 
-constexpr uint64_t kOwnWriteGcmTagBytes = 16;
-
 // Whether the object this write stored is sealed: the generation says so when it knows (a restore's copy), else the
-// size relation tells (a sealed object is the plaintext plus the 16-byte tag; a plaintext-upstream PUT stores the
-// plaintext size).
+// size relation tells (a sealed object is the sealed size of the plaintext in its generation's format, legacy GCM or
+// VHF1; a plaintext-upstream PUT stores the plaintext size).
 bool ownWriteEncrypted(const hooks::UpstreamWrite& write) {
     const auto& f = write.file;
     if (!f) return false;
     if (f->remote_encrypted) return *f->remote_encrypted && !f->encryption_iv.empty();
     if (f->encryption_iv.empty() || !write.object_size) return false;
-    return *write.object_size == f->size_bytes + kOwnWriteGcmTagBytes;
+    return vh::vault::content::plaintextSizeOfGeneration(*write.object_size, f->encryption_iv) == f->size_bytes &&
+           *write.object_size != f->size_bytes;
 }
 
 }

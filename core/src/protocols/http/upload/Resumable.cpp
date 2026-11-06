@@ -31,7 +31,9 @@
 #include "storage/Engine.hpp"
 #include "storage/PlaintextReader.hpp"
 #include "sync/Controller.hpp"
+#include "vault/Content.hpp"
 #include "vault/EncryptionManager.hpp"
+#include "vault/PrefixSealer.hpp"
 #include "vault/model/Vault.hpp"
 
 #include <fmt/format.h>
@@ -212,10 +214,10 @@ struct HttpError final : std::runtime_error {
     return std::nullopt;
 }
 
-[[nodiscard]] std::vector<uint8_t> randomIv() {
-    std::vector<uint8_t> iv(crypto::util::AES_IV_SIZE);
-    randombytes_buf(iv.data(), iv.size());
-    return iv;
+// Uploads created by this version seal VHF1 (#367); one created before it carries a 12-byte IV and finishes in the
+// legacy format it started in (design/encryption/02 §6.1), with the legacy cursor.
+[[nodiscard]] bool vhf1Sealing(const std::string& generation) {
+    return vh::vault::content::isVhf1(generation);
 }
 
 [[nodiscard]] std::array<uint8_t, crypto::util::AES_IV_SIZE> ivFrom(const std::string& b64) {
@@ -342,10 +344,13 @@ struct StoredPart {
     std::string iv;  // base64, the part's own GCM IV
 };
 
-// The sealing cursor: the file's GCM stream (and the BLAKE2b of its ciphertext) fed in order with the stored parts,
-// written to <ordinal>.sealed. Only the task holding the file's `busy` flag touches it.
+// The sealing cursor, fed in order with the stored parts and written to <ordinal>.sealed. VHF1 (every upload created
+// by this version): a vault::content::PrefixSealer that seals whole chunks as the prefix grows. Legacy (uploads
+// created before #367): the file's GCM stream and the BLAKE2b of its ciphertext. Only the task holding the file's
+// `busy` flag touches it.
 struct Cursor {
     uint64_t fed{0};
+    std::unique_ptr<vh::vault::content::PrefixSealer> vhf1;
     std::unique_ptr<crypto::util::GcmStreamEncryptor> enc;
     crypto_generichash_state hash{};
     Fd fd;
@@ -748,7 +753,7 @@ void failFile(const SessionPtr& s, const uint32_t ordinal, const std::string& co
 
 struct FileKey {
     crypto::SecretKeyPtr key;
-    std::array<uint8_t, crypto::util::AES_IV_SIZE> iv{};
+    std::array<uint8_t, crypto::util::AES_IV_SIZE> iv{};  // legacy uploads only
 };
 
 // The file's key, or a key_rotated failure: the version it was created under must still be the vault's current key.
@@ -761,7 +766,9 @@ struct FileKey {
             failFile(s, ordinal, "key_rotated", "The vault key was rotated during the upload; upload the file again");
             return std::nullopt;
         }
-        return FileKey{.key = em->keySnapshot(keyVersion), .iv = ivFrom(iv)};
+        FileKey out{.key = em->keySnapshot(keyVersion)};
+        if (!vhf1Sealing(iv)) out.iv = ivFrom(iv);
+        return out;
     } catch (const std::exception&) {
         failFile(s, ordinal, "key_rotated", "The vault key was rotated during the upload; upload the file again");
         return std::nullopt;
@@ -809,9 +816,238 @@ void sniff(Cursor& c, const uint64_t at, const uint8_t* plain, const std::size_t
     return c;
 }
 
+[[nodiscard]] std::filesystem::path resaltPath(const std::filesystem::path& sealed) {
+    auto p = sealed;
+    p += ".resalt";
+    return p;
+}
+
+// The part whose range holds plaintext offset `at`, if one does.
+[[nodiscard]] std::optional<std::pair<uint64_t, StoredPart>> partHolding(const UFile& f, const uint64_t at) {
+    auto it = f.parts.upper_bound(at);
+    if (it == f.parts.begin()) return std::nullopt;
+    --it;
+    if (it->first + it->second.length <= at) return std::nullopt;
+    return std::make_pair(it->first, it->second);
+}
+
+// Continues the file's VHF1 sealing under a new salt, keeping its authenticated plaintext [0, keep): the new sealing
+// is written next to the spool file, fsynced, recorded (generation + durable prefix), then renamed over it. A crash
+// in between is settled by openVhf1Cursor (a .resalt file that authenticates under the recorded generation wins).
+void resalt(const SessionPtr& s, const uint32_t ordinal, Cursor& c, const uint64_t keep) {
+    const auto spool = sealedPath(s->id, ordinal);
+    const auto temp = resaltPath(spool);
+    Fd fd(::open(temp.c_str(), O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0600));
+    if (fd.fd < 0) throw std::system_error(errno, std::generic_category(), "creating a re-salted sealing");
+    std::unique_ptr<vh::vault::content::PrefixSealer> next;
+    try {
+        next = c.vhf1->resealed(fd.fd, keep);
+        syncFd(fd.fd, "flushing a re-salted sealing");
+        q::Resumable::setSealing(s->id, s->files[ordinal].id, next->generation(), next->sealed());
+    } catch (...) {
+        removeQuietly(temp);
+        throw;
+    }
+    std::filesystem::rename(temp, spool);
+    syncDir(spool.parent_path());
+    {
+        std::scoped_lock lock(s->m);
+        auto& f = s->files[ordinal];
+        f.iv = next->generation();
+        f.sealed = next->sealed();
+    }
+    log::Registry::http()->info("[ResumableUpload] {} file #{}: sealing continues under a new salt ({} bytes kept)",
+                                s->id, ordinal, keep);
+    c.fd = std::move(fd);
+    c.vhf1 = std::move(next);
+    c.fed = c.vhf1->fed();
+}
+
+// Opens the VHF1 cursor: the durable prefix is authenticated (never re-encrypted); bytes found past it, which a crash
+// left without a record, make the sealing continue under a new salt so no chunk index is sealed twice under one salt.
+[[nodiscard]] std::unique_ptr<Cursor> openVhf1Cursor(const SessionPtr& s, const uint32_t ordinal, const FileKey& key,
+                                                     const std::shared_ptr<storage::Engine>& engine,
+                                                     const std::string& generation, const uint32_t keyVersion,
+                                                     const uint64_t size, const uint64_t durable) {
+    const auto spool = sealedPath(s->id, ordinal);
+    const vh::vault::content::Binding binding{.vaultUid = engine->encryptionManager->vaultUid(),
+                                              .generation = generation, .keyVersion = keyVersion};
+    // A re-salt that was recorded but not renamed into place yet.
+    if (const auto temp = resaltPath(spool); std::filesystem::exists(temp)) {
+        bool current = false;
+        {
+            Fd t(::open(temp.c_str(), O_RDONLY | O_CLOEXEC));
+            if (t.fd >= 0) {
+                try {
+                    vh::vault::content::PrefixReader probe(t.fd, binding, key.key, size);
+                    current = true;
+                } catch (const storage::IntegrityError&) {
+                }
+            }
+        }
+        if (current) {
+            std::filesystem::rename(temp, spool);
+            syncDir(spool.parent_path());
+        } else {
+            removeQuietly(temp);
+        }
+    }
+
+    auto c = std::make_unique<Cursor>();
+    c->fd = Fd(::open(spool.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600));
+    if (c->fd.fd < 0) throw std::system_error(errno, std::generic_category(), "opening the sealed spool file");
+    struct stat st{};
+    if (::fstat(c->fd.fd, &st) != 0) throw std::system_error(errno, std::generic_category(), "stat sealed spool");
+    // Once committed, the sealed file is a vault backing file (a hard link): never write it again.
+    if (st.st_nlink > 1) throw storage::IntegrityError("The sealed spool file is linked elsewhere");
+    c->vhf1 = vh::vault::content::PrefixSealer::resume(
+        {.fd = c->fd.fd, .binding = binding, .key = key.key, .plaintextSize = size}, durable);
+    if (c->vhf1->tail()) resalt(s, ordinal, *c, durable);
+    c->fed = c->vhf1->fed();
+    crypto_generichash_init(&c->hash, nullptr, 0, crypto_generichash_BYTES);
+    if (c->fed > 0) {
+        // The MIME type is sniffed from the first plaintext bytes: read them back authenticated.
+        vh::vault::content::PrefixReader head(c->fd.fd, {.vaultUid = binding.vaultUid,
+                                                         .generation = c->vhf1->generation(), .keyVersion = keyVersion},
+                                              key.key, size);
+        std::vector<uint8_t> first(static_cast<std::size_t>(std::min<uint64_t>(kSniffBytes, c->fed)));
+        head.read(0, first);
+        sniff(*c, 0, first.data(), first.size());
+        sodium_memzero(first.data(), first.size());
+    }
+    return c;
+}
+
+// The VHF1 sealing step: every stored part that holds the next byte of the prefix is fed (bytes the sealing already
+// decided must match; a part that differs makes it continue under a new salt from that part's start), whole chunks
+// are sealed as they complete, and the durable prefix is checkpointed. Returns true when the file is ready to commit.
+[[nodiscard]] bool sealStepVhf1(const SessionPtr& s, const uint32_t ordinal) {
+    std::string id = s->id, generation;
+    uint32_t keyVersion{};
+    uint64_t size{}, durable{};
+    {
+        std::scoped_lock lock(s->m);
+        const auto& f = s->files[ordinal];
+        generation = f.iv;
+        keyVersion = f.keyVersion;
+        size = f.size;
+        durable = f.sealed;
+    }
+    const auto engine = engineFor(s->vaultId);
+    const auto key = fileKeyOrFail(s, ordinal, engine, keyVersion, generation);
+    if (!key) return false;
+
+    std::unique_ptr<Cursor> cursor;
+    {
+        std::scoped_lock lock(s->m);
+        cursor = std::move(s->files[ordinal].cursor);
+    }
+    if (!cursor) cursor = openVhf1Cursor(s, ordinal, *key, engine, generation, keyVersion, size, durable);
+
+    const auto& fileId = s->files[ordinal].id;
+    std::vector<uint8_t> ct(kIoChunk), plain(kIoChunk);
+    std::vector<std::pair<uint64_t, uint64_t>> consumed;  // fully fed parts, removed once the durable prefix covers them
+    uint64_t unsynced = 0;
+    const auto checkpoint = [&] {
+        if (consumed.empty() && unsynced == 0) return;
+        syncFd(cursor->fd.fd, "flushing the sealed spool file");
+        const auto prefix = cursor->vhf1->sealed();
+        q::Resumable::setSealed(id, fileId, prefix);
+        {
+            std::scoped_lock lock(s->m);
+            s->files[ordinal].sealed = prefix;
+        }
+        std::erase_if(consumed, [&](const auto& part) {
+            if (part.first + part.second > prefix) return false;
+            removeQuietly(partPath(id, ordinal, part.first));
+            return true;
+        });
+        unsynced = 0;
+    };
+
+    for (;;) {
+        std::optional<std::pair<uint64_t, StoredPart>> next;
+        {
+            std::scoped_lock lock(s->m);
+            if (s->removed) return false;
+            if (workersStopping()) break;  // shutting down: checkpoint what is sealed, resume after the restart
+            if (cursor->vhf1->fed() < size) next = partHolding(s->files[ordinal], cursor->vhf1->fed());
+        }
+        if (!next) break;
+        const auto [offset, part] = *next;
+        const auto partFile = partPath(id, ordinal, offset);
+        Fd in(::open(partFile.c_str(), O_RDONLY | O_CLOEXEC));
+        if (in.fd < 0) throw std::system_error(errno, std::generic_category(), "opening a stored part");
+        const auto partIv = ivFrom(part.iv);
+        crypto::util::GcmStreamDecryptor dec(key->key->bytes(), partIv);
+        bool diverged = false;
+        for (uint64_t pos = 0; pos < part.length;) {
+            const auto n = static_cast<std::size_t>(std::min<uint64_t>(kIoChunk, part.length - pos));
+            readExact(in.fd, ct.data(), n, pos);
+            dec.update({ct.data(), n}, {plain.data(), n});
+            sniff(*cursor, offset + pos, plain.data(), n);
+            if (cursor->vhf1->feed(offset + pos, {plain.data(), n}) ==
+                vh::vault::content::PrefixSealer::Fed::Diverged) {
+                diverged = true;
+                break;
+            }
+            pos += n;
+        }
+        sodium_memzero(plain.data(), plain.size());
+        if (diverged) {
+            // The stored bytes for an index this sealing already sealed changed: never seal that index again under
+            // this salt. The prefix before this part is kept; the part is fed again under the new salt.
+            resalt(s, ordinal, *cursor, offset);
+            continue;
+        }
+        std::array<uint8_t, crypto::util::AES_TAG_SIZE> tag{};
+        readExact(in.fd, tag.data(), tag.size(), part.length);
+        if (!dec.finish(tag)) {
+            failFile(s, ordinal, "integrity", "A stored part failed its integrity check");
+            return false;
+        }
+        cursor->fed = cursor->vhf1->fed();
+        consumed.emplace_back(offset, part.length);
+        unsynced += part.length;
+        if (unsynced >= kSealCheckpointBytes) checkpoint();
+    }
+
+    if (!cursor->vhf1->complete()) {
+        checkpoint();
+        std::scoped_lock lock(s->m);
+        s->files[ordinal].cursor = std::move(cursor);
+        return false;
+    }
+
+    syncFd(cursor->fd.fd, "flushing the sealed spool file");
+    const auto contentHash = cursor->vhf1->contentHash();
+    cursor->fd.reset();
+    q::Resumable::setSealed(id, fileId, size);
+    q::Resumable::setFileState(id, fileId, "committing");
+    {
+        std::scoped_lock lock(s->m);
+        auto& f = s->files[ordinal];
+        f.sealed = size;
+        f.contentHash = contentHash;
+        if (cursor->mime) f.clientMime = cursor->mime;  // the sniffed type wins over the client's
+        if (f.state == FileState::Receiving || f.state == FileState::Sealing) f.state = FileState::Committing;
+    }
+    for (const auto& [offset, _] : consumed) removeQuietly(partPath(id, ordinal, offset));
+    s->cv.notify_all();
+    return true;
+}
+
 // Feeds every stored part that continues the sealed prefix, checkpoints, and (once the whole file is fed) finishes
 // the tag. Returns true when the file is ready to commit.
 [[nodiscard]] bool sealStep(const SessionPtr& s, const uint32_t ordinal) {
+    {
+        std::string generation;
+        {
+            std::scoped_lock lock(s->m);
+            generation = s->files[ordinal].iv;
+        }
+        if (vhf1Sealing(generation)) return sealStepVhf1(s, ordinal);
+    }
     std::string id = s->id, iv;
     uint32_t keyVersion{};
     uint64_t size{}, durable{};
@@ -1000,7 +1236,7 @@ void commitFile(const SessionPtr& s, const uint32_t ordinal) {
     if (plan.size > 0) {
         std::error_code ec;
         const auto onDisk = std::filesystem::file_size(spool, ec);
-        if (ec || onDisk != plan.size + crypto::util::AES_TAG_SIZE) {
+        if (ec || onDisk != vh::vault::content::sealedSizeOf(plan.size, plan.iv)) {
             failFile(s, ordinal, "internal", "The sealed upload is missing from the spool");
             return;
         }
@@ -1440,7 +1676,9 @@ struct NewFile {
             nf.row.key_version = 0;
             nf.row.state = "committing";
         } else {
-            nf.row.encryption_iv = crypto::util::b64_encode(randomIv());
+            // The sealing's VHF1 salt (= the new generation's id), fixed for the upload unless a resumed sealing has
+            // to continue under a new one.
+            nf.row.encryption_iv = vh::vault::content::generationOf(crypto::vhf1::freshSalt());
             nf.row.key_version = current.version;
         }
     }
@@ -1634,6 +1872,8 @@ struct Part::Impl {
     crypto::SecretKeyPtr key;
     std::array<uint8_t, crypto::util::AES_IV_SIZE> iv{};           // write: this attempt's IV; verify: the stored one's
     std::unique_ptr<crypto::util::GcmStreamEncryptor> enc;
+    // verify against a VHF1 sealed spool file: authenticated chunk reads (no CTR keystream on VHF1 bytes)
+    std::unique_ptr<vh::vault::content::PrefixReader> sealedReader;
     uint64_t sourceBase{};  // verify: where the stored bytes start (0 in a part file, the offset in the sealed file)
     std::unique_ptr<crypto::util::EvpDigest> sha;
     std::optional<std::array<unsigned char, 32>> expectedDigest;
@@ -1682,9 +1922,13 @@ void Part::write(const void* data, const std::size_t size) {
             if (!p.mismatch) {
                 p.buf.resize(n);
                 p.cmp.resize(n);
-                readExact(p.fd.fd, p.buf.data(), n, p.sourceBase + p.received);
-                crypto::util::gcmCtrDecryptAt(p.key->bytes(), p.iv, p.sourceBase + p.received, {p.buf.data(), n},
-                                              {p.cmp.data(), n});
+                if (p.sealedReader) {
+                    p.sealedReader->read(p.sourceBase + p.received, {p.cmp.data(), n});
+                } else {
+                    readExact(p.fd.fd, p.buf.data(), n, p.sourceBase + p.received);
+                    crypto::util::gcmCtrDecryptAt(p.key->bytes(), p.iv, p.sourceBase + p.received, {p.buf.data(), n},
+                                                  {p.cmp.data(), n});
+                }
                 if (sodium_memcmp(p.cmp.data(), in + done, n) != 0) p.mismatch = true;
                 sodium_memzero(p.cmp.data(), p.cmp.size());
             }
@@ -1855,7 +2099,8 @@ PartBegun beginPart(const request& req, const std::optional<uint64_t> contentLen
                 for (const auto& [a, b] : f->inflight)
                     if (*offset < b && a < end)
                         throw HttpError(status::conflict, "part_overlap", "That range is being received right now");
-                storedInSealed = *offset < f->sealed;  // its part file may be gone: compare with the sealed file
+                // Its part file is gone once the durable sealed prefix covers it: compare with the sealed file.
+                storedInSealed = end <= f->sealed;
             }
             if (s.inFlight >= limits.maxInFlight) {
                 HttpError e(status::too_many_requests, "too_many_parts_in_flight",
@@ -1894,8 +2139,22 @@ PartBegun beginPart(const request& req, const std::optional<uint64_t> contentLen
             impl->verify = true;
             if (storedInSealed) {
                 impl->fd = Fd(::open(sealedPath(s.id, impl->ordinal).c_str(), O_RDONLY | O_CLOEXEC));
-                impl->iv = ivFrom(fileIv);
                 impl->sourceBase = *offset;
+                if (vhf1Sealing(fileIv)) {
+                    uint64_t fileSize{};
+                    {
+                        std::scoped_lock lock(s.m);
+                        fileSize = s.files[impl->ordinal].size;
+                    }
+                    if (impl->fd.fd >= 0)
+                        impl->sealedReader = std::make_unique<vh::vault::content::PrefixReader>(
+                            impl->fd.fd,
+                            vh::vault::content::Binding{.vaultUid = engine->encryptionManager->vaultUid(),
+                                                        .generation = fileIv, .keyVersion = keyVersion},
+                            impl->key, fileSize);
+                } else {
+                    impl->iv = ivFrom(fileIv);
+                }
             } else {
                 impl->fd = Fd(::open(partPath(s.id, impl->ordinal, *offset).c_str(), O_RDONLY | O_CLOEXEC));
                 impl->iv = ivFrom(stored->iv);
@@ -2028,8 +2287,10 @@ void Service::recover() {
         for (const auto& part : l.parts) {
             auto* f = fileById(*s, part.file_id);
             if (!f || terminal(f->state)) continue;
-            // A part below the sealed prefix lives on in the sealed file; one above it must still be in the spool.
-            if (part.offset >= f->sealed && !std::filesystem::exists(partPath(s->id, f->ordinal, part.offset))) {
+            // A part the durable sealed prefix covers lives on in the sealed file; any other (VHF1: also one the prefix
+            // ends inside) must still be in the spool.
+            if (part.offset + part.length > f->sealed &&
+                !std::filesystem::exists(partPath(s->id, f->ordinal, part.offset))) {
                 try {
                     q::Resumable::deletePart(s->id, part.file_id, part.offset);
                 } catch (const std::exception&) {
@@ -2060,7 +2321,7 @@ void Service::recover() {
             for (const auto& f : s.files) {
                 if (terminal(f.state)) continue;
                 const auto prefix = std::to_string(f.ordinal) + ".";
-                if (file == prefix + "sealed") keep = true;
+                if (file == prefix + "sealed" || file == prefix + "sealed.resalt") keep = true;
                 for (const auto& [offset, _] : f.parts)
                     if (file == prefix + std::to_string(offset) + ".part") keep = true;
             }
@@ -2077,7 +2338,7 @@ void Service::recover() {
         for (uint32_t i = 0; i < s->files.size(); ++i) {
             const auto st = s->files[i].state;
             if (st == FileState::Sealing || st == FileState::Committing ||
-                (st == FileState::Receiving && s->files[i].parts.contains(s->files[i].sealed))) {
+                (st == FileState::Receiving && partHolding(s->files[i], s->files[i].sealed))) {
                 enqueue(s, i);
                 ++resumed;
             }

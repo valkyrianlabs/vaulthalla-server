@@ -19,6 +19,7 @@
 #include "vault/EncryptionManager.hpp"
 #include "vault/model/S3Vault.hpp"
 #include "vault/model/Vault.hpp"
+#include "vault/Content.hpp"
 
 #include <sodium.h>
 
@@ -50,15 +51,13 @@ bool fileAuthenticatesWith(const vault::EncryptionManager& em, const std::filesy
     if (state.key_version != em.get_key_version())
         return authenticatesInMemory(em, fs::ops::readFileToVector(path), state);
 
-    // Current key: stream it, nothing but a wiped scratch buffer ever holds plaintext.
-    auto key = em.get_key("KeyRotation::verify");
+    // Current key: stream it (either format), nothing but a wiped scratch buffer ever holds plaintext.
     try {
-        const bool ok = crypto::util::aes256_gcm_file_authenticates(path, key, crypto::util::b64_decode(state.iv_b64));
-        sodium_memzero(key.data(), key.size());
-        return ok;
-    } catch (...) {
-        sodium_memzero(key.data(), key.size());
-        throw;
+        return vh::vault::content::verifyWholeFile(
+            path, {.vaultUid = em.vaultUid(), .generation = state.iv_b64, .keyVersion = state.key_version},
+            *em.keySnapshot(state.key_version));
+    } catch (const std::invalid_argument&) {
+        return false;  // a generation id that is neither an IV nor a salt
     }
 }
 

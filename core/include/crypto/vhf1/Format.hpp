@@ -185,10 +185,13 @@ private:
 
 // What the caller knows about the object it is reading (the DB row or the manifest entry), checked in step 2 of
 // §3.6. generation, when set, is the salt the caller expects (stale reads and rollbacks fail GenerationMismatch).
+// objectUid is nullopt only when the caller doesn't hold the uid the object was sealed under (a path_v0 row indexed
+// from a bucket listing before its object was read); the generation then binds the object to the row on its own
+// (a 256-bit salt names exactly one sealing). An expectation with neither is refused (std::invalid_argument).
 struct Expectation {
     Kind kind{Kind::FileContent};
     Uid vaultUid{};
-    Uid objectUid{};
+    std::optional<Uid> objectUid{};
     std::optional<Salt> generation;
 };
 

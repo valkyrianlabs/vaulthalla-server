@@ -17,6 +17,7 @@
 #include "vault/APIKeyManager.hpp"
 #include "vault/model/APIKey.hpp"
 #include "vault/model/S3Vault.hpp"
+#include "vault/Content.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -157,7 +158,7 @@ TEST_F(RecoverySnapshotsTest, TwoSnapshotsOfAnUnchangedFileShareOneBlob) {
     write("/same.bin", std::string(4096, 's'));
     const auto first = snapshot("/same.bin");
     const auto physical = store::physicalBytes(vaultId(), std::chrono::milliseconds(0));
-    EXPECT_EQ(first.new_bytes, 4096u + 16u);
+    EXPECT_EQ(first.new_bytes, vh::vault::content::newSealedSize(4096));
     const auto second = snapshot("/same.bin");
     EXPECT_EQ(second.new_bytes, 0u) << "the generation is already retained";
     EXPECT_EQ(store::physicalBytes(vaultId(), std::chrono::milliseconds(0)), physical);
@@ -232,7 +233,8 @@ TEST_F(RecoverySnapshotsTest, AZeroCopySnapshotCostsNoQuotaUntilTheLiveFileIsRep
     engine->vault->quota = quota;
     write("/q/one.bin", "replaced");   // the snapshot now holds the only copy of the old bytes
     store::invalidateUsage(vaultId());
-    EXPECT_EQ(engine->getRecoverySize(), 10016u) << "the retained bytes are charged after the overwrite";
+    EXPECT_EQ(engine->getRecoverySize(), vh::vault::content::newSealedSize(10000))
+        << "the retained bytes are charged after the overwrite";
 }
 
 TEST_F(RecoverySnapshotsTest, ACrashMidSnapshotIsMarkedFailedAndReleasedAtStartup) {

@@ -19,6 +19,8 @@
 #include "fs/model/File.hpp"
 #include "identities/User.hpp"
 #include "storage/GcmFileReader.hpp"
+#include "storage/Vhf1FileReader.hpp"
+#include "vault/Content.hpp"
 #include "fs/cache/Registry.hpp"
 #include "runtime/Deps.hpp"
 #include "crypto/util/encrypt.hpp"
@@ -45,7 +47,7 @@ namespace vh::storage {
         : vault(vault),
           sync(db::query::sync::Policy::getSync(vault->id)),
           paths(std::make_shared<Path>(makeAbsolute(vault->effectiveFuseName()), vault->mount_point)),
-          encryptionManager(std::make_shared<vault::EncryptionManager>(vault->id)) {
+          encryptionManager(std::make_shared<vault::EncryptionManager>(vault->id, vault->uid)) {
         if (!db::query::vault::Vault::vaultRootExists(vault->id)) Filesystem::mkVault(
             paths->absRelToRoot(paths->vaultRoot, PathType::FUSE_ROOT), vault->id);
         if (!fs::exists(paths->cacheRoot)) fs::create_directories(paths->cacheRoot);
@@ -113,6 +115,21 @@ namespace vh::storage {
 
     std::unique_ptr<PlaintextReader> Engine::openLocalReader(const std::shared_ptr<File> &f,
                                                              const ReaderOptions &options) const {
+        if (vh::vault::content::isVhf1(f->encryption_iv)) {
+            // Authenticated per chunk: no GCM CTR keystream and no optimistic serving (spec 02 §3.7).
+            if (!encryptionManager) throw std::runtime_error("Vault has no encryption key loaded");
+            Vhf1FileReader::Params params;
+            params.path = f->backing_path;
+            params.plaintextSize = f->size_bytes;
+            params.generation = generationOf(*f);
+            if (vault) params.generation.vault_id = vault->id;
+            params.integrityDomain = "file:" + std::to_string(params.generation.vault_id) + ":" + std::to_string(f->id);
+            params.binding = {.vaultUid = encryptionManager->vaultUid(), .generation = f->encryption_iv,
+                              .keyVersion = f->encrypted_with_key_version};
+            params.key = encryptionManager->keySnapshot(f->encrypted_with_key_version);
+            return std::make_unique<Vhf1FileReader>(std::move(params));
+        }
+
         GcmFileReader::Params params;
         params.path = f->backing_path;
         params.plaintextSize = f->size_bytes;

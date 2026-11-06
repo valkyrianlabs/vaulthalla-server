@@ -161,6 +161,15 @@ public:
     std::atomic<bool> blockHeads{false};   // getHeadObject blocks until released or the thread's HTTP cancellation
     mutable std::atomic<bool> headEntered{false};
     std::atomic<bool> failPuts{false};     // uploads throw before metering
+    // The next n PUTs / multipart completes take effect, then fail as if the response was lost on the way back
+    // (the object exists; the caller sees an error).
+    mutable std::atomic<unsigned> loseResponses{0};
+
+    // Multipart uploads initiated and neither completed nor aborted.
+    [[nodiscard]] std::size_t openUploads() const {
+        std::scoped_lock lock(mutex_);
+        return uploads_.size();
+    }
 
     // ---- seeding and inspection (never metered) ------------------------------------------------------------------
 
@@ -313,6 +322,7 @@ public:
         uploads_.erase(it);
         const auto& written = writeLocked(key.string(), std::move(v));
         recordPutOutcomeForTesting({.etag = written.etag, .version_id = outcomeIdLocked(written)});
+        loseResponseIfAsked();
     }
 
     void abortMultipartUpload(const std::filesystem::path&, const std::string& uploadId) const override {
@@ -821,6 +831,13 @@ private:
         v.storage_class = storageClassOf(options);
         const auto& written = writeLocked(key, std::move(v));
         recordPutOutcomeForTesting({.etag = written.etag, .version_id = outcomeIdLocked(written)});
+        loseResponseIfAsked();
+    }
+
+    void loseResponseIfAsked() const {
+        auto n = loseResponses.load();
+        while (n > 0 && !loseResponses.compare_exchange_weak(n, n - 1)) {}
+        if (n > 0) throw std::runtime_error("S3 request failed: connection reset after the request was applied (test)");
     }
 
     void replaceMetadata(const std::string& key, const std::unordered_map<std::string, std::string>& meta,
