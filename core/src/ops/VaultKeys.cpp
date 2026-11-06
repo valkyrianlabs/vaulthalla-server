@@ -1,5 +1,8 @@
 #include "ops/VaultKeys.hpp"
 
+#include "crypto/id/ObjectUid.hpp"
+#include "crypto/recovery/Kev1.hpp"
+#include "crypto/recovery/Kit.hpp"
 #include "crypto/secrets/KeyProvider.hpp"
 #include "crypto/SecretBytes.hpp"
 #include "crypto/secrets/Dependents.hpp"
@@ -9,9 +12,13 @@
 #include "fs/model/File.hpp"
 #include "db/encoding/timestamp.hpp"
 #include "db/query/vault/Deletion.hpp"
+#include "db/query/device/Device.hpp"
+#include "db/query/sync/Manifest.hpp"
 #include "db/query/vault/Key.hpp"
+#include "db/query/vault/RecoveryGrants.hpp"
 #include "db/query/vault/Vault.hpp"
 #include "identities/User.hpp"
+#include "audit/Trail.hpp"
 #include "log/Registry.hpp"
 #include "ops/Vaults.hpp"
 #include "rbac/permission/admin/Keys.hpp"
@@ -20,12 +27,15 @@
 #include "storage/Engine.hpp"
 #include "storage/Manager.hpp"
 #include "storage/PlaintextReader.hpp"
+#include "sync/manifest/Objects.hpp"
+#include "sync/manifest/Store.hpp"
 #include "sync/rotation/Rotation.hpp"
 #include "sync/rotation/Runtime.hpp"
 #include "vault/EncryptionManager.hpp"
 #include "vault/KeyAttestation.hpp"
 #include "vault/KeyCheck.hpp"
 #include "vault/Master.hpp"
+#include "vault/RecoveryEnvelopes.hpp"
 #include "vault/model/APIKey.hpp"
 #include "vault/model/Deletion.hpp"
 #include "vault/model/Key.hpp"
@@ -277,7 +287,9 @@ std::optional<std::string> checkOf(const Source& s, const unsigned int version, 
 
 std::optional<KeyAttestationInfo> attestationInfoOf(const std::optional<unsigned int>& keyId, const std::vector<uint8_t>& sig) {
     if (!keyId || sig.empty()) return std::nullopt;
-    return KeyAttestationInfo{.key_id = *keyId, .signature = crypto::util::b64_encode(sig)};
+    KeyAttestationInfo out{.key_id = *keyId, .signature = crypto::util::b64_encode(sig), .public_key = std::nullopt};
+    if (const auto pk = KeyQ::attestationPublicKey(*keyId)) out.public_key = crypto::util::b64_encode(*pk);
+    return out;
 }
 
 // The version's sealed row as stored now (a backfill may have written its provenance since the Source was read).
@@ -366,6 +378,23 @@ KeyStatus statusOf(const Source& s, Unsealer& unsealer) {
             }
     }
     out.key_available = !out.unavailable_reason.has_value();
+
+    // What a recovery kit pins (spec 03 §5.3), and D2's verdict (§5.5).
+    out.node_id = db::query::device::Devices::nodeId();
+    for (const auto& k : KeyQ::attestationKeys())
+        out.attestation_public_keys.push_back({.key_id = k.id, .public_key = crypto::util::b64_encode(k.public_key),
+                                               .retired_at = k.retired_at});
+    if (!s.deleted) {
+        if (const auto vault = db::query::vault::Vault::getVault(s.vault_id); vault && vault->uid)
+            out.vault_uid = crypto::id::toBase32(*vault->uid);
+        if (const auto state = db::query::sync::Manifest::state(s.vault_id); state.epoch && state.root_sha256)
+            out.checkpoint = ManifestCheckpoint{.epoch = *state.epoch, .root_sha256 = *state.root_sha256};
+        std::vector<unsigned int> needed;
+        for (const auto& n : out.needed_versions) needed.push_back(n.version);
+        out.recovery = recoveryMaterialOf(s.vault_id, needed, s.current);
+    } else {
+        out.recovery.state = vault::envelopes::kMaterialNotRequired;
+    }
     return out;
 }
 
@@ -468,7 +497,9 @@ std::vector<KeyStatus> status(const Actor& actor, const std::optional<unsigned i
 namespace {
 nlohmann::json attestationJson(const std::optional<KeyAttestationInfo>& a) {
     if (!a) return nullptr;
-    return {{"key_id", a->key_id}, {"signature", a->signature}};
+    nlohmann::json out{{"key_id", a->key_id}, {"signature", a->signature}};
+    if (a->public_key) out["public_key"] = *a->public_key;
+    return out;
 }
 }
 
@@ -482,6 +513,9 @@ nlohmann::json toJson(const KeyStatus& s) {
                           {"key_check", n.key_check ? nlohmann::json(*n.key_check) : nlohmann::json(nullptr)},
                           {"reason", to_string(n.reason)},
                           {"attestation", attestationJson(n.attestation)}});
+    auto keys = nlohmann::json::array();
+    for (const auto& k : s.attestation_public_keys)
+        keys.push_back({{"key_id", k.key_id}, {"public_key", k.public_key}, {"retired_at", time(k.retired_at)}});
     return {{"vault_id", s.vault_id},
             {"vault_name", s.vault_name},
             {"deleted", s.deleted},
@@ -497,7 +531,35 @@ nlohmann::json toJson(const KeyStatus& s) {
             {"needed_versions", std::move(needed)},
             {"missing_versions", s.missing_versions},
             {"attestation", attestationJson(s.attestation)},
-            {"last_salvage", s.last_salvage ? toJson(*s.last_salvage) : nlohmann::json(nullptr)}};
+            {"last_salvage", s.last_salvage ? toJson(*s.last_salvage) : nlohmann::json(nullptr)},
+            {"vault_uid", s.vault_uid ? nlohmann::json(*s.vault_uid) : nlohmann::json(nullptr)},
+            {"node_id", s.node_id},
+            {"attestation_public_keys", std::move(keys)},
+            {"checkpoint", s.checkpoint ? nlohmann::json{{"epoch", s.checkpoint->epoch},
+                                                         {"root_sha256", s.checkpoint->root_sha256}}
+                                        : nlohmann::json(nullptr)},
+            {"recovery", toJson(s.recovery)}};
+}
+
+RecoveryMaterial recoveryMaterialOf(const unsigned int vaultId, const std::vector<unsigned int>& needed,
+                                    const unsigned int current) {
+    const auto m = needed.empty() ? vault::envelopes::material(vaultId)
+                                  : vault::envelopes::material(vaultId, needed, current);
+    RecoveryMaterial out{.required = m.required, .state = m.state, .recipients = m.recipients,
+                         .uncovered_versions = m.uncovered, .export_current = m.export_current,
+                         .rotation_needed = m.rotation_needed, .detail = std::nullopt};
+    if (!m.detail.empty()) out.detail = m.detail;
+    return out;
+}
+
+nlohmann::json toJson(const RecoveryMaterial& m) {
+    return {{"required", m.required},
+            {"state", m.state},
+            {"recipients", m.recipients},
+            {"uncovered_versions", m.uncovered_versions},
+            {"export_current", m.export_current},
+            {"rotation_needed", m.rotation_needed},
+            {"detail", m.detail ? nlohmann::json(*m.detail) : nlohmann::json(nullptr)}};
 }
 
 VaultExport exportVault(const Actor& actor, const unsigned int vaultId, const Channel channel) {
@@ -614,6 +676,7 @@ struct Candidate {
     std::optional<std::string> backup_check{};
     std::optional<vault::attestation::Attestation> attestation{};
     std::optional<std::string> attestation_problem{};  // present but malformed
+    std::optional<std::vector<uint8_t>> attestation_public_key{};  // the export names its signing key's public key
 };
 
 std::optional<std::vector<uint8_t>> decodeKey(const nlohmann::json& v) {
@@ -653,6 +716,14 @@ void parseAttestation(const nlohmann::json* field, Candidate& c) {
     if (!sig || sig->size() != vault::attestation::kSignatureSize) {
         c.attestation_problem = "the backup's attestation signature is not 64 bytes of base64";
         return;
+    }
+    if (field->contains("public_key") && !field->at("public_key").is_null()) {
+        auto pk = decodeKey(field->at("public_key"));
+        if (!pk || pk->size() != vault::attestation::kPublicKeySize) {
+            c.attestation_problem = "the backup's attestation public key is not base64 of 32 bytes";
+            return;
+        }
+        c.attestation_public_key = std::move(*pk);
     }
     c.attestation = vault::attestation::Attestation{.key_id = field->at("key_id").get<unsigned int>(),
                                                     .signature = std::move(*sig)};
@@ -778,6 +849,152 @@ ImportTarget importTarget(const Actor& actor, const unsigned int vaultId) {
     if (!t.current || *t.current == 0)
         throw Conflict("vault '" + t.name + "' has no key record to restore into");
     return t;
+}
+
+// ---- recovery kit (spec 03 §5.6): the vault's KEV1 envelopes, unwrapped with the kit's seed, as import candidates.
+//
+// The bucket is untrusted: anyone who can write to it can wrap a key of their own to the recipient's public key. So an
+// envelope proves nothing about provenance; each version goes through the import's recover rules with the attestation
+// this node recorded for it (the vault's rows, else the manifest root's key history, which an opaque_v1 vault's own
+// keys authenticate). An unwrapped key that isn't the one the records name for its version is ignored, never imported.
+
+bool sameKey(const crypto::SecretKey& a, const crypto::SecretKey& b);
+
+constexpr std::size_t kMaxKitEnvelopes = 4096;
+constexpr uint64_t kMaxEnvelopeBytes = 1024;
+
+// The recorded rows of a version (current, retired, a deleted vault's copy).
+std::vector<KeyRecord> recordedRows(const ImportTarget& t, const unsigned int version) {
+    std::vector<KeyRecord> out;
+    if (t.current_row && t.current_row->version == version) out.push_back(t.current_row);
+    if (const auto it = t.retired.find(version); it != t.retired.end() && it->second) out.push_back(it->second);
+    if (const auto it = t.copies.find(version); it != t.copies.end() && it->second) out.push_back(it->second);
+    return out;
+}
+
+// The manifest root's attestations by version (opaque_v1 vaults), opened with the unwrapped keys. Empty when there is
+// no root or it doesn't open.
+std::map<unsigned int, vault::attestation::Attestation>
+rootAttestations(sync::manifest::ObjectStore& store, const crypto::id::ObjectUid& uid,
+                 const std::map<unsigned int, crypto::SecretKeyPtr>& keys) {
+    std::map<unsigned int, vault::attestation::Attestation> out;
+    try {
+        const auto obj = store.get(std::string(sync::manifest::kRootKey));
+        if (!obj) return out;
+        const auto root = sync::manifest::openRoot(obj->bytes, uid, [&](const uint32_t v) -> crypto::SecretKeyPtr {
+            const auto it = keys.find(v);
+            return it == keys.end() ? nullptr : it->second;
+        });
+        for (const auto& k : root.keys) {
+            if (!k.attestation) continue;
+            auto sig = decodeKey(nlohmann::json(k.attestation->signature));
+            if (!sig || sig->size() != vault::attestation::kSignatureSize) continue;
+            out[k.version] = {.key_id = k.attestation->key_id, .signature = std::move(*sig)};
+        }
+    } catch (const std::exception& e) {
+        log::Registry::crypto()->info("[ops::vault_keys] vault: the manifest root did not open with the recovered "
+                                      "keys ({}); using the database's attestations only", e.what());
+    }
+    return out;
+}
+
+std::vector<Candidate> candidatesFromKit(const nlohmann::json& doc, const ImportTarget& t, KitImportReport& report) {
+    if (t.deleted)
+        throw Conflict("vault '" + t.name + "' is deleted: restore it (vh vault restore) before importing its keys from a "
+                       "recovery kit");
+    std::optional<crypto::recovery::Kit> kit;
+    try {
+        kit.emplace(crypto::recovery::parseKit(doc));
+    } catch (const crypto::recovery::KitError& e) {
+        throw Invalid(e.what());
+    }
+    const auto vault = db::query::vault::Vault::getVault(t.vault_id);
+    if (!vault || !vault->uid) throw Conflict("vault '" + t.name + "' has no uid");
+    const auto& uid = *vault->uid;
+    if (!kit->vaults.empty() && !kit->find(uid))
+        throw Invalid("the recovery kit does not list vault '" + t.name + "' (uid " + crypto::id::toBase32(uid) +
+                      "): it is another vault's kit; nothing was written");
+
+    std::shared_ptr<sync::manifest::ObjectStore> store;
+    std::vector<sync::manifest::ListedObject> listed;
+    try {
+        store = vault::envelopes::storeFor(t.vault_id);
+        listed = store->list(std::string(crypto::kev1::kObjectPrefix));
+    } catch (const std::exception& e) {
+        throw Conflict(std::string("the vault's bucket can't be read for its recovery envelopes (") + e.what() +
+                       "); check the vault's API key and bucket, then try again");
+    }
+
+    const auto sk = kit->seed.x25519SecretKey();
+    std::map<unsigned int, std::vector<crypto::SecretKeyPtr>> unwrapped;
+    for (const auto& o : listed) {
+        if (report.envelopes >= kMaxKitEnvelopes) break;
+        ++report.envelopes;
+        if (o.size > kMaxEnvelopeBytes) {
+            ++report.rejected;
+            continue;
+        }
+        const auto obj = store->get(o.key);
+        if (!obj) continue;
+        try {
+            auto u = crypto::kev1::unwrap(obj->bytes, sk.bytes(), crypto::kev1::Suite::X25519, uid);
+            ++report.unwrapped;
+            unwrapped[u.key_version].push_back(std::move(u.key));
+        } catch (const crypto::kev1::Error& e) {
+            if (crypto::kev1::skippedByRestore(e.code())) ++report.skipped;
+            else ++report.rejected;
+        }
+    }
+    if (report.unwrapped == 0)
+        throw Invalid(fmt::format("none of the {} recovery envelope(s) in the vault's bucket is addressed to this kit's "
+                                  "recipient for vault '{}' (another vault's kit, or a recipient that was never "
+                                  "enrolled); nothing was written", report.envelopes, t.name));
+
+    // One key per version: the one the vault's recorded key check names; without a record, the first.
+    std::map<unsigned int, crypto::SecretKeyPtr> chosen;
+    for (const auto& [version, keys] : unwrapped) {
+        std::vector<std::string> checks;
+        for (const auto& row : recordedRows(t, version))
+            if (row->key_check) checks.push_back(*row->key_check);
+        crypto::SecretKeyPtr pick;
+        for (const auto& k : keys) {
+            const auto check = vault::keyCheck(k->bytes(), t.vault_id, version);
+            const bool matches = checks.empty() || std::ranges::any_of(checks, [&](const std::string& r) {
+                return vault::keyCheckEquals(r, check);
+            });
+            if (matches && !pick) pick = k;
+            else if (!pick || !sameKey(*pick, *k)) ++report.ignored;
+        }
+        if (pick) chosen[version] = pick;
+    }
+
+    std::map<unsigned int, vault::attestation::Attestation> fromRoot;
+    const auto s3 = std::dynamic_pointer_cast<vault::model::S3Vault>(vault);
+    const auto needsRoot = std::ranges::any_of(chosen, [&](const auto& kv) {
+        const auto rows = recordedRows(t, kv.first);
+        return std::ranges::none_of(rows, [](const KeyRecord& r) { return !r->attestation.empty(); });
+    });
+    if (needsRoot && s3 && s3->storage_layout == vault::model::StorageLayout::OpaqueV1) {
+        fromRoot = rootAttestations(*store, uid, chosen);
+        report.root_consulted = !fromRoot.empty();
+    }
+
+    std::vector<Candidate> out;
+    for (const auto& [version, key] : chosen) {
+        Candidate c{.version = version, .key = key};
+        const auto check = vault::keyCheck(key->bytes(), t.vault_id, version);
+        for (const auto& row : recordedRows(t, version))
+            if (row->attestation_key_id && !row->attestation.empty() && row->key_check &&
+                vault::keyCheckEquals(*row->key_check, check)) {
+                c.attestation = vault::attestation::Attestation{.key_id = *row->attestation_key_id,
+                                                                .signature = row->attestation};
+                break;
+            }
+        if (!c.attestation)
+            if (const auto it = fromRoot.find(version); it != fromRoot.end()) c.attestation = it->second;
+        out.push_back(std::move(c));
+    }
+    return out;
 }
 
 struct Slot {
@@ -1180,12 +1397,22 @@ ImportResult importKeys(const Actor& actor, const ImportRequest& request, const 
                       "vault keys are imported only from a paired device (Vaulthalla Desktop) or the local vh CLI, "
                       "never through the browser");
     requireKeyChannel(channel);
-    if (!request.keys) throw Invalid("keys (the export document) is required");
+    if (!request.keys && !request.recovery_kit) throw Invalid("keys (the export document) is required");
+    if (request.keys && request.recovery_kit) throw Invalid("an import reads an export or a recovery kit, not both");
+    if (request.recovery_kit && request.mode == ImportMode::Salvage)
+        throw Invalid("a recovery kit restores the versions this node attested; salvage takes a key export (--file)");
 
-    const auto candidates = candidatesFrom(*request.keys, request.vault_id);
+    std::optional<KitImportReport> kitReport;
+    std::vector<Candidate> candidates;
+    if (request.keys) candidates = candidatesFrom(*request.keys, request.vault_id);
     const auto target = importTarget(actor, request.vault_id);
+    if (request.recovery_kit) {
+        kitReport.emplace();
+        candidates = candidatesFromKit(*request.recovery_kit, target, *kitReport);
+    }
     ImportResult result{.vault_id = target.vault_id, .vault_name = target.name, .deleted = target.deleted,
                         .mode = request.mode};
+    result.recovery_kit = kitReport;
     Unsealer unsealer;
     std::vector<KeyQ::SealedWrite> writes;
     std::map<unsigned int, crypto::SecretKeyPtr> needsSalvage;
@@ -1269,8 +1496,15 @@ ImportResult importKeys(const Actor& actor, const ImportRequest& request, const 
             else {
                 const auto attestation = c.attestation.value_or(vault::attestation::Attestation{});
                 const auto verdict = vault::attestation::check(attestation, target.vault_id, c.version, check);
+                // An export names its signing key's public key (spec 03 §5.4): here it must be this node's key of
+                // that id. Older exports without it are checked by the id alone.
+                const auto ownKey = c.attestation_public_key ? KeyQ::attestationPublicKey(attestation.key_id)
+                                                             : std::nullopt;
                 if (verdict != vault::attestation::Verdict::Valid)
                     why = verdictText(verdict, attestation.key_id);
+                else if (c.attestation_public_key && (!ownKey || *ownKey != *c.attestation_public_key))
+                    why = fmt::format("its attestation names signing key {} with a public key that is not this node's "
+                                      "key {} (an export from another node)", attestation.key_id, attestation.key_id);
                 else {
                     provenance.attestation_key_id = attestation.key_id;
                     provenance.attestation = attestation.signature;
@@ -1380,9 +1614,20 @@ ImportResult importKeys(const Actor& actor, const ImportRequest& request, const 
     if (!writes.empty()) {
         KeyQ::writeImported(target.vault_id, writes);
         result.written = true;
-        log::Registry::audit()->warn("[ops::vault_keys] {} restored key version(s) {} of vault {} ('{}'{}) through {}",
-                                     actor->name(), versionList(restored), target.vault_id, target.name,
-                                     target.deleted ? ", deleted" : "", channelName(channel));
+        if (kitReport)
+            vh::audit::record({.action = "vault.keys.import.recovery_kit", .outcome = vh::audit::Outcome::Success,
+                               .actor_id = actor->id, .actor = actor->name(), .vault_id = target.vault_id,
+                               .details = {{"versions", versionList(restored)},
+                                           {"envelopes_unwrapped", static_cast<int64_t>(kitReport->unwrapped)},
+                                           {"channel", channel == Channel::Device ? "device" : "cli"}}},
+                              fmt::format("[ops::vault_keys] {} restored key version(s) {} of vault {} from a recovery "
+                                          "kit's envelopes through {}", actor->name(), versionList(restored),
+                                          target.vault_id, channelName(channel)),
+                              spdlog::level::warn);
+        else
+            log::Registry::audit()->warn("[ops::vault_keys] {} restored key version(s) {} of vault {} ('{}'{}) through {}",
+                                         actor->name(), versionList(restored), target.vault_id, target.name,
+                                         target.deleted ? ", deleted" : "", channelName(channel));
     }
 
     if (salvageRun) {
@@ -1455,10 +1700,15 @@ nlohmann::json toJson(const ImportResult& r) {
     auto versions = nlohmann::json::array();
     for (const auto& v : r.versions)
         versions.push_back({{"version", v.version}, {"outcome", to_string(v.outcome)}, {"detail", v.detail}});
-    return {{"vault_id", r.vault_id}, {"vault_name", r.vault_name}, {"deleted", r.deleted}, {"mode", to_string(r.mode)},
-            {"written", r.written}, {"key_available", r.key_available},
+    nlohmann::json out{{"vault_id", r.vault_id}, {"vault_name", r.vault_name}, {"deleted", r.deleted},
+            {"mode", to_string(r.mode)}, {"written", r.written}, {"key_available", r.key_available},
             {"note", r.note ? nlohmann::json(*r.note) : nlohmann::json(nullptr)}, {"versions", std::move(versions)},
             {"salvage", r.salvage ? toJson(*r.salvage) : nlohmann::json(nullptr)}};
+    if (const auto& k = r.recovery_kit)
+        out["recovery_kit"] = {{"envelopes", k->envelopes}, {"unwrapped", k->unwrapped}, {"skipped", k->skipped},
+                               {"rejected", k->rejected}, {"ignored", k->ignored},
+                               {"root_consulted", k->root_consulted}};
+    return out;
 }
 
 }

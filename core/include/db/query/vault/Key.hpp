@@ -60,6 +60,13 @@ public:
     // other key marked retired) when it is new.
     [[nodiscard]] static unsigned int attestationKeyId(const std::vector<uint8_t>& publicKey);
     [[nodiscard]] static std::optional<std::vector<uint8_t>> attestationPublicKey(unsigned int keyId);
+    // Every attestation public key this node has had (current and retired), by id: what a recovery kit pins (#370).
+    struct AttestationKey {
+        unsigned int id{};
+        std::vector<uint8_t> public_key{};
+        std::optional<std::time_t> retired_at{};
+    };
+    [[nodiscard]] static std::vector<AttestationKey> attestationKeys();
     static void markKeyRotationFinished(unsigned int vaultId);
     [[nodiscard]] static bool keyRotationInProgress(unsigned int vaultId);
     [[nodiscard]] static KeyPtr getRotationInProgressOldKey(unsigned int vaultId);

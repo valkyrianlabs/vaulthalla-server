@@ -123,6 +123,10 @@ void Handler::registerVaultKeyHandlers(const std::shared_ptr<Router>& r) {
     r->registerPayload("vault.keys.export", &handler::VaultKeys::exportKeys);
     r->registerPayload("vault.keys.export.confirm", &handler::VaultKeys::confirmExport);
     r->registerPayload("vault.keys.import", &handler::VaultKeys::importKeys);
+    // Recovery recipients (#370): add and revoke refuse any session but a paired device's (recipient_requires_device).
+    r->registerPayload("vault.keys.recipients.list", &handler::VaultKeys::listRecipients);
+    r->registerPayload("vault.keys.recipients.add", &handler::VaultKeys::addRecipient);
+    r->registerPayload("vault.keys.recipients.revoke", &handler::VaultKeys::revokeRecipient);
 }
 
 void Handler::registerMetaHandlers(const std::shared_ptr<Router>& r) {

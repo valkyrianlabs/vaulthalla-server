@@ -7,7 +7,9 @@
 #include "db/query/vault/Deletion.hpp"
 #include "db/query/vault/Key.hpp"
 #include "ops/Vaults.hpp"
+#include "ops/RecoveryRecipients.hpp"
 #include "ops/VaultKeys.hpp"
+#include "vault/RecoveryEnvelopes.hpp"
 #include "vault/Retention.hpp"
 #include "vault/model/Deletion.hpp"
 #include "vault/model/Key.hpp"
@@ -156,7 +158,7 @@ static void wipe_keys(nlohmann::json& j) {
         for (auto& e : j) wipe_keys(e);
     } else if (j.is_object()) {
         for (auto it = j.begin(); it != j.end(); ++it) {
-            if (it.key() == "key" && it->is_string()) {
+            if ((it.key() == "key" || it.key() == "recovery_seed") && it->is_string()) {
                 auto& text = it->get_ref<std::string&>();
                 std::fill(text.begin(), text.end(), '\0');
             } else {
@@ -178,6 +180,11 @@ static std::string import_text(const keys_ops::ImportResult& r) {
         for (const auto& f : s->failures)
             out += fmt::format("    {} {} (version {}): {}\n", f.kind, f.path, f.version, f.reason);
     }
+    if (const auto& k = r.recovery_kit)
+        out += fmt::format("  recovery kit: {} envelope(s) in the bucket, {} unwrapped, {} skipped (another recipient or "
+                           "a reserved kind), {} rejected, {} ignored (not the recorded key){}\n",
+                           k->envelopes, k->unwrapped, k->skipped, k->rejected, k->ignored,
+                           k->root_consulted ? "; attestations from the manifest root" : "");
     out += r.key_available ? "  the vault's key is available on this host\n" : "";
     if (r.note) out += "  " + *r.note + "\n";
     return out;
@@ -190,10 +197,14 @@ static CommandResult handle_vault_keys_import(const CommandCall& call) {
     if (!call.input)
         return invalid(std::string(ERR) + ": no key file came with the request. vh reads --file on your side and sends "
                        "its contents; the daemon never opens it (is vh older than the daemon?)");
+    const bool fromKit = optVal(call, usage->resolveOptional("recovery_kit")->option_tokens).has_value();
+    if (fromKit && optVal(call, usage->resolveOptional("key_file")->option_tokens))
+        return invalid(std::string(ERR) + ": --file and --recovery-kit can't be combined");
     nlohmann::json doc;
     try {
         doc = nlohmann::json::parse(*call.input);
     } catch (const std::exception&) {
+        if (fromKit) return invalid(std::string(ERR) + ": the file is not a JSON recovery kit");
         return invalid(std::string(ERR) + ": the file is not a JSON key export. Decrypt a GPG export first: gpg "
                        "--decrypt <file> | vh vault keys import <vault> --file - --confirm-name <vault name>");
     }
@@ -210,7 +221,9 @@ static CommandResult handle_vault_keys_import(const CommandCall& call) {
     const auto mode = hasFlag(call, usage->resolveFlag("salvage")->aliases) ? keys_ops::ImportMode::Salvage
                                                                             : keys_ops::ImportMode::Recover;
     const auto run = [&](const std::optional<std::string>& name) {
-        return keys_ops::importKeys(call.user, {.vault_id = *vaultId, .keys = &doc, .confirm_name = name, .mode = mode},
+        return keys_ops::importKeys(call.user,
+                                    {.vault_id = *vaultId, .keys = fromKit ? nullptr : &doc, .confirm_name = name,
+                                     .mode = mode, .recovery_kit = fromKit ? &doc : nullptr},
                                     cli_channel());
     };
 
@@ -258,6 +271,10 @@ static std::string status_text(const keys_ops::KeyStatus& s) {
                            n.key_check.value_or("MISSING"));
     if (s.key_retain_until)
         out += "  key kept until " + db::encoding::timestampToString(*s.key_retain_until) + "\n";
+    if (s.recovery.state != vault::envelopes::kMaterialNotRequired || s.recovery.recipients > 0)
+        out += fmt::format("  recovery:      {} ({} recipient(s){})\n", s.recovery.state, s.recovery.recipients,
+                           s.recovery.export_current ? ", current export" : "");
+    if (s.recovery.detail) out += "                 " + *s.recovery.detail + "\n";
     return out;
 }
 
@@ -375,6 +392,94 @@ static CommandResult handle_rotate_vault_keys(const CommandCall& call) {
     return ok(rotateKey(engine));
 }
 
+namespace recipients_ops = vh::ops::recovery_recipients;
+
+static std::string recipient_text(const recipients_ops::Recipient& r) {
+    std::string versions;
+    for (const auto v : r.envelope_versions) versions += (versions.empty() ? "" : ", ") + std::to_string(v);
+    return fmt::format("  {}{} {}\n    recipient {}  public key {}\n    added {} by {}{}\n    envelopes for key "
+                       "version(s): {}\n",
+                       r.grant_id, r.label ? " (" + *r.label + ")" : std::string{}, r.revoked_at ? "[revoked]" : "",
+                       r.recipient_id, r.public_key, db::encoding::timestampToString(r.added_at), r.authorized_by,
+                       r.revoked_at ? "; revoked " + db::encoding::timestampToString(*r.revoked_at) : std::string{},
+                       versions.empty() ? "none yet" : versions);
+}
+
+static std::string recovery_text(const keys_ops::RecoveryMaterial& m) {
+    std::string out = "recovery: " + m.state + "\n";
+    if (m.detail) out += "  " + *m.detail + "\n";
+    return out;
+}
+
+static CommandResult handle_recipient_list(const CommandCall& call) {
+    constexpr const auto* ERR = "vault keys recipient list";
+    const auto usage = resolveUsage({"vault", "keys", "recipient", "list"});
+    validatePositionals(call, usage);
+    const auto lookup = resolveVault(call, call.positionals[0], usage, ERR);
+    if (!lookup || !lookup.ptr) return invalid(lookup.error);
+    try {
+        const auto l = recipients_ops::list(call.user, lookup.ptr->id);
+        if (hasFlag(call, usage->resolveFlag("json_output")->aliases)) return ok(recipients_ops::toJson(l).dump(4));
+        std::string out = fmt::format("Vault {} ('{}'), uid {}\n", l.vault_id, l.vault_name, l.vault_uid);
+        if (l.recipients.empty()) out += "  no recovery recipients\n";
+        for (const auto& r : l.recipients) out += recipient_text(r);
+        return ok(out + recovery_text(l.recovery));
+    } catch (const ops::Error& e) {
+        return invalid(std::string(ERR) + ": " + e.what());
+    }
+}
+
+static CommandResult handle_recipient_add(const CommandCall& call) {
+    constexpr const auto* ERR = "vault keys recipient add";
+    const auto usage = resolveUsage({"vault", "keys", "recipient", "add"});
+    validatePositionals(call, usage);
+    const auto lookup = resolveVault(call, call.positionals[0], usage, ERR);
+    if (!lookup || !lookup.ptr) return invalid(lookup.error);
+    const auto key = optVal(call, usage->resolveRequired("public_key")->option_tokens);
+    if (!key || key->empty()) return invalid(std::string(ERR) + ": --public-key is required");
+    const auto label = optVal(call, usage->resolveOptional("label")->option_tokens);
+    try {
+        const auto r = recipients_ops::add(call.user, {.vault_id = lookup.ptr->id, .public_key = *key, .label = label},
+                                           cli_channel());
+        if (hasFlag(call, usage->resolveFlag("json_output")->aliases)) return ok(recipients_ops::toJson(r).dump(4));
+        std::string out = fmt::format("Enrolled recovery recipient on vault {}; {} envelope(s) written to the vault's "
+                                      "bucket.\n", lookup.ptr->id, r.envelopes_written);
+        out += recipient_text(r.recipient);
+        if (r.note) out += "  " + *r.note + "\n";
+        return ok(out + recovery_text(r.recovery));
+    } catch (const ops::Error& e) {
+        return invalid(std::string(ERR) + ": " + e.what());
+    }
+}
+
+static CommandResult handle_recipient_revoke(const CommandCall& call) {
+    constexpr const auto* ERR = "vault keys recipient revoke";
+    const auto usage = resolveUsage({"vault", "keys", "recipient", "revoke"});
+    validatePositionals(call, usage);
+    const auto lookup = resolveVault(call, call.positionals[0], usage, ERR);
+    if (!lookup || !lookup.ptr) return invalid(lookup.error);
+    try {
+        const auto r = recipients_ops::revoke(call.user, lookup.ptr->id, call.positionals[1], cli_channel());
+        if (hasFlag(call, usage->resolveFlag("json_output")->aliases)) return ok(recipients_ops::toJson(r).dump(4));
+        std::string out = "Revoked recovery recipient " + r.recipient.grant_id + ": no new envelopes are written for it.\n";
+        if (r.recovery.rotation_needed)
+            out += "It still holds envelopes of key versions the vault uses: rotate the key (vh vault keys rotate " +
+                   std::to_string(lookup.ptr->id) + ") to cut it off from new data.\n";
+        return ok(out + recovery_text(r.recovery));
+    } catch (const ops::Error& e) {
+        return invalid(std::string(ERR) + ": " + e.what());
+    }
+}
+
+static CommandResult handle_vault_keys_recipient(const CommandCall& call) {
+    if (call.positionals.empty()) return usage(call.constructFullArgs());
+    const auto [subcommand, subcall] = descend(call);
+    if (isCommandMatch({"vault", "keys", "recipient", "list"}, subcommand)) return handle_recipient_list(subcall);
+    if (isCommandMatch({"vault", "keys", "recipient", "add"}, subcommand)) return handle_recipient_add(subcall);
+    if (isCommandMatch({"vault", "keys", "recipient", "revoke"}, subcommand)) return handle_recipient_revoke(subcall);
+    return invalid("vault keys recipient: unknown subcommand '" + std::string(subcommand) + "'. Use: list | add | revoke");
+}
+
 static bool isVaultKeysMatch(const std::string& cmd, const std::string_view input) {
     return isCommandMatch({"vault", "keys", cmd}, input);
 }
@@ -388,7 +493,8 @@ CommandResult commands::vault::handle_vault_keys(const CommandCall& call) {
     if (isVaultKeysMatch("inspect", subcommand)) return handle_inspect_vault_key(subcall);
     if (isVaultKeysMatch("status", subcommand)) return handle_vault_keys_status(subcall);
     if (isVaultKeysMatch("import", subcommand)) return handle_vault_keys_import(subcall);
+    if (isVaultKeysMatch("recipient", subcommand)) return handle_vault_keys_recipient(subcall);
 
     return invalid("vault keys: unknown subcommand '" + std::string(subcommand) +
-                   "'. Use: status | export | import | rotate | inspect");
+                   "'. Use: status | export | import | rotate | inspect | recipient");
 }

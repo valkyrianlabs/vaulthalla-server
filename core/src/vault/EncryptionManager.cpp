@@ -8,6 +8,7 @@
 #include "vault/model/Key.hpp"
 #include "vault/KeyAttestation.hpp"
 #include "vault/Master.hpp"
+#include "vault/RecoveryEnvelopes.hpp"
 #include "fs/model/File.hpp"
 #include "fs/PlaintextSource.hpp"
 
@@ -19,6 +20,7 @@
 #include <array>
 #include <cerrno>
 #include <fstream>
+#include <functional>
 #include <stdexcept>
 #include <system_error>
 #include <paths.h>
@@ -30,6 +32,38 @@ using namespace vh::vault;
 using namespace vh::crypto;
 using namespace vh::crypto::util;
 using namespace vh::fs::model;
+
+namespace vh::vault::encryption_manager_envelopes {
+
+// Commits key version `expected` of the vault through `commit` (which returns the version the database assigned) with
+// the version's recovery envelopes already in the bucket (vault/RecoveryEnvelopes.hpp, #370): a version never seals a
+// file before its envelopes exist. A failed PUT throws before anything is committed.
+unsigned int commitWithEnvelopes(const unsigned int vaultId, const unsigned int expected, const SecretKey& key,
+                                 const std::function<unsigned int()>& commit) {
+    const auto pending = envelopes::put(vaultId, expected, key);
+    unsigned int version = 0;
+    try {
+        version = commit();
+    } catch (...) {
+        envelopes::discard(pending);
+        throw;
+    }
+    try {
+        if (version == expected) {
+            envelopes::record(pending);
+        } else {
+            envelopes::discard(pending);
+            (void)envelopes::writeFor(vaultId, version, key);
+        }
+    } catch (const std::exception& e) {
+        // The version is committed; the next sync pass writes what is missing (status reports it until then).
+        log::Registry::crypto()->error("[VaultEncryptionManager] Vault {}: recovery envelopes of key version {} were "
+                                       "not recorded: {}", vaultId, version, e.what());
+    }
+    return version;
+}
+
+}
 
 KeyVersionUnavailable::KeyVersionUnavailable(const unsigned int vaultId, const unsigned int version)
     : std::runtime_error(fmt::format("Vault {} does not hold key version {}", vaultId, version)),
@@ -127,7 +161,8 @@ void EncryptionManager::load_key() {
             key->encrypted_key = std::move(wrapped.encrypted_key);
             key->iv = std::move(wrapped.iv);
             key->master_version = wrapped.master_version;
-            key->version = db::query::vault::Key::addVaultKey(key, provenance);
+            key->version = encryption_manager_envelopes::commitWithEnvelopes(
+                vault_id_, 1, *vaultKey, [&] { return db::query::vault::Key::addVaultKey(key, provenance); });
         }
 
         {
@@ -212,7 +247,9 @@ void EncryptionManager::prepare_key_rotation() {
         key->encrypted_key = std::move(wrapped.encrypted_key);
         key->iv = std::move(wrapped.iv);
         key->master_version = wrapped.master_version;
-        key->version = db::query::vault::Key::rotateVaultKey(key, expected, outgoing);
+        key->version = encryption_manager_envelopes::commitWithEnvelopes(
+            vault_id_, expected.version, *next,
+            [&] { return db::query::vault::Key::rotateVaultKey(key, expected, outgoing); });
     }
 
     {
@@ -242,7 +279,9 @@ unsigned int EncryptionManager::mintSalvageKey(const unsigned int vaultId, const
         key->encrypted_key = std::move(wrapped.encrypted_key);
         key->iv = std::move(wrapped.iv);
         key->master_version = wrapped.master_version;
-        key->version = db::query::vault::Key::rotateVaultKey(key, expected, std::nullopt, true, !outgoingHeld);
+        key->version = encryption_manager_envelopes::commitWithEnvelopes(
+            vaultId, expectedVersion, *next,
+            [&] { return db::query::vault::Key::rotateVaultKey(key, expected, std::nullopt, true, !outgoingHeld); });
     }
 
     const auto msg = fmt::format("[VaultEncryptionManager] Created salvage key version {} for vault {}", key->version,

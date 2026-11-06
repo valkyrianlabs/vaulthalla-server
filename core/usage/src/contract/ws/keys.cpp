@@ -114,6 +114,48 @@ std::vector<WsCommandUsage> vaultKeyCommands() {
         .client_timeout = std::chrono::milliseconds(600'000),
     });
 
+    out.push_back({
+        .command = "vault.keys.recipients.list",
+        .description = "The vault's recovery recipients (spec 03 §5; #370): customer-held X25519 public keys every key "
+                       "version is wrapped to (KEV1 envelopes in the vault's own bucket), revoked ones included, with "
+                       "the vault's D2 recovery state. Public data only; the encryption-key View permission.",
+        .payload = {vaultId()},
+        .response = modelFields("VaultRecoveryRecipientList"),
+        .refusal_codes = {"denied", "invalid", "not_found", "unauthorized"},
+        .response_model = "VaultRecoveryRecipientList",
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "vault.keys.recipients.add",
+        .description = "Enroll a recovery recipient: an X25519 public key generated on the customer's own device "
+                       "(Vaulthalla Desktop, or the offline `vh-recovery kit create`); the server never receives the "
+                       "seed. Every key version the vault holds is wrapped to it now and every future version at "
+                       "rotation, into the vault's bucket only. Customer-controlled (class customer) is the only kind. "
+                       "S3 vaults only (conflict otherwise). Paired devices only (recipient_requires_device "
+                       "otherwise); the encryption-key Export permission.",
+        .payload = {vaultId(),
+                    str("public_key").desc("The recipient's X25519 public key: base64 (32 bytes) or 64 hex digits."),
+                    str("label").opt().nullable().desc("A name the customer recognizes (at most 200 characters).")},
+        .response = modelFields("VaultRecoveryRecipientAdd"),
+        .refusal_codes = {"denied", "invalid", "not_found", "conflict", "unauthorized", "recipient_requires_device"},
+        .response_model = "VaultRecoveryRecipientAdd",
+        .client_timeout = std::chrono::milliseconds(120'000),
+    });
+
+    out.push_back({
+        .command = "vault.keys.recipients.revoke",
+        .description = "Revoke a recovery recipient: no new envelopes are written for it. Access it already has is "
+                       "not revoked (an envelope keeps unwrapping the versions it covers): recovery.rotation_needed "
+                       "says when a key rotation is needed to cut it off from new data. Paired devices only "
+                       "(recipient_requires_device otherwise); the encryption-key Export permission.",
+        .payload = {vaultId(), str("grant_id").desc("The recipient's grant_id (vault.keys.recipients.list).")},
+        .response = modelFields("VaultRecoveryRecipientRevoke"),
+        .refusal_codes = {"denied", "invalid", "not_found", "conflict", "unauthorized", "recipient_requires_device"},
+        .response_model = "VaultRecoveryRecipientRevoke",
+        .client_timeout = kDefaultTimeout,
+    });
+
     return out;
 }
 

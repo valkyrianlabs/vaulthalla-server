@@ -345,6 +345,7 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
         {"device_unknown", {}},
         {"export_requires_device", {"vault.keys.export", "vault.keys.export.confirm"}},
         {"import_requires_device", {"vault.keys.import"}},
+        {"recipient_requires_device", {"vault.keys.recipients.add", "vault.keys.recipients.revoke"}},
         {"protocol_unsupported", {"meta.hello"}},
         {"already_signed_in", {"auth.login", "auth.passkey.options", "auth.passkey.login"}},
         // #357: the pending-MFA sign-in and the enrollment commands.
