@@ -138,9 +138,9 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
 
     def test_ci_and_its_composite_actions_run_in_the_ci_container(self) -> None:
         ci = _read(".github/workflows/build_and_test.yml")
-        # build, web, fuzz and tooling
-        self.assertEqual(ci.count(f"shell: {CONTAINER_SHELL}"), 4)
-        self.assertEqual(ci.count('"self-hosted","Linux","X64","vps-ci"'), 4)
+        # build, web and tooling (the fuzz step lives in tooling: the vps-ci pool has three runners)
+        self.assertEqual(ci.count(f"shell: {CONTAINER_SHELL}"), 3)
+        self.assertEqual(ci.count('"self-hosted","Linux","X64","vps-ci"'), 3)
         self.assertNotIn("sudo", _code(ci))
         for action in ("build", "test", "fuzz", "setup_web", "build_web", "test_web", "sync_web_icons"):
             text = _read(f".github/actions/{action}/action.yml")
