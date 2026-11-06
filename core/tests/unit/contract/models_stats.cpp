@@ -329,6 +329,10 @@ void checkSystemStats(vh::test::contract_models::Checker& c) {
     health.vaultsUnavailable.push_back({.vaultId = 12, .vaultName = "archive", .reason = "key_unsealable",
                                         .detail = "restore it with `vh vault keys import 12 --file <export.json>`"});
     c.check(json(health), "SystemHealth", "a vault whose key doesn't unseal here");
+    health.vaultsRecoveryMaterialMissing.push_back(
+        {.vaultId = 13, .vaultName = "photos", .detail = "no recovery recipient is enrolled and the last key export is "
+                                                         "not of the current key version"});
+    c.check(json(health), "SystemHealth", "a vault without recovery material");
     c.check(json(sm::SystemHealth{}), "SystemHealth", "system before the pool exists");
 }
 

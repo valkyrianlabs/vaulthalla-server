@@ -6,10 +6,10 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = '960c1abad5ed60d147fbcf01a15808ff90450b924b448c3aab052a63137a70f5'
+export const WS_CONTRACT_HASH = 'fccb00365d1ebe8e04da2666296e78e5023a3c541848f4207583c9fcf7c0c520'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = '144e2cc1625766141f2fb45d5358956cac3188d29eb60c77a7ee9798baf55c4a'
+export const WS_MODELS_HASH = '455b23eafefb4b72a1cfb1503ebe2c43a378d38313d320a1d0176c2f9bfcebf8'
 
 // The ws protocol range this book is (core/usage WsProtocol.hpp): send it in meta.hello.
 export const WS_PROTOCOL_VERSION = 1
@@ -2029,6 +2029,7 @@ export interface WsModels {
       reason: 'key_missing' | 'key_unsealable' | 'version_missing' | 'engine_failed'
       detail: string
     }[]
+    vaults_recovery_material_missing?: { vault_id: number; vault_name: string; reason: 'recovery_material_missing'; detail: string }[]
     summary: {
       services_ready: number
       services_total: number
@@ -2463,7 +2464,17 @@ export interface WsModels {
    * node_id ‖ UInt64BE(vault_id) ‖ UInt32BE(version) ‖ key_check (16 bytes). `vh vault keys import` restores
    * a version as canonical only when it verifies under one of this node's attestation keys.
    */
-  'VaultKeyAttestation': { key_id: number; signature: string }
+  'VaultKeyAttestation': { key_id: number; signature: string; public_key?: string | null }
+  /**
+   * One of this node's attestation signing keys (key_attestation_keys): what a recovery kit pins as
+   * attestation_public_keys (spec 03 §5.3). Public.
+   */
+  'VaultKeyAttestationKey': { key_id: number; public_key: string; retired_at: number | null }
+  /**
+   * The vault's manifest v2 chain position (opaque_v1 vaults): a recovery kit's checkpoint bounds rollback
+   * (spec 03 §4.5).
+   */
+  'VaultKeyCheckpoint': { epoch: number; root_sha256: string }
   /**
    * One vault's export document: ops::vault_keys::toJson(VaultExport) (core/src/ops/VaultKeys.cpp), the CLI's
    * `vh vault keys export` shape (vault::model::generate_json_key_object) plus key_check and every needed
@@ -2544,6 +2555,14 @@ export interface WsModels {
       detail: string
     }[]
     salvage: WsModels['VaultKeySalvageReport'] | null
+    recovery_kit?: {
+      envelopes: number
+      unwrapped: number
+      skipped: number
+      rejected: number
+      ignored: number
+      root_consulted: boolean
+    }
   }
   /**
    * A key version still needed to decrypt the vault's data, identified by its key check (never key bytes):
@@ -2604,7 +2623,68 @@ export interface WsModels {
     missing_versions: number[]
     attestation: WsModels['VaultKeyAttestation'] | null
     last_salvage: WsModels['VaultKeySalvageReport'] | null
+    vault_uid?: string | null
+    node_id?: string
+    attestation_public_keys?: WsModels['VaultKeyAttestationKey'][]
+    checkpoint?: WsModels['VaultKeyCheckpoint'] | null
+    recovery?: WsModels['VaultRecoveryMaterial']
   }
+  /**
+   * D2 (spec 03 §5.5): whether the vault has recovery material independent of this host.
+   * ops::vault_keys::toJson(RecoveryMaterial) (core/src/ops/VaultKeys.cpp).
+   */
+  'VaultRecoveryMaterial': {
+    required: boolean
+    state: 'not_required' | 'recipient' | 'export' | 'recovery_material_missing'
+    recipients: number
+    uncovered_versions: number[]
+    export_current: boolean
+    rotation_needed: boolean
+    detail: string | null
+  }
+  /**
+   * A recovery recipient: an independently revocable grant of the vault's key versions to a customer-held
+   * X25519 public key (spec 03 §5.7). ops::recovery_recipients::toJson(Recipient)
+   * (core/src/ops/RecoveryRecipients.cpp). Public: never a seed or key.
+   */
+  'VaultRecoveryRecipient': {
+    grant_id: string
+    recipient_id: string
+    public_key: string
+    suite: number
+    class: 'customer'
+    label: string | null
+    added_at: number
+    authorized_by: string
+    revoked_at: number | null
+    revoked_by: string | null
+    envelope_versions: number[]
+  }
+  /**
+   * An enrollment: ops::recovery_recipients::toJson(AddResult).
+   */
+  'VaultRecoveryRecipientAdd': {
+    recipient: WsModels['VaultRecoveryRecipient']
+    envelopes_written: number
+    versions: number[]
+    note: string | null
+    recovery: WsModels['VaultRecoveryMaterial']
+  }
+  /**
+   * A vault's recovery recipients: ops::recovery_recipients::toJson(RecipientList).
+   */
+  'VaultRecoveryRecipientList': {
+    vault_id: number
+    vault_name: string
+    vault_uid: string
+    recipients: WsModels['VaultRecoveryRecipient'][]
+    recovery: WsModels['VaultRecoveryMaterial']
+  }
+  /**
+   * A revocation: ops::recovery_recipients::toJson(RevokeResult). recovery.rotation_needed says whether a key
+   * rotation is needed to cut the recipient off from new data.
+   */
+  'VaultRecoveryRecipientRevoke': { recipient: WsModels['VaultRecoveryRecipient']; recovery: WsModels['VaultRecoveryMaterial'] }
   /**
    * A vault's backup/recovery posture (core/src/stats/model/VaultRecovery.cpp to_json; C++
    * stats::model::VaultRecovery).
@@ -2876,88 +2956,6 @@ export interface WsContract {
   'auth.activity': {
     payload: null
     response: Record<string, never>
-  }
-  /**
-   * Approve a device's request with a passkey, nothing else: a TOTP code or a password is refused (invalid),
-   * and an account without a usable passkey gets passkey_required (do the action in the console instead).
-   * Without credential: answers webauthn.publicKey (a challenge bound to this session and this request, 120
-   * s) for navigator.credentials.get(); with credential (a UV assertion over it): approves, and the device's
-   * next device.approval.status makes its grant. approval_failed {attempts_remaining}: the assertion didn't
-   * hold; the fifth failure within 15 minutes signs this session out. not_found: expired or already answered.
-   */
-  'auth.approval.approve': {
-    payload: {
-      approval_id: string
-      credential?: {
-        id: string
-        rawId: string
-        type: 'public-key'
-        response: { clientDataJSON: string; authenticatorData: string; signature: string; userHandle?: string | null }
-        authenticatorAttachment?: string | null
-        clientExtensionResults?: { credProps?: { rk?: boolean } }
-      } | null
-    }
-    response: {
-      approval: {
-        approval_id: string
-        state: 'pending' | 'approved' | 'denied' | 'expired'
-        family: 'keys' | 'device.trust' | 'account.credentials' | 'identity.admin' | 'secrets' | 'settings' | 'data.destroy'
-        target: string | null
-        summary: string
-        device: { id: number; device_id: string; name: string }
-        created_at: number
-        expires_at: number
-      }
-      webauthn?: {
-        publicKey: {
-          challenge: string
-          rpId: string
-          timeout: number
-          userVerification: 'required'
-          allowCredentials: { type: 'public-key'; id: string; transports: string[] }[]
-        }
-      }
-    }
-  }
-  /**
-   * Decline a device's request; its device.approval.status answers denied.
-   */
-  'auth.approval.deny': {
-    payload: { approval_id: string }
-    response: {
-      approval: {
-        approval_id: string
-        state: 'pending' | 'approved' | 'denied' | 'expired'
-        family: 'keys' | 'device.trust' | 'account.credentials' | 'identity.admin' | 'secrets' | 'settings' | 'data.destroy'
-        target: string | null
-        summary: string
-        device: { id: number; device_id: string; name: string }
-        created_at: number
-        expires_at: number
-      }
-    }
-  }
-  /**
-   * The signed-in account's open requests from its paired devices (device.approval.request), oldest first:
-   * what each asks for (family, target), the device's own summary, and when it expires. A new request also
-   * arrives as an unsolicited frame {"command": "auth.approval.pending", "data": {approval_id, device: {id,
-   * name}, family, target, summary, expires_at}} on every console session of the account. Web sessions only:
-   * a device is refused.
-   */
-  'auth.approval.list': {
-    payload: null
-    response: {
-      approvals: {
-        approval_id: string
-        state: 'pending' | 'approved' | 'denied' | 'expired'
-        family: 'keys' | 'device.trust' | 'account.credentials' | 'identity.admin' | 'secrets' | 'settings' | 'data.destroy'
-        target: string | null
-        summary: string
-        device: { id: number; device_id: string; name: string }
-        created_at: number
-        expires_at: number
-      }[]
-    }
   }
   /**
    * Whether the envelope token is a valid session for this socket.
@@ -3395,91 +3393,6 @@ export interface WsContract {
     response: { preferences: WsModels['DashboardPreference'] }
   }
   /**
-   * Start approving a step-up with this device's approval key: name the family and the target the
-   * step_up_required refusal named. Only keys and device.trust (console_approval_required otherwise: use
-   * device.approval.request); approval_key_unavailable without a live approval key. Answers a challenge
-   * (single use, 120 s, bound to this session, the family and the target) and payload_b64, the exact bytes to
-   * sign: "vh-device-approval-v1" 0x00 node_id 0x00 server_spki_sha256[32] approving_device_spki_sha256[32]
-   * challenge[32] family 0x00 target 0x00 UInt64BE(expires_at). The device checks them against what it knows
-   * before asking for Touch ID. At most 4 open per session (a new one replaces the oldest).
-   */
-  'device.approval.challenge': {
-    payload: { family: 'keys' | 'device.trust'; target: string }
-    response: {
-      challenge_id: string
-      challenge: string
-      payload_b64: string
-      family: 'keys' | 'device.trust'
-      target: string
-      expires_at: number
-    }
-  }
-  /**
-   * Register this already-paired device's approval key (once per device): a P-256 SubjectPublicKeyInfo, 91
-   * bytes of DER, standard base64, not the connection's key. A person approves it in the web console: it
-   * answers step_up_required (device.trust, target device.approval.key.register:<device row>:<key SPKI
-   * SHA-256>) until a console approval (device.approval.request) for exactly that target. conflict: the
-   * device has (or had) a key, or the key is known here.
-   */
-  'device.approval.key.register': {
-    payload: { public_key_spki_b64: string }
-    response: { registered: boolean }
-  }
-  /**
-   * Ask a person to approve a step-up in the web console (any family; the one way for families the approval
-   * key can't approve, and for a device without one). summary (1-160 characters) is shown with the family and
-   * target. The account's console sessions get auth.approval.pending; a person approves with a passkey
-   * (auth.approval.approve). Lives 5 minutes; at most 3 open and 10 per hour per device (rate_limited). Poll
-   * device.approval.status on this same session.
-   */
-  'device.approval.request': {
-    payload: {
-      family: 'keys' | 'device.trust' | 'account.credentials' | 'identity.admin' | 'secrets' | 'settings' | 'data.destroy'
-      target?: string | null
-      summary: string
-    }
-    response: {
-      approval_id: string
-      state: 'pending' | 'approved' | 'denied' | 'expired'
-      family: string
-      target: string | null
-      summary: string
-      device: { id: number; device_id: string; name: string }
-      created_at: number
-      expires_at: number
-    }
-  }
-  /**
-   * How a console approval stands (pending, approved, denied, expired). Answered at once: ask again in 2 s
-   * while pending. Once approved, the first answer leaves the grant on this session (the same binding as a
-   * web session's: target-bound grants are spent by one use); then resend the refused request. Only the
-   * session that asked: another is not_found.
-   */
-  'device.approval.status': {
-    payload: { approval_id: string }
-    response: {
-      approval_id: string
-      state: 'pending' | 'approved' | 'denied' | 'expired'
-      family: string
-      target: string | null
-      summary: string
-      device: { id: number; device_id: string; name: string }
-      created_at: number
-      expires_at: number
-    }
-  }
-  /**
-   * Answer a challenge with the approval key's ECDSA P-256/SHA-256 signature (DER, standard base64) over its
-   * payload. The challenge is spent whatever the answer. On success this session holds a grant for the family
-   * and target (spent by one use, until expires_at); then resend the refused request. invalid: the signature
-   * doesn't verify (the payload as the server computes it now: a changed node or server key never verifies);
-   * not_found: expired, used or another session's; approval_key_unavailable: the key was revoked.
-   */
-  'device.approval.submit': {
-    payload: { challenge_id: string; signature_b64: string }
-    response: { family: 'keys' | 'device.trust'; target: string; expires_at: number }
-  }
-  /**
    * Where this node's device listener can be reached (docs/reference/transfer-protocol.md §1.1): interface
    * addresses classified by range, <hostname>.local where an mDNS responder runs, and
    * device_server.advertise's configured names. Computed per call; never answered before a device is paired.
@@ -3534,7 +3447,7 @@ export interface WsContract {
    * knows. One live request per key: a new one replaces it.
    */
   'device.pair.request': {
-    payload: { name: string; platform: string; app_version?: string; commitment: string; approval_key?: string | null }
+    payload: { name: string; platform: string; app_version?: string; commitment: string }
     response: { request_id: string; nonce_server: string; expires_at: number }
   }
   /**
@@ -3553,10 +3466,7 @@ export interface WsContract {
   }
   /**
    * Approve a request with the code the device shows (number matching). Any other code denies the request
-   * (invalid). Creates the device for the caller's account, with the approval key the request carried. A
-   * device.trust step-up bound to the request, its key and the chosen code: in the console a passkey or
-   * password + TOTP; on an already-paired device its approval key (device.approval.challenge/submit) or a
-   * console approval; `vh device pair` on the node needs none.
+   * (invalid). Creates the device for the caller's account.
    */
   'device.pairing.approve': {
     payload: { request_id: string; code: string }
@@ -3610,8 +3520,7 @@ export interface WsContract {
   /**
    * The caller's open window and its confirmed requests. Each offers three code_choices (random order): one
    * is the code the device shows, two are decoys fixed for the request. The real code is never returned on
-   * its own. Also answered on a paired device's session (an already-paired Desktop approving a new one,
-   * design 8.4); approval_key_present says the request carries an approval key.
+   * its own.
    */
   'device.pairing.pending': {
     payload: null
@@ -3625,7 +3534,6 @@ export interface WsContract {
         source_ip: string
         device_id: string
         code_choices: string[]
-        approval_key_present: boolean
         created_at: number
         expires_at: number
       }[]
@@ -6074,7 +5982,58 @@ export interface WsContract {
         detail: string
       }[]
       salvage: WsModels['VaultKeySalvageReport'] | null
+      recovery_kit?: {
+        envelopes: number
+        unwrapped: number
+        skipped: number
+        rejected: number
+        ignored: number
+        root_consulted: boolean
+      }
     }
+  }
+  /**
+   * Enroll a recovery recipient: an X25519 public key generated on the customer's own device (Vaulthalla
+   * Desktop, or the offline `vh-recovery kit create`); the server never receives the seed. Every key version
+   * the vault holds is wrapped to it now and every future version at rotation, into the vault's bucket only.
+   * Customer-controlled (class customer) is the only kind. S3 vaults only (conflict otherwise). Paired
+   * devices only (recipient_requires_device otherwise), with a keys step-up bound to the vault (#359); the
+   * encryption-key Export permission.
+   */
+  'vault.keys.recipients.add': {
+    payload: { vault_id: number; public_key: string; label?: string | null }
+    response: {
+      recipient: WsModels['VaultRecoveryRecipient']
+      envelopes_written: number
+      versions: number[]
+      note: string | null
+      recovery: WsModels['VaultRecoveryMaterial']
+    }
+  }
+  /**
+   * The vault's recovery recipients (spec 03 §5; #370): customer-held X25519 public keys every key version is
+   * wrapped to (KEV1 envelopes in the vault's own bucket), revoked ones included, with the vault's D2
+   * recovery state. Public data only; the encryption-key View permission.
+   */
+  'vault.keys.recipients.list': {
+    payload: { vault_id: number }
+    response: {
+      vault_id: number
+      vault_name: string
+      vault_uid: string
+      recipients: WsModels['VaultRecoveryRecipient'][]
+      recovery: WsModels['VaultRecoveryMaterial']
+    }
+  }
+  /**
+   * Revoke a recovery recipient: no new envelopes are written for it. Access it already has is not revoked
+   * (an envelope keeps unwrapping the versions it covers): recovery.rotation_needed says when a key rotation
+   * is needed to cut it off from new data. Paired devices only (recipient_requires_device otherwise), with a
+   * keys step-up bound to the vault (#359); the encryption-key Export permission.
+   */
+  'vault.keys.recipients.revoke': {
+    payload: { vault_id: number; grant_id: string }
+    response: { recipient: WsModels['VaultRecoveryRecipient']; recovery: WsModels['VaultRecoveryMaterial'] }
   }
   /**
    * Key backup state of every vault the caller may inspect (the encryption-key View permission; deleted
@@ -6147,9 +6106,6 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'audit.list',
   'audit.verify',
   'auth.activity',
-  'auth.approval.approve',
-  'auth.approval.deny',
-  'auth.approval.list',
   'auth.isAuthenticated',
   'auth.login',
   'auth.logout',
@@ -6182,11 +6138,6 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'dashboard.preferences.get',
   'dashboard.preferences.reset',
   'dashboard.preferences.update',
-  'device.approval.challenge',
-  'device.approval.key.register',
-  'device.approval.request',
-  'device.approval.status',
-  'device.approval.submit',
   'device.endpoints',
   'device.identity.rotate',
   'device.list',
@@ -6395,6 +6346,9 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'vault.keys.export',
   'vault.keys.export.confirm',
   'vault.keys.import',
+  'vault.keys.recipients.add',
+  'vault.keys.recipients.list',
+  'vault.keys.recipients.revoke',
   'vault.keys.status',
   'vault.recovery.disclosure',
   'vault.recovery.status',
@@ -6457,10 +6411,8 @@ export const WS_CONTRACT_STEP_UP: Readonly<Partial<Record<WsContractCommand, str
   'auth.user.change_password': 'account.credentials',
   'auth.user.delete': 'identity.admin',
   'auth.user.update': 'identity.admin',
-  'device.approval.key.register': 'device.trust',
   'device.pairing.approve': 'device.trust',
   'device.remote.enable': 'device.trust',
-  'email.config.update': 'settings',
   'email.provider.secret.set': 'secrets',
   'group.member.add': 'identity.admin',
   'group.member.remove': 'identity.admin',
@@ -6498,6 +6450,8 @@ export const WS_CONTRACT_STEP_UP: Readonly<Partial<Record<WsContractCommand, str
   'upstream.bucket.unprotect': 'data.destroy',
   'vault.keys.export': 'keys',
   'vault.keys.import': 'keys',
+  'vault.keys.recipients.add': 'keys',
+  'vault.keys.recipients.revoke': 'keys',
   'vault.recovery.suspend': 'data.destroy',
 }
 
@@ -6507,9 +6461,6 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'audit.list': 15000,
   'audit.verify': 120000,
   'auth.activity': 15000,
-  'auth.approval.approve': 20000,
-  'auth.approval.deny': 15000,
-  'auth.approval.list': 15000,
   'auth.isAuthenticated': 15000,
   'auth.login': 20000,
   'auth.logout': 15000,
@@ -6542,11 +6493,6 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'dashboard.preferences.get': 15000,
   'dashboard.preferences.reset': 15000,
   'dashboard.preferences.update': 15000,
-  'device.approval.challenge': 15000,
-  'device.approval.key.register': 15000,
-  'device.approval.request': 15000,
-  'device.approval.status': 15000,
-  'device.approval.submit': 15000,
   'device.endpoints': 15000,
   'device.identity.rotate': 15000,
   'device.list': 15000,
@@ -6755,6 +6701,9 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'vault.keys.export': 15000,
   'vault.keys.export.confirm': 15000,
   'vault.keys.import': 600000,
+  'vault.keys.recipients.add': 120000,
+  'vault.keys.recipients.list': 15000,
+  'vault.keys.recipients.revoke': 15000,
   'vault.keys.status': 15000,
   'vault.recovery.disclosure': 60000,
   'vault.recovery.status': 60000,

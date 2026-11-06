@@ -1,8 +1,8 @@
 #pragma once
 
 // A document the `vh` client reads on the caller's side and attaches to its request, so the daemon never opens a path
-// the caller names: `vh vault keys import <vault> --file <path|->` (a key export). Header-only, shared by the client
-// (core/main/cli.cpp) and the daemon (shell/Server.cpp).
+// the caller names: `vh vault keys import <vault> --file <path|->` (a key export) or `--recovery-kit <path|->` (a
+// recovery kit, #370). Header-only, shared by the client (core/main/cli.cpp) and the daemon (shell/Server.cpp).
 //
 //   request frame: {..., "input": {"v": 1, "text": "<the file's contents>"}}
 //
@@ -45,15 +45,22 @@ inline std::string lower(std::string_view s) {
     if (!(a == "vault" || a == "vaults" || a == "v") || !(b == "key" || b == "keys" || b == "k") || c != "import")
         return p;
     p.active = true;
+    bool file = false, kit = false;
     for (std::size_t i = 3; i < argv.size(); ++i) {
-        if (argv[i] != "--file" && argv[i] != "-f") continue;
+        const bool isFile = argv[i] == "--file" || argv[i] == "-f";
+        const bool isKit = argv[i] == "--recovery-kit" || argv[i] == "--kit";
+        if (!isFile && !isKit) continue;
         if (i + 1 >= argv.size() || argv[i + 1].empty()) {
-            p.error = "--file needs a file name (or - for stdin)";
+            p.error = argv[i] + " needs a file name (or - for stdin)";
             return p;
         }
+        (isFile ? file : kit) = true;
         p.path = argv[i + 1];
     }
-    if (p.path.empty()) p.error = "usage: vh vault keys import <vault> --file <export.json|-> [--confirm-name <name>]";
+    if (file && kit) p.error = "--file and --recovery-kit can't be combined: an import reads one or the other";
+    else if (p.path.empty())
+        p.error = "usage: vh vault keys import <vault> --file <export.json|-> | --recovery-kit <kit.json|-> "
+                  "[--confirm-name <name>]";
     return p;
 }
 

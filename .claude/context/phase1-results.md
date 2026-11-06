@@ -18,6 +18,8 @@ Integration branch `phase1/hardening` → PR #124. Issues #97–#133 on the "Vau
   Boost 1.83, meson 1.3.2 per the artifact's `.buildinfo`.)
 - **Lab tooling** (`tools/lab/`): `vhws.py` (ws client), `parity_smoke.py` (CLI↔web parity, 32 checks),
   `ws_churn.py` (connection churn; asserts same daemon PID), `test_providers.sh` (S3/R2 test-credential scaffold).
+  Since #357/#359 the ws clients sign admins in with TOTP and answer step-up through `tools/lab/mfa.py`
+  (`--totp-file` / `--admin-totp-file`, a 0600 TotpStore file; `vhws.py --enroll-totp` enrolls one; #395).
   Web: `web/tests/e2e/lab-first-run.spec.ts` (opt-in `VAULTHALLA_E2E_LAB=1`).
 
 ## Real-host matrix (vh-storage, Ubuntu 24.04.5, HW TPM, PG16, nginx, data disk at /var/lib/vaulthalla)

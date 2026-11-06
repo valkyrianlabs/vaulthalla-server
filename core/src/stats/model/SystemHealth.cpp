@@ -10,6 +10,10 @@
 #include "runtime/Deps.hpp"
 #include "runtime/Manager.hpp"
 #include "storage/Manager.hpp"
+#include "db/query/vault/Vault.hpp"
+#include "log/Registry.hpp"
+#include "vault/RecoveryEnvelopes.hpp"
+#include "vault/model/S3Vault.hpp"
 
 #include <algorithm>
 #include <array>
@@ -114,6 +118,7 @@ SystemHealthStatus computeOverallStatus(const SystemHealth& health) {
 
     const bool ok = health.runtime.allRunning
         && health.vaultsUnavailable.empty()
+        && health.vaultsRecoveryMaterialMissing.empty()
         && health.database->brokenIdle == 0
         && protocolsHealthy(health.protocols, health.s3Gateway)
         && depsHealthy(health.deps, health.summary);
@@ -221,6 +226,20 @@ SystemHealth SystemHealth::snapshot() {
         for (const auto& v : storage->unavailableVaults())
             out.vaultsUnavailable.push_back({.vaultId = v.vault_id, .vaultName = v.vault_name, .reason = v.reason,
                                              .detail = v.detail});
+
+    if (out.database && out.database->reachable) {
+        try {
+            for (const auto& v : db::query::vault::Vault::listLiveVaults()) {
+                const auto s3 = std::dynamic_pointer_cast<vault::model::S3Vault>(v);
+                if (!s3 || !s3->encrypt_upstream) continue;
+                if (const auto m = vault::envelopes::material(v->id); m.state == vault::envelopes::kMaterialMissing)
+                    out.vaultsRecoveryMaterialMissing.push_back({.vaultId = v->id, .vaultName = v->name,
+                                                                 .detail = m.detail});
+            }
+        } catch (const std::exception& e) {
+            log::Registry::vaulthalla()->warn("[SystemHealth] recovery material check failed: {}", e.what());
+        }
+    }
 
     const auto [protocolsReady, protocolsTotal] = protocolReadySummary(out.protocols, out.s3Gateway);
     out.summary = {
@@ -358,6 +377,15 @@ void to_json(nlohmann::json& j, const VaultUnavailableHealth& health) {
     };
 }
 
+void to_json(nlohmann::json& j, const VaultRecoveryMaterialHealth& health) {
+    j = nlohmann::json{
+        {"vault_id", health.vaultId},
+        {"vault_name", health.vaultName},
+        {"reason", vault::envelopes::kMaterialMissing},
+        {"detail", health.detail},
+    };
+}
+
 void to_json(nlohmann::json& j, const SystemHealth& health) {
     j = nlohmann::json{
         {"overall_status", to_string(health.overallStatus)},
@@ -368,6 +396,7 @@ void to_json(nlohmann::json& j, const SystemHealth& health) {
         {"shell", health.shell},
         {"database", health.database ? nlohmann::json(*health.database) : nlohmann::json(nullptr)},
         {"vaults_unavailable", health.vaultsUnavailable},
+        {"vaults_recovery_material_missing", health.vaultsRecoveryMaterialMissing},
         {"summary", health.summary},
     };
 }

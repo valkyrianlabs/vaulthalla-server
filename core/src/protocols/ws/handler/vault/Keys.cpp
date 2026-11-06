@@ -1,6 +1,7 @@
 #include "protocols/ws/handler/vault/Keys.hpp"
 
 #include "ops/Error.hpp"
+#include "ops/RecoveryRecipients.hpp"
 #include "ops/VaultKeys.hpp"
 #include "identities/User.hpp"
 #include "protocols/ws/Session.hpp"
@@ -83,6 +84,34 @@ json VaultKeys::confirmExport(const json& payload, const std::shared_ptr<Session
     return {{"vault_id", confirmed.vault_id},
             {"version", confirmed.version},
             {"exported_at", static_cast<int64_t>(confirmed.exported_at)}};
+}
+
+json VaultKeys::listRecipients(const json& payload, const std::shared_ptr<Session>& session) {
+    return ops::recovery_recipients::toJson(ops::recovery_recipients::list(actorOf(session), requiredVaultId(payload)));
+}
+
+json VaultKeys::addRecipient(const json& payload, const std::shared_ptr<Session>& session) {
+    const auto channel = channelOf(session);
+    const auto vaultId = requiredVaultId(payload);
+    if (!payload.contains("public_key") || !payload.at("public_key").is_string())
+        throw ops::Invalid("public_key is required (an X25519 public key: base64 or hex)");
+    std::optional<std::string> label;
+    if (payload.contains("label") && !payload.at("label").is_null()) {
+        if (!payload.at("label").is_string()) throw ops::Invalid("label must be a string");
+        label = payload.at("label").get<std::string>();
+    }
+    return ops::recovery_recipients::toJson(ops::recovery_recipients::add(
+        actorOf(session), {.vault_id = vaultId, .public_key = payload.at("public_key").get<std::string>(), .label = label},
+        channel));
+}
+
+json VaultKeys::revokeRecipient(const json& payload, const std::shared_ptr<Session>& session) {
+    const auto channel = channelOf(session);
+    const auto vaultId = requiredVaultId(payload);
+    if (!payload.contains("grant_id") || !payload.at("grant_id").is_string())
+        throw ops::Invalid("grant_id is required");
+    return ops::recovery_recipients::toJson(ops::recovery_recipients::revoke(
+        actorOf(session), vaultId, payload.at("grant_id").get<std::string>(), channel));
 }
 
 }

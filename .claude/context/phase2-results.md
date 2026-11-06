@@ -24,9 +24,12 @@ starts from a published package (its apt options don't allow downgrades).
 ## Lab recipe on 1.8.0+
 
 Operator for the parity smoke without the real admin password: `vh role admin create parity-op --from super_admin`,
-`vh user create parity_operator --role parity-op`, keep the `^Password: ` line in a 0600 file, run
-`tools/lab/parity_smoke.py --admin-user parity_operator ...`, then `vh user delete parity_operator --yes` (its vaults go
-with it) and delete the role.
+`vh user create parity_operator --role parity-op`, keep the `^Password: ` line in a 0600 file. Since #357 the operator
+must sign in with a second factor: enroll it once with `tools/lab/vhws.py --url ... --user parity_operator
+--password-file F --totp-file T --enroll-totp` (T gets the TOTP seed and recovery codes, 0600; it refuses to overwrite),
+then run `tools/lab/parity_smoke.py --admin-user parity_operator --admin-password-file F --admin-totp-file T ...`
+(step-up refusals, #359, are answered with the password and a code). Afterwards `vh user delete parity_operator --yes`
+(its vaults go with it), delete the role, and shred F and T. Every step mutates the lab: approval first (#395).
 
 ## S3/R2
 

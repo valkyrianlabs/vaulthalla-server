@@ -17,6 +17,8 @@ std::vector<WsStepUp> stepUpTable() {
          "outside the paired device's key-backup grant (until the grant table, #362, a paired device's export is "
          "inside it; the console is refused export_requires_device first)"},
         {"vault.keys.import", "keys", kTarget, "when it writes or salvages"},
+        {"vault.keys.recipients.add", "keys", kTarget, "(the console is refused recipient_requires_device first)"},
+        {"vault.keys.recipients.revoke", "keys", kTarget, "(the console is refused recipient_requires_device first)"},
         // device.trust: target-bound (request id + new key + chosen code), single use
         {"device.pairing.approve", "device.trust", kTarget, ""},
         {"device.remote.enable", "device.trust", kTarget, "when remote device connections are off"},

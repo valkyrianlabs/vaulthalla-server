@@ -104,7 +104,8 @@ struct WsCommandUsage {
     // the command refuses that way by design, e.g. a failed login); and the ops::Refused codes (ERROR with that
     // data.code) a client acts on where no generic kind says enough: "no_pairing_window", "rate_limited",
     // "device_unknown" (device pairing), "export_requires_device", "import_requires_device" (vault.keys.export,
-    // .export.confirm and .import on a session that isn't a paired device's: D4). Exported as `refusal_kinds`; the
+    // .export.confirm and .import on a session that isn't a paired device's: D4), "recipient_requires_device"
+    // (vault.keys.recipients.add and .revoke, likewise). Exported as `refusal_kinds`; the
     // exported `refusal_codes` is these plus the confirmation codes (the pre-version-2 shape).
     std::vector<std::string> refusal_codes{};
     std::vector<WsConfirmation> confirmations{};

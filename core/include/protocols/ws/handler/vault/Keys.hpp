@@ -15,6 +15,11 @@ struct VaultKeys {
     static json exportKeys(const json& payload, const std::shared_ptr<Session>& session);
     static json confirmExport(const json& payload, const std::shared_ptr<Session>& session);
     static json importKeys(const json& payload, const std::shared_ptr<Session>& session);
+    // Recovery recipients (ops::recovery_recipients, #370): list for any session with the View permission; add and
+    // revoke only on a paired device's session (D4; recipient_requires_device otherwise).
+    static json listRecipients(const json& payload, const std::shared_ptr<Session>& session);
+    static json addRecipient(const json& payload, const std::shared_ptr<Session>& session);
+    static json revokeRecipient(const json& payload, const std::shared_ptr<Session>& session);
 };
 
 }

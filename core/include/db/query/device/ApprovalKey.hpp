@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-// The `device_approval_keys` table (migration 127, #361): one P-256 approval key per paired device. Trusted
+// The `device_approval_keys` table (migration 128, #361): one P-256 approval key per paired device. Trusted
 // primitives: callers (ops::devices, auth::approval) authorize and validate the key.
 namespace vh::db::query::device {
 

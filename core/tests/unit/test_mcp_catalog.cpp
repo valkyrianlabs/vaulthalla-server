@@ -146,7 +146,8 @@ TEST(McpCatalog, ExclusionListIsExactlyTheAgreedOne) {
         ASSERT_TRUE(node) << p;
         EXPECT_EQ(node->primary(), ex.path.back()) << p;
     }
-    const std::vector<std::string> expected{"vault key export", "vault key import", "secrets export", "secrets update",
+    const std::vector<std::string> expected{"vault key export", "vault key import", "vault key recipient add",
+                                            "vault key recipient revoke", "secrets export", "secrets update",
                                             "secrets master rotate", "secrets master finalize",
                                             "secrets master rollback", "secrets jwt rotate",
                                             "secrets device-identity rotate", "setup",

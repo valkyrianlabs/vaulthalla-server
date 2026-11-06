@@ -538,7 +538,7 @@ without step-up (design 7.4). Capability `auth.step_up`. Console: `WsClient` `on
 satisfy, revocation, regression list).
 
 **Device approvals (#361; design 6.1-6.3, 6.5, 8.4, D6; `docs/reference/device-approvals.md`).** `auth::approval`
-(`core/{include,src}/auth/approval/`), ws `handler::Approvals`. Migration 127 `device_approval_keys` (PK device_id,
+(`core/{include,src}/auth/approval/`), ws `handler::Approvals`. Migration 128 `device_approval_keys` (PK device_id,
 91-byte P-256 SPKI, `spki_sha256` UNIQUE, `registered_via` pairing|console_approval, `revoked_at` set by
 `Devices::revoke|revokeAll`; once per device, `db::query::device::ApprovalKeys`). Registered by `device.pair.request
 approval_key` (validated `crypto::p256KeyFromSpki`, never the connection's key or a known one; inserted with the device
@@ -751,6 +751,25 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   rewritten when their content is (an overwrite, a rotation, a restore under an older key); #372 converts the rest.
   A contract test (`Vhf1AtRestTest.IntegrityContract*`, counter `crypto::util::gcmCtrDecryptAtCallsForTesting`)
   proves no VHF1 read reaches `gcmCtrDecryptAt`.
+- **Local format conversion (#372).** `vault::conversion` (`vault/FormatConversion.hpp`) re-seals legacy `gcm0` live
+  backing files and `.vh-recovery` blobs as VHF1 under the same key version (never a rotation). Per item: legacy tag
+  over the whole input + plaintext BLAKE2b while streaming (`content::openFileTo` → `content::Sealer`), then a full
+  chunk walk of the output bound to vault/salt/key version/object with its own BLAKE2b; digests, sizes and the
+  catalog's recorded plaintext size must match before anything is replaced. Live files: the rotation sidecar protocol
+  under `contentWriteMutex` (seams reused from `sync::rotation::runtimeDeps`): `<backing>.vh-rotate` → (a blob holding
+  the same generation is `link(2)`ed from the sidecar under a new store name) → one transaction (files CAS with
+  rotation's prepared statement + the blob row's CAS) → rename → unlink the old blob file; so a hard-linked blob
+  converts once and stays a link. Other blobs: new store name (O_EXCL) → CAS of the `recovery_blob` row (generation,
+  storage name, size) → unlink. Crashes are settled by the existing startup sidecar recovery and the store sweep
+  (unreferenced files). `content_hash` columns are kept (sync change detectors; rotation keeps them too). Live files
+  of encrypt-upstream cloud vaults are not converted here (local == bucket bytes; the layout migration, spec 01 §6,
+  converts both); plaintext-upstream rows without local bytes get their stale legacy id cleared, as rotation does.
+  `vault::FormatConversionService` (after VaultRetentionService; first pass 60 s after start) runs
+  `conversion::convertVault` every `vaults.format_conversion.pass_interval` for vaults with legacy rows
+  (`db::query::vault::FormatConversion`, migration 126's `content_format` + partial indexes), paced between items by
+  `max_mib_per_second` / `max_cpu_percent` (`conversion::pauseAfter`), blocked per item while
+  `rotation_in_progress()` or a `vault_key_salvage` row is running. Config is YAML-only (not in the settings JSON).
+  `vh vault format status` = `ops::vault_format::status` (encryption-key View permission).
 - **VHF1 codec** (`crypto::vhf1`, `core/include/crypto/vhf1/{Format,Writer,Reader}.hpp`; #365, spec
   `design/encryption/02-authenticated-file-format.md`). The library under VHF1 at rest (above) and the manifest v2
   objects below: the 120-byte header (HMAC-SHA-256 tag), per-sealing HKDF-SHA-256 keys from vault key + salt,
@@ -776,8 +795,21 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   epoch, root hash, ETag, refused root, gc_at) and `remote_manifest_root` (last three roots' sids). `Service` is the
   per-vault glue `CloudEngine` uses for opaque_v1 (`publishManifestV2`, `refreshRemoteIndexFromManifestIfChanged`
   verifies only and returns false); a refused root stalls the pass (`SyncStalled`) and raises one
-  `manifest_rollback` / `manifest_fork` operator notification per root. Recovery recipients (KEV1 envelopes, grants)
-  are #370; `vh vault recover` and the scratch-schema restore are #371.
+  `manifest_rollback` / `manifest_fork` operator notification per root. The root carries the vault's recovery grants
+  and each key version's envelope kids (#370, below); `vh vault recover` and the scratch-schema restore are #371.
+- **Recovery recipients and KEV1 envelopes** (#370, spec 03 §5, §5.8; migration 127). `crypto::kev1` and
+  `crypto::recovery::{RecoverySeed, Kit}` (`crypto/recovery/`, self-contained: the offline `vh-recovery` tool,
+  `core/main/recovery.cpp`, links only them, libsodium and OpenSSL). `db::query::vault::RecoveryGrants`
+  (`vault_recovery_grant`: class CHECKed to `customer`; `vault_key_envelope`). `vault::envelopes`
+  (`vault/RecoveryEnvelopes.*`): `put`/`record`/`discard` for one version (no request without a usable grant),
+  `ensure` for every held version, `material` (D2: `not_required | recipient | export | recovery_material_missing`),
+  `setStoreFactoryForTesting`. Hooks: `EncryptionManager`'s three mint paths (`commitWithEnvelopes`: envelopes PUT
+  before the version is committed, a failed PUT fails the rotation), `CloudEngine::ensureRecoveryEnvelopes` at the
+  start of each cloud pass (`sync::Cloud::initBins`), `requestManifestPublish`. `ops::recovery_recipients`
+  (list/add/revoke; `auth::stepup::require(Keys, "vault.keys.recipients.add|revoke:<vault>")`), ws
+  `vault.keys.recipients.*` (`handler::VaultKeys`), CLI `vh vault keys recipient …`, kit import through
+  `ops::vault_keys::importKeys` (`ImportRequest::recovery_kit`; `candidatesFromKit`). Health
+  `vaults_recovery_material_missing` (`stats::model::SystemHealth`) makes the node degraded.
 - **Derived cache** (`preview::cache::Store`, `cache_index` rows `type='derived'`, migration 103). One encrypted,
   disposable cache for thumbnails (`thumbnail`/`<size>`), sheet and PDF page renders (`render`/`p<page>-s<size>`),
   posters, probes, GLB, transcodes. File: `<cacheRoot>/derived/<file_id>/<kind>.<variant>.vhd` = 64-byte header

@@ -335,6 +335,23 @@ vaults:
 
 Durations take `s`, `m`, `h`, `d` or `w`. Each deletion records its own deadlines, so a change applies to vaults deleted afterwards. "Delete now" skips `retention_window` but never shortens the key retention window. The section is optional: a missing key keeps the default shown here. Settings saved from the web console apply immediately. See [Deleting And Restoring Vaults](/vaults/deleting-vaults).
 
+## Vault Format Conversion
+
+```yaml
+vaults:
+  format_conversion:
+    enabled: true             # convert legacy-format content to VHF1 in the background
+    max_mib_per_second: 32    # sealed bytes read per second; 0 = unlimited
+    max_cpu_percent: 25       # share of one CPU core, 1 to 100
+    pass_interval: 10m        # how often a pass looks for work
+```
+
+The background conversion re-seals content stored in the legacy encryption format as VHF1 (see
+[Encryption](/vaults/encryption#content-format-and-conversion)). The limits are averages: one file is converted at
+full speed and the pause after it keeps the rate and CPU share under the limits. A pass over a vault with nothing left
+costs two indexed counts. These keys are read from `config.yaml` at startup and are not changed from the web console.
+Track progress with `vh vault format status all`.
+
 ## Stats Snapshots
 
 Stats snapshot settings control dashboard trend collection and how long its history is kept:
