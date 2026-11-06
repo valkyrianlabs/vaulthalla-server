@@ -1,4 +1,5 @@
 #include "ops/Config.hpp"
+#include "auth/stepup/StepUp.hpp"
 
 #include "config/Registry.hpp"
 #include "email/Message.hpp"
@@ -135,6 +136,7 @@ Config saveSettings(const Actor& actor, const nlohmann::json& settings) {
     requireActor(actor);
     if (!actor->isSuperAdmin()) throw Denied("only super admins may change settings");
     validateSettings(settings);
+    auth::stepup::require(auth::stepup::Family::Settings);
     return commit(Config(settings));
 }
 
@@ -142,6 +144,8 @@ Config setDeviceRemote(const Actor& actor, const bool enabled) {
     requireActor(actor);
     if (!actor->isSuperAdmin()) throw Denied("only super admins may turn remote device connections on or off");
     auto next = vh::config::Registry::get();
+    if (enabled && !next.device_server.remote)
+        auth::stepup::require(auth::stepup::Family::DeviceTrust, std::string("device.remote.enable"));
     next.device_server.remote = enabled;
     return commit(next);
 }

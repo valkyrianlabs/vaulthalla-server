@@ -1,4 +1,5 @@
 #include "ops/VaultKeys.hpp"
+#include "auth/stepup/StepUp.hpp"
 
 #include "crypto/secrets/KeyProvider.hpp"
 #include "crypto/SecretBytes.hpp"
@@ -504,6 +505,9 @@ nlohmann::json toJson(const KeyStatus& s) {
 VaultExport exportVault(const Actor& actor, const unsigned int vaultId, const Channel channel) {
     requireExport(actor);
     requireKeyChannel(channel);
+    // #359: keys, bound to the vault; never inside a paired device's key-backup grant (Desktop's 1Password backup).
+    if (!auth::stepup::keyBackupGrantCovers(vaultId))
+        auth::stepup::require(auth::stepup::Family::Keys, "vault.keys.export:" + std::to_string(vaultId));
     auto out = exportFrom(sourceFor(actor, vaultId));
     log::Registry::audit()->warn("[ops::vault_keys] {} exported {} and {} other needed version(s) through {}",
                                  actor->name(), auditName(out), out.historical.size(), channelName(channel));
@@ -513,6 +517,8 @@ VaultExport exportVault(const Actor& actor, const unsigned int vaultId, const Ch
 ExportAll exportAll(const Actor& actor, const Channel channel) {
     requireExport(actor);
     requireKeyChannel(channel);
+    if (!auth::stepup::keyBackupGrantCovers(0))
+        auth::stepup::require(auth::stepup::Family::Keys, std::string("vault.keys.export:all"));
     ExportAll out;
     for (const auto& vault : db::query::vault::Vault::listLiveVaults()) {
         try {
@@ -1370,6 +1376,10 @@ ImportResult importKeys(const Actor& actor, const ImportRequest& request, const 
             throw NeedsConfirmation(salvageMode ? "vault_key_salvage" : "vault_key_import", text);
         }
     }
+
+    // #359: keys, bound to the vault, after the typed confirmation and before anything is written or salvaged.
+    if (!writes.empty() || salvageRun)
+        auth::stepup::require(auth::stepup::Family::Keys, "vault.keys.import:" + std::to_string(target.vault_id));
 
     if (!writes.empty()) {
         KeyQ::writeImported(target.vault_id, writes);

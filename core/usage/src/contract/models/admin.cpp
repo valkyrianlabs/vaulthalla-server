@@ -248,7 +248,11 @@ std::vector<WsModel> adminSettingsModels() {
         {str("host"), uinteger("port").max(65535), str("name"), str("user"), integer("pool_size")}));
     out.push_back(model("AuthConfig", "auth.* (Config.cpp to_json(AuthConfig)); the JWT secret is never part of it.",
         {uinteger("access_token_expiry_minutes"), uinteger("refresh_token_expiry_days"),
-         object("webauthn", "WebAuthnConfig").opt()}));
+         object("webauthn", "WebAuthnConfig").opt(), object("mfa", "MfaConfig").opt()}));
+    out.push_back(model("MfaConfig",
+        "auth.mfa.* (Config.cpp to_json(MfaConfig), #359): multi-factor authentication settings.",
+        {uinteger("step_up_ttl_seconds").min(60).max(900).desc(
+            "How long a step-up grant lasts, and how recent an aal 2 sign-in must be to stand in for a family-wide one.")}));
     out.push_back(model("WebAuthnConfig",
         "auth.webauthn.* (Config.cpp to_json(WebAuthnConfig), #355): the passkey relying party, explicit configuration "
         "only (never derived from request headers). An empty rp_id means passkeys are unavailable.",

@@ -7,6 +7,7 @@
 #include "auth/model/TokenPair.hpp"
 #include "auth/session/Issuer.hpp"
 #include "auth/session/Validator.hpp"
+#include "auth/stepup/StepUp.hpp"
 #include "crypto/util/hash.hpp"
 #include "db/query/auth/RefreshToken.hpp"
 #include "log/Registry.hpp"
@@ -581,6 +582,8 @@ void Manager::invalidate(const std::shared_ptr<Session>& session) {
 
     if (session->tokens)
         session->tokens->invalidate();
+    // #359: logout, idle sign-out, revocation and the MFA policy all end here, and the step-up grants with them.
+    session->stepUp().clear();
 
     {
         std::lock_guard lock(sessionMutex_);

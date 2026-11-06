@@ -18,6 +18,14 @@ std::vector<WsCommandUsage> commands() {
         all.insert(all.end(), std::make_move_iterator(part.begin()), std::make_move_iterator(part.end()));
 
     std::ranges::sort(all, {}, &WsCommandUsage::command);
+    // #359: the step-up families, from their one table.
+    for (const auto& row : stepUpTable()) {
+        const auto it = std::ranges::find(all, row.command, &WsCommandUsage::command);
+        if (it == all.end()) throw std::logic_error("step-up table names " + row.command + ", which the book lacks");
+        it->step_up = row.family;
+        if (std::ranges::find(it->refusal_codes, "step_up_required") == it->refusal_codes.end())
+            it->refusal_codes.emplace_back("step_up_required");
+    }
     if (const auto dup = std::ranges::adjacent_find(all, {}, &WsCommandUsage::command); dup != all.end())
         throw std::logic_error("ws command book declares " + dup->command + " twice");
     return all;

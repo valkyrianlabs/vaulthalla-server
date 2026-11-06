@@ -101,6 +101,9 @@ public:
     // The socket's MFA state (auth/mfa/Pending.hpp): a pending-MFA sign-in, which is not a signed-in session (`user`
     // stays null until the factor succeeds), and an open passkey registration. Dies with the socket.
     [[nodiscard]] auth::mfa::SessionState& mfa() const noexcept { return *mfa_; }
+    // The socket's step-up grants and open ceremony (auth/stepup/StepUp.hpp, #359): never visible to another session,
+    // dropped when the session is invalidated or closes.
+    [[nodiscard]] auth::stepup::SessionState& stepUp() const noexcept { return *stepUp_; }
 
     std::shared_ptr<handler::fs::Upload> getUploadHandler();
     [[nodiscard]] SessionMode mode() const noexcept { return mode_; }
@@ -180,6 +183,7 @@ private:
 
     std::shared_ptr<Router> router_;
     std::unique_ptr<auth::mfa::SessionState> mfa_;
+    std::unique_ptr<auth::stepup::SessionState> stepUp_;
     SessionMode mode_{SessionMode::Unauthenticated};
     std::shared_ptr<vh::share::Principal> sharePrincipal_{nullptr};
     std::string shareSessionId_;

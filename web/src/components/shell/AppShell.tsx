@@ -13,6 +13,7 @@ import { BarsIcon, ChevronLeftIcon, MagnifyingGlassIcon } from '@/components/ui/
 import { Kbd } from '@/components/ui/Badge'
 import dynamic from 'next/dynamic'
 import { useCommandPalette } from '@/components/shell/commandPaletteStore'
+import { useStepUp } from '@/lib/stepUp'
 import { useVisibleNav } from '@/components/shell/useVisibleNav'
 import { UserMenu } from '@/components/shell/UserMenu'
 import { ConnectionIndicator } from '@/components/shell/ConnectionIndicator'
@@ -22,6 +23,9 @@ import Logo from '@/public/vaulthalla-logo.png'
 
 // cmdk loads the first time the palette opens.
 const CommandPalette = dynamic(() => import('@/components/shell/CommandPalette').then(m => m.CommandPalette), { ssr: false })
+
+// The Step-up dialog (#359) loads the first time a command asks for a step-up.
+const StepUpDialog = dynamic(() => import('@/features/auth/stepup/StepUpDialog').then(m => m.StepUpDialog), { ssr: false })
 
 const isActive = (pathname: string, href: string) => pathname === href || pathname.startsWith(`${href}/`)
 
@@ -173,6 +177,12 @@ const PaletteMount = () => {
   return mounted ? <CommandPalette /> : null
 }
 
+const StepUpMount = () => {
+  const prompt = useStepUp(state => state.prompt)
+  // Keyed by the prompt: each one starts its own ceremony.
+  return prompt ? <StepUpDialog key={prompt.id} /> : null
+}
+
 export const AppShell = ({ children }: { children: React.ReactNode }) => (
   <div className="flex min-h-dvh">
     <Rail />
@@ -186,5 +196,6 @@ export const AppShell = ({ children }: { children: React.ReactNode }) => (
       </main>
     </div>
     <PaletteMount />
+    <StepUpMount />
   </div>
 )

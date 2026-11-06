@@ -33,6 +33,8 @@ struct Mfa {
     static json totpStart(const json& payload, const std::shared_ptr<Session>& session);
     static json totpConfirm(const json& payload, const std::shared_ptr<Session>& session);
     static json renameFactor(const json& payload, const std::shared_ptr<Session>& session);
+    // #359: account.credentials step-up; never the last factor of an account that must have MFA (mfa_last_factor).
+    static json removeFactor(const json& payload, const std::shared_ptr<Session>& session);
     static json generateRecovery(const std::shared_ptr<Session>& session);
     static json acknowledgeRecovery(const json& payload, const std::shared_ptr<Session>& session);
 

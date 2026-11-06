@@ -15,3 +15,7 @@ namespace vh::auth::session {
 namespace vh::auth::mfa {
     class SessionState;
 }
+
+namespace vh::auth::stepup {
+    class SessionState;
+}

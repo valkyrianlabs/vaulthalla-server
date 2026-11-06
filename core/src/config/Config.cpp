@@ -138,6 +138,7 @@ Config& Config::operator=(Config&&) noexcept = default;
             YAML::convert<AuthConfig>::decode(node, cfg.auth);
             try {
                 validateWebAuthn(cfg.auth.webauthn);
+                validateMfa(cfg.auth.mfa);
             } catch (const std::invalid_argument& e) {
                 throw std::invalid_argument(std::string("config.yaml: ") + e.what());
             }
@@ -748,7 +749,8 @@ Config& Config::operator=(Config&&) noexcept = default;
         j = {
             {"access_token_expiry_minutes", c.access_token_expiry_minutes},
             {"refresh_token_expiry_days", c.refresh_token_expiry_days},
-            {"webauthn", c.webauthn}
+            {"webauthn", c.webauthn},
+            {"mfa", c.mfa}
             // Do not serialize jwt_secret
         };
     }
@@ -758,6 +760,29 @@ Config& Config::operator=(Config&&) noexcept = default;
         c.refresh_token_expiry_days = j.value("refresh_token_expiry_days", 7);
         c.webauthn = WebAuthnConfig{};
         if (j.contains("webauthn")) j.at("webauthn").get_to(c.webauthn);
+        c.mfa = MfaConfig{};
+        if (j.contains("mfa")) j.at("mfa").get_to(c.mfa);
+    }
+
+    void to_json(nlohmann::json &j, const MfaConfig &c) {
+        j = {{"step_up_ttl_seconds", c.step_up_ttl_seconds}};
+    }
+
+    // A key left out keeps its default; the result is validated as config.yaml is (settings.update answers invalid).
+    void from_json(const nlohmann::json &j, MfaConfig &c) {
+        const MfaConfig d;
+        const auto& ttl = j.contains("step_up_ttl_seconds") ? j.at("step_up_ttl_seconds") : nlohmann::json(nullptr);
+        if (!ttl.is_null() && !ttl.is_number_integer())
+            throw std::invalid_argument("auth.mfa.step_up_ttl_seconds must be a whole number of seconds");
+        const auto seconds = ttl.is_null() ? static_cast<long long>(d.step_up_ttl_seconds) : ttl.get<long long>();
+        if (seconds < 60 || seconds > 900)
+            throw std::invalid_argument("auth.mfa.step_up_ttl_seconds must be between 60 and 900");
+        c.step_up_ttl_seconds = static_cast<unsigned int>(seconds);
+    }
+
+    void validateMfa(const MfaConfig &c) {
+        if (c.step_up_ttl_seconds < 60 || c.step_up_ttl_seconds > 900)
+            throw std::invalid_argument("auth.mfa.step_up_ttl_seconds must be between 60 and 900");
     }
 
     void to_json(nlohmann::json &j, const WebAuthnConfig &c) {

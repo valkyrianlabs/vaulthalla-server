@@ -3,6 +3,7 @@
 // where they meet and the only place they are authorized. See .claude/context/recovery.md.
 
 #include "ops/Recovery.hpp"
+#include "auth/stepup/StepUp.hpp"
 
 #include "db/query/recovery/ObjectVersion.hpp"
 #include "ops/RecoveryAccess.hpp"
@@ -382,6 +383,7 @@ void deletePoint(const Actor& actor, const std::string& recoveryId, const bool c
     if (!confirm)
         throw NeedsConfirmation(POINT_DELETE, "Delete recovery point " + recoveryId + " (" + point.path +
                                               ")? This permanently removes what it retained.");
+    auth::stepup::require(auth::stepup::Family::DataDestroy, "recovery.point.delete:" + recoveryId);
     if (resolved.id.type == rec::RecoveryId::Type::Snapshot) rec::local::snapshots::remove(static_cast<int64_t>(resolved.id.id));
     else rec::local::removeVersion(static_cast<int64_t>(resolved.id.id));
     log::Registry::audit()->info("[ops::recovery] {} deleted recovery point {} ({}) in vault {}", actor->name(),

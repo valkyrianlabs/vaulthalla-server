@@ -479,6 +479,9 @@ struct convert<AuthConfig> {
         webauthn["rp_name"] = rhs.webauthn.rp_name;
         webauthn["origins"] = rhs.webauthn.origins;
         node["webauthn"] = webauthn;
+        Node mfa;
+        mfa["step_up_ttl_seconds"] = rhs.mfa.step_up_ttl_seconds;
+        node["mfa"] = mfa;
         return node;
     }
 
@@ -502,6 +505,13 @@ struct convert<AuthConfig> {
                 if (!o.IsSequence()) throw std::invalid_argument("auth.webauthn.origins must be a list of origins");
                 rhs.webauthn.origins = o.as<std::vector<std::string>>();
             }
+        }
+        // auth.mfa (#359): validated by loadConfig (validateMfa).
+        if (const auto m = node["mfa"]) {
+            if (!m.IsMap()) throw std::invalid_argument("auth.mfa must be a map (step_up_ttl_seconds)");
+            const MfaConfig d;
+            rhs.mfa.step_up_ttl_seconds = m["step_up_ttl_seconds"] ? m["step_up_ttl_seconds"].as<unsigned int>()
+                                                                   : d.step_up_ttl_seconds;
         }
         return true;
     }
