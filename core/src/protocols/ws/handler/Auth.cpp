@@ -9,7 +9,10 @@
 #include "db/query/identities/User.hpp"
 #include "protocols/ws/Session.hpp"
 #include "protocols/ws/ShareRateLimit.hpp"
+#include "ops/Sessions.hpp"
 #include "ops/Users.hpp"
+#include "auth/model/RefreshToken.hpp"
+#include "auth/model/TokenPair.hpp"
 
 using namespace vh::protocols::ws::handler;
 using namespace vh::auth;
@@ -17,6 +20,14 @@ using vh::identities::User;
 using vh::identities::Group;
 
 namespace {
+// The refresh token of the web session asking (none on a device session).
+std::optional<std::string> currentRefreshJti(const std::shared_ptr<vh::protocols::ws::Session>& session) {
+    if (!session || session->onDeviceListener() || !session->tokens || !session->tokens->refreshToken)
+        return std::nullopt;
+    const auto& jti = session->tokens->refreshToken->jti;
+    return jti.empty() ? std::nullopt : std::optional<std::string>(jti);
+}
+
 // Account-management handlers are routed only for authenticated human sessions, but never trust that here: a null
 // session user would be a daemon-killing null dereference, not a catchable error.
 const std::shared_ptr<User>& requireSessionUser(const std::shared_ptr<vh::protocols::ws::Session>& session) {
@@ -49,6 +60,11 @@ json Auth::sessionUser(const User& user) {
 json Auth::login(const json &payload, const std::shared_ptr<Session> &session) {
     const auto username = payload.at("name").get<std::string>();
     const auto password = payload.at("password").get<std::string>();
+
+    // #354: a socket signs in once (data.code already_signed_in). Not a failed attempt: it doesn't count toward the
+    // rate limit, and no password is checked.
+    if (session && session->user)
+        throw vh::ops::Refused(std::string(vh::auth::Manager::kAlreadySignedIn), "This connection is already signed in");
 
     try {
         runtime::Deps::get().authManager->loginUser(username, password, session);
@@ -141,6 +157,19 @@ json Auth::getUser(const json &payload, const std::shared_ptr<Session> &session)
 json Auth::activity(const std::shared_ptr<Session> &session) {
     runtime::Deps::get().sessionManager->noteUserActivity(session);
     return {};
+}
+
+json Auth::listSessions(const std::shared_ptr<Session> &session) {
+    json sessions = ops::sessions::list(requireSessionUser(session), currentRefreshJti(session));
+    return {{"sessions", std::move(sessions)}};
+}
+
+json Auth::revokeSessions(const json &payload, const std::shared_ptr<Session> &session) {
+    ops::sessions::Revoke req;
+    if (payload.contains("id") && !payload.at("id").is_null()) req.id = payload.at("id").get<std::string>();
+    req.all_others = payload.value("all_others", false);
+    const auto revoked = ops::sessions::revoke(requireSessionUser(session), currentRefreshJti(session), req, session);
+    return {{"revoked", revoked}};
 }
 
 json Auth::logout(const std::shared_ptr<Session> &session) {

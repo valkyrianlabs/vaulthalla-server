@@ -337,13 +337,14 @@ bool payloadDeclares(const contract::WsCommandUsage& cmd, const std::string& dot
 TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
     static const std::set<std::string> kKinds{"denied", "not_found", "invalid", "conflict", "unauthorized", "error"};
     // ops::Refused codes (core/include/ops/Error.hpp), each allowed only on the commands that send it: device
-    // pairing's, the vault key commands' D4 channel refusals (a session that isn't a paired device's), and meta.hello's
-    // protocol_unsupported (no protocol version in common).
+    // pairing's, the vault key commands' D4 channel refusals (a session that isn't a paired device's), meta.hello's
+    // protocol_unsupported (no protocol version in common) and auth.login's already_signed_in (#354).
     static const std::map<std::string, std::set<std::string>> kRefusedCodes{
         {"no_pairing_window", {}}, {"rate_limited", {}}, {"device_unknown", {}},
         {"export_requires_device", {"vault.keys.export", "vault.keys.export.confirm"}},
         {"import_requires_device", {"vault.keys.import"}},
-        {"protocol_unsupported", {"meta.hello"}}};
+        {"protocol_unsupported", {"meta.hello"}},
+        {"already_signed_in", {"auth.login"}}};
     const auto refusedCodeAllowed = [](const std::string& code, const std::string& command) {
         const auto it = kRefusedCodes.find(code);
         if (it == kRefusedCodes.end()) return false;

@@ -241,7 +241,7 @@ device listener device and device-pairing (see "Device listener and pairing" bel
 Only the session-lifecycle commands (`auth.login`, `auth.logout`, `auth.refresh`, `auth.isAuthenticated`) skip
 access-token validation (`isSessionLifecycleCommand`, mirrored by the web's
 `SESSION_LIFECYCLE_COMMANDS`). Every other `auth.*` command (register, user update/delete/get/list, password change)
-is account management and goes through `RequireHumanAuth`. A `starts_with("auth")` rule used to let unauthenticated
+is account management and goes through `RequireHumanAuth` (so are `auth.sessions.list|revoke`, #354). A `starts_with("auth")` rule used to let unauthenticated
 sockets reach handlers that dereference `session->user` (a remote daemon segfault); `WsAuthRouting.*` guards it.
 There is no password gate (removed in 1.8.0, with the universal default password): a valid session is fully
 authenticated. The super admin's initial-credential posture is advisory only: `auth.security.status` (human auth,
@@ -381,6 +381,29 @@ is `TEXT`. Guard: `RefreshTokenDigest*` unit tests. A cookie-authenticated HTTP 
 rehydrates from the stored row on every request (one `Transactions::read`, so revocation is immediate); the owner is
 `refresh_tokens.user_id` resolved through `identities::Manager` (a deleted account is a non-authorizing tombstone),
 and the JWT secret is cached in `crypto::secrets::Manager` (written only through it, which republishes).
+
+**Session assurance and write-once promotion (#354, migration 119; MFA design note §5.3).** `refresh_tokens` carries
+`aal` (1|2), `amr TEXT[]` (`pwd`, `hwk`, `swk`, `otp`, `rec`) and `auth_time`; rows from before read as aal 1, `{pwd}`,
+`auth_time = issued_at`. `session::Manager::promote(session, assurance::Proof)` inserts the row **once**
+(`RefreshToken::insertOnce`, `ON CONFLICT (jti) DO NOTHING`): a jti that already has a row is never promoted or
+adopted again. A socket's refresh JWT is minted at its own handshake: `Validator::validateRefreshToken` rehydrates
+**only from the stored row** (the old prior-session shortcut, which let a socket adopt another live socket's rowless
+cookie, is gone), so a planted cookie is rotated away at the handshake. `auth.login` on a socket that already has a
+user is `ops::Refused` `already_signed_in` (before any lookup; not counted by the login rate limit). The MFA policy
+hook `auth::session::assurance` (`Assurance.hpp`; no policy installed until #360) is checked against the row on every
+use: `rehydrateFromStoredRefreshToken` (handshake, validate, auth.refresh), the HTTP lanes' stored-row path, and
+`Manager::endIfBelowPolicy` on every `validate`/`renewAccessToken`/`validateRawRefreshToken`; a row below policy is
+revoked (`auth.session.revoke`, reason `assurance_policy`). `assurance::setPolicy` / `policyChanged()` bump
+`rbac::policyEpoch()`, so the 30 s cache can't hide a change. Sessions list/revoke: `ops::sessions` (own account
+only; ids are a keyed BLAKE2b of the jti under a per-process key, never the jti), ws `auth.sessions.list` /
+`auth.sessions.revoke {id} | {all_others}`; revoking revokes the rows, then `Manager::endSessionsWithRefreshJti`
+invalidates and closes every live socket holding them (the caller's after its reply), so the HTTP lanes refuse the
+cookie on the next request. Console: Account › Security › Sessions (`web/src/features/account/SessionsPanel.tsx`).
+Tabs on the sign-in page each get their own cookie (the last handshake's wins), so the console's `login()` reconnects
+first (`WsClient.reconnect`): the socket that signs in is the one that set the browser's current cookie, and a
+connection that comes up already signed in (another tab won) answers `already_signed_in`, which `login()` turns into
+`auth.refresh`. Tests: `SessionAssurance*`,
+`WsAuthRouting.AuthLoginOnASignedInSocketIsAlreadySignedIn`, `SqlDeployerHistoryDb.RefreshTokenAssurance*`.
 
 **Identities (`identities::Manager`, `core/{include,src}/identities/`).** One canonical `User`/`Group` object per id,
 handed out as the same `shared_ptr` everywhere (sessions, engines, FUSE, HTTP, S3). Each holds an immutable

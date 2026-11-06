@@ -20,7 +20,11 @@
 - **Session:** `src/lib/session.ts`. The access token lives **in memory only**; the HttpOnly `refresh` cookie set at
   the ws handshake re-issues it (`auth.refresh`) on every page load. Single-flight refresh; an `UNAUTHORIZED`
   response refreshes and retries once (the router never ran it). Logout sends `auth.logout`, runs every
-  `onSessionReset` handler, clears legacy `vaulthalla-*` keys and hard-navigates to `/login`.
+  `onSessionReset` handler, clears legacy `vaulthalla-*` keys and hard-navigates to `/login`. `login()` reconnects the
+  socket first (`WsClient.reconnect`) so the signing-in socket owns the browser's current cookie (#354: the server
+  never lets a socket adopt another socket's cookie), and treats `already_signed_in` as "another tab won": it
+  `auth.refresh`es instead. Account › Security › Sessions (`features/account/SessionsPanel.tsx`) lists and revokes
+  the user's sessions (`auth.sessions.list|revoke`).
 - **Server data:** TanStack Query over ws (`src/lib/query.ts`: `useWs`, `useWsMutation`, `invalidate`, `fetchWs`).
   Polling = `refetchInterval` (deduped, ref-counted, paused in hidden tabs). No Zustand stores for server data;
   Zustand only for client state (transfers, UI prefs, confirm/palette state).
