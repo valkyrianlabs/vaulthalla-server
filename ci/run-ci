@@ -123,6 +123,8 @@ build_jobs=$(( memory_bytes * 10 / (24 * 1024 * 1024 * 1024) ))
 cpus="$(nproc)"
 [ "$build_jobs" -ge 1 ] || build_jobs=1
 [ "$build_jobs" -le "$cpus" ] || build_jobs="$cpus"
+# CI_BUILD_JOBS overrides the memory-derived count (measurement, or a host whose job lock admits fewer jobs at once).
+build_jobs="${CI_BUILD_JOBS:-$build_jobs}"
 
 # --- environment -----------------------------------------------------------------------------
 # The step's environment (workflow/job/step env, secrets it was given, GITHUB_*, RUNNER_*, OIDC

@@ -24,6 +24,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
     CCACHE_DIR=/cache/ccache \
     CCACHE_MAXSIZE=10G \
+    CCACHE_SLOPPINESS=pch_defines,time_macros,include_file_mtime,include_file_ctime \
     HOME=/home/ci \
     CI=true
 
