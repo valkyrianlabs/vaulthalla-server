@@ -190,7 +190,6 @@ Result recover(const Actor& actor, const Request& req, const vault_keys::Channel
     const bool salvage = !blocking.empty();
     result.mode = salvage ? "salvage" : "canonical";
     result.report["mode"] = result.mode;
-    result.report["vault_name"] = result.vault_name;
 
     // Files sealed under a version nothing holds (or a refused key) can't be read or salvaged: left out, reported.
     std::set<std::string> skip;

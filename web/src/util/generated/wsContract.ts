@@ -6,10 +6,10 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = '4bf2db17f1b0a409329311aaadb210ffa7b70dd526bd910c21a5e2f5001e1478'
+export const WS_CONTRACT_HASH = 'a84d7b7ade3f3718827c112169fb30db5ba8bb3b5dc33778dd03270eae570299'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = '6efaac4235d9c6d9e26d539f478a73d601a5498e52e6d21fc6460220bc73542d'
+export const WS_MODELS_HASH = '341d2a620adbed8657e0fe3ae19ac3aaedf1067bd9fc9b03dda052931a00652f'
 
 // The ws protocol range this book is (core/usage WsProtocol.hpp): send it in meta.hello.
 export const WS_PROTOCOL_VERSION = 1
@@ -2650,7 +2650,7 @@ export interface WsModels {
   'VaultRecoverResult': {
     vault_uid: string
     origin: { node_id: string | null; vault_id: number | null }
-    vault_name: string | null
+    manifest_vault_name: string | null
     blind: boolean
     epoch: number | null
     root_sha256: string | null
@@ -6420,7 +6420,7 @@ export interface WsContract {
     response: {
       vault_uid: string
       origin: { node_id: string | null; vault_id: number | null }
-      vault_name: string | null
+      manifest_vault_name: string | null
       blind: boolean
       epoch: number | null
       root_sha256: string | null

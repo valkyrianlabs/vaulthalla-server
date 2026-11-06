@@ -960,6 +960,7 @@ TEST_F(OpaqueLayoutTest, NewEncryptingVaultsAreOpaqueV1) {
     EXPECT_THROW((void)db::query::vault::Vault::upsertVault(refused, std::make_shared<sync::model::RemotePolicy>()),
                  std::invalid_argument);
     paths::testMode = true;
+    vault::model::setNewEncryptingLayoutForTesting(vault::model::StorageLayout::PathV0);  // this binary's default
     // An existing transparent vault that starts encrypting moves to path_v0 (into opaque_v1 only by WS1-c).
     plain->encrypt_upstream = true;
     EXPECT_NO_THROW((void)db::query::vault::Vault::upsertVault(plain));

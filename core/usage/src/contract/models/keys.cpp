@@ -278,7 +278,7 @@ std::vector<WsModel> vaultKeyModels() {
         {str("vault_uid").desc("The vault's uid (26 base32 symbols): the same as in the bucket."),
          object("origin", "", {str("node_id").nullable(), uinteger("vault_id").nullable()})
              .desc("Where the manifest was produced (the root's producer), or what the material says without one."),
-         str("vault_name").nullable().desc("The manifest's name for the vault; null in a blind rebuild."),
+         str("manifest_vault_name").nullable().desc("The manifest's name for the vault; null in a blind rebuild."),
          boolean("blind").desc("No usable manifest root: content recovered under /Recovered without names (§4.3)."),
          uinteger("epoch").nullable().desc("The loaded root's epoch."),
          str("root_sha256").nullable(),

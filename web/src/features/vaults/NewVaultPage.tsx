@@ -21,7 +21,7 @@ import { syncFormDefaults, syncPayload, type SyncFormValues } from '@/features/v
 import { RequestGuardrailFields, SyncPolicyFields } from '@/features/vaults/sync/SyncPolicyFields'
 import { QuotaInput, quotaBytes, SLUG_PATTERN, storageTierOptions, validateFuseName, type QuotaUnit } from '@/features/vaults/fields'
 import { withEncryptionWaiver } from '@/features/vaults/waiver'
-import { UPSTREAM_ENCRYPTION_OFF, UPSTREAM_ENCRYPTION_ON } from '@/features/vaults/encryptionCopy'
+import { UPSTREAM_ENCRYPTION_NEW, UPSTREAM_ENCRYPTION_OFF } from '@/features/vaults/encryptionCopy'
 import { useServerPolicy } from '@/lib/serverPolicy'
 import { useUpstreamPerms, withConfirmation } from '@/features/credentials/upstream/hooks'
 import {
@@ -279,7 +279,7 @@ const NewVaultForm = () => {
               <SwitchRow
                 id={`${ids}-encrypt`}
                 label="Encrypt objects before upload"
-                hint={encrypt ? `${UPSTREAM_ENCRYPTION_ON} Recommended.` : UPSTREAM_ENCRYPTION_OFF}
+                hint={encrypt ? `${UPSTREAM_ENCRYPTION_NEW} Recommended.` : UPSTREAM_ENCRYPTION_OFF}
                 checked={encrypt}
                 onCheckedChange={value => setValue('encrypt_upstream', value)}
               />

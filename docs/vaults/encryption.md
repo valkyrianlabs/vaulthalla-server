@@ -129,7 +129,7 @@ Your storage provider only ever sees encrypted, opaquely named objects. It can't
 - Each file is one encrypted object named by a random id (`o/<id>`), with no metadata; names, folders and the vault's history live in an encrypted manifest in the same bucket (`.vaulthalla/`).
 - Decrypting the objects needs this vault's keys, which stay on your server, in your [key exports](#export-vault-keys), and wrapped to your [recovery kit](/vaults/secrets-and-key-export#recovery-recipients). With the kit, the vault can be rebuilt on another server from its bucket (see [Restore A Vault From Its Bucket](/vaults/secrets-and-key-export#restore-a-vault-from-its-bucket)); that needs your recovery material, never the bucket by itself.
 
-Encrypting S3/R2 vaults created before this release keep the earlier layout until a later release migrates them: file contents are encrypted before upload. File and folder names are visible to your storage provider.
+Encrypting S3/R2 vaults created before this release keep the earlier layout until a later release migrates them. File contents are encrypted before upload. File and folder names are visible to your storage provider.
 
 - Each object is named after the file's path in the vault, so the bucket's provider, and anyone with read access to the bucket, sees file and folder names, the folder tree, object sizes and counts, when objects change, and the provider metadata (encryption status, IV, key version, content hash).
 - Restoring such a vault needs its database as well (see [Restore Vault Keys](/vaults/secrets-and-key-export#restore-vault-keys)).

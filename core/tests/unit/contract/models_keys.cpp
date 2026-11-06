@@ -206,7 +206,7 @@ nlohmann::json recoverResult(const bool written) {
     r.report = {
         {"vault_uid", "as4f38nkrkaydxr834n3pk2xdr"},
         {"origin", {{"node_id", "00000000-0000-4000-8000-00000000000a"}, {"vault_id", 42}}},
-        {"vault_name", written ? nlohmann::json("finance") : nlohmann::json(nullptr)},
+        {"manifest_vault_name", written ? nlohmann::json("finance") : nlohmann::json(nullptr)},
         {"blind", !written},
         {"epoch", written ? nlohmann::json(812) : nlohmann::json(nullptr)},
         {"root_sha256", written ? nlohmann::json(std::string(64, 'a')) : nlohmann::json(nullptr)},

@@ -17048,7 +17048,7 @@
         },
         {
           "description": "The manifest's name for the vault; null in a blind rebuild.",
-          "name": "vault_name",
+          "name": "manifest_vault_name",
           "required": true,
           "types": [
             "string",
@@ -19557,7 +19557,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "6efaac4235d9c6d9e26d539f478a73d601a5498e52e6d21fc6460220bc73542d",
+  "models_hash": "341d2a620adbed8657e0fe3ae19ac3aaedf1067bd9fc9b03dda052931a00652f",
   "protocol": {
     "min": 1,
     "version": 1
@@ -45801,7 +45801,7 @@
         },
         {
           "description": "The manifest's name for the vault; null in a blind rebuild.",
-          "name": "vault_name",
+          "name": "manifest_vault_name",
           "required": true,
           "types": [
             "string",
@@ -46999,5 +46999,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "4bf2db17f1b0a409329311aaadb210ffa7b70dd526bd910c21a5e2f5001e1478"
+  "ws_hash": "a84d7b7ade3f3718827c112169fb30db5ba8bb3b5dc33778dd03270eae570299"
 }

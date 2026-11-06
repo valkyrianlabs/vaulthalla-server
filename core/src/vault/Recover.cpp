@@ -961,7 +961,7 @@ nlohmann::json toJson(const Plan& p) {
         {"vault_uid", mf::uidText(p.vault_uid)},
         {"origin", {{"node_id", p.origin_node_id.empty() ? nlohmann::json(nullptr) : nlohmann::json(p.origin_node_id)},
                     {"vault_id", p.origin_vault_id ? nlohmann::json(*p.origin_vault_id) : nlohmann::json(nullptr)}}},
-        {"vault_name", p.vault_name ? nlohmann::json(*p.vault_name) : nlohmann::json(nullptr)},
+        {"manifest_vault_name", p.vault_name ? nlohmann::json(*p.vault_name) : nlohmann::json(nullptr)},
         {"blind", p.blind},
         {"epoch", p.epoch ? nlohmann::json(*p.epoch) : nlohmann::json(nullptr)},
         {"root_sha256", p.root_sha256 ? nlohmann::json(*p.root_sha256) : nlohmann::json(nullptr)},

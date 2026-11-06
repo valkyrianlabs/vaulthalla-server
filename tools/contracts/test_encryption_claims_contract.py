@@ -16,6 +16,8 @@ from tools.contracts import encryption_claims as claims
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PATH_V0 = "File contents are encrypted before upload. File and folder names are visible to your storage provider."
+OPAQUE_V1 = ("Your storage provider only ever sees encrypted, opaquely named objects. It can't see your file names, "
+             "folders or contents. It can see how many objects you store, their sizes and when they change.")
 
 
 def rule_ids(text: str, *, prose: bool = True) -> list[str]:
@@ -181,12 +183,17 @@ class RepositoryClaimsTests(unittest.TestCase):
     def test_docs_and_console_use_the_path_v0_sentence(self) -> None:
         doc = (REPO_ROOT / "docs/vaults/encryption.md").read_text(encoding="utf-8")
         self.assertIn(PATH_V0, doc)
+        self.assertIn(OPAQUE_V1, " ".join(doc.split()))
         copy = (REPO_ROOT / "web/src/features/vaults/encryptionCopy.ts").read_text(encoding="utf-8")
-        self.assertIn(PATH_V0, " ".join(line.strip().strip("'") for line in copy.splitlines()))
-        for page in ("web/src/features/vaults/NewVaultPage.tsx", "web/src/features/vaults/settings/VaultSettings.tsx",
-                     "web/src/features/gateway/BucketDialogs.tsx"):
+        joined = "".join(line.strip().rstrip("+").strip().strip("'\"") for line in copy.splitlines())
+        self.assertIn(PATH_V0, joined)
+        self.assertIn(OPAQUE_V1, joined)
+        # New encrypting vaults are opaque_v1 (#371); an existing vault that turns encryption on is path_v0 (WS1-c).
+        for page, constant in (("web/src/features/vaults/NewVaultPage.tsx", "UPSTREAM_ENCRYPTION_NEW"),
+                               ("web/src/features/gateway/BucketDialogs.tsx", "UPSTREAM_ENCRYPTION_NEW"),
+                               ("web/src/features/vaults/settings/VaultSettings.tsx", "UPSTREAM_ENCRYPTION_ON")):
             with self.subTest(page=page):
-                self.assertIn("UPSTREAM_ENCRYPTION_ON", (REPO_ROOT / page).read_text(encoding="utf-8"))
+                self.assertIn(constant, (REPO_ROOT / page).read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

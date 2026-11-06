@@ -223,7 +223,8 @@ TEST_F(ObjectUidDbTest, VaultsGetAUidAndALayoutThatFollowsEncryption) {
     using vault::model::StorageLayout;
 
     // A request can't pick the layout: it follows encrypt_upstream.
-    // The path_v0 data plane's seam (test mode only): new encrypting vaults otherwise get opaque_v1, below.
+    // The path_v0 data plane's seam (test mode only; gtest_main sets it for this binary): new encrypting vaults
+    // otherwise get opaque_v1, below.
     vault::model::setNewEncryptingLayoutForTesting(StorageLayout::PathV0);
     const auto encrypting = create(true, StorageLayout::Transparent);
     vault::model::setNewEncryptingLayoutForTesting(std::nullopt);
@@ -263,7 +264,6 @@ TEST_F(ObjectUidDbTest, VaultsGetAUidAndALayoutThatFollowsEncryption) {
     EXPECT_EQ(storedLayout(create(true, StorageLayout::PathV0)->id), "opaque_v1") << "outside test mode too";
     vault::model::setNewEncryptingLayoutForTesting(StorageLayout::PathV0);
     EXPECT_EQ(storedLayout(create(true, StorageLayout::PathV0)->id), "opaque_v1") << "the seam is test mode's only";
-    vault::model::setNewEncryptingLayoutForTesting(std::nullopt);
     paths::testMode = true;
 }
 

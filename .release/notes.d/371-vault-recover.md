@@ -34,3 +34,8 @@ deleted root (versioned → the newest retained root; unversioned → blind rebu
 rollback refused against the checkpoint and accepted explicitly, wrong seed, a kit for another vault, an export alone
 after a rotation (the later version reported missing, never invented), and kits with no, another node's or the
 restoring node's own attestation keys (salvage only).
+
+The same drill ran live on Cloudflare R2 the same day (`tools/harness/drill_recover_r2.sh`, 300 files, nodes A, B and C
+as independent private instances on one host, bucket `vh-test-recover-drill` deleted afterwards): 16/16 checks; the
+restore took 5.8 s and read 0 content bytes (469 kB of manifest) before the first file read, key versions 1-3 verified,
+freshness verified.

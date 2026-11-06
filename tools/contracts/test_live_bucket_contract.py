@@ -61,8 +61,11 @@ LIVE_CREDENTIAL_READERS = {
     # The remote gateway smoke hands the key to the daemon under test as its upstream API key; its bucket is created
     # and deleted by vh_live_bucket (the helper), never by the script itself.
     "tools/smoke/s3_gateway_scoped_budget_smoke.sh", "tools/e2e/load_env.sh",
+    # The live restore drill (#371) hands the key to its private daemons over their sockets; its bucket is created and
+    # deleted by vh_live_bucket.
+    "tools/harness/drill_recover_r2.sh", "tools/harness/vhh/drill.py",
 }
-FIXED_TEST_BUCKETS = ["vh-test-gateway-smoke"]
+FIXED_TEST_BUCKETS = ["vh-test-gateway-smoke", "vh-test-recover-drill"]
 TOOL = TESTS / "helpers" / "live_bucket_tool.cpp"
 
 REAL_ADAPTER = re.compile(r"\b(AwsAdmin|R2Admin|AwsEvents|R2Events)\s*[(>{]")
