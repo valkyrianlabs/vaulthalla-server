@@ -15,6 +15,7 @@ are the cross-language contract for C++ (daemon) and Swift (Desktop, sealed vaul
 - The legacy headerless AES-GCM format is retired through a verified migration with a clear retirement point. No
   permanent dual format "behind a flag" (the issue body's original wording is superseded by the maintainer's
   compatibility comment).
+- Retirement is enforced by local upgrade gates and a supported version floor, not by install-wide reports (#344).
 
 ## 2. Today's format (legacy, "GCM0")
 
@@ -236,16 +237,31 @@ BLAKE2b of the plaintext while streaming, authenticate the VHF1 output (full chu
 BLAKE2b. Only then commit. The legacy bytes of a local file are not kept after a verified commit: the conversion is
 reversible from the VHF1 bytes (same key, same plaintext), so keeping both would only be a second copy.
 
-### 6.3 Retirement point
+No plaintext touches disk during a conversion: it streams in bounded, locked memory buffers, and the only file
+written is the VHF1 sidecar. A converter that needs scratch space (a remote-only object re-sealed in a cache vault,
+a restore transfer) uses `crypto::ScratchFile` (#328, `core/include/crypto/ScratchFile.hpp`: XChaCha20-Poly1305
+blocks under a per-process key that never leaves memory), never a plain temp file. `ScratchFile` is process-local
+staging, not a storage format; VHF1 is what persists.
 
-| Release | Writers | Readers | Gate |
+### 6.3 Retirement point: local gates and version floors
+
+Vaulthalla has no telemetry, so retirement can't wait for "every install reports zero legacy rows" (maintainer,
+#344). It rests on two local mechanisms instead:
+
+| Release | Writers | Readers | Gate on this host |
 |---|---|---|---|
-| N (ships VHF1) | VHF1 for every new generation | VHF1 and legacy | local conversion runs automatically per vault (background, rate-limited, resumable, `vh vault format status` shows progress); upstream conversion through spec 01 §6 |
-| N … N+k | VHF1; legacy writer only for the spec 01 §6.4 soak rollback | both | — |
-| Retirement release | VHF1 only | VHF1 only | `preinst`/startup refuses to proceed while any `files`, `recovery_blob`, `upstream_object_version` (live) or backlog row is legacy, and names the command that converts it. No stored data is ever left without a reader. |
+| **R1** (ships VHF1 and the converters) | VHF1 for every new generation | VHF1 and legacy | local conversion runs automatically per vault (background, rate-limited, resumable; `vh vault format status` shows progress); upstream conversion through spec 01 §6 |
+| R1 … retirement − 1 | VHF1; legacy writer only for the spec 01 §6.4 soak rollback | both | — |
+| **Retirement release** | VHF1 only | VHF1 only | **version floor:** upgrading requires an installed version ≥ R1 (Debian `preinst` compares `$2` with `dpkg --compare-versions`; the macOS package's preinstall reads the installed version); an older install is refused with "upgrade to R1 first". **Data gate:** `preinst` and daemon startup query the local database and refuse while any `files`, `recovery_blob`, live `upstream_object_version` or backlog row is legacy, or any vault is still `path_v0` or in a migration short of `cutover`, naming the vaults and the command that converts them. The installed version keeps running untouched. |
 
-The retirement release is the first one cut after every known install reports zero legacy rows (today: Cooper's
-installs; no external customer depends on the legacy format).
+Rules:
+- The floor and the gate never delete or convert anything themselves; they only refuse to install a reader that
+  couldn't read what is stored. No stored data is ever left without a reader.
+- The supported upgrade path (R1 → retirement) and the floor are stated in the release notes of both releases and
+  in `docs/` (Linux and macOS upgrade pages).
+- A host restored from an old database backup onto the retirement release hits the same startup gate: it refuses
+  with the conversion instructions (install R1, convert, upgrade).
+- The retirement release is planned when the maintainer chooses; nothing waits for remote reports.
 
 ## 7. Test plan
 
@@ -258,7 +274,9 @@ installs; no external customer depends on the legacy format).
 | `Vhf1Upload*` (fake S3) | 0-byte, small, multipart objects are one object each; part failure → abort, nothing stored; lost Complete response reconciled; retry re-sends identical bytes |
 | `Vhf1Resumable*` | sealing cursor seals whole chunks only; restart rebuilds by authentication; divergent bytes restart with a new salt |
 | `Vhf1Sidecar*` | torn sidecar discarded, complete one promoted |
-| `FormatMigration*` | local conversion idempotent and resumable; plaintext digest compared; recovery blobs and hard-linked live files converted once; retirement gate refuses with legacy rows present |
+| `FormatMigration*` | local conversion idempotent and resumable; plaintext digest compared; recovery blobs and hard-linked live files converted once; no plaintext temp files (ScratchFile only) |
+| `FormatRetirementGate*` (tools/contracts + maintainer-script tests) | the version floor refuses an upgrade from below R1; the data gate refuses with legacy rows or `path_v0` vaults and passes on a converted DB; neither modifies anything |
+| `RemoteFormatConversion*` (fake S3 + live R2) | remote-only objects re-sealed with retries, aborted multipart cleaned up, costs equal the preflight |
 | `IntegrityContract` (tools/contracts) | no `gcmCtrDecryptAt` call reachable for VHF1 generations |
 | Fuzz (`libFuzzer`, dev box) | header parser and chunk walker never crash or emit plaintext on malformed input |
 
@@ -272,6 +290,6 @@ installs; no external customer depends on the legacy format).
   kept. Depends on WS2-a, WS1-a (file uid).
 - **WS2-c. Local format conversion** of backing files and recovery blobs (background, resumable, verified, status).
   Depends on WS2-b.
-- **WS2-d. Legacy format retirement** (remove legacy reader/writer, upgrade gate). Depends on WS2-c and WS1-c being
-  committed on every known install.
+- **WS2-d. Legacy format retirement** (remove legacy reader/writer; version floor + local data gate in `preinst`,
+  the macOS preinstall and daemon startup). Depends on WS2-c, WS1-c and WS3-c.
 - **Desktop: VHF1 in Swift + vectors** (in `vaulthalla-desktop`, for sealed vaults). Depends on WS2-a.

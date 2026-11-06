@@ -27,8 +27,8 @@ flowchart TD
   W3a["WS3-a encrypted manifest v2"]
   W1b["WS1-b OpaqueV1 data plane"]
   W3b["WS3-b recovery recipients + KEV1"]
-  W3c["WS3-c vh vault recover + drill"]
-  W1c["WS1-c layout migration path_v0 → opaque_v1"]
+  W3c["WS3-c vh vault recover + drill (lifts opaque_v1 staging)"]
+  W1c["WS1-c layout migration path_v0 → opaque_v1 (D3 gate)"]
   W1d["WS1-d operator docs"]
   W5c["WS5-c managed-storage guardrails"]
   W2d["WS2-d legacy format retirement"]
@@ -46,6 +46,7 @@ flowchart TD
   W3a --> W3b --> W3c
   W1b --> W1c
   W2b --> W1c
+  W3c --> W1c
   W1c --> W1d
   W1b --> W5c
   W2c --> W2d
@@ -68,34 +69,56 @@ flowchart TD
 5. **WS3-a**: manifest v2, used by new `opaque_v1` vaults.
 6. **WS1-b**: the `opaque_v1` data plane; new encrypting vaults are created opaque.
 7. **WS3-b**, then **WS3-c**: recovery recipients, the kit and the restore drill. The north star is met for new
-   vaults here.
+   vaults here, and `opaque_v1` creation leaves internal staging.
 8. **WS2-c** (local conversion; can start right after 4) and **WS1-c** (bucket migration of existing vaults), then
    **WS1-d** docs.
-9. **WS2-d**: retire the legacy format once every known install reports zero legacy rows.
+9. **WS2-d**: retire the legacy format behind a version floor and local upgrade gates.
 10. **#325** (in parallel with 2-9), then **WS5-b** and **WS4** (sealed vaults) with the Desktop work.
 
 Each step is a separate PR with its own tests; none rotates an existing key. Steps 8 and 9 are the only ones that
 rewrite stored data, and both are verified before anything old is removed.
 
-## Open questions for the maintainer
+## Decisions (maintainer, #344)
 
-Settled decisions from #329 are encoded in the specs and not reopened. These four need a decision because they touch
-key custody, trust boundaries or irreversible deletion:
+The four questions raised in review were decided on #344; the specs encode them.
 
-1. **Restore trust anchor (spec 03 §6.2 step 4).** In a restore into a new instance, a key version becomes canonical
-   only if the *original* node's attestation verifies under an attestation public key pinned in the customer's
-   recovery kit; otherwise the restore offers salvage (re-encrypt under a fresh key) and makes nothing canonical.
-   This carries the key-import rule (revision 3) to a new node with the customer's kit as the anchor.
-   *Recommendation: approve.*
-2. **Recovery recipients: required or optional (spec 03 §5).** *Recommendation:* required for managed storage (A′)
-   and for sealed vaults (genesis must name one); strongly prompted but optional for self-hosted BYOS, where the key
-   export remains an alternative.
-3. **Legacy provider history (spec 01 §6.5, §6.4).** Re-seal every retained provider version into the opaque key,
-   then, after verification, the soak window and a typed confirmation, permanently delete the path-keyed versions and
-   delete markers (the only way old names leave the provider's version listings). *Recommendation: approve;* the
-   alternative (let them expire under retention) leaves names visible indefinitely when retention is indefinite.
-4. **Sealed vaults v1 scope (spec 04 §8).** Single owner (own devices + recovery key) on macOS Desktop first;
-   multi-user membership and web access in phase 2. *Recommendation: approve.*
+| | Decision | Where |
+|---|---|---|
+| **D1** | On a fresh node, a key version is canonical only when its original-node attestation verifies against the original public key pinned in customer-held recovery material (the kit, or an export that carries the public key). Otherwise explicit salvage and re-encryption. A fresh server's self-attestation never proves old provenance. Empty, missing and wrong anchors and an independent-host restore are tested. | 03 §5.4, §6.2, §7, §8 |
+| **D2** | Customer-held recovery recipients are mandatory for managed storage and sealed vaults before creation or writes. Self-hosted BYOS: prominently recommended, optional when an independently verified, current key export exists; otherwise `recovery_material_missing`. No content-decryption material is escrowed to Valkyrian Labs. | 03 §5.5, 04 §6, 05 |
+| **D3** | Every required retained upstream version and recovery generation is re-sealed into the opaque layout. Inventories and actual decryption are verified before anything path-keyed is deleted. Object Lock, provider retention, incomplete history and failed deletes are respected; the migration is never reported finished while names remain in provider history. Bounded verify/soak/rollback period; destructive-cleanup guardrails. | 01 §6 |
+| **D4** | Sealed vault v1: single owner, multiple owner-approved devices, macOS Desktop first; sharing and web access in phase 2. The server never receives plaintext, names or unwrapped content keys, and never enrolls an encryption-capable device on its own. | 04 |
+
+Settled earlier on #329 and not reopened: opaque ids are intrinsic to `encrypt_upstream=true` (no second switch;
+readable paths only for `encrypt_upstream=false`); AEAD chunks live inside one object per file version, with
+ordinary multipart transport and no per-chunk objects.
+
+## Quality gates
+
+- **Recoverability before exposure.** `opaque_v1` creation is staged internally (test mode and the harness only)
+  until the encrypted manifest (WS3-a), recovery recipients and exports (WS3-b) and the catastrophic restore drill
+  (WS3-c) pass. New encrypting vaults stay `path_v0` until then, and no claim says a vault is recoverable from the
+  bucket (spec 05). The release that enables `opaque_v1` creation records the drill result.
+- **No unverified plaintext, no auxiliary leaks.** VHF1 readers emit only authenticated chunks (02 §3.6-3.7); the
+  request audit test fails on any name, path or plaintext-derived value in any request (01 §8).
+- **Verified everywhere it matters:** negative vectors, local and remote format conversion, provider versioning and
+  retention, retries and aborts, cross-language interoperability (C++ and Swift against `vectors.json`), remote
+  costs against the preflight, rollback.
+- **Replay limit, stated precisely.** An untrusted bucket can replay an older valid state unless the customer keeps
+  an independent freshness checkpoint; with one, it can still replay any state newer than the checkpoint (03 §4.5).
+  Restores without a checkpoint report "freshness unverified".
+- **Rollout:** retirement of legacy formats uses local upgrade gates and a supported version floor (02 §6.3), never
+  install-wide reports (the product has no telemetry).
+
+## Prerequisites already merged
+
+- #326 (sealing fails closed): `KeyProvider::initGuarded` and `MasterSecretLost` stop a host from silently replacing
+  a lost `vault_master`; spec 03 §5.6 adds the recovery-kit import path to its ways back.
+- #328 (encrypted working copies and staging): `crypto::ScratchFile` is the only way plaintext may touch disk during
+  conversions and restore transfers (02 §6.2).
+- #323 (tamper-evident audit trail): migration cleanups, restores, recipient changes and support grants are recorded
+  there (01 §6.4, 05 §5).
+- #327 (paths out of logs): transport logs name object keys, filesystem logs entry ids (01 §4.5).
 
 ## Not in scope
 

@@ -15,6 +15,11 @@ hardening) before implementation starts. Uses VHF1 ([02](02-authenticated-file-f
   gateway, server-run rotation, guest shares.
 - A practical device-loss recovery path that never gives the operator unilateral decryption.
 - Pairing and step-up hardening (#325) comes first.
+- **D4 (#344):** v1 is single owner with multiple owner-approved devices, macOS Desktop first; multi-user sharing
+  and web access are phase 2. The server never receives plaintext, file names or unwrapped content keys, and never
+  enrolls an encryption-capable device on its own: only a chain entry signed by an existing device of the owner (or
+  the owner's recovery key) adds one.
+- **D2 (#344):** a recovery recipient is mandatory before the vault is created or written (§6).
 
 ## 2. Threat model
 
@@ -149,8 +154,9 @@ device-run job ("re-seal everything"), never server-run.
 | Every device lost, recovery kit kept | on a new device, enter the recovery seed: derive the recovery keys, unwrap the content keys from the recovery envelopes (daemon or bucket), append `add_device` signed by the recovery key, then `remove_device` for the lost ones and `rotate_key` | none: the operator relays bytes |
 | Everything lost | data unrecoverable, by design | none can help; stated at creation |
 
-Creating a sealed vault requires a recovery recipient (the genesis entry must name one) and asks the user to store
-the kit (1Password item or print) before the first file is written. There is no operator escrow and no "reset" by
+Creating a sealed vault requires a recovery recipient (the genesis entry must name one; the server refuses a
+genesis without one and refuses every write before a valid genesis is stored) and asks the user to store the kit
+(1Password item or print) before the first file is written. There is no operator escrow and no "reset" by
 an administrator: a super admin can delete a sealed vault, not open it.
 
 ## 7. Migration
@@ -176,7 +182,9 @@ keep the source vault.
 | Chain verification vectors (to be generated once the entry format is final; ECDSA signatures are randomized, so the vectors are verify-only) | signature, link and rule checks |
 | `SealedVaultServer*` | every unavailable feature refuses with `sealed_vault`; the daemon never receives a content key (key tables empty, no `vault_keys` row); no plaintext name reaches the DB or logs (scan) |
 | `SealedUpload*` | pre-sealed objects stored byte for byte; malformed headers and impossible sizes refused |
-| `SealedChain*` (server) | append-only sequencing; conflicting `seq` refused; the server cannot author entries |
+| `SealedChain*` (server) | append-only sequencing; conflicting `seq` refused; the server cannot author entries; a genesis without a recovery recipient and writes before genesis are refused |
+| `SealedNoServerEnrollment` | no server API, admin command or pairing flow results in a device holding a grant without a device- or recovery-signed `add_device` entry; a server-side device record (`devices` table) alone gives no key access |
+| `SealedServerNeverSees*` | request capture across create, upload, rename, rotate and recovery: no plaintext, name or unwrapped key in any request body, DB row or log line |
 | Desktop UI tests | SAS flow, rollback/fork warning, recovery from seed, removal + rotation |
 | Drill | spec 03 §7 with a sealed vault: restore from bucket + seed, no server key involved |
 

@@ -16,6 +16,15 @@ removes the operator's. Therefore:
 - The Recovery service restores into customer-operated instances.
 - Support access is customer-initiated, scoped, expiring and audited (§5).
 
+Release gate (#344): until spec 03's manifest, recovery recipients/exports and the catastrophic restore drill pass,
+`opaque_v1` is staged internally and **no claim says or implies that a vault is recoverable from the bucket**.
+After that, the recovery claim for a vault also requires its recovery material to be in place (spec 03 §5.5); a
+vault reporting `recovery_material_missing` gets no recovery claim. A vault whose migration is `cleanup_blocked`
+carries the qualifier from spec 01 §6.4 (earlier names remain in provider history until a date).
+
+No content-decryption material is escrowed to Valkyrian Labs (D2): VL never generates, receives or stores recovery
+seeds, kits, exports or device keys, and no wording may suggest VL can restore access.
+
 ## 2. Terms
 
 | Term | Means | Against whom |
@@ -62,7 +71,7 @@ If any condition fails, the claim falls back to "provider-blind".
 | Customer-initiated | A customer administrator creates a support grant on their instance (`vh support grant create --scope … --expires …`, step-up per #325). VL can't create, extend or request one through the product. |
 | Scoped | Scopes: `diagnostics` (health, versions, config with secrets redacted, logs in `logging.file_paths: ids` mode), `metadata` (vault and file metadata of named vaults, still no content), `content` (read files of named vaults, explicitly listed). Never in any scope: key export or import, recovery recipients, secrets export, sealed vault content (impossible anyway). |
 | Expiring | Default 24 h, maximum 72 h; revocable at once; expiry closes sessions. |
-| Audited | Every support action runs as a distinct support identity, writes audit lines tagged with the grant id, and notifies the customer's admins when the grant is used and when it ends. The customer can export the grant's audit trail. |
+| Audited | Every support action runs as a distinct support identity and is recorded in the tamper-evident audit trail (#323: hash chain with signed heads, `core/include/audit/Chain.hpp`) tagged with the grant id; the customer's admins are notified when the grant is used and when it ends, and can export the grant's slice of the trail with its signed head. |
 | Bound to people | The grant names the support engineer's account and requires their MFA (#325) and a paired device; shared credentials are not possible. |
 | VL-hosted (B) | Host-level access (SSH, DB) to a managed instance is outside the product's control. The claim for B is therefore "managed, encrypted": VL commits to policy (customer-visible access log of host access, least privilege, break-glass records), not to impossibility. |
 

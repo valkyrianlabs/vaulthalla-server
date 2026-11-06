@@ -14,6 +14,17 @@ and `kev1`.
   files, recovery when the original signing hardware is gone; the integrity and anti-rollback limits of an untrusted
   bucket are stated.
 - The Recovery service restores into **customer-operated** instances (spec 05).
+- **D1 (#344):** on a fresh node, a key version is canonical only when its original-node attestation verifies
+  against the original public key pinned in customer-held recovery material; otherwise explicit salvage and
+  re-encryption. A fresh server's self-attestation never proves old provenance (§6.2).
+- **D2 (#344):** customer-held recovery recipients are mandatory for managed storage and sealed vaults before
+  creation or writes; recommended but optional for self-hosted BYOS when an independently verified key export gives
+  a viable recovery path. No content-decryption material is escrowed to Valkyrian Labs (§5.5).
+- **Replay limit (#344):** an untrusted bucket can replay an older valid state unless the customer keeps an
+  independent freshness checkpoint (§4.5).
+- **Quality gate (#344):** `opaque_v1` creation is not offered as fully recoverable until the manifest, recovery
+  recipients/exports and the catastrophic restore drill pass; until then it is staged internally (README, "Quality
+  gates").
 
 ## 2. Today
 
@@ -198,6 +209,16 @@ object. Revisit if the drill or field data show manifest loss is a realistic fai
 | Delete objects, segments, roots, envelopes | detected as missing; not preventable (availability is the provider's) |
 | Withhold the newest root while the daemon is down | equals rollback; bounded by the newest checkpoint the restorer holds |
 
+**The replay limitation, precisely.** Everything in a root, its segments and the objects it names is authenticated
+under the vault key, so the bucket can't invent or alter state. But any state that was once valid stays valid: a
+bucket writer who kept (or can list as provider versions) an older root, its segments and the object versions it
+names can present that whole older state, and it authenticates. A reader can reject it only by comparing with
+freshness information it holds independently of the bucket. Without such a checkpoint a restore **cannot
+distinguish the latest state from any earlier valid state**, and it says so in its report ("freshness unverified:
+no checkpoint supplied"). With a checkpoint, the restore rejects anything older than the checkpoint, and still
+cannot detect a rollback to a state between the checkpoint and the true latest one. Deletion (of everything after
+some point) is the same attack and is likewise bounded only by the checkpoint.
+
 Freshness therefore needs state outside the bucket. Vaulthalla keeps it in two places:
 
 - The daemon's DB (`remote_manifest_state.epoch`, root hash).
@@ -276,11 +297,34 @@ server. One kit can serve many vaults.
 
 ### 5.4 Key material a restore can use
 
-| Material | Covers | Freshness |
+| Material | Covers | Freshness | Trust anchor for D1 |
+|---|---|---|---|
+| Recovery seed (+ envelopes in the bucket) | every version wrapped while the recipient was enrolled | automatic | the kit's `attestation_public_keys` |
+| Key export (`vh vault keys export`, Desktop's 1Password item) | the versions in that export | as of the export | the export's `attestation.public_key` (added by WS3-b: today's exports carry `{key_id, signature}` only, `key-backup.md`; an export without the public key can't anchor provenance on a fresh node) |
+| Both | union | | either |
+
+### 5.5 When a recovery recipient is required (D2)
+
+| Vault | Rule | Enforced at |
 |---|---|---|
-| Recovery seed (+ envelopes in the bucket) | every version wrapped while the recipient was enrolled | automatic |
-| Key export (`vh vault keys export`, Desktop's 1Password item) | the versions in that export | as of the export |
-| Both | union | |
+| Managed storage (VL-managed B2), any server vault | a recovery recipient must be enrolled before the vault is created (the creation request carries the recipient public key) and before any write; removing the last recipient is refused | `ops::vaults::create`, the write path (a vault without one refuses writes with `recovery_recipient_required`), recipient removal |
+| Sealed vault (spec 04) | the genesis entry must name a recovery recipient; the server refuses a genesis without one and writes before the genesis | sealed vault creation, chain append |
+| Self-hosted BYOS, `encrypt_upstream=true` | recommended, optional. Without a recipient, the vault must have a **verified export** covering every needed version (`vault.keys.status`: current `exported_version`, a Desktop confirmation with a matching key check, and no `missing_versions`); otherwise status and health report `recovery_material_missing` (degraded, never hidden) and the console shows the recommendation prominently. A rotation makes an export stale, which returns the vault to `recovery_material_missing` until re-exported. | status, health, console |
+| Local vaults, `transparent` vaults | the existing export guidance | — |
+
+Valkyrian Labs never holds a recipient's private key or seed: kits are generated on customer devices (§5.3), the
+server only ever receives public keys, and managed-storage onboarding never generates a seed server-side. The
+server can't verify who holds a public key; the product and the docs say plainly that a recipient VL generated
+would be escrow and is not offered (spec 05).
+
+### 5.6 The same host after a TPM loss
+
+With the database intact but the TPM state (or the Secure Enclave keys) gone, `KeyProvider::initGuarded` refuses to
+generate a new `vault_master` while vault keys depend on it and throws `MasterSecretLost` (#326,
+`core/include/crypto/secrets/KeyProvider.hpp`). The ways back stay what #326 lists (restore the sealed state, import
+key backups) plus one: `vh vault keys import <vault> --recovery-kit <file>` unwraps the vault's envelopes from the
+bucket with the kit's seed and feeds them to the normal import, which verifies attestations against this node's
+own `key_attestation_keys` (revision 3, unchanged). No bucket-level restore is needed in that case.
 
 ## 6. Restore into a new instance
 
@@ -303,7 +347,17 @@ command (key material never travels through browser sessions, D4).
    revision 3's rule with the trust anchor moved from the dead node's database to the customer's kit: keys are
    recovered, never introduced. A version without such proof is not made canonical: the restore stops and offers
    salvage (decrypt what authenticates, re-encrypt under a fresh key, `key-backup.md` "Salvage"), confirmed
-   separately.
+   separately. Trust-anchor cases, each tested:
+
+   | Anchor | Result |
+   |---|---|
+   | pinned key in the kit or export verifies the version's attestation | canonical |
+   | no anchor supplied (no kit, or a kit/export without public keys) | salvage only |
+   | anchor present but empty | salvage only |
+   | anchor that doesn't verify (another node's key, a forged key, an attestation over another vault id, node id or version) | salvage only, and the report names the mismatch |
+   | attestations re-signed by the **restoring** node | never accepted as proof of origin: the new node's key is not in the customer's material |
+   | key check recomputed from the bytes differs from the root's or the attestation's | the version is refused (damaged or foreign key) |
+
 5. Load segments, create a new vault (new numeric id, same `vault_uid`) bound to the bucket with
    `storage_layout = 'opaque_v1'`, rebuild `fs_entry`/`files`/trash/symlinks, `remote_object_index`,
    `upstream_object_version`, snapshot records (members marked restorable only where the bucket holds the
@@ -350,7 +404,12 @@ another instance is consistent; zero bytes downloaded beyond headers, manifest a
 `/Recovered`); one segment corrupted; root rolled back with a newer checkpoint (refused; accepted with
 `--accept-rollback`); wrong seed; a kit for another vault; an export only (no seed) after a rotation (versions after
 the export are reported missing, never invented); envelopes present but the kit lacks attestation keys (salvage
-offered, nothing canonical).
+offered, nothing canonical); a kit whose attestation key belongs to another node, and one with an empty key list
+(salvage only); restored attestations re-signed by the restoring node presented as an anchor (refused).
+
+**Independent host:** the restore runs on a different machine from the one that wrote the vault (harness: a second
+private instance with its own database and swtpm state; live: written on dev, restored on a separate VM or Mac), with
+nothing shared but the bucket and the customer material.
 
 ## 8. Test plan
 
@@ -362,15 +421,21 @@ offered, nothing canonical).
 | `ManifestContent*` | every DB fact the restore needs is in the manifest (round trip DB → manifest → scratch schema → compare) |
 | `RecoveryRecipient*` | enrollment requires a paired device + step-up; envelopes written for every existing and future version; removal stops new envelopes (old ones stay: they can't be unpublished from the customer's copies anyway) |
 | `VaultRecover*` | §6.2 steps incl. the provenance rule; dry run writes nothing |
+| `VaultRecoverTrustAnchor*` | every row of the §6.2 step 4 table: verified, missing, empty, wrong-node, wrong-vault, self-attested and key-check mismatch anchors |
+| `RecoveryRequirement*` | managed-storage creation and writes refused without a recipient; last-recipient removal refused; BYOS without a recipient or a verified, current export reports `recovery_material_missing`; a rotation makes an export stale |
+| `KeysImportFromKit*` | `MasterSecretLost` on the same host, then import from the kit's envelopes restores the vault under the existing attestation rules |
+| `ManifestReplay*` | an older complete state (root + segments + object versions) authenticates; without a checkpoint the report says "freshness unverified"; with one, older states are refused |
 | Drill (§7) | the north star, end to end |
 
 ## 9. Proposed implementation issues
 
 - **WS3-a. Manifest v2.** Root/segment documents, CoW publish with conditional PUT, GC, chain rules,
   `remote_manifest_state` epoch, replaces `index-v1.json` for `opaque_v1` vaults. Depends on WS2-a, WS1-a.
-- **WS3-b. Recovery recipients and KEV1.** Enrollment (paired device + #325 step-up), envelope writer, root key
-  history with attestations, `vh-recovery kit create` offline tool, kit format. Depends on WS3-a.
-- **WS3-c. `vh vault recover` + drill.** Restore procedure, dry run, harness drill, live R2 drill script. Depends on
-  WS3-a, WS3-b.
+- **WS3-b. Recovery recipients and KEV1.** Enrollment (CLI or a paired device, D4; #325's step-up once it lands), envelope writer, root key
+  history with attestations, attestation public keys in exports, the D2 requirement rules (§5.5),
+  `vh vault keys import --recovery-kit` (§5.6), `vh-recovery kit create` offline tool, kit format. Depends on WS3-a.
+- **WS3-c. `vh vault recover` + drill.** Restore procedure with the D1 trust-anchor rules, dry run, harness drill on
+  an independent instance, live R2 drill script. Passing it lifts the internal staging of `opaque_v1` creation.
+  Depends on WS3-a, WS3-b.
 - **Desktop: recovery kit and checkpoints** (in `vaulthalla-desktop`): generate the seed, enroll the recipient,
   store the kit and checkpoints in the 1Password item, refresh attestation keys. Depends on WS3-b.
