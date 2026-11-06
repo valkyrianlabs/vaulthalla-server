@@ -325,6 +325,12 @@ Dev mode requires both `VH_BUILD_MODE=dev` and the gitignored `enable_dev_mode` 
   `build-fuzz/core/tests/fuzz/vh_fuzz_vhf1 -max_total_time=600 -max_len=16384 <corpus>` from a `mktemp -d` directory (seed it
   with the vectors' objects, mode byte 0 first). Its iteration (`core/tests/fuzz/vhf1_fuzz_body.hpp`) also runs as
   `Vhf1Fuzz` in the unit tests. Keep `build-fuzz` out of rsync `--delete` mirrors.
+- Manifest v2 (#368): `ManifestVectors`, `ManifestDocument`, `ManifestPartition`, `ManifestPublish*`, `ManifestChain*`,
+  `ManifestContent*`, `ManifestReplay*` (`test_manifest.cpp`, DB-free, CI) run the protocol on the versioned fake bucket
+  through the production `S3Store`; `ManifestVectors` reads every `manifest` vector (the contract above checks it, and
+  that every chain error/warning is one `sync::manifest` knows). `ManifestDbTest.*` (`test_manifest_db.cpp`,
+  db-only) compares DB → collect → publish → load → a scratch schema with an independent SQL projection of the live
+  tables, and covers `remote_manifest_state`, the refused-root alert and the opaque_v1 `CloudEngine` path.
 
 ## Known test gaps
 

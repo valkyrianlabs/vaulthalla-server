@@ -128,6 +128,15 @@ exceeds 8,192 entries or 4 MiB of plaintext and merges with a neighbor below 1,0
   key_version, provider_version_id | null}]}`. Local snapshot blobs live on the host only (`.vh-recovery/`), so after
   a catastrophe a member is restorable only when the bucket holds that generation (a provider version or the
   current object). The manifest states this per member; nothing claims more.
+- As implemented (#368): one snapshot per segment (VHF1 kind 2, object uid = its sid, named by the root's
+  `snapshots`), immutable once written: `{"type": "vh.manifest.snapshot", "v": 1, "vault_uid": "…", "snapshot":
+  {"id": 7, "name": "…" | null, "created_at": "…", "root_path": "/Reports", "members": [{"uid": "<b32>" | null,
+  "path_at_capture": "…", "generation": "<hex>"?, "key_version": 1?, "provider_version_id": "…" | null,
+  "restorable_from_bucket": true}]}}`. Directories and symlinks carry their own uids (`directories.uid`,
+  `symlinks.uid`, migration 125) like files (`files.object_uid`); `mtime` / `ctime` are the entry's `updated_at` /
+  `created_at`; a trashed file keeps its uid (`files_trashed.object_uid`) and `trashed.path` (where it was; its parent
+  may be gone). Until recovery recipients exist (#370) the root carries `{"v": 1, "threshold": null, "grants": []}`
+  and no `envelopes`.
 - No field holds plaintext content or a plaintext digest. `content_hash` is the sealed bytes' hash (spec 02 §3.8).
 
 ### 3.4 Publish protocol
@@ -173,6 +182,11 @@ as its first publish lands.
 | `epoch == known.epoch + 1` and `prev ≠ known hash` | `fork` |
 | `epoch > known.epoch + 1` | accept only if the chain back to `known` can be walked through retained root versions; otherwise accept with a `gap` warning (another writer published several times, e.g. a restore elsewhere) |
 | no known state | accept, record |
+
+Vectors: `manifest.chain` states every row a single root can (`fresh_restore_accepts_epoch_2`, `advance_1_to_2`,
+`rollback_2_to_1`, `rollback_3_to_2`, `fork_same_epoch`, `gap_1_to_3` with no retained roots, so `"warning": "gap"`)
+and both segment pins (`segment_replaced`, `segment_missing`). The walk through retained versions is tested in C++
+(`ManifestChain.*`).
 
 3. Fetch every segment the root names, check `SHA-256` and size (`segment_mismatch`, `segment_missing`), open each
    (kind 2, object uid = sid).
