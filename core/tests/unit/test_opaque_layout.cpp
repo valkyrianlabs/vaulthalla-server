@@ -933,6 +933,27 @@ TEST_F(OpaqueLayoutTest, OpaqueManifestNamesTheObjectsItsFilesAreStoredIn) {
     EXPECT_EQ(entry->versions[0].version_id, object->version_id);
 }
 
+// Key rotation's remote re-read of an index-only file (#369 open item, done in #371): the object at o/<uid> must be this
+// file's (its header binds the object uid), not another file's sealed object of the same vault planted there.
+TEST_F(OpaqueLayoutTest, RotationRereadBindsTheObjectUid) {
+    const auto v = opaqueVault();
+    const auto a = write(v, "/a.txt", "the file being rotated");
+    const auto b = write(v, "/b.txt", "another file of the vault");
+    (void)pass(v);
+    const auto aKey = keys::contentKey(*row(v, "/a.txt")->object_uid);
+    const auto bObject = v.bucket->current(keys::contentKey(*row(v, "/b.txt")->object_uid));
+    ASSERT_TRUE(bObject);
+    (void)v.bucket->seed(aKey, bObject->body);  // b's sealed bytes under a's key
+    const auto aRow = row(v, "/a.txt");
+    sfs::remove(aRow->backing_path);            // index-only: rotation re-reads the bucket
+    v.engine->encryptionManager->prepare_key_rotation();
+    const auto deps = sync::rotation::runtimeDeps(v.engine);
+    EXPECT_ANY_THROW((void)sync::rotation::rotateFile(row(v, "/a.txt"), deps));
+    EXPECT_EQ(row(v, "/a.txt")->encrypted_with_key_version, aRow->encrypted_with_key_version) << "nothing committed";
+    (void)a;
+    (void)b;
+}
+
 // Since the restore drill passed (#371), every new encrypting vault is opaque_v1, outside test mode too; a vault
 // that doesn't encrypt can't be opaque_v1, and an existing one keeps its layout when encryption is turned on.
 TEST_F(OpaqueLayoutTest, NewEncryptingVaultsAreOpaqueV1) {
