@@ -260,7 +260,15 @@ config_database_value() {
 }
 
 local_dev_db_seed_allowed() {
+  local host db_name db_user
+  host="$(config_database_value host || true)"
+  db_name="$(config_database_value name || true)"
+  db_user="$(config_database_value user || true)"
+
   if [[ "${VAULTHALLA_E2E_ALLOW_LOCAL_DEV_DB_SEED:-0}" == "1" ]]; then
+    # The override skips the name checks, not the name: without one there is nothing to seed.
+    [[ -n "$db_name" ]] || return 1
+    LOCAL_DEV_DB_NAME="$db_name"
     return 0
   fi
 
@@ -268,11 +276,6 @@ local_dev_db_seed_allowed() {
     dev|debug|test) ;;
     *) return 1 ;;
   esac
-
-  local host db_name db_user
-  host="$(config_database_value host || true)"
-  db_name="$(config_database_value name || true)"
-  db_user="$(config_database_value user || true)"
 
   case "$host" in
     localhost|127.0.0.1|"") ;;

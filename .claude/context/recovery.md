@@ -519,7 +519,8 @@ Open, consolidated from the slices (the sections above keep the detail):
 - **CLI bug:** `vh recovery restore <plan-id>` without `--token` can never succeed (`getPlan` cleared the token, so
   `rcRunPlan` sends "" → `recovery_restore`), although the usage book says `--yes` works there. Docs tell operators to
   pass `--token`; fix by refusing early or re-planning.
-- **Web:** the point-in-time form is shown for folders of local vaults too; ops refuses it (Invalid).
+- **Web:** the point-in-time form is shown only for folders of S3 vaults (since 7ed1a5b4; ops refuses it elsewhere
+  with Invalid). `recovery.spec.ts` pins both sides: a local vault's folder has no form, an S3 folder's form plans it (#414).
 - **Proof gaps:** no Tier A/B harness scenario for recovery yet; no live provider-versioning run since the
   live suites were consolidated (2026-10-22: the live R2 tests cover the data plane only; R2 has no versions); no lab
   install of a recovery build.
