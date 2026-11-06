@@ -25,6 +25,7 @@ REFERENCE = VECTORS_DIR / "vh_crypto_vectors.py"
 CPP_TEST = REPO / "core" / "tests" / "unit" / "test_vhf1.cpp"
 CPP_MANIFEST_TEST = REPO / "core" / "tests" / "unit" / "test_manifest.cpp"
 CPP_TESTS = (CPP_TEST, CPP_MANIFEST_TEST)
+CPP_VECTORS_HELPER = REPO / "core" / "tests" / "helpers" / "bytes.hpp"
 CPP_FORMAT = REPO / "core" / "src" / "crypto" / "vhf1" / "Format.cpp"
 CPP_CHAIN = REPO / "core" / "src" / "sync" / "manifest" / "Chain.cpp"
 MESON = REPO / "core" / "meson.build"
@@ -103,8 +104,10 @@ class Vhf1VectorsContract(unittest.TestCase):
     def test_unit_tests_read_this_vectors_directory(self) -> None:
         meson = MESON.read_text(encoding="utf-8")
         self.assertIn("-DVH_TEST_VECTORS_DIR=\"' + join_paths(repo_root, 'design', 'encryption', 'vectors')", meson)
+        # The suites read the file through the shared helper (vh::test::bin::goldenVectors()).
+        self.assertIn("VH_TEST_VECTORS_DIR", CPP_VECTORS_HELPER.read_text(encoding="utf-8"))
         for path in CPP_TESTS:
-            self.assertIn("VH_TEST_VECTORS_DIR", path.read_text(encoding="utf-8"), path.name)
+            self.assertIn("goldenVectors()", path.read_text(encoding="utf-8"), path.name)
 
 
 if __name__ == "__main__":

@@ -13,7 +13,7 @@ import unittest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MARKER = "// vh-test-tier: db-only"
 # Headers whose fixtures carry the VH_TEST_DB_* guard for the files that include them.
-DB_HARNESS_HEADERS = ("recovery_local.hpp", "sync_conflict_harness.hpp")
+DB_HARNESS_HEADERS = ("db_suite.hpp", "recovery_local.hpp", "sync_conflict_harness.hpp")
 
 
 def _read(rel: str) -> str:
