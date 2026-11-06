@@ -353,6 +353,7 @@ TEST(ShippedConfig, UsesTheNewKeysWithTheirDefaults) {
     EXPECT_EQ(cfg.stats_snapshots.rollup_5m_retention_days, 30u);
     EXPECT_EQ(cfg.stats_snapshots.rollup_1h_retention_days, 365u);
     EXPECT_EQ(json(cfg.transfer), json(config::TransferConfig{})) << "the shipped transfer section is the defaults";
+    EXPECT_EQ(json(cfg.auth.webauthn), json(config::WebAuthnConfig{})) << "passkeys ship unconfigured";
 }
 
 
@@ -448,6 +449,59 @@ TEST(RefreshCookie, MaxAgeFollowsTheConfiguredLifetime) {
     const auto cookie = refreshCookie("share_refresh", "abc", 7, true);
     EXPECT_EQ(cookie, "share_refresh=abc; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800; Secure");
     EXPECT_EQ(refreshCookie("refresh", "t", 7, false).find("Secure"), std::string::npos);
+}
+
+
+// #355: auth.webauthn is explicit configuration (never request headers), validated the same way from config.yaml and
+// settings.update: a host-name rp_id (never an IP), exact origins under it, and nothing half-configured.
+TEST_F(ConfigSettingsTest, WebAuthnRelyingPartyParsesAndRefusesBadValues) {
+    const auto unset = load("auth:\n  access_token_expiry_minutes: 15\n");
+    EXPECT_TRUE(unset.auth.webauthn.rp_id.empty()) << "passkeys stay unavailable until an rp_id is set";
+    EXPECT_TRUE(unset.auth.webauthn.origins.empty());
+    EXPECT_EQ(unset.auth.webauthn.rp_name, "Vaulthalla");
+
+    const auto set = load("auth:\n  webauthn:\n    rp_id: vault.example.com\n    rp_name: Acme Vault\n"
+                          "    origins: [https://vault.example.com, https://vault.example.com:8443]\n");
+    EXPECT_EQ(set.auth.webauthn.rp_id, "vault.example.com");
+    EXPECT_EQ(set.auth.webauthn.rp_name, "Acme Vault");
+    EXPECT_EQ(set.auth.webauthn.origins, (std::vector<std::string>{"https://vault.example.com",
+                                                                    "https://vault.example.com:8443"}));
+
+    for (const auto* bad : {"auth:\n  webauthn:\n    rp_id: 192.168.1.10\n    origins: [https://192.168.1.10]\n",
+                            "auth:\n  webauthn:\n    rp_id: vault.example.com\n",
+                            "auth:\n  webauthn:\n    rp_id: vault.example.com\n    origins: [https://evil.example]\n",
+                            "auth:\n  webauthn:\n    origins: [https://vault.example.com]\n",
+                            "auth:\n  webauthn:\n    rp_id: vault.example.com\n    origins: https://vault.example.com\n",
+                            "auth:\n  webauthn: on\n"})
+        EXPECT_ANY_THROW(load(bad)) << bad;
+}
+
+TEST(ConfigSettingsSerialization, WebAuthnRoundTripsAndSettingsUpdateRefusesBadValues) {
+    config::AuthConfig auth;
+    auth.webauthn.rp_id = "vault.example.com";
+    auth.webauthn.origins = {"https://vault.example.com"};
+    config::AuthConfig back;
+    ASSERT_TRUE(YAML::convert<config::AuthConfig>::decode(
+        YAML::Load(YAML::Dump(YAML::convert<config::AuthConfig>::encode(auth))), back));
+    EXPECT_EQ(json(back), json(auth));
+    EXPECT_EQ(json(auth).at("webauthn").at("origins"), json::array({"https://vault.example.com"}));
+
+    const json current = config::Registry::get();
+    auto doc = current;
+    doc["auth"]["webauthn"] = {{"rp_id", "10.0.0.5"}, {"origins", {"https://10.0.0.5"}}};
+    EXPECT_THROW(ops::config::validateSettings(doc), ops::Invalid);
+    doc = current;
+    doc["auth"]["webauthn"] = {{"rp_id", "vault.example.com"}, {"origins", {"https://vault.example.com/"}}};
+    EXPECT_THROW(ops::config::validateSettings(doc), ops::Invalid);
+    doc = current;
+    doc["auth"]["webauthn"] = {{"rp_id", "vault.example.com"}, {"origins", json::array()}};
+    EXPECT_THROW(ops::config::validateSettings(doc), ops::Invalid);
+    doc = current;
+    doc["auth"]["webauthn"] = {{"rp_id", "vault.example.com"}, {"rp_name", "Vaulthalla"},
+                               {"origins", {"https://vault.example.com", "http://localhost:3000"}}};
+    EXPECT_THROW(ops::config::validateSettings(doc), ops::Invalid) << "localhost is not under vault.example.com";
+    doc["auth"]["webauthn"]["origins"] = {"https://vault.example.com"};
+    EXPECT_NO_THROW(ops::config::validateSettings(doc));
 }
 
 }

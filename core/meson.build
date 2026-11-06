@@ -196,6 +196,10 @@ if host_os == 'linux'
     ]
 endif
 
+# The WebAuthn verifier (#355): a separate library with its own dependency set (src/auth/webauthn/meson.build).
+subdir('src/auth/webauthn')
+deps += vh_webauthn_dep
+
 test_deps = deps + dependency('gtest', required: true, main: false, include_type: 'system')
 
 
@@ -216,11 +220,13 @@ main        = files(join_paths(core_root, 'main/main.cpp'))
 # Platform-specific code lives under platform/<os>/ (and fuse/unbuilt/, the stand-in for a build without the kernel
 # FUSE bridge); only the host's directory is compiled. Everything else is shared by every OS.
 platform_src_prefixes = ['platform/', 'fuse/unbuilt/', 'protocols/http/upload/staging/']
+# Built as their own libraries by their own meson.build, never into libvaulthalla.
+own_library_prefixes = ['auth/webauthn/']
 sources = []
 foreach f : run_command('sh', '-c', 'find "$1" -type f -name "*.cpp" | LC_ALL=C sort', 'find-cpp', src, check: true).stdout().strip().split('\n')
     rel = f.replace(src + '/', '')
     skip = not fuse_dep.found() and rel in fuse_bridge_sources
-    foreach prefix : platform_src_prefixes
+    foreach prefix : platform_src_prefixes + own_library_prefixes
         skip = skip or rel.startswith(prefix)
     endforeach
     if not skip

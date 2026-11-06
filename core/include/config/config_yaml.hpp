@@ -4,6 +4,7 @@
 #include "config/util.hpp"
 
 #include <algorithm>
+#include <stdexcept>
 #include <yaml-cpp/yaml.h>
 
 namespace YAML {
@@ -473,6 +474,11 @@ struct convert<AuthConfig> {
         Node node;
         node["access_token_expiry_minutes"] = rhs.access_token_expiry_minutes;
         node["refresh_token_expiry_days"] = rhs.refresh_token_expiry_days;
+        Node webauthn;
+        webauthn["rp_id"] = rhs.webauthn.rp_id;
+        webauthn["rp_name"] = rhs.webauthn.rp_name;
+        webauthn["origins"] = rhs.webauthn.origins;
+        node["webauthn"] = webauthn;
         return node;
     }
 
@@ -485,6 +491,18 @@ struct convert<AuthConfig> {
         else
             rhs.access_token_expiry_minutes = node["token_expiry_minutes"].as<int>(60);
         rhs.refresh_token_expiry_days = node["refresh_token_expiry_days"].as<int>(7);
+        // auth.webauthn (#355): validated by loadConfig (validateWebAuthn), which refuses to start on a bad value.
+        if (const auto w = node["webauthn"]) {
+            if (!w.IsMap()) throw std::invalid_argument("auth.webauthn must be a map of rp_id, rp_name and origins");
+            const WebAuthnConfig d;
+            rhs.webauthn.rp_id = w["rp_id"] ? w["rp_id"].as<std::string>() : d.rp_id;
+            rhs.webauthn.rp_name = w["rp_name"] ? w["rp_name"].as<std::string>() : d.rp_name;
+            rhs.webauthn.origins = d.origins;
+            if (const auto o = w["origins"]; o && !o.IsNull()) {
+                if (!o.IsSequence()) throw std::invalid_argument("auth.webauthn.origins must be a list of origins");
+                rhs.webauthn.origins = o.as<std::vector<std::string>>();
+            }
+        }
         return true;
     }
 };

@@ -17,6 +17,7 @@ brew "spdlog"         # logging
 brew "yaml-cpp"       # config.yaml parsing
 brew "pugixml"        # S3 XML (gateway + provider)
 brew "libsodium"      # vault crypto
+brew "libcbor"        # WebAuthn CBOR (core/src/auth/webauthn)
 brew "libmagic"       # MIME sniffing
 brew "jpeg-turbo"     # libjpeg + libturbojpeg (previews/thumbnails)
 brew "curl"           # libcurl; keg-only, env.sh puts it ahead of the SDK's older curl
