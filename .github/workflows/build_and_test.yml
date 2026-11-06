@@ -57,7 +57,7 @@ jobs:
   build:
     needs: gate
     if: ${{ !cancelled() && needs.gate.outputs.run != 'false' }}
-    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || fromJSON('["self-hosted","Linux","X64","vps-ci"]') }}
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || fromJSON(format('["self-hosted","Linux","X64","{0}"]', vars.CI_HEAVY_LABEL || 'ci-heavy')) }}
     defaults:
       run:
         shell: bash ./ci/run-ci bash -euo pipefail {0}

@@ -64,7 +64,7 @@ The build needs the private icons (`$VAULTHALLA_WEB_ICON_SRC`, default `~/vaulth
   `-Dwerror=true`, `hardening=+all`, dpkg's `-O2` stripped, no LTO). A release never rebuilds or reruns the suite;
   `tools/dev/check_build_flags.py` checks the package's compile lines (-O3, hardening, -Werror, no diagnostics).
   1.8.x packages shipped -O0 and unhardened: a `cpp_args` default_option made meson drop dpkg-buildflags.
-- `build_and_test.yml` (push/PR to main): three independent jobs (one per `vps-ci` runner) that run side by side: `build` (composite `runner`:
+- `build_and_test.yml` (push/PR to main): three independent jobs that run side by side: `build` (on the heavy VM runners, label `ci-heavy`; `web` and `tooling` stay on `vps-ci`) (composite `runner`:
   core build at -O0 with -Werror → tests, `tools/dev/ci-test.sh` runs `vh_unit_tests` as 4 parallel gtest shards),
   `web` (typecheck, lint, build, budgets) and `tooling` (installs `vl-release`,
   `bash tools/dev/verify.sh release packaging lifecycle`, shellcheck, then the WebAuthn fuzz step: targets always
@@ -115,7 +115,11 @@ The build needs the private icons (`$VAULTHALLA_WEB_ICON_SRC`, default `~/vaulth
     visible to jobs that declare `environment: Production`.
 - Composite actions (`.github/actions/`): `runner`, `build`, `test`, `setup_web`, `build_web`, `sync_web_icons`
   (calls `web/bin/sync_private_icons.sh`), `test_web`, `setup_valkyrianlabs_tools` (vl-release, pmdocs from apt).
-  Runners: the Valkyrian Labs VPS build pool (valkyrianlabs org runners labelled `vps-ci`, in the shared `ci.slice`
+  Heavy runners (2026-11-06): the compile-heavy `build` job runs on `vm-build-1..2` (label `ci-heavy`, VM `vl-gh-runner-home`;
+  `CI_MEMORY=17g`, `CI_BUILD_JOBS=8`, 2 job slots). `runs-on` is `[self-hosted, Linux, X64, ${{ vars.CI_HEAVY_LABEL || 'ci-heavy' }}]`;
+  failover: `gh variable set CI_HEAVY_LABEL --org valkyrianlabs --body vps-ci` (back to `ci-heavy` when the VM is up).
+  Topology and install steps: valkyrianlabs/infra `docs/ci-runners.md`.
+  Light runners: the Valkyrian Labs VPS build pool (valkyrianlabs org runners labelled `vps-ci`, in the shared `ci.slice`
   CPU/memory pool; the repository moved from vaulthalla/server in 2026-10). CI targets `[self-hosted, Linux, X64, vps-ci]`
   (fork PRs: `ubuntu-latest`, which has no icon store); release jobs target the same labels. Every step runs in the
   disposable CI container (`ci/run-ci`, rootless Podman, `ci/Containerfile` with the Build-Depends, g++ 14, ccache,
