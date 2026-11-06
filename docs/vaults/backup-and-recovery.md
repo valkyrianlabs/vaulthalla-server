@@ -29,6 +29,7 @@ A practical recovery set includes:
 | State | `/var/lib/vaulthalla` | `/Library/Application Support/Vaulthalla/state` | Vaulthalla-managed state, local vault bodies, cache/index state, and sealed key material. |
 | Key protection | `/var/lib/swtpm/vaulthalla` when `swtpm` is used | this Mac's Secure Enclave (not backed up; the sealed blobs are in the state directory) | Unseals the master keys on the original host. |
 | Vault key export | Portable recovery material for encrypted vault content. |
+| Recovery kit | Offline, on your own computer: unwraps an S3 vault's recovery envelopes and pins its attestation keys, so the vault can be rebuilt from its bucket ([Recovery Recipients](/vaults/secrets-and-key-export#recovery-recipients)). Not on the server, and not in the bucket. |
 | Internal secret export | Database and JWT secrets managed by Vaulthalla. |
 | S3/R2 bucket data | Remote object bodies for S3-compatible vaults (and, with provider versioning, their object versions). |
 | Package version record | Helps restore with the same or compatible schema and runtime behavior. |
@@ -102,9 +103,19 @@ For local vaults, the file bodies live in Vaulthalla-managed local state. Back u
 
 ## S3/R2 Vault Backup
 
-For S3/R2 vaults, back up the bucket according to your provider's tooling. If upstream encryption is enabled, the remote object bodies still require Vaulthalla keys and metadata to decrypt.
+For S3/R2 vaults, back up the bucket according to your provider's tooling. If upstream encryption is enabled, the remote object bodies still require Vaulthalla keys to decrypt.
 
-Do not rely only on the provider bucket as a complete Vaulthalla backup. You still need PostgreSQL metadata, vault key exports, internal secrets, and configuration.
+What else you need depends on the vault's layout (`vh vault info`):
+
+| Vault | A bucket plus | Restore |
+| --- | --- | --- |
+| Opaque storage (`opaque_v1`, every new encrypting S3/R2 vault) | Your recovery kit (or a current key export). The bucket holds the encrypted manifest, so names, folders, trash, provider versions and snapshot records come back with it. | If the server, its database and its TPM are gone: `vh vault recover` on a new server ([Restore A Vault From Its Bucket](/vaults/secrets-and-key-export#restore-a-vault-from-its-bucket)). Users, shares, roles and other settings are not in the bucket: they come from the database backup. |
+| Earlier layout (`path_v0`) | PostgreSQL metadata, vault key exports, internal secrets and configuration. | Restore the database first, then import the keys ([Restore Vault Keys](/vaults/secrets-and-key-export#restore-vault-keys)). A bucket and a kit are not enough. |
+
+Enroll a recovery recipient on every opaque vault, pin it in your kit and keep the kit offline. A vault without a
+recipient or a current export is reported as degraded. Refresh the kit after a restore, and after anything you can't
+afford to lose to a rollback of the bucket. Keep the database backup, internal secrets and configuration as well: the
+bucket restores the vault's files and names, not the installation around it.
 
 ## Hardware TPM Recovery
 
@@ -191,6 +202,7 @@ Run restore drills. A backup is not proven until an operator has restored:
 - At least one local vault file.
 - At least one S3/R2 vault file.
 - An encrypted upstream object.
+- For opaque S3/R2 vaults, a drill with `vh vault recover --dry-run` against the bucket and your kit, then a real restore into a scratch server, and a check that the key versions are proven rather than salvaged.
 - A user, group, role, and share record.
 - Cost-control policy state.
 

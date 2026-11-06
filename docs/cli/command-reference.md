@@ -68,10 +68,10 @@ vh user mfa require <username-or-id> [--off]
 
 `vh user mfa reset` is the host recovery for an account that lost every second factor, including the sole super
 admin: its passkeys and authenticator apps are disabled, its recovery codes voided, every session signed out and the
-automatic key backup of its paired devices paused (they stay paired); it sets up a new factor at its next sign-in, and
+key-backup grants of its paired devices revoked (they stay paired); it sets up a new factor at its next sign-in, and
 sensitive actions wait for the recovery cooldown. Run it as the Linux user bound to your own account (for yourself)
 or to an account that may reset the target's password; never with `sudo` (root is refused). A super admin's MFA only
-a super admin may reset. `vh user mfa require` can't change your own account.
+a super admin may reset. `vh user mfa require` can't change your own account. See [Multi-Factor Sign-In](/admin/mfa).
 
 The built-in `super_admin` role and user are protected from normal create, update, and delete operations.
 
@@ -270,6 +270,31 @@ Exit status: `0` done; `64` invalid arguments; `65` a damaged or incomplete tran
 vh vault keys export <vault-or-all> --recipient <gpg-fingerprint> --output vaulthalla-vault-keys.json.gpg
 vh vault keys export <vault-or-all> --output vaulthalla-vault-keys.json
 vh vault keys rotate <vault-or-all> [--sync-now]
+vh vault keys import <vault> --file <export>|--recovery-kit <kit> [--salvage]
+vh vault keys recipient list <vault>
+vh vault keys recipient add <vault> --public-key <key> [--label <text>]
+vh vault keys recipient revoke <vault> <grant-id>
+```
+
+`recipient` enrolls a public key from a recovery kit, so every key version of an S3 vault is wrapped to it in the
+vault's bucket; `import --recovery-kit` restores keys with that kit after the host's vault master was lost. See
+[Recovery Recipients](/vaults/secrets-and-key-export#recovery-recipients).
+
+```bash
+vh vault recover --api-key <name-or-id> --bucket <bucket> --kit <kit> [--export <keys>] [--into <name>] [--dry-run] [--accept-rollback] [--salvage]
+```
+
+Rebuilds an `opaque_v1` S3 vault on this server from its bucket and your recovery kit (or a key export) after the
+original server is gone. `--dry-run` writes nothing. See
+[Restore A Vault From Its Bucket](/vaults/secrets-and-key-export#restore-a-vault-from-its-bucket).
+
+The offline tool `vh-recovery` creates and maintains the kit on your own computer:
+
+```bash
+vh-recovery kit create --output kit.json
+vh-recovery kit public-key kit.json
+vh-recovery kit add-vault kit.json --status status.json
+vh-recovery kit show kit.json
 ```
 
 Unencrypted key exports are dangerous. Prefer `--recipient` and `--output`.

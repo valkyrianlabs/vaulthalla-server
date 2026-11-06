@@ -152,7 +152,7 @@ Recovery stays under your control. The server only ever receives the public key;
 
 `vh vault keys recipient list <vault>` shows the recipients, the key versions wrapped to each and the vault's recovery state. `vh vault keys recipient revoke <vault> <grant_id>` stops new envelopes for a recipient. It can't take back envelopes it already has: those keep unwrapping the key versions they cover, so the command (and `vh vault keys status`) tells you when to rotate the key (`vh vault keys rotate <vault>`) to cut it off from new data.
 
-Enrolling and revoking need the same permission as export and work from the local `vh` CLI or a paired device, never the web console or an AI agent. A paired device also needs a step-up, which arrives with device approvals.
+Enrolling and revoking need the same permission as export and work from the local `vh` CLI or a paired device, never the web console or an AI agent. A paired device needs a person's approval for each of these (Touch ID on the Mac, or a passkey in the web console); see [Device Approvals](/reference/device-approvals).
 
 ### Recovery Material Status
 
@@ -166,11 +166,11 @@ If this host can no longer unseal a vault's keys (its vault master was lost) but
 vh vault keys import photos --recovery-kit vaulthalla-recovery-kit.json
 ```
 
-`vh` reads the kit on your side; the server derives the recipient key in memory, reads the vault's envelopes from its bucket and restores the versions the normal import rules accept: a version is restored only when the server's own records show the vault had it and its attestation by this server verifies. Envelopes anyone else could have placed in the bucket never introduce or replace a key, envelopes for other recipients or kinds the server doesn't know are skipped, and the vault's current key version never moves. If the vault's API key secret was lost along with the master, enter it again first so the server can read the bucket. The database must still be intact: rebuilding a vault in a new installation is not supported yet.
+`vh` reads the kit on your side; the server derives the recipient key in memory, reads the vault's envelopes from its bucket and restores the versions the normal import rules accept: a version is restored only when the server's own records show the vault had it and its attestation by this server verifies. Envelopes anyone else could have placed in the bucket never introduce or replace a key, envelopes for other recipients or kinds the server doesn't know are skipped, and the vault's current key version never moves. If the vault's API key secret was lost along with the master, enter it again first so the server can read the bucket. The database must still be intact for this command; when the database is gone too, rebuild the vault from its bucket with `vh vault recover` ([Restore A Vault From Its Bucket](#restore-a-vault-from-its-bucket)).
 
 ## Back Up Keys With Vaulthalla Desktop
 
-A Mac paired with Vaulthalla Desktop can back vault keys up to 1Password over its paired connection. It reads the key status, exports the keys it needs, and confirms each backup by its key check after 1Password stored it; only then does the server record the vault as exported. A confirmation is refused when the vault rotated its key in the meantime, so a backup is never recorded for a key it doesn't hold.
+Backup runs under a *key-backup grant* you can see, confirm and turn off (**Devices › My devices**, [Paired Devices](/admin/devices#approvals-and-key-backup-grants)); exports outside it need your approval each time. A Mac paired with Vaulthalla Desktop can back vault keys up to 1Password over its paired connection. It reads the key status, exports the keys it needs, and confirms each backup by its key check after 1Password stored it; only then does the server record the vault as exported. A confirmation is refused when the vault rotated its key in the meantime, so a backup is never recorded for a key it doesn't hold.
 
 Keys leave and enter the server only through the local `vh` CLI or a paired device. The web console never receives or sends key material, and AI agents (MCP) can read key status but never export or import keys. A paired device needs the same permission to export keys as the CLI.
 
@@ -375,7 +375,7 @@ An S3 vault created with opaque storage keeps an encrypted manifest in its bucke
 
 **When the manifest is damaged.** A missing or unreadable manifest root falls back to an older one the provider kept (versioned buckets); with none, the restore rebuilds blind: every object that authenticates comes back under `/Recovered/<id>` without its name. A damaged part of the manifest is reported, and its files land under `/Recovered` the same way. Objects the manifest doesn't name (an interrupted upload) are recovered there too; files whose object is gone are restored with their names and reported as missing.
 
-After a restore, refresh your kit from the new server (`vh vault keys status <vault> --json` and `vh-recovery kit add-vault`): versions it creates from now on are attested by its key. The restored server publishes a new manifest, so the old server, should it come back, refuses to sync over it. `vh vault recover` needs the same permission as a key export and runs from the local `vh` CLI or a paired device (with a step-up), never the web console or an AI agent.
+After a restore, refresh your kit from the new server (`vh vault keys status <vault> --json` and `vh-recovery kit add-vault`): versions it creates from now on are attested by its key. The restored server publishes a new manifest, so the old server, should it come back, refuses to sync over it. `vh vault recover` needs the same permission as a key export and runs from the local `vh` CLI or a paired device (with a person's approval), never the web console or an AI agent.
 
 ## Restore Vault Keys
 
