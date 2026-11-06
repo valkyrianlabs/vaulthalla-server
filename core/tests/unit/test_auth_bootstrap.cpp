@@ -113,7 +113,9 @@ protected:
     }
 
     static void TearDownTestSuite() {
-        if (!skipTests) auth::session::Issuer::clearJwtSecretForTesting();
+        if (skipTests) return;
+        (void)runtime::Deps::releaseSessions();  // the signed-in sessions this suite cached (#397)
+        auth::session::Issuer::clearJwtSecretForTesting();
     }
 
     void SetUp() override {

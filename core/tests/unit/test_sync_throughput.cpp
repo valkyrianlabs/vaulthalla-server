@@ -1,3 +1,4 @@
+#include "../helpers/temp_dir.hpp"
 #include "concurrency/ThreadPool.hpp"
 #include "fs/model/Path.hpp"
 #include "fs/model/file/Trashed.hpp"
@@ -32,7 +33,7 @@ protected:
     void SetUp() override {
         oldBackingPath = vh::paths::backingPath;
         oldMountPath = vh::paths::mountPath;
-        testRoot = std::filesystem::temp_directory_path() / "vh_sync_throughput_unit";
+        testRoot = vh::test::uniqueTempRoot("vh_sync_throughput_unit");
         std::filesystem::remove_all(testRoot);
         vh::paths::backingPath = testRoot / "backing";
         vh::paths::mountPath = testRoot / "mount";

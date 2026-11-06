@@ -392,6 +392,12 @@ Applier::Outcome Applier::applyVault(const uint32_t vaultId) {
             } catch (const storage::upstream::BucketProtected&) {
                 throw;
             } catch (const std::exception& e) {
+                if (hooks_.shouldStop()) {
+                    // Shutdown aborted this key's request (a HEAD cancelled mid-flight): not a failure. The row stays
+                    // pending, with no attempt burned and no backoff, and stopping writes nothing more (#412).
+                    stopped = true;
+                    break;
+                }
                 // The key's newest row is retried (older ones were settled as superseded above).
                 db::query::upstream::Inbox::markFailed(latest->id, e.what(),
                                                        std::time(nullptr) + passBackoff(latest->attempts));

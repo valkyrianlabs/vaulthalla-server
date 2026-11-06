@@ -1,6 +1,7 @@
 // Web-console wire contract pieces that live in core: typed refusal codes on ws ERROR responses, the admin gates
 // that produce them, and the cheap dashboard severity read.
 
+#include "../helpers/temp_dir.hpp"
 #include "db/Transactions.hpp"
 #include "identities/User.hpp"
 #include "ops/Error.hpp"
@@ -192,6 +193,13 @@ TEST(WsS3GatewayPayloads, BareIdIsRefusedAsInvalidNamingTheExplicitField) {
 class DashboardSeverityTest : public ::testing::Test {
 protected:
     inline static bool skipTests = false;
+    inline static std::filesystem::path root;
+
+    static void TearDownTestSuite() {
+        if (root.empty()) return;
+        std::error_code ec;
+        std::filesystem::remove_all(root, ec);
+    }
 
     static void SetUpTestSuite() {
         if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
@@ -200,7 +208,7 @@ protected:
             return;
         }
         paths::enableTestMode();
-        const auto root = std::filesystem::temp_directory_path() / "vh_console_contract_severity";
+        root = vh::test::uniqueTempRoot("vh_console_contract_severity");
         paths::backingPath = root / "backing";
         paths::mountPath = root / "mount";
         std::filesystem::create_directories(paths::backingPath);

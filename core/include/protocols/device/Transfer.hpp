@@ -33,6 +33,9 @@ using Slot = std::shared_ptr<void>;
 [[nodiscard]] std::optional<uint64_t> sourceBytes(std::string_view target);
 
 // `bytes` pseudo-random bytes (SplitMix64 keyed by `seed`, positioned: read(offset) needs no state), never stored.
-[[nodiscard]] std::shared_ptr<storage::PlaintextReader> randomSource(uint64_t bytes, uint64_t seed);
+// The source holds `slot` until its last byte has been read (at once when `bytes` is 0), so the slot is free before
+// that byte is written and the client can see the response end: a client that starts its next request when an answer
+// is complete never finds its own finished request still counted.
+[[nodiscard]] std::shared_ptr<storage::PlaintextReader> randomSource(uint64_t bytes, uint64_t seed, Slot slot);
 
 }

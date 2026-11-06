@@ -189,7 +189,9 @@ protected:
     }
 
     void TearDown() override {
-        if (!skipTests) vault::envelopes::setStoreFactoryForTesting({});  // later suites reach no bucket of ours
+        if (skipTests) return;
+        vault::envelopes::setStoreFactoryForTesting({});  // later suites reach no bucket of ours
+        (void)runtime::Deps::releaseSessions();          // nor the sessions the device()/console() principals cached
     }
 
     void SetUp() override {

@@ -133,6 +133,7 @@ protected:
 
     static void TearDownTestSuite() {
         if (skipTests) return;
+        (void)runtime::Deps::releaseSessions();  // the sessions this suite cached (#397)
         rw::setCrashHookForTesting(nullptr);
         vm::resetForTesting();
         std::error_code ec;

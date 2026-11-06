@@ -97,6 +97,14 @@ class ItestEnsureBuild(unittest.TestCase):
         (self.root / "core/src/a.hpp").write_text("")
         self.assertEqual(self.reconfigures(self.ensure()), [])
 
+    def test_a_changed_build_definition_reconfigures(self) -> None:
+        # A new target (an alias in core/meson.build) is unknown to `meson compile` until the directory is re-configured.
+        (self.root / "core/meson.build").write_text("project('x')\n")
+        self.ensure()
+        (self.root / "core/meson.build").write_text("project('x')\nalias_target('helpers', [])\n")
+        self.assertEqual(len(self.reconfigures(self.ensure())), 1)
+        self.assertEqual(self.reconfigures(self.ensure()), [], "the new definition is recorded")
+
     def test_a_build_configured_before_the_fingerprint_reconfigures_once(self) -> None:
         self.ensure()
         (self.build / ".itest-sources").unlink()

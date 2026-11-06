@@ -30,6 +30,7 @@ if media_found
         include_directories: helper_inc,
         link_with: helper_common_lib,
         dependencies: media_deps + [seccomp_dep],
+        override_options: helper_sanitize,
         install: true,
         install_dir: helper_dir,
     )

@@ -29,6 +29,7 @@
 #include "protocols/device/Transfer.hpp"
 #include "protocols/http/Access.hpp"
 #include "protocols/http/Session.hpp"
+#include "protocols/http/upload/Resumable.hpp"
 #include "protocols/ws/Handler.hpp"
 #include "protocols/ws/Router.hpp"
 #include "protocols/ws/Session.hpp"
@@ -135,12 +136,19 @@ protected:
 
     static void TearDownTestSuite() {
         if (skipTests) return;
+        // The order of the device Service's own shutdown, then what the daemon does before main returns: nothing this
+        // suite started may outlive it (#389, #397).
         listener->close();
         protocols::device::closeAllDeviceListenerSessions();
-        (void)protocols::http::Session::waitUntilNoDeviceSessionsAlive(5s);
+        const bool drained = protocols::http::Session::waitUntilNoDeviceSessionsAlive(5s);
+        EXPECT_TRUE(drained) << "device HTTP connections still running after their principals were closed";
+        protocols::http::upload::resumable::Service::shutdown();  // the resumable lane started the commit workers
         ioc->stop();
         for (auto& t : threads) t.join();
         threads.clear();
+        listener.reset();
+        (void)runtime::Deps::releaseSessions();  // their sockets close while the io_context still exists
+        if (drained) ioc.reset();                 // its queued handlers (and the sessions they hold) go now
     }
 
     void SetUp() override {

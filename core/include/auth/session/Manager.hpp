@@ -61,6 +61,12 @@ public:
     // from memory. The caller revoked the stored refresh tokens first. Returns how many sessions ended.
     std::size_t endAll();
 
+    // Process shutdown (runtime::Deps::releaseSessions): drops every cached session without revoking or invalidating
+    // anything (a restarted daemon re-hydrates them from their refresh tokens). Returns how many sessions were held.
+    std::size_t releaseAll();
+    // Sessions cached by UUID (each live session once).
+    [[nodiscard]] std::size_t size();
+
     std::shared_ptr<protocols::ws::Session> get(const std::string& token);
     std::shared_ptr<protocols::ws::Session> getShareByRefreshJti(const std::string& token);
     std::vector<std::shared_ptr<protocols::ws::Session>> getSessions(const std::shared_ptr<identities::User>& user);

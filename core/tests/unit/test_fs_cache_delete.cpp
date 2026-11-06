@@ -1,5 +1,6 @@
 // vh-test-tier: db-only
 // Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
+#include "../helpers/temp_dir.hpp"
 #include "db/Transactions.hpp"
 #include "config/Registry.hpp"
 #include "db/query/fs/Entry.hpp"
@@ -162,7 +163,7 @@ protected:
 
         oldBackingPath = vh::paths::backingPath;
         oldMountPath = vh::paths::mountPath;
-        testRoot = std::filesystem::temp_directory_path() / "vh_fs_cache_delete_unit";
+        testRoot = vh::test::uniqueTempRoot("vh_fs_cache_delete_unit");
         std::filesystem::remove_all(testRoot);
         vh::paths::backingPath = testRoot / "backing";
         vh::paths::mountPath = testRoot / "mount";

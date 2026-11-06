@@ -109,22 +109,25 @@ public:
     [[nodiscard]] auth::stepup::SessionState& stepUp() const noexcept { return *stepUp_; }
 
     std::shared_ptr<handler::fs::Upload> getUploadHandler();
-    [[nodiscard]] SessionMode mode() const noexcept { return mode_; }
-    [[nodiscard]] bool isSharePending() const noexcept { return mode_ == SessionMode::SharePending; }
-    [[nodiscard]] bool isShareMode() const noexcept { return mode_ == SessionMode::Share; }
+    [[nodiscard]] SessionMode mode() const noexcept { return mode_.load(std::memory_order_acquire); }
+    [[nodiscard]] bool isSharePending() const noexcept { return mode() == SessionMode::SharePending; }
+    [[nodiscard]] bool isShareMode() const noexcept { return mode() == SessionMode::Share; }
     [[nodiscard]] bool isShareSession() const noexcept { return isSharePending() || isShareMode(); }
-    [[nodiscard]] bool isDeviceSession() const noexcept { return mode_ == SessionMode::Device; }
-    [[nodiscard]] bool isDevicePairing() const noexcept { return mode_ == SessionMode::DevicePairing; }
+    [[nodiscard]] bool isDeviceSession() const noexcept { return mode() == SessionMode::Device; }
+    [[nodiscard]] bool isDevicePairing() const noexcept { return mode() == SessionMode::DevicePairing; }
     // Either of the device listener's modes.
     [[nodiscard]] bool onDeviceListener() const noexcept { return isDeviceSession() || isDevicePairing(); }
     // The connection's device identity (device listener only, else null).
     [[nodiscard]] const std::shared_ptr<const ::vh::device::Peer>& devicePeer() const noexcept { return devicePeer_; }
     // True from the first close() on: nothing more is run for this session.
     [[nodiscard]] bool closing() const noexcept { return closing_.load(std::memory_order_acquire); }
-    [[nodiscard]] std::shared_ptr<vh::share::Principal> sharePrincipal() const noexcept { return sharePrincipal_; }
+    // The share identity is read and re-set from several threads at once (the socket's strand, HTTP connection
+    // threads that resolved this session, resumable-upload commit workers), so these return copies taken under
+    // shareMutex_, never references into strings another thread may be replacing.
+    [[nodiscard]] std::shared_ptr<vh::share::Principal> sharePrincipal() const;
     [[nodiscard]] vh::rbac::Actor rbacActor() const;
-    [[nodiscard]] const std::string& shareSessionId() const noexcept { return shareSessionId_; }
-    [[nodiscard]] const std::string& shareSessionToken() const noexcept { return shareSessionToken_; }
+    [[nodiscard]] std::string shareSessionId() const;
+    [[nodiscard]] std::string shareSessionToken() const;
 
     // meta.hello (core/usage WsProtocol.hpp): the protocol version this session speaks, contract::kProtocolMin until the
     // client says hello. A handler that changes an answer's shape in a later protocol answers older sessions in the
@@ -187,7 +190,8 @@ private:
     std::shared_ptr<Router> router_;
     std::unique_ptr<auth::mfa::SessionState> mfa_;
     std::unique_ptr<auth::stepup::SessionState> stepUp_;
-    SessionMode mode_{SessionMode::Unauthenticated};
+    std::atomic<SessionMode> mode_{SessionMode::Unauthenticated};
+    mutable std::mutex shareMutex_;  // guards the three below (see sharePrincipal())
     std::shared_ptr<vh::share::Principal> sharePrincipal_{nullptr};
     std::string shareSessionId_;
     std::string shareSessionToken_;

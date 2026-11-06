@@ -134,7 +134,7 @@ protected:
 
     static sync::events::PollOutcome poll(const uint32_t vaultId) {
         ue::FakeEvents client(ue::providerState());
-        return sync::events::Service::pollOnce(channelOf(vaultId), client);
+        return sync::events::Service::pollOnce(channelOf(vaultId), client, std::chrono::seconds{0});  // a short poll
     }
 
     struct PassCounts {

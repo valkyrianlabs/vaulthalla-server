@@ -678,6 +678,29 @@ std::size_t Manager::endAll() {
     return targets.size();
 }
 
+std::size_t Manager::releaseAll() {
+    // Moved out under the lock and dropped after it: a session destroyed here runs close(), which never re-enters the
+    // manager from a destructor, but its socket and logging must not run under sessionMutex_.
+    decltype(sessionsByUUID_) byUuid;
+    decltype(sessionsByRefreshJti_) byJti;
+    decltype(shareSessionsByRefreshJti_) shareByJti;
+    decltype(sessionsByUserId_) byUser;
+    {
+        std::lock_guard lock(sessionMutex_);
+        byUuid.swap(sessionsByUUID_);
+        byJti.swap(sessionsByRefreshJti_);
+        shareByJti.swap(shareSessionsByRefreshJti_);
+        byUser.swap(sessionsByUserId_);
+        validatedAt_.clear();
+    }
+    return byUuid.size();
+}
+
+std::size_t Manager::size() {
+    std::lock_guard lock(sessionMutex_);
+    return sessionsByUUID_.size();
+}
+
 std::shared_ptr<Session> Manager::get(const std::string& token) {
     std::lock_guard lock(sessionMutex_);
 

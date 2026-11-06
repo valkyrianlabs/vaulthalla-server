@@ -47,7 +47,8 @@ constexpr uint64_t splitmix64(uint64_t x) noexcept {
 // Word i of the stream is splitmix64(seed + i): any offset is computable, so the reader is stateless.
 class RandomSource final : public storage::PlaintextReader {
 public:
-    RandomSource(const uint64_t bytes, const uint64_t seed) : seed_(seed) { generation_.size = bytes; }
+    RandomSource(const uint64_t bytes, const uint64_t seed, Slot slot)
+        : seed_(seed), slot_(bytes > 0 ? std::move(slot) : nullptr) { generation_.size = bytes; }
 
     [[nodiscard]] uint64_t size() const override { return generation_.size; }
     [[nodiscard]] const storage::Generation& generation() const override { return generation_; }
@@ -67,11 +68,13 @@ public:
             done += take;
             skip = 0;
         }
+        if (offset + n == generation_.size) slot_.reset();  // the body is complete: the slot is free before it is sent
         return n;
     }
 
 private:
     uint64_t seed_;
+    Slot slot_;
     storage::Generation generation_{};
 };
 
@@ -124,8 +127,8 @@ std::optional<uint64_t> sourceBytes(const std::string_view target) {
     return std::nullopt;
 }
 
-std::shared_ptr<storage::PlaintextReader> randomSource(const uint64_t bytes, const uint64_t seed) {
-    return std::make_shared<RandomSource>(bytes, seed);
+std::shared_ptr<storage::PlaintextReader> randomSource(const uint64_t bytes, const uint64_t seed, Slot slot) {
+    return std::make_shared<RandomSource>(bytes, seed, std::move(slot));
 }
 
 }

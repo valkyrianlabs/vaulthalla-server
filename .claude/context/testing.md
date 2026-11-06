@@ -92,6 +92,14 @@ runs one logical operation through `shell::Router::executeLine` and through the 
 role, and compares allow/deny (against an oracle from the role's permission bits) and resulting DB state, never text.
 New families add a `test_ops_parity_<family>.cpp` on the same pattern.
 
+Teardown order (#385, #389, #397): nothing a suite starts may outlive it. `gtest_main.cpp` installs a `SessionLeakGuard`
+that fails any suite leaving ws sessions in `runtime::Deps`' session manager (and drops them before the next suite),
+and `main` joins the resumable-upload workers and calls `Deps::releaseSessions()` before returning, as the daemon does. A suite running a listener tears down
+in the product's order: close the listener and its sessions, wait for its HTTP connections
+(`waitUntilNoDeviceSessionsAlive`), `resumable::Service::shutdown()` if it uploaded, stop and join the io threads,
+`Deps::releaseSessions()`, then destroy the io_context. Exit-time crashes after "PASSED" (SIGSEGV in a websocket
+stream destructor, macOS "mutex lock failed", "terminate called without an active exception") are this class.
+
 **Never print or commit secret values.** DB auth problems mean the harness role's settings and the role disagree:
 re-run `sudo tools/harness/bootstrap.sh` (it never rotates an existing role's password; remove the settings file first
 to re-key).
@@ -193,10 +201,15 @@ never bind 36972 (port 0).
 - Tests that write identity or role rows with raw SQL must call `identities::manager().reconcile()` afterwards (the
   revision watcher does it in the daemon) or the canonical objects they read keep the old state.
 - Helpers that run under `RLIMIT_AS` can't be sanitized: ASan reserves far more address space than the limit allows,
-  so a sanitized helper aborts at start. `vh_fake_derive_helper` is therefore always built with `b_sanitize=none`
-  (per-target override, honoured by meson 1.3 and 1.8), and `DeriveRunnerTest`/`DeriveQueueDbTest` pass in the
-  sanitized `build-itest` (`make test`; #224). The real preview helpers (`core/tools/preview-*`, the helper suites)
-  are still sanitized in such a build: run those suites from a non-sanitized one.
+  so a sanitized helper aborts at start ("ReserveShadowMemoryRange failed ... ulimit -v"). Every helper is therefore
+  built with `b_sanitize=none` (per-target override, honoured by meson 1.3 and 1.8): `vh_fake_derive_helper` (#224)
+  and the real `core/tools/preview-*` helpers with their `vh_helper_common` library (`helper_sanitize` in
+  `core/tools/meson.build`). The helper suites (`PreviewCadHelperTest`, `PreviewMediaHelper`,
+  `DeriveQueueDbTest.RealCadHelper*`) pass in the sanitized `build-itest` (`make test`). `run_unit.sh` builds the
+  `core/vh_unit_test_helpers` alias with the test binary, so the suites never spawn a helper left over from another
+  configuration. They skip when a helper isn't built (no OCCT / libav* dev packages, `preview_cad`/`preview_media`
+  off) or `ffmpeg` is missing for fixtures. A resident-memory bound (`ResumableUploadDbTest.LargeFiles*`) is skipped
+  under ASan, whose quarantine holds freed blocks.
 - `bench_http_paths.cpp` holds `DISABLED_HttpBench*` benchmarks (256 MiB download TTFB/throughput/peak RSS, 192 MiB
   folder ZIP HEAD/TTFB/peak RSS, 4 concurrent downloads, 1 MiB range at 200 MiB, HEAD vs GET, 12 MP preview cold/warm, thumbnail generation). Run with
   a release build and the test DB env:

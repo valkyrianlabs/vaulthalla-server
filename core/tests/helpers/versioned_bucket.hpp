@@ -244,10 +244,9 @@ public:
         auto it = objects_.find(key);
         if (it == objects_.end()) return false;
         auto& stack = it->second;
-        const auto before = stack.size();
-        std::erase_if(stack, [&](const Version& v) { return v.version_id == versionId; });
-        if (stack.empty()) objects_.erase(it);
-        return stack.size() != before;
+        const auto removed = std::erase_if(stack, [&](const Version& v) { return v.version_id == versionId; });
+        if (stack.empty()) objects_.erase(it);  // `stack` is gone with it: nothing reads it after this
+        return removed > 0;
     }
 
     // Newest first; empty when the key has no versions.
