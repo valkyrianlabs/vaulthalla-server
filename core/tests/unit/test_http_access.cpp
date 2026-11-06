@@ -484,7 +484,7 @@ TEST_F(HttpAccessDbTest, DownloadsLargerThanTheOldInMemoryCapStream) {
         }
     }
     const auto file = fs::Filesystem::createFile({.path = "/huge.bin", .fuse_path = vaultA->vaultPathToFusePath("/huge.bin"),
-                                                  .source_path = source, .engine = vaultA, .user = admin, .overwrite = true});
+                                                  .source = vh::fs::sourceOf(source), .engine = vaultA, .user = admin, .overwrite = true});
     std::filesystem::remove(source);
     ASSERT_EQ(file->size_bytes, 300ull << 20);
 

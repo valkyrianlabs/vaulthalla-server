@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <string>
 #include <filesystem>
+#include <functional>
+#include <span>
 
 namespace vh::crypto::util {
 
@@ -21,11 +23,12 @@ std::vector<uint8_t> decrypt_aes256_gcm(
     const std::vector<uint8_t>& key,
     const std::vector<uint8_t>& iv);
 
-// Streams a ciphertext file (AES-256-GCM body followed by its 16-byte tag) into plaintextPath, 64 KiB at a time.
-// Throws when the tag doesn't verify (or the input is truncated), and then leaves nothing at plaintextPath.
+// Streams a ciphertext file (AES-256-GCM body followed by its 16-byte tag) into `sink`, 64 KiB at a time. What the
+// sink receives is NOT authenticated until this returns: when the tag doesn't verify (or the input is truncated) it
+// throws, and the caller discards everything it was given. Nothing is written to disk here.
 void decrypt_aes256_gcm_file(
     const std::filesystem::path& ciphertextPath,
-    const std::filesystem::path& plaintextPath,
+    const std::function<void(std::span<const uint8_t>)>& sink,
     const std::vector<uint8_t>& key,
     const std::vector<uint8_t>& iv);
 

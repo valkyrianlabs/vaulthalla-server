@@ -104,20 +104,6 @@ std::optional<int32_t> userIdFor(const std::shared_ptr<vh::identities::User>& us
     return static_cast<int32_t>(user->id);
 }
 
-std::string mimeTypeFromSourceFile(
-    const std::filesystem::path& sourcePath,
-    const std::filesystem::path& fallbackPath) {
-    try {
-        return Magic::get_mime_type(sourcePath.string());
-    } catch (const std::exception& e) {
-        vh::log::Registry::fs()->warn(
-            "[Filesystem] Failed to detect MIME type from source file {}: {}",
-            sourcePath.string(),
-            e.what());
-        return inferMimeTypeFromPath(fallbackPath);
-    }
-}
-
 } // namespace
 
 static void updateFile(pqxx::work& txn, const std::shared_ptr<File>& file) {
@@ -944,20 +930,20 @@ std::shared_ptr<File> Filesystem::createFile(const NewFileContext& ctx) {
                 staged->encrypted_with_key_version = sealed.key_version;
                 staged->size_bytes = sealed.plaintext_size;
                 staged->mime_type = sealed.mime_type ? *sealed.mime_type : inferMimeTypeFromPath(ctx.path);
-            } else if (ctx.source_path) {
-                const auto plaintextSize = std::filesystem::file_size(*ctx.source_path);
+            } else if (ctx.source) {
+                const auto plaintextSize = ctx.source->size;
                 if (plaintextSize == 0) {
                     writeFileExclusive(sidecar, {}, mode);
                     staged->encryption_iv.clear();
                     staged->encrypted_with_key_version = 0;
                 } else {
-                    engine->encryptionManager->encryptFileToFile(*ctx.source_path, sidecar, staged);
+                    engine->encryptionManager->encryptToFile(*ctx.source, sidecar, staged);
                     std::filesystem::permissions(sidecar, static_cast<std::filesystem::perms>(mode),
                                                  std::filesystem::perm_options::replace);
                     fsyncFile(sidecar);
                 }
                 staged->size_bytes = plaintextSize;
-                staged->mime_type = mimeTypeFromSourceFile(*ctx.source_path, ctx.path);
+                staged->mime_type = mimeTypeOf(*ctx.source, ctx.path);
             } else if (!ctx.buffer.empty()) {
                 const auto ciphertext = engine->encryptionManager->encrypt(ctx.buffer, staged);
                 writeFileExclusive(sidecar, ciphertext, mode);
@@ -1036,10 +1022,10 @@ std::shared_ptr<File> Filesystem::createFile(const NewFileContext& ctx) {
     f->created_by = f->last_modified_by = userIdFor(ctx.user);
     f->created_at = f->updated_at = std::time(nullptr);
     f->inode = std::make_optional(cache->getOrAssignInode(ctx.fuse_path));
-    f->mime_type = ctx.source_path
-        ? mimeTypeFromSourceFile(*ctx.source_path, ctx.path)
+    f->mime_type = ctx.source
+        ? mimeTypeOf(*ctx.source, ctx.path)
         : (ctx.buffer.empty() ? inferMimeTypeFromPath(ctx.path) : Magic::get_mime_type_from_buffer(ctx.buffer));
-    f->size_bytes = ctx.source_path ? std::filesystem::file_size(*ctx.source_path) : ctx.buffer.size();
+    f->size_bytes = ctx.source ? ctx.source->size : ctx.buffer.size();
 
     // A new file at a fresh alias. Created exclusively or replaced by rename, never written in place: a retained
     // generation may share an existing backing inode (recovery.md, "Local storage").
@@ -1055,11 +1041,11 @@ std::shared_ptr<File> Filesystem::createFile(const NewFileContext& ctx) {
             f->size_bytes = sealed.plaintext_size;
             if (sealed.mime_type) f->mime_type = sealed.mime_type;
         });
-    } else if (ctx.source_path && f->size_bytes > 0) {
+    } else if (ctx.source && f->size_bytes > 0) {
         replaceFileAtomic(f->backing_path, [&](const std::filesystem::path& temp) {
-            engine->encryptionManager->encryptFileToFile(*ctx.source_path, temp, f);
+            engine->encryptionManager->encryptToFile(*ctx.source, temp, f);
         });
-    } else if (ctx.source_path || ctx.buffer.empty()) writeFileExclusive(f->backing_path, {}, 0600);
+    } else if (ctx.source || ctx.buffer.empty()) writeFileExclusive(f->backing_path, {}, 0600);
     else {
         const auto ciphertext = engine->encryptionManager->encrypt(ctx.buffer, f);
         writeFileAtomic(f->backing_path, ciphertext);

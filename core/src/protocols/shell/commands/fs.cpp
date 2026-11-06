@@ -17,8 +17,8 @@
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
+#include "crypto/ScratchFile.hpp"
 #include "log/Redact.hpp"
-#include "platform/Durable.hpp"
 #include "rbac/fs/Visibility.hpp"
 #include "rbac/permission/vault/Filesystem.hpp"
 #include "runtime/Deps.hpp"
@@ -281,9 +281,9 @@ CommandResult handleGet(const CommandCall& call) {
 
 // --------------------------------------------------------------------------------------------------------- put ----
 
-// The bytes of one put, in a 0600 file inside a 0700 directory under the daemon's private state root (never the
-// mount, never the caller's filesystem), removed on every path out unless committed. Leftovers from a crash are
-// plaintext and are swept when the CLI server starts.
+// The bytes of one put, in a file inside a 0700 directory under the daemon's private state root (never the mount, never
+// the caller's filesystem), as ciphertext under the process's in-memory key (crypto::ScratchFile, #328), removed on
+// every path out. Leftovers from a crash are unreadable and are swept when the CLI server starts.
 class Staged {
 public:
     explicit Staged(const std::filesystem::path& dir) {
@@ -294,39 +294,14 @@ public:
         std::string name = "put-";
         static constexpr char kHex[] = "0123456789abcdef";
         for (const auto b : id) { name.push_back(kHex[b >> 4]); name.push_back(kHex[b & 15]); }
-        path_ = dir / (name + ".part");
-        fd_ = ::open(path_.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
-        if (fd_ < 0) throw std::runtime_error(std::string("cannot create the staging file: ") + std::strerror(errno));
+        file_ = std::make_unique<crypto::ScratchFile>(dir / (name + ".part"));
     }
-    ~Staged() {
-        if (fd_ >= 0) ::close(fd_);
-        std::error_code ec;
-        std::filesystem::remove(path_, ec);
-    }
-    Staged(const Staged&) = delete;
-    Staged& operator=(const Staged&) = delete;
 
-    void write(const std::vector<std::uint8_t>& bytes) const {
-        const auto* p = bytes.data();
-        std::size_t left = bytes.size();
-        while (left) {
-            const auto w = ::write(fd_, p, left);
-            if (w < 0 && errno == EINTR) continue;
-            if (w <= 0) throw std::runtime_error(std::string("writing the staging file failed: ") + std::strerror(errno));
-            p += w;
-            left -= static_cast<std::size_t>(w);
-        }
-    }
-    void finish() {
-        if (platform::durable::sync(fd_) != 0) throw std::runtime_error(std::string("fsync of the staging file failed: ") + std::strerror(errno));
-        ::close(fd_);
-        fd_ = -1;
-    }
-    [[nodiscard]] const std::filesystem::path& path() const { return path_; }
+    void write(const std::vector<std::uint8_t>& bytes) const { file_->append(bytes); }
+    [[nodiscard]] fs::PlaintextSource source() const { return fs::sourceOf(*file_); }
 
 private:
-    std::filesystem::path path_;
-    int fd_{-1};
+    std::unique_ptr<crypto::ScratchFile> file_;
 };
 
 std::filesystem::path stagingDir() { return paths::getBackingPath() / ".cli-staging"; }
@@ -420,7 +395,6 @@ CommandResult handlePut(const CommandCall& call) {
         }
         if (Clock::now() - started > kMaxTransferDuration) return fail(tx::exitcode::kTempFail, prefix, "transfer took too long");
     }
-    staged.finish();
 
     // Authorization is evaluated again with the user as it is now: a role revoked mid-upload commits nothing.
     const auto user = currentUser(call);
@@ -436,7 +410,7 @@ CommandResult handlePut(const CommandCall& call) {
         // Seal (fresh IV) from the staged plaintext straight into the vault, then the row; for a replacement the
         // ciphertext lands in a sidecar first and is renamed over the old bytes only after the row (fs::Filesystem).
         const auto stored = fs::Filesystem::createFile({.path = vaultPath, .fuse_path = fusePath,
-                                                        .source_path = staged.path(), .engine = engine, .user = user,
+                                                        .source = staged.source(), .engine = engine, .user = user,
                                                         .overwrite = static_cast<bool>(existing),
                                                         .expected_source_id = expectedSource});
         if (!stored) return fail(1, prefix, "the file could not be stored");
@@ -480,7 +454,9 @@ void sweepFsStaging() noexcept {
         std::error_code rm;
         if (std::filesystem::remove(e.path(), rm)) ++removed;
     }
-    if (removed) log::Registry::shell()->warn("[vh fs] removed {} unfinished upload(s) left by an earlier run", removed);
+    if (removed)
+        log::Registry::shell()->warn("[vh fs] removed {} unfinished upload(s) left by an earlier run (unreadable: "
+                                     "encrypted under that run's in-memory key)", removed);
 }
 
 void registerFsCommands(const std::shared_ptr<Router>& r) {

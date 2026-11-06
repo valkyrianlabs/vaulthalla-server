@@ -53,6 +53,18 @@ std::string Magic::mime_type_buffer(const std::string& buffer) const {
     return {result};
 }
 
+std::string Magic::mime_type_bytes(const std::span<const uint8_t> bytes) const {
+    if (bytes.empty()) throw std::invalid_argument("Cannot detect MIME type from empty buffer");
+
+    std::scoped_lock lock(mutex_);
+    const char* result = magic_buffer(cookie, bytes.data(), bytes.size());
+    if (!result) {
+        std::string err = magic_error(cookie) ? magic_error(cookie) : "Unknown error";
+        throw std::runtime_error("magic_buffer failed: " + err);
+    }
+    return {result};
+}
+
 // Static interface
 std::string Magic::get_mime_type(const std::string& path) {
     static Magic instance;
@@ -69,4 +81,20 @@ std::string Magic::get_mime_type_from_buffer(const std::vector<uint8_t>& buffer)
 
     static Magic instance;
     return instance.mime_type_buffer(std::string(buffer.begin(), buffer.end()));
+}
+
+std::string Magic::get_mime_type_from_bytes(const std::span<const uint8_t> bytes) {
+    static Magic instance;
+    return instance.mime_type_bytes(bytes);
+}
+
+std::size_t Magic::sniff_limit() {
+    static const std::size_t limit = [] {
+        const Magic probe;
+        std::size_t value = 0;
+        std::scoped_lock lock(probe.mutex_);
+        if (magic_getparam(probe.cookie, MAGIC_PARAM_BYTES_MAX, &value) != 0 || value == 0) value = 1024 * 1024;
+        return value;
+    }();
+    return limit;
 }

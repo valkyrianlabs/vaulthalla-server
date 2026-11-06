@@ -98,7 +98,7 @@ void recordCloseHandle() noexcept {
     if (const auto& stats = runtime::Deps::get().fuseStats) stats->record_close_handle();
 }
 
-WorkingCopies::Handle workingHandle(const FileHandle& fh) { return {fh.copy, fh.fd}; }
+WorkingCopies::Handle workingHandle(const FileHandle& fh) { return {fh.copy, fh.flags}; }
 
 int errnoFrom(const std::exception& e) {
     if (const auto* sys = dynamic_cast<const std::system_error*>(&e); sys && sys->code().value() > 0)
@@ -442,7 +442,7 @@ void create(const fuse_req_t req, const fuse_ino_t parent, const char* name, con
         return;
     }
 
-    auto* fh = new FileHandle{newEntry->backing_path.string(), handle.fd, 0, handle.copy};
+    auto* fh = new FileHandle{newEntry->backing_path.string(), handle.flags, 0, handle.copy};
     fi->fh = reinterpret_cast<uint64_t>(fh);
 
     fi->direct_io = 1;
@@ -546,7 +546,7 @@ void open(const fuse_req_t req, const fuse_ino_t ino, fuse_file_info* fi) {
         return;
     }
 
-    auto* fh = new FileHandle{resolved.entry->backing_path.string(), handle.fd, 0, handle.copy};
+    auto* fh = new FileHandle{resolved.entry->backing_path.string(), handle.flags, 0, handle.copy};
     fi->fh = reinterpret_cast<uint64_t>(fh);
 
     fi->direct_io = 1;

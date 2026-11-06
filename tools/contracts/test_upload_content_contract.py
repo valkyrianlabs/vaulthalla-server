@@ -45,13 +45,17 @@ class UploadContentContractTests(unittest.TestCase):
         for path in (COORDINATOR, CONTENT):
             self.assertNotIn("readFileToVector", _code(path), f"{path.name} buffers a staged file whole")
         commit = _body(_code(COORDINATOR), "std::shared_ptr<vh::fs::model::File> commitCompletedUploadFile(")
-        self.assertIn("source_path", commit, "the session commit must seal from the staged file")
+        # #328: staging is an encrypted scratch file; the commit seals from its streaming source, never a path.
+        self.assertIn("->source()", commit, "the session commit must seal from the staged file's source")
+        self.assertNotIn("source_path", commit, "no plaintext staging path may reach the commit")
 
     def test_the_conditional_lane_seals_from_staging_through_the_cas_path(self) -> None:
         commit = _body(_code(CONTENT), "model::preview::Response Upload::commit(")
-        self.assertIn("vh::platform::durable::sync(", commit, "flush the staging file through the durability seam")
+        # #328: the staged bytes are ciphertext under a per-process key (unreadable after a crash by design), so they
+        # need no durable flush; createFile makes the sealed result durable. Closing the staging file ends the body.
+        self.assertIn("u.staged->close()", commit, "the staging file is closed before it is sealed")
         self.assertIn("Filesystem::createFile(", commit)
-        self.assertIn("source_path", commit)
+        self.assertIn("->source()", commit, "the conditional lane seals from the staged file's source")
         self.assertIn("expected_source_id", commit, "a replacement is a compare-and-swap on the matched generation")
 
     def test_the_session_streams_the_conditional_lane(self) -> None:
