@@ -24,7 +24,7 @@ Vaulthalla combines host-protected master keys (TPM2 on Linux, the Secure Enclav
 | Vault master key provider | Encrypts stored per-vault keys. |
 | Per-vault AES-256-GCM key | Encrypts file content for a vault. |
 | Per-file IV and key version | Lets Vaulthalla decrypt the correct ciphertext with the correct vault key version. |
-| S3/R2 upstream encryption metadata | Records whether remote object bodies are Vaulthalla-encrypted and which IV/key version applies. |
+| S3/R2 storage layout | Records whether remote object bodies are Vaulthalla-encrypted and how the bucket is organised: `opaque_v1` (new encrypting vaults) or `path_v0` (older ones). |
 
 ## How Master Keys Are Protected
 
@@ -129,10 +129,41 @@ Your storage provider only ever sees encrypted, opaquely named objects. It can't
 - Each file is one encrypted object named by a random id (`o/<id>`), with no metadata; names, folders and the vault's history live in an encrypted manifest in the same bucket (`.vaulthalla/`).
 - Decrypting the objects needs this vault's keys, which stay on your server, in your [key exports](#export-vault-keys), and wrapped to your [recovery kit](/vaults/secrets-and-key-export#recovery-recipients). With the kit, the vault can be rebuilt on another server from its bucket (see [Restore A Vault From Its Bucket](/vaults/secrets-and-key-export#restore-a-vault-from-its-bucket)); that needs your recovery material, never the bucket by itself.
 
-Encrypting S3/R2 vaults created before this release keep the earlier layout until a later release migrates them. File contents are encrypted before upload. File and folder names are visible to your storage provider.
+### What Opaque Storage Still Reveals
+
+Opaque storage hides names and contents, not everything. Your storage provider, or anyone with access to the bucket,
+its access logs or its inventory reports, can still see:
+
+| What | How exactly |
+| --- | --- |
+| How many files you store | The number of objects under `o/` (files plus a few bounded metadata objects). |
+| Each file's size | The object size minus the 120-byte header and 16 bytes per 64 KiB chunk. There is no padding. |
+| When each file changes, and how often | A file keeps one object id, so every overwrite lands on the same object. |
+| What is read and when | Which objects are read, and which byte ranges (a ranged read reveals chunk ranges). |
+| Request counts and timing per sync pass | Including the manifest root rewrite each pass. |
+| How many versions and deletions | Provider versions and delete markers per object. |
+| How many key rotations | The key version in each object's header and the number of key envelopes. |
+| Roughly how large the manifest is | Its segment sizes follow the number of entries. |
+| That the bucket is a Vaulthalla vault | The layout descriptor and the shape of the object names. |
+| Account, region, storage class, creation time | The provider's own account data. |
+
+It does not protect against whoever runs the server (it holds the keys while it runs), against traffic analysis of
+connections to the server, or against the provider deleting everything (availability). Active tampering in the bucket
+(replacing, reordering or rolling back objects) is detected, not prevented.
+
+`vh vault info` shows a vault's layout. Opaque storage costs about the same in requests as the earlier layout, and
+less for renames: a rename or move of a file or folder rewrites no object, only the manifest at the next sync pass.
+An `opaque_v1` vault can be rebuilt from its bucket and your recovery kit on another server; see
+[Restore A Vault From Its Bucket](/vaults/secrets-and-key-export#restore-a-vault-from-its-bucket).
+
+### Vaults From Before Opaque Storage
+
+Encrypting S3/R2 vaults created before release 1.22 keep the earlier layout, `path_v0`, exactly as it is. File contents are encrypted before upload. File and folder names are visible to your storage provider. The migration of
+these vaults to opaque storage has not shipped, and nothing converts them yet: until it does, treat their names as
+visible to anyone with read access to the bucket.
 
 - Each object is named after the file's path in the vault, so the bucket's provider, and anyone with read access to the bucket, sees file and folder names, the folder tree, object sizes and counts, when objects change, and the provider metadata (encryption status, IV, key version, content hash).
-- Restoring such a vault needs its database as well (see [Restore Vault Keys](/vaults/secrets-and-key-export#restore-vault-keys)).
+- Restoring such a vault needs its database as well; a bucket and a recovery kit are not enough (see [Restore Vault Keys](/vaults/secrets-and-key-export#restore-vault-keys)).
 
 With upstream encryption disabled:
 
@@ -146,8 +177,10 @@ These statements are for the deployment Vaulthalla supports today: you run the d
 
 | Who | Local vault | S3/R2, upstream encryption on | S3/R2, upstream encryption off |
 | --- | --- | --- | --- |
-| The storage provider, or anyone with bucket access | Not involved | Opaque storage: encrypted, opaquely named objects; sizes, counts and change times are visible. Vaults from before this release: file and folder names are visible too | Everything: contents and names |
+| The storage provider, or anyone with bucket access | Not involved | Encrypted, opaquely named objects; counts, sizes and change times are visible ([what remains](#what-opaque-storage-still-reveals)). Vaults from before release 1.22 (`path_v0`): file and folder names are visible too | Everything: contents and names |
 | Whoever administers the server running the daemon | Everything: the daemon holds the vault keys while it runs | Everything | Everything |
+
+Valkyrian Labs does not run your server and receives no keys, exports or recovery material. Recovery works from your bucket and your recovery kit, even if Valkyrian Labs is gone: no account or payment is needed. Hosted or assisted recovery services are planned, not implemented, and enrolling in one would be a separate, explicit choice.
 
 The server holds every vault key while it runs, so protecting that host, its administrators and its updates is part of protecting the data. A vault's contents are only as private as the server that runs it.
 

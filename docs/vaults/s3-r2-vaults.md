@@ -106,7 +106,11 @@ Useful options:
 
 ## Upstream Encryption
 
-New S3/R2 vaults should normally use upstream encryption. With upstream encryption enabled, object payloads written by Vaulthalla are encrypted before upload and carry Vaulthalla metadata such as encryption status, IV, key version, and content hash.
+New S3/R2 vaults should normally use upstream encryption. With it enabled, a new vault uses **opaque storage** (`opaque_v1`): each file is one encrypted object named by a random id, with no metadata headers, and names, folders and history live in an encrypted manifest in the same bucket (`.vaulthalla/`). Your storage provider only ever sees encrypted, opaquely named objects. It can't see your file names, folders or contents. It can see how many objects you store, their sizes and when they change ([what remains visible](/vaults/encryption#what-opaque-storage-still-reveals)).
+
+- The vault's keys stay on your server. For recovery that doesn't depend on this server, create a recovery kit and enroll it on the vault (`vh vault keys recipient add`): every key version is then wrapped to it in the vault's own bucket, and `vh vault recover` can rebuild the vault from the bucket and the kit on another server. A vault with neither a recipient nor a current key export shows as degraded (`recovery_material_missing`). See [Recovery Recipients](/vaults/secrets-and-key-export#recovery-recipients).
+- Don't delete or edit objects under `o/` or `.vaulthalla/` in the bucket yourself, and keep provider versioning on if you can: an older manifest the provider kept is what a restore falls back to when the newest one is damaged.
+- Vaults created before release 1.22 keep the earlier `path_v0` layout, where each object is named after the file's path and carries encryption metadata: file and folder names are visible to your storage provider. They stay that way until a later release migrates them.
 
 With `--no-encrypt`, object payloads written upstream are plaintext from Vaulthalla's perspective. This can be useful for interoperability, but it changes the risk model. See [Encryption](/vaults/encryption) before disabling upstream encryption.
 
