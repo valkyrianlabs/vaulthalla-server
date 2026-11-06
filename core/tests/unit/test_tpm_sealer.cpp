@@ -16,8 +16,10 @@
 
 #include <paths.h>
 
+#if defined(__linux__)
 #include <tss2/tss2_esys.h>
 #include <tss2/tss2_tctildr.h>
+#endif
 
 #include <gtest/gtest.h>
 
@@ -195,6 +197,7 @@ public:
 
     // Extends PCR 7 (what a firmware, Secure Boot key or boot configuration change does to it).
     [[nodiscard]] bool extendPcr7() const {
+#if defined(__linux__)
         const auto tcti = "swtpm:host=127.0.0.1,port=" + std::to_string(port_);
         TSS2_TCTI_CONTEXT* ctx = nullptr;
         ESYS_CONTEXT* esys = nullptr;
@@ -211,6 +214,9 @@ public:
         if (esys) Esys_Finalize(&esys);
         if (ctx) Tss2_TctiLdr_Finalize(&ctx);
         return ok;
+#else
+        return false;
+#endif
     }
 
     ~PrivateSwtpm() {
@@ -411,6 +417,7 @@ TEST_F(TpmPcr7Test, TheBoundBlobHasNoPasswordPath) {
     // Same TPM, same PCRs: unseal through the policy works; changing PCR 7 is the only thing that closes it, which the
     // previous test proves. Here: the blob's public part carries a non-empty auth policy and the attributes lack
     // USERWITHAUTH.
+#if defined(__linux__)
     std::ifstream pub(dir / "bound.pub", std::ios::binary);
     std::vector<char> raw((std::istreambuf_iterator<char>(pub)), {});
     TPMT_PUBLIC t{};
@@ -418,6 +425,7 @@ TEST_F(TpmPcr7Test, TheBoundBlobHasNoPasswordPath) {
     std::memcpy(&t, raw.data(), sizeof(t));
     EXPECT_NE(t.authPolicy.size, 0);
     EXPECT_FALSE(t.objectAttributes & TPMA_OBJECT_USERWITHAUTH);
+#endif
 }
 
 TEST_F(TpmPcr7Test, ResealRebindsAtTheCurrentPcrValuesWithoutChangingTheSecret) {
