@@ -437,8 +437,9 @@ until the first correct code within 10 minutes, one in flight per account, the J
 codes (`RecoveryCodes.hpp`): 10 × `XXXXX-XXXXX` Crockford (50 bits); a batch is inactive until acknowledged,
 acknowledging supersedes the active one (partial unique index), a newer generate drops an unacknowledged batch; a code
 is spent by one conditional UPDATE joined to an acknowledged, unsuperseded batch. Passkeys: storage only
-(`addWebAuthnCredential`, lookup by credential id, compare-and-set `recordWebAuthnUse`, suspend); the verifier is
-`auth/webauthn` (#355). Factors are removed by `disabled_at` (kept for audit). Audit actions
+(`addWebAuthnCredential`, lookup by credential id, compare-and-set `recordWebAuthnUse`, suspend) plus the adapters for
+the `auth/webauthn` verifier (#355): `fromVerified(webauthn::NewCredential, …)`, `CredentialStore` (its
+`CredentialLookup`, joined with `user_mfa`'s handle) and `recordAssertion(VerifiedAssertion, expectedSignCount)`. Factors are removed by `disabled_at` (kept for audit). Audit actions
 `auth.mfa.factor.enroll|rename|remove|suspend`, `auth.mfa.recovery.generate|acknowledge|use` with ids only;
 `ws::LogRedaction` redacts codes, seeds, `otpauth:` URIs (by value) and WebAuthn material. `vh secrets export
 mfa-seal|mfa-pepper` (base64). Tests: `MfaTotp*`, `MfaRecoveryCodes*`, `MfaSeal*`, `MfaLogRedaction*`,
