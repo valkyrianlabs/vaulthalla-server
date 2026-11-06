@@ -25,6 +25,7 @@ from vhh.instance import Target, validate_target
 from vhh.redact import Redactor
 from vhh.world import World, pentest_v1
 
+from tools.lab.mfa import Totp
 from tools.lab.pentest import fixture
 from tools.lab.pentest.client import Target as NetTarget
 from tools.lab.pentest.seed import PASSWORD_RE, Seeder
@@ -215,6 +216,7 @@ async def provision(target: Target, world: World, broker: IdentityBroker, redact
             raise ProvisionError("fixture seeding reported an incomplete step")
         binding = Binding()
         credentials = []
+        totps = []
         for principal in world.principals:
             user = state["users"][principal.key]
             account = accounts[principal.key]
@@ -224,6 +226,8 @@ async def provision(target: Target, world: World, broker: IdentityBroker, redact
             binding.principals[principal.id] = {"id": user["id"], "username": user["username"],
                                                 "account": account.pw_name, "linux_uid": account.pw_uid}
             credentials.append((principal.id, "password", user["password"], user["username"]))
+            if user.get("totp"):  # the Seeder enrolled one: this account must sign in with a second factor
+                totps.append((principal.id, user["totp"]))
         for vault in world.vaults:
             rec = state["vaults"][vault.key]
             fuse_name = rec.get("fuse_name")
@@ -245,6 +249,10 @@ async def provision(target: Target, world: World, broker: IdentityBroker, redact
         for ref, kind, secret, username in credentials:
             register(secret)
             broker.register(ref, kind, secret, username)
+        for ref, doc in totps:
+            totp = Totp.from_json(doc)
+            register(totp.secret_base32)
+            broker.register_totp(ref, totp)
         for principal in world.principals:
             principal.linux_uid = binding.principals[principal.id]["linux_uid"]
         return binding
@@ -259,3 +267,7 @@ async def provision(target: Target, world: World, broker: IdentityBroker, redact
                 for rec in snapshot.get(kind, {}).values():
                     if rec.get(field):
                         register(rec[field])
+            for rec in snapshot.get("users", {}).values():
+                for value in ((rec.get("totp") or {}).get("secret_base32"), *(rec.get("recovery_codes") or [])):
+                    if value:
+                        register(value)
