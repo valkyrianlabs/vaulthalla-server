@@ -294,6 +294,23 @@ labels:
 # sort and board column field are not settable through the API; `ui` lists what to set by hand.
 # Filter token `{areas:<domain>}` expands to label:"area:a","area:b",... for that domain.
 views:
+  # One view per product. The Roadmap spans the Vaulthalla repositories; an issue lives in the repository whose code it
+  # changes, so the repository is the product. Each repository's own auto-add workflow puts new issues on the board.
+  - name: Server
+    layout: table
+    filter: "is:open repo:valkyrianlabs/vaulthalla-server"
+    fields: [Title, Status, Priority, Size, Labels, Linked pull requests, Sub-issues progress]
+    ui: {group_by: Status, sort: Priority asc}
+  - name: Desktop
+    layout: table
+    filter: "is:open repo:valkyrianlabs/vaulthalla-desktop"
+    fields: [Title, Status, Priority, Size, Labels, Linked pull requests, Sub-issues progress]
+    ui: {group_by: Status, sort: Priority asc}
+  - name: Cloud
+    layout: table
+    filter: "is:open repo:valkyrianlabs/vaulthalla-cloud"
+    fields: [Title, Status, Priority, Size, Labels, Linked pull requests, Sub-issues progress]
+    ui: {group_by: Status, sort: Priority asc}
   - name: Backlog
     layout: table
     filter: ""
