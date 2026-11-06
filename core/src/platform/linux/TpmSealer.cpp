@@ -21,6 +21,7 @@
 #include <thread>
 #include <utility>
 #include <paths.h>
+#include <sodium.h>
 
 using namespace std::string_literals;
 
@@ -331,7 +332,7 @@ namespace vh::platform::sealer {
     // A KEYEDHASH object holding the secret under the TPM's storage primary, which is recreated on each use (no
     // persistent handle). The blob only loads into this TPM. No PCR policy: whoever can read `dir` and reach the TPM
     // can unseal it.
-    static void seal_once(const std::filesystem::path &dir, const std::string &name, const std::vector<uint8_t> &secret) {
+    static void seal_once(const std::filesystem::path &dir, const std::string &name, const std::span<const uint8_t> secret) {
         auto runtime = init_esys();
         ESYS_TR parent = ESYS_TR_NONE;
         TPM2B_PRIVATE *outPriv = nullptr;
@@ -341,9 +342,13 @@ namespace vh::platform::sealer {
             parent = create_primary(runtime.esys);
 
             TPM2B_SENSITIVE_CREATE sens{};
+            if (secret.size() > sizeof(sens.sensitive.data.buffer))
+                throw std::runtime_error("secret '" + name + "' is too large to seal in the TPM (" +
+                                         std::to_string(secret.size()) + " bytes, at most " +
+                                         std::to_string(sizeof(sens.sensitive.data.buffer)) + ")");
             sens.size = 0;
             sens.sensitive.userAuth.size = 0;
-            sens.sensitive.data.size = secret.size();
+            sens.sensitive.data.size = static_cast<UINT16>(secret.size());
             memcpy(sens.sensitive.data.buffer, secret.data(), secret.size());
 
             TPM2B_PUBLIC pub{};
@@ -367,6 +372,7 @@ namespace vh::platform::sealer {
                                      &outsideInfo, &pcrSel,
                                      &outPriv, &outPub,
                                      nullptr, nullptr, nullptr);
+            sodium_memzero(&sens, sizeof(sens));  // the secret's copy for the TPM command
 
             if (rc != TSS2_RC_SUCCESS) {
                 throw TpmError("Esys_Create failed", rc);
@@ -390,6 +396,13 @@ namespace vh::platform::sealer {
         flush_if_valid(runtime.esys, parent);
 
         log::Registry::crypto()->debug("[TPMKeyProvider] Sealed {} key to {}", name, dir.string());
+    }
+
+    // ESAPI allocates the unsealed secret; zero it before handing the buffer back.
+    static void wipe_free(TPM2B_SENSITIVE_DATA *data) noexcept {
+        if (!data) return;
+        sodium_memzero(data->buffer, sizeof(data->buffer));
+        Esys_Free(data);
     }
 
     static std::vector<uint8_t> unseal_once(const std::filesystem::path &dir, const std::string &name) {
@@ -433,13 +446,13 @@ namespace vh::platform::sealer {
 
             secret.assign(outData->buffer, outData->buffer + outData->size);
         } catch (...) {
-            if (outData) Esys_Free(outData);
+            wipe_free(outData);
             flush_if_valid(runtime.esys, obj);
             flush_if_valid(runtime.esys, parent);
             throw;
         }
 
-        if (outData) Esys_Free(outData);
+        wipe_free(outData);
         flush_if_valid(runtime.esys, obj);
         flush_if_valid(runtime.esys, parent);
 
@@ -447,7 +460,7 @@ namespace vh::platform::sealer {
         return secret;
     }
 
-    void seal(const std::filesystem::path &dir, const std::string &name, const std::vector<uint8_t> &secret) {
+    void seal(const std::filesystem::path &dir, const std::string &name, const std::span<const uint8_t> secret) {
         with_tpm("seal", [&] { seal_once(dir, name, secret); });
     }
 

@@ -2,6 +2,7 @@
 #include "crypto/secrets/Dependents.hpp"
 
 #include "crypto/secrets/KeyProvider.hpp"
+#include "crypto/SecretBytes.hpp"
 #include "crypto/util/encrypt.hpp"
 #include "db/query/s3/Gateway.hpp"
 
@@ -145,15 +146,13 @@ std::string CredentialManager::generateSecretKey() {
 }
 
 std::vector<uint8_t> CredentialManager::encryptSecret(const std::string& secret, std::vector<uint8_t>& iv) const {
-    const auto masterKey = tpmKeyProvider_->getMasterKey();
-    const auto plaintext = std::vector<uint8_t>(secret.begin(), secret.end());
-    return crypto::util::encrypt_aes256_gcm(plaintext, masterKey, iv);
+    return crypto::util::encrypt_aes256_gcm(crypto::viewBytes(secret), tpmKeyProvider_->getMasterKey(), iv);
 }
 
 std::string CredentialManager::decryptSecret(const std::vector<uint8_t>& ciphertext, const std::vector<uint8_t>& iv) const {
-    const auto masterKey = tpmKeyProvider_->getMasterKey();
-    const auto decrypted = crypto::util::decrypt_aes256_gcm(ciphertext, masterKey, iv);
-    return {decrypted.begin(), decrypted.end()};
+    const crypto::WipedKeyCopy decrypted(
+        crypto::util::decrypt_aes256_gcm(ciphertext, tpmKeyProvider_->getMasterKey(), iv));
+    return {decrypted.bytes.begin(), decrypted.bytes.end()};
 }
 
 } // namespace vh::protocols::s3

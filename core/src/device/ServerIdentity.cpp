@@ -202,7 +202,12 @@ std::shared_ptr<const ServerIdentity> loadOrCreateServerIdentity() {
     const auto candidate = ServerIdentity::generate();
     auto candidateScalar = candidate->privateScalar();
     ::vh::crypto::secrets::KeyProvider provider(paths::testMode ? "test_device_tls" : "device_tls");
-    provider.init(std::string(candidateScalar.begin(), candidateScalar.end()));
+    try {
+        provider.init(candidateScalar);
+    } catch (...) {
+        OPENSSL_cleanse(candidateScalar.data(), candidateScalar.size());
+        throw;
+    }
     OPENSSL_cleanse(candidateScalar.data(), candidateScalar.size());
 
     const auto path = serverCertificatePath();

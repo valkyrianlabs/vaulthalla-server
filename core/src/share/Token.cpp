@@ -1,5 +1,6 @@
 #include "share/Token.hpp"
 
+#include "crypto/SecretBytes.hpp"
 #include "crypto/model/Secret.hpp"
 #include "crypto/util/uuid.hpp"
 #include "db/Transactions.hpp"
@@ -13,6 +14,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <regex>
@@ -25,9 +27,12 @@ constexpr std::string_view kSessionDomain = "vh/share-token/session/v1";
 constexpr size_t kSecretBytes = 32;
 constexpr size_t kHashBytes = crypto_generichash_BYTES;
 
+// The pepper keys every share-token hash. Held in locked memory and shared with each hash in flight, never copied
+// (#350); wiped when the last holder lets go.
+using Pepper = std::shared_ptr<const vh::crypto::SecretBytes>;
 std::mutex pepper_mutex;
-std::optional<std::vector<uint8_t>> cached_pepper;
-std::optional<std::vector<uint8_t>> testing_pepper;
+Pepper cached_pepper;
+Pepper testing_pepper;
 
 void ensure_sodium() {
     static const int init = [] {
@@ -49,21 +54,29 @@ std::vector<uint8_t> random_bytes(const size_t size) {
     throw std::runtime_error("Share token pepper unavailable");
 }
 
-std::vector<uint8_t> asBytes(const std::string& s) { return {s.begin(), s.end()}; }
-std::string asString(const std::vector<uint8_t>& v) { return {v.begin(), v.end()}; }
+Pepper keep(const std::span<const uint8_t> bytes) { return std::make_shared<const vh::crypto::SecretBytes>(bytes); }
 
 // Seals `pepper`, then reads it back through the same path every later start uses: a pepper only counts as stored
-// once that round trip returns the same bytes.
-void sealAndVerify(const vh::crypto::secrets::Manager& secrets, const std::vector<uint8_t>& pepper) {
-    secrets.setSecret(Token::kSealedPepperKey, asString(pepper));
-    const auto back = secrets.getSecret(Token::kSealedPepperKey);
-    if (!back || asBytes(*back) != pepper) pepperUnavailable("sealed pepper did not read back identically");
+// once that round trip returns the same bytes. The plain copies the Manager API takes and returns are wiped.
+void sealAndVerify(const vh::crypto::secrets::Manager& secrets, const std::span<const uint8_t> pepper) {
+    std::string text(pepper.begin(), pepper.end());
+    try {
+        secrets.setSecret(Token::kSealedPepperKey, text);
+    } catch (...) {
+        vh::crypto::wipeSecret(text);
+        throw;
+    }
+    vh::crypto::wipeSecret(text);
+    auto back = secrets.getSecret(Token::kSealedPepperKey);
+    const bool same = back && std::ranges::equal(vh::crypto::viewBytes(*back), pepper);
+    if (back) vh::crypto::wipeSecret(*back);
+    if (!same) pepperUnavailable("sealed pepper did not read back identically");
 }
 
-std::vector<uint8_t> load_or_create_pepper() {
+Pepper load_or_create_pepper() {
     std::lock_guard lock(pepper_mutex);
-    if (testing_pepper) return *testing_pepper;
-    if (cached_pepper) return *cached_pepper;
+    if (testing_pepper) return testing_pepper;
+    if (cached_pepper) return cached_pepper;
 
     if (!vh::db::Transactions::dbPool_) pepperUnavailable("no database");
     const auto secrets = vh::runtime::Deps::get().secretsManager;
@@ -71,21 +84,26 @@ std::vector<uint8_t> load_or_create_pepper() {
 
     using vh::db::query::crypto::Secret;
     try {
-        const auto legacy = Secret::getSecret(Token::kLegacyPepperKey);  // plaintext row from before #322, if any
+        auto legacy = Secret::getSecret(Token::kLegacyPepperKey);  // plaintext row from before #322, if any
+        // The plaintext row's bytes are wiped once read, on every path.
+        const std::unique_ptr<std::vector<uint8_t>, void (*)(std::vector<uint8_t>*)> legacyWipe(
+            legacy ? &legacy->value : nullptr, [](std::vector<uint8_t>* v) { vh::crypto::wipeSecret(*v); });
         if (secrets->hasSecret(Token::kSealedPepperKey)) {
             // Throws when the master key can't open it: fail closed, never regenerate (every link would break).
-            const auto sealed = secrets->getSecret(Token::kSealedPepperKey);
+            auto sealed = secrets->getSecret(Token::kSealedPepperKey);
             if (!sealed) pepperUnavailable("sealed pepper vanished while loading");
-            auto pepper = asBytes(*sealed);
-            if (pepper.size() < crypto_generichash_KEYBYTES_MIN) pepperUnavailable("sealed pepper is too short");
+            auto pepper = keep(vh::crypto::viewBytes(*sealed));
+            vh::crypto::wipeSecret(*sealed);
+            if (pepper->size() < crypto_generichash_KEYBYTES_MIN) pepperUnavailable("sealed pepper is too short");
             if (legacy) {
                 // A conversion stopped after sealing: finish it, but only if both copies agree.
-                if (legacy->value != pepper) pepperUnavailable("plaintext and sealed peppers differ; refusing to choose");
+                if (!std::ranges::equal(legacy->value, pepper->bytes()))
+                    pepperUnavailable("plaintext and sealed peppers differ; refusing to choose");
                 Secret::deleteSecret(Token::kLegacyPepperKey);
                 vh::log::Registry::crypto()->info("[share::Token] Removed the plaintext share token pepper (already sealed)");
             }
             cached_pepper = std::move(pepper);
-            return *cached_pepper;
+            return cached_pepper;
         }
 
         if (legacy) {
@@ -93,14 +111,14 @@ std::vector<uint8_t> load_or_create_pepper() {
             sealAndVerify(*secrets, legacy->value);
             Secret::deleteSecret(Token::kLegacyPepperKey);
             vh::log::Registry::crypto()->info("[share::Token] Sealed the share token pepper; existing links keep working");
-            cached_pepper = legacy->value;
-            return *cached_pepper;
+            cached_pepper = keep(legacy->value);
+            return cached_pepper;
         }
 
-        auto pepper = random_bytes(crypto_generichash_KEYBYTES);
-        sealAndVerify(*secrets, pepper);
+        auto pepper = std::make_shared<const vh::crypto::SecretBytes>(vh::crypto::SecretBytes::random(crypto_generichash_KEYBYTES));
+        sealAndVerify(*secrets, pepper->bytes());
         cached_pepper = std::move(pepper);
-        return *cached_pepper;
+        return cached_pepper;
     } catch (const std::exception& e) {
         if (std::string_view(e.what()) == "Share token pepper unavailable") throw;
         pepperUnavailable(e.what());
@@ -180,13 +198,14 @@ std::vector<uint8_t> Token::hashForDomain(const std::string_view domain, const s
     std::vector<uint8_t> out(kHashBytes);
 
     crypto_generichash_state state;
-    if (crypto_generichash_init(&state, pepper.data(), pepper.size(), out.size()) != 0)
+    if (crypto_generichash_init(&state, pepper->bytes().data(), pepper->size(), out.size()) != 0)
         throw std::runtime_error("Share token hash initialization failed");
     crypto_generichash_update(&state, reinterpret_cast<const unsigned char*>(domain.data()), domain.size());
     static constexpr char sep = '\0';
     crypto_generichash_update(&state, reinterpret_cast<const unsigned char*>(&sep), 1);
     crypto_generichash_update(&state, reinterpret_cast<const unsigned char*>(value.data()), value.size());
     crypto_generichash_final(&state, out.data(), out.size());
+    sodium_memzero(&state, sizeof(state));  // keyed by the pepper
     return out;
 }
 
@@ -212,8 +231,10 @@ std::string Token::redact(const std::string_view raw_or_lookup) {
 
 void Token::setPepperForTesting(std::vector<uint8_t> pepper) {
     if (pepper.size() < crypto_generichash_KEYBYTES_MIN) throw std::invalid_argument("Share token pepper is too short");
+    auto kept = keep(pepper);
+    vh::crypto::wipeSecret(pepper);
     std::lock_guard lock(pepper_mutex);
-    testing_pepper = std::move(pepper);
+    testing_pepper = std::move(kept);
     cached_pepper.reset();
 }
 

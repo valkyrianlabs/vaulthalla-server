@@ -1,6 +1,7 @@
 #include "crypto/secrets/Manager.hpp"
 #include "db/query/crypto/Secret.hpp"
 #include "crypto/model/Secret.hpp"
+#include "crypto/SecretBytes.hpp"
 #include "crypto/util/encrypt.hpp"
 #include "crypto/util/hash.hpp"
 #include "log/Registry.hpp"
@@ -111,18 +112,15 @@ bool Manager::isRegenerableSecret(const std::string& key) {
 
 std::string Manager::decryptStoredSecret(const std::vector<uint8_t>& value, const std::vector<uint8_t>& iv) const {
     std::scoped_lock lock(mutex_);
-    const auto masterKey = tpmKeyProvider_->getMasterKey();
-    const auto decrypted = decrypt_aes256_gcm(value, masterKey, iv);
-    return {decrypted.begin(), decrypted.end()};
+    const WipedKeyCopy decrypted(decrypt_aes256_gcm(value, tpmKeyProvider_->getMasterKey(), iv));
+    return {decrypted.bytes.begin(), decrypted.bytes.end()};
 }
 
 void Manager::setEncryptedValue(const std::string& key, const std::string& value) const {
     std::scoped_lock lock(mutex_);
 
-    const auto masterKey = tpmKeyProvider_->getMasterKey();
     std::vector<uint8_t> iv;
-    const auto plaintext = std::vector<uint8_t>(value.begin(), value.end());
-    const auto ciphertext = encrypt_aes256_gcm(plaintext, masterKey, iv);
+    const auto ciphertext = encrypt_aes256_gcm(viewBytes(value), tpmKeyProvider_->getMasterKey(), iv);
 
     const auto secret = std::make_shared<Secret>();
     secret->key = key;

@@ -2,6 +2,7 @@
 #include "crypto/secrets/Dependents.hpp"
 #include "db/query/vault/APIKey.hpp"
 #include "db/query/identities/User.hpp"
+#include "crypto/SecretBytes.hpp"
 #include "crypto/util/encrypt.hpp"
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
@@ -40,17 +41,14 @@ unsigned int APIKeyManager::addAPIKey(std::shared_ptr<APIKey>& key) {
     if (owner->systemOnly()) throw std::runtime_error("system-only users cannot receive normal API keys");
 
     // --- Encrypt secret_access_key before storage ---
-    const auto masterKey = tpmKeyProvider_->getMasterKey();
     std::vector<uint8_t> iv;
-    const auto plaintext = std::vector<uint8_t>(key->secret_access_key.begin(),
-                                          key->secret_access_key.end());
-
-    const auto ciphertext = encrypt_aes256_gcm(plaintext, masterKey, iv);
+    const auto ciphertext = encrypt_aes256_gcm(viewBytes(key->secret_access_key), tpmKeyProvider_->getMasterKey(), iv);
 
     // Replace sensitive data with encrypted representation
     key->encrypted_secret_access_key = ciphertext;
     key->iv = iv;
-    key->secret_access_key.clear(); // wipe plaintext from memory
+    wipeSecret(key->secret_access_key);
+    key->secret_access_key.clear();
 
     // Persist to DB
     key->id = db::query::vault::APIKey::upsertAPIKey(key);
@@ -74,10 +72,9 @@ void APIKeyManager::updateAPIKey(const std::shared_ptr<APIKey>& key) {
         key->encrypted_secret_access_key = stored->encrypted_secret_access_key;
         key->iv = stored->iv;
     } else {
-        const auto masterKey = tpmKeyProvider_->getMasterKey();
         std::vector<uint8_t> iv;
-        const auto plaintext = std::vector<uint8_t>(key->secret_access_key.begin(), key->secret_access_key.end());
-        key->encrypted_secret_access_key = encrypt_aes256_gcm(plaintext, masterKey, iv);
+        key->encrypted_secret_access_key =
+            encrypt_aes256_gcm(viewBytes(key->secret_access_key), tpmKeyProvider_->getMasterKey(), iv);
         key->iv = iv;
         sodium_memzero(key->secret_access_key.data(), key->secret_access_key.size());
         key->secret_access_key.clear();
@@ -134,12 +131,9 @@ void APIKeyManager::setProviderToken(const unsigned int keyId, std::optional<std
     if (!token || token->empty()) {
         db::query::vault::APIKey::clearProviderToken(keyId);
     } else {
-        const auto masterKey = tpmKeyProvider_->getMasterKey();
         std::vector<uint8_t> iv;
-        std::vector<uint8_t> plaintext(token->begin(), token->end());
-        const auto ciphertext = encrypt_aes256_gcm(plaintext, masterKey, iv);
-        sodium_memzero(plaintext.data(), plaintext.size());
-        sodium_memzero(token->data(), token->size());
+        const auto ciphertext = encrypt_aes256_gcm(viewBytes(*token), tpmKeyProvider_->getMasterKey(), iv);
+        wipeSecret(*token);
         db::query::vault::APIKey::setProviderToken(keyId, ciphertext, iv);
     }
     if (auto refreshed = db::query::vault::APIKey::getAPIKey(keyId)) apiKeys_[keyId] = std::move(refreshed);

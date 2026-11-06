@@ -31,7 +31,7 @@ void syncDirectory(const std::filesystem::path& dir) {
 
 }
 
-void writePrivateFile(const std::filesystem::path& path, const std::vector<uint8_t>& bytes) {
+void writePrivateFile(const std::filesystem::path& path, const std::span<const uint8_t> bytes) {
     const auto dir = path.parent_path();
     std::filesystem::create_directories(dir);
     if (::chmod(dir.c_str(), 0700) != 0) failFile("chmod", dir, errno);
@@ -99,7 +99,7 @@ std::filesystem::path path(const std::filesystem::path& dir, const std::string& 
     return dir / (name + ".key");
 }
 
-void seal(const std::filesystem::path& dir, const std::string& name, const std::vector<uint8_t>& secret) {
+void seal(const std::filesystem::path& dir, const std::string& name, const std::span<const uint8_t> secret) {
     writePrivateFile(path(dir, name), secret);
 }
 

@@ -533,6 +533,12 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   keystream (`crypto::util::gcmCtrDecryptAt`: plaintext offset o ↔ ciphertext offset o, counter IV‖BE32(2+o/16)).
   Keys come from `EncryptionManager::keySnapshot(version)` (immutable `crypto::SecretKey`, mlocked, wiped; rotation
   swaps pointers under a shared_mutex). `readAll()` does one authenticated pass and records the verdict.
+- **Master secrets in memory (#350).** `crypto::secrets::KeyProvider` holds its slot in `crypto::SecretBytes` (mlocked,
+  zeroed on release; `crypto/SecretBytes.hpp`) and `getMasterKey()` returns a `std::span` borrowed from it. The AES-GCM
+  helpers take key spans, so callers never copy a master into a vector; a plain copy an API insists on (decrypt output,
+  a sealer's return) goes in `crypto::WipedKeyCopy`. The share pepper and attestation seed are cached as
+  `shared_ptr<const SecretBytes>`. `crypto::setWipeObserverForTesting` and `KeyProvider::setUnsealHookForTesting` are
+  the test seams (`test_master_secret_memory.cpp`).
 - **Verify-once integrity.** `crypto::IntegrityRegistry` keys a verdict on (domain, IV, key version, dev, ino, size,
   mtime_ns) and runs one streaming tag check per key on 2 workers (capacity 8192 settled verdicts). `optimistic`
   (default, `preview.media.integrity`) serves at once and every live reader throws `IntegrityError` on its next read
