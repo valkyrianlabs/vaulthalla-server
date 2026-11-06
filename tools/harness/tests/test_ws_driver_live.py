@@ -10,6 +10,9 @@ import asyncio
 import json
 import os
 import re
+import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -19,8 +22,9 @@ from vhh.drivers.ws import WsDriver
 from vhh.instance import Instance, mount_entry
 from vhh.model import Op
 
+from tools.lab.mfa import TotpStore
 from tools.lab.pentest.client import Target as NetTarget
-from tools.lab.pentest.client import http_request
+from tools.lab.pentest.client import Ws, http_request, ok
 
 
 @unittest.skipUnless(os.environ.get("VHH_WS_LIVE_BUILD"), "set VHH_WS_LIVE_BUILD for a private daemon proof")
@@ -45,6 +49,29 @@ class PrivateDaemonTests(unittest.IsolatedAsyncioTestCase):
             cls.target = cls.instance.start()
         password = (cls.instance.backing / "super_admin_initial_password").read_text().strip()
         cls.broker.register("u-admin", "password", password, "admin")
+        # The super admin must have MFA (#357). Its first sign-in enrolls a TOTP authenticator through the lab client
+        # (tools/lab/mfa.py), kept in a private file for the vhws.py proof below and in the broker for the driver.
+        cls.private = tempfile.TemporaryDirectory(prefix="vhh-ws-live-")
+        cls.addClassCleanup(cls.private.cleanup)
+        cls.store = TotpStore(Path(cls.private.name) / "admin.totp")
+        cls.password = password
+
+    async def enroll_admin(self):
+        if self.broker.totp("u-admin") is not None:
+            return
+        async with Ws(NetTarget("127.0.0.1", ws_port=self.target.ws_port), user_agent="vhh-live/1") as ws:
+            first = await ws.login("admin", self.password)
+            self.assertEqual(first["data"].get("code"), "mfa_enrollment_required")
+            # A fresh socket: the password step above left that one pending.
+        async with Ws(NetTarget("127.0.0.1", ws_port=self.target.ws_port), user_agent="vhh-live/1") as ws:
+            done = await ws.sign_in("admin", self.password, enroll=True, on_enrolled=self.store.enrolled)
+            self.assertTrue(ok(done), "TOTP enrollment did not complete the sign-in")
+            self.assertEqual(done["data"].get("aal"), 2)
+            self.assertIsNotNone(ws.totp)
+            self.redactor.register_secret(ws.totp.secret_base32)
+            for code in self.store.recovery_codes:
+                self.redactor.register_secret(code)
+            self.broker.register_totp("u-admin", ws.totp)
 
     @classmethod
     def stop_instance(cls):
@@ -68,6 +95,7 @@ class PrivateDaemonTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(match, "private vault id missing from CLI info")
         vault_id = int(match.group(1))
 
+        await self.enroll_admin()
         driver = WsDriver(self.target.ws_port, "u-admin", broker=self.broker)
         self.addAsyncCleanup(driver.close)
         await driver.open()
@@ -112,7 +140,8 @@ class PrivateDaemonTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(missing.outcome, "not_found")
         trace.close()
         raw = trace_path.read_text() + json.dumps([result.to_json() for result in results])
-        secrets = [self.broker.credential("u-admin").secret(), driver.ws.token, cookie, *driver.ws.cookies.values()]
+        secrets = [self.broker.credential("u-admin").secret(), driver.ws.token, cookie, *driver.ws.cookies.values(),
+                   self.broker.totp("u-admin").secret_base32, *self.store.recovery_codes]
         for secret in secrets:
             # assertNotIn would print the secret on failure.
             self.assertFalse(bool(secret) and secret in raw, "secret reached a Result or trace")
@@ -138,6 +167,48 @@ class PrivateDaemonTests(unittest.IsolatedAsyncioTestCase):
         await driver.close()
         self.assertFalse(bool(driver.cookie_header()))
         print("private WS proof: login, six bindings, refusal, HTTP cookie, redacted trace, close passed")
+
+    async def test_lab_clients_sign_in_and_step_up_with_totp(self):
+        """tools/lab against a private daemon (never the lab): vhws.py with the TOTP file, then a target-bound step-up
+        (storage.vault.remove asks for data.destroy, #359) answered with the password and a code, and resent once."""
+        await self.enroll_admin()
+        cli = CliSockDriver(self.target.cli_socket, None, redactor=self.redactor)
+        await cli.open()
+        self.addAsyncCleanup(cli.close)
+        created = await cli.run_line(["vault", "create", "ws-stepup-proof", "--local", "--owner", "admin"], 30)
+        self.assertEqual(created.outcome, "ok", created.detail)
+        info = await cli.run_line(["vault", "info", "ws-stepup-proof", "--owner", "admin"], 10)
+        vault_id = int(re.search(r"^ID:\s*(\d+)", info.data["stdout"], re.MULTILINE).group(1))
+
+        password_file = Path(self.private.name) / "admin.password"
+        password_file.touch(mode=0o600)
+        password_file.write_text(self.password)
+        vhws = Path(__file__).resolve().parents[3] / "tools" / "lab" / "vhws.py"
+        proc = await asyncio.to_thread(
+            subprocess.run, [sys.executable, str(vhws), "--url", f"ws://127.0.0.1:{self.target.ws_port}/ws",
+                             "--user", "admin", "--password-file", str(password_file),
+                             "--totp-file", str(self.store.path), "storage.vault.list"],
+            capture_output=True, text=True, timeout=90)
+        output = proc.stdout + proc.stderr
+        self.assertFalse(self.password in output or self.broker.totp("u-admin").secret_base32 in output,
+                         "vhws.py printed a secret")
+        self.assertEqual(proc.returncode, 0, self.redactor.redact_text(output)[-400:])
+        lines = [json.loads(line) for line in proc.stdout.splitlines()]
+        self.assertEqual([(l["command"], l["status"].upper()) for l in lines],
+                         [("auth.login", "OK"), ("storage.vault.list", "OK")])
+        # vhws.py spent a step from the file; the broker's copy must not offer it again.
+        self.broker.totp("u-admin").last_step = max(self.broker.totp("u-admin").last_step,
+                                                    TotpStore(self.store.path).load().last_step)
+
+        async with Ws(NetTarget("127.0.0.1", ws_port=self.target.ws_port), user_agent="vhh-live/1") as ws:
+            signed = await ws.sign_in("admin", self.password, self.broker.totp("u-admin"))
+            self.assertTrue(ok(signed), "admin TOTP sign-in failed")
+            refused = await ws.send("storage.vault.remove", {"id": vault_id})
+            self.assertEqual(refused["data"].get("code"), "step_up_required", refused.get("error"))
+            self.assertEqual(refused["data"].get("family"), "data.destroy")
+            removed = await ws.stepped("storage.vault.remove", {"id": vault_id})
+            self.assertTrue(ok(removed), self.redactor.redact_text(str(removed.get("error")))[:200])
+        print("private lab-client proof: TOTP enrollment, vhws.py sign-in, data.destroy step-up passed")
 
 
 if __name__ == "__main__":

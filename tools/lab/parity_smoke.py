@@ -6,9 +6,12 @@ other, and checks that both surfaces *reject* invalid operations (duplicates, mi
 of reporting success. Nothing here stress-tests providers; it only creates/deletes `parity-*` objects.
 
 Requires: `pip install websockets`; an ssh alias with passwordless sudo on the host; the web admin's
-(non-default) password in a 0600 file.
+(non-default) password in a 0600 file, and since #357 the admin's TOTP authenticator in another (tools/lab/mfa.py
+TotpStore; enroll it once with `vhws.py --enroll-totp`). Commands refused with step_up_required (#359) are confirmed
+with the password and a code and resent once, as the console does.
 
-  parity_smoke.py --host vh-storage --ws-url ws://10.0.0.33/ws --admin-password-file F [--evidence out.json]
+  parity_smoke.py --host vh-storage --ws-url ws://10.0.0.33/ws --admin-password-file F --admin-totp-file T \
+                  [--evidence out.json]
 
 Exit status: 0 when every check passed, 1 otherwise. Passwords are never printed.
 """
@@ -23,8 +26,12 @@ import sys
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 
 import websockets
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from tools.lab import mfa  # noqa: E402
 
 
 @dataclass
@@ -61,6 +68,8 @@ class Ws:
         self.url = url
         self.token = ""
         self.conn = None
+        self.password: str | None = None
+        self.totp: mfa.Totp | None = None
 
     async def __aenter__(self) -> "Ws":
         self.conn = await websockets.connect(self.url, open_timeout=10, close_timeout=5, max_size=2**24)
@@ -69,7 +78,23 @@ class Ws:
     async def __aexit__(self, *exc) -> None:
         await self.conn.close()
 
+    async def sign_in(self, name: str, password: str, totp: mfa.Totp | None = None, *, enroll: bool = False,
+                      on_enrolled=None) -> dict:
+        """Password, then the TOTP step an admin owes since #357 (tools/lab/mfa.py). On success the session keeps the
+        password and factor in memory to answer step_up_required refusals (#359) in send."""
+        msg, used = await mfa.sign_in(self.raw, name, password, totp, enroll=enroll, on_enrolled=on_enrolled,
+                                      label="parity smoke")
+        if ok_status(msg):
+            self.password, self.totp = password, used
+        return msg
+
     async def send(self, command: str, payload=None, timeout: float = 20) -> dict:
+        """As the console: a command refused with step_up_required is confirmed (password and TOTP) and resent once."""
+        if self.password is None:
+            return await self.raw(command, payload, timeout)
+        return await mfa.send_stepped(lambda c, p: self.raw(c, p, timeout), command, payload, self.password, self.totp)
+
+    async def raw(self, command: str, payload=None, timeout: float = 20) -> dict:
         rid = str(uuid.uuid4())
         await self.conn.send(json.dumps({"command": command, "payload": payload if payload is not None else {},
                                          "requestId": rid, "token": self.token}))
@@ -206,8 +231,9 @@ async def phase2_scenarios(cli: Cli, ws: Ws, r: Report, ws_user: str, ws_url: st
                                           "is_active": True, "role": "identity_admin"})
     r.add(s, "admin registers an identity_admin", ok_status(reg), json.dumps(reg)[:300])
     async with Ws(ws_url) as ws2:
-        login = await ws2.send("auth.login", {"name": helper, "password": password})
-        r.add(s, "identity_admin logs in", ok_status(login), str(login.get("error", "")))
+        # identity_admin must have MFA (#357): this throwaway account enrolls an authenticator kept in memory only.
+        login = await ws2.sign_in(helper, password, enroll=True)
+        r.add(s, "identity_admin logs in (enrolling TOTP)", ok_status(login), str(login.get("error", "")))
         mint = await ws2.send("auth.register", {"name": f"parity_mint_{tag}", "email": f"mint{tag}@example.invalid",
                                                 "password": password, "is_active": True, "role": "admin"})
         r.add(s, "identity_admin cannot mint an admin account (S3)", not ok_status(mint), json.dumps(mint)[:300])
@@ -331,8 +357,10 @@ async def main_async(args) -> int:
         password = fh.read().strip()
     cli, report = Cli(args.host), Report()
     async with Ws(args.ws_url) as ws:
-        login = await ws.send("auth.login", {"name": args.admin_user, "password": password})
-        if not report.add("setup", "ws admin login", ok_status(login), str(login.get("error", ""))):
+        totp = mfa.TotpStore(args.admin_totp_file).load() if args.admin_totp_file else None
+        login = await ws.sign_in(args.admin_user, password, totp)
+        if not report.add("setup", "ws admin login", ok_status(login),
+                          f"{login.get('error', '')} ({mfa.code_of(login) or ''})"):
             return 1
         await scenarios(cli, ws, report, args.admin_user)
         await phase2_scenarios(cli, ws, report, args.admin_user, args.ws_url, args.host)
@@ -350,6 +378,7 @@ def main() -> None:
     ap.add_argument("--ws-url", required=True)
     ap.add_argument("--admin-user", default="admin")
     ap.add_argument("--admin-password-file", required=True)
+    ap.add_argument("--admin-totp-file", help="private (0600) file with the admin's TOTP authenticator (#357)")
     ap.add_argument("--evidence")
     sys.exit(asyncio.run(main_async(ap.parse_args())))
 

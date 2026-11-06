@@ -9,6 +9,8 @@ from vhh.guardrails import Budget, Guardrails, KillSwitch, Scope
 from vhh.model import Op
 from vhh.redact import Redactor
 
+from tools.lab.mfa import Totp
+
 
 class Broker(TempDir, unittest.TestCase):
     def test_credentials_stay_out_of_repr_and_are_registered(self):
@@ -32,6 +34,23 @@ class Broker(TempDir, unittest.TestCase):
         os.chmod(p, 0o600)
         self.assertEqual(b.load_private_file(p), 2)
         self.assertTrue(b.has("u-a") and b.has("public:sl-1"))
+        self.assertIsNone(b.totp("u-a"))
+
+    def test_totp_factor_is_held_once_and_its_seed_redacted(self):
+        seed = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"  # RFC 6238 test seed
+        r = Redactor()
+        b = IdentityBroker(r)
+        b.register_totp("u-admin", Totp(seed, last_step=9))
+        self.assertIs(b.totp("u-admin"), b.totp("u-admin"))  # every session spends steps from one instance
+        self.assertEqual(r.redact_text(f"x {seed} y").count(seed), 0)
+        self.assertNotIn(seed, repr(b.totp("u-admin")))
+        p = self.tmp / "creds-mfa.json"
+        p.write_text(json.dumps({"principals": {"u-admin": {"password": "pw-123456", "username": "pt_superadmin",
+                                                           "totp": {"secret_base32": seed, "last_step": 41}}}}))
+        os.chmod(p, 0o600)
+        loaded = IdentityBroker(Redactor())
+        self.assertEqual(loaded.load_private_file(p), 1)
+        self.assertEqual(loaded.totp("u-admin").last_step, 41)
 
 
 class Guardrail(unittest.TestCase):

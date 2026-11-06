@@ -10,7 +10,10 @@ from vhh.drivers.ws import WsDriver, classify
 from vhh.model import Op
 from websockets.exceptions import ConnectionClosedError
 
+from tools.lab.mfa import Totp
 from tools.lab.pentest.client import Ws, http_request
+
+_TOTP_SECRET = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"  # RFC 6238 test seed, not a real factor
 
 
 class ClassificationTests(unittest.TestCase):
@@ -159,6 +162,86 @@ class WsDriverTests(unittest.IsolatedAsyncioTestCase):
             await self.driver.open()
         self.assertEqual(self.driver.login_result.outcome, "timeout")
         self.ws.__aexit__.assert_awaited_once()
+
+    def with_totp(self, clock=None):
+        totp = Totp(_TOTP_SECRET, clock=clock or (lambda: 30 * 5000 + 4))
+        self.broker = Mock(redactor=self.redactor, spec=["credential", "redactor", "totp"])
+        self.broker.credential.return_value = self.credential
+        self.broker.totp.return_value = totp
+        self.redactor.register_secret(totp.secret_base32)
+        self.driver.broker = self.broker
+        return totp
+
+    async def test_mfa_required_is_finished_with_the_brokers_totp(self):
+        totp = self.with_totp()
+        answers = [{"status": "ERROR", "error": "Confirm it's you", "data": {
+                        "code": "mfa_required", "pending": {"kind": "mfa", "methods": ["totp"]}}},
+                   {"status": "OK", "token": "test-access-token", "data": {"user": {"id": 12}, "aal": 2}}]
+        self.ws.send.side_effect = lambda *a, **k: answers.pop(0)
+        await self.driver.open()
+        self.broker.totp.assert_called_with("u-test")
+        login, verify = self.ws.send.await_args_list
+        self.assertEqual(login.args[0], "auth.login")
+        self.assertEqual(verify.args[0], "auth.mfa.verify")
+        code = verify.args[1]["code"]
+        self.assertEqual(verify.args[1], {"method": "totp", "code": totp.code(totp.last_step)})
+        self.assertIn(code, self.secrets)  # a spent code is redacted like a password
+        self.assertEqual(self.driver.login_result.outcome, "ok")
+        raw = json.dumps(self.driver.login_result.to_json())
+        for secret in self.secrets:
+            self.assertNotIn(secret, raw)
+
+    async def test_mfa_required_without_a_factor_fails_closed(self):
+        self.ws.send.return_value = {"status": "ERROR", "error": "Confirm it's you", "data": {
+            "code": "mfa_required", "pending": {"kind": "mfa", "methods": ["totp"]}}}
+        with self.assertRaisesRegex(RuntimeError, "open failed: needs_confirmation"):
+            await self.driver.open()
+        self.ws.send.assert_awaited_once()
+        self.assertEqual(self.driver.login_result.code, "mfa_required")
+
+    async def test_enrollment_is_never_started_by_a_session(self):
+        self.with_totp()
+        self.ws.send.return_value = {"status": "ERROR", "error": "Set up a second factor", "data": {
+            "code": "mfa_enrollment_required", "pending": {"kind": "enrollment", "methods": ["totp"]}}}
+        with self.assertRaises(RuntimeError):
+            await self.driver.open()
+        self.ws.send.assert_awaited_once()
+
+    async def test_step_up_refusal_is_confirmed_and_the_request_resent_once(self):
+        totp = self.with_totp()
+        await self.driver.open()
+        refusal = {"status": "ERROR", "error": "Confirm it's you", "data": {
+            "code": "step_up_required", "family": "data.destroy", "target": "vault:7", "methods": ["password_totp"]}}
+        answers = [refusal,
+                   {"status": "OK", "data": {"stepup_id": "c1", "methods": ["password_totp"]}},
+                   {"status": "OK", "data": {"family": "data.destroy", "uses": 1}},
+                   {"status": "OK", "data": {"done": True}}]
+        self.ws.send.reset_mock()
+        self.ws.send.side_effect = lambda *a, **k: answers.pop(0)
+        result = await self.driver.execute(self.op("fs.delete", path="/x"), 5)
+        self.assertEqual(result.outcome, "ok")
+        commands = [c.args[0] for c in self.ws.send.await_args_list]
+        self.assertEqual(commands, ["fs.entry.delete", "auth.stepup.begin", "auth.stepup.finish", "fs.entry.delete"])
+        self.assertEqual(self.ws.send.await_args_list[1].args[1], {"family": "data.destroy", "target": "vault:7"})
+        finish = self.ws.send.await_args_list[2].args[1]
+        self.assertEqual(finish, {"stepup_id": "c1", "password": "test-password-12345", "method": "password_totp",
+                                  "code": totp.code(totp.last_step)})
+        raw = json.dumps(result.to_json())
+        for secret in self.secrets:
+            self.assertNotIn(secret, raw)
+
+    async def test_failed_step_up_reports_the_original_refusal(self):
+        self.with_totp()
+        await self.driver.open()
+        refusal = {"status": "ERROR", "error": "Confirm it's you", "data": {
+            "code": "step_up_required", "family": "settings", "target": None, "methods": ["password_totp"]}}
+        answers = [refusal, {"status": "OK", "data": {"stepup_id": "c1", "methods": ["password_totp"]}},
+                   {"status": "ERROR", "error": "That didn't work", "data": {"code": "step_up_failed"}}]
+        self.ws.send.reset_mock()
+        self.ws.send.side_effect = lambda *a, **k: answers.pop(0)
+        result = await self.driver.execute(self.op(), 5)
+        self.assertEqual(result.code, "step_up_required")
+        self.assertEqual(self.ws.send.await_count, 3)
 
     async def test_all_filesystem_bindings_and_success_data(self):
         await self.driver.open()
