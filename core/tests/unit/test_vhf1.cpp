@@ -30,12 +30,12 @@ using Json = nlohmann::json;
 using Bytes = std::vector<uint8_t>;
 
 // Sections of vectors.json and who verifies them. VHF1-owned sections are exercised here; the others belong to the
-// suites of their own workstreams (#329: object ids and KEV1/recovery seed with WS1/WS3, the manifest chain with
-// WS3-a). A new section fails until it is classified here (and, if it is VHF1's, tested).
+// suites of their own workstreams (#329: object ids and KEV1/recovery seed with WS1/WS3, the manifest chain in
+// test_manifest.cpp, ManifestVectors). A new section fails until it is classified here (and, if it is VHF1's, tested).
 const std::set<std::string> kTopLevel = {"schema", "generated_by", "conventions", "object_ids", "vhf1",
                                          "kev1", "recovery_seed", "manifest"};
 const std::set<std::string> kVhf1Sections = {"positive", "range_reads", "negative", "range_negative"};
-const std::set<std::string> kManifestSections = {"objects", "chain", "negative"};  // chain: WS3-a (spec 03)
+const std::set<std::string> kManifestSections = {"objects", "chain", "negative"};  // chain: test_manifest.cpp
 
 const Json& vectors() {
     static const Json doc = [] {

@@ -238,6 +238,30 @@
         "name": "segment_missing",
         "root": "root_epoch_2",
         "segments_override": {}
+      },
+      {
+        "expect": {
+          "epoch": 3,
+          "root_sha256": "bb4636dd4e2b5b3bbf5cfce0023cc10f366ee39f5a440cae351419b1d6889c0b",
+          "warning": "gap"
+        },
+        "known": {
+          "epoch": 1,
+          "root_sha256": "fb0e78bf85d4b34289dc450e20bff4c13f3cdf23cc4557e06a79ae031d93fcc0"
+        },
+        "name": "gap_1_to_3",
+        "root": "root_epoch_3"
+      },
+      {
+        "expect": {
+          "error": "rollback"
+        },
+        "known": {
+          "epoch": 3,
+          "root_sha256": "bb4636dd4e2b5b3bbf5cfce0023cc10f366ee39f5a440cae351419b1d6889c0b"
+        },
+        "name": "rollback_3_to_2",
+        "root": "root_epoch_2"
       }
     ],
     "negative": [
@@ -282,6 +306,16 @@
         "object_sha256": "3144d9d3947a71b95c95b8099bb4d51df8fb4cd9156438204e49b5bc60fc6b4e",
         "object_uid_hex": "5648f1a2b3c4d5e6f708192a3b4c5d6e",
         "plaintext_utf8": "{\"epoch\":2,\"keys\":[{\"attestation\":null,\"created_at\":\"2026-10-01T00:00:00Z\",\"key_check\":\"72e4c8b7f8ab43b8ed8869a57cef1703\",\"retired_at\":\"2026-11-01T00:00:00Z\",\"version\":1},{\"attestation\":null,\"created_at\":\"2026-11-01T00:00:00Z\",\"key_check\":null,\"retired_at\":null,\"version\":2}],\"layout\":\"OpaqueV1\",\"prev\":\"fb0e78bf85d4b34289dc450e20bff4c13f3cdf23cc4557e06a79ae031d93fcc0\",\"producer\":{\"node_id\":\"8f14e45f-ceea-467a-9575-0c6d2b6a1b8a\",\"software\":\"vaulthalla 1.20.0\",\"vault_id\":42},\"published_at\":\"2026-11-05T12:02:00Z\",\"segments\":[{\"count\":3,\"object_sha256\":\"86ec232270a56c76d7062d31d2cc94fb22017e9d862fde5d52d5f39dabfa1069\",\"range\":[\"00\",\"ff\"],\"sid\":\"p84r7fs2kxr7e45am2npbbsxcc\",\"size\":897}],\"snapshots\":[],\"stats\":{\"bytes\":3172,\"dirs\":2,\"files\":1},\"type\":\"vh.manifest.root\",\"v\":1,\"vault_uid\":\"as4f38nkrkaydxr834n3pk2xdr\"}"
+      },
+      {
+        "key_version": 2,
+        "kind": 3,
+        "name": "root_epoch_3",
+        "object_hex": "895648460d0a1a0a000100780001100300000002000000005648f1a2b3c4d5e6f708192a3b4c5d6e5648f1a2b3c4d5e6f708192a3b4c5d6eede80755f4773929137a2a616d063f8cbeaff0332ea9fbf262864eee1f0062dcee104bca9232f1ce387d61c04c6fa406993e193a21d159487653bb804623d28344c6e0c03a1be5de4f983832fd066fcc3b9839572be5f5440bbb8e03c68dea50932edc9552c832772f671165184ccef9caa5cc2d3bcb8971183d20da9c0b0794c75ae618be6b5a415ef108ae7e6734e217ad5b1bedcf1a57cf1f71bbe1b50031df4941814bacdc633b1e10c2a48249dbbaa931c4411e8564dea210f4fe708f65fea4b63a9d7b15e172216fc44d7ea7c012030d8043e6b2389a483f57431a6b9a491dc5ba474a91f44ff527d927b68dc9aafcb7f95cadb46b93ae2faa16f8a7e1683d0ffda1d21a794670ebd9d640c3a6b40de7d1801b053ef9d87d82c46c3a83246423b0d39190be293b25f6642d0e9a36af107de88bfe06dac03f459165d294c3c9be6406e22fa41e03593901abe63161187aac5e6695b75ef14c2cf4103f268b110ad620e46bbc1111f50cc4f58adebef363d0d1d651ee66c056d24b1aa1936665c4287cea361f53350940f5256b9ac3d3b73390ae62499439090145216f07316594853c1aac062e0fc8368dc4f6e56aabfe8c8a92f898592570c78787a1dd4cc818ecc23bc56c424f6569b5b65315c6e9b77eee6e90933bb3b32ce9a7b712e480a02971a7d98cc8325c1de49cb951eccc209c5a46d16b3766be6f208b024e8a232a2421414f1323ea8154fd5a12be78f5fdaa68a45a2fc995a8dce57e826701d532fc7b9ca21ed3c3166c7a9001eff864b3f77e937d21ae49f652d72d7d2c84ce582597e13cb5c370916837a1f4267e3b7dea38697143c6f7b15972a23eec1c5933ff9eaa5e9ab6cef78e15314c1f9ce5cfac922156fa4048b954f27703566f5f46d993d85ebc19361206f9dfa6fccb289d4e4557483c1dc237308e7c41a02e0c8aed0da7f929f85433a73c23db658067bd61f8a4969e24c48d6d92a99b12d7bfd4affa3889a192d72b281e2505292700c63acf4ce0156bc83834ad368a32b09c7c024be4826fdebfd4aa46e430a868ed54df61e3792b7bcd46983e43a1be9d6c9165d623f4f6c5958db0ddcdfa5d1960d0d7f39d53e8f2ec469b535a3813e5c4fadb8130684d24cd3c812e6f53527ba474428802779c8010345f6a270eb55f8593e95fc50eb9b5c51224e9cd6d36e8d371d2382647a6eacb2c5c4963b558df259101eb3150200a9900b692dc3d2da85bfd4617155d5be688d9e64a81c87e85c510",
+        "object_key": ".vaulthalla/root",
+        "object_sha256": "bb4636dd4e2b5b3bbf5cfce0023cc10f366ee39f5a440cae351419b1d6889c0b",
+        "object_uid_hex": "5648f1a2b3c4d5e6f708192a3b4c5d6e",
+        "plaintext_utf8": "{\"epoch\":3,\"keys\":[{\"attestation\":null,\"created_at\":\"2026-10-01T00:00:00Z\",\"key_check\":\"72e4c8b7f8ab43b8ed8869a57cef1703\",\"retired_at\":\"2026-11-01T00:00:00Z\",\"version\":1},{\"attestation\":null,\"created_at\":\"2026-11-01T00:00:00Z\",\"key_check\":null,\"retired_at\":null,\"version\":2}],\"layout\":\"OpaqueV1\",\"prev\":\"3144d9d3947a71b95c95b8099bb4d51df8fb4cd9156438204e49b5bc60fc6b4e\",\"producer\":{\"node_id\":\"8f14e45f-ceea-467a-9575-0c6d2b6a1b8a\",\"software\":\"vaulthalla 1.20.0\",\"vault_id\":42},\"published_at\":\"2026-11-05T12:03:00Z\",\"segments\":[{\"count\":3,\"object_sha256\":\"86ec232270a56c76d7062d31d2cc94fb22017e9d862fde5d52d5f39dabfa1069\",\"range\":[\"00\",\"ff\"],\"sid\":\"p84r7fs2kxr7e45am2npbbsxcc\",\"size\":897}],\"snapshots\":[],\"stats\":{\"bytes\":3172,\"dirs\":2,\"files\":1},\"type\":\"vh.manifest.root\",\"v\":1,\"vault_uid\":\"as4f38nkrkaydxr834n3pk2xdr\"}"
       }
     ]
   },

@@ -918,6 +918,10 @@ TEST_F(SqlDeployerHistoryDb, StorageLayoutMigrationBackfillsUidsAndLayoutsAndIsI
     inRolledBackTxn([](pqxx::work& txn) {
         txn.exec("DROP TRIGGER IF EXISTS vh_uid_immutable ON vault");
         txn.exec("DROP TRIGGER IF EXISTS vh_uid_immutable ON files");
+        // 125 (#368) also hangs its directory/symlink uid triggers on the function: a 121-era database has neither.
+        txn.exec("DROP TRIGGER IF EXISTS vh_uid_immutable ON directories");
+        txn.exec("DROP TRIGGER IF EXISTS vh_uid_immutable ON symlinks");
+        txn.exec("DELETE FROM schema_migrations WHERE filename = '125_manifest_v2.sql'");
         txn.exec("DROP FUNCTION IF EXISTS vh_uid_immutable()");
         txn.exec("ALTER TABLE s3 DROP CONSTRAINT IF EXISTS s3_storage_layout_check");
         txn.exec("ALTER TABLE s3 DROP COLUMN IF EXISTS storage_layout");
@@ -1053,6 +1057,80 @@ TEST_F(SqlDeployerHistoryDb, LayoutCheckConstraintRefusesMismatchedPairsAndUidsA
         }
         // Content changes and same-value writes pass.
         txn.exec("UPDATE files SET size_bytes = 2, object_uid = object_uid WHERE fs_entry_id = $1", pqxx::params{file});
+    });
+}
+
+// 125 (#368, manifest v2) on a 124-era database: additive (chain position and refused root on remote_manifest_state,
+// the root history, directory/symlink uids, the trashed file's object uid), existing manifest rows keep their values,
+// the new uids are immutable once set, the CHECKs hold, and running the file again changes nothing.
+TEST_F(SqlDeployerHistoryDb, ManifestV2MigrationIsAdditiveAndIdempotent) {
+    inRolledBackTxn([](pqxx::work& txn) {
+        txn.exec("DROP TABLE IF EXISTS remote_manifest_root");
+        txn.exec("DROP TRIGGER IF EXISTS vh_uid_immutable ON directories");
+        txn.exec("DROP TRIGGER IF EXISTS vh_uid_immutable ON symlinks");
+        txn.exec("ALTER TABLE remote_manifest_state DROP CONSTRAINT IF EXISTS remote_manifest_state_chain_check");
+        txn.exec("ALTER TABLE remote_manifest_state DROP CONSTRAINT IF EXISTS remote_manifest_state_refused_check");
+        for (const auto* column : {"epoch", "root_sha256", "refused_reason", "refused_epoch", "refused_root_sha256",
+                                   "refused_at", "gc_at"})
+            txn.exec(std::string("ALTER TABLE remote_manifest_state DROP COLUMN IF EXISTS ") + column);
+        txn.exec("ALTER TABLE directories DROP COLUMN IF EXISTS uid");
+        txn.exec("ALTER TABLE symlinks DROP COLUMN IF EXISTS uid");
+        txn.exec("ALTER TABLE files_trashed DROP COLUMN IF EXISTS object_uid");
+        txn.exec("DELETE FROM schema_migrations WHERE filename = '125_manifest_v2.sql'");
+        ASSERT_FALSE(columnExists(txn, "remote_manifest_state", "epoch"));
+
+        const auto owner = txn.exec("INSERT INTO users (name, password_hash) VALUES ('claude_test_125_owner', 'x') "
+                                    "RETURNING id").one_field_ref().as<int>();
+        const auto vault = txn.exec("INSERT INTO vault (name, owner_id, type, mount_point, uid) VALUES "
+                                    "('claude_test_125', $1, 's3', 'claude_test_125', gen_random_uuid()) RETURNING id",
+                                    pqxx::params{owner}).one_field_ref().as<int>();
+        txn.exec("INSERT INTO remote_manifest_state (vault_id, manifest_key, etag) VALUES ($1, '.vaulthalla/index-v1.json', "
+                 "'\"e1\"')", pqxx::params{vault});
+        const auto dir = txn.exec("INSERT INTO fs_entry (vault_id, name, path) VALUES ($1, 'd', '/d') RETURNING id",
+                                  pqxx::params{vault}).one_field_ref().as<int>();
+        txn.exec("INSERT INTO directories (fs_entry_id) VALUES ($1)", pqxx::params{dir});
+
+        migseed::SqlDeployReport report;
+        ASSERT_NO_THROW(report = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(applied(report, "125_manifest_v2.sql"));
+        EXPECT_EQ(recordedHash(txn, "125_manifest_v2.sql"), currentHash("125_manifest_v2.sql"));
+        for (const auto* column : {"epoch", "root_sha256", "refused_reason", "refused_epoch", "refused_root_sha256",
+                                   "refused_at", "gc_at"})
+            EXPECT_TRUE(columnExists(txn, "remote_manifest_state", column)) << column;
+        EXPECT_TRUE(columnExists(txn, "directories", "uid"));
+        EXPECT_TRUE(columnExists(txn, "symlinks", "uid"));
+        EXPECT_TRUE(columnExists(txn, "files_trashed", "object_uid"));
+        EXPECT_EQ(txn.exec("SELECT etag FROM remote_manifest_state WHERE vault_id = $1", pqxx::params{vault})
+                      .one_field_ref().as<std::string>(), "\"e1\"") << "existing rows keep their values";
+
+        const auto refused = [&](const std::string& sql) {
+            pqxx::subtransaction sub(txn, "check");
+            try {
+                sub.exec(sql, pqxx::params{vault});
+            } catch (const pqxx::sql_error&) {
+                return true;
+            }
+            return false;
+        };
+        EXPECT_TRUE(refused("UPDATE remote_manifest_state SET epoch = 0, root_sha256 = repeat('a', 64) WHERE vault_id = $1"));
+        EXPECT_TRUE(refused("UPDATE remote_manifest_state SET epoch = 1 WHERE vault_id = $1")) << "epoch and hash go together";
+        EXPECT_TRUE(refused("UPDATE remote_manifest_state SET epoch = 1, root_sha256 = 'ABC' WHERE vault_id = $1"));
+        EXPECT_TRUE(refused("UPDATE remote_manifest_state SET refused_reason = 'other' WHERE vault_id = $1"));
+        EXPECT_FALSE(refused("UPDATE remote_manifest_state SET epoch = 3, root_sha256 = repeat('a', 64), "
+                             "refused_reason = 'fork' WHERE vault_id = $1"));
+        EXPECT_TRUE(refused("INSERT INTO remote_manifest_root (vault_id, epoch, root_sha256) VALUES ($1, 0, repeat('a', 64))"));
+
+        txn.exec("UPDATE directories SET uid = gen_random_uuid() WHERE fs_entry_id = $1", pqxx::params{dir});
+        {
+            pqxx::subtransaction change(txn, "dir_uid");
+            EXPECT_THROW(change.exec("UPDATE directories SET uid = gen_random_uuid() WHERE fs_entry_id = $1",
+                                     pqxx::params{dir}), pqxx::sql_error) << "a directory uid never changes once set";
+        }
+
+        migseed::SqlDeployReport again;
+        ASSERT_NO_THROW(again = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(again.applied.empty());
+        ASSERT_NO_THROW(txn.exec(migseed::readFileToString(repoPsqlDir() / "125_manifest_v2.sql")));
     });
 }
 

@@ -13,7 +13,7 @@ encrypted bucket reconstructs files, names, versions and layout after the old se
 | [03 Metadata recovery](03-metadata-recovery.md) | 3 | encrypted copy-on-write manifest (root + segments) with epochs, KEV1 key envelopes to a customer recovery recipient, the recovery kit, `vh vault recover`, the catastrophic restore drill |
 | [04 Sealed vaults](04-sealed-vaults.md) | 4 | device-held keys, a signed membership chain, SAS-verified device approval, recovery seed; the server stores ciphertext, encrypted names and envelopes; blocked on #325 |
 | [05 Claims and custody](05-claims-and-custody.md) | 5 | provider-blind vs operator-blind vs device E2EE by deployment model, support-access rules, allowed wording |
-| [`vectors/`](vectors/) | 2, 3 | `vh_crypto_vectors.py` (reference implementation) and `vectors.json` (69 vectors: object ids, VHF1, range reads, negatives, KEV1, recovery seed, manifest chain). `python3 vectors/vh_crypto_vectors.py --check` |
+| [`vectors/`](vectors/) | 2, 3 | `vh_crypto_vectors.py` (reference implementation) and `vectors.json` (72 vectors: object ids, VHF1, range reads, negatives, KEV1, recovery seed, manifest objects and chain). `python3 vectors/vh_crypto_vectors.py --check` |
 
 ## Dependencies
 
