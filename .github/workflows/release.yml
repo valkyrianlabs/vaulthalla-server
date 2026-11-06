@@ -519,15 +519,20 @@ jobs:
     defaults:
       run:
         shell: bash ./ci/run-ci bash -euo pipefail {0}
+    # Recorded only once every publication succeeded, the macOS package on GitHub and Apthalla included.
     needs:
       - release-check
       - publish-debian
       - github-release
+      - macos-publish
+      - macos-publish-pkg
     if: >-
       !cancelled() &&
       needs.release-check.outputs.publish_required == 'true' &&
       needs.publish-debian.result == 'success' &&
-      needs.github-release.result == 'success'
+      needs.github-release.result == 'success' &&
+      needs.macos-publish.result == 'success' &&
+      needs.macos-publish-pkg.result == 'success'
     permissions:
       contents: write
     timeout-minutes: 10
