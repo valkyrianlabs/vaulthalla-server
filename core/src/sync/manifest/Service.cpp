@@ -42,7 +42,20 @@ void Service::refused(const ChainRejected& e, const uint64_t epoch, const std::s
 
 PublishReport Service::publish() {
     std::scoped_lock lock(mutex_);
-    const auto produced = db::query::sync::Manifest::collect(vaultId_);
+    return publishLocked(db::query::sync::Manifest::collect(vaultId_));
+}
+
+std::optional<PublishReport> Service::publishIfChanged() {
+    std::scoped_lock lock(mutex_);
+    auto produced = db::query::sync::Manifest::collect(vaultId_);
+    const auto knownState = known();
+    if (cache_.base && cache_.last_produced && knownState && cache_.base->known == *knownState &&
+        *cache_.last_produced == produced)
+        return std::nullopt;
+    return publishLocked(produced);
+}
+
+PublishReport Service::publishLocked(const Content& produced) {
     const auto current = keys_->currentKey();
     const auto knownState = known();
     PublishOptions options;
@@ -72,6 +85,10 @@ PublishReport Service::publish() {
 std::optional<Acceptance> Service::verifyRemote() {
     std::scoped_lock lock(mutex_);
     const auto state = db::query::sync::Manifest::state(vaultId_);
+    // A pass that changed nothing costs one HEAD of the root (spec 01 §5): its ETag still the one we recorded.
+    if (state.etag && state.epoch && state.root_sha256)
+        if (const auto etag = store_->headEtag(std::string(kRootKey)); etag && *etag == *state.etag)
+            return Acceptance{*state.epoch, *state.root_sha256, false};
     auto obj = store_->get(std::string(kRootKey));
     if (!obj) return std::nullopt;
     if (state.etag && obj->etag && *state.etag == *obj->etag && state.epoch && state.root_sha256)

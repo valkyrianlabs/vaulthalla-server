@@ -30,13 +30,14 @@ Baseline Baseline::agreed(const fs::model::File& local, const fs::model::File& r
 
 Baseline Baseline::afterUpload(const fs::model::File& local) {
     // The index row an upload writes is the local snapshot (plaintext size, content hash), so that is what the
-    // next pass sees as the remote side.
+    // next pass sees as the remote side. opaque_v1 uploads also record the stored object's ETag (CloudEngine sets
+    // it on the uploaded file; never for path_v0), so a later listing of the same object reads as unchanged.
     return {
         .file_id = local.id,
         .content_hash = local.content_hash,
         .size_bytes = local.size_bytes,
         .remote_content_hash = local.content_hash,
-        .remote_etag = std::nullopt,
+        .remote_etag = local.remote_etag,
         .remote_size_bytes = local.size_bytes
     };
 }

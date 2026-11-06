@@ -6,6 +6,7 @@
 #include "db/encoding/bytea.hpp"
 #include "db/query/device/Device.hpp"
 #include "sync/manifest/Objects.hpp"
+#include "vault/Content.hpp"
 
 #include <fmt/format.h>
 #include <version.h>
@@ -30,6 +31,17 @@ std::string iso(const std::string& column) {
 std::optional<std::string> optText(const pqxx::field_ref& f) {
     if (f.is_null()) return std::nullopt;
     return f.as<std::string>();
+}
+
+std::string hexOf(const std::vector<uint8_t>& bytes) {
+    static constexpr char kHex[] = "0123456789abcdef";
+    std::string out;
+    out.reserve(bytes.size() * 2);
+    for (const auto b : bytes) {
+        out += kHex[b >> 4];
+        out += kHex[b & 0x0f];
+    }
+    return out;
 }
 
 template <typename T>
@@ -244,15 +256,23 @@ vh::sync::manifest::Content Manifest::collect(const uint32_t vaultId) {
             versionsByUid[mf::uidText(*uid)].push_back(std::move(v));
         }
 
-        // ---- the current object of each file (remote_object_index under its o/<uid> key)
+        // ---- the current object of each file (remote_object_index under its o/<uid> key). A row Vaulthalla's own
+        //      upload wrote (#369) names the object's generation (its size is then the plaintext's: the object's is
+        //      the sealed size of that generation); a listed row has the object's size and no generation.
         std::map<std::string, mf::ObjectRef> objects;
-        for (const auto row : txn.exec("SELECT object_key, size_bytes, etag, version_id, storage_class "
+        std::map<std::string, std::string> objectGenerations;   // uid → hex salt of the current object (VHF1)
+        for (const auto row : txn.exec("SELECT object_key, size_bytes, etag, version_id, storage_class, encryption_iv "
                                        "FROM remote_object_index WHERE vault_id = $1 AND object_key LIKE 'o/%'",
                                        pqxx::params{vaultId})) {
             const auto uid = mf::uidOfObjectKey(row["object_key"].as<std::string>());
             if (!uid) continue;
-            objects[mf::uidText(*uid)] = {optText(row["etag"]), row["size_bytes"].as<uint64_t>(),
-                                          optText(row["version_id"]), optText(row["storage_class"])};
+            auto size = row["size_bytes"].as<uint64_t>();
+            if (const auto iv = optText(row["encryption_iv"]); iv && vault::content::isVhf1(*iv)) {
+                size = vault::content::sealedSizeOf(size, *iv);
+                objectGenerations[mf::uidText(*uid)] = manifest_query_detail::hexOf(crypto::util::b64_decode(*iv));
+            }
+            objects[mf::uidText(*uid)] = {optText(row["etag"]), size, optText(row["version_id"]),
+                                          optText(row["storage_class"])};
         }
 
         // ---- the tree
@@ -319,6 +339,10 @@ vh::sync::manifest::Content Manifest::collect(const uint32_t vaultId) {
                 e.content_hash = optText(row["content_hash"]);
                 if (const auto kv = optNum<uint32_t>(row["encrypted_with_key_version"]); kv && *kv > 0) e.key_version = kv;
                 if (const auto o = objects.find(e.uid); o != objects.end()) e.object = o->second;
+                if (const auto g = objectGenerations.find(e.uid); g != objectGenerations.end()) {
+                    e.format = 1;
+                    e.generation = g->second;
+                }
                 if (const auto v = versionsByUid.find(e.uid); v != versionsByUid.end()) e.versions = v->second;
             } else {
                 e.kind = mf::EntryKind::Symlink;

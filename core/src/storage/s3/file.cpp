@@ -86,6 +86,7 @@ void Controller::uploadObjectWithMetadata(
     const std::filesystem::path& filePath,
     const RequestOptions& options) const {
     resetLastPutOutcome();
+    enforceRequestPolicy(RequestOp::Put, key.string(), &options);
     recordRequest(RequestKind::Put);
 
     std::ifstream fin(filePath, std::ios::binary);
@@ -137,6 +138,7 @@ void Controller::uploadObjectWithMetadata(
 
 void Controller::downloadObject(const std::filesystem::path& key,
                                 const std::filesystem::path& outputPath) const {
+    enforceRequestPolicy(RequestOp::Get, key.string());
     recordRequest(RequestKind::Get);
 
     CURL* curl = curl_easy_init();

@@ -720,9 +720,33 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   `o/<uid>` rows of `upstream_object_version`) and keeps `remote_manifest_state` (manifest_key `.vaulthalla/root`:
   epoch, root hash, ETag, refused root, gc_at) and `remote_manifest_root` (last three roots' sids). `Service` is the
   per-vault glue `CloudEngine` uses for opaque_v1 (`publishManifestV2`, `refreshRemoteIndexFromManifestIfChanged`
-  verifies only and returns false); a refused root stalls the pass (`SyncStalled`) and raises one
+  verifies only and returns false: one HEAD of the root while its ETag is the recorded one, `ObjectStore::headEtag`);
+  a pass publishes only when the collected content moved since the service's last publish (`publishIfChanged`); a
+  refused root stalls the pass (`SyncStalled`) and raises one
   `manifest_rollback` / `manifest_fork` operator notification per root. Recovery recipients (KEV1 envelopes, grants)
   are #370; `vh vault recover` and the scratch-schema restore are #371.
+- **opaque_v1 data plane** (#369, spec `design/encryption/01-provider-blind-storage.md` §4-§5; test mode only until
+  #371). Keys: `storage/ObjectKeys.hpp` (`o/<file uid>`, `.vaulthalla/{layout.json,root,seg/<sid>,key/<kid>}`,
+  classify Content/Metadata/Foreign, `partSizeFor` = max(5 MiB, ceil(size/10,000)) whole MiB, used by every layout).
+  `CloudEngine::objectKeyOf(File|Trashed)` / `objectKeyForPath` (opaque: the uid via
+  `db::query::sync::ObjectIdentity`: live file, else the newest trashed one) replace `stripLeadingSlash(path)`; path
+  APIs (`headRemoteObject`, `downloadToBuffer`, `removeRemotely`, `purge`) resolve through it, key APIs are
+  `headObjectKey[Strict]` and `removeRemoteKey`. Request rules: `s3::Controller::setOpaqueLayout` (set from the
+  vault's layout by `CloudEngine::applyLayoutPolicy`) makes `enforceRequestPolicy` refuse, before metering, any
+  non-allowlisted key or list prefix (only "", `o/`, `.vaulthalla/…`, one allowlisted key), `x-amz-meta-*`, content
+  headers other than octet-stream, metadata rewrites, and copies onto another key; only `ScopedForeignObjectRead`
+  lets a GET/HEAD name a foreign key (`importForeignObject`). Uploads send no metadata (`uploadOptionsFor`), check the
+  header names the file (`requireOpaqueHeader`) and record the PUT's ETag/version on the file (index row, upload
+  baseline, manifest object ref). Reads bind the file uid (`openOpaqueObject`; header-named generation when the row
+  has none; hydrate is one GET; `Engine::openLocalReader` binds it too). Sync (`sync::Cloud::keyByObjectUid`): maps
+  keyed `/o/<uid>`, remote rows bound to the file with that uid (path, id), `sameOpaqueGeneration` in the planner,
+  orphans and trashed files' objects excluded, no `EnsureDirectories`; a full listing is `listOpaqueBucket` (no
+  prefix; foreign keys to `handleForeignObjects`). Scoped passes resolve `/o/<uid>` through `ObjectIdentity`; the
+  applier never HEADs or indexes a foreign key and skips `o/` objects no file has. Backlog keys, `file_versions
+  .upstream_key` and provider-version keys are `o/<uid>`; `recovery::provider::versions::{objectKeyOf,
+  liveObjectKeyOf, directoryPrefixOf, vaultPathOf, keyUnder}(engine, …)` map them to paths (directories: `o/`
+  filtered by the paths the DB gives uids; a uid no row has → `/Recovered/<uid>`), and an opaque transfer restore
+  re-seals into the destination's uid. Copies re-seal (new uid, new generation). path_v0/transparent unchanged.
 - **Derived cache** (`preview::cache::Store`, `cache_index` rows `type='derived'`, migration 103). One encrypted,
   disposable cache for thumbnails (`thumbnail`/`<size>`), sheet and PDF page renders (`render`/`p<page>-s<size>`),
   posters, probes, GLB, transcodes. File: `<cacheRoot>/derived/<file_id>/<kind>.<variant>.vhd` = 64-byte header

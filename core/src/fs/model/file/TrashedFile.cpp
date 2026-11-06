@@ -1,6 +1,7 @@
 #include "fs/model/file/Trashed.hpp"
 #include <boost/uuid/string_generator.hpp>
 
+#include "db/encoding/has.hpp"
 #include "db/encoding/timestamp.hpp"
 #include <pqxx/result>
 
@@ -18,5 +19,7 @@ Trashed::Trashed(pqxx::row_ref row)
       size_bytes(row["size_bytes"].as<uint64_t>()) {
     if (row["deleted_at"].is_null()) deleted_at = std::nullopt;
     else deleted_at = parsePostgresTimestamp(row["deleted_at"].as<std::string>());
+    if (const auto uid = vh::db::encoding::try_get<std::string>(row, "object_uid"))
+        object_uid = vh::crypto::id::fromUuid(*uid);
 }
 

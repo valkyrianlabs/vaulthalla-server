@@ -113,6 +113,12 @@ key of `s3`, `deploy/psql/020_vaults.sql:60-68`), so keys carry no vault prefix.
 These rules are enforced in one place: the `OpaqueV1` request builder, plus a fake-S3 test that records every
 request and fails on any header or key outside an allowlist (§8).
 
+As implemented (#369): the one place is `s3::Controller::enforceRequestPolicy`, which every operation of a controller
+set to `opaque_v1` runs before it sends or meters anything (the fake bucket runs it too). A full listing sends no
+prefix at all (the query then names nothing) so that foreign keys can be reported; the import of a foreign object is
+the only request that names a foreign key (a GET, never a write). Checksums are SigV4's `x-amz-content-sha256` of the
+bytes sent; no `Content-MD5` or `x-amz-checksum-*` is sent.
+
 ### 4.4 Data-plane behavior
 
 | Operation | `PathV0` today | `OpaqueV1` |
@@ -138,6 +144,11 @@ bucket is foreign: `ignore` (default) leaves it alone and reports it; `import` r
 a new file under `/Imported/<key>` and leaves the original untouched (deleting it is a separate, confirmed action).
 The rule "an object without Vaulthalla metadata is an authentication failure unless the vault imports foreign
 objects" (`upstream-control-plane.md`) carries over unchanged in substance.
+
+As implemented (#369): the policy is the event subscription's `foreign_objects` (no subscription: `ignore`). An
+import happens once per key: an existing `/Imported/<key>` (live or in the trash) is never imported again. An orphan
+is left alone (counted and logged per pass) until a restore (#371) places it; objects of files in the vault trash
+wait for the trash purge.
 
 **Events** (`sync/events/`): decoded keys are object keys. `o/<id>` is resolved to a file through the index; the
 `.vaulthalla/` keys stay "self" and are skipped, as manifest keys are today.

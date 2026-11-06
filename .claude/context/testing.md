@@ -331,6 +331,17 @@ Dev mode requires both `VH_BUILD_MODE=dev` and the gitignored `enable_dev_mode` 
   that every chain error/warning is one `sync::manifest` knows). `ManifestDbTest.*` (`test_manifest_db.cpp`,
   db-only) compares DB → collect → publish → load → a scratch schema with an independent SQL projection of the live
   tables, and covers `remote_manifest_state`, the refused-root alert and the opaque_v1 `CloudEngine` path.
+- opaque_v1 data plane (#369, `test_opaque_layout.cpp`): `OpaqueObjectKeys.*`, `OpaqueRequestPolicy.*` and
+  `OpaqueMultipart.*` are DB-free (the 60 GiB object is a sparse file behind a part-counting controller: ~20 s);
+  `OpaqueLayoutTest.*` (db) makes a vault opaque_v1 before it holds anything (test mode; `UPDATE s3 SET
+  storage_layout` + the engine's in-memory layout, then `setS3ControllerForTesting`, which applies the request
+  policy) and runs real passes over the versioned fake bucket, whose `requests()` records every request as sent
+  (key or prefix, copy destination / version id / part, metadata, headers) after running `enforceRequestPolicy`
+  like the network paths. `OpaqueRequestAudit` walks create, overwrite, backlog replay, rename, move, copy,
+  rotation, provider restore and delete and checks every request and every stored byte for names; `OpaqueObjectCount`,
+  `OpaqueRenameCostsNothing` (1,000-file folder) and `OpaqueRequestCountsMatchSpec01Section5` count requests per
+  operation. Live: `LiveR2Test.OpaqueObjectsCarryNoMetadataAndCostWhatSpec01Says` (o/ objects at the run bucket's
+  root, deleted by the test and again by the bucket's deletion).
 
 ## Known test gaps
 

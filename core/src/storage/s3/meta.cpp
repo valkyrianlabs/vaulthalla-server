@@ -63,6 +63,7 @@ void Controller::recordHeadOutcomeForTesting(const HeadOutcome outcome) noexcept
 
 std::optional<std::unordered_map<std::string, std::string> >
 Controller::getHeadObject(const std::filesystem::path &key) const {
+    enforceRequestPolicy(RequestOp::Head, key.string());
     recordRequest(RequestKind::Head);
 
     const auto [canonicalPath, url] = constructPaths(nullptr, key);
@@ -111,6 +112,7 @@ Controller::getHeadObject(const std::filesystem::path &key) const {
 
 void Controller::setObjectContentHash(const std::filesystem::path &key, const std::string &hash,
                                       const RequestOptions& options) const {
+    enforceRequestPolicy(RequestOp::MetadataRewrite, key.string(), &options);
     recordRequest(RequestKind::Copy);
 
     CurlEasy curl;
@@ -150,6 +152,7 @@ void Controller::setObjectContentHash(const std::filesystem::path &key, const st
 void Controller::setObjectEncryptionMetadata(const std::string &key, const std::string &iv_b64,
                                              unsigned int key_version,
                                              const RequestOptions& options) const {
+    enforceRequestPolicy(RequestOp::MetadataRewrite, key, &options);
     recordRequest(RequestKind::Copy);
 
     CurlEasy curl;

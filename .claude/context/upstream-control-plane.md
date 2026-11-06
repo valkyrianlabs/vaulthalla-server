@@ -26,6 +26,11 @@ buckets it created. Other providers: plain storage, but protection locks still a
 
 ## Invariants (keep them)
 
+- opaque_v1 (#369): event keys are object keys. `.vaulthalla/` keys are skipped as before; a foreign key (neither
+  `o/<uid>` nor `.vaulthalla/`) is never HEADed or indexed: skipped under `foreign_objects = ignore`, handed to a scoped
+  pass that imports it once as `/Imported/<key>` under `import`; an `o/<uid>` object no file of the vault has is
+  skipped as an orphan. Scoped passes resolve `/o/<uid>` to the file with that uid.
+
 - Protection belongs to the bucket identity, never the key; unknown account ⇒ any lock on (provider, bucket) applies.
   Identity follows the endpoint host, not the key's provider label (`*.r2.cloudflarestorage.com` ⇒ cloudflare-r2,
   `*.amazonaws.com` ⇒ aws-s3; `providerIdentity(const APIKey&)`); keys whose label contradicts the endpoint are refused.

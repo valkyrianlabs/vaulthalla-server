@@ -12,6 +12,20 @@
 
 #include "../helpers/live_bucket.hpp"
 
+#include "fs/model/File.hpp"
+#include "storage/CloudEngine.hpp"
+#include "storage/ObjectKeys.hpp"
+#include "vault/Content.hpp"
+#include "vault/EncryptionManager.hpp"
+#include "vault/model/S3Vault.hpp"
+
+#include <sodium.h>
+#include <unistd.h>
+
+#include <filesystem>
+#include <fstream>
+#include <random>
+
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -453,6 +467,117 @@ TEST_F(LiveR2, EventNotificationsOnTheRunBucket) {
     EXPECT_TRUE(seen) << "no event for " << uploads << " upload(s) within 120 s (" << notPullable
                       << " pull(s) answered 405/5xx)";
     std::cout << "[live] event delivered after " << uploads << " upload(s)" << std::endl;
+}
+
+// ---- opaque_v1 on R2 (#369, design/encryption/01 §5, §8) ------------------------------------------------------------
+
+// The opaque_v1 data plane against the run bucket: o/<uid> objects (at the bucket root, which the run bucket's
+// deletion empties), sent under the controller's opaque_v1 request rules. Each object carries no x-amz-meta-*, is
+// application/octet-stream and exactly its VHF1 size; the requests are what spec 01 §5 says (1 PUT per small object,
+// initiate + parts + complete for a multipart one, 1 GET per read, no HEAD for metadata).
+TEST_F(LiveR2Test, OpaqueObjectsCarryNoMetadataAndCostWhatSpec01Says) {
+    ASSERT_GE(sodium_init(), 0);
+    constexpr unsigned kVault = 990'369;
+    constexpr unsigned kKeyVersion = 1;
+    std::vector<uint8_t> vaultKey(32);
+    randombytes_buf(vaultKey.data(), vaultKey.size());
+    const auto em = std::make_shared<vault::EncryptionManager>(vault::EncryptionManager::ForTesting{}, kVault, vaultKey,
+                                                               kKeyVersion);
+    auto s3 = std::make_shared<vault::model::S3Vault>();
+    s3->id = kVault;
+    s3->encrypt_upstream = true;
+    s3->storage_layout = vault::model::StorageLayout::OpaqueV1;
+    const auto cloud = std::make_shared<storage::CloudEngine>();
+    cloud->vault = s3;
+    cloud->encryptionManager = em;
+    const auto data = std::make_shared<storage::s3::Controller>(apiKey(), bucket());
+    cloud->setS3ControllerForTesting(data);
+    ASSERT_TRUE(data->opaqueLayout());
+
+    const auto dir = std::filesystem::temp_directory_path() / ("vh_live_opaque_" + std::to_string(::getpid()));
+    std::filesystem::create_directories(dir);
+    std::mt19937 rng(369);
+    struct Case {
+        std::shared_ptr<fs::model::File> file;
+        std::vector<uint8_t> plaintext;
+        uint64_t puts;
+    };
+    std::vector<Case> cases;
+    unsigned id = 0;
+    for (const auto& [size, puts] : {std::pair<std::size_t, uint64_t>{0, 1}, {300 * 1024, 1}, {11 * 1024 * 1024, 1 + 3 + 1}}) {
+        Case c;
+        c.plaintext.resize(size);
+        for (auto& b : c.plaintext) b = static_cast<uint8_t>(rng());
+        c.puts = puts;
+        c.file = std::make_shared<fs::model::File>();
+        c.file->id = ++id;
+        c.file->vault_id = kVault;
+        c.file->path = "/live-" + std::to_string(id);
+        c.file->object_uid = crypto::id::newObjectUid();
+        c.file->backing_path = dir / std::to_string(id);
+        c.file->size_bytes = size;
+        c.file->content_hash = "live";
+        std::ofstream out(c.file->backing_path, std::ios::binary | std::ios::trunc);
+        if (size > 0) {
+            const auto sealed = em->encrypt(c.plaintext, c.file);
+            out.write(reinterpret_cast<const char*>(sealed.data()), static_cast<std::streamsize>(sealed.size()));
+        }
+        out.close();
+        cases.push_back(std::move(c));
+    }
+
+    std::vector<std::string> written;
+    try {
+        for (auto& c : cases) {
+            data->resetRequestMetrics();
+            cloud->upload(c.file);
+            const auto key = storage::object_keys::contentKey(*c.file->object_uid);
+            written.push_back(key);
+            const auto m = data->requestMetrics();
+            EXPECT_EQ(m.put_requests, c.puts) << key;
+            EXPECT_EQ(m.head_requests + m.get_requests + m.list_requests + m.copy_requests + m.delete_requests, 0u);
+            EXPECT_TRUE(c.file->remote_etag) << "the PUT's ETag, for the index and the manifest";
+        }
+        for (const auto& c : cases) {
+            const auto key = storage::object_keys::contentKey(*c.file->object_uid);
+            const auto head = data->getHeadObject(key);
+            ASSERT_TRUE(head) << key;
+            for (const auto& [name, value] : *head) {
+                std::string lower = name;
+                std::ranges::transform(lower, lower.begin(), [](const unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+                EXPECT_FALSE(lower.starts_with("x-amz-meta-")) << key << ": " << name;
+                if (lower == "content-type") EXPECT_EQ(value, "application/octet-stream") << key;
+                if (lower == "content-length")
+                    EXPECT_EQ(value, std::to_string(vault::content::newSealedSize(c.plaintext.size()))) << key;
+            }
+            data->resetRequestMetrics();
+            std::vector<uint8_t> payload;
+            data->downloadToBuffer(key, payload);
+            auto remote = std::make_shared<fs::model::File>(*c.file);
+            if (c.plaintext.empty()) {
+                remote->encryption_iv.clear();   // the empty file's object: its header names the generation
+                remote->encrypted_with_key_version = 0;
+            }
+            EXPECT_EQ(cloud->decryptRemotePayload(c.file->path, payload, remote,
+                                                  {/*trustFileEncryptionMetadata=*/true, /*allowLocalDbRecovery=*/false}),
+                      c.plaintext);
+            const auto m = data->requestMetrics();
+            EXPECT_EQ(m.get_requests, 1u);
+            EXPECT_EQ(m.head_requests, 0u);
+        }
+        // A name never goes up: the controller refuses it before sending.
+        EXPECT_THROW(data->uploadBufferWithMetadata(key("not-allowed.txt"), {1, 2, 3}, storage::s3::RequestOptions{}),
+                     storage::s3::OpaqueRequestRefused);
+    } catch (...) {
+        for (const auto& k : written) data->deleteObject(k);
+        std::filesystem::remove_all(dir);
+        throw;
+    }
+    for (const auto& k : written) {
+        data->deleteObject(k);
+        EXPECT_FALSE(data->getHeadObject(k)) << k;
+    }
+    std::filesystem::remove_all(dir);
 }
 
 }

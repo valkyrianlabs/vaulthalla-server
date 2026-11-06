@@ -196,6 +196,7 @@ Controller::SignedObjectRequest Controller::signObjectRequest(
 ObjectVersionPage Controller::listObjectVersionsPage(const std::string& prefix, const std::string& keyMarker,
                                                      const std::string& versionIdMarker,
                                                      const unsigned int maxKeys) const {
+    enforceRequestPolicy(RequestOp::ListVersions, prefix);
     if (!versionIdMarker.empty() && keyMarker.empty())
         throw std::invalid_argument("ListObjectVersions: a version-id-marker needs a key-marker");
 
@@ -263,6 +264,7 @@ ObjectVersionPage Controller::listObjectVersionsPage(const std::string& prefix, 
 // ---- HEAD ?versionId= ----------------------------------------------------------------------------------------------
 
 std::optional<ObjectVersionHead> Controller::headObjectVersion(const std::string& key, const std::string& versionId) const {
+    enforceRequestPolicy(RequestOp::HeadVersion, key);
     version_detail::requireVersionId(versionId, key);
     recordRequest(RequestKind::Head);
 
@@ -305,6 +307,7 @@ CopyResult Controller::copyObjectVersion(const std::string& sourceKey, const std
                                          const RequestOptions& options,
                                          const std::optional<std::string>& ifSourceMatchEtag) const {
     resetLastPutOutcome();
+    enforceRequestPolicy(RequestOp::Copy, sourceKey, &options, destKey);
     version_detail::requireVersionId(sourceVersionId, sourceKey);
     if (sourceKey.empty() || destKey.empty()) throw std::invalid_argument("S3 copy needs a source and a destination key");
     if (sourceSize > MAX_SINGLE_COPY_BYTES)

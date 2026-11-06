@@ -252,12 +252,35 @@ public:
     }
 
     [[nodiscard]] unsigned puts() const { return static_cast<unsigned>(counters().put); }
+
+    // ---- request audit (spec 01 §8, OpaqueRequestAudit) -------------------------------------------------------------
+    // Every request that reached the bucket, as sent: the key (or listing prefix), the copy destination or version id,
+    // and the options (x-amz-meta-* and system headers). Every override also runs Controller::enforceRequestPolicy
+    // first, exactly like the network paths, so an opaque_v1 controller refuses a non-conforming request here too.
+    struct Request {
+        Op op{Op::Any};
+        std::string key;
+        std::string second;
+        std::unordered_map<std::string, std::string> metadata;
+        std::map<std::string, std::string> headers;
+    };
+
+    [[nodiscard]] std::vector<Request> requests() const {
+        std::scoped_lock lock(mutex_);
+        return requests_;
+    }
+
+    void clearRequests() {
+        std::scoped_lock lock(mutex_);
+        requests_.clear();
+    }
     [[nodiscard]] unsigned heads() const { return static_cast<unsigned>(counters().head); }
 
     // ---- uploads ---------------------------------------------------------------------------------------------------
 
     void uploadObjectWithMetadata(const std::filesystem::path& key, const std::filesystem::path& file,
                                   const RequestOptions& options) const override {
+        audit(Op::Put, storage::s3::RequestOp::Put, key.string(), &options);
         resetLastPutOutcome();
         if (failPuts.load()) throw std::runtime_error("upload refused (test)");
         std::ifstream in(file, std::ios::binary);
@@ -271,6 +294,7 @@ public:
     void uploadBufferWithMetadataConditional(const std::filesystem::path& key, const std::vector<uint8_t>& buffer,
                                              const RequestOptions& options, const std::optional<std::string>& ifMatch,
                                              const std::optional<std::string>& ifNoneMatch) const override {
+        audit(Op::Put, storage::s3::RequestOp::Put, key.string(), &options);
         resetLastPutOutcome();
         if (failPuts.load()) throw std::runtime_error("upload refused (test)");
         recordRequest(RequestKind::Put);
@@ -279,6 +303,7 @@ public:
     }
 
     std::string initiateMultipartUpload(const std::filesystem::path& key, const RequestOptions& options) const override {
+        audit(Op::Put, storage::s3::RequestOp::Put, key.string(), &options, "initiate");
         if (failPuts.load()) throw std::runtime_error("upload refused (test)");
         recordRequest(RequestKind::Put);
         std::scoped_lock lock(mutex_);
@@ -291,6 +316,7 @@ public:
 
     void uploadPart(const std::filesystem::path& key, const std::string& uploadId, const int partNumber,
                     const std::string& partData, std::string& etagOut) const override {
+        audit(Op::Put, storage::s3::RequestOp::Put, key.string(), nullptr, "part " + std::to_string(partNumber));
         recordRequest(RequestKind::Put);
         recordUploadBytes(partData.size());
         std::scoped_lock lock(mutex_);
@@ -305,6 +331,7 @@ public:
 
     void completeMultipartUpload(const std::filesystem::path& key, const std::string& uploadId,
                                  const std::vector<std::string>& etags) const override {
+        audit(Op::Put, storage::s3::RequestOp::Put, key.string(), nullptr, "complete");
         resetLastPutOutcome();
         if (etags.empty()) throw std::runtime_error("No ETags provided to completeMultipartUpload");
         recordRequest(RequestKind::Put);
@@ -325,7 +352,8 @@ public:
         loseResponseIfAsked();
     }
 
-    void abortMultipartUpload(const std::filesystem::path&, const std::string& uploadId) const override {
+    void abortMultipartUpload(const std::filesystem::path& key, const std::string& uploadId) const override {
+        audit(Op::Delete, storage::s3::RequestOp::Delete, key.string(), nullptr, "abort");
         recordRequest(RequestKind::Delete);
         std::scoped_lock lock(mutex_);
         failIfInjectedLocked(Op::Delete);
@@ -336,6 +364,7 @@ public:
     // ---- reads -----------------------------------------------------------------------------------------------------
 
     void downloadToBuffer(const std::filesystem::path& key, std::vector<uint8_t>& out) const override {
+        audit(Op::Get, storage::s3::RequestOp::Get, key.string());
         recordRequest(RequestKind::Get);
         std::vector<uint8_t> body;
         {
@@ -363,6 +392,7 @@ public:
     }
 
     std::optional<std::unordered_map<std::string, std::string>> getHeadObject(const std::filesystem::path& key) const override {
+        audit(Op::Head, storage::s3::RequestOp::Head, key.string());
         if (blockHeads.load()) {
             headEntered = true;
             while (blockHeads.load() && !storage::s3::curl::http::cancellationRequested())
@@ -401,6 +431,7 @@ public:
 
     std::optional<storage::s3::ObjectVersionHead> headObjectVersion(const std::string& key,
                                                                     const std::string& versionId) const override {
+        audit(Op::Head, storage::s3::RequestOp::HeadVersion, key, nullptr, versionId);
         if (versionId.empty()) throw std::invalid_argument("S3 version id is empty for " + key);
         recordRequest(RequestKind::Head);
         std::scoped_lock lock(mutex_);
@@ -431,6 +462,7 @@ public:
     // ---- listings --------------------------------------------------------------------------------------------------
 
     std::u8string listObjects(const std::filesystem::path& prefix) const override {
+        audit(Op::List, storage::s3::RequestOp::List, prefix.string());
         const auto p = prefix.string();
         std::vector<std::pair<std::string, Version>> live;
         {
@@ -458,6 +490,7 @@ public:
 
     storage::s3::ObjectKeyPage listObjectKeysPage(const std::string& continuationToken,
                                                   const unsigned int maxKeys) const override {
+        audit(Op::List, storage::s3::RequestOp::List, {}, nullptr, continuationToken);
         recordRequest(RequestKind::List);
         std::scoped_lock lock(mutex_);
         failIfInjectedLocked(Op::List);
@@ -480,6 +513,7 @@ public:
     storage::s3::ObjectVersionPage listObjectVersionsPage(const std::string& prefix, const std::string& keyMarker = {},
                                                           const std::string& versionIdMarker = {},
                                                           const unsigned int maxKeys = 1000) const override {
+        audit(Op::List, storage::s3::RequestOp::ListVersions, prefix, nullptr, "versions");
         if (!versionIdMarker.empty() && keyMarker.empty())
             throw std::invalid_argument("ListObjectVersions: a version-id-marker needs a key-marker");
         recordRequest(RequestKind::List);
@@ -546,6 +580,7 @@ public:
                                               const std::string& destKey, const uint64_t sourceSize,
                                               const RequestOptions& options,
                                               const std::optional<std::string>& ifSourceMatchEtag = std::nullopt) const override {
+        audit(Op::Copy, storage::s3::RequestOp::Copy, sourceKey, &options, destKey);
         resetLastPutOutcome();
         if (sourceVersionId.empty()) throw std::invalid_argument("S3 version id is empty for " + sourceKey);
         if (sourceSize > MAX_SINGLE_COPY_BYTES)
@@ -579,16 +614,19 @@ public:
 
     void setObjectContentHash(const std::filesystem::path& key, const std::string& hash,
                               const RequestOptions& options) const override {
+        audit(Op::Copy, storage::s3::RequestOp::MetadataRewrite, key.string(), &options);
         replaceMetadata(key.string(), {{"content-hash", hash}}, options);
     }
 
     void setObjectEncryptionMetadata(const std::string& key, const std::string& iv_b64, const unsigned int keyVersion,
                                      const RequestOptions& options) const override {
+        audit(Op::Copy, storage::s3::RequestOp::MetadataRewrite, key, &options);
         replaceMetadata(key, {{"vh-encrypted", "true"}, {"vh-iv", iv_b64}, {"vh-algo", "aes256gcm"},
                               {"vh-key-version", std::to_string(keyVersion)}}, options);
     }
 
     void deleteObject(const std::filesystem::path& key) const override {
+        audit(Op::Delete, storage::s3::RequestOp::Delete, key.string());
         recordRequest(RequestKind::Delete);
         std::scoped_lock lock(mutex_);
         failIfInjectedLocked(Op::Delete);
@@ -606,6 +644,9 @@ protected:
         long status = 200;
         {
             std::scoped_lock lock(mutex_);
+            Request audited{.op = Op::Get, .key = key.string(), .second = versionId.value_or(""), .metadata = {}, .headers = {}};
+            for (const auto& [name, value] : extraHeaders) audited.headers[name] = value;
+            requests_.push_back(std::move(audited));
             ++counters_.get;
             if (const auto failure = takeFailureLocked(Op::Get)) {
                 if (*failure == Failure::Transport) {
@@ -658,6 +699,19 @@ protected:
     }
 
 private:
+    void audit(const Op op, const storage::s3::RequestOp policyOp, const std::string& key,
+               const RequestOptions* options = nullptr, const std::string& second = {}) const {
+        enforceRequestPolicy(policyOp, key, options,
+                             policyOp == storage::s3::RequestOp::Copy ? std::string_view(second) : std::string_view{});
+        std::scoped_lock lock(mutex_);
+        Request r{.op = op, .key = key, .second = second, .metadata = {}, .headers = {}};
+        if (options) {
+            r.metadata = options->metadata;
+            r.headers = options->system_headers;
+        }
+        requests_.push_back(std::move(r));
+    }
+
     struct Upload {
         std::string key;
         RequestOptions options;
@@ -893,6 +947,7 @@ private:
     mutable std::time_t now_{1'760'000'000};   // 2025-10-09T08:53:20Z
     mutable uint64_t versionSeq_{0};
     mutable uint64_t uploadSeq_{0};
+    mutable std::vector<Request> requests_;
 };
 
 }

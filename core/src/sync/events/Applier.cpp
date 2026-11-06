@@ -3,6 +3,7 @@
 #include "db/Transactions.hpp"
 #include "db/encoding/u8.hpp"
 #include "db/query/fs/File.hpp"
+#include "db/query/sync/ObjectIdentity.hpp"
 #include "db/query/sync/RemoteObjectIndex.hpp"
 #include "db/query/upstream/Channel.hpp"
 #include "db/query/upstream/Inbox.hpp"
@@ -14,6 +15,7 @@
 #include "runtime/Deps.hpp"
 #include "storage/CloudEngine.hpp"
 #include "storage/Manager.hpp"
+#include "storage/ObjectKeys.hpp"
 #include "storage/ScopedS3RequestUsageCapture.hpp"
 #include "storage/upstream/Guard.hpp"
 #include "sync/model/RemoteManifest.hpp"
@@ -199,6 +201,23 @@ Applier::Outcome Applier::applyVault(const uint32_t vaultId) {
                 continue;
             }
 
+            // opaque_v1 (spec 01 §4.4): a key outside o/ and .vaulthalla/ is foreign. Never HEADed or indexed: it is
+            // ignored (the default), or a scoped pass imports it once as /Imported/<key> (foreign_objects = import).
+            const bool opaque = engine->opaqueLayout();
+            if (opaque && storage::object_keys::classify(objectKey) == storage::object_keys::KeyClass::Foreign) {
+                const bool import = sub && sub->foreign_objects == amodel::ForeignObjects::Import &&
+                                    std::ranges::any_of(group, [](const auto* r) { return r->kind == amodel::InboxKind::Created; });
+                if (import) {
+                    db::query::upstream::Inbox::markApplied(groupIds, amodel::InboxOrigin::External);
+                    out.applied += group.size();
+                } else {
+                    db::query::upstream::Inbox::markSkipped(groupIds, "foreign object ignored (opaque_v1: neither o/ nor "
+                                                            ".vaulthalla/)", amodel::InboxOrigin::External);
+                    out.skipped += group.size();
+                }
+                continue;
+            }
+
             const InboxRow* latest = group.front();
             for (const auto* r : group)
                 if (newerOrEqual(*r, *latest)) latest = r;
@@ -212,7 +231,7 @@ Applier::Outcome Applier::applyVault(const uint32_t vaultId) {
                                                                 std::nullopt, latest->event_time, std::nullopt,
                                                                 "self: Vaulthalla's own delete")) {
                     meter();
-                    if (const auto head = engine->headRemoteObjectStrict(objectKey)) {
+                    if (const auto head = engine->headObjectKeyStrict(objectKey)) {
                         db::query::upstream::Inbox::markSkipped({latest->id}, "removal not confirmed: the object still exists",
                                                                 amodel::InboxOrigin::External);
                         ++out.skipped;
@@ -316,11 +335,22 @@ Applier::Outcome Applier::applyVault(const uint32_t vaultId) {
                         ++out.skipped;
                         continue;
                     }
+                    // opaque_v1: an o/<uid> object no file of this vault has is an orphan (or someone else's): never
+                    // a new file. Only a restore (#371) places objects without rows.
+                    if (opaque && !indexed) {
+                        const auto uid = storage::object_keys::uidOfContentKey(objectKey);
+                        if (!uid || !db::query::sync::ObjectIdentity::known(vaultId, *uid)) {
+                            db::query::upstream::Inbox::markSkipped({latest->id}, "orphan: no file of this vault names "
+                                                                    "the object", amodel::InboxOrigin::External);
+                            ++out.skipped;
+                            continue;
+                        }
+                    }
                     if (sub && sub->foreign_objects == amodel::ForeignObjects::Ignore && !indexed &&
                         !db::query::fs::File::getFileByPath(vaultId, fs::model::makeAbsolute(objectKey))) {
                         // A new object nobody in this vault knows: only Vaulthalla-written objects are imported.
                         meter();
-                        const auto head = engine->headRemoteObjectStrict(objectKey);
+                        const auto head = engine->headObjectKeyStrict(objectKey);
                         if (!head || !head->encrypted) {
                             db::query::upstream::Inbox::markSkipped(
                                 {latest->id}, head ? "foreign object ignored (no Vaulthalla metadata)" : "object vanished",

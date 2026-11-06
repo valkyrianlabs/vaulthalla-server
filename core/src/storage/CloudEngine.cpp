@@ -27,6 +27,11 @@
 #include "sync/manifest/Store.hpp"
 #include "sync/model/Event.hpp"
 #include "storage/s3/provider/Registry.hpp"
+#include "storage/ObjectKeys.hpp"
+#include "storage/PlaintextReader.hpp"
+#include "db/query/sync/ObjectIdentity.hpp"
+#include "vault/Content.hpp"
+#include "crypto/vhf1/Format.hpp"
 #include "identities/Manager.hpp"
 #include "db/query/upstream/WriteIntent.hpp"
 #include "sync/events/Subscriptions.hpp"
@@ -36,6 +41,7 @@
 #include <algorithm>
 #include <cctype>
 #include <ctime>
+#include <fstream>
 
 using namespace vh::fs;
 using namespace vh::fs::model;
@@ -144,6 +150,7 @@ CloudEngine::CloudEngine(const std::shared_ptr<vh::vault::model::S3Vault>& vault
       s3Provider_(std::make_shared<s3::Controller>(key_, vault->bucket)) {
     resolveS3ProviderConfiguration();
     s3Provider_->setUsageVault(vault->id);   // feeds the vault's local usage ledger (recovery cost estimates)
+    applyLayoutPolicy();
 }
 
 CloudEngine::CloudEngine(const std::shared_ptr<vh::vault::model::S3Vault>& vault, std::shared_ptr<s3::Controller> s3Provider)
@@ -152,6 +159,7 @@ CloudEngine::CloudEngine(const std::shared_ptr<vh::vault::model::S3Vault>& vault
       s3Provider_(std::move(s3Provider)) {
     resolveS3ProviderConfiguration();
     if (s3Provider_ && vault) s3Provider_->setUsageVault(vault->id);
+    applyLayoutPolicy();
 }
 
 void CloudEngine::upload(const std::shared_ptr<File>& f) const {
@@ -159,7 +167,7 @@ void CloudEngine::upload(const std::shared_ptr<File>& f) const {
     if (!fs::exists(backingPath) || !fs::is_regular_file(backingPath))
         throw std::runtime_error("[CloudStorageEngine] Invalid file: " + f->path.string());
 
-    const fs::path s3Key = stripLeadingSlash(f->path);
+    const fs::path s3Key = objectKeyOf(*f);
     const auto backingSize = fs::file_size(backingPath);
 
     if (!s3Vault()->encrypt_upstream) {
@@ -180,32 +188,20 @@ void CloudEngine::upload(const std::shared_ptr<File>& f) const {
         if (!encryptionManager)
             throw std::runtime_error("[CloudStorageEngine] Encryption manager unavailable for empty encrypted upload");
         const auto ciphertext = encryptionManager->encrypt({}, f);
-        auto options = requestOptionsFor(s3::provider::RequestOperation::PutObject);
-        options.metadata = getMetaMapFromFile(f);
-        auto own = noteOwnWrite(s3Key, false, ciphertext.size(), f);
-        s3Provider_->uploadBufferWithMetadata(s3Key, ciphertext, options);
-        own.done();
+        if (opaqueLayout()) requireOpaqueHeader(ciphertext, *f);
+        putContent(s3Key, f, ciphertext);
         return;
     }
 
     if (!f->content_hash) f->content_hash = db::query::fs::File::getContentHash(vault->id, f->path);
-    const auto meta = getMetaMapFromFile(f);
-    auto options = requestOptionsFor(s3::provider::RequestOperation::PutObject);
-    options.metadata = meta;
-    auto own = noteOwnWrite(s3Key, false, backingSize, f);
-
-    if (backingSize < s3::Controller::MIN_PART_SIZE)
-        s3Provider_->uploadObjectWithMetadata(s3Key, backingPath, options);
-    else {
-        auto multipartOptions = requestOptionsFor(s3::provider::RequestOperation::CreateMultipartUpload);
-        multipartOptions.metadata = meta;
-        s3Provider_->uploadLargeObject(
-            s3Key,
-            backingPath,
-            s3::Controller::MIN_PART_SIZE,
-            multipartOptions);
+    if (opaqueLayout()) {
+        std::vector<uint8_t> header(std::min<uint64_t>(backingSize, crypto::vhf1::kHeaderSize));
+        if (std::ifstream in(backingPath, std::ios::binary);
+            !in.read(reinterpret_cast<char*>(header.data()), static_cast<std::streamsize>(header.size())))
+            throw std::runtime_error("[CloudStorageEngine] Could not read the sealed header of " + s3Key.string());
+        requireOpaqueHeader(header, *f);
     }
-    own.done();
+    putContent(s3Key, f, backingPath, backingSize);
 }
 
 void CloudEngine::upload(const std::shared_ptr<File>& f, const std::vector<uint8_t>& buffer, const bool isCiphertext) const {
@@ -222,23 +218,51 @@ void CloudEngine::upload(const std::shared_ptr<File>& f, const std::vector<uint8
         return;
     }
 
-    const auto s3Key = stripLeadingSlash(f->path);
-    const auto meta = getMetaMapFromFile(f);
-    auto options = requestOptionsFor(s3::provider::RequestOperation::PutObject);
-    options.metadata = meta;
-    auto own = noteOwnWrite(s3Key, false, buffer.size(), f);
+    if (opaqueLayout()) requireOpaqueHeader(buffer, *f);
+    putContent(objectKeyOf(*f), f, buffer);
+}
 
-    if (buffer.size() < s3::Controller::MIN_PART_SIZE) s3Provider_->uploadBufferWithMetadata(s3Key, buffer, options);
-    else {
-        auto multipartOptions = requestOptionsFor(s3::provider::RequestOperation::CreateMultipartUpload);
-        multipartOptions.metadata = meta;
-        s3Provider_->uploadLargeObject(
-            s3Key,
-            buffer,
-            s3::Controller::MIN_PART_SIZE,
-            multipartOptions);
+s3::RequestOptions CloudEngine::uploadOptionsFor(const s3::provider::RequestOperation operation,
+                                                 const std::shared_ptr<File>& f) const {
+    auto options = requestOptionsFor(operation);
+    if (!opaqueLayout()) options.metadata = getMetaMapFromFile(f);
+    else if (f->encryption_iv.empty() || f->encrypted_with_key_version == 0)
+        // Nothing of it goes on the object (its header carries the generation), but nothing unsealed goes up either.
+        throw std::runtime_error("[CloudStorageEngine] Missing encryption metadata for upload: " + objectKeyOf(*f));
+    return options;
+}
+
+namespace {
+    // opaque_v1: what the PUT stored, for the index row and the manifest's object reference (spec 03 §3.3).
+    void opaqueRecordStoredObject(const std::shared_ptr<File>& f) {
+        const auto outcome = s3::Controller::lastPutOutcome();
+        f->remote_etag = outcome.etag.empty() ? std::nullopt : std::make_optional(outcome.etag);
+        f->remote_version_id = outcome.version_id && *outcome.version_id != "null" ? outcome.version_id : std::nullopt;
     }
+}
+
+void CloudEngine::putContent(const std::string& key, const std::shared_ptr<File>& f, const fs::path& source,
+                             const uint64_t size) const {
+    const bool single = size < s3::Controller::MIN_PART_SIZE;
+    const auto options = uploadOptionsFor(single ? s3::provider::RequestOperation::PutObject
+                                                 : s3::provider::RequestOperation::CreateMultipartUpload, f);
+    auto own = noteOwnWrite(key, false, size, f);
+    if (single) s3Provider_->uploadObjectWithMetadata(key, source, options);
+    else s3Provider_->uploadLargeObject(key, source, object_keys::partSizeFor(size), options);
     own.done();
+    if (opaqueLayout()) opaqueRecordStoredObject(f);
+}
+
+void CloudEngine::putContent(const std::string& key, const std::shared_ptr<File>& f,
+                             const std::vector<uint8_t>& bytes) const {
+    const bool single = bytes.size() < s3::Controller::MIN_PART_SIZE;
+    const auto options = uploadOptionsFor(single ? s3::provider::RequestOperation::PutObject
+                                                 : s3::provider::RequestOperation::CreateMultipartUpload, f);
+    auto own = noteOwnWrite(key, false, bytes.size(), f);
+    if (single) s3Provider_->uploadBufferWithMetadata(key, bytes, options);
+    else s3Provider_->uploadLargeObject(key, bytes, object_keys::partSizeFor(bytes.size()), options);
+    own.done();
+    if (opaqueLayout()) opaqueRecordStoredObject(f);
 }
 
 std::shared_ptr<File> CloudEngine::uploadBufferObject(
@@ -253,6 +277,7 @@ std::shared_ptr<File> CloudEngine::uploadBufferObject(
     file->content_hash = std::move(contentHash);
     file->created_at = file->updated_at = std::time(nullptr);
     file->remote_storage_class = configuredStorageClass();
+    if (opaqueLayout()) file->object_uid = crypto::id::newObjectUid();   // a new file: its own object
 
     std::vector<uint8_t> payload;
     if (s3Vault()->encrypt_upstream) {
@@ -267,30 +292,22 @@ std::shared_ptr<File> CloudEngine::uploadBufferObject(
         file->encrypted_with_key_version = 0;
     }
 
-    const auto s3Key = stripLeadingSlash(file->path);
-    auto options = requestOptionsFor(s3::provider::RequestOperation::PutObject);
-    options.metadata = getMetaMapFromFile(file);
+    const auto s3Key = objectKeyOf(*file);
+    const bool single = payload.size() < s3::Controller::MIN_PART_SIZE;
+    const auto options = uploadOptionsFor(single ? s3::provider::RequestOperation::PutObject
+                                                 : s3::provider::RequestOperation::CreateMultipartUpload, file);
     auto own = noteOwnWrite(s3Key, false, payload.size());
-
-    if (payload.size() < s3::Controller::MIN_PART_SIZE) {
-        s3Provider_->uploadBufferWithMetadata(s3Key, payload, options);
-    } else {
-        auto multipartOptions = requestOptionsFor(s3::provider::RequestOperation::CreateMultipartUpload);
-        multipartOptions.metadata = options.metadata;
-        s3Provider_->uploadLargeObject(
-            s3Key,
-            payload,
-            s3::Controller::MIN_PART_SIZE,
-            multipartOptions);
-    }
+    if (single) s3Provider_->uploadBufferWithMetadata(s3Key, payload, options);
+    else s3Provider_->uploadLargeObject(s3Key, payload, object_keys::partSizeFor(payload.size()), options);
     own.done();
+    if (opaqueLayout()) opaqueRecordStoredObject(file);
 
     return file;
 }
 
 std::vector<uint8_t> CloudEngine::downloadToBuffer(const fs::path& rel_path) const {
     std::vector<uint8_t> buffer;
-    s3Provider_->downloadToBuffer(stripLeadingSlash(rel_path), buffer);
+    s3Provider_->downloadToBuffer(objectKeyForPath(rel_path), buffer);
     return buffer;
 }
 
@@ -306,6 +323,24 @@ std::vector<uint8_t> CloudEngine::decryptRemotePayload(
     const std::vector<uint8_t>& payload,
     const std::shared_ptr<File>& remoteFile,
     const RemoteEncryptionResolveOptions options) const {
+    if (opaqueLayout()) {
+        // Every object is sealed and carries no metadata (spec 01 §4.3): it is opened against this vault and the
+        // file's uid, with the generation the remote row records (trusted) or else the one its header names. The
+        // local row's generation describes the local copy, never the object, so it is not used.
+        std::shared_ptr<File> bound;
+        if (remoteFile && remoteFile->object_uid) {
+            bound = std::make_shared<File>(*remoteFile);
+            if (!options.trust_file_encryption_metadata) {
+                bound->encryption_iv.clear();
+                bound->encrypted_with_key_version = 0;
+            }
+        } else if (const auto uid = db::query::sync::ObjectIdentity::uidAtPath(vault->id, makeAbsolute(rel_path))) {
+            bound = std::make_shared<File>();
+            bound->object_uid = uid;
+        }
+        if (!bound) throw IntegrityError("[CloudStorageEngine] no file names this object; it is not read");
+        return openOpaqueObject(payload, bound);
+    }
     const auto context = resolveRemoteEncryptionContext(rel_path, remoteFile, options);
     if (!context.encrypted) return payload;
     if (!context.payload)
@@ -327,7 +362,10 @@ std::shared_ptr<File> CloudEngine::downloadFile(const std::shared_ptr<File>& rem
 std::shared_ptr<File> CloudEngine::downloadFileWithRemoteMetadata(
     const fs::path& rel_path,
     const std::shared_ptr<File>& remoteFile) {
-    auto buffer = downloadToBuffer(rel_path);
+    std::vector<uint8_t> buffer;
+    if (opaqueLayout() && remoteFile && remoteFile->object_uid)
+        s3Provider_->downloadToBuffer(object_keys::contentKey(*remoteFile->object_uid), buffer);
+    else buffer = downloadToBuffer(rel_path);
 
     buffer = decryptRemotePayload(
         rel_path,
@@ -354,8 +392,20 @@ std::shared_ptr<File> CloudEngine::downloadFileWithRemoteMetadata(
     return f;
 }
 
-std::shared_ptr<File> CloudEngine::indexAndDeleteFile(const std::shared_ptr<File>& remoteFile) {
-    if (!remoteFile) throw std::invalid_argument("[CloudStorageEngine] Cannot index null remote file");
+std::shared_ptr<File> CloudEngine::indexAndDeleteFile(const std::shared_ptr<File>& listed) {
+    if (!listed) throw std::invalid_argument("[CloudStorageEngine] Cannot index null remote file");
+    auto remoteFile = listed;
+    if (opaqueLayout() && listed->object_uid && (listed->encryption_iv.empty() || listed->encrypted_with_key_version == 0)) {
+        // A row from a listing or an event: the object's header names its generation (one ranged GET), and its size
+        // is the sealed one.
+        remoteFile = std::make_shared<File>(*listed);
+        std::tie(remoteFile->encryption_iv, remoteFile->encrypted_with_key_version) =
+            opaqueObjectGeneration(*listed->object_uid);
+        const auto plain = vh::vault::content::plaintextSizeOfGeneration(listed->size_bytes, remoteFile->encryption_iv);
+        if (!plain) throw IntegrityError("[CloudStorageEngine] the object's size does not match its generation");
+        remoteFile->size_bytes = *plain;
+        remoteFile->remote_encrypted = true;
+    }
 
     const auto owner = vh::identities::manager().user(vault->owner_id);
     if (!owner) throw std::runtime_error("[CloudStorageEngine] Vault owner not found for metadata-only indexing");
@@ -408,13 +458,12 @@ std::shared_ptr<File> CloudEngine::indexAndDeleteFile(const std::shared_ptr<File
 
 std::unordered_map<std::u8string, std::shared_ptr<File>>
 CloudEngine::getGroupedFilesFromS3(const fs::path& prefix) const {
+    // opaque_v1: the content objects (keyed /o/<uid>) of one whole-bucket listing; foreign objects are not files.
+    if (opaqueLayout()) return groupEntriesByPath(listOpaqueBucket().objects);
     return groupEntriesByPath(filesFromS3XML(s3Provider_->listObjects(prefix)));
 }
 
-bool CloudEngine::usesManifestV2() const {
-    const auto s3 = s3Vault();
-    return s3 && s3->storage_layout == vault::model::StorageLayout::OpaqueV1;
-}
+bool CloudEngine::usesManifestV2() const { return opaqueLayout(); }
 
 std::shared_ptr<vh::sync::manifest::Service> CloudEngine::manifestV2() const {
     std::scoped_lock lock(manifestV2Mutex_);
@@ -426,9 +475,10 @@ std::shared_ptr<vh::sync::manifest::Service> CloudEngine::manifestV2() const {
     return manifestV2_;
 }
 
-void CloudEngine::publishManifestV2() const {
+void CloudEngine::publishManifestV2(const bool onlyIfChanged) const {
     try {
-        (void)manifestV2()->publish();
+        if (onlyIfChanged) (void)manifestV2()->publishIfChanged();
+        else (void)manifestV2()->publish();
         remoteIndexPublishPending_ = false;
     } catch (const vh::sync::manifest::ChainRejected& e) {
         throw SyncStalled(std::string("the bucket's manifest root was refused: ") + e.what());
@@ -588,6 +638,8 @@ void CloudEngine::applyRemoteIndexMutation(const std::vector<Action>& plan) cons
             case ActionType::Upload:
                 if (action.local) {
                     auto indexed = std::make_shared<File>(*action.local);
+                    // opaque_v1: the row is the object o/<uid> (with the ETag and version id the PUT returned).
+                    if (opaqueLayout()) indexed->path = "/" + objectKeyOf(*action.local);
                     if (s3Vault()->encrypt_upstream) {
                         indexed->remote_encrypted = true;
                     } else {
@@ -602,7 +654,10 @@ void CloudEngine::applyRemoteIndexMutation(const std::vector<Action>& plan) cons
                 break;
             case ActionType::DeleteRemote:
                 if (action.remote) {
-                    db::query::sync::RemoteObjectIndex::deleteKey(vault->id, action.remote->path);
+                    db::query::sync::RemoteObjectIndex::deleteKey(
+                        vault->id, opaqueLayout() && action.remote->object_uid
+                                       ? std::filesystem::path(object_keys::contentKey(*action.remote->object_uid))
+                                       : action.remote->path);
                     mutated = true;
                 }
                 break;
@@ -615,8 +670,11 @@ void CloudEngine::applyRemoteIndexMutation(const std::vector<Action>& plan) cons
     };
 
     if (usesManifestV2()) {
-        // Published once per pass that changed anything, after the objects it names (spec 03 §3.4).
-        if (replayMutation() || remoteIndexPublishPending_) publishManifestV2();
+        // Published once per pass that changed anything, after the objects it names (spec 03 §3.4). Under opaque_v1
+        // a rename or move changes no object and the plan has nothing for it: the manifest itself says whether the
+        // database moved on since the last publish (a pass that changed nothing writes nothing).
+        const bool mutated = replayMutation();
+        publishManifestV2(/*onlyIfChanged=*/!mutated && !remoteIndexPublishPending_);
         return;
     }
 
@@ -683,7 +741,9 @@ bool CloudEngine::selectedDownloadRequiresRestore(const std::shared_ptr<File>& r
     if (storageClass != "INTELLIGENT_TIERING")
         return false;
 
-    const auto head = s3Provider_->getHeadObject(stripLeadingSlash(remoteFile->path));
+    const auto head = s3Provider_->getHeadObject(
+        opaqueLayout() && remoteFile->object_uid ? object_keys::contentKey(*remoteFile->object_uid)
+                                                 : objectKeyForPath(remoteFile->path));
     if (!head) return true;
 
     if (const auto archiveStatus = header_value(*head, "x-amz-archive-status");
@@ -698,12 +758,14 @@ bool CloudEngine::selectedDownloadRequiresRestore(const std::shared_ptr<File>& r
 }
 
 std::string CloudEngine::getRemoteContentHash(const fs::path& rel_path) const {
+    if (opaqueLayout()) return "";   // no content-hash metadata (spec 01 §4.3)
     if (const auto head = s3Provider_->getHeadObject(stripLeadingSlash(rel_path)))
         if (const auto hash = header_value(*head, META_CONTENT_HASH)) return *hash;
     return "";
 }
 
 bool CloudEngine::remoteFileIsEncrypted(const fs::path& rel_path) const {
+    if (opaqueLayout()) return true;   // every object of an opaque_v1 vault is sealed
     return resolveRemoteEncryptionContext(rel_path, nullptr, RemoteEncryptionResolveOptions{}).encrypted;
 }
 
@@ -744,6 +806,8 @@ std::vector<std::shared_ptr<Directory>> CloudEngine::extractDirectories(
 }
 
 std::optional<std::pair<std::string, unsigned int>> CloudEngine::getRemoteIVBase64AndVersion(const fs::path& rel_path) const {
+    // opaque_v1 objects carry no vh-iv: the header names the generation, and callers fall back to the row's.
+    if (opaqueLayout()) return std::nullopt;
     const auto context = resolveRemoteEncryptionContext(rel_path, nullptr, RemoteEncryptionResolveOptions{});
     if (!context.payload) {
         log::Registry::cloud()->error("[CloudStorageEngine] No IV or key version found for encrypted file: {}", log::path(rel_path));
@@ -861,7 +925,16 @@ CloudEngine::RemoteEncryptionContext CloudEngine::resolveRemoteEncryptionContext
 }
 
 std::optional<CloudEngine::RemoteObjectHead> CloudEngine::headRemoteObject(const fs::path& rel_path) const {
-    const auto head = s3Provider_->getHeadObject(stripLeadingSlash(rel_path));
+    if (opaqueLayout()) {
+        const auto uid = db::query::sync::ObjectIdentity::uidAtPath(vault->id, makeAbsolute(rel_path));
+        if (!uid) return std::nullopt;   // no file there: no object
+        return headObjectKey(object_keys::contentKey(*uid));
+    }
+    return headObjectKey(stripLeadingSlash(rel_path).string());
+}
+
+std::optional<CloudEngine::RemoteObjectHead> CloudEngine::headObjectKey(const std::string& objectKey) const {
+    const auto head = s3Provider_->getHeadObject(stripLeadingSlash(objectKey));
     if (!head) return std::nullopt;
 
     RemoteObjectHead out;
@@ -882,8 +955,15 @@ std::optional<CloudEngine::RemoteObjectHead> CloudEngine::headRemoteObject(const
     }
     std::optional<bool> flag;
     if (const auto value = header_value(*head, META_VH_ENCRYPTED)) flag = parse_encrypted_flag(*value);
-    // Objects Vaulthalla writes always carry vh-encrypted; an object without any vh metadata is plaintext.
+    // Objects Vaulthalla writes always carry vh-encrypted; an object without any vh metadata is plaintext. Under
+    // opaque_v1 no object carries metadata, and every o/<uid> object is sealed (its header names the generation).
     out.encrypted = flag ? *flag : payload.has_value();
+    if (opaqueLayout()) {
+        out.encrypted = object_keys::classify(stripLeadingSlash(objectKey).string()) == object_keys::KeyClass::Content;
+        out.iv_b64.clear();
+        out.key_version = 0;
+        out.content_hash.reset();
+    }
     if (out.encrypted && payload) {
         out.iv_b64 = payload->first;
         out.key_version = payload->second;
@@ -906,13 +986,22 @@ std::optional<CloudEngine::RemoteObjectHead> CloudEngine::headRemoteObject(const
 }
 
 std::optional<CloudEngine::RemoteObjectHead> CloudEngine::headRemoteObjectStrict(const fs::path& rel_path) const {
+    if (opaqueLayout()) {
+        const auto uid = db::query::sync::ObjectIdentity::uidAtPath(vault->id, makeAbsolute(rel_path));
+        if (!uid) return std::nullopt;
+        return headObjectKeyStrict(object_keys::contentKey(*uid));
+    }
+    return headObjectKeyStrict(stripLeadingSlash(rel_path).string());
+}
+
+std::optional<CloudEngine::RemoteObjectHead> CloudEngine::headObjectKeyStrict(const std::string& objectKey) const {
     s3::Controller::resetLastHeadOutcome();
-    auto head = headRemoteObject(rel_path);
+    auto head = headObjectKey(objectKey);
     if (head) return head;
     const auto outcome = s3::Controller::lastHeadOutcome();
     if (outcome.performed && !(outcome.transport_ok && outcome.http_status == 404))
         throw std::runtime_error(fmt::format("HEAD of '{}' failed (HTTP {}{}): whether the object exists is unknown",
-                                             rel_path.string(), outcome.http_status,
+                                             objectKey, outcome.http_status,
                                              outcome.transport_ok ? "" : ", transport error"));
     return std::nullopt;
 }
@@ -926,7 +1015,8 @@ std::vector<uint8_t> CloudEngine::fetchRemotePlaintext(const std::shared_ptr<Fil
     if (remoteFile->size_bytes) payload.reserve(maxBytes ? std::min<uint64_t>(remoteFile->size_bytes, *maxBytes)
                                                          : remoteFile->size_bytes);
     s3Provider_->streamObject(
-        stripLeadingSlash(relPath),
+        opaqueLayout() && remoteFile->object_uid ? object_keys::contentKey(*remoteFile->object_uid)
+                                                 : objectKeyForPath(relPath),
         s3::GetObjectOptions{.range = std::nullopt, .if_match = ifMatch, .max_body_bytes = maxBytes},
         [&](const std::span<const uint8_t> chunk) { payload.insert(payload.end(), chunk.begin(), chunk.end()); });
     return decryptRemotePayload(relPath, payload, remoteFile, RemoteEncryptionResolveOptions{true, true});
@@ -957,8 +1047,9 @@ void CloudEngine::setRangedReadLimits(const RangedReadLimits& limits) { rangedLi
 void CloudEngine::setHydrateCatalogCommitForTesting(HydrateCatalogCommit commit) { catalogCommit_ = std::move(commit); }
 
 void CloudEngine::purge(const fs::path& rel_path) const {
+    const auto key = objectKeyForPath(rel_path);   // before the row goes: opaque_v1 resolves the uid through it
     removeLocally(rel_path);
-    removeRemotely(rel_path);
+    removeRemoteKey(key, rel_path);
 }
 
 void CloudEngine::purge(const std::shared_ptr<file::Trashed>& f) const {
@@ -966,9 +1057,11 @@ void CloudEngine::purge(const std::shared_ptr<file::Trashed>& f) const {
     removeRemotely(f);
 }
 
-void CloudEngine::removeRemotely(const fs::path& rel_path) const {
-    auto own = noteOwnWrite(stripLeadingSlash(rel_path), true, std::nullopt);
-    s3Provider_->deleteObject(stripLeadingSlash(rel_path));
+void CloudEngine::removeRemotely(const fs::path& rel_path) const { removeRemoteKey(objectKeyForPath(rel_path), rel_path); }
+
+void CloudEngine::removeRemoteKey(const std::string& key, const fs::path& rel_path) const {
+    auto own = noteOwnWrite(key, true, std::nullopt);
+    s3Provider_->deleteObject(key);
     own.done();
     // The file may still be indexed (remote-only removal); its derived artifacts go with the remote copy, as the
     // path-keyed thumbnails did. After removeLocally the row (and its artifacts) are already gone.
@@ -978,8 +1071,9 @@ void CloudEngine::removeRemotely(const fs::path& rel_path) const {
 
 void CloudEngine::removeRemotely(const std::shared_ptr<file::Trashed>& f) const {
     // Trashing ended the file id and dropped its derived artifacts.
-    auto own = noteOwnWrite(stripLeadingSlash(makeAbsolute(f->path)), true, std::nullopt);
-    s3Provider_->deleteObject(stripLeadingSlash(makeAbsolute(f->path)));
+    const auto key = objectKeyOf(*f);
+    auto own = noteOwnWrite(key, true, std::nullopt);
+    s3Provider_->deleteObject(key);
     own.done();
 }
 
@@ -1101,6 +1195,9 @@ s3::S3RequestMetrics CloudEngine::s3RequestMetrics() const {
 void CloudEngine::setS3ControllerForTesting(std::shared_ptr<s3::Controller> s3Provider) {
     s3Provider_ = std::move(s3Provider);
     if (s3Provider_ && vault) s3Provider_->setUsageVault(vault->id);
+    applyLayoutPolicy();
+    std::scoped_lock lock(manifestV2Mutex_);
+    manifestV2_.reset();   // its store wraps the previous controller
 }
 
 void CloudEngine::setS3ProviderProfileForTesting(s3::provider::ProfilePtr profile) {

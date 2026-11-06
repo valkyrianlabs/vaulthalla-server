@@ -264,18 +264,21 @@ std::shared_ptr<vh::fs::model::File> CloudEngine::hydrateNow(const std::shared_p
     if (!s3Provider_) throw std::runtime_error("Cloud engine has no S3 controller");
     if (!encryptionManager) throw std::runtime_error("Vault has no encryption key loaded");
 
-    const auto objectKey = ::vh::fs::model::stripLeadingSlash(f->path);
+    const auto objectKey = objectKeyOf(*f);
+    // opaque_v1: one GET and nothing else (spec 01 §5): the row holds the generation, key version and size, and the
+    // object authenticates against them and the file's uid (its header binds both); there is no metadata to HEAD.
+    const bool opaque = opaqueLayout();
     // The most a generation of this size can take upstream (VHF1 ≥ legacy GCM ≥ plaintext).
     const auto maxStored = vh::vault::content::newSealedSize(f->size_bytes);
 
     // 1. Price preflight before anything upstream (HEAD + one GET of the whole object).
     auto reservation = reserveRemoteFetch({
         .path = f->path, .operation = detail::kHydrateOperation,
-        .head_requests = 1, .get_requests = 1, .download_bytes = maxStored});
+        .head_requests = opaque ? 0u : 1u, .get_requests = 1, .download_bytes = maxStored});
 
     // 2. Request cap for this hydrate alone, on top of the engine-wide budget and any outer capture.
     s3::S3RequestBudget cap;
-    cap.max_head_requests = 1;
+    cap.max_head_requests = opaque ? 0 : 1;
     cap.max_get_requests = 1;
     cap.max_downloaded_bytes = maxStored + detail::kErrorBodySlack;
     std::optional<ScopedS3RequestUsageCapture> capture(std::in_place, *this, cap);
@@ -290,7 +293,11 @@ std::shared_ptr<vh::fs::model::File> CloudEngine::hydrateNow(const std::shared_p
 
     try {
         // 3. HEAD: version (ETag), stored length and encryption context of the object as it is now.
-        const auto head = headRemoteObject(f->path);
+        const auto head = opaque ? std::make_optional(RemoteObjectHead{.etag = {}, .content_length = std::nullopt,
+                                                                       .encrypted = true, .iv_b64 = {},
+                                                                       .key_version = 0, .requires_restore = false,
+                                                                       .content_hash = std::nullopt})
+                                 : headRemoteObject(f->path);
         if (!head) throw ContentUnavailable("Remote object not found: " + f->path.string());
         if (head->requires_restore)
             throw ContentUnavailable("Remote object is in an archive tier and must be restored first: " + f->path.string());
@@ -364,7 +371,8 @@ std::shared_ptr<vh::fs::model::File> CloudEngine::hydrateNow(const std::shared_p
             sealer->finish();
         } else if (!vh::vault::content::verifyFd(staged.fd(), f->size_bytes,
                                              {.vaultUid = encryptionManager->vaultUid(), .generation = ivB64,
-                                              .keyVersion = keyVersion},
+                                              .keyVersion = keyVersion,
+                                              .objectUid = opaque ? f->object_uid : std::nullopt},
                                              *key)) {
             throw IntegrityError("Remote object failed authentication; nothing was stored: " + f->path.string());
         }
@@ -433,11 +441,13 @@ std::vector<uint8_t> CloudEngine::fetchSealedObject(const std::string& objectKey
     };
 
     try {
-        const auto head = headRemoteObject(path);
+        const auto head = headObjectKey(objectKey);
         if (!head) throw ContentUnavailable("Remote object not found: " + objectKey);
         if (head->requires_restore)
             throw ContentUnavailable("Remote object is in an archive tier and must be restored first: " + objectKey);
-        if (!head->encrypted || head->key_version != keyVersion || (!head->iv_b64.empty() && head->iv_b64 != ivB64))
+        // opaque_v1 objects carry no metadata to compare: the caller authenticates the bytes against the row.
+        if (!head->encrypted ||
+            (!opaqueLayout() && (head->key_version != keyVersion || (!head->iv_b64.empty() && head->iv_b64 != ivB64))))
             throw ContentUnavailable("Remote object " + objectKey + " is no longer sealed under key version " +
                                      std::to_string(keyVersion) + " as indexed; sync the vault");
         const uint64_t length = head->content_length.value_or(storedBytes);
@@ -505,7 +515,7 @@ std::unique_ptr<PlaintextReader> CloudEngine::openRangedReader(const std::shared
 
     std::optional<RemoteObjectHead> head;
     try {
-        head = headRemoteObject(f->path);
+        head = headObjectKey(objectKeyOf(*f));
     } catch (const s3::RequestBudgetExceeded& e) {
         settleHead();
         throw ContentUnavailable(fmt::format("S3 request budget refused opening {}: {}", f->path.string(), e.what()));
@@ -532,7 +542,7 @@ std::unique_ptr<PlaintextReader> CloudEngine::openRangedReader(const std::shared
         RemoteRangedReader::Params params;
         params.engine = self;
         params.controller = s3Provider_;
-        params.objectKey = ::vh::fs::model::stripLeadingSlash(f->path);
+        params.objectKey = objectKeyOf(*f);
         params.etag = head->etag;
         params.plaintextSize = f->size_bytes;
         params.limits = rangedLimits_;
@@ -550,7 +560,8 @@ std::unique_ptr<PlaintextReader> CloudEngine::openRangedReader(const std::shared
                 // opens; the object size is the catalog's (authenticated) one and must equal the provider's.
                 params.vhf1 = RemoteRangedReader::Params::Vhf1Object{
                     .binding = {.vaultUid = encryptionManager->vaultUid(), .generation = ivB64,
-                                .keyVersion = keyVersion},
+                                .keyVersion = keyVersion,
+                                .objectUid = opaqueLayout() ? f->object_uid : std::nullopt},
                     .objectSize = expected};
             } else {
                 params.iv = detail::decodeIv(ivB64, f->path);
