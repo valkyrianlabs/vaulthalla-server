@@ -6,7 +6,7 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = 'fccb00365d1ebe8e04da2666296e78e5023a3c541848f4207583c9fcf7c0c520'
+export const WS_CONTRACT_HASH = '767c44c3cc8033e32ad8e67fa29c61210a5139b57f9758b3cd1cdb848d19ff2b'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
 export const WS_MODELS_HASH = '455b23eafefb4b72a1cfb1503ebe2c43a378d38313d320a1d0176c2f9bfcebf8'
@@ -2958,6 +2958,88 @@ export interface WsContract {
     response: Record<string, never>
   }
   /**
+   * Approve a device's request with a passkey, nothing else: a TOTP code or a password is refused (invalid),
+   * and an account without a usable passkey gets passkey_required (do the action in the console instead).
+   * Without credential: answers webauthn.publicKey (a challenge bound to this session and this request, 120
+   * s) for navigator.credentials.get(); with credential (a UV assertion over it): approves, and the device's
+   * next device.approval.status makes its grant. approval_failed {attempts_remaining}: the assertion didn't
+   * hold; the fifth failure within 15 minutes signs this session out. not_found: expired or already answered.
+   */
+  'auth.approval.approve': {
+    payload: {
+      approval_id: string
+      credential?: {
+        id: string
+        rawId: string
+        type: 'public-key'
+        response: { clientDataJSON: string; authenticatorData: string; signature: string; userHandle?: string | null }
+        authenticatorAttachment?: string | null
+        clientExtensionResults?: { credProps?: { rk?: boolean } }
+      } | null
+    }
+    response: {
+      approval: {
+        approval_id: string
+        state: 'pending' | 'approved' | 'denied' | 'expired'
+        family: 'keys' | 'device.trust' | 'account.credentials' | 'identity.admin' | 'secrets' | 'settings' | 'data.destroy'
+        target: string | null
+        summary: string
+        device: { id: number; device_id: string; name: string }
+        created_at: number
+        expires_at: number
+      }
+      webauthn?: {
+        publicKey: {
+          challenge: string
+          rpId: string
+          timeout: number
+          userVerification: 'required'
+          allowCredentials: { type: 'public-key'; id: string; transports: string[] }[]
+        }
+      }
+    }
+  }
+  /**
+   * Decline a device's request; its device.approval.status answers denied.
+   */
+  'auth.approval.deny': {
+    payload: { approval_id: string }
+    response: {
+      approval: {
+        approval_id: string
+        state: 'pending' | 'approved' | 'denied' | 'expired'
+        family: 'keys' | 'device.trust' | 'account.credentials' | 'identity.admin' | 'secrets' | 'settings' | 'data.destroy'
+        target: string | null
+        summary: string
+        device: { id: number; device_id: string; name: string }
+        created_at: number
+        expires_at: number
+      }
+    }
+  }
+  /**
+   * The signed-in account's open requests from its paired devices (device.approval.request), oldest first:
+   * what each asks for (family, target), the device's own summary, and when it expires. A new request also
+   * arrives as an unsolicited frame {"command": "auth.approval.pending", "data": {approval_id, device: {id,
+   * name}, family, target, summary, expires_at}} on every console session of the account. Web sessions only:
+   * a device is refused.
+   */
+  'auth.approval.list': {
+    payload: null
+    response: {
+      approvals: {
+        approval_id: string
+        state: 'pending' | 'approved' | 'denied' | 'expired'
+        family: 'keys' | 'device.trust' | 'account.credentials' | 'identity.admin' | 'secrets' | 'settings' | 'data.destroy'
+        target: string | null
+        summary: string
+        device: { id: number; device_id: string; name: string }
+        created_at: number
+        expires_at: number
+      }[]
+    }
+  }
+  /**
    * Whether the envelope token is a valid session for this socket.
    */
   'auth.isAuthenticated': {
@@ -3393,6 +3475,91 @@ export interface WsContract {
     response: { preferences: WsModels['DashboardPreference'] }
   }
   /**
+   * Start approving a step-up with this device's approval key: name the family and the target the
+   * step_up_required refusal named. Only keys and device.trust (console_approval_required otherwise: use
+   * device.approval.request); approval_key_unavailable without a live approval key. Answers a challenge
+   * (single use, 120 s, bound to this session, the family and the target) and payload_b64, the exact bytes to
+   * sign: "vh-device-approval-v1" 0x00 node_id 0x00 server_spki_sha256[32] approving_device_spki_sha256[32]
+   * challenge[32] family 0x00 target 0x00 UInt64BE(expires_at). The device checks them against what it knows
+   * before asking for Touch ID. At most 4 open per session (a new one replaces the oldest).
+   */
+  'device.approval.challenge': {
+    payload: { family: 'keys' | 'device.trust'; target: string }
+    response: {
+      challenge_id: string
+      challenge: string
+      payload_b64: string
+      family: 'keys' | 'device.trust'
+      target: string
+      expires_at: number
+    }
+  }
+  /**
+   * Register this already-paired device's approval key (once per device): a P-256 SubjectPublicKeyInfo, 91
+   * bytes of DER, standard base64, not the connection's key. A person approves it in the web console: it
+   * answers step_up_required (device.trust, target device.approval.key.register:<device row>:<key SPKI
+   * SHA-256>) until a console approval (device.approval.request) for exactly that target. conflict: the
+   * device has (or had) a key, or the key is known here.
+   */
+  'device.approval.key.register': {
+    payload: { public_key_spki_b64: string }
+    response: { registered: boolean }
+  }
+  /**
+   * Ask a person to approve a step-up in the web console (any family; the one way for families the approval
+   * key can't approve, and for a device without one). summary (1-160 characters) is shown with the family and
+   * target. The account's console sessions get auth.approval.pending; a person approves with a passkey
+   * (auth.approval.approve). Lives 5 minutes; at most 3 open and 10 per hour per device (rate_limited). Poll
+   * device.approval.status on this same session.
+   */
+  'device.approval.request': {
+    payload: {
+      family: 'keys' | 'device.trust' | 'account.credentials' | 'identity.admin' | 'secrets' | 'settings' | 'data.destroy'
+      target?: string | null
+      summary: string
+    }
+    response: {
+      approval_id: string
+      state: 'pending' | 'approved' | 'denied' | 'expired'
+      family: string
+      target: string | null
+      summary: string
+      device: { id: number; device_id: string; name: string }
+      created_at: number
+      expires_at: number
+    }
+  }
+  /**
+   * How a console approval stands (pending, approved, denied, expired). Answered at once: ask again in 2 s
+   * while pending. Once approved, the first answer leaves the grant on this session (the same binding as a
+   * web session's: target-bound grants are spent by one use); then resend the refused request. Only the
+   * session that asked: another is not_found.
+   */
+  'device.approval.status': {
+    payload: { approval_id: string }
+    response: {
+      approval_id: string
+      state: 'pending' | 'approved' | 'denied' | 'expired'
+      family: string
+      target: string | null
+      summary: string
+      device: { id: number; device_id: string; name: string }
+      created_at: number
+      expires_at: number
+    }
+  }
+  /**
+   * Answer a challenge with the approval key's ECDSA P-256/SHA-256 signature (DER, standard base64) over its
+   * payload. The challenge is spent whatever the answer. On success this session holds a grant for the family
+   * and target (spent by one use, until expires_at); then resend the refused request. invalid: the signature
+   * doesn't verify (the payload as the server computes it now: a changed node or server key never verifies);
+   * not_found: expired, used or another session's; approval_key_unavailable: the key was revoked.
+   */
+  'device.approval.submit': {
+    payload: { challenge_id: string; signature_b64: string }
+    response: { family: 'keys' | 'device.trust'; target: string; expires_at: number }
+  }
+  /**
    * Where this node's device listener can be reached (docs/reference/transfer-protocol.md §1.1): interface
    * addresses classified by range, <hostname>.local where an mDNS responder runs, and
    * device_server.advertise's configured names. Computed per call; never answered before a device is paired.
@@ -3447,7 +3614,7 @@ export interface WsContract {
    * knows. One live request per key: a new one replaces it.
    */
   'device.pair.request': {
-    payload: { name: string; platform: string; app_version?: string; commitment: string }
+    payload: { name: string; platform: string; app_version?: string; commitment: string; approval_key?: string | null }
     response: { request_id: string; nonce_server: string; expires_at: number }
   }
   /**
@@ -3466,7 +3633,10 @@ export interface WsContract {
   }
   /**
    * Approve a request with the code the device shows (number matching). Any other code denies the request
-   * (invalid). Creates the device for the caller's account.
+   * (invalid). Creates the device for the caller's account, with the approval key the request carried. A
+   * device.trust step-up bound to the request, its key and the chosen code: in the console a passkey or
+   * password + TOTP; on an already-paired device its approval key (device.approval.challenge/submit) or a
+   * console approval; `vh device pair` on the node needs none.
    */
   'device.pairing.approve': {
     payload: { request_id: string; code: string }
@@ -3520,7 +3690,8 @@ export interface WsContract {
   /**
    * The caller's open window and its confirmed requests. Each offers three code_choices (random order): one
    * is the code the device shows, two are decoys fixed for the request. The real code is never returned on
-   * its own.
+   * its own. Also answered on a paired device's session (an already-paired Desktop approving a new one,
+   * design 8.4); approval_key_present says the request carries an approval key.
    */
   'device.pairing.pending': {
     payload: null
@@ -3534,6 +3705,7 @@ export interface WsContract {
         source_ip: string
         device_id: string
         code_choices: string[]
+        approval_key_present: boolean
         created_at: number
         expires_at: number
       }[]
@@ -6106,6 +6278,9 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'audit.list',
   'audit.verify',
   'auth.activity',
+  'auth.approval.approve',
+  'auth.approval.deny',
+  'auth.approval.list',
   'auth.isAuthenticated',
   'auth.login',
   'auth.logout',
@@ -6138,6 +6313,11 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'dashboard.preferences.get',
   'dashboard.preferences.reset',
   'dashboard.preferences.update',
+  'device.approval.challenge',
+  'device.approval.key.register',
+  'device.approval.request',
+  'device.approval.status',
+  'device.approval.submit',
   'device.endpoints',
   'device.identity.rotate',
   'device.list',
@@ -6411,8 +6591,10 @@ export const WS_CONTRACT_STEP_UP: Readonly<Partial<Record<WsContractCommand, str
   'auth.user.change_password': 'account.credentials',
   'auth.user.delete': 'identity.admin',
   'auth.user.update': 'identity.admin',
+  'device.approval.key.register': 'device.trust',
   'device.pairing.approve': 'device.trust',
   'device.remote.enable': 'device.trust',
+  'email.config.update': 'settings',
   'email.provider.secret.set': 'secrets',
   'group.member.add': 'identity.admin',
   'group.member.remove': 'identity.admin',
@@ -6461,6 +6643,9 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'audit.list': 15000,
   'audit.verify': 120000,
   'auth.activity': 15000,
+  'auth.approval.approve': 20000,
+  'auth.approval.deny': 15000,
+  'auth.approval.list': 15000,
   'auth.isAuthenticated': 15000,
   'auth.login': 20000,
   'auth.logout': 15000,
@@ -6493,6 +6678,11 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'dashboard.preferences.get': 15000,
   'dashboard.preferences.reset': 15000,
   'dashboard.preferences.update': 15000,
+  'device.approval.challenge': 15000,
+  'device.approval.key.register': 15000,
+  'device.approval.request': 15000,
+  'device.approval.status': 15000,
+  'device.approval.submit': 15000,
   'device.endpoints': 15000,
   'device.identity.rotate': 15000,
   'device.list': 15000,

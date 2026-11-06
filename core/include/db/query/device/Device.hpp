@@ -22,6 +22,10 @@ struct NewDevice {
     std::string app_version{};
     std::string spki_sha256{};
     std::string last_ip{};
+    // #361: the approval key the pairing request carried (DER SPKI and its SHA-256 hex), registered with the device in
+    // the same transaction (device_approval_keys, registered_via 'pairing').
+    std::optional<std::vector<uint8_t>> approval_key_spki{};
+    std::string approval_key_sha256{};
 };
 
 class Devices {
@@ -37,12 +41,13 @@ public:
     [[nodiscard]] static std::vector<Device> listForUser(uint32_t userId);
     [[nodiscard]] static std::vector<Device> listAll();
 
-    // Throws ops::Conflict when the key is already a device's (current or previous).
+    // Throws ops::Conflict when the key is already a device's (current or previous), or the approval key is known.
     [[nodiscard]] static Device insert(const NewDevice& d);
     [[nodiscard]] static std::optional<Device> rename(uint32_t id, const std::string& name);
-    // Sets revoked_at once (a revoked row keeps its first revocation time). Returns the row, or nullopt if absent.
+    // Sets revoked_at once (a revoked row keeps its first revocation time), and revokes the device's approval key with
+    // it. Returns the row, or nullopt if absent.
     [[nodiscard]] static std::optional<Device> revoke(uint32_t id);
-    // Revokes every device that is not revoked yet (a server identity rotation, #353); how many.
+    // Revokes every device that is not revoked yet (a server identity rotation, #353), approval keys included; how many.
     static std::size_t revokeAll();
     [[nodiscard]] static std::size_t countActive();
     // Compare-and-set rotation: previous = old, current = new, only while `oldSpki` is still current and the row is
