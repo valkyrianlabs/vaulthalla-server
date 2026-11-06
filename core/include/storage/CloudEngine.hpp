@@ -35,6 +35,7 @@ namespace vh::storage {
         struct ObjectVersionHead;
         struct GetObjectResult;
         struct CopyResult;
+        struct PutOutcome;
     }
 
     class CloudEngine final : public Engine {
@@ -157,6 +158,26 @@ namespace vh::storage {
         // version id), without publishing: key rotation and salvage re-seal objects outside a sync plan, and the
         // manifest's object reference must name the object the bucket now holds (#371).
         void recordOwnUpload(const std::shared_ptr<vh::fs::model::File>& f) const;
+        // ---- bucket layout migration path_v0 -> opaque_v1 (vault/LayoutMigration.hpp, #373) ------------------------
+        // The vault's S3 controller: the migration's listings, version reads and the cleanup's deletes go through it
+        // (metered, budgeted and protection-locked like every other request).
+        [[nodiscard]] std::shared_ptr<s3::Controller> s3Controller() const { return s3Provider_; }
+        // One re-sealed object PUT to `key` (o/<uid>) from the sealed file at `source` (size bytes): no metadata, no
+        // content headers (spec 01 §4.3) whatever the vault's current layout, multipart with partSizeFor above the
+        // threshold, as Vaulthalla's own write (event write intent, and the recovery hook records the version with
+        // `generation`'s IV, key version, hash and plaintext size). Returns what the provider stored.
+        s3::PutOutcome putMigratedObject(const std::string &key, const std::filesystem::path &source, uint64_t size,
+                                         const std::shared_ptr<vh::fs::model::File> &generation) const;
+        // A DELETE of `key` (o/<uid>) as Vaulthalla's own write: a delete marker in that object's history, where the
+        // legacy key's history had one.
+        void deleteMigratedObject(const std::string &key) const;
+        // After the cutover transaction committed: the vault's layout in memory and the controller's request rules
+        // follow the database (opaque_v1 from here on).
+        void adoptStorageLayout(vault::model::StorageLayout layout);
+        // The vault's manifest v2 as the bucket holds it now, loaded with only the key material (no fallbacks to
+        // provider versions): the migration's bucket-only check before anything legacy is deleted.
+        [[nodiscard]] sync::manifest::Content loadManifestFromBucket() const;
+
         [[nodiscard]] bool selectedDownloadRequiresRestore(const std::shared_ptr<vh::fs::model::File>& remoteFile) const;
 
         std::vector<std::shared_ptr<vh::fs::model::Directory> > extractDirectories(

@@ -24,7 +24,8 @@ public:
     // there and is still in the trash.
     [[nodiscard]] static std::optional<crypto::id::ObjectUid> uidAtPath(uint32_t vaultId,
                                                                         const std::filesystem::path& path);
-    // Where a uid's file is: its live path, else the path it was trashed from (still in the trash).
+    // Where a uid's file is: its live path, else the path it was trashed from (still in the trash), else the legacy
+    // path the bucket layout migration (#373) re-sealed its history from.
     [[nodiscard]] static std::optional<std::filesystem::path> pathOfUid(uint32_t vaultId,
                                                                        const crypto::id::ObjectUid& uid);
     // The uids of files still in the vault trash (their objects stay until the trash is purged).

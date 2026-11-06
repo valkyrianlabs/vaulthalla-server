@@ -15,6 +15,7 @@ namespace vh::storage::s3 {
 namespace policy_detail {
 
 thread_local bool foreignReadAllowed = false;
+thread_local bool legacyCleanupAllowed = false;
 
 std::string lowered(std::string s) {
     std::ranges::transform(s, s.begin(), [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -32,6 +33,7 @@ std::string_view opName(const RequestOp op) {
     case RequestOp::HeadVersion: return "HEAD version";
     case RequestOp::Copy: return "COPY";
     case RequestOp::MetadataRewrite: return "metadata rewrite";
+    case RequestOp::DeleteVersion: return "DELETE version";
     }
     return "request";
 }
@@ -55,6 +57,14 @@ ScopedForeignObjectRead::~ScopedForeignObjectRead() { policy_detail::foreignRead
 
 bool ScopedForeignObjectRead::active() noexcept { return policy_detail::foreignReadAllowed; }
 
+ScopedLegacyLayoutCleanup::ScopedLegacyLayoutCleanup() noexcept : previous_(policy_detail::legacyCleanupAllowed) {
+    policy_detail::legacyCleanupAllowed = true;
+}
+
+ScopedLegacyLayoutCleanup::~ScopedLegacyLayoutCleanup() { policy_detail::legacyCleanupAllowed = previous_; }
+
+bool ScopedLegacyLayoutCleanup::active() noexcept { return policy_detail::legacyCleanupAllowed; }
+
 void Controller::enforceRequestPolicy(const RequestOp op, std::string_view key, const RequestOptions* options,
                                       const std::string_view secondKey) const {
     if (!opaqueLayout()) return;
@@ -69,7 +79,10 @@ void Controller::enforceRequestPolicy(const RequestOp op, std::string_view key, 
         if (!keys::isAllowedListPrefix(key)) policy_detail::refuse(op, "the listing prefix is not o/ or .vaulthalla/");
     } else if (!keys::isAllowedKey(key)) {
         const bool read = op == RequestOp::Get || op == RequestOp::Head;
-        if (!(read && ScopedForeignObjectRead::active()))
+        // The layout migration's cleanup of the legacy versions it inventoried (#373): HEAD and DELETE only.
+        const bool cleanup = op == RequestOp::Head || op == RequestOp::HeadVersion || op == RequestOp::Delete ||
+                             op == RequestOp::DeleteVersion;
+        if (!(read && ScopedForeignObjectRead::active()) && !(cleanup && ScopedLegacyLayoutCleanup::active()))
             policy_detail::refuse(op, "the key is neither o/<uid> nor a .vaulthalla/ object");
     }
 

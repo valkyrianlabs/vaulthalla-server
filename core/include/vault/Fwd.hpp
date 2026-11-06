@@ -6,6 +6,7 @@ namespace vh::vault {
     class EncryptionManager;
     class RetentionService;
     class FormatConversionService;
+    class LayoutMigrationService;
 }
 
 namespace vh::vault::model {
@@ -16,4 +17,5 @@ namespace vh::vault::model {
     enum class VaultType;
     struct Deletion;
     enum class DeletionState;
+    enum class StorageLayout;
 }

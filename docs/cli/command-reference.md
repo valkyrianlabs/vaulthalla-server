@@ -309,6 +309,18 @@ Shows how much of each vault is still stored in the legacy encryption format: li
 (snapshots, local versions, upstream backlog), as items and bytes, the background conversion's state and what its last
 pass did. See [Encryption](/vaults/encryption#content-format-and-conversion).
 
+## Vault Layout Migration
+
+```bash
+vh vault migrate-layout <vault> --status [--json]
+vh vault migrate-layout <vault> [--accept-unpriced]
+vh vault migrate-layout <vault> --cleanup [--confirm <vault name>]
+```
+
+Moves an encrypting S3/R2 vault from path-named objects (`path_v0`) to opaque storage (`opaque_v1`): starts it (or
+resumes it after a failure), shows where it stands, and after the waiting period lists and then deletes the old
+path-named object versions. See [Migrating A Vault To Opaque Storage](/vaults/encryption#migrating-a-vault-to-opaque-storage).
+
 ## File Recovery
 
 Earlier versions of files come from three places: local snapshots you take, local versions kept automatically when

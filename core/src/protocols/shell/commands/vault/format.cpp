@@ -32,7 +32,7 @@ std::string vfText(const vfops::FormatStatus& s) {
     if (s.converts_live_files)
         out += fmt::format("    live files:  {}\n", vfRemaining(s.files));
     else
-        out += fmt::format("    live files:  {}, converted with the bucket's layout migration\n", vfRemaining(s.files));
+        out += fmt::format("    live files:  {}, converted by vh vault migrate-layout (the bucket layout migration)\n", vfRemaining(s.files));
     out += fmt::format("    recovery:    {} blob(s)\n", vfRemaining(s.blobs));
     if (s.files_other_key_versions)
         out += fmt::format("  other keys:    {} legacy file(s) on a key version a rotation or salvage owns\n",

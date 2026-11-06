@@ -8,6 +8,7 @@
 #include "ops/Error.hpp"
 #include "ops/RecoveryRecipients.hpp"
 #include "ops/VaultKeys.hpp"
+#include "ops/VaultLayout.hpp"
 #include "ops/VaultRecover.hpp"
 #include "vault/KeyAttestation.hpp"
 
@@ -289,6 +290,66 @@ void checkVaultKeyModels(Checker& c) {
             "VaultRecoveryRecipientAdd", "vault.keys.recipients.add");
     c.check(rr::toJson(rr::RevokeResult{.recipient = t::recipient(true), .recovery = t::missingMaterial()}),
             "VaultRecoveryRecipientRevoke", "vault.keys.recipients.revoke");
+
+    // #373: the bucket layout migration.
+    namespace vl = ops::vault_layout;
+    namespace lm = vault::layout;
+    vl::Status none;
+    none.vault_id = 3;
+    none.vault_name = "archive";
+    none.layout = "path_v0";
+    c.check(vl::toJson(none), "VaultLayoutStatus", "vault.layout.status (no migration)");
+    lm::Row row;
+    row.vault_id = 3;
+    row.state = lm::State::CleanupBlocked;
+    row.started_by = 1;
+    row.started_at = 1'760'000'000;
+    row.versioned = true;
+    row.attempts = 1;
+    row.verified_at = row.cutover_at = 1'760'000'600;
+    row.cleanup_after = 1'760'605'400;
+    row.manifest_verified_at = 1'760'000'700;
+    row.cleanup_confirmed_at = row.cleanup_run_at = 1'760'700'000;
+    row.estimate = lm::toJson(lm::Estimate{.list_requests = 2, .head_requests = 9, .get_requests = 12, .put_requests = 9,
+                                           .delete_requests = 1, .download_bytes = 4096, .upload_bytes = 5120,
+                                           .readback_worst_case_gets = 9, .readback_worst_case_bytes = 5120,
+                                           .metadata_puts = 2, .objects = 4, .versions = 7, .delete_markers = 1,
+                                           .backlog = 1, .current_files = 2, .sample = 9,
+                                           .estimated_cost = "0.000412", .priced = true});
+    row.usage = nlohmann::json{{"list_requests", 2}, {"head_requests", 9}, {"get_requests", 12}, {"put_requests", 9},
+                               {"delete_requests", 1}, {"downloaded_bytes", 4096}, {"uploaded_bytes", 5120}};
+    row.last_error = "manifest: transient";
+    const lm::CleanupEntry locked{.key = "docs/a.txt", .version_id = "3HL4kqtJlcpXroDTDmJ+rmSpXd3dIbrHY",
+                                  .delete_marker = false, .size = 1234, .last_modified = 1'759'000'000,
+                                  .reason = "object_lock_retention", .retain_until = 1'790'000'000};
+    vl::Status blocked = none;
+    blocked.layout = "opaque_v1";
+    blocked.migration = row;
+    blocked.versions.verified = 6;
+    blocked.versions.skipped = 1;
+    blocked.markers.verified = 1;
+    blocked.backlog.superseded = 1;
+    blocked.current.verified = 2;
+    blocked.legacy_listed = 2;
+    blocked.legacy_deleted = 7;
+    blocked.blocked = {locked};
+    blocked.blocked_total = 1;
+    c.check(vl::toJson(blocked), "VaultLayoutStatus", "vault.layout.status (cleanup_blocked)");
+    blocked.migration->state = lm::State::Complete;
+    blocked.migration->completed_at = 1'760'800'000;
+    blocked.blocked.clear();
+    blocked.blocked_total = 0;
+    c.check(vl::toJson(blocked), "VaultLayoutStatus", "vault.layout.status (complete)");
+    lm::CleanupPlan plan;
+    plan.complete_listing = true;
+    plan.deletable = 1;
+    plan.deletable_bytes = 99;
+    plan.oldest = plan.newest = 1'759'000'000;
+    plan.kept = {locked};
+    plan.deletable_entries = {{.key = "b.txt", .version_id = std::nullopt, .delete_marker = false, .size = 99,
+                               .last_modified = 1'759'000'000, .reason = "", .retain_until = std::nullopt}};
+    c.check(vl::toJson(vl::CleanupAnswer{.dry_run = true, .started = false, .cleanup_after = 1'760'605'400, .plan = plan}),
+            "VaultLayoutCleanup", "vault.layout.cleanup (dry run)");
 }
 
 }

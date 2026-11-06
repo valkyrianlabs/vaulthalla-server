@@ -926,6 +926,22 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   liveObjectKeyOf, directoryPrefixOf, vaultPathOf, keyUnder}(engine, …)` map them to paths (directories: `o/`
   filtered by the paths the DB gives uids; a uid no row has → `/Recovered/<uid>`), and an opaque transfer restore
   re-seals into the destination's uid. Copies re-seal (new uid, new generation). path_v0/transparent unchanged.
+- **Bucket layout migration path_v0 → opaque_v1** (#373; spec 01 §6 as simplified on the issue 2026-11-06: no
+  soak/rollback, no encrypt_upstream toggling). `vault::layout` (`vault/LayoutMigration.hpp`: states copying →
+  verifying → cut_over → cleanup → cleanup_blocked | complete, failed = still path_v0 and resumable), run by
+  `vault::LayoutMigrationService` (polls `vault_layout_migration`, migration 133; never starts a vault itself), catalog
+  `db::query::vault::LayoutMigration` (items = the inventory; one cutover transaction), ops `ops::vault_layout` (CLI `vh
+  vault migrate-layout`, ws `vault.layout.*`, keys / data.destroy step-up). The run holds the sync pass lease from the
+  inventory to the cutover; writes only `o/<uid>` (`CloudEngine::putMigratedObject` / `deleteMigratedObject`: no
+  metadata, own-write intents, the recovery hook records the version), never a legacy key; reads legacy versions with
+  If-Match; gcm0 local copies convert through `conversion::convertLiveFile` first; proof of storage = MD5 ETag
+  (`s3EtagOf`) else read-back; cutover = `CloudEngine::adoptStorageLayout`, then manifest publish +
+  `loadManifestFromBucket` check (`manifest_verified_at`, cleanup waits for it). Cleanup deletes inventoried versions
+  by id under `s3::ScopedLegacyLayoutCleanup` (HEAD/DELETE of legacy keys only), Object Lock read first, refusals kept
+  as `cleanup_blocked`; `complete` only after a complete listing with nothing legacy. path_v0 listings and the event
+  applier ignore `o/<uid>` objects; `ObjectIdentity::pathOfUid` falls back to the migrated legacy key. Health
+  `legacy_content` (#376 readiness). Tests `LayoutMigration*`, harness `vhh drill migrate`, live
+  `LiveR2.LayoutMigrationPrimitives`.
 - **Derived cache** (`preview::cache::Store`, `cache_index` rows `type='derived'`, migration 103). One encrypted,
   disposable cache for thumbnails (`thumbnail`/`<size>`), sheet and PDF page renders (`render`/`p<page>-s<size>`),
   posters, probes, GLB, transcodes. File: `<cacheRoot>/derived/<file_id>/<kind>.<variant>.vhd` = 64-byte header

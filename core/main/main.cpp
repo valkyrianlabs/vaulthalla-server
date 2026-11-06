@@ -13,6 +13,7 @@
 
 // Storage
 #include "storage/Manager.hpp"
+#include "vault/model/S3Vault.hpp"
 #include "fs/Filesystem.hpp"
 
 // Previews
@@ -34,6 +35,7 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
+#include <string_view>
 #include <cstring>
 #include <paths.h>
 #include "concurrency/ThreadPoolManager.hpp"
@@ -293,6 +295,10 @@ bool enterTestInstanceMode() {
         return false;
     }
     vh::paths::enableTestMode();
+    // Test instances only: new encrypting vaults on the legacy path_v0 layout, so the harness can drill the bucket
+    // layout migration (#373, `vhh drill migrate`) on a daemon whose product default is opaque_v1.
+    if (const char* layout = std::getenv("VH_TEST_NEW_ENCRYPTING_LAYOUT"); layout && std::string_view(layout) == "path_v0")
+        vh::vault::model::setNewEncryptingLayoutForTesting(vh::vault::model::StorageLayout::PathV0);
     std::fprintf(stderr, "[*] Test instance: config %s, CLI socket %s\n", vh::paths::getConfigPath().c_str(),
                  vh::paths::getCliSocketPath().c_str());
     return true;

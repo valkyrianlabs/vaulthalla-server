@@ -1043,6 +1043,11 @@ export interface WebSocketCommandMap {
   // #371: a vault rebuilt from its bucket and the customer's recovery material. Paired devices only
   // (recover_requires_device elsewhere) with a keys step-up; the console never sends it.
   'vault.recover': WsContract['vault.recover']
+  // #373: the bucket layout migration path_v0 -> opaque_v1. migrate asks a keys step-up, a confirmed cleanup a
+  // data.destroy step-up; the dry run never asks.
+  'vault.layout.status': WsContract['vault.layout.status']
+  'vault.layout.migrate': WsContract['vault.layout.migrate']
+  'vault.layout.cleanup': WsContract['vault.layout.cleanup']
 }
 
 export type WSCommandPayload<K extends keyof WebSocketCommandMap> = WebSocketCommandMap[K]['payload']

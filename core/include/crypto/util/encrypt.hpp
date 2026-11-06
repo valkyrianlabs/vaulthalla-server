@@ -34,8 +34,6 @@ void decrypt_aes256_gcm_file(
     std::span<const uint8_t> key,
     const std::vector<uint8_t>& iv);
 
-std::vector<uint8_t> read_file(const std::filesystem::path& path);
-
 std::string b64_encode(const std::vector<uint8_t>& data);
 
 std::vector<uint8_t> b64_decode(const std::string& b64);

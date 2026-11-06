@@ -23,6 +23,11 @@ struct VaultKeys {
     // vault.recover (ops::vault_recover, #371): a vault rebuilt from its bucket and the customer's recovery material,
     // only on a paired device's session (recover_requires_device otherwise) with the keys step-up.
     static json recover(const json& payload, const std::shared_ptr<Session>& session);
+    // vault.layout.* (ops::vault_layout, #373): the bucket layout migration path_v0 -> opaque_v1 (status, start with
+    // a keys step-up, cleanup dry run / confirmation with a data.destroy step-up).
+    static json layoutStatus(const json& payload, const std::shared_ptr<Session>& session);
+    static json layoutMigrate(const json& payload, const std::shared_ptr<Session>& session);
+    static json layoutCleanup(const json& payload, const std::shared_ptr<Session>& session);
 };
 
 }

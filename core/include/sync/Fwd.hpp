@@ -14,6 +14,7 @@ namespace vh::sync::events {
 namespace vh::sync::manifest {
     class Service;
     class ObjectStore;
+    struct Content;
 }
 
 namespace vh::sync::model {

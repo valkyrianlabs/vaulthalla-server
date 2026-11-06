@@ -578,9 +578,10 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--rounds", type=int, default=20)
     p.set_defaults(fn=cmd_scenario)
 
-    p = sub.add_parser("drill", help="the catastrophic restore drill (spec 03 §7; root): write on node A, destroy it, "
-                                     "restore on independent nodes B and C")
-    p.add_argument("kind", choices=("recover",))
+    p = sub.add_parser("drill", help="drills (root): recover = the catastrophic restore drill (spec 03 §7: write on "
+                                     "node A, destroy it, restore on independent nodes B and C); migrate = the bucket "
+                                     "layout migration path_v0 -> opaque_v1 while FUSE and a sync pass are busy (#373)")
+    p.add_argument("kind", choices=("recover", "migrate"))
     p.add_argument("--build", required=True)
     p.add_argument("--files", type=int, default=2000)
     p.add_argument("--s3", choices=("fake", "r2"), default="fake")

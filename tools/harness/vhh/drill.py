@@ -2,6 +2,7 @@
 
     sudo tools/harness/vhh.sh drill recover --build build [--files 2000]          # fake S3 with versioning (harness)
     sudo tools/harness/drill_recover_r2.sh --build build                          # live Cloudflare R2 (vh-test-* bucket)
+    sudo tools/harness/vhh.sh drill migrate --build build [--files 300]           # the layout migration (vhh/drill_migrate.py)
 
 Node A (a private daemon with its own database, state directory and swtpm) writes an opaque_v1 vault: nested folders,
 0-byte, small and multipart-sized files, symlinks, renames of files and folders, a purged file, overwrites, a
@@ -619,7 +620,7 @@ Node.key_status_any = _key_status_any
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="vhh drill", description=__doc__.split("\n\n")[0])
-    ap.add_argument("kind", choices=("recover",))
+    ap.add_argument("kind", choices=("recover", "migrate"))
     ap.add_argument("--build", required=True)
     ap.add_argument("--files", type=int, default=2000)
     ap.add_argument("--s3", choices=("fake", "r2"), default="fake")
@@ -630,6 +631,17 @@ def main(argv: list[str] | None = None) -> int:
     if os.geteuid() != 0:
         print("vhh drill: needs root (private daemon instances): use sudo", file=sys.stderr)
         return 2
+    if a.kind == "migrate":
+        if a.s3 != "fake":
+            print("vhh drill migrate: runs on the harness's fake S3 only (live R2: LiveR2.LayoutMigration)",
+                  file=sys.stderr)
+            return 2
+        from vhh import drill_migrate
+        ok, summary = drill_migrate.run(Path(a.build).resolve(), files=min(a.files, 2000), keep=a.keep,
+                                        out=Path(a.out) if a.out else None)
+        print(f"vhh drill migrate: {'PASS' if ok else 'FAIL'}: {sum(c['ok'] for c in summary.get('checks', []))}/"
+              f"{len(summary.get('checks', []))} checks; report {a.out or '/tmp/vhh_layoutdrill_' + summary['run_id'] + '/report.json'}")
+        return 0 if ok else 1
     ok, summary = run(Path(a.build).resolve(), files=a.files, s3=a.s3, negative=not a.no_negative, keep=a.keep,
                       out=Path(a.out) if a.out else None)
     print(f"vhh drill: {'PASS' if ok else 'FAIL'}: {sum(c['ok'] for c in summary.get('checks', []))}/"
