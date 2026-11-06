@@ -15,7 +15,7 @@ void vh::db::Connection::initPreparedAPIKeys() const {
         WHERE id = $1
     )SQL");
 
-    // Wrapped secrets declare the API key master that wraps them (migration 122; the guard refuses another one).
+    // Wrapped secrets declare the API key master that wraps them (migration 124; the guard refuses another one).
     conn_->prepare("api_key_set_provider_token",
                    "UPDATE api_keys SET encrypted_provider_token = $2, provider_token_iv = $3, master_version = $4 "
                    "WHERE id = $1");

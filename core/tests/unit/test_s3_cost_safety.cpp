@@ -749,7 +749,7 @@ uint32_t seedS3VaultForDbTest(const std::string& suffix) {
             "s3-cost-safety-" + suffix + "@vaulthalla.test");
 
         return txn.exec(
-            "INSERT INTO vault (type, name, owner_id, mount_point, description) VALUES ($1, $2, $3, $4, $5) RETURNING id",
+            "INSERT INTO vault (type, name, owner_id, mount_point, description, uid) VALUES ($1, $2, $3, $4, $5, gen_random_uuid()) RETURNING id",
             pqxx::params{
                 "s3",
                 "S3 Cost Safety " + suffix,
@@ -809,7 +809,7 @@ void attachS3ProviderForDbTest(const std::uint32_t vaultId, const std::string& p
                 "https://s3.example.com"
             }).one_field_ref().as<std::uint32_t>();
         txn.exec(
-            "INSERT INTO s3 (vault_id, api_key_id, bucket) VALUES ($1, $2, $3) "
+            "INSERT INTO s3 (vault_id, api_key_id, bucket, storage_layout) VALUES ($1, $2, $3, 'path_v0') "
             "ON CONFLICT (vault_id) DO UPDATE SET api_key_id = EXCLUDED.api_key_id, bucket = EXCLUDED.bucket",
             pqxx::params{vaultId, apiKeyId, "bucket-" + std::to_string(vaultId)});
     });
@@ -1028,7 +1028,7 @@ uint32_t seedLocalGatewayRouteVaultForDbTest(const std::string& suffix) {
     const auto vaultId = vh::db::Transactions::exec("S3CostSafetyTest::seedLocalGatewayRouteVault", [&](pqxx::work& txn) {
         const auto mountPoint = vh::crypto::id::Generator({.namespace_token = "local-gateway-" + suffix}).generate();
         const auto seededVaultId = txn.exec(
-            "INSERT INTO vault (type, name, owner_id, mount_point, description) VALUES ($1, $2, $3, $4, $5) RETURNING id",
+            "INSERT INTO vault (type, name, owner_id, mount_point, description, uid) VALUES ($1, $2, $3, $4, $5, gen_random_uuid()) RETURNING id",
             pqxx::params{
                 "local",
                 "Local Gateway Route Budget " + suffix,
@@ -1807,7 +1807,7 @@ TEST(S3CostSafetyTest, DbFileBackingPathOmitsGlobalRootAlias) {
             "entry-backing-" + suffix + "@vaulthalla.test");
 
         const auto seededVaultId = txn.exec(
-            "INSERT INTO vault (type, name, owner_id, mount_point, description) VALUES ($1, $2, $3, $4, $5) RETURNING id",
+            "INSERT INTO vault (type, name, owner_id, mount_point, description, uid) VALUES ($1, $2, $3, $4, $5, gen_random_uuid()) RETURNING id",
             pqxx::params{
                 "local",
                 "Entry Backing " + suffix,
@@ -1848,8 +1848,8 @@ TEST(S3CostSafetyTest, DbFileBackingPathOmitsGlobalRootAlias) {
             pqxx::params{seededVaultId, dirId, fileName, fileAlias, userId, filePath.string()}
         ).one_field_ref().as<uint32_t>();
         txn.exec(
-            "INSERT INTO files (fs_entry_id, size_bytes, mime_type, content_hash, encryption_iv) "
-            "VALUES ($1, 4, 'text/plain', 'hash', 'iv')",
+            "INSERT INTO files (fs_entry_id, size_bytes, mime_type, content_hash, encryption_iv, object_uid) "
+            "VALUES ($1, 4, 'text/plain', 'hash', 'iv', gen_random_uuid())",
             pqxx::params{fileId});
 
         return seededVaultId;
@@ -4814,7 +4814,7 @@ TEST(S3CostSafetyTest, VaultPricingDashboardStatsOnlyUseApplicableProviderScopeA
             "local-pricing-user",
             uniqueSuffix("local-pricing") + "@vaulthalla.test");
         const auto vaultId = txn.exec(
-            "INSERT INTO vault (type, name, owner_id, mount_point, description) VALUES ($1, $2, $3, $4, $5) RETURNING id",
+            "INSERT INTO vault (type, name, owner_id, mount_point, description, uid) VALUES ($1, $2, $3, $4, $5, gen_random_uuid()) RETURNING id",
             pqxx::params{"local", uniqueSuffix("Local Pricing"), userId, "ABCDEFGHJKMNPQRSTVWXYZ0123456789", ""})
             .one_field_ref().as<std::uint32_t>();
         txn.exec(

@@ -66,10 +66,13 @@ current    284828ce1f7c2c6c4b2456e201fc0e7e91dbf81dae27953cb315337a1ad3ad77  114
 current    bdff1df120f3dd1b8fb006be2fd5c369aa7f2822fc254811b63f5e896d6079cb  115_fs_change_log.sql  unreleased
 current    81098db83d4235750458be66c9d8f89f32382d31ce730d6d945204f871beb44c  116_refresh_token_activity.sql  unreleased
 current    45c3dddf905ec1309386b7c84830ccb55190fd9dc2fa7df7b6983cc6859086b6  117_audit_trail.sql  unreleased
+current    b12973226c85586ff0fcf3ce7042dce3ebe15140f9762a67480a40cbc5325666  118_s3_multipart_parts_sealed.sql  unreleased
 current    8c4a48ae2e0afc0368c398cb26794a381ddcd8f48d38d6cf8ccfc198c76d43cf  119_refresh_token_assurance.sql  unreleased
 current    1a30da34091b7843ccd25653ed103ee0aab555d161fbe15d4f627d5fa00d2316  120_mfa_factors.sql  unreleased
 current    321878c952eb9eb25603d330bb8c3137107f0e52d4d3d53727437c6721afd5e5  121_vault_master_rewrap.sql  unreleased
-current    ec48dfa03d37eeb3869d74c239d7daf2d623fb592887114e2a004bb2a59fcc46  122_master_secret_rewrap.sql  unreleased
+current    2c33e81004bdbf996b67d9877080d87aedaaa354b3fc4c8daa76d92f68a16d5e  122_storage_layout.sql  unreleased
+current    4dc6c5fea5d05cb14cd2dd340c08d390dd2519cf6afe3b58563b40cc17fd0189  123_object_uids_required.sql  unreleased
+current    ec48dfa03d37eeb3869d74c239d7daf2d623fb592887114e2a004bb2a59fcc46  124_master_secret_rewrap.sql  unreleased
 historical 64170212eb3f9fbe0f7c949791b953f0376a1f2bcf66b3dec7afc5db6325d570  020_vaults.sql  v0.28.0-alpha..v1.5.0
 historical c154cd7e10f7931f29c12b9221c90f66d6b953cfb5e3dc15ea50f0940e5d4220  060_acl.sql  v0.28.0-alpha..v1.5.1
 historical 720caaa27c0d51635fe3f459a8426f019d3f0dbdc0b7ae176d283309933a7f53  082_stats_metric_samples.sql  v1.2.4..v1.2.5

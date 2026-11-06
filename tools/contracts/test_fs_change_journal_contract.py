@@ -40,11 +40,11 @@ WRITERS: dict[str, dict[tuple[str, str], int]] = {
         ("UPDATE", "directories"): 2, ("UPDATE", "fs_entry"): 2, ("INSERT INTO", "fs_entry"): 1,
         ("INSERT INTO", "directories"): 1,
     },
-    # upsert_file_full / upsert_file_by_entry_id: create (files insert) or update (content); update_file_only (the
-    # FUSE seal and overwrite): update; set/compare_and_set IV and version: update for a new seal, nothing for key
-    # rotation; mark_file_trashed(_by_id): delete.
+    # upsert_file_full: create (files insert) or update (content); update_file_only (the FUSE seal and overwrite):
+    # update; set/compare_and_set IV and version: update for a new seal, nothing for key rotation;
+    # mark_file_trashed(_by_id): delete.
     "core/src/db/preparedStatements/fs/files.cpp": {
-        ("INSERT INTO", "files"): 2, ("UPDATE", "fs_entry"): 1, ("UPDATE", "files"): 3, ("INSERT INTO", "fs_entry"): 1,
+        ("INSERT INTO", "files"): 1, ("UPDATE", "fs_entry"): 1, ("UPDATE", "files"): 3, ("INSERT INTO", "fs_entry"): 1,
         ("DELETE FROM", "files"): 2, ("DELETE FROM", "fs_entry"): 2,
     },
     # update_fs_entry_by_inode / rename_fs_entry: move, rename or update; delete_fs_entry*: delete.

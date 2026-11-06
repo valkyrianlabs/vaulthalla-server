@@ -53,7 +53,7 @@ private:
 // Where the certificate is kept (next to the sealed secrets in the state directory; public, 0644).
 [[nodiscard]] std::filesystem::path serverCertificatePath();
 
-// The identity's key is versioned like the data-wrapping masters (migration 122, master_secret_state slot
+// The identity's key is versioned like the data-wrapping masters (migration 124, master_secret_state slot
 // 'device_tls'): version 1 is the sealed slot "device_tls", version N > 1 "device_tls.vN" ("test_" prefixed in test
 // mode). A rotation seals the new key beside the current one and switches in one transaction, so a crash never leaves
 // a half-written key in the slot the listener loads.

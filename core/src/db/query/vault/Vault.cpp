@@ -5,6 +5,9 @@
 #include "sync/model/LocalPolicy.hpp"
 #include "sync/model/RemotePolicy.hpp"
 #include "db/encoding/u8.hpp"
+#include "crypto/id/ObjectUid.hpp"
+
+#include <paths.h>
 
 namespace vh::db::query::vault {
 
@@ -62,6 +65,34 @@ namespace {
         if (!fuseOwner.empty())
             throw std::invalid_argument("effective FUSE name '" + effectiveFuseName + "' is already in use.");
     }
+
+    // The storage layout to store (spec 01 §4.6). It follows encrypt_upstream and is never taken from a request:
+    //  - a new vault gets transparent or path_v0; opaque_v1 only when asked for in test mode (internal staging until
+    //    the restore drill passes, #371);
+    //  - an existing vault keeps its layout while encrypt_upstream stays; flipping encrypt_upstream moves between
+    //    transparent and path_v0, and is refused for an opaque_v1 vault (converting it is the layout migration's job).
+    vh::vault::model::StorageLayout resolveStorageLayout(pqxx::work& txn, const unsigned int vaultId, const bool exists,
+                                                         const vh::vault::model::S3Vault& s3) {
+        using vh::vault::model::StorageLayout;
+        const auto stored = exists
+            ? txn.exec("SELECT encrypt_upstream, storage_layout FROM s3 WHERE vault_id = $1 FOR UPDATE",
+                       pqxx::params{vaultId})
+            : pqxx::result{};
+        if (stored.empty()) {
+            if (s3.storage_layout != StorageLayout::OpaqueV1) return vh::vault::model::layoutFor(s3.encrypt_upstream);
+            if (!paths::isTestMode())
+                throw std::invalid_argument("the opaque_v1 storage layout is not available yet");
+            if (!s3.encrypt_upstream) throw std::invalid_argument("the opaque_v1 storage layout requires upstream encryption");
+            return StorageLayout::OpaqueV1;
+        }
+        const auto row = stored.one_row_ref();
+        const auto layout = vh::vault::model::storageLayoutFromString(row["storage_layout"].as<std::string>());
+        if (row["encrypt_upstream"].as<bool>() == s3.encrypt_upstream) return layout;
+        if (layout == StorageLayout::OpaqueV1)
+            throw std::invalid_argument("upstream encryption of an opaque_v1 vault can't be turned off before the layout "
+                                        "migration supports it");
+        return vh::vault::model::layoutFor(s3.encrypt_upstream);
+    }
 }
 
 unsigned int Vault::upsertVault(const VaultPtr& vault,
@@ -114,15 +145,18 @@ unsigned int Vault::upsertVault(const VaultPtr& vault,
                         fuse_name = $9,
                         updated_at = CURRENT_TIMESTAMP
                     WHERE id = $10
-                    RETURNING id
+                    RETURNING id, uid
                 )SQL",
                 p);
         } else {
+            // A restore names the vault's existing uid; anything else is a new vault and gets a new one.
+            p.append(vh::crypto::id::toUuid(vault->uid.value_or(vh::crypto::id::newObjectUid())));
             vaultRes = txn.exec(pqxx::prepped{"upsert_vault"}, p);
         }
         if (vaultRes.empty() || vaultRes.affected_rows() == 0)
             throw std::runtime_error("Failed to upsert vault: " + vault->name);
-        const auto vaultId = vaultRes.one_field_ref().as<unsigned int>();
+        const auto vaultId = vaultRes.one_row_ref()["id"].as<unsigned int>();
+        vault->uid = vh::crypto::id::fromUuid(vaultRes.one_row_ref()["uid"].as<std::string>());
 
         if (!exists) {
             if (vault->type == vh::vault::model::VaultType::Local) {
@@ -167,12 +201,14 @@ unsigned int Vault::upsertVault(const VaultPtr& vault,
 
         if (vault->type == vh::vault::model::VaultType::S3) {
             const auto s3Vault = std::static_pointer_cast<vh::vault::model::S3Vault>(vault);
+            s3Vault->storage_layout = resolveStorageLayout(txn, vaultId, exists, *s3Vault);
             pqxx::params s3p{
                 vaultId,
                 s3Vault->api_key_id,
                 s3Vault->bucket,
                 s3Vault->encrypt_upstream,
-                s3Vault->storage_tier_id
+                s3Vault->storage_tier_id,
+                std::string(vh::vault::model::to_string(s3Vault->storage_layout))
             };
             txn.exec(pqxx::prepped{"upsert_s3_vault"}, s3p);
         }

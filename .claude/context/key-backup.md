@@ -17,7 +17,7 @@ recorded provenance (`key_check`, `attestation_key_id`, `attestation`; migration
 `vault::master::unwrap(row.encrypted_key, row.iv, row.master_version)`, wrap inside a `vault::master::Writer`), and
 `vh secret master rotate|rollback|finalize` rewraps all three tables (`vault/MasterRewrap.hpp`, staged `*_next` and
 retained `*_prev` columns; design/sealing/master-secrets.md §6). Import seals under the current version
-(`Writer(true)`: it may create it on a new host). Since #353 (migration 122) the registry and the engine are shared by
+(`Writer(true)`: it may create it on a new host). Since #353 (migration 124) the registry and the engine are shared by
 every data-wrapping master: `crypto/secrets/Versioned.hpp` (slots vault_master, ak_master, s3gw_master; state in
 `master_secret_state`, one row per slot, which replaced `vault_master_state`) and `crypto/secrets/Rewrap.hpp` (the
 engine, by slot; `vault/Master.hpp` and `vault/MasterRewrap.hpp` are its vault_master wrappers). `api_keys` and

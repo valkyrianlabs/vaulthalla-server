@@ -78,7 +78,7 @@ the same lock-and-wipe behavior (`crypto/SecretBytes.hpp`, which also holds `Wip
 
 ## 6. Part 4: versioned master-key rewrap (`vault_master` first)
 
-Status: parts 4a (#352) and 4b (#353, §6.5) implemented: migrations 121 and 122, the registry
+Status: parts 4a (#352) and 4b (#353, §6.5) implemented: migrations 121 and 124, the registry
 (`crypto/secrets/Versioned.hpp`; `vault/Master.hpp` is its vault_master view), the engine
 (`crypto/secrets/Rewrap.hpp`; `vault/MasterRewrap.hpp`), `ops::master_secrets` and `vh secret master
 status|rotate|finalize|rollback [--slot ...]`. As built for 4a (the state now lives in `master_secret_state`):
@@ -101,7 +101,7 @@ Goal: replace `vault_master` without re-encrypting any file body.
 4. **Recovery window.** The old sealed blob stays for a bounded window (default 7 days; `vh secret master finalize` ends it sooner). Rollback within the window reverses the switch from a retained copy of the old columns. After the window both the old blob and the old columns are deleted, verified first.
 5. **Other slots.** `ak_master` and `s3gw_master` use the same machinery over their own tables. `master` (JWT) and `device_tls` rotate by regeneration, with explicit consequences: everyone signs in again, and devices re-pair. Each is its own command with its own warning.
 
-### 6.5 Part 4b as built (#353, migration 122)
+### 6.5 Part 4b as built (#353, migration 124)
 
 - **One registry, one engine.** `crypto/secrets/Versioned.hpp` holds every data-wrapping master by version (slot ids
   `vault_master`, `ak_master`, `s3gw_master`; v1 the original sealed name, vN `<slot>.vN`), and

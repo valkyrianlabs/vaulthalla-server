@@ -112,10 +112,11 @@ public:
     db::query::s3::ObjectState putObject(const ResolvedBucket& bucket, const std::string& key,
                                          const std::vector<uint8_t>& body,
                                          const PutObjectOptions& options = {}) const;
-    db::query::s3::ObjectState putObjectFromFile(const ResolvedBucket& bucket, const std::string& key,
-                                                 const std::filesystem::path& sourcePath,
-                                                 uint64_t sourceSize,
-                                                 const PutObjectOptions& options = {}) const;
+    // Seals `source` (a streamed request body's scratch file, or a completed multipart upload's sealed parts) into the
+    // object. Without options.etag_override the ETag is the MD5 of the source, read once more.
+    db::query::s3::ObjectState putObjectFromSource(const ResolvedBucket& bucket, const std::string& key,
+                                                   const fs::PlaintextSource& source,
+                                                   const PutObjectOptions& options = {}) const;
     db::query::s3::ObjectState copyObject(const ResolvedBucket& sourceBucket, const std::string& sourceKey,
                                           const ResolvedBucket& destBucket, const std::string& destKey,
                                           const PutObjectOptions& options = {}) const;

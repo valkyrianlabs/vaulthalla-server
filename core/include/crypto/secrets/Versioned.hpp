@@ -12,7 +12,7 @@
 #include <string_view>
 #include <vector>
 
-// The data-wrapping master secrets, by version (#352, #353; design/sealing/master-secrets.md §6; migrations 121, 122).
+// The data-wrapping master secrets, by version (#352, #353; design/sealing/master-secrets.md §6; migrations 121, 124).
 // Each slot wraps the rows of its own tables; every row records the version that wraps it (master_version), and
 // master_secret_state.version is the one every row is wrapped under outside a rewrap (crypto/secrets/Rewrap.hpp).
 //

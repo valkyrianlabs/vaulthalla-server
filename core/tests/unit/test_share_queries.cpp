@@ -66,7 +66,7 @@ protected:
             ).one_field_ref().as<uint32_t>();
 
             vaultId = txn.exec(
-                "INSERT INTO vault (type, name, owner_id, mount_point) VALUES ($1, $2, $3, $4) RETURNING id",
+                "INSERT INTO vault (type, name, owner_id, mount_point, uid) VALUES ($1, $2, $3, $4, gen_random_uuid()) RETURNING id",
                 pqxx::params{"local", "Share Foundation Vault", userId, "0123456789ABCDEFGHJKMNPQRSTVWXYZ"}
             ).one_field_ref().as<uint32_t>();
 
@@ -134,7 +134,7 @@ TEST_F(ShareQueryTest, EntryPathLookupPreservesLegacyVaultMountSegment) {
     const auto seeded = db::Transactions::exec("ShareQueryTest::legacyPathSeed", [&](pqxx::work& txn) {
         SeededPath out;
         out.vaultId = txn.exec(
-            "INSERT INTO vault (type, name, owner_id, mount_point) VALUES ($1, $2, $3, $4) RETURNING id",
+            "INSERT INTO vault (type, name, owner_id, mount_point, uid) VALUES ($1, $2, $3, $4, gen_random_uuid()) RETURNING id",
             pqxx::params{"local", "Legacy Mount Vault", userId, "legacy_mount_alias"}
         ).one_field_ref().as<uint32_t>();
 
@@ -158,8 +158,8 @@ TEST_F(ShareQueryTest, EntryPathLookupPreservesLegacyVaultMountSegment) {
             pqxx::params{out.vaultId, miscId, "test.jpg", "legacy-mount-file", userId, "/misc/test.jpg", 9102}
         ).one_field_ref().as<uint32_t>();
         txn.exec(
-            "INSERT INTO files (fs_entry_id, size_bytes, mime_type, content_hash, encryption_iv) "
-            "VALUES ($1, $2, $3, $4, $5)",
+            "INSERT INTO files (fs_entry_id, size_bytes, mime_type, content_hash, encryption_iv, object_uid) "
+            "VALUES ($1, $2, $3, $4, $5, gen_random_uuid())",
             pqxx::params{out.fileEntryId, 5, "image/jpeg", "hash", ""}
         );
 

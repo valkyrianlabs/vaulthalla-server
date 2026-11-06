@@ -31,7 +31,7 @@ struct APIKey {
     std::string region;
     std::string endpoint;
 
-    // Encrypted parts (stored in DB), wrapped under API key master `master_version` (migration 122): the secret and
+    // Encrypted parts (stored in DB), wrapped under API key master `master_version` (migration 124): the secret and
     // the provider token below always share it.
     std::vector<uint8_t> encrypted_secret_access_key, iv;
     unsigned int master_version{1};

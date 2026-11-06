@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-// The installation's vault master, by version (#352, design/sealing/master-secrets.md §6; migrations 121, 122): the
+// The installation's vault master, by version (#352, design/sealing/master-secrets.md §6; migrations 121, 124): the
 // vault_master slot of the versioned registry (crypto/secrets/Versioned.hpp), which the other data-wrapping masters
 // share. It wraps every vault key version (vault_keys, vault_keys_trashed, vault_deletion_key); each row records the
 // version that wraps it (master_version).

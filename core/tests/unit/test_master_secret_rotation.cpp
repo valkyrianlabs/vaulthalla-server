@@ -1,4 +1,4 @@
-// Rotation of the other master secrets (#353, design/sealing/master-secrets.md §6.5, migration 122).
+// Rotation of the other master secrets (#353, design/sealing/master-secrets.md §6.5, migration 124).
 //
 // ak_master (api_keys: the S3 secret and the provider token) and s3gw_master (s3_gateway_credentials) go through the
 // same staged rewrap as vault_master (#352), so they get the same acceptance matrix, run for both: interrupted staging

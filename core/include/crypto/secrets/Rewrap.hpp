@@ -14,7 +14,7 @@
 #include <vector>
 
 // Versioned master-secret rewrap (#352 for vault_master, #353 for ak_master and s3gw_master; design/sealing/
-// master-secrets.md §6; migrations 121, 122). Replaces a data-wrapping master without touching what its rows protect:
+// master-secrets.md §6; migrations 121, 124). Replaces a data-wrapping master without touching what its rows protect:
 // only the wraps change (never a file body, never an upstream credential's value).
 //
 //   slot           rows rewrapped                                           verified against

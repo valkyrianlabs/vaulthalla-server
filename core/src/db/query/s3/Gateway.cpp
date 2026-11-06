@@ -325,7 +325,9 @@ MultipartPart partFromRow(pqxx::row_ref row) {
         .size_bytes = row["size_bytes"].as<uint64_t>(),
         .md5 = from_hex_bytea(row["md5"].as<std::string>()),
         .path = row["path"].as<std::string>(),
-        .created_at = ts(row, "created_at")
+        .created_at = ts(row, "created_at"),
+        .encryption_iv = row["encryption_iv"].as<std::optional<std::string>>(),
+        .key_version = row["key_version"].as<std::optional<uint32_t>>()
     };
 }
 
@@ -1336,6 +1338,14 @@ std::vector<MultipartUpload> Gateway::listMultipartUploadsInitiatedBefore(const 
     });
 }
 
+std::vector<MultipartUpload> Gateway::listOpenMultipartUploads() {
+    return Transactions::exec("S3Gateway::listOpenMultipartUploads", [&](pqxx::work& txn) {
+        const auto res = txn.exec(
+            "SELECT * FROM s3_gateway_multipart_upload WHERE aborted = FALSE AND completed = FALSE ORDER BY initiated_at");
+        return db::mapRows(res, uploadFromRow);
+    });
+}
+
 void Gateway::markMultipartUploadCompleted(const std::string& uploadId) {
     Transactions::exec("S3Gateway::markMultipartUploadCompleted", [&](pqxx::work& txn) {
         txn.exec("UPDATE s3_gateway_multipart_upload SET completed = TRUE WHERE upload_id = $1", pqxx::params{uploadId});
@@ -1348,18 +1358,23 @@ void Gateway::abortMultipartUpload(const std::string& uploadId) {
     });
 }
 
-void Gateway::upsertMultipartPart(const MultipartPart& part) {
-    Transactions::exec("S3Gateway::upsertMultipartPart", [&](pqxx::work& txn) {
+std::optional<std::filesystem::path> Gateway::upsertMultipartPart(const MultipartPart& part) {
+    return Transactions::exec("S3Gateway::upsertMultipartPart", [&](pqxx::work& txn) -> std::optional<std::filesystem::path> {
+        const auto previous = txn.exec(
+            "SELECT path FROM s3_gateway_multipart_part WHERE upload_id = $1 AND part_number = $2 FOR UPDATE",
+            pqxx::params{part.upload_id, part.part_number});
         txn.exec(
             R"SQL(
                 INSERT INTO s3_gateway_multipart_part
-                    (upload_id, part_number, etag, size_bytes, md5, path)
-                VALUES ($1, $2, $3, $4, $5, $6)
+                    (upload_id, part_number, etag, size_bytes, md5, path, encryption_iv, key_version)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                 ON CONFLICT (upload_id, part_number) DO UPDATE SET
                     etag = EXCLUDED.etag,
                     size_bytes = EXCLUDED.size_bytes,
                     md5 = EXCLUDED.md5,
                     path = EXCLUDED.path,
+                    encryption_iv = EXCLUDED.encryption_iv,
+                    key_version = EXCLUDED.key_version,
                     created_at = NOW()
             )SQL",
             pqxx::params{
@@ -1368,8 +1383,28 @@ void Gateway::upsertMultipartPart(const MultipartPart& part) {
                 part.etag,
                 part.size_bytes,
                 to_hex_bytea(part.md5),
-                part.path.string()
+                part.path.string(),
+                part.encryption_iv,
+                part.key_version
             });
+        if (previous.empty()) return std::nullopt;
+        return std::filesystem::path(previous.one_row_ref()["path"].as<std::string>());
+    });
+}
+
+bool Gateway::sealLegacyMultipartPart(const std::string& uploadId, const uint32_t partNumber,
+                                      const std::filesystem::path& plaintextPath,
+                                      const std::filesystem::path& sealedPath, const std::string& encryptionIv,
+                                      const uint32_t keyVersion) {
+    return Transactions::exec("S3Gateway::sealLegacyMultipartPart", [&](pqxx::work& txn) {
+        const auto res = txn.exec(
+            R"SQL(
+                UPDATE s3_gateway_multipart_part
+                SET path = $4, encryption_iv = $5, key_version = $6
+                WHERE upload_id = $1 AND part_number = $2 AND path = $3 AND encryption_iv IS NULL
+            )SQL",
+            pqxx::params{uploadId, partNumber, plaintextPath.string(), sealedPath.string(), encryptionIv, keyVersion});
+        return res.affected_rows() == 1;
     });
 }
 

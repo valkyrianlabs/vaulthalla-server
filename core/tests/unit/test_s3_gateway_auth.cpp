@@ -12,6 +12,8 @@
 //   S3GatewayStreaming.*       signed streaming payloads (STREAMING-AWS4-HMAC-SHA256-PAYLOAD[-TRAILER]): the seed
 //                              signature, then every chunk through decodeAwsChunkedBody, and each way a body fails
 
+#include "crypto/ScratchFile.hpp"
+#include "fs/PlaintextSource.hpp"
 #include "protocols/s3/Auth.hpp"
 #include "protocols/s3/RequestBody.hpp"
 #include "protocols/s3/Router.hpp"
@@ -31,12 +33,14 @@
 #include <cctype>
 #include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <map>
 #include <openssl/evp.h>
 #include <optional>
 #include <set>
+#include <span>
 #include <sstream>
 #include <unistd.h>
 #include <string>
@@ -246,22 +250,29 @@ inline Decoded routeChunkedBody(const Request& req, const std::string& rawBody, 
     const auto decodedPath = std::filesystem::temp_directory_path() /
                              ("vh-s3-chunked-" + std::to_string(::getpid()) + "-" +
                               std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    const vh::fs::PlaintextSource in{
+        .size = rawBody.size(), .read = [&rawBody](const uint64_t offset, const std::span<uint8_t> dst) -> std::size_t {
+            if (offset >= rawBody.size()) return 0;
+            const auto n = std::min<std::size_t>(dst.size(), rawBody.size() - offset);
+            std::memcpy(dst.data(), rawBody.data() + offset, n);
+            return n;
+        }};
     try {
         std::optional<vs::ChunkVerifier> chain;
         const bool signedChunks = s3::hasSignedChunks(req);
-        std::istringstream in(rawBody);
         if (!signedChunks) out.payload = s3::decodeAwsChunkedBody(in, decodedPath, req, std::nullopt);
         (void)s3::verifySignedRequest(s3::verificationInput(req, {}, out.payload.sha256_hex), lookup, at,
                                       signedChunks ? &chain : nullptr);
         if (signedChunks) out.payload = s3::decodeAwsChunkedBody(in, decodedPath, req, std::move(chain));
-        std::ifstream decoded(decodedPath, std::ios::binary);
-        out.data.assign(std::istreambuf_iterator<char>(decoded), std::istreambuf_iterator<char>());
+        out.data.resize(out.payload.file->size());
+        (void)out.payload.file->read(0, {reinterpret_cast<uint8_t*>(out.data.data()), out.data.size()});
         out.outcome = "ok";
     } catch (const s3::S3Error& e) {
         out.outcome = e.code + ": " + e.what();
         out.status = e.status;
     }
-    std::filesystem::remove(decodedPath);
+    out.payload.file.reset();  // the scratch file goes with it
+    EXPECT_FALSE(std::filesystem::exists(decodedPath));
     return out;
 }
 
