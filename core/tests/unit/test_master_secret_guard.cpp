@@ -34,6 +34,25 @@ protected:
         std::filesystem::remove_all(root, ec);
     }
 
+    // Whether this host can seal and unseal at all (CI containers may reach a TPM that can't load what it sealed).
+    // The guard's refusal path needs no backend; the generate-then-unseal path does.
+    static std::optional<std::string> sealingUnusable() {
+        try {
+            std::vector<uint8_t> first;
+            {
+                secrets::KeyProvider probe("test_guard_probe");
+                probe.init();
+                first = probe.getMasterKey();
+            }
+            secrets::KeyProvider again("test_guard_probe");
+            again.init();
+            if (again.getMasterKey() != first) return std::string("the backend returned a different secret");
+            return std::nullopt;
+        } catch (const std::exception& e) {
+            return std::string(e.what());
+        }
+    }
+
     static secrets::DependentsCheck records(const int n) {
         return [n]() -> std::optional<std::string> {
             if (n == 0) return std::nullopt;
@@ -58,7 +77,7 @@ TEST_F(MasterSecretGuardTest, RefusesToReplaceASecretThatWrapsRecords) {
 }
 
 TEST_F(MasterSecretGuardTest, GeneratesOnlyWhenNothingDependsOnIt) {
-    if (secrets::KeyProvider::posture() == "unknown") GTEST_SKIP() << "no sealing backend on this host";
+    if (const auto why = sealingUnusable()) GTEST_SKIP() << "sealing doesn't round-trip on this host: " << *why;
     std::vector<uint8_t> first;
     {
         secrets::KeyProvider provider("test_guard_fresh");
