@@ -45,6 +45,9 @@ export interface IDependencyHealth {
   // "tpm2", or "file" (macOS development backend).
   secrets_backend?: string
   secrets_posture?: string
+  secrets_policy?: string
+  secrets_pcr_bound?: number
+  secrets_warning?: string | null
 }
 
 export interface IShellHealth {

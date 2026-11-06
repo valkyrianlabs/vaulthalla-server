@@ -1,6 +1,7 @@
 #include "stats/model/SystemHealth.hpp"
 
 #include "crypto/secrets/KeyProvider.hpp"
+#include "ops/MasterSecrets.hpp"
 #include "db/DBPool.hpp"
 #include "fuse/Service.hpp"
 #include "db/Transactions.hpp"
@@ -119,6 +120,7 @@ SystemHealthStatus computeOverallStatus(const SystemHealth& health) {
     const bool ok = health.runtime.allRunning
         && health.vaultsUnavailable.empty()
         && health.vaultsRecoveryMaterialMissing.empty()
+        && health.deps.secretsWarning.empty()
         && health.database->brokenIdle == 0
         && protocolsHealthy(health.protocols, health.s3Gateway)
         && depsHealthy(health.deps, health.summary);
@@ -255,6 +257,15 @@ SystemHealth SystemHealth::snapshot() {
         .checkedAt = unixTimestamp()
     };
 
+    try {
+        const auto sealing = ops::master_secrets::currentPolicyStatus();
+        out.deps.secretsPolicy = sealing.configured;
+        out.deps.secretsPcrBound = sealing.bound;
+        if (sealing.warning) out.deps.secretsWarning = *sealing.warning;
+    } catch (const std::exception& e) {
+        log::Registry::vaulthalla()->warn("[SystemHealth] sealing policy check failed: {}", e.what());
+    }
+
     out.overallStatus = computeOverallStatus(out);
     return out;
 }
@@ -331,6 +342,9 @@ void to_json(nlohmann::json& j, const DependencyHealth& health) {
         {"mount_detail", health.mountDetail.empty() ? nlohmann::json(nullptr) : nlohmann::json(health.mountDetail)},
         {"secrets_backend", health.secretsBackend},
         {"secrets_posture", health.secretsPosture},
+        {"secrets_policy", health.secretsPolicy},
+        {"secrets_pcr_bound", health.secretsPcrBound},
+        {"secrets_warning", health.secretsWarning.empty() ? nlohmann::json(nullptr) : nlohmann::json(health.secretsWarning)},
     };
 }
 

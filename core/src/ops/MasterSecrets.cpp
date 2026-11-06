@@ -6,6 +6,8 @@
 #include "audit/Trail.hpp"
 #include "auth/session/Manager.hpp"
 #include "crypto/secrets/KeyProvider.hpp"
+#include "crypto/secrets/Reseal.hpp"
+#include "db/query/crypto/SecretExport.hpp"
 #include "crypto/secrets/Manager.hpp"
 #include "db/query/device/Device.hpp"
 #include "device/Pairing.hpp"
@@ -15,6 +17,7 @@
 #include "runtime/Deps.hpp"
 #include "runtime/Manager.hpp"
 
+#include <algorithm>
 #include <fmt/format.h>
 #include <nlohmann/json.hpp>
 
@@ -316,6 +319,174 @@ DeviceIdentityRotation rotateDeviceIdentity(const Actor& actor, const bool confi
     });
 }
 
+// ---- the sealing policy (#351) ------------------------------------------------------------------------------------
+
+namespace {
+
+namespace sealer = platform::sealer;
+
+std::string policyLabel(const sealer::Policy policy) { return std::string(sealer::policyName(policy)); }
+
+std::string ageText(const std::time_t last, const std::time_t now) {
+    const auto hours = std::max<long long>(0, (now - last) / 3600);
+    return hours < 48 ? fmt::format("{} hour(s)", hours) : fmt::format("{} day(s)", hours / 24);
+}
+
+}
+
+std::optional<std::string> pcrExportWarning(const std::size_t bound, const std::optional<std::time_t>& lastExport,
+                                            const std::time_t now) {
+    if (bound == 0) return std::nullopt;
+    const auto limit = std::chrono::duration_cast<std::chrono::seconds>(kExportWarnAfter).count();
+    if (!lastExport)
+        return fmt::format("{} sealed secret(s) are bound to TPM PCR 7 and no `vh secret export all` was ever taken: a "
+                           "firmware or Secure Boot change would lock them until they are restored from an export. "
+                           "Take one now and keep it off this host.",
+                           bound);
+    if (now - *lastExport > limit)
+        return fmt::format("{} sealed secret(s) are bound to TPM PCR 7 and the last `vh secret export all` is {} old "
+                           "(more than 30 days): take a fresh export and keep it off this host.",
+                           bound, ageText(*lastExport, now));
+    return std::nullopt;
+}
+
+PolicyStatus currentPolicyStatus() {
+    using crypto::secrets::KeyProvider;
+    PolicyStatus out;
+    out.configured = policyLabel(KeyProvider::configuredPolicy());
+    out.supported = sealer::policySupported();
+    out.posture = std::string(KeyProvider::posture());
+    for (const auto& e : crypto::secrets::reseal::inventory()) {
+        out.secrets.push_back({.name = e.name, .policy = policyLabel(e.policy), .complete = e.complete});
+        if (e.policy == sealer::Policy::Pcr7) ++out.bound;
+    }
+    if (out.supported) {
+        // A host with nothing bound (the default) needs no export record, and health must not touch the database for it.
+        if (out.bound > 0 || out.configured == "pcr7") {
+            try {
+                out.last_export_at = db::query::crypto::SecretExport::lastAt();
+            } catch (const std::exception& e) {
+                log::Registry::crypto()->warn("[ops::master_secrets] could not read the last secret export: {}", e.what());
+            }
+        }
+        const auto unbound = out.secrets.size() - out.bound;
+        if (const auto w = pcrExportWarning(out.bound, out.last_export_at, std::time(nullptr))) out.warning = *w;
+        else if (out.configured == "pcr7" && unbound > 0)
+            out.warning = fmt::format("secrets.tpm_pcr_policy is pcr7, but {} sealed secret(s) are not bound to it yet: "
+                                      "`sudo vh secret reseal --pcr7` binds them (existing secrets are never rebound "
+                                      "by the setting alone).",
+                                      unbound);
+        else if (out.configured == "none" && out.bound > 0)
+            out.warning = fmt::format("{} sealed secret(s) are still bound to TPM PCR 7 while secrets.tpm_pcr_policy is "
+                                      "none: `sudo vh secret reseal --none` removes the binding.", out.bound);
+    }
+    return out;
+}
+
+PolicyStatus policyStatus(const Actor& actor) {
+    requireSuperAdmin(actor, "secrets.policy", "sealing policy");
+    return currentPolicyStatus();
+}
+
+bool keysBackedUp(const vault_keys::KeyStatus& v) {
+    if (!v.key_available || !v.missing_versions.empty()) return false;
+    if (v.exported_version && *v.exported_version == v.version) return true;
+    return v.recovery.state == "recipient" && v.recovery.uncovered_versions.empty() && !v.recovery.rotation_needed;
+}
+
+std::vector<std::string> resealRefusals(const ResealGate& gate) {
+    std::vector<std::string> out;
+    if (!gate.supported)
+        out.emplace_back("this platform's sealing has no PCR policy (macOS: the Secure Enclave is unaffected)");
+    else if (gate.posture != "hardware")
+        out.push_back("no hardware TPM seals the secrets here (posture '" + gate.posture +
+                      "'): a software TPM's state is on the same disk, so PCR 7 would protect nothing");
+    std::vector<std::string> unbacked;
+    for (const auto& v : gate.vaults)
+        if (!keysBackedUp(v)) unbacked.push_back(fmt::format("'{}' (ID {})", v.vault_name, v.vault_id));
+    if (!unbacked.empty()) {
+        std::string names;
+        for (const auto& u : unbacked) names += (names.empty() ? "" : ", ") + u;
+        out.push_back("these vaults have key versions without a confirmed backup (`vh vault keys status all`, then "
+                      "`vh vault keys export <vault>` or a recovery recipient): " + names);
+    }
+    const auto fresh = std::chrono::duration_cast<std::chrono::seconds>(kExportFreshForReseal).count();
+    if (!gate.last_export_at)
+        out.emplace_back("no `vh secret export all` was ever taken; take one (and keep it off this host) within 24 "
+                         "hours of resealing");
+    else if (gate.now - *gate.last_export_at > fresh)
+        out.push_back("the last `vh secret export all` is " + ageText(*gate.last_export_at, gate.now) +
+                      " old; take a fresh one (24 hours at most)");
+    return out;
+}
+
+void recordSecretsExport(const Actor& actor, const std::vector<std::string>& secrets) {
+    const auto id = actor ? std::optional<uint32_t>(actor->id) : std::nullopt;
+    db::query::crypto::SecretExport::record(id, actor ? actor->name() : std::string{}, secrets);
+    auditAs(actor, "secrets.export", vh::audit::Outcome::Success, {{"secrets", secrets}},
+            "exported " + std::to_string(secrets.size()) + " internal secret(s)", spdlog::level::warn);
+}
+
+crypto::secrets::reseal::Report reseal(const Actor& actor, const ResealRequest& request) {
+    constexpr const char* action = "secrets.reseal";
+    using crypto::secrets::KeyProvider;
+    requireSuperAdmin(actor, action, "sealing policy");
+    const auto target = KeyProvider::configuredPolicy();
+    nlohmann::json details{{"target", policyLabel(target)}};
+    if (request.expect && *request.expect != target)
+        throw Invalid(fmt::format("secrets.tpm_pcr_policy is '{}' in config.yaml, which the daemon read when it "
+                                  "started, not '{}'. Set it to '{}', restart Vaulthalla, then run this again "
+                                  "(`vh secret reseal` alone reseals to what the config says).",
+                                  policyLabel(target), policyLabel(*request.expect), policyLabel(*request.expect)));
+    if (!sealer::policySupported())
+        throw Refused("reseal_unsupported", "Sealed secrets on this platform are bound by the Secure Enclave, which has no "
+                                            "PCR policy: secrets.tpm_pcr_policy does not apply and there is nothing to "
+                                            "reseal.");
+
+    return audited(actor, action, details, [&] {
+        if (target == sealer::Policy::Pcr7) {
+            ResealGate gate{.supported = true, .posture = std::string(KeyProvider::posture()),
+                            .last_export_at = db::query::crypto::SecretExport::lastAt(), .now = std::time(nullptr),
+                            .vaults = vault_keys::status(actor)};
+            if (const auto problems = resealRefusals(gate); !problems.empty()) {
+                std::string text = "Refusing to bind the sealed secrets to PCR 7:";
+                for (const auto& p : problems) text += "\n  - " + p;
+                throw Refused("reseal_refused", text);
+            }
+        }
+        const auto status = currentPolicyStatus();
+        if (!request.confirmed)
+            throw NeedsConfirmation(
+                "sealing_policy_reseal",
+                target == sealer::Policy::Pcr7
+                    ? fmt::format("This binds all {} sealed secrets on this host to TPM PCR 7 (the secure-boot state). "
+                                  "Afterwards a firmware update or a Secure Boot key or configuration change locks them: "
+                                  "the daemon will not start until PCR 7 matches again or the secrets are restored from "
+                                  "your exports (`vh secret export all`, `vh vault keys export`). Run `sudo vh secret "
+                                  "reseal --pcr7` again after a planned update and BEFORE rebooting into it. No secret "
+                                  "changes and nothing is re-encrypted. Continue?",
+                                  status.secrets.size())
+                    : fmt::format("This removes the TPM PCR 7 binding from the sealed secrets on this host ({} of {} are "
+                                  "bound): a firmware or Secure Boot change will no longer lock them. No secret changes "
+                                  "and nothing is re-encrypted. Continue?",
+                                  status.bound, status.secrets.size()));
+        auth::stepup::require(auth::stepup::Family::Secrets);  // #359
+        auditAs(actor, action, vh::audit::Outcome::Info, details,
+                "started a reseal of the sealed secrets to policy " + policyLabel(target));
+        try {
+            auto r = crypto::secrets::reseal::run(target);
+            auditAs(actor, action, vh::audit::Outcome::Success,
+                    {{"target", policyLabel(target)}, {"secrets", r.items.size()}, {"changed", r.changed()}},
+                    fmt::format("resealed the sealed secrets to policy {}: {} of {} changed", policyLabel(target),
+                                r.changed(), r.items.size()),
+                    spdlog::level::warn);
+            return r;
+        } catch (const sealer::PolicyUnsatisfied& e) {
+            throw Refused("sealing_policy_unsatisfied", e.what());
+        }
+    });
+}
+
 // ---- JSON ---------------------------------------------------------------------------------------------------------
 
 nlohmann::json toJson(const rw::Status& s) {
@@ -379,6 +550,26 @@ nlohmann::json toJson(const DeviceIdentityRotation& r) {
             {"sessions_closed", r.sessions_closed},
             {"pairing_requests_dropped", r.pairing_requests_dropped},
             {"listener_updated", r.listener_updated}};
+}
+
+nlohmann::json toJson(const PolicyStatus& s) {
+    nlohmann::json secrets = nlohmann::json::array();
+    for (const auto& e : s.secrets) secrets.push_back({{"name", e.name}, {"policy", e.policy}, {"complete", e.complete}});
+    return {{"configured", s.configured},
+            {"supported", s.supported},
+            {"posture", s.posture},
+            {"secrets", std::move(secrets)},
+            {"bound", s.bound},
+            {"last_export_at", orNull(isoOf(s.last_export_at))},
+            {"warning", orNull(s.warning)}};
+}
+
+nlohmann::json toJson(const crypto::secrets::reseal::Report& r) {
+    nlohmann::json items = nlohmann::json::array();
+    for (const auto& i : r.items)
+        items.push_back({{"name", i.name}, {"from", policyLabel(i.from)}, {"to", policyLabel(i.to)}, {"changed", i.changed}});
+    return {{"target", policyLabel(r.target)}, {"secrets", r.items.size()}, {"changed", r.changed()},
+            {"items", std::move(items)}};
 }
 
 }

@@ -435,10 +435,13 @@ sudo vh secret master rotate [--slot vault|api-keys|s3-gateway] [--window-hours 
 vh secret master rollback|finalize [--slot vault|api-keys|s3-gateway]
 sudo vh secret jwt rotate                             # everyone signs in again
 sudo vh secret device-identity rotate                 # every paired device pairs again
+vh secret policy                                       # PCR 7 binding of the sealed secrets, last export, warnings
+sudo vh secret reseal [--pcr7|--none]                  # rebind every sealed secret to secrets.tpm_pcr_policy
 ```
 
 Super admins only, each asking to confirm (`--yes` without a terminal), and never available to agents. See
-[Rotate The Vault Master](/vaults/secrets-and-key-export#rotate-the-vault-master) and the sections after it.
+[Rotate The Vault Master](/vaults/secrets-and-key-export#rotate-the-vault-master) and the sections after it. `reseal`
+and `policy` are the opt-in TPM PCR 7 binding: [Bind Secrets To Secure Boot](/vaults/secrets-and-key-export#bind-secrets-to-secure-boot-tpm-pcr-7). `vh secret export all` records that an export was taken, which `reseal --pcr7` requires within 24 hours.
 
 ## S3 Gateway
 

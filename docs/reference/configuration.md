@@ -169,6 +169,25 @@ sudo vh setup remote-db --host <host> --user <user> --database <name> --password
 vh secret set db-password /path/to/password-file
 ```
 
+## Sealed Secrets
+
+The master secrets are sealed to the machine (a TPM on Linux, the Secure Enclave on macOS). These settings are read from `config.yaml` only, never from the console:
+
+```yaml
+secrets:
+  require_hardware: false
+  tpm_pcr_policy: none
+  allow_development_file_backend: false
+```
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `require_hardware` | `false` | `true` refuses to seal or unseal unless a hardware TPM or the Secure Enclave protects the secrets (no swtpm, no files). |
+| `tpm_pcr_policy` | `none` | `pcr7` binds secrets sealed from now on to TPM PCR 7 (the secure-boot state), so they open only while it is unchanged. Existing secrets are rebound only by `sudo vh secret reseal --pcr7`. Linux TPM only: the Secure Enclave is unaffected. Any other value is refused at start. |
+| `allow_development_file_backend` | `false` | macOS without a usable Secure Enclave: allow plain 0600 key files. Development only. |
+
+See [How Secrets Are Sealed](/vaults/secrets-and-key-export#how-secrets-are-sealed) and [Bind Secrets To Secure Boot](/vaults/secrets-and-key-export#bind-secrets-to-secure-boot-tpm-pcr-7) before enabling `pcr7`: a firmware update locks bound secrets until they are restored.
+
 ## Authentication
 
 Authentication settings include access-token and refresh-token lifetimes:

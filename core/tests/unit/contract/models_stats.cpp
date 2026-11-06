@@ -322,6 +322,8 @@ void checkSystemStats(vh::test::contract_models::Checker& c) {
     health.deps.mountDetail = "/mnt/vaulthalla";
     health.deps.secretsBackend = "tpm2";
     health.deps.secretsPosture = "hardware";
+    health.deps.secretsPolicy = "pcr7";
+    health.deps.secretsPcrBound = 6;
     health.shell.adminUidBound = true;
     health.database = sm::DatabaseHealth{.poolSize = 4, .reachable = true, .probeLatencyMs = 1, .probeError = "slow"};
     c.check(json(health), "SystemHealth", "healthy system");

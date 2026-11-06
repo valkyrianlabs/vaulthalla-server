@@ -151,7 +151,7 @@ TEST(McpCatalog, ExclusionListIsExactlyTheAgreedOne) {
                                             "vault key recipient revoke", "secrets export", "secrets update",
                                             "secrets master rotate", "secrets master finalize",
                                             "secrets master rollback", "secrets jwt rotate",
-                                            "secrets device-identity rotate", "setup",
+                                            "secrets device-identity rotate", "secrets reseal", "setup",
                                             "setup set-super-admin-password", "teardown", "fs get", "fs put", "mcp",
                                             "skill", "device pair", "device approve", "device deny",
                                             "device remote enable", "device remote disable"};
@@ -164,7 +164,7 @@ TEST(McpCatalog, ExcludedCommandsAreNeitherListedNorRunnable) {
         if (l.excluded) excluded.insert(l.command);
     for (const auto* c : {"vault key export", "vault key import", "vault recover", "secrets export", "secrets update",
                           "secrets master rotate", "secrets master finalize", "secrets master rollback",
-                          "secrets jwt rotate", "secrets device-identity rotate", "setup db", "setup caddy",
+                          "secrets jwt rotate", "secrets device-identity rotate", "secrets reseal", "setup db", "setup caddy",
                           "setup set-super-admin-password", "teardown db", "fs get", "fs put", "mcp", "skill install",
                           "device pair", "device approve", "device deny", "device remote enable",
                           "device remote disable"})
@@ -182,7 +182,7 @@ TEST(McpCatalog, ExcludedCommandsAreNeitherListedNorRunnable) {
                                 "secret set jwt-secret /tmp/x", "secret master rotate --yes", "secrets master finalize",
                                 "secret master rollback --yes", "secret master rotate --slot api-keys --yes",
                                 "secrets master rollback --slot s3-gateway", "secret jwt rotate --yes",
-                                "secrets device-identity rotate --yes", "setup db", "setup database", "teardown nginx",
+                                "secrets device-identity rotate --yes", "secret reseal --pcr7 --yes", "setup db", "setup database", "teardown nginx",
                                 "setup super-admin-password", "fs get 3 /a", "files download 3 /a", "fs put 3 a /a",
                                 "fs upload 3 a /a", "mcp", "skills install --agent claude", "device pair",
                                 "device approve 7f3a9c1d2e4b6a80 --code 482913", "device deny 7f3a9c1d2e4b6a80",

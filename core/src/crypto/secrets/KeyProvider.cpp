@@ -3,6 +3,7 @@
 #include "config/Registry.hpp"
 
 #include <paths.h>
+#include <algorithm>
 #include <atomic>
 #include <stdexcept>
 #include <utility>
@@ -12,6 +13,7 @@ namespace vh::crypto::secrets {
 namespace {
 
 std::atomic<KeyProvider::UnsealHook> unsealHook{nullptr};
+std::atomic<const char*> postureOverride{nullptr};
 
 std::filesystem::path resolveSealedDir(const std::string& key) {
     return paths::getBackingPath() / (".sealed_" + key + ".blob");
@@ -25,6 +27,7 @@ KeyProvider::KeyProvider(const std::string& name)
 
 void KeyProvider::init(const std::span<const uint8_t> initial) {
     requirePosture();
+    platform::sealer::recover(sealedDir_, name_);  // an interrupted reseal (#351)
     if (platform::sealer::present(sealedDir_, name_)) {
         unsealStored();
         return;
@@ -34,6 +37,7 @@ void KeyProvider::init(const std::span<const uint8_t> initial) {
 
 void KeyProvider::initGuarded(const DependentsCheck& dependents) {
     requirePosture();
+    platform::sealer::recover(sealedDir_, name_);  // an interrupted reseal (#351)
     if (platform::sealer::present(sealedDir_, name_)) {
         unsealStored();
         return;
@@ -69,7 +73,43 @@ void KeyProvider::destroySealed() {
 
 std::string_view KeyProvider::backend() noexcept { return platform::sealer::backend(); }
 
-std::string_view KeyProvider::posture() noexcept { return platform::sealer::posture(); }
+std::string_view KeyProvider::posture() noexcept {
+    if (const auto* forced = postureOverride.load()) return forced;
+    return platform::sealer::posture();
+}
+
+void KeyProvider::setPostureForTesting(const char* posture) noexcept { postureOverride.store(posture); }
+
+platform::sealer::Policy KeyProvider::policy() const {
+    if (!platform::sealer::complete(sealedDir_, name_)) return platform::sealer::Policy::None;
+    return platform::sealer::policyOf(sealedDir_, name_);
+}
+
+platform::sealer::ResealResult KeyProvider::reseal(const platform::sealer::Policy to) {
+    requirePosture();
+    return platform::sealer::reseal(sealedDir_, name_, to);
+}
+
+platform::sealer::Policy KeyProvider::configuredPolicy() {
+    if (!platform::sealer::policySupported()) return platform::sealer::Policy::None;
+    return platform::sealer::parsePolicy(config::Registry::get().secrets.tpm_pcr_policy)
+        .value_or(platform::sealer::Policy::None);
+}
+
+std::vector<std::string> KeyProvider::sealedNames() {
+    std::vector<std::string> out;
+    std::error_code ec;
+    constexpr std::string_view prefix = ".sealed_", suffix = ".blob";
+    for (const auto& entry : std::filesystem::directory_iterator(paths::getBackingPath(), ec)) {
+        const auto file = entry.path().filename().string();
+        if (!entry.is_directory(ec) || file.size() <= prefix.size() + suffix.size() || !file.starts_with(prefix) ||
+            !file.ends_with(suffix))
+            continue;
+        out.push_back(file.substr(prefix.size(), file.size() - prefix.size() - suffix.size()));
+    }
+    std::ranges::sort(out);
+    return out;
+}
 
 void KeyProvider::requirePosture() {
     if (!config::Registry::get().secrets.require_hardware) return;
@@ -95,7 +135,7 @@ void KeyProvider::unsealStored() {
 
 void KeyProvider::sealAndKeep(SecretBytes candidate) {
     if (candidate.empty()) candidate = generateMasterSecret();
-    platform::sealer::seal(sealedDir_, name_, candidate.bytes());
+    platform::sealer::seal(sealedDir_, name_, candidate.bytes(), configuredPolicy());
     master_ = std::move(candidate);
 }
 
