@@ -51,6 +51,14 @@ class MultiSurfaceLiveTests(unittest.IsolatedAsyncioTestCase):
                             self.assertEqual(downloaded.outcome, "ok", downloaded.detail)
                             self.assertTrue(downloaded.body == data, "HTTP bytes differ")
                             self.assertEqual(downloaded.bytes_sha256, hashlib.sha256(data).hexdigest())
+                            # #404: an existing file is replaced through PUT /upload/content with If-Match.
+                            replacement = b"replaced through the conditional content lane"
+                            replaced = await lane.upload(vid, "/http-proof +é.bin", replacement, 10)
+                            reread = await lane.download(vid, "/http-proof +é.bin", 10)
+                            results.extend((replaced, reread))
+                            self.assertEqual((replaced.outcome, replaced.code), ("ok", 200), replaced.detail)
+                            self.assertTrue(replaced.rendered.startswith("PUT /upload/content?"), replaced.rendered)
+                            self.assertTrue(reread.body == replacement, "replaced HTTP bytes differ")
                         else:
                             self.assertEqual(uploaded.outcome, "denied")
                             self.assertIn(downloaded.outcome, ("denied", "not_found"))
