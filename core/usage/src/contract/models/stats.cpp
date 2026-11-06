@@ -388,6 +388,14 @@ std::vector<WsModel> statsSystemModels() {
                       str("detail")})
              .desc("Live vaults whose storage engine did not start (storage::Manager::unavailableVaults): their data "
                    "can't be read. Any entry makes the node at least degraded; empty when every vault runs."),
+         objectArray("vaults_recovery_material_missing", "",
+                     {uinteger("vault_id"), str("vault_name"),
+                      str("reason").oneOf({"recovery_material_missing"}),
+                      str("detail").desc("What is missing and the commands that fix it.")})
+             .opt()
+             .desc("Self-hosted vaults that encrypt upstream without recovery material independent of this host (spec "
+                   "03 §5.5, D2): no recovery recipient whose envelopes cover every needed key version and no export "
+                   "of the current key version. Any entry makes the node at least degraded."),
          object("summary", "",
                 {statsUint("services_ready"), statsUint("services_total"), statsUint("deps_ready"),
                  statsUint("deps_total"), statsUint("protocols_ready"), statsUint("protocols_total"),

@@ -36,6 +36,10 @@ constexpr std::string_view kSignOutReason =
 constexpr std::string_view kRepairReason =
     "rotating the device identity revokes every paired device; a human at the terminal decides it, never an agent";
 
+constexpr std::string_view kRecipientReason =
+    "a recovery recipient is a decryption path for the vault: a human enrolls or revokes it at the terminal, never an "
+    "agent";
+
 constexpr std::string_view kKeysReason =
     "key and secret material is never handled by agents (D4); the human runs this in a terminal themselves";
 
@@ -45,6 +49,8 @@ const std::vector<Exclusion>& exclusions() {
     static const std::vector<Exclusion> list{
         {{"vault", "key", "export"}, kKeysReason},
         {{"vault", "key", "import"}, kKeysReason},
+        {{"vault", "key", "recipient", "add"}, kRecipientReason},
+        {{"vault", "key", "recipient", "revoke"}, kRecipientReason},
         {{"secrets", "export"}, kKeysReason},
         {{"secrets", "update"}, "internal secrets are changed by the operator, never by an agent"},
         {{"secrets", "master", "rotate"}, kMasterReason},

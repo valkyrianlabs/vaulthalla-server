@@ -46,7 +46,73 @@ std::vector<WsModel> vaultKeyModels() {
         {uinteger("key_id").min(1).max(2147483647)
              .desc("Which of this node's attestation keys signed (key_attestation_keys.id, a PostgreSQL integer). An "
                    "import reads any other value as a malformed attestation: that version needs salvage."),
-         str("signature").desc("base64 (64 bytes).")}));
+         str("signature").desc("base64 (64 bytes)."),
+         str("public_key").opt().nullable()
+             .desc("base64 (32 bytes): the signing key's public key (key_attestation_keys), so the backup can anchor "
+                   "provenance on another node (spec 03 §5.4). An import on this node requires it to be this node's key "
+                   "of key_id; absent in exports from before #370, which still import here.")}));
+
+    out.push_back(model("VaultKeyAttestationKey",
+        "One of this node's attestation signing keys (key_attestation_keys): what a recovery kit pins as "
+        "attestation_public_keys (spec 03 §5.3). Public.",
+        {uinteger("key_id").min(1).max(2147483647), str("public_key").desc("base64 (32 bytes, Ed25519)."),
+         vaultKeyTime("retired_at").nullable().desc("When a newer signing key replaced it (its signatures stay valid).")}));
+
+    out.push_back(model("VaultKeyCheckpoint",
+        "The vault's manifest v2 chain position (opaque_v1 vaults): a recovery kit's checkpoint bounds rollback (spec 03 "
+        "§4.5).",
+        {uinteger("epoch").min(1), str("root_sha256").desc("64 lowercase hex digits: SHA-256 of the root object.")}));
+
+    out.push_back(model("VaultRecoveryMaterial",
+        "D2 (spec 03 §5.5): whether the vault has recovery material independent of this host. "
+        "ops::vault_keys::toJson(RecoveryMaterial) (core/src/ops/VaultKeys.cpp).",
+        {boolean("required").desc("A self-hosted S3 vault that encrypts upstream: it needs a recovery recipient or a "
+                                  "current export."),
+         str("state").oneOf({"not_required", "recipient", "export", "recovery_material_missing"})
+             .desc("recipient: a recovery recipient's envelopes cover every needed key version; export: the current "
+                   "version was exported (a rotation makes an export stale); recovery_material_missing: neither "
+                   "(health is degraded); not_required: a local or transparent vault (the export guidance applies)."),
+         uinteger("recipients").desc("Usable (customer, not revoked) recovery recipients."),
+         intArray("uncovered_versions").desc("Needed key versions without an envelope for a usable recipient (only "
+                                             "with recipients)."),
+         boolean("export_current").desc("The recorded export is of the current key version."),
+         boolean("rotation_needed").desc("A revoked recipient still holds envelopes of key versions the vault uses: "
+                                         "only a key rotation cuts it off from new data."),
+         str("detail").nullable().desc("What is missing and what to do.")}));
+
+    out.push_back(model("VaultRecoveryRecipient",
+        "A recovery recipient: an independently revocable grant of the vault's key versions to a customer-held X25519 "
+        "public key (spec 03 §5.7). ops::recovery_recipients::toJson(Recipient) (core/src/ops/RecoveryRecipients.cpp). "
+        "Public: never a seed or key.",
+        {str("grant_id").desc("26 base32 symbols."),
+         str("recipient_id").desc("64 lowercase hex digits: SHA-256 of the public key (KEV1 recipient_id)."),
+         str("public_key").desc("base64 (32 bytes, X25519)."),
+         uinteger("suite").desc("KEV1 suite: 1 (X25519 + HKDF-SHA-256 + AES-256-GCM)."),
+         str("class").oneOf({"customer"}).desc("Customer-controlled: the only class implemented."),
+         str("label").nullable(), vaultKeyTime("added_at"),
+         str("authorized_by").desc("Who enrolled it: user:<id> via cli|device."),
+         vaultKeyTime("revoked_at").nullable(), str("revoked_by").nullable(),
+         intArray("envelope_versions").desc("Key versions wrapped to it (KEV1 envelopes in the vault's bucket).")}));
+
+    out.push_back(model("VaultRecoveryRecipientList",
+        "A vault's recovery recipients: ops::recovery_recipients::toJson(RecipientList).",
+        {vaultId(), str("vault_name"),
+         str("vault_uid").desc("26 base32 symbols: how a recovery kit names the vault."),
+         objectArray("recipients", "VaultRecoveryRecipient").desc("Oldest first, revoked ones included."),
+         object("recovery", "VaultRecoveryMaterial")}));
+
+    out.push_back(model("VaultRecoveryRecipientAdd",
+        "An enrollment: ops::recovery_recipients::toJson(AddResult).",
+        {object("recipient", "VaultRecoveryRecipient"),
+         uinteger("envelopes_written").desc("KEV1 envelopes written to the vault's bucket now."),
+         intArray("versions").desc("The key versions wrapped to the recipient."),
+         str("note").nullable().desc("Set when not every envelope could be written yet (the sync pass retries)."),
+         object("recovery", "VaultRecoveryMaterial")}));
+
+    out.push_back(model("VaultRecoveryRecipientRevoke",
+        "A revocation: ops::recovery_recipients::toJson(RevokeResult). recovery.rotation_needed says whether a key "
+        "rotation is needed to cut the recipient off from new data.",
+        {object("recipient", "VaultRecoveryRecipient"), object("recovery", "VaultRecoveryMaterial")}));
 
     out.push_back(model("VaultKeySalvageFailure",
         "One file a key salvage could not re-encrypt.",
@@ -96,7 +162,15 @@ std::vector<WsModel> vaultKeyModels() {
          objectArray("needed_versions", "VaultKeyNeededVersion").desc("Current first, then ascending."),
          intArray("missing_versions").desc("Needed versions this host can't read."),
          vaultKeyAttestation("attestation").desc("The current version's attestation; null when none is recorded."),
-         object("last_salvage", "VaultKeySalvageReport").nullable().desc("The vault's last key salvage, if any.")}));
+         object("last_salvage", "VaultKeySalvageReport").nullable().desc("The vault's last key salvage, if any."),
+         str("vault_uid").nullable().opt().desc("26 base32 symbols (null for a deleted vault): how a recovery kit "
+                                                "names the vault."),
+         str("node_id").opt().desc("This node's id (device_node.node_id): the origin a recovery kit records."),
+         objectArray("attestation_public_keys", "VaultKeyAttestationKey").opt()
+             .desc("Every attestation signing key this node has had: what a recovery kit pins."),
+         object("checkpoint", "VaultKeyCheckpoint").nullable().opt()
+             .desc("The last manifest root this node recorded (opaque_v1 vaults), else null."),
+         object("recovery", "VaultRecoveryMaterial").opt().desc("D2: the vault's recovery material.")}));
 
     out.push_back(model("VaultKeyExport",
         "One vault's export document: ops::vault_keys::toJson(VaultExport) (core/src/ops/VaultKeys.cpp), the CLI's "
@@ -174,7 +248,16 @@ std::vector<WsModel> vaultKeyModels() {
                                 "salvage pass, the key itself was not stored."),
                       str("detail").desc("Which proof restored it, or why not.")})
              .desc("Every version the backup carries for the vault, ascending."),
-         object("salvage", "VaultKeySalvageReport").nullable().desc("Salvage mode: the pass's report.")}));
+         object("salvage", "VaultKeySalvageReport").nullable().desc("Salvage mode: the pass's report."),
+         object("recovery_kit", "",
+                {uinteger("envelopes").desc("Objects under .vaulthalla/key/ in the vault's bucket."),
+                 uinteger("unwrapped").desc("Addressed to the kit's recipient and authentic."),
+                 uinteger("skipped").desc("Another recipient's, or a reserved purpose or recipient class."),
+                 uinteger("rejected").desc("Damaged, for another vault, or not KEV1."),
+                 uinteger("ignored").desc("Unwrapped, but not the key the vault's records name for that version."),
+                 boolean("root_consulted").desc("The manifest root's key history supplied attestations.")})
+             .opt()
+             .desc("`vh vault keys import --recovery-kit` only: what the envelopes in the bucket held.")}));
 
     return out;
 }

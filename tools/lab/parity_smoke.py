@@ -332,7 +332,10 @@ async def phase2_scenarios(cli: Cli, ws: Ws, r: Report, ws_user: str, ws_url: st
     stats = (health.get("data") or {}).get("stats", {})
     r.add(s, "web health carries a live DB probe", (stats.get("database") or {}).get("reachable") is True, json.dumps(stats)[:300])
     rc, out = cli.run("status")
-    r.add(s, "CLI and web agree on severity", rc == 0 and stats.get("overall_status") == "healthy", out[:200])
+    # vh status exits 0/1/2 for healthy/degraded/critical. A host can be degraded on purpose (e.g. an S3 vault without
+    # recovery material, #370): the check is that both surfaces say the same.
+    severity = {0: "healthy", 1: "degraded", 2: "critical"}.get(rc)
+    r.add(s, "CLI and web agree on severity", severity is not None and stats.get("overall_status") == severity, out[:200])
 
     # --- malformed and unauthorized requests never take the daemon down --------
     s = "robustness"

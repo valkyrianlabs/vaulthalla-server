@@ -749,8 +749,21 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   epoch, root hash, ETag, refused root, gc_at) and `remote_manifest_root` (last three roots' sids). `Service` is the
   per-vault glue `CloudEngine` uses for opaque_v1 (`publishManifestV2`, `refreshRemoteIndexFromManifestIfChanged`
   verifies only and returns false); a refused root stalls the pass (`SyncStalled`) and raises one
-  `manifest_rollback` / `manifest_fork` operator notification per root. Recovery recipients (KEV1 envelopes, grants)
-  are #370; `vh vault recover` and the scratch-schema restore are #371.
+  `manifest_rollback` / `manifest_fork` operator notification per root. The root carries the vault's recovery grants
+  and each key version's envelope kids (#370, below); `vh vault recover` and the scratch-schema restore are #371.
+- **Recovery recipients and KEV1 envelopes** (#370, spec 03 §5, §5.8; migration 127). `crypto::kev1` and
+  `crypto::recovery::{RecoverySeed, Kit}` (`crypto/recovery/`, self-contained: the offline `vh-recovery` tool,
+  `core/main/recovery.cpp`, links only them, libsodium and OpenSSL). `db::query::vault::RecoveryGrants`
+  (`vault_recovery_grant`: class CHECKed to `customer`; `vault_key_envelope`). `vault::envelopes`
+  (`vault/RecoveryEnvelopes.*`): `put`/`record`/`discard` for one version (no request without a usable grant),
+  `ensure` for every held version, `material` (D2: `not_required | recipient | export | recovery_material_missing`),
+  `setStoreFactoryForTesting`. Hooks: `EncryptionManager`'s three mint paths (`commitWithEnvelopes`: envelopes PUT
+  before the version is committed, a failed PUT fails the rotation), `CloudEngine::ensureRecoveryEnvelopes` at the
+  start of each cloud pass (`sync::Cloud::initBins`), `requestManifestPublish`. `ops::recovery_recipients`
+  (list/add/revoke; `auth::stepup::require(Keys, "vault.keys.recipients.add|revoke:<vault>")`), ws
+  `vault.keys.recipients.*` (`handler::VaultKeys`), CLI `vh vault keys recipient …`, kit import through
+  `ops::vault_keys::importKeys` (`ImportRequest::recovery_kit`; `candidatesFromKit`). Health
+  `vaults_recovery_material_missing` (`stats::model::SystemHealth`) makes the node degraded.
 - **Derived cache** (`preview::cache::Store`, `cache_index` rows `type='derived'`, migration 103). One encrypted,
   disposable cache for thumbnails (`thumbnail`/`<size>`), sheet and PDF page renders (`render`/`p<page>-s<size>`),
   posters, probes, GLB, transcodes. File: `<cacheRoot>/derived/<file_id>/<kind>.<variant>.vhd` = 64-byte header

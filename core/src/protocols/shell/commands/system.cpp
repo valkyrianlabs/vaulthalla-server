@@ -86,6 +86,15 @@ CommandResult handleStatus(const CommandCall& call) {
         out << "  check: vh vault keys status all; restore keys: vh vault keys import <vault> --file <export.json>\n";
     }
 
+    if (!health.vaultsRecoveryMaterialMissing.empty()) {
+        out << "vaults without recovery material (recovery_material_missing: losing this host's database or TPM would "
+               "lose them):\n";
+        for (const auto& v : health.vaultsRecoveryMaterialMissing)
+            out << "  - " << v.vaultName << " (ID " << v.vaultId << ")\n";
+        out << "  fix: vh vault keys recipient add <vault> --public-key <key from vh-recovery kit create>, or vh vault "
+               "keys export <vault>\n";
+    }
+
     if (health.database) {
         const auto& pool = *health.database;
         out << "database pool:\n";

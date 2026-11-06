@@ -135,8 +135,9 @@ exceeds 8,192 entries or 4 MiB of plaintext and merges with a neighbor below 1,0
   "restorable_from_bucket": true}]}}`. Directories and symlinks carry their own uids (`directories.uid`,
   `symlinks.uid`, migration 125) like files (`files.object_uid`); `mtime` / `ctime` are the entry's `updated_at` /
   `created_at`; a trashed file keeps its uid (`files_trashed.object_uid`) and `trashed.path` (where it was; its parent
-  may be gone). Until recovery recipients exist (#370) the root carries `{"v": 1, "threshold": null, "grants": []}`
-  and no `envelopes`.
+  may be gone). Since #370 `recovery_policy.grants` lists every recovery grant of the vault (revoked ones with
+  `revoked_at`, oldest first) and `keys[].envelopes` names the kids of each version's KEV1 envelopes (absent for a
+  version without any); see §5.8.
 - No field holds plaintext content or a plaintext digest. `content_hash` is the sealed bytes' hash (spec 02 §3.8).
 
 ### 3.4 Publish protocol
@@ -312,8 +313,8 @@ server. One kit can serve many vaults.
   `alphabet[SHA-256(seed)[0] >> 3]` (27 symbols; display grouping is cosmetic). It derives the keys:
   `PRK = HKDF-Extract(salt = "vh.recovery.v1", IKM = seed)`, X25519 recipient key `HKDF-Expand(PRK, "x25519", 32)`,
   Ed25519 signing seed `HKDF-Expand(PRK, "ed25519", 32)` (used by sealed vaults, spec 04 §4). Vectors:
-  `recovery_seed`. The public key is enrolled on the vault (`vh vault recovery-recipient add --public-key …`, or
-  from Desktop over the paired connection, step-up per #325).
+  `recovery_seed`. The public key is enrolled on the vault (`vh vault keys recipient add <vault> --public-key …`,
+  or from Desktop over the paired connection, `vault.keys.recipients.add`, step-up per #325).
 - `attestation_public_keys` pin the original node's attestation keys (`key_attestation_keys`), so a restore can
   verify that each recovered key version was minted by the node that owned the vault (§6.2). Desktop refreshes them
   whenever `vault.keys.status` shows a new signing key.
@@ -371,6 +372,48 @@ it received keeps unwrapping the versions it covers, so a revocation is followed
 recipient could have read old data, re-encryption of that data) when the customer needs the recipient's access cut
 off. Nothing here adds an API, table, billing hook or code path for custodians, and no recovery material may be
 sent to Valkyrian Labs until such a service is designed, approved and explicitly enabled by the customer.
+
+### 5.8 As implemented (#370)
+
+- **Codecs.** `crypto::kev1` (`core/{include,src}/crypto/recovery/Kev1.*`: `wrap`, `unwrap` with the reader's checks in
+  §5.2's order, `inspect`, `kid`, `skippedByRestore`; suites 1 and 2, OpenSSL 3), `crypto::recovery::RecoverySeed`
+  (`Seed.*`) and the kit (`Kit.*`, `parseKit`/`toJson`). Every `kev1` and `recovery_seed` vector passes
+  (`Kev1Vectors`, `RecoverySeedVectors`, `Kev1ReservedFields`, `RecoveryKit`).
+- **Grants and envelopes** (migration 127): `vault_recovery_grant` (one row per grant: `grant_id` base32, `recipient_id`,
+  X25519 `public_key`, suite 1, `class` CHECKed to `customer`, label, `added_at`, `authorized_by` = `user:<id> via
+  cli|device`, `revoked_at`/`revoked_by`; one active grant per recipient key) and `vault_key_envelope` (grant ×
+  version → kid). `vault::envelopes` (`vault/RecoveryEnvelopes.*`) wraps and PUTs (`If-None-Match: *`) to the vault's
+  own bucket through its API key; nothing else ever receives an envelope. A vault without a usable grant makes no
+  request.
+- **When envelopes are written.** Before a new version is committed: `EncryptionManager::prepare_key_rotation`, the
+  salvage key (`mintSalvageKey`) and a vault's first key put the version's envelopes first and fail (nothing committed)
+  when a PUT fails; at enrollment for every held version; and at the start of each cloud sync pass for anything still
+  missing (`CloudEngine::ensureRecoveryEnvelopes`), which also asks an `opaque_v1` vault to republish its root.
+- **Surfaces.** `vh vault keys recipient list|add|revoke` and ws `vault.keys.recipients.list|add|revoke`
+  (`ops::recovery_recipients`). List: the encryption-key View permission, any session. Add and revoke: the Export
+  permission, the local CLI or a paired device (`recipient_requires_device` for browser sessions, agents denied and
+  excluded from MCP), and a `keys` step-up bound to the vault (#359; the host CLI is exempt, a device is refused until
+  #361). Audit: `vault.recovery.recipient.add|revoke`. S3 vaults only (a local vault has no bucket).
+- **D2 (§5.5).** `vault::envelopes::material` → `vault.keys.status` `recovery`
+  (`not_required | recipient | export | recovery_material_missing`, `uncovered_versions`, `export_current`,
+  `rotation_needed`) and health `vaults_recovery_material_missing` (degraded). "Verified export" is
+  `vault_keys.exported_version` = the current version (the CLI's export or a device's confirmation with a matching key
+  check). The managed-storage rules (recipient required at creation and for writes, last recipient not removable) land
+  with managed storage itself (#375): there is no managed storage in the server yet.
+- **Exports** carry `attestation.public_key`; an import on this node requires it to be its own key of that id (older
+  exports without it import as before).
+- **§5.6.** `vh vault keys import <vault> --recovery-kit <file|->` (the kit is read client-side): lists
+  `.vaulthalla/key/`, unwraps with the seed (another recipient's and reserved envelopes are skipped and counted), keeps
+  per version only the key whose key check the vault's records name (planted keys are `ignored`), takes the attestation
+  this node recorded for it (else, for `opaque_v1`, the root's key history opened with the unwrapped keys) and runs the
+  normal recover rules: never a new version, never the current version moved, never a held key replaced. Recover mode
+  only; audit `vault.keys.import.recovery_kit`. A kit that lists vaults but not this one is refused.
+- **Kit tool.** `vh-recovery kit create|public-key|add-vault|show` (`core/main/recovery.cpp`, shipped as
+  `/usr/bin/vh-recovery`): offline, writes kits with mode 0600 and never over a file; `add-vault` pins a vault from
+  `vh vault keys status --json` (which now reports `vault_uid`, `node_id`, `attestation_public_keys`, `checkpoint`).
+- **Tests.** `RecoveryRecipient.*`, `RecoveryRequirement.*`, `RecoveryNoSilentCustody.*`, `KeysImportFromKit.*`,
+  `VaultKeyExportProvenance.*` (`test_recovery_recipients.cpp`, DB), `SqlDeployerHistoryDb.RecoveryRecipients*`,
+  `recovery_tool` (meson). Left for #371: `vh vault recover` on a fresh node with the kit's pinned keys as the anchor.
 
 ## 6. Restore into a new instance
 

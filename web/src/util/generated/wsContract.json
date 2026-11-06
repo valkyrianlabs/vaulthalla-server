@@ -12987,6 +12987,50 @@
           ]
         },
         {
+          "description": "Self-hosted vaults that encrypt upstream without recovery material independent of this host (spec 03 §5.5, D2): no recovery recipient whose envelopes cover every needed key version and no export of the current key version. Any entry makes the node at least degraded.",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "vault_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "vault_name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "recovery_material_missing"
+              ],
+              "name": "reason",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "What is missing and the commands that fix it.",
+              "name": "detail",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "items": "object",
+          "name": "vaults_recovery_material_missing",
+          "required": false,
+          "types": [
+            "array"
+          ]
+        },
+        {
           "fields": [
             {
               "minimum": 0,
@@ -15748,9 +15792,73 @@
           "types": [
             "string"
           ]
+        },
+        {
+          "description": "base64 (32 bytes): the signing key's public key (key_attestation_keys), so the backup can anchor provenance on another node (spec 03 §5.4). An import on this node requires it to be this node's key of key_id; absent in exports from before #370, which still import here.",
+          "name": "public_key",
+          "required": false,
+          "types": [
+            "string",
+            "null"
+          ]
         }
       ],
       "name": "VaultKeyAttestation"
+    },
+    {
+      "description": "One of this node's attestation signing keys (key_attestation_keys): what a recovery kit pins as attestation_public_keys (spec 03 §5.3). Public.",
+      "fields": [
+        {
+          "maximum": 2147483647,
+          "minimum": 1,
+          "name": "key_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "base64 (32 bytes, Ed25519).",
+          "name": "public_key",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "When a newer signing key replaced it (its signatures stay valid).",
+          "minimum": 0,
+          "name": "retired_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        }
+      ],
+      "name": "VaultKeyAttestationKey"
+    },
+    {
+      "description": "The vault's manifest v2 chain position (opaque_v1 vaults): a recovery kit's checkpoint bounds rollback (spec 03 §4.5).",
+      "fields": [
+        {
+          "minimum": 1,
+          "name": "epoch",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "64 lowercase hex digits: SHA-256 of the root object.",
+          "name": "root_sha256",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "name": "VaultKeyCheckpoint"
     },
     {
       "description": "One vault's export document: ops::vault_keys::toJson(VaultExport) (core/src/ops/VaultKeys.cpp), the CLI's `vh vault keys export` shape (vault::model::generate_json_key_object) plus key_check and every needed version. vault.keys.import (and `vh vault keys import`) takes it back, alone or in an `all` array.",
@@ -16288,6 +16396,69 @@
             "object",
             "null"
           ]
+        },
+        {
+          "description": "`vh vault keys import --recovery-kit` only: what the envelopes in the bucket held.",
+          "fields": [
+            {
+              "description": "Objects under .vaulthalla/key/ in the vault's bucket.",
+              "minimum": 0,
+              "name": "envelopes",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Addressed to the kit's recipient and authentic.",
+              "minimum": 0,
+              "name": "unwrapped",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Another recipient's, or a reserved purpose or recipient class.",
+              "minimum": 0,
+              "name": "skipped",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Damaged, for another vault, or not KEV1.",
+              "minimum": 0,
+              "name": "rejected",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Unwrapped, but not the key the vault's records name for that version.",
+              "minimum": 0,
+              "name": "ignored",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "The manifest root's key history supplied attestations.",
+              "name": "root_consulted",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            }
+          ],
+          "name": "recovery_kit",
+          "required": false,
+          "types": [
+            "object"
+          ]
         }
       ],
       "name": "VaultKeyImportResult"
@@ -16656,9 +16827,355 @@
             "object",
             "null"
           ]
+        },
+        {
+          "description": "26 base32 symbols (null for a deleted vault): how a recovery kit names the vault.",
+          "name": "vault_uid",
+          "required": false,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "This node's id (device_node.node_id): the origin a recovery kit records.",
+          "name": "node_id",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Every attestation signing key this node has had: what a recovery kit pins.",
+          "items": "object",
+          "model": "VaultKeyAttestationKey",
+          "name": "attestation_public_keys",
+          "required": false,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "The last manifest root this node recorded (opaque_v1 vaults), else null.",
+          "model": "VaultKeyCheckpoint",
+          "name": "checkpoint",
+          "required": false,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "description": "D2: the vault's recovery material.",
+          "model": "VaultRecoveryMaterial",
+          "name": "recovery",
+          "required": false,
+          "types": [
+            "object"
+          ]
         }
       ],
       "name": "VaultKeyStatus"
+    },
+    {
+      "description": "D2 (spec 03 §5.5): whether the vault has recovery material independent of this host. ops::vault_keys::toJson(RecoveryMaterial) (core/src/ops/VaultKeys.cpp).",
+      "fields": [
+        {
+          "description": "A self-hosted S3 vault that encrypts upstream: it needs a recovery recipient or a current export.",
+          "name": "required",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "recipient: a recovery recipient's envelopes cover every needed key version; export: the current version was exported (a rotation makes an export stale); recovery_material_missing: neither (health is degraded); not_required: a local or transparent vault (the export guidance applies).",
+          "enum": [
+            "not_required",
+            "recipient",
+            "export",
+            "recovery_material_missing"
+          ],
+          "name": "state",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Usable (customer, not revoked) recovery recipients.",
+          "minimum": 0,
+          "name": "recipients",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Needed key versions without an envelope for a usable recipient (only with recipients).",
+          "items": "integer",
+          "name": "uncovered_versions",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "The recorded export is of the current key version.",
+          "name": "export_current",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "A revoked recipient still holds envelopes of key versions the vault uses: only a key rotation cuts it off from new data.",
+          "name": "rotation_needed",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "What is missing and what to do.",
+          "name": "detail",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        }
+      ],
+      "name": "VaultRecoveryMaterial"
+    },
+    {
+      "description": "A recovery recipient: an independently revocable grant of the vault's key versions to a customer-held X25519 public key (spec 03 §5.7). ops::recovery_recipients::toJson(Recipient) (core/src/ops/RecoveryRecipients.cpp). Public: never a seed or key.",
+      "fields": [
+        {
+          "description": "26 base32 symbols.",
+          "name": "grant_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "64 lowercase hex digits: SHA-256 of the public key (KEV1 recipient_id).",
+          "name": "recipient_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "base64 (32 bytes, X25519).",
+          "name": "public_key",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "KEV1 suite: 1 (X25519 + HKDF-SHA-256 + AES-256-GCM).",
+          "minimum": 0,
+          "name": "suite",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Customer-controlled: the only class implemented.",
+          "enum": [
+            "customer"
+          ],
+          "name": "class",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "label",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "minimum": 0,
+          "name": "added_at",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Who enrolled it: user:<id> via cli|device.",
+          "name": "authorized_by",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "minimum": 0,
+          "name": "revoked_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "name": "revoked_by",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "Key versions wrapped to it (KEV1 envelopes in the vault's bucket).",
+          "items": "integer",
+          "name": "envelope_versions",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        }
+      ],
+      "name": "VaultRecoveryRecipient"
+    },
+    {
+      "description": "An enrollment: ops::recovery_recipients::toJson(AddResult).",
+      "fields": [
+        {
+          "model": "VaultRecoveryRecipient",
+          "name": "recipient",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "KEV1 envelopes written to the vault's bucket now.",
+          "minimum": 0,
+          "name": "envelopes_written",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The key versions wrapped to the recipient.",
+          "items": "integer",
+          "name": "versions",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "Set when not every envelope could be written yet (the sync pass retries).",
+          "name": "note",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "model": "VaultRecoveryMaterial",
+          "name": "recovery",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "name": "VaultRecoveryRecipientAdd"
+    },
+    {
+      "description": "A vault's recovery recipients: ops::recovery_recipients::toJson(RecipientList).",
+      "fields": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "vault_name",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "26 base32 symbols: how a recovery kit names the vault.",
+          "name": "vault_uid",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Oldest first, revoked ones included.",
+          "items": "object",
+          "model": "VaultRecoveryRecipient",
+          "name": "recipients",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "model": "VaultRecoveryMaterial",
+          "name": "recovery",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "name": "VaultRecoveryRecipientList"
+    },
+    {
+      "description": "A revocation: ops::recovery_recipients::toJson(RevokeResult). recovery.rotation_needed says whether a key rotation is needed to cut the recipient off from new data.",
+      "fields": [
+        {
+          "model": "VaultRecoveryRecipient",
+          "name": "recipient",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "model": "VaultRecoveryMaterial",
+          "name": "recovery",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "name": "VaultRecoveryRecipientRevoke"
     },
     {
       "description": "A vault's backup/recovery posture (core/src/stats/model/VaultRecovery.cpp to_json; C++ stats::model::VaultRecovery).",
@@ -18162,7 +18679,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "144e2cc1625766141f2fb45d5358956cac3188d29eb60c77a7ee9798baf55c4a",
+  "models_hash": "455b23eafefb4b72a1cfb1503ebe2c43a378d38313d320a1d0176c2f9bfcebf8",
   "protocol": {
     "min": 1,
     "version": 1
@@ -42023,9 +42540,369 @@
             "object",
             "null"
           ]
+        },
+        {
+          "description": "`vh vault keys import --recovery-kit` only: what the envelopes in the bucket held.",
+          "fields": [
+            {
+              "description": "Objects under .vaulthalla/key/ in the vault's bucket.",
+              "minimum": 0,
+              "name": "envelopes",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Addressed to the kit's recipient and authentic.",
+              "minimum": 0,
+              "name": "unwrapped",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Another recipient's, or a reserved purpose or recipient class.",
+              "minimum": 0,
+              "name": "skipped",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Damaged, for another vault, or not KEV1.",
+              "minimum": 0,
+              "name": "rejected",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Unwrapped, but not the key the vault's records name for that version.",
+              "minimum": 0,
+              "name": "ignored",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "The manifest root's key history supplied attestations.",
+              "name": "root_consulted",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            }
+          ],
+          "name": "recovery_kit",
+          "required": false,
+          "types": [
+            "object"
+          ]
         }
       ],
       "response_model": "VaultKeyImportResult",
+      "step_up": "keys",
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 120000,
+      "command": "vault.keys.recipients.add",
+      "confirmations": [],
+      "description": "Enroll a recovery recipient: an X25519 public key generated on the customer's own device (Vaulthalla Desktop, or the offline `vh-recovery kit create`); the server never receives the seed. Every key version the vault holds is wrapped to it now and every future version at rotation, into the vault's bucket only. Customer-controlled (class customer) is the only kind. S3 vaults only (conflict otherwise). Paired devices only (recipient_requires_device otherwise), with a keys step-up bound to the vault (#359); the encryption-key Export permission.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The recipient's X25519 public key: base64 (32 bytes) or 64 hex digits.",
+          "generator": {
+            "kind": "const",
+            "values": [
+              "9jB0b7LvRAo3+fTz//m8OhJQkp39Kcd1PjiFpjtmrTs="
+            ]
+          },
+          "name": "public_key",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "A name the customer recognizes (at most 200 characters).",
+          "name": "label",
+          "required": false,
+          "types": [
+            "string",
+            "null"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "recipient_requires_device",
+        "step_up_required"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "recipient_requires_device",
+        "step_up_required"
+      ],
+      "response": [
+        {
+          "model": "VaultRecoveryRecipient",
+          "name": "recipient",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "KEV1 envelopes written to the vault's bucket now.",
+          "minimum": 0,
+          "name": "envelopes_written",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The key versions wrapped to the recipient.",
+          "items": "integer",
+          "name": "versions",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "Set when not every envelope could be written yet (the sync pass retries).",
+          "name": "note",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "model": "VaultRecoveryMaterial",
+          "name": "recovery",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": "VaultRecoveryRecipientAdd",
+      "step_up": "keys",
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "vault.keys.recipients.list",
+      "confirmations": [],
+      "description": "The vault's recovery recipients (spec 03 §5; #370): customer-held X25519 public keys every key version is wrapped to (KEV1 envelopes in the vault's own bucket), revoked ones included, with the vault's D2 recovery state. Public data only; the encryption-key View permission.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "vault_name",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "26 base32 symbols: how a recovery kit names the vault.",
+          "name": "vault_uid",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Oldest first, revoked ones included.",
+          "items": "object",
+          "model": "VaultRecoveryRecipient",
+          "name": "recipients",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "model": "VaultRecoveryMaterial",
+          "name": "recovery",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": "VaultRecoveryRecipientList",
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "vault.keys.recipients.revoke",
+      "confirmations": [],
+      "description": "Revoke a recovery recipient: no new envelopes are written for it. Access it already has is not revoked (an envelope keeps unwrapping the versions it covers): recovery.rotation_needed says when a key rotation is needed to cut it off from new data. Paired devices only (recipient_requires_device otherwise), with a keys step-up bound to the vault (#359); the encryption-key Export permission.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The recipient's grant_id (vault.keys.recipients.list).",
+          "generator": {
+            "attrs": [
+              "grant_id"
+            ],
+            "entity": "vault.recipient",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "grant_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "recipient_requires_device",
+        "step_up_required"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "recipient_requires_device",
+        "step_up_required"
+      ],
+      "response": [
+        {
+          "model": "VaultRecoveryRecipient",
+          "name": "recipient",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "model": "VaultRecoveryMaterial",
+          "name": "recovery",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": "VaultRecoveryRecipientRevoke",
       "step_up": "keys",
       "untyped_refusals": [],
       "variants": []
@@ -42573,5 +43450,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "a6f7dbcc6f7d12f43951e18ad9a76f711d8aef21a5d3eebe0b633610dc0defc2"
+  "ws_hash": "fccb00365d1ebe8e04da2666296e78e5023a3c541848f4207583c9fcf7c0c520"
 }

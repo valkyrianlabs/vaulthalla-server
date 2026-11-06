@@ -13,6 +13,7 @@ namespace vh::sync::events {
 
 namespace vh::sync::manifest {
     class Service;
+    class ObjectStore;
 }
 
 namespace vh::sync::model {

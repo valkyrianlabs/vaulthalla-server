@@ -144,6 +144,21 @@ std::optional<std::vector<uint8_t>> Key::attestationPublicKey(const unsigned int
     });
 }
 
+std::vector<Key::AttestationKey> Key::attestationKeys() {
+    return Transactions::exec("Key::attestationKeys", [&](pqxx::work& txn) {
+        std::vector<AttestationKey> out;
+        for (const auto row : txn.exec("SELECT id, public_key, EXTRACT(EPOCH FROM retired_at)::bigint "
+                                       "FROM key_attestation_keys ORDER BY id")) {
+            AttestationKey k{.id = row[0].as<unsigned int>(),
+                             .public_key = db::encoding::from_hex_bytea(row[1].as<std::string>()),
+                             .retired_at = std::nullopt};
+            if (!row[2].is_null()) k.retired_at = row[2].as<std::time_t>();
+            out.push_back(std::move(k));
+        }
+        return out;
+    });
+}
+
 void Key::markKeyRotationFinished(unsigned int vaultId) {
     Transactions::exec("Key::markKeyRotationFinished", [&](pqxx::work& txn) {
         txn.exec(pqxx::prepped{"mark_vault_key_rotation_finished"}, vaultId);

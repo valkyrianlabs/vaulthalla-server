@@ -109,6 +109,12 @@ namespace vh::storage {
         // or a reload from the manifest clears it.
         void markRemoteIndexRebuilt() const;
         [[nodiscard]] bool remoteIndexPublishPending() const;
+        // Recovery recipients (#370): an opaque_v1 vault's next pass republishes its manifest root (grants, envelopes).
+        void requestManifestPublish() const;
+        // Writes the KEV1 envelopes still missing for the key versions this engine holds (vault/RecoveryEnvelopes.hpp;
+        // no request when the vault has no usable recovery recipient) and, when it wrote any, requests a manifest
+        // publish. Returns how many it wrote; throws on a failed PUT. Run at the start of every sync pass.
+        unsigned ensureRecoveryEnvelopes() const;
         // Publishes a rebuilt index that applyRemoteIndexMutation did not (failed operations, an error after the
         // LIST). No-op when nothing is pending; logs instead of throwing.
         void publishPendingRemoteIndexManifest() const noexcept;
