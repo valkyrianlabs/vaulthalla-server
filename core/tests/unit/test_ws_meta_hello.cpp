@@ -48,14 +48,22 @@ std::shared_ptr<identities::User> admin(const uint32_t id, const std::string& na
     return identities::User::detached(id, std::move(state));
 }
 
-// A paired device's session without a listener (the HTTP-lane principal: same mode, same router rules).
-std::shared_ptr<Session> deviceSession() {
-    auto peer = std::make_shared<vh::device::Peer>();
-    peer->spkiHex = std::string(64, 'a');
-    peer->address = "127.0.0.1";
-    peer->deviceRowId = 1;
-    return Session::devicePrincipal(std::move(peer), admin(4301, "hello_device_owner"), [] {});
-}
+// A paired device's session without a listener (the HTTP-lane principal: same mode, same router rules). Like every
+// device principal it registers with the session manager, so it is closed (and unregistered) as its connection would
+// be when the test is done with it (#397: nothing may stay in the process-wide manager).
+struct DeviceSession {
+    std::shared_ptr<Session> session;
+    DeviceSession() {
+        auto peer = std::make_shared<vh::device::Peer>();
+        peer->spkiHex = std::string(64, 'a');
+        peer->address = "127.0.0.1";
+        peer->deviceRowId = 1;
+        session = Session::devicePrincipal(std::move(peer), admin(4301, "hello_device_owner"), [] {});
+    }
+    ~DeviceSession() { session->close(); }
+    DeviceSession(const DeviceSession&) = delete;
+    DeviceSession& operator=(const DeviceSession&) = delete;
+};
 
 // What the client sees for the refusal the handler throws.
 json refusalData(const json& payload) {
@@ -175,7 +183,8 @@ TEST(WsMetaHello, AllowedWhereMetaContractGetIs) {
     human->user = admin(4302, "hello_human");
     const auto share = std::make_shared<Session>(std::make_shared<Router>());
     share->setPendingShareSession("share-session", "share-token");
-    const auto device = deviceSession();
+    const DeviceSession paired;
+    const auto& device = paired.session;
     ASSERT_TRUE(device->isDeviceSession());
 
     EXPECT_EQ(Router::classifyCommand("meta.hello", *unauthenticated), Decision::Deny);
@@ -214,7 +223,8 @@ TEST(WsMetaHello, UnknownCommandsAreTypedOnWebAndDeviceSessions) {
     human->user = admin(4303, "unknown_human");
     EXPECT_EQ(Router::classifyCommand("frobnicate", *unauthenticated), Decision::Deny);
     EXPECT_EQ(Router::classifyCommand("frobnicate", *human), Decision::RequireHumanAuth);
-    EXPECT_EQ(Router::classifyCommand("frobnicate", *deviceSession()), Decision::Allow);
+    const DeviceSession device;
+    EXPECT_EQ(Router::classifyCommand("frobnicate", *device.session), Decision::Allow);
 }
 
 }

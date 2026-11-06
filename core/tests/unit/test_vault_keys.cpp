@@ -296,6 +296,7 @@ protected:
 
     static void TearDownTestSuite() {
         if (skipTests) return;
+        (void)runtime::Deps::releaseSessions();  // the console/device sessions this suite cached (#397)
         std::error_code ec;
         std::filesystem::remove_all(root, ec);
     }
