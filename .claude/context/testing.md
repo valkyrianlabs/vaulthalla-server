@@ -148,6 +148,18 @@ Web: `web/tests/e2e/recovery.spec.ts` (scripted ws answers; see `web-client.md`)
 | `VaultKeyCheck`, `VaultKeysDbTest` (`test_vault_keys.cpp`) | key backup (`key-backup.md`): the key-check vectors, `vault.keys.status` (rotation, recovery, missing, deleted vaults), export refused on console/agent and carrying an unfinished rotation's key, confirm (mismatch, rotation in between), CLI ↔ ws verdicts for every seeded admin role; import (`Import*`): restore + read back, wrong/damaged/other-vault/held keys refused, partial sets mid-rotation, a missing retired row, a deleted vault; revision 2: a missing key row over sealed files (no mint, unavailable in status/health, import restores) vs an empty vault (minted), a fresh rotation target accepted on its key check, a cloud vault verified against its smallest upstream object (fake bucket, price refusal, wrong key); revision 3: attested recovery, out-of-range attestation key ids, salvage (mode salvage always confirms as `vault_key_salvage`). The import document's contract model against the import's parser: `ContractModels.VaultKeyImportDocument*` / `VaultKeyAttestationKeyId*` (`contract/models_keys.cpp`, DB-free) | test DB env (the vectors and the contract tests: nothing) |
 | `DeviceParityTest` (`test_ops_parity_devices.cpp`) | `vh device` vs ws `device.*`: windows, number matching, list/rename/revoke ownership, remote switch for every seeded admin role (settings written to a private config copy) | test DB env |
 
+## WebAuthn verifier suites (#355, DB-free)
+
+| Suite (file) | Covers | Needs |
+|---|---|---|
+| `WebAuthnW3cVectors` (`test_webauthn_vectors.cpp`) | the W3C WebAuthn L3 section 16 vectors (`core/test-assets/webauthn/`, re-extract with `tools/dev/extract_w3c_webauthn_vectors.py`): every in-scope vector registers and signs in (UV `Preferred`), every UV = 0 one refuses under `Required`, out-of-scope algorithms and crossOrigin/topOrigin refuse, one-property tampering of a published ceremony | nothing |
+| `WebAuthnCeremony` (all three algorithms), `WebAuthnChecks` (ES256) (`test_webauthn_verifier.cpp`) | fresh keys from `tests/unit/webauthn/Fixtures.hpp` (test-only signer and CBOR writer): at least one negative per check of design 4.1, each on an otherwise valid, correctly signed ceremony | nothing |
+| `WebAuthnCbor`, `WebAuthnCose`, `WebAuthnAuthenticatorData`, `WebAuthnAttestationObject`, `WebAuthnClientData`, `WebAuthnBase64Url`, `WebAuthnWire`, `WebAuthnChallengeStore`, `WebAuthnRelyingParty`, `WebAuthnFuzzCorpus` (`test_webauthn_parsers.cpp`) | strict parsing, config rules, and a replay of every committed fuzz input (`core/src/auth/webauthn/fuzz/corpus/`) | nothing |
+
+libFuzzer: `tools/dev/fuzz-webauthn.sh [--seconds N] [--merge]` (clang `CXX`, `build-fuzz`, `-Dfuzz=true` builds only
+the verifier, ASan/UBSan). PR CI runs it for 60 s per target (`.github/actions/fuzz`). A crash's reproducer goes into
+the target's corpus with the fix; `--merge` folds new coverage into the committed corpus.
+
 On macOS, run DB suites on a private cluster when another checkout may be testing: `VH_TEST_PG_DIR=$TMPDIR/<name>
 VH_TEST_PG_PORT=<port> tools/macos/test-db.sh up` (two runs on one cluster drop each other's schema; agents sharing a
 scratchpad must keep the printed exports in a file only they write, or one agent's runs land on the other's cluster). Device tests

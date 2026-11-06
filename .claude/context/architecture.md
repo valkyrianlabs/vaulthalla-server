@@ -9,7 +9,9 @@ core-backend, and protocol-map docs, with stale claims corrected.
   `unity=on`, `unity_size=9`, `warning_level=3`, `werror=false`, `prefix=/usr`, meson >= 1.3.0.
   It enters C++ via `subdir('core')` and also installs `deploy/lifecycle` → `/usr/lib/vaulthalla/lifecycle`.
 - `core/meson.build`: deps `libsodium libcurl boost(filesystem) libpqxx-vh pdfium yaml-cpp spdlog fmt openssl>=3
-  libmagic libjpeg libturbojpeg pugixml zlib threads`, plus `fuse3` when the kernel bridge is built (`-Dfuse`, auto:
+  libmagic libjpeg libturbojpeg pugixml zlib threads`, the WebAuthn verifier library `vh_webauthn`
+  (`core/src/auth/webauthn/meson.build`: libcbor >= 0.10, OpenSSL, libsodium; skipped by libvaulthalla's source
+  discovery, `own_library_prefixes`; `-Dfuzz=true` builds only it and its libFuzzer targets), plus `fuse3` when the kernel bridge is built (`-Dfuse`, auto:
   required on Linux; never on macOS, where `-Dfuse=enabled` is a setup error) and the Linux-only `uuid tss2-esys tss2-tctildr tss2-rc`.
   OS-specific code lives only in `core/src/platform/{linux,darwin}/` behind `core/include/platform/*.hpp` (see
   `macos.md`); source discovery adds the host's directory and, without FUSE, swaps the four libfuse sources for
@@ -241,7 +243,7 @@ device listener device and device-pairing (see "Device listener and pairing" bel
 Only the session-lifecycle commands (`auth.login`, `auth.logout`, `auth.refresh`, `auth.isAuthenticated`) skip
 access-token validation (`isSessionLifecycleCommand`, mirrored by the web's
 `SESSION_LIFECYCLE_COMMANDS`). Every other `auth.*` command (register, user update/delete/get/list, password change)
-is account management and goes through `RequireHumanAuth`. A `starts_with("auth")` rule used to let unauthenticated
+is account management and goes through `RequireHumanAuth` (so are `auth.sessions.list|revoke`, #354). A `starts_with("auth")` rule used to let unauthenticated
 sockets reach handlers that dereference `session->user` (a remote daemon segfault); `WsAuthRouting.*` guards it.
 There is no password gate (removed in 1.8.0, with the universal default password): a valid session is fully
 authenticated. The super admin's initial-credential posture is advisory only: `auth.security.status` (human auth,
@@ -367,6 +369,21 @@ whose UID is bound to `admin` (root/system/sudo refused). Startup `retireLegacyD
 `vh!adm1n` with a generated one (file written, admin's refresh tokens revoked). `vh setup nginx` (lifecycle Python)
 warns while generated + file present and offers rotate / delete file / continue / cancel; non-TTY warns and continues.
 
+### WebAuthn verifier (`auth/webauthn/`, #355)
+
+The relying-party half of passkeys (design `docs/dev/mfa-design.md` 4.1, decision D5), not yet wired into sign-in
+(#357). Its own library with no daemon includes (`tools/contracts/test_webauthn_contract.py`), namespace
+`vh::auth::webauthn`, so it can be extracted as a `vl-*` library. `Verifier` = check 1 (`ChallengeStore`: in-memory,
+single use, 120 s, bound to ws session, `Purpose`, user and scope, burnt before any signature check) + the pure
+`verifyRegistration`/`verifyAssertion` (checks 2-14). Persistence is the caller's: `CredentialLookup` is an
+interface, and an `Outcome` says what to store (new signCount, BS) or do (`suspendCredential` on a device-bound
+counter regression, audit `counterRegression`). Parsers: `Cbor` (libcbor streaming decoder as a strict scanner, then
+`cbor_load`), `Cose`, `AuthenticatorData`, `ClientData` and `Wire` (nlohmann SAX for duplicates/depth), `Attestation`
+(none, packed self, packed x5c without chain, others as none). Crypto only through `OpenSsl` (EVP) and libsodium.
+`UserVerification::Preferred` exists for the W3C vectors only. Config `auth.webauthn.{rp_id,rp_name,origins}`
+(`config::WebAuthnConfig`, rules in `RelyingParty.hpp`) is checked on load and settings.update; the console edits
+it in Settings › Security.
+
 ### Refresh tokens and the web auth gate
 
 Refresh tokens (human and share) are HS256 JWTs minted by `auth::session::Issuer`: a libuuid random `jti` plus an
@@ -381,6 +398,29 @@ is `TEXT`. Guard: `RefreshTokenDigest*` unit tests. A cookie-authenticated HTTP 
 rehydrates from the stored row on every request (one `Transactions::read`, so revocation is immediate); the owner is
 `refresh_tokens.user_id` resolved through `identities::Manager` (a deleted account is a non-authorizing tombstone),
 and the JWT secret is cached in `crypto::secrets::Manager` (written only through it, which republishes).
+
+**Session assurance and write-once promotion (#354, migration 119; MFA design note §5.3).** `refresh_tokens` carries
+`aal` (1|2), `amr TEXT[]` (`pwd`, `hwk`, `swk`, `otp`, `rec`) and `auth_time`; rows from before read as aal 1, `{pwd}`,
+`auth_time = issued_at`. `session::Manager::promote(session, assurance::Proof)` inserts the row **once**
+(`RefreshToken::insertOnce`, `ON CONFLICT (jti) DO NOTHING`): a jti that already has a row is never promoted or
+adopted again. A socket's refresh JWT is minted at its own handshake: `Validator::validateRefreshToken` rehydrates
+**only from the stored row** (the old prior-session shortcut, which let a socket adopt another live socket's rowless
+cookie, is gone), so a planted cookie is rotated away at the handshake. `auth.login` on a socket that already has a
+user is `ops::Refused` `already_signed_in` (before any lookup; not counted by the login rate limit). The MFA policy
+hook `auth::session::assurance` (`Assurance.hpp`; no policy installed until #360) is checked against the row on every
+use: `rehydrateFromStoredRefreshToken` (handshake, validate, auth.refresh), the HTTP lanes' stored-row path, and
+`Manager::endIfBelowPolicy` on every `validate`/`renewAccessToken`/`validateRawRefreshToken`; a row below policy is
+revoked (`auth.session.revoke`, reason `assurance_policy`). `assurance::setPolicy` / `policyChanged()` bump
+`rbac::policyEpoch()`, so the 30 s cache can't hide a change. Sessions list/revoke: `ops::sessions` (own account
+only; ids are a keyed BLAKE2b of the jti under a per-process key, never the jti), ws `auth.sessions.list` /
+`auth.sessions.revoke {id} | {all_others}`; revoking revokes the rows, then `Manager::endSessionsWithRefreshJti`
+invalidates and closes every live socket holding them (the caller's after its reply), so the HTTP lanes refuse the
+cookie on the next request. Console: Account › Security › Sessions (`web/src/features/account/SessionsPanel.tsx`).
+Tabs on the sign-in page each get their own cookie (the last handshake's wins), so the console's `login()` reconnects
+first (`WsClient.reconnect`): the socket that signs in is the one that set the browser's current cookie, and a
+connection that comes up already signed in (another tab won) answers `already_signed_in`, which `login()` turns into
+`auth.refresh`. Tests: `SessionAssurance*`,
+`WsAuthRouting.AuthLoginOnASignedInSocketIsAlreadySignedIn`, `SqlDeployerHistoryDb.RefreshTokenAssurance*`.
 
 **Identities (`identities::Manager`, `core/{include,src}/identities/`).** One canonical `User`/`Group` object per id,
 handed out as the same `shared_ptr` everywhere (sessions, engines, FUSE, HTTP, S3). Each holds an immutable
@@ -533,6 +573,12 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   keystream (`crypto::util::gcmCtrDecryptAt`: plaintext offset o ↔ ciphertext offset o, counter IV‖BE32(2+o/16)).
   Keys come from `EncryptionManager::keySnapshot(version)` (immutable `crypto::SecretKey`, mlocked, wiped; rotation
   swaps pointers under a shared_mutex). `readAll()` does one authenticated pass and records the verdict.
+- **Master secrets in memory (#350).** `crypto::secrets::KeyProvider` holds its slot in `crypto::SecretBytes` (mlocked,
+  zeroed on release; `crypto/SecretBytes.hpp`) and `getMasterKey()` returns a `std::span` borrowed from it. The AES-GCM
+  helpers take key spans, so callers never copy a master into a vector; a plain copy an API insists on (decrypt output,
+  a sealer's return) goes in `crypto::WipedKeyCopy`. The share pepper and attestation seed are cached as
+  `shared_ptr<const SecretBytes>`. `crypto::setWipeObserverForTesting` and `KeyProvider::setUnsealHookForTesting` are
+  the test seams (`test_master_secret_memory.cpp`).
 - **Verify-once integrity.** `crypto::IntegrityRegistry` keys a verdict on (domain, IV, key version, dev, ino, size,
   mtime_ns) and runs one streaming tag check per key on 2 workers (capacity 8192 settled verdicts). `optimistic`
   (default, `preview.media.integrity`) serves at once and every live reader throws `IntegrityError` on its next read

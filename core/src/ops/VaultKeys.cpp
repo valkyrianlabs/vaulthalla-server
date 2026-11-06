@@ -1,6 +1,7 @@
 #include "ops/VaultKeys.hpp"
 
 #include "crypto/secrets/KeyProvider.hpp"
+#include "crypto/SecretBytes.hpp"
 #include "crypto/secrets/Dependents.hpp"
 #include "crypto/util/Gcm.hpp"
 #include "crypto/util/encrypt.hpp"
@@ -126,14 +127,12 @@ public:
             provider_.emplace(paths::testMode ? "test_vault_master" : "vault_master");
             provider_->initGuarded(crypto::secrets::dependents::vaultMaster());
         }
-        auto raw = crypto::util::decrypt_aes256_gcm(rec.encrypted_key, provider_->getMasterKey(), rec.iv);
-        if (raw.size() != crypto::util::AES_KEY_SIZE) {
-            sodium_memzero(raw.data(), raw.size());
+        const crypto::WipedKeyCopy raw(
+            crypto::util::decrypt_aes256_gcm(rec.encrypted_key, provider_->getMasterKey(), rec.iv));
+        if (raw.bytes.size() != crypto::util::AES_KEY_SIZE)
             throw std::runtime_error("the sealed key is not a 32-byte AES key");
-        }
-        if (rec.vaultId != 0) vault::attestation::backfill(rec, raw);  // records its provenance if it never was
-        auto key = std::make_shared<const crypto::SecretKey>(raw);
-        sodium_memzero(raw.data(), raw.size());
+        auto key = std::make_shared<const crypto::SecretKey>(raw.bytes);
+        if (rec.vaultId != 0) vault::attestation::backfill(rec, key->bytes());  // records its provenance if it never was
         return key;
     }
 
@@ -146,10 +145,8 @@ public:
             // unreadable until their own backups are imported; nothing that was readable becomes unreadable.
             provider_->init();
         }
-        std::vector<uint8_t> raw(key.bytes().begin(), key.bytes().end());
         std::vector<uint8_t> iv;
-        auto sealed = crypto::util::encrypt_aes256_gcm(raw, provider_->getMasterKey(), iv);
-        sodium_memzero(raw.data(), raw.size());
+        auto sealed = crypto::util::encrypt_aes256_gcm(key.bytes(), provider_->getMasterKey(), iv);
         return {std::move(sealed), std::move(iv)};
     }
 

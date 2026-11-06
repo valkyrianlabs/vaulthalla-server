@@ -106,3 +106,10 @@ option(
     value: '',
     description: 'Empty (default): the production install. A name (e.g. dev, used by `make dev`): an isolated instance whose every compiled-in location, service account, service name and CLI socket carries the name, so it never touches a production install on the same host'
 )
+
+option(
+    'fuzz',
+    type: 'boolean',
+    value: false,
+    description: 'Build only the libFuzzer targets of the WebAuthn verifier (core/src/auth/webauthn/fuzz; clang, usually with -Db_sanitize=address,undefined). Nothing else is configured or built. See tools/dev/fuzz-webauthn.sh'
+)

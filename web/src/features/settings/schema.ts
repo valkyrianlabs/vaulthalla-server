@@ -24,6 +24,8 @@ export interface FieldDef {
   hint?: string
   type: FieldKind
   restart?: boolean
+  // Shown in place of the hint once the field is changed (a consequence the operator should see before saving).
+  changeWarning?: string
 }
 
 export interface GroupDef {
@@ -194,11 +196,35 @@ export const SECTIONS: SectionDef[] = [
   },
   {
     key: 'auth',
-    label: 'Sign-in sessions',
-    description: 'How long access and refresh tokens last.',
+    label: 'Security',
+    description: 'Sign-in session lifetimes and the passkey (WebAuthn) relying party.',
     fields: [
       { key: 'access_token_expiry_minutes', label: 'Access token lifetime', type: int('minutes', 1) },
       { key: 'refresh_token_expiry_days', label: 'Refresh token lifetime', type: int('days', 1) },
+    ],
+    groups: [
+      {
+        // auth.webauthn.* (core WebAuthnConfig, #355). The daemon validates it; nothing is read from request headers.
+        key: 'webauthn',
+        label: 'Passkeys / security keys',
+        fields: [
+          {
+            key: 'rp_id',
+            label: 'Relying party ID',
+            hint: 'The host name people open this console at, e.g. vault.example.com. Never an IP address. Empty: passkeys are off.',
+            type: { kind: 'optionalText', mono: true, placeholder: 'vault.example.com' },
+            changeWarning:
+              'Passkeys and security keys registered for the current ID stop working once it changes. They are kept, not deleted; people sign in another way and register new ones.',
+          },
+          { key: 'rp_name', label: 'Name shown by authenticators', type: { kind: 'text', placeholder: 'Vaulthalla' } },
+          {
+            key: 'origins',
+            label: 'Console origins',
+            hint: 'One per line, exactly as the browser shows them: https://host or https://host:port (http://localhost:port for development), under the relying party ID.',
+            type: { kind: 'lines', placeholder: 'https://vault.example.com' },
+          },
+        ],
+      },
     ],
   },
   {

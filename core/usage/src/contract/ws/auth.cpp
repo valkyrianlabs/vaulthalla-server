@@ -22,11 +22,14 @@ std::vector<WsCommandUsage> authCommands() {
     out.push_back({
         .command = "auth.login",
         .description = "Sign in with a username and password. The access token comes back in the response envelope "
-                       "(`token`), the refresh token as an HttpOnly cookie set at the handshake.",
+                       "(`token`), the refresh token as an HttpOnly cookie set at the handshake. A connection signs in "
+                       "once: one that already has a user (signed in, or restored from its cookie) is refused with "
+                       "data.code already_signed_in; sign in again on a new connection. The session's sign-in is "
+                       "recorded as aal 1, amr [\"pwd\"] (auth.sessions.list).",
         .auth = "session",
         .payload = {str("name").gen(gen::ref("user", {"name"})), str("password")},
         .response = {authSessionUserObject().desc("The signed-in user; role permissions reduced to {qualified, value}.")},
-        .refusal_codes = {"error"},
+        .refusal_codes = {"error", "already_signed_in"},
         .operation = "auth.login",
         .client_timeout = 20s,
     });
@@ -147,6 +150,30 @@ std::vector<WsCommandUsage> authCommands() {
         .description = "Users visible to the caller, slim projection (admin_role without permissions).",
         .input = "none",
         .response = {objectArray("users", "UserSummary")},
+        .refusal_codes = opsRefusals(),
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "auth.sessions.list",
+        .description = "The caller's signed-in web sessions (one per browser: its tabs share one), most recent sign-in "
+                       "first: live, unexpired and not past the idle sign-out. Ids are opaque handles for "
+                       "auth.sessions.revoke, never the refresh token's id, and change when the daemon restarts.",
+        .input = "none",
+        .response = {objectArray("sessions", "AuthSession")},
+        .refusal_codes = opsRefusals(),
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "auth.sessions.revoke",
+        .description = "Sign out one of the caller's sessions (id from auth.sessions.list; the current one included) "
+                       "or every other one (all_others). Revoked sessions end at once: their sockets close and their "
+                       "cookies stop working for previews, downloads and uploads. Give exactly one of id and "
+                       "all_others (else invalid); an id that is not one of the caller's live sessions is not_found.",
+        .payload = {str("id").opt().gen(gen::ref("auth.session", {"id"})).desc("From auth.sessions.list."),
+                    boolean("all_others").opt().gen(gen::boolean())},
+        .response = {uinteger("revoked").desc("How many sessions were signed out.")},
         .refusal_codes = opsRefusals(),
         .client_timeout = kDefaultTimeout,
     });

@@ -137,6 +137,22 @@ std::vector<WsModel> identityModels() {
         identityWith(identityUserBase(),
                      {object("admin_role", "SessionAdminRole"), identityVaultRolesUnion("SessionVaultRole")})));
 
+    out.push_back(model("AuthSession",
+        "One of the caller's signed-in web sessions (a refresh token row, every tab of one browser shares it; #354): "
+        "ops::sessions::to_json, core/src/ops/Sessions.cpp.",
+        {str("id").desc("Opaque: names the session for auth.sessions.revoke, never the refresh token's id. Valid "
+                        "until the daemon restarts."),
+         boolean("current").desc("The session this request came in on."),
+         uinteger("aal").min(1).max(2).desc("Authenticator assurance level of its sign-in: 1 a password, 2 a second "
+                                             "factor or a passkey."),
+         strArray("amr", {"pwd", "hwk", "swk", "otp", "rec"})
+             .desc("How the sign-in was proven: pwd (password), hwk / swk (device-bound / synced passkey), otp "
+                   "(authenticator code), rec (recovery code)."),
+         integer("auth_time").desc("Unix seconds: when the person signed in."),
+         integer("last_activity_at").desc("Unix seconds: the last real use (the idle sign-out clock)."),
+         str("ip_address").desc("The address it signed in from."),
+         str("user_agent")}));
+
     out.push_back(model("RoleSummary",
         "A role's identity without its permissions (identities::to_list_json's roleSummary).",
         {uinteger("id"),

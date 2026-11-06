@@ -9,7 +9,8 @@
 #               VERIFY_WEB_BUILD=1 also builds and enforces the first-load JS budgets (web/perf-budgets.json)
 #   release     vl-release contract: vlr check + vlr version check (release.toml, staged .release/ docs)
 #   packaging   product contracts (tools/contracts: Debian packaging, maintainer scripts, migrations,
-#               release workflow) + tools/lab and tools/project tests, each with a minimum test count
+#               release workflow, encryption-claims lint of docs/README/web/src) + tools/lab and tools/project
+#               tests, each with a minimum test count
 #   lifecycle   deploy/lifecycle unit tests (minimum test count)
 #   docs        payload-markdown checker on changed docs (or all docs) + pmdocs validate
 #   shell       bash -n on changed/all bin/ and debian maintainer scripts
@@ -104,7 +105,7 @@ run_release() {
 
 run_packaging() {
   log "product contracts (tools/contracts)"
-  run_suite "tools/contracts" 188 discover -s tools/contracts -t .
+  run_suite "tools/contracts" 200 discover -s tools/contracts -t .
   log "lab tooling tests (tools/lab/tests)"
   run_suite "tools/lab/tests" 34 discover -s tools/lab/tests -t .
   log "project board tooling tests (tools/project/tests)"
@@ -166,7 +167,7 @@ infer_profiles() {
   grep -qE '^core/|^meson\.build$|^meson\.options$'            <<<"$files" && echo core
   grep -qE '^web/'                                              <<<"$files" && echo web
   grep -qE '^release\.toml$|^\.release/|^VERSION$|^meson\.build$|^web/package\.json$|^debian/changelog$|^RELEASE_NOTES\.md$|^\.github/' <<<"$files" && echo release
-  grep -qE '^debian/|^deploy/(systemd|psql|nginx)/|^core/seed/shipped_migrations\.lock$|^tools/(contracts|lab|project)/|^\.github/' <<<"$files" && echo packaging
+  grep -qE '^debian/|^deploy/(systemd|psql|nginx)/|^core/seed/shipped_migrations\.lock$|^tools/(contracts|lab|project)/|^\.github/|^docs/|^web/src/|^README\.md$' <<<"$files" && echo packaging
   grep -qE '^deploy/lifecycle/'                                 <<<"$files" && echo lifecycle
   grep -qE '^docs/|^debian/README'                              <<<"$files" && echo docs
   grep -qE '^bin/|^web/bin/|^tools/.*\.sh$|^debian/(postinst|prerm|postrm)$'   <<<"$files" && echo shell

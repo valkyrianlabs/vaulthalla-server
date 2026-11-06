@@ -6,10 +6,10 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = '799049bb18175a04a74f8728b1c348617c1eb3e1868321c538e7240eeaba36d9'
+export const WS_CONTRACT_HASH = '523f85def9d6794eba2f6baa4438b4757ce700d37b4b62d2d1282a81f8a7f007'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = '0e7099c80fe633cb2599a7f526951d1943790d94893cf33616d40fa40339913e'
+export const WS_MODELS_HASH = 'd75335fcf8465799923514c6f3987bfda145b113b5e517773a4be63ed103c3e6'
 
 // The ws protocol range this book is (core/usage WsProtocol.hpp): send it in meta.hello.
 export const WS_PROTOCOL_VERSION = 1
@@ -170,7 +170,25 @@ export interface WsModels {
   /**
    * auth.* (Config.cpp to_json(AuthConfig)); the JWT secret is never part of it.
    */
-  'AuthConfig': { access_token_expiry_minutes: number; refresh_token_expiry_days: number }
+  'AuthConfig': {
+    access_token_expiry_minutes: number
+    refresh_token_expiry_days: number
+    webauthn?: WsModels['WebAuthnConfig']
+  }
+  /**
+   * One of the caller's signed-in web sessions (a refresh token row, every tab of one browser shares it;
+   * #354): ops::sessions::to_json, core/src/ops/Sessions.cpp.
+   */
+  'AuthSession': {
+    id: string
+    current: boolean
+    aal: number
+    amr: ('pwd' | 'hwk' | 'swk' | 'otp' | 'rec')[]
+    auth_time: number
+    last_activity_at: number
+    ip_address: string
+    user_agent: string
+  }
   /**
    * Cache counters (core/src/stats/model/CacheStats.cpp to_json(CacheStatsSnapshot)).
    */
@@ -2771,6 +2789,11 @@ export interface WsModels {
     tpm_retention_window: string
   }
   /**
+   * auth.webauthn.* (Config.cpp to_json(WebAuthnConfig), #355): the passkey relying party, explicit
+   * configuration only (never derived from request headers). An empty rp_id means passkeys are unavailable.
+   */
+  'WebAuthnConfig': { rp_id: string; rp_name: string; origins: string[] }
+  /**
    * websocket_server.* (Config.cpp to_json(WebsocketConfig)).
    */
   'WebsocketServerConfig': {
@@ -2838,7 +2861,9 @@ export interface WsContract {
   }
   /**
    * Sign in with a username and password. The access token comes back in the response envelope (`token`), the
-   * refresh token as an HttpOnly cookie set at the handshake.
+   * refresh token as an HttpOnly cookie set at the handshake. A connection signs in once: one that already
+   * has a user (signed in, or restored from its cookie) is refused with data.code already_signed_in; sign in
+   * again on a new connection. The session's sign-in is recorded as aal 1, amr ["pwd"] (auth.sessions.list).
    */
   'auth.login': {
     payload: { name: string; password: string }
@@ -2872,6 +2897,25 @@ export interface WsContract {
   'auth.security.status': {
     payload: null
     response: { initial_password_file: string | null }
+  }
+  /**
+   * The caller's signed-in web sessions (one per browser: its tabs share one), most recent sign-in first:
+   * live, unexpired and not past the idle sign-out. Ids are opaque handles for auth.sessions.revoke, never
+   * the refresh token's id, and change when the daemon restarts.
+   */
+  'auth.sessions.list': {
+    payload: null
+    response: { sessions: WsModels['AuthSession'][] }
+  }
+  /**
+   * Sign out one of the caller's sessions (id from auth.sessions.list; the current one included) or every
+   * other one (all_others). Revoked sessions end at once: their sockets close and their cookies stop working
+   * for previews, downloads and uploads. Give exactly one of id and all_others (else invalid); an id that is
+   * not one of the caller's live sessions is not_found.
+   */
+  'auth.sessions.revoke': {
+    payload: { id?: string; all_others?: boolean }
+    response: { revoked: number }
   }
   /**
    * Change (own, with old_password) or reset (another user's) a password.
@@ -5627,6 +5671,8 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'auth.refresh',
   'auth.register',
   'auth.security.status',
+  'auth.sessions.list',
+  'auth.sessions.revoke',
   'auth.user.change_password',
   'auth.user.delete',
   'auth.user.get',
@@ -5905,6 +5951,8 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'auth.refresh': 15000,
   'auth.register': 15000,
   'auth.security.status': 15000,
+  'auth.sessions.list': 15000,
+  'auth.sessions.revoke': 15000,
   'auth.user.change_password': 15000,
   'auth.user.delete': 15000,
   'auth.user.get': 15000,

@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -14,7 +15,7 @@ namespace vh::platform::sealer {
 namespace file {
 
 [[nodiscard]] std::filesystem::path path(const std::filesystem::path& dir, const std::string& name);
-void seal(const std::filesystem::path& dir, const std::string& name, const std::vector<uint8_t>& secret);
+void seal(const std::filesystem::path& dir, const std::string& name, std::span<const uint8_t> secret);
 [[nodiscard]] std::vector<uint8_t> unseal(const std::filesystem::path& dir, const std::string& name);
 
 }
@@ -32,14 +33,14 @@ namespace secure_enclave {
 // Why not (the probe's error), or empty.
 [[nodiscard]] std::string unavailableReason();
 [[nodiscard]] std::filesystem::path path(const std::filesystem::path& dir, const std::string& name);
-void seal(const std::filesystem::path& dir, const std::string& name, const std::vector<uint8_t>& secret);
+void seal(const std::filesystem::path& dir, const std::string& name, std::span<const uint8_t> secret);
 [[nodiscard]] std::vector<uint8_t> unseal(const std::filesystem::path& dir, const std::string& name);
 
 }
 
 // Shared by both: write <path> atomically (sibling, full flush, rename, directory flush) as a 0600 file in a 0700
 // directory, and read one back, refusing a file that group or others can read.
-void writePrivateFile(const std::filesystem::path& path, const std::vector<uint8_t>& bytes);
+void writePrivateFile(const std::filesystem::path& path, std::span<const uint8_t> bytes);
 [[nodiscard]] std::vector<uint8_t> readPrivateFile(const std::filesystem::path& path);
 // Remove <path> if it exists and flush its directory.
 void removeDurably(const std::filesystem::path& path);

@@ -46,13 +46,14 @@ RUN apt-get update \
       g++-14 build-essential \
       debhelper devscripts dpkg-dev fakeroot \
       meson ninja-build pkg-config pandoc \
-      libfuse3-dev libsodium-dev libcurl4-openssl-dev libboost-filesystem-dev libboost-system-dev \
+      libfuse3-dev libsodium-dev libcbor-dev libcurl4-openssl-dev libboost-filesystem-dev libboost-system-dev \
       libpqxx-vh-dev libpdfium-dev libmagic-dev libmagic1 libyaml-cpp-dev libjpeg-dev libturbojpeg0-dev \
       libpugixml-dev uuid-dev libspdlog-dev libfmt-dev libtss2-dev libssl-dev zlib1g-dev libgtest-dev \
       libseccomp-dev libocct-data-exchange-dev libocct-foundation-dev libocct-modeling-algorithms-dev \
       libocct-modeling-data-dev libocct-ocaf-dev \
       libavcodec-dev libavformat-dev libavutil-dev libswresample-dev libswscale-dev \
       swtpm swtpm-tools tpm2-tools \
+      clang-18 libclang-rt-18-dev \
       gh vl-release pmdocs \
  && echo 'ALL ALL=(ALL:ALL) NOPASSWD: ALL' > /etc/sudoers.d/ci \
  && chmod 0440 /etc/sudoers.d/ci \

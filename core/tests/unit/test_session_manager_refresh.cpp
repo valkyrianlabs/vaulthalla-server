@@ -249,25 +249,4 @@ TEST_F(SessionManagerRefreshTest, InvalidateStillRevokesRuntimeOnlyAccessTokenAn
     EXPECT_TRUE(session->tokens->accessToken->revoked);
 }
 
-TEST_F(SessionManagerRefreshTest, PriorSessionRehydrationRestoresHumanMode) {
-    auto manager = std::make_shared<Manager>();
-    ScopedRuntimeSessionManager scoped(manager);
-
-    auto prior = baseSession();
-    manager->rotateRefreshToken(prior);
-    prior->setAuthenticatedUser(testUser());
-    manager->cache(prior);
-
-    const auto raw = prior->tokens->refreshToken->rawToken;
-    const auto claims = Issuer::decode(raw);
-    ASSERT_TRUE(claims);
-
-    auto reconnected = baseSession();
-
-    ASSERT_TRUE(Validator::tryRehydrateFromPriorSession(reconnected, raw, claims));
-    ASSERT_TRUE(reconnected->user);
-    EXPECT_EQ(prior->user->id, reconnected->user->id);
-    EXPECT_EQ(protocols::ws::SessionMode::Human, reconnected->mode());
-}
-
 }

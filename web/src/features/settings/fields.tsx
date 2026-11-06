@@ -331,11 +331,13 @@ export const SettingField = ({
     }
   })()
 
+  const hint =
+    changed && def.changeWarning ? <span className="text-warn">{def.changeWarning}</span> : def.hint
   return (
     <Field
       label={label}
       htmlFor={id}
-      hint={def.hint}
+      hint={hint}
       error={error ?? undefined}
       className={type.kind === 'lines' || type.kind === 'tags' ? 'sm:col-span-2' : undefined}>
       {control}

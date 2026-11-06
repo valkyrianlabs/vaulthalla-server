@@ -425,7 +425,7 @@ families in section 5.4.
 - **Never human presence:** a routine mTLS connection, a Desktop reporting that the OS checked a biometric, or any
   client flag. Only a verified signature over a fresh, single-use, server-issued challenge bound to the action,
   target and device session counts.
-- For a future E2EE design: adding a device authorized for encryption keys must also need an existing device's
+- For a future sealed-vault (device E2EE) design: adding a device authorized for encryption keys must also need an existing device's
   approval. Server-side MFA alone isn't enough. The approval key is the hook for that.
 
 ### 6.3 Approving from another channel ("approve in the console")

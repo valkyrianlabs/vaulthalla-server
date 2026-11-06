@@ -8,6 +8,8 @@ namespace vh::crypto::secrets {
 
 namespace vh::crypto {
     class ScratchFile;
+    class SecretBytes;
+    class SecretKey;
 }
 
 namespace vh::crypto::vhf1 {

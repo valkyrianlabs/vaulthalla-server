@@ -8,6 +8,7 @@
 
 #include "../helpers/identities.hpp"
 #include "platform/Fd.hpp"
+#include "auth/Manager.hpp"
 #include "auth/model/Token.hpp"
 #include "auth/model/TokenPair.hpp"
 #include "auth/session/Issuer.hpp"
@@ -37,6 +38,7 @@
 #include "protocols/ws/ShareRateLimit.hpp"
 #include "protocols/ws/Router.hpp"
 #include "protocols/ws/Session.hpp"
+#include "protocols/ws/core/handler_templates.hpp"
 #include "protocols/ws/handler/Auth.hpp"
 #include "protocols/ws/handler/rbac/roles/Admin.hpp"
 #include "rbac/role/Admin.hpp"
@@ -612,9 +614,10 @@ TEST(NoPasswordGate, AValidSessionRunsCommandsWhateverItsPassword) {
 
 constexpr std::array<std::string_view, 4> kSessionLifecycleCommands{
     "auth.login", "auth.logout", "auth.refresh", "auth.isAuthenticated"};
-constexpr std::array<std::string_view, 9> kAccountCommands{
+constexpr std::array<std::string_view, 11> kAccountCommands{
     "auth.register", "auth.user.delete", "auth.user.update", "auth.user.change_password",
-    "auth.user.get", "auth.user.get.byName", "auth.users.list", "auth.security.status", "auth.user.anything_new"};
+    "auth.user.get", "auth.user.get.byName", "auth.users.list", "auth.security.status",
+    "auth.sessions.list", "auth.sessions.revoke", "auth.user.anything_new"};
 
 TEST(WsAuthRouting, OnlySessionLifecycleCommandsSkipHumanAuth) {
     using Decision = protocols::ws::Router::CommandAuthDecision;
@@ -636,6 +639,34 @@ TEST(WsAuthRouting, OnlySessionLifecycleCommandsSkipHumanAuth) {
         EXPECT_EQ(Decision::RequireHumanAuth, protocols::ws::Router::classifyCommand(cmd, *human)) << cmd;
         EXPECT_EQ(ordinaryUnauth, protocols::ws::Router::classifyCommand(cmd, *unauth)) << cmd;
         EXPECT_EQ(ordinaryHuman, protocols::ws::Router::classifyCommand(cmd, *human)) << cmd;
+    }
+}
+
+// #354: a socket signs in once. auth.login on one that already has a user (signed in, or restored from a cookie, which
+// may have been planted) answers data.code already_signed_in, before any account is looked up or password checked.
+TEST(WsAuthRouting, AuthLoginOnASignedInSocketIsAlreadySignedIn) {
+    using Decision = protocols::ws::Router::CommandAuthDecision;
+    const auto human = std::make_shared<protocols::ws::Session>(std::make_shared<protocols::ws::Router>());
+    human->user = userWithPassword("irrelevant-for-routing");
+    ASSERT_EQ(Decision::Allow, protocols::ws::Router::classifyCommand("auth.login", *human));
+
+    const auto reply = [&] {
+        try {
+            (void)protocols::ws::handler::Auth::login(json{{"name", "someone"}, {"password", "anything"}}, human);
+        } catch (...) {
+            return protocols::ws::core::describeCurrentError();
+        }
+        return protocols::ws::core::ErrorReply{"<signed in>"};
+    }();
+    EXPECT_EQ(reply.data.value("code", std::string{}), "already_signed_in") << reply.message;
+
+    // The auth manager refuses the same way on its own (no database is needed to get there: nothing is read).
+    auth::Manager manager;
+    try {
+        manager.loginUser("someone", "anything", human);
+        ADD_FAILURE() << "signed in again";
+    } catch (const ops::Refused& e) {
+        EXPECT_EQ(e.code, auth::Manager::kAlreadySignedIn);
     }
 }
 
