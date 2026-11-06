@@ -9,7 +9,7 @@ export const WS_CONTRACT_VERSION = 3
 export const WS_CONTRACT_HASH = '523f85def9d6794eba2f6baa4438b4757ce700d37b4b62d2d1282a81f8a7f007'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = 'addb50180de8e75a09c1775851e2697d0761eac39c42b2993a0667063f24a276'
+export const WS_MODELS_HASH = 'd75335fcf8465799923514c6f3987bfda145b113b5e517773a4be63ed103c3e6'
 
 // The ws protocol range this book is (core/usage WsProtocol.hpp): send it in meta.hello.
 export const WS_PROTOCOL_VERSION = 1
@@ -170,7 +170,11 @@ export interface WsModels {
   /**
    * auth.* (Config.cpp to_json(AuthConfig)); the JWT secret is never part of it.
    */
-  'AuthConfig': { access_token_expiry_minutes: number; refresh_token_expiry_days: number }
+  'AuthConfig': {
+    access_token_expiry_minutes: number
+    refresh_token_expiry_days: number
+    webauthn?: WsModels['WebAuthnConfig']
+  }
   /**
    * One of the caller's signed-in web sessions (a refresh token row, every tab of one browser shares it;
    * #354): ops::sessions::to_json, core/src/ops/Sessions.cpp.
@@ -2784,6 +2788,11 @@ export interface WsModels {
     default_remote_conflict_policy: string
     tpm_retention_window: string
   }
+  /**
+   * auth.webauthn.* (Config.cpp to_json(WebAuthnConfig), #355): the passkey relying party, explicit
+   * configuration only (never derived from request headers). An empty rp_id means passkeys are unavailable.
+   */
+  'WebAuthnConfig': { rp_id: string; rp_name: string; origins: string[] }
   /**
    * websocket_server.* (Config.cpp to_json(WebsocketConfig)).
    */

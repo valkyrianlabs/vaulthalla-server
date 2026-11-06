@@ -18,6 +18,10 @@ inputs:
     description: Run the web test step
     default: 'false'
     required: false
+  fuzz:
+    description: Run the WebAuthn libFuzzer targets for a bounded time
+    default: 'false'
+    required: false
 
 runs:
   using: composite
@@ -31,6 +35,10 @@ runs:
     - name: Test
       if: ${{ inputs.test == 'true' }}
       uses: ./.github/actions/test
+
+    - name: Fuzz
+      if: ${{ inputs.fuzz == 'true' }}
+      uses: ./.github/actions/fuzz
 
     - name: Setup Web
       if: ${{ inputs.build_web == 'true' || inputs.test_web == 'true' }}

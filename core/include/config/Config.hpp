@@ -160,9 +160,23 @@ struct DatabaseConfig {
     int pool_size = 10;
 };
 
+// auth.webauthn.* (#355, docs/dev/mfa-design.md section 4.1): the passkey relying party. Explicit configuration only:
+// nothing is derived from Host, Origin or forwarded headers, so a misconfigured proxy can't widen it. An empty rp_id
+// means passkeys are unavailable. Rules: auth/webauthn/RelyingParty.hpp; config.yaml and settings.update both refuse
+// a value that breaks them.
+struct WebAuthnConfig {
+    std::string rp_id;
+    std::string rp_name = "Vaulthalla";
+    std::vector<std::string> origins;
+};
+
+// Throws std::invalid_argument naming the first rule a WebAuthnConfig breaks.
+void validateWebAuthn(const WebAuthnConfig& c);
+
 struct AuthConfig {
     unsigned int access_token_expiry_minutes = 60;
     unsigned int refresh_token_expiry_days = 7;
+    WebAuthnConfig webauthn;
 };
 
 struct SyncConfig {
@@ -515,6 +529,8 @@ void to_json(nlohmann::json& j, const DatabaseConfig& c);
 void from_json(const nlohmann::json& j, DatabaseConfig& c);
 void to_json(nlohmann::json& j, const AuthConfig& c);
 void from_json(const nlohmann::json& j, AuthConfig& c);
+void to_json(nlohmann::json& j, const WebAuthnConfig& c);
+void from_json(const nlohmann::json& j, WebAuthnConfig& c);
 void to_json(nlohmann::json& j, const SyncConfig& c);
 void from_json(const nlohmann::json& j, SyncConfig& c);
 void to_json(nlohmann::json& j, const StorageRatesApiConfig& c);

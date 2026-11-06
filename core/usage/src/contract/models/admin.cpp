@@ -247,7 +247,16 @@ std::vector<WsModel> adminSettingsModels() {
         "database.* (Config.cpp to_json(DatabaseConfig)); the password is never part of it.",
         {str("host"), uinteger("port").max(65535), str("name"), str("user"), integer("pool_size")}));
     out.push_back(model("AuthConfig", "auth.* (Config.cpp to_json(AuthConfig)); the JWT secret is never part of it.",
-        {uinteger("access_token_expiry_minutes"), uinteger("refresh_token_expiry_days")}));
+        {uinteger("access_token_expiry_minutes"), uinteger("refresh_token_expiry_days"),
+         object("webauthn", "WebAuthnConfig").opt()}));
+    out.push_back(model("WebAuthnConfig",
+        "auth.webauthn.* (Config.cpp to_json(WebAuthnConfig), #355): the passkey relying party, explicit configuration "
+        "only (never derived from request headers). An empty rp_id means passkeys are unavailable.",
+        {str("rp_id").desc("A lowercase host name, never an IP address; empty: passkeys unavailable. Changing it makes "
+                           "passkeys registered for the old one unusable."),
+         str("rp_name").desc("Shown by authenticators; 1..64 characters."),
+         strArray("origins").desc("Exact console origins (https://host[:port], or http://localhost:<port>) under "
+                                  "rp_id; required when rp_id is set, at most 16.")}));
     out.push_back(model("SyncConfig", "sync.* (Config.cpp to_json(SyncConfig)).",
         {uinteger("event_audit_retention_days"), uinteger("event_audit_max_entries")}));
 

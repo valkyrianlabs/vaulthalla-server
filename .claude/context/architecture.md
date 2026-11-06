@@ -9,7 +9,9 @@ core-backend, and protocol-map docs, with stale claims corrected.
   `unity=on`, `unity_size=9`, `warning_level=3`, `werror=false`, `prefix=/usr`, meson >= 1.3.0.
   It enters C++ via `subdir('core')` and also installs `deploy/lifecycle` → `/usr/lib/vaulthalla/lifecycle`.
 - `core/meson.build`: deps `libsodium libcurl boost(filesystem) libpqxx-vh pdfium yaml-cpp spdlog fmt openssl>=3
-  libmagic libjpeg libturbojpeg pugixml zlib threads`, plus `fuse3` when the kernel bridge is built (`-Dfuse`, auto:
+  libmagic libjpeg libturbojpeg pugixml zlib threads`, the WebAuthn verifier library `vh_webauthn`
+  (`core/src/auth/webauthn/meson.build`: libcbor >= 0.10, OpenSSL, libsodium; skipped by libvaulthalla's source
+  discovery, `own_library_prefixes`; `-Dfuzz=true` builds only it and its libFuzzer targets), plus `fuse3` when the kernel bridge is built (`-Dfuse`, auto:
   required on Linux; never on macOS, where `-Dfuse=enabled` is a setup error) and the Linux-only `uuid tss2-esys tss2-tctildr tss2-rc`.
   OS-specific code lives only in `core/src/platform/{linux,darwin}/` behind `core/include/platform/*.hpp` (see
   `macos.md`); source discovery adds the host's directory and, without FUSE, swaps the four libfuse sources for
@@ -366,6 +368,21 @@ daemon shell command (`setup/superAdminPassword.cpp` → `ops::users::setSuperAd
 whose UID is bound to `admin` (root/system/sudo refused). Startup `retireLegacyDefaultPassword()` replaces a pre-1.8.0
 `vh!adm1n` with a generated one (file written, admin's refresh tokens revoked). `vh setup nginx` (lifecycle Python)
 warns while generated + file present and offers rotate / delete file / continue / cancel; non-TTY warns and continues.
+
+### WebAuthn verifier (`auth/webauthn/`, #355)
+
+The relying-party half of passkeys (design `docs/dev/mfa-design.md` 4.1, decision D5), not yet wired into sign-in
+(#357). Its own library with no daemon includes (`tools/contracts/test_webauthn_contract.py`), namespace
+`vh::auth::webauthn`, so it can be extracted as a `vl-*` library. `Verifier` = check 1 (`ChallengeStore`: in-memory,
+single use, 120 s, bound to ws session, `Purpose`, user and scope, burnt before any signature check) + the pure
+`verifyRegistration`/`verifyAssertion` (checks 2-14). Persistence is the caller's: `CredentialLookup` is an
+interface, and an `Outcome` says what to store (new signCount, BS) or do (`suspendCredential` on a device-bound
+counter regression, audit `counterRegression`). Parsers: `Cbor` (libcbor streaming decoder as a strict scanner, then
+`cbor_load`), `Cose`, `AuthenticatorData`, `ClientData` and `Wire` (nlohmann SAX for duplicates/depth), `Attestation`
+(none, packed self, packed x5c without chain, others as none). Crypto only through `OpenSsl` (EVP) and libsodium.
+`UserVerification::Preferred` exists for the W3C vectors only. Config `auth.webauthn.{rp_id,rp_name,origins}`
+(`config::WebAuthnConfig`, rules in `RelyingParty.hpp`) is checked on load and settings.update; the console edits
+it in Settings › Security.
 
 ### Refresh tokens and the web auth gate
 

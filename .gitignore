@@ -28,6 +28,7 @@ providers.env
 /build/
 /build-asan/
 /build-check/
+/build-fuzz/
 /build-check-install/
 /build-install/
 /build-macos/

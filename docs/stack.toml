@@ -42,6 +42,9 @@ name = "libsodium"
 name = "OpenSSL"
 
 [[stack.security]]
+name = "libcbor"
+
+[[stack.security]]
 name = "Landlock"
 
 [[stack.security]]
