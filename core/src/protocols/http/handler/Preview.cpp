@@ -35,28 +35,11 @@ namespace {
     return value;
 }
 
-[[nodiscard]] std::string percentEncode(const std::string& value) {
-    static constexpr char hex[] = "0123456789ABCDEF";
-    std::string out;
-    out.reserve(value.size());
-    for (const unsigned char c : value) {
-        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_' ||
-            c == '.' || c == '~') {
-            out.push_back(static_cast<char>(c));
-        } else {
-            out.push_back('%');
-            out.push_back(hex[c >> 4u]);
-            out.push_back(hex[c & 0x0fu]);
-        }
-    }
-    return out;
-}
-
-[[nodiscard]] std::string previewUrl(const bool share, const uint32_t vaultId, const std::string& path, const uint32_t size) {
-    std::string url = "/preview?";
-    if (share) url += "share=1&path=" + percentEncode(path);
-    else url += "vault_id=" + std::to_string(vaultId) + "&path=" + percentEncode(path);
-    return url + "&size=" + std::to_string(size);
+// Entry ids, never names or paths (#417): thumbnail URLs land in access logs, history and Referer headers. They
+// resolve through the same Access rules as the path form (#327), with the share scope check for share links.
+[[nodiscard]] std::string previewUrl(const bool share, const uint32_t vaultId, const uint32_t entryId, const uint32_t size) {
+    std::string url = share ? "/preview?share=1" : "/preview?vault_id=" + std::to_string(vaultId);
+    return url + "&entry=" + std::to_string(entryId) + "&size=" + std::to_string(size);
 }
 
 [[nodiscard]] uint32_t batchSize(const nlohmann::json& body) {
@@ -146,7 +129,6 @@ model::preview::Response previewBatch(request&& req) {
         nlohmann::json items = nlohmann::json::array();
         struct Pending {
             std::size_t item;
-            std::string path;
             access::Target target;
         };
         std::vector<Pending> pending;
@@ -167,7 +149,7 @@ model::preview::Response previewBatch(request&& req) {
                 }
                 auto target = access::resolve(caller, itemParams, access::Need::Preview, access::Expect::File);
                 if (!preview::classify(*target.file).thumbnail) out["status"] = "unsupported";
-                else pending.push_back({items.size(), path, std::move(target)});
+                else pending.push_back({items.size(), std::move(target)});
             } catch (const access::NotFound&) {
                 out["status"] = "missing";
             } catch (const access::Forbidden&) {
@@ -197,7 +179,7 @@ model::preview::Response previewBatch(request&& req) {
                 switch (states[n]) {
                     case preview::render::ThumbnailState::Ready:
                         out["status"] = "ready";
-                        out["url"] = previewUrl(caller.share, p.target.vaultId, p.path, size);
+                        out["url"] = previewUrl(caller.share, p.target.vaultId, p.target.file->id, size);
                         break;
                     case preview::render::ThumbnailState::Failed:
                         out["status"] = "failed";   // invalid or over a limit: asking again won't help
