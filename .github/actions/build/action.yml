@@ -15,8 +15,6 @@ runs:
   # No checkout here: callers already checked out the ref under test (release.yml honors the
   # workflow_dispatch `ref` input). A nested checkout would silently reset the workspace to github.sha.
   steps:
-    - name: Sync private web icons
-      uses: ./.github/actions/sync_web_icons
     - name: Make clean
       shell: bash ./ci/run-ci bash -euo pipefail {0}
       run: make clean || true

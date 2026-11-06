@@ -118,6 +118,7 @@ The build needs the private icons (`$VAULTHALLA_WEB_ICON_SRC`, default `~/vaulth
   Heavy runners (2026-11-06): the compile-heavy `build` job runs on `vm-build-1..2` (label `ci-heavy`, VM `vl-gh-runner-home`;
   `CI_MEMORY=17g`, `CI_BUILD_JOBS=8`, 2 job slots). `runs-on` is `[self-hosted, Linux, X64, ${{ vars.CI_HEAVY_LABEL || 'ci-heavy' }}]`;
   failover: `gh variable set CI_HEAVY_LABEL --org valkyrianlabs --body vps-ci` (back to `ci-heavy` when the VM is up).
+  The licensed icon store (`/opt/ci/vaulthalla-web-icons`) exists only on the VPS: the `build` job is C++ only and the `web` job (VPS) mounts it.
   Topology and install steps: valkyrianlabs/infra `docs/ci-runners.md`.
   Light runners: the Valkyrian Labs VPS build pool (valkyrianlabs org runners labelled `vps-ci`, in the shared `ci.slice`
   CPU/memory pool; the repository moved from vaulthalla/server in 2026-10). CI targets `[self-hosted, Linux, X64, vps-ci]`

@@ -22,8 +22,6 @@ concurrency:
 # runner's cache; the licensed icon store is mounted read-only and never enters the repository.
 env:
   CI_CACHE_NAMES: ccache
-  CI_RO_MOUNTS: /opt/ci/vaulthalla-web-icons:/opt/vaulthalla-web-icons
-  VAULTHALLA_WEB_ICON_SRC: /opt/vaulthalla-web-icons
 
 jobs:
   # Pushes to main skip the build when CI already tested the exact tree they land: a merged, up-to-date pull request,
@@ -77,6 +75,10 @@ jobs:
       run:
         shell: bash ./ci/run-ci bash -euo pipefail {0}
     timeout-minutes: 30
+    # Only the web job needs the licensed icon store (mounted read-only; VPS runners only).
+    env:
+      CI_RO_MOUNTS: /opt/ci/vaulthalla-web-icons:/opt/vaulthalla-web-icons
+      VAULTHALLA_WEB_ICON_SRC: /opt/vaulthalla-web-icons
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/runner
