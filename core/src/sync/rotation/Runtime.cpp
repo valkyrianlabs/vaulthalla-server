@@ -93,6 +93,9 @@ std::optional<Remote> remoteFor(const std::shared_ptr<storage::Engine>& engine) 
             throw std::runtime_error("earlier versions could not be replayed upstream first: " +
                                      replay.error.value_or("unknown"));
         cloud->upload(file, bytes, isCiphertext);
+        // opaque_v1: the index row (and so the next manifest) names the object the bucket now holds. Path-keyed
+        // layouts are reconciled after the pass (reconcileRemoteIndex), which can't match o/<uid> rows by path.
+        if (cloud->opaqueLayout() && isCiphertext) cloud->recordOwnUpload(file);
     };
     return remote;
 }

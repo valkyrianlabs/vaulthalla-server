@@ -1233,4 +1233,58 @@ TEST_F(SqlDeployerHistoryDb, DeviceApprovalKeysMigrationIsAdditiveAndIdempotent)
     });
 }
 
+// 129 (#371, recovered key versions) on a 128-era database: one new table, nothing existing changes, the CHECKs hold,
+// a vault's removal takes its rows, and running the file again changes nothing.
+TEST_F(SqlDeployerHistoryDb, VaultKeyOriginMigrationIsAdditiveAndIdempotent) {
+    inRolledBackTxn([](pqxx::work& txn) {
+        txn.exec("DROP TABLE IF EXISTS vault_key_origin");
+        txn.exec("DELETE FROM schema_migrations WHERE filename = '129_vault_key_origin.sql'");
+        const auto vault = txn.exec("INSERT INTO vault (name, type, mount_point, uid) VALUES ('claude_test_129', 'local', "
+                                    "'claude_test_129_mount', '00000000-0000-4000-8000-000000000129') RETURNING id")
+                               .one_field_ref()
+                               .as<int>();
+
+        migseed::SqlDeployReport report;
+        ASSERT_NO_THROW(report = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(applied(report, "129_vault_key_origin.sql"));
+        EXPECT_EQ(recordedHash(txn, "129_vault_key_origin.sql"), currentHash("129_vault_key_origin.sql"));
+        EXPECT_TRUE(columnExists(txn, "vault_key_origin", "origin_node_id"));
+        EXPECT_TRUE(txn.exec("SELECT 1 FROM vault_key_origin").empty()) << "no vault gets an origin by migration";
+
+        const auto refused = [&](const std::string& values) {
+            pqxx::subtransaction sub(txn, "check");
+            try {
+                sub.exec("INSERT INTO vault_key_origin (vault_id, version, origin_node_id, origin_vault_id, "
+                         "origin_key_check, attestation_key_id, attestation_public_key, attestation, anchor) VALUES " +
+                             values,
+                         pqxx::params{vault});
+                sub.commit();
+            } catch (const pqxx::sql_error&) {
+                return true;
+            }
+            return false;
+        };
+        const std::string pk = "decode(repeat('ab', 32), 'hex')", sig = "decode(repeat('cd', 64), 'hex')";
+        const std::string check = "repeat('0', 32)";
+        EXPECT_TRUE(refused("($1, 0, 'n', 1, " + check + ", 1, " + pk + ", " + sig + ", 'kit')")) << "version >= 1";
+        EXPECT_TRUE(refused("($1, 1, 'n', 1, 'ABC', 1, " + pk + ", " + sig + ", 'kit')")) << "key check hex";
+        EXPECT_TRUE(refused("($1, 1, 'n', 1, " + check + ", 1, decode('ab', 'hex'), " + sig + ", 'kit')"))
+            << "32-byte public key";
+        EXPECT_TRUE(refused("($1, 1, 'n', 1, " + check + ", 1, " + pk + ", decode('cd', 'hex'), 'kit')"))
+            << "64-byte signature";
+        EXPECT_TRUE(refused("($1, 1, 'n', 1, " + check + ", 1, " + pk + ", " + sig + ", 'bucket')"))
+            << "anchored only by customer material";
+        EXPECT_FALSE(refused("($1, 1, 'n', 1, " + check + ", 1, " + pk + ", " + sig + ", 'kit')"));
+        EXPECT_TRUE(refused("($1, 1, 'n', 1, " + check + ", 1, " + pk + ", " + sig + ", 'export')"))
+            << "one row per version";
+        txn.exec("DELETE FROM vault WHERE id = $1", pqxx::params{vault});
+        EXPECT_TRUE(txn.exec("SELECT 1 FROM vault_key_origin").empty()) << "the rows go with their vault";
+
+        migseed::SqlDeployReport again;
+        ASSERT_NO_THROW(again = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(again.applied.empty());
+        ASSERT_NO_THROW(txn.exec(migseed::readFileToString(repoPsqlDir() / "129_vault_key_origin.sql")));
+    });
+}
+
 } // namespace vh_sql_deployer_history_test

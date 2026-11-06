@@ -155,8 +155,8 @@ Content richContent() {
                         FileRecovery{"provider_versioning", 90}};
     c.keys = {KeyRecord{1, "72e4c8b7f8ab43b8ed8869a57cef1703",
                         KeyAttestation{3, "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=", std::string(86, 'A') + "=="},
-                        "2026-10-01T00:00:00Z", "2026-11-01T00:00:00Z", std::nullopt},
-              KeyRecord{2, std::nullopt, std::nullopt, "2026-11-01T00:00:00Z", std::nullopt, std::nullopt}};
+                        "2026-10-01T00:00:00Z", "2026-11-01T00:00:00Z", std::nullopt, std::nullopt},
+              KeyRecord{2, std::nullopt, std::nullopt, "2026-11-01T00:00:00Z", std::nullopt, std::nullopt, std::nullopt}};
     c.recovery_policy = RecoveryPolicy{};
     c.entries.push_back(dirEntry(kRootUid, std::nullopt, ""));
     c.entries.push_back(dirEntry(kReportsUid, kRootUid, "Reports"));
@@ -232,7 +232,7 @@ Content smallVault(const std::size_t files, const uint8_t salt = 0) {
     Content c;
     c.producer = {"node", 1, "vaulthalla test"};
     c.recovery_policy = RecoveryPolicy{};
-    c.keys = {KeyRecord{2, std::nullopt, std::nullopt, "2026-11-01T00:00:00Z", std::nullopt, std::nullopt}};
+    c.keys = {KeyRecord{2, std::nullopt, std::nullopt, "2026-11-01T00:00:00Z", std::nullopt, std::nullopt, std::nullopt}};
     c.entries.push_back(dirEntry(kRootUid, std::nullopt, ""));
     for (std::size_t i = 0; i < files; ++i) {
         Uid u{};
@@ -362,7 +362,7 @@ TEST(ManifestDocument, RichRootSegmentAndSnapshotRoundTrip) {
     root.keys = content.keys;
     root.keys[1].envelopes = std::vector<std::string>{"abcdefghjkmnpqrstvwxyz0123"};
     root.recovery_policy = RecoveryPolicy{1, true, {Grant{"g1", std::string(64, 'b'), "customer", 1, "Recovery kit",
-                                                           "2026-11-01T00:00:00Z", "device-3", std::nullopt}}};
+                                                           "2026-11-01T00:00:00Z", "device-3", std::nullopt, std::nullopt}}};
     root.segments = {SegmentRef{uidT(0x10, 0x01), {0x00, 0x7f}, 3, std::string(64, 'c'), 900},
                      SegmentRef{uidT(0x10, 0x02), {0x80, 0xff}, 4, std::string(64, 'd'), 1200}};
     root.snapshots = {SnapshotRef{uidT(0x10, 0x03), std::string(64, 'e'), 400}};

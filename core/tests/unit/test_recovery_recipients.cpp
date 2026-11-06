@@ -38,6 +38,7 @@
 #include "seed/include/init_db_tables.hpp"
 #include "seed/include/seed_db.hpp"
 #include "stats/model/SystemHealth.hpp"
+#include "storage/CloudEngine.hpp"
 #include "storage/Engine.hpp"
 #include "storage/Manager.hpp"
 #include "storage/PlaintextReader.hpp"
@@ -116,7 +117,7 @@ public:
         std::scoped_lock lock(mutex_);
         std::vector<sync::manifest::ListedObject> out;
         for (const auto& [k, v] : objects_)
-            if (k.starts_with(prefix)) out.push_back({.key = k, .size = v.size(), .last_modified = std::nullopt});
+            if (k.starts_with(prefix)) out.push_back({.key = k, .size = v.size(), .last_modified = std::nullopt, .etag = std::nullopt});
         return out;
     }
     std::vector<sync::manifest::StoredVersion> versions(const std::string&) override { return {}; }

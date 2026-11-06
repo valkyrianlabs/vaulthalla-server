@@ -80,3 +80,4 @@ historical 720caaa27c0d51635fe3f459a8426f019d3f0dbdc0b7ae176d283309933a7f53  082
 current    968226d37b715dcbb6da14b69c3d970bdbd64603cb6fc4602fbfb7d6daa7b2bc  126_content_format.sql  unreleased
 current    c7996eab8ae866f100e6f88cfbba766e40052f1cad3205afeb880e531d5e1c9d  127_recovery_recipients.sql  unreleased
 current    d58ba91bae5a2d2be3c82374679732174103bbaeea76b98e214f0a76b34f8175  128_device_approval_keys.sql  unreleased
+current    ee437d225eae46d7eca18058b216acebf58696ef77d73c99df694320868c163f  129_vault_key_origin.sql  unreleased

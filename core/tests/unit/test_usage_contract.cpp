@@ -346,6 +346,11 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
         {"export_requires_device", {"vault.keys.export", "vault.keys.export.confirm"}},
         {"import_requires_device", {"vault.keys.import"}},
         {"recipient_requires_device", {"vault.keys.recipients.add", "vault.keys.recipients.revoke"}},
+        // #371: vault.recover's D4 refusal and the restore's own refusals (vault::recover::Refusal, ops Refused).
+        {"recover_requires_device", {"vault.recover"}}, {"salvage_required", {"vault.recover"}},
+        {"rollback", {"vault.recover"}}, {"fork", {"vault.recover"}}, {"kit_vault_mismatch", {"vault.recover"}},
+        {"export_vault_mismatch", {"vault.recover"}}, {"recovery_material_mismatch", {"vault.recover"}},
+        {"no_key_material", {"vault.recover"}}, {"vault_unknown", {"vault.recover"}},
         {"protocol_unsupported", {"meta.hello"}},
         {"already_signed_in", {"auth.login", "auth.passkey.options", "auth.passkey.login"}},
         // #357: the pending-MFA sign-in and the enrollment commands.

@@ -204,7 +204,7 @@ vh::sync::manifest::Content Manifest::collect(const uint32_t vaultId) {
         // Recovery recipients (#370, spec 03 §5.7): every grant, revoked ones too (with revoked_at), oldest first.
         mf::RecoveryPolicy policy;
         for (const auto row : txn.exec(
-                 fmt::format("SELECT grant_id, recipient_id, class, suite, label, {}, authorized_by, {} "
+                 fmt::format("SELECT grant_id, recipient_id, class, suite, label, {}, authorized_by, {}, public_key "
                              "FROM vault_recovery_grant WHERE vault_id = $1 ORDER BY added_at, grant_id",
                              iso("added_at") + " AS added_at", iso("revoked_at") + " AS revoked_at"),
                  pqxx::params{vaultId})) {
@@ -217,6 +217,7 @@ vh::sync::manifest::Content Manifest::collect(const uint32_t vaultId) {
             g.added_at = optText(row["added_at"]);
             g.authorized_by = optText(row["authorized_by"]);
             g.revoked_at = optText(row["revoked_at"]);
+            g.public_key = crypto::util::b64_encode(encoding::from_hex_bytea(row["public_key"].as<std::string>()));
             policy.grants.push_back(std::move(g));
         }
         c.recovery_policy = std::move(policy);
@@ -239,6 +240,25 @@ vh::sync::manifest::Content Manifest::collect(const uint32_t vaultId) {
                         "WHERE t.vault_id = $1 ORDER BY 1",
                         iso("k.created_at") + " AS created_at", iso("t.created_at"), iso("t.trashed_at")),
             pqxx::params{vaultId});
+        // Versions a restore recovered (#371, migration 129): where they were minted and the original attestation.
+        std::map<uint32_t, mf::KeyOrigin> origins;
+        for (const auto row : txn.exec(
+                 fmt::format("SELECT version, origin_node_id, origin_vault_id, origin_key_check, attestation_key_id, "
+                             "       attestation_public_key, attestation, {} FROM vault_key_origin WHERE vault_id = $1",
+                             iso("recovered_at") + " AS recovered_at"),
+                 pqxx::params{vaultId})) {
+            mf::KeyOrigin o;
+            o.node_id = row["origin_node_id"].as<std::string>();
+            o.vault_id = row["origin_vault_id"].as<uint64_t>();
+            o.key_check = row["origin_key_check"].as<std::string>();
+            o.attestation.key_id = row["attestation_key_id"].as<unsigned>();
+            o.attestation.public_key =
+                crypto::util::b64_encode(encoding::from_hex_bytea(row["attestation_public_key"].as<std::string>()));
+            o.attestation.signature =
+                crypto::util::b64_encode(encoding::from_hex_bytea(row["attestation"].as<std::string>()));
+            o.recovered_at = optText(row["recovered_at"]);
+            origins.emplace(row["version"].as<uint32_t>(), std::move(o));
+        }
         for (const auto row : keyRows) {
             mf::KeyRecord k;
             k.version = row["version"].as<uint32_t>();
@@ -256,13 +276,15 @@ vh::sync::manifest::Content Manifest::collect(const uint32_t vaultId) {
             if (!c.keys.empty() && c.keys.back().version == k.version) continue;  // a retired copy of the current row
             if (const auto it = envelopesByVersion.find(k.version); it != envelopesByVersion.end())
                 k.envelopes = it->second;
+            if (const auto it = origins.find(k.version); it != origins.end()) k.origin = it->second;
             c.keys.push_back(std::move(k));
         }
 
         // ---- provider versions of o/<uid> objects, by uid
         std::map<std::string, std::vector<mf::FileVersion>> versionsByUid;
         for (const auto row : txn.exec(
-                 fmt::format("SELECT object_key, version_id, key_version, size_bytes, etag, is_delete_marker, {}, {} "
+                 fmt::format("SELECT object_key, version_id, key_version, size_bytes, etag, is_delete_marker, "
+                             "encryption_iv, {}, {} "
                              "FROM upstream_object_version WHERE vault_id = $1 AND gone_at IS NULL "
                              "  AND object_key LIKE 'o/%' ORDER BY object_key, last_modified DESC NULLS LAST, version_id",
                              iso("last_modified") + " AS last_modified",
@@ -278,6 +300,8 @@ vh::sync::manifest::Content Manifest::collect(const uint32_t vaultId) {
             v.delete_marker = row["is_delete_marker"].as<bool>();
             v.last_modified = optText(row["last_modified"]);
             v.noncurrent_at = optText(row["noncurrent_at"]);
+            if (const auto iv = optText(row["encryption_iv"]); iv && vault::content::isVhf1(*iv))
+                v.generation = manifest_query_detail::hexOf(crypto::util::b64_decode(*iv));
             versionsByUid[mf::uidText(*uid)].push_back(std::move(v));
         }
 
@@ -401,12 +425,12 @@ vh::sync::manifest::Content Manifest::collect(const uint32_t vaultId) {
         }
 
         // ---- tombstones: provider versions of objects whose file is gone
-        for (auto& [uid, versions] : versionsByUid) {
+        for (const auto& [uid, versions] : versionsByUid) {
             if (liveUids.contains(uid)) continue;
             mf::Entry e;
             e.uid = uid;
             e.kind = mf::EntryKind::Tombstone;
-            e.versions = std::move(versions);
+            e.versions = versions;  // a copy: the snapshot members below still look them up
             c.entries.push_back(std::move(e));
         }
 
@@ -424,7 +448,7 @@ vh::sync::manifest::Content Manifest::collect(const uint32_t vaultId) {
             snapshots.emplace(s.id, std::move(s));
         }
         for (const auto row : txn.exec(
-                 "SELECT fv.snapshot_id, fv.path, f.object_uid, b.key_version, fv.upstream_version_id "
+                 "SELECT fv.snapshot_id, fv.path, f.object_uid, b.key_version, b.encryption_iv, fv.upstream_version_id "
                  "FROM file_versions fv JOIN recovery_snapshot rs ON rs.id = fv.snapshot_id "
                  "LEFT JOIN files f ON f.fs_entry_id = fv.file_id LEFT JOIN recovery_blob b ON b.id = fv.blob_id "
                  "WHERE rs.vault_id = $1 AND rs.state = 'ready' ORDER BY fv.snapshot_id, fv.path",
@@ -436,7 +460,18 @@ vh::sync::manifest::Content Manifest::collect(const uint32_t vaultId) {
             m.path_at_capture = row["path"].as<std::string>();
             if (const auto kv = optNum<uint32_t>(row["key_version"]); kv && *kv > 0) m.key_version = kv;
             m.provider_version_id = optText(row["upstream_version_id"]);
+            if (const auto iv = optText(row["encryption_iv"]); iv && vault::content::isVhf1(*iv))
+                m.generation = manifest_query_detail::hexOf(crypto::util::b64_decode(*iv));
+            // The bucket holds the member's generation as a provider version of its object, or as the object itself.
             m.restorable_from_bucket = m.provider_version_id.has_value();
+            if (!m.restorable_from_bucket && m.uid && m.generation) {
+                if (const auto g = objectGenerations.find(*m.uid); g != objectGenerations.end() && g->second == *m.generation)
+                    m.restorable_from_bucket = true;
+                else if (const auto vs = versionsByUid.find(*m.uid); vs != versionsByUid.end())
+                    m.restorable_from_bucket = std::ranges::any_of(vs->second, [&](const mf::FileVersion& v) {
+                        return v.generation == m.generation && !v.delete_marker;
+                    });
+            }
             it->second.members.push_back(std::move(m));
         }
         for (auto& [_, s] : snapshots) c.snapshots.push_back(std::move(s));

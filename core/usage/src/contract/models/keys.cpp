@@ -141,7 +141,17 @@ std::vector<WsModel> vaultKeyModels() {
         "ops::vault_keys::toJson(KeyStatus) needed_versions[] (core/src/ops/VaultKeys.cpp).",
         {uinteger("version"),
          vaultKeyCheck("key_check").nullable().desc("Null when this host can't read that version."),
-         vaultKeyReason(), vaultKeyAttestation("attestation")}));
+         vaultKeyReason(), vaultKeyAttestation("attestation"),
+         object("origin", "",
+                {str("node_id").desc("The node that minted the version."),
+                 uinteger("vault_id").desc("The vault's id on that node."),
+                 uinteger("key_id").desc("That node's attestation key that signed it."),
+                 str("anchor").oneOf({"kit", "export"}).desc("The customer material whose pinned key verified it."),
+                 vaultKeyTime("recovered_at")})
+             .nullable()
+             .opt()
+             .desc("Recovered by `vh vault recover` (#371): attested by its original node, verified with a key the "
+                   "customer pinned; null for versions this node minted.")}));
 
     out.push_back(model("VaultKeyStatus",
         "One vault's key backup state: ops::vault_keys::toJson(KeyStatus) (core/src/ops/VaultKeys.cpp; also "
@@ -177,6 +187,8 @@ std::vector<WsModel> vaultKeyModels() {
         "`vh vault keys export` shape (vault::model::generate_json_key_object) plus key_check and every needed "
         "version. vault.keys.import (and `vh vault keys import`) takes it back, alone or in an `all` array.",
         {vaultId(), str("vault_name"),
+         str("node_id").desc("This node's id (device_node.node_id): the node the attestations are over (#371)."),
+         str("vault_uid").nullable().desc("The vault's uid (26 base32 symbols; #371); null for a deleted vault."),
          str("key").desc("The current key, base64 (32 bytes)."),
          vaultKeyCheck("key_check").desc("The current key's key check."),
          vaultKeyAttestation("attestation").opt().desc("The current version's attestation by this node: what makes the "
@@ -258,6 +270,60 @@ std::vector<WsModel> vaultKeyModels() {
                  boolean("root_consulted").desc("The manifest root's key history supplied attestations.")})
              .opt()
              .desc("`vh vault keys import --recovery-kit` only: what the envelopes in the bucket held.")}));
+
+    out.push_back(model("VaultRecoverResult",
+        "What `vh vault recover` / vault.recover read and did (#371, spec 03 §6): ops::vault_recover::toJson "
+        "(core/src/ops/VaultRecover.cpp) over vault::recover::toJson(Plan). Public data only: key checks, attestation "
+        "verdicts and counts, never key material.",
+        {str("vault_uid").desc("The vault's uid (26 base32 symbols): the same as in the bucket."),
+         object("origin", "", {str("node_id").nullable(), uinteger("vault_id").nullable()})
+             .desc("Where the manifest was produced (the root's producer), or what the material says without one."),
+         str("vault_name").nullable().desc("The manifest's name for the vault; null in a blind rebuild."),
+         boolean("blind").desc("No usable manifest root: content recovered under /Recovered without names (§4.3)."),
+         uinteger("epoch").nullable().desc("The loaded root's epoch."),
+         str("root_sha256").nullable(),
+         str("freshness").oneOf({"unverified", "verified", "rollback_accepted"}),
+         str("freshness_report").desc("\"freshness unverified: no checkpoint supplied\" without a kit checkpoint."),
+         strArray("issues").desc("Manifest fallbacks and adjustments (segments from versions or older roots, ...)."),
+         object("counts", "",
+                {uinteger("files"), uinteger("folders"), uinteger("symlinks"), uinteger("trashed"),
+                 uinteger("tombstones"), uinteger("provider_versions"), uinteger("bytes"), uinteger("snapshots"),
+                 uinteger("snapshot_members"), uinteger("snapshot_members_restorable")}),
+         objectArray("key_versions", "",
+                     {uinteger("version"),
+                      str("verdict").oneOf({"verified", "no_anchor", "empty_anchor", "unattested", "unverified",
+                                            "wrong_node", "wrong_vault", "self_attested", "key_check_mismatch"})
+                          .desc("D1: verified = attested by the original node under a key the customer pinned."),
+                      str("detail"), boolean("held"), str("key_source").opt(),
+                      boolean("current"), boolean("needed").desc("Live files are sealed under it (or it is current)."),
+                      str("state").oneOf({"canonical", "salvage_only", "refused", "missing"}),
+                      object("anchor", "", {uinteger("key_id"), str("source").oneOf({"kit", "export"})}).opt(),
+                      object("origin", "", {str("node_id"), uinteger("vault_id"),
+                                            str("source").oneOf({"root", "origin", "export"})}).opt()}),
+         uinteger("current_version"), uinteger("highest_version_seen"),
+         intArray("canonical_versions"), intArray("blocking_versions"), intArray("salvageable_versions"),
+         strArray("orphans").desc("Uids of objects no manifest entry names, restored under /Recovered."),
+         strArray("missing_objects").desc("Uids of files whose object the bucket doesn't hold (restored unavailable)."),
+         strArray("rejected_objects").desc("Objects that did not authenticate (left untouched)."),
+         object("envelopes", "", {uinteger("listed"), uinteger("unwrapped"), uinteger("skipped"), uinteger("rejected")}),
+         object("anchors", "", {boolean("supplied"), uinteger("keys")}),
+         object("downloads", "",
+                {uinteger("manifest_bytes"), uinteger("envelope_bytes"), uinteger("header_bytes"),
+                 uinteger("content_bytes"), uinteger("other_bytes"), uinteger("gets"), uinteger("ranged_gets"),
+                 uinteger("lists"), uinteger("version_lists")})
+             .desc("What the restore read: never a file's content (content_bytes stays 0)."),
+         str("mode").oneOf({"canonical", "salvage"}),
+         uinteger("unrecoverable_files").desc("Files sealed under a version no material holds (left out)."),
+         object("restored", "",
+                {uinteger("vault_id"), uinteger("files"), uinteger("folders"), uinteger("symlinks"), uinteger("trashed"),
+                 uinteger("index_rows"), uinteger("provider_versions"), uinteger("snapshots"),
+                 uinteger("snapshot_members"), uinteger("left_out"), strArray("notes"),
+                 uinteger("fresh_version").opt()})
+             .opt()
+             .desc("What was written (absent on a dry run)."),
+         boolean("dry_run"), boolean("written"), uinteger("vault_id").nullable(), str("vault_name"),
+         boolean("key_available"), uinteger("published_epoch").nullable(),
+         object("salvage", "VaultKeySalvageReport").nullable(), str("note").nullable()}));
 
     return out;
 }

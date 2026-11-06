@@ -143,6 +143,8 @@ void Handler::registerVaultKeyHandlers(const std::shared_ptr<Router>& r) {
     r->registerPayload("vault.keys.recipients.list", &handler::VaultKeys::listRecipients);
     r->registerPayload("vault.keys.recipients.add", &handler::VaultKeys::addRecipient);
     r->registerPayload("vault.keys.recipients.revoke", &handler::VaultKeys::revokeRecipient);
+    // #371: a vault rebuilt from its bucket; a paired device only (recover_requires_device), keys step-up.
+    r->registerPayload("vault.recover", &handler::VaultKeys::recover);
 }
 
 void Handler::registerMetaHandlers(const std::shared_ptr<Router>& r) {

@@ -71,6 +71,9 @@ namespace vh::protocols::shell::commands::vault {
     // recovery.cpp: `vh vault recovery status|set|suspend|disclosure` (ops::recovery policy).
     CommandResult handle_vault_recovery(const CommandCall &call);
 
+    // `vh vault recover` (#371): a vault rebuilt from its bucket and the customer's recovery material.
+    CommandResult handle_vault_recover(const CommandCall &call);
+
     // helpers.cpp
     std::optional<unsigned int> parsePositiveUint(const std::string &s, const char *errLabel, std::string &errOut);
 

@@ -20,6 +20,9 @@ struct VaultKeys {
     static json listRecipients(const json& payload, const std::shared_ptr<Session>& session);
     static json addRecipient(const json& payload, const std::shared_ptr<Session>& session);
     static json revokeRecipient(const json& payload, const std::shared_ptr<Session>& session);
+    // vault.recover (ops::vault_recover, #371): a vault rebuilt from its bucket and the customer's recovery material,
+    // only on a paired device's session (recover_requires_device otherwise) with the keys step-up.
+    static json recover(const json& payload, const std::shared_ptr<Session>& session);
 };
 
 }

@@ -309,6 +309,66 @@ static std::shared_ptr<CommandUsage> restore(const std::weak_ptr<CommandUsage>& 
     return cmd;
 }
 
+static std::shared_ptr<CommandUsage> recover(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = buildBaseUsage(parent);
+    cmd->aliases = {"recover"};
+    cmd->effect = CommandEffect::Destructive;
+    cmd->description =
+        "Rebuild a vault on this instance from its bucket and your recovery material, after the server, database or "
+        "TPM that held it are gone (an opaque_v1 vault; design: spec 03 §6). The bucket's encrypted manifest gives back "
+        "the files, folders, symlinks, names, trash, provider versions and snapshot records; the recovery kit's seed "
+        "unwraps the vault's key envelopes (--kit), and/or a key export supplies keys (--export). A key version is "
+        "restored only when the original node's attestation of it verifies against an attestation key your kit or "
+        "export pins; anything else stops the restore with salvage_required (--dry-run shows why per version), and "
+        "--salvage then re-encrypts what the supplied keys decrypt under a fresh key this node creates, never storing "
+        "the supplied keys. Nothing is downloaded beyond headers, the manifest and envelopes until a file is read (the "
+        "vault starts in the cache strategy). The kit's checkpoint bounds rollback: an older root is refused unless "
+        "--accept-rollback. Files are read by vh on your side (- for standard input). Writes nothing with --dry-run.";
+    cmd->required = {Option::OneToMany("s3_api_key", "Name or ID of the API key that reaches the bucket", "api-key",
+                                       {"name", "id"})
+                         .withGen("name", contract::gen::ref("api_key", {"name"}))
+                         .withGen("id", contract::gen::ref("api_key", {"id"})),
+                     Option::Single("s3_bucket", "The bucket holding the vault", "bucket", "name")
+                         .withGen("name", contract::gen::pattern("vh-test-{a}{a}{a}{9}{9}"))};
+    cmd->optional = {Optional::Multi("recovery_kit",
+                                     "The recovery kit (vh-recovery kit create): its seed unwraps the vault's key "
+                                     "envelopes and its pinned attestation keys anchor them. Read on your side; - for "
+                                     "standard input",
+                                     {"kit", "recovery-kit"}, {"path"})
+                         .withGen("path", contract::gen::constant("kit.json")),
+                     Optional::Multi("key_export",
+                                     "A key export (vh vault keys export, or a Vaulthalla Desktop backup): its keys, and "
+                                     "the attestation public keys it carries as anchors. Read on your side",
+                                     {"export", "key-file"}, {"path"})
+                         .withGen("path", contract::gen::constant("keys.json")),
+                     Optional::ManyToOne("into", "The restored vault's name (default: the name in the manifest)",
+                                         {"into", "name"}, "name"),
+                     Optional::ManyToOne("vault_uid", "Which vault of the bucket (its uid; default: the kit's)",
+                                         {"vault-uid"}, "uid"),
+                     owner,
+                     Optional::ManyToOne("confirm_name", "The vault's name, confirming a salvage without a terminal",
+                                         {"confirm-name"}, "name")};
+    cmd->optional_flags = {jsonFlag,
+                           Flag::Alias("dry_run", "Read the bucket and report what a restore would do; write nothing",
+                                       "dry-run"),
+                           Flag::Alias("accept_rollback",
+                                       "Restore a manifest older than the kit's checkpoint (a possible rollback)",
+                                       "accept-rollback"),
+                           Flag::Alias("salvage",
+                                       "Versions that can't be proven: re-encrypt what their keys decrypt under a fresh "
+                                       "key; never store the supplied keys",
+                                       "salvage")};
+    cmd->examples = {
+        {"vh vault recover --api-key r2-main --bucket finance-vault --kit kit.json --dry-run",
+         "Show what a restore of the vault in bucket 'finance-vault' would recover, and how each key version is proven."},
+        {"vh vault recover --api-key r2-main --bucket finance-vault --kit kit.json",
+         "Restore it here (cache strategy; files are fetched when read)."},
+        {"vh vault recover --api-key 3 --bucket finance-vault --kit kit.json --export keys.json --into finance-restored",
+         "Use a key export too, and give the restored vault another name."}
+    };
+    return cmd;
+}
+
 static std::shared_ptr<CommandUsage> deleted(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"deleted", "trash"};
@@ -917,6 +977,7 @@ static std::shared_ptr<CommandUsage> base(const std::weak_ptr<CommandUsage>& par
     const auto createCmd = create(cmd->weak_from_this());
     const auto removeCmd = remove(cmd->weak_from_this());
     const auto restoreCmd = restore(cmd->weak_from_this());
+    const auto recoverCmd = recover(cmd->weak_from_this());
     const auto deletedCmd = deleted(cmd->weak_from_this());
     const auto infoCmd = info(cmd->weak_from_this());
     const auto updateCmd = update(cmd->weak_from_this());
@@ -1068,6 +1129,7 @@ static std::shared_ptr<CommandUsage> base(const std::weak_ptr<CommandUsage>& par
         createCmd,
         removeCmd,
         restoreCmd,
+        recoverCmd,
         deletedCmd,
         infoCmd,
         updateCmd,

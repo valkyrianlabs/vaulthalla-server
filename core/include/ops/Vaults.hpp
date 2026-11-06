@@ -132,6 +132,11 @@ struct RemovalPlan {
 // Throws NeedsConfirmation{"encryption_waiver"} when an S3 vault would be created over, or switch encryption on,
 // a bucket that already holds data, unless accept_waiver is set. The accepted waiver is recorded.
 [[nodiscard]] VaultPtr create(const Actor& actor, const Create& req);
+// `vh vault recover` (#371) creates an S3 vault from a bucket's manifest outside create(): the same checks create()
+// makes before it writes (the owner exists and the actor may create vaults for them, the name is free, the bucket name
+// is valid and unprotected, the actor may use the API key, no vault already holds that bucket with that key).
+void requireCanRecoverInto(const Actor& actor, unsigned int ownerId, unsigned int apiKeyId, const std::string& bucket,
+                           const std::optional<std::string>& name);
 [[nodiscard]] VaultPtr update(const Actor& actor, const Update& req);
 // Schedules the deletion. On a vault already pending deletion, `now` purges it on the next pass (and
 // delete_upstream, when given, replaces the earlier choice); anything else is a Conflict.

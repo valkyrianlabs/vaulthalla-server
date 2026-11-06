@@ -49,6 +49,7 @@ const std::vector<Exclusion>& exclusions() {
     static const std::vector<Exclusion> list{
         {{"vault", "key", "export"}, kKeysReason},
         {{"vault", "key", "import"}, kKeysReason},
+        {{"vault", "recover"}, kKeysReason},
         {{"vault", "key", "recipient", "add"}, kRecipientReason},
         {{"vault", "key", "recipient", "revoke"}, kRecipientReason},
         {{"secrets", "export"}, kKeysReason},

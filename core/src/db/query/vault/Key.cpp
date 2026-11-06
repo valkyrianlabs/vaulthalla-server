@@ -223,6 +223,23 @@ std::vector<unsigned int> Key::rotationPendingKeyVersions(const unsigned int vau
     });
 }
 
+std::vector<Key::Origin> Key::origins(const unsigned int vaultId) {
+    return Transactions::exec("Key::origins", [&](pqxx::work& txn) {
+        std::vector<Origin> out;
+        for (const auto row : txn.exec("SELECT version, origin_node_id, origin_vault_id, attestation_key_id, anchor, "
+                                       "EXTRACT(EPOCH FROM recovered_at)::bigint AS at FROM vault_key_origin "
+                                       "WHERE vault_id = $1 ORDER BY version",
+                                       pqxx::params{vaultId}))
+            out.push_back({.version = row["version"].as<unsigned int>(),
+                           .node_id = row["origin_node_id"].as<std::string>(),
+                           .vault_id = row["origin_vault_id"].as<uint64_t>(),
+                           .attestation_key_id = row["attestation_key_id"].as<unsigned int>(),
+                           .anchor = row["anchor"].as<std::string>(),
+                           .recovered_at = row["at"].as<std::time_t>()});
+        return out;
+    });
+}
+
 void Key::writeImported(const unsigned int vaultId, const std::vector<SealedWrite>& writes) {
     Transactions::exec("Key::writeImported", [&](pqxx::work& txn) {
         txn.exec("SELECT pg_advisory_xact_lock($1::bigint)", pqxx::params{vaultId});

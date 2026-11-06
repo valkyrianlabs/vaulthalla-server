@@ -3,6 +3,7 @@
 #include "ops/Error.hpp"
 #include "ops/RecoveryRecipients.hpp"
 #include "ops/VaultKeys.hpp"
+#include "ops/VaultRecover.hpp"
 #include "identities/User.hpp"
 #include "protocols/ws/Session.hpp"
 
@@ -112,6 +113,48 @@ json VaultKeys::revokeRecipient(const json& payload, const std::shared_ptr<Sessi
         throw ops::Invalid("grant_id is required");
     return ops::recovery_recipients::toJson(ops::recovery_recipients::revoke(
         actorOf(session), vaultId, payload.at("grant_id").get<std::string>(), channel));
+}
+
+json VaultKeys::recover(const json& payload, const std::shared_ptr<Session>& session) {
+    const auto channel = channelOf(session);
+    if (!payload.is_object()) throw ops::Invalid("vault.recover takes an object");
+    ops::vault_recover::Request req;
+    const auto str = [&](const char* name) -> std::optional<std::string> {
+        if (!payload.contains(name) || payload.at(name).is_null()) return std::nullopt;
+        if (!payload.at(name).is_string()) throw ops::Invalid(std::string(name) + " must be a string");
+        return payload.at(name).get<std::string>();
+    };
+    const auto flag = [&](const char* name) {
+        if (!payload.contains(name) || payload.at(name).is_null()) return false;
+        if (!payload.at(name).is_boolean()) throw ops::Invalid(std::string(name) + " must be a boolean");
+        return payload.at(name).get<bool>();
+    };
+    if (!payload.contains("api_key_id") || !payload.at("api_key_id").is_number_unsigned() ||
+        payload.at("api_key_id").get<uint64_t>() == 0 || payload.at("api_key_id").get<uint64_t>() > UINT32_MAX)
+        throw ops::Invalid("api_key_id is required (a positive integer)");
+    req.api_key_id = payload.at("api_key_id").get<unsigned int>();
+    req.bucket = str("bucket").value_or("");
+    if (payload.contains("kit") && !payload.at("kit").is_null()) {
+        if (!payload.at("kit").is_object()) throw ops::Invalid("kit must be a recovery kit object");
+        req.kit = &payload.at("kit");
+    }
+    if (payload.contains("export") && !payload.at("export").is_null()) {
+        if (!(payload.at("export").is_object() || payload.at("export").is_array()))
+            throw ops::Invalid("export must be a key export (one vault object, or the array of an `all` export)");
+        req.exported = &payload.at("export");
+    }
+    req.into = str("into");
+    req.vault_uid = str("vault_uid");
+    if (payload.contains("owner_id") && !payload.at("owner_id").is_null()) {
+        if (!payload.at("owner_id").is_number_unsigned() || payload.at("owner_id").get<uint64_t>() > UINT32_MAX)
+            throw ops::Invalid("owner_id must be a positive integer");
+        req.owner_id = payload.at("owner_id").get<unsigned int>();
+    }
+    req.accept_rollback = flag("accept_rollback");
+    req.dry_run = flag("dry_run");
+    req.salvage = flag("salvage");
+    req.confirm_name = str("confirm_name");
+    return ops::vault_recover::toJson(ops::vault_recover::recover(actorOf(session), req, channel));
 }
 
 }
