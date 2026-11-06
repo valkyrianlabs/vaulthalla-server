@@ -1,0 +1,4 @@
+- Release pipeline: the macOS cask smoke enables secrets.allow_development_file_backend on virtual Macs and re-runs provisioning.
+- Release pipeline: the macOS package job follows CI_MACOS_RUNNER (self-hosted Tart VMs; GitHub-hosted xcode-27 fallback).
+- Release pipeline: the release is recorded on main only after the macOS package published.
+- Release pipeline: the -O3 package build runs on the ci-heavy runners with DEB_BUILD_OPTIONS=parallel=$VH_BUILD_JOBS.
