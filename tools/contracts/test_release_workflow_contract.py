@@ -116,12 +116,19 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
 
     def test_every_release_job_runs_on_the_vps_runner_in_the_ci_container(self) -> None:
         for name, job in self.jobs.items():
-            if name in MACOS_JOBS:
+            if name in MACOS_JOBS or name == "release-artifacts":
                 continue
             with self.subTest(job=name):
                 self.assertIn(f"runs-on: {VPS_RUNNER}\n    defaults:\n      run:\n        shell: {CONTAINER_SHELL}\n", job)
                 self.assertNotRegex(job, r"(?m)^\s+shell: (?!bash \./ci/run-ci )")
                 self.assertNotIn("sudo", _code(job))
+
+    def test_the_package_build_runs_on_the_heavy_runner_sized_to_its_memory(self) -> None:
+        job = self.jobs["release-artifacts"]
+        self.assertIn("vars.CI_HEAVY_LABEL || 'ci-heavy'", job)
+        self.assertIn(f"shell: {CONTAINER_SHELL}", job)
+        # dh's default is one job per CPU; the -O3 build must use the job count ci/run-ci sized from the memory cap.
+        self.assertIn('DEB_BUILD_OPTIONS="parallel=${VH_BUILD_JOBS}', job)
 
     def test_ci_image_carries_every_build_dependency(self) -> None:
         # vlr build-deb runs dpkg-checkbuilddeps in the CI container: a Build-Depends missing from the image fails
