@@ -490,7 +490,7 @@ TEST_F(LiveR2, OpaqueObjectsCarryNoMetadataAndCostWhatSpec01Says) {
     const auto cloud = std::make_shared<storage::CloudEngine>();
     cloud->vault = s3;
     cloud->encryptionManager = em;
-    const auto data = std::make_shared<storage::s3::Controller>(apiKey(), bucket());
+    const auto data = sharedController();
     cloud->setS3ControllerForTesting(data);
     ASSERT_TRUE(data->opaqueLayout());
 
