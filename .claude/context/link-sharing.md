@@ -55,8 +55,9 @@ for archaeology, because parts of it are stale (for example, it says uploads sta
   body chunk (sliding), with a 24 h ceiling; `Coordinator::setClockForTesting` drives the tests.
 - Download `Content-Disposition` is `attachment; filename="<ASCII fallback>"; filename*=UTF-8''<pct-encoded>`
   (`Router::attachmentContentDisposition`); leading dots are kept. Single-file downloads stream with no size cap:
-  positioned reads decrypt only the requested ciphertext with the GCM CTR keystream, and the whole message is
-  authenticated once per file version (`IntegrityRegistry`, see `architecture.md` "Byte-serving spine"). Folder ZIPs
+  positioned reads authenticate only the 64 KiB VHF1 chunks they need (legacy GCM files: the requested ciphertext
+  with the GCM CTR keystream, the whole message authenticated once per file version through `IntegrityRegistry`;
+  see `architecture.md` "Byte-serving spine"). Folder ZIPs
   stream too (STORE, exact `Content-Length`, ≤ 50,000 entries, no byte cap; `architecture.md` "Folder ZIPs"), on the
   same path with share scoping and one `max_downloads` unit per logical GET. A chunked AEAD at-rest format would only be needed for
   *authenticated* random access to remote-only objects (`preview.media.remote: ranged`).

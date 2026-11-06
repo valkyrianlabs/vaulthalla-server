@@ -192,6 +192,14 @@ void File::moveFile(const FilePtr& file, const std::filesystem::path& newPath, u
     });
 }
 
+std::optional<vh::crypto::id::ObjectUid> File::objectUidByInode(const uint64_t inode) {
+    return Transactions::exec("File::objectUidByInode", [&](pqxx::work& txn) -> std::optional<vh::crypto::id::ObjectUid> {
+        const auto res = txn.exec(pqxx::prepped{"get_file_object_uid_by_inode"}, inode);
+        if (res.empty()) return std::nullopt;
+        return vh::crypto::id::fromUuid(res.one_field_ref().as<std::string>());
+    });
+}
+
 File::FilePtr File::getFileByPath(const unsigned int vaultId, const std::filesystem::path& relPath) {
     return Transactions::exec("File::getFileByPath", [&](pqxx::work& txn) -> FilePtr {
         const auto res = txn.exec(pqxx::prepped{"get_file_by_path"}, pqxx::params{vaultId, to_utf8_string(relPath.u8string())});

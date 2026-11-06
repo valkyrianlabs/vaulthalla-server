@@ -105,6 +105,15 @@ void Resumable::setSealed(const std::string& uploadId, const std::string& fileId
     });
 }
 
+void Resumable::setSealing(const std::string& uploadId, const std::string& fileId, const std::string& generation,
+                           const uint64_t sealedBytes) {
+    Transactions::exec("upload::Resumable::setSealing", [&](pqxx::work& txn) {
+        txn.exec("UPDATE upload_session_file SET encryption_iv = $3, sealed_bytes = $4 "
+                 "WHERE upload_id = $1 AND file_id = $2",
+                 pqxx::params{uploadId, fileId, generation, signedBytes(sealedBytes)});
+    });
+}
+
 // A file's state only moves forward (receiving < sealing < committing < committed | failed): a late write from a
 // slower thread never takes it back (a "sealing" landing after "committing" would make a restart re-seal a file
 // whose sealed bytes are already linked into the vault).

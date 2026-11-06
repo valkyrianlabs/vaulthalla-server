@@ -314,7 +314,10 @@ OpenedHeader openHeader(const std::span<const uint8_t> object, const Expectation
     // 2. The caller's expectations.
     if (h[kOffKind] != static_cast<uint8_t>(expect.kind)) throw Error(ErrorCode::KindMismatch);
     if (!equalCt(h + kOffVaultUid, expect.vaultUid.data(), kUidSize)) throw Error(ErrorCode::VaultMismatch);
-    if (!equalCt(h + kOffObjectUid, expect.objectUid.data(), kUidSize)) throw Error(ErrorCode::ObjectMismatch);
+    if (!expect.objectUid && !expect.generation)
+        throw std::invalid_argument("A VHF1 expectation names the object's uid, its generation or both");
+    if (expect.objectUid && !equalCt(h + kOffObjectUid, expect.objectUid->data(), kUidSize))
+        throw Error(ErrorCode::ObjectMismatch);
     if (expect.generation && !equalCt(h + kOffSalt, expect.generation->data(), kSaltSize))
         throw Error(ErrorCode::GenerationMismatch);
     const uint32_t keyVersion = readBe32(h + kOffKeyVersion);

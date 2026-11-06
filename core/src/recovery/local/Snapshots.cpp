@@ -19,6 +19,7 @@
 #include "recovery/Model.hpp"
 #include "recovery/Store.hpp"
 #include "runtime/Deps.hpp"
+#include "vault/Content.hpp"
 #include "storage/CloudEngine.hpp"
 #include "storage/Engine.hpp"
 #include "storage/Manager.hpp"
@@ -204,8 +205,8 @@ Created create(const std::shared_ptr<storage::Engine>& engine, const std::shared
             newBlobBytes += static_cast<uint64_t>(st.st_size);
             if (!storeDevice || st.st_dev != *storeDevice) copyBytes += static_cast<uint64_t>(st.st_size);
         } else if (f->size_bytes > 0 && cloud) {
-            newBlobBytes += f->size_bytes + crypto::util::AES_TAG_SIZE;
-            hydrateBytes += f->size_bytes + crypto::util::AES_TAG_SIZE;   // the hydrated copy is linked, not copied
+            newBlobBytes += vh::vault::content::newSealedSize(f->size_bytes);
+            hydrateBytes += vh::vault::content::newSealedSize(f->size_bytes);   // the hydrated copy is linked, not copied
         }
     }
     if (policy.snapshot_quota_bytes) {

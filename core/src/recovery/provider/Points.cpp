@@ -5,6 +5,7 @@
 #include "storage/CloudEngine.hpp"
 #include "vault/EncryptionManager.hpp"
 #include "vault/model/Vault.hpp"
+#include "vault/Content.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -50,6 +51,8 @@ RecoveryPoint fromRow(const db::query::recovery::ObjectVersionRow& row, const va
 
     const bool encrypted = row.encrypted.value_or(false);
     if (row.plaintext_bytes) p.size_bytes = row.plaintext_bytes;
+    else if (row.size_bytes && encrypted && row.encryption_iv)
+        p.size_bytes = vh::vault::content::plaintextSizeOfGeneration(*row.size_bytes, *row.encryption_iv);
     else if (row.size_bytes && encrypted && *row.size_bytes >= kPointGcmTagBytes) p.size_bytes = *row.size_bytes - kPointGcmTagBytes;
     else if (row.size_bytes && row.encrypted && !encrypted) p.size_bytes = row.size_bytes;
     // An observed version without metadata: its stored size is all that is known (ciphertext when it is sealed).

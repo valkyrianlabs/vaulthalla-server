@@ -33,6 +33,7 @@
 #include "sync/model/Baseline.hpp"
 #include "sync/model/RemotePolicy.hpp"
 #include "sync/tasks/Baseline.hpp"
+#include "vault/Content.hpp"
 #include "vault/EncryptionManager.hpp"
 #include "vault/model/S3Vault.hpp"
 
@@ -130,9 +131,10 @@ VersionMeta metaFromHead(const storage::s3::ObjectVersionHead& head) {
             throw NoEncryptionContext("the version is sealed but carries no IV / key version");
         m.iv = *iv;
         m.key_version = *keyVersion;
-        if (m.object_size < kRestoreGcmTag)
-            throw storage::IntegrityError("the version is shorter than its authentication tag");
-        m.plaintext_size = m.object_size - kRestoreGcmTag;
+        // The plaintext the object holds in its generation's format (legacy GCM: minus the tag; VHF1: its layout).
+        const auto plain = vh::vault::content::plaintextSizeOfGeneration(m.object_size, m.iv);
+        if (!plain) throw storage::IntegrityError("the version's size is no valid sealed object for its IV");
+        m.plaintext_size = *plain;
     } else {
         m.plaintext_size = m.object_size;
     }
@@ -441,6 +443,8 @@ PlanItem itemFor(const PlanContext& ctx, const VersionRow& v, const std::filesys
     item.destination_path = destination.string();
     const bool encrypted = v.encrypted.value_or(false);
     if (v.plaintext_bytes) item.size_bytes = v.plaintext_bytes;
+    else if (v.size_bytes && encrypted && v.encryption_iv)
+        item.size_bytes = vh::vault::content::plaintextSizeOfGeneration(*v.size_bytes, *v.encryption_iv);
     else if (v.size_bytes) item.size_bytes = encrypted && *v.size_bytes >= kRestoreGcmTag ? *v.size_bytes - kRestoreGcmTag
                                                                                          : *v.size_bytes;
     if (v.origin != "vaulthalla")
@@ -553,8 +557,8 @@ void tally(Plan& plan, const storage::CloudEngine& engine) {
         } else {
             e.get_requests += 1;
             e.put_requests += 1;
-            e.download_bytes += bytes + kRestoreGcmTag;
-            e.upload_bytes += bytes + kRestoreGcmTag;
+            e.download_bytes += vh::vault::content::newSealedSize(bytes);
+            e.upload_bytes += vh::vault::content::newSealedSize(bytes);
         }
         // The remote index manifest is republished once per restored item (conditional PUT + HEADs).
         e.put_requests += 1;
@@ -772,7 +776,7 @@ RestoreOutcome restore(const std::shared_ptr<storage::CloudEngine>& engine, cons
     if (srcKey == destKey && row->is_latest) return result("skipped", "this is already the current version");
 
     // Price preflight for the worst case (HEAD + COPY, or GET + PUT, + the index manifest) before any request.
-    const uint64_t objectBytes = row->size_bytes.value_or(row->plaintext_bytes.value_or(0) + d::kRestoreGcmTag);
+    const uint64_t objectBytes = row->size_bytes.value_or(vh::vault::content::newSealedSize(row->plaintext_bytes.value_or(0)));
     std::optional<metering::PriceReservation> price;
     try {
         sync::model::S3CostEstimate planned;
@@ -926,16 +930,15 @@ RestoreOutcome restore(const std::shared_ptr<storage::CloudEngine>& engine, cons
 
         std::string ivB64;
         unsigned int keyVersion = 0;
-        std::optional<crypto::util::GcmStreamEncryptor> sealer;
-        std::array<uint8_t, crypto::util::AES_IV_SIZE> freshIv{};
+        std::optional<vh::vault::content::Sealer> sealer;
         if (!meta.encrypted) {
-            // Plaintext upstream: sealed on the fly, never on disk in the clear.
+            // Plaintext upstream: sealed on the fly as a new VHF1 generation, never on disk in the clear.
             const auto current = engine->encryptionManager->currentKey();
-            if (sodium_init() < 0) throw std::runtime_error("libsodium init failed");
-            randombytes_buf(freshIv.data(), freshIv.size());
-            ivB64 = crypto::util::b64_encode(std::vector<uint8_t>(freshIv.begin(), freshIv.end()));
             keyVersion = current.version;
-            sealer.emplace(current.key->bytes(), crypto::util::GcmIv(freshIv.data(), freshIv.size()));
+            sealer.emplace(*current.key, current.version, engine->encryptionManager->vaultUid(),
+                           dest && dest->object_uid ? *dest->object_uid : crypto::id::newObjectUid(),
+                           [&](const std::span<const uint8_t> bytes) { fetched.write(bytes); });
+            ivB64 = sealer->generation();
         }
         {
             s3::S3RequestBudget cap;
@@ -947,13 +950,8 @@ RestoreOutcome restore(const std::shared_ptr<storage::CloudEngine>& engine, cons
             const auto got = engine->streamObjectVersion(
                 srcKey, row->version_id, meta.etag.empty() ? std::nullopt : std::make_optional(meta.etag),
                 meta.object_size, [&](const std::span<const uint8_t> bytes) {
-                    if (sealer) {
-                        buf.resize(bytes.size());
-                        sealer->update(bytes, buf);
-                        fetched.write(buf);
-                    } else {
-                        fetched.write(bytes);
-                    }
+                    if (sealer) sealer->write(bytes);
+                    else fetched.write(bytes);
                 });
             if (got.body_bytes != meta.object_size)
                 throw std::runtime_error(fmt::format("the provider returned {} of {} bytes", got.body_bytes, meta.object_size));
@@ -962,21 +960,27 @@ RestoreOutcome restore(const std::shared_ptr<storage::CloudEngine>& engine, cons
         std::optional<d::RestoreTemp> resealed;
         d::RestoreTemp* sealedFile = &fetched;
         if (sealer) {
-            const auto tag = sealer->finish();
-            fetched.write(tag);
+            sealer->finish();
         } else if (meta.key_version == currentKeyVersion) {
-            // Sealed under the current key: the bytes are reused as they are (same IV for the same plaintext).
+            // Sealed under the current key: the bytes are reused as they are (same generation for the same
+            // plaintext), once they authenticate in their format (legacy GCM or VHF1).
             const auto key = engine->encryptionManager->keySnapshot(meta.key_version);
-            const auto raw = crypto::util::b64_decode(meta.iv);
-            if (raw.size() != crypto::util::AES_IV_SIZE) throw storage::IntegrityError("the version's IV is malformed");
-            if (!crypto::util::gcmVerifyFd(fetched.fd(), 0, meta.plaintext_size, key->bytes(),
-                                           crypto::util::GcmIv(raw.data(), raw.size())))
+            try {
+                if (vh::vault::content::formatOf(meta.iv) == vh::vault::content::Format::Plain)
+                    throw std::invalid_argument("no generation");
+            } catch (const std::invalid_argument&) {
+                throw storage::IntegrityError("the version's IV is malformed");
+            }
+            if (!vh::vault::content::verifyFd(fetched.fd(), meta.plaintext_size,
+                                          {.vaultUid = engine->encryptionManager->vaultUid(), .generation = meta.iv,
+                                           .keyVersion = meta.key_version},
+                                          *key))
                 throw storage::IntegrityError("the version failed authentication; nothing was restored");
             ivB64 = meta.iv;
             keyVersion = meta.key_version;
         } else {
-            // Sealed under a retired key: streamed GCM decrypt (old key) → encrypt (current key, fresh IV); committed
-            // only once the old tag verified.
+            // Sealed under a retired key: streamed open (old key, either format) → a new VHF1 generation under the
+            // current key; committed only once the old generation authenticated.
             fetched.sync();
             resealed.emplace(dir, ".sealed");
             resealed->closeFd();

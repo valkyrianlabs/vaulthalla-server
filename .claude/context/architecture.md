@@ -607,10 +607,14 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
     byte (decrypting the stored part, or the sealed file once the part is sealed): 200 or 409 `part_conflict`. No
     plaintext digest is stored; the answer's `sha256` is computed in memory.
   - A per-file **sealing cursor** (worker pool `transfer.commit_workers`) decrypts the stored parts in order and
-    re-encrypts them through the file's GCM stream into `<ord>.sealed` (+ BLAKE2b content hash, passed to
-    `createFile` through `SealedContent::content_hash`); `sealed_bytes` checkpoints (≤ 256 MiB, and every pass)
-    let consumed part files go. After a restart the cursor reads the sealed prefix back (it must re-encrypt to the
-    same bytes) and truncates the rest. Commit: `Filesystem::createFile{overwrite=true, expected_source_id = "" or
+    seals them as VHF1 into `<ord>.sealed` (#367, `vault::content::PrefixSealer`: whole 64 KiB chunks as soon as
+    they are complete, the last one final; the partial tail chunk held in memory; + BLAKE2b content hash, passed to
+    `createFile` through `SealedContent::content_hash`); `sealed_bytes` checkpoints (whole chunks; ≤ 256 MiB, and
+    every pass) let part files the prefix covers completely go. After a restart the cursor authenticates the
+    recorded prefix (never re-encrypts); bytes past it, or stored bytes that differ from what was sealed for their
+    range, make the sealing continue under a fresh salt (`<ord>.sealed.resalt` → `setSealing` → rename), so no index
+    is sealed twice under one salt. Uploads created before #367 (12-byte IV) keep the legacy GCM cursor, which reads
+    the sealed prefix back (it must re-encrypt to the same bytes) and truncates the rest. Commit: `Filesystem::createFile{overwrite=true, expected_source_id = "" or
     the if_match generation, sealed = link(spool → dst), copy on EXDEV/EPERM}` under `upload::CreateClaim` (shared
     with `PUT /upload/content`), authorized again as the user is now (share: principal re-resolved, committed as the
     link creator). A target that appeared meanwhile fails the file (`already_exists` / `precondition_failed`), never
@@ -628,12 +632,17 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
 
 - **Positioned reads.** `storage::Engine::openPlaintextReader(file, ReaderOptions)` is the single funnel for every
   byte consumer (HTTP, media, models, text, thumbnails, converter input). `storage::Generation` identifies one content
-  version: `sourceId()` = IV (changes on every write; rename/move keep it), `plain:0` for an empty file and
+  version: `sourceId()` = the generation id (VHF1: the header salt; legacy: the GCM IV; changes on every write;
+  rename/move keep it), `plain:0` for an empty file and
   `plain:<size>:<updated_at>` for an unencrypted legacy file. **Entry versions (#257):** fs entry JSON carries
   `content_version` (files: exactly `Generation::etag()`, the `/download/content` ETag) and `metadata_version` (every
   entry: `fs::model::metadataVersion`, a hash of vault, parent, name, mode, owner, group and updated_at; not a counter,
   so it can't disagree with the fields in the same reply), both set by the Entry base serializer. Entry ids survive
-  rename and move (`FsEntryVersionsDbTest`). `GcmFileReader` preads only the requested ciphertext and decrypts with the GCM CTR
+  rename and move (`FsEntryVersionsDbTest`). `openLocalReader` dispatches on the format (`vault::content::isVhf1`): a VHF1
+  generation gets `storage::Vhf1FileReader` (whole 64 KiB chunks authenticated before any byte of them is returned,
+  the catalog's size as the authenticated object size, header bound to vault uid + salt + key version, failures
+  sticky for the reader and the generation; no optimistic/strict distinction and no CTR keystream); a legacy one
+  `GcmFileReader`, which preads only the requested ciphertext and decrypts with the GCM CTR
   keystream (`crypto::util::gcmCtrDecryptAt`: plaintext offset o ↔ ciphertext offset o, counter IV‖BE32(2+o/16)).
   Keys come from `EncryptionManager::keySnapshot(version)` (immutable `crypto::SecretKey`, mlocked, wiped; rotation
   swaps pointers under a shared_mutex). `readAll()` does one authenticated pass and records the verdict.
@@ -650,12 +659,25 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   logged on the crypto channel); a replacement during verification is `Superseded`, not corruption.
 - **Remote-only files** (cloud vaults without a local copy) follow `preview.media.remote`: `hydrate` (default: whole
   object once, metered/budgeted, verified, local ciphertext kept), `ranged` (opt-in metered ranged GETs pinned to the
-  object version, no per-range authentication), `off` (`storage::ContentUnavailable` → HTTP 503
+  object version; a VHF1 object's header is fetched and authenticated at open and every window is whole chunks
+  authenticated before use; a legacy GCM object has no per-range authentication), `off` (`storage::ContentUnavailable` → HTTP 503
   `content_unavailable`). Grid thumbnails always use `off`. Chunked AEAD at rest would only be needed for
   *authenticated* random access to remote-only objects.
+- **VHF1 at rest (#367).** Every new content generation is VHF1: `EncryptionManager` writes (encrypt,
+  encryptToFile, reseal, rotation), FUSE seals, `createFile`, the resumable sealing cursor
+  (`vault::content::PrefixSealer`), hydrate-and-seal of plaintext objects, provider restores and key salvage.
+  `vault/Content.hpp` is the one place that tells the formats apart: by the generation id's length (12-byte IV =
+  legacy `gcm0`, 32-byte salt = `vhf1`, empty = `plain`; `files.content_format` / `recovery_blob.content_format`,
+  migration 125, are generated from it), with sealed-size math, dispatching readers (`openBuffer`, `openFileTo`,
+  `verifyFd`, `StreamOpener`) and the VHF1 sealer. Readers bind a VHF1 object to the vault uid, the recorded salt and
+  key version (the object uid when the caller holds it: path_v0 rows can be indexed from a listing before their
+  object is read, and the 256-bit salt binds the object to the row on its own). Empty files stay zero bytes with no
+  generation locally; uploaded, an empty file is one 136-byte VHF1 object. Legacy GCM files keep reading and are only
+  rewritten when their content is (an overwrite, a rotation, a restore under an older key); #372 converts the rest.
+  A contract test (`Vhf1AtRestTest.IntegrityContract*`, counter `crypto::util::gcmCtrDecryptAtCallsForTesting`)
+  proves no VHF1 read reaches `gcmCtrDecryptAt`.
 - **VHF1 codec** (`crypto::vhf1`, `core/include/crypto/vhf1/{Format,Writer,Reader}.hpp`; #365, spec
-  `design/encryption/02-authenticated-file-format.md`). A pure library, not yet wired into any read or write path
-  (that is #367/WS2-b): the 120-byte header (HMAC-SHA-256 tag), per-sealing HKDF-SHA-256 keys from vault key + salt,
+  `design/encryption/02-authenticated-file-format.md`). The library under VHF1 at rest: the 120-byte header (HMAC-SHA-256 tag), per-sealing HKDF-SHA-256 keys from vault key + salt,
   64 KiB AES-256-GCM chunks with AAD = header hash ‖ index ‖ final flag, a streaming `Writer` (final-chunk hold-back),
   `open()` / `ChunkWalker` (whole and streamed reads, only authenticated chunks reach the sink) and `RangeReader`
   (authenticated object size required, sticky failure). Errors are `vhf1::Error` with the spec's codes in the §3.6
@@ -715,7 +737,8 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   encryption and I/O for an n-part file, and a part acknowledged as durable must survive a restart, which a working
   copy (process-key ciphertext) does not.
 - **Vault bytes are always ciphertext at rest; the mount is the decrypting view (#173).** Every backing file (local
-  vaults and cloud vaults' local copies) is AES-256-GCM body‖16-byte tag, IV and key version in `files`, and
+  vaults and cloud vaults' local copies) is VHF1 (#367; files written before it: AES-256-GCM body‖16-byte tag), its
+  generation id and key version in `files`, and
   `files.size_bytes` is the *plaintext* size. Derived preview artifacts are encrypted too (`VHDERIV1`, see
   "Byte-serving spine"); the legacy plaintext `<cacheRoot>/thumbnails` and `<cacheRoot>/files` trees are deleted by
   `preview::cache::Store::sweep` at startup. The HTTP lanes never write plaintext. FUSE `open` decrypts into a

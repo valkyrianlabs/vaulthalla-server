@@ -26,6 +26,7 @@
 #include "storage/Engine.hpp"
 #include "storage/Manager.hpp"
 #include "storage/PlaintextReader.hpp"
+#include "vault/Content.hpp"
 #include "vault/EncryptionManager.hpp"
 #include "vault/model/Vault.hpp"
 
@@ -159,7 +160,9 @@ TEST_F(RecoveryKeysTest, ResealFileMovesAnOldGenerationUnderTheCurrentKey) {
     EXPECT_EQ(f->encrypted_with_key_version, 5u);
     EXPECT_FALSE(f->encryption_iv.empty());
     EXPECT_NE(f->encryption_iv, iv);
-    EXPECT_EQ(stdfs::file_size(dir / "sub" / "sidecar"), sealed.size());
+    // A re-seal is a new VHF1 generation (#367): its id is a salt, its size the VHF1 size of the plaintext.
+    EXPECT_TRUE(vault::content::isVhf1(f->encryption_iv));
+    EXPECT_EQ(stdfs::file_size(dir / "sub" / "sidecar"), vault::content::newSealedSize(plaintext.size()));
     EXPECT_EQ(stdfs::status(dir / "sub" / "sidecar").permissions() & stdfs::perms::all,
               stdfs::perms::owner_read | stdfs::perms::owner_write);
 
@@ -167,10 +170,18 @@ TEST_F(RecoveryKeysTest, ResealFileMovesAnOldGenerationUnderTheCurrentKey) {
     EXPECT_EQ(em->decrypt(slurp(dir / "sub" / "sidecar"), f->encryption_iv, f->encrypted_with_key_version), plaintext);
     EXPECT_EQ(slurp(dir / "blob"), sealed);
 
-    // The util directly, back the other way.
+    // The content layer directly, back the other way: VHF1 in, VHF1 out under another key.
     const crypto::SecretKey oldKey(k5), newKey(k3);
-    const auto backIv = cu::resealFile(dir / "sub" / "sidecar", oldKey, f->encryption_iv, dir / "back", newKey);
-    EXPECT_EQ(cu::decrypt_aes256_gcm(slurp(dir / "back"), k3, cu::b64_decode(backIv)), plaintext);
+    const auto uid = vault::EncryptionManager::testVaultUid(7);
+    const auto back = vault::content::resealFile(dir / "sub" / "sidecar",
+                                                 {.vaultUid = uid, .generation = f->encryption_iv, .keyVersion = 5},
+                                                 oldKey, dir / "back", newKey, 3, *f->object_uid);
+    EXPECT_EQ(vault::content::openBuffer(slurp(dir / "back"), {.vaultUid = uid, .generation = back, .keyVersion = 3},
+                                         newKey),
+              plaintext);
+    // The legacy util still re-seals legacy GCM (it has no VHF1 callers).
+    const auto legacyIv = cu::resealFile(dir / "blob", crypto::SecretKey(k2), iv, dir / "legacy", newKey);
+    EXPECT_EQ(cu::decrypt_aes256_gcm(slurp(dir / "legacy"), k3, cu::b64_decode(legacyIv)), plaintext);
 }
 
 TEST_F(RecoveryKeysTest, ResealOfATamperedSourceThrowsIntegrityErrorAndLeavesNothing) {
@@ -233,12 +244,12 @@ TEST_F(RecoveryKeysTest, EmptyGenerationsKeepTheirRepresentation) {
     EXPECT_FALSE(stdfs::exists(dir / "plain.out"));
     EXPECT_THROW((void)em->resealToCurrent({'h', 'i'}, "", 0, f), std::invalid_argument);
 
-    // A sealed empty message (just a tag) re-seals to another sealed empty message.
+    // A sealed empty message (just a tag) re-seals to a sealed empty VHF1 object (one empty final chunk).
     const auto [sealed, iv] = seal({}, k2);
     ASSERT_EQ(sealed.size(), cu::AES_TAG_SIZE);
     spit(dir / "tag-only", sealed);
     em->resealFileToCurrent(dir / "tag-only", iv, 2, dir / "tag-only.out", f);
-    EXPECT_EQ(stdfs::file_size(dir / "tag-only.out"), cu::AES_TAG_SIZE);
+    EXPECT_EQ(stdfs::file_size(dir / "tag-only.out"), 136u);
     EXPECT_EQ(f->encrypted_with_key_version, 5u);
     EXPECT_TRUE(em->decrypt(slurp(dir / "tag-only.out"), f->encryption_iv, 5).empty());
 }

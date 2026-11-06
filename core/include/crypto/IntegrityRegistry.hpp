@@ -8,6 +8,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -77,6 +78,10 @@ public:
 
     // Records an out-of-band verdict (e.g. a full authenticated read that just checked the tag).
     void record(const IntegrityKey& key, bool verified);
+
+    // The verdict recorded for key, if any (never schedules a verification): VHF1 readers authenticate per chunk
+    // themselves and only consult and record verdicts.
+    [[nodiscard]] std::optional<IntegrityState> peek(const IntegrityKey& key) const;
 
     [[nodiscard]] Stats stats() const;
     void clearForTesting();

@@ -12,6 +12,7 @@
 #include "storage/PlaintextReader.hpp"
 #include "storage/s3/Controller.hpp"
 #include "sync/ConflictResolver.hpp"
+#include "vault/Content.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -59,7 +60,7 @@ void harden(string_response& res, const std::string& mime, const std::string& na
 [[nodiscard]] model::preview::Response remote(const request& req, const ops::conflicts::PreviewTarget& t) {
     const auto& recorded = t.record.remote;
     const auto mime = recorded.mime_type.value_or(t.file->mime_type.value_or("application/octet-stream"));
-    if (recorded.size_bytes > kConflictPreviewMaxBytes + 16) return tooLarge(req, kConflictPreviewMaxBytes);
+    if (recorded.size_bytes > vh::vault::content::newSealedSize(kConflictPreviewMaxBytes)) return tooLarge(req, kConflictPreviewMaxBytes);
 
     string_response res{status::ok, req.version()};
     res.keep_alive(req.keep_alive());

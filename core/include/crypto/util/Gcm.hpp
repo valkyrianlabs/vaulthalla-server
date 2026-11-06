@@ -22,6 +22,9 @@ using GcmTag = std::array<uint8_t, AES_TAG_SIZE>;
 // Decrypts `ciphertext`, the bytes found at plaintext offset `plaintextOffset`, into `out` (same length, may
 // alias). This is positioned decryption WITHOUT authentication: callers pair it with a whole-message
 // verification (crypto::IntegrityRegistry) before trusting the bytes.
+// Tests (IntegrityContract, #367): how many times gcmCtrDecryptAt ran in this process. VHF1 reads never reach it.
+[[nodiscard]] uint64_t gcmCtrDecryptAtCallsForTesting();
+
 void gcmCtrDecryptAt(GcmKey key, GcmIv iv, uint64_t plaintextOffset,
                      std::span<const uint8_t> ciphertext, std::span<uint8_t> out);
 

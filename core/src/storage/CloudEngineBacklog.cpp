@@ -1,6 +1,7 @@
 // Local versioning's upstream backlog: replaying one retained generation (recovery/local/Backlog.cpp drives it).
 
 #include "storage/CloudEngine.hpp"
+#include "vault/Content.hpp"
 
 #include "crypto/util/encrypt.hpp"
 #include "db/query/recovery/Generation.hpp"
@@ -64,15 +65,15 @@ std::optional<std::string> CloudEngine::uploadGeneration(const std::filesystem::
         }
         std::vector<uint8_t> plaintext;
         const BacklogWipeOnExit wipePlaintext{plaintext};
-        {
-            std::vector<uint8_t> raw(secret->bytes().begin(), secret->bytes().end());
-            const BacklogWipeOnExit wipeKey{raw};
-            try {
-                plaintext = crypto::util::decrypt_aes256_gcm(vh::fs::ops::readFileToVector(blob), raw,
-                                                             crypto::util::b64_decode(*generation.encryption_iv));
-            } catch (const std::exception& e) {
-                throw IntegrityError(std::string("the retained generation failed authentication: ") + e.what());
-            }
+        try {
+            // Whatever format the generation was sealed in (legacy GCM or VHF1), authenticated as a whole.
+            plaintext = vh::vault::content::openBuffer(
+                vh::fs::ops::readFileToVector(blob),
+                {.vaultUid = encryptionManager->vaultUid(), .generation = *generation.encryption_iv,
+                 .keyVersion = *generation.key_version},
+                *secret);
+        } catch (const std::exception& e) {
+            throw IntegrityError(std::string("the retained generation failed authentication: ") + e.what());
         }
 
         auto own = noteOwnWrite(key, false, plaintext.size(), file);

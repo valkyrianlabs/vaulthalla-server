@@ -32,6 +32,7 @@
 #include "identities/Group.hpp"
 #include "fuse/WorkingCopies.hpp"
 #include "recovery/local/Versions.hpp"
+#include "vault/Content.hpp"
 
 #include <ranges>
 #include <set>
@@ -45,6 +46,7 @@
 #include <system_error>
 #include <ctime>
 #include <paths.h>
+#include <fmt/format.h>
 
 using namespace vh::storage;
 using namespace vh::vault::model;
@@ -622,7 +624,7 @@ int Filesystem::copy(const CopyContext& ctx) {
                     return -EIO;
                 }
                 // The hydrated source copy and the new one both count against the quota.
-                required += 2 * (file->size_bytes + vh::crypto::util::AES_TAG_SIZE);
+                required += 2 * vh::vault::content::newSealedSize(file->size_bytes);
             }
         }
 
@@ -1027,6 +1029,10 @@ std::shared_ptr<File> Filesystem::createFile(const NewFileContext& ctx) {
         ? mimeTypeOf(*ctx.source, ctx.path)
         : (ctx.buffer.empty() ? inferMimeTypeFromPath(ctx.path) : Magic::get_mime_type_from_buffer(ctx.buffer));
     f->size_bytes = ctx.source ? ctx.source->size : ctx.buffer.size();
+
+    // The object uid the row will carry, so the VHF1 header names it: a row this one replaces (same inode: the same
+    // file written again) keeps its uid (db::query::fs::File::upsertFile), anything else draws a new one when sealed.
+    if (f->inode) f->object_uid = db::query::fs::File::objectUidByInode(*f->inode);
 
     // A new file at a fresh alias. Created exclusively or replaced by rename, never written in place: a retained
     // generation may share an existing backing inode (recovery.md, "Local storage").
@@ -1595,9 +1601,16 @@ Filesystem::AtRestRepair Filesystem::repairAtRest(const std::shared_ptr<Engine>&
                 entry->content_hash = hash::blake2b(entry->backing_path);
                 ++result.encrypted;
             } else {
-                const auto plaintextSize = onDisk >= vh::crypto::util::AES_TAG_SIZE ? onDisk - vh::crypto::util::AES_TAG_SIZE : 0;
-                if (entry->size_bytes == plaintextSize) continue;
-                entry->size_bytes = plaintextSize;
+                // The plaintext size the stored bytes hold in the row's format (legacy GCM: minus the tag; VHF1: the
+                // layout's). A size no plaintext seals to is damage, never "corrected" into the row.
+                const auto plaintextSize = vh::vault::content::plaintextSizeOf(
+                    onDisk, vh::vault::content::formatOf(entry->encryption_iv));
+                if (!plaintextSize)
+                    throw std::runtime_error(fmt::format("{} stored bytes are no valid {} object", onDisk,
+                                                         vh::vault::content::to_string(
+                                                             vh::vault::content::formatOf(entry->encryption_iv))));
+                if (entry->size_bytes == *plaintextSize) continue;
+                entry->size_bytes = *plaintextSize;
                 ++result.resized;
             }
 
