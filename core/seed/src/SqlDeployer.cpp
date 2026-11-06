@@ -98,7 +98,7 @@ void assignUids(pqxx::work& txn, const std::string& table, const std::string& ke
                 uids += ',';
             }
             ids += row[0].c_str();
-            uids += crypto::id::toUuid(crypto::id::newObjectUid());
+            uids += vh::crypto::id::toUuid(vh::crypto::id::newObjectUid());
         }
         ids += '}';
         uids += '}';

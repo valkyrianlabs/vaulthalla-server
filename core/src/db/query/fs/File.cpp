@@ -28,9 +28,9 @@ namespace {
 std::string objectUidFor(pqxx::work& txn, const std::shared_ptr<vh::fs::model::File>& file) {
     if (!file->object_uid && file->inode) {
         const auto res = txn.exec(pqxx::prepped{"get_file_object_uid_by_inode"}, *file->inode);
-        if (!res.empty()) file->object_uid = crypto::id::fromUuid(res.one_field_ref().as<std::string>());
+        if (!res.empty()) file->object_uid = vh::crypto::id::fromUuid(res.one_field_ref().as<std::string>());
     }
-    return crypto::id::toUuid(file->object_uid.value_or(crypto::id::newObjectUid()));
+    return vh::crypto::id::toUuid(file->object_uid.value_or(vh::crypto::id::newObjectUid()));
 }
 
 pqxx::params upsertFileParams(pqxx::work& txn, const std::shared_ptr<vh::fs::model::File>& file) {
@@ -74,7 +74,7 @@ unsigned int File::upsertFile(const FilePtr& file) {
 
         const auto stored = txn.exec(pqxx::prepped{"upsert_file_full"}, p).one_row();
         const auto fileId = stored["fs_entry_id"].as<unsigned int>();
-        file->object_uid = crypto::id::fromUuid(stored["object_uid"].as<std::string>());
+        file->object_uid = vh::crypto::id::fromUuid(stored["object_uid"].as<std::string>());
         txn.exec(
             pqxx::prepped{"insert_file_activity"},
             pqxx::params{
@@ -177,7 +177,7 @@ void File::moveFile(const FilePtr& file, const std::filesystem::path& newPath, u
         file->last_modified_by = userId;
 
         const auto stored = txn.exec(pqxx::prepped{"upsert_file_full"}, upsertFileParams(txn, file)).one_row();
-        file->object_uid = crypto::id::fromUuid(stored["object_uid"].as<std::string>());
+        file->object_uid = vh::crypto::id::fromUuid(stored["object_uid"].as<std::string>());
 
         // Update parent directories stats
         parentId = file->parent_id;

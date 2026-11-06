@@ -141,11 +141,12 @@ protected:
     }
 
     [[nodiscard]] uint32_t apiKey() const {
+        const auto tag = uidTag();
         return db::Transactions::exec("ObjectUidDbTest::apiKey", [&](pqxx::work& txn) {
             return txn.exec("INSERT INTO api_keys (user_id, name, provider, access_key, encrypted_secret_access_key, iv, "
-                            "region, endpoint) VALUES ($1, $2, 'AWS', $2, decode('00','hex'), decode('00','hex'), "
+                            "region, endpoint) VALUES ($1, $2, 'AWS', $3, decode('00','hex'), decode('00','hex'), "
                             "'us-east-1', 'https://s3.example.com') RETURNING id",
-                            pqxx::params{superUser->id, "uid-key-" + uidTag()}).one_field_ref().as<uint32_t>();
+                            pqxx::params{superUser->id, "uid-key-" + tag, "uid-key-" + tag}).one_field_ref().as<uint32_t>();
         });
     }
 

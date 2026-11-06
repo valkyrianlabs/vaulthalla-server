@@ -79,7 +79,7 @@ struct MigrationDataStep {
     void (*run)(pqxx::work&);
 };
 
-// Assigns a fresh crypto::id::newObjectUid() to every vault without a uid and every file without an object uid, in
+// Assigns a fresh vh::crypto::id::newObjectUid() to every vault without a uid and every file without an object uid, in
 // batches. Rows that already have one are left alone.
 void assignObjectUids(pqxx::work& txn);
 

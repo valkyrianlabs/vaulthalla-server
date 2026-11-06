@@ -870,8 +870,8 @@ TEST_F(SqlDeployerHistoryDb, StorageLayoutMigrationBackfillsUidsAndLayoutsAndIsI
         const auto owner = txn.exec("INSERT INTO users (name, password_hash) VALUES ('claude_test_120_owner', 'x') "
                                     "RETURNING id").one_field_ref().as<int>();
         const auto vault = [&](const std::string& name, const std::string& type) {
-            return txn.exec("INSERT INTO vault (name, owner_id, type, mount_point) VALUES ($1, $2, $3, $1) RETURNING id",
-                            pqxx::params{name, owner, type}).one_field_ref().as<int>();
+            return txn.exec("INSERT INTO vault (name, owner_id, type, mount_point) VALUES ($1, $2, $3, $4) RETURNING id",
+                            pqxx::params{name, owner, type, name}).one_field_ref().as<int>();
         };
         const auto local = vault("claude_test_120_local", "local");
         const auto encrypting = vault("claude_test_120_enc", "s3");
@@ -882,8 +882,8 @@ TEST_F(SqlDeployerHistoryDb, StorageLayoutMigrationBackfillsUidsAndLayoutsAndIsI
         std::vector<int> files;
         for (int i = 0; i < 3; ++i) {
             const auto name = "f" + std::to_string(i);
-            const auto id = txn.exec("INSERT INTO fs_entry (vault_id, name, path) VALUES ($1, $2, '/' || $2) RETURNING id",
-                                     pqxx::params{i == 0 ? local : encrypting, name}).one_field_ref().as<int>();
+            const auto id = txn.exec("INSERT INTO fs_entry (vault_id, name, path) VALUES ($1, $2, $3) RETURNING id",
+                                     pqxx::params{i == 0 ? local : encrypting, name, "/" + name}).one_field_ref().as<int>();
             txn.exec("INSERT INTO files (fs_entry_id, size_bytes) VALUES ($1, 1)", pqxx::params{id});
             files.push_back(id);
         }

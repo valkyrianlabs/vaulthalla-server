@@ -16,7 +16,7 @@ namespace vh::fs::model {
         // db::query::fs::File::upsertFile when the row is created; rename, move, overwrite and key rotation keep it. A
         // copy is a new file: clear it before storing the copy's row. Empty on a file not yet stored, or loaded by a
         // query that doesn't select it.
-        std::optional<crypto::id::ObjectUid> object_uid;
+        std::optional<vh::crypto::id::ObjectUid> object_uid;
 
         File() = default;
 
