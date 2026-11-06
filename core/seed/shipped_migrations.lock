@@ -67,12 +67,9 @@ current    bdff1df120f3dd1b8fb006be2fd5c369aa7f2822fc254811b63f5e896d6079cb  115
 current    81098db83d4235750458be66c9d8f89f32382d31ce730d6d945204f871beb44c  116_refresh_token_activity.sql  unreleased
 current    45c3dddf905ec1309386b7c84830ccb55190fd9dc2fa7df7b6983cc6859086b6  117_audit_trail.sql  unreleased
 current    8c4a48ae2e0afc0368c398cb26794a381ddcd8f48d38d6cf8ccfc198c76d43cf  119_refresh_token_assurance.sql  unreleased
-<<<<<<< HEAD
-current    3cb9331bff4e91246bfb0cb31eddffe0b79159baca842a775031dd76b287b057  120_storage_layout.sql  unreleased
-current    5ac6ef34b0d47daf5bcff91e56dce26bfb043106f3804d8e81d6debf40f212a6  121_object_uids_required.sql  unreleased
-=======
 current    1a30da34091b7843ccd25653ed103ee0aab555d161fbe15d4f627d5fa00d2316  120_mfa_factors.sql  unreleased
->>>>>>> origin/main
+current    2c33e81004bdbf996b67d9877080d87aedaaa354b3fc4c8daa76d92f68a16d5e  122_storage_layout.sql  unreleased
+current    4dc6c5fea5d05cb14cd2dd340c08d390dd2519cf6afe3b58563b40cc17fd0189  123_object_uids_required.sql  unreleased
 historical 64170212eb3f9fbe0f7c949791b953f0376a1f2bcf66b3dec7afc5db6325d570  020_vaults.sql  v0.28.0-alpha..v1.5.0
 historical c154cd7e10f7931f29c12b9221c90f66d6b953cfb5e3dc15ea50f0940e5d4220  060_acl.sql  v0.28.0-alpha..v1.5.1
 historical 720caaa27c0d51635fe3f459a8426f019d3f0dbdc0b7ae176d283309933a7f53  082_stats_metric_samples.sql  v1.2.4..v1.2.5

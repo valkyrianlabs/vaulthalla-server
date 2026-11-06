@@ -15,7 +15,7 @@
 -- Uids are raw CSPRNG bytes from libsodium (crypto::id::newObjectUid), not UUIDs PostgreSQL generates (those carry
 -- version bits): UUID is only the 16-byte column type. This file adds them nullable; the deployer's data step for this
 -- file (seed/SqlDeployer, kMigrationDataSteps) assigns one to every existing vault and file in the same transaction,
--- and 121_object_uids_required.sql then makes them NOT NULL. Neither uid ever changes once set (triggers below).
+-- and 123_object_uids_required.sql then makes them NOT NULL. Neither uid ever changes once set (triggers below).
 --
 -- Existing rows: s3.encrypt_upstream NULL was always read as true (vault::model::S3Vault) and becomes TRUE; encrypting
 -- vaults get path_v0, the others transparent. Idempotent and safe on upgraded installs.

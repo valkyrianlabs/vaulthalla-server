@@ -71,8 +71,8 @@ inline bool isAcceptedHistoricalChecksum(const std::string_view filename, const 
 // transaction (a failure rolls the whole deploy back). They run only when their file is applied in this run, so each
 // must be idempotent and leave the schema to the SQL files.
 //
-//  - 120_storage_layout.sql: every existing vault and file gets its uid from libsodium (assignObjectUids), before
-//    121_object_uids_required.sql makes the columns NOT NULL. PostgreSQL must not generate them: its UUIDs carry
+//  - 122_storage_layout.sql: every existing vault and file gets its uid from libsodium (assignObjectUids), before
+//    123_object_uids_required.sql makes the columns NOT NULL. PostgreSQL must not generate them: its UUIDs carry
 //    version bits, and spec 01 §4.1 names the CSPRNG.
 struct MigrationDataStep {
     std::string_view filename;
@@ -84,7 +84,7 @@ struct MigrationDataStep {
 void assignObjectUids(pqxx::work& txn);
 
 inline constexpr std::array kMigrationDataSteps{
-    MigrationDataStep{"120_storage_layout.sql", &assignObjectUids},
+    MigrationDataStep{"122_storage_layout.sql", &assignObjectUids},
 };
 
 struct ReconciledMigration {

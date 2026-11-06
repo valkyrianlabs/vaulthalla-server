@@ -72,13 +72,13 @@ buckets it created. Other providers: plain storage, but protection locks still a
   `vh-encrypted=false` over a sealed file follows the same rule. Encrypting vaults default to `foreign_objects=ignore`
   (adopted buckets: `import`). Manual `vault sync events --file` needs configure + sync.config.edit + key Consume.
 - `s3` bindings are upserted per vault (`ON CONFLICT (vault_id)`); a key+bucket pair of another vault is refused.
-- `s3.storage_layout` (migration 120, #366; design/encryption/01 §4.6) is internal: `transparent` ⇔
+- `s3.storage_layout` (migration 122, #366; design/encryption/01 §4.6) is internal: `transparent` ⇔
   `encrypt_upstream=false`, `path_v0`/`opaque_v1` ⇔ `true` (`s3_storage_layout_check`). `Vault::upsertVault` resolves
   it (`resolveStorageLayout`), never a request; `opaque_v1` only in test mode until the restore drill (#371), and an
   `opaque_v1` vault's encryption can't be toggled until the layout migration exists. `vault.uid` and
   `files.object_uid` are 16 libsodium bytes (`crypto::id::ObjectUid`), assigned once (immutable by trigger): new rows
   in `upsertVault`/`File::upsertFile` (a rewritten inode keeps its uid; copies clear it first), existing rows by the
-  deployer data step for 120 (`SqlDeployer` `kMigrationDataSteps`). Nothing in the data plane reads them yet (#369).
+  deployer data step for 122 (`SqlDeployer` `kMigrationDataSteps`). Nothing in the data plane reads them yet (#369).
 
 ## Provider facts (verified live 2026-10-15)
 
