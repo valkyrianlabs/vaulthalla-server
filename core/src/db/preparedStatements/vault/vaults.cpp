@@ -2,23 +2,24 @@
 
 void vh::db::Connection::initPreparedVaults() const {
     conn_->prepare("upsert_vault",
-                   R"(INSERT INTO vault (name, type, description, owner_id, mount_point, quota, is_active, slug, fuse_name)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       RETURNING id)");
+                   R"(INSERT INTO vault (name, type, description, owner_id, mount_point, quota, is_active, slug, fuse_name, uid)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       RETURNING id, uid)");
 
     conn_->prepare("upsert_s3_vault",
                    // The vault's own row (one per vault): a key or bucket change edits it in place. Conflicting on
                    // (api_key_id, bucket) used to make a key/bucket change insert a second row for the vault (s3_pkey
                    // violation), and a vault created on a pair another vault held took that vault's binding over.
                    // Another vault's (api_key_id, bucket) now fails the unique constraint; ops refuse it first.
-                   "INSERT INTO s3 (vault_id, api_key_id, bucket, encrypt_upstream, storage_tier_id) VALUES ($1, $2, $3, $4, $5) "
+                   // storage_layout comes from Vault::upsertVault (resolved from encrypt_upstream and the stored
+                   // layout under this transaction's row lock), never from a request; s3_storage_layout_check backs it.
+                   "INSERT INTO s3 (vault_id, api_key_id, bucket, encrypt_upstream, storage_tier_id, storage_layout) "
+                   "VALUES ($1, $2, $3, $4, $5, $6) "
                    "ON CONFLICT (vault_id) DO UPDATE "
                    "SET bucket = EXCLUDED.bucket, api_key_id = EXCLUDED.api_key_id, "
-                   "encrypt_upstream = EXCLUDED.encrypt_upstream, storage_tier_id = EXCLUDED.storage_tier_id "
+                   "encrypt_upstream = EXCLUDED.encrypt_upstream, storage_tier_id = EXCLUDED.storage_tier_id, "
+                   "storage_layout = EXCLUDED.storage_layout "
                    "RETURNING vault_id");
-
-    conn_->prepare("insert_s3_vault", "INSERT INTO s3 (vault_id, api_key_id, bucket, storage_tier_id) VALUES ($1, $2, $3, $4) "
-                   "ON CONFLICT (vault_id) DO NOTHING");
 
     conn_->prepare("vault_root_exists",
                    "SELECT EXISTS(SELECT 1 FROM fs_entry WHERE vault_id = $1 AND path = '/') AS exists");

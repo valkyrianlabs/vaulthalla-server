@@ -39,6 +39,10 @@ std::vector<WsModel> vaultModels() {
          str("bucket").opt().desc("S3 vaults."),
          str("storage_tier_id").opt().nullable().desc("S3 vaults."),
          boolean("encrypt_upstream").opt().desc("S3 vaults: objects are encrypted with the vault key."),
+         str("storage_layout").opt().oneOf({"transparent", "path_v0", "opaque_v1"})
+             .desc("S3 vaults, read-only: how objects sit in the bucket (design/encryption/01 §4.6). transparent: "
+                   "readable names, unencrypted objects; path_v0: encrypted objects under their file paths; "
+                   "opaque_v1: opaque object ids. It follows encrypt_upstream; no request sets it."),
          str("owner").opt().desc("The owner's name (\"\" when it no longer resolves): list and get."),
          object("sync", "RemoteSyncPolicy").opt().desc("storage.vault.get of an S3 vault.")}));
 

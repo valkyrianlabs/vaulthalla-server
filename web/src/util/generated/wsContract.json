@@ -15031,6 +15031,19 @@
           ]
         },
         {
+          "description": "S3 vaults, read-only: how objects sit in the bucket (design/encryption/01 §4.6). transparent: readable names, unencrypted objects; path_v0: encrypted objects under their file paths; opaque_v1: opaque object ids. It follows encrypt_upstream; no request sets it.",
+          "enum": [
+            "transparent",
+            "path_v0",
+            "opaque_v1"
+          ],
+          "name": "storage_layout",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
           "description": "The owner's name (\"\" when it no longer resolves): list and get.",
           "name": "owner",
           "required": false,
@@ -18120,7 +18133,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "39845cd85756810670c2f82f033274e36f3716318f2b049d9f98d8f78db1604f",
+  "models_hash": "adece020e347877b41fa73042a73e55267d7acc9d2ad7ae3bf1208f0c66e1136",
   "protocol": {
     "min": 1,
     "version": 1

@@ -1,6 +1,8 @@
 #include "protocols/s3/Router.hpp"
 
 #include "config/Registry.hpp"
+#include "crypto/ScratchFile.hpp"
+#include "fs/PlaintextSource.hpp"
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
 #include "protocols/s3/RequestBody.hpp"
@@ -155,12 +157,7 @@ Router::Response makeResponse(
     return response;
 }
 
-std::vector<uint8_t> bodyBytes(const Router::Request& request, const Router::BodyPayload& payload) {
-    if (payload.temp_file) {
-        std::ifstream in(*payload.temp_file, std::ios::binary);
-        if (!in) throw invalidArgument("Unable to read streamed request body", payload.temp_file->string());
-        return {std::istreambuf_iterator<char>(in), {}};
-    }
+std::vector<uint8_t> bodyBytes(const Router::Request& request) {
     return {request.body().begin(), request.body().end()};
 }
 
@@ -925,9 +922,11 @@ Router::Response Router::route(Request&& request, BodyPayload payload) const {
         const bool encoded = payload.aws_chunked_decode_to.has_value();
         const bool signedChunks = encoded && hasSignedChunks(request);
         const auto decode = [&](std::optional<vl::sigv4::ChunkVerifier> chain) {
-            std::ifstream in(*payload.temp_file, std::ios::binary);
-            if (!in) throw std::runtime_error("Unable to open aws-chunked request body");
-            payload = decodeAwsChunkedBody(in, *payload.aws_chunked_decode_to, request, std::move(chain));
+            if (!payload.file) throw std::runtime_error("The aws-chunked request body is missing");
+            const auto encoded = std::move(payload.file);  // released (and unlinked) once decoded
+            auto decoded = decodeAwsChunkedBody(fs::sourceOf(*encoded), *payload.aws_chunked_decode_to, request,
+                                                std::move(chain));
+            payload = std::move(decoded);
         };
         if (encoded && !signedChunks) decode(std::nullopt);
 
@@ -1165,13 +1164,13 @@ Router::Response Router::routeAuthenticated(
             "sync_deferred");
         db::query::s3::MultipartPart part;
         try {
-            if (payload.temp_file) {
+            if (payload.file) {
                 validateContentMd5(request, payload);
                 validateS3Checksums(request, payload);
-                part = multipart_.uploadPartFromFile(bucket, parsed.key, parsed.query.at("uploadId"), partNumber,
-                                                     *payload.temp_file, payload.size);
+                part = multipart_.uploadPartFromSource(bucket, parsed.key, parsed.query.at("uploadId"), partNumber,
+                                                       fs::sourceOf(*payload.file));
             } else {
-                auto body = bodyBytes(request, payload);
+                auto body = bodyBytes(request);
                 validateContentMd5(request, body);
                 validateS3Checksums(request, body);
                 part = multipart_.uploadPart(bucket, parsed.key, parsed.query.at("uploadId"), partNumber, body);
@@ -1533,11 +1532,11 @@ Router::Response Router::routeAuthenticated(
         db::query::s3::ObjectState state;
         const auto options = putOptionsFromRequest(request);
         std::optional<std::vector<uint8_t>> bufferedBody;
-        if (payload.temp_file) {
+        if (payload.file) {
             validateContentMd5(request, payload);
             validateS3Checksums(request, payload);
         } else {
-            bufferedBody = bodyBytes(request, payload);
+            bufferedBody = bodyBytes(request);
             validateContentMd5(request, *bufferedBody);
             validateS3Checksums(request, *bufferedBody);
         }
@@ -1546,17 +1545,17 @@ Router::Response Router::routeAuthenticated(
             auth,
             rid,
             storage::s3::pricing::S3GatewayOperation::PutObject,
-            payload.temp_file ? payload.size : bufferedBody->size(),
+            payload.file ? payload.size : bufferedBody->size(),
             0,
             1,
             options.storage_class,
             parsed.key,
             "sync_deferred");
-        if (payload.temp_file) {
+        if (payload.file) {
             auto fileOptions = options;
             if (payload.md5_hex) fileOptions.etag_override = "\"" + *payload.md5_hex + "\"";
             try {
-                state = objects_.putObjectFromFile(bucket, parsed.key, *payload.temp_file, payload.size, fileOptions);
+                state = objects_.putObjectFromSource(bucket, parsed.key, fs::sourceOf(*payload.file), fileOptions);
                 recordGatewaySyncOrigin(bucket, auth, rid, "put", parsed.key);
                 commitGatewayBudget(budget);
             } catch (...) {

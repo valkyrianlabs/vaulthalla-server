@@ -132,7 +132,7 @@ protected:
                 "fs-cache-delete@vaulthalla.test");
 
             seeded.vaultId = txn.exec(
-                "INSERT INTO vault (type, name, owner_id, mount_point) VALUES ($1, $2, $3, $4) RETURNING id",
+                "INSERT INTO vault (type, name, owner_id, mount_point, uid) VALUES ($1, $2, $3, $4, gen_random_uuid()) RETURNING id",
                 pqxx::params{"local", "Cache Delete Vault", seeded.userId, "cache_delete_vault"}
             ).one_field_ref().as<uint32_t>();
 

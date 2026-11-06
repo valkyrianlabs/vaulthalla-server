@@ -149,6 +149,10 @@ struct MultipartPart {
     std::vector<uint8_t> md5;
     std::filesystem::path path;
     std::time_t created_at{};
+    // The sealed part's IV (base64) and vault key version (protocols/s3/PartCipher.hpp, migration 118). Unset only on
+    // a part stored as plaintext before migration 118, until the daemon seals it.
+    std::optional<std::string> encryption_iv;
+    std::optional<uint32_t> key_version;
 };
 
 class Gateway {
@@ -218,10 +222,19 @@ public:
     static std::optional<MultipartUpload> getMultipartUpload(const std::string& uploadId);
     static std::vector<MultipartUpload> listMultipartUploads(uint32_t vaultId, const std::string& prefix = {});
     static std::vector<MultipartUpload> listMultipartUploadsInitiatedBefore(std::time_t cutoff);
+    // Every upload that is neither completed nor aborted, in every vault.
+    static std::vector<MultipartUpload> listOpenMultipartUploads();
     static void markMultipartUploadCompleted(const std::string& uploadId);
     static void abortMultipartUpload(const std::string& uploadId);
 
-    static void upsertMultipartPart(const MultipartPart& part);
+    // Inserts or replaces the part's row; returns the file the replaced row pointed at (the caller removes it when it
+    // differs from the new one), read under the row's lock in the same transaction.
+    static std::optional<std::filesystem::path> upsertMultipartPart(const MultipartPart& part);
+    // Points a plaintext part (no encryption_iv) at its sealed copy. False when the row is no longer that plaintext
+    // part (re-uploaded or gone meanwhile): the caller then drops its copy.
+    static bool sealLegacyMultipartPart(const std::string& uploadId, uint32_t partNumber,
+                                        const std::filesystem::path& plaintextPath, const std::filesystem::path& sealedPath,
+                                        const std::string& encryptionIv, uint32_t keyVersion);
     static std::vector<MultipartPart> listMultipartParts(const std::string& uploadId);
     static std::optional<MultipartPart> getMultipartPart(const std::string& uploadId, uint32_t partNumber);
     static void deleteMultipartParts(const std::string& uploadId);

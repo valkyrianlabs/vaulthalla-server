@@ -1,14 +1,6 @@
 #include "db/DBConnection.hpp"
 
 void vh::db::Connection::initPreparedFiles() const {
-    conn_->prepare("upsert_file_by_entry_id",
-                   "INSERT INTO files (fs_entry_id, size_bytes, mime_type, content_hash) "
-                   "VALUES ($1, $2, $3, $4) "
-                   "ON CONFLICT (fs_entry_id) DO UPDATE SET "
-                   "size_bytes = EXCLUDED.size_bytes, "
-                   "mime_type = EXCLUDED.mime_type, "
-                   "content_hash = EXCLUDED.content_hash");
-
     conn_->prepare("update_file_only",
                    "WITH updated_entry AS ("
                    "  UPDATE fs_entry "
@@ -36,15 +28,19 @@ void vh::db::Connection::initPreparedFiles() const {
                    "    updated_at = NOW() "
                    "  RETURNING id"
                    ") "
-                   "INSERT INTO files (fs_entry_id, size_bytes, mime_type, content_hash, encryption_iv, encrypted_with_key_version) "
-                   "SELECT id, $14, $15, $16, $17, $18 FROM upsert_entry "
+                   // object_uid ($19) only names a new row: an existing one keeps its uid (it never changes).
+                   "INSERT INTO files (fs_entry_id, size_bytes, mime_type, content_hash, encryption_iv, encrypted_with_key_version, object_uid) "
+                   "SELECT id, $14, $15, $16, $17, $18, $19 FROM upsert_entry "
                    "ON CONFLICT (fs_entry_id) DO UPDATE SET "
                    "  size_bytes = EXCLUDED.size_bytes, "
                    "  mime_type = EXCLUDED.mime_type, "
                    "  content_hash = EXCLUDED.content_hash, "
                    "  encryption_iv = EXCLUDED.encryption_iv, "
                    "  encrypted_with_key_version = EXCLUDED.encrypted_with_key_version "
-                   "RETURNING fs_entry_id");
+                   "RETURNING fs_entry_id, object_uid");
+
+    conn_->prepare("get_file_object_uid_by_inode",
+                   "SELECT f.object_uid FROM files f JOIN fs_entry e ON e.id = f.fs_entry_id WHERE e.inode = $1");
 
     conn_->prepare("get_file_mime_type",
                    "SELECT f.mime_type FROM files f "

@@ -169,7 +169,8 @@ public:
     [[nodiscard]] bool rotation_in_progress() const;
 
 private:
-    std::unique_ptr<crypto::secrets::KeyProvider> tpmKeyProvider_;
+    // Keys come from sealed rows under the versioned vault master (vault/Master.hpp); false for ForTesting managers.
+    bool sealed_{false};
     std::atomic<bool> rotation_in_progress_{false};
     unsigned int vault_id_;
 

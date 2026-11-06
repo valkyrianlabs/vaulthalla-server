@@ -28,6 +28,9 @@ constexpr std::string_view kPairingReason =
 constexpr std::string_view kExposureReason =
     "whether devices on other hosts may connect is the node's network exposure, changed by a human";
 
+constexpr std::string_view kMasterReason =
+    "which master wraps the vault keys is changed by a human at the terminal, never by an agent";
+
 constexpr std::string_view kKeysReason =
     "key and secret material is never handled by agents (D4); the human runs this in a terminal themselves";
 
@@ -39,6 +42,9 @@ const std::vector<Exclusion>& exclusions() {
         {{"vault", "key", "import"}, kKeysReason},
         {{"secrets", "export"}, kKeysReason},
         {{"secrets", "update"}, "internal secrets are changed by the operator, never by an agent"},
+        {{"secrets", "master", "rotate"}, kMasterReason},
+        {{"secrets", "master", "finalize"}, kMasterReason},
+        {{"secrets", "master", "rollback"}, kMasterReason},
         {{"setup"}, "installation and lifecycle commands need root and a human at the terminal (this includes "
                     "setup set-super-admin-password)"},
         {{"setup", "set-super-admin-password"}, "the super-admin password is set by a human at the terminal"},

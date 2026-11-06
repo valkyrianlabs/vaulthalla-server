@@ -91,15 +91,18 @@ window, signed headers, payload hash first; then `CredentialManager::findEnabled
 then the constant-time signature). Options (`gatewayVerifyOptions`): service `s3`, any region, ±15 min, presign ≤ 7 d,
 no session tokens, host must be signed, scope date = x-amz-date date, implied `content-length: 0` for bodiless
 requests a proxy stripped it from. Failures map to AWS's S3 codes and statuses in `sigv4Error`.
-**aws-chunked bodies** (`protocols/s3/RequestBody.{hpp,cpp}`): `Session` spools a streamed PUT to
-`<backing>/s3-request-body/<uuid>.body` and, when `isAwsChunked` (Content-Encoding `aws-chunked`, or any `STREAMING-*`
+**aws-chunked bodies** (`protocols/s3/RequestBody.{hpp,cpp}`): `Session` spools a streamed PUT to a
+`crypto::ScratchFile` at `<backing>/.s3-request-body/<uuid>.body` (0700, `requestBodyRoot()`; ciphertext under the process
+key, #345; `BodyPayload::file`) and, when `isAwsChunked` (Content-Encoding `aws-chunked`, or any `STREAMING-*`
 payload hash: mc signs chunks without Content-Encoding), sets `BodyPayload::aws_chunked_decode_to`. `Router::route`
 decodes it with `decodeAwsChunkedBody` (vl-sigv4's `AwsChunkedDecoder`, the only aws-chunked parser): unsigned framing
 before authenticating (a hashed payload is compared with the decoded body); signed chunks
 (`STREAMING-AWS4-HMAC-SHA256-PAYLOAD[-TRAILER]`: mc and the Java SDK over plain HTTP) after it, through the
 `vl::sigv4::ChunkVerifier` that `authenticate(input, &chain)` hands back once the seed signature verified. Nothing
 reaches `routeAuthenticated` (and so no object, budget or metadata write) unless every chunk and trailer verified;
-both temp files are removed by `Session`. Signed chunks outside a streamed PUT, and SigV4a streaming, answer
+the decoded body is another scratch file (`<uuid>.body.decoded`), and both go with their last reference (`route`
+returns, or throws). The body is committed through `fs::sourceOf(ScratchFile)` (`ObjectStore::putObjectFromSource`,
+`MultipartStore::uploadPartFromSource`). Signed chunks outside a streamed PUT, and SigV4a streaming, answer
 `NotImplemented`. `protocols/s3/SigV4` (the old verifier) has no production callers: it is the goldens'
 reference until a release is verified. Tests: `S3GatewayAuth*`, `S3GatewayStreaming*`, `S3GatewayClientCaptures`
 (real-client captures incl. mc's signed-chunk and `--checksum` bodies, `tools/dev/sigv4-capture/`),
@@ -727,9 +730,26 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   encrypted zeros. One write block and one read block are cached in locked memory. The file is unlinked with its
   object. A crash leaves only ciphertext no later process can read; each owner sweeps it at startup. Mount staging
   (`.upload-http-*.part` through FUSE) lands in a working copy, then in a sealed vault file: never plaintext either.
-  Not covered: S3 gateway request bodies (`<backing>/s3-request-body/*.body`) and multipart parts
-  (`<backing>/.8f3a9c1d6e2b4f70/`, `VH_S3_GATEWAY_MULTIPART_PARTS_DIRNAME`), which are still plaintext (#345; parts must survive restarts, so they need the
-  vault key, not the process key).
+  S3 gateway request bodies are scratch files too (`<backing>/.s3-request-body`, #345).
+- **S3 multipart parts are sealed under the vault key (#345, migration 118, `protocols/s3/PartCipher.{hpp,cpp}`).**
+  Parts must survive restarts (a client resumes an upload days later), so not the process key. Each part is one
+  AES-256-GCM message (body ‖ tag) in `<backing>/.8f3a9c1d6e2b4f70/<parts dir id>/<n>.<16 hex>`
+  (`VH_S3_GATEWAY_MULTIPART_PARTS_DIRNAME`) under the vault's current key, fresh random IV per write, AAD =
+  `"vaulthalla/s3-multipart-part/v1" ‖ 0 ‖ BE32(vault) ‖ BE32(len) ‖ upload id ‖ BE32(part) ‖ BE64(plaintext size)`;
+  `s3_gateway_multipart_part.encryption_iv`/`key_version` record it. Every write is a new file and the row switches to
+  it in one transaction (`upsertMultipartPart` returns the replaced path, then deleted), so a flipped byte, a part
+  moved to another number/upload/vault, an older copy and a cut-off file all fail closed. ETag and `size_bytes` stay
+  the plaintext's MD5 and length. Complete (`part_cipher::open`) authenticates every part first (no vault write if one
+  fails: `InvalidPart`, upload and parts kept, the client re-uploads that part), then streams them into
+  `putObjectFromSource`, re-checking each tag as it is read: no plaintext concatenation file. Parts sealed before a key
+  rotation decrypt with the retained version (`historicalKeySnapshot`), so an in-flight upload survives a rotation and
+  is resealed under the current key. Startup (`protocols::s3::sweepStagingAtStartup`, `main.cpp` `wireStorage`, gateway
+  enabled or not) deletes `.s3-request-body` and the pre-#345 plaintext `<backing>/s3-request-body`, seals pre-#345
+  plaintext parts (rows with no IV) after checking size and MD5 and then deletes the plaintext (a part that no longer
+  matches is left as is, and Complete refuses it), and removes files no open upload's rows reference (a crashed
+  Complete's plaintext `.complete-object`) and directories of finished uploads; Complete seals any plaintext part the
+  sweep couldn't reach. Tests: `S3GatewayPartCipher*`, `S3GatewayRequestBodyStaging*`, `S3GatewayDbTest.{MultipartParts
+  AreSealedAtRest*,MultipartUploadSurvivesARestart,TamperedOrSwappedPart*,LegacyPlaintextParts*,StagedRequestBodies*}`.
 - **Rename over an existing entry replaces it (editor saves; `FsRenameDbTest`, Tier A CRUD + "Rename Over Needs
   Delete").** `Filesystem::rename(..., RenameMode)`: `NoReplace` (default: ws rename/move, uploads,
   RENAME_NOREPLACE) answers -EEXIST; `Replace` (FUSE rename without flags, only after the Bridge resolved Delete on

@@ -151,6 +151,7 @@ Vault::Vault(pqxx::row_ref row)
       // vault.owner_id is ON DELETE SET NULL: deleting a user leaves their vaults ownerless (0, shown as N/A).
       // Reading it as non-null threw in listVaults and stopped the daemon from starting at all (vh-storage).
       owner_id(row["owner_id"].is_null() ? 0u : row["owner_id"].as<unsigned int>()),
+      uid(try_get<std::string>(row, "uid").transform([](const std::string& text) { return vh::crypto::id::fromUuid(text); })),
       name(row["name"].as<std::string>()),
       description(try_get<std::string>(row, "description").value_or("")),
       slug(try_get<std::string>(row, "slug").value_or(slugifyName(name))),
@@ -213,10 +214,12 @@ std::string vh::vault::model::to_string(const Vault& v) {
     out += "ID: " + std::to_string(v.id) + "\n";
     out += "Owner ID: " + std::to_string(v.owner_id) + "\n";
     out += "Type: " + to_string(v.type) + "\n";
+    if (v.uid) out += "Vault UID: " + vh::crypto::id::toBase32(*v.uid) + "\n";
     if (const auto* s3 = dynamic_cast<const S3Vault*>(&v)) {
         out += "API Key ID: " + std::to_string(s3->api_key_id) + "\n";
         out += "Bucket: " + s3->bucket + "\n";
         out += "Storage Tier: " + s3->storage_tier_id.value_or("provider default") + "\n";
+        out += "Storage Layout: " + std::string(describe(s3->storage_layout)) + "\n";
     }
     out += "Description: " + v.description + "\n";
     out += "Mount Point: " + v.mount_point.string() + "\n";

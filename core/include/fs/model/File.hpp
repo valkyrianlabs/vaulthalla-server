@@ -2,6 +2,7 @@
 
 #include "Entry.hpp"
 #include "db/Fwd.hpp"
+#include "crypto/id/ObjectUid.hpp"
 
 namespace vh::fs::model {
     struct File final : Entry {
@@ -11,6 +12,11 @@ namespace vh::fs::model {
         std::optional<std::string> remote_version_id, remote_sequencer;
         std::optional<bool> remote_encrypted;
         unsigned int encrypted_with_key_version{};
+        // files.object_uid (spec 01 §4.1): the file's identity in the bucket under opaque_v1. Drawn by
+        // db::query::fs::File::upsertFile when the row is created; rename, move, overwrite and key rotation keep it. A
+        // copy is a new file: clear it before storing the copy's row. Empty on a file not yet stored, or loaded by a
+        // query that doesn't select it.
+        std::optional<vh::crypto::id::ObjectUid> object_uid;
 
         File() = default;
 
