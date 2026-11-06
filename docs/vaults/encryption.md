@@ -158,8 +158,7 @@ An `opaque_v1` vault can be rebuilt from its bucket and your recovery kit on ano
 
 ### Vaults From Before Opaque Storage
 
-Encrypting S3/R2 vaults created before release 1.22 keep the earlier layout, `path_v0`, exactly as it is. File
-contents are encrypted before upload. File and folder names are visible to your storage provider. The migration of
+Encrypting S3/R2 vaults created before release 1.22 keep the earlier layout, `path_v0`, exactly as it is. File contents are encrypted before upload. File and folder names are visible to your storage provider. The migration of
 these vaults to opaque storage has not shipped, and nothing converts them yet: until it does, treat their names as
 visible to anyone with read access to the bucket.
 
