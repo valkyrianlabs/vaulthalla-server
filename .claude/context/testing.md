@@ -304,6 +304,16 @@ Dev mode requires both `VH_BUILD_MODE=dev` and the gitignored `enable_dev_mode` 
   `vh_live_bucket` refuses every name but the fixed ones. Real R2 dogfooding otherwise: only in a bucket you create
   and delete yourself.
 
+- VHF1 (#365): `Vhf1*` unit suites read `design/encryption/vectors/vectors.json` at test time (no DB, run in CI);
+  `tools/contracts/test_vhf1_vectors_contract.py` runs `vh_crypto_vectors.py --check` (needs python3-cryptography,
+  in the CI image) and fails when a VHF1 section or error code of the vectors isn't consumed by the C++ suite. The
+  libFuzzer target is dev-box only (clang 19 there; Apple clang has no libFuzzer):
+  `CC=clang-19 CXX=clang++-19 meson setup build-fuzz -Dfuzz=true -Dbuild_unit_tests=false -Dpreview_cad=disabled
+  -Dpreview_media=disabled -Dmanpage=false && meson compile -C build-fuzz -j 6 vh_fuzz_vhf1`, then
+  `build-fuzz/core/vh_fuzz_vhf1 -max_total_time=600 -max_len=16384 <corpus>` from a `mktemp -d` directory (seed it
+  with the vectors' objects, mode byte 0 first). Its iteration (`core/tests/fuzz/vhf1_fuzz_body.hpp`) also runs as
+  `Vhf1Fuzz` in the unit tests. Keep `build-fuzz` out of rsync `--delete` mirrors.
+
 ## Known test gaps
 
 - Copying a cloud file with no local copy (hydrate-then-copy in `Filesystem::copy`) has no test: `FsCopyDbTest`

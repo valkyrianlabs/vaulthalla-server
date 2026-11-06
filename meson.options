@@ -43,6 +43,13 @@ option(
 )
 
 option(
+    'fuzz',
+    type: 'boolean',
+    value: false,
+    description: 'Build the libFuzzer targets (vh_fuzz_vhf1; needs clang). Never part of a package or CI build'
+)
+
+option(
     'integration_tests',
     type: 'boolean',
     value: false,

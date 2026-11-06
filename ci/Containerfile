@@ -6,7 +6,8 @@
 # builds all three packages, and the PR gate compiles the helpers too; tools/contracts checks the list), the
 # runtime tools of bin/setup/install_deps.sh that tests use (swtpm, tpm2-tools), g++ 14 as the default `cc`/`c++`
 # (the previous runner's compiler; meson and dh pick `c++`, which tools/dev/check_build_flags.py expects) + ccache,
-# Node (web/.nvmrc) + pnpm (web/package.json packageManager), Python 3.14 + venv for tools/harness (deadsnakes PPA,
+# Node (web/.nvmrc) + pnpm (web/package.json packageManager), python3-cryptography for the #329 golden vectors'
+# --check (tools/contracts/test_vhf1_vectors_contract.py), Python 3.14 + venv for tools/harness (deadsnakes PPA,
 # signing key pinned by fingerprint), Debian packaging tools, shellcheck, and
 # vl-release, pmdocs and gh. libpqxx-vh-dev and libpdfium-dev come from the Valkyrian Labs repository too
 # (apt.valkyrianlabs.com; apt.vaulthalla.sh is an alias of the same index, so one source covers everything).
@@ -41,7 +42,7 @@ RUN apt-get update \
  && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/deadsnakes.gpg] https://ppa.launchpadcontent.net/deadsnakes/ppa/ubuntu noble main" > /etc/apt/sources.list.d/deadsnakes.list \
  && apt-get update \
  && apt-get install -y --no-install-recommends \
-      sudo git jq xz-utils file make python3 python3-yaml python3.14 python3.14-venv shellcheck ccache gcc-14 \
+      sudo git jq xz-utils file make python3 python3-yaml python3-cryptography python3.14 python3.14-venv shellcheck ccache gcc-14 \
       g++-14 build-essential \
       debhelper devscripts dpkg-dev fakeroot \
       meson ninja-build pkg-config pandoc \
