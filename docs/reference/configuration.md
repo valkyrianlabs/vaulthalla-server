@@ -381,6 +381,19 @@ full speed and the pause after it keeps the rate and CPU share under the limits.
 costs two indexed counts. These keys are read from `config.yaml` at startup and are not changed from the web console.
 Track progress with `vh vault format status all`.
 
+## Vault Layout Migration
+
+```yaml
+vaults:
+  layout_migration:
+    cleanup_wait_days: 7      # 1 to 365: old path-named objects stay untouched this long after the cutover
+```
+
+`vh vault migrate-layout` moves an encrypting S3/R2 vault from path-named objects to opaque storage (see
+[Encryption](/vaults/encryption#migrating-a-vault-to-opaque-storage)). After the cutover the old objects stay in the
+bucket for `cleanup_wait_days`; only then may `--cleanup --confirm <vault name>` delete them. A migration keeps the
+waiting period it started with. Read from `config.yaml` at startup; not changed from the web console.
+
 ## Stats Snapshots
 
 Stats snapshot settings control dashboard trend collection and how long its history is kept:

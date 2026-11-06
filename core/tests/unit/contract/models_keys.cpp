@@ -335,6 +335,11 @@ void checkVaultKeyModels(Checker& c) {
     blocked.blocked = {locked};
     blocked.blocked_total = 1;
     c.check(vl::toJson(blocked), "VaultLayoutStatus", "vault.layout.status (cleanup_blocked)");
+    blocked.migration->state = lm::State::Complete;
+    blocked.migration->completed_at = 1'760'800'000;
+    blocked.blocked.clear();
+    blocked.blocked_total = 0;
+    c.check(vl::toJson(blocked), "VaultLayoutStatus", "vault.layout.status (complete)");
     lm::CleanupPlan plan;
     plan.complete_listing = true;
     plan.deletable = 1;

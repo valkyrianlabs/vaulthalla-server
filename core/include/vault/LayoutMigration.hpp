@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <ctime>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -219,6 +220,11 @@ CleanupResult runCleanup(const storage::CloudEngine& engine, const CleanupDeps& 
 // Whether the bucket's manifest v2 names every live file with the generation the database records (the bucket-only
 // check before cleanup). Throws with the first difference.
 void verifyManifestAgainstDatabase(const storage::CloudEngine& engine);
+
+// The ETag S3 (and R2) give the bytes at `sealed` uploaded as putMigratedObject uploads them: the MD5 of a single PUT,
+// or the MD5 of the parts' MD5s and "-<parts>" at partSizeFor(size). Unquoted, lower-case hex. An ETag that equals it
+// proves the provider holds exactly those bytes; any other (SSE-KMS, some S3-compatible stores) forces a read-back.
+[[nodiscard]] std::string s3EtagOf(const std::filesystem::path& sealed, uint64_t size);
 
 // ---- JSON -------------------------------------------------------------------------------------------------------------
 

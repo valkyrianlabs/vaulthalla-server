@@ -333,6 +333,10 @@ void checkSystemStats(vh::test::contract_models::Checker& c) {
         {.vaultId = 13, .vaultName = "photos", .detail = "no recovery recipient is enrolled and the last key export is "
                                                          "not of the current key version"});
     c.check(json(health), "SystemHealth", "a vault without recovery material");
+    health.legacyContent = sm::LegacyContentHealth{.remaining = true, .pathV0Vaults = {14},
+                                                   .layoutMigrationsUnfinished = {15}, .legacyFiles = 3,
+                                                   .legacyBlobs = 2, .legacyUploadFiles = 0};
+    c.check(json(health), "SystemHealth", "legacy content remains (#373/#376)");
     c.check(json(sm::SystemHealth{}), "SystemHealth", "system before the pool exists");
 }
 

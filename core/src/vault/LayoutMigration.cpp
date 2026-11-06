@@ -1314,6 +1314,10 @@ void requireCutoverReady(const std::vector<Item>& items) {
 
 }
 
+std::string s3EtagOf(const std::filesystem::path& sealed, const uint64_t size) {
+    return layout_detail::expectedEtag(sealed, size);
+}
+
 // ---- preconditions --------------------------------------------------------------------------------------------------
 
 void requirePreconditions(const storage::CloudEngine& engine) {

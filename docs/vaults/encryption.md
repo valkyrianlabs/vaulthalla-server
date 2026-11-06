@@ -103,7 +103,8 @@ After the upgrade, a background conversion re-seals every legacy local file and 
 - It is rate-limited (`vaults.format_conversion` in [Configuration](/reference/configuration#vault-format-conversion)).
 
 S3/R2 vaults with upstream encryption keep their live files' local and bucket copies identical, so those convert with
-the bucket's layout migration instead; their recovery generations convert here. Vaults that store plaintext upstream
+the bucket's layout migration instead ([Migrating A Vault To Opaque Storage](#migrating-a-vault-to-opaque-storage));
+their recovery generations convert here. Vaults that store plaintext upstream
 convert their local copies here.
 
 Check progress:
@@ -115,7 +116,7 @@ vh vault format status <vault> --json
 
 `state` is `converted` when nothing legacy is left, `pending` or `converting` while work remains, `blocked` during a key
 rotation or salvage, `disabled` when the conversion is turned off, and `awaiting_layout_migration` when only an
-upstream-encrypted vault's live files are left. `remaining` lists live files and recovery blobs still in the legacy
+upstream-encrypted vault's live files are left (`vh vault migrate-layout` converts them). `remaining` lists live files and recovery blobs still in the legacy
 format, as items and bytes on disk.
 
 ## S3/R2 Upstream Encryption
@@ -158,12 +159,66 @@ An `opaque_v1` vault can be rebuilt from its bucket and your recovery kit on ano
 
 ### Vaults From Before Opaque Storage
 
-Encrypting S3/R2 vaults created before release 1.22 keep the earlier layout, `path_v0`, exactly as it is. File contents are encrypted before upload. File and folder names are visible to your storage provider. The migration of
-these vaults to opaque storage has not shipped, and nothing converts them yet: until it does, treat their names as
-visible to anyone with read access to the bucket.
+Encrypting S3/R2 vaults created before release 1.22 keep the earlier layout, `path_v0`, until you migrate them.
+File contents are encrypted before upload. File and folder names are visible to your storage provider.
 
 - Each object is named after the file's path in the vault, so the bucket's provider, and anyone with read access to the bucket, sees file and folder names, the folder tree, object sizes and counts, when objects change, and the provider metadata (encryption status, IV, key version, content hash).
 - Restoring such a vault needs its database as well; a bucket and a recovery kit are not enough (see [Restore Vault Keys](/vaults/secrets-and-key-export#restore-vault-keys)).
+
+Nothing converts them on upgrade. Migrate each one yourself when you are ready.
+
+### Migrating A Vault To Opaque Storage
+
+`vh vault migrate-layout` moves a `path_v0` vault to opaque storage. It re-seals every object in the newer encrypted
+format, under the same key version (it is not a key rotation), so no content is ever written in plaintext.
+
+:::steps
+1. **Check it can run.** The vault must encrypt upstream, its keys must be loaded, no key rotation or salvage may be
+   running, and it needs recovery material that doesn't depend on this server: a recovery recipient or a current key
+   export ([Recovery Recipients](/vaults/secrets-and-key-export#recovery-recipients)). A bucket with a protection lock
+   can't be migrated. `vh vault migrate-layout <vault> --status` shows the layout and any migration.
+2. **Start it.** `vh vault migrate-layout <vault>`. It runs in the background. Files stay readable and writable
+   through the mount, the web console and the S3 gateway; the vault's sync waits until the migration is done, and
+   changes made meanwhile upload right after.
+3. **Follow it.** `vh vault migrate-layout <vault> --status` shows the state, the cost estimate and what was sent.
+4. **Clean up later.** The old path-named objects stay untouched in the bucket for a waiting period (7 days by
+   default). After it, `vh vault migrate-layout <vault> --cleanup` lists what would be deleted, and
+   `--cleanup --confirm <vault name>` deletes it.
+:::
+
+What the migration does:
+
+- **Inventory.** It lists the whole bucket, every object, every version the provider keeps and every delete marker,
+  and reads each version's header once.
+- **Cost check.** It estimates the requests and bytes before anything is written and checks them against your price
+  budget. If the cost can't be priced (no catalog for the provider), start it with `--accept-unpriced`.
+- **Copy and verify.** Every retained version, every pending upstream version from local versioning and each file's
+  current content is decrypted, authenticated, re-sealed and written under the file's opaque id, oldest version first.
+  A delete marker becomes a delete marker on that object, so recovery points keep their order and their original
+  times. Each new object is checked twice: the bytes are authenticated before upload, and the provider must prove it
+  holds them (its checksum matches, or Vaulthalla reads the object back and authenticates it). A random sample is
+  always read back.
+- **Cutover.** One database transaction switches the vault to opaque storage, then the encrypted manifest is
+  published and read back from the bucket alone.
+- **If anything fails before the cutover**, the vault stays on `path_v0`, nothing in the bucket is deleted, and
+  `vh vault migrate-layout <vault>` resumes where it stopped. A bucket that changed since the vault's last sync is
+  refused: run `vh vault sync <vault>` and start the migration again.
+
+What the cleanup never does:
+
+- delete anything before the waiting period ends, before the manifest has been verified, or on a bucket with a
+  protection lock;
+- delete anything the inventory didn't list, by prefix or by lifecycle rule: each deletion names one object version;
+- override Object Lock: a version under retention or a legal hold stays, and status shows the date it can go.
+
+Some versions stay on purpose and are listed with their reason: `archived` (an archive storage class: restore it
+first), `key_unavailable` (sealed under a key version this server doesn't hold), `unattributed` (not Vaulthalla's
+encrypted content, such as another application's object), `not_inventoried` (it appeared after the inventory). The
+migration is `complete` only when a full listing of the bucket shows no path-named object, version or delete marker;
+until then status says `cut_over`, `cleanup` or `cleanup_blocked`, and your provider can still read the names in that
+history. `vaults.layout_migration.cleanup_wait_days` sets the waiting period
+([Configuration](/reference/configuration#vault-layout-migration)). The server's health (`legacy_content`) says whether any legacy content is
+left on it.
 
 With upstream encryption disabled:
 
