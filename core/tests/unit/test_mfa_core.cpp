@@ -39,13 +39,16 @@ TEST(MfaTotp, Rfc6238AppendixBSha1Vectors) {
         {1234567890, "89005924"}, {2000000000, "69279037"}, {20000000000, "65353130"},
     };
     for (const auto& [t, expected] : vectors) {
-        const auto step = totp::stepAt(at(t));
+        // T = 20000000000 (year 2603) is past what a nanosecond system_clock can hold, so the step is T / 30 here and
+        // stepAt is checked separately.
+        const int64_t step = t / totp::kPeriodSeconds;
         EXPECT_EQ(totp::code(kRfcSeed, step, 8), expected) << "T = " << t;
         // The 6-digit code (what Vaulthalla uses) is the same truncation modulo 10^6.
         EXPECT_EQ(totp::code(kRfcSeed, step), expected.substr(2)) << "T = " << t;
     }
     EXPECT_EQ(totp::stepAt(at(59)), 1);
     EXPECT_EQ(totp::stepAt(at(1111111109)), 0x23523EC);
+    EXPECT_EQ(totp::stepAt(at(2000000000)), 2000000000 / 30);
 }
 
 TEST(MfaTotp, ParametersAreTheOnesEveryAuthenticatorAccepts) {
@@ -162,7 +165,7 @@ TEST(MfaSeal, ATotpSeedOpensOnlyForItsAccountAndFactor) {
     const auto sealed = keys::sealTotpSecret(key, 5, factor, seed.bytes());
     EXPECT_EQ(sealed.iv.size(), 12u);
     EXPECT_EQ(sealed.ciphertext.size(), seed.size() + 16u);
-    EXPECT_FALSE(std::ranges::search(sealed.ciphertext, seed.bytes())) << "the seed never appears in the row";
+    EXPECT_TRUE(std::ranges::search(sealed.ciphertext, seed.bytes()).empty()) << "the seed never appears in the row";
 
     const auto opened = keys::openTotpSecret(key, 5, factor, sealed);
     EXPECT_TRUE(std::ranges::equal(opened.bytes(), seed.bytes()));

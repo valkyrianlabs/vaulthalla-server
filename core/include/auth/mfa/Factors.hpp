@@ -1,5 +1,7 @@
 #pragma once
 
+#include "auth/webauthn/Types.hpp"
+
 #include <nlohmann/json_fwd.hpp>
 
 #include <chrono>
@@ -213,6 +215,34 @@ struct NewWebAuthnCredential {
 // read (`expectedSignCount`), so two concurrent assertions can't both move it. False when the row changed, is
 // suspended or was removed.
 bool recordWebAuthnUse(uint32_t id, int64_t expectedSignCount, int64_t signCount, bool backupState);
+// ---- the verifier's side (auth/webauthn, #355)
+
+// What the registration ceremony reports beside the signed data: the label the person chose, and the client's
+// unsigned hints (getTransports(), credProps.rk), stored as hints only.
+struct RegistrationDetails {
+    std::string label{};
+    std::vector<std::string> transports{};
+    std::optional<bool> discoverable{};
+    bool during_recovery{false};
+};
+
+// The storage form of a verified registration (webauthn::verifyRegistration's NewCredential). An all-zero AAGUID is
+// stored as none; transport hints that aren't lower-case tokens are dropped.
+[[nodiscard]] NewWebAuthnCredential fromVerified(const webauthn::NewCredential& verified,
+                                                 const RegistrationDetails& details);
+
+// The verifier's credential lookup (check 11) over webauthn_credentials joined with the owner's user_mfa handle.
+// Returns disabled and suspended credentials too, flagged, as the interface asks: the verifier refuses them.
+class CredentialStore final : public webauthn::CredentialLookup {
+public:
+    [[nodiscard]] std::optional<webauthn::StoredCredential> find(webauthn::ByteView credentialId) const override;
+};
+
+// Writes back a verified assertion: the new signCount when the verifier says to store it (otherwise the count stays),
+// the reported backup state and last_used_at, compare-and-set on `expectedSignCount` (the count the lookup returned).
+// False when the row changed meanwhile, or is suspended or removed.
+bool recordAssertion(const webauthn::VerifiedAssertion& assertion, uint32_t expectedSignCount);
+
 // Suspends a credential (a device-bound counter regression: possible clone). False when the account has no such live
 // credential. Audited as auth.mfa.factor.suspend.
 bool suspendWebAuthnCredential(uint32_t userId, uint32_t id, std::string_view reason);

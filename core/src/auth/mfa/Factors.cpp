@@ -18,6 +18,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <climits>
+#include <cstdint>
+#include <format>
 #include <string>
 
 namespace vh::auth::mfa {
@@ -584,6 +587,78 @@ bool suspendWebAuthnCredential(const uint32_t userId, const uint32_t id, const s
                   "suspended passkey " + std::to_string(id));
     }
     return suspended;
+}
+
+// ---- the verifier's side
+
+NewWebAuthnCredential fromVerified(const webauthn::NewCredential& verified, const RegistrationDetails& details) {
+    NewWebAuthnCredential out{.credential_id = verified.id,
+                              .public_key_cose = verified.publicKeyCose,
+                              .cose_alg = static_cast<int>(verified.algorithm),
+                              .rp_id = verified.rpId,
+                              .sign_count = verified.signCount,
+                              .backup_eligible = verified.backupEligible,
+                              .backup_state = verified.backupState,
+                              .discoverable = details.discoverable,
+                              .attestation_fmt = verified.attestationFormat,
+                              .label = details.label,
+                              .created_during_recovery = details.during_recovery};
+    if (std::ranges::any_of(verified.aaguid, [](const uint8_t b) { return b != 0; })) {
+        std::string uuid;
+        for (std::size_t i = 0; i < verified.aaguid.size(); ++i) {
+            if (i == 4 || i == 6 || i == 8 || i == 10) uuid += '-';
+            uuid += std::format("{:02x}", verified.aaguid[i]);
+        }
+        out.aaguid = std::move(uuid);
+    }
+    for (const auto& t : details.transports) {
+        if (out.transports.size() >= 8) break;
+        if (!t.empty() && t.size() <= 32 &&
+            std::ranges::all_of(t, [](const unsigned char ch) { return std::islower(ch) || ch == '-'; }) &&
+            std::ranges::find(out.transports, t) == out.transports.end())
+            out.transports.push_back(t);
+    }
+    return out;
+}
+
+std::optional<webauthn::StoredCredential> CredentialStore::find(const webauthn::ByteView credentialId) const {
+    if (credentialId.empty() || credentialId.size() > 1023) return std::nullopt;
+    const std::vector<uint8_t> id(credentialId.begin(), credentialId.end());
+    return db::Transactions::exec("auth::mfa::CredentialStore::find",
+                                  [&](pqxx::work& txn) -> std::optional<webauthn::StoredCredential> {
+        const auto res = txn.exec(
+            "SELECT c.credential_id, c.user_id, m.webauthn_user_handle, c.public_key_cose, c.rp_id, c.sign_count, "
+            "c.backup_eligible, c.backup_state, c.disabled_at IS NOT NULL, c.suspended_at IS NOT NULL "
+            "FROM webauthn_credentials c LEFT JOIN user_mfa m ON m.user_id = c.user_id WHERE c.credential_id = $1",
+            pqxx::params{to_hex_bytea(id)});
+        if (res.empty()) return std::nullopt;
+        const auto r = res.one_row();
+        const auto signCount = r[5].as<int64_t>();
+        return webauthn::StoredCredential{
+            .id = from_hex_bytea(r[0].as<std::string>()),
+            .userId = r[1].as<int64_t>(),
+            .userHandle = r[2].is_null() ? webauthn::Bytes{} : from_hex_bytea(r[2].as<std::string>()),
+            .publicKeyCose = from_hex_bytea(r[3].as<std::string>()),
+            .rpId = r[4].as<std::string>(),
+            .signCount = static_cast<uint32_t>(std::clamp<int64_t>(signCount, 0, UINT32_MAX)),
+            .backupEligible = r[6].as<bool>(),
+            .backupState = r[7].as<bool>(),
+            .disabled = r[8].as<bool>(),
+            .suspended = r[9].as<bool>()};
+    });
+}
+
+bool recordAssertion(const webauthn::VerifiedAssertion& assertion, const uint32_t expectedSignCount) {
+    if (assertion.credentialId.empty() || assertion.credentialId.size() > 1023) return false;
+    const int64_t next = assertion.storeSignCount ? assertion.signCount : expectedSignCount;
+    return db::Transactions::exec("auth::mfa::recordAssertion", [&](pqxx::work& txn) {
+        return txn.exec("UPDATE webauthn_credentials SET sign_count = $4, backup_state = $5, last_used_at = NOW() "
+                        "WHERE credential_id = $1 AND user_id = $2 AND sign_count = $3 AND suspended_at IS NULL "
+                        "AND disabled_at IS NULL",
+                        pqxx::params{to_hex_bytea(assertion.credentialId), assertion.userId,
+                                     static_cast<int64_t>(expectedSignCount), next, assertion.backupState})
+                   .affected_rows() == 1;
+    });
 }
 
 }

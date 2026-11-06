@@ -455,6 +455,58 @@ TEST_F(MfaFactorsDb, PasskeysAreStoredWithTheirFlagsAndCountersMoveOnlyByCompare
     EXPECT_TRUE(webAuthnCredentials(user).empty());
 }
 
+// The adapters the verifier (#355) plugs into: a verified registration becomes a row, the row answers check 11's
+// lookup with the owner's user handle, and a verified assertion is written back compare-and-set.
+TEST_F(MfaFactorsDb, AVerifiedRegistrationIsStoredAndServesTheVerifiersLookup) {
+    const auto user = newUser();
+    const auto account = ensureUser(user);
+    webauthn::NewCredential verified{.id = std::vector<uint8_t>(20, 0x51),
+                                     .publicKeyCose = {0xa5, 0x01, 0x02},
+                                     .algorithm = webauthn::Algorithm::EdDSA,
+                                     .aaguid = {0xad, 0xce, 0x00, 0x02, 0x35, 0xbc, 0xc6, 0x0a, 0x64, 0x8b, 0x0b, 0x25,
+                                                0xf1, 0xf0, 0x55, 0x03},
+                                     .signCount = 0,
+                                     .backupEligible = false,
+                                     .attestationFormat = "packed",
+                                     .rpId = "vault.example.com"};
+    const auto row = fromVerified(verified, {.label = "YubiKey", .transports = {"usb", "NFC!", "usb", "nfc"},
+                                             .discoverable = true});
+    EXPECT_EQ(row.cose_alg, -8);
+    EXPECT_EQ(row.aaguid, "adce0002-35bc-c60a-648b-0b25f1f05503");
+    EXPECT_EQ(row.transports, (std::vector<std::string>{"usb", "nfc"})) << "hints only: bad and repeated ones dropped";
+    verified.aaguid = {};
+    EXPECT_FALSE(fromVerified(verified, {.label = "x"}).aaguid) << "an all-zero AAGUID is none";
+
+    const auto stored = addWebAuthnCredential(user, row);
+    const CredentialStore store;
+    const webauthn::CredentialLookup& lookup = store;
+    auto found = lookup.find(stored.credential_id);
+    ASSERT_TRUE(found);
+    EXPECT_EQ(found->userId, user);
+    EXPECT_EQ(found->userHandle, account.webauthn_user_handle);
+    EXPECT_EQ(found->rpId, "vault.example.com");
+    EXPECT_FALSE(found->backupEligible);
+    EXPECT_FALSE(found->disabled || found->suspended);
+    EXPECT_FALSE(lookup.find(std::vector<uint8_t>(20, 0x52)));
+
+    webauthn::VerifiedAssertion signedIn{.userId = user, .credentialId = stored.credential_id, .signCount = 7,
+                                         .storeSignCount = true, .userVerified = true};
+    EXPECT_TRUE(recordAssertion(signedIn, found->signCount));
+    EXPECT_FALSE(recordAssertion(signedIn, found->signCount)) << "the count moved under a second writer";
+    EXPECT_EQ(lookup.find(stored.credential_id)->signCount, 7u);
+    signedIn.storeSignCount = false;
+    signedIn.signCount = 3;
+    EXPECT_TRUE(recordAssertion(signedIn, 7));
+    EXPECT_EQ(lookup.find(stored.credential_id)->signCount, 7u) << "not stored unless the verifier says so";
+    signedIn.userId = newUser();
+    EXPECT_FALSE(recordAssertion(signedIn, 7)) << "another owner";
+
+    ASSERT_TRUE(suspendWebAuthnCredential(user, stored.id, "counter_regression"));
+    EXPECT_TRUE(lookup.find(stored.credential_id)->suspended) << "returned flagged, for the verifier to refuse";
+    ASSERT_TRUE(removeFactor(user, FactorKind::WebAuthn, stored.id));
+    EXPECT_TRUE(lookup.find(stored.credential_id)->disabled);
+}
+
 TEST_F(MfaFactorsDb, TheAccountRowHasAStableRandomUserHandle) {
     const auto user = newUser();
     EXPECT_FALSE(userState(user));
