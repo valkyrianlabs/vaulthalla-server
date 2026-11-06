@@ -51,6 +51,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: python3 .github/scripts/ci_gate.py
 
+  # build, web and fuzz are independent jobs that run side by side (the job lock admits up to CI_JOB_SLOTS at once), so
+  # a pull request waits for the slowest of them, not their sum. The ruleset requires `build` and the tooling job, and
+  # `web` and `fuzz` as well (they used to be steps of `build`, so the checks still prove the same things).
   build:
     needs: gate
     if: ${{ !cancelled() && needs.gate.outputs.run != 'false' }}
@@ -58,15 +61,50 @@ jobs:
     defaults:
       run:
         shell: bash ./ci/run-ci bash -euo pipefail {0}
-    timeout-minutes: 120
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/runner
         with:
           test: 'true'
-          fuzz: 'true'
+
+  web:
+    name: Web console (typecheck, lint, build, budgets)
+    needs: gate
+    if: ${{ !cancelled() && needs.gate.outputs.run != 'false' }}
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || fromJSON('["self-hosted","Linux","X64","vps-ci"]') }}
+    defaults:
+      run:
+        shell: bash ./ci/run-ci bash -euo pipefail {0}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/runner
+        with:
+          build: 'false'
           build_web: 'true'
           test_web: 'true'
+
+  # The WebAuthn libFuzzer targets always build (a few files). They run for their 60 s budget when the change can affect
+  # them (decision D5: the parsers are fuzzed on every change to them) and on every push to main; other pull requests
+  # stop after the build.
+  fuzz:
+    name: WebAuthn fuzz
+    needs: gate
+    if: ${{ !cancelled() && needs.gate.outputs.run != 'false' }}
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || fromJSON('["self-hosted","Linux","X64","vps-ci"]') }}
+    defaults:
+      run:
+        shell: bash ./ci/run-ci bash -euo pipefail {0}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - uses: ./.github/actions/runner
+        with:
+          build: 'false'
+          fuzz: 'true'
 
   tooling:
     name: Release contract, packaging contracts, lifecycle and lab tests, shellcheck

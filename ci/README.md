@@ -16,7 +16,7 @@ defaults:
   root is an unprivileged subordinate uid on the host. Keep it in step with `debian/control` and the version pins.
 - `ci/run-ci`: the same script the ValkyrianLabs repositories use (see `payload-markdown/ci/README.md`), plus two
   options: `CI_CACHE_NAMES` (extra persistent caches, `<cache>/<name>` → `/cache/<name>`) and `CI_RO_MOUNTS`
-  (read-only host paths). The workspace is `/workspace`; files stay owned by the runner user.
+  (read-only host paths); `CI_BUILD_JOBS` overrides the memory-derived compile parallelism. The workspace is `/workspace`; files stay owned by the runner user.
 - Caches on the runner: `~/.cache/vaulthalla-ci/{ccache,pnpm-store,npm}` (`CCACHE_DIR=/cache/ccache`).
 - The licensed icon store `/opt/ci/vaulthalla-web-icons` on the VPS is mounted read-only at `/opt/vaulthalla-web-icons`
   (`VAULTHALLA_WEB_ICON_SRC`); it is never copied into the repository.

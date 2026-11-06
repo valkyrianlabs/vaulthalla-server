@@ -1,14 +1,30 @@
 name: 'Fuzz the WebAuthn parsers'
 description: 'Builds the libFuzzer targets of core/src/auth/webauthn (clang, ASan/UBSan) and runs each for a bounded time.'
 # Decision D5 (docs/dev/mfa-design.md section 11): the CBOR/COSE, authenticatorData and clientDataJSON parsers are
-# fuzzed on every change. Every pull request runs them (the build is a few files, the three targets run in parallel),
-# a 60 s budget each. A crash, leak or sanitizer report fails the job; the reproducer is uploaded as an artifact.
+# fuzzed on every change to them. The targets build on every run (the build is a few files). The 60 s per target budget
+# (the three run in parallel) is spent on pushes to main and on pull requests whose diff against the base touches the
+# parsers, their corpus or build inputs, so a docs or web change does not wait for it. Detection fails open: anything
+# it cannot read runs the fuzzers. A crash, leak or sanitizer report fails the job; the reproducer is uploaded.
 runs:
   using: "composite"
   steps:
-    - name: Fuzz (60 s per target)
+    - name: Fuzz (build; 60 s per target when relevant)
       shell: bash ./ci/run-ci bash -euo pipefail {0}
-      run: bash tools/dev/fuzz-webauthn.sh --seconds 60 --build-dir build-fuzz
+      run: |
+        relevant=true
+        if [ "${{ github.event_name }}" = pull_request ]; then
+          if changed="$(git diff --name-only HEAD^1 HEAD 2>/dev/null)" && [ -n "$changed" ]; then
+            if ! grep -qE '^(core/src/auth/webauthn/|core/include/auth/webauthn/|core/vendor/|core/tests/fuzz/|tools/dev/fuzz-webauthn\.sh|\.github/actions/fuzz/|meson\.build|meson\.options|core/meson\.build|subprojects/|ci/)' <<<"$changed"; then
+              relevant=false
+            fi
+          fi
+        fi
+        if [ "$relevant" = true ]; then
+          bash tools/dev/fuzz-webauthn.sh --seconds 60 --build-dir build-fuzz
+        else
+          echo "No fuzz-relevant path changed: targets built, not run."
+          bash tools/dev/fuzz-webauthn.sh --build-only --build-dir build-fuzz
+        fi
     - name: Upload fuzz reproducers
       if: failure()
       uses: actions/upload-artifact@v4
