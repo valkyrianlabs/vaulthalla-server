@@ -86,7 +86,7 @@ def run(build: Path, *, files: int = 300, keep: bool = False, out: Path | None =
     report = Report()
     run_id = time.strftime("%Y%m%dT%H%M%S") + "_" + secrets.token_hex(3)
     admin = os.environ.get("SUDO_USER") or "coop"
-    private = Path(f"/tmp/vhh_migrate_{run_id}")
+    private = Path(f"/tmp/vhh_layoutdrill_{run_id}")
     private.mkdir(mode=0o700)
     pw = pwd.getpwnam(admin)
     os.chown(private, pw.pw_uid, pw.pw_gid)
@@ -190,7 +190,7 @@ def run(build: Path, *, files: int = 300, keep: bool = False, out: Path | None =
         again = snapshot_tree(node, "migrate")
         report.check("the tree still reads after the cleanup",
                      {p: e.get("sha256") for p, e in again.items()} == {p: e.get("sha256") for p, e in after.items()})
-    except (DrillError, KeyboardInterrupt, subprocess.SubprocessError) as e:
+    except (DrillError, KeyboardInterrupt, subprocess.SubprocessError, RuntimeError, OSError) as e:
         report.check("drill completed", False, str(e) or type(e).__name__)
     finally:
         if writer:

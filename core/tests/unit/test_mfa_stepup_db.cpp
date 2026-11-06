@@ -381,6 +381,10 @@ TEST_F(StepUpDb, EveryAnnotatedCommandRefusesWithoutAGrantAndRunsWithOne) {
         {"vault.recovery.suspend", "needs a versioned provider bucket"},
         {"vault.recover", "needs a bucket and the customer's recovery material (VaultRecoverDb; the console is refused "
                           "recover_requires_device first)"},
+        {"vault.layout.migrate", "needs an encrypting S3 vault on path_v0 with recovery material and a bucket; the ops "
+                                 "gate runs after the preconditions (LayoutMigrationTest)"},
+        {"vault.layout.cleanup", "needs a cut-over vault past its waiting period with a verified manifest; the gate "
+                                 "runs after those checks, only with confirm (LayoutMigrationTest)"},
     };
 
     std::set<std::string> annotated;

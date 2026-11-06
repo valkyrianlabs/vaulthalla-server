@@ -640,7 +640,7 @@ def main(argv: list[str] | None = None) -> int:
         ok, summary = drill_migrate.run(Path(a.build).resolve(), files=min(a.files, 2000), keep=a.keep,
                                         out=Path(a.out) if a.out else None)
         print(f"vhh drill migrate: {'PASS' if ok else 'FAIL'}: {sum(c['ok'] for c in summary.get('checks', []))}/"
-              f"{len(summary.get('checks', []))} checks; report {a.out or '/tmp/vhh_migrate_' + summary['run_id'] + '/report.json'}")
+              f"{len(summary.get('checks', []))} checks; report {a.out or '/tmp/vhh_layoutdrill_' + summary['run_id'] + '/report.json'}")
         return 0 if ok else 1
     ok, summary = run(Path(a.build).resolve(), files=a.files, s3=a.s3, negative=not a.no_negative, keep=a.keep,
                       out=Path(a.out) if a.out else None)

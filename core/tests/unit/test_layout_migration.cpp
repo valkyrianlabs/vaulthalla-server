@@ -28,6 +28,8 @@
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "ops/VaultLayout.hpp"
+#include "protocols/shell/Router.hpp"
+#include "protocols/shell/commands/vault.hpp"
 #include "ops/Vaults.hpp"
 #include "recovery/local/Versions.hpp"
 #include "runtime/Deps.hpp"
@@ -792,6 +794,39 @@ TEST_F(LayoutMigrationTest, LayoutMigrationOpsRefuse) {
     EXPECT_THROW(start(v), ops::Conflict) << "one migration at a time";
     EXPECT_THROW((void)ops::vault_layout::cleanup(superUser, {.vault_id = v.id(), .confirm = std::nullopt}), ops::Conflict)
         << "nothing to clean up before the cutover";
+}
+
+// The CLI: --status (text and JSON), the start, and --cleanup refused before the cutover.
+TEST_F(LayoutMigrationTest, LayoutMigrationCli) {
+    auto v = legacyVault();
+    write(v, "/a.txt", "a");
+    (void)pass(v);
+    const auto router = std::make_shared<protocols::shell::Router>();
+    protocols::shell::commands::vault::registerCommands(router);
+    const auto id = std::to_string(v.id());
+
+    auto r = router->executeLine("vault migrate-layout " + id + " --status --json", superUser, nullptr);
+    ASSERT_EQ(r.exit_code, 0) << r.stderr_text << r.stdout_text;
+    auto doc = nlohmann::json::parse(r.stdout_text);
+    EXPECT_EQ(doc.at("layout"), "path_v0");
+    EXPECT_TRUE(doc.at("migration").is_null());
+
+    r = router->executeLine("vault migrate-layout " + id + " --cleanup", superUser, nullptr);
+    EXPECT_NE(r.exit_code, 0) << "nothing to clean up before the cutover";
+
+    r = router->executeLine("vault migrate-layout " + id + " --accept-unpriced", superUser, nullptr);
+    ASSERT_EQ(r.exit_code, 0) << r.stderr_text << r.stdout_text;
+    EXPECT_NE(r.stdout_text.find("started"), std::string::npos) << r.stdout_text;
+
+    r = router->executeLine("vault migrate-layout " + id + " --status", superUser, nullptr);
+    ASSERT_EQ(r.exit_code, 0) << r.stderr_text;
+    EXPECT_NE(r.stdout_text.find("state:         copying"), std::string::npos) << r.stdout_text;
+    ASSERT_EQ(lm::run(v.engine, deps()).state, lm::State::CutOver);
+    r = router->executeLine("vault migrate-layout " + id + " --status --json", superUser, nullptr);
+    ASSERT_EQ(r.exit_code, 0) << r.stderr_text;
+    doc = nlohmann::json::parse(r.stdout_text);
+    EXPECT_EQ(doc.at("layout"), "opaque_v1");
+    EXPECT_EQ(doc.at("migration").at("state"), "cut_over");
 }
 
 }
