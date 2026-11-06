@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { authStatePath, authenticateAndSaveState, explicitSkipRequested } from './helpers/auth'
+import { armStepUp, authenticateAndSaveState, authStatePath, explicitSkipRequested } from './helpers/auth'
 
 // Paired devices (Vaulthalla Desktop): the Devices pages, the "Pair a device" dialog's number matching, and the super
 // admin's remote-connections switch. The device.* answers are scripted on the console socket (page.routeWebSocket), so
@@ -18,6 +18,8 @@ const OFFLINE = process.env.VAULTHALLA_E2E_OFFLINE === '1' || process.env.VAULTH
 
 test.skip(explicitSkipRequested(), 'VAULTHALLA_E2E_SKIP set')
 test.use({ ignoreHTTPSErrors: true, ...(OFFLINE ? {} : { storageState: authStatePath }) })
+// Step-up dialogs (#359) are answered with the e2e account's password and TOTP code.
+test.beforeEach(({ page }) => armStepUp(page))
 
 test.beforeAll(async ({ browser }) => {
   if (!OFFLINE) await authenticateAndSaveState(browser)

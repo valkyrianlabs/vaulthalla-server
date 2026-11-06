@@ -1,6 +1,6 @@
 import { expect, test, type Browser, type Page } from '@playwright/test'
 import { randomBytes } from 'node:crypto'
-import { authStatePath, authenticateAndSaveState, explicitSkipRequested, signIn } from './helpers/auth'
+import { armStepUp, authenticateAndSaveState, authStatePath, explicitSkipRequested, signIn } from './helpers/auth'
 
 // RBAC personas through the console: the super admin creates each persona in Users → New user, the persona signs in
 // in a fresh browser, and the console must offer exactly what core allows — no admin links a role can't use, a typed
@@ -9,6 +9,8 @@ import { authStatePath, authenticateAndSaveState, explicitSkipRequested, signIn 
 
 test.skip(explicitSkipRequested(), 'VAULTHALLA_E2E_SKIP set')
 test.use({ storageState: authStatePath, ignoreHTTPSErrors: true })
+// Step-up dialogs (#359) are answered with the e2e account's password and TOTP code.
+test.beforeEach(({ page }) => armStepUp(page))
 
 test.beforeAll(async ({ browser }) => {
   await authenticateAndSaveState(browser)
@@ -64,12 +66,13 @@ const asPersona = async (browser: Browser, persona: { name: string; password: st
 const navLabels = async (page: Page) => (await page.getByRole('navigation', { name: 'Main' }).getByRole('link').allInnerTexts()).map(t => t.trim()).filter(Boolean)
 
 test.describe.serial('personas', () => {
-  test('a user without admin permissions gets Files and Shares only, and plain denials elsewhere', async ({ page, browser }) => {
+  test('a user without admin permissions gets Files, Shares and their own Devices, and plain denials elsewhere', async ({ page, browser }) => {
     const persona = await createPersona(page, 'unprivileged')
     try {
       const { context, page: p, sent } = await asPersona(browser, persona)
       await expect(p).toHaveURL(/\/files/)
-      expect(await navLabels(p)).toEqual(['Files', 'Shares'])
+      // Everyone pairs Vaulthalla Desktop to their own account (components/shell/nav.ts).
+      expect(await navLabels(p)).toEqual(['Files', 'Shares', 'Devices'])
       for (const route of ['/users', '/groups', '/roles', '/health', '/settings', '/cost', '/notifications']) {
         await p.goto(route)
         await expect(p.getByText(/you don.t have access to this/i), route).toBeVisible({ timeout: 15_000 })

@@ -316,7 +316,18 @@ Dev mode requires both `VH_BUILD_MODE=dev` and the gitignored `enable_dev_mode` 
 ## Other harnesses
 
 - `tools/smoke/s3_gateway_{e2e,merge_ready,scoped_budget_smoke}.sh`: S3 gateway smoke runs against a live install.
-- `tools/e2e/{load_env.sh,provision_e2e_user.sh}` + `web/tests/e2e` (Playwright).
+- `tools/e2e/{load_env.sh,provision_e2e_user.sh}` + `web/tests/e2e` (Playwright). MFA (#405): the e2e account is an
+  admin, so provisioning gives it a TOTP factor before any worker starts (`tools/e2e/enroll_totp.py`: the real ws
+  sign-in through `tools/lab/mfa.py`, the seed in `$RESULT_DIR/totp-<user>.json`, 0600, exported as
+  `VAULTHALLA_E2E_TOTP_FILE`; `VAULTHALLA_E2E_PYTHON` names an interpreter with `websockets`, `VAULTHALLA_E2E_WS_URL`
+  the daemon's ws when the default from the console settings is wrong). `helpers/totp.ts` `withTotpCode` spends one
+  step at a time under a lock beside that file (the daemon refuses a step at or below the last it accepted, so codes
+  must reach it in order across workers). `armStepUp(page)` (each spec's `beforeEach`, and `deleteVault`) answers the
+  Step-up dialog (#359) with the password and a code. No daemon bypass.
+- `tools/macos/{install_acceptance,storage_smoke}.py` sign the admin in through `tools/macos/session.py` (password, TOTP,
+  first enrollment, step-up with one resend). install_acceptance keeps the authenticator in `admin-totp.json` next to
+  `--state` (`--totp-file`), storage_smoke in memory. Offline tests: `tools/macos/tests` (a scripted daemon behind the
+  real `Ws`; `verify.sh packaging`). `tools/lab/pentest/client.py` imports `websockets` lazily so they run without it.
 - `tools/dev/share_preview_smoke.mjs`: public share preview smoke.
 - The remote gateway smoke (`s3_gateway_scoped_budget_smoke.sh`, needs a running install) has no upstream knobs: it
   creates the fixed test bucket `vh-test-gateway-smoke` with `build/core/vh_live_bucket` (the guarded helper; a

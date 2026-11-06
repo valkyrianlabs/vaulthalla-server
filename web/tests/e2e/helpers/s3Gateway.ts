@@ -1,4 +1,5 @@
 import { expect, type Page } from '@playwright/test'
+import { armStepUp } from './auth'
 
 export function uniqueE2EName(prefix: string) {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
@@ -188,17 +189,21 @@ export async function saveKeyVaultBudget(page: Page, amount: string, vaultName?:
   await expect(page.getByTestId('s3-gateway-key-vault-budget-disable')).toBeEnabled()
 }
 
-// Deletes a vault through the console: Vaults → the vault → Settings → Delete vault (typed confirmation).
+// Deletes a vault through the console: Vaults → the vault → Settings → Delete vault → Delete now (typed confirmation).
+// Deleting a vault is a data.destroy step-up (#359): the dialog is answered with the e2e account's password and code.
 export async function deleteVault(page: Page, name: string) {
+  await armStepUp(page)
   await page.goto('/vaults')
   // The row link's name also carries the vault's description.
   await page.getByRole('link').filter({ hasText: name }).first().click()
   await page.waitForURL(/\/vaults\/\d+$/)
   await page.goto(`${new URL(page.url()).pathname}/settings`)
   await page.getByRole('button', { name: 'Delete vault' }).click()
-  const dialog = page.getByRole('dialog')
-  await dialog.getByLabel(`Type ${name} to confirm`).fill(name)
-  await dialog.getByRole('button', { name: 'Delete vault' }).click()
+  // The delete dialog (features/vaults/DeleteVaultDialog.tsx): Delete now, then the typed confirmation.
+  const dialog = page.getByTestId('vault-delete-dialog')
+  await dialog.getByTestId('vault-delete-now').click()
+  await dialog.getByLabel(`Type “${name}” to confirm`).fill(name)
+  await dialog.getByTestId('vault-delete-now-confirm').click()
   await page.waitForURL(/\/vaults$/)
 }
 

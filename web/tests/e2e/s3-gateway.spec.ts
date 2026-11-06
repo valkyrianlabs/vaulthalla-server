@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { authStatePath, authenticateAndSaveState, explicitSkipRequested } from './helpers/auth'
+import { armStepUp, authenticateAndSaveState, authStatePath, explicitSkipRequested } from './helpers/auth'
 import {
   acknowledgeBudgetAlerts,
   addDefaultCredentialOverride,
@@ -28,6 +28,8 @@ import {
 test.describe.configure({ mode: 'serial' })
 test.skip(explicitSkipRequested(), 'VAULTHALLA_E2E_SKIP requested')
 test.use({ storageState: authStatePath })
+// Step-up dialogs (#359) are answered with the e2e account's password and TOTP code.
+test.beforeEach(({ page }) => armStepUp(page))
 
 let userAccessCredential = ''
 let vaultAllowCredential = ''
@@ -39,6 +41,8 @@ test.beforeAll(async ({ browser }) => {
 test.beforeEach(({ page }) => trackBudgetPolicies(page))
 
 test.afterAll(async ({ browser }) => {
+  // Each vault deletion is its own data.destroy step-up (single use), so each spends a TOTP step: up to 30 s apiece.
+  test.setTimeout(60_000 + createdVaults.length * 45_000)
   const context = await browser.newContext({ storageState: authStatePath, ignoreHTTPSErrors: true })
   const page = await context.newPage()
   // Acknowledge the budget alerts this run raised (before deleting vaults: a vault's alerts go with it), so they

@@ -2,7 +2,8 @@
 """Milestone B storage smoke (roadmap #215): a private daemon instance on this machine, end to end.
 
 Starts build-macos/core/vaulthalla-server as a VH_TEST_MODE instance (every path under /tmp, the disposable cluster
-from tools/macos/test-db.sh), then over the real surfaces: logs in as the generated admin (ws), creates a vault,
+from tools/macos/test-db.sh), then over the real surfaces: signs in as the generated admin (ws; the password, then a
+TOTP authenticator it enrolls and keeps in memory, #357/#405; step-up refusals answered, #359), creates a vault,
 uploads a random file over the HTTP lane, downloads it and checks the bytes, checks the vault's backing file is
 ciphertext, restarts the daemon and checks again that the login, the vault and the bytes survived.
 
@@ -27,6 +28,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 from tools.lab.pentest.client import Target, Ws, http_request, ok, upload_files  # noqa: E402
+from tools.macos.session import AdminFactor, must, sign_in  # noqa: E402
 
 ROOT = Path("/tmp/vh-macos-storage-smoke")
 
@@ -98,12 +100,11 @@ def prepare(ws_port: int, http_port: int, mount_mode: str | None) -> None:
     (ROOT / "config.yaml").write_text(config)
 
 
-async def login(target: Target, password: str, name: str = "admin") -> tuple[Ws, str]:
-    ws = await Ws(target).__aenter__()
-    res = await ws.login(name, password)
-    if not ok(res):
-        await ws.__aexit__(None, None, None)
-        raise RuntimeError(f"{name} login failed: {res.get('status')}")
+async def login(target: Target, password: str, factor: AdminFactor | None = None,
+                name: str = "admin") -> tuple[Ws, str]:
+    """The admin with `factor` (the first sign-in enrolls an authenticator into it, kept in this process's memory
+    only; later ones answer the TOTP step from it), or another account with its password."""
+    ws = await sign_in(target, name, password, factor, label="vh storage smoke")
     return ws, ws.cookie_header()
 
 
@@ -145,10 +146,11 @@ async def run(args) -> bool:
         if not good:
             return False
         password = (ROOT / "backing/super_admin_initial_password").read_text().strip()
+        admin = AdminFactor()  # memory only: this run's authenticator, never written or printed
 
-        ws, cookie = await login(target, password)
-        good &= step("ws login as admin", True)
-        health = (await ws.must("stats.system.health")).get("stats", {})
+        ws, cookie = await login(target, password, admin)
+        good &= step("ws sign-in as admin (password + TOTP enrollment)", True)
+        health = (await must(ws, "stats.system.health")).get("stats", {})
         deps = health.get("deps", {})
         state = deps.get("mount_state")
         good &= step("health reports mount + secrets backend honestly",
@@ -160,7 +162,7 @@ async def run(args) -> bool:
             # A configured mount that isn't there is degraded health, never "healthy", and never blocks storage.
             overall = health.get("overall_status") or health.get("status")
             good &= step("unmounted configured mount reads as degraded", overall in ("degraded", "warning"), f"overall={overall}")
-        vault = (await ws.must("storage.vault.add", {"name": "storage_smoke", "type": "local"}))["vault"]
+        vault = (await must(ws, "storage.vault.add", {"name": "storage_smoke", "type": "local"}))["vault"]
         vault_id = int(vault["id"])
         good &= step("create encrypted local vault", vault_id > 0, f"id={vault_id}")
 
@@ -182,9 +184,9 @@ async def run(args) -> bool:
         good &= step("nested download matches", got == nested)
 
         # Share upload: an upload-only public link into /inbox, used from a share session.
-        await ws.must("fs.dir.create", {"vault_id": vault_id, "path": "/inbox"})
-        inbox = (await ws.must("fs.metadata", {"vault_id": vault_id, "path": "/inbox"}))["entry"]
-        link = await ws.must("share.link.create", {
+        await must(ws, "fs.dir.create", {"vault_id": vault_id, "path": "/inbox"})
+        inbox = (await must(ws, "fs.metadata", {"vault_id": vault_id, "path": "/inbox"}))["entry"]
+        link = await must(ws, "share.link.create", {
             "vault_id": vault_id, "root_entry_id": inbox["id"], "root_path": "/inbox", "target_type": "directory",
             "link_type": "upload", "access_mode": "public", "allowed_ops": ["metadata", "upload"],
             "public_role_assignment": {"vault_role_name": "share_upload_dropbox"}, "name": "smoke-upload"})
@@ -215,7 +217,7 @@ async def run(args) -> bool:
         good &= step("no staged plaintext left behind", not staged, f"{len(staged)} left")
         # RBAC over the web surface: a second, unprivileged account can't read or write the admin's vault.
         other_pw = os.urandom(12).hex()
-        await ws.must("auth.register", {"name": "smoke_other", "password": other_pw, "role": "unprivileged"})
+        await must(ws, "auth.register", {"name": "smoke_other", "password": other_pw, "role": "unprivileged"})
         await ws.__aexit__(None, None, None)
         other, other_cookie = await login(target, other_pw, name="smoke_other")
         good &= step("second user logs in", True)
@@ -230,9 +232,9 @@ async def run(args) -> bool:
         took = daemon.stop()
         good &= step("SIGTERM shutdown", took is not None, f"{took:.1f}s" if took is not None else "had to SIGKILL")
         good &= step("daemon restarts", daemon.start(args.ws_port))
-        ws, cookie = await login(target, password)
-        good &= step("ws login after restart", True)
-        vaults = (await ws.must("storage.vault.list")).get("vaults", [])
+        ws, cookie = await login(target, password, admin)
+        good &= step("ws sign-in after restart (password + TOTP)", True)
+        vaults = (await must(ws, "storage.vault.list")).get("vaults", [])
         good &= step("vault survived restart", any(int(v["id"]) == vault_id for v in vaults))
         got = download(target, cookie, vault_id, f"/{name}")
         good &= step("download after restart matches (keys unsealed)",

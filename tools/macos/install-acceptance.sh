@@ -20,7 +20,9 @@
 #              provisioning still idempotent); the package reinstalled over itself (an upgrade) keeping every byte and
 #              bringing Caddy back; then `vh teardown caddy --purge`.
 #   cleanup    removes the hidden test identity (only if this script created it).
-# It never purges and never prints secrets: the admin password goes from the state directory to the client on stdin.
+# It never purges and never prints secrets: the admin password goes from the state directory to the client on stdin,
+# and the admin's TOTP authenticator, enrolled by the first seed (MFA is mandatory for admins), stays in the report
+# directory's admin-totp.json (0600). Remove that file with the report when the installation is purged.
 set -euo pipefail
 
 SUPPORT="/Library/Application Support/Vaulthalla"
@@ -94,6 +96,8 @@ sealed_by_backend() {  # the DB password in the reported backend's format, nothi
 }
 
 client() {  # client seed|verify: the admin password goes from the state dir to the unprivileged client on stdin
+  # The admin's second factor (#357): the first seed enrolls an authenticator and the client keeps it in
+  # $REPORT/admin-totp.json (0600, the client's own run state); every later run answers the TOTP step from it.
   # shellcheck disable=SC2024  # deliberate: root opens the secret, the client only gets the stream
   as_client "$PY" "$REPO/tools/macos/install_acceptance.py" "$1" --state "$REPORT/acceptance.json" \
     --expect-mount-state disabled < "$STATE/super_admin_initial_password"

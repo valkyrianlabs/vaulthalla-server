@@ -1,6 +1,6 @@
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { join } from 'node:path'
-import { authStatePath, authenticateAndSaveState, explicitSkipRequested } from './helpers/auth'
+import { armStepUp, authenticateAndSaveState, authStatePath, explicitSkipRequested } from './helpers/auth'
 
 // Rich previews end to end: server preview plans, ranged /download/content for native media, PDF paging, text
 // view/edit/save with ETag conflicts, 3D models through the lazy viewer, and share-link capability gating
@@ -11,6 +11,8 @@ import { authStatePath, authenticateAndSaveState, explicitSkipRequested } from '
 
 test.skip(explicitSkipRequested(), 'VAULTHALLA_E2E_SKIP set')
 test.use({ storageState: authStatePath, ignoreHTTPSErrors: true })
+// Step-up dialogs (#359) are answered with the e2e account's password and TOTP code.
+test.beforeEach(({ page }) => armStepUp(page))
 
 test.beforeAll(async ({ browser }) => {
   await authenticateAndSaveState(browser)
