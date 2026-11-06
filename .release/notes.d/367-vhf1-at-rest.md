@@ -7,10 +7,10 @@
   of encrypting S3/R2 vaults are the same bytes: still one object per file version (multipart is only transport, never
   one object per chunk), about 0.025 % larger for big files and 120 bytes larger for small ones; an empty file is a
   136-byte object.
-- **Existing files keep their format until the conversion.** Files, local versions, snapshots and bucket objects
-  written by earlier releases stay exactly as they are on disk and keep reading normally; a file only moves to VHF1
-  when its content is written again (an edit, an overwrite, a key rotation, a restore). Nothing is converted or
-  rewritten by the upgrade itself. A later release converts the rest (#372) and only then retires the old format
-  (#376). A resumable upload that was in progress during the upgrade finishes in the format it started in.
+- **Existing content keeps reading normally.** Files, local versions and snapshots written by earlier releases are
+  converted to VHF1 in the background after the upgrade (see "Existing files and recovery points are converted to
+  VHF1"); bucket objects of existing encrypted S3/R2 vaults keep their format until the layout migration of a later
+  release. A later release retires the old format (#376). A resumable upload that was in progress during the upgrade
+  finishes in the format it started in.
 - The upgrade adds a generated `content_format` column to the file and recovery tables (one table rewrite); it changes
   no data.
