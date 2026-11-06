@@ -850,7 +850,8 @@ TEST(ManifestChain, MissingAndMismatchedSegmentsFallBackInOrder) {
     for (const auto& s : segs)
         if (s.sid != rewritten->sid) shared.push_back(s);
     const auto purge = [&](const std::string& sid) {
-        for (const auto& v : w.bucket->history(segmentKey(sid))) w.bucket->purgeVersion(segmentKey(sid), v.version_id);
+        const auto versions = w.bucket->history(segmentKey(sid));  // copy: purging mutates the history
+        for (const auto& v : versions) w.bucket->purgeVersion(segmentKey(sid), v.version_id);
     };
 
     // (a) overwritten (mismatch), its own provider version intact.

@@ -447,8 +447,10 @@ the `auth/webauthn` verifier (#355): `fromVerified(webauthn::NewCredential, …)
 `CredentialLookup`, joined with `user_mfa`'s handle) and `recordAssertion(VerifiedAssertion, expectedSignCount)`. Factors are removed by `disabled_at` (kept for audit). Audit actions
 `auth.mfa.factor.enroll|rename|remove|suspend`, `auth.mfa.recovery.generate|acknowledge|use` with ids only;
 `ws::LogRedaction` redacts codes, seeds, `otpauth:` URIs (by value) and WebAuthn material. `vh secrets export
-mfa-seal|mfa-pepper` (base64). Tests: `MfaTotp*`, `MfaRecoveryCodes*`, `MfaSeal*`, `MfaLogRedaction*`,
-`MfaFactorsDb*`, `SqlDeployerHistoryDb.MfaFactors*`.
+mfa-seal|mfa-pepper` (base64); `vh secret set mfa-seal|mfa-pepper <file>` imports that file on a new host (#398,
+`ops::mfa_keys`, super admin, confirmed, audited `secrets.mfa_key.import`): the seal must open a stored TOTP seed, the pepper must
+reproduce the hash of a recovery code the actor passes (`--code`), a readable stored key is never replaced, a mismatch changes nothing. Tests: `MfaTotp*`, `MfaRecoveryCodes*`, `MfaSeal*`, `MfaLogRedaction*`,
+`MfaFactorsDb*`, `MfaKeyImportDb*`, `SqlDeployerHistoryDb.MfaFactors*`.
 
 **Pending-MFA sign-in and guided enrollment (#357; MFA design note §5.2, §7.1, §7.2, §8).** `auth::mfa::policy`
 (`Policy.hpp`): level `auth.mfa.policy` (`optional | admins | all`, default `admins` on new and upgraded installs, D2) plus

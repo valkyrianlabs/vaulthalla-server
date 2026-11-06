@@ -10,21 +10,36 @@ static std::shared_ptr<CommandUsage> buildBaseUsage(const std::weak_ptr<CommandU
     return cmd;
 }
 
-static const auto secretPos = Positional::WithAliases("secret", "Name of the secret (jwt-secret, db-password)", {"db-password", "jwt-secret"});
+static const auto secretPos = Positional::WithAliases("secret", "Name of the secret (jwt-secret, db-password, mfa-seal, mfa-pepper)",
+                                                      {"db-password", "jwt-secret", "mfa-seal", "mfa-pepper"});
 static const auto exportSecretPos = Positional::WithAliases(
     "secret", "Name of the secret (jwt-secret, db-password, mfa-seal, mfa-pepper, all)",
     {"db-password", "jwt-secret", "mfa-seal", "mfa-pepper", "all"});
 static const auto filePos = Positional::Alias("file", "Absolute path to a file containing the secret value (read by the daemon)", "path");
+
+static const auto mfaRecoveryCode = Optional::Single(
+    "code", "mfa-pepper only: one of your own recovery codes (used or unused, it is not spent); the imported key must "
+            "reproduce its stored hash", "code", "recovery-code");
+static const auto yesFlag = Flag::Alias("yes", "Don't ask for confirmation", "yes");
 
 static std::shared_ptr<CommandUsage> set(const std::weak_ptr<CommandUsage>& parent) {
     const auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"update", "set", "modify", "edit"};
     cmd->effect = CommandEffect::Write;
     cmd->description = "Set or update an internal secret. db-password is refused: the PostgreSQL role password and the "
-                       "sealed copy must change together (the command prints the rotation procedure).";
+                       "sealed copy must change together (the command prints the rotation procedure). mfa-seal and "
+                       "mfa-pepper import the file `vh secret export` wrote, on a host restored from a database backup "
+                       "without its old state (super admins only, confirmed, audited): the key is checked against stored "
+                       "TOTP seeds (mfa-seal) or against a recovery code of yours (mfa-pepper, --code), a key that does "
+                       "not match or a host that already has a working key is refused, and the key is never printed.";
     cmd->positionals = { secretPos, filePos };
+    cmd->optional = { mfaRecoveryCode };
+    cmd->optional_flags = { yesFlag };
     cmd->examples = {
-        {"vh secret set jwt-secret /var/lib/vaulthalla/jwt_secret.txt", "Set the JWT secret from the specified file."}
+        {"vh secret set jwt-secret /var/lib/vaulthalla/jwt_secret.txt", "Set the JWT secret from the specified file."},
+        {"vh secret set mfa-seal /root/mfa-seal.json", "Import the exported TOTP sealing key after a restore."},
+        {"vh secret set mfa-pepper /root/mfa-pepper.json --code ABCDE-FGHJK",
+         "Import the exported recovery code key, verified against one of your own recovery codes."}
     };
     return cmd;
 }
@@ -48,7 +63,6 @@ static std::shared_ptr<CommandUsage> secret_export(const std::weak_ptr<CommandUs
 
 // ---- vh secret master (#352, #353): the versioned rewrap of the data-wrapping masters ---------------------------
 
-static const auto yesFlag = Flag::Alias("yes", "Don't ask for confirmation", "yes");
 
 static Optional slotOption(const bool allowAll) {
     return Optional::Single("slot",
