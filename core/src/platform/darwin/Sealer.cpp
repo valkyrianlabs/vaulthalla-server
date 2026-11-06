@@ -106,7 +106,9 @@ std::string_view posture() noexcept {
     return "unknown";
 }
 
-void seal(const std::filesystem::path& dir, const std::string& name, const std::span<const uint8_t> secret) {
+// The Secure Enclave has no PCRs: a PCR policy is a TPM feature and does not apply here (#351).
+void seal(const std::filesystem::path& dir, const std::string& name, const std::span<const uint8_t> secret,
+          Policy /*policy*/) {
     const std::scoped_lock lock(darwinSealerMutex());
     requireUsable();
     sealLocked(dir, name, secret);
@@ -154,5 +156,26 @@ bool present(const std::filesystem::path& dir, const std::string& name) {
 bool complete(const std::filesystem::path& dir, const std::string& name) {
     return present(dir, name);
 }
+
+std::string_view policyName(const Policy policy) noexcept { return policy == Policy::Pcr7 ? "pcr7" : "none"; }
+
+std::optional<Policy> parsePolicy(const std::string_view text) noexcept {
+    if (text == "none") return Policy::None;
+    if (text == "pcr7") return Policy::Pcr7;
+    return std::nullopt;
+}
+
+bool policySupported() noexcept { return false; }
+
+Policy policyOf(const std::filesystem::path&, const std::string&) { return Policy::None; }
+
+ResealResult reseal(const std::filesystem::path&, const std::string&, const Policy) {
+    throw std::runtime_error("sealed secrets on this platform are bound by the Secure Enclave, which has no PCR policy; "
+                             "there is nothing to reseal");
+}
+
+void recover(const std::filesystem::path&, const std::string&) {}
+
+void setResealHookForTesting(ResealHook) noexcept {}
 
 }

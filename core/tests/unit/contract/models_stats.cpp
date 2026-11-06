@@ -322,6 +322,8 @@ void checkSystemStats(vh::test::contract_models::Checker& c) {
     health.deps.mountDetail = "/mnt/vaulthalla";
     health.deps.secretsBackend = "tpm2";
     health.deps.secretsPosture = "hardware";
+    health.deps.secretsPolicy = "pcr7";
+    health.deps.secretsPcrBound = 6;
     health.shell.adminUidBound = true;
     health.database = sm::DatabaseHealth{.poolSize = 4, .reachable = true, .probeLatencyMs = 1, .probeError = "slow"};
     c.check(json(health), "SystemHealth", "healthy system");
@@ -333,6 +335,8 @@ void checkSystemStats(vh::test::contract_models::Checker& c) {
         {.vaultId = 13, .vaultName = "photos", .detail = "no recovery recipient is enrolled and the last key export is "
                                                          "not of the current key version"});
     c.check(json(health), "SystemHealth", "a vault without recovery material");
+    health.deps.secretsWarning = "6 sealed secret(s) are bound to TPM PCR 7 and no `vh secret export all` was ever taken";
+    c.check(json(health), "SystemHealth", "PCR-bound secrets with no recent export");
     c.check(json(sm::SystemHealth{}), "SystemHealth", "system before the pool exists");
 }
 

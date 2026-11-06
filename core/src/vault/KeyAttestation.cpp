@@ -66,6 +66,8 @@ Seed loadSeedLocked(SigningSeed& s) {
         provider.init();  // generates and seals a 32-byte seed when none exists
         if (provider.getMasterKey().size() == kSeedSize)
             seed = std::make_shared<const crypto::SecretBytes>(provider.getMasterKey());
+    } catch (const platform::sealer::PolicyUnsatisfied&) {
+        throw;  // PCR 7 changed (#351): the key is intact and unseals again once it matches; never replace it
     } catch (const std::exception& e) {
         log::Registry::crypto()->warn("[KeyAttestation] The key attestation signing key does not unseal on this host "
                                       "({}); generating a new one. Attestations by the old key still verify.",

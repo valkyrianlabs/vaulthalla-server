@@ -36,6 +36,10 @@ constexpr std::string_view kSignOutReason =
 constexpr std::string_view kRepairReason =
     "rotating the device identity revokes every paired device; a human at the terminal decides it, never an agent";
 
+constexpr std::string_view kResealReason =
+    "how the sealed secrets are bound to this host's TPM (PCR 7) is changed by a human at the terminal, never by an "
+    "agent";
+
 constexpr std::string_view kRecipientReason =
     "a recovery recipient is a decryption path for the vault: a human enrolls or revokes it at the terminal, never an "
     "agent";
@@ -59,6 +63,7 @@ const std::vector<Exclusion>& exclusions() {
         {{"secrets", "master", "rollback"}, kMasterReason},
         {{"secrets", "jwt", "rotate"}, kSignOutReason},
         {{"secrets", "device-identity", "rotate"}, kRepairReason},
+        {{"secrets", "reseal"}, kResealReason},
         {{"setup"}, "installation and lifecycle commands need root and a human at the terminal (this includes "
                     "setup set-super-admin-password)"},
         {{"setup", "set-super-admin-password"}, "the super-admin password is set by a human at the terminal"},

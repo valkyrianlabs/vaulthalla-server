@@ -213,6 +213,49 @@ static std::shared_ptr<CommandUsage> device_identity(const std::weak_ptr<Command
     return cmd;
 }
 
+// ---- vh secret policy, vh secret reseal (#351): the TPM PCR 7 policy of the sealed secrets ------------------------
+
+static std::shared_ptr<CommandUsage> policy(const std::weak_ptr<CommandUsage>& parent) {
+    const auto cmd = buildBaseUsage(parent);
+    cmd->aliases = {"policy"};
+    cmd->effect = CommandEffect::Read;
+    cmd->description = "Show how the sealed secrets of this host are bound: the configured policy "
+                       "(secrets.tpm_pcr_policy: none or pcr7), the policy each sealed secret carries, whether a "
+                       "hardware TPM seals them, when the last `vh secret export all` was taken, and any warning (a PCR "
+                       "7 binding with no export newer than 30 days, secrets that do not match the configured policy). "
+                       "On macOS the Secure Enclave has no PCR policy and is unaffected. Super admins only.";
+    cmd->optional_flags = {jsonFlag};
+    cmd->examples = {{"vh secret policy", "Show the sealing policy and every sealed secret's binding."}};
+    return cmd;
+}
+
+static std::shared_ptr<CommandUsage> reseal(const std::weak_ptr<CommandUsage>& parent) {
+    const auto cmd = buildBaseUsage(parent);
+    cmd->aliases = {"reseal"};
+    cmd->effect = CommandEffect::Destructive;
+    cmd->description = "Reseal every sealed secret of this host under the policy config.yaml names "
+                       "(secrets.tpm_pcr_policy: none or pcr7, read when the daemon started) at the current PCR values. "
+                       "Each secret is unsealed, sealed again beside the old blob, unsealed and compared, and only then "
+                       "swapped in; no secret changes and nothing is re-encrypted. The setting alone never rebinds "
+                       "existing secrets: this command does, explicitly. Binding to PCR 7 is refused unless a hardware "
+                       "TPM seals the secrets, every vault's key versions have a confirmed backup and a `vh secret "
+                       "export all` is under 24 hours old. Run it again after a planned firmware or Secure Boot update "
+                       "and before rebooting into it, or with the policy set to none to turn the binding off (also "
+                       "from a recovery boot that still matches). --pcr7 / --none assert which one you mean. Linux TPM "
+                       "only: on macOS the Secure Enclave is unaffected and there is nothing to reseal. Super admins "
+                       "only; asks to confirm (--yes without a terminal).";
+    cmd->optional_flags = {
+        Flag::Alias("pcr7", "Assert that secrets.tpm_pcr_policy is pcr7 (the command reseals to what config.yaml says)",
+                    "pcr7"),
+        Flag::Alias("none", "Assert that secrets.tpm_pcr_policy is none (removes the PCR 7 binding)", "none"),
+        yesFlag, jsonFlag};
+    cmd->examples = {
+        {"sudo vh secret reseal --pcr7", "Bind every sealed secret to PCR 7 (secrets.tpm_pcr_policy: pcr7; asks to confirm)."},
+        {"sudo vh secret reseal --none --yes", "Remove the PCR 7 binding (secrets.tpm_pcr_policy: none), without asking."}
+    };
+    return cmd;
+}
+
 static std::shared_ptr<CommandUsage> base(const std::weak_ptr<CommandUsage>& parent) {
     const auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"secrets", "secret"};
@@ -224,6 +267,8 @@ static std::shared_ptr<CommandUsage> base(const std::weak_ptr<CommandUsage>& par
     const auto masterCmd    = master(cmd->weak_from_this());
     const auto jwtCmd       = jwt(cmd->weak_from_this());
     const auto deviceCmd    = device_identity(cmd->weak_from_this());
+    const auto policyCmd    = policy(cmd->weak_from_this());
+    const auto resealCmd    = reseal(cmd->weak_from_this());
 
     const auto exportSingle = TestCommandUsage::Single(exportCmd);
     const auto setSingle    = TestCommandUsage::Single(setCmd);
@@ -244,7 +289,9 @@ static std::shared_ptr<CommandUsage> base(const std::weak_ptr<CommandUsage>& par
         exportCmd,
         masterCmd,
         jwtCmd,
-        deviceCmd
+        deviceCmd,
+        policyCmd,
+        resealCmd
     };
 
     return cmd;
