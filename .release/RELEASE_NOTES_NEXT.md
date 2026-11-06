@@ -26,7 +26,8 @@ for users and operators; keep it representative of what actually ships.
   current key export now marks the node degraded until you add one (`vh vault keys recipient add`) or export its
   keys (`vh vault keys export`).
 - **New encrypting S3/R2 vaults use the opaque layout** (no file names, paths or metadata visible to the provider).
-  Existing vaults keep their layout until the migration in a later release.
+  Existing vaults keep their layout until you move them with `vh vault migrate-layout <vault>`, which converts and
+  verifies everything before cutover and removes the old objects only after a waiting period.
 - **Local content converts in the background** to the authenticated VHF1 format after the upgrade, rate-limited;
   `vh vault format status all` shows progress.
 - **Back up before upgrading,** as always: this release adds database migrations 117 to 131. To restore onto a new
