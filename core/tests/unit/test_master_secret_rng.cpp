@@ -23,7 +23,7 @@ TEST(MasterSecretRng, SecretsAreFullLengthAndDistinct) {
     for (int i = 0; i < 256; ++i) {
         const auto secret = KeyProvider::generateMasterSecret();
         ASSERT_EQ(secret.size(), 32u);
-        EXPECT_TRUE(seen.insert(secret).second) << "duplicate master secret";
+        EXPECT_TRUE(seen.emplace(secret.bytes().begin(), secret.bytes().end()).second) << "duplicate master secret";
     }
     EXPECT_EQ(KeyProvider::generateMasterSecret(64).size(), 64u);
     EXPECT_THROW((void)KeyProvider::generateMasterSecret(0), std::invalid_argument);
@@ -33,8 +33,10 @@ TEST(MasterSecretRng, SecretsAreFullLengthAndDistinct) {
 // every byte value appears and none dominates.
 TEST(MasterSecretRng, BytesCoverTheWholeRange) {
     std::array<std::size_t, 256> counts{};
-    for (int i = 0; i < 2048; ++i)
-        for (const auto b : KeyProvider::generateMasterSecret()) ++counts[b];
+    for (int i = 0; i < 2048; ++i) {
+        const auto secret = KeyProvider::generateMasterSecret();
+        for (const auto b : secret.bytes()) ++counts[b];
+    }
     const auto [minIt, maxIt] = std::ranges::minmax_element(counts);
     EXPECT_GT(*minIt, 0u);
     EXPECT_LT(*maxIt, 2048u * 32u / 256u * 2u);  // under twice the expected 256 per value

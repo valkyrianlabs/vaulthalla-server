@@ -2,12 +2,17 @@
 #include "config/Config.hpp"
 #include "config/Registry.hpp"
 #include "crypto/secrets/KeyProvider.hpp"
+#include "crypto/SecretBytes.hpp"
 #include "log/Registry.hpp"
 
 #include <fstream>
 #include <paths.h>
 #include <pqxx/nontransaction>
+#include <memory>
+#include <span>
 #include <string_view>
+#include <tuple>
+#include <utility>
 
 using namespace vh::crypto;
 
@@ -115,7 +120,10 @@ Connection::Connection() : tpmKeyProvider_(
         return;
     }
 
-    const auto initPass = getFirstInitDBPass();
+    auto initPass = getFirstInitDBPass();
+    // The handed-over password is wiped once it is sealed, on every path (#350).
+    const std::unique_ptr<std::string, void (*)(std::string*)> initPassWipe(
+        initPass ? &*initPass : nullptr, [](std::string* s) { crypto::wipeSecret(*s); });
     if (tpmKeyProvider_->sealedExists()) {
         try {
             tpmKeyProvider_->init();
@@ -127,8 +135,7 @@ Connection::Connection() : tpmKeyProvider_(
             throw std::runtime_error(msg);
         }
         if (initPass) {
-            const auto replacement = std::vector<uint8_t>(initPass->begin(), initPass->end());
-            tpmKeyProvider_->updateMasterKey(replacement);
+            tpmKeyProvider_->updateMasterKey(crypto::viewBytes(*initPass));
             clearPendingDBPassIfPresent();
             log::Registry::runtime()->info("[seed] Reseeded TPM-stored DB password from pending handoff file");
         }
@@ -143,14 +150,14 @@ Connection::Connection() : tpmKeyProvider_(
             log::Registry::runtime()->error("[DBConnection] {}", msg);
             throw std::runtime_error(msg);
         }
-        tpmKeyProvider_->init(*initPass);
+        tpmKeyProvider_->init(crypto::viewBytes(*initPass));
         clearPendingDBPassIfPresent();
     }
 
-    const auto& key = tpmKeyProvider_->getMasterKey();
+    // No password here: open() reads it from the provider's locked memory for each connect, so no long-lived copy of
+    // it sits in params_ (#350).
     const auto& db = config::Registry::get().database;
-    params_ = {{"user", db.user}, {"password", std::string(key.begin(), key.end())}, {"host", libpqHost(db.host)},
-               {"port", std::to_string(db.port)}, {"dbname", db.name}};
+    params_ = {{"user", db.user}, {"host", libpqHost(db.host)}, {"port", std::to_string(db.port)}, {"dbname", db.name}};
     addSessionParams(params_);
     try {
         conn_ = open();
@@ -170,7 +177,23 @@ pqxx::connection& Connection::get() const { return *conn_; }
 bool Connection::healthy() const noexcept { return !poisoned_ && conn_ && conn_->is_open(); }
 
 std::unique_ptr<pqxx::connection> Connection::open() const {
-    auto conn = std::make_unique<pqxx::connection>(params_);
+    const auto password = tpmKeyProvider_ ? tpmKeyProvider_->getMasterKey() : std::span<const uint8_t>{};
+    if (password.empty()) {  // test mode: the environment's password is in params_
+        auto conn = std::make_unique<pqxx::connection>(params_);
+        configureSession(*conn);
+        return conn;
+    }
+
+    // libpq takes the password as text: a copy for this connect only, built in place (reserved, so no reallocation
+    // leaves a stray copy) and wiped on every path. libpq keeps its own copy for the session, out of our reach.
+    Params withPassword;
+    withPassword.reserve(params_.size() + 1);
+    withPassword.insert(withPassword.end(), params_.begin(), params_.end());
+    withPassword.emplace_back(std::piecewise_construct, std::forward_as_tuple("password"),
+                              std::forward_as_tuple(reinterpret_cast<const char*>(password.data()), password.size()));
+    const std::unique_ptr<std::string, void (*)(std::string*)> wipePassword(
+        &withPassword.back().second, [](std::string* s) { crypto::wipeSecret(*s); });
+    auto conn = std::make_unique<pqxx::connection>(withPassword);
     configureSession(*conn);
     return conn;
 }

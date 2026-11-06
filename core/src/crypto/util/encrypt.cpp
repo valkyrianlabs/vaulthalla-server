@@ -152,8 +152,8 @@ static std::string aes_gcm_unavailable_reason() {
 } // namespace
 
 std::vector<uint8_t> encrypt_aes256_gcm(
-    const std::vector<uint8_t>& plaintext,
-    const std::vector<uint8_t>& key,
+    const std::span<const uint8_t> plaintext,
+    const std::span<const uint8_t> key,
     std::vector<uint8_t>& out_iv)
 {
     if (key.size() != AES_KEY_SIZE) {
@@ -179,7 +179,7 @@ std::vector<uint8_t> encrypt_aes256_gcm(
 
 std::vector<uint8_t> decrypt_aes256_gcm(
     const std::vector<uint8_t>& ciphertext_with_tag,
-    const std::vector<uint8_t>& key,
+    const std::span<const uint8_t> key,
     const std::vector<uint8_t>& iv)
 {
     if (key.size() != AES_KEY_SIZE || iv.size() != AES_IV_SIZE) {
@@ -208,7 +208,7 @@ std::vector<uint8_t> decrypt_aes256_gcm(
 void decrypt_aes256_gcm_file(
     const std::filesystem::path& ciphertextPath,
     const std::function<void(std::span<const uint8_t>)>& sink,
-    const std::vector<uint8_t>& key,
+    const std::span<const uint8_t> key,
     const std::vector<uint8_t>& iv) {
     if (key.size() != AES_KEY_SIZE) throw std::invalid_argument("Invalid AES-256 key size");
     if (iv.size() != AES_IV_SIZE) throw std::invalid_argument("Invalid AES-GCM IV size");

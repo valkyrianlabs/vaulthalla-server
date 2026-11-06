@@ -1,5 +1,6 @@
 #pragma once
 
+#include "crypto/Fwd.hpp"
 #include "vault/Fwd.hpp"
 
 #include <chrono>
@@ -79,8 +80,9 @@ using ControllerFactory = std::function<std::shared_ptr<storage::s3::Controller>
 void setControllerFactoryForTesting(ControllerFactory factory);
 
 // A deleted vault's retained key (current version), unsealed with the TPM master key, for `vh vault keys export`.
+// The key stays in locked memory, wiped when the last holder releases it.
 struct RetainedKey {
-    std::vector<uint8_t> key;
+    std::shared_ptr<const crypto::SecretKey> key;
     std::shared_ptr<model::Key> record;
 };
 [[nodiscard]] RetainedKey retainedKey(unsigned int vaultId);

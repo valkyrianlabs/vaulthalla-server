@@ -52,6 +52,10 @@ Backups are separate on purpose:
 
 ## 4. Part 2: memory hygiene (`SecretKey` for masters)
 
+Status: implemented (#350). `SecretKey` is fixed at 32 bytes for vault keys, while the provider's slots include the DB
+password and other variable-length values, so `KeyProvider` uses `crypto::SecretBytes`, its variable-length sibling with
+the same lock-and-wipe behavior (`crypto/SecretBytes.hpp`, which also holds `WipedKeyCopy`).
+
 - `KeyProvider` holds the master in a `crypto::SecretKey` (locked, zeroized on destruction) instead of a `std::vector`. `getMasterKey()` returns a `std::span<const uint8_t>`.
 - Callers that copy it into vectors (`encrypt_aes256_gcm(..., master, ...)`, `Retention::retainedKey`, `EncryptionManager::mintSalvageKey`, `APIKeyManager`, `CredentialManager`) take spans, so no long-lived aliases remain.
 - Short-lived copies made by dependent APIs are wrapped in `WipedKeyCopy`.
@@ -103,7 +107,7 @@ Recommendation: (A) now. (B) as an opt-in later if a customer needs software-onl
 
 ## 8. Implementation issues (to open)
 
-1. Part 2: `SecretKey` for master secrets.
+1. Part 2: `SecretKey` for master secrets (#350, done).
 2. Part 3: PCR 7 opt-in with reseal, health warning and drill docs.
 3. Part 4a: versioned rewrap engine with staging columns and the `vault_master` rotation command.
 4. Part 4b: `ak_master` and `s3gw_master` rewrap, and JWT and device-identity rotation commands.

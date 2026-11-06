@@ -1,5 +1,6 @@
 #include "vault/EncryptionManager.hpp"
 #include "crypto/secrets/Dependents.hpp"
+#include "crypto/SecretBytes.hpp"
 #include "crypto/util/encrypt.hpp"
 #include "crypto/util/Gcm.hpp"
 #include "crypto/util/reseal.hpp"
@@ -30,17 +31,6 @@ using namespace vh::crypto;
 using namespace vh::crypto::util;
 using namespace vh::fs::model;
 
-namespace {
-// The one-shot crypto helpers take std::vector keys; this copy is wiped as soon as it goes out of scope.
-struct WipedKeyCopy {
-    explicit WipedKeyCopy(const SecretKeyPtr& key) : bytes(key->bytes().begin(), key->bytes().end()) {}
-    ~WipedKeyCopy() { sodium_memzero(bytes.data(), bytes.size()); }
-    WipedKeyCopy(const WipedKeyCopy&) = delete;
-    WipedKeyCopy& operator=(const WipedKeyCopy&) = delete;
-    std::vector<uint8_t> bytes;
-};
-}
-
 KeyVersionUnavailable::KeyVersionUnavailable(const unsigned int vaultId, const unsigned int version)
     : std::runtime_error(fmt::format("Vault {} does not hold key version {}", vaultId, version)),
       vaultId_(vaultId), version_(version) {}
@@ -53,24 +43,24 @@ std::string keyImportHint(const unsigned int vaultId) {
     return fmt::format("Restore it from a key export or backup: vh vault keys import {} --file <export.json>", vaultId);
 }
 
-std::vector<uint8_t> unsealKeyRowOrThrow(const unsigned int vaultId, const vh::vault::model::Key& rec,
-                                   const std::vector<uint8_t>& masterKey) {
-    std::vector<uint8_t> raw;
-    try {
-        raw = decrypt_aes256_gcm(rec.encrypted_key, masterKey, rec.iv);
-    } catch (const std::exception& e) {
-        throw KeyUnavailable(vaultId, "key_unsealable",
-                             fmt::format("Key version {} of vault {} does not unseal under this host's vault master "
-                                         "({}): the master key changed or the key row is damaged. {}",
-                                         rec.version, vaultId, e.what(), keyImportHint(vaultId)));
-    }
-    if (raw.size() != AES_KEY_SIZE) {
-        sodium_memzero(raw.data(), raw.size());
+// The row's key in locked memory; the unwrapped bytes are wiped on every path.
+SecretKeyPtr unsealKeyRowOrThrow(const unsigned int vaultId, const vh::vault::model::Key& rec,
+                                 const std::span<const uint8_t> masterKey) {
+    const WipedKeyCopy raw([&] {
+        try {
+            return decrypt_aes256_gcm(rec.encrypted_key, masterKey, rec.iv);
+        } catch (const std::exception& e) {
+            throw KeyUnavailable(vaultId, "key_unsealable",
+                                 fmt::format("Key version {} of vault {} does not unseal under this host's vault "
+                                             "master ({}): the master key changed or the key row is damaged. {}",
+                                             rec.version, vaultId, e.what(), keyImportHint(vaultId)));
+        }
+    }());
+    if (raw.bytes.size() != AES_KEY_SIZE)
         throw KeyUnavailable(vaultId, "key_unsealable",
                              fmt::format("Key version {} of vault {} is not a 32-byte AES key. {}", rec.version,
                                          vaultId, keyImportHint(vaultId)));
-    }
-    return raw;
+    return std::make_shared<const SecretKey>(raw.bytes);
 }
 }
 
@@ -127,16 +117,15 @@ void EncryptionManager::load_key() {
 
         // First time: generate and seal new vault key
         const auto vaultKey = SecretKey::random();
-        const WipedKeyCopy raw(vaultKey);
 
         std::vector<uint8_t> iv;
-        const auto enc_key = encrypt_aes256_gcm(raw.bytes, masterKey, iv);
+        const auto enc_key = encrypt_aes256_gcm(vaultKey->bytes(), masterKey, iv);
 
         const auto key = std::make_shared<vault::model::Key>();
         key->vaultId = vault_id_;
         key->encrypted_key = enc_key;
         key->iv = iv;
-        key->version = db::query::vault::Key::addVaultKey(key, attestation::provenanceOf(vault_id_, 1, raw.bytes));
+        key->version = db::query::vault::Key::addVaultKey(key, attestation::provenanceOf(vault_id_, 1, vaultKey->bytes()));
 
         {
             std::unique_lock lock(keyMutex_);
@@ -152,10 +141,8 @@ void EncryptionManager::load_key() {
         return;
     }
 
-    auto rawKey = unsealKeyRowOrThrow(vault_id_, *rec, masterKey);
-    attestation::backfill(*rec, rawKey);
-    auto current = std::make_shared<const SecretKey>(rawKey);
-    sodium_memzero(rawKey.data(), rawKey.size());
+    auto current = unsealKeyRowOrThrow(vault_id_, *rec, masterKey);
+    attestation::backfill(*rec, current->bytes());
 
     SecretKeyPtr previous;
     if (rotating) {
@@ -167,10 +154,8 @@ void EncryptionManager::load_key() {
             throw KeyUnavailable(vault_id_, "version_missing",
                                  fmt::format("Vault {} is rotating its key but the outgoing key is missing. {}",
                                              vault_id_, keyImportHint(vault_id_)));
-        auto rawOld = unsealKeyRowOrThrow(vault_id_, *oldKey, masterKey);
-        attestation::backfill(*oldKey, rawOld);
-        previous = std::make_shared<const SecretKey>(rawOld);
-        sodium_memzero(rawOld.data(), rawOld.size());
+        previous = unsealKeyRowOrThrow(vault_id_, *oldKey, masterKey);
+        attestation::backfill(*oldKey, previous->bytes());
         log::Registry::crypto()->debug("[VaultEncryptionManager] Loaded old key for vault {} during rotation", vault_id_);
     }
 
@@ -206,18 +191,17 @@ void EncryptionManager::prepare_key_rotation() {
     log::Registry::crypto()->debug("[VaultEncryptionManager] Preparing key rotation for vault {}", vault_id_);
 
     const auto next = SecretKey::random();
-    const WipedKeyCopy raw(next);
 
     std::vector<uint8_t> iv;
     const auto key = std::make_shared<vault::model::Key>();
     key->vaultId = vault_id_;
-    key->encrypted_key = encrypt_aes256_gcm(raw.bytes, tpmKeyProvider_->getMasterKey(), iv);
+    key->encrypted_key = encrypt_aes256_gcm(next->bytes(), tpmKeyProvider_->getMasterKey(), iv);
     key->iv = std::move(iv);
     // Provenance of both versions (signing reads the database, so before the rotation's transaction).
     const auto [outgoingKey, outgoingVersion] = currentKey();
     const db::query::vault::Key::NewVersion expected{
         .version = outgoingVersion + 1,
-        .provenance = attestation::provenanceOf(vault_id_, outgoingVersion + 1, raw.bytes)};
+        .provenance = attestation::provenanceOf(vault_id_, outgoingVersion + 1, next->bytes())};
     const db::query::vault::Key::Outgoing outgoing{
         .version = outgoingVersion,
         .provenance = attestation::provenanceOf(vault_id_, outgoingVersion, outgoingKey->bytes())};
@@ -243,14 +227,13 @@ unsigned int EncryptionManager::mintSalvageKey(const unsigned int vaultId, const
     secrets::KeyProvider provider(paths::testMode ? "test_vault_master" : "vault_master");
     provider.initGuarded(secrets::dependents::vaultMaster());
     const auto next = SecretKey::random();
-    const WipedKeyCopy raw(next);
     std::vector<uint8_t> iv;
     const auto key = std::make_shared<vault::model::Key>();
     key->vaultId = vaultId;
-    key->encrypted_key = encrypt_aes256_gcm(raw.bytes, provider.getMasterKey(), iv);
+    key->encrypted_key = encrypt_aes256_gcm(next->bytes(), provider.getMasterKey(), iv);
     key->iv = std::move(iv);
     const db::query::vault::Key::NewVersion expected{
-        .version = expectedVersion, .provenance = attestation::provenanceOf(vaultId, expectedVersion, raw.bytes)};
+        .version = expectedVersion, .provenance = attestation::provenanceOf(vaultId, expectedVersion, next->bytes())};
     key->version = db::query::vault::Key::rotateVaultKey(key, expected, std::nullopt, true, !outgoingHeld);
 
     const auto msg = fmt::format("[VaultEncryptionManager] Created salvage key version {} for vault {}", key->version,
@@ -311,13 +294,10 @@ std::vector<uint8_t> EncryptionManager::rotateDecryptEncrypt(const std::vector<u
             log::Registry::crypto()->warn("[VaultEncryptionManager] Key version {} is not the previous version {}, using the previous key",
                                         f->encrypted_with_key_version, version - 1);
 
-        const WipedKeyCopy oldRaw(oldKey);
-        const WipedKeyCopy newRaw(newKey);
-        auto decrypted = decrypt_aes256_gcm(ciphertext, oldRaw.bytes, b64_decode(f->encryption_iv));
+        const WipedKeyCopy decrypted(decrypt_aes256_gcm(ciphertext, oldKey->bytes(), b64_decode(f->encryption_iv)));
 
         std::vector<uint8_t> iv;
-        const auto encrypted = encrypt_aes256_gcm(decrypted, newRaw.bytes, iv);
-        sodium_memzero(decrypted.data(), decrypted.size());
+        const auto encrypted = encrypt_aes256_gcm(decrypted.bytes, newKey->bytes(), iv);
 
         if (encrypted.size() != ciphertext.size()) {
             log::Registry::crypto()->error("[VaultEncryptionManager] Encrypted data size mismatch after key rotation");
@@ -336,9 +316,8 @@ std::vector<uint8_t> EncryptionManager::rotateDecryptEncrypt(const std::vector<u
 
 std::vector<uint8_t> EncryptionManager::encrypt(const std::vector<uint8_t>& plaintext, const std::shared_ptr<File>& f) const {
     const auto [key, version] = currentKey();
-    const WipedKeyCopy raw(key);
     std::vector<uint8_t> iv;
-    auto ciphertext = encrypt_aes256_gcm(plaintext, raw.bytes, iv);
+    auto ciphertext = encrypt_aes256_gcm(plaintext, key->bytes(), iv);
     f->encryption_iv = b64_encode(iv);
     f->encrypted_with_key_version = version;
     return ciphertext;
@@ -466,14 +445,11 @@ SecretKeyPtr EncryptionManager::historicalKeySnapshot(const unsigned int keyVers
         throw KeyVersionUnavailable(vault_id_, keyVersion);
     }
 
-    auto raw = decrypt_aes256_gcm(rec->encrypted_key, tpmKeyProvider_->getMasterKey(), rec->iv);
-    if (raw.size() != AES_KEY_SIZE) {
-        sodium_memzero(raw.data(), raw.size());
+    const WipedKeyCopy raw(decrypt_aes256_gcm(rec->encrypted_key, tpmKeyProvider_->getMasterKey(), rec->iv));
+    if (raw.bytes.size() != AES_KEY_SIZE)
         throw std::runtime_error(fmt::format("Retired key version {} of vault {} is not 32 bytes", keyVersion, vault_id_));
-    }
-    attestation::backfill(*rec, raw);
-    auto key = std::make_shared<const SecretKey>(raw);
-    sodium_memzero(raw.data(), raw.size());
+    attestation::backfill(*rec, raw.bytes);
+    auto key = std::make_shared<const SecretKey>(raw.bytes);
     cacheHistoricalKey(keyVersion, key);
     log::Registry::crypto()->info("[VaultEncryptionManager] Unsealed retired key version {} of vault {} for recovery",
                                   keyVersion, vault_id_);
@@ -570,8 +546,8 @@ std::vector<uint8_t> EncryptionManager::resealToCurrent(const std::vector<uint8_
 }
 
 std::vector<uint8_t> EncryptionManager::decrypt(const std::vector<uint8_t>& ciphertext, const std::string& b64_iv, const unsigned int keyVersion) const {
-    const WipedKeyCopy raw(keySnapshot(keyVersion));
-    return decrypt_aes256_gcm(ciphertext, raw.bytes, b64_decode(b64_iv));
+    const auto key = keySnapshot(keyVersion);
+    return decrypt_aes256_gcm(ciphertext, key->bytes(), b64_decode(b64_iv));
 }
 
 void EncryptionManager::decryptFileTo(
@@ -579,8 +555,8 @@ void EncryptionManager::decryptFileTo(
     const std::function<void(std::span<const uint8_t>)>& sink,
     const std::string& b64_iv,
     const unsigned int keyVersion) const {
-    const WipedKeyCopy raw(keySnapshot(keyVersion));
-    decrypt_aes256_gcm_file(ciphertextPath, sink, raw.bytes, b64_decode(b64_iv));
+    const auto key = keySnapshot(keyVersion);
+    decrypt_aes256_gcm_file(ciphertextPath, sink, key->bytes(), b64_decode(b64_iv));
 }
 
 std::vector<uint8_t> EncryptionManager::get_key(const std::string& callingFunctionName) const {
