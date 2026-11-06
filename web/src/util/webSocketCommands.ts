@@ -247,6 +247,9 @@ export interface WebSocketCommandMap {
   'auth.mfa.factor.rename': WsContract['auth.mfa.factor.rename']
   'auth.mfa.recovery.generate': WsContract['auth.mfa.recovery.generate']
   'auth.mfa.recovery.acknowledge': WsContract['auth.mfa.recovery.acknowledge']
+  // Discoverable passkey sign-in (#358): an anonymous connection, a passkey alone (features/auth/passkeySignIn.ts).
+  'auth.passkey.options': WsContract['auth.passkey.options']
+  'auth.passkey.login': WsContract['auth.passkey.login']
 
   // Vault commands
 

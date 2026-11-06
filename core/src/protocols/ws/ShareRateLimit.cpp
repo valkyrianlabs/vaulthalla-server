@@ -21,6 +21,10 @@ constexpr RateLimitPolicy kLoginSustainedPolicy{.max_attempts = 30, .window = st
     // Password guessing: per client IP (issue #103). A locked-out IP waits out the rest of the window.
     if (command == "auth.login")
         return RateLimitPolicy{.max_attempts = 10, .window = 1min};
+    // Discoverable passkey sign-in (#358, design 7.3): anonymous challenges per client IP, and the sign-ins that
+    // spend them. The challenge store is capped as well (auth/mfa/Passkeys.hpp kMaxLoginChallenges).
+    if (command == "auth.passkey.options" || command == "auth.passkey.login")
+        return RateLimitPolicy{.max_attempts = 30, .window = 1min};
     if (command == "share.session.open")
         return RateLimitPolicy{.max_attempts = 12, .window = 5min};
     if (command == "share.email.challenge.start")

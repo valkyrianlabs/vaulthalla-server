@@ -19737,6 +19737,286 @@
     },
     {
       "auth": "session",
+      "client_timeout_ms": 20000,
+      "command": "auth.passkey.login",
+      "confirmations": [],
+      "description": "Finish a passkey sign-in with the assertion over an auth.passkey.options challenge of this connection. The assertion must carry userHandle, equal to the account's own WebAuthn handle for that credential, and user verification. Success signs the connection in: one session row at aal 2 with amr [\"hwk\"] (a device-bound passkey or security key) or [\"swk\"] (a synced passkey), the access token in the envelope. Every failure (an unknown, suspended or foreign passkey, another server's, no user verification, a spent or expired challenge, an account that can't sign in) is the same error; the challenge is spent either way. already_signed_in on a signed-in connection.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "AuthenticationResponseJSON (PublicKeyCredential.toJSON() after get()); response.userHandle is required.",
+          "fields": [
+            {
+              "name": "id",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "base64url; equals id.",
+              "name": "rawId",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "public-key"
+              ],
+              "name": "type",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "description": "base64url.",
+                  "name": "clientDataJSON",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "base64url.",
+                  "name": "authenticatorData",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "base64url.",
+                  "name": "signature",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "base64url.",
+                  "name": "userHandle",
+                  "required": false,
+                  "types": [
+                    "string",
+                    "null"
+                  ]
+                }
+              ],
+              "name": "response",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "name": "authenticatorAttachment",
+              "required": false,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "fields": [
+                    {
+                      "name": "rk",
+                      "required": false,
+                      "types": [
+                        "boolean"
+                      ]
+                    }
+                  ],
+                  "name": "credProps",
+                  "required": false,
+                  "types": [
+                    "object"
+                  ]
+                }
+              ],
+              "name": "clientExtensionResults",
+              "required": false,
+              "types": [
+                "object"
+              ]
+            }
+          ],
+          "generator": {
+            "kind": "const",
+            "values": [
+              "{}"
+            ]
+          },
+          "name": "credential",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "invalid",
+        "denied",
+        "error",
+        "already_signed_in"
+      ],
+      "refusal_kinds": [
+        "invalid",
+        "denied",
+        "error",
+        "already_signed_in"
+      ],
+      "response": [
+        {
+          "description": "The signed-in user; role permissions reduced to {qualified, value}.",
+          "model": "SessionUser",
+          "name": "user",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "maximum": 2,
+          "minimum": 2,
+          "name": "aal",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "session",
+      "client_timeout_ms": 15000,
+      "command": "auth.passkey.options",
+      "confirmations": [],
+      "description": "Start signing in with a passkey alone, no username or password first: a challenge for navigator.credentials.get() on this connection, with an empty allowCredentials (the browser or passkey manager offers the passkeys it holds for this server) and user verification required. It names no account, so the answer is the same for every caller but for its challenge. Anonymous web connections only: already_signed_in on a signed-in one; a paired device and a pending sign-in can't run it. invalid when passkeys are not configured (auth.webauthn.rp_id). Rate limited to 30 a minute per client address; rate_limited when 10,000 sign-in challenges are open.",
+      "input": "none",
+      "operation": null,
+      "payload": [],
+      "refusal_codes": [
+        "invalid",
+        "denied",
+        "error",
+        "already_signed_in",
+        "rate_limited"
+      ],
+      "refusal_kinds": [
+        "invalid",
+        "denied",
+        "error",
+        "already_signed_in",
+        "rate_limited"
+      ],
+      "response": [
+        {
+          "description": "PublicKeyCredentialRequestOptionsJSON for navigator.credentials.get(), modal or with mediation \"conditional\" (autofill).",
+          "fields": [
+            {
+              "description": "base64url, 32 bytes, single use, 120 s, bound to this connection and to discoverable sign-in only.",
+              "name": "challenge",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "rpId",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "Milliseconds.",
+              "minimum": 0,
+              "name": "timeout",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "enum": [
+                "required"
+              ],
+              "name": "userVerification",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "Always empty: the browser offers the passkeys it holds for rpId.",
+              "fields": [
+                {
+                  "enum": [
+                    "public-key"
+                  ],
+                  "name": "type",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "base64url credential id.",
+                  "name": "id",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "items": "string",
+                  "name": "transports",
+                  "required": true,
+                  "types": [
+                    "array"
+                  ]
+                }
+              ],
+              "items": "object",
+              "name": "allowCredentials",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            }
+          ],
+          "name": "publicKey",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "Unix seconds: when the challenge lapses (ask again after).",
+          "name": "expires_at",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "session",
       "client_timeout_ms": 15000,
       "command": "auth.refresh",
       "confirmations": [],
@@ -41574,5 +41854,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "a0833cc2acdf26a6666f0c4a7c3ba141a2626cf2cc93e40dbf773a7268c74521"
+  "ws_hash": "03e5d43516b1128c3420b4f00607f0d059ce2be6a1ad34cc2ccf3cfa937cec55"
 }

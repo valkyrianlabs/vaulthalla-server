@@ -2,7 +2,7 @@ import { expect, test, type CDPSession, type Page } from '@playwright/test'
 import { execFileSync } from 'node:child_process'
 import { nextTotpStep, totpCode, totpStep } from './helpers/totp'
 
-// Pending-MFA sign-in and guided enrollment (#357) against a real daemon, with Chrome's virtual authenticator
+// Pending-MFA sign-in and guided enrollment (#357) and discoverable passkey sign-in (#358) against a real daemon, with Chrome's virtual authenticator
 // (CDP WebAuthn.addVirtualAuthenticator: ctap2, internal, resident key, user verification) standing in for Touch ID,
 // 1Password or a security key, and TOTP codes computed here with node:crypto.
 //
@@ -29,7 +29,7 @@ const newAdmin = () => {
   return { name, password }
 }
 
-const authenticator = async (page: Page, options: { isUserVerified?: boolean } = {}) => {
+const authenticator = async (page: Page, options: { isUserVerified?: boolean; synced?: boolean } = {}) => {
   const cdp = await page.context().newCDPSession(page)
   await cdp.send('WebAuthn.enable')
   const { authenticatorId } = await cdp.send('WebAuthn.addVirtualAuthenticator', {
@@ -40,10 +40,21 @@ const authenticator = async (page: Page, options: { isUserVerified?: boolean } =
       hasUserVerification: true,
       isUserVerified: options.isUserVerified ?? true,
       automaticPresenceSimulation: true,
+      // A synced passkey (1Password, iCloud Keychain, Google Password Manager): backup eligible and backed up.
+      ...(options.synced ? { defaultBackupEligibility: true, defaultBackupState: true } : {}),
     },
   })
   return { cdp, authenticatorId }
 }
+
+// Chrome's virtual authenticator answers a conditional (autofill) request by itself, with the first resident credential
+// for the page: /login would sign in with the passkey before a test could type a password or click the button. Tests
+// of those flows turn the autofill off; 'the username field's autofill signs in' keeps it.
+const withoutAutofill = (page: Page) =>
+  page.addInitScript(() => {
+    if (typeof window.PublicKeyCredential === 'function')
+      Object.defineProperty(window.PublicKeyCredential, 'isConditionalMediationAvailable', { value: async () => false })
+  })
 
 const setUserVerified = (a: { cdp: CDPSession; authenticatorId: string }, isUserVerified: boolean) =>
   a.cdp.send('WebAuthn.setUserVerified', { authenticatorId: a.authenticatorId, isUserVerified })
@@ -79,6 +90,7 @@ const signedIn = async (page: Page) => {
 }
 
 test('first-run passkey enrollment, then password + passkey', async ({ page }) => {
+  await withoutAutofill(page)
   const admin = newAdmin()
   const key = await authenticator(page)
 
@@ -122,6 +134,7 @@ test('first-run passkey enrollment, then password + passkey', async ({ page }) =
 })
 
 test('a passkey without user verification is refused', async ({ page }) => {
+  await withoutAutofill(page)
   const admin = newAdmin()
   const key = await authenticator(page)
   await password(page, admin.name, admin.password)
@@ -144,6 +157,7 @@ test('a passkey without user verification is refused', async ({ page }) => {
 })
 
 test('authenticator app enrollment and sign-in, then a recovery code', async ({ page }) => {
+  // No authenticator here, so the autofill request stays open: every password sign-in below has to end it first.
   test.setTimeout(150_000)
   const admin = newAdmin()
   let secret = ''
@@ -196,5 +210,111 @@ test('authenticator app enrollment and sign-in, then a recovery code', async ({ 
     await page.getByTestId('mfa-submit-code').click()
     await expect(page.getByText(/That didn.t work/)).toBeVisible()
     await expect(page).toHaveURL(/\/login/)
+  })
+})
+
+// ── discoverable passkey sign-in (#358) ──────────────────────────────────────────────────────────────────────────
+
+// First run with a passkey, the account's only credential on this authenticator.
+const enrollPasskey = async (page: Page, admin: { name: string; password: string }) => {
+  await password(page, admin.name, admin.password)
+  await page.getByTestId('mfa-choose-passkey').click()
+  await page.getByTestId('mfa-passkey-create').click()
+  await saveRecoveryCodes(page)
+  await page.getByTestId('mfa-enrollment-continue').click()
+  await signedIn(page)
+}
+
+const thisSession = (page: Page) => page.getByTestId('session-row').filter({ hasText: 'This session' })
+
+test('sign in with a passkey alone: no username, no password', async ({ page }) => {
+  await withoutAutofill(page)
+  const admin = newAdmin()
+  const key = await authenticator(page)
+  await enrollPasskey(page, admin)
+
+  await test.step('the sign-in page offers the passkey, and it signs in at aal 2', async () => {
+    await signOut(page)
+    await expect(page.getByLabel('Username')).toHaveValue('')
+    // The username field asks the browser to list passkeys in its autofill (conditional mediation).
+    await expect(page.getByLabel('Username')).toHaveAttribute('autocomplete', 'username webauthn')
+    await page.getByTestId('passkey-sign-in').click()
+    await signedIn(page)
+    await page.goto('/account')
+    // The passkey alone: no password in the session's methods.
+    await expect(thisSession(page)).toContainText('Security key or device passkey')
+    await expect(thisSession(page)).not.toContainText('Password')
+  })
+
+  await test.step('a passkey without user verification is refused, and the page stays on the sign-in form', async () => {
+    await signOut(page)
+    await setUserVerified(key, false)
+    await page.getByTestId('passkey-sign-in').click()
+    // The browser refuses (UV is required): the form says so, and the button is ready again.
+    await expect(page.locator('form').getByRole('alert')).toBeVisible()
+    await expect(page.getByTestId('passkey-sign-in')).toBeEnabled()
+    await expect(page).toHaveURL(/\/login/)
+    await setUserVerified(key, true)
+    await page.getByTestId('passkey-sign-in').click()
+    await signedIn(page)
+  })
+
+})
+
+test('the username field’s autofill (conditional mediation) signs in with the passkey', async ({ page }) => {
+  const admin = newAdmin()
+  await authenticator(page)
+  // Enrollment needs the password page to stay put: no autofill while the passkey is created.
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem('e2e-autofill') !== 'on' && typeof window.PublicKeyCredential === 'function')
+      Object.defineProperty(window.PublicKeyCredential, 'isConditionalMediationAvailable', { value: async () => false })
+  })
+  await enrollPasskey(page, admin)
+  await page.evaluate(() => sessionStorage.setItem('e2e-autofill', 'on'))
+  await page.context().clearCookies()
+  // The browser's autofill request answers with the passkey (the virtual authenticator picks it): no click, no typing.
+  await page.goto('/login')
+  await signedIn(page)
+  await page.goto('/account')
+  await expect(thisSession(page)).toContainText('Security key or device passkey')
+  await expect(thisSession(page)).not.toContainText('Password')
+})
+
+test('a synced passkey whose counter does not grow still signs in', async ({ page }) => {
+  await withoutAutofill(page)
+  const admin = newAdmin()
+  const key = await authenticator(page, { synced: true })
+  await enrollPasskey(page, admin)
+  const [registered] = (await key.cdp.send('WebAuthn.getCredentials', { authenticatorId: key.authenticatorId })).credentials
+  // Backup eligible and backed up, as a passkey manager reports it (BE never changes for a credential).
+  await key.cdp.send('WebAuthn.setCredentialProperties', {
+    authenticatorId: key.authenticatorId,
+    credentialId: registered.credentialId,
+    backupEligibility: true,
+    backupState: true,
+  })
+
+  await test.step('first discoverable sign-in moves the stored counter', async () => {
+    await signOut(page)
+    await page.getByTestId('passkey-sign-in').click()
+    await signedIn(page)
+  })
+
+  await test.step('another copy of the passkey reports an older counter: accepted for a synced passkey', async () => {
+    // The same credential, as a second device holding the synced passkey reports it: its counter starts over.
+    const [current] = (await key.cdp.send('WebAuthn.getCredentials', { authenticatorId: key.authenticatorId })).credentials
+    expect(current.signCount).toBeGreaterThan(0)
+    await key.cdp.send('WebAuthn.removeCredential', { authenticatorId: key.authenticatorId, credentialId: current.credentialId })
+    await key.cdp.send('WebAuthn.addCredential', {
+      authenticatorId: key.authenticatorId,
+      credential: { ...current, signCount: 0, backupEligibility: true, backupState: true },
+    })
+    await signOut(page)
+    await page.getByTestId('passkey-sign-in').click()
+    await signedIn(page)
+    await page.goto('/account')
+    await expect(thisSession(page)).toContainText('Synced passkey')
+    await expect(page.getByTestId('mfa-factor')).toHaveCount(1)
+    await expect(page.getByTestId('mfa-factor')).toContainText('Synced passkey')
   })
 })
