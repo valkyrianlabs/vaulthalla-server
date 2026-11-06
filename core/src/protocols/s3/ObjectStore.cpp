@@ -503,7 +503,8 @@ ObjectBody ObjectStore::getObject(
             .bytes = std::move(body.bytes),
             .content_range = body.content_range
         };
-    } else if (const auto cloud = cloudEngine(bucket)) {
+    } else if (const auto cloud = cloudEngine(bucket); cloud && !cloud->opaqueLayout()) {
+        // (opaque_v1: an object exists only as a file's, and every file has a row; nothing to read past the database.)
         auto remotePayload = cloud->downloadToBuffer(vaultPath);
         bytes = cloud->decryptRemotePayload(vaultPath, remotePayload);
         if (shouldMaterializeRemoteObject(bucket, cloud)) {

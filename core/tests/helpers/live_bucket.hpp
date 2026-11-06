@@ -708,7 +708,7 @@ protected:
         padmin::setFactoryForTesting(guardedFactory(t_));
         active_ = true;
         prefix_ = testPrefix();
-        data_ = std::make_unique<storage::s3::Controller>(RunBucket::get().key(), bucket_);
+        data_ = std::make_shared<storage::s3::Controller>(RunBucket::get().key(), bucket_);
     }
 
     void TearDown() override {
@@ -731,6 +731,8 @@ protected:
     [[nodiscard]] const std::string& prefix() const { return prefix_; }
     [[nodiscard]] std::string key(const std::string_view relative) const { return prefix_ + std::string(relative); }
     [[nodiscard]] storage::s3::Controller& controller() { return *data_; }
+    // The same controller, shared (a CloudEngine under test holds it; the opaque_v1 data plane, #369).
+    [[nodiscard]] const std::shared_ptr<storage::s3::Controller>& sharedController() const { return data_; }
     [[nodiscard]] GuardedAdmin& admin() { return RunBucket::get().admin(); }
     [[nodiscard]] const std::shared_ptr<vault::model::APIKey>& apiKey() const { return RunBucket::get().key(); }
     [[nodiscard]] const Target& liveTarget() const { return t_; }
@@ -738,7 +740,7 @@ protected:
 private:
     Target t_;
     std::string bucket_, prefix_;
-    std::unique_ptr<storage::s3::Controller> data_;
+    std::shared_ptr<storage::s3::Controller> data_;
     bool active_ = false;
 };
 

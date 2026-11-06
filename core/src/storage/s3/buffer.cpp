@@ -104,6 +104,7 @@ void Controller::uploadBufferWithMetadataConditional(
     const std::optional<std::string>& ifNoneMatch) const
 {
     resetLastPutOutcome();
+    enforceRequestPolicy(RequestOp::Put, key.string(), &options);
     recordRequest(RequestKind::Put);
     recordUploadBytes(buffer.size());
 
@@ -182,6 +183,7 @@ void Controller::uploadBufferWithMetadataConditional(
 }
 
 void Controller::downloadToBuffer(const std::filesystem::path& key, std::vector<uint8_t>& outBuffer) const {
+    enforceRequestPolicy(RequestOp::Get, key.string());
     recordRequest(RequestKind::Get);
 
     CURL* curl = curl_easy_init();

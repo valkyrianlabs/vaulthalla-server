@@ -16,6 +16,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 #include <curl/curl.h>
@@ -166,6 +167,30 @@ namespace vh::storage::s3 {
         std::optional<std::string> version_id;
     };
 
+    // ---- the opaque_v1 request rules (design/encryption/01-provider-blind-storage.md §4.3) --------------------------
+
+    // A request an opaque_v1 vault must never send. Thrown before anything is sent or metered.
+    class OpaqueRequestRefused final : public std::logic_error {
+    public:
+        explicit OpaqueRequestRefused(const std::string& message) : std::logic_error(message) {}
+    };
+
+    enum class RequestOp { Put, Get, Head, Delete, List, ListVersions, HeadVersion, Copy, MetadataRewrite };
+
+    // Lets the calling thread GET/HEAD keys outside the opaque_v1 allowlist while it lives: only the explicit import
+    // of a foreign object (foreign_objects = import, spec 01 §4.4) reads one. Writes stay refused.
+    class ScopedForeignObjectRead {
+    public:
+        ScopedForeignObjectRead() noexcept;
+        ~ScopedForeignObjectRead();
+        ScopedForeignObjectRead(const ScopedForeignObjectRead&) = delete;
+        ScopedForeignObjectRead& operator=(const ScopedForeignObjectRead&) = delete;
+        [[nodiscard]] static bool active() noexcept;
+
+    private:
+        bool previous_;
+    };
+
     class Controller {
     public:
         static constexpr uintmax_t MIN_PART_SIZE = 5 * 1024 * 1024; // 5 MiB
@@ -188,6 +213,24 @@ namespace vh::storage::s3 {
 
         static void pushRequestUsageCapture(ScopedS3RequestUsageCapture* capture);
         static void popRequestUsageCapture(ScopedS3RequestUsageCapture* capture) noexcept;
+
+        // opaque_v1 (spec 01 §4.3): while set, every request through this controller is held to the layout's rules
+        // before it is sent or metered (enforceRequestPolicy). CloudEngine sets it for opaque_v1 vaults.
+        void setOpaqueLayout(bool opaque) noexcept { opaqueLayout_.store(opaque, std::memory_order_relaxed); }
+        [[nodiscard]] bool opaqueLayout() const noexcept { return opaqueLayout_.load(std::memory_order_relaxed); }
+
+        // The one check of the opaque_v1 request rules, called at the top of every operation (the network paths here,
+        // and test fakes that override them). A no-op unless opaqueLayout(). Refuses (OpaqueRequestRefused):
+        //   - any key outside the allowlist (o/<uid>, .vaulthalla/{layout.json,root,seg/<sid>,key/<kid>}); a GET or
+        //     HEAD of a foreign key only inside a ScopedForeignObjectRead;
+        //   - a listing prefix other than "", "o/", ".vaulthalla/…" or one allowlisted key;
+        //   - x-amz-meta-* (options.metadata), and any content header besides Content-Type: application/octet-stream
+        //     (Content-Disposition, -Encoding, -Language, Cache-Control, Expires, tagging, website redirects);
+        //   - metadata rewrites (setObjectContentHash, setObjectEncryptionMetadata) altogether;
+        //   - a CopyObject onto another key (secondKey: the destination): only a provider-version restore onto the
+        //     same key, directive COPY.
+        void enforceRequestPolicy(RequestOp op, std::string_view key, const RequestOptions* options = nullptr,
+                                  std::string_view secondKey = {}) const;
 
         // #########################################################################
         // ########################### FILE OPS ####################################
@@ -421,6 +464,7 @@ namespace vh::storage::s3 {
         mutable S3RequestMetrics metrics_;
         mutable std::optional<S3RequestBudget> requestBudget_;
         std::atomic<uint32_t> usageVaultId_{0};
+        std::atomic<bool> opaqueLayout_{false};
 
         std::pair<std::string, std::string> constructPaths(CURL *curl, const fs::path &p,
                                                            const std::string &query = "") const;

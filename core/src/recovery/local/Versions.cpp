@@ -343,7 +343,13 @@ Pending retain(const storage::Engine& engine, const fs::model::File& prior, cons
     g.created_by = options.actor;
     g.reason = to_string(reason);
     g.upstream_state = upstream ? rq::UpstreamState::Pending : rq::UpstreamState::None;
-    if (upstream) g.upstream_key = path.substr(1);
+    if (upstream) {
+        // The key the generation was the content of: o/<uid> under opaque_v1 (renames keep it), else the path.
+        const auto& cloud = static_cast<const storage::CloudEngine&>(engine);
+        if (!cloud.opaqueLayout()) g.upstream_key = path.substr(1);
+        else if (prior.object_uid) g.upstream_key = cloud.objectKeyOf(prior);
+        else g.upstream_state = rq::UpstreamState::None;   // no uid, no object: kept locally only
+    }
     p.keepLast_ = policy.keep_last;
     return p;
 }

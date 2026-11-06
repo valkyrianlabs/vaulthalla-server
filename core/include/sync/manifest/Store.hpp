@@ -58,6 +58,13 @@ public:
     // Bytes [offset, offset + length) of the current object; nullopt for 404.
     [[nodiscard]] virtual std::optional<std::vector<uint8_t>> getRange(const std::string& key, uint64_t offset,
                                                                       uint64_t length) = 0;
+    // The current ETag of `key` without its body (one HEAD): nullopt when the HEAD found nothing (or failed: callers
+    // then fall back to get()). The default reads the object (stores that have no HEAD).
+    [[nodiscard]] virtual std::optional<std::string> headEtag(const std::string& key) {
+        const auto o = get(key);
+        if (!o) return std::nullopt;
+        return o->etag.value_or("");
+    }
     // Returns the new object's ETag. Throws PreconditionFailed when the key exists.
     virtual std::string putIfAbsent(const std::string& key, const std::vector<uint8_t>& bytes) = 0;
     // Returns the new object's ETag. Throws PreconditionFailed when the current ETag is not `etag`.
@@ -77,6 +84,7 @@ public:
                                                  const std::optional<std::string>& versionId) override;
     [[nodiscard]] std::optional<std::vector<uint8_t>> getRange(const std::string& key, uint64_t offset,
                                                               uint64_t length) override;
+    [[nodiscard]] std::optional<std::string> headEtag(const std::string& key) override;
     std::string putIfAbsent(const std::string& key, const std::vector<uint8_t>& bytes) override;
     std::string putIfMatch(const std::string& key, const std::vector<uint8_t>& bytes, const std::string& etag) override;
     [[nodiscard]] std::vector<ListedObject> list(const std::string& prefix) override;

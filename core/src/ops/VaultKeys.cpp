@@ -1176,7 +1176,7 @@ sync::rotation::Deps salvageDeps(const EnginePtr& engine, const std::shared_ptr<
         // The object must still be what the row says (fetchSealedObject checks its HEAD), so its state is the row's.
         auto states = std::make_shared<std::map<std::string, sync::rotation::EncryptionState>>();
         deps.remote->download = [cloud, states](const FileSP& file) {
-            const auto key = file->path.string().substr(file->path.string().starts_with('/') ? 1 : 0);
+            const auto key = cloud->objectKeyOf(*file);
             const auto stored = vh::vault::content::sealedSizeOf(file->size_bytes, file->encryption_iv);
             try {
                 auto bytes = cloud->fetchSealedObject(key, stored, file->encryption_iv, file->encrypted_with_key_version,

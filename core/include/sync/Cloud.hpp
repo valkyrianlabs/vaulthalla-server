@@ -39,6 +39,20 @@ namespace vh::sync {
         std::shared_ptr<const model::PassScope> scope;
         std::unordered_set<std::u8string> removedKeys;
 
+        // opaque_v1 (design/encryption/01-provider-blind-storage.md §4.4): sync identity is the file uid. Both maps are
+        // keyed by the object key (/o/<uid>); a remote row is bound to the local file with its uid (its path becomes
+        // the file's, so the planner compares like with like), and a rename or move is no difference at all. Remote
+        // objects no live file names are not files: those of trashed files wait for the trash purge, the rest are
+        // orphans (an interrupted write) and are reported, never downloaded or deleted. Keys outside o/ and
+        // .vaulthalla/ are foreign: reported (foreign_objects = ignore, the default) or imported once as
+        // /Imported/<key> (import).
+        bool opaque = false;
+        struct OpaqueTally {
+            uint64_t orphans{};
+            uint64_t foreign_ignored{};
+            uint64_t foreign_imported{};
+        } opaqueTally;
+
         // Installed by the event service: the vault's keys with an applied, unsettled removal event.
         using PendingRemovalsProvider = std::function<std::unordered_set<std::u8string>(uint32_t vaultId)>;
         static void setPendingRemovalsProvider(PendingRemovalsProvider provider);
@@ -90,6 +104,10 @@ namespace vh::sync {
         void initScopedBins();
         // removedKeys from the pending-removals provider (and the scope's own removals).
         void loadRemovedKeys();
+        // opaque_v1: re-keys localMap and s3Map by object key and binds remote rows to their files (see `opaque`).
+        void keyByObjectUid();
+        // opaque_v1: foreign keys of a listing or an event scope, reported or imported (see `opaque`).
+        void handleForeignObjects(const std::vector<std::string>& keys);
 
         void clearBins();
 

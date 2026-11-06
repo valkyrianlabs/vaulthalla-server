@@ -35,6 +35,10 @@
 
 #include "crypto/id/Generator.hpp"
 #include "sync/Controller.hpp"
+#include "sync/events/Subscriptions.hpp"
+#include "storage/ObjectKeys.hpp"
+#include "db/query/sync/ObjectIdentity.hpp"
+#include "db/encoding/u8.hpp"
 
 #include <mutex>
 
@@ -227,7 +231,7 @@ void Cloud::sync() {
     const auto self = std::static_pointer_cast<Cloud>(shared_from_this());
     S3CostEstimate planningNotes;
     const auto plan = planPass(&planningNotes);
-    auto estimate = Planner::estimateS3Cost(plan);
+    auto estimate = Planner::estimateS3Cost(plan, opaque);
     estimate.archive_tier_downloads_skipped = planningNotes.archive_tier_downloads_skipped;
     event->applyS3CostEstimate(estimate);
     const auto priceEstimate = vh::storage::s3::pricing::estimatePlannedS3Sync(*cloudEngine(), estimate);
@@ -359,6 +363,8 @@ void Cloud::sync() {
 
 void Cloud::initBins() {
     const auto cloud = cloudEngine();
+    opaque = cloud->opaqueLayout();
+    opaqueTally = {};
     const auto policy = cloud->remote_policy();
     const auto hooks = eventHooks();
     const auto vaultId = engine->vault->id;
@@ -388,7 +394,13 @@ void Cloud::initBins() {
         s3Map = groupEntriesByPath(db::query::sync::RemoteObjectIndex::listFilesForVault(engine->vault->id));
     } else {
         const auto listStartedAt = std::time(nullptr);
-        s3Map = cloud->getGroupedFilesFromS3();
+        if (opaque) {
+            auto listing = cloud->listOpaqueBucket();
+            s3Map = groupEntriesByPath(listing.objects);
+            handleForeignObjects(listing.foreign);
+        } else {
+            s3Map = cloud->getGroupedFilesFromS3();
+        }
         db::query::sync::RemoteObjectIndex::replaceFromListObjects(engine->vault->id, uMap2Vector(s3Map));
         // Published once, by this pass's applyRemoteIndexMutation together with what the pass changes (#248: the
         // first pass of a vault used to publish here and again after its uploads); if the pass never gets there,
@@ -401,12 +413,45 @@ void Cloud::initBins() {
 
     localFiles = db::query::fs::File::listFilesInDir(engine->vault->id);
     localMap = groupEntriesByPath(localFiles);
+    if (opaque) keyByObjectUid();
     loadConflictState();
 
     event->heartbeat();
 }
 
 void Cloud::initScopedBins() {
+    opaque = cloudEngine()->opaqueLayout();
+    opaqueTally = {};
+    if (opaque) {
+        // opaque_v1: the scope names object keys; the file with that uid is the local side, and foreign keys are
+        // reported or imported (an event subscription's foreign_objects).
+        std::vector<std::string> foreign;
+        for (const auto& key : scope->keys) {
+            const auto text = vh::db::encoding::to_utf8_string(key);
+            const auto uid = vh::storage::object_keys::uidOfContentKey(text);
+            if (!uid) {
+                auto bare = std::string_view(text);
+                while (bare.starts_with('/')) bare.remove_prefix(1);
+                if (vh::storage::object_keys::classify(bare) == vh::storage::object_keys::KeyClass::Foreign)
+                    foreign.emplace_back(bare);
+                continue;
+            }
+            if (auto remote = db::query::sync::RemoteObjectIndex::getFile(engine->vault->id, std::filesystem::path(key)))
+                s3Map[key] = remote;
+            if (auto local = db::query::sync::ObjectIdentity::fileByUid(engine->vault->id, *uid))
+                localFiles.push_back(local);
+        }
+        handleForeignObjects(foreign);
+        localMap = groupEntriesByPath(localFiles);
+        keyByObjectUid();
+        s3Files = uMap2Vector(s3Map);
+        loadConflictState();
+        log::Registry::sync()->debug("[CloudSync] Vault {}: scoped opaque pass over {} key(s) ({} remote, {} local, {} removed)",
+                                     engine->vault->id, scope->keys.size(), s3Map.size(), localMap.size(),
+                                     removedKeys.size());
+        event->heartbeat();
+        return;
+    }
     // Only the keys the events named, straight from the index the events were applied to: no LIST, no manifest
     // refresh, no staleness gate (the scope is exactly what the provider just told us changed).
     for (const auto& key : scope->keys) {
@@ -421,6 +466,69 @@ void Cloud::initScopedBins() {
                                  engine->vault->id, scope->keys.size(), s3Map.size(), localMap.size(),
                                  removedKeys.size());
     event->heartbeat();
+}
+
+void Cloud::keyByObjectUid() {
+    namespace keys = vh::storage::object_keys;
+    std::unordered_map<std::u8string, std::shared_ptr<File>> locals;
+    for (const auto& L : localFiles) {
+        if (!L || !L->object_uid) {
+            log::Registry::sync()->warn("[CloudSync] Vault {}: file {} has no object uid; it is not synced",
+                                        engine->vault->id, L ? L->id : 0);
+            continue;
+        }
+        locals[vh::fs::model::makeAbsolute(keys::contentKey(*L->object_uid)).u8string()] = L;
+    }
+
+    const auto trashed = db::query::sync::ObjectIdentity::trashedUids(engine->vault->id);
+    std::unordered_map<std::u8string, std::shared_ptr<File>> remotes;
+    for (const auto& [key, R] : s3Map) {
+        if (!R) continue;
+        const auto uid = keys::uidOfContentKey(vh::db::encoding::to_utf8_string(key));
+        if (!uid) continue;   // not an o/<uid> row: nothing of this vault's
+        const auto local = locals.find(key);
+        if (local == locals.end()) {
+            if (!trashed.contains(*uid)) ++opaqueTally.orphans;
+            continue;
+        }
+        // Bound: the remote row is this file's object, at the file's path.
+        auto bound = std::make_shared<File>(*R);
+        bound->object_uid = uid;
+        bound->remote_encrypted = true;
+        bound->id = local->second->id;
+        bound->path = local->second->path;
+        bound->name = local->second->name;
+        bound->vault_id = local->second->vault_id;
+        remotes.emplace(key, std::move(bound));
+    }
+    if (opaqueTally.orphans)
+        log::Registry::sync()->warn("[CloudSync] Vault {}: {} object(s) in o/ that no file names (orphans of an "
+                                    "interrupted write, or a restore elsewhere); left alone, never downloaded",
+                                    engine->vault->id, opaqueTally.orphans);
+    localMap = std::move(locals);
+    s3Map = std::move(remotes);
+    localFiles = uMap2Vector(localMap);
+    s3Files = uMap2Vector(s3Map);
+}
+
+void Cloud::handleForeignObjects(const std::vector<std::string>& keys) {
+    if (keys.empty()) return;
+    const auto vaultId = engine->vault->id;
+    if (!vh::sync::events::subscriptions::importsForeignObjects(vaultId)) {
+        opaqueTally.foreign_ignored += keys.size();
+        log::Registry::sync()->warn("[CloudSync] Vault {}: {} foreign object(s) in the bucket (neither o/ nor "
+                                    ".vaulthalla/); ignored and left untouched (foreign_objects = ignore)",
+                                    vaultId, keys.size());
+        return;
+    }
+    const auto cloud = cloudEngine();
+    for (const auto& key : keys) {
+        try {
+            if (cloud->importForeignObject(key)) ++opaqueTally.foreign_imported;
+        } catch (const std::exception& e) {
+            log::Registry::sync()->warn("[CloudSync] Vault {}: a foreign object was not imported: {}", vaultId, e.what());
+        }
+    }
 }
 
 void Cloud::clearBins() {

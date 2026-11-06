@@ -198,6 +198,7 @@ namespace vh::storage::s3 {
     }
 
     void Controller::deleteObject(const fs::path& key) const {
+        enforceRequestPolicy(RequestOp::Delete, key.string());
         recordRequest(RequestKind::Delete);
 
         const CurlEasy tmpHandle;
@@ -231,6 +232,7 @@ namespace vh::storage::s3 {
     }
 
     ObjectKeyPage Controller::listObjectKeysPage(const std::string& continuationToken, const unsigned int maxKeys) const {
+        enforceRequestPolicy(RequestOp::List, {});
         recordRequest(RequestKind::List);
 
         const CurlEasy handle;
@@ -287,6 +289,7 @@ namespace vh::storage::s3 {
     // error, any non-2xx such as 403 SignatureDoesNotMatch or 503 SlowDown, a cut or unparsable body) throws instead
     // of ending the loop, so callers never mistake a partial listing for the bucket's contents (#246).
     std::u8string Controller::listObjects(const fs::path& prefix) const {
+        enforceRequestPolicy(RequestOp::List, prefix.string());
         std::u8string fullXmlResponse;
         std::string continuationToken;
         const std::string prefixStr = prefix.string();
