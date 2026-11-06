@@ -40,9 +40,9 @@ class SessionLeakGuard final : public ::testing::EmptyTestEventListener {
     }
 };
 
-// Parallel runs: `meson test` starts one process per shard (core/meson.build), bin/tests/run_unit.sh -j N one per
-// shard with its own database. VH_UNIT_SHARD=<index>/<count> runs whole suites, so a suite's fixture is set up once,
-// in one process. Every process computes the same split: suites by test count (most first), each to the least
+// Parallel DB-backed runs: bin/tests/run_unit.sh -j N starts one process per shard, each with its own database.
+// VH_UNIT_SHARD=<index>/<count> runs whole suites, so a suite's fixture (a fresh schema) is set up once, in one
+// process. (CI's DB-free run shards by test case instead: GTEST_TOTAL_SHARDS, tools/dev/ci-test.sh.) Every process computes the same split: suites by test count (most first), each to the least
 // loaded shard; the shard's suites are intersected with --gtest_filter.
 struct Shard {
     int index = 0;
@@ -118,13 +118,7 @@ int main(int argc, char** argv) {
     const auto privateTmp = usePrivateTempDir();
 
     try {
-        if (shard) {
-            // meson test shards share the caller's environment: one test database would be wiped by every shard.
-            if (std::getenv("VH_UNIT_SHARD_SHARED_ENV") && std::getenv("VH_TEST_DB_NAME"))
-                throw std::runtime_error("meson test runs vh_unit_tests in parallel shards, which can't share one "
-                                         "test database; run DB-backed tests with bin/tests/run_unit.sh (make test)");
-            restrictToShard(*shard);
-        }
+        if (shard) restrictToShard(*shard);
         vh::paths::enableTestMode();
         // Argon2id at MODERATE cost took ~0.5 s per password hash; suites that check hashing itself still verify
         // real Argon2id strings. Production parameters are unchanged (crypto/util/hash.cpp).

@@ -444,6 +444,9 @@ endif
 # ╭────────────────────────────────────── TESTS ────────────────────────────────────────╮
 
 if get_option('build_unit_tests')
+    unit_test_env = environment()
+    unit_test_env.set('VH_PATH_TO_CONFIG', join_paths(repo_root, 'deploy/config/config.yaml'))
+
     vh_unit_tests = executable(
         'vh_unit_tests',
         link_whole: unit_test_objects,
@@ -464,18 +467,9 @@ if get_option('build_unit_tests')
         install: false,
     )
 
-    # Parallel shards of whole suites (VH_UNIT_SHARD, tests/unit/gtest_main.cpp), each process with its own TMPDIR;
-    # `meson test --suite vh_unit_tests` runs only these. They can't share a test database, so a caller's VH_TEST_DB_*
-    # makes them fail: DB-backed runs are bin/tests/run_unit.sh (make test), which shards over databases of their own.
-    vh_unit_test_shards = 6
-    foreach shard : range(vh_unit_test_shards)
-        shard_env = environment()
-        shard_env.set('VH_PATH_TO_CONFIG', join_paths(repo_root, 'deploy/config/config.yaml'))
-        shard_env.set('VH_UNIT_SHARD', '@0@/@1@'.format(shard, vh_unit_test_shards))
-        shard_env.set('VH_UNIT_SHARD_SHARED_ENV', '1')
-        test('vh_unit_tests_@0@'.format(shard), vh_unit_tests, env: shard_env, workdir: meson.current_build_dir(),
-             timeout: 600, suite: 'vh_unit_tests', depends: unit_test_helper_targets)
-    endforeach
+    # DB-backed suites make one run take several minutes (#123); 120s always timed out.
+    test('vh_unit_tests', vh_unit_tests, env: unit_test_env, workdir: meson.current_build_dir(), timeout: 1800,
+         depends: unit_test_helper_targets)
     # Every helper the suites spawn, as this build makes it (bin/tests/run_unit.sh builds it with the test binary, so a
     # helper left over from another configuration, e.g. a sanitized one, is never what the tests run).
     alias_target('vh_unit_test_helpers', unit_test_helper_targets)

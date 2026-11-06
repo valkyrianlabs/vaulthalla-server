@@ -62,8 +62,7 @@ make test ARGS="--gtest_filter='RoleParity*'"           # or: bash bin/tests/run
 `run_unit.sh -j N` (default `VH_UNIT_JOBS` or 4) runs 3N shards of whole suites (`VH_UNIT_SHARD=<i>/<n>`, split in
 `tests/unit/gtest_main.cpp`), N at a time, each on a database of its own; logs in `<build>/unit-logs/shard-<i>.log`
 (printed at the end), `--gtest_output=json:F` writes `F.shard<i>`. `-j 1` is one process on one DB, streamed (macOS
-always). `meson test` (CI) runs 6 shards in parallel (`core/meson.build`, `--suite vh_unit_tests`); they refuse a
-caller's `VH_TEST_DB_*` (one DB can't serve parallel shards). Every test process gets a private `TMPDIR`
+always). CI's DB-free run uses gtest's own sharding (`tools/dev/ci-test.sh`). Every test process gets a private `TMPDIR`
 (`/tmp/vh-unit-XXXXXX`, removed at exit), so the test-mode default paths and fixed scratch names never meet another
 process's. Test-only speedups, all refused outside test mode and never set by the daemon: Argon2id at libsodium's
 minimum cost (`hash::setMinimalPasswordCostForTesting`, set in `gtest_main.cpp`), a TOTP clock tests advance instead

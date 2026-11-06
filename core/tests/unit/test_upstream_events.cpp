@@ -46,6 +46,13 @@ protected:
         installFakeProvider();
         storage::upstream::guard::clearForTesting();
         sync::events::subscriptions::invalidateCache();
+        // The suite's vaults share one channel (same provider, account, region). A continuity break or DLQ depth an
+        // earlier test left on it held this test's events whenever both fell in the same second (continuity is
+        // compared in whole seconds), which made ShutdownIsBoundedDuringAnApplyBatch flaky.
+        db::Transactions::exec("UpstreamEventsTest::SetUp", [](pqxx::work& txn) {
+            txn.exec("UPDATE upstream_event_channel SET continuity_broken_at = NULL, continuity_note = NULL, "
+                     "dlq_depth = NULL");
+        });
     }
 
     void TearDown() override {
