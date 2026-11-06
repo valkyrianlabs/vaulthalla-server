@@ -205,8 +205,10 @@ reachable through a router: a Desktop connecting from outside is the proof (see
 
 - **`vh device remote status` says it is not listening:** the reason follows (usually the port is in use by
   another program). The daemon keeps retrying every 30 seconds; nothing else is affected.
-- **Desktop says the node's identity changed:** the node's key was replaced (for example the state directory was
-  restored without its sealed secrets). Pair again; the old pin can't be trusted automatically.
+- **Desktop says the node's identity changed:** the node's key was replaced (the state directory was restored without
+  its sealed secrets, or a super admin ran `vh secret device-identity rotate`, which also revokes every paired device:
+  [Rotate The Device Identity](/vaults/secrets-and-key-export#rotate-the-device-identity)). Pair again; the old pin
+  can't be trusted automatically.
 - **Desktop says this Mac was unpaired:** the device was revoked, or its account deleted. Pair again.
 - **Desktop connects on the LAN but not from outside, or a route shows an error:** see the symptom table in
   [Direct Device Connections](/admin/direct-connections#troubleshooting).

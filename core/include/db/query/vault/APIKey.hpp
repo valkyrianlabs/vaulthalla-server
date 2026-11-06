@@ -45,7 +45,9 @@ public:
     static void setAdmin(unsigned int keyId, bool enabled, const std::optional<std::string>& accountRef,
                          const std::optional<std::string>& capabilitiesJson, std::optional<std::time_t> validatedAt);
     // Sealed Cloudflare account token (ciphertext + IV, as for the S3 secret).
-    static void setProviderToken(unsigned int keyId, const std::vector<uint8_t>& ciphertext, const std::vector<uint8_t>& iv);
+    // The token is wrapped under API key master `masterVersion` (the row's secret is too: a Writer holds it).
+    static void setProviderToken(unsigned int keyId, const std::vector<uint8_t>& ciphertext, const std::vector<uint8_t>& iv,
+                                 unsigned int masterVersion);
     static void clearProviderToken(unsigned int keyId);
     // nullopt clears it (e.g. the key's endpoint or provider changed, so the old account no longer applies).
     static void setAccountRef(unsigned int keyId, const std::optional<std::string>& accountRef);

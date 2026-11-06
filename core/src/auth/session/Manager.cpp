@@ -651,6 +651,30 @@ void Manager::invalidate(const std::string& token) {
     invalidate(get(token));
 }
 
+std::size_t Manager::endAll() {
+    std::vector<std::shared_ptr<Session>> targets;
+    {
+        std::lock_guard lock(sessionMutex_);
+        const auto add = [&](const std::shared_ptr<Session>& s) {
+            if (s && std::ranges::find(targets, s) == targets.end()) targets.push_back(s);
+        };
+        for (const auto& [_, s] : sessionsByUUID_) add(s);
+        for (const auto& [_, s] : sessionsByRefreshJti_) add(s);
+        for (const auto& [_, s] : shareSessionsByRefreshJti_) add(s);
+        for (const auto& [_, s] : sessionsByUserId_) add(s);
+        validatedAt_.clear();
+    }
+    for (const auto& session : targets) {
+        invalidate(session);
+        session->close();
+    }
+    {
+        std::lock_guard lock(sessionMutex_);
+        validatedAt_.clear();
+    }
+    return targets.size();
+}
+
 std::shared_ptr<Session> Manager::get(const std::string& token) {
     std::lock_guard lock(sessionMutex_);
 

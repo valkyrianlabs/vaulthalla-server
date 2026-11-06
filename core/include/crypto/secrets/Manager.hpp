@@ -22,6 +22,12 @@ public:
 
     std::string jwtSecret() const;
     void setJWTSecret(const std::string& secret) const;
+    // Replaces the JWT signing secret with a fresh one (64 CSPRNG characters) and revokes every stored refresh token,
+    // in one transaction, then serves the new secret (#353, `vh secret jwt rotate`). Every access and refresh token
+    // signed before stops verifying at once; the caller ends the live sessions (auth::session::Manager::endAll).
+    // Only the jwt_secret row changes: the host master that wraps internal_secrets (and with it the MFA keys, the
+    // share-token pepper and the email credentials) is not touched. Returns how many refresh tokens were revoked.
+    std::size_t rotateJWTSecret() const;
     [[nodiscard]] std::optional<std::string> getSecret(const std::string& key) const;
     void setSecret(const std::string& key, const std::string& value) const;
     [[nodiscard]] bool hasSecret(const std::string& key) const;

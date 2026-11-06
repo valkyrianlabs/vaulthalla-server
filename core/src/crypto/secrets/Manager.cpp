@@ -4,7 +4,11 @@
 #include "crypto/SecretBytes.hpp"
 #include "crypto/util/encrypt.hpp"
 #include "crypto/util/hash.hpp"
+#include "db/Transactions.hpp"
+#include "db/encoding/bytea.hpp"
 #include "log/Registry.hpp"
+
+#include <pqxx/pqxx>
 
 #include <paths.h>
 
@@ -42,6 +46,50 @@ void Manager::setJWTSecret(const std::string& secret) const {
     std::scoped_lock lock(jwtMutex_);
     setEncryptedValue("jwt_secret", secret);
     jwtSecret_.store(std::make_shared<const std::string>(secret));
+}
+
+std::size_t Manager::rotateJWTSecret() const {
+    std::scoped_lock lock(jwtMutex_);
+    auto fresh = hash::generate_secure_password(64);
+    if (testSecrets_) {
+        {
+            std::scoped_lock testLock(mutex_);
+            (*testSecrets_)["jwt_secret"] = fresh;
+        }
+        jwtSecret_.store(std::make_shared<const std::string>(std::move(fresh)));
+        return 0;
+    }
+
+    std::vector<uint8_t> iv, ciphertext;
+    {
+        std::scoped_lock masterLock(mutex_);
+        ciphertext = encrypt_aes256_gcm(viewBytes(fresh), tpmKeyProvider_->getMasterKey(), iv);
+    }
+    std::size_t revoked = 0;
+    try {
+        revoked = db::Transactions::exec("secrets::rotateJWTSecret", [&](pqxx::work& txn) {
+            txn.exec(pqxx::prepped{"upsert_internal_secret"},
+                     pqxx::params{std::string("jwt_secret"), db::encoding::to_hex_bytea(ciphertext),
+                                  db::encoding::to_hex_bytea(iv)});
+            return static_cast<std::size_t>(
+                txn.exec("UPDATE refresh_tokens SET revoked = TRUE WHERE revoked IS NOT TRUE").affected_rows());
+        });
+    } catch (...) {
+        wipeSecret(fresh);
+        throw;
+    }
+    // What is stored is what will be served: read back under the host master before the switch in memory.
+    auto back = getSecret("jwt_secret");
+    const bool same = back && *back == fresh;
+    if (back) wipeSecret(*back);
+    if (!same) {
+        wipeSecret(fresh);
+        throw std::runtime_error("the rotated JWT secret did not read back identically; the previous one is still "
+                                 "served in memory, and stored sessions were revoked");
+    }
+    jwtSecret_.store(std::make_shared<const std::string>(fresh));
+    wipeSecret(fresh);
+    return revoked;
 }
 
 std::optional<std::string> Manager::getSecret(const std::string& key) const {

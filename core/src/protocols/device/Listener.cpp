@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <atomic>
 #include <limits>
+#include <stdexcept>
 #include <thread>
 #include <string_view>
 
@@ -231,6 +232,13 @@ Listener::Listener(asio::io_context& ioc, std::shared_ptr<ssl::context> tls, std
                    const unsigned int maxConnections)
     : ioc_(ioc), tls_(std::move(tls)), router_(std::move(router)), maxConnections_(maxConnections) {}
 
+void Listener::setTls(std::shared_ptr<ssl::context> tls) {
+    if (!tls) throw std::invalid_argument("device listener: no TLS context");
+    std::scoped_lock lock(tlsMutex_);
+    if (tls_) retiredTls_.push_back(std::move(tls_));
+    tls_ = std::move(tls);
+}
+
 namespace {
 
 std::shared_ptr<tcp::acceptor> openAcceptor(asio::io_context& ioc, const tcp::endpoint& endpoint) {
@@ -310,7 +318,12 @@ void Listener::doAccept(const std::shared_ptr<tcp::acceptor>& acceptor) {
             beast::error_code ignored;
             socket.set_option(tcp::no_delay(true), ignored);
             socket.set_option(asio::socket_base::keep_alive(true), ignored);
-            std::make_shared<Connection>(std::move(socket), *self->tls_, self->router_, std::move(slot))->start();
+            std::shared_ptr<ssl::context> tls;
+            {
+                std::scoped_lock lock(self->tlsMutex_);
+                tls = self->tls_;
+            }
+            std::make_shared<Connection>(std::move(socket), *tls, self->router_, std::move(slot))->start();
         } else {
             // A TLS client can't read a plaintext 503: over the cap the connection is simply closed.
             warnRefused(std::max(1u, limit));

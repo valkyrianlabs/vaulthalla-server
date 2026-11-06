@@ -20,7 +20,8 @@ namespace vh::db::query::vault {
                 to_hex_bytea(key->encrypted_secret_access_key),
                 to_hex_bytea(key->iv),
                 key->region,
-                key->endpoint
+                key->endpoint,
+                key->master_version
             };
             return txn.exec(pqxx::prepped{"upsert_api_key"}, p).one_field_ref().as<unsigned int>();
         });
@@ -36,7 +37,8 @@ namespace vh::db::query::vault {
                 to_hex_bytea(key->encrypted_secret_access_key),
                 to_hex_bytea(key->iv),
                 key->region,
-                key->endpoint
+                key->endpoint,
+                key->master_version
             };
             txn.exec(pqxx::prepped{"update_api_key"}, p);
         });
@@ -112,10 +114,10 @@ namespace vh::db::query::vault {
     }
 
     void APIKey::setProviderToken(const unsigned int keyId, const std::vector<uint8_t>& ciphertext,
-                                  const std::vector<uint8_t>& iv) {
+                                  const std::vector<uint8_t>& iv, const unsigned int masterVersion) {
         Transactions::exec("APIKey::setProviderToken", [&](pqxx::work& txn) {
             txn.exec(pqxx::prepped{"api_key_set_provider_token"},
-                     pqxx::params{keyId, to_hex_bytea(ciphertext), to_hex_bytea(iv)});
+                     pqxx::params{keyId, to_hex_bytea(ciphertext), to_hex_bytea(iv), masterVersion});
         });
     }
 

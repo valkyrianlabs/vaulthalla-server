@@ -15,8 +15,10 @@ void vh::db::Connection::initPreparedAPIKeys() const {
         WHERE id = $1
     )SQL");
 
+    // Wrapped secrets declare the API key master that wraps them (migration 122; the guard refuses another one).
     conn_->prepare("api_key_set_provider_token",
-                   "UPDATE api_keys SET encrypted_provider_token = $2, provider_token_iv = $3 WHERE id = $1");
+                   "UPDATE api_keys SET encrypted_provider_token = $2, provider_token_iv = $3, master_version = $4 "
+                   "WHERE id = $1");
 
     conn_->prepare("api_key_clear_provider_token",
                    "UPDATE api_keys SET encrypted_provider_token = NULL, provider_token_iv = NULL WHERE id = $1");
@@ -27,12 +29,13 @@ void vh::db::Connection::initPreparedAPIKeys() const {
 
     conn_->prepare("upsert_api_key",
                    "INSERT INTO api_keys (user_id, name, provider, access_key, "
-                   "encrypted_secret_access_key, iv, region, endpoint) "
-                   "VALUES ($1, $2, $3, $4, $5, $6, $7, $8) "
+                   "encrypted_secret_access_key, iv, region, endpoint, master_version) "
+                   "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) "
                    "ON CONFLICT (user_id, name, access_key) DO UPDATE SET "
                    "  provider = EXCLUDED.provider, "
                    "  encrypted_secret_access_key = EXCLUDED.encrypted_secret_access_key, "
                    "  iv = EXCLUDED.iv, "
+                   "  master_version = EXCLUDED.master_version, "
                    "  region = EXCLUDED.region, "
                    "  endpoint = EXCLUDED.endpoint, "
                    "  created_at = CURRENT_TIMESTAMP "
@@ -41,7 +44,7 @@ void vh::db::Connection::initPreparedAPIKeys() const {
     // In-place edit: the id (and so every vault's s3.api_key_id) stays.
     conn_->prepare("update_api_key",
                    "UPDATE api_keys SET name = $2, provider = $3, access_key = $4, "
-                   "encrypted_secret_access_key = $5, iv = $6, region = $7, endpoint = $8 "
+                   "encrypted_secret_access_key = $5, iv = $6, region = $7, endpoint = $8, master_version = $9 "
                    "WHERE id = $1");
 
     conn_->prepare("list_api_key_vaults",

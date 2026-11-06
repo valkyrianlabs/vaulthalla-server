@@ -18,12 +18,13 @@
 #include "CommandUsage.hpp"
 #include "rbac/role/Admin.hpp"
 #include "rbac/role/Vault.hpp"
-#include "ops/VaultMaster.hpp"
-#include "vault/Master.hpp"
+#include "ops/MasterSecrets.hpp"
+#include "crypto/secrets/Versioned.hpp"
 #include "protocols/shell/types.hpp"
 
 #include <fmt/format.h>
 
+#include <cctype>
 #include <fstream>
 #include <paths.h>
 
@@ -185,7 +186,10 @@ static CommandResult handle_secrets_export(const CommandCall& call) {
     return handle_secret_encrypt_and_response(call, out, usage);
 }
 
-// ---- vh secret master (#352) ----------------------------------------------------------------------------------
+// ---- vh secret master (#352, #353) ----------------------------------------------------------------------------
+
+namespace master_ops = vh::ops::master_secrets;
+namespace master_slots = vh::crypto::secrets::versioned;
 
 static bool isMasterMatch(const std::string& cmd, const std::string_view input) {
     return isCommandMatch({"secrets", "master", cmd}, input);
@@ -200,12 +204,18 @@ static std::string iso(const std::optional<std::time_t>& t) {
     return buf;
 }
 
-static std::string master_status_text(const vault::master::rewrap::Status& s) {
-    std::string out = fmt::format("Vault master: version {} ('{}'), {} sealing ({}){}\n", s.state.version,
-                                  vault::master::slotName(s.state.version),
+static std::string capitalized(std::string_view text) {
+    std::string out(text);
+    if (!out.empty()) out[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(out[0])));
+    return out;
+}
+
+static std::string master_status_text(const crypto::secrets::rewrap::Status& s) {
+    std::string out = fmt::format("{}: version {} ('{}'), {} sealing ({}){}\n", capitalized(master_slots::noun(s.slot)),
+                                  s.state.version, master_slots::slotName(s.slot, s.state.version),
                                   crypto::secrets::KeyProvider::posture(), crypto::secrets::KeyProvider::backend(),
                                   s.current_sealed ? "" : " [NOT SEALED ON THIS HOST]");
-    out += fmt::format("  key rows:     {}", s.rows);
+    out += fmt::format("  rows:         {}", s.rows);
     for (const auto& [v, n] : s.by_master) out += fmt::format("  (version {}: {})", v, n);
     out += "\n";
     if (s.state.staging_version)
@@ -223,7 +233,7 @@ static std::string master_status_text(const vault::master::rewrap::Status& s) {
     return out;
 }
 
-// Runs a confirmable vault master operation: asks in a terminal, else needs --yes.
+// Runs a confirmable operation: asks in a terminal, else needs --yes.
 template <class Fn>
 static CommandResult runConfirmable(const CommandCall& call, const std::string& err, Fn&& fn) {
     const bool yes = hasFlag(call, "yes");
@@ -245,26 +255,53 @@ static CommandResult runConfirmable(const CommandCall& call, const std::string& 
     }
 }
 
+// --slot vault|api-keys|s3-gateway (default vault); `all` only where allowAll (status).
+static std::optional<std::vector<master_slots::Slot>> slotsOf(const CommandCall& call, const bool allowAll) {
+    const auto value = optVal(call, "slot");
+    if (!value) return std::vector{master_slots::Slot::VaultMaster};
+    if (allowAll && *value == "all") return std::vector<master_slots::Slot>(master_slots::kSlots.begin(), master_slots::kSlots.end());
+    if (const auto slot = master_slots::parse(*value)) return std::vector{*slot};
+    return std::nullopt;
+}
+
 static CommandResult handle_secrets_master(const CommandCall& call) {
-    // Changing which master wraps the vault keys is never an agent's decision (also excluded from MCP).
+    // Changing which master wraps stored secrets is never an agent's decision (also excluded from MCP).
     if (call.positionals.empty() || hasKey(call, "help") || hasKey(call, "h")) return usage(call.constructFullArgs());
     const auto [sub, subcall] = descend(call);
     const bool json = hasFlag(subcall, "json") || hasFlag(subcall, "j");
+    const bool isStatus = isMasterMatch("status", sub);
+    const auto slots = slotsOf(subcall, isStatus);
+    if (!slots)
+        return invalid(std::string("secret master: --slot is one of vault, api-keys, s3-gateway") +
+                       (isStatus ? ", all" : ""));
+    const auto slot = slots->front();
 
-    if (isMasterMatch("status", sub)) {
+    if (isStatus) {
         try {
-            const auto s = ops::vault_master::status(subcall.user);
-            return ok(json ? ops::vault_master::toJson(s).dump(4) : master_status_text(s));
+            if (slots->size() > 1) {
+                nlohmann::json all = nlohmann::json::object();
+                std::string text;
+                for (const auto s : *slots) {
+                    const auto st = master_ops::status(subcall.user, s);
+                    all[std::string(master_slots::id(s))] = master_ops::toJson(st);
+                    text += master_status_text(st);
+                }
+                return ok(json ? all.dump(4) : text);
+            }
+            const auto s = master_ops::status(subcall.user, slot);
+            return ok(json ? master_ops::toJson(s).dump(4) : master_status_text(s));
         } catch (const ops::Error& e) {
             return invalid(std::string("secret master status: ") + e.what());
         }
     }
     const bool mutating = isMasterMatch("rotate", sub) || isMasterMatch("finalize", sub) || isMasterMatch("rollback", sub);
     if (mutating && AgentCallScope::active())
-        return invalid("secret master: the vault master is rotated by a human at the terminal, never by an agent");
+        return invalid("secret master: master secrets are rotated by a human at the terminal, never by an agent");
 
+    const auto noun = std::string(master_slots::noun(slot));
+    const auto slotFlag = slot == master_slots::Slot::VaultMaster ? std::string{} : " --slot " + std::string(master_slots::cliName(slot));
     if (isMasterMatch("rotate", sub)) {
-        ops::vault_master::RotateRequest req;
+        master_ops::RotateRequest req{.slot = slot};
         try {
             if (const auto h = optVal(subcall, "window-hours")) req.window = std::chrono::hours(std::stoul(*h));
             else if (const auto w = optVal(subcall, "window")) req.window = std::chrono::hours(std::stoul(*w));
@@ -274,38 +311,76 @@ static CommandResult handle_secrets_master(const CommandCall& call) {
         }
         return runConfirmable(subcall, "secret master rotate", [&](const bool yes) {
             req.confirmed = yes;
-            const auto r = ops::vault_master::rotate(subcall.user, req);
-            if (json) return ok(ops::vault_master::toJson(r).dump(4));
-            return ok(fmt::format("Vault master rotated from version {} to {}: {} key row(s) rewrapped and verified "
-                                  "({} staged now in {} batch(es){}, {} caught up at the switch). No file was "
-                                  "re-encrypted.\nThe previous master is kept until {}: `vh secret master rollback` "
-                                  "returns to it, `vh secret master finalize` deletes it sooner.",
-                                  r.from, r.to, r.rows, r.staged_now, r.batches,
+            const auto r = master_ops::rotate(subcall.user, req);
+            if (json) return ok(master_ops::toJson(r).dump(4));
+            return ok(fmt::format("{} rotated from version {} to {}: {} row(s) rewrapped and verified ({} staged now "
+                                  "in {} batch(es){}, {} caught up at the switch). No protected value changed.\nThe "
+                                  "previous master is kept until {}: `vh secret master rollback{}` returns to it, "
+                                  "`vh secret master finalize{}` deletes it sooner.",
+                                  capitalized(noun), r.from, r.to, r.rows, r.staged_now, r.batches,
                                   r.resumed ? ", resuming an interrupted rotation" : "", r.caught_up,
-                                  iso(r.window_until)));
+                                  iso(r.window_until), slotFlag, slotFlag));
         });
     }
     if (isMasterMatch("finalize", sub))
         return runConfirmable(subcall, "secret master finalize", [&](const bool yes) {
-            const auto r = ops::vault_master::finalize(subcall.user, yes);
-            if (json) return ok(ops::vault_master::toJson(r).dump(4));
+            const auto r = master_ops::finalize(subcall.user, slot, yes);
+            if (json) return ok(master_ops::toJson(r).dump(4));
             if (!r.finalized)
                 return ok(r.deleted.empty() ? std::string("No recovery window is open; nothing to finalize.")
                                             : fmt::format("No recovery window is open; deleted {} leftover retired "
                                                           "master slot(s).", r.deleted.size()));
-            return ok(fmt::format("Finalized: {} key row(s) verified under the current vault master; version {} "
-                                  "deleted.", r.rows, *r.previous));
+            return ok(fmt::format("Finalized: {} row(s) verified under the current {}; version {} deleted.", r.rows,
+                                  noun, *r.previous));
         });
     if (isMasterMatch("rollback", sub))
         return runConfirmable(subcall, "secret master rollback", [&](const bool yes) {
-            const auto r = ops::vault_master::rollback(subcall.user, yes);
-            if (json) return ok(ops::vault_master::toJson(r).dump(4));
-            if (r.kind == vault::master::rewrap::RollbackResult::Kind::AbandonedStaging)
-                return ok(fmt::format("Abandoned the staged vault master version {}; version {} stays.", r.from, r.to));
-            return ok(fmt::format("Rolled back to vault master version {}: {} key row(s) restored from their retained "
-                                  "wrap, {} rewrapped; version {} deleted.", r.to, r.rows, r.rewrapped, r.from));
+            const auto r = master_ops::rollback(subcall.user, slot, yes);
+            if (json) return ok(master_ops::toJson(r).dump(4));
+            if (r.kind == crypto::secrets::rewrap::RollbackResult::Kind::AbandonedStaging)
+                return ok(fmt::format("Abandoned the staged {} version {}; version {} stays.", noun, r.from, r.to));
+            return ok(fmt::format("Rolled back to {} version {}: {} row(s) restored from their retained wrap, {} "
+                                  "rewrapped; version {} deleted.", noun, r.to, r.rows, r.rewrapped, r.from));
         });
     return invalid("secret master: unknown subcommand '" + std::string(sub) + "'. Use: status | rotate | finalize | rollback");
+}
+
+// ---- vh secret jwt rotate, vh secret device-identity rotate (#353) --------------------------------------------
+
+static CommandResult handle_secrets_jwt(const CommandCall& call) {
+    if (call.positionals.empty() || hasKey(call, "help") || hasKey(call, "h")) return usage(call.constructFullArgs());
+    const auto [sub, subcall] = descend(call);
+    if (!isCommandMatch({"secrets", "jwt", "rotate"}, sub))
+        return invalid("secret jwt: unknown subcommand '" + std::string(sub) + "'. Use: rotate");
+    if (AgentCallScope::active())
+        return invalid("secret jwt rotate: the JWT secret is rotated by a human at the terminal, never by an agent");
+    const bool json = hasFlag(subcall, "json") || hasFlag(subcall, "j");
+    return runConfirmable(subcall, "secret jwt rotate", [&](const bool yes) {
+        const auto r = master_ops::rotateJwtSecret(subcall.user, yes);
+        if (json) return ok(master_ops::toJson(r).dump(4));
+        return ok(fmt::format("JWT secret rotated: {} refresh token(s) revoked, {} live session(s) ended. Everyone "
+                              "signs in again.", r.refresh_tokens_revoked, r.sessions_ended));
+    });
+}
+
+static CommandResult handle_secrets_device_identity(const CommandCall& call) {
+    if (call.positionals.empty() || hasKey(call, "help") || hasKey(call, "h")) return usage(call.constructFullArgs());
+    const auto [sub, subcall] = descend(call);
+    if (!isCommandMatch({"secrets", "device-identity", "rotate"}, sub))
+        return invalid("secret device-identity: unknown subcommand '" + std::string(sub) + "'. Use: rotate");
+    if (AgentCallScope::active())
+        return invalid("secret device-identity rotate: the device identity is rotated by a human at the terminal, "
+                       "never by an agent");
+    const bool json = hasFlag(subcall, "json") || hasFlag(subcall, "j");
+    return runConfirmable(subcall, "secret device-identity rotate", [&](const bool yes) {
+        const auto r = master_ops::rotateDeviceIdentity(subcall.user, yes);
+        if (json) return ok(master_ops::toJson(r).dump(4));
+        return ok(fmt::format("Device identity rotated (version {} to {}); the new pin is SPKI sha256 {}.\n{} paired "
+                              "device(s) revoked and {} connection(s) closed: each device pairs again with a new "
+                              "pairing code.{}",
+                              r.from, r.to, r.spki_sha256, r.devices_revoked, r.sessions_closed,
+                              r.listener_updated ? "" : " The device listener presents the new identity when it starts."));
+    });
 }
 
 static bool isSecretsMatch(const std::string& cmd, const std::string_view input) {
@@ -313,10 +388,18 @@ static bool isSecretsMatch(const std::string& cmd, const std::string_view input)
 }
 
 static CommandResult handle_secrets(const CommandCall& call) {
-    // The vault master has its own gate (super admins only, ops::vault_master), checked there.
+    // The master secret rotations have their own gate (super admins only, ops::master_secrets), checked there.
     if (!call.positionals.empty() && isSecretsMatch("master", call.positionals[0])) {
         const auto [_, subcall] = descend(call);
         return handle_secrets_master(subcall);
+    }
+    if (!call.positionals.empty() && isSecretsMatch("jwt", call.positionals[0])) {
+        const auto [_, subcall] = descend(call);
+        return handle_secrets_jwt(subcall);
+    }
+    if (!call.positionals.empty() && isSecretsMatch("device-identity", call.positionals[0])) {
+        const auto [_, subcall] = descend(call);
+        return handle_secrets_device_identity(subcall);
     }
     if (!call.user->encryptionKeysPerms().canExport())
         return invalid("secrets export: insufficient permissions to export secrets. Requires encryption keys export permission.");

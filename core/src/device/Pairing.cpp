@@ -258,6 +258,14 @@ std::optional<std::string> Pairing::codeForTesting(const std::string& requestId)
     return it->second.code;
 }
 
+std::size_t Pairing::abandonAll() {
+    std::scoped_lock lock(mutex_);
+    const auto dropped = requests_.size();
+    window_.reset();
+    requests_.clear();
+    return dropped;
+}
+
 void Pairing::resetForTesting() {
     std::scoped_lock lock(mutex_);
     window_.reset();

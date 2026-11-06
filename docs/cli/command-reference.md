@@ -384,6 +384,17 @@ vh secret export all --recipient <gpg-fingerprint> --output vaulthalla-secrets.j
 
 `secret set` reads the secret value from the file path you pass.
 
+```bash
+vh secret master status --slot all                    # every data-wrapping master: version, rotation, window
+sudo vh secret master rotate [--slot vault|api-keys|s3-gateway] [--window-hours <hours>]
+vh secret master rollback|finalize [--slot vault|api-keys|s3-gateway]
+sudo vh secret jwt rotate                             # everyone signs in again
+sudo vh secret device-identity rotate                 # every paired device pairs again
+```
+
+Super admins only, each asking to confirm (`--yes` without a terminal), and never available to agents. See
+[Rotate The Vault Master](/vaults/secrets-and-key-export#rotate-the-vault-master) and the sections after it.
+
 ## S3 Gateway
 
 ```bash
@@ -442,5 +453,6 @@ vh skill install --agent claude --no-register --force
 vh mcp                                             # the stdio MCP server an agent starts
 ```
 
-Key and secret export, `secrets update`, `setup`, `teardown` and `fs get|put` are never available to agents. See
+Key and secret export, `secrets update`, the master secret, JWT and device identity rotations, `setup`, `teardown` and
+`fs get|put` are never available to agents. See
 [AI Agents And MCP](/admin/mcp-and-agents).

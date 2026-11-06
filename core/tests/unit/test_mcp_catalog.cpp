@@ -148,7 +148,8 @@ TEST(McpCatalog, ExclusionListIsExactlyTheAgreedOne) {
     }
     const std::vector<std::string> expected{"vault key export", "vault key import", "secrets export", "secrets update",
                                             "secrets master rotate", "secrets master finalize",
-                                            "secrets master rollback", "setup",
+                                            "secrets master rollback", "secrets jwt rotate",
+                                            "secrets device-identity rotate", "setup",
                                             "setup set-super-admin-password", "teardown", "fs get", "fs put", "mcp",
                                             "skill", "device pair", "device approve", "device deny",
                                             "device remote enable", "device remote disable"};
@@ -160,7 +161,8 @@ TEST(McpCatalog, ExcludedCommandsAreNeitherListedNorRunnable) {
     for (const auto& l : catalog().leaves())
         if (l.excluded) excluded.insert(l.command);
     for (const auto* c : {"vault key export", "vault key import", "secrets export", "secrets update",
-                          "secrets master rotate", "secrets master finalize", "secrets master rollback", "setup db", "setup caddy",
+                          "secrets master rotate", "secrets master finalize", "secrets master rollback",
+                          "secrets jwt rotate", "secrets device-identity rotate", "setup db", "setup caddy",
                           "setup set-super-admin-password", "teardown db", "fs get", "fs put", "mcp", "skill install",
                           "device pair", "device approve", "device deny", "device remote enable",
                           "device remote disable"})
@@ -176,7 +178,9 @@ TEST(McpCatalog, ExcludedCommandsAreNeitherListedNorRunnable) {
                                 "vaults key export 3", "vault keys import 3 --file k.json",
                                 "VAULT K IMPORT 3 --file - --confirm-name a", "secret export jwt-secret", "secrets get db-password",
                                 "secret set jwt-secret /tmp/x", "secret master rotate --yes", "secrets master finalize",
-                                "secret master rollback --yes", "setup db", "setup database", "teardown nginx",
+                                "secret master rollback --yes", "secret master rotate --slot api-keys --yes",
+                                "secrets master rollback --slot s3-gateway", "secret jwt rotate --yes",
+                                "secrets device-identity rotate --yes", "setup db", "setup database", "teardown nginx",
                                 "setup super-admin-password", "fs get 3 /a", "files download 3 /a", "fs put 3 a /a",
                                 "fs upload 3 a /a", "mcp", "skills install --agent claude", "device pair",
                                 "device approve 7f3a9c1d2e4b6a80 --code 482913", "device deny 7f3a9c1d2e4b6a80",

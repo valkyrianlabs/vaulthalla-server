@@ -2,8 +2,11 @@
 
 #include "concurrency/AtomicSharedPtr.hpp"
 #include "crypto/secrets/KeyProvider.hpp"
+#include "db/Transactions.hpp"
 #include "fs/ops/file.hpp"
 #include "log/Registry.hpp"
+
+#include <pqxx/pqxx>
 
 #include <openssl/bio.h>
 #include <openssl/bn.h>
@@ -20,10 +23,14 @@
 
 #include <paths.h>
 
+#include <atomic>
 #include <fstream>
 #include <memory>
+#include <mutex>
 #include <sstream>
 #include <stdexcept>
+#include <utility>
+#include <vector>
 
 namespace vh::device {
 
@@ -197,19 +204,15 @@ std::vector<uint8_t> ServerIdentity::privateScalar() const { return scalarOf(key
 
 std::filesystem::path serverCertificatePath() { return paths::getBackingPath() / "device_server_certificate.pem"; }
 
-std::shared_ptr<const ServerIdentity> loadOrCreateServerIdentity() {
-    // init() unseals the stored key when there is one and only seals the candidate when there is none.
-    const auto candidate = ServerIdentity::generate();
-    auto candidateScalar = candidate->privateScalar();
-    ::vh::crypto::secrets::KeyProvider provider(paths::testMode ? "test_device_tls" : "device_tls");
-    try {
-        provider.init(candidateScalar);
-    } catch (...) {
-        OPENSSL_cleanse(candidateScalar.data(), candidateScalar.size());
-        throw;
-    }
-    OPENSSL_cleanse(candidateScalar.data(), candidateScalar.size());
+namespace {
 
+std::atomic<void (*)(std::string_view)> rotationHook{nullptr};
+
+void identityCrashPoint(const std::string_view point) {
+    if (const auto hook = rotationHook.load()) hook(point);
+}
+
+std::string readCertificateFile() {
     const auto path = serverCertificatePath();
     std::string pem;
     if (std::error_code ec; std::filesystem::is_regular_file(path, ec)) {
@@ -218,16 +221,160 @@ std::shared_ptr<const ServerIdentity> loadOrCreateServerIdentity() {
         buf << in.rdbuf();
         pem = buf.str();
     }
+    return pem;
+}
 
-    auto identity = ServerIdentity::fromPrivateScalar(provider.getMasterKey(), pem);
+void writeCertificateFile(const ServerIdentity& identity) {
+    const auto& text = identity.certificatePem();
+    fs::ops::writeFileAtomic(serverCertificatePath(),
+                             std::span(reinterpret_cast<const uint8_t*>(text.data()), text.size()));
+}
+
+std::vector<unsigned int> pendingIdentityDiscards() {
+    return db::Transactions::exec("device::identity.discards", [](pqxx::work& txn) {
+        std::vector<unsigned int> out;
+        for (const auto& r : txn.exec("SELECT unnest(discard_versions) FROM master_secret_state WHERE slot = "
+                                      "'device_tls'"))
+            out.push_back(r[0].as<unsigned int>());
+        return out;
+    });
+}
+
+// Deletes the retired identity keys the state lists (never the current one), then forgets them.
+void discardRetiredIdentities(const unsigned int current) {
+    for (const auto v : pendingIdentityDiscards()) {
+        if (v != current) {
+            ::vh::crypto::secrets::KeyProvider(identitySlotName(v)).destroySealed();
+            log::Registry::runtime()->info("[device] Deleted the retired device listener key (version {})", v);
+        }
+        db::Transactions::exec("device::identity.discarded", [&](pqxx::work& txn) {
+            txn.exec("UPDATE master_secret_state SET discard_versions = array_remove(discard_versions, $1) "
+                     "WHERE slot = 'device_tls'",
+                     pqxx::params{v});
+        });
+    }
+}
+
+}
+
+std::string identitySlotName(const unsigned int version) {
+    if (version == 0) throw std::invalid_argument("device identity versions start at 1");
+    const std::string base = paths::testMode ? "test_device_tls" : "device_tls";
+    return version == 1 ? base : base + ".v" + std::to_string(version);
+}
+
+unsigned int currentIdentityVersion() {
+    return db::Transactions::exec("device::identity.version", [](pqxx::work& txn) {
+        return txn.exec("SELECT vh_master_version('device_tls')").one_field_ref().as<unsigned int>();
+    });
+}
+
+std::shared_ptr<const ServerIdentity> loadOrCreateServerIdentity() {
+    const auto version = currentIdentityVersion();
+    // init() unseals the stored key when there is one and only seals the candidate when there is none.
+    const auto candidate = ServerIdentity::generate();
+    auto candidateScalar = candidate->privateScalar();
+    ::vh::crypto::secrets::KeyProvider provider(identitySlotName(version));
+    try {
+        provider.init(candidateScalar);
+    } catch (...) {
+        OPENSSL_cleanse(candidateScalar.data(), candidateScalar.size());
+        throw;
+    }
+    OPENSSL_cleanse(candidateScalar.data(), candidateScalar.size());
+
+    auto identity = ServerIdentity::fromPrivateScalar(provider.getMasterKey(), readCertificateFile());
     if (identity->certificateIsNew()) {
-        const auto& text = identity->certificatePem();
-        fs::ops::writeFileAtomic(path, std::span(reinterpret_cast<const uint8_t*>(text.data()), text.size()));
+        writeCertificateFile(*identity);
         log::Registry::runtime()->info("[device] Issued the device listener certificate (SPKI sha256 {})",
                                        identity->spkiHex());
     }
+    try {
+        discardRetiredIdentities(version);
+    } catch (const std::exception& e) {
+        log::Registry::runtime()->warn("[device] Could not delete a retired device listener key: {}", e.what());
+    }
     return identity;
 }
+
+IdentityRotation rotateServerIdentity() {
+    static std::mutex rotationMutex;
+    std::scoped_lock lock(rotationMutex);
+
+    IdentityRotation out;
+    // The next number is taken first, and listed for deletion until the switch claims it: a crash before the switch
+    // never lets a later rotation reuse the number, and the next start deletes the key it may have sealed.
+    const auto numbers = db::Transactions::exec("device::identity.next", [](pqxx::work& txn) {
+        const auto r = txn.exec("UPDATE master_secret_state SET highest_version = highest_version + 1, "
+                                "discard_versions = array_append(discard_versions, highest_version + 1) "
+                                "WHERE slot = 'device_tls' RETURNING version, highest_version")
+                           .one_row();
+        return std::pair{r[0].as<unsigned int>(), r[1].as<unsigned int>()};
+    });
+    const unsigned int from = numbers.first, target = numbers.second;
+    out.from = from;
+    out.to = target;
+    {
+        ::vh::crypto::secrets::KeyProvider current(identitySlotName(from));
+        if (current.sealedExists()) {
+            current.init();
+            out.previous_spki_sha256 = ServerIdentity::fromPrivateScalar(current.getMasterKey(), {})->spkiHex();
+        }
+    }
+
+    // Seal the new key beside the current one and read it back: only a key that unseals is ever switched to.
+    const auto fresh = ServerIdentity::generate();
+    {
+        auto scalar = fresh->privateScalar();
+        try {
+            ::vh::crypto::secrets::KeyProvider slot(identitySlotName(target));
+            slot.destroySealed();  // a leftover of an interrupted rotation, never switched to
+            slot.init(scalar);
+        } catch (...) {
+            OPENSSL_cleanse(scalar.data(), scalar.size());
+            throw;
+        }
+        OPENSSL_cleanse(scalar.data(), scalar.size());
+    }
+    ::vh::crypto::secrets::KeyProvider back(identitySlotName(target));
+    back.init();
+    out.identity = ServerIdentity::fromPrivateScalar(back.getMasterKey(), {});
+    if (out.identity->spkiSha256() != fresh->spkiSha256())
+        throw std::runtime_error("the new device listener key did not unseal to the key that was sealed; nothing was "
+                                 "switched");
+    identityCrashPoint("identity_sealed");
+
+    // Switch: every paired device is revoked in the same transaction that records the new key.
+    out.devices_revoked = db::Transactions::exec("device::identity.switch", [&](pqxx::work& txn) {
+        const auto state = txn.exec("SELECT version FROM master_secret_state WHERE slot = 'device_tls' FOR UPDATE")
+                               .one_field_ref()
+                               .as<unsigned int>();
+        if (state != from) throw std::runtime_error("the device identity changed during the rotation");
+        const auto revoked = txn.exec("UPDATE devices SET revoked_at = CURRENT_TIMESTAMP WHERE revoked_at IS NULL")
+                                 .affected_rows();
+        txn.exec("UPDATE master_secret_state SET version = $1, "
+                 "discard_versions = array_append(array_remove(array_remove(discard_versions, $1), $2), $2) "
+                 "WHERE slot = 'device_tls'",
+                 pqxx::params{target, from});
+        return static_cast<std::size_t>(revoked);
+    });
+    identityCrashPoint("identity_switched");
+
+    writeCertificateFile(*out.identity);
+    log::Registry::runtime()->warn("[device] Rotated the device listener identity from version {} to {} (SPKI sha256 "
+                                   "{}); {} paired device(s) revoked",
+                                   from, target, out.identity->spkiHex(), out.devices_revoked);
+    try {
+        discardRetiredIdentities(target);
+    } catch (const std::exception& e) {
+        log::Registry::runtime()->warn("[device] Could not delete the retired device listener key yet ({}); the next "
+                                       "start deletes it",
+                                       e.what());
+    }
+    return out;
+}
+
+void setIdentityRotationHookForTesting(void (*hook)(std::string_view point)) { rotationHook.store(hook); }
 
 std::shared_ptr<const ServerIdentity> currentServerIdentity() { return current().load(); }
 

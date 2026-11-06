@@ -46,6 +46,7 @@ GatewayCredential credentialFromRow(pqxx::row_ref row) {
         .access_key = row["access_key"].as<std::string>(),
         .encrypted_secret_access_key = from_hex_bytea(row["encrypted_secret_access_key"].as<std::string>()),
         .iv = from_hex_bytea(row["iv"].as<std::string>()),
+        .master_version = row["master_version"].as<unsigned int>(),
         .enabled = row["enabled"].as<bool>(),
         .enforce_budget_for_local_requests = row["enforce_budget_for_local_requests"].as<bool>(),
         .scope_mode = row["scope_mode"].as<std::string>(),
@@ -406,15 +407,16 @@ uint32_t Gateway::createCredential(const GatewayCredential& credential) {
             R"SQL(
                 INSERT INTO s3_gateway_credentials
                     (user_id, created_by, principal_user_id, name, access_key, encrypted_secret_access_key, iv,
-                     enabled, enforce_budget_for_local_requests, scope_mode, description, expires_at)
+                     enabled, enforce_budget_for_local_requests, scope_mode, description, expires_at, master_version)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-                        $11, CASE WHEN $12::bigint IS NULL THEN NULL ELSE TO_TIMESTAMP($12::double precision) END)
+                        $11, CASE WHEN $12::bigint IS NULL THEN NULL ELSE TO_TIMESTAMP($12::double precision) END, $13)
                 ON CONFLICT (user_id, name) DO UPDATE SET
                     created_by = EXCLUDED.created_by,
                     principal_user_id = EXCLUDED.principal_user_id,
                     access_key = EXCLUDED.access_key,
                     encrypted_secret_access_key = EXCLUDED.encrypted_secret_access_key,
                     iv = EXCLUDED.iv,
+                    master_version = EXCLUDED.master_version,
                     enabled = EXCLUDED.enabled,
                     enforce_budget_for_local_requests = EXCLUDED.enforce_budget_for_local_requests,
                     scope_mode = EXCLUDED.scope_mode,
@@ -434,7 +436,8 @@ uint32_t Gateway::createCredential(const GatewayCredential& credential) {
                 credential.enforce_budget_for_local_requests,
                 credential.scope_mode.empty() ? std::string{"user_access"} : credential.scope_mode,
                 credential.description,
-                credential.expires_at
+                credential.expires_at,
+                credential.master_version
             });
         return res.one_field_ref().as<uint32_t>();
     });

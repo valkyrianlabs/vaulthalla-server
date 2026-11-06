@@ -22,6 +22,7 @@
 
 #include <chrono>
 #include <functional>
+#include <stdexcept>
 
 namespace vh::protocols::device {
 
@@ -93,6 +94,18 @@ ListenerStatus Service::listenerStatus() const {
     if (const auto identity = vh::device::currentServerIdentity()) out.server_spki_sha256 = identity->spkiHex();
     out.connections = ws::ConnectionSlot::active(ws::ConnectionSlot::Pool::Device);
     return out;
+}
+
+void Service::replaceIdentity(std::shared_ptr<const vh::device::ServerIdentity> identity) {
+    if (!identity) throw std::invalid_argument("device listener: no identity");
+    std::scoped_lock lock(mutex_);
+    auto tls = makeServerContext(*identity);
+    if (listener_) listener_->setTls(tls);
+    tls_ = std::move(tls);
+    identity_ = std::move(identity);
+    vh::device::setCurrentServerIdentity(identity_);
+    log::Registry::runtime()->info("[DeviceServer] Now presenting the rotated server identity (SPKI sha256 {})",
+                                   identity_->spkiHex());
 }
 
 void Service::setIdentityForTesting(std::shared_ptr<const vh::device::ServerIdentity> identity) {

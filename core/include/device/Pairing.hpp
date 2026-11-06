@@ -124,6 +124,10 @@ public:
                         const crypto::Hash& serverSpki, time_point now);
     [[nodiscard]] RequestStatus status(const Peer& peer, const std::string& requestId, time_point now);
 
+    // Closes the pairing window and drops every request in flight (a server identity rotation, #353: they were bound
+    // to the old key). A device polling one sees it as unknown and starts over. Returns how many requests were dropped.
+    std::size_t abandonAll();
+
     // The SAS of a confirmed request (tests only: the daemon never sends it anywhere).
     [[nodiscard]] std::optional<std::string> codeForTesting(const std::string& requestId);
     void resetForTesting();

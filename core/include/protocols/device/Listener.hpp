@@ -9,6 +9,7 @@
 #include <atomic>
 #include <chrono>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -45,6 +46,9 @@ public:
     [[nodiscard]] tcp::endpoint localEndpoint() const;
     [[nodiscard]] std::vector<tcp::endpoint> localEndpoints() const;
     void setMaxConnections(unsigned int max) noexcept { maxConnections_.store(max, std::memory_order_relaxed); }
+    // The TLS context new connections handshake with (a rotated server identity, #353). Connections already open keep
+    // theirs, which stays alive: a connection only borrows its context.
+    void setTls(std::shared_ptr<asio::ssl::context> tls);
 
     // How long a client gets for the TLS handshake and for its HTTP request after it.
     static constexpr auto kHandshakeTimeout = std::chrono::seconds(10);
@@ -55,7 +59,9 @@ private:
     asio::io_context& ioc_;
     // Each pending accept holds its acceptor, so a rebind never frees one under an accept in flight.
     std::vector<std::shared_ptr<tcp::acceptor>> acceptors_;
+    mutable std::mutex tlsMutex_;
     std::shared_ptr<asio::ssl::context> tls_;
+    std::vector<std::shared_ptr<asio::ssl::context>> retiredTls_;  // contexts open connections may still borrow
     std::shared_ptr<ws::Router> router_;
     std::atomic<unsigned int> maxConnections_;
     std::atomic<bool> closed_{true};

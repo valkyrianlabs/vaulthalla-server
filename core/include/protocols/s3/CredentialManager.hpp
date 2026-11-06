@@ -1,6 +1,5 @@
 #pragma once
 
-#include "crypto/secrets/KeyProvider.hpp"
 #include "db/query/s3/Gateway.hpp"
 #include "identities/Fwd.hpp"
 
@@ -33,6 +32,9 @@ struct CredentialCreateOptions {
     bool enforce_budget_for_local_requests{false};
 };
 
+// S3 gateway credentials. Their secrets are wrapped under the S3 gateway master (s3gw_master), by version
+// (crypto/secrets/Versioned.hpp; `vh secret master rotate --slot s3-gateway` rewraps them, #353): each row is
+// unwrapped under the version it names, and a new one is written inside a Writer.
 class CredentialManager {
 public:
     CredentialManager();
@@ -49,10 +51,7 @@ public:
     static std::string generateSecretKey();
 
 private:
-    std::unique_ptr<crypto::secrets::KeyProvider> tpmKeyProvider_;
-
-    [[nodiscard]] std::vector<uint8_t> encryptSecret(const std::string& secret, std::vector<uint8_t>& iv) const;
-    [[nodiscard]] std::string decryptSecret(const std::vector<uint8_t>& ciphertext, const std::vector<uint8_t>& iv) const;
+    [[nodiscard]] static std::string decryptSecret(const db::query::s3::GatewayCredential& credential);
 };
 
 }
