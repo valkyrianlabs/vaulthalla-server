@@ -1,4 +1,5 @@
 #include "db/Janitor.hpp"
+#include "auth/mfa/Factors.hpp"
 #include "config/Registry.hpp"
 #include "db/query/fs/ChangeLog.hpp"
 #include "db/query/sync/Event.hpp"
@@ -65,6 +66,16 @@ void maintainRecovery(const bool sweepStores) {
     }
 }
 
+// TOTP enrollments never confirmed within their 10 minutes (#356): the sealed seed of an unusable factor.
+void purgeTotpEnrollments() {
+    try {
+        if (const auto n = vh::auth::mfa::purgeExpiredTotpEnrollments(); n > 0)
+            log::Registry::vaulthalla()->info("[DBSweeper] Removed {} expired TOTP enrollment(s)", n);
+    } catch (const std::exception& e) {
+        log::Registry::vaulthalla()->warn("[DBSweeper] TOTP enrollment purge failed: {}", e.what());
+    }
+}
+
 // Best effort: a failure here never blocks the other sweeps.
 void pruneFsChanges() {
     try {
@@ -114,6 +125,7 @@ void vh::db::Janitor::runLoop() {
             }
             janitor_impl::sweepUpstreamEvents();
             janitor_impl::pruneFsChanges();
+            janitor_impl::purgeTotpEnrollments();
             nextDbSweep = std::chrono::steady_clock::now() + sweep_interval_;
         }
 

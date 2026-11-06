@@ -850,4 +850,64 @@ TEST_F(SqlDeployerHistoryDb, RefreshTokenAssuranceMigrationIsAdditiveAndOldRowsR
     });
 }
 
+// 120 (#356, MFA factor storage): on a 119-era database none of the factor tables exist. The file creates them with
+// their checks (32-byte user handle, one active recovery batch per account, 32-byte code hashes, a 12-byte TOTP IV),
+// touches no existing table, and re-running it changes nothing.
+TEST_F(SqlDeployerHistoryDb, MfaFactorsMigrationIsAdditiveAndIdempotent) {
+    inRolledBackTxn([](pqxx::work& txn) {
+        for (const auto* table : {"recovery_codes", "recovery_code_batches", "totp_factors", "webauthn_credentials",
+                                  "user_mfa"})
+            txn.exec(std::string("DROP TABLE IF EXISTS ") + table + " CASCADE");
+        txn.exec("DELETE FROM schema_migrations WHERE filename = '120_mfa_factors.sql'");
+        const auto owner = txn.exec("INSERT INTO users (name, password_hash) VALUES ('claude_test_120_owner', 'x') "
+                                    "RETURNING id").one_field_ref().as<int>();
+        const auto usersCols = txn.exec("SELECT COUNT(*) FROM information_schema.columns WHERE table_name = 'users'")
+                                   .one_field_ref().as<int>();
+
+        migseed::SqlDeployReport report;
+        ASSERT_NO_THROW(report = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(applied(report, "120_mfa_factors.sql"));
+        EXPECT_EQ(recordedHash(txn, "120_mfa_factors.sql"), currentHash("120_mfa_factors.sql"));
+        EXPECT_EQ(txn.exec("SELECT COUNT(*) FROM information_schema.columns WHERE table_name = 'users'")
+                      .one_field_ref().as<int>(), usersCols) << "users is not touched";
+
+        txn.exec("INSERT INTO user_mfa (user_id, webauthn_user_handle) VALUES ($1, decode(repeat('ab', 32), 'hex'))",
+                 pqxx::params{owner});
+        {
+            pqxx::subtransaction bad(txn, "short_handle");
+            EXPECT_THROW(bad.exec("UPDATE user_mfa SET webauthn_user_handle = '\\x00' WHERE user_id = $1",
+                                  pqxx::params{owner}), pqxx::check_violation);
+        }
+        txn.exec("INSERT INTO recovery_code_batches (id, user_id, acknowledged_at) VALUES "
+                 "('00000000-0000-4000-8000-000000000120', $1, NOW())", pqxx::params{owner});
+        {
+            pqxx::subtransaction bad(txn, "two_active");
+            EXPECT_THROW(bad.exec("INSERT INTO recovery_code_batches (id, user_id, acknowledged_at) VALUES "
+                                  "('00000000-0000-4000-8000-000000000121', $1, NOW())", pqxx::params{owner}),
+                         pqxx::unique_violation) << "one active batch per account";
+        }
+        txn.exec("INSERT INTO recovery_code_batches (id, user_id) VALUES "
+                 "('00000000-0000-4000-8000-000000000122', $1)", pqxx::params{owner});  // pending: allowed
+        {
+            pqxx::subtransaction bad(txn, "short_hash");
+            EXPECT_THROW(bad.exec("INSERT INTO recovery_codes (batch_id, user_id, code_hash) VALUES "
+                                  "('00000000-0000-4000-8000-000000000120', $1, '\\x00')", pqxx::params{owner}),
+                         pqxx::check_violation);
+        }
+        {
+            pqxx::subtransaction bad(txn, "short_iv");
+            EXPECT_THROW(bad.exec("INSERT INTO totp_factors (factor_uuid, user_id, label, secret_sealed, secret_iv) "
+                                  "VALUES ('00000000-0000-4000-8000-000000000123', $1, 'Phone', '\\x00', '\\x00')",
+                                  pqxx::params{owner}), pqxx::check_violation);
+        }
+
+        migseed::SqlDeployReport again;
+        ASSERT_NO_THROW(again = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(again.applied.empty());
+        ASSERT_NO_THROW(txn.exec(migseed::readFileToString(repoPsqlDir() / "120_mfa_factors.sql")));
+        EXPECT_EQ(txn.exec("SELECT COUNT(*) FROM recovery_code_batches WHERE user_id = $1", pqxx::params{owner})
+                      .one_field_ref().as<int>(), 2) << "re-running keeps the rows";
+    });
+}
+
 } // namespace vh_sql_deployer_history_test

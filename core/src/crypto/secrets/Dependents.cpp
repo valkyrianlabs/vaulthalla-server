@@ -43,4 +43,17 @@ DependentsCheck gatewayMaster() {
     };
 }
 
+DependentsCheck mfaSeal() {
+    return [] {
+        return describe("secrets::dependents::mfaSeal", "SELECT COUNT(*) FROM totp_factors", "sealed TOTP factor(s)");
+    };
+}
+
+DependentsCheck mfaPepper() {
+    return [] {
+        return describe("secrets::dependents::mfaPepper", "SELECT COUNT(*) FROM recovery_codes",
+                        "recovery code hash(es)");
+    };
+}
+
 }
