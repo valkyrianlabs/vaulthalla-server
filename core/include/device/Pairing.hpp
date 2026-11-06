@@ -50,6 +50,8 @@ struct PairRequestInput {
     std::string platform{};
     std::string app_version{};
     crypto::Hash commitment{};
+    // #361: the device's approval key (validated P-256 SPKI), shown with the request and registered with the device.
+    std::optional<crypto::PublicKey> approval_key{};
 };
 
 struct PairRequestReceipt {
@@ -70,6 +72,7 @@ struct PendingRequest {
     std::array<std::string, 3> code_choices{};
     std::time_t created_at{};
     std::time_t expires_at{};
+    bool approval_key_present{false};  // the request carries an approval key (#361)
 };
 
 // An approval in progress: the request is held (Approving) until finishApproval/abortApproval.
@@ -81,6 +84,7 @@ struct ApprovalClaim {
     std::string platform{};
     std::string app_version{};
     std::string source_ip{};
+    std::optional<crypto::PublicKey> approval_key{};
 };
 
 struct RequestStatus {
@@ -143,6 +147,7 @@ private:
         crypto::Hash device_spki{};
         std::string name{}, platform{}, app_version{}, source_ip{};
         crypto::Hash commitment{}, nonce_server{};
+        std::optional<crypto::PublicKey> approval_key{};
         std::string code{};  // the SAS, once confirmed
         std::array<std::string, 3> choices{};
         RequestState state{RequestState::AwaitingConfirm};

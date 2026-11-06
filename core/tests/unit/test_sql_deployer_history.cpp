@@ -1134,4 +1134,56 @@ TEST_F(SqlDeployerHistoryDb, ManifestV2MigrationIsAdditiveAndIdempotent) {
     });
 }
 
+// 127 (#361, device approval keys) on a 126-era database: one new table, nothing existing changes, the CHECKs and the
+// one-key-per-device / unique-hash rules hold, a device's removal takes its key, and running the file again changes
+// nothing.
+TEST_F(SqlDeployerHistoryDb, DeviceApprovalKeysMigrationIsAdditiveAndIdempotent) {
+    inRolledBackTxn([](pqxx::work& txn) {
+        txn.exec("DROP TABLE IF EXISTS device_approval_keys");
+        txn.exec("DELETE FROM schema_migrations WHERE filename = '127_device_approval_keys.sql'");
+        const auto owner = txn.exec("INSERT INTO users (name, password_hash) VALUES ('claude_test_127_owner', 'x') "
+                                    "RETURNING id").one_field_ref().as<int>();
+        const auto device = txn.exec("INSERT INTO devices (user_id, name, platform, spki_sha256) VALUES ($1, 'Mac', "
+                                     "'macOS', repeat('a', 64)) RETURNING id",
+                                     pqxx::params{owner}).one_field_ref().as<int>();
+
+        migseed::SqlDeployReport report;
+        ASSERT_NO_THROW(report = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(applied(report, "127_device_approval_keys.sql"));
+        EXPECT_EQ(recordedHash(txn, "127_device_approval_keys.sql"), currentHash("127_device_approval_keys.sql"));
+        EXPECT_TRUE(columnExists(txn, "device_approval_keys", "public_key_spki"));
+        EXPECT_EQ(txn.exec("SELECT name FROM devices WHERE id = $1", pqxx::params{device}).one_field_ref().as<std::string>(),
+                  "Mac") << "existing rows keep their values";
+        EXPECT_TRUE(txn.exec("SELECT 1 FROM device_approval_keys").empty()) << "no device gets a key by migration";
+
+        const auto refused = [&](const std::string& sql) {
+            pqxx::subtransaction sub(txn, "check");
+            try {
+                sub.exec(sql, pqxx::params{device});
+            } catch (const pqxx::sql_error&) {
+                return true;
+            }
+            return false;
+        };
+        const std::string spki = "decode(repeat('30', 91), 'hex')";
+        EXPECT_TRUE(refused("INSERT INTO device_approval_keys (device_id, public_key_spki, spki_sha256, registered_via) "
+                            "VALUES ($1, decode('30', 'hex'), repeat('b', 64), 'pairing')")) << "91 bytes";
+        EXPECT_TRUE(refused("INSERT INTO device_approval_keys (device_id, public_key_spki, spki_sha256, registered_via) "
+                            "VALUES ($1, " + spki + ", 'ABC', 'pairing')")) << "lowercase hex";
+        EXPECT_TRUE(refused("INSERT INTO device_approval_keys (device_id, public_key_spki, spki_sha256, registered_via) "
+                            "VALUES ($1, " + spki + ", repeat('b', 64), 'client_flag')")) << "how a person approved it";
+        EXPECT_FALSE(refused("INSERT INTO device_approval_keys (device_id, public_key_spki, spki_sha256, registered_via) "
+                             "VALUES ($1, " + spki + ", repeat('b', 64), 'pairing')"));
+        EXPECT_TRUE(refused("INSERT INTO device_approval_keys (device_id, public_key_spki, spki_sha256, registered_via) "
+                            "VALUES ($1, " + spki + ", repeat('c', 64), 'console_approval')")) << "one key per device";
+        txn.exec("DELETE FROM devices WHERE id = $1", pqxx::params{device});
+        EXPECT_TRUE(txn.exec("SELECT 1 FROM device_approval_keys").empty()) << "the key goes with its device";
+
+        migseed::SqlDeployReport again;
+        ASSERT_NO_THROW(again = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(again.applied.empty());
+        ASSERT_NO_THROW(txn.exec(migseed::readFileToString(repoPsqlDir() / "127_device_approval_keys.sql")));
+    });
+}
+
 } // namespace vh_sql_deployer_history_test

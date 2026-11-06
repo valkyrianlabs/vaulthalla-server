@@ -80,6 +80,9 @@ public:
                                                                   std::shared_ptr<identities::User> deviceUser,
                                                                   std::function<void()> onClose);
     void send(json message);
+    // Tests: answers go to `sink` instead of the socket (a session without one, e.g. a device principal, then sees what
+    // the router would have sent it).
+    void setSendSinkForTesting(std::function<void(const json&)> sink) { sendSink_ = std::move(sink); }
     // An unsolicited frame (fs.changed): queued like an answer, but never carries the access token an answer may owe.
     void pushEvent(const json& event);
     // Frames queued and not yet written (answers and events); readable off the strand, for push backpressure.
@@ -205,6 +208,7 @@ private:
     bool externallyHttps_ = false;         // set during handshake hydration (cookie Secure flag)
 
     bool sendAccessToken_{false};
+    std::function<void(const json&)> sendSink_;  // tests only
 
     std::atomic<int> protocolVersion_{contract::kProtocolMin};
     mutable std::mutex clientInfoMutex_;

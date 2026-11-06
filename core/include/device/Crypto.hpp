@@ -58,6 +58,18 @@ using Hash = std::array<uint8_t, 32>;
 [[nodiscard]] bool verifyEcdsaP256Sha256(std::span<const uint8_t> spkiDer, std::span<const uint8_t> message,
                                          std::span<const uint8_t> signature);
 
+// ---- device approvals (#361; docs/reference/device-approvals.md, MFA design note section 6.2)
+
+// The bytes a device's approval key signs:
+//   "vh-device-approval-v1" 0x00 node_id 0x00 server_spki_sha256[32] approving_device_spki_sha256[32] challenge[32]
+//   family 0x00 target 0x00 UInt64BE(expires_at)
+// nullopt when node_id or family is empty or node_id, family or target holds a NUL byte (the separators must stay
+// unambiguous). The shared vector is core/test-assets/device/approval-vectors.json.
+[[nodiscard]] std::optional<std::vector<uint8_t>> approvalMessage(std::string_view nodeId, const Hash& serverSpki,
+                                                                  const Hash& deviceSpki, const Hash& challenge,
+                                                                  std::string_view family, std::string_view target,
+                                                                  uint64_t expiresAt);
+
 // ---- keys and certificates (spec §1-2)
 
 // A P-256 public key as the protocol sees it: its DER SubjectPublicKeyInfo and that DER's SHA-256.
@@ -71,6 +83,10 @@ struct PublicKey {
 [[nodiscard]] std::optional<PublicKey> p256KeyOf(const X509* certificate) noexcept;
 // The same from a DER certificate (device.identity.rotate's `certificate`).
 [[nodiscard]] std::optional<PublicKey> p256KeyOfCertificate(std::span<const uint8_t> der) noexcept;
+// An approval key (device.pair.request's approval_key, device.approval.key.register): a P-256 SubjectPublicKeyInfo in
+// the protocol's one encoding (spec §1's 26-byte prefix and an uncompressed point on the curve, 91 bytes), and its
+// SHA-256. nullopt for anything else. Never throws.
+[[nodiscard]] std::optional<PublicKey> p256KeyFromSpki(std::span<const uint8_t> der) noexcept;
 // The SPKI of an uncompressed P-256 point (04 ‖ X ‖ Y, 65 bytes): spec §1's 26-byte prefix followed by the point.
 [[nodiscard]] std::optional<PublicKey> p256KeyFromPoint(std::span<const uint8_t> point);
 

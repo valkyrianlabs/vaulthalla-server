@@ -540,7 +540,8 @@ TEST_F(DeviceListenerTest, SweeperAndContractAuthLevelsMatchTheRouter) {
             EXPECT_EQ(protocols::ws::Router::classifyCommand(c, *pairingSession), Decision::DenyDeviceUnknown) << c;
             EXPECT_EQ(protocols::ws::Router::classifyCommand(c, *human), Decision::Deny) << c;
         } else if (cmd.auth == "human") {
-            const bool deviceMayRun = c != "auth.register";
+            // auth.register, and a device never answering an approval request (#361: a person does, in the console).
+            const bool deviceMayRun = c != "auth.register" && !c.starts_with("auth.approval.");
             EXPECT_EQ(protocols::ws::Router::classifyCommand(c, *deviceSession),
                       deviceMayRun ? Decision::Allow : Decision::Deny) << c;
             EXPECT_EQ(protocols::ws::Router::classifyCommand(c, *pairingSession), Decision::DenyDeviceUnknown) << c;

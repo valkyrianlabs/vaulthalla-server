@@ -1,5 +1,8 @@
 #include "ops/Devices.hpp"
+
+#include "audit/Trail.hpp"
 #include "auth/stepup/StepUp.hpp"
+#include "db/query/device/ApprovalKey.hpp"
 
 #include "config/Registry.hpp"
 #include "db/query/device/Device.hpp"
@@ -107,6 +110,19 @@ std::string validName(const std::string& name) {
     return *normalized;
 }
 
+// An approval key as a device sends it (base64 SPKI DER): a P-256 key that isn't the connection's own key and that no
+// device here has or had (as its key or approval key).
+vh::device::crypto::PublicKey validApprovalKey(const std::vector<uint8_t>& der, const vh::device::Peer& peer) {
+    auto key = vh::device::crypto::p256KeyFromSpki(der);
+    if (!key)
+        throw Invalid("approval_key must be a P-256 SubjectPublicKeyInfo (91 bytes of DER, an uncompressed point), "
+                      "in standard base64");
+    if (key->spkiSha256 == peer.spki) throw Invalid("the approval key must be a second key, not the connection's");
+    if (db::query::device::ApprovalKeys::known(vh::device::crypto::toHex(key->spkiSha256)))
+        throw Conflict("this approval key is already known to this node; use a new key");
+    return *key;
+}
+
 std::shared_ptr<const vh::device::ServerIdentity> serverIdentityOrThrow() {
     auto identity = vh::device::currentServerIdentity();
     if (!identity) throw std::runtime_error("the device listener has no server identity yet");
@@ -155,9 +171,14 @@ Device approve(const Actor& actor, const std::string& requestId, const std::stri
     const auto claim = pairing().beginApproval(actor->id, requestId, code, PairingClock::now());
     Device device;
     try {
-        device = Devices::insert({.user_id = claim.owner_id, .approved_by = actor->id, .name = claim.name,
-                                  .platform = claim.platform, .app_version = claim.app_version,
-                                  .spki_sha256 = claim.device_id, .last_ip = claim.source_ip});
+        db::query::device::NewDevice row{.user_id = claim.owner_id, .approved_by = actor->id, .name = claim.name,
+                                         .platform = claim.platform, .app_version = claim.app_version,
+                                         .spki_sha256 = claim.device_id, .last_ip = claim.source_ip};
+        if (claim.approval_key) {
+            row.approval_key_spki = claim.approval_key->spkiDer;
+            row.approval_key_sha256 = vh::device::crypto::toHex(claim.approval_key->spkiSha256);
+        }
+        device = Devices::insert(row);
     } catch (...) {
         pairing().abortApproval(requestId, PairingClock::now());
         throw;
@@ -165,6 +186,12 @@ Device approve(const Actor& actor, const std::string& requestId, const std::stri
     pairing().finishApproval(requestId, device.id, PairingClock::now());
     log::Registry::audit()->info("[ops::devices] {} approved device {} ('{}', {}) from {}", actor->name(),
                                  shortId(device.spki_sha256), device.name, device.platform, claim.source_ip);
+    if (claim.approval_key)
+        vh::audit::record({.action = "device.approval.key.register", .actor_id = actor->id, .actor = actor->name(),
+                       .details = {{"device", device.id}, {"via", "pairing"},
+                                   {"key", vh::device::crypto::toHex(claim.approval_key->spkiSha256).substr(0, 16)}}},
+                      "[ops::devices] device " + shortId(device.spki_sha256) +
+                          " was paired with an approval key");
     return device;
 }
 
@@ -179,9 +206,13 @@ void deny(const Actor& actor, const std::string& requestId) {
 vh::device::PairRequestReceipt pairRequest(const vh::device::Peer& peer, const PairRequest& req) {
     const auto commitment = vh::device::crypto::hashFromHex(req.commitment);
     if (!commitment) throw Invalid("commitment must be 64 hex digits");
-    const vh::device::PairRequestInput input{.name = validName(req.name), .platform = validPlatform(req.platform),
-                                             .app_version = validAppVersion(req.app_version),
-                                             .commitment = *commitment};
+    vh::device::PairRequestInput input{.name = validName(req.name), .platform = validPlatform(req.platform),
+                                       .app_version = validAppVersion(req.app_version), .commitment = *commitment};
+    if (req.approval_key) {
+        const auto der = vh::device::crypto::fromBase64(*req.approval_key);
+        if (!der || der->empty()) throw Invalid("approval_key must be standard base64 (with padding)");
+        input.approval_key = validApprovalKey(*der, peer);
+    }
     // A key that is (or was) a device here never pairs again: pairing always uses a fresh key (spec §6).
     if (Devices::spkiKnown(peer.spkiHex))
         throw Conflict("this device key is already known to this node; pair with a new key");
@@ -288,6 +319,25 @@ std::string rotateIdentity(const Actor& actor, const vh::device::Peer& peer, con
     log::Registry::audit()->info("[ops::devices] device {} ('{}', user {}) rotated its key to {}", shortId(row->spki_sha256),
                                  row->name, row->user_name, shortId(newHex));
     return newHex;
+}
+
+void registerApprovalKey(const Actor& actor, const vh::device::Peer& peer, const std::vector<uint8_t>& spkiDer) {
+    requireUser(actor);
+    if (!peer.deviceRowId) throw Refused("device_unknown", "this device is not paired with this node");
+    const auto row = Devices::byId(*peer.deviceRowId);
+    if (!row || row->revoked() || row->user_id != actor->id)
+        throw Refused("device_unknown", "this device is not paired with this node");
+    const auto key = validApprovalKey(spkiDer, peer);
+    if (db::query::device::ApprovalKeys::forDevice(row->id))
+        throw Conflict("this device already has an approval key (a device registers one once)");
+    const auto keyHex = vh::device::crypto::toHex(key.spkiSha256);
+    // A person approves it in the web console (design 6.2): a device.trust grant for exactly this device and key.
+    auth::stepup::require(auth::stepup::Family::DeviceTrust,
+                          "device.approval.key.register:" + std::to_string(row->id) + ":" + keyHex);
+    (void)db::query::device::ApprovalKeys::registerKey(row->id, key.spkiDer, keyHex, "console_approval");
+    vh::audit::record({.action = "device.approval.key.register", .actor_id = actor->id, .actor = actor->name(),
+                   .details = {{"device", row->id}, {"via", "console_approval"}, {"key", keyHex.substr(0, 16)}}},
+                  "[ops::devices] device " + shortId(row->spki_sha256) + " registered an approval key");
 }
 
 ServerIdentityInfo serverIdentity(const vh::device::Peer& peer) {

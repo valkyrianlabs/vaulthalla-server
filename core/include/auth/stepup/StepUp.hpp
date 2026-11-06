@@ -32,7 +32,9 @@
 // Host never prompts: RBAC, typed confirmations and the audit trail still apply, and `vh` stays the documented host
 // recovery path. Agent can never produce a step-up, so an annotated operation refuses under it. A Device session never
 // sees step_up_required for routine sync (a contract test enumerates them); for an annotated command it is refused
-// until a device approval (#361) or the key-backup grant (#362) covers it. No Scope at all means no request: the
+// (methods device_approval and/or console_approval) until a grant on that device session covers it: one made by the
+// device's approval key (keys and device.trust only, D6) or by a person's passkey in the web console (#361,
+// auth/approval/Approvals.hpp), or the key-backup grant (#362). No Scope at all means no request: the
 // daemon's own callers and tests, which call ops:: directly and are trusted like the host (ops/Actor.hpp).
 //
 // How it is satisfied (web sessions only): a grant, made by auth.stepup.finish after
@@ -159,12 +161,17 @@ void require(Family family, const std::optional<std::string>& target = std::null
 
 struct Grant {
     uint32_t user_id{};
-    std::string refresh_jti{};
+    std::string refresh_jti{};            // empty on a device session (it has no refresh token)
     Family family{Family::Settings};
     std::optional<std::string> target{};  // target-bound families only
-    std::string method{};                 // webauthn, password_totp, password
+    std::string method{};                 // webauthn, password_totp, password; on a device: the two below
     std::chrono::system_clock::time_point expires_at{};
 };
+
+// How a device session's grant was made (#361, auth/approval/Approvals.hpp): a signature by the device's approval
+// key (D6: keys and device.trust only), or a person's passkey in the web console (design 6.3: any family).
+inline constexpr std::string_view kDeviceApprovalMethod{"device_approval"};
+inline constexpr std::string_view kConsoleApprovalMethod{"console_approval"};
 
 // A begun ceremony: auth.stepup.begin to auth.stepup.finish, one per session (a new one replaces it).
 struct Ceremony {

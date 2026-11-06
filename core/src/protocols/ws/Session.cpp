@@ -477,6 +477,7 @@ void Session::send(json message) {
         sendAccessToken_ = false;
     }
 
+    if (sendSink_) return sendSink_(message);
     enqueue(message.dump());
 }
 

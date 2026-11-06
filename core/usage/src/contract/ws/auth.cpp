@@ -115,6 +115,16 @@ const std::vector<std::string> kStepUpFamilies{"keys",           "device.trust",
                                                "identity.admin", "secrets",      "settings",
                                                "data.destroy"};
 
+// A device's approval request (auth::approval::toJson), as the console and the device see it (#361).
+std::vector<WsField> authApprovalFields() {
+    return {str("approval_id"), str("state").oneOf({"pending", "approved", "denied", "expired"}),
+            str("family").oneOf(kStepUpFamilies), str("target").nullable(),
+            str("summary").desc("What the device says it is asking for (its own words: show it with family and "
+                                "target, which the server checks)."),
+            object("device", "", {uinteger("id").desc("The device row."), str("device_id"), str("name")}),
+            integer("created_at").desc("Unix seconds."), integer("expires_at").desc("Unix seconds.")};
+}
+
 const std::vector<std::string> kMfaEnrollmentRefusals{"denied", "invalid", "not_found", "conflict", "unauthorized",
                                                       "error", "mfa_expired"};
 
@@ -492,6 +502,50 @@ std::vector<WsCommandUsage> authCommands() {
                                                       "expires.")},
         .refusal_codes = {"denied", "invalid", "not_found", "unauthorized", "error", "step_up_failed"},
         .client_timeout = 20s,
+    });
+
+    // ---- #361: approving a paired device's request (auth/approval/Approvals.hpp, MFA design note 6.3)
+
+    out.push_back({
+        .command = "auth.approval.list",
+        .description = "The signed-in account's open requests from its paired devices (device.approval.request), "
+                       "oldest first: what each asks for (family, target), the device's own summary, and when it "
+                       "expires. A new request also arrives as an unsolicited frame {\"command\": "
+                       "\"auth.approval.pending\", \"data\": {approval_id, device: {id, name}, family, target, summary, "
+                       "expires_at}} on every console session of the account. Web sessions only: a device is "
+                       "refused.",
+        .input = "none",
+        .response = {objectArray("approvals", "", authApprovalFields())},
+        .refusal_codes = {"denied", "unauthorized"},
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "auth.approval.approve",
+        .description = "Approve a device's request with a passkey, nothing else: a TOTP code or a password is "
+                       "refused (invalid), and an account without a usable passkey gets passkey_required (do the "
+                       "action in the console instead). Without credential: answers webauthn.publicKey (a challenge "
+                       "bound to this session and this request, 120 s) for navigator.credentials.get(); with "
+                       "credential (a UV assertion over it): approves, and the device's next device.approval.status "
+                       "makes its grant. approval_failed {attempts_remaining}: the assertion didn't hold; the fifth "
+                       "failure within 15 minutes signs this session out. not_found: expired or already answered.",
+        .payload = {str("approval_id").gen(gen::pattern("{*}{*}{*}{*}{*}{*}{*}{*}")),
+                    mfaCredential(false).opt().nullable().desc("AuthenticationResponseJSON; leave out to get the "
+                                                               "request options first.")},
+        .response = {object("approval", "", authApprovalFields()),
+                     object("webauthn", "", {mfaRequestOptions()}).opt().desc("Without credential: what to sign.")},
+        .refusal_codes = {"denied", "invalid", "not_found", "unauthorized", "rate_limited", "passkey_required",
+                          "approval_failed"},
+        .client_timeout = 20s,
+    });
+
+    out.push_back({
+        .command = "auth.approval.deny",
+        .description = "Decline a device's request; its device.approval.status answers denied.",
+        .payload = {str("approval_id").gen(gen::pattern("{*}{*}{*}{*}{*}{*}{*}{*}"))},
+        .response = {object("approval", "", authApprovalFields())},
+        .refusal_codes = {"denied", "invalid", "not_found", "unauthorized"},
+        .client_timeout = kDefaultTimeout,
     });
 
     out.push_back({

@@ -328,7 +328,8 @@ Normative protocol: `docs/pairing.md` in `valkyrianlabs/vaulthalla-desktop` (its
   minus `auth.login|logout|refresh|register` and the share-recipient commands, plus `device.*`; deactivation or
   deletion is seen on the next command. Pairing: only `device.pair.*`, `meta.contract.get` and `meta.hello`; anything else is ERROR
   `data.code: device_unknown` (same for unknown and revoked keys). `device.identity.rotate` /
-  `device.server.identity` only in Device mode; `device.pair.*` never on console sessions. Key material
+  `device.server.identity` (and #361's `device.approval.*`) only in Device mode; `device.pair.*` never on console
+  sessions; `auth.approval.*` never in Device mode. Key material
   (`vault.keys.export|export.confirm|import`) reaches the handler from any signed-in session but `ops::vault_keys` answers
   only Device sessions (`export_requires_device` / `import_requires_device` otherwise, D4). Contract auth levels
   `pairing` and `device` (`human` commands also run in Device mode). The sweeper keeps Device sessions while their
@@ -517,9 +518,11 @@ targets name the action and object: `vault.keys.export:<id>|all`, `vault.keys.im
 (`core/usage/src/contract/ws/stepup.cpp`), exported as `step_up` on annotated commands and as `WS_CONTRACT_STEP_UP`.
 Who asks is a thread-local `stepup::Scope`: the ws router sets it per routed command (Web, or Device on the device
 listener), the CLI server Host (exempt: peer credentials, design 5.6) or Agent (`vh mcp` agent: true), `/mcp` Agent;
-no scope = the daemon's own callers and tests (exempt, like `ops::Actor`'s internal callers). Agent and Device always
-refuse (`methods: []`; #361 adds device approvals for keys/device.trust only, D6); a device's `vault.keys.export` is
-inside its key-backup grant (`keyBackupGrantCovers`: every paired device until #362, D1). Web: a grant on
+no scope = the daemon's own callers and tests (exempt, like `ops::Actor`'s internal callers). Agent always refuses
+(`methods: []`). Device refuses (`methods: [device_approval?, console_approval]`) unless a grant on that device session
+covers it: method `device_approval` (its approval key, keys/device.trust only, D6) or `console_approval` (a person's
+passkey in the console, any family); any other grant method never counts on a device (#361, below). A device's
+`vault.keys.export` is inside its key-backup grant (`keyBackupGrantCovers`: every paired device until #362, D1). Web: a grant on
 `ws::Session::stepUp()` bound to user + refresh jti + family (+ target), `auth.mfa.step_up_ttl_seconds` (default 300,
 60..900); or, family-wide only, an aal 2 sign-in (not `rec`) within the TTL. Refusal `ops::StepUpRequired` → ERROR
 `step_up_required {family, target, methods, max_age_seconds}`. `auth.stepup.begin {family, target?}` → `{stepup_id,
@@ -533,6 +536,30 @@ without step-up (design 7.4). Capability `auth.step_up`. Console: `WsClient` `on
 `features/auth/stepup/StepUpDialog.tsx` (lazy), then one resend. Tests: `test_mfa_stepup.cpp` (DB-free),
 `test_mfa_stepup_db.cpp` (table-driven over the annotations, D3, passkey binding, devices/recovery/refresh never
 satisfy, revocation, regression list).
+
+**Device approvals (#361; design 6.1-6.3, 6.5, 8.4, D6; `docs/reference/device-approvals.md`).** `auth::approval`
+(`core/{include,src}/auth/approval/`), ws `handler::Approvals`. Migration 127 `device_approval_keys` (PK device_id,
+91-byte P-256 SPKI, `spki_sha256` UNIQUE, `registered_via` pairing|console_approval, `revoked_at` set by
+`Devices::revoke|revokeAll`; once per device, `db::query::device::ApprovalKeys`). Registered by `device.pair.request
+approval_key` (validated `crypto::p256KeyFromSpki`, never the connection's key or a known one; inserted with the device
+row in `Devices::insert`'s transaction) or `device.approval.key.register` (`ops::devices::registerApprovalKey`:
+device.trust target `device.approval.key.register:<row>:<spki hex>`, so only a console approval satisfies it).
+`device.approval.challenge|submit`: in-memory challenges (32 random bytes, 120 s, ≤ 4 per session, bound to session
+uuid, family, target; spent by the first answer from that session; another session's attempt doesn't spend it);
+`crypto::approvalMessage` = "vh-device-approval-v1" 0 node_id 0 server SPKI hash, device (peer) SPKI hash, challenge,
+family 0 target 0 UInt64BE(expires) — recomputed at submit from the current node id and server identity; verified with
+the live key (`verifyEcdsaP256Sha256`); grant method `device_approval`. Console approvals (`device.approval.request|
+status`, `auth.approval.list|approve|deny`): in memory, 5 min, ≤ 3 open and 10/h per device row; push
+`auth.approval.pending` to the user's console sessions (`setPushForTesting`); approve = WebAuthn purpose `approval`,
+scope `approval␟id␟family␟target`, UV required, `passkey_required` without a passkey, any TOTP/password payload refused;
+failures count on the console session's step-up failures (5 → revoked); the first `status` on the asking session
+mints a `console_approval` grant (once). Router: `device.approval.*` are device-only (`isDeviceOnlyCommand`),
+`auth.approval.*` denied on device sessions. Shared vector `core/test-assets/device/approval-vectors.json`
+(`tools/dev/device_approval_vectors.py --check`). Audit `device.approval.submit`, `device.approval.key.register`,
+`auth.approval.request|approve|deny`. Tests: `test_device_approvals.cpp` (vector, SPKI, routing, grant methods,
+contract), `test_device_approvals_db.cpp` (8.4 pairing, console/CLI pairing, every signature mismatch, console
+approvals, rate limits, key registration, and the table-driven "a device never prompts for a routine command" probe
+through the daemon's router; `Session::setSendSinkForTesting` captures the answers).
 
 **Identities (`identities::Manager`, `core/{include,src}/identities/`).** One canonical `User`/`Group` object per id,
 handed out as the same `shared_ptr` everywhere (sessions, engines, FUSE, HTTP, S3). Each holds an immutable
