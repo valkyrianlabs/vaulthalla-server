@@ -1206,6 +1206,7 @@ TEST_F(SqlDeployerHistoryDb, DeviceApprovalKeysMigrationIsAdditiveAndIdempotent)
             pqxx::subtransaction sub(txn, "check");
             try {
                 sub.exec(sql, pqxx::params{device});
+                sub.commit();  // kept: the next check sees it
             } catch (const pqxx::sql_error&) {
                 return true;
             }

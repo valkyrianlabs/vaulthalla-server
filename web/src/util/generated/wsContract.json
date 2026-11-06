@@ -18917,6 +18917,649 @@
       "variants": []
     },
     {
+      "auth": "human",
+      "client_timeout_ms": 20000,
+      "command": "auth.approval.approve",
+      "confirmations": [],
+      "description": "Approve a device's request with a passkey, nothing else: a TOTP code or a password is refused (invalid), and an account without a usable passkey gets passkey_required (do the action in the console instead). Without credential: answers webauthn.publicKey (a challenge bound to this session and this request, 120 s) for navigator.credentials.get(); with credential (a UV assertion over it): approves, and the device's next device.approval.status makes its grant. approval_failed {attempts_remaining}: the assertion didn't hold; the fifth failure within 15 minutes signs this session out. not_found: expired or already answered.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "kind": "pattern",
+            "pattern": "{*}{*}{*}{*}{*}{*}{*}{*}"
+          },
+          "name": "approval_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "AuthenticationResponseJSON; leave out to get the request options first.",
+          "fields": [
+            {
+              "name": "id",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "base64url; equals id.",
+              "name": "rawId",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "public-key"
+              ],
+              "name": "type",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "description": "base64url.",
+                  "name": "clientDataJSON",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "base64url.",
+                  "name": "authenticatorData",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "base64url.",
+                  "name": "signature",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "base64url.",
+                  "name": "userHandle",
+                  "required": false,
+                  "types": [
+                    "string",
+                    "null"
+                  ]
+                }
+              ],
+              "name": "response",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "name": "authenticatorAttachment",
+              "required": false,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "fields": [
+                    {
+                      "name": "rk",
+                      "required": false,
+                      "types": [
+                        "boolean"
+                      ]
+                    }
+                  ],
+                  "name": "credProps",
+                  "required": false,
+                  "types": [
+                    "object"
+                  ]
+                }
+              ],
+              "name": "clientExtensionResults",
+              "required": false,
+              "types": [
+                "object"
+              ]
+            }
+          ],
+          "generator": {
+            "kind": "const",
+            "values": [
+              "{}"
+            ]
+          },
+          "name": "credential",
+          "required": false,
+          "types": [
+            "object",
+            "null"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "unauthorized",
+        "rate_limited",
+        "passkey_required",
+        "approval_failed"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "unauthorized",
+        "rate_limited",
+        "passkey_required",
+        "approval_failed"
+      ],
+      "response": [
+        {
+          "fields": [
+            {
+              "name": "approval_id",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "pending",
+                "approved",
+                "denied",
+                "expired"
+              ],
+              "name": "state",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "keys",
+                "device.trust",
+                "account.credentials",
+                "identity.admin",
+                "secrets",
+                "settings",
+                "data.destroy"
+              ],
+              "name": "family",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "target",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "What the device says it is asking for (its own words: show it with family and target, which the server checks).",
+              "name": "summary",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "description": "The device row.",
+                  "minimum": 0,
+                  "name": "id",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "device_id",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "name",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "name": "device",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "description": "Unix seconds.",
+              "name": "created_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Unix seconds.",
+              "name": "expires_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "approval",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "Without credential: what to sign.",
+          "fields": [
+            {
+              "description": "PublicKeyCredentialRequestOptionsJSON for navigator.credentials.get().",
+              "fields": [
+                {
+                  "description": "base64url, 32 bytes, single use, 120 s, bound to this connection, the purpose and (step-up) the family and target.",
+                  "name": "challenge",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "rpId",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "Milliseconds.",
+                  "minimum": 0,
+                  "name": "timeout",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "enum": [
+                    "required"
+                  ],
+                  "name": "userVerification",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "The account's usable passkeys.",
+                  "fields": [
+                    {
+                      "enum": [
+                        "public-key"
+                      ],
+                      "name": "type",
+                      "required": true,
+                      "types": [
+                        "string"
+                      ]
+                    },
+                    {
+                      "description": "base64url credential id.",
+                      "name": "id",
+                      "required": true,
+                      "types": [
+                        "string"
+                      ]
+                    },
+                    {
+                      "items": "string",
+                      "name": "transports",
+                      "required": true,
+                      "types": [
+                        "array"
+                      ]
+                    }
+                  ],
+                  "items": "object",
+                  "name": "allowCredentials",
+                  "required": true,
+                  "types": [
+                    "array"
+                  ]
+                }
+              ],
+              "name": "publicKey",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            }
+          ],
+          "name": "webauthn",
+          "required": false,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "auth.approval.deny",
+      "confirmations": [],
+      "description": "Decline a device's request; its device.approval.status answers denied.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "kind": "pattern",
+            "pattern": "{*}{*}{*}{*}{*}{*}{*}{*}"
+          },
+          "name": "approval_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "fields": [
+            {
+              "name": "approval_id",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "pending",
+                "approved",
+                "denied",
+                "expired"
+              ],
+              "name": "state",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "keys",
+                "device.trust",
+                "account.credentials",
+                "identity.admin",
+                "secrets",
+                "settings",
+                "data.destroy"
+              ],
+              "name": "family",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "target",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "What the device says it is asking for (its own words: show it with family and target, which the server checks).",
+              "name": "summary",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "description": "The device row.",
+                  "minimum": 0,
+                  "name": "id",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "device_id",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "name",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "name": "device",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "description": "Unix seconds.",
+              "name": "created_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Unix seconds.",
+              "name": "expires_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "approval",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "auth.approval.list",
+      "confirmations": [],
+      "description": "The signed-in account's open requests from its paired devices (device.approval.request), oldest first: what each asks for (family, target), the device's own summary, and when it expires. A new request also arrives as an unsolicited frame {\"command\": \"auth.approval.pending\", \"data\": {approval_id, device: {id, name}, family, target, summary, expires_at}} on every console session of the account. Web sessions only: a device is refused.",
+      "input": "none",
+      "operation": null,
+      "payload": [],
+      "refusal_codes": [
+        "denied",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "fields": [
+            {
+              "name": "approval_id",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "pending",
+                "approved",
+                "denied",
+                "expired"
+              ],
+              "name": "state",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "keys",
+                "device.trust",
+                "account.credentials",
+                "identity.admin",
+                "secrets",
+                "settings",
+                "data.destroy"
+              ],
+              "name": "family",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "target",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "What the device says it is asking for (its own words: show it with family and target, which the server checks).",
+              "name": "summary",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "description": "The device row.",
+                  "minimum": 0,
+                  "name": "id",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "device_id",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "name",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "name": "device",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "description": "Unix seconds.",
+              "name": "created_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Unix seconds.",
+              "name": "expires_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "items": "object",
+          "name": "approvals",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
       "auth": "session",
       "client_timeout_ms": 15000,
       "command": "auth.isAuthenticated",
@@ -21992,6 +22635,522 @@
     {
       "auth": "device",
       "client_timeout_ms": 15000,
+      "command": "device.approval.challenge",
+      "confirmations": [],
+      "description": "Start approving a step-up with this device's approval key: name the family and the target the step_up_required refusal named. Only keys and device.trust (console_approval_required otherwise: use device.approval.request); approval_key_unavailable without a live approval key. Answers a challenge (single use, 120 s, bound to this session, the family and the target) and payload_b64, the exact bytes to sign: \"vh-device-approval-v1\" 0x00 node_id 0x00 server_spki_sha256[32] approving_device_spki_sha256[32] challenge[32] family 0x00 target 0x00 UInt64BE(expires_at). The device checks them against what it knows before asking for Touch ID. At most 4 open per session (a new one replaces the oldest).",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "enum": [
+            "keys",
+            "device.trust"
+          ],
+          "name": "family",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The refusal's target (at most 256 printable ASCII characters).",
+          "generator": {
+            "kind": "pattern",
+            "pattern": "vault.keys.import:{9}"
+          },
+          "name": "target",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "invalid",
+        "unauthorized",
+        "device_unknown",
+        "rate_limited",
+        "console_approval_required",
+        "approval_key_unavailable"
+      ],
+      "refusal_kinds": [
+        "invalid",
+        "unauthorized",
+        "device_unknown",
+        "rate_limited",
+        "console_approval_required",
+        "approval_key_unavailable"
+      ],
+      "response": [
+        {
+          "name": "challenge_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "64 lowercase hex digits (a SHA-256 value).",
+          "name": "challenge",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Standard base64.",
+          "name": "payload_b64",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "enum": [
+            "keys",
+            "device.trust"
+          ],
+          "name": "family",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "target",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Unix seconds (also in the payload).",
+          "minimum": 0,
+          "name": "expires_at",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "device",
+      "client_timeout_ms": 15000,
+      "command": "device.approval.key.register",
+      "confirmations": [],
+      "description": "Register this already-paired device's approval key (once per device): a P-256 SubjectPublicKeyInfo, 91 bytes of DER, standard base64, not the connection's key. A person approves it in the web console: it answers step_up_required (device.trust, target device.approval.key.register:<device row>:<key SPKI SHA-256>) until a console approval (device.approval.request) for exactly that target. conflict: the device has (or had) a key, or the key is known here.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "kind": "pattern",
+            "pattern": "{A}{a}{9}{a}"
+          },
+          "name": "public_key_spki_b64",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "invalid",
+        "conflict",
+        "unauthorized",
+        "device_unknown",
+        "step_up_required"
+      ],
+      "refusal_kinds": [
+        "invalid",
+        "conflict",
+        "unauthorized",
+        "device_unknown",
+        "step_up_required"
+      ],
+      "response": [
+        {
+          "name": "registered",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "response_model": null,
+      "step_up": "device.trust",
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "device",
+      "client_timeout_ms": 15000,
+      "command": "device.approval.request",
+      "confirmations": [],
+      "description": "Ask a person to approve a step-up in the web console (any family; the one way for families the approval key can't approve, and for a device without one). summary (1-160 characters) is shown with the family and target. The account's console sessions get auth.approval.pending; a person approves with a passkey (auth.approval.approve). Lives 5 minutes; at most 3 open and 10 per hour per device (rate_limited). Poll device.approval.status on this same session.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "enum": [
+            "keys",
+            "device.trust",
+            "account.credentials",
+            "identity.admin",
+            "secrets",
+            "settings",
+            "data.destroy"
+          ],
+          "name": "family",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The refusal's target (keys, device.trust, data.destroy).",
+          "name": "target",
+          "required": false,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "generator": {
+            "kind": "pattern",
+            "pattern": "Export key {a}{a}{a}"
+          },
+          "name": "summary",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "invalid",
+        "unauthorized",
+        "device_unknown",
+        "rate_limited"
+      ],
+      "refusal_kinds": [
+        "invalid",
+        "unauthorized",
+        "device_unknown",
+        "rate_limited"
+      ],
+      "response": [
+        {
+          "name": "approval_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "enum": [
+            "pending",
+            "approved",
+            "denied",
+            "expired"
+          ],
+          "name": "state",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "family",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "target",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "name": "summary",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "64 lowercase hex digits (a SHA-256 value).",
+              "name": "device_id",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "name": "device",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "name": "created_at",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "name": "expires_at",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "device",
+      "client_timeout_ms": 15000,
+      "command": "device.approval.status",
+      "confirmations": [],
+      "description": "How a console approval stands (pending, approved, denied, expired). Answered at once: ask again in 2 s while pending. Once approved, the first answer leaves the grant on this session (the same binding as a web session's: target-bound grants are spent by one use); then resend the refused request. Only the session that asked: another is not_found.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "kind": "pattern",
+            "pattern": "{*}{*}{*}{*}{*}{*}{*}{*}"
+          },
+          "name": "approval_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "invalid",
+        "not_found",
+        "unauthorized",
+        "device_unknown"
+      ],
+      "refusal_kinds": [
+        "invalid",
+        "not_found",
+        "unauthorized",
+        "device_unknown"
+      ],
+      "response": [
+        {
+          "name": "approval_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "enum": [
+            "pending",
+            "approved",
+            "denied",
+            "expired"
+          ],
+          "name": "state",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "family",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "target",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "name": "summary",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "64 lowercase hex digits (a SHA-256 value).",
+              "name": "device_id",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "name": "device",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "name": "created_at",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "name": "expires_at",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "device",
+      "client_timeout_ms": 15000,
+      "command": "device.approval.submit",
+      "confirmations": [],
+      "description": "Answer a challenge with the approval key's ECDSA P-256/SHA-256 signature (DER, standard base64) over its payload. The challenge is spent whatever the answer. On success this session holds a grant for the family and target (spent by one use, until expires_at); then resend the refused request. invalid: the signature doesn't verify (the payload as the server computes it now: a changed node or server key never verifies); not_found: expired, used or another session's; approval_key_unavailable: the key was revoked.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "kind": "pattern",
+            "pattern": "{*}{*}{*}{*}{*}{*}{*}{*}"
+          },
+          "name": "challenge_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "DER Ecdsa-Sig-Value, standard base64.",
+          "generator": {
+            "kind": "pattern",
+            "pattern": "{A}{a}{9}{a}"
+          },
+          "name": "signature_b64",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "invalid",
+        "not_found",
+        "unauthorized",
+        "device_unknown",
+        "approval_key_unavailable"
+      ],
+      "refusal_kinds": [
+        "invalid",
+        "not_found",
+        "unauthorized",
+        "device_unknown",
+        "approval_key_unavailable"
+      ],
+      "response": [
+        {
+          "enum": [
+            "keys",
+            "device.trust"
+          ],
+          "name": "family",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "target",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Unix seconds: the grant's end.",
+          "name": "expires_at",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "device",
+      "client_timeout_ms": 15000,
       "command": "device.endpoints",
       "confirmations": [],
       "description": "Where this node's device listener can be reached (docs/reference/transfer-protocol.md §1.1): interface addresses classified by range, <hostname>.local where an mDNS responder runs, and device_server.advertise's configured names. Computed per call; never answered before a device is paired.",
@@ -22390,6 +23549,15 @@
           "types": [
             "string"
           ]
+        },
+        {
+          "description": "#361: the device's approval key (a second P-256 key, never the connection's): its SubjectPublicKeyInfo, 91 bytes of DER (uncompressed point), in standard base64. Shown with the request (approval_key_present) and registered with the device when it is approved. invalid for any other key; conflict for a key this node knows.",
+          "name": "approval_key",
+          "required": false,
+          "types": [
+            "string",
+            "null"
+          ]
         }
       ],
       "refusal_codes": [
@@ -22521,7 +23689,7 @@
       "client_timeout_ms": 15000,
       "command": "device.pairing.approve",
       "confirmations": [],
-      "description": "Approve a request with the code the device shows (number matching). Any other code denies the request (invalid). Creates the device for the caller's account.",
+      "description": "Approve a request with the code the device shows (number matching). Any other code denies the request (invalid). Creates the device for the caller's account, with the approval key the request carried. A device.trust step-up bound to the request, its key and the chosen code: in the console a passkey or password + TOTP; on an already-paired device its approval key (device.approval.challenge/submit) or a console approval; `vh device pair` on the node needs none.",
       "input": "payload",
       "operation": null,
       "payload": [
@@ -22909,7 +24077,7 @@
       "client_timeout_ms": 15000,
       "command": "device.pairing.pending",
       "confirmations": [],
-      "description": "The caller's open window and its confirmed requests. Each offers three code_choices (random order): one is the code the device shows, two are decoys fixed for the request. The real code is never returned on its own.",
+      "description": "The caller's open window and its confirmed requests. Each offers three code_choices (random order): one is the code the device shows, two are decoys fixed for the request. The real code is never returned on its own. Also answered on a paired device's session (an already-paired Desktop approving a new one, design 8.4); approval_key_present says the request carries an approval key.",
       "input": "none",
       "operation": null,
       "payload": [],
@@ -23014,6 +24182,13 @@
               "required": true,
               "types": [
                 "array"
+              ]
+            },
+            {
+              "name": "approval_key_present",
+              "required": true,
+              "types": [
+                "boolean"
               ]
             },
             {
@@ -23787,12 +24962,14 @@
       "refusal_codes": [
         "denied",
         "invalid",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -23851,6 +25028,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "settings",
       "untyped_refusals": [],
       "variants": []
     },
@@ -43450,5 +44628,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "fccb00365d1ebe8e04da2666296e78e5023a3c541848f4207583c9fcf7c0c520"
+  "ws_hash": "767c44c3cc8033e32ad8e67fa29c61210a5139b57f9758b3cd1cdb848d19ff2b"
 }
