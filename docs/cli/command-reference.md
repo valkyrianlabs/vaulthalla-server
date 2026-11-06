@@ -264,6 +264,16 @@ vh vault keys rotate <vault-or-all> [--sync-now]
 
 Unencrypted key exports are dangerous. Prefer `--recipient` and `--output`.
 
+## Vault Format
+
+```bash
+vh vault format status <vault-or-all> [--json]
+```
+
+Shows how much of each vault is still stored in the legacy encryption format: live files and recovery blobs
+(snapshots, local versions, upstream backlog), as items and bytes, the background conversion's state and what its last
+pass did. See [Encryption](/vaults/encryption#content-format-and-conversion).
+
 ## File Recovery
 
 Earlier versions of files come from three places: local snapshots you take, local versions kept automatically when

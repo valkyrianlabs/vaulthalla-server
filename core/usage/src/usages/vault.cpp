@@ -731,6 +731,36 @@ static std::shared_ptr<CommandUsage> key(const std::weak_ptr<CommandUsage>& pare
     return cmd;
 }
 
+static std::shared_ptr<CommandUsage> format_status(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = buildBaseUsage(parent);
+    cmd->aliases = {"status"};
+    cmd->effect = CommandEffect::Read;
+    cmd->description = "Show the progress of the local format conversion: how many live files and recovery blobs "
+                       "(snapshots, local versions, upstream backlog) of each vault are still in the legacy "
+                       "encryption format and how many bytes they hold, the conversion's state (converted, pending, "
+                       "converting, blocked by a key rotation or salvage, disabled) and what its last pass did. The "
+                       "conversion runs in the background (vaults.format_conversion in config.yaml), never rotates a "
+                       "key and verifies every item before the legacy form is removed. A cloud vault that encrypts "
+                       "upstream converts its live files with the bucket's layout migration instead.";
+    cmd->positionals = {vaultOrAll};
+    cmd->optional = {owner};
+    cmd->optional_flags = {jsonFlag};
+    cmd->examples = {
+        {"vh vault format status all", "Conversion progress of every vault."},
+        {"vh vault format status 42 --json", "The same for the vault with ID 42, as JSON."}
+    };
+    return cmd;
+}
+
+static std::shared_ptr<CommandUsage> vault_format(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = buildBaseUsage(parent);
+    cmd->aliases = {"format"};
+    cmd->description = "Inspect the at-rest format of vault content (legacy GCM or VHF1).";
+    cmd->examples = {{"vh vault format status all", "Conversion progress of every vault."}};
+    cmd->subcommands = {format_status(cmd->weak_from_this())};
+    return cmd;
+}
+
 static std::shared_ptr<CommandUsage> sync_info(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"info", "show", "get"};
@@ -893,6 +923,7 @@ static std::shared_ptr<CommandUsage> base(const std::weak_ptr<CommandUsage>& par
 
     const auto vroleCmd = vrole(cmd->weak_from_this());
     const auto keyCmd = key(cmd->weak_from_this());
+    const auto formatCmd = vault_format(cmd->weak_from_this());
     const auto syncCmd = sync(cmd->weak_from_this()); // executable (manual sync) + has subcommands
     const auto recoveryCmd = recovery_book::vaultRecovery(cmd->weak_from_this());
 
@@ -1042,6 +1073,7 @@ static std::shared_ptr<CommandUsage> base(const std::weak_ptr<CommandUsage>& par
         updateCmd,
         vroleCmd,
         keyCmd,
+        formatCmd,
         syncCmd,
         recoveryCmd
     };
