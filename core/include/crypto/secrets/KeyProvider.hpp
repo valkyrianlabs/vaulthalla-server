@@ -49,6 +49,11 @@ public:
 
     [[nodiscard]] bool sealedExists() const;
 
+    // Deletes this secret's sealed state from the host and wipes the held copy. Irreversible: only for a secret
+    // nothing is wrapped under any more, verified by the caller (a rewrap's finalized or discarded vault master
+    // version, vault/MasterRewrap.hpp). Every backend keeps a secret entirely in its own directory.
+    void destroySealed();
+
     // The sealing backend in use: "tpm2" (Linux), "secure-enclave" (macOS), or "file" (the macOS development
     // backend, when the build or config.yaml selects it).
     [[nodiscard]] static std::string_view backend() noexcept;

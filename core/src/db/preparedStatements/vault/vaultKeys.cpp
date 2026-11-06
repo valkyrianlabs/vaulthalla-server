@@ -2,12 +2,12 @@
 
 void vh::db::Connection::initPreparedVaultKeys() const {
     conn_->prepare("insert_vault_key",
-                   "INSERT INTO vault_keys (vault_id, encrypted_key, iv) "
-                   "VALUES ($1, $2, $3) RETURNING version");
+                   "INSERT INTO vault_keys (vault_id, encrypted_key, iv, master_version) "
+                   "VALUES ($1, $2, $3, $4) RETURNING version");
 
     conn_->prepare("update_vault_key",
                    "UPDATE vault_keys "
-                   "SET encrypted_key = $2, iv = $3, updated_at = NOW() "
+                   "SET encrypted_key = $2, iv = $3, master_version = $4, updated_at = NOW() "
                    "WHERE vault_id = $1");
 
     conn_->prepare("get_vault_key", "SELECT * FROM vault_keys WHERE vault_id = $1");
@@ -23,16 +23,16 @@ void vh::db::Connection::initPreparedVaultKeys() const {
                    "  ), "
                    "  current AS ( "
                    "    SELECT vk.vault_id, vk.encrypted_key, vk.iv, vk.created_at, vk.version, vk.key_check, "
-                   "           vk.attestation_key_id, vk.attestation "
+                   "           vk.attestation_key_id, vk.attestation, vk.master_version "
                    "    FROM vault_keys vk "
                    "    WHERE vk.vault_id = $1 "
                    "    FOR UPDATE "
                    "  ), "
                    "  trashed AS ( "
                    "    INSERT INTO vault_keys_trashed (vault_id, encrypted_key, iv, created_at, trashed_at, version, "
-                   "                                    key_check, attestation_key_id, attestation) "
+                   "                                    key_check, attestation_key_id, attestation, master_version) "
                    "    SELECT c.vault_id, c.encrypted_key, c.iv, c.created_at, CURRENT_TIMESTAMP, c.version, c.key_check, "
-                   "           c.attestation_key_id, c.attestation "
+                   "           c.attestation_key_id, c.attestation, c.master_version "
                    "    FROM current c "
                    "    RETURNING version "
                    "  ), "
@@ -43,6 +43,7 @@ void vh::db::Connection::initPreparedVaultKeys() const {
                    "    UPDATE vault_keys "
                    "    SET encrypted_key = $2, "
                    "        iv            = $3, "
+                   "        master_version = $4, "
                    "        version       = (SELECT version FROM next_version), "
                    "        created_at    = CURRENT_TIMESTAMP, "
                    "        key_check     = NULL, "
@@ -52,8 +53,8 @@ void vh::db::Connection::initPreparedVaultKeys() const {
                    "    RETURNING version "
                    "  ), "
                    "  inserted AS ( "
-                   "    INSERT INTO vault_keys (vault_id, encrypted_key, iv, version, created_at) "
-                   "    SELECT $1, $2, $3, (SELECT version FROM next_version), CURRENT_TIMESTAMP "
+                   "    INSERT INTO vault_keys (vault_id, encrypted_key, iv, version, created_at, master_version) "
+                   "    SELECT $1, $2, $3, (SELECT version FROM next_version), CURRENT_TIMESTAMP, $4 "
                    "    WHERE NOT EXISTS (SELECT 1 FROM current) "
                    "    RETURNING version "
                    "  ) "
@@ -71,12 +72,12 @@ void vh::db::Connection::initPreparedVaultKeys() const {
     // vault_keys_trashed has no updated_at column (vault::model::Key reads one): a retired key's is when it retired.
     conn_->prepare("get_rotation_old_vault_key",
                    "SELECT vault_id, version, encrypted_key, iv, created_at, COALESCE(trashed_at, created_at) AS updated_at, "
-                   "key_check, attestation_key_id, attestation "
+                   "key_check, attestation_key_id, attestation, master_version "
                    "FROM vault_keys_trashed WHERE vault_id = $1 AND rotation_completed_at IS NULL");
 
     conn_->prepare("get_retired_vault_key",
                    "SELECT vault_id, version, encrypted_key, iv, created_at, COALESCE(trashed_at, created_at) AS updated_at, "
-                   "key_check, attestation_key_id, attestation "
+                   "key_check, attestation_key_id, attestation, master_version "
                    "FROM vault_keys_trashed WHERE vault_id = $1 AND version = $2");
 
     conn_->prepare("list_retired_vault_key_versions",

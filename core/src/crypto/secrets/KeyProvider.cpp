@@ -60,6 +60,13 @@ bool KeyProvider::sealedExists() const {
     return platform::sealer::complete(sealedDir_, name_);
 }
 
+void KeyProvider::destroySealed() {
+    std::error_code ec;
+    std::filesystem::remove_all(sealedDir_, ec);
+    if (ec) throw std::filesystem::filesystem_error("deleting the sealed secret '" + name_ + "'", sealedDir_, ec);
+    master_ = SecretBytes{};
+}
+
 std::string_view KeyProvider::backend() noexcept { return platform::sealer::backend(); }
 
 std::string_view KeyProvider::posture() noexcept { return platform::sealer::posture(); }
