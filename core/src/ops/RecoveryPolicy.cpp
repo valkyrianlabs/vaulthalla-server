@@ -3,6 +3,7 @@
 // primitives beneath (recovery::provider::policy, recovery::cost, db::query) never authorize.
 
 #include "ops/Recovery.hpp"
+#include "auth/stepup/StepUp.hpp"
 
 #include "db/query/recovery/Generation.hpp"
 #include "db/query/recovery/Policy.hpp"
@@ -788,6 +789,7 @@ Status suspendVersioning(const Actor& actor, const uint32_t vaultId, const bool 
         throw Invalid("bucket '" + vb.bucket + "' has never been versioned: there is nothing to suspend");
     if (vb.versioning && vb.versioning->object_lock && *vb.versioning->object_lock)
         throw Conflict("bucket '" + vb.bucket + "' has object lock enabled: its versioning can't be suspended");
+    auth::stepup::require(auth::stepup::Family::DataDestroy, "vault.recovery.suspend:" + std::to_string(vaultId));
     pol::ReadBack readBack;
     bool put = false;
     if (state.status != padmin::Versioning::Suspended) {

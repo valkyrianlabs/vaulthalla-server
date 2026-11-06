@@ -109,6 +109,10 @@ public:
     // (ops::Invalid). ops::NotFound for a request that isn't the caller's, isn't pending, or is gone.
     [[nodiscard]] ApprovalClaim beginApproval(uint32_t ownerId, const std::string& requestId, const std::string& code,
                                               time_point now);
+    // The same checks as beginApproval (a wrong code denies), without holding the request: the device key (SPKI SHA-256
+    // hex) the approval would pair. ops::devices::approve binds its device.trust step-up to it (#359).
+    [[nodiscard]] std::string checkApproval(uint32_t ownerId, const std::string& requestId, const std::string& code,
+                                            time_point now);
     void finishApproval(const std::string& requestId, uint32_t deviceRowId, time_point now);
     // The devices row could not be written: the request is denied (the device starts over).
     void abortApproval(const std::string& requestId, time_point now);

@@ -2,6 +2,7 @@
 #include "protocols/ws/Router.hpp"
 #include "protocols/ws/handler/Auth.hpp"
 #include "protocols/ws/handler/Mfa.hpp"
+#include "protocols/ws/handler/StepUp.hpp"
 #include "protocols/ws/handler/Devices.hpp"
 #include "protocols/ws/handler/fs/Changes.hpp"
 #include "protocols/ws/handler/fs/Storage.hpp"
@@ -88,11 +89,15 @@ void Handler::registerAuthHandlers(const std::shared_ptr<Router>& r) {
     r->registerPayload("auth.mfa.totp.enroll.start", &handler::Mfa::totpStart);
     r->registerPayload("auth.mfa.totp.enroll.confirm", &handler::Mfa::totpConfirm);
     r->registerPayload("auth.mfa.factor.rename", &handler::Mfa::renameFactor);
+    r->registerPayload("auth.mfa.factor.remove", &handler::Mfa::removeFactor);
     r->registerSessionOnlyHandler("auth.mfa.recovery.generate", &handler::Mfa::generateRecovery);
     r->registerPayload("auth.mfa.recovery.acknowledge", &handler::Mfa::acknowledgeRecovery);
     // #358: discoverable sign-in with a passkey alone.
     r->registerSessionOnlyHandler("auth.passkey.options", &handler::Mfa::passkeyOptions);
     r->registerPayload("auth.passkey.login", &handler::Mfa::passkeyLogin);
+    // #359: step-up
+    r->registerPayload("auth.stepup.begin", &handler::StepUp::begin);
+    r->registerPayload("auth.stepup.finish", &handler::StepUp::finish);
 }
 
 // Paired devices (ops::devices). Which sessions reach which is the router's decision (classifyCommand).

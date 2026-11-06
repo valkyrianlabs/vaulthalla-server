@@ -11,6 +11,7 @@
 #include "auth/model/RefreshToken.hpp"
 #include "auth/model/TokenPair.hpp"
 #include "auth/session/Assurance.hpp"
+#include "auth/stepup/StepUp.hpp"
 #include "crypto/util/uuid.hpp"
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
@@ -50,14 +51,6 @@ bool mfaWsRecoveryRestricted(const std::shared_ptr<Session>& session) {
            std::ranges::find(row->amr, std::string(auth::session::assurance::kRecoveryCode)) != row->amr.end();
 }
 
-// A second factor proven within the last five minutes on this session: until the step-up framework (#359), the
-// stand-in for account.credentials step-up (a fresh aal 2 sign-in counts for family-wide grants, design 5.4).
-constexpr auto kMfaWsFreshSignIn = std::chrono::minutes(5);
-bool mfaWsFreshSecondFactor(const std::shared_ptr<Session>& session) {
-    const auto* row = mfaWsRow(session);
-    return row && row->aal >= 2 && SysClock::now() - row->authTime <= kMfaWsFreshSignIn;
-}
-
 [[noreturn]] void mfaWsExpired(const std::shared_ptr<Session>& session) {
     mfa::signin::end(session, "expired");
     throw ops::Refused("mfa_expired", "The sign-in timed out. Enter your password again.");
@@ -95,6 +88,16 @@ MfaWsTarget mfaWsTarget(const std::shared_ptr<Session>& session, const bool afte
     if (!afterFirstFactor && p->enrolled_amr)
         throw ops::Conflict("A first factor is set up: save your recovery codes to finish signing in");
     return {.user = mfaWsPendingUser(session, *p), .pending = true};
+}
+
+// Adding a factor to an account that already has one is a credential change (account.credentials step-up, design
+// 5.4): the first factor of an account needs none (there is nothing to step up with), a pending enrollment is the
+// sign-in itself, and a recovery-code session may enroll its replacement factor (design 7.4: required next; the factor
+// is flagged created_during_recovery). Checked when the ceremony starts, so the console asks before the
+// authenticator does, and again before the factor is stored.
+void mfaWsRequireForAnotherFactor(const MfaWsTarget& target) {
+    if (target.pending || target.during_recovery || !mfa::hasUsableFactor(target.user->id)) return;
+    auth::stepup::require(auth::stepup::Family::AccountCredentials);
 }
 
 const std::shared_ptr<identities::User>& mfaWsSignedIn(const std::shared_ptr<Session>& session) {
@@ -153,6 +156,16 @@ void mfaWsAnonymousWeb(const std::shared_ptr<Session>& session) {
     if (session->user)
         throw ops::Refused(std::string(auth::Manager::kAlreadySignedIn), "This connection is already signed in");
     if (session->mfa().pendingKind()) throw ops::Denied("This connection is finishing a sign-in");
+}
+
+// This session's live step-up grants (auth.mfa.status step_up): never another session's.
+json mfaWsStepUpGrants(const std::shared_ptr<Session>& session) {
+    json out = json::array();
+    for (const auto& g : session->stepUp().grants())
+        out.push_back({{"family", std::string(auth::stepup::to_string(g.family))},
+                       {"target", g.target ? json(*g.target) : json(nullptr)},
+                       {"expires_at", mfaWsUnix(g.expires_at)}});
+    return out;
 }
 
 [[noreturn]] void mfaWsRateLimited(const std::chrono::seconds retryAfter) {
@@ -314,13 +327,15 @@ json Mfa::status(const std::shared_ptr<Session>& session) {
                           {"pending", recovery.pending_batch.has_value()}}},
             {"cooldown_until", state && state->recovery_cooldown_until ? json(*state->recovery_cooldown_until)
                                                                       : json(nullptr)},
-            {"recovery_restricted", mfaWsRecoveryRestricted(session)}};
+            {"recovery_restricted", mfaWsRecoveryRestricted(session)},
+            {"step_up", mfaWsStepUpGrants(session)}};
 }
 
 json Mfa::registerOptions(const json& payload, const std::shared_ptr<Session>& session) {
     const auto target = mfaWsTarget(session);
     if (!mfa::passkeys::available())
         throw ops::Invalid("Passkeys are not configured on this server (auth.webauthn.rp_id and origins)");
+    mfaWsRequireForAnotherFactor(target);
     auto options = mfa::passkeys::creationOptions(session->uuid, target.user->id, target.user->name());
     const auto id = crypto::util::uuid4_hex();
     session->mfa().setRegistration({.id = id,
@@ -332,6 +347,7 @@ json Mfa::registerOptions(const json& payload, const std::shared_ptr<Session>& s
 
 json Mfa::registerFinish(const json& payload, const std::shared_ptr<Session>& session) {
     const auto target = mfaWsTarget(session);
+    mfaWsRequireForAnotherFactor(target);  // before the registration is spent: a resend after a step-up still has it
     const auto registration = session->mfa().takeRegistration(payload.at("registration_id").get<std::string>());
     if (!registration || registration->user_id != target.user->id)
         throw ops::NotFound("That passkey setup expired. Start again.");
@@ -353,6 +369,7 @@ json Mfa::registerFinish(const json& payload, const std::shared_ptr<Session>& se
 
 json Mfa::totpStart(const json& payload, const std::shared_ptr<Session>& session) {
     const auto target = mfaWsTarget(session);
+    mfaWsRequireForAnotherFactor(target);
     try {
         const auto started = mfa::startTotp(target.user->id, {.label = mfaWsLabel(payload, "Authenticator app"),
                                                               .account = target.user->name(),
@@ -369,6 +386,7 @@ json Mfa::totpStart(const json& payload, const std::shared_ptr<Session>& session
 
 json Mfa::totpConfirm(const json& payload, const std::shared_ptr<Session>& session) {
     const auto target = mfaWsTarget(session);
+    mfaWsRequireForAnotherFactor(target);
     const bool first = !mfa::hasUsableFactor(target.user->id);
     try {
         const auto factor = mfa::confirmTotp(target.user->id, payload.at("enrollment_id").get<uint32_t>(),
@@ -394,18 +412,41 @@ json Mfa::renameFactor(const json& payload, const std::shared_ptr<Session>& sess
     return {{"factor", *factor}};
 }
 
+json Mfa::removeFactor(const json& payload, const std::shared_ptr<Session>& session) {
+    const auto& user = mfaWsSignedIn(session);
+    const auto kindName = payload.at("kind").get<std::string>();
+    if (kindName != "webauthn" && kindName != "totp") throw ops::Invalid("kind is webauthn or totp");
+    const auto kind = kindName == "webauthn" ? mfa::FactorKind::WebAuthn : mfa::FactorKind::Totp;
+    const auto id = payload.at("id").get<uint32_t>();
+    if (!mfaWsFactor(user->id, kind, id)) throw ops::NotFound("No such factor on your account");
+
+    // Design 7.2: never the last usable factor of an account that must have MFA.
+    bool anotherUsable = false;
+    for (const auto& f : mfa::factors(user->id))
+        if (!(f.kind == kind && f.id == id) && !f.suspended) anotherUsable = true;
+    if (!anotherUsable && mfa::policy::requirement(*user).required)
+        throw ops::Refused("mfa_last_factor",
+                           "This is the last sign-in factor of an account that must have MFA: add another one first");
+
+    auth::stepup::require(auth::stepup::Family::AccountCredentials);
+    // Disabled and kept for the audit trail (auth.mfa.factor.remove), never usable again.
+    if (!mfa::removeFactor(user->id, kind, id)) throw ops::NotFound("No such factor on your account");
+
+    // Removing a factor signs the account's other web sessions out (design 7.2): one of them may hold it.
+    std::size_t revoked = 0;
+    if (const auto* row = mfaWsRow(session))
+        revoked = ops::sessions::revoke(user, row->jti, {.all_others = true}, session);
+    return {{"sessions_revoked", revoked}};
+}
+
 json Mfa::generateRecovery(const std::shared_ptr<Session>& session) {
     const auto& user = mfaWsSignedIn(session);
     if (!mfa::hasUsableFactor(user->id))
         throw ops::Invalid("Add a passkey or an authenticator app first: recovery codes stand in for them");
-    // Replacing working codes is a credential change: until step-up (#359), it needs a second factor proven within
-    // the last five minutes, or the recovery sign-in that is spending the old batch.
-    if (mfa::recoveryStatus(user->id).active_batch && !mfaWsRecoveryRestricted(session) &&
-        !mfaWsFreshSecondFactor(session))
-        throw core::DetailedRefusal("step_up_required",
-                                    "Sign in again with your second factor to make new recovery codes",
-                                    {{"family", "account.credentials"},
-                                     {"max_age_seconds", std::chrono::seconds(kMfaWsFreshSignIn).count()}});
+    // Replacing working codes is a credential change (account.credentials step-up), except for the recovery-code
+    // session that is spending the old batch (design 7.4: new codes are required next).
+    if (mfa::recoveryStatus(user->id).active_batch && !mfaWsRecoveryRestricted(session))
+        auth::stepup::require(auth::stepup::Family::AccountCredentials);
     try {
         const auto batch = mfa::generateRecoveryCodes(user->id);
         return {{"batch_id", batch.batch_id}, {"codes", batch.codes}};

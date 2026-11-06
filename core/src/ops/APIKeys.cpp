@@ -1,4 +1,5 @@
 #include "ops/APIKeys.hpp"
+#include "auth/stepup/StepUp.hpp"
 
 #include "db/query/identities/User.hpp"
 #include "db/query/upstream/Subscription.hpp"
@@ -85,6 +86,7 @@ APIKeyPtr create(const Actor& actor, const Create& req) {
         if (!valid) throw Invalid("API key validation failed:\n" + errors);
     }
 
+    auth::stepup::require(auth::stepup::Family::Secrets);
     key->id = runtime::Deps::get().apiKeyManager->addAPIKey(key);
     return requireKey(key->id);
 }
@@ -133,6 +135,7 @@ APIKeyPtr update(const Actor& actor, const Ref& ref, const Update& req) {
         const auto [valid, errors] = storage::s3::Controller(probe, "").validateAPICredentials();
         if (!valid) throw Invalid("API key validation failed:\n" + errors);
     }
+    auth::stepup::require(auth::stepup::Family::Secrets);
     if (newSecret) key->secret_access_key = *req.secret_access_key;
 
     try {
@@ -188,6 +191,7 @@ APIKeyPtr remove(const Actor& actor, const Ref& ref) {
         throw Conflict("API key '" + key->name + "' operates " + std::to_string(n) +
                        " event subscription(s); turn event-driven sync off for those vaults first");
 
+    auth::stepup::require(auth::stepup::Family::Secrets);
     try {
         runtime::Deps::get().apiKeyManager->removeAPIKey(key->id);
     } catch (const pqxx::foreign_key_violation&) {

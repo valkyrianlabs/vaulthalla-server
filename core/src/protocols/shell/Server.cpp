@@ -1,4 +1,5 @@
 #include "protocols/shell/Server.hpp"
+#include "auth/stepup/StepUp.hpp"
 #include "protocols/shell/ClientInput.hpp"
 #include "protocols/shell/Transfer.hpp"
 #include "protocols/shell/Router.hpp"
@@ -327,6 +328,9 @@ void Server::handleClient(const int cfd) {
             // `vh mcp` marks its tool calls; key material refuses them (D4).
             std::optional<AgentCallScope> agent;
             if (req.value("agent", false)) agent.emplace();
+            // #359: the host account (peer credentials) is exempt from step-up; an agent can never produce one.
+            const vh::auth::stepup::Scope stepUpScope(agent ? vh::auth::stepup::Channel::Agent
+                                                            : vh::auth::stepup::Channel::Host);
             const auto res = router_->executeLine(line, user, io.get(), std::move(peer), std::move(input));
 
             json reply{

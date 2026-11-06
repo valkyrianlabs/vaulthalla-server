@@ -206,20 +206,22 @@ Json wsJson() {
         for (const auto& v : c.variants)
             variants.push_back({{"mode", v.mode}, {"description", v.description},
                                 {"payload", wsFieldsJson(v.payload)}, {"response", wsFieldsJson(v.response)}});
-        out.push_back({{"command", c.command},
-                       {"description", c.description},
-                       {"auth", c.auth},
-                       {"input", c.input},
-                       {"payload", wsFieldsJson(c.payload)},
-                       {"response", wsFieldsJson(c.response)},
-                       {"variants", variants},
-                       {"refusal_codes", legacyCodes},
-                       {"refusal_kinds", c.refusal_codes},
-                       {"confirmations", confirmations},
-                       {"untyped_refusals", c.untyped_refusals},
-                       {"operation", c.operation ? Json(*c.operation) : Json(nullptr)},
-                       {"response_model", c.response_model ? Json(*c.response_model) : Json(nullptr)},
-                       {"client_timeout_ms", c.client_timeout.count()}});
+        Json entry{{"command", c.command},
+                    {"description", c.description},
+                    {"auth", c.auth},
+                    {"input", c.input},
+                    {"payload", wsFieldsJson(c.payload)},
+                    {"response", wsFieldsJson(c.response)},
+                    {"variants", variants},
+                    {"refusal_codes", legacyCodes},
+                    {"refusal_kinds", c.refusal_codes},
+                    {"confirmations", confirmations},
+                    {"untyped_refusals", c.untyped_refusals},
+                    {"operation", c.operation ? Json(*c.operation) : Json(nullptr)},
+                    {"response_model", c.response_model ? Json(*c.response_model) : Json(nullptr)},
+                    {"client_timeout_ms", c.client_timeout.count()}};
+        if (c.step_up) entry["step_up"] = *c.step_up;  // #359: annotated commands only (additive)
+        out.push_back(std::move(entry));
     }
     return out;
 }

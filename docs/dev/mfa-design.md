@@ -604,7 +604,8 @@ names or paths (#327).
 | `auth.mfa.recovery.generate` / `.acknowledge` / `.use` | success, failure | `{batch_id, remaining}` |
 | `auth.mfa.admin.reset` / `.require` | success, denied | `{target_id, reason, channel}` (actor = the admin or CLI user) |
 | `auth.mfa.policy.change` | success | `{from, to}` |
-| `auth.stepup.grant` / `.fail` | success, failure | `{family, target, method}` |
+| `auth.stepup.grant` / `.fail` | success, failure, denied (session revoked) | `{family, target, method}` |
+| `auth.stepup.required` (a command answered `step_up_required`) | info, denied (agent or device) | `{family, target, methods}` |
 | `device.approval.submit` / `auth.approval.approve` / `.deny` | success, failure, denied | `{family, target, approval_id, device}` |
 | `keys.backup.grant.create` / `.extend` / `.confirm` / `.migrate` / `.suspend` / `.revoke` | success | `{grant_id, device, vault_count, reason}` |
 | `keys.backup.export` | success | `{grant_id, versions}` (vault in `vault_id`) |

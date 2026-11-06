@@ -1,4 +1,5 @@
 #include "ops/Devices.hpp"
+#include "auth/stepup/StepUp.hpp"
 
 #include "config/Registry.hpp"
 #include "db/query/device/Device.hpp"
@@ -142,6 +143,15 @@ PendingList pending(const Actor& actor) {
 
 Device approve(const Actor& actor, const std::string& requestId, const std::string& code) {
     requireUser(actor);
+    // #359: device.trust, bound to this request, the key it pairs and the code the person chose (digested: the audit
+    // trail never holds codes). Checked (a wrong code still denies) before the request is held for the approval.
+    const auto spki = pairing().checkApproval(actor->id, requestId, code, PairingClock::now());
+    const auto chosen = vh::device::crypto::normalizeCode(code).value_or("");
+    const auto codeDigest = vh::device::crypto::sha256(
+        std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(chosen.data()), chosen.size()));
+    auth::stepup::require(auth::stepup::Family::DeviceTrust,
+                          "device.pairing.approve:" + requestId + ":" + spki + ":" +
+                              vh::device::crypto::toHex(codeDigest).substr(0, 16));
     const auto claim = pairing().beginApproval(actor->id, requestId, code, PairingClock::now());
     Device device;
     try {
