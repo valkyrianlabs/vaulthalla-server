@@ -7,6 +7,9 @@
 #include "log/Registry.hpp"
 
 #include <paths.h>
+
+#include <algorithm>
+#include <stdexcept>
 #include <utility>
 
 using namespace vh::crypto::util;
@@ -70,6 +73,45 @@ bool Manager::hasSecret(const std::string& key) const {
         return testSecrets_->contains(key);
     }
     return db::query::crypto::Secret::secretExists(key);
+}
+
+crypto::SecretBytes Manager::sealedKey(const std::string& key, const std::size_t size,
+                                      const DependentsCheck& dependents) const {
+    if (size == 0) throw std::invalid_argument("a sealed key needs a size");
+
+    if (hasSecret(key)) {
+        auto stored = getSecret(key);  // throws when the master can't open it
+        if (!stored) throw std::runtime_error("internal secret '" + key + "' vanished while loading");
+        if (stored->size() != size) {
+            wipeSecret(*stored);
+            throw std::runtime_error("internal secret '" + key + "' has the wrong length");
+        }
+        SecretBytes out(viewBytes(*stored));
+        wipeSecret(*stored);
+        return out;
+    }
+
+    if (dependents)
+        if (const auto what = dependents())
+            throw MasterSecretLost("internal secret '" + key + "' is missing, but " + *what +
+                                   " depend on it; refusing to generate a replacement that could never open them. "
+                                   "Restore the database's internal_secrets row together with this host's sealed "
+                                   "master, or reset the affected accounts' factors.");
+
+    auto fresh = SecretBytes::random(size);
+    std::string text(fresh.bytes().begin(), fresh.bytes().end());
+    try {
+        setSecret(key, text);
+    } catch (...) {
+        wipeSecret(text);
+        throw;
+    }
+    wipeSecret(text);
+    auto back = getSecret(key);
+    const bool same = back && std::ranges::equal(viewBytes(*back), fresh.bytes());
+    if (back) wipeSecret(*back);
+    if (!same) throw std::runtime_error("internal secret '" + key + "' did not read back identically after sealing");
+    return fresh;
 }
 
 std::string Manager::getOrInitSecret(const std::string& key) const {
