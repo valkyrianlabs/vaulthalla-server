@@ -109,7 +109,7 @@ SecKeyRef restoreKey(CFDataRef tokenObject) {
     return key;
 }
 
-std::vector<uint8_t> labelled(const std::string& name, const std::vector<uint8_t>& secret) {
+std::vector<uint8_t> labelled(const std::string& name, const std::span<const uint8_t> secret) {
     std::vector<uint8_t> out(name.begin(), name.end());
     out.push_back(0);
     out.insert(out.end(), secret.begin(), secret.end());
@@ -174,7 +174,7 @@ std::vector<uint8_t> unwrap(const SeBlob& blob, const std::string& name, const s
 }
 
 // A new key, the secret wrapped to it, and the blob decrypted back by the SEP before anyone relies on it.
-SeBlob sealNew(const std::string& name, const std::vector<uint8_t>& secret, const std::filesystem::path& target) {
+SeBlob sealNew(const std::string& name, const std::span<const uint8_t> secret, const std::filesystem::path& target) {
     CFErrorRef err = nullptr;
     const CfOwned<SecAccessControlRef> access(SecAccessControlCreateWithFlags(
         kCFAllocatorDefault, kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly, kSecAccessControlPrivateKeyUsage, &err));
@@ -211,7 +211,7 @@ SeBlob sealNew(const std::string& name, const std::vector<uint8_t>& secret, cons
     // Read it back the way unseal() will (restore from the stored token object, decrypt in the SEP) before it
     // replaces anything, so a sealing path that can't be undone never costs the secret already on disk.
     auto check = unwrap(blob, name, target);
-    const bool same = check == secret;
+    const bool same = std::ranges::equal(check, secret);
     wipe(check);
     if (!same) throw std::runtime_error("Secure Enclave: read-back of the new blob for " + name + " didn't match");
     return blob;
@@ -226,7 +226,8 @@ const SeProbe& probe() {
     static const SeProbe result = [] {
         SeProbe p;
         try {
-            (void)sealNew("probe", {'v', 'h', '-', 's', 'e', '-', 'p', 'r', 'o', 'b', 'e'}, "<probe>");
+            static constexpr std::array<uint8_t, 11> kProbe{'v', 'h', '-', 's', 'e', '-', 'p', 'r', 'o', 'b', 'e'};
+            (void)sealNew("probe", kProbe, "<probe>");
             p.usable = true;
         } catch (const std::exception& e) {
             p.failure = e.what();
@@ -246,7 +247,7 @@ std::filesystem::path path(const std::filesystem::path& dir, const std::string& 
     return dir / (name + ".se");
 }
 
-void seal(const std::filesystem::path& dir, const std::string& name, const std::vector<uint8_t>& secret) {
+void seal(const std::filesystem::path& dir, const std::string& name, const std::span<const uint8_t> secret) {
     const auto target = path(dir, name);
     writePrivateFile(target, encodeBlob(sealNew(name, secret, target)));
 }

@@ -93,6 +93,27 @@ export class WsClient {
     this.open()
   }
 
+  // A new connection now (pending requests fail as disconnected). Sign-in uses it so the socket that signs in is the
+  // one whose handshake set the browser's current refresh cookie (#354: a session is only ever the cookie minted at
+  // its own handshake, so another tab's later handshake must not leave this one signed in with a different cookie).
+  async reconnect(signal?: AbortSignal) {
+    if (typeof window === 'undefined') return
+    const socket = this.socket
+    this.socket = null
+    if (socket) {
+      socket.onopen = socket.onclose = socket.onmessage = socket.onerror = null
+      socket.close()
+    }
+    this.failAll(new WsError('disconnected', 'Reconnecting'))
+    this.wanted = true
+    this.hookWindow()
+    this.clearReconnect()
+    this.attempt = 0
+    this.status = 'closed'
+    this.open()
+    await this.ready(signal)
+  }
+
   // Drops the socket and every pending request. Used on logout and when a share session ends.
   close() {
     this.wanted = false

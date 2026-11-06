@@ -86,18 +86,31 @@ Use `--sync-now` when remote encrypted objects should be brought forward immedia
 
 For S3/R2 vaults, upstream encryption controls whether object bodies uploaded to the bucket are encrypted by Vaulthalla before upload.
 
-With upstream encryption enabled:
+With upstream encryption enabled (the default for new S3/R2 vaults):
+
+File contents are encrypted before upload. File and folder names are visible to your storage provider.
 
 - Object payloads are encrypted before upload.
 - Remote object metadata records Vaulthalla encryption status, IV, key version, and content hash.
-- The bucket operator still sees object names and provider metadata.
-- Recovery requires the database metadata and/or remote encryption metadata plus the correct vault keys.
+- Each object is named after the file's path in the vault, so the bucket's provider, and anyone with read access to the bucket, sees file and folder names, the folder tree, object sizes and counts, when objects change, and the provider metadata.
+- Decrypting the objects needs this vault's keys, which stay on your server (or in your [key exports](#export-vault-keys)). A vault can't be restored from its bucket alone: restoring needs its database as well (see [Restore Vault Keys](/vaults/secrets-and-key-export#restore-vault-keys)).
 
 With upstream encryption disabled:
 
 - Object payloads written by Vaulthalla are plaintext from Vaulthalla's perspective.
 - Provider-side encryption may still exist, but it is outside Vaulthalla's key model.
 - Anyone with bucket read access and provider decryption rights may read uploaded object bodies.
+
+### Who Can Read What
+
+These statements are for the deployment Vaulthalla supports today: you run the daemon on your own hardware, with your own bucket or local disk, and you hold the recovery material ([key exports](#export-vault-keys), [internal secret exports](#export-internal-secrets)). Valkyrian Labs receives no keys, exports or recovery material and has no access to your server. It remains the software vendor: the updates you install come from it, signed, and you decide when to take them (`sudo apt-mark hold vaulthalla` pins a version on Linux).
+
+| Who | Local vault | S3/R2, upstream encryption on | S3/R2, upstream encryption off |
+| --- | --- | --- | --- |
+| The storage provider, or anyone with bucket access | Not involved | Encrypted file contents; file and folder names, sizes, counts and change times are visible | Everything: contents and names |
+| Whoever administers the server running the daemon | Everything: the daemon holds the vault keys while it runs | Everything | Everything |
+
+The server holds every vault key while it runs, so protecting that host, its administrators and its updates is part of protecting the data. A vault's contents are only as private as the server that runs it.
 
 ## Changing Upstream Encryption
 

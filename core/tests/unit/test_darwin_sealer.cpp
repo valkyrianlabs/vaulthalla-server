@@ -96,7 +96,7 @@ TEST(DarwinSealer, SecureEnclaveProbeAgreesWithARealSeal) {
     std::string tmpl = (std::filesystem::temp_directory_path() / "vh-se-probe-XXXXXX").string();
     ASSERT_NE(::mkdtemp(tmpl.data()), nullptr);
     try {
-        vh::platform::sealer::secure_enclave::seal(tmpl, "probe", {1, 2, 3});
+        vh::platform::sealer::secure_enclave::seal(tmpl, "probe", std::vector<uint8_t>{1, 2, 3});
         ADD_FAILURE() << "the Secure Enclave works on this Mac but available() says it has none";
     } catch (const std::exception& e) {
         std::cout << "[darwin-sealer] no Secure Enclave, as expected: " << e.what() << std::endl;
@@ -193,7 +193,7 @@ TEST_F(DarwinSealerTest, AStaleFileBesideASecureEnclaveBlobLoses) {
     namespace sealer = vh::platform::sealer;
     if (!dst::underSecureEnclave()) GTEST_SKIP() << "no Secure Enclave backend on this Mac";
     sealer::seal(dir_, "slot", secret_);
-    sealer::file::seal(dir_, "slot", {'s', 't', 'a', 'l', 'e'});
+    sealer::file::seal(dir_, "slot", std::vector<uint8_t>{'s', 't', 'a', 'l', 'e'});
 
     EXPECT_EQ(sealer::unseal(dir_, "slot"), secret_);
     EXPECT_FALSE(std::filesystem::exists(sealer::file::path(dir_, "slot")));

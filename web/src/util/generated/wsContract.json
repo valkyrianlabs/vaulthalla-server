@@ -1067,6 +1067,85 @@
       "name": "AuthConfig"
     },
     {
+      "description": "One of the caller's signed-in web sessions (a refresh token row, every tab of one browser shares it; #354): ops::sessions::to_json, core/src/ops/Sessions.cpp.",
+      "fields": [
+        {
+          "description": "Opaque: names the session for auth.sessions.revoke, never the refresh token's id. Valid until the daemon restarts.",
+          "name": "id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The session this request came in on.",
+          "name": "current",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "Authenticator assurance level of its sign-in: 1 a password, 2 a second factor or a passkey.",
+          "maximum": 2,
+          "minimum": 1,
+          "name": "aal",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "How the sign-in was proven: pwd (password), hwk / swk (device-bound / synced passkey), otp (authenticator code), rec (recovery code).",
+          "item_enum": [
+            "pwd",
+            "hwk",
+            "swk",
+            "otp",
+            "rec"
+          ],
+          "items": "string",
+          "name": "amr",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "Unix seconds: when the person signed in.",
+          "name": "auth_time",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Unix seconds: the last real use (the idle sign-out clock).",
+          "name": "last_activity_at",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The address it signed in from.",
+          "name": "ip_address",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "user_agent",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "name": "AuthSession"
+    },
+    {
       "description": "Cache counters (core/src/stats/model/CacheStats.cpp to_json(CacheStatsSnapshot)).",
       "fields": [
         {
@@ -17940,7 +18019,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "d986920634205c0a7f5781c63c7e7eb8c3d2e1268a64eda128028dd8474cd312",
+  "models_hash": "d75335fcf8465799923514c6f3987bfda145b113b5e517773a4be63ed103c3e6",
   "protocol": {
     "min": 1,
     "version": 1
@@ -18215,7 +18294,7 @@
       "client_timeout_ms": 20000,
       "command": "auth.login",
       "confirmations": [],
-      "description": "Sign in with a username and password. The access token comes back in the response envelope (`token`), the refresh token as an HttpOnly cookie set at the handshake.",
+      "description": "Sign in with a username and password. The access token comes back in the response envelope (`token`), the refresh token as an HttpOnly cookie set at the handshake. A connection signs in once: one that already has a user (signed in, or restored from its cookie) is refused with data.code already_signed_in; sign in again on a new connection. The session's sign-in is recorded as aal 1, amr [\"pwd\"] (auth.sessions.list).",
       "input": "payload",
       "operation": "auth.login",
       "payload": [
@@ -18243,10 +18322,12 @@
         }
       ],
       "refusal_codes": [
-        "error"
+        "error",
+        "already_signed_in"
       ],
       "refusal_kinds": [
-        "error"
+        "error",
+        "already_signed_in"
       ],
       "response": [
         {
@@ -18425,6 +18506,109 @@
           "types": [
             "string",
             "null"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "auth.sessions.list",
+      "confirmations": [],
+      "description": "The caller's signed-in web sessions (one per browser: its tabs share one), most recent sign-in first: live, unexpired and not past the idle sign-out. Ids are opaque handles for auth.sessions.revoke, never the refresh token's id, and change when the daemon restarts.",
+      "input": "none",
+      "operation": null,
+      "payload": [],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "items": "object",
+          "model": "AuthSession",
+          "name": "sessions",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "auth.sessions.revoke",
+      "confirmations": [],
+      "description": "Sign out one of the caller's sessions (id from auth.sessions.list; the current one included) or every other one (all_others). Revoked sessions end at once: their sockets close and their cookies stop working for previews, downloads and uploads. Give exactly one of id and all_others (else invalid); an id that is not one of the caller's live sessions is not_found.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "From auth.sessions.list.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "auth.session",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "id",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "kind": "bool"
+          },
+          "name": "all_others",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "description": "How many sessions were signed out.",
+          "minimum": 0,
+          "name": "revoked",
+          "required": true,
+          "types": [
+            "integer"
           ]
         }
       ],
@@ -40015,5 +40199,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "799049bb18175a04a74f8728b1c348617c1eb3e1868321c538e7240eeaba36d9"
+  "ws_hash": "523f85def9d6794eba2f6baa4438b4757ce700d37b4b62d2d1282a81f8a7f007"
 }

@@ -57,11 +57,21 @@ export const refreshSession = (): Promise<boolean> => {
   return refreshing
 }
 
+// Signs in on a fresh connection: its handshake sets the refresh cookie this session will use (#354), so another tab
+// that loaded the sign-in page later can't leave this browser holding a cookie that isn't this session's. A
+// connection that comes up already signed in (another tab signed in meanwhile) answers already_signed_in: the browser
+// is signed in, so take that session.
 export const login = async (name: string, password: string) => {
-  const { user } = await api.send('auth.login', { name, password })
-  if (!useSession.getState().token) throw new WsError('error', 'The server did not issue a session token')
-  useSession.setState({ status: 'authenticated', user: user as unknown as IUser })
-  void checkServerContract(api)
+  await api.reconnect()
+  try {
+    const { user } = await api.send('auth.login', { name, password })
+    if (!useSession.getState().token) throw new WsError('error', 'The server did not issue a session token')
+    useSession.setState({ status: 'authenticated', user: user as unknown as IUser })
+    void checkServerContract(api)
+  } catch (error) {
+    if (isWsError(error) && error.code === 'already_signed_in' && (await refreshSession())) return
+    throw error
+  }
 }
 
 const resetHandlers = new Set<() => void>()

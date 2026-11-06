@@ -7,6 +7,7 @@
 #include "crypto/secrets/Manager.hpp"
 #include "fs/ops/file.hpp"
 #include <nlohmann/json.hpp>
+#include <span>
 #include "crypto/encryptors/GPG.hpp"
 #include "log/Registry.hpp"
 #include "runtime/Deps.hpp"
@@ -113,7 +114,7 @@ static CommandResult handle_secret_encrypt_and_response(const CommandCall& call,
             "\nConsider using --recipient with a GPG fingerprint along with --output\nto securely encrypt the key(s) to an output file."};
 }
 
-static nlohmann::json generateSecretOutput(const std::string& name, const std::vector<uint8_t>& secret) {
+static nlohmann::json generateSecretOutput(const std::string& name, const std::span<const uint8_t> secret) {
     return {
             {"name", name},
             {"secret", std::string(secret.begin(), secret.end())}

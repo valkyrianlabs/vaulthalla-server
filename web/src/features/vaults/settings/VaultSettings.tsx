@@ -20,6 +20,7 @@ import { useCredentials, useUserNames, VAULT_EDIT, VAULT_REMOVE } from '@/featur
 import { vaultTypeLabel, type VaultDetail } from '@/features/vaults/model'
 import { QuotaInput, quotaBytes, quotaDefaults, SLUG_PATTERN, storageTierOptions, validateFuseName, type QuotaUnit } from '@/features/vaults/fields'
 import { withEncryptionWaiver } from '@/features/vaults/waiver'
+import { UPSTREAM_ENCRYPTION_OFF, UPSTREAM_ENCRYPTION_ON } from '@/features/vaults/encryptionCopy'
 
 const DeleteVaultDialog = dynamic(() => import('@/features/vaults/DeleteVaultDialog'), { ssr: false })
 const EventSyncPanel = dynamic(() => import('@/features/vaults/settings/EventSyncPanel'), { ssr: false })
@@ -279,7 +280,7 @@ const BucketForm = ({ vault }: { vault: VaultDetail }) => {
             <SwitchRow
               id={`${ids}-encrypt`}
               label="Encrypt objects before upload"
-              hint="Turning this on or off over a bucket that already holds objects asks you to accept a waiver first."
+              hint={`${encrypt ? UPSTREAM_ENCRYPTION_ON : UPSTREAM_ENCRYPTION_OFF} Turning this on or off over a bucket that already holds objects asks you to accept a waiver first.`}
               checked={encrypt}
               disabled={!canEdit}
               onCheckedChange={value => setValue('encrypt_upstream', value, { shouldDirty: true })}

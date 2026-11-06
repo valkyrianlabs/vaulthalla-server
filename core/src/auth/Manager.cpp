@@ -14,6 +14,8 @@
 #include "runtime/Deps.hpp"
 #include "auth/session/Issuer.hpp"
 #include "auth/Bootstrap.hpp"
+#include "auth/session/Assurance.hpp"
+#include "ops/Error.hpp"
 
 #include <sodium.h>
 #include <array>
@@ -67,6 +69,7 @@ std::shared_ptr<User> Manager::registerUser(const identities::UserState& draft, 
 // Every refused sign-in looks the same to the client (#321): the same message, and one Argon2id verify whether or not
 // the account exists, so neither the reply nor its timing says which part was wrong. The reason goes to the server log.
 const char* const Manager::kLoginFailed = "Invalid username or password";
+const std::string_view Manager::kAlreadySignedIn = "already_signed_in";
 
 namespace {
 // A valid Argon2id hash of a random secret nobody knows, made once (the first unknown name also pays for hashing it):
@@ -96,6 +99,10 @@ const std::string& unknownUserHash() {
 }
 
 void Manager::loginUser(const std::string& name, const std::string& password, const std::shared_ptr<Session>& session) {
+    if (!session) throw std::invalid_argument("Sign-in needs a session");
+    // #354: a socket signs in once. One that already has a user (signed in, or rehydrated from its cookie) is refused
+    // before any password is checked, so a planted cookie's session can never be re-promoted as someone else's.
+    if (session->user) throw ops::Refused(std::string(kAlreadySignedIn), "This connection is already signed in");
     const auto credentials = db::query::identities::Loader::credentialsByName(name);
     if (!credentials) {
         (void)hash::verifyPassword(password, unknownUserHash());
@@ -113,7 +120,7 @@ void Manager::loginUser(const std::string& name, const std::string& password, co
     if (!user) refuseLogin(name, "account removed during sign-in", session, credentials->id);
 
     session->setAuthenticatedUser(user);
-    runtime::Deps::get().sessionManager->promote(session);
+    runtime::Deps::get().sessionManager->promote(session, auth::session::assurance::password());
 
     log::Registry::auth()->info("[AuthManager] User logged in: {}", name);
     audit::record({.action = "auth.login.success", .actor_id = user->id, .actor = name,

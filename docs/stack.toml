@@ -1,6 +1,6 @@
 [project]
 title = "Vaulthalla"
-description = "The final cloud: sovereign, encrypted storage on hardware you own. A native C++ daemon encrypts every file before it reaches a disk or a bucket, enforces one set of permissions across the web console, the vh CLI, an S3-compatible gateway and a FUSE filesystem mount, and syncs vaults to S3-compatible providers under cost limits you set."
+description = "The final cloud: sovereign, encrypted storage on hardware you own. A native C++ daemon encrypts file contents before they reach a disk or, with upstream encryption (the default), a bucket. File and folder names are visible to your storage provider. The daemon enforces one set of permissions across the web console, the vh CLI, an S3-compatible gateway and a FUSE filesystem mount, and syncs vaults to S3-compatible providers under cost limits you set."
 
 [[stack.languages]]
 name = "C++23"

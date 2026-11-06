@@ -12,10 +12,11 @@
 **Stop renting back your own data.**
 
 Vaulthalla is sovereignty-first, encrypted, self-hosted storage for hardware you own. It is a compiled C++ daemon,
-not a web app bolted onto a database: files are encrypted before they reach a disk or a bucket, one permission model
-governs the web console, the `vh` CLI, the S3-compatible gateway and (on Linux) a real filesystem mount, and vaults
-sync to S3-compatible providers under budgets you set. It is a rapidly maturing alternative to tools like Nextcloud
-and MinIO, and it runs on Linux servers and Apple Silicon Macs.
+not a web app bolted onto a database: file contents are encrypted before they reach a disk or (by default) a bucket,
+whose provider still sees file and folder names; one permission model governs the web console, the `vh` CLI, the
+S3-compatible gateway and (on Linux) a real filesystem mount; and vaults sync to S3-compatible providers under budgets
+you set. It is a rapidly maturing alternative to tools like Nextcloud and MinIO, and it runs on Linux servers and
+Apple Silicon Macs.
 
 > 📖 **Documentation: [vaulthalla.io/docs](https://vaulthalla.io/docs)** covers installation on both platforms,
 > HTTPS, administration, storage, sharing, the S3 gateway, the CLI, backup and troubleshooting.
@@ -82,7 +83,8 @@ the CLI administrator. It is signed by Valkyrian Labs LLC and notarized by Apple
 ![Vaulthalla web 'vaults' dashboard](https://media.vaulthalla.io/vaulthalla-web-ultrawide-vault-preview-10-11-26.png)
 
 - **Encrypted at rest, always.** Every vault is AES-256-GCM with per-vault keys; master keys are sealed by the host's
-  TPM2 on Linux (or a managed software TPM on VPS hosts). Cloud copies can be encrypted before they leave the host.
+  TPM2 on Linux (or a managed software TPM on VPS hosts). For S3/R2 vaults with upstream encryption (the default), file
+  contents are encrypted before upload. File and folder names are visible to your storage provider.
 - **A real filesystem on Linux.** Vaults mount at `/mnt/vaulthalla` through a native FUSE driver, governed by the same
   permissions as everything else.
 - **Local or S3-backed storage.** Keep vaults on local disks or sync them to S3-compatible providers such as Cloudflare
