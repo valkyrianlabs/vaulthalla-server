@@ -248,6 +248,10 @@ export interface WebSocketCommandMap {
   'auth.mfa.factor.remove': WsContract['auth.mfa.factor.remove']
   'auth.mfa.recovery.generate': WsContract['auth.mfa.recovery.generate']
   'auth.mfa.recovery.acknowledge': WsContract['auth.mfa.recovery.acknowledge']
+  // #360: another account's MFA (users-manage; a super admin's only by a super admin).
+  'auth.mfa.admin.status': WsContract['auth.mfa.admin.status']
+  'auth.mfa.admin.require': WsContract['auth.mfa.admin.require']
+  'auth.mfa.admin.reset': WsContract['auth.mfa.admin.reset']
   // Discoverable passkey sign-in (#358): an anonymous connection, a passkey alone (features/auth/passkeySignIn.ts).
   'auth.passkey.options': WsContract['auth.passkey.options']
   'auth.passkey.login': WsContract['auth.passkey.login']

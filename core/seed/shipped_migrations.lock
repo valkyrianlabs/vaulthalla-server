@@ -78,3 +78,4 @@ historical 64170212eb3f9fbe0f7c949791b953f0376a1f2bcf66b3dec7afc5db6325d570  020
 historical c154cd7e10f7931f29c12b9221c90f66d6b953cfb5e3dc15ea50f0940e5d4220  060_acl.sql  v0.28.0-alpha..v1.5.1
 historical 720caaa27c0d51635fe3f459a8426f019d3f0dbdc0b7ae176d283309933a7f53  082_stats_metric_samples.sql  v1.2.4..v1.2.5
 current    968226d37b715dcbb6da14b69c3d970bdbd64603cb6fc4602fbfb7d6daa7b2bc  126_content_format.sql  unreleased
+current    dae3f3a2fdf25f2e8b8ea2a3e7c0ec964620a3567947283542c74660c77c7490  127_mfa_recovery_grants.sql  unreleased

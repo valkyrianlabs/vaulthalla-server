@@ -74,6 +74,9 @@ by hand is never reused or torn down. `make itest` (and `run_proof*.sh`) refuses
 macOS with a pointer to `make test`: Tier A needs a kernel FUSE mount, /proc and sudo. The test scripts stay bash 3.2
 compatible (`/bin/bash -n`); `itest_abspath` in `bin/tests/lib/itest.sh` replaces GNU `realpath -m`.
 
+MFA (#354-#360): `--gtest_filter='MfaSignInDb*:StepUpDb*:MfaPolicyDb*'` (DB-backed; TOTP/recovery tests inject test MFA
+keys with `auth::mfa::keys::setForTesting` where sealing can't round-trip); DB-free `Mfa*:StepUp*:MfaBackoff*`.
+
 CLI ↔ ws parity for families migrated to `core/ops/`:
 `--gtest_filter='*Parity*:OpsGroups*:AuthPasswordChange*'` (groups, roles, API keys, vaults and the accessible-vaults list, users, S3 gateway,
 pricing/config, sync conflicts). The whole binary takes ~7 minutes against a local DB; meson's test timeout is 30 minutes (#123). A parity case

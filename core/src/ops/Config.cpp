@@ -1,5 +1,9 @@
 #include "ops/Config.hpp"
+#include "audit/Trail.hpp"
+#include "auth/mfa/Policy.hpp"
+#include "auth/session/Assurance.hpp"
 #include "auth/stepup/StepUp.hpp"
+#include "notifications/AccountSecurity.hpp"
 
 #include "config/Registry.hpp"
 #include "email/Message.hpp"
@@ -132,12 +136,61 @@ void validateSettings(const nlohmann::json& settings) {
     }
 }
 
+namespace {
+
+std::string mfaPolicyJoined(const std::vector<std::string>& items) {
+    std::string out;
+    for (const auto& i : items) out += (out.empty() ? "" : ",") + i;
+    return out;
+}
+
+// auth.mfa / auth.webauthn changed (#360, design 7.1): the sessions are re-judged at next use (policy epoch), the
+// change is audited as auth.mfa.policy.change, and a weakening is mailed to the security recipients.
+void recordMfaPolicyChange(const Actor& actor, const vh::config::AuthConfig& from, const vh::config::AuthConfig& to) {
+    if (!auth::mfa::policy::policyChanged(from, to)) return;
+    auth::session::assurance::policyChanged();
+    const auto weakened = auth::mfa::policy::weakenings(from, to);
+    vh::audit::record({.action = "auth.mfa.policy.change", .actor_id = actor->id, .actor = actor->name(),
+                       .details = {{"from", from.mfa.policy}, {"to", to.mfa.policy},
+                                   {"admin_webauthn_only", to.mfa.admin_webauthn_only},
+                                   {"admin_device_bound_only", to.mfa.admin_device_bound_only},
+                                   {"rp_id_changed", from.webauthn.rp_id != to.webauthn.rp_id},
+                                   {"weakened", mfaPolicyJoined(weakened)}}},
+                      "[ops::config] " + actor->name() + " changed the MFA policy: " + from.mfa.policy + " -> " +
+                          to.mfa.policy + (weakened.empty() ? "" : " (weakened: " + mfaPolicyJoined(weakened) + ")"),
+                      weakened.empty() ? spdlog::level::info : spdlog::level::warn);
+    if (weakened.empty()) return;
+    std::vector<std::pair<std::string, std::string>> facts{
+        {"Changed by", actor->name()},
+        {"Policy", from.mfa.policy + " -> " + to.mfa.policy},
+        {"Admins: passkeys only", std::string(from.mfa.admin_webauthn_only ? "on" : "off") + " -> " +
+                                      (to.mfa.admin_webauthn_only ? "on" : "off")},
+        {"Admins: device-bound passkeys only", std::string(from.mfa.admin_device_bound_only ? "on" : "off") + " -> " +
+                                                   (to.mfa.admin_device_bound_only ? "on" : "off")},
+        {"Weakened", mfaPolicyJoined(weakened)}};
+    if (from.webauthn.rp_id != to.webauthn.rp_id)
+        facts.emplace_back("Passkey relying party", from.webauthn.rp_id + " -> " + to.webauthn.rp_id);
+    notifications::account::send({
+        .event = "mfa.policy_weakened",
+        .title = "MFA policy weakened",
+        .summary = "The server's multi-factor sign-in policy was changed so that it protects less than before.",
+        .facts = std::move(facts),
+        .advice = "If nobody meant to do this, restore the setting in Settings > Security and review the audit trail.",
+        .to_user = false,
+    });
+}
+
+}
+
 Config saveSettings(const Actor& actor, const nlohmann::json& settings) {
     requireActor(actor);
     if (!actor->isSuperAdmin()) throw Denied("only super admins may change settings");
     validateSettings(settings);
     auth::stepup::require(auth::stepup::Family::Settings);
-    return commit(Config(settings));
+    const auto before = vh::config::Registry::get().auth;
+    auto out = commit(Config(settings));
+    recordMfaPolicyChange(actor, before, out.auth);
+    return out;
 }
 
 Config setDeviceRemote(const Actor& actor, const bool enabled) {

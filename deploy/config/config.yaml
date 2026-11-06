@@ -120,10 +120,26 @@ auth:
     rp_id: ""
     rp_name: Vaulthalla
     origins: []
-  # Multi-factor authentication. A step-up (fresh proof with a passkey, or password + authenticator code) is asked for
-  # before sensitive changes in the web console (roles, keys, secrets, settings, device approval, destructive data
-  # operations); it lasts this long (60..900 seconds). The local vh CLI never asks.
+  # Multi-factor authentication.
+  #   policy: who must sign in with a second factor (a passkey or an authenticator app):
+  #     optional  nobody (accounts an admin marked "require MFA" still must)
+  #     admins    the super admin and every account whose role may manage users, roles, settings or encryption keys
+  #     all       every account
+  #   Raising it signs the affected accounts' password-only sessions out at their next request; they set up a factor
+  #   at their next sign-in. Weakening it is audited and emailed to operator_emails.recipients.security.
+  #   admin_webauthn_only: accounts the admins policy names use passkeys only (no authenticator apps).
+  #   admin_device_bound_only: ... and only passkeys bound to one device (security keys, not synced passkeys).
+  #   Both need passkeys configured (auth.webauthn.rp_id).
+  #   recovery_cooldown_hours: after a recovery-code sign-in or an MFA reset, key export, device approval, account and
+  #   role administration, secrets and settings changes wait this long (1..168).
+  #   step_up_ttl_seconds: a step-up (fresh proof with a passkey, or password + authenticator code) is asked for before
+  #   sensitive changes in the web console (roles, keys, secrets, settings, device approval, destructive data
+  #   operations); it lasts this long (60..900 seconds). The local vh CLI never asks.
   mfa:
+    policy: admins
+    admin_webauthn_only: false
+    admin_device_bound_only: false
+    recovery_cooldown_hours: 24
     step_up_ttl_seconds: 300
 
 

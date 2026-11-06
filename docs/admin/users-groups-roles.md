@@ -76,6 +76,34 @@ Rules that apply on the CLI and in the web console alike:
 - Deleting, deactivating, re-roling or resetting the password of an account ends all of its sessions immediately. A deactivated account can't log in.
 - `vh user create` creates the account's default vault, as the web console does, and prints a generated password once.
 
+### Multi-factor sign-in
+
+Who must use a second factor is the `auth.mfa.policy` setting (see [Configuration](/reference/configuration)).
+Administrators manage another account's factors from its page (**Users › a user › Sign-in factors**) or with `vh`:
+
+```bash
+vh user mfa status alice
+vh user mfa require alice            # whatever the policy says; --off to undo
+vh user mfa reset alice --reason "lost phone, verified by phone call"
+```
+
+- **Who:** whoever may reset the account's password. A super admin's MFA only another super admin. In the console,
+  never your own account (manage it in **Account › Security**); with `vh`, the Linux user bound to an account may
+  reset that account's own MFA, which is how a sole super admin recovers. `sudo`/root is refused.
+- **Reset** is for an account that lost every factor. Its passkeys and authenticator apps are disabled (kept for the
+  audit trail), its recovery codes voided, every session signed out, and its paired devices' automatic key backup
+  paused (the devices stay paired and keep syncing). It sets up a new factor at its next sign-in. Until the recovery
+  cooldown ends (`auth.mfa.recovery_cooldown_hours`, 24 hours by default), it can't export keys, approve devices,
+  manage accounts or roles, change secrets or settings. The account and the security recipients are emailed.
+- In the console, resetting asks for a step-up (your passkey, or password and authenticator code); requiring MFA too.
+- A password reset never touches factors: MFA still applies at the next sign-in. The last factor of an account that
+  must have MFA can't be removed.
+- **Lost a factor but kept the recovery codes?** Sign in with the password and a recovery code. Every other browser
+  is signed out, paired devices pause their automatic key backup (revoke any you lost in **Account › Security**), and
+  the same cooldown applies while you set up a new factor and new codes.
+- Five failed second factors in a row delay the account's next attempt by a minute, doubling up to 15 minutes; it is
+  never locked. The tenth emails the account and the security recipients.
+
 ## Groups
 
 Create a group:

@@ -210,10 +210,37 @@ Each passkey belongs to the `rp_id` it was registered for. After a change, passk
 longer work. They are kept, not deleted; their owners sign in another way and register new ones.
 :::
 
-:::callout{theme="info" title="Not multi-factor sign-in yet"}
-This release adds the verifier and its settings only. Passkey enrollment and sign-in arrive in a later release; until
-then these settings have no effect on how anyone signs in.
-:::
+### Multi-factor sign-in (MFA)
+
+```yaml
+auth:
+  mfa:
+    policy: admins                 # optional | admins | all
+    admin_webauthn_only: false
+    admin_device_bound_only: false
+    recovery_cooldown_hours: 24    # 1..168
+    step_up_ttl_seconds: 300       # 60..900
+```
+
+- `policy`: who must sign in with a second factor (a passkey or an authenticator app). `admins` (the default on new
+  and upgraded installs) covers the super admin and every account whose role may manage users, admins, roles,
+  settings or encryption keys; `all` covers every account; `optional` covers nobody, except accounts an administrator
+  marked **Require MFA** (`vh user mfa require`). An account that has a factor is always asked for it.
+- Raising the policy takes effect at each session's next request: a session signed in with a password alone is
+  signed out, and its next sign-in is the guided setup. Nothing is grandfathered.
+- `admin_webauthn_only`: the accounts the `admins` policy names may use passkeys only, not authenticator apps.
+  `admin_device_bound_only`: only passkeys that never leave their device (security keys, platform passkeys that
+  don't sync), not synced ones such as 1Password or iCloud Keychain; it implies `admin_webauthn_only`. Both need
+  passkeys configured (`auth.webauthn.rp_id`), or the daemon refuses the setting. An administrator whose only factor
+  becomes disallowed is signed out and sets up an allowed one at the next sign-in.
+- `recovery_cooldown_hours`: after a recovery-code sign-in or an MFA reset, key export, device approval, account and
+  role administration, secrets and settings changes wait this long.
+- `step_up_ttl_seconds`: how long confirming a sensitive change (step-up) lasts.
+
+Changing the policy, the two admin flags or `auth.webauthn.rp_id` is a settings change (it asks for a step-up),
+recorded as `auth.mfa.policy.change` in the [audit trail](/admin/audit-trail). Weakening it (a lower policy, an
+admin flag turned off, a changed `rp_id`) is also emailed to `operator_emails.recipients.security`.
+
 
 ### Idle Sign-Out
 

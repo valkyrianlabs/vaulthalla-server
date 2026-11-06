@@ -8,6 +8,7 @@
 #include "WsProtocol.hpp"
 #include "auth/model/RefreshToken.hpp"
 #include "auth/model/TokenPair.hpp"
+#include "auth/mfa/Recovery.hpp"
 #include "auth/stepup/StepUp.hpp"
 #include "identities/User.hpp"
 #include "ops/Error.hpp"
@@ -170,6 +171,7 @@ TEST(StepUpScope, ACoveredOperationNeedsNoSecondStepUp) {
 }
 
 TEST(StepUpScope, OneRequestSpendsASingleUseGrantOnce) {
+    const mfa::recovery::CooldownSourceForTesting noCooldown([](uint32_t) { return std::nullopt; });  // DB-free
     const auto s = detachedWebSession(41);
     s->stepUp().addGrant(grantFor(s, Family::Keys, "vault.keys.import:3"));
     {
@@ -182,6 +184,7 @@ TEST(StepUpScope, OneRequestSpendsASingleUseGrantOnce) {
 }
 
 TEST(StepUpScope, AFreshAal2SignInStandsInForFamilyGrants) {
+    const mfa::recovery::CooldownSourceForTesting noCooldown([](uint32_t) { return std::nullopt; });  // DB-free
     const auto fresh = detachedWebSession(42, 2, {"pwd", "hwk"}, SysClock::now() - std::chrono::seconds(30));
     const Scope scope(fresh);
     for (const auto f : {Family::AccountCredentials, Family::IdentityAdmin, Family::Secrets, Family::Settings})

@@ -364,6 +364,13 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
         if (code == "step_up_required")
             return std::ranges::any_of(stepUp, [&](const contract::WsStepUp& r) { return r.command == command; });
         if (code == "rate_limited" && command == "auth.stepup.begin") return true;  // the passkey challenge store
+        // #360: the recovery cooldown's families (keys, device.trust, identity.admin, secrets, settings).
+        if (code == "recovery_cooldown")
+            return std::ranges::any_of(stepUp, [&](const contract::WsStepUp& r) {
+                return r.command == command && (r.family == "keys" || r.family == "device.trust" ||
+                                                r.family == "identity.admin" || r.family == "secrets" ||
+                                                r.family == "settings");
+            });
         const auto it = kRefusedCodes.find(code);
         if (it == kRefusedCodes.end()) return false;
         // rate_limited is device pairing's, auth.mfa.verify's and auth.passkey.options'.

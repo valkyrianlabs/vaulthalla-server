@@ -22,6 +22,7 @@
 #include "crypto/util/hash.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/auth/RefreshToken.hpp"
+#include "db/query/device/Device.hpp"
 #include "db/query/rbac/role/Admin.hpp"
 #include "db/query/rbac/role/Vault.hpp"
 #include "db/query/vault/Vault.hpp"
@@ -319,6 +320,13 @@ TEST_F(StepUpDb, EveryAnnotatedCommandRefusesWithoutAGrantAndRunsWithOne) {
         {"device.pairing.approve", {[&] {
              return h::Devices::pairingApprove(json{{"request_id", pairing.request_id}, {"code", pairing.code}}, s);
          }}},
+        // #360: another account's MFA.
+        {"auth.mfa.admin.require", {[&] {
+             return h::Mfa::adminRequire(json{{"user_id", subject->id}, {"required", true}}, s);
+         }}},
+        {"auth.mfa.admin.reset", {[&] {
+             return h::Mfa::adminReset(json{{"user_id", subject->id}, {"reason", "step-up table"}}, s);
+         }}},
         {"auth.user.delete", {[&] { return h::Auth::deleteUser(json{{"id", other->id}, {"confirm", true}}, s); }}},
     };
 
@@ -375,7 +383,8 @@ TEST_F(StepUpDb, EveryAnnotatedCommandRefusesWithoutAGrantAndRunsWithOne) {
     const std::vector<std::string> order{
         "auth.register", "auth.user.update", "auth.user.change_password", "role.admin.add", "role.admin.update",
         "role.admin.delete", "role.vault.add", "role.vault.update", "role.vault.delete", "group.member.add",
-        "group.member.remove", "group.remove", "device.pairing.approve", "auth.user.delete"};
+        "group.member.remove", "group.remove", "device.pairing.approve", "auth.mfa.admin.require",
+        "auth.mfa.admin.reset", "auth.user.delete"};
     ASSERT_EQ(order.size(), rows.size());
     const auto table = contract::stepUpTable();
     for (const auto& cmd : order) {
@@ -613,7 +622,12 @@ TEST_F(StepUpDb, RecoveryCodesRefreshTokensAndDevicesNeverSatisfyIt) {
     auto peer = std::make_shared<vh::device::Peer>();
     peer->spki.fill(0x42);
     peer->spkiHex = vh::device::crypto::toHex(peer->spki);
-    peer->deviceRowId = 1;
+    const auto paired = db::query::device::Devices::byCurrentSpki(peer->spkiHex);
+    peer->deviceRowId = paired ? paired->id
+                               : db::query::device::Devices::insert({.user_id = admin->id, .approved_by = admin->id,
+                                                                    .name = "StepUp Mac", .platform = "macOS",
+                                                                    .spki_sha256 = peer->spkiHex})
+                                     .id;
     const auto device = protocols::ws::Session::devicePrincipal(peer, admin, [] {});
     {
         const Scope scope(device);

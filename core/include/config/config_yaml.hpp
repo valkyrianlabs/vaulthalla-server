@@ -480,6 +480,10 @@ struct convert<AuthConfig> {
         webauthn["origins"] = rhs.webauthn.origins;
         node["webauthn"] = webauthn;
         Node mfa;
+        mfa["policy"] = rhs.mfa.policy;
+        mfa["admin_webauthn_only"] = rhs.mfa.admin_webauthn_only;
+        mfa["admin_device_bound_only"] = rhs.mfa.admin_device_bound_only;
+        mfa["recovery_cooldown_hours"] = rhs.mfa.recovery_cooldown_hours;
         mfa["step_up_ttl_seconds"] = rhs.mfa.step_up_ttl_seconds;
         node["mfa"] = mfa;
         return node;
@@ -506,10 +510,19 @@ struct convert<AuthConfig> {
                 rhs.webauthn.origins = o.as<std::vector<std::string>>();
             }
         }
-        // auth.mfa (#359): validated by loadConfig (validateMfa).
+        // auth.mfa (#359, #360): validated by loadConfig (validateAuth). A key left out keeps its default, so an
+        // upgraded config.yaml without auth.mfa.policy runs `admins` (D2).
         if (const auto m = node["mfa"]) {
-            if (!m.IsMap()) throw std::invalid_argument("auth.mfa must be a map (step_up_ttl_seconds)");
+            if (!m.IsMap()) throw std::invalid_argument("auth.mfa must be a map (policy, step_up_ttl_seconds, ...)");
             const MfaConfig d;
+            rhs.mfa.policy = m["policy"] ? m["policy"].as<std::string>() : d.policy;
+            rhs.mfa.admin_webauthn_only = m["admin_webauthn_only"] ? m["admin_webauthn_only"].as<bool>()
+                                                                   : d.admin_webauthn_only;
+            rhs.mfa.admin_device_bound_only = m["admin_device_bound_only"] ? m["admin_device_bound_only"].as<bool>()
+                                                                           : d.admin_device_bound_only;
+            rhs.mfa.recovery_cooldown_hours = m["recovery_cooldown_hours"]
+                                                  ? m["recovery_cooldown_hours"].as<unsigned int>()
+                                                  : d.recovery_cooldown_hours;
             rhs.mfa.step_up_ttl_seconds = m["step_up_ttl_seconds"] ? m["step_up_ttl_seconds"].as<unsigned int>()
                                                                    : d.step_up_ttl_seconds;
         }

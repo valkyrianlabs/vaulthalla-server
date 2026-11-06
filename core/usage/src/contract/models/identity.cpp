@@ -166,7 +166,10 @@ std::vector<WsModel> identityModels() {
          boolean("backup_eligible").opt().desc("Passkeys: a synced passkey (1Password, iCloud Keychain, Google)."),
          boolean("backup_state").opt().desc("Passkeys: currently backed up, as last reported."),
          strArray("transports").opt().desc("Passkeys: the browser's transport hints (usb, nfc, ble, internal, hybrid)."),
-         str("aaguid").opt().nullable().desc("Passkeys: the authenticator model's AAGUID, when it reported one.")}));
+         str("aaguid").opt().nullable().desc("Passkeys: the authenticator model's AAGUID, when it reported one."),
+         boolean("allowed").opt().desc(
+             "auth.mfa.status and auth.mfa.admin.status: the MFA policy lets this account use it (false: an admin held "
+             "to passkeys, or to device-bound passkeys, by auth.mfa.admin_webauthn_only / admin_device_bound_only).")}));
 
     out.push_back(model("RoleSummary",
         "A role's identity without its permissions (identities::to_list_json's roleSummary).",

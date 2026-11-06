@@ -10,6 +10,7 @@
 #include "db/Transactions.hpp"
 #include "db/encoding/bytea.hpp"
 #include "log/Registry.hpp"
+#include "notifications/AccountSecurity.hpp"
 #include "ops/Error.hpp"
 
 #include <nlohmann/json.hpp>
@@ -79,6 +80,16 @@ void recordMfa(const char* action, const vh::audit::Outcome outcome, const uint3
                       "[auth::mfa] user " + std::to_string(userId) + " " + message,
                       outcome == vh::audit::Outcome::Success || outcome == vh::audit::Outcome::Info ? spdlog::level::info
                                                                                             : spdlog::level::warn);
+}
+
+// Design 7.2: every factor change notifies the account (a suspension, a possible clone, the security recipients too).
+void noticeFactor(const uint32_t userId, const char* event, std::string title, std::string summary,
+                  const bool toSecurity = false) {
+    notifications::account::send({.event = event, .title = std::move(title), .summary = std::move(summary),
+                                  .user_id = userId,
+                                  .advice = "If this wasn't you, sign in and review Account > Security now, or ask an "
+                                            "administrator to reset this account's MFA.",
+                                  .severity = toSecurity ? "warning" : "info", .to_security = toSecurity});
 }
 
 const char* factorTable(const FactorKind kind) {
@@ -216,14 +227,16 @@ UserMfa ensureUser(const uint32_t userId) {
 std::optional<UserMfa> userState(const uint32_t userId) {
     return db::Transactions::exec("auth::mfa::userState", [&](pqxx::work& txn) -> std::optional<UserMfa> {
         const auto res = txn.exec("SELECT webauthn_user_handle, required, "
-                                  "EXTRACT(EPOCH FROM recovery_cooldown_until)::BIGINT FROM user_mfa WHERE user_id = $1",
+                                  "EXTRACT(EPOCH FROM recovery_cooldown_until)::BIGINT, "
+                                  "EXTRACT(EPOCH FROM reset_at)::BIGINT FROM user_mfa WHERE user_id = $1",
                                   pqxx::params{userId});
         if (res.empty()) return std::nullopt;
         const auto r = res.one_row();
         return UserMfa{.user_id = userId,
                        .webauthn_user_handle = from_hex_bytea(r[0].as<std::string>()),
                        .required = r[1].as<bool>(),
-                       .recovery_cooldown_until = r[2].as<std::optional<int64_t>>()};
+                       .recovery_cooldown_until = r[2].as<std::optional<int64_t>>(),
+                       .reset_at = r[3].as<std::optional<int64_t>>()};
     });
 }
 
@@ -235,6 +248,14 @@ int64_t startRecoveryCooldown(const uint32_t userId, const std::chrono::hours du
                         "RETURNING EXTRACT(EPOCH FROM recovery_cooldown_until)::BIGINT",
                         pqxx::params{userId, static_cast<int>(duration.count())}).one_field().as<int64_t>();
     });
+}
+
+void setRequired(const uint32_t userId, const bool required) {
+    (void)ensureUser(userId);
+    db::Transactions::exec("auth::mfa::setRequired", [&](pqxx::work& txn) {
+        txn.exec("UPDATE user_mfa SET required = $2 WHERE user_id = $1", pqxx::params{userId, required});
+    });
+    session::assurance::policyChanged();
 }
 
 std::vector<Factor> factors(const uint32_t userId) {
@@ -273,6 +294,8 @@ bool renameFactor(const uint32_t userId, const FactorKind kind, const uint32_t i
         recordMfa("auth.mfa.factor.rename", vh::audit::Outcome::Success, userId,
                   {{"factor_id", id}, {"kind", to_string(kind)}},
                   "renamed " + std::string(to_string(kind)) + " factor " + std::to_string(id));
+    if (renamed) noticeFactor(userId, "mfa.factor.rename", "Sign-in factor renamed",
+                              "A passkey or authenticator app on this account was renamed.");
     return renamed;
 }
 
@@ -287,6 +310,8 @@ bool removeFactor(const uint32_t userId, const FactorKind kind, const uint32_t i
         recordMfa("auth.mfa.factor.remove", vh::audit::Outcome::Success, userId,
                   {{"factor_id", id}, {"kind", to_string(kind)}},
                   "removed " + std::string(to_string(kind)) + " factor " + std::to_string(id));
+        noticeFactor(userId, "mfa.factor.remove", "Sign-in factor removed",
+                     "A passkey or authenticator app was removed from this account; it can't sign in any more.");
     }
     return removed;
 }
@@ -356,6 +381,8 @@ std::optional<Factor> confirmTotp(const uint32_t userId, const uint32_t factorId
     recordMfa("auth.mfa.factor.enroll", vh::audit::Outcome::Success, userId,
               {{"factor_id", factor->id}, {"kind", "totp"}, {"during_recovery", factor->created_during_recovery}},
               "enrolled TOTP factor " + std::to_string(factor->id));
+    noticeFactor(userId, "mfa.factor.enroll", "Authenticator app added",
+                 "An authenticator app was set up as a sign-in factor on this account.");
     return factor;
 }
 
@@ -449,6 +476,8 @@ std::size_t acknowledgeRecoveryCodes(const uint32_t userId, const std::string& b
     });
     recordMfa("auth.mfa.recovery.acknowledge", vh::audit::Outcome::Success, userId,
               {{"batch_id", batchId}, {"remaining", remaining}}, "acknowledged recovery code batch " + batchId);
+    noticeFactor(userId, "mfa.recovery.renew", "New recovery codes",
+                 "New recovery codes were saved for this account; the previous ones no longer work.");
     return remaining;
 }
 
@@ -546,6 +575,7 @@ WebAuthnCredential addWebAuthnCredential(const uint32_t userId, const NewWebAuth
     recordMfa("auth.mfa.factor.enroll", vh::audit::Outcome::Success, userId,
               {{"factor_id", stored.id}, {"kind", "webauthn"}, {"during_recovery", stored.created_during_recovery}},
               "enrolled passkey " + std::to_string(stored.id));
+    noticeFactor(userId, "mfa.factor.enroll", "Passkey added", "A passkey was added as a sign-in factor on this account.");
     return stored;
 }
 
@@ -595,6 +625,10 @@ bool suspendWebAuthnCredential(const uint32_t userId, const uint32_t id, const s
         recordMfa("auth.mfa.factor.suspend", vh::audit::Outcome::Success, userId,
                   {{"factor_id", id}, {"kind", "webauthn"}, {"reason", std::string(reason)}},
                   "suspended passkey " + std::to_string(id));
+        noticeFactor(userId, "mfa.factor.suspend", "Passkey suspended",
+                     "A passkey on this account reported a signature counter that went backwards, which can mean it "
+                     "was copied. It was suspended and can't sign in.",
+                     true);
     }
     return suspended;
 }

@@ -92,6 +92,10 @@ void Handler::registerAuthHandlers(const std::shared_ptr<Router>& r) {
     r->registerPayload("auth.mfa.factor.remove", &handler::Mfa::removeFactor);
     r->registerSessionOnlyHandler("auth.mfa.recovery.generate", &handler::Mfa::generateRecovery);
     r->registerPayload("auth.mfa.recovery.acknowledge", &handler::Mfa::acknowledgeRecovery);
+    // #360: another account's MFA (ops/Mfa.hpp).
+    r->registerPayload("auth.mfa.admin.status", &handler::Mfa::adminStatus);
+    r->registerPayload("auth.mfa.admin.require", &handler::Mfa::adminRequire);
+    r->registerPayload("auth.mfa.admin.reset", &handler::Mfa::adminReset);
     // #358: discoverable sign-in with a passkey alone.
     r->registerSessionOnlyHandler("auth.passkey.options", &handler::Mfa::passkeyOptions);
     r->registerPayload("auth.passkey.login", &handler::Mfa::passkeyLogin);

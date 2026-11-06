@@ -184,6 +184,12 @@ std::optional<WebAuthnCredential> registerCredential(const std::string& sessionU
         passkeyRefusal("registration", userId, outcome.failure);
         return std::nullopt;
     }
+    const auto stored = fromVerified(*outcome.value, details);
+    if (details.device_bound_only && stored.backup_eligible) {
+        log::Registry::auth()->warn("[auth::mfa] user {} tried to register a synced passkey; the policy allows only "
+                                    "device-bound ones (auth.mfa.admin_device_bound_only)", userId);
+        return std::nullopt;
+    }
     auto withHints = details;
     withHints.transports = response->transports;
     withHints.discoverable = response->residentKey;

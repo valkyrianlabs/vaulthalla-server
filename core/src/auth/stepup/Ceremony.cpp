@@ -6,6 +6,8 @@
 #include "auth/mfa/Factors.hpp"
 #include "auth/mfa/Keys.hpp"
 #include "auth/mfa/Passkeys.hpp"
+#include "auth/mfa/Policy.hpp"
+#include "auth/mfa/Recovery.hpp"
 #include "auth/model/RefreshToken.hpp"
 #include "auth/model/TokenPair.hpp"
 #include "auth/session/Manager.hpp"
@@ -66,6 +68,23 @@ nlohmann::json stepUpTarget(const std::optional<std::string>& target) {
     return target ? nlohmann::json(*target) : nlohmann::json(nullptr);
 }
 
+// During the recovery cooldown, factors enrolled during the recovery never answer a cooldown family (design 7.4).
+bool stepUpExcludeRecovery(const uint32_t userId, const Family family) {
+    return cooldownFamily(family) && mfa::recovery::cooldownUntil(userId).has_value();
+}
+
+// The factor that answered: allowed by the account's policy rule, and not one enrolled during a recovery whose cooldown
+// still holds this family back. Checked after the verifier (the options offered only such factors, but an assertion
+// names its own credential).
+bool stepUpFactorCounts(const identities::User& user, const Family family, const mfa::FactorKind kind,
+                        const uint32_t factorId) {
+    const bool excludeRecovery = stepUpExcludeRecovery(user.id, family);
+    for (const auto& f : mfa::factors(user.id))
+        if (f.kind == kind && f.id == factorId)
+            return !f.suspended && mfa::policy::factorAllowed(user, f) && !(excludeRecovery && f.created_during_recovery);
+    return false;
+}
+
 }
 
 std::string challengeScope(const Family family, const std::optional<std::string>& target) {
@@ -82,6 +101,7 @@ nlohmann::json begin(const std::shared_ptr<protocols::ws::Session>& session, con
                                ": pass the one the step_up_required refusal named");
         bound = target;
     }
+    requireNoCooldown(caller.user->id, family);
     auto ways = methods(*caller.user, family);
     if (ways.empty())
         throw ops::Refused("step_up_unavailable",
@@ -101,7 +121,7 @@ nlohmann::json begin(const std::shared_ptr<protocols::ws::Session>& session, con
                        {"expires_at", stepUpUnix(std::chrono::system_clock::now() + kCeremonyTtl)},
                        {"max_age_seconds", ttl().count()}};
     if (std::ranges::find(ways, "webauthn") != ways.end()) {
-        const auto credentials = mfa::passkeys::usableCredentials(caller.user->id);
+        const auto credentials = mfa::policy::allowedPasskeys(*caller.user, stepUpExcludeRecovery(caller.user->id, family));
         out["webauthn"] = {{"publicKey", mfa::passkeys::stepUpOptions(session->uuid, caller.user->id, credentials,
                                                                       challengeScope(family, bound))}};
     }
@@ -122,6 +142,7 @@ Finished finish(const std::shared_ptr<protocols::ws::Session>& session, const nl
     if (std::ranges::find(ceremony->methods, method) == ceremony->methods.end())
         throw ops::Invalid("That method can't confirm this change");
     const auto familyName = std::string(to_string(ceremony->family));
+    requireNoCooldown(caller.user->id, ceremony->family);
 
     bool ok = false;
     std::optional<uint32_t> factorId;
@@ -132,7 +153,7 @@ Finished finish(const std::shared_ptr<protocols::ws::Session>& session, const nl
             if (const auto v = mfa::passkeys::verifyStepUp(session->uuid, caller.user->id,
                                                            payload.at("credential").dump(),
                                                            challengeScope(ceremony->family, ceremony->target))) {
-                ok = true;
+                ok = stepUpFactorCounts(*caller.user, ceremony->family, mfa::FactorKind::WebAuthn, v->factor_id);
                 factorId = v->factor_id;
             }
         } else if (method == "password_totp") {
@@ -142,7 +163,7 @@ Finished finish(const std::shared_ptr<protocols::ws::Session>& session, const nl
             const auto code = stepUpString(payload, "code");
             if (stepUpPasswordMatches(caller.user->id, password))
                 if (const auto totp = mfa::verifyTotp(caller.user->id, code)) {
-                    ok = true;
+                    ok = stepUpFactorCounts(*caller.user, ceremony->family, mfa::FactorKind::Totp, *totp);
                     factorId = *totp;
                 }
         } else if (method == "password") {

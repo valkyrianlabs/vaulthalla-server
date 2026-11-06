@@ -42,6 +42,11 @@ struct Mfa {
     static json passkeyOptions(const std::shared_ptr<Session>& session);
     // {credential}: signs the socket in at aal 2 (amr hwk | swk) through signin::complete, or one uniform refusal.
     static json passkeyLogin(const json& payload, const std::shared_ptr<Session>& session);
+
+    // #360: another account's MFA (ops/Mfa.hpp): auth.mfa.admin.status / .require / .reset.
+    static json adminStatus(const json& payload, const std::shared_ptr<Session>& session);
+    static json adminRequire(const json& payload, const std::shared_ptr<Session>& session);
+    static json adminReset(const json& payload, const std::shared_ptr<Session>& session);
 };
 
 }

@@ -450,7 +450,7 @@ mfa-seal|mfa-pepper` (base64). Tests: `MfaTotp*`, `MfaRecoveryCodes*`, `MfaSeal*
 `MfaFactorsDb*`, `SqlDeployerHistoryDb.MfaFactors*`.
 
 **Pending-MFA sign-in and guided enrollment (#357; MFA design note §5.2, §7.1, §7.2, §8).** `auth::mfa::policy`
-(`Policy.hpp`): level `admins` on every install (D2; `optional | admins | all`, configurable in #360) plus
+(`Policy.hpp`): level `auth.mfa.policy` (`optional | admins | all`, default `admins` on new and upgraded installs, D2) plus
 `user_mfa.required`; "privileged" = super admin, or an admin role that may add/edit/delete users or admins or reset
 their passwords, add/edit/delete admin or vault roles, edit any settings section, or export/rotate encryption keys
 (auditor/unprivileged are not). It is applied twice: `rowSatisfies` (installed into `assurance` by `main.cpp`) refuses
@@ -468,15 +468,14 @@ human branch, a pending socket runs exactly `kPendingCommands` (`auth.mfa.verify
 `auth.mfa.recovery.acknowledge`) while enrolling; everything else (auth.login, meta.hello) is UNAUTHORIZED. Mirrored
 in the web's `LIFECYCLE` (`tools/contracts/test_mfa_pending_contract.py`). Ends after 5 min (10 enrolling), 5 failed
 factors, cancel, logout, or the socket closing (`Session::close` clears it and `passkeys::forgetSession`). A second
-cap across sockets: 5 factor failures per account in 15 min → `rate_limited {retry_after}` (`signin::
-accountRetryAfter`; in memory; #360 adds the doubling backoff). `signin::complete` is the only promotion: clears
+cap across sockets: the account backoff (#360, below) → `rate_limited {retry_after}` (`signin::
+accountRetryAfter`; in memory). `signin::complete` is the only promotion: clears
 pending, `setAuthenticatedUser` + `promote(Proof{2, {pwd, hwk|swk|otp|rec}})` (one row), last login,
 `auth.login.success {method, aal, amr}`. `auth.mfa.verify {method webauthn|totp|recovery_code}`: passkeys through
 `auth/mfa/Passkeys.hpp` (RP from `config.auth.webauthn`, one process-wide `ChallengeStore`, purpose `mfa` bound to
 the socket uuid and user; `{method: webauthn}` without a credential answers `mfa_required` with a fresh challenge,
 not an attempt); `mfa_invalid {attempts_remaining, pending}`; a recovery code → RecoveryRestricted: amr `rec`,
-`user_mfa.recovery_cooldown_until` = now + 24 h (`startRecoveryCooldown`; what it refuses is #360), every other web
-session revoked through `ops::sessions::revoke(all_others)` (paired devices untouched, D4), answer `recovery`.
+the recovery effects of #360 (below), answer `recovery`.
 Enrollment: the first factor (UV passkey registration or a confirmed TOTP code) answers ten recovery codes; on a
 pending socket `auth.mfa.recovery.acknowledge` of that batch completes the sign-in at aal 2. The same commands
 (plus `auth.mfa.status`, `auth.mfa.factor.rename {kind, id, label}`, `auth.mfa.recovery.generate`) serve signed-in web
@@ -519,7 +518,8 @@ Who asks is a thread-local `stepup::Scope`: the ws router sets it per routed com
 listener), the CLI server Host (exempt: peer credentials, design 5.6) or Agent (`vh mcp` agent: true), `/mcp` Agent;
 no scope = the daemon's own callers and tests (exempt, like `ops::Actor`'s internal callers). Agent and Device always
 refuse (`methods: []`; #361 adds device approvals for keys/device.trust only, D6); a device's `vault.keys.export` is
-inside its key-backup grant (`keyBackupGrantCovers`: every paired device until #362, D1). Web: a grant on
+inside its key-backup grant (`keyBackupGrantCovers`: every paired device whose `devices.key_backup_revoked_at` is
+unset, until #362, D1). Web: a grant on
 `ws::Session::stepUp()` bound to user + refresh jti + family (+ target), `auth.mfa.step_up_ttl_seconds` (default 300,
 60..900); or, family-wide only, an aal 2 sign-in (not `rec`) within the TTL. Refusal `ops::StepUpRequired` → ERROR
 `step_up_required {family, target, methods, max_age_seconds}`. `auth.stepup.begin {family, target?}` → `{stepup_id,
@@ -533,6 +533,44 @@ without step-up (design 7.4). Capability `auth.step_up`. Console: `WsClient` `on
 `features/auth/stepup/StepUpDialog.tsx` (lazy), then one resend. Tests: `test_mfa_stepup.cpp` (DB-free),
 `test_mfa_stepup_db.cpp` (table-driven over the annotations, D3, passkey binding, devices/recovery/refresh never
 satisfy, revocation, regression list).
+
+**MFA policy, lockout, reset and auditable recovery (#360, migration 127; MFA design note §7.1, §7.3-§7.5, D2, D4).**
+Config `auth.mfa.{policy, admin_webauthn_only, admin_device_bound_only, recovery_cooldown_hours (1..168, 24),
+step_up_ttl_seconds}` (`config::validateAuth`: the admin flags need `auth.webauthn.rp_id`). `policy::level()` reads it
+(`setLevel` writes the running config, tests); `policy::factorRule(user)` holds privileged accounts to passkeys (no
+TOTP) or device-bound passkeys (no BE flag): `allowedPasskeys`, `hasAllowedTotp`, `hasAllowedFactor` feed sign-in
+methods, the enrollment decision (an admin whose only factor is disallowed gets pending enrollment, passkey only),
+step-up methods and `rowSatisfies` (an aal 2 row of a restricted admin survives only with `hwk`, `swk` if synced is
+allowed, or `rec`); TOTP enrollment refuses, registration refuses a BE passkey (`RegistrationDetails::device_bound_only`).
+`ops::config::saveSettings` → `policy::policyChanged/weakenings` (lower level, admin flag off, rp_id changed from a set
+value): epoch bump, audit `auth.mfa.policy.change {from, to, weakened}`, weakening → `notifications::account::send`
+to the security recipients. **Lockout:** `signin::AccountBackoff` (DB-free arithmetic): the 5th factor failure of a
+streak delays the account 1 min, doubling to 15 (never a lock); a streak ends 15 quiet minutes after its last
+failure or delay; audit `auth.mfa.lockout`; the 10th notifies user + security. **Recovery** (`auth/mfa/Recovery.hpp`):
+`afterRecoveryCodeSignIn` (cooldown from config, `ops::sessions::revoke(all_others)`, `revokeKeyBackupGrants` →
+`devices.key_backup_revoked_at/_reason` + `keys.backup.grant.revoke` per device, the live devices listed in the
+answer, never revoked, audit `auth.mfa.recovery.signin`, notice); `reset(target, Resetter{id, name, AdminReset |
+CliReset}, reason)`: disables every passkey/TOTP (`auth.mfa.factor.remove` per factor, kept), supersedes every
+recovery batch, `user_mfa.required = true`, `reset_at/by`, cooldown, `auth::Manager::revokeSessions`, grants revoked,
+`auth.mfa.admin.reset {target_id, reason, channel, counts}`, notice. **Cooldown:** `stepup::cooldownFamily` (keys,
+device.trust, identity.admin, secrets, settings); `require` checks `requireNoCooldown` on Web and Device before any
+grant or fresh sign-in → `ops::RecoveryCooldown` → ERROR `recovery_cooldown {family, cooldown_until}` (audited
+`auth.stepup.required` denied, reason `recovery_cooldown`; Host exempt); `begin`/`finish` refuse it too, and factors
+`created_during_recovery` (enrolled by a `rec` session or while the cooldown runs) are never offered or accepted for a
+cooldown family until it ends. **Admin/CLI:** `ops::mfa` (`ops/Mfa.hpp`) `status | require | reset`, Channel Web
+(never self; users-manage = `ops::users::requireMfaManager`: reset-password over the account, a super admin only by
+a super admin; reset `account.credentials`, require `identity.admin`) or Cli (`vh user mfa status|reset|require`: the
+bound UID itself (reset/status) or a users-manager; root/UID 0 and unbound actors refused; Host exempt from step-up,
+Agent refused). ws `auth.mfa.admin.status|require|reset`; `auth.mfa.status` gains `policy.totp_allowed`,
+`synced_passkeys_allowed`, factor `allowed`; `Device.key_backup_revoked_at`. Notices: `notifications/AccountSecurity`
+(security recipients + the account's email; factor changes to the account only; test sink). Console: Settings ›
+Security › Multi-factor sign-in, Users › user › Sign-in factors (`MfaAdminPanel`, lazy), Account › Security
+recovery notice with paired devices and revoke. Tests: `test_mfa_policy.cpp` (DB-free: backoff, config, weakening,
+contract), `test_mfa_policy_db.cpp` (`MfaPolicyDb.*`: policy raise, D2 upgrade refusal, weakening, webauthn-only,
+recovery-code effects and audit sequence, cooldown vs. recovery-enrolled factor, admin reset effects and rules, CLI
+reset permissions and ws/CLI parity, password reset, last factor, 10th-failure notice; `vh audit verify` after each
+recovery path), `SqlDeployerHistoryDb.MfaRecoveryGrants*`. Tier B ws/CLI parity for reset waits on the harness's
+TOTP/step-up sign-in (#395).
 
 **Identities (`identities::Manager`, `core/{include,src}/identities/`).** One canonical `User`/`Group` object per id,
 handed out as the same `shared_ptr` everywhere (sessions, engines, FUSE, HTTP, S3). Each holds an immutable

@@ -4,10 +4,13 @@
 #include "protocols/shell/util/argsHelpers.hpp"
 #include "protocols/shell/util/runOp.hpp"
 #include "identities/User.hpp"
+#include "ops/Mfa.hpp"
 #include "ops/Users.hpp"
 #include "runtime/Deps.hpp"
 #include "usage/include/UsageManager.hpp"
 #include "CommandUsage.hpp"
+
+#include <nlohmann/json.hpp>
 
 #include <optional>
 #include <string>
@@ -120,6 +123,83 @@ CommandResult listUsers(const CommandCall& call) {
                  [](const std::vector<ops::users::UserPtr>& users) { return identities::to_string(users); });
 }
 
+// ---- vh user mfa (#360; ops/Mfa.hpp) -------------------------------------------------------------------------------
+
+std::string mfaStatusText(const std::string& name, const ops::mfa::Status& st) {
+    std::string out = "MFA for " + name + ": " + (st.required ? "required (" + st.reason + ")" : "not required") + "\n";
+    if (st.required_flag) out += "  Required for this account (vh user mfa require).\n";
+    if (st.factors.empty()) out += "  No sign-in factors.\n";
+    for (const auto& f : st.factors)
+        out += "  " + f.value("kind", std::string{}) + " #" + std::to_string(f.value("id", 0u)) + "  " +
+               f.value("label", std::string{}) + (f.value("suspended", false) ? "  (suspended)" : "") +
+               (f.value("allowed", true) ? "" : "  (not allowed by the policy)") +
+               (f.value("created_during_recovery", false) ? "  (enrolled during recovery)" : "") + "\n";
+    out += "  Recovery codes: " + (st.recovery_active ? std::to_string(st.recovery_remaining) + " left" : "none") + "\n";
+    if (st.cooldown_until) out += "  Recovery cooldown until " + std::to_string(*st.cooldown_until) + " (Unix time)\n";
+    return out;
+}
+
+CommandResult mfaStatus(const CommandCall& call) {
+    validatePositionals(call, resolveUsage({"user", "mfa", "status"}));
+    const auto id = userIdFromPositional(call.positionals[0]);
+    if (!id) return userNotFound("user mfa status", call.positionals[0]);
+    const bool json = hasFlag(call, std::vector<std::string>{"json", "json_output"});
+    const auto name = call.positionals[0];
+    return runOp("user mfa status", [&] { return ops::mfa::status(call.user, *id, ops::mfa::Channel::Cli); },
+                 [&](const ops::mfa::Status& st) {
+                     return json ? nlohmann::json(st).dump(2) + "\n" : mfaStatusText(name, st);
+                 });
+}
+
+CommandResult mfaRequire(const CommandCall& call) {
+    validatePositionals(call, resolveUsage({"user", "mfa", "require"}));
+    const auto id = userIdFromPositional(call.positionals[0]);
+    if (!id) return userNotFound("user mfa require", call.positionals[0]);
+    const bool required = !hasFlag(call, "off");
+    return runOp("user mfa require", [&] {
+        ops::mfa::require(call.user, *id, required, ops::mfa::Channel::Cli);
+        return ops::mfa::status(call.user, *id, ops::mfa::Channel::Cli);
+    }, [&](const ops::mfa::Status& st) { return mfaStatusText(call.positionals[0], st); });
+}
+
+CommandResult mfaReset(const CommandCall& call) {
+    const auto usage = resolveUsage({"user", "mfa", "reset"});
+    validatePositionals(call, usage);
+    const auto id = userIdFromPositional(call.positionals[0]);
+    if (!id) return userNotFound("user mfa reset", call.positionals[0]);
+    const auto reason = optVal(call, usage->resolveOptional("reason")->option_tokens)
+                            .value_or("host recovery (vh user mfa reset)");
+    const auto name = call.positionals[0];
+    if (!hasFlag(call, "yes")) {
+        const auto question = "Reset the MFA of '" + name + "'? Their passkeys, authenticator apps and recovery "
+                              "codes stop working and every session is signed out. [no]";
+        if (!call.io) {
+            noteConfirmationNeeded("mfa_reset", {"--yes"});
+            return invalid("user mfa reset: this disables every sign-in factor of '" + name +
+                           "'.\nRe-run with --yes to confirm.");
+        }
+        if (!call.io->confirm(question, true)) return invalid("user mfa reset: cancelled; nothing was changed");
+    }
+    return runOp("user mfa reset", [&] { return ops::mfa::reset(call.user, *id, reason, ops::mfa::Channel::Cli); },
+                 [&](const auth::mfa::recovery::ResetEffects& e) {
+                     return "MFA reset for " + name + ": " + std::to_string(e.factors_disabled) +
+                            " factor(s) disabled, " + std::to_string(e.sessions_revoked) + " session(s) signed out, " +
+                            std::to_string(e.grants_revoked) + " device key backup(s) paused.\n" + name +
+                            " sets up a new second factor at the next sign-in; sensitive changes wait until the "
+                            "recovery cooldown ends (Unix time " + std::to_string(e.cooldown_until) + ").\n";
+                 });
+}
+
+CommandResult handleUserMfa(const CommandCall& call) {
+    if (call.positionals.empty() || hasFlag(call, "h") || hasFlag(call, "help"))
+        return usage(call.constructFullArgs());
+    const auto [sub, subcall] = descend(call);
+    if (isCommandMatch({"user", "mfa", "status"}, sub)) return mfaStatus(subcall);
+    if (isCommandMatch({"user", "mfa", "reset"}, sub)) return mfaReset(subcall);
+    if (isCommandMatch({"user", "mfa", "require"}, sub)) return mfaRequire(subcall);
+    return invalid(call.constructFullArgs(), "Unknown user mfa subcommand: '" + std::string(sub) + "'");
+}
+
 bool isUserMatch(const std::string& cmd, const std::string_view input) {
     return isCommandMatch({"user", cmd}, input);
 }
@@ -135,6 +215,7 @@ CommandResult handleUser(const CommandCall& call) {
     if (isUserMatch("info", sub)) return userInfo(subcall);
     if (isUserMatch("update", sub)) return updateUser(subcall);
     if (isUserMatch("list", sub) || isUserMatch("ls", sub)) return listUsers(subcall);
+    if (isUserMatch("mfa", sub)) return handleUserMfa(subcall);
 
     return invalid(call.constructFullArgs(), "Unknown user subcommand: '" + std::string(sub) + "'");
 }

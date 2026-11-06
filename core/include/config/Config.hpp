@@ -2,6 +2,7 @@
 
 #include "log/Rotator.hpp"
 
+#include <array>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -173,11 +174,26 @@ struct WebAuthnConfig {
 // Throws std::invalid_argument naming the first rule a WebAuthnConfig breaks.
 void validateWebAuthn(const WebAuthnConfig& c);
 
-// auth.mfa.* (#359, docs/dev/mfa-design.md section 7.1): step_up_ttl_seconds is how long a step-up grant lasts (and how
-// recent an aal 2 sign-in must be to stand in for one), 60..900. config.yaml and settings.update refuse other values.
+// auth.mfa.* (docs/dev/mfa-design.md section 7.1; auth/mfa/Policy.hpp):
+//   policy                   who must sign in with a second factor: optional, admins (the default, new and upgraded
+//                            installs, D2) or all (#360)
+//   admin_webauthn_only      accounts the admins policy names may use passkeys only (no authenticator app) (#360)
+//   admin_device_bound_only  ... and only device-bound passkeys (not synced ones); implies admin_webauthn_only (#360)
+//   recovery_cooldown_hours  after a recovery-code sign-in or an MFA reset, keys, device.trust, identity.admin,
+//                            secrets and settings are refused for this long, 1..168 (#360, D4)
+//   step_up_ttl_seconds      how long a step-up grant lasts (and how recent an aal 2 sign-in must be to stand in for
+//                            one), 60..900 (#359)
+// config.yaml and settings.update refuse other values. Changing any of these (or auth.webauthn) bumps the policy epoch:
+// sessions are re-judged at next use, never grandfathered.
 struct MfaConfig {
+    std::string policy = "admins";
+    bool admin_webauthn_only = false;
+    bool admin_device_bound_only = false;
+    unsigned int recovery_cooldown_hours = 24;
     unsigned int step_up_ttl_seconds = 300;
 };
+
+inline constexpr std::array<std::string_view, 3> kMfaPolicies{"optional", "admins", "all"};
 
 // Throws std::invalid_argument naming the first rule a MfaConfig breaks.
 void validateMfa(const MfaConfig& c);
@@ -188,6 +204,10 @@ struct AuthConfig {
     WebAuthnConfig webauthn;
     MfaConfig mfa;
 };
+
+// validateWebAuthn and validateMfa, plus what they need of each other: holding admins to passkeys needs passkeys
+// (auth.webauthn.rp_id), or no admin could sign in.
+void validateAuth(const AuthConfig& c);
 
 struct SyncConfig {
     uint32_t event_audit_retention_days = 30;

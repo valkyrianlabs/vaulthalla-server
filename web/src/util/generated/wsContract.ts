@@ -6,10 +6,10 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = 'a6f7dbcc6f7d12f43951e18ad9a76f711d8aef21a5d3eebe0b633610dc0defc2'
+export const WS_CONTRACT_HASH = '9b6d468921dd72f13e101201fd2fc60deb4730545135a9f025947287674f58a6'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = '144e2cc1625766141f2fb45d5358956cac3188d29eb60c77a7ee9798baf55c4a'
+export const WS_MODELS_HASH = 'da700568f0a7910d2ee04d7ad0231ad43de2b4ad7ed70c9346d8db1fd43109ce'
 
 // The ws protocol range this book is (core/usage WsProtocol.hpp): send it in meta.hello.
 export const WS_PROTOCOL_VERSION = 1
@@ -404,6 +404,7 @@ export interface WsModels {
     last_ip: string | null
     revoked_at: number | null
     revoked: boolean
+    key_backup_revoked_at?: number | null
   }
   /**
    * device_server.advertise.* (Config.cpp to_json(DeviceAdvertiseConfig); docs/reference/transfer-protocol.md
@@ -616,9 +617,17 @@ export interface WsModels {
    */
   'LoggingConfig': { levels: WsModels['LogLevelsConfig']; file_paths?: 'ids' | 'full' }
   /**
-   * auth.mfa.* (Config.cpp to_json(MfaConfig), #359): multi-factor authentication settings.
+   * auth.mfa.* (Config.cpp to_json(MfaConfig), #359, #360): multi-factor authentication settings. Changing
+   * policy, the admin flags or auth.webauthn.rp_id is audited (auth.mfa.policy.change); weakening them is
+   * mailed to operator_emails.recipients.security.
    */
-  'MfaConfig': { step_up_ttl_seconds: number }
+  'MfaConfig': {
+    policy?: 'optional' | 'admins' | 'all'
+    admin_webauthn_only?: boolean
+    admin_device_bound_only?: boolean
+    recovery_cooldown_hours?: number
+    step_up_ttl_seconds: number
+  }
   /**
    * One of the account's sign-in factors (#356/#357): auth::mfa::to_json(Factor),
    * core/src/auth/mfa/Factors.cpp. Carries no secret and no credential id. id is unique per kind only: name a
@@ -636,6 +645,7 @@ export interface WsModels {
     backup_state?: boolean
     transports?: string[]
     aaguid?: string | null
+    allowed?: boolean
   }
   /**
    * Filesystem operation queue and share upload figures, one vault or the system
@@ -2911,6 +2921,66 @@ export interface WsContract {
     response: Record<string, never>
   }
   /**
+   * Require MFA for one account whatever the policy level (or stop requiring it; the policy may still).
+   * Applies at the account's next request: a session signed in without a second factor is signed out. Answers
+   * its status. identity.admin step-up. Who: whoever may reset the account's password (admin.identities.users
+   * or .admins reset-password, within their own permissions); a super admin's MFA only another super admin;
+   * never your own account here (Account > Security, or `vh user mfa` on the server).
+   */
+  'auth.mfa.admin.require': {
+    payload: { user_id: number; required: boolean }
+    response: {
+      user_id: number
+      required: boolean
+      reason: 'none' | 'policy_admins' | 'policy_all' | 'user_required'
+      required_flag: boolean
+      factors: WsModels['MfaFactor'][]
+      recovery: { active: boolean; remaining: number }
+      cooldown_until: number | null
+      reset_at: number | null
+    }
+  }
+  /**
+   * Reset an account that lost every factor: its passkeys and authenticator apps are disabled (kept for the
+   * audit trail), its recovery codes voided, every session signed out, the key-backup grants of its paired
+   * devices revoked (the devices stay paired), and it must set up a new factor at its next sign-in, inside
+   * the recovery cooldown. The account and the security recipients are notified; audited as
+   * auth.mfa.admin.reset. account.credentials step-up. Who: whoever may reset the account's password
+   * (admin.identities.users or .admins reset-password, within their own permissions); a super admin's MFA
+   * only another super admin; never your own account here (Account > Security, or `vh user mfa` on the
+   * server).
+   */
+  'auth.mfa.admin.reset': {
+    payload: { user_id: number; reason: string }
+    response: {
+      factors_disabled: number
+      recovery_batches_voided: number
+      sessions_revoked: number
+      grants_revoked: number
+      cooldown_until: number
+    }
+  }
+  /**
+   * Another account's MFA: whether it must have MFA and why, its factors (no secrets), recovery codes left,
+   * the recovery cooldown and the last reset. Who: whoever may reset the account's password
+   * (admin.identities.users or .admins reset-password, within their own permissions); a super admin's MFA
+   * only another super admin; never your own account here (Account > Security, or `vh user mfa` on the
+   * server).
+   */
+  'auth.mfa.admin.status': {
+    payload: { user_id: number }
+    response: {
+      user_id: number
+      required: boolean
+      reason: 'none' | 'policy_admins' | 'policy_all' | 'user_required'
+      required_flag: boolean
+      factors: WsModels['MfaFactor'][]
+      recovery: { active: boolean; remaining: number }
+      cooldown_until: number | null
+      reset_at: number | null
+    }
+  }
+  /**
    * End a pending sign-in now; the connection is anonymous again (sign in again with the password).
    */
   'auth.mfa.cancel': {
@@ -2969,6 +3039,8 @@ export interface WsContract {
         webauthn_available: boolean
         admin_webauthn_only: boolean
         admin_device_bound_only: boolean
+        totp_allowed?: boolean
+        synced_passkeys_allowed?: boolean
       }
       factors: WsModels['MfaFactor'][]
       recovery: { active: boolean; remaining: number; acknowledged: boolean; pending: boolean }
@@ -3004,12 +3076,14 @@ export interface WsContract {
    * pending challenge), or {method: "totp" | "recovery_code", code}. Success signs the connection in: one
    * session row at aal 2 with amr ["pwd", "hwk" | "swk" | "otp" | "rec"], the access token in the envelope. A
    * recovery code signs every other web session of the account out (paired devices are not touched), starts
-   * the recovery cooldown and answers `recovery`. Refusals: mfa_invalid {attempts_remaining, pending?} (the
-   * 5th ends the sign-in), mfa_expired (start again with the password), rate_limited {retry_after} (5 failed
-   * factors on the account in 15 minutes), mfa_required {pending} for {method: "webauthn"} without a
-   * credential: a fresh passkey challenge, not an attempt. data.pending is {kind: "mfa" | "enrollment",
-   * expires_at (Unix seconds), methods: ["webauthn" | "totp" | "recovery_code"], attempts_remaining,
-   * webauthn?: {publicKey: PublicKeyCredentialRequestOptionsJSON}}.
+   * the recovery cooldown, revokes the key-backup grants of the account's paired devices (they stay paired
+   * and are listed for the person to revoke) and answers `recovery`. Refusals: mfa_invalid
+   * {attempts_remaining, pending?} (the 5th ends the sign-in), mfa_expired (start again with the password),
+   * rate_limited {retry_after} (the account's 5th failed factor in a streak waits 1 minute, each further one
+   * doubles it up to 15; never a lock), mfa_required {pending} for {method: "webauthn"} without a credential:
+   * a fresh passkey challenge, not an attempt. data.pending is {kind: "mfa" | "enrollment", expires_at (Unix
+   * seconds), methods: ["webauthn" | "totp" | "recovery_code"], attempts_remaining, webauthn?: {publicKey:
+   * PublicKeyCredentialRequestOptionsJSON}}.
    */
   'auth.mfa.verify': {
     payload: {
@@ -3027,7 +3101,19 @@ export interface WsContract {
     response: {
       user: WsModels['SessionUser']
       aal: number
-      recovery?: { codes_remaining: number; cooldown_until: number; sessions_revoked: number }
+      recovery?: {
+        codes_remaining: number
+        cooldown_until: number
+        sessions_revoked: number
+        grants_revoked?: number
+        devices?: {
+          id: number
+          name: string
+          platform: string
+          last_seen_at: number | null
+          key_backup_revoked: boolean
+        }[]
+      }
     }
   }
   /**
@@ -5978,6 +6064,9 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'auth.isAuthenticated',
   'auth.login',
   'auth.logout',
+  'auth.mfa.admin.require',
+  'auth.mfa.admin.reset',
+  'auth.mfa.admin.status',
   'auth.mfa.cancel',
   'auth.mfa.factor.remove',
   'auth.mfa.factor.rename',
@@ -6267,6 +6356,8 @@ export const WS_CONTRACT_CONFIRMATIONS: Readonly<
 // The step-up family a command's operation may ask for (#359): it can answer step_up_required until this
 // session holds a grant (auth.stepup.begin / auth.stepup.finish).
 export const WS_CONTRACT_STEP_UP: Readonly<Partial<Record<WsContractCommand, string>>> = {
+  'auth.mfa.admin.require': 'identity.admin',
+  'auth.mfa.admin.reset': 'account.credentials',
   'auth.mfa.factor.remove': 'account.credentials',
   'auth.mfa.recovery.generate': 'account.credentials',
   'auth.mfa.totp.enroll.confirm': 'account.credentials',
@@ -6328,6 +6419,9 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'auth.isAuthenticated': 15000,
   'auth.login': 20000,
   'auth.logout': 15000,
+  'auth.mfa.admin.require': 15000,
+  'auth.mfa.admin.reset': 15000,
+  'auth.mfa.admin.status': 15000,
   'auth.mfa.cancel': 15000,
   'auth.mfa.factor.remove': 15000,
   'auth.mfa.factor.rename': 15000,
