@@ -12,7 +12,8 @@ struct Validator {
     static void validateRefreshToken(const std::shared_ptr<protocols::ws::Session>& session);
     static bool validateAccessToken(const std::shared_ptr<protocols::ws::Session>& session, const std::string& accessToken);
 
-    static bool tryRehydrateFromPriorSession(const std::shared_ptr<protocols::ws::Session>& session, const std::string& rawToken, const std::optional<TokenClaims>& claims);
+    // Signs the session in from the stored row of its refresh cookie: the row must exist, be live, not idle, match the
+    // claims, subject and hash, belong to an authorizing account and satisfy the MFA policy (assurance::enforce).
     static void rehydrateFromStoredRefreshToken(const std::shared_ptr<protocols::ws::Session>& session, const std::string& rawToken, const std::optional<TokenClaims>& claims);
 
     static bool softValidateActiveSession(const std::shared_ptr<protocols::ws::Session>& session);

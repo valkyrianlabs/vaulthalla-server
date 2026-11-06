@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 #include <paths.h>
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <string>
@@ -42,11 +43,12 @@ protected:
             {
                 secrets::KeyProvider probe("test_guard_probe");
                 probe.init();
-                first = probe.getMasterKey();
+                first.assign(probe.getMasterKey().begin(), probe.getMasterKey().end());
             }
             secrets::KeyProvider again("test_guard_probe");
             again.init();
-            if (again.getMasterKey() != first) return std::string("the backend returned a different secret");
+            if (!std::ranges::equal(again.getMasterKey(), first))
+                return std::string("the backend returned a different secret");
             return std::nullopt;
         } catch (const std::exception& e) {
             return std::string(e.what());
@@ -82,14 +84,14 @@ TEST_F(MasterSecretGuardTest, GeneratesOnlyWhenNothingDependsOnIt) {
     {
         secrets::KeyProvider provider("test_guard_fresh");
         provider.initGuarded(records(0));
-        first = provider.getMasterKey();
+        first.assign(provider.getMasterKey().begin(), provider.getMasterKey().end());
         EXPECT_EQ(first.size(), 32u);
         EXPECT_TRUE(provider.sealedExists());
     }
     // Once sealed, records depending on it are the normal case: it unseals, the same secret.
     secrets::KeyProvider again("test_guard_fresh");
     again.initGuarded(records(5));
-    EXPECT_EQ(again.getMasterKey(), first);
+    EXPECT_TRUE(std::ranges::equal(again.getMasterKey(), first));
 }
 
 TEST_F(MasterSecretGuardTest, PostureIsOneOfTheReportedValues) {

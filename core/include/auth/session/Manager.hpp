@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <vector>
 #include <boost/asio/ip/tcp.hpp>
+#include "auth/session/Assurance.hpp"
 #include "identities/Fwd.hpp"
 #include "protocols/ws/Fwd.hpp"
 
@@ -21,7 +22,11 @@ public:
                 std::unique_ptr<protocols::ws::ConnectionSlot> slot);
     void tryRehydrate(const std::shared_ptr<protocols::ws::Session>& session);
 
-    void promote(const std::shared_ptr<protocols::ws::Session>& session);
+    // Signs the socket's session in: inserts its refresh token's row once, with how the sign-in was proven (aal, amr,
+    // auth_time = now), and issues the access token. Throws when the jti already has a row (#354: write-once; a
+    // cookie someone else signed in with, or a second promotion, never becomes this session).
+    void promote(const std::shared_ptr<protocols::ws::Session>& session,
+                 const assurance::Proof& proof = assurance::password());
     void cache(const std::shared_ptr<protocols::ws::Session>& session);
     void rotateRefreshToken(const std::shared_ptr<protocols::ws::Session>& session);
     void rotateShareRefreshToken(const std::shared_ptr<protocols::ws::Session>& session);
@@ -41,6 +46,15 @@ public:
     // the stored token first, because other tabs share the token and may have been active.
     void noteUserActivity(const std::shared_ptr<protocols::ws::Session>& session);
     bool expireIfIdle(const std::shared_ptr<protocols::ws::Session>& session);
+
+    // The MFA policy against a signed-in web session's row (#354; assurance::enforce): when the row is below it, the
+    // row is revoked, the session invalidated, and this says so. Devices and share sessions are not checked here.
+    bool endIfBelowPolicy(const std::shared_ptr<protocols::ws::Session>& session);
+
+    // auth.sessions.revoke: ends every live socket of `userId` that holds refresh token `jti` (invalidated, closed;
+    // `caller` after its reply). The row itself is revoked by the caller first. Returns how many sessions ended.
+    std::size_t endSessionsWithRefreshJti(uint32_t userId, const std::string& jti,
+                                          const std::shared_ptr<protocols::ws::Session>& caller);
 
     std::shared_ptr<protocols::ws::Session> get(const std::string& token);
     std::shared_ptr<protocols::ws::Session> getShareByRefreshJti(const std::string& token);

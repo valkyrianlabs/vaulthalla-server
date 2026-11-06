@@ -1,15 +1,21 @@
 #include "db/DBConnection.hpp"
 
 void vh::db::Connection::initPreparedRefreshTokens() const {
+    // Write-once (#354): a jti that already has a row is never written again, so nothing can re-promote it (and
+    // nothing can adopt a row someone else signed in with). The caller learns which by the returned jti.
     conn_->prepare(
         "insert_refresh_token",
-        "INSERT INTO refresh_tokens (jti, user_id, token_hash, ip_address, user_agent, issued_at, expires_at, last_used, revoked) "
-        "VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), FALSE)"
+        "INSERT INTO refresh_tokens (jti, user_id, token_hash, ip_address, user_agent, issued_at, expires_at, last_used, "
+        "revoked, aal, amr, auth_time) "
+        "VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), FALSE, $8, string_to_array($9, ','), NOW()) "
+        "ON CONFLICT (jti) DO NOTHING "
+        "RETURNING jti"
     );
 
+    // amr as a comma-separated list (model::RefreshToken parses amr_list).
     conn_->prepare(
         "get_refresh_token_by_jti",
-        "SELECT * FROM refresh_tokens "
+        "SELECT *, array_to_string(amr, ',') AS amr_list FROM refresh_tokens "
         "WHERE jti = $1"
     );
 
@@ -40,6 +46,14 @@ void vh::db::Connection::initPreparedRefreshTokens() const {
         "UPDATE refresh_tokens "
         "SET revoked = TRUE "
         "WHERE jti = $1"
+    );
+
+    // auth.sessions.revoke: only the caller's own live row.
+    conn_->prepare(
+        "revoke_refresh_token_of_user",
+        "UPDATE refresh_tokens "
+        "SET revoked = TRUE "
+        "WHERE jti = $1 AND user_id = $2 AND revoked = FALSE"
     );
 
     conn_->prepare(
@@ -78,7 +92,7 @@ void vh::db::Connection::initPreparedRefreshTokens() const {
 
     conn_->prepare(
         "list_active_refresh_tokens_for_user",
-        "SELECT * FROM refresh_tokens "
+        "SELECT *, array_to_string(amr, ',') AS amr_list FROM refresh_tokens "
         "WHERE user_id = $1 AND revoked = FALSE AND expires_at >= NOW() "
         "ORDER BY issued_at DESC"
     );

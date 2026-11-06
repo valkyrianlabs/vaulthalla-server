@@ -1,4 +1,5 @@
 #include "crypto/SecretKey.hpp"
+#include "crypto/SecretBytes.hpp"
 
 #include <sodium.h>
 
@@ -16,6 +17,7 @@ SecretKey::SecretKey(const std::span<const uint8_t> bytes) {
 
 SecretKey::~SecretKey() {
     sodium_munlock(bytes_.data(), bytes_.size());  // also zeroes the memory
+    notifySecretWiped(bytes_.data(), bytes_);
 }
 
 std::shared_ptr<const SecretKey> SecretKey::random() {

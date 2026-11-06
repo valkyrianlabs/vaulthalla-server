@@ -240,7 +240,7 @@ TEST(TpmSealerTest, CorruptBlobFailsWithoutRetrying) {
     if (!tpm.ready()) GTEST_SKIP() << "swtpm is not installed or did not start";
 
     const auto dir = tpm.stateDir() / "sealed";
-    vh::platform::sealer::seal(dir, "corrupt", {1, 2, 3, 4});
+    vh::platform::sealer::seal(dir, "corrupt", std::vector<uint8_t>{1, 2, 3, 4});
     {
         std::ofstream priv(dir / "corrupt.priv", std::ios::binary | std::ios::trunc);
         priv << "not a TPM private blob";

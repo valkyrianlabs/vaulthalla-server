@@ -13,6 +13,7 @@ import { useCredentialList } from '@/features/credentials/useCredentials'
 import { BUCKET_MODES, bucketNameProblem } from '@/features/gateway/model'
 import { refreshBuckets, useVaultOptions } from '@/features/gateway/queries'
 import { CheckRow } from '@/features/gateway/CheckRow'
+import { UPSTREAM_ENCRYPTION_ON } from '@/features/vaults/encryptionCopy'
 import type { S3GatewayBucketBindMode } from '@/models/s3Gateway'
 
 export type BucketDialogKind = 'bind' | 'local' | 'remote'
@@ -259,7 +260,7 @@ const RemoteDialog = ({ onClose }: { onClose: () => void }) => {
         <CheckRow
           id="gw-remote-encrypt"
           label="Encrypt objects before they leave this server"
-          hint="Recommended. Turning it off stores plain objects at the provider."
+          hint={`Recommended. ${UPSTREAM_ENCRYPTION_ON} Turning it off stores plain objects at the provider.`}
           checked={encrypt}
           onCheckedChange={setEncrypt}
         />

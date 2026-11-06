@@ -67,6 +67,7 @@ current    bdff1df120f3dd1b8fb006be2fd5c369aa7f2822fc254811b63f5e896d6079cb  115
 current    81098db83d4235750458be66c9d8f89f32382d31ce730d6d945204f871beb44c  116_refresh_token_activity.sql  unreleased
 current    45c3dddf905ec1309386b7c84830ccb55190fd9dc2fa7df7b6983cc6859086b6  117_audit_trail.sql  unreleased
 current    b12973226c85586ff0fcf3ce7042dce3ebe15140f9762a67480a40cbc5325666  118_s3_multipart_parts_sealed.sql  unreleased
+current    8c4a48ae2e0afc0368c398cb26794a381ddcd8f48d38d6cf8ccfc198c76d43cf  119_refresh_token_assurance.sql  unreleased
 historical 64170212eb3f9fbe0f7c949791b953f0376a1f2bcf66b3dec7afc5db6325d570  020_vaults.sql  v0.28.0-alpha..v1.5.0
 historical c154cd7e10f7931f29c12b9221c90f66d6b953cfb5e3dc15ea50f0940e5d4220  060_acl.sql  v0.28.0-alpha..v1.5.1
 historical 720caaa27c0d51635fe3f459a8426f019d3f0dbdc0b7ae176d283309933a7f53  082_stats_metric_samples.sql  v1.2.4..v1.2.5

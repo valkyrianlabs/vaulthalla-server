@@ -8,6 +8,8 @@
 
 #include "config/Registry.hpp"
 #include "crypto/secrets/KeyProvider.hpp"
+#include "crypto/SecretBytes.hpp"
+#include "crypto/SecretKey.hpp"
 #include "crypto/util/encrypt.hpp"
 #include "db/query/vault/Deletion.hpp"
 #include "log/Registry.hpp"
@@ -298,13 +300,11 @@ RetainedKey retainedKey(const unsigned int vaultId) {
     if (keys.empty()) throw std::runtime_error("no key is retained for deleted vault " + std::to_string(vaultId));
     crypto::secrets::KeyProvider tpm(paths::testMode ? "test_vault_master" : "vault_master");
     tpm.initGuarded(crypto::secrets::dependents::vaultMaster());
-    RetainedKey out{.key = crypto::util::decrypt_aes256_gcm(keys.front()->encrypted_key, tpm.getMasterKey(), keys.front()->iv),
-                    .record = keys.front()};
-    if (out.key.size() != 32) {
-        sodium_memzero(out.key.data(), out.key.size());
+    const crypto::WipedKeyCopy raw(
+        crypto::util::decrypt_aes256_gcm(keys.front()->encrypted_key, tpm.getMasterKey(), keys.front()->iv));
+    if (raw.bytes.size() != crypto::util::AES_KEY_SIZE)
         throw std::runtime_error("retained key of deleted vault " + std::to_string(vaultId) + " is not a 32-byte AES key");
-    }
-    return out;
+    return {.key = std::make_shared<const crypto::SecretKey>(raw.bytes), .record = keys.front()};
 }
 
 }
