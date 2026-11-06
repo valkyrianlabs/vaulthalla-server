@@ -67,7 +67,7 @@ public:
         std::optional<std::time_t> retired_at{};
     };
     [[nodiscard]] static std::vector<AttestationKey> attestationKeys();
-    // Versions `vh vault recover` recovered (vault_key_origin, migration 129, #371): where each was minted and which
+    // Versions `vh vault recover` recovered (vault_key_origin, migration 130, #371): where each was minted and which
     // customer material anchored it. Empty for vaults this node created.
     struct Origin {
         unsigned int version{};

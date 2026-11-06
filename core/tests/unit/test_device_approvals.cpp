@@ -6,6 +6,7 @@
 // never), and the contract entries. The DB-backed half is test_device_approvals_db.cpp.
 #include "Contract.hpp"
 #include "auth/approval/Approvals.hpp"
+#include "auth/mfa/Recovery.hpp"
 #include "auth/stepup/StepUp.hpp"
 #include "device/Crypto.hpp"
 #include "device/Peer.hpp"
@@ -197,6 +198,8 @@ TEST(DeviceApprovalRouting, DeviceCommandsOnlyOnADeviceAndConsoleApprovalsNeverO
 
 TEST(DeviceApprovalGrants, AnApprovalKeyOnlyForD6FamiliesAConsoleApprovalForAnyTheConnectionNever) {
     using namespace std::chrono_literals;
+    // DB-free: no account is in a recovery cooldown (#360 checks it before any grant).
+    const auth::mfa::recovery::CooldownSourceForTesting noCooldown([](uint32_t) { return std::nullopt; });
     const auto device = deviceSession(5103);
     const auto now = std::chrono::system_clock::now();
     const auto grant = [&](const stepup::Family f, std::string_view method, std::optional<std::string> target) {

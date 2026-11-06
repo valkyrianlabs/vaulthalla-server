@@ -240,7 +240,7 @@ vh::sync::manifest::Content Manifest::collect(const uint32_t vaultId) {
                         "WHERE t.vault_id = $1 ORDER BY 1",
                         iso("k.created_at") + " AS created_at", iso("t.created_at"), iso("t.trashed_at")),
             pqxx::params{vaultId});
-        // Versions a restore recovered (#371, migration 129): where they were minted and the original attestation.
+        // Versions a restore recovered (#371, migration 130): where they were minted and the original attestation.
         std::map<uint32_t, mf::KeyOrigin> origins;
         for (const auto row : txn.exec(
                  fmt::format("SELECT version, origin_node_id, origin_vault_id, origin_key_check, attestation_key_id, "

@@ -22,6 +22,8 @@ import { AccessPanel, GroupsPanel, ProfilePanel, VaultAccessPanel } from '@/feat
 // Radix dialogs load on first open, not with the page.
 const ResetPasswordDialog = dynamic(() => import('@/features/access/users/UserDialogs').then(m => m.ResetPasswordDialog))
 const DeleteUserDialog = dynamic(() => import('@/features/access/users/UserDialogs').then(m => m.DeleteUserDialog))
+// #360: another account's MFA (status, require, reset); the server decides who may.
+const MfaAdminPanel = dynamic(() => import('@/features/access/users/MfaAdminPanel').then(m => m.MfaAdminPanel))
 
 const VIEW = ['admin.identities.users.view', 'admin.identities.admins.view']
 
@@ -138,6 +140,8 @@ const UserDetail = ({ user }: { user: UserRecord }) => {
               {!rules.password.allowed && !notice ? <Reason reason={rules.password.reason} className="mt-3" /> : null}
             </Panel>
           ) : null}
+
+          {!rules.self && !user.is_protected && !user.system_only ? <MfaAdminPanel user={user} /> : null}
 
 {!rules.self ? (
           <Panel title="Delete account" className="border-danger-line" description="Removes the account, its sessions and its memberships. Its vaults are destroyed unless you transfer them.">

@@ -67,6 +67,12 @@ void resetForTesting() {
     cachedPepper.reset();
 }
 
+void setForTesting(Key seal, Key pepper) {
+    std::scoped_lock lock(mfaKeysMutex);
+    cachedSeal = std::move(seal);
+    cachedPepper = std::move(pepper);
+}
+
 SealedSecret sealTotpSecret(const std::span<const uint8_t> key, const uint32_t userId,
                             const std::string_view factorUuid, const std::span<const uint8_t> secret) {
     crypto::util::ensure_sodium_init();

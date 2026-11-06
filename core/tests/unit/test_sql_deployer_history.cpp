@@ -1233,21 +1233,59 @@ TEST_F(SqlDeployerHistoryDb, DeviceApprovalKeysMigrationIsAdditiveAndIdempotent)
     });
 }
 
-// 129 (#371, recovered key versions) on a 128-era database: one new table, nothing existing changes, the CHECKs hold,
+// 129 (#360, MFA recovery effects on paired devices): on a 128-era database devices has no key_backup_revoked_* columns.
+// The file adds them, nullable, keeps every row as it was (an existing device's grant is not revoked), refuses an
+// unknown reason, and re-running it changes nothing.
+TEST_F(SqlDeployerHistoryDb, MfaRecoveryGrantsMigrationIsAdditiveAndIdempotent) {
+    inRolledBackTxn([](pqxx::work& txn) {
+        txn.exec("ALTER TABLE devices DROP COLUMN IF EXISTS key_backup_revoked_reason, "
+                 "DROP COLUMN IF EXISTS key_backup_revoked_at");
+        txn.exec("DELETE FROM schema_migrations WHERE filename = '129_mfa_recovery_grants.sql'");
+        const auto owner = txn.exec("INSERT INTO users (name, password_hash) VALUES ('claude_test_129_owner', 'x') "
+                                    "RETURNING id").one_field_ref().as<int>();
+        const auto device = txn.exec("INSERT INTO devices (user_id, name, platform, spki_sha256) VALUES "
+                                     "($1, 'Mac', 'macOS', repeat('d', 64)) RETURNING id",
+                                     pqxx::params{owner}).one_field_ref().as<int>();
+
+        migseed::SqlDeployReport report;
+        ASSERT_NO_THROW(report = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(applied(report, "129_mfa_recovery_grants.sql"));
+        EXPECT_EQ(recordedHash(txn, "129_mfa_recovery_grants.sql"), currentHash("129_mfa_recovery_grants.sql"));
+        EXPECT_TRUE(txn.exec("SELECT key_backup_revoked_at IS NULL AND key_backup_revoked_reason IS NULL "
+                             "FROM devices WHERE id = $1", pqxx::params{device}).one_field_ref().as<bool>())
+            << "an existing device keeps its grant";
+        {
+            pqxx::subtransaction bad(txn, "bad_reason");
+            EXPECT_THROW(bad.exec("UPDATE devices SET key_backup_revoked_reason = 'whim' WHERE id = $1",
+                                  pqxx::params{device}), pqxx::check_violation);
+        }
+        txn.exec("UPDATE devices SET key_backup_revoked_at = NOW(), key_backup_revoked_reason = 'recovery_code' "
+                 "WHERE id = $1", pqxx::params{device});
+
+        migseed::SqlDeployReport again;
+        ASSERT_NO_THROW(again = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(again.applied.empty());
+        ASSERT_NO_THROW(txn.exec(migseed::readFileToString(repoPsqlDir() / "129_mfa_recovery_grants.sql")));
+        EXPECT_EQ(txn.exec("SELECT key_backup_revoked_reason FROM devices WHERE id = $1", pqxx::params{device})
+                      .one_field_ref().as<std::string>(), "recovery_code") << "re-running keeps the values";
+    });
+}
+
+// 130 (#371, recovered key versions) on a 129-era database: one new table, nothing existing changes, the CHECKs hold,
 // a vault's removal takes its rows, and running the file again changes nothing.
 TEST_F(SqlDeployerHistoryDb, VaultKeyOriginMigrationIsAdditiveAndIdempotent) {
     inRolledBackTxn([](pqxx::work& txn) {
         txn.exec("DROP TABLE IF EXISTS vault_key_origin");
-        txn.exec("DELETE FROM schema_migrations WHERE filename = '129_vault_key_origin.sql'");
-        const auto vault = txn.exec("INSERT INTO vault (name, type, mount_point, uid) VALUES ('claude_test_129', 'local', "
-                                    "'claude_test_129_mount', '00000000-0000-4000-8000-000000000129') RETURNING id")
+        txn.exec("DELETE FROM schema_migrations WHERE filename = '130_vault_key_origin.sql'");
+        const auto vault = txn.exec("INSERT INTO vault (name, type, mount_point, uid) VALUES ('claude_test_130', 'local', "
+                                    "'claude_test_130_mount', '00000000-0000-4000-8000-000000000130') RETURNING id")
                                .one_field_ref()
                                .as<int>();
 
         migseed::SqlDeployReport report;
         ASSERT_NO_THROW(report = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
-        EXPECT_TRUE(applied(report, "129_vault_key_origin.sql"));
-        EXPECT_EQ(recordedHash(txn, "129_vault_key_origin.sql"), currentHash("129_vault_key_origin.sql"));
+        EXPECT_TRUE(applied(report, "130_vault_key_origin.sql"));
+        EXPECT_EQ(recordedHash(txn, "130_vault_key_origin.sql"), currentHash("130_vault_key_origin.sql"));
         EXPECT_TRUE(columnExists(txn, "vault_key_origin", "origin_node_id"));
         EXPECT_TRUE(txn.exec("SELECT 1 FROM vault_key_origin").empty()) << "no vault gets an origin by migration";
 
@@ -1283,7 +1321,7 @@ TEST_F(SqlDeployerHistoryDb, VaultKeyOriginMigrationIsAdditiveAndIdempotent) {
         migseed::SqlDeployReport again;
         ASSERT_NO_THROW(again = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
         EXPECT_TRUE(again.applied.empty());
-        ASSERT_NO_THROW(txn.exec(migseed::readFileToString(repoPsqlDir() / "129_vault_key_origin.sql")));
+        ASSERT_NO_THROW(txn.exec(migseed::readFileToString(repoPsqlDir() / "130_vault_key_origin.sql")));
     });
 }
 

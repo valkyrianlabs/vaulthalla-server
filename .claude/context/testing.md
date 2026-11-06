@@ -74,6 +74,13 @@ by hand is never reused or torn down. `make itest` (and `run_proof*.sh`) refuses
 macOS with a pointer to `make test`: Tier A needs a kernel FUSE mount, /proc and sudo. The test scripts stay bash 3.2
 compatible (`/bin/bash -n`); `itest_abspath` in `bin/tests/lib/itest.sh` replaces GNU `realpath -m`.
 
+MFA (#354-#360): `--gtest_filter='MfaSignInDb*:StepUpDb*:MfaPolicyDb*'` (DB-backed; TOTP/recovery tests inject test MFA
+keys with `auth::mfa::keys::setForTesting` where sealing can't round-trip); DB-free `Mfa*:StepUp*:MfaBackoff*`. Tier B
+reset parity (ws vs `vh`, private daemon, root): `VHH_WS_LIVE_BUILD=<build> python -m unittest
+tools.harness.tests.test_mfa_reset_live` with `VH_TEST_DB_*` from the harness db.env, run from a checkout the
+`vhh-actor-NN` accounts can traverse (the CLI connector runs the venv's python as them; a checkout under a 0750 home
+fails with EACCES). Browser: `web/tests/e2e/mfa.spec.ts` (needs `VAULTHALLA_E2E_MFA_VH`, see its header).
+
 CLI ↔ ws parity for families migrated to `core/ops/`:
 `--gtest_filter='*Parity*:OpsGroups*:AuthPasswordChange*'` (groups, roles, API keys, vaults and the accessible-vaults list, users, S3 gateway,
 pricing/config, sync conflicts). The whole binary takes ~7 minutes against a local DB; meson's test timeout is 30 minutes (#123). A parity case
@@ -338,7 +345,22 @@ Dev mode requires both `VH_BUILD_MODE=dev` and the gitignored `enable_dev_mode` 
 ## Other harnesses
 
 - `tools/smoke/s3_gateway_{e2e,merge_ready,scoped_budget_smoke}.sh`: S3 gateway smoke runs against a live install.
-- `tools/e2e/{load_env.sh,provision_e2e_user.sh}` + `web/tests/e2e` (Playwright).
+- `tools/e2e/{load_env.sh,provision_e2e_user.sh}` + `web/tests/e2e` (Playwright). MFA (#405): the e2e account is an
+  admin, so provisioning gives it a TOTP factor before any worker starts (`tools/e2e/enroll_totp.py`: the real ws
+  sign-in through `tools/lab/mfa.py`, the seed in `$RESULT_DIR/totp-<user>.json`, 0600, exported as
+  `VAULTHALLA_E2E_TOTP_FILE`; `VAULTHALLA_E2E_PYTHON` names an interpreter with `websockets`, `VAULTHALLA_E2E_WS_URL`
+  the daemon's ws when the default from the console settings is wrong). `helpers/totp.ts` `withTotpCode` spends one
+  step at a time under a lock beside that file (the daemon refuses a step at or below the last it accepted, so codes
+  must reach it in order across workers; one shared factor gives about three sign-ins at once, then one per 30 s, so
+  queued callers extend their timeout). `armStepUp(page)` (each spec's `beforeEach`; a locator handler, so only before
+  actions and assertions) and `settleStepUp(page, wait)` (a step that ends in a wait, e.g. `deleteVault`: every vault
+  deletion is its own `data.destroy` step-up) answer the Step-up dialog (#359) with the password and a code. No
+  daemon bypass. Run it the documented way (production build behind the reverse proxy): under `next dev` there is no
+  `/upload` route and the ws budget doubles.
+- `tools/macos/{install_acceptance,storage_smoke}.py` sign the admin in through `tools/macos/session.py` (password, TOTP,
+  first enrollment, step-up with one resend). install_acceptance keeps the authenticator in `admin-totp.json` next to
+  `--state` (`--totp-file`), storage_smoke in memory. Offline tests: `tools/macos/tests` (a scripted daemon behind the
+  real `Ws`; `verify.sh packaging`). `tools/lab/pentest/client.py` imports `websockets` lazily so they run without it.
 - `tools/dev/share_preview_smoke.mjs`: public share preview smoke.
 - The remote gateway smoke (`s3_gateway_scoped_budget_smoke.sh`, needs a running install) has no upstream knobs: it
   creates the fixed test bucket `vh-test-gateway-smoke` with `build/core/vh_live_bucket` (the guarded helper; a

@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from 'react'
 import dynamic from 'next/dynamic'
 import { api } from '@/lib/session'
-import { invalidate, useWs } from '@/lib/query'
+import { invalidate, useWs, useWsMutation } from '@/lib/query'
 import { formatDateTime, formatRelative } from '@/lib/format'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
@@ -78,8 +78,15 @@ export const MfaPanel = () => {
           <div className="space-y-4" data-testid="mfa-panel">
             {status.recovery_restricted || recoveryLanding ? (
               <Notice tone="warn" title="You signed in with a recovery code">
-                Every other browser was signed out. Add a new passkey or authenticator app and make new recovery codes now.
+                Every other browser was signed out, and your paired devices paused their automatic key backup. Add a new passkey or
+                authenticator app and make new recovery codes now.
                 {status.cooldown_until ? ` Sensitive actions wait until ${formatDateTime(status.cooldown_until)}.` : ''}
+                <RecoveryDevices />
+              </Notice>
+            ) : status.cooldown_until ? (
+              <Notice tone="warn" title="Recovery cooldown">
+                This account recently signed in with a recovery code or had its MFA reset. Key export, device approval, account and
+                role changes, secrets and settings wait until {formatDateTime(status.cooldown_until)}.
               </Notice>
             ) : null}
             <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -105,7 +112,12 @@ export const MfaPanel = () => {
                 data-testid="mfa-add-passkey">
                 Add {PASSKEY_LABEL.toLowerCase()}
               </Button>
-              <Button size="sm" onClick={() => setOpen({ at: 'totp' })} data-testid="mfa-add-totp">
+              <Button
+                size="sm"
+                onClick={() => setOpen({ at: 'totp' })}
+                disabled={status.policy.totp_allowed === false}
+                title={status.policy.totp_allowed === false ? 'This server allows administrators passkeys only.' : undefined}
+                data-testid="mfa-add-totp">
                 Add authenticator app
               </Button>
             </div>
@@ -187,6 +199,8 @@ const FactorRow = ({ factor, onChanged }: { factor: MfaFactor; onChanged: () => 
           <div className="flex items-center gap-2">
             <span className="truncate font-medium text-fg">{factor.label}</span>
             {factor.suspended ? <Badge tone="danger">Suspended</Badge> : null}
+            {factor.allowed === false ? <Badge tone="danger">Not allowed by the server’s policy</Badge> : null}
+            {factor.created_during_recovery ? <Badge>Added during recovery</Badge> : null}
           </div>
         )}
         <div className="mt-0.5 text-xs text-fg-subtle">
@@ -210,5 +224,44 @@ const FactorRow = ({ factor, onChanged }: { factor: MfaFactor; onChanged: () => 
         </div>
       )}
     </li>
+  )
+}
+
+// D4: after a recovery-code sign-in the paired devices are listed, never revoked automatically (a lost browser factor
+// shouldn't break a Desktop's sync). Revoke the ones you lost.
+const RecoveryDevices = () => {
+  const list = useWs('device.list', {})
+  const revoke = useWsMutation('device.revoke', {
+    invalidates: ['device.list'],
+    onSuccess: () => notify.success('Device revoked', 'Its connections were closed.'),
+  })
+  const live = (list.data?.devices ?? []).filter(d => !d.revoked)
+  if (!live.length) return null
+  return (
+    <div className="mt-3" data-testid="mfa-recovery-devices">
+      <div className="font-medium">Your paired devices</div>
+      <p className="text-xs">Revoke any you no longer have. The others keep syncing.</p>
+      <ul className="mt-1 space-y-1">
+        {live.map(d => (
+          <li key={d.id} className="flex items-center justify-between gap-2">
+            <span>
+              {d.name} · {d.platform}
+              {d.last_seen_at ? ` · seen ${formatRelative(d.last_seen_at)}` : ''}
+            </span>
+            <Button
+              size="sm"
+              variant="ghost"
+              loading={revoke.isPending && revoke.variables?.device_id === d.device_id}
+              onClick={async () => {
+                if (await confirm({ title: `Revoke ${d.name}?`, description: 'It has to pair again with a new key.', confirmLabel: 'Revoke', tone: 'danger' }))
+                  revoke.mutate({ device_id: d.device_id })
+              }}
+              data-testid={`mfa-recovery-revoke-${d.id}`}>
+              Revoke
+            </Button>
+          </li>
+        ))}
+      </ul>
+    </div>
   )
 }

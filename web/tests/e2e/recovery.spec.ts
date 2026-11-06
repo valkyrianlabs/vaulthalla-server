@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { authStatePath, authenticateAndSaveState, explicitSkipRequested } from './helpers/auth'
+import { armStepUp, authenticateAndSaveState, authStatePath, explicitSkipRequested } from './helpers/auth'
 
 // File recovery UI: history sheet, restore preview, vault Recovery panel and the provider-versioning cost disclosure.
 // The recovery.* / vault.recovery.* answers are scripted on the console socket (page.routeWebSocket), so the suite
@@ -9,6 +9,8 @@ import { authStatePath, authenticateAndSaveState, explicitSkipRequested } from '
 
 test.skip(explicitSkipRequested(), 'VAULTHALLA_E2E_SKIP set')
 test.use({ storageState: authStatePath, ignoreHTTPSErrors: true })
+// Step-up dialogs (#359) are answered with the e2e account's password and TOTP code.
+test.beforeEach(({ page }) => armStepUp(page))
 
 test.beforeAll(async ({ browser }) => {
   await authenticateAndSaveState(browser)

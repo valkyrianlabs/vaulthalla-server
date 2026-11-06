@@ -56,6 +56,7 @@ struct UserMfa {
     std::vector<uint8_t> webauthn_user_handle{};  // 32 random bytes: WebAuthn's user.id, never the numeric id
     bool required{false};
     std::optional<int64_t> recovery_cooldown_until{};
+    std::optional<int64_t> reset_at{};  // the last MFA reset (#360)
 };
 
 // The row, created on first use with a fresh random user handle.
@@ -64,9 +65,11 @@ struct UserMfa {
 
 // A recovery-code sign-in (#357, design section 7.4): starts the account's recovery cooldown,
 // recovery_cooldown_until = now + `duration` (never shortening one already running). Returns it, Unix seconds. What
-// the cooldown refuses is the policy issue's (#360).
+// the cooldown refuses: auth/stepup (cooldownFamily); its length: auth.mfa.recovery_cooldown_hours (auth/mfa/Recovery).
 inline constexpr std::chrono::hours kRecoveryCooldown{24};
 int64_t startRecoveryCooldown(uint32_t userId, std::chrono::hours duration = kRecoveryCooldown);
+// Sets user_mfa.required (auth.mfa.admin.require). Bumps the policy epoch.
+void setRequired(uint32_t userId, bool required);
 
 // The account's factors that are enrolled and not removed (confirmed TOTP, passkeys including suspended ones), oldest
 // first.
@@ -230,6 +233,8 @@ struct RegistrationDetails {
     std::vector<std::string> transports{};
     std::optional<bool> discoverable{};
     bool during_recovery{false};
+    // auth.mfa.admin_device_bound_only (#360): a passkey with the backup-eligible flag (a synced one) is refused.
+    bool device_bound_only{false};
 };
 
 // The storage form of a verified registration (webauthn::verifyRegistration's NewCredential). An all-zero AAGUID is

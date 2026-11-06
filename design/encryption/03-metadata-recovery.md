@@ -480,7 +480,7 @@ verification (spec 01 §6.3) is the same code.
   `wrong_node`, `wrong_vault`, `self_attested` (a pinned key that is any of the restoring node's own attestation keys)
   and `key_check_mismatch` (refused, not salvaged). `blocking()` = versions live files (or the current version) need
   that aren't canonical; any blocking version makes the restore `salvage_required`.
-- **Write** (`db::query::vault::Recover::apply`, one transaction; migration 129 `vault_key_origin`): the vault (a
+- **Write** (`db::query::vault::Recover::apply`, one transaction; migration 130 `vault_key_origin`): the vault (a
   reserved id, the bucket's uid, `opaque_v1`, cache strategy), the tree with the manifest's uids and inodes from the FS
   cache, trash, `remote_object_index` (source `manifest`), `upstream_object_version` (origin `observed`), snapshot
   records (members `upstream_state = sent` where the bucket holds their generation, else `none`), the canonical key

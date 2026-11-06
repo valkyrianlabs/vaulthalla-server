@@ -83,6 +83,14 @@ struct SuperAdminPasswordSet {
 // initial plaintext copy. A copy that can't be removed is reported, not rolled back.
 SuperAdminPasswordSet setSuperAdminPassword(const Actor& actor, const std::string& newPassword);
 
+// Whether `actor` may manage the MFA of account `targetId` (#360: auth.mfa.admin.*, `vh user mfa`): what resetting its
+// password needs (admin.identities.users or .admins reset-password, within the actor's ceiling). A super admin's MFA
+// only another super admin may manage; protected and system accounts are never managed here. Returns the target.
+// Throws Denied / NotFound.
+UserPtr requireMfaManager(const Actor& actor, uint32_t targetId);
+// The same question without throwing (the CLI's "bound UID or users-manage" rule).
+[[nodiscard]] bool mayManageMfa(const Actor& actor, const identities::User& target);
+
 // Your own password needs the current one; anyone else's needs reset-password over them (and ends their sessions).
 UserPtr changePassword(const Actor& actor, uint32_t id, const std::optional<std::string>& currentPassword,
                        const std::string& newPassword);

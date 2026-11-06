@@ -375,6 +375,16 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
             return std::ranges::any_of(stepUp, [&](const contract::WsStepUp& r) { return r.command == command; });
         if (code == "rate_limited" && (command == "auth.stepup.begin" || command == "auth.approval.approve"))
             return true;  // the passkey challenge store
+        // #360: the recovery cooldown's families (keys, device.trust, identity.admin, secrets, settings), and the
+        // device and console approvals that could otherwise make a grant for them.
+        if (code == "recovery_cooldown")
+            return command == "device.approval.challenge" || command == "device.approval.submit" ||
+                   command == "device.approval.request" || command == "auth.approval.approve" ||
+                   std::ranges::any_of(stepUp, [&](const contract::WsStepUp& r) {
+                       return r.command == command && (r.family == "keys" || r.family == "device.trust" ||
+                                                       r.family == "identity.admin" || r.family == "secrets" ||
+                                                       r.family == "settings");
+                   });
         const auto it = kRefusedCodes.find(code);
         if (it == kRefusedCodes.end()) return false;
         // rate_limited is device pairing's, auth.mfa.verify's and auth.passkey.options'.

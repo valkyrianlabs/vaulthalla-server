@@ -273,7 +273,7 @@ std::vector<WsCommandUsage> deviceCommands() {
                      str("family").oneOf({"keys", "device.trust"}), str("target"),
                      uinteger("expires_at").desc("Unix seconds (also in the payload).")},
         .refusal_codes = {"invalid", "unauthorized", "device_unknown", "rate_limited", "console_approval_required",
-                          "approval_key_unavailable"},
+                          "approval_key_unavailable", "recovery_cooldown"},
         .client_timeout = kDefaultTimeout,
     });
 
@@ -290,7 +290,8 @@ std::vector<WsCommandUsage> deviceCommands() {
                     str("signature_b64").gen(gen::pattern("{A}{a}{9}{a}")).desc("DER Ecdsa-Sig-Value, standard base64.")},
         .response = {str("family").oneOf({"keys", "device.trust"}), str("target"),
                      integer("expires_at").desc("Unix seconds: the grant's end.")},
-        .refusal_codes = {"invalid", "not_found", "unauthorized", "device_unknown", "approval_key_unavailable"},
+        .refusal_codes = {"invalid", "not_found", "unauthorized", "device_unknown", "approval_key_unavailable",
+                          "recovery_cooldown"},
         .client_timeout = kDefaultTimeout,
     });
 
@@ -307,7 +308,7 @@ std::vector<WsCommandUsage> deviceCommands() {
                     str("target").opt().nullable().desc("The refusal's target (keys, device.trust, data.destroy)."),
                     str("summary").gen(gen::pattern("Export key {a}{a}{a}"))},
         .response = deviceApprovalFields(),
-        .refusal_codes = {"invalid", "unauthorized", "device_unknown", "rate_limited"},
+        .refusal_codes = {"invalid", "unauthorized", "device_unknown", "rate_limited", "recovery_cooldown"},
         .client_timeout = kDefaultTimeout,
     });
 

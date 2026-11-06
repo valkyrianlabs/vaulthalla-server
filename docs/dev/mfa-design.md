@@ -907,6 +907,10 @@ CREATE TABLE IF NOT EXISTS key_backup_grant_vaults (
 -- export then (section 6.4), each with a keys.backup.grant.migrate audit event.
 ```
 
+Until the grant tables land (#362), a paired device's implicit grant is revoked by setting
+`devices.key_backup_revoked_at` / `key_backup_revoked_reason` (`recovery_code`, `admin_reset`, `cli_reset`; migration
+129, #360). #362's migration must not create a `migrated` grant for such a device.
+
 ## 10. ws Contract Additions
 
 All additive under protocol 1 (`docs/reference/ws-protocol.md`, "Breaking And Additive Changes"): new commands, new

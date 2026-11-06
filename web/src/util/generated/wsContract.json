@@ -2586,6 +2586,15 @@
           "types": [
             "boolean"
           ]
+        },
+        {
+          "description": "When the device's key-backup grant was revoked (a recovery-code sign-in or an MFA reset of its user): it stays paired and syncs, but its key exports need a person's approval again.",
+          "name": "key_backup_revoked_at",
+          "required": false,
+          "types": [
+            "integer",
+            "null"
+          ]
         }
       ],
       "name": "Device"
@@ -3885,8 +3894,47 @@
       "name": "LoggingConfig"
     },
     {
-      "description": "auth.mfa.* (Config.cpp to_json(MfaConfig), #359): multi-factor authentication settings.",
+      "description": "auth.mfa.* (Config.cpp to_json(MfaConfig), #359, #360): multi-factor authentication settings. Changing policy, the admin flags or auth.webauthn.rp_id is audited (auth.mfa.policy.change); weakening them is mailed to operator_emails.recipients.security.",
       "fields": [
+        {
+          "description": "Who must sign in with a second factor: nobody (per-account requirements still apply), the super admin and privileged admins (the default), or every account. Applied at each session's next use.",
+          "enum": [
+            "optional",
+            "admins",
+            "all"
+          ],
+          "name": "policy",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Privileged admins may use passkeys only (no authenticator apps). Needs auth.webauthn.rp_id.",
+          "name": "admin_webauthn_only",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "Privileged admins may use device-bound passkeys only (no synced ones); implies admin_webauthn_only. Needs auth.webauthn.rp_id.",
+          "name": "admin_device_bound_only",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "After a recovery-code sign-in or an MFA reset, keys, device.trust, identity.admin, secrets and settings are refused (recovery_cooldown) for this long.",
+          "maximum": 168,
+          "minimum": 1,
+          "name": "recovery_cooldown_hours",
+          "required": false,
+          "types": [
+            "integer"
+          ]
+        },
         {
           "description": "How long a step-up grant lasts, and how recent an aal 2 sign-in must be to stand in for a family-wide one.",
           "maximum": 900,
@@ -3996,6 +4044,14 @@
           "types": [
             "string",
             "null"
+          ]
+        },
+        {
+          "description": "auth.mfa.status and auth.mfa.admin.status: the MFA policy lets this account use it (false: an admin held to passkeys, or to device-bound passkeys, by auth.mfa.admin_webauthn_only / admin_device_bound_only).",
+          "name": "allowed",
+          "required": false,
+          "types": [
+            "boolean"
           ]
         }
       ],
@@ -15888,23 +15944,6 @@
           ]
         },
         {
-          "description": "This node's id (device_node.node_id): the node the attestations are over (#371).",
-          "name": "node_id",
-          "required": true,
-          "types": [
-            "string"
-          ]
-        },
-        {
-          "description": "The vault's uid (26 base32 symbols; #371); null for a deleted vault.",
-          "name": "vault_uid",
-          "required": true,
-          "types": [
-            "string",
-            "null"
-          ]
-        },
-        {
           "description": "The current key, base64 (32 bytes).",
           "name": "key",
           "required": true,
@@ -16522,64 +16561,6 @@
             "object",
             "null"
           ]
-        },
-        {
-          "description": "Recovered by `vh vault recover` (#371): attested by its original node, verified with a key the customer pinned; null for versions this node minted.",
-          "fields": [
-            {
-              "description": "The node that minted the version.",
-              "name": "node_id",
-              "required": true,
-              "types": [
-                "string"
-              ]
-            },
-            {
-              "description": "The vault's id on that node.",
-              "minimum": 0,
-              "name": "vault_id",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "description": "That node's attestation key that signed it.",
-              "minimum": 0,
-              "name": "key_id",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "description": "The customer material whose pinned key verified it.",
-              "enum": [
-                "kit",
-                "export"
-              ],
-              "name": "anchor",
-              "required": true,
-              "types": [
-                "string"
-              ]
-            },
-            {
-              "description": "Unix seconds.",
-              "minimum": 0,
-              "name": "recovered_at",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            }
-          ],
-          "name": "origin",
-          "required": false,
-          "types": [
-            "object",
-            "null"
-          ]
         }
       ],
       "name": "VaultKeyNeededVersion"
@@ -16951,753 +16932,6 @@
         }
       ],
       "name": "VaultKeyStatus"
-    },
-    {
-      "description": "What `vh vault recover` / vault.recover read and did (#371, spec 03 §6): ops::vault_recover::toJson (core/src/ops/VaultRecover.cpp) over vault::recover::toJson(Plan). Public data only: key checks, attestation verdicts and counts, never key material.",
-      "fields": [
-        {
-          "description": "The vault's uid (26 base32 symbols): the same as in the bucket.",
-          "name": "vault_uid",
-          "required": true,
-          "types": [
-            "string"
-          ]
-        },
-        {
-          "description": "Where the manifest was produced (the root's producer), or what the material says without one.",
-          "fields": [
-            {
-              "name": "node_id",
-              "required": true,
-              "types": [
-                "string",
-                "null"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "vault_id",
-              "required": true,
-              "types": [
-                "integer",
-                "null"
-              ]
-            }
-          ],
-          "name": "origin",
-          "required": true,
-          "types": [
-            "object"
-          ]
-        },
-        {
-          "description": "The manifest's name for the vault; null in a blind rebuild.",
-          "name": "vault_name",
-          "required": true,
-          "types": [
-            "string",
-            "null"
-          ]
-        },
-        {
-          "description": "No usable manifest root: content recovered under /Recovered without names (§4.3).",
-          "name": "blind",
-          "required": true,
-          "types": [
-            "boolean"
-          ]
-        },
-        {
-          "description": "The loaded root's epoch.",
-          "minimum": 0,
-          "name": "epoch",
-          "required": true,
-          "types": [
-            "integer",
-            "null"
-          ]
-        },
-        {
-          "name": "root_sha256",
-          "required": true,
-          "types": [
-            "string",
-            "null"
-          ]
-        },
-        {
-          "enum": [
-            "unverified",
-            "verified",
-            "rollback_accepted"
-          ],
-          "name": "freshness",
-          "required": true,
-          "types": [
-            "string"
-          ]
-        },
-        {
-          "description": "\"freshness unverified: no checkpoint supplied\" without a kit checkpoint.",
-          "name": "freshness_report",
-          "required": true,
-          "types": [
-            "string"
-          ]
-        },
-        {
-          "description": "Manifest fallbacks and adjustments (segments from versions or older roots, ...).",
-          "items": "string",
-          "name": "issues",
-          "required": true,
-          "types": [
-            "array"
-          ]
-        },
-        {
-          "fields": [
-            {
-              "minimum": 0,
-              "name": "files",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "folders",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "symlinks",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "trashed",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "tombstones",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "provider_versions",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "bytes",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "snapshots",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "snapshot_members",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "snapshot_members_restorable",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            }
-          ],
-          "name": "counts",
-          "required": true,
-          "types": [
-            "object"
-          ]
-        },
-        {
-          "fields": [
-            {
-              "minimum": 0,
-              "name": "version",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "description": "D1: verified = attested by the original node under a key the customer pinned.",
-              "enum": [
-                "verified",
-                "no_anchor",
-                "empty_anchor",
-                "unattested",
-                "unverified",
-                "wrong_node",
-                "wrong_vault",
-                "self_attested",
-                "key_check_mismatch"
-              ],
-              "name": "verdict",
-              "required": true,
-              "types": [
-                "string"
-              ]
-            },
-            {
-              "name": "detail",
-              "required": true,
-              "types": [
-                "string"
-              ]
-            },
-            {
-              "name": "held",
-              "required": true,
-              "types": [
-                "boolean"
-              ]
-            },
-            {
-              "name": "key_source",
-              "required": false,
-              "types": [
-                "string"
-              ]
-            },
-            {
-              "name": "current",
-              "required": true,
-              "types": [
-                "boolean"
-              ]
-            },
-            {
-              "description": "Live files are sealed under it (or it is current).",
-              "name": "needed",
-              "required": true,
-              "types": [
-                "boolean"
-              ]
-            },
-            {
-              "enum": [
-                "canonical",
-                "salvage_only",
-                "refused",
-                "missing"
-              ],
-              "name": "state",
-              "required": true,
-              "types": [
-                "string"
-              ]
-            },
-            {
-              "fields": [
-                {
-                  "minimum": 0,
-                  "name": "key_id",
-                  "required": true,
-                  "types": [
-                    "integer"
-                  ]
-                },
-                {
-                  "enum": [
-                    "kit",
-                    "export"
-                  ],
-                  "name": "source",
-                  "required": true,
-                  "types": [
-                    "string"
-                  ]
-                }
-              ],
-              "name": "anchor",
-              "required": false,
-              "types": [
-                "object"
-              ]
-            },
-            {
-              "fields": [
-                {
-                  "name": "node_id",
-                  "required": true,
-                  "types": [
-                    "string"
-                  ]
-                },
-                {
-                  "minimum": 0,
-                  "name": "vault_id",
-                  "required": true,
-                  "types": [
-                    "integer"
-                  ]
-                },
-                {
-                  "enum": [
-                    "root",
-                    "origin",
-                    "export"
-                  ],
-                  "name": "source",
-                  "required": true,
-                  "types": [
-                    "string"
-                  ]
-                }
-              ],
-              "name": "origin",
-              "required": false,
-              "types": [
-                "object"
-              ]
-            }
-          ],
-          "items": "object",
-          "name": "key_versions",
-          "required": true,
-          "types": [
-            "array"
-          ]
-        },
-        {
-          "minimum": 0,
-          "name": "current_version",
-          "required": true,
-          "types": [
-            "integer"
-          ]
-        },
-        {
-          "minimum": 0,
-          "name": "highest_version_seen",
-          "required": true,
-          "types": [
-            "integer"
-          ]
-        },
-        {
-          "items": "integer",
-          "name": "canonical_versions",
-          "required": true,
-          "types": [
-            "array"
-          ]
-        },
-        {
-          "items": "integer",
-          "name": "blocking_versions",
-          "required": true,
-          "types": [
-            "array"
-          ]
-        },
-        {
-          "items": "integer",
-          "name": "salvageable_versions",
-          "required": true,
-          "types": [
-            "array"
-          ]
-        },
-        {
-          "description": "Uids of objects no manifest entry names, restored under /Recovered.",
-          "items": "string",
-          "name": "orphans",
-          "required": true,
-          "types": [
-            "array"
-          ]
-        },
-        {
-          "description": "Uids of files whose object the bucket doesn't hold (restored unavailable).",
-          "items": "string",
-          "name": "missing_objects",
-          "required": true,
-          "types": [
-            "array"
-          ]
-        },
-        {
-          "description": "Objects that did not authenticate (left untouched).",
-          "items": "string",
-          "name": "rejected_objects",
-          "required": true,
-          "types": [
-            "array"
-          ]
-        },
-        {
-          "fields": [
-            {
-              "minimum": 0,
-              "name": "listed",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "unwrapped",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "skipped",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "rejected",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            }
-          ],
-          "name": "envelopes",
-          "required": true,
-          "types": [
-            "object"
-          ]
-        },
-        {
-          "fields": [
-            {
-              "name": "supplied",
-              "required": true,
-              "types": [
-                "boolean"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "keys",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            }
-          ],
-          "name": "anchors",
-          "required": true,
-          "types": [
-            "object"
-          ]
-        },
-        {
-          "description": "What the restore read: never a file's content (content_bytes stays 0).",
-          "fields": [
-            {
-              "minimum": 0,
-              "name": "manifest_bytes",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "envelope_bytes",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "header_bytes",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "content_bytes",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "other_bytes",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "gets",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "ranged_gets",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "lists",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "version_lists",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            }
-          ],
-          "name": "downloads",
-          "required": true,
-          "types": [
-            "object"
-          ]
-        },
-        {
-          "enum": [
-            "canonical",
-            "salvage"
-          ],
-          "name": "mode",
-          "required": true,
-          "types": [
-            "string"
-          ]
-        },
-        {
-          "description": "Files sealed under a version no material holds (left out).",
-          "minimum": 0,
-          "name": "unrecoverable_files",
-          "required": true,
-          "types": [
-            "integer"
-          ]
-        },
-        {
-          "description": "What was written (absent on a dry run).",
-          "fields": [
-            {
-              "minimum": 0,
-              "name": "vault_id",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "files",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "folders",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "symlinks",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "trashed",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "index_rows",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "provider_versions",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "snapshots",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "snapshot_members",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "left_out",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "items": "string",
-              "name": "notes",
-              "required": true,
-              "types": [
-                "array"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "fresh_version",
-              "required": false,
-              "types": [
-                "integer"
-              ]
-            }
-          ],
-          "name": "restored",
-          "required": false,
-          "types": [
-            "object"
-          ]
-        },
-        {
-          "name": "dry_run",
-          "required": true,
-          "types": [
-            "boolean"
-          ]
-        },
-        {
-          "name": "written",
-          "required": true,
-          "types": [
-            "boolean"
-          ]
-        },
-        {
-          "minimum": 0,
-          "name": "vault_id",
-          "required": true,
-          "types": [
-            "integer",
-            "null"
-          ]
-        },
-        {
-          "name": "vault_name",
-          "required": true,
-          "types": [
-            "string"
-          ]
-        },
-        {
-          "name": "key_available",
-          "required": true,
-          "types": [
-            "boolean"
-          ]
-        },
-        {
-          "minimum": 0,
-          "name": "published_epoch",
-          "required": true,
-          "types": [
-            "integer",
-            "null"
-          ]
-        },
-        {
-          "model": "VaultKeySalvageReport",
-          "name": "salvage",
-          "required": true,
-          "types": [
-            "object",
-            "null"
-          ]
-        },
-        {
-          "name": "note",
-          "required": true,
-          "types": [
-            "string",
-            "null"
-          ]
-        }
-      ],
-      "name": "VaultRecoverResult"
     },
     {
       "description": "D2 (spec 03 §5.5): whether the vault has recovery material independent of this host. ops::vault_keys::toJson(RecoveryMaterial) (core/src/ops/VaultKeys.cpp).",
@@ -19501,7 +18735,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "ebe260a47850bf2ce9c5b47bb43d1a640d7b81c768e1c2eed35d446dd7db4dd5",
+  "models_hash": "c9d08760af47b94daddf016ec824a1a3a966c12a9f0283dd0dd350f9184c9913",
   "protocol": {
     "min": 1,
     "version": 1
@@ -19883,7 +19117,8 @@
         "unauthorized",
         "rate_limited",
         "passkey_required",
-        "approval_failed"
+        "approval_failed",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -19892,7 +19127,8 @@
         "unauthorized",
         "rate_limited",
         "passkey_required",
-        "approval_failed"
+        "approval_failed",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -20492,6 +19728,386 @@
       "variants": []
     },
     {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "auth.mfa.admin.require",
+      "confirmations": [],
+      "description": "Require MFA for one account whatever the policy level (or stop requiring it; the policy may still). Applies at the account's next request: a session signed in without a second factor is signed out. Answers its status. identity.admin step-up. Who: whoever may reset the account's password (admin.identities.users or .admins reset-password, within their own permissions); a super admin's MFA only another super admin; never your own account here (Account > Security, or `vh user mfa` on the server).",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "user",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "user_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "generator": {
+            "kind": "bool"
+          },
+          "name": "required",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "step_up_required",
+        "recovery_cooldown"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "step_up_required",
+        "recovery_cooldown"
+      ],
+      "response": [
+        {
+          "minimum": 0,
+          "name": "user_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "required",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "enum": [
+            "none",
+            "policy_admins",
+            "policy_all",
+            "user_required"
+          ],
+          "name": "reason",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "required_flag",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "items": "object",
+          "model": "MfaFactor",
+          "name": "factors",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "name": "active",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "remaining",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "recovery",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "name": "cooldown_until",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "name": "reset_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        }
+      ],
+      "response_model": null,
+      "step_up": "identity.admin",
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "auth.mfa.admin.reset",
+      "confirmations": [],
+      "description": "Reset an account that lost every factor: its passkeys and authenticator apps are disabled (kept for the audit trail), its recovery codes voided, every session signed out, the key-backup grants of its paired devices revoked (the devices stay paired), and it must set up a new factor at its next sign-in, inside the recovery cooldown. The account and the security recipients are notified; audited as auth.mfa.admin.reset. account.credentials step-up. Who: whoever may reset the account's password (admin.identities.users or .admins reset-password, within their own permissions); a super admin's MFA only another super admin; never your own account here (Account > Security, or `vh user mfa` on the server).",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "user",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "user_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "1..200 characters, kept in the audit trail.",
+          "generator": {
+            "fresh": true,
+            "kind": "pattern",
+            "pattern": "reason_{a}{a}{a}{9}{9}{a}{9}"
+          },
+          "name": "reason",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "step_up_required"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "step_up_required"
+      ],
+      "response": [
+        {
+          "minimum": 0,
+          "name": "factors_disabled",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "recovery_batches_voided",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "sessions_revoked",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "grants_revoked",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Unix seconds: the account's recovery cooldown ends then.",
+          "name": "cooldown_until",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "response_model": null,
+      "step_up": "account.credentials",
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "auth.mfa.admin.status",
+      "confirmations": [],
+      "description": "Another account's MFA: whether it must have MFA and why, its factors (no secrets), recovery codes left, the recovery cooldown and the last reset. Who: whoever may reset the account's password (admin.identities.users or .admins reset-password, within their own permissions); a super admin's MFA only another super admin; never your own account here (Account > Security, or `vh user mfa` on the server).",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "user",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "user_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "minimum": 0,
+          "name": "user_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "required",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "enum": [
+            "none",
+            "policy_admins",
+            "policy_all",
+            "user_required"
+          ],
+          "name": "reason",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Set for this account (auth.mfa.admin.require).",
+          "name": "required_flag",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "items": "object",
+          "model": "MfaFactor",
+          "name": "factors",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "name": "active",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "remaining",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "recovery",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "Unix seconds, while the recovery cooldown runs.",
+          "name": "cooldown_until",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "Unix seconds: the last MFA reset.",
+          "name": "reset_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
       "auth": "pending",
       "client_timeout_ms": 15000,
       "command": "auth.mfa.cancel",
@@ -20837,6 +20453,7 @@
               ]
             },
             {
+              "description": "auth.mfa.admin_webauthn_only (or device_bound_only).",
               "name": "admin_webauthn_only",
               "required": true,
               "types": [
@@ -20846,6 +20463,22 @@
             {
               "name": "admin_device_bound_only",
               "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "This account may use an authenticator app.",
+              "name": "totp_allowed",
+              "required": false,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "This account may use a synced passkey.",
+              "name": "synced_passkeys_allowed",
+              "required": false,
               "types": [
                 "boolean"
               ]
@@ -20908,7 +20541,7 @@
           ]
         },
         {
-          "description": "Unix seconds: the recovery cooldown, if one ran.",
+          "description": "Unix seconds: the recovery cooldown while it runs (keys, device.trust, identity.admin, secrets and settings answer recovery_cooldown until then), else null.",
           "name": "cooldown_until",
           "required": true,
           "types": [
@@ -21153,7 +20786,7 @@
       "client_timeout_ms": 20000,
       "command": "auth.mfa.verify",
       "confirmations": [],
-      "description": "Finish a pending sign-in with a second factor: {method: \"webauthn\", credential} (a UV assertion over the pending challenge), or {method: \"totp\" | \"recovery_code\", code}. Success signs the connection in: one session row at aal 2 with amr [\"pwd\", \"hwk\" | \"swk\" | \"otp\" | \"rec\"], the access token in the envelope. A recovery code signs every other web session of the account out (paired devices are not touched), starts the recovery cooldown and answers `recovery`. Refusals: mfa_invalid {attempts_remaining, pending?} (the 5th ends the sign-in), mfa_expired (start again with the password), rate_limited {retry_after} (5 failed factors on the account in 15 minutes), mfa_required {pending} for {method: \"webauthn\"} without a credential: a fresh passkey challenge, not an attempt. data.pending is {kind: \"mfa\" | \"enrollment\", expires_at (Unix seconds), methods: [\"webauthn\" | \"totp\" | \"recovery_code\"], attempts_remaining, webauthn?: {publicKey: PublicKeyCredentialRequestOptionsJSON}}.",
+      "description": "Finish a pending sign-in with a second factor: {method: \"webauthn\", credential} (a UV assertion over the pending challenge), or {method: \"totp\" | \"recovery_code\", code}. Success signs the connection in: one session row at aal 2 with amr [\"pwd\", \"hwk\" | \"swk\" | \"otp\" | \"rec\"], the access token in the envelope. A recovery code signs every other web session of the account out (paired devices are not touched), starts the recovery cooldown, revokes the key-backup grants of the account's paired devices (they stay paired and are listed for the person to revoke) and answers `recovery`. Refusals: mfa_invalid {attempts_remaining, pending?} (the 5th ends the sign-in), mfa_expired (start again with the password), rate_limited {retry_after} (the account's 5th failed factor in a streak waits 1 minute, each further one doubles it up to 15; never a lock), mfa_required {pending} for {method: \"webauthn\"} without a credential: a fresh passkey challenge, not an attempt. data.pending is {kind: \"mfa\" | \"enrollment\", expires_at (Unix seconds), methods: [\"webauthn\" | \"totp\" | \"recovery_code\"], attempts_remaining, webauthn?: {publicKey: PublicKeyCredentialRequestOptionsJSON}}.",
       "input": "payload",
       "operation": null,
       "payload": [
@@ -21363,6 +20996,64 @@
               "required": true,
               "types": [
                 "integer"
+              ]
+            },
+            {
+              "description": "Paired devices whose key-backup grant was revoked.",
+              "minimum": 0,
+              "name": "grants_revoked",
+              "required": false,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "The account's paired devices: none was revoked; offer device.revoke for each.",
+              "fields": [
+                {
+                  "minimum": 0,
+                  "name": "id",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "name",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "platform",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "Unix seconds.",
+                  "name": "last_seen_at",
+                  "required": true,
+                  "types": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                {
+                  "name": "key_backup_revoked",
+                  "required": true,
+                  "types": [
+                    "boolean"
+                  ]
+                }
+              ],
+              "items": "object",
+              "name": "devices",
+              "required": false,
+              "types": [
+                "array"
               ]
             }
           ],
@@ -22250,7 +21941,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -22258,7 +21950,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -22982,6 +22675,7 @@
         "conflict",
         "unauthorized",
         "step_up_required",
+        "recovery_cooldown",
         "user_delete"
       ],
       "refusal_kinds": [
@@ -22990,7 +22684,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -23195,7 +22890,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -23203,7 +22899,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -23493,7 +23190,8 @@
         "device_unknown",
         "rate_limited",
         "console_approval_required",
-        "approval_key_unavailable"
+        "approval_key_unavailable",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "invalid",
@@ -23501,7 +23199,8 @@
         "device_unknown",
         "rate_limited",
         "console_approval_required",
-        "approval_key_unavailable"
+        "approval_key_unavailable",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -23585,14 +23284,16 @@
         "conflict",
         "unauthorized",
         "device_unknown",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "invalid",
         "conflict",
         "unauthorized",
         "device_unknown",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -23658,13 +23359,15 @@
         "invalid",
         "unauthorized",
         "device_unknown",
-        "rate_limited"
+        "rate_limited",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "invalid",
         "unauthorized",
         "device_unknown",
-        "rate_limited"
+        "rate_limited",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -23929,14 +23632,16 @@
         "not_found",
         "unauthorized",
         "device_unknown",
-        "approval_key_unavailable"
+        "approval_key_unavailable",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "invalid",
         "not_found",
         "unauthorized",
         "device_unknown",
-        "approval_key_unavailable"
+        "approval_key_unavailable",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -24554,7 +24259,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -24562,7 +24268,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -25172,7 +24879,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -25180,7 +24888,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -25785,13 +25494,15 @@
         "denied",
         "invalid",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -25945,13 +25656,15 @@
         "denied",
         "invalid",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -28024,7 +27737,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -28032,7 +27746,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -28116,7 +27831,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -28124,7 +27840,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -28190,7 +27907,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -28198,7 +27916,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -30596,7 +30315,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -30604,7 +30324,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -30653,7 +30374,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -30661,7 +30383,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -30865,7 +30588,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -30873,7 +30597,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -30955,7 +30680,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -30963,7 +30689,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -31058,7 +30785,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -31066,7 +30794,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -31115,7 +30844,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -31123,7 +30853,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -31356,7 +31087,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -31364,7 +31096,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -31545,7 +31278,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -31553,7 +31287,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -31675,7 +31410,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -31683,7 +31419,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -31761,7 +31498,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -31769,7 +31507,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -31864,7 +31603,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -31872,7 +31612,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -33343,7 +33084,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -33351,7 +33093,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -33449,7 +33192,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -33457,7 +33201,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -33733,7 +33478,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -33741,7 +33487,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -33961,7 +33708,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -33969,7 +33717,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -34124,7 +33873,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -34132,7 +33882,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -34438,7 +34189,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -34446,7 +34198,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -34784,7 +34537,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -34792,7 +34546,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -35115,7 +34870,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -35123,7 +34879,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -35281,7 +35038,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -35289,7 +35047,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -35713,7 +35472,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -35721,7 +35481,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -36814,13 +36575,15 @@
         "denied",
         "invalid",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -40779,7 +40542,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -40787,7 +40551,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -40932,7 +40697,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -40940,7 +40706,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [],
       "response_model": null,
@@ -41040,7 +40807,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -41048,7 +40816,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -42703,7 +42472,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -42711,7 +42481,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -43899,7 +43670,8 @@
         "conflict",
         "unauthorized",
         "export_requires_device",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -43908,7 +43680,8 @@
         "conflict",
         "unauthorized",
         "export_requires_device",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -43933,23 +43706,6 @@
           "required": true,
           "types": [
             "string"
-          ]
-        },
-        {
-          "description": "This node's id (device_node.node_id): the node the attestations are over (#371).",
-          "name": "node_id",
-          "required": true,
-          "types": [
-            "string"
-          ]
-        },
-        {
-          "description": "The vault's uid (26 base32 symbols; #371); null for a deleted vault.",
-          "name": "vault_uid",
-          "required": true,
-          "types": [
-            "string",
-            "null"
           ]
         },
         {
@@ -44426,6 +44182,7 @@
         "unauthorized",
         "import_requires_device",
         "step_up_required",
+        "recovery_cooldown",
         "vault_key_import",
         "vault_key_salvage"
       ],
@@ -44436,7 +44193,8 @@
         "conflict",
         "unauthorized",
         "import_requires_device",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -44684,7 +44442,8 @@
         "conflict",
         "unauthorized",
         "recipient_requires_device",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -44693,7 +44452,8 @@
         "conflict",
         "unauthorized",
         "recipient_requires_device",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -44890,7 +44650,8 @@
         "conflict",
         "unauthorized",
         "recipient_requires_device",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -44899,7 +44660,8 @@
         "conflict",
         "unauthorized",
         "recipient_requires_device",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -44976,935 +44738,6 @@
         }
       ],
       "response_model": null,
-      "untyped_refusals": [],
-      "variants": []
-    },
-    {
-      "auth": "human",
-      "client_timeout_ms": 600000,
-      "command": "vault.recover",
-      "confirmations": [
-        {
-          "accept_field": "confirm_name",
-          "code": "vault_recover_salvage",
-          "description": "A salvage restore would create a fresh key on this node and re-encrypt every file the supplied keys decrypt (the text says which versions); resend with confirm_name set to the restored vault's name once the person typed it."
-        }
-      ],
-      "description": "Rebuild a vault on this instance from its bucket and the customer's recovery material (#371, spec 03 §6): a recovery kit (its seed unwraps the vault's KEV1 envelopes) and/or a key export. A key version is restored only when its original node's attestation verifies against an attestation key the material pins (D1); otherwise the answer is salvage_required with the per-version verdicts, and salvage (confirmed with confirm_name) re-encrypts what the supplied keys decrypt under a fresh key, never storing them. dry_run reads and reports, writing nothing. The vault starts in the cache strategy: nothing beyond headers, the manifest and envelopes is downloaded until a file is read. Paired devices only (recover_requires_device otherwise), with a keys step-up bound to the bucket; the encryption-key Export permission and vault Create.",
-      "input": "payload",
-      "operation": null,
-      "payload": [
-        {
-          "description": "The API key that reaches the bucket.",
-          "generator": {
-            "attrs": [
-              "id"
-            ],
-            "entity": "api_key",
-            "kind": "ref",
-            "scope": "any"
-          },
-          "minimum": 0,
-          "name": "api_key_id",
-          "required": true,
-          "types": [
-            "integer"
-          ]
-        },
-        {
-          "description": "The bucket holding the vault.",
-          "generator": {
-            "kind": "pattern",
-            "pattern": "vh-test-{a}{a}{a}{9}{9}"
-          },
-          "name": "bucket",
-          "required": true,
-          "types": [
-            "string"
-          ]
-        },
-        {
-          "description": "The recovery kit (vh.recovery-kit v1).",
-          "name": "kit",
-          "required": false,
-          "types": [
-            "object",
-            "null"
-          ]
-        },
-        {
-          "description": "A key export (its keys, and the attestation public keys it carries as anchors).",
-          "name": "export",
-          "one_of": [
-            {
-              "description": "One vault's entry of an export.",
-              "model": "VaultKeyImportDocument",
-              "name": "",
-              "required": true,
-              "types": [
-                "object"
-              ]
-            },
-            {
-              "description": "The CLI's `vh vault keys export all` array; the entry whose vault_uid matches the bucket's vault is used.",
-              "items": "object",
-              "model": "VaultKeyImportDocument",
-              "name": "",
-              "required": true,
-              "types": [
-                "array"
-              ]
-            }
-          ],
-          "required": false,
-          "types": [
-            "object",
-            "array",
-            "null"
-          ]
-        },
-        {
-          "description": "The restored vault's name (default: the manifest's).",
-          "name": "into",
-          "required": false,
-          "types": [
-            "string",
-            "null"
-          ]
-        },
-        {
-          "description": "Which vault of the bucket (default: the kit's).",
-          "name": "vault_uid",
-          "required": false,
-          "types": [
-            "string",
-            "null"
-          ]
-        },
-        {
-          "description": "The owner (default: the caller).",
-          "minimum": 0,
-          "name": "owner_id",
-          "required": false,
-          "types": [
-            "integer",
-            "null"
-          ]
-        },
-        {
-          "description": "Restore a root older than the kit's checkpoint.",
-          "name": "accept_rollback",
-          "required": false,
-          "types": [
-            "boolean"
-          ]
-        },
-        {
-          "description": "Report only; write nothing.",
-          "name": "dry_run",
-          "required": false,
-          "types": [
-            "boolean"
-          ]
-        },
-        {
-          "description": "Re-encrypt what unproven versions decrypt under a fresh key.",
-          "name": "salvage",
-          "required": false,
-          "types": [
-            "boolean"
-          ]
-        },
-        {
-          "description": "The restored vault's name: the person confirmed a salvage.",
-          "name": "confirm_name",
-          "required": false,
-          "types": [
-            "string",
-            "null"
-          ]
-        }
-      ],
-      "refusal_codes": [
-        "denied",
-        "invalid",
-        "not_found",
-        "conflict",
-        "unauthorized",
-        "recover_requires_device",
-        "salvage_required",
-        "rollback",
-        "fork",
-        "kit_vault_mismatch",
-        "export_vault_mismatch",
-        "recovery_material_mismatch",
-        "no_key_material",
-        "vault_unknown",
-        "step_up_required",
-        "vault_recover_salvage"
-      ],
-      "refusal_kinds": [
-        "denied",
-        "invalid",
-        "not_found",
-        "conflict",
-        "unauthorized",
-        "recover_requires_device",
-        "salvage_required",
-        "rollback",
-        "fork",
-        "kit_vault_mismatch",
-        "export_vault_mismatch",
-        "recovery_material_mismatch",
-        "no_key_material",
-        "vault_unknown",
-        "step_up_required"
-      ],
-      "response": [
-        {
-          "description": "The vault's uid (26 base32 symbols): the same as in the bucket.",
-          "name": "vault_uid",
-          "required": true,
-          "types": [
-            "string"
-          ]
-        },
-        {
-          "description": "Where the manifest was produced (the root's producer), or what the material says without one.",
-          "fields": [
-            {
-              "name": "node_id",
-              "required": true,
-              "types": [
-                "string",
-                "null"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "vault_id",
-              "required": true,
-              "types": [
-                "integer",
-                "null"
-              ]
-            }
-          ],
-          "name": "origin",
-          "required": true,
-          "types": [
-            "object"
-          ]
-        },
-        {
-          "description": "The manifest's name for the vault; null in a blind rebuild.",
-          "name": "vault_name",
-          "required": true,
-          "types": [
-            "string",
-            "null"
-          ]
-        },
-        {
-          "description": "No usable manifest root: content recovered under /Recovered without names (§4.3).",
-          "name": "blind",
-          "required": true,
-          "types": [
-            "boolean"
-          ]
-        },
-        {
-          "description": "The loaded root's epoch.",
-          "minimum": 0,
-          "name": "epoch",
-          "required": true,
-          "types": [
-            "integer",
-            "null"
-          ]
-        },
-        {
-          "name": "root_sha256",
-          "required": true,
-          "types": [
-            "string",
-            "null"
-          ]
-        },
-        {
-          "enum": [
-            "unverified",
-            "verified",
-            "rollback_accepted"
-          ],
-          "name": "freshness",
-          "required": true,
-          "types": [
-            "string"
-          ]
-        },
-        {
-          "description": "\"freshness unverified: no checkpoint supplied\" without a kit checkpoint.",
-          "name": "freshness_report",
-          "required": true,
-          "types": [
-            "string"
-          ]
-        },
-        {
-          "description": "Manifest fallbacks and adjustments (segments from versions or older roots, ...).",
-          "items": "string",
-          "name": "issues",
-          "required": true,
-          "types": [
-            "array"
-          ]
-        },
-        {
-          "fields": [
-            {
-              "minimum": 0,
-              "name": "files",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "folders",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "symlinks",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "trashed",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "tombstones",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "provider_versions",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "bytes",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "snapshots",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "snapshot_members",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "snapshot_members_restorable",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            }
-          ],
-          "name": "counts",
-          "required": true,
-          "types": [
-            "object"
-          ]
-        },
-        {
-          "fields": [
-            {
-              "minimum": 0,
-              "name": "version",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "description": "D1: verified = attested by the original node under a key the customer pinned.",
-              "enum": [
-                "verified",
-                "no_anchor",
-                "empty_anchor",
-                "unattested",
-                "unverified",
-                "wrong_node",
-                "wrong_vault",
-                "self_attested",
-                "key_check_mismatch"
-              ],
-              "name": "verdict",
-              "required": true,
-              "types": [
-                "string"
-              ]
-            },
-            {
-              "name": "detail",
-              "required": true,
-              "types": [
-                "string"
-              ]
-            },
-            {
-              "name": "held",
-              "required": true,
-              "types": [
-                "boolean"
-              ]
-            },
-            {
-              "name": "key_source",
-              "required": false,
-              "types": [
-                "string"
-              ]
-            },
-            {
-              "name": "current",
-              "required": true,
-              "types": [
-                "boolean"
-              ]
-            },
-            {
-              "description": "Live files are sealed under it (or it is current).",
-              "name": "needed",
-              "required": true,
-              "types": [
-                "boolean"
-              ]
-            },
-            {
-              "enum": [
-                "canonical",
-                "salvage_only",
-                "refused",
-                "missing"
-              ],
-              "name": "state",
-              "required": true,
-              "types": [
-                "string"
-              ]
-            },
-            {
-              "fields": [
-                {
-                  "minimum": 0,
-                  "name": "key_id",
-                  "required": true,
-                  "types": [
-                    "integer"
-                  ]
-                },
-                {
-                  "enum": [
-                    "kit",
-                    "export"
-                  ],
-                  "name": "source",
-                  "required": true,
-                  "types": [
-                    "string"
-                  ]
-                }
-              ],
-              "name": "anchor",
-              "required": false,
-              "types": [
-                "object"
-              ]
-            },
-            {
-              "fields": [
-                {
-                  "name": "node_id",
-                  "required": true,
-                  "types": [
-                    "string"
-                  ]
-                },
-                {
-                  "minimum": 0,
-                  "name": "vault_id",
-                  "required": true,
-                  "types": [
-                    "integer"
-                  ]
-                },
-                {
-                  "enum": [
-                    "root",
-                    "origin",
-                    "export"
-                  ],
-                  "name": "source",
-                  "required": true,
-                  "types": [
-                    "string"
-                  ]
-                }
-              ],
-              "name": "origin",
-              "required": false,
-              "types": [
-                "object"
-              ]
-            }
-          ],
-          "items": "object",
-          "name": "key_versions",
-          "required": true,
-          "types": [
-            "array"
-          ]
-        },
-        {
-          "minimum": 0,
-          "name": "current_version",
-          "required": true,
-          "types": [
-            "integer"
-          ]
-        },
-        {
-          "minimum": 0,
-          "name": "highest_version_seen",
-          "required": true,
-          "types": [
-            "integer"
-          ]
-        },
-        {
-          "items": "integer",
-          "name": "canonical_versions",
-          "required": true,
-          "types": [
-            "array"
-          ]
-        },
-        {
-          "items": "integer",
-          "name": "blocking_versions",
-          "required": true,
-          "types": [
-            "array"
-          ]
-        },
-        {
-          "items": "integer",
-          "name": "salvageable_versions",
-          "required": true,
-          "types": [
-            "array"
-          ]
-        },
-        {
-          "description": "Uids of objects no manifest entry names, restored under /Recovered.",
-          "items": "string",
-          "name": "orphans",
-          "required": true,
-          "types": [
-            "array"
-          ]
-        },
-        {
-          "description": "Uids of files whose object the bucket doesn't hold (restored unavailable).",
-          "items": "string",
-          "name": "missing_objects",
-          "required": true,
-          "types": [
-            "array"
-          ]
-        },
-        {
-          "description": "Objects that did not authenticate (left untouched).",
-          "items": "string",
-          "name": "rejected_objects",
-          "required": true,
-          "types": [
-            "array"
-          ]
-        },
-        {
-          "fields": [
-            {
-              "minimum": 0,
-              "name": "listed",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "unwrapped",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "skipped",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "rejected",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            }
-          ],
-          "name": "envelopes",
-          "required": true,
-          "types": [
-            "object"
-          ]
-        },
-        {
-          "fields": [
-            {
-              "name": "supplied",
-              "required": true,
-              "types": [
-                "boolean"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "keys",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            }
-          ],
-          "name": "anchors",
-          "required": true,
-          "types": [
-            "object"
-          ]
-        },
-        {
-          "description": "What the restore read: never a file's content (content_bytes stays 0).",
-          "fields": [
-            {
-              "minimum": 0,
-              "name": "manifest_bytes",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "envelope_bytes",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "header_bytes",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "content_bytes",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "other_bytes",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "gets",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "ranged_gets",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "lists",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "version_lists",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            }
-          ],
-          "name": "downloads",
-          "required": true,
-          "types": [
-            "object"
-          ]
-        },
-        {
-          "enum": [
-            "canonical",
-            "salvage"
-          ],
-          "name": "mode",
-          "required": true,
-          "types": [
-            "string"
-          ]
-        },
-        {
-          "description": "Files sealed under a version no material holds (left out).",
-          "minimum": 0,
-          "name": "unrecoverable_files",
-          "required": true,
-          "types": [
-            "integer"
-          ]
-        },
-        {
-          "description": "What was written (absent on a dry run).",
-          "fields": [
-            {
-              "minimum": 0,
-              "name": "vault_id",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "files",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "folders",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "symlinks",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "trashed",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "index_rows",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "provider_versions",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "snapshots",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "snapshot_members",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "left_out",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "items": "string",
-              "name": "notes",
-              "required": true,
-              "types": [
-                "array"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "fresh_version",
-              "required": false,
-              "types": [
-                "integer"
-              ]
-            }
-          ],
-          "name": "restored",
-          "required": false,
-          "types": [
-            "object"
-          ]
-        },
-        {
-          "name": "dry_run",
-          "required": true,
-          "types": [
-            "boolean"
-          ]
-        },
-        {
-          "name": "written",
-          "required": true,
-          "types": [
-            "boolean"
-          ]
-        },
-        {
-          "minimum": 0,
-          "name": "vault_id",
-          "required": true,
-          "types": [
-            "integer",
-            "null"
-          ]
-        },
-        {
-          "name": "vault_name",
-          "required": true,
-          "types": [
-            "string"
-          ]
-        },
-        {
-          "name": "key_available",
-          "required": true,
-          "types": [
-            "boolean"
-          ]
-        },
-        {
-          "minimum": 0,
-          "name": "published_epoch",
-          "required": true,
-          "types": [
-            "integer",
-            "null"
-          ]
-        },
-        {
-          "model": "VaultKeySalvageReport",
-          "name": "salvage",
-          "required": true,
-          "types": [
-            "object",
-            "null"
-          ]
-        },
-        {
-          "name": "note",
-          "required": true,
-          "types": [
-            "string",
-            "null"
-          ]
-        }
-      ],
-      "response_model": "VaultRecoverResult",
-      "step_up": "keys",
       "untyped_refusals": [],
       "variants": []
     },
@@ -46396,5 +45229,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "b57e0d40342b4e028efa7af0d50bdeba199eaef3a93a366ad0ad687684c8fd1b"
+  "ws_hash": "c8235c517daa4798cc53d56cd7e1a241871ab6799071a757ed6451592585d7d5"
 }

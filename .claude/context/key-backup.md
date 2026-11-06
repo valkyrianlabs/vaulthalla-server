@@ -303,7 +303,7 @@ Spec 03 §6.4. A fresh node rebuilds an `opaque_v1` vault from its bucket plus a
 canonical only when its original node's attestation (the root's record, its recorded `origin`, or the export's)
 verifies under an attestation key the customer pinned (kit entry, or the export's `attestation.public_key`), over that
 node id and vault id, with the key check recomputed from the bytes; the restoring node's own keys never count. The new
-rows carry this node's key check (new vault id) and attestation; `vault_key_origin` (migration 129) keeps the original
+rows carry this node's key check (new vault id) and attestation; `vault_key_origin` (migration 130) keeps the original
 proof, status reports it as `needed_versions[].origin`, and the manifest root as `keys[].origin`, so the customer's
 original kit still anchors those versions after later restores. Anything unproven stops the restore
 (`salvage_required`); `--salvage` mints a fresh key above every version the bucket names and runs the import's salvage
