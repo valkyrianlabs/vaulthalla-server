@@ -26,12 +26,15 @@ struct Device {
     std::optional<std::time_t> last_seen_at;
     std::optional<std::string> last_ip;
     std::optional<std::time_t> revoked_at;
+    // The device's key-backup grant was revoked (a recovery-code sign-in or an MFA reset of its user, #360; migration
+    // 129): its key exports need a person's approval again. The device itself stays paired and keeps syncing.
+    std::optional<std::time_t> key_backup_revoked_at;
 
     [[nodiscard]] bool revoked() const noexcept { return revoked_at.has_value(); }
 };
 
 // {id, device_id, user_id, user_name, name, platform, app_version, previous_device_id, approved_by, created_at,
-//  last_seen_at, last_ip, revoked_at, revoked}: times are Unix seconds or null.
+//  last_seen_at, last_ip, revoked_at, revoked, key_backup_revoked_at}: times are Unix seconds or null.
 void to_json(nlohmann::json& j, const Device& d);
 
 // Device names (pairing requests, renames): 1-64 characters (UTF-8 code points), no control characters, trimmed.

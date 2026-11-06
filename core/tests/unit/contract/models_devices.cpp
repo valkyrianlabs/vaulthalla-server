@@ -24,6 +24,7 @@ device::Device rotatedRevokedDevice() {
     d.last_seen_at = 1760000600;
     d.last_ip = "10.0.0.42";
     d.revoked_at = 1760001200;
+    d.key_backup_revoked_at = 1760001100;  // a recovery-code sign-in of its user revoked its key-backup grant first
     return d;
 }
 

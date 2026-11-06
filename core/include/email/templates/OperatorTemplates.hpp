@@ -7,6 +7,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace vh::email::templates {
@@ -91,11 +92,26 @@ struct SecurityAlertEmailContext {
     std::optional<std::string> baseUrl;
 };
 
+// An account-security notice (#360; MFA design note section 7): a recovery-code sign-in, an MFA reset, a factor change,
+// repeated second-factor failures, an MFA policy weakened. Sent to the security recipients and, in a second message,
+// to the account's own address. `facts` are label/value rows (ids, counts, times): never codes, secrets or paths.
+struct AccountSecurityEmailContext {
+    std::string instance;
+    std::string title;    // "Recovery code used", "MFA reset", ...
+    std::string summary;  // one sentence
+    std::string severity = "warning";
+    std::uint64_t occurredAt = 0;
+    std::vector<std::pair<std::string, std::string>> facts;
+    std::optional<std::string> advice;  // what the reader should do if it wasn't them
+    std::optional<std::string> baseUrl;
+};
+
 [[nodiscard]] std::string escapeHtml(std::string_view value);
 [[nodiscard]] RenderedEmail renderTestEmail(const TestEmailContext& ctx);
 [[nodiscard]] RenderedEmail renderWatchdogAlertEmail(const WatchdogEmailContext& ctx);
 [[nodiscard]] RenderedEmail renderWatchdogRecoveryEmail(const WatchdogEmailContext& ctx);
 [[nodiscard]] RenderedEmail renderWeeklyDigestEmail(const WeeklyDigestEmailContext& ctx);
 [[nodiscard]] RenderedEmail renderSecurityAlertEmail(const SecurityAlertEmailContext& ctx);
+[[nodiscard]] RenderedEmail renderAccountSecurityEmail(const AccountSecurityEmailContext& ctx);
 
 }

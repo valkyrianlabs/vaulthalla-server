@@ -57,6 +57,17 @@ struct StepUpRequired : Refused {
           methods(std::move(methods_)), max_age_seconds(maxAgeSeconds) {}
 };
 
+// The account is in its recovery cooldown (#360; MFA design note section 7.4, D4): after a recovery-code sign-in or an
+// MFA reset, operations of the families keys, device.trust, identity.admin, secrets and settings are refused until
+// cooldown_until (Unix seconds). ws: ERROR {code: "recovery_cooldown", family, cooldown_until}. Nothing satisfies it
+// early; the local CLI (the host) is exempt like it is from step-up.
+struct RecoveryCooldown : Refused {
+    std::string family;
+    long long cooldown_until{};
+    RecoveryCooldown(std::string family_, const long long until, const std::string& text)
+        : Refused("recovery_cooldown", text), family(std::move(family_)), cooldown_until(until) {}
+};
+
 // The operation needs a person's explicit acceptance first (e.g. an encryption waiver over existing bucket data).
 // `code` is stable for clients; what() is the text to show. The caller asks, then repeats the request with the
 // acceptance set. Operations never prompt themselves.

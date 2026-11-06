@@ -36,6 +36,8 @@ using Key = std::shared_ptr<const crypto::SecretBytes>;
 
 // Forgets the cached keys (tests, and after `vh secrets` changes the stored rows).
 void resetForTesting();
+// Tests on hosts whose sealing can't round-trip (the CI container's TPM): serve these keys instead.
+void setForTesting(Key seal, Key pepper);
 
 // A sealed TOTP seed as totp_factors stores it: secret_sealed (ciphertext || 16-byte tag) and secret_iv (12 bytes).
 struct SealedSecret {

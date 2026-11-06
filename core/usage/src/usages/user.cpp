@@ -113,6 +113,56 @@ static std::shared_ptr<CommandUsage> update(const std::weak_ptr<CommandUsage>& p
     return cmd;
 }
 
+// #360: another account's MFA (ops/Mfa.hpp), and the documented host recovery for a user who lost every factor.
+static std::shared_ptr<CommandUsage> mfa(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = buildBaseUsage(parent);
+    cmd->aliases = {"mfa"};
+    cmd->description = "Multi-factor sign-in of a user: status, require, and reset (host recovery). Run it as the "
+                       "Linux user bound to your Vaulthalla account, never with sudo: you may act on your own account, "
+                       "or on one whose password you may reset; a super admin's only as a super admin.";
+
+    auto status = buildBaseUsage(cmd->weak_from_this());
+    status->aliases = {"status", "info", "show"};
+    status->effect = CommandEffect::Read;
+    status->description = "Whether the user must have MFA and why, their factors (no secrets), recovery codes left, "
+                          "and the recovery cooldown.";
+    status->positionals = {userPos};
+    status->optional_flags = {Flag::WithAliases("json_output", "Print it as JSON", {"json"})};
+    status->examples = {{"vh user mfa status alice", "Show alice's sign-in factors."}};
+
+    auto reset = buildBaseUsage(cmd->weak_from_this());
+    reset->aliases = {"reset"};
+    reset->effect = CommandEffect::Destructive;
+    reset->description = "Reset the MFA of a user who lost every factor: their passkeys and authenticator apps are "
+                         "disabled, recovery codes voided, every session signed out and the key-backup grants of "
+                         "their paired devices revoked (the devices stay paired). They set up a new factor at their "
+                         "next sign-in, and key export, device approval, account administration, secrets and settings "
+                         "changes wait for the recovery cooldown. Audited and mailed to the security recipients.";
+    reset->positionals = {userPos};
+    reset->optional = {Optional::ManyToOne("reason", "Why (kept in the audit trail; default: host recovery)",
+                                           {"reason"}, "text")
+                           .withGen("text", contract::gen::freshName("reason_"))};
+    reset->optional_flags = {Flag::Alias("yes", "Reset without asking for confirmation", "yes")};
+    reset->examples = {
+        {"vh user mfa reset admin", "The sole super admin, as the Linux user bound to 'admin', after losing every factor."},
+        {"vh user mfa reset alice --reason \"lost phone, ticket 42\" --yes", "Reset alice's MFA without asking."}};
+
+    auto require = buildBaseUsage(cmd->weak_from_this());
+    require->aliases = {"require"};
+    require->effect = CommandEffect::Write;
+    require->description = "Require MFA for one user whatever the policy level (--off: stop requiring it; the policy "
+                           "may still). Applies at the user's next request.";
+    require->positionals = {userPos};
+    require->optional_flags = {Flag::Alias("off", "Stop requiring MFA for this user", "off")};
+    require->examples = {{"vh user mfa require bob", "bob must set up a second factor at his next sign-in."},
+                         {"vh user mfa require bob --off", "Back to what the policy says."}};
+
+    cmd->subcommands = {status, reset, require};
+    cmd->examples = {{"vh user mfa status alice", "Show alice's sign-in factors."},
+                     {"vh user mfa reset alice", "Reset alice's MFA after she lost every factor."}};
+    return cmd;
+}
+
 static std::shared_ptr<CommandUsage> base(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"user", "u"};
@@ -125,6 +175,7 @@ static std::shared_ptr<CommandUsage> base(const std::weak_ptr<CommandUsage>& par
     const auto removeCmd = remove(cmd->weak_from_this());
     const auto infoCmd = info(cmd->weak_from_this());
     const auto updateCmd = update(cmd->weak_from_this());
+    const auto mfaCmd = mfa(cmd->weak_from_this());
 
     // ---------- examples ----------
     cmd->examples = {
@@ -169,7 +220,8 @@ static std::shared_ptr<CommandUsage> base(const std::weak_ptr<CommandUsage>& par
         createCmd,
         removeCmd,
         infoCmd,
-        updateCmd
+        updateCmd,
+        mfaCmd
     };
 
     return cmd;

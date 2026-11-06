@@ -7,16 +7,19 @@
 #include "auth/mfa/Passkeys.hpp"
 #include "auth/mfa/Pending.hpp"
 #include "auth/mfa/Policy.hpp"
+#include "auth/mfa/Recovery.hpp"
 #include "auth/mfa/SignIn.hpp"
 #include "auth/model/RefreshToken.hpp"
 #include "auth/model/TokenPair.hpp"
 #include "auth/session/Assurance.hpp"
 #include "auth/stepup/StepUp.hpp"
+#include "config/Registry.hpp"
 #include "crypto/util/uuid.hpp"
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
 #include "ops/Error.hpp"
+#include "ops/Mfa.hpp"
 #include "ops/Sessions.hpp"
 #include "protocols/ws/Session.hpp"
 #include "protocols/ws/core/Refusal.hpp"
@@ -60,7 +63,8 @@ bool mfaWsRecoveryRestricted(const std::shared_ptr<Session>& session) {
 struct MfaWsTarget {
     std::shared_ptr<identities::User> user;
     bool pending{false};
-    bool during_recovery{false};
+    bool recovery_session{false};  // signed in with a recovery code (its replacement factor needs no step-up)
+    bool during_recovery{false};   // a factor enrolled now is marked created_during_recovery (that, or the cooldown)
 };
 
 std::shared_ptr<identities::User> mfaWsPendingUser(const std::shared_ptr<Session>& session, const mfa::Pending& p) {
@@ -81,13 +85,20 @@ void mfaWsWebOnly(const std::shared_ptr<Session>& session) {
 // `afterFirstFactor`: the pending enrollment already has its factor (only the recovery acknowledgement remains).
 MfaWsTarget mfaWsTarget(const std::shared_ptr<Session>& session, const bool afterFirstFactor = false) {
     mfaWsWebOnly(session);
-    if (session->user) return {.user = session->user, .during_recovery = mfaWsRecoveryRestricted(session)};
+    if (session->user) {
+        const bool restricted = mfaWsRecoveryRestricted(session);
+        return {.user = session->user, .recovery_session = restricted,
+                .during_recovery = mfa::recovery::enrollingDuringRecovery(session->user->id, restricted)};
+    }
     const auto p = session->mfa().pending();
     if (!p || p->kind != mfa::PendingKind::Enrollment) throw ops::Denied("Sign in first");
     if (p->expired()) mfaWsExpired(session);
     if (!afterFirstFactor && p->enrolled_amr)
         throw ops::Conflict("A first factor is set up: save your recovery codes to finish signing in");
-    return {.user = mfaWsPendingUser(session, *p), .pending = true};
+    auto user = mfaWsPendingUser(session, *p);
+    // After an MFA reset the guided enrollment runs inside the cooldown: its factor is flagged.
+    const bool during = mfa::recovery::enrollingDuringRecovery(user->id, false);
+    return {.user = std::move(user), .pending = true, .during_recovery = during};
 }
 
 // Adding a factor to an account that already has one is a credential change (account.credentials step-up, design
@@ -96,7 +107,7 @@ MfaWsTarget mfaWsTarget(const std::shared_ptr<Session>& session, const bool afte
 // is flagged created_during_recovery). Checked when the ceremony starts, so the console asks before the
 // authenticator does, and again before the factor is stored.
 void mfaWsRequireForAnotherFactor(const MfaWsTarget& target) {
-    if (target.pending || target.during_recovery || !mfa::hasUsableFactor(target.user->id)) return;
+    if (target.pending || target.recovery_session || !mfa::policy::hasAllowedFactor(*target.user)) return;
     auth::stepup::require(auth::stepup::Family::AccountCredentials);
 }
 
@@ -185,7 +196,8 @@ json Mfa::pending(const std::shared_ptr<Session>& session) {
              {"methods", p->methods},
              {"attempts_remaining", std::max(0, mfa::kPendingMaxFailures - p->failures)}};
     if (p->kind == mfa::PendingKind::Mfa && std::ranges::find(p->methods, "webauthn") != p->methods.end()) {
-        const auto credentials = mfa::passkeys::usableCredentials(p->user_id);
+        const auto user = vh::identities::manager().user(p->user_id);
+        const auto credentials = user ? mfa::policy::allowedPasskeys(*user) : std::vector<mfa::WebAuthnCredential>{};
         if (!credentials.empty())
             out["webauthn"] = {{"publicKey", mfa::passkeys::requestOptions(session->uuid, p->user_id, credentials)}};
     }
@@ -224,12 +236,15 @@ json Mfa::verify(const json& payload, const std::shared_ptr<Session>& session) {
         if (method == "webauthn") {
             const auto& credential = payload.at("credential");
             if (!credential.is_object()) throw ops::Invalid("credential is a PublicKeyCredential's JSON form");
-            if (const auto ok = mfa::passkeys::verifyAssertion(session->uuid, p->user_id, credential.dump())) {
+            const auto owner = vh::identities::manager().user(p->user_id);
+            if (const auto ok = mfa::passkeys::verifyAssertion(session->uuid, p->user_id, credential.dump());
+                ok && owner && mfa::policy::factorAllowed(*owner, mfa::FactorKind::WebAuthn, ok->backup_eligible)) {
                 amr = std::string(ok->backup_eligible ? auth::session::assurance::kSoftwareKey
                                                       : auth::session::assurance::kHardwareKey);
                 factorId = ok->factor_id;
             }
         } else if (method == "totp") {
+            // methods() offers totp only when the policy rule allows it (checked above).
             if (const auto id = mfa::verifyTotp(p->user_id, payload.at("code").get<std::string>())) {
                 amr = std::string(auth::session::assurance::kOneTimeCode);
                 factorId = *id;
@@ -283,20 +298,13 @@ json Mfa::verify(const json& payload, const std::shared_ptr<Session>& session) {
 
     json out = mfaWsSignedInAnswer(session);
     if (recovery) {
-        // RecoveryRestricted (design 7.4, D4): every other web session of the account is signed out now; paired
-        // devices are not touched (a lost browser factor never breaks a Desktop's sync). The cooldown starts; what
-        // it refuses is the policy issue's (#360).
-        const auto cooldown = mfa::startRecoveryCooldown(user->id);
-        const auto jti = session->tokens->refreshToken->jti;
-        const auto revoked = ops::sessions::revoke(user, jti, {.all_others = true}, session);
-        audit::record({.action = "auth.mfa.recovery.signin", .outcome = audit::Outcome::Info, .actor_id = user->id,
-                       .actor = user->name(),
-                       .details = {{"batch_id", recovery->batch_id}, {"remaining", recovery->remaining},
-                                   {"sessions_revoked", revoked}, {"cooldown_until", cooldown}}},
-                      "[auth] " + user->name() + " signed in with a recovery code; other web sessions were "
-                      "signed out");
-        out["recovery"] = {{"codes_remaining", recovery->remaining}, {"cooldown_until", cooldown},
-                           {"sessions_revoked", revoked}};
+        // RecoveryRestricted (design 7.4, D4): every other web session of the account is signed out and the key-backup
+        // grants of its paired devices revoked; the devices themselves are listed for the person to revoke, never
+        // revoked here (a lost browser factor never breaks a Desktop's sync). The cooldown starts.
+        const auto effects = mfa::recovery::afterRecoveryCodeSignIn(session, recovery->batch_id, recovery->remaining);
+        out["recovery"] = {{"codes_remaining", recovery->remaining}, {"cooldown_until", effects.cooldown_until},
+                           {"sessions_revoked", effects.sessions_revoked},
+                           {"grants_revoked", effects.grants_revoked}, {"devices", effects.devices}};
     }
     return out;
 }
@@ -311,22 +319,29 @@ json Mfa::status(const std::shared_ptr<Session>& session) {
     const auto& user = mfaWsSignedIn(session);
     const auto requirement = mfa::policy::requirement(*user);
     const auto recovery = mfa::recoveryStatus(user->id);
-    const auto state = mfa::userState(user->id);
+    const auto& cfg = config::Registry::get().auth.mfa;
+    const auto rule = mfa::policy::factorRule(*user);
+    const auto cooldown = mfa::recovery::cooldownUntil(user->id);
     json factors = json::array();
-    for (const auto& f : mfa::factors(user->id)) factors.push_back(f);
+    for (const auto& f : mfa::factors(user->id)) {
+        json j = f;
+        j["allowed"] = mfa::policy::factorAllowed(*user, f);
+        factors.push_back(std::move(j));
+    }
     return {{"policy", {{"level", std::string(mfa::policy::to_string(mfa::policy::level()))},
                         {"required", requirement.required},
                         {"reason", std::string(mfa::policy::to_string(requirement.reason))},
                         {"webauthn_available", mfa::passkeys::available()},
-                        {"admin_webauthn_only", false},
-                        {"admin_device_bound_only", false}}},
+                        {"admin_webauthn_only", cfg.admin_webauthn_only || cfg.admin_device_bound_only},
+                        {"admin_device_bound_only", cfg.admin_device_bound_only},
+                        {"totp_allowed", rule.totp},
+                        {"synced_passkeys_allowed", rule.synced_passkeys}}},
             {"factors", std::move(factors)},
             {"recovery", {{"active", recovery.active_batch.has_value()},
                           {"remaining", recovery.remaining},
                           {"acknowledged", recovery.active_batch.has_value()},
                           {"pending", recovery.pending_batch.has_value()}}},
-            {"cooldown_until", state && state->recovery_cooldown_until ? json(*state->recovery_cooldown_until)
-                                                                      : json(nullptr)},
+            {"cooldown_until", cooldown ? json(*cooldown) : json(nullptr)},
             {"recovery_restricted", mfaWsRecoveryRestricted(session)},
             {"step_up", mfaWsStepUpGrants(session)}};
 }
@@ -354,11 +369,16 @@ json Mfa::registerFinish(const json& payload, const std::shared_ptr<Session>& se
     const auto& credential = payload.at("credential");
     if (!credential.is_object()) throw ops::Invalid("credential is a PublicKeyCredential's JSON form");
 
-    const bool first = !mfa::hasUsableFactor(target.user->id);
+    const bool first = !mfa::policy::hasAllowedFactor(*target.user);
     const auto stored = mfa::passkeys::registerCredential(
         session->uuid, target.user->id, credential.dump(),
-        {.label = mfaWsLabel(payload, registration->label), .during_recovery = target.during_recovery});
-    if (!stored) throw ops::Invalid("The passkey could not be registered. Try again.");
+        {.label = mfaWsLabel(payload, registration->label), .during_recovery = target.during_recovery,
+         .device_bound_only = !mfa::policy::factorRule(*target.user).synced_passkeys});
+    if (!stored)
+        throw ops::Invalid(mfa::policy::factorRule(*target.user).synced_passkeys
+                               ? "The passkey could not be registered. Try again."
+                               : "The passkey could not be registered. This server accepts only device-bound passkeys "
+                                 "(a security key) for administrators, not synced ones.");
     const auto factor = mfaWsFactor(target.user->id, mfa::FactorKind::WebAuthn, stored->id);
     if (!factor) throw std::runtime_error("The passkey was stored but can't be read back");
     return mfaWsAfterEnroll(session, target, first,
@@ -367,8 +387,17 @@ json Mfa::registerFinish(const json& payload, const std::shared_ptr<Session>& se
                             *factor);
 }
 
+namespace {
+// auth.mfa.admin_webauthn_only / admin_device_bound_only: an admin can't set up an authenticator app.
+void mfaWsTotpAllowed(const identities::User& user) {
+    if (!mfa::policy::factorRule(user).totp)
+        throw ops::Invalid("This server's policy allows only passkeys for administrators: set up a passkey instead");
+}
+}
+
 json Mfa::totpStart(const json& payload, const std::shared_ptr<Session>& session) {
     const auto target = mfaWsTarget(session);
+    mfaWsTotpAllowed(*target.user);
     mfaWsRequireForAnotherFactor(target);
     try {
         const auto started = mfa::startTotp(target.user->id, {.label = mfaWsLabel(payload, "Authenticator app"),
@@ -386,8 +415,9 @@ json Mfa::totpStart(const json& payload, const std::shared_ptr<Session>& session
 
 json Mfa::totpConfirm(const json& payload, const std::shared_ptr<Session>& session) {
     const auto target = mfaWsTarget(session);
+    mfaWsTotpAllowed(*target.user);
     mfaWsRequireForAnotherFactor(target);
-    const bool first = !mfa::hasUsableFactor(target.user->id);
+    const bool first = !mfa::policy::hasAllowedFactor(*target.user);
     try {
         const auto factor = mfa::confirmTotp(target.user->id, payload.at("enrollment_id").get<uint32_t>(),
                                              payload.at("code").get<std::string>());
@@ -423,7 +453,8 @@ json Mfa::removeFactor(const json& payload, const std::shared_ptr<Session>& sess
     // Design 7.2: never the last usable factor of an account that must have MFA.
     bool anotherUsable = false;
     for (const auto& f : mfa::factors(user->id))
-        if (!(f.kind == kind && f.id == id) && !f.suspended) anotherUsable = true;
+        if (!(f.kind == kind && f.id == id) && !f.suspended && mfa::policy::factorAllowed(*user, f))
+            anotherUsable = true;
     if (!anotherUsable && mfa::policy::requirement(*user).required)
         throw ops::Refused("mfa_last_factor",
                            "This is the last sign-in factor of an account that must have MFA: add another one first");
@@ -497,6 +528,11 @@ json Mfa::passkeyLogin(const json& payload, const std::shared_ptr<Session>& sess
             log::Registry::auth()->warn("[auth::mfa] passkey sign-in refused for {}: the account can't sign in",
                                         user->name());
             user = nullptr;
+        } else if (user && !mfa::policy::factorAllowed(*user, mfa::FactorKind::WebAuthn,
+                                                       signedIn->factor.backup_eligible)) {
+            log::Registry::auth()->warn("[auth::mfa] passkey sign-in refused for {}: the policy allows only "
+                                        "device-bound passkeys for this account", user->name());
+            user = nullptr;
         }
     }
     if (!user) {
@@ -515,6 +551,24 @@ json Mfa::passkeyLogin(const json& payload, const std::shared_ptr<Session>& sess
                    .details = {{"factor_id", signedIn->factor.factor_id}, {"amr", amr}, {"ip", session->ipAddress}}},
                   "[auth] " + user->name() + " signed in with a passkey");
     return mfaWsSignedInAnswer(session);
+}
+
+json Mfa::adminStatus(const json& payload, const std::shared_ptr<Session>& session) {
+    const auto& user = mfaWsSignedIn(session);
+    return ops::mfa::status(user, payload.at("user_id").get<uint32_t>(), ops::mfa::Channel::Web);
+}
+
+json Mfa::adminRequire(const json& payload, const std::shared_ptr<Session>& session) {
+    const auto& user = mfaWsSignedIn(session);
+    const auto id = payload.at("user_id").get<uint32_t>();
+    ops::mfa::require(user, id, payload.at("required").get<bool>(), ops::mfa::Channel::Web);
+    return ops::mfa::status(user, id, ops::mfa::Channel::Web);
+}
+
+json Mfa::adminReset(const json& payload, const std::shared_ptr<Session>& session) {
+    const auto& user = mfaWsSignedIn(session);
+    return ops::mfa::reset(user, payload.at("user_id").get<uint32_t>(), payload.at("reason").get<std::string>(),
+                           ops::mfa::Channel::Web);
 }
 
 }

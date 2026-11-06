@@ -2586,6 +2586,15 @@
           "types": [
             "boolean"
           ]
+        },
+        {
+          "description": "When the device's key-backup grant was revoked (a recovery-code sign-in or an MFA reset of its user): it stays paired and syncs, but its key exports need a person's approval again.",
+          "name": "key_backup_revoked_at",
+          "required": false,
+          "types": [
+            "integer",
+            "null"
+          ]
         }
       ],
       "name": "Device"
@@ -3885,8 +3894,47 @@
       "name": "LoggingConfig"
     },
     {
-      "description": "auth.mfa.* (Config.cpp to_json(MfaConfig), #359): multi-factor authentication settings.",
+      "description": "auth.mfa.* (Config.cpp to_json(MfaConfig), #359, #360): multi-factor authentication settings. Changing policy, the admin flags or auth.webauthn.rp_id is audited (auth.mfa.policy.change); weakening them is mailed to operator_emails.recipients.security.",
       "fields": [
+        {
+          "description": "Who must sign in with a second factor: nobody (per-account requirements still apply), the super admin and privileged admins (the default), or every account. Applied at each session's next use.",
+          "enum": [
+            "optional",
+            "admins",
+            "all"
+          ],
+          "name": "policy",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Privileged admins may use passkeys only (no authenticator apps). Needs auth.webauthn.rp_id.",
+          "name": "admin_webauthn_only",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "Privileged admins may use device-bound passkeys only (no synced ones); implies admin_webauthn_only. Needs auth.webauthn.rp_id.",
+          "name": "admin_device_bound_only",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "After a recovery-code sign-in or an MFA reset, keys, device.trust, identity.admin, secrets and settings are refused (recovery_cooldown) for this long.",
+          "maximum": 168,
+          "minimum": 1,
+          "name": "recovery_cooldown_hours",
+          "required": false,
+          "types": [
+            "integer"
+          ]
+        },
         {
           "description": "How long a step-up grant lasts, and how recent an aal 2 sign-in must be to stand in for a family-wide one.",
           "maximum": 900,
@@ -3996,6 +4044,14 @@
           "types": [
             "string",
             "null"
+          ]
+        },
+        {
+          "description": "auth.mfa.status and auth.mfa.admin.status: the MFA policy lets this account use it (false: an admin held to passkeys, or to device-bound passkeys, by auth.mfa.admin_webauthn_only / admin_device_bound_only).",
+          "name": "allowed",
+          "required": false,
+          "types": [
+            "boolean"
           ]
         }
       ],
@@ -18679,7 +18735,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "455b23eafefb4b72a1cfb1503ebe2c43a378d38313d320a1d0176c2f9bfcebf8",
+  "models_hash": "c9d08760af47b94daddf016ec824a1a3a966c12a9f0283dd0dd350f9184c9913",
   "protocol": {
     "min": 1,
     "version": 1
@@ -19061,7 +19117,8 @@
         "unauthorized",
         "rate_limited",
         "passkey_required",
-        "approval_failed"
+        "approval_failed",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -19070,7 +19127,8 @@
         "unauthorized",
         "rate_limited",
         "passkey_required",
-        "approval_failed"
+        "approval_failed",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -19670,6 +19728,386 @@
       "variants": []
     },
     {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "auth.mfa.admin.require",
+      "confirmations": [],
+      "description": "Require MFA for one account whatever the policy level (or stop requiring it; the policy may still). Applies at the account's next request: a session signed in without a second factor is signed out. Answers its status. identity.admin step-up. Who: whoever may reset the account's password (admin.identities.users or .admins reset-password, within their own permissions); a super admin's MFA only another super admin; never your own account here (Account > Security, or `vh user mfa` on the server).",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "user",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "user_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "generator": {
+            "kind": "bool"
+          },
+          "name": "required",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "step_up_required",
+        "recovery_cooldown"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "step_up_required",
+        "recovery_cooldown"
+      ],
+      "response": [
+        {
+          "minimum": 0,
+          "name": "user_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "required",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "enum": [
+            "none",
+            "policy_admins",
+            "policy_all",
+            "user_required"
+          ],
+          "name": "reason",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "required_flag",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "items": "object",
+          "model": "MfaFactor",
+          "name": "factors",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "name": "active",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "remaining",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "recovery",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "name": "cooldown_until",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "name": "reset_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        }
+      ],
+      "response_model": null,
+      "step_up": "identity.admin",
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "auth.mfa.admin.reset",
+      "confirmations": [],
+      "description": "Reset an account that lost every factor: its passkeys and authenticator apps are disabled (kept for the audit trail), its recovery codes voided, every session signed out, the key-backup grants of its paired devices revoked (the devices stay paired), and it must set up a new factor at its next sign-in, inside the recovery cooldown. The account and the security recipients are notified; audited as auth.mfa.admin.reset. account.credentials step-up. Who: whoever may reset the account's password (admin.identities.users or .admins reset-password, within their own permissions); a super admin's MFA only another super admin; never your own account here (Account > Security, or `vh user mfa` on the server).",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "user",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "user_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "1..200 characters, kept in the audit trail.",
+          "generator": {
+            "fresh": true,
+            "kind": "pattern",
+            "pattern": "reason_{a}{a}{a}{9}{9}{a}{9}"
+          },
+          "name": "reason",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "step_up_required"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "step_up_required"
+      ],
+      "response": [
+        {
+          "minimum": 0,
+          "name": "factors_disabled",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "recovery_batches_voided",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "sessions_revoked",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "grants_revoked",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Unix seconds: the account's recovery cooldown ends then.",
+          "name": "cooldown_until",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "response_model": null,
+      "step_up": "account.credentials",
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "auth.mfa.admin.status",
+      "confirmations": [],
+      "description": "Another account's MFA: whether it must have MFA and why, its factors (no secrets), recovery codes left, the recovery cooldown and the last reset. Who: whoever may reset the account's password (admin.identities.users or .admins reset-password, within their own permissions); a super admin's MFA only another super admin; never your own account here (Account > Security, or `vh user mfa` on the server).",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "user",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "user_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "minimum": 0,
+          "name": "user_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "required",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "enum": [
+            "none",
+            "policy_admins",
+            "policy_all",
+            "user_required"
+          ],
+          "name": "reason",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Set for this account (auth.mfa.admin.require).",
+          "name": "required_flag",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "items": "object",
+          "model": "MfaFactor",
+          "name": "factors",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "name": "active",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "remaining",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "recovery",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "Unix seconds, while the recovery cooldown runs.",
+          "name": "cooldown_until",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "Unix seconds: the last MFA reset.",
+          "name": "reset_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
       "auth": "pending",
       "client_timeout_ms": 15000,
       "command": "auth.mfa.cancel",
@@ -20015,6 +20453,7 @@
               ]
             },
             {
+              "description": "auth.mfa.admin_webauthn_only (or device_bound_only).",
               "name": "admin_webauthn_only",
               "required": true,
               "types": [
@@ -20024,6 +20463,22 @@
             {
               "name": "admin_device_bound_only",
               "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "This account may use an authenticator app.",
+              "name": "totp_allowed",
+              "required": false,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "This account may use a synced passkey.",
+              "name": "synced_passkeys_allowed",
+              "required": false,
               "types": [
                 "boolean"
               ]
@@ -20086,7 +20541,7 @@
           ]
         },
         {
-          "description": "Unix seconds: the recovery cooldown, if one ran.",
+          "description": "Unix seconds: the recovery cooldown while it runs (keys, device.trust, identity.admin, secrets and settings answer recovery_cooldown until then), else null.",
           "name": "cooldown_until",
           "required": true,
           "types": [
@@ -20331,7 +20786,7 @@
       "client_timeout_ms": 20000,
       "command": "auth.mfa.verify",
       "confirmations": [],
-      "description": "Finish a pending sign-in with a second factor: {method: \"webauthn\", credential} (a UV assertion over the pending challenge), or {method: \"totp\" | \"recovery_code\", code}. Success signs the connection in: one session row at aal 2 with amr [\"pwd\", \"hwk\" | \"swk\" | \"otp\" | \"rec\"], the access token in the envelope. A recovery code signs every other web session of the account out (paired devices are not touched), starts the recovery cooldown and answers `recovery`. Refusals: mfa_invalid {attempts_remaining, pending?} (the 5th ends the sign-in), mfa_expired (start again with the password), rate_limited {retry_after} (5 failed factors on the account in 15 minutes), mfa_required {pending} for {method: \"webauthn\"} without a credential: a fresh passkey challenge, not an attempt. data.pending is {kind: \"mfa\" | \"enrollment\", expires_at (Unix seconds), methods: [\"webauthn\" | \"totp\" | \"recovery_code\"], attempts_remaining, webauthn?: {publicKey: PublicKeyCredentialRequestOptionsJSON}}.",
+      "description": "Finish a pending sign-in with a second factor: {method: \"webauthn\", credential} (a UV assertion over the pending challenge), or {method: \"totp\" | \"recovery_code\", code}. Success signs the connection in: one session row at aal 2 with amr [\"pwd\", \"hwk\" | \"swk\" | \"otp\" | \"rec\"], the access token in the envelope. A recovery code signs every other web session of the account out (paired devices are not touched), starts the recovery cooldown, revokes the key-backup grants of the account's paired devices (they stay paired and are listed for the person to revoke) and answers `recovery`. Refusals: mfa_invalid {attempts_remaining, pending?} (the 5th ends the sign-in), mfa_expired (start again with the password), rate_limited {retry_after} (the account's 5th failed factor in a streak waits 1 minute, each further one doubles it up to 15; never a lock), mfa_required {pending} for {method: \"webauthn\"} without a credential: a fresh passkey challenge, not an attempt. data.pending is {kind: \"mfa\" | \"enrollment\", expires_at (Unix seconds), methods: [\"webauthn\" | \"totp\" | \"recovery_code\"], attempts_remaining, webauthn?: {publicKey: PublicKeyCredentialRequestOptionsJSON}}.",
       "input": "payload",
       "operation": null,
       "payload": [
@@ -20541,6 +20996,64 @@
               "required": true,
               "types": [
                 "integer"
+              ]
+            },
+            {
+              "description": "Paired devices whose key-backup grant was revoked.",
+              "minimum": 0,
+              "name": "grants_revoked",
+              "required": false,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "The account's paired devices: none was revoked; offer device.revoke for each.",
+              "fields": [
+                {
+                  "minimum": 0,
+                  "name": "id",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "name",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "platform",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "Unix seconds.",
+                  "name": "last_seen_at",
+                  "required": true,
+                  "types": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                {
+                  "name": "key_backup_revoked",
+                  "required": true,
+                  "types": [
+                    "boolean"
+                  ]
+                }
+              ],
+              "items": "object",
+              "name": "devices",
+              "required": false,
+              "types": [
+                "array"
               ]
             }
           ],
@@ -21428,7 +21941,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -21436,7 +21950,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -22160,6 +22675,7 @@
         "conflict",
         "unauthorized",
         "step_up_required",
+        "recovery_cooldown",
         "user_delete"
       ],
       "refusal_kinds": [
@@ -22168,7 +22684,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -22373,7 +22890,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -22381,7 +22899,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -22671,7 +23190,8 @@
         "device_unknown",
         "rate_limited",
         "console_approval_required",
-        "approval_key_unavailable"
+        "approval_key_unavailable",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "invalid",
@@ -22679,7 +23199,8 @@
         "device_unknown",
         "rate_limited",
         "console_approval_required",
-        "approval_key_unavailable"
+        "approval_key_unavailable",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -22763,14 +23284,16 @@
         "conflict",
         "unauthorized",
         "device_unknown",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "invalid",
         "conflict",
         "unauthorized",
         "device_unknown",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -22836,13 +23359,15 @@
         "invalid",
         "unauthorized",
         "device_unknown",
-        "rate_limited"
+        "rate_limited",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "invalid",
         "unauthorized",
         "device_unknown",
-        "rate_limited"
+        "rate_limited",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -23107,14 +23632,16 @@
         "not_found",
         "unauthorized",
         "device_unknown",
-        "approval_key_unavailable"
+        "approval_key_unavailable",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "invalid",
         "not_found",
         "unauthorized",
         "device_unknown",
-        "approval_key_unavailable"
+        "approval_key_unavailable",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -23732,7 +24259,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -23740,7 +24268,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -24350,7 +24879,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -24358,7 +24888,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -24963,13 +25494,15 @@
         "denied",
         "invalid",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -25123,13 +25656,15 @@
         "denied",
         "invalid",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -27202,7 +27737,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -27210,7 +27746,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -27294,7 +27831,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -27302,7 +27840,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -27368,7 +27907,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -27376,7 +27916,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -29774,7 +30315,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -29782,7 +30324,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -29831,7 +30374,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -29839,7 +30383,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -30043,7 +30588,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -30051,7 +30597,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -30133,7 +30680,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -30141,7 +30689,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -30236,7 +30785,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -30244,7 +30794,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -30293,7 +30844,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -30301,7 +30853,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -30534,7 +31087,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -30542,7 +31096,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -30723,7 +31278,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -30731,7 +31287,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -30853,7 +31410,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -30861,7 +31419,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -30939,7 +31498,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -30947,7 +31507,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -31042,7 +31603,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -31050,7 +31612,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -32521,7 +33084,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -32529,7 +33093,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -32627,7 +33192,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -32635,7 +33201,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -32911,7 +33478,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -32919,7 +33487,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -33139,7 +33708,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -33147,7 +33717,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -33302,7 +33873,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -33310,7 +33882,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -33616,7 +34189,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -33624,7 +34198,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -33962,7 +34537,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -33970,7 +34546,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -34293,7 +34870,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -34301,7 +34879,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -34459,7 +35038,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -34467,7 +35047,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -34891,7 +35472,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -34899,7 +35481,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -35992,13 +36575,15 @@
         "denied",
         "invalid",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -39957,7 +40542,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -39965,7 +40551,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -40110,7 +40697,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -40118,7 +40706,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [],
       "response_model": null,
@@ -40218,7 +40807,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -40226,7 +40816,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -41881,7 +42472,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -41889,7 +42481,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -43077,7 +43670,8 @@
         "conflict",
         "unauthorized",
         "export_requires_device",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -43086,7 +43680,8 @@
         "conflict",
         "unauthorized",
         "export_requires_device",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -43587,6 +44182,7 @@
         "unauthorized",
         "import_requires_device",
         "step_up_required",
+        "recovery_cooldown",
         "vault_key_import",
         "vault_key_salvage"
       ],
@@ -43597,7 +44193,8 @@
         "conflict",
         "unauthorized",
         "import_requires_device",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -43845,7 +44442,8 @@
         "conflict",
         "unauthorized",
         "recipient_requires_device",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -43854,7 +44452,8 @@
         "conflict",
         "unauthorized",
         "recipient_requires_device",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -44051,7 +44650,8 @@
         "conflict",
         "unauthorized",
         "recipient_requires_device",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "refusal_kinds": [
         "denied",
@@ -44060,7 +44660,8 @@
         "conflict",
         "unauthorized",
         "recipient_requires_device",
-        "step_up_required"
+        "step_up_required",
+        "recovery_cooldown"
       ],
       "response": [
         {
@@ -44628,5 +45229,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "767c44c3cc8033e32ad8e67fa29c61210a5139b57f9758b3cd1cdb848d19ff2b"
+  "ws_hash": "c8235c517daa4798cc53d56cd7e1a241871ab6799071a757ed6451592585d7d5"
 }

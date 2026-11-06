@@ -439,4 +439,50 @@ RenderedEmail renderSecurityAlertEmail(const SecurityAlertEmailContext& ctx) {
     };
 }
 
+RenderedEmail renderAccountSecurityEmail(const AccountSecurityEmailContext& ctx) {
+    const auto occurredAt = formatUnixTime(ctx.occurredAt);
+    const auto accent = severityAccent(ctx.severity);
+
+    std::ostringstream html;
+    html
+        << "<!doctype html><html><body style=\"margin:0;background:#f5f7fb;color:#172033;"
+        << "font-family:Inter,Segoe UI,Arial,sans-serif;\">"
+        << "<div style=\"max-width:680px;margin:0 auto;padding:32px 20px;\">"
+        << "<div style=\"background:#ffffff;border:1px solid #d9e1ec;border-radius:8px;overflow:hidden;\">"
+        << "<div style=\"background:#172033;color:#ffffff;padding:20px 24px;border-top:5px solid "
+        << accent << ";\">"
+        << "<div style=\"font-size:13px;letter-spacing:0;text-transform:uppercase;color:#a7b5c8;\">"
+        << "Vaulthalla account security</div>"
+        << "<h1 style=\"margin:8px 0 0;font-size:24px;line-height:1.25;\">"
+        << escapeHtml(ctx.title) << "</h1>"
+        << "</div>"
+        << "<div style=\"padding:24px;\">"
+        << "<p style=\"margin:0 0 18px;font-size:15px;line-height:1.6;\">"
+        << escapeHtml(ctx.summary) << "</p>"
+        << "<table role=\"presentation\" style=\"width:100%;border-collapse:collapse;font-size:14px;\">";
+
+    appendMetricRow(html, "Instance", ctx.instance);
+    appendMetricRow(html, "Occurred at", occurredAt);
+    for (const auto& [label, value] : ctx.facts) appendMetricRow(html, label, value);
+    html << "</table>";
+
+    if (ctx.advice)
+        html << "<p style=\"margin:22px 0 0;font-size:14px;line-height:1.6;\">" << escapeHtml(*ctx.advice) << "</p>";
+    if (ctx.baseUrl)
+        html << "<p style=\"margin:22px 0 0;font-size:14px;line-height:1.6;\">"
+             << "<a href=\"" << escapeHtml(*ctx.baseUrl) << "\" style=\"color:#0b62b4;\">Open Vaulthalla</a>"
+             << "</p>";
+    html << "</div></div></div></body></html>";
+
+    std::ostringstream text;
+    text << "[Vaulthalla] " << ctx.title << "\n\n" << ctx.summary << "\n\n"
+         << "Instance: " << ctx.instance << "\n"
+         << "Occurred at: " << occurredAt << "\n";
+    for (const auto& [label, value] : ctx.facts) text << label << ": " << value << "\n";
+    if (ctx.advice) text << "\n" << *ctx.advice << "\n";
+    if (ctx.baseUrl) text << "\nURL: " << *ctx.baseUrl << "\n";
+
+    return {.subject = "[Vaulthalla] " + ctx.title, .html = html.str(), .text = text.str()};
+}
+
 }

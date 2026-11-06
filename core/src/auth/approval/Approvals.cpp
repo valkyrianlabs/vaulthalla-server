@@ -4,6 +4,8 @@
 
 #include "audit/Trail.hpp"
 #include "auth/mfa/Passkeys.hpp"
+#include "auth/mfa/Policy.hpp"
+#include "auth/mfa/Recovery.hpp"
 #include "auth/model/RefreshToken.hpp"
 #include "auth/model/TokenPair.hpp"
 #include "auth/session/Manager.hpp"
@@ -244,6 +246,8 @@ bool hasLiveApprovalKey(const std::shared_ptr<protocols::ws::Session>& session) 
 Challenge challenge(const std::shared_ptr<protocols::ws::Session>& session, const stepup::Family family,
                     const std::string& target) {
     const auto caller = approvalDeviceCaller(session);
+    // #360: during the account's recovery cooldown its families can't be approved at all (D4).
+    stepup::requireNoCooldown(caller.user->id, family);
     if (!stepup::deviceApprovalMaySatisfy(family))
         throw ops::Refused("console_approval_required",
                            "A device's approval key can approve only keys and device.trust; ask for a console "
@@ -321,6 +325,8 @@ Submitted submit(const std::shared_ptr<protocols::ws::Session>& session, const s
         throw ops::Invalid("The approval signature does not verify under this device's approval key");
     }
 
+    // #360: a cooldown that started after the challenge holds the grant back too.
+    stepup::requireNoCooldown(caller.user->id, taken->family);
     const auto expires = ApprovalClock::now() + stepup::ttl();
     std::optional<std::string> target;
     if (stepup::targetBound(taken->family)) target = taken->target;
@@ -340,6 +346,7 @@ Submitted submit(const std::shared_ptr<protocols::ws::Session>& session, const s
 Approval request(const std::shared_ptr<protocols::ws::Session>& session, const stepup::Family family,
                  const std::optional<std::string>& target, const std::string& summary) {
     const auto caller = approvalDeviceCaller(session);
+    stepup::requireNoCooldown(caller.user->id, family);  // #360 (D4)
     const auto bound = approvalTarget(family, target);
     const auto text = device::normalizeDisplayText(summary, kMaxSummaryCodePoints);
     if (!text)
@@ -470,7 +477,12 @@ ApproveAnswer approve(const std::shared_ptr<protocols::ws::Session>& session, co
         throw ops::Invalid("Only a passkey can approve a device's request. Without one, do the action in the console.");
     }
     auto a = approvalPendingFor(caller.user->id, id);
-    const auto credentials = mfa::passkeys::available() ? mfa::passkeys::usableCredentials(caller.user->id)
+    // #360: never during the recovery cooldown for its families, and only passkeys the MFA policy allows; a passkey
+    // enrolled during the recovery never approves a cooldown family while the cooldown runs.
+    stepup::requireNoCooldown(caller.user->id, a.family);
+    const bool excludeRecovery =
+        stepup::cooldownFamily(a.family) && mfa::recovery::cooldownUntil(caller.user->id).has_value();
+    const auto credentials = mfa::passkeys::available() ? mfa::policy::allowedPasskeys(*caller.user, excludeRecovery)
                                                         : std::vector<mfa::WebAuthnCredential>{};
     if (credentials.empty())
         throw ops::Refused("passkey_required", "Approving a device's request takes a passkey. Add one (Account > "
@@ -483,8 +495,13 @@ ApproveAnswer approve(const std::shared_ptr<protocols::ws::Session>& session, co
                                                                           scope)};
     if (!payload.at("credential").is_object()) throw ops::Invalid("credential is a PublicKeyCredential's JSON form");
 
-    const auto verified = mfa::passkeys::verifyApproval(session->uuid, caller.user->id, payload.at("credential").dump(),
-                                                        scope);
+    auto verified = mfa::passkeys::verifyApproval(session->uuid, caller.user->id, payload.at("credential").dump(),
+                                                  scope);
+    // The assertion names its own credential: it must be one of those offered.
+    if (verified && std::ranges::none_of(credentials, [&](const mfa::WebAuthnCredential& c) {
+            return c.id == verified->factor_id;
+        }))
+        verified.reset();
     if (!verified) {
         const int failures = session->stepUp().recordFailure();
         const int remaining = std::max(0, stepup::kMaxFailures - failures);

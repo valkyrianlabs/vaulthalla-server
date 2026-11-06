@@ -137,8 +137,7 @@ Config& Config::operator=(Config&&) noexcept = default;
         if (auto node = root["auth"]) {
             YAML::convert<AuthConfig>::decode(node, cfg.auth);
             try {
-                validateWebAuthn(cfg.auth.webauthn);
-                validateMfa(cfg.auth.mfa);
+                validateAuth(cfg.auth);
             } catch (const std::invalid_argument& e) {
                 throw std::invalid_argument(std::string("config.yaml: ") + e.what());
             }
@@ -762,27 +761,70 @@ Config& Config::operator=(Config&&) noexcept = default;
         if (j.contains("webauthn")) j.at("webauthn").get_to(c.webauthn);
         c.mfa = MfaConfig{};
         if (j.contains("mfa")) j.at("mfa").get_to(c.mfa);
+        validateAuth(c);
     }
 
     void to_json(nlohmann::json &j, const MfaConfig &c) {
-        j = {{"step_up_ttl_seconds", c.step_up_ttl_seconds}};
+        j = {{"policy", c.policy},
+             {"admin_webauthn_only", c.admin_webauthn_only},
+             {"admin_device_bound_only", c.admin_device_bound_only},
+             {"recovery_cooldown_hours", c.recovery_cooldown_hours},
+             {"step_up_ttl_seconds", c.step_up_ttl_seconds}};
+    }
+
+    namespace {
+    // A whole number in [min, max] at `key`, or `fallback` when the key is absent or null.
+    long long mfaWhole(const nlohmann::json &j, const char *key, const long long fallback, const long long min,
+                       const long long max, const char *unit) {
+        const auto &v = j.contains(key) ? j.at(key) : nlohmann::json(nullptr);
+        if (!v.is_null() && !v.is_number_integer())
+            throw std::invalid_argument(std::string("auth.mfa.") + key + " must be a whole number of " + unit);
+        const auto n = v.is_null() ? fallback : v.get<long long>();
+        if (n < min || n > max)
+            throw std::invalid_argument(std::string("auth.mfa.") + key + " must be between " + std::to_string(min) +
+                                        " and " + std::to_string(max));
+        return n;
+    }
+
+    bool mfaFlag(const nlohmann::json &j, const char *key, const bool fallback) {
+        const auto &v = j.contains(key) ? j.at(key) : nlohmann::json(nullptr);
+        if (v.is_null()) return fallback;
+        if (!v.is_boolean()) throw std::invalid_argument(std::string("auth.mfa.") + key + " must be true or false");
+        return v.get<bool>();
+    }
     }
 
     // A key left out keeps its default; the result is validated as config.yaml is (settings.update answers invalid).
     void from_json(const nlohmann::json &j, MfaConfig &c) {
         const MfaConfig d;
-        const auto& ttl = j.contains("step_up_ttl_seconds") ? j.at("step_up_ttl_seconds") : nlohmann::json(nullptr);
-        if (!ttl.is_null() && !ttl.is_number_integer())
-            throw std::invalid_argument("auth.mfa.step_up_ttl_seconds must be a whole number of seconds");
-        const auto seconds = ttl.is_null() ? static_cast<long long>(d.step_up_ttl_seconds) : ttl.get<long long>();
-        if (seconds < 60 || seconds > 900)
-            throw std::invalid_argument("auth.mfa.step_up_ttl_seconds must be between 60 and 900");
-        c.step_up_ttl_seconds = static_cast<unsigned int>(seconds);
+        const auto &policy = j.contains("policy") ? j.at("policy") : nlohmann::json(nullptr);
+        if (!policy.is_null() && !policy.is_string())
+            throw std::invalid_argument("auth.mfa.policy must be optional, admins or all");
+        c.policy = policy.is_null() ? d.policy : policy.get<std::string>();
+        c.admin_webauthn_only = mfaFlag(j, "admin_webauthn_only", d.admin_webauthn_only);
+        c.admin_device_bound_only = mfaFlag(j, "admin_device_bound_only", d.admin_device_bound_only);
+        c.recovery_cooldown_hours = static_cast<unsigned int>(
+            mfaWhole(j, "recovery_cooldown_hours", d.recovery_cooldown_hours, 1, 168, "hours"));
+        c.step_up_ttl_seconds =
+            static_cast<unsigned int>(mfaWhole(j, "step_up_ttl_seconds", d.step_up_ttl_seconds, 60, 900, "seconds"));
+        validateMfa(c);
     }
 
     void validateMfa(const MfaConfig &c) {
+        if (std::ranges::find(kMfaPolicies, std::string_view(c.policy)) == kMfaPolicies.end())
+            throw std::invalid_argument("auth.mfa.policy must be optional, admins or all");
+        if (c.recovery_cooldown_hours < 1 || c.recovery_cooldown_hours > 168)
+            throw std::invalid_argument("auth.mfa.recovery_cooldown_hours must be between 1 and 168");
         if (c.step_up_ttl_seconds < 60 || c.step_up_ttl_seconds > 900)
             throw std::invalid_argument("auth.mfa.step_up_ttl_seconds must be between 60 and 900");
+    }
+
+    void validateAuth(const AuthConfig &c) {
+        validateWebAuthn(c.webauthn);
+        validateMfa(c.mfa);
+        if ((c.mfa.admin_webauthn_only || c.mfa.admin_device_bound_only) && c.webauthn.rp_id.empty())
+            throw std::invalid_argument("auth.mfa.admin_webauthn_only and admin_device_bound_only need passkeys: set "
+                                        "auth.webauthn.rp_id and origins first, or no admin could sign in");
     }
 
     void to_json(nlohmann::json &j, const WebAuthnConfig &c) {

@@ -61,7 +61,17 @@ vh user create <username> --role <role-or-id> [--email <email>] [--linux-uid <ui
 vh user info <username-or-id>
 vh user update <username-or-id> --name <new-name> --email <email> --role <role-or-id> --linux-uid <uid>
 vh user delete <username-or-id>
+vh user mfa status <username-or-id> [--json]
+vh user mfa reset <username-or-id> [--reason <text>] [--yes]
+vh user mfa require <username-or-id> [--off]
 ```
+
+`vh user mfa reset` is the host recovery for an account that lost every second factor, including the sole super
+admin: its passkeys and authenticator apps are disabled, its recovery codes voided, every session signed out and the
+automatic key backup of its paired devices paused (they stay paired); it sets up a new factor at its next sign-in, and
+sensitive actions wait for the recovery cooldown. Run it as the Linux user bound to your own account (for yourself)
+or to an account that may reset the target's password; never with `sudo` (root is refused). A super admin's MFA only
+a super admin may reset. `vh user mfa require` can't change your own account.
 
 The built-in `super_admin` role and user are protected from normal create, update, and delete operations.
 
