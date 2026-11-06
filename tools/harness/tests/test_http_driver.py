@@ -8,7 +8,7 @@ import threading
 import time
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 from urllib.parse import unquote_plus
 
 from vhh.drivers.http import HttpLane
@@ -18,10 +18,16 @@ from vhh.redact import Redactor
 from tools.lab.pentest.client import HttpResult, Target, http_request, upload_files
 
 COOKIE = "refresh=private-refresh-value"
+VERSION = '"g7-0123abcd"'
 
 
 def response(status=200, body=b""):
     return HttpResult(status, {}, body)
+
+
+def entry(version=VERSION):
+    return Result("ok", data={"vault": "v", "path": "/file",
+                              "entry": {"name": "file"} if version is None else {"content_version": version}})
 
 
 class HttpLaneTests(unittest.IsolatedAsyncioTestCase):
@@ -30,7 +36,8 @@ class HttpLaneTests(unittest.IsolatedAsyncioTestCase):
         self.lane = HttpLane(43124, self.redactor)
         self.ws = SimpleNamespace(principal="u-alice", ws=object(), login_result=Result("ok"),
                                   target=Target("127.0.0.1", ws_port=43123),
-                                  cookie_header=Mock(return_value=COOKIE))
+                                  cookie_header=Mock(return_value=COOKIE),
+                                  execute=AsyncMock(return_value=Result("not_found")))
         self.lane.attach(self.ws)
         self.addAsyncCleanup(self.lane.close)
         self.send = self.enterContext(patch("vhh.drivers.http.http_request"))
@@ -84,6 +91,108 @@ class HttpLaneTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls[1].kwargs["body"], b"contents")
         self.assertTrue(all(c.kwargs["cookie"] == COOKIE for c in calls))
         self.assert_safe(result)
+
+    async def test_upload_reads_the_target_entry_over_the_session_websocket(self):
+        self.send.side_effect = [response(body=b'{"upload_id":"abc"}'), response(), response()]
+        self.assertEqual((await self.lane.upload(42, "/new", b"contents", 2)).outcome, "ok")
+        probe, deadline = self.ws.execute.call_args.args
+        self.assertEqual((probe.surface, probe.principal, probe.op, probe.args),
+                         ("ws", "u-alice", "fs.stat", {"vault_id": 42, "path": "/new"}))
+        self.assertLessEqual(deadline, 2)
+
+    async def test_overwrite_replaces_through_conditional_content_lane(self):
+        # #404: a file that exists is replaced with PUT /upload/content and If-Match, never the create-only session.
+        self.ws.execute.return_value = entry()
+        self.send.return_value = response()
+        result = await self.lane.upload(42, "/a b+é", b"version two", 2)
+        self.assertEqual((result.outcome, result.code), ("ok", 200))
+        self.assertEqual(result.bytes_sha256, hashlib.sha256(b"version two").hexdigest())
+        self.assertEqual(result.data, {"size": 11})
+        self.send.assert_called_once()
+        call = self.send.call_args
+        self.assertEqual(call.args[1:], ("PUT", "/upload/content"))
+        self.assertEqual(call.kwargs["query"], {"vault_id": 42, "path": "/a b+é"})
+        self.assertEqual(call.kwargs["body"], b"version two")
+        self.assertEqual(call.kwargs["cookie"], COOKIE)
+        self.assertEqual(call.kwargs["headers"]["If-Match"], VERSION)
+        self.assertNotIn("If-None-Match", call.kwargs["headers"])
+        self.assertLessEqual(call.kwargs["timeout"], 2)
+        self.assertTrue(result.rendered.startswith("PUT /upload/content?"))
+        self.assert_safe(result)
+
+    async def test_empty_overwrite(self):
+        self.ws.execute.return_value = entry()
+        self.send.return_value = response()
+        result = await self.lane.upload(42, "/file", b"", 1)
+        self.assertEqual(result.outcome, "ok")
+        self.assertEqual(self.send.call_args.kwargs["body"], b"")
+        self.assertEqual(result.bytes_sha256, hashlib.sha256(b"").hexdigest())
+
+    async def test_overwrite_refusals_are_typed_and_never_cancel_a_session(self):
+        # 412: the file changed (or was opened on the mount) after it was read, a legitimate concurrent-write conflict.
+        for code, expected in [(412, "conflict"), (403, "denied"), (401, "denied"), (409, "conflict"),
+                               (413, "invalid"), (428, "error"), (400, "error"), (500, "error")]:
+            with self.subTest(code=code):
+                self.send.reset_mock()
+                self.ws.execute.return_value = entry()
+                self.send.side_effect = None
+                self.send.return_value = response(code, b'{"content_version":"private-password-value"}')
+                result = await self.lane.upload(42, "/file", b"contents", 1)
+                self.assertEqual((result.outcome, result.code), (expected, code))
+                self.assertEqual(result.detail, f"HTTP replace failed ({code})")
+                self.assertIsNone(result.body)
+                self.assertIsNone(result.bytes_sha256)
+                self.send.assert_called_once()
+                self.assert_safe(result)
+
+    async def test_overwrite_of_a_removed_file_creates_it_once(self):
+        self.ws.execute.return_value = entry()
+        self.send.side_effect = [response(404), response(body=b'{"upload_id":"abc"}'), response(), response()]
+        result = await self.lane.upload(42, "/file", b"contents", 2)
+        self.assertEqual((result.outcome, result.code), ("ok", 200))
+        self.assertEqual([c.args[1:] for c in self.send.call_args_list], [
+            ("PUT", "/upload/content"), ("POST", "/upload/session"), ("PUT", "/upload/abc/files/f0"),
+            ("POST", "/upload/abc/finish")])
+        self.assertTrue(result.rendered.startswith("POST /upload/session?"))
+
+        self.send.reset_mock()
+        self.send.side_effect = [response(404), response(403)]
+        result = await self.lane.upload(42, "/file", b"contents", 2)
+        self.assertEqual((result.outcome, result.code), ("denied", 403))
+        self.assertEqual(self.send.call_count, 2)
+
+    async def test_targets_without_a_file_version_use_the_create_lane(self):
+        for probe in (Result("not_found"), Result("denied"), Result("invalid"), entry(None)):
+            with self.subTest(probe=probe.outcome):
+                self.send.reset_mock()
+                self.ws.execute.return_value = probe
+                self.send.side_effect = [response(body=b'{"upload_id":"abc"}'), response(), response()]
+                result = await self.lane.upload(42, "/file", b"contents", 1)
+                self.assertEqual(result.outcome, "ok")
+                self.assertEqual(self.send.call_args_list[0].args[1:], ("POST", "/upload/session"))
+
+    async def test_failed_version_lookup_never_writes(self):
+        for probe, expected in [(Result("timeout"), "timeout"), (Result("disconnected"), "disconnected"),
+                                (Result("error", detail="private-password-value"), "error"),
+                                (entry('"g1"\r\nCookie: x'), "error"), (entry(7), "error"), (entry(""), "error"),
+                                (entry("g1-unquoted"), "error")]:
+            with self.subTest(probe=probe):
+                self.ws.execute.return_value = probe
+                result = await self.lane.upload(42, "/file", b"contents", 1)
+                self.assertEqual(result.outcome, expected)
+                self.assertTrue(result.rendered.startswith("fs.metadata?"))
+                self.assert_safe(result)
+        self.send.assert_not_called()
+
+    async def test_version_lookup_counts_against_the_deadline(self):
+        async def slow(*_):
+            await asyncio.sleep(.15)
+            return entry()
+
+        self.ws.execute.side_effect = slow
+        result = await self.lane.upload(42, "/file", b"contents", .1)
+        self.assertEqual(result.outcome, "timeout")
+        self.send.assert_not_called()
 
     async def test_empty_upload(self):
         self.send.side_effect = [response(body=b'{"upload_id":"abc"}'), response()]

@@ -1,4 +1,13 @@
-"""The console's authenticated HTTP transfer lane, sharing a WsDriver session and the pentest transports."""
+"""The console's authenticated HTTP transfer lane, sharing a WsDriver session and the pentest transports.
+
+Writes go where the console would send them (#404). The lane first reads the target's entry over the session's ws
+(`fs.metadata`), as the console knows the entry it saves over:
+
+- a file is there: PUT /upload/content with If-Match set to its content_version. A 412 means the file changed (or
+  was opened on the mount) between that read and the write, a legitimate concurrent-write conflict ("conflict"). A 404
+  means it was removed meanwhile, and the write is made once more as a create.
+- nothing is there (or the entry cannot be read): the create-only upload lane, POST /upload/session.
+"""
 from __future__ import annotations
 
 import asyncio
@@ -14,10 +23,12 @@ from urllib.parse import urlencode
 import vhh._repo  # noqa: F401 - make tools.lab importable when only tools/harness is on sys.path
 from tools.lab.pentest.client import Target as NetTarget
 from tools.lab.pentest.client import http_request, upload_files
-from vhh.model import Result
+from vhh.model import Op, Result
 
 _STATUS = {200: "ok", 401: "denied", 403: "denied", 404: "not_found", 409: "conflict", 412: "conflict",
            413: "invalid", 415: "invalid", 422: "invalid"}
+# An entity-tag as the daemon sends content_version (RFC 9110 8.8.3, strong): it goes into a request header verbatim.
+_ETAG = re.compile(r'"[\x21\x23-\x7e]{1,256}"')
 
 
 class _Transfer:
@@ -123,6 +134,24 @@ class HttpLane:
             return self._result("invalid", "POST /upload/session", now, detail="upload data must be bytes")
         return await self._transfer(vault_id, path, data, deadline_s)
 
+    async def _current_version(self, vault_id, path, deadline_s):
+        """The content_version of the file at path as the session sees it: a str, None (nothing there, not a file, or
+        not visible: the create lane decides), or the failed lookup's Result."""
+        probe = Op(seq=-1, session="http", principal=self._principal, surface="ws", op="fs.stat",
+                   args={"vault_id": vault_id, "path": path})
+        result = await self._ws.execute(probe, deadline_s)
+        if result.outcome == "ok":
+            entry = result.data.get("entry") if isinstance(result.data, dict) else None
+            version = entry.get("content_version") if isinstance(entry, dict) else None
+            if version is None:
+                return None
+            if isinstance(version, str) and _ETAG.fullmatch(version):
+                return version
+            return Result("error", detail="file entry has an invalid content_version", code=result.code)
+        if result.outcome in ("not_found", "denied", "invalid"):
+            return None
+        return result
+
     async def _transfer(self, vault_id, path, data, deadline_s):
         t0 = time.time_ns()
         upload = data is not None
@@ -140,13 +169,41 @@ class HttpLane:
         if not cookie:
             return self._result("denied", rendered, t0, detail="HTTP session is no longer authenticated")
         self._register_cookie(cookie)
-        rendered += "?" + urlencode(self.redactor.redact({"vault_id": vault_id, "path": path}))
+        query = "?" + urlencode(self.redactor.redact({"vault_id": vault_id, "path": path}))
+        version = None
+        if upload:
+            end = time.monotonic() + deadline_s
+            version = await self._current_version(vault_id, path, deadline_s)
+            if isinstance(version, Result):
+                outcome = version.outcome if version.outcome in ("timeout", "disconnected") else "error"
+                return self._result(outcome, "fs.metadata" + query, t0, code=version.code,
+                                    detail=f"HTTP upload: reading the current version failed ({version.outcome})")
+            deadline_s = end - time.monotonic()
+            if deadline_s <= 0:
+                return self._result("timeout", rendered + query, t0, detail="HTTP transfer deadline exceeded")
+            if version is not None:
+                rendered = "PUT /upload/content"
+        rendered += query
         # Reserve a small part of an upload's total budget to cancel a partial server upload session.
         reserve = min(0.25, deadline_s / 4) if upload else 0
         context = _Transfer(time.monotonic() + deadline_s, reserve)
 
         def work():
+            nonlocal rendered
             try:
+                if upload and version is not None:
+                    response = context.request(self.target, "PUT", "/upload/content",
+                                               query={"vault_id": vault_id, "path": path}, body=data, cookie=cookie,
+                                               headers={"Content-Type": "application/octet-stream",
+                                                        "If-Match": version})
+                    code = response.status
+                    if code != 404:
+                        return self._result(_STATUS.get(code, "error"), rendered, t0, code=code,
+                                            detail="" if code == 200 else f"HTTP replace failed ({code})",
+                                            body=data if code == 200 else None)
+                    # Removed since it was read: the console's next save creates it.
+                    context.failure_status = None
+                    rendered = "POST /upload/session" + query
                 if upload:
                     completed = False
                     try:

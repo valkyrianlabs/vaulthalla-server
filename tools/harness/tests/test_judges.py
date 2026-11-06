@@ -29,6 +29,26 @@ class OracleJudge(unittest.TestCase):
         self.assertGreater(rig.engine.judges.counts["canary.scanned"], 0)
 
 
+class WriteConflict(unittest.TestCase):
+    """#404: a conditional replace refused with 412 lost a race; it is a typed answer, not an unexplained error."""
+
+    def observe(self, result):
+        from vhh.judges import Judges, Observation
+        from vhh.model import Op
+        from vhh.state import Snapshot
+        op = Op(7, "s00", "u-alice", "ws", "fs.write", {"vault": "v-alice", "path": "/README.md", "version": 2})
+        return Judges().judge(Observation(op, result, [Snapshot(0, 0, pentest())], 5))
+
+    def test_412_conflict_is_legitimate(self):
+        from vhh.model import Result
+        self.assertEqual(self.observe(Result("conflict", "HTTP replace failed (412)", code=412)), [])
+
+    def test_untyped_upload_failure_is_still_an_error(self):
+        from vhh.model import Result
+        verdicts = self.observe(Result("error", "HTTP upload failed (400)", code=400))
+        self.assertEqual([v.judge for v in verdicts], ["error"])
+
+
 class CanaryJudge(unittest.TestCase):
     def test_leak_through_a_different_lane_still_trips(self):
         # a denied principal gets bytes over http that contain a foreign canary
