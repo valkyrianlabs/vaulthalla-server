@@ -131,9 +131,9 @@ TEST(OfflineStartup, ListenersStartWithoutNetworkAndWithoutListFiles) {
     Strength::setBreachEndpointForTesting("http://10.255.255.1/range/");  // unroutable: would hang if ever used
 
     // The probe connections below are accepted by the real ws server, which hands them to the session manager the
-    // daemon always has (this test process has none until we give it one).
+    // daemon always has: a private one for this test, so its sessions never join the process-wide one (#397).
     const auto previousSessions = runtime::Deps::get().sessionManager;
-    if (!previousSessions) runtime::Deps::get().sessionManager = std::make_shared<auth::session::Manager>();
+    runtime::Deps::get().sessionManager = std::make_shared<auth::session::Manager>();
     const auto previousConfig = config::Registry::get();
     const auto previousLists = paths::passwordListsPath;
     paths::passwordListsPath = scratchDir("missing") / "does-not-exist";
@@ -167,6 +167,8 @@ TEST(OfflineStartup, ListenersStartWithoutNetworkAndWithoutListFiles) {
         // was a use-after-free: an intermittent SIGSEGV under MALLOC_PERTURB_ (meson test sets it). The service now
         // keeps the context while any ws session object is alive.
         service.stop();
+        // As the daemon's shutdown does: the cached probe sessions go while the context they were bound to is alive.
+        (void)runtime::Deps::releaseSessions();
     }
     EXPECT_EQ(Strength::outboundRequestCount(), requestsBefore) << "startup made an outbound request";
 

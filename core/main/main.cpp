@@ -257,6 +257,13 @@ void shutdownVaulthalla() {
     // storage engines and the DB pool they use are still up.
     vh::preview::derive::Queue::instance().shutdown();
     ThreadPoolManager::instance().shutdown();
+    // Every listener has stopped. The resumable-upload workers are joined once more: ProtocolService joined them, but a
+    // device-listener upload still finishing then could start them again, and a joinable thread left in their static
+    // registry aborts the process at exit (#389).
+    vh::protocols::http::upload::resumable::Service::shutdown();
+    // Cached ws sessions go now, while their listeners' io_contexts (kept by the stopped services) and everything else
+    // a session's teardown uses are still alive; never in static destruction after main (#397, #385).
+    (void)vh::runtime::Deps::releaseSessions();
 
     log->info("[✓] Vaulthalla services shut down cleanly.");
 }

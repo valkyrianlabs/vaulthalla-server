@@ -634,11 +634,12 @@ bool Session::handle_transfer(HeaderParser& parser) {
         res.result(status::ok);
         res.set(field::content_type, "application/octet-stream");
         res.set(field::cache_control, "no-store");
+        // The source releases the slot as it produces the last byte (or when the response ends early and drops it).
         res.reader = transfer::randomSource(*bytes, static_cast<uint64_t>(
-                                                        std::chrono::steady_clock::now().time_since_epoch().count()));
+                                                        std::chrono::steady_clock::now().time_since_epoch().count()),
+                                            std::move(slot));
         res.length = *bytes;
         res.keep_alive(keepAlive && !hasBody);
-        res.onFinish = [slot = std::move(slot)](uint64_t, bool) mutable { slot.reset(); };
         const bool alive = res.keep_alive();
         return write_response(std::move(res)) && alive;
     }
@@ -657,8 +658,10 @@ bool Session::handle_transfer(HeaderParser& parser) {
                 last = std::chrono::steady_clock::now();
                 if (!first) first = last;
                 received += used;
-                if (received > transfer::kMaxBytes)
+                if (received > transfer::kMaxBytes) {
+                    slot.reset();  // like every answer here: free before the client can see it
                     return error(status::payload_too_large, "too_large", "at most 268435456 bytes", true);
+                }
             }
             if (ec == boost::beast::http::error::need_buffer) {
                 ec = {};

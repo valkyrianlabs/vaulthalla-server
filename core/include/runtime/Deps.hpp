@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <memory>
 #include "auth/Fwd.hpp"
 #include "crypto/Fwd.hpp"
@@ -56,6 +57,11 @@ namespace vh::runtime {
         static Deps& get();
         static void init();
         static void setSyncController(std::shared_ptr<sync::Controller> controller);
+        // Drops every ws session the session manager caches; returns how many there were. Called once the services
+        // have stopped and before main returns (the daemon's shutdown, the unit-test binary after each suite and at
+        // exit): Deps lives until static destruction, and a session destroyed there would tear down its socket and
+        // reach the session counters, the passkey registry and logging after they may already be gone (#385, #397).
+        static std::size_t releaseSessions();
 
         void setFuseSession(fuse_session* session) { fuseSession = session; }
         [[nodiscard]] SanityStatus sanityStatus() const;

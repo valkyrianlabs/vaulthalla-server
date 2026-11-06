@@ -51,7 +51,12 @@ Fwd.hpp once it's forward-declared in more than one place. The `vh_usage` librar
 
 `core/main/main.cpp` boot sequence: config + log registries → DB init + prepared statements +
 optional seed → runtime deps → storage wiring (+ derived-cache startup sweep) → `runtime::Manager` start → wait
-for SIGINT/SIGTERM. Shutdown: `Manager::stopAll` → `preview::derive::Queue::shutdown()` → thread pools.
+for SIGINT/SIGTERM. Shutdown: `Manager::stopAll` → `preview::derive::Queue::shutdown()` → thread pools →
+`resumable::Service::shutdown()` again (a late device upload could restart its workers; a joinable worker in the
+static registry aborts at exit) → `runtime::Deps::releaseSessions()` (the cached ws sessions go before main returns, while the io_contexts their sockets
+were bound to still exist; a session destroyed in static destruction crashed at exit, #397/#385). An io_context a
+stopped listener keeps for sessions that outlived it (`protocols::retainForProcessLifetime`) is never freed, not even
+by static destruction.
 Shutdown is bounded and fast (restart ≈1 s; guard: `test_shutdown_bounds.cpp`): the SIGTERM/SIGINT handler only sets
 an atomic and notifies a `platform::Waker` (eventfd on Linux, self-pipe on macOS); a watcher thread (started before startup) wakes main and `_Exit`s 10 s after the first
 signal whatever main is doing; a second signal exits at once. `stopAll` calls `requestStop()` on every service but FUSE

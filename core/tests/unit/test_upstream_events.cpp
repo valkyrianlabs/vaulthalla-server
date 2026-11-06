@@ -129,9 +129,11 @@ protected:
         return n;
     }
 
+    // One short poll (no long-poll wait), as a test drives it; the service's pollers long-poll like the real queue.
     static sync::events::PollOutcome poll(const EventVault& v) {
         FakeEvents client(providerState());
-        return sync::events::Service::pollOnce(*db::query::upstream::Channel::get(v.channel.id), client);
+        return sync::events::Service::pollOnce(*db::query::upstream::Channel::get(v.channel.id), client,
+                                               std::chrono::seconds{0});
     }
 
     // A foreign writer puts plaintext bytes straight into the bucket.
@@ -148,7 +150,7 @@ TEST_F(UpstreamEventsTest, MessagesAreAcknowledgedOnlyAfterTheyAreStored) {
     auto broken = *db::query::upstream::Channel::get(v.channel.id);
     broken.id = 987654321;
     FakeEvents client(providerState());
-    EXPECT_ANY_THROW((void)sync::events::Service::pollOnce(broken, client));
+    EXPECT_ANY_THROW((void)sync::events::Service::pollOnce(broken, client, std::chrono::seconds{0}));
     EXPECT_TRUE(providerState()->acked.empty());
     EXPECT_EQ(providerState()->queue.size(), 1u) << "the message is redelivered";
 
@@ -399,7 +401,7 @@ TEST_F(UpstreamEventsTest, R2NotificationFromAnotherAccountIsRefused) {
     providerState()->push(R"({"account":"ffffffffffffffffffffffffffffffff","action":"PutObject","bucket":")" + v.bucket +
                           R"(","object":{"key":"k","size":1,"eTag":"e"},"eventTime":"2026-10-15T12:00:00Z"})");
     FakeEvents client(providerState());
-    const auto out = sync::events::Service::pollOnce(ch, client);
+    const auto out = sync::events::Service::pollOnce(ch, client, std::chrono::seconds{0});
     EXPECT_EQ(out.undecodable, 1u);
     EXPECT_EQ(out.acked, 0u);
 }
@@ -793,7 +795,16 @@ TEST_F(UpstreamEventsHardeningTest, ShutdownIsBoundedDuringAnApplyBatch) {
     service.join();
     EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(1));
     v.f.bucket->blockHeads = false;
-    EXPECT_GE(countState(v.f.vault->id, umodel::InboxState::Pending), 1u) << "keys not reached stay pending";
+    // #412: the HEAD shutdown cancelled is not a failure. Every row stays pending as it was (no attempt burned, no
+    // backoff, no error), so stopping writes nothing to the database and waits on no commit.
+    const auto rows = inbox(v.f.vault->id);
+    ASSERT_EQ(rows.size(), 3u);
+    for (const auto& r : rows) {
+        EXPECT_EQ(r.state, umodel::InboxState::Pending) << r.object_key;
+        EXPECT_EQ(r.attempts, 0u) << r.object_key;
+        EXPECT_FALSE(r.next_attempt_at.has_value()) << r.object_key;
+        EXPECT_FALSE(r.last_error.has_value()) << r.object_key;
+    }
 }
 
 }

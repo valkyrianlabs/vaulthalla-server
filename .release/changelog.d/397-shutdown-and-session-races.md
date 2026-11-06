@@ -1,0 +1,5 @@
+- The daemon drops its cached ws sessions before main returns (`runtime::Deps::releaseSessions()`), and an io_context kept for sessions that outlived their listener is never freed: a session destroyed during static destruction could crash the process at exit (SIGSEGV in the websocket stream on Linux, "mutex lock failed" abort on macOS) (#397, #385).
+- A share session's identity (principal, session id, token) is read and replaced under a lock; concurrent HTTP and resumable-upload threads could read a torn token ("Malformed share token prefix") (#389).
+- Device `/transfer/source` releases its calibration slot as the last byte is produced, so a client never sees its finished request still counted against the two-at-once limit (#389).
+- The upstream event applier no longer records a HEAD cancelled by shutdown as a failure: the row stays pending with no attempt burned, no backoff and no database write while stopping (#412).
+- Unit tests: a suite that leaves sessions in the process-wide session manager fails at its own end; device suites shut down their resumable upload workers and io_contexts; the fake event queue long-polls like SQS (#385, #389, #397, #412).

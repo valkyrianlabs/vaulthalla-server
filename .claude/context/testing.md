@@ -88,6 +88,14 @@ runs one logical operation through `shell::Router::executeLine` and through the 
 role, and compares allow/deny (against an oracle from the role's permission bits) and resulting DB state, never text.
 New families add a `test_ops_parity_<family>.cpp` on the same pattern.
 
+Teardown order (#385, #389, #397): nothing a suite starts may outlive it. `gtest_main.cpp` installs a `SessionLeakGuard`
+that fails any suite leaving ws sessions in `runtime::Deps`' session manager (and drops them before the next suite),
+and `main` joins the resumable-upload workers and calls `Deps::releaseSessions()` before returning, as the daemon does. A suite running a listener tears down
+in the product's order: close the listener and its sessions, wait for its HTTP connections
+(`waitUntilNoDeviceSessionsAlive`), `resumable::Service::shutdown()` if it uploaded, stop and join the io threads,
+`Deps::releaseSessions()`, then destroy the io_context. Exit-time crashes after "PASSED" (SIGSEGV in a websocket
+stream destructor, macOS "mutex lock failed", "terminate called without an active exception") are this class.
+
 **Never print or commit secret values.** DB auth problems mean the harness role's settings and the role disagree:
 re-run `sudo tools/harness/bootstrap.sh` (it never rotates an existing role's password; remove the settings file first
 to re-key).

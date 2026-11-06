@@ -131,6 +131,11 @@ protected:
         ioc->stop();
         for (auto& t : threads) t.join();
         threads.clear();
+        listener.reset();
+        // What the daemon does before main returns (#397): the cached device sessions go while their io_context
+        // exists, then the context with the handlers still queued on it. Nothing outlives the suite.
+        (void)runtime::Deps::releaseSessions();
+        ioc.reset();
     }
 
     void SetUp() override {

@@ -27,6 +27,7 @@
 #include "db/query/device/BackupGrant.hpp"
 #include "db/query/device/Device.hpp"
 #include "db/query/rbac/role/Admin.hpp"
+#include "db/query/vault/Vault.hpp"
 #include "device/Crypto.hpp"
 #include "device/Pairing.hpp"
 #include "device/Peer.hpp"
