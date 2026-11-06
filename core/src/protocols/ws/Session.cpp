@@ -107,7 +107,7 @@ void Session::setAuthenticatedUser(const std::shared_ptr<User>& u) {
 
     clearShareSession();
     user = u;
-    mode_ = SessionMode::Human;
+    mode_.store(SessionMode::Human, std::memory_order_release);
     if (!tokens->refreshToken) throw std::runtime_error("Cannot set authenticated user without a refresh token in session");
     tokens->refreshToken->userId = user->id;
 }
@@ -117,10 +117,11 @@ void Session::setPendingShareSession(std::string sessionId, std::string sessionT
     if (sessionId.empty()) throw std::invalid_argument("Share session id is required");
     if (sessionToken.empty()) throw std::invalid_argument("Share session token is required");
 
+    std::scoped_lock lock(shareMutex_);
     sharePrincipal_.reset();
     shareSessionId_ = std::move(sessionId);
     shareSessionToken_ = std::move(sessionToken);
-    mode_ = SessionMode::SharePending;
+    mode_.store(SessionMode::SharePending, std::memory_order_release);
 }
 
 void Session::setSharePrincipal(std::shared_ptr<vh::share::Principal> principal, std::string sessionToken) {
@@ -128,17 +129,34 @@ void Session::setSharePrincipal(std::shared_ptr<vh::share::Principal> principal,
     if (!principal) throw std::invalid_argument("Share principal is required");
     if (sessionToken.empty()) throw std::invalid_argument("Share session token is required");
 
+    std::scoped_lock lock(shareMutex_);
     shareSessionId_ = principal->share_session_id;
     shareSessionToken_ = std::move(sessionToken);
     sharePrincipal_ = std::move(principal);
-    mode_ = SessionMode::Share;
+    mode_.store(SessionMode::Share, std::memory_order_release);
 }
 
 void Session::clearShareSession() {
+    std::scoped_lock lock(shareMutex_);
     sharePrincipal_.reset();
     shareSessionId_.clear();
     shareSessionToken_.clear();
-    mode_ = user ? SessionMode::Human : SessionMode::Unauthenticated;
+    mode_.store(user ? SessionMode::Human : SessionMode::Unauthenticated, std::memory_order_release);
+}
+
+std::shared_ptr<vh::share::Principal> Session::sharePrincipal() const {
+    std::scoped_lock lock(shareMutex_);
+    return sharePrincipal_;
+}
+
+std::string Session::shareSessionId() const {
+    std::scoped_lock lock(shareMutex_);
+    return shareSessionId_;
+}
+
+std::string Session::shareSessionToken() const {
+    std::scoped_lock lock(shareMutex_);
+    return shareSessionToken_;
 }
 
 void Session::setHandshakeRequest(const RequestType& req) { handshakeRequest_ = req; }
@@ -152,7 +170,8 @@ std::shared_ptr<handler::fs::Upload> Session::getUploadHandler() {
 
 vh::rbac::Actor Session::rbacActor() const {
     if (user) return vh::rbac::Actor::human(user);
-    if (mode_ == SessionMode::Share && sharePrincipal_) return vh::rbac::Actor::share(sharePrincipal_);
+    if (auto principal = sharePrincipal(); principal && mode() == SessionMode::Share)
+        return vh::rbac::Actor::share(std::move(principal));
     throw std::runtime_error("Unauthorized");
 }
 
@@ -247,7 +266,7 @@ void Session::acceptDevice(std::shared_ptr<TlsTransport> transport, const Reques
     userAgent = getUserAgent();
     devicePeer_ = std::move(peer);
     user = std::move(deviceUser);
-    mode_ = user ? SessionMode::Device : SessionMode::DevicePairing;
+    mode_.store(user ? SessionMode::Device : SessionMode::DevicePairing, std::memory_order_release);
 
     auto& ws = stream_->tls->ws;
     // A paired Desktop keeps its connection open indefinitely; pings find the dead ones.
@@ -296,7 +315,7 @@ std::shared_ptr<Session> Session::devicePrincipal(std::shared_ptr<const ::vh::de
     session->userAgent = "device-http";
     session->devicePeer_ = std::move(peer);
     session->user = std::move(deviceUser);
-    session->mode_ = SessionMode::Device;
+    session->mode_.store(SessionMode::Device, std::memory_order_release);
     session->onClose_ = std::move(onClose);
     session->handshakeComplete_.store(true, std::memory_order_release);  // nothing to hand-shake: the sweeper may judge it
     if (const auto manager = runtime::Deps::get().sessionManager) manager->cache(session);

@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <ctime>
 #include <deque>
 #include <map>
@@ -47,13 +48,18 @@ struct FakeProviderState {
     std::atomic<bool> pollEntered{false};
     unsigned int nextReceipt = 0;
 
+    std::condition_variable arrived;              // a long poll waits on it for push()
+
     void push(const std::string& body) {
-        std::scoped_lock lock(mutex);
-        padmin::ReceivedMessage m;
-        m.receipt = "r-" + std::to_string(++nextReceipt);
-        m.message_id = "m-" + std::to_string(nextReceipt);
-        m.body = body;
-        queue.push_back(std::move(m));
+        {
+            std::scoped_lock lock(mutex);
+            padmin::ReceivedMessage m;
+            m.receipt = "r-" + std::to_string(++nextReceipt);
+            m.message_id = "m-" + std::to_string(nextReceipt);
+            m.body = body;
+            queue.push_back(std::move(m));
+        }
+        arrived.notify_all();
     }
 };
 
@@ -159,14 +165,24 @@ public:
         std::scoped_lock lock(s_->mutex);
         ++s_->removeChannelCalls;
     }
-    padmin::PollResult poll(const padmin::ChannelRef&, const unsigned int max, std::chrono::seconds,
+    // Like SQS long polling (#412): an empty queue answers after `wait` unless a message arrives first, and the HTTP
+    // layer's cancellation aborts the wait. Returning at once instead put the service's poller in a hot loop of
+    // database writes that the real queue never causes, and shutdown waited on whichever commit was in flight.
+    padmin::PollResult poll(const padmin::ChannelRef&, const unsigned int max, const std::chrono::seconds wait,
                             std::chrono::seconds) override {
         s_->pollEntered = true;
         while (s_->blockPolls.load()) {
             if (storage::s3::curl::http::cancellationRequested()) throw padmin::ProviderError("cancelled");
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
-        std::scoped_lock lock(s_->mutex);
+        std::unique_lock lock(s_->mutex);
+        const auto until = std::chrono::steady_clock::now() + wait;
+        // The cancellation flag can't notify a condition variable: it is checked every 5 ms, as curl's progress
+        // callback checks it.
+        while (s_->queue.empty() && !s_->pollError && std::chrono::steady_clock::now() < until) {
+            if (storage::s3::curl::http::cancellationRequested()) throw padmin::ProviderError("cancelled");
+            s_->arrived.wait_for(lock, std::chrono::milliseconds(5));
+        }
         if (s_->pollError) throw padmin::ProviderError(*s_->pollError, "ServiceUnavailable", 503);
         padmin::PollResult r;
         // Messages stay queued until acknowledged (like a visibility timeout that expired at once).

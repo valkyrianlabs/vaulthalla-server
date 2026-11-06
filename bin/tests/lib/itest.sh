@@ -134,12 +134,19 @@ itest_preflight() {
   fi
 }
 
-# itest_source_fingerprint ROOT: the set of C++ files core/meson.build discovers. Meson lists sources with `find` at
-# configure time, so a build directory configured before a .cpp was added (or removed) builds a stale list and fails to
-# link (#270). Paths only, sorted: contents are ninja's business. The test builds keep -Ddb_tests at its default (true),
-# so the db-only tier marker never changes which files are built.
+# itest_source_fingerprint ROOT: the set of C++ files core/meson.build discovers, plus the build definitions themselves.
+# Meson lists sources with `find` at configure time, so a build directory configured before a .cpp was added (or
+# removed) builds a stale list and fails to link (#270). Paths only for sources, sorted: their contents are ninja's
+# business. The meson.build files count by content: `meson compile <target>` resolves targets from the last configure,
+# so a target a branch added (core/vh_unit_test_helpers) is "not found" until the directory is re-configured. The test
+# builds keep -Ddb_tests at its default (true), so the db-only tier marker never changes which files are built.
 itest_source_fingerprint() {
-  (cd "$1/core" && find . -type f -name '*.cpp' | LC_ALL=C sort | cksum)
+  (cd "$1" && {
+    (cd core && find . -type f -name '*.cpp' | LC_ALL=C sort)
+    find . \( -path './build*' -o -path ./web -o -path '*/.*' -o -name node_modules \) -prune -o \
+      \( -name meson.build -o -name meson_options.txt \) -type f -print \
+      | LC_ALL=C sort | while IFS= read -r f; do cksum "$f"; done
+  } | cksum)
 }
 
 # itest_ensure_build DIR TARGET... : configure DIR with ITEST_BUILD_OPTS if it has no build.ninja; re-configure it when

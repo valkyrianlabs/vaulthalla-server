@@ -1,3 +1,4 @@
+#include "../helpers/temp_dir.hpp"
 #include "fs/model/Directory.hpp"
 #include "protocols/http/upload/Staging.hpp"
 #include "fs/model/File.hpp"
@@ -485,7 +486,7 @@ protected:
         vh::share::Token::setPepperForTesting(std::vector<uint8_t>(32, 0x61));
         oldBackingPath = vh::paths::backingPath;
         oldMountPath = vh::paths::mountPath;
-        testRoot = std::filesystem::temp_directory_path() / "vh_http_share_upload_unit";
+        testRoot = vh::test::uniqueTempRoot("vh_http_share_upload_unit");
         std::filesystem::remove_all(testRoot);
         vh::paths::backingPath = testRoot / "backing";
         vh::paths::mountPath = testRoot / "mount";

@@ -1,3 +1,4 @@
+#include "../helpers/temp_dir.hpp"
 #include "db/query/rbac/role/Admin.hpp"
 #include "auth/Manager.hpp"
 #include "db/encoding/interval.hpp"
@@ -1458,7 +1459,7 @@ TEST(S3CostSafetyTest, PolicyIntervalsDefaultAndClampToNonZero) {
 }
 
 TEST(S3CostSafetyTest, EngineFreeSpaceSaturatesFiniteQuota) {
-    ScopedPathRoots paths(std::filesystem::temp_directory_path() / "vh_engine_quota_finite");
+    ScopedPathRoots paths(vh::test::uniqueTempRoot("vh_engine_quota_finite"));
 
     auto vault = std::make_shared<vh::vault::model::Vault>();
     vault->id = 1001;
@@ -1482,7 +1483,7 @@ TEST(S3CostSafetyTest, EngineFreeSpaceSaturatesFiniteQuota) {
 }
 
 TEST(S3CostSafetyTest, EngineFreeSpaceTreatsZeroQuotaAsUnlimitedWithoutUnderflow) {
-    ScopedPathRoots paths(std::filesystem::temp_directory_path() / "vh_engine_quota_unlimited");
+    ScopedPathRoots paths(vh::test::uniqueTempRoot("vh_engine_quota_unlimited"));
 
     auto vault = std::make_shared<vh::vault::model::Vault>();
     vault->id = 1002;
@@ -2630,7 +2631,7 @@ TEST(S3CostSafetyTest, CloudTrashPurgeDeletesRemoteIndexWithoutRemoteOnlyDownloa
 }
 
 TEST(S3CostSafetyTest, RemoveTrashedFileUsesAbsoluteBackingPathDirectly) {
-    ScopedPathRoots paths(std::filesystem::temp_directory_path() / "vh_trash_absolute_backing");
+    ScopedPathRoots paths(vh::test::uniqueTempRoot("vh_trash_absolute_backing"));
 
     auto vault = std::make_shared<vh::vault::model::Vault>();
     vault->id = 2001;

@@ -496,7 +496,7 @@ TEST(DeviceTransfer, AtMostTwoCalibrationsPerDevice) {
 }
 
 TEST(DeviceTransfer, RandomSourceIsPositionedAndExact) {
-    const auto reader = transfer::randomSource(1000, 42);
+    const auto reader = transfer::randomSource(1000, 42, nullptr);
     EXPECT_EQ(reader->size(), 1000u);
     std::vector<uint8_t> whole(1000);
     ASSERT_EQ(reader->read(0, whole), 1000u);
@@ -509,8 +509,32 @@ TEST(DeviceTransfer, RandomSourceIsPositionedAndExact) {
     // Not a constant fill.
     EXPECT_GT(std::ranges::count_if(whole, [&](const uint8_t b) { return b != whole[0]; }), 900);
     std::vector<uint8_t> other(1000);
-    (void)transfer::randomSource(1000, 43)->read(0, other);
+    (void)transfer::randomSource(1000, 43, nullptr)->read(0, other);
     EXPECT_NE(other, whole);
+}
+
+// #389: the slot is released as the last byte is produced, before the session writes it, so a client that sees the
+// response end never finds that request still holding a slot (it used to be released after the final write returned,
+// and a client fast enough to ask first saw it still counted).
+TEST(DeviceTransfer, TheSourceReleasesItsSlotWithItsLastByte) {
+    const auto reader = transfer::randomSource(1000, 7, transfer::acquire(9101));
+    EXPECT_EQ(transfer::inFlightForTesting(9101), 1u) << "held while bytes remain";
+    std::vector<uint8_t> chunk(600);
+    ASSERT_EQ(reader->read(0, chunk), 600u);
+    EXPECT_EQ(transfer::inFlightForTesting(9101), 1u);
+    ASSERT_EQ(reader->read(600, chunk), 400u);
+    EXPECT_EQ(transfer::inFlightForTesting(9101), 0u) << "free once the body is complete, with the reader still alive";
+
+    const auto empty = transfer::randomSource(0, 7, transfer::acquire(9101));
+    EXPECT_EQ(empty->size(), 0u);
+    EXPECT_EQ(transfer::inFlightForTesting(9101), 0u) << "nothing to send: never held";
+
+    // A response that ends early (the client went away) releases it with the reader.
+    auto abandoned = transfer::randomSource(1000, 7, transfer::acquire(9101));
+    ASSERT_EQ(abandoned->read(0, chunk), 600u);
+    EXPECT_EQ(transfer::inFlightForTesting(9101), 1u);
+    abandoned.reset();
+    EXPECT_EQ(transfer::inFlightForTesting(9101), 0u);
 }
 
 }

@@ -2,6 +2,7 @@
 
 #include "UsageManager.hpp"
 #include "auth/Manager.hpp"
+#include "auth/session/Manager.hpp"
 #include "crypto/secrets/Manager.hpp"
 #include "fs/cache/Registry.hpp"
 #include "identities/Manager.hpp"
@@ -35,6 +36,11 @@ namespace vh::runtime {
 
     void Deps::setSyncController(std::shared_ptr<sync::Controller> controller) {
         get().syncController = std::move(controller);
+    }
+
+    std::size_t Deps::releaseSessions() {
+        const auto manager = get().sessionManager;
+        return manager ? manager->releaseAll() : 0;
     }
 
     Deps::SanityStatus Deps::sanityStatus() const {

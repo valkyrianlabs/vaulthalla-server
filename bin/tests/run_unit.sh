@@ -41,7 +41,7 @@ done
 
 if [[ "$(uname -s)" == Darwin ]]; then itest_preflight_darwin; else itest_preflight; fi
 itest_log "building vh_unit_tests in $BUILD_DIR"
-itest_ensure_build "$BUILD_DIR" core/vh_unit_tests core/vh_fake_derive_helper  # the derive suites spawn the fake helper
+itest_ensure_build "$BUILD_DIR" core/vh_unit_tests core/vh_unit_test_helpers  # the helpers the derive/preview suites spawn
 BIN="$BUILD_DIR/core/vh_unit_tests"
 [[ -x "$BIN" ]] || itest_die "not built: $BIN"
 

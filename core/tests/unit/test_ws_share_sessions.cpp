@@ -21,10 +21,12 @@
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
+#include <atomic>
 #include <chrono>
 #include <format>
 #include <memory>
 #include <stdexcept>
+#include <thread>
 #include <unordered_map>
 
 namespace vh::protocols::ws::handler::share::test_sessions {
@@ -752,6 +754,46 @@ TEST_F(WsShareSessionsTest, ChallengeFlowRejectsInvalidStates) {
         {"challenge_id", uuidFor(999)},
         {"code", std::string(kChallengeCode)}
     }, publicSession()), vh::ops::Invalid);
+}
+
+}
+
+namespace vh::protocols::ws::test_share_identity {
+
+// #389 ("Malformed share token prefix", once): a share session's identity is re-set by whichever thread re-resolves it
+// (HTTP connection threads, resumable-upload commit workers) while others read it. Readers used to get a reference
+// into a string being replaced, so a token could come back torn. Every read is now a whole token of one of the writes.
+TEST(WsShareIdentity, ConcurrentReadersSeeWholeTokensWhileTheyAreReplaced) {
+    // Well-formed session tokens of different lengths, both past any small-string buffer.
+    const std::string a = "vhss_0b2d6f1e-6a0c-4c55-9e3f-2f7d1a9c4b10_7k3m9q2r5t8v1w4x6y0z";
+    const std::string b = "vhss_9f8e7d6c-5b4a-4321-8fed-cba987654321_a1b2c3d4e5f6g7h8j9k0m1n2p3q4r5s6";
+    const auto principal = [](const std::string& id) {
+        auto p = std::make_shared<vh::share::Principal>();
+        p->share_session_id = id;
+        return p;
+    };
+    const auto pa = principal("session-a"), pb = principal("session-b");
+    auto session = std::make_shared<Session>(std::make_shared<Router>());
+    session->setSharePrincipal(pa, a);
+
+    std::atomic<bool> stop{false};
+    std::thread writer([&] {
+        for (int i = 0; i < 20000; ++i) session->setSharePrincipal(i % 2 ? pa : pb, i % 2 ? a : b);
+        stop = true;
+    });
+    unsigned torn = 0, reads = 0;
+    while (!stop.load()) {
+        const auto token = session->shareSessionToken();
+        const auto id = session->shareSessionId();
+        if (token != a && token != b) ++torn;
+        if (id != "session-a" && id != "session-b") ++torn;
+        if (const auto p = session->sharePrincipal(); !p || (p != pa && p != pb)) ++torn;
+        EXPECT_NO_THROW((void)vh::share::Token::parse(token));
+        ++reads;
+    }
+    writer.join();
+    EXPECT_EQ(torn, 0u) << "of " << reads << " reads";
+    EXPECT_TRUE(session->isShareMode());
 }
 
 }

@@ -57,12 +57,17 @@ private:
 };
 
 // For a service whose sessions outlived its shutdown deadline: their sockets still point into this object, so it is
-// kept for the life of the process instead of being freed under them.
+// kept for the life of the process instead of being freed under them. Never destroyed, not even by static
+// destruction: the sessions holding those sockets can be destroyed then (a process-wide cache, a handler still queued
+// on the stopped io_context), and a function-local container would be freed before them (#397).
 inline void retainForProcessLifetime(std::shared_ptr<void> object) {
-    static std::mutex mutex;
-    static std::vector<std::shared_ptr<void>> retained;
-    std::scoped_lock lock(mutex);
-    retained.push_back(std::move(object));
+    struct Retained {
+        std::mutex mutex;
+        std::vector<std::shared_ptr<void>> objects;
+    };
+    static auto* const retained = new Retained;  // intentionally never deleted
+    std::scoped_lock lock(retained->mutex);
+    retained->objects.push_back(std::move(object));
 }
 
 }
