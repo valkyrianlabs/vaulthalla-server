@@ -1,4 +1,6 @@
 #include "ops/MasterSecrets.hpp"
+#include "db/query/device/BackupGrant.hpp"
+#include "ops/BackupGrants.hpp"
 #include "auth/stepup/StepUp.hpp"
 
 #include "audit/Trail.hpp"
@@ -277,6 +279,8 @@ DeviceIdentityRotation rotateDeviceIdentity(const Actor& actor, const bool confi
         DeviceIdentityRotation out;
         // Requests in flight were bound to the old key: none of them may complete against either one.
         out.pairing_requests_dropped = pairing.abandonAll();
+        // #362: every key-backup grant ends with its device (in the revocation's transaction); audited below.
+        const auto liveGrants = db::query::device::BackupGrants::listLive();
         const auto r = vh::device::rotateServerIdentity();  // revokes every paired device with the switch
         out.from = r.from;
         out.to = r.to;
@@ -293,6 +297,12 @@ DeviceIdentityRotation rotateDeviceIdentity(const Actor& actor, const bool confi
         out.sessions_closed = protocols::device::closeAllDeviceListenerSessions();
         // A pairing approved between the switch and the swap was still bound to the old key.
         out.devices_revoked += Devices::revokeAll();
+        std::vector<db::query::device::BackupGrant> endedGrants;
+        for (const auto& g : liveGrants)
+            if (const auto now = db::query::device::BackupGrants::byId(g.id); now && !now->live())
+                endedGrants.push_back(*now);
+        backup_grants::auditRevoked(endedGrants, backup_grants::Revocation::DeviceRevoked,
+                                    actor ? std::optional<uint32_t>(actor->id) : std::nullopt);
         auditAs(actor, action, vh::audit::Outcome::Success,
                 {{"from", out.from}, {"to", out.to}, {"spki_sha256", out.spki_sha256},
                  {"previous_spki_sha256", out.previous_spki_sha256}, {"devices_revoked", out.devices_revoked},

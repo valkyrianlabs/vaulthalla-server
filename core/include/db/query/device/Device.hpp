@@ -44,10 +44,11 @@ public:
     // Throws ops::Conflict when the key is already a device's (current or previous), or the approval key is known.
     [[nodiscard]] static Device insert(const NewDevice& d);
     [[nodiscard]] static std::optional<Device> rename(uint32_t id, const std::string& name);
-    // Sets revoked_at once (a revoked row keeps its first revocation time), and revokes the device's approval key with
-    // it. Returns the row, or nullopt if absent.
+    // Sets revoked_at once (a revoked row keeps its first revocation time), and revokes the device's approval key and
+    // key-backup grant (#362, reason device_revoked) with it. Returns the row, or nullopt if absent.
     [[nodiscard]] static std::optional<Device> revoke(uint32_t id);
-    // Revokes every device that is not revoked yet (a server identity rotation, #353), approval keys included; how many.
+    // Revokes every device that is not revoked yet (a server identity rotation, #353), approval keys and key-backup
+    // grants included; how many.
     static std::size_t revokeAll();
     [[nodiscard]] static std::size_t countActive();
     // Compare-and-set rotation: previous = old, current = new, only while `oldSpki` is still current and the row is

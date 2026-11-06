@@ -147,12 +147,6 @@ void refuse(const Family family, const std::optional<std::string>& target, std::
                               ttl().count(), text);
 }
 
-bool keyBackupGrantCovers(const uint32_t vaultId) {
-    (void)vaultId;  // #362: the device's grant lists its vaults explicitly
-    const auto* scope = Scope::current();
-    return scope && scope->channel() == Channel::Device;
-}
-
 void require(const Family family, const std::optional<std::string>& target) {
     auto* scope = Scope::current();
     if (!scope) return;  // no request: the daemon's own callers and tests (see the header)

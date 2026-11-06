@@ -33,6 +33,8 @@
 #include "crypto/util/hash.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/auth/RefreshToken.hpp"
+#include "db/query/device/BackupGrant.hpp"
+#include "db/query/device/Device.hpp"
 #include "db/query/rbac/role/Admin.hpp"
 #include "device/Peer.hpp"
 #include "identities/Manager.hpp"
@@ -630,11 +632,20 @@ TEST_F(MfaSignInDb, ARecoveryCodeSignsInOnceAndSignsOtherWebSessionsOut) {
     SessionPtr other;
     const auto t = enrollTotpAtSignIn(admin, other);
     ASSERT_TRUE(httpLaneAccepts(cookieOf(other)));
+    // D4 (#362): the account's paired Mac with a key-backup grant.
+    const auto mac = db::query::device::Devices::insert({.user_id = admin->id, .approved_by = admin->id, .name = "Mac",
+                                                         .platform = "macOS", .spki_sha256 = std::string(64, '7')});
+    const auto grant = db::query::device::BackupGrants::create({.device_id = mac.id, .user_id = admin->id,
+                                                                .vault_ids = {1}});
 
     const auto socket = connect();
     ASSERT_EQ(login(admin, socket).code, "mfa_required");
     const auto ok = call([&] { return Mfa::verify(json{{"method", "recovery_code"}, {"code", t.codes[3]}}, socket); });
     ASSERT_TRUE(ok.ok) << ok.message;
+    const auto after = db::query::device::BackupGrants::byId(grant.id);
+    ASSERT_TRUE(after);
+    EXPECT_EQ(after->revoked_reason, std::optional<std::string>("recovery_code")) << "D4: the grant is revoked";
+    EXPECT_FALSE(db::query::device::Devices::byId(mac.id)->revoked()) << "D4: the device itself keeps syncing";
     ASSERT_TRUE(ok.data.contains("recovery"));
     EXPECT_EQ(ok.data.at("recovery").at("codes_remaining"), 9);
     EXPECT_GT(ok.data.at("recovery").at("cooldown_until").get<int64_t>(),

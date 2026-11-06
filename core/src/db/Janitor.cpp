@@ -7,6 +7,7 @@
 #include "db/query/upstream/Inbox.hpp"
 #include "db/query/upstream/WriteIntent.hpp"
 #include "log/Registry.hpp"
+#include "ops/BackupGrants.hpp"
 #include "preview/cache/Maintenance.hpp"
 #include "protocols/http/upload/Resumable.hpp"
 #include "db/query/recovery/Plan.hpp"
@@ -63,6 +64,16 @@ void maintainRecovery(const bool sweepStores) {
                 r.orphans_removed, r.unreferenced_removed);
     } catch (const std::exception& e) {
         log::Registry::vaulthalla()->warn("[DBSweeper] Recovery maintenance failed: {}", e.what());
+    }
+}
+
+// Key-backup grants (#362): a device idle for 90 days, a user deactivated or without Export.
+void reconcileBackupGrants() {
+    try {
+        if (const auto n = vh::ops::backup_grants::reconcile(); n > 0)
+            log::Registry::vaulthalla()->info("[DBSweeper] Revoked {} key-backup grant(s)", n);
+    } catch (const std::exception& e) {
+        log::Registry::vaulthalla()->warn("[DBSweeper] Key-backup grant check failed: {}", e.what());
     }
 }
 
@@ -126,6 +137,7 @@ void vh::db::Janitor::runLoop() {
             janitor_impl::sweepUpstreamEvents();
             janitor_impl::pruneFsChanges();
             janitor_impl::purgeTotpEnrollments();
+            janitor_impl::reconcileBackupGrants();
             nextDbSweep = std::chrono::steady_clock::now() + sweep_interval_;
         }
 

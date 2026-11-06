@@ -3,6 +3,8 @@
 #include "audit/Trail.hpp"
 #include "auth/stepup/StepUp.hpp"
 #include "db/query/device/ApprovalKey.hpp"
+#include "db/query/device/BackupGrant.hpp"
+#include "ops/BackupGrants.hpp"
 
 #include "config/Registry.hpp"
 #include "db/query/device/Device.hpp"
@@ -267,8 +269,13 @@ Device revoke(const Actor& actor, const Ref& device, const vh::device::Peer* sel
     // The device itself ("Unpair this Mac") acts as its user, so the visibility rule in resolve() already admits it.
     requireUser(actor);
     const auto row = resolve(actor, device);
+    // #362: the device's key-backup grant ends with it, in the revocation's transaction; audited here.
+    const auto grant = db::query::device::BackupGrants::liveForDevice(row.id);
     auto revoked = Devices::revoke(row.id);
     if (!revoked) throw NotFound("no device '" + device + "'");
+    if (grant)
+        if (const auto ended = db::query::device::BackupGrants::byId(grant->id); ended && !ended->live())
+            backup_grants::auditRevoked({*ended}, backup_grants::Revocation::DeviceRevoked, actor->id);
     // The device revoking itself keeps its own connection until its reply is out (the ws handler closes it then).
     const auto closed = protocols::device::closeDeviceSessions(row.id, self);
     log::Registry::audit()->info("[ops::devices] {} revoked device {} ('{}', user {}){}; closed {} live session(s)",

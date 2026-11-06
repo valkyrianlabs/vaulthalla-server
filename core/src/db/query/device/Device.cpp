@@ -144,6 +144,10 @@ std::optional<Device> Devices::revoke(const uint32_t id) {
                  pqxx::params{id});
         txn.exec("UPDATE device_approval_keys SET revoked_at = NOW() WHERE device_id = $1 AND revoked_at IS NULL",
                  pqxx::params{id});
+        // #362: its key-backup grant ends with it.
+        txn.exec("UPDATE key_backup_grants SET revoked_at = NOW(), revoked_reason = 'device_revoked' "
+                 "WHERE device_id = $1 AND revoked_at IS NULL",
+                 pqxx::params{id});
         const auto res = txn.exec(select("WHERE d.id = $1"), pqxx::params{id});
         return one(res);
     });
@@ -152,6 +156,8 @@ std::optional<Device> Devices::revoke(const uint32_t id) {
 std::size_t Devices::revokeAll() {
     return Transactions::exec("Devices::revokeAll", [](pqxx::work& txn) {
         txn.exec("UPDATE device_approval_keys SET revoked_at = NOW() WHERE revoked_at IS NULL");
+        txn.exec("UPDATE key_backup_grants SET revoked_at = NOW(), revoked_reason = 'device_revoked' "
+                 "WHERE revoked_at IS NULL");
         return static_cast<std::size_t>(
             txn.exec("UPDATE devices SET revoked_at = CURRENT_TIMESTAMP WHERE revoked_at IS NULL").affected_rows());
     });

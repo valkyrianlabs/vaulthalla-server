@@ -1,4 +1,5 @@
 #include "ops/VaultKeys.hpp"
+#include "ops/BackupGrants.hpp"
 #include "auth/stepup/StepUp.hpp"
 
 #include "crypto/id/ObjectUid.hpp"
@@ -564,13 +565,37 @@ nlohmann::json toJson(const RecoveryMaterial& m) {
             {"detail", m.detail ? nlohmann::json(*m.detail) : nlohmann::json(nullptr)}};
 }
 
+std::vector<unsigned int> exportableVaults(const Actor& actor) {
+    std::vector<unsigned int> out;
+    if (!actor || !actor->authorizing() || (!actor->isSuperAdmin() && !actor->encryptionKeysPerms().canExport()))
+        return out;
+    for (const auto& vault : db::query::vault::Vault::listLiveVaults())
+        if (vault) out.push_back(vault->id);
+    for (const auto& d : ops::vaults::listDeleted(actor))
+        if (d && d->keyRetained()) out.push_back(d->vault_id);
+    std::ranges::sort(out);
+    const auto [first, last] = std::ranges::unique(out);
+    out.erase(first, last);
+    return out;
+}
+
+namespace {
+std::vector<unsigned int> vaultKeysExportedVersions(const VaultExport& e) {
+    std::vector<unsigned int> out{e.current.version};
+    for (const auto& k : e.historical) out.push_back(k.version);
+    return out;
+}
+}
+
 VaultExport exportVault(const Actor& actor, const unsigned int vaultId, const Channel channel) {
     requireExport(actor);
     requireKeyChannel(channel);
-    // #359: keys, bound to the vault; never inside a paired device's key-backup grant (Desktop's 1Password backup).
-    if (!auth::stepup::keyBackupGrantCovers(vaultId))
-        auth::stepup::require(auth::stepup::Family::Keys, "vault.keys.export:" + std::to_string(vaultId));
+    // #362: inside the paired device's key-backup grant, no step-up (Desktop's background 1Password backup never
+    // prompts); anything else is the keys step-up, bound to the vault.
+    const auto grant = backup_grants::covering({vaultId});
+    if (!grant) auth::stepup::require(auth::stepup::Family::Keys, "vault.keys.export:" + std::to_string(vaultId));
     auto out = exportFrom(sourceFor(actor, vaultId));
+    if (grant) backup_grants::recordUse(*grant, out.vault_id, vaultKeysExportedVersions(out));
     log::Registry::audit()->warn("[ops::vault_keys] {} exported {} and {} other needed version(s) through {}",
                                  actor->name(), auditName(out), out.historical.size(), channelName(channel));
     return out;
@@ -579,12 +604,19 @@ VaultExport exportVault(const Actor& actor, const unsigned int vaultId, const Ch
 ExportAll exportAll(const Actor& actor, const Channel channel) {
     requireExport(actor);
     requireKeyChannel(channel);
-    if (!auth::stepup::keyBackupGrantCovers(0))
-        auth::stepup::require(auth::stepup::Family::Keys, std::string("vault.keys.export:all"));
+    const auto live = db::query::vault::Vault::listLiveVaults();
+    std::vector<uint32_t> ids;
+    for (const auto& vault : live)
+        if (vault) ids.push_back(vault->id);
+    // #362: covered only when the device's grant names every live vault.
+    const auto grant = backup_grants::covering(ids);
+    if (!grant) auth::stepup::require(auth::stepup::Family::Keys, std::string("vault.keys.export:all"));
     ExportAll out;
-    for (const auto& vault : db::query::vault::Vault::listLiveVaults()) {
+    for (const auto& vault : live) {
+        if (!vault) continue;
         try {
             out.vaults.push_back(exportFrom(liveSource(vault)));
+            if (grant) backup_grants::recordUse(*grant, vault->id, vaultKeysExportedVersions(out.vaults.back()));
             log::Registry::audit()->warn("[ops::vault_keys] {} exported {} and {} other needed version(s) through {}",
                                          actor->name(), auditName(out.vaults.back()),
                                          out.vaults.back().historical.size(), channelName(channel));

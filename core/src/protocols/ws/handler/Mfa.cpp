@@ -1,4 +1,5 @@
 #include "protocols/ws/handler/Mfa.hpp"
+#include "ops/BackupGrants.hpp"
 
 #include "audit/Trail.hpp"
 #include "auth/Manager.hpp"
@@ -289,10 +290,15 @@ json Mfa::verify(const json& payload, const std::shared_ptr<Session>& session) {
         const auto cooldown = mfa::startRecoveryCooldown(user->id);
         const auto jti = session->tokens->refreshToken->jti;
         const auto revoked = ops::sessions::revoke(user, jti, {.all_others = true}, session);
+        // D4: the account's key-backup grants are revoked too (its devices keep syncing; their key exports need a
+        // person's approval again, and a device may re-create its grant with an approval key from before now).
+        const auto grants = ops::backup_grants::revokeForUser(user->id, ops::backup_grants::Revocation::RecoveryCode,
+                                                              user->id);
         audit::record({.action = "auth.mfa.recovery.signin", .outcome = audit::Outcome::Info, .actor_id = user->id,
                        .actor = user->name(),
                        .details = {{"batch_id", recovery->batch_id}, {"remaining", recovery->remaining},
-                                   {"sessions_revoked", revoked}, {"cooldown_until", cooldown}}},
+                                   {"sessions_revoked", revoked}, {"grants_revoked", grants.size()},
+                                   {"cooldown_until", cooldown}}},
                       "[auth] " + user->name() + " signed in with a recovery code; other web sessions were "
                       "signed out");
         out["recovery"] = {{"codes_remaining", recovery->remaining}, {"cooldown_until", cooldown},

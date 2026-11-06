@@ -34,8 +34,9 @@
 // sees step_up_required for routine sync (a contract test enumerates them); for an annotated command it is refused
 // (methods device_approval and/or console_approval) until a grant on that device session covers it: one made by the
 // device's approval key (keys and device.trust only, D6) or by a person's passkey in the web console (#361,
-// auth/approval/Approvals.hpp), or the key-backup grant (#362). No Scope at all means no request: the
-// daemon's own callers and tests, which call ops:: directly and are trusted like the host (ops/Actor.hpp).
+// auth/approval/Approvals.hpp). A key export inside the device's key-backup grant (#362, ops/BackupGrants.hpp) never
+// asks at all. No Scope at all means no request: the daemon's own callers and tests, which call ops:: directly and are
+// trusted like the host (ops/Actor.hpp).
 //
 // How it is satisfied (web sessions only): a grant, made by auth.stepup.finish after
 //   - a WebAuthn assertion with UV over a step-up challenge bound to this session, the family and the target; or
@@ -141,12 +142,6 @@ private:
 // caller in scope may run an operation of `family` on `target` now (see the namespace comment). `target` is required
 // for target-bound families and ignored otherwise.
 void require(Family family, const std::optional<std::string>& target = std::nullopt);
-
-// vault.keys.export on a paired device (#362's extension point): an export inside the device's key-backup grant needs
-// no step-up (design 6.4: Desktop's background 1Password backup never prompts). Until #362 adds the grant table, every
-// paired device holds what D1 migrates to an `origin = migrated` grant: its user's existing export authority, which
-// RBAC (encryption-key Export) has already checked. So this is true on any Device channel, and nowhere else.
-[[nodiscard]] bool keyBackupGrantCovers(uint32_t vaultId);
 
 // What `user` can answer a step-up of `family` with on a web session: "webauthn" (a usable passkey and passkeys
 // configured), "password_totp" (a confirmed authenticator app), "password" (D3). Empty when nothing can (an account

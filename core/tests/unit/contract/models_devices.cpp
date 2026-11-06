@@ -3,6 +3,7 @@
 #include "model_suites.hpp"
 
 #include "device/Device.hpp"
+#include "ops/BackupGrants.hpp"
 
 #include <string>
 
@@ -39,6 +40,35 @@ device::Device freshDevice() {
     return d;
 }
 
+// A migrated grant that was confirmed, used, suspended and revoked: every member non-null.
+db::query::device::BackupGrant revokedGrant() {
+    db::query::device::BackupGrant g;
+    g.id = 4;
+    g.device_id = 7;
+    g.user_id = 3;
+    g.origin = "approved";
+    g.approved_via = "device_approval";
+    g.vault_ids = {1, 5, 9};
+    g.created_at = 1760000000;
+    g.confirmed_at = 1760000100;
+    g.last_used_at = 1760000200;
+    g.suspended_at = 1760000300;
+    g.revoked_at = 1760000400;
+    g.revoked_reason = "recovery_code";
+    return g;
+}
+
+// Just migrated (D1): never confirmed or used, no vaults yet; its device row gone.
+db::query::device::BackupGrant migratedGrant() {
+    db::query::device::BackupGrant g;
+    g.id = 5;
+    g.device_id = 8;
+    g.user_id = 4;
+    g.origin = "migrated";
+    g.created_at = 1760000000;
+    return g;
+}
+
 }
 
 namespace vh::test::contract_models {
@@ -47,6 +77,11 @@ void checkDeviceModels(Checker& c) {
     using json = nlohmann::json;
     c.check(json(test_contract_models_devices::rotatedRevokedDevice()), "Device", "device.list devices[] (revoked)");
     c.check(json(test_contract_models_devices::freshDevice()), "Device", "device.pairing.approve device");
+    c.check(ops::backup_grants::toJson(test_contract_models_devices::revokedGrant(),
+                                       test_contract_models_devices::rotatedRevokedDevice()),
+            "KeyBackupGrant", "device.backup.grant.list grants[] (revoked)");
+    c.check(ops::backup_grants::toJson(test_contract_models_devices::migratedGrant(), std::nullopt), "KeyBackupGrant",
+            "device.backup.grant.create grant (migrated, device gone)");
 }
 
 }

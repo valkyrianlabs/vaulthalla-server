@@ -17,6 +17,7 @@
 #include "fs/model/File.hpp"
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
+#include "ops/BackupGrants.hpp"
 #include "ops/Devices.hpp"
 #include "ops/Roles.hpp"
 #include "ops/Error.hpp"
@@ -431,9 +432,17 @@ TEST_F(DeviceHttpTest, VaultKeyExportOnlyOnAPairedDevice) {
     const auto check = vault::keyCheck(key->bytes(), vaultId, version);
 
     const ClientIdentity device;
-    (void)paired(device, admin);
+    const auto row = paired(device, admin);
     Client client(port, device);
     ASSERT_TRUE(client.connect());
+    // #362: a device without a key-backup grant naming the vault needs a person's approval for this one export.
+    const auto unapproved = client.call("vault.keys.export", {{"vault_id", vaultId}});
+    ASSERT_TRUE(unapproved);
+    EXPECT_EQ(unapproved->at("data").value("code", ""), "step_up_required") << unapproved->dump();
+    EXPECT_EQ(unapproved->at("data").value("target", ""), "vault.keys.export:" + std::to_string(vaultId));
+    EXPECT_FALSE(unapproved->at("data").contains("key"));
+    // Inside its grant (made here directly; the approval itself: test_key_backup_grants_db.cpp) it never prompts.
+    (void)ops::backup_grants::create(admin, nullptr, row.spki_sha256, {static_cast<uint32_t>(vaultId)});
     const auto exported = client.call("vault.keys.export", {{"vault_id", vaultId}});
     ASSERT_TRUE(exported && exported->value("status", "") == "OK") << (exported ? exported->dump() : "no reply");
     EXPECT_EQ(exported->at("data").at("key_check"), check);
