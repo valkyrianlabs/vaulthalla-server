@@ -66,6 +66,20 @@ WsField mfaCredential(const bool registration) {
                            : "AuthenticationResponseJSON (PublicKeyCredential.toJSON() after get()).");
 }
 
+// PublicKeyCredentialRequestOptionsJSON of discoverable sign-in (#358): no account named, so no credentials allowed.
+WsField passkeyRequestOptions() {
+    return object("publicKey", "",
+                  {str("challenge").desc("base64url, 32 bytes, single use, 120 s, bound to this connection and to "
+                                         "discoverable sign-in only."),
+                   str("rpId"),
+                   uinteger("timeout").desc("Milliseconds."),
+                   str("userVerification").oneOf({"required"}),
+                   mfaDescriptors("allowCredentials").desc("Always empty: the browser offers the passkeys it holds "
+                                                           "for rpId.")})
+        .desc("PublicKeyCredentialRequestOptionsJSON for navigator.credentials.get(), modal or with mediation "
+              "\"conditional\" (autofill).");
+}
+
 // PublicKeyCredentialRequestOptionsJSON as passkeys::requestOptions / stepUpOptions build it.
 WsField mfaRequestOptions() {
     return object("publicKey", "",
@@ -503,6 +517,44 @@ std::vector<WsCommandUsage> authCommands() {
                      uinteger("aal").min(2).max(2).opt()},
         .refusal_codes = kMfaEnrollmentRefusals,
         .client_timeout = kDefaultTimeout,
+    });
+
+    // ---- discoverable passkey sign-in (#358; docs/dev/mfa-design.md sections 4.1, 7.3 and 8.6)
+
+    out.push_back({
+        .command = "auth.passkey.options",
+        .description = "Start signing in with a passkey alone, no username or password first: a challenge for "
+                       "navigator.credentials.get() on this connection, with an empty allowCredentials (the browser "
+                       "or passkey manager offers the passkeys it holds for this server) and user verification "
+                       "required. It names no account, so the answer is the same for every caller but for its "
+                       "challenge. Anonymous web connections only: already_signed_in on a signed-in one; a paired "
+                       "device and a pending sign-in can't run it. invalid when passkeys are not configured "
+                       "(auth.webauthn.rp_id). Rate limited to 30 a minute per client address; rate_limited when "
+                       "10,000 sign-in challenges are open.",
+        .auth = "session",
+        .input = "none",
+        .response = {passkeyRequestOptions(),
+                     integer("expires_at").desc("Unix seconds: when the challenge lapses (ask again after).")},
+        .refusal_codes = {"invalid", "denied", "error", "already_signed_in", "rate_limited"},
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "auth.passkey.login",
+        .description = "Finish a passkey sign-in with the assertion over an auth.passkey.options challenge of this "
+                       "connection. The assertion must carry userHandle, equal to the account's own WebAuthn handle "
+                       "for that credential, and user verification. Success signs the connection in: one session row "
+                       "at aal 2 with amr [\"hwk\"] (a device-bound passkey or security key) or [\"swk\"] (a "
+                       "synced passkey), the access token in the envelope. Every failure (an unknown, suspended or "
+                       "foreign passkey, another server's, no user verification, a spent or expired challenge, an "
+                       "account that can't sign in) is the same error; the challenge is spent either way. "
+                       "already_signed_in on a signed-in connection.",
+        .auth = "session",
+        .payload = {mfaCredential(false).desc("AuthenticationResponseJSON (PublicKeyCredential.toJSON() after "
+                                              "get()); response.userHandle is required.")},
+        .response = {mfaSessionUser(), uinteger("aal").min(2).max(2)},
+        .refusal_codes = {"invalid", "denied", "error", "already_signed_in"},
+        .client_timeout = 20s,
     });
 
     out.push_back({

@@ -145,6 +145,19 @@ json mfaWsSignedInAnswer(const std::shared_ptr<Session>& session) {
     return {{"user", Auth::sessionUser(*session->user)}, {"aal", row ? row->aal : 1}};
 }
 
+// Discoverable sign-in (#358) refuses with one answer whatever went wrong: no passkey, an unknown or suspended one,
+// another account's user handle, no user verification, a spent challenge, a deactivated account.
+constexpr auto kPasskeySignInFailed = "That passkey couldn't sign you in. Try again, or sign in with your password.";
+
+// auth.passkey.* run on an anonymous web socket only: never on one that is signed in (a connection signs in once,
+// #354) or finishing a password sign-in (the router's pending allowlist refuses them too).
+void mfaWsAnonymousWeb(const std::shared_ptr<Session>& session) {
+    mfaWsWebOnly(session);
+    if (session->user)
+        throw ops::Refused(std::string(auth::Manager::kAlreadySignedIn), "This connection is already signed in");
+    if (session->mfa().pendingKind()) throw ops::Denied("This connection is finishing a sign-in");
+}
+
 // This session's live step-up grants (auth.mfa.status step_up): never another session's.
 json mfaWsStepUpGrants(const std::shared_ptr<Session>& session) {
     json out = json::array();
@@ -460,6 +473,48 @@ json Mfa::acknowledgeRecovery(const json& payload, const std::shared_ptr<Session
     json out = mfaWsSignedInAnswer(session);
     out["remaining"] = remaining;
     return out;
+}
+
+json Mfa::passkeyOptions(const std::shared_ptr<Session>& session) {
+    mfaWsAnonymousWeb(session);
+    if (!mfa::passkeys::available()) throw ops::Invalid("Passkeys are not configured on this server");
+    auto publicKey = mfa::passkeys::loginOptions(session->uuid);
+    return {{"publicKey", std::move(publicKey)},
+            {"expires_at", mfaWsUnix(SysClock::now() + mfa::passkeys::kChallengeTtl)}};
+}
+
+json Mfa::passkeyLogin(const json& payload, const std::shared_ptr<Session>& session) {
+    mfaWsAnonymousWeb(session);
+    const auto credential = payload.find("credential");
+    if (credential == payload.end() || !credential->is_object())
+        throw ops::Invalid("credential is a PublicKeyCredential's JSON form");
+
+    const auto signedIn = mfa::passkeys::verifyLogin(session->uuid, credential->dump());
+    std::shared_ptr<identities::User> user;
+    if (signedIn) {
+        user = vh::identities::manager().user(signedIn->user_id);
+        if (user && (user->systemOnly() || !user->authorizing())) {
+            log::Registry::auth()->warn("[auth::mfa] passkey sign-in refused for {}: the account can't sign in",
+                                        user->name());
+            user = nullptr;
+        }
+    }
+    if (!user) {
+        audit::record({.action = "auth.passkey.login", .outcome = audit::Outcome::Failure,
+                       .actor_id = signedIn ? std::optional<uint32_t>(signedIn->user_id) : std::nullopt,
+                       .details = {{"ip", session->ipAddress}}},
+                      "[auth] a passkey sign-in was refused", spdlog::level::warn);
+        throw std::runtime_error(kPasskeySignInFailed);
+    }
+
+    // A UV passkey alone is aal 2 (design 4.1): possession plus the authenticator's own PIN or biometric.
+    const auto amr = std::string(signedIn->factor.backup_eligible ? auth::session::assurance::kSoftwareKey
+                                                                  : auth::session::assurance::kHardwareKey);
+    mfa::signin::complete(session, user, {.aal = 2, .amr = {amr}}, "passkey");
+    audit::record({.action = "auth.passkey.login", .actor_id = user->id, .actor = user->name(),
+                   .details = {{"factor_id", signedIn->factor.factor_id}, {"amr", amr}, {"ip", session->ipAddress}}},
+                  "[auth] " + user->name() + " signed in with a passkey");
+    return mfaWsSignedInAnswer(session);
 }
 
 }

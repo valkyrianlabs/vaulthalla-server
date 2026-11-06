@@ -43,6 +43,20 @@ DependentsCheck gatewayMaster() {
     };
 }
 
+DependentsCheck internalSecrets() {
+    return [] {
+        return db::Transactions::exec("secrets::dependents::internalSecrets", [](pqxx::work& txn) -> std::optional<std::string> {
+            // jwt_secret regenerates by design; share.token.pepper.v1 is the plaintext row of releases before #322.
+            const auto res = txn.exec("SELECT key FROM internal_secrets WHERE key NOT IN ('jwt_secret', "
+                                      "'share.token.pepper.v1') ORDER BY key");
+            if (res.empty()) return std::nullopt;
+            std::string names;
+            for (const auto& row : res) names += (names.empty() ? "" : ", ") + row[0].as<std::string>();
+            return std::to_string(res.size()) + " internal secret(s) (" + names + ")";
+        });
+    };
+}
+
 DependentsCheck mfaSeal() {
     return [] {
         return describe("secrets::dependents::mfaSeal", "SELECT COUNT(*) FROM totp_factors", "sealed TOTP factor(s)");

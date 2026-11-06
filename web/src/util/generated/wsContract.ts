@@ -6,10 +6,10 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = '23e6bbf402f64053be6a21ae8e47f09372c467b151fea36b9741e536bb7473a3'
+export const WS_CONTRACT_HASH = '03e5d43516b1128c3420b4f00607f0d059ce2be6a1ad34cc2ccf3cfa937cec55'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = '144e2cc1625766141f2fb45d5358956cac3188d29eb60c77a7ee9798baf55c4a'
+export const WS_MODELS_HASH = 'adece020e347877b41fa73042a73e55267d7acc9d2ad7ae3bf1208f0c66e1136'
 
 // The ws protocol range this book is (core/usage WsProtocol.hpp): send it in meta.hello.
 export const WS_PROTOCOL_VERSION = 1
@@ -17,7 +17,6 @@ export const WS_PROTOCOL_MIN = 1
 
 // The capabilities a daemon built from this book answers in meta.hello.
 export const WS_CAPABILITIES: readonly string[] = [
-  'auth.step_up',
   'device.endpoints',
   'device.lanes.download',
   'device.lanes.preview',
@@ -175,7 +174,6 @@ export interface WsModels {
     access_token_expiry_minutes: number
     refresh_token_expiry_days: number
     webauthn?: WsModels['WebAuthnConfig']
-    mfa?: WsModels['MfaConfig']
   }
   /**
    * One of the caller's signed-in web sessions (a refresh token row, every tab of one browser shares it;
@@ -615,10 +613,6 @@ export interface WsModels {
    * logging.* (Config.cpp to_json(LoggingConfig)).
    */
   'LoggingConfig': { levels: WsModels['LogLevelsConfig']; file_paths?: 'ids' | 'full' }
-  /**
-   * auth.mfa.* (Config.cpp to_json(MfaConfig), #359): multi-factor authentication settings.
-   */
-  'MfaConfig': { step_up_ttl_seconds: number }
   /**
    * One of the account's sign-in factors (#356/#357): auth::mfa::to_json(Factor),
    * core/src/auth/mfa/Factors.cpp. Carries no secret and no credential id. id is unique per kind only: name a
@@ -2918,16 +2912,6 @@ export interface WsContract {
     response: Record<string, never>
   }
   /**
-   * Remove one of the caller's factors (named by kind and id): it is disabled, kept for the audit trail and
-   * never usable again, and the account's other web sessions are signed out (one of them may hold it).
-   * mfa_last_factor: it is the last usable factor of an account that must have MFA (add another first).
-   * account.credentials step-up.
-   */
-  'auth.mfa.factor.remove': {
-    payload: { kind: 'webauthn' | 'totp'; id: number }
-    response: { sessions_revoked: number }
-  }
-  /**
    * Rename one of the caller's factors (named by kind and id).
    */
   'auth.mfa.factor.rename': {
@@ -2945,8 +2929,9 @@ export interface WsContract {
   }
   /**
    * Make ten new recovery codes, shown once. They replace the current ones only when acknowledged. The
-   * account needs a factor (invalid otherwise). Replacing codes that are in force is account.credentials
-   * step-up (except on the recovery-code session spending them).
+   * account needs a factor (invalid otherwise). Replacing codes that are in force needs a second factor
+   * proven on this session within the last 5 minutes (or a recovery-code sign-in): step_up_required {family,
+   * max_age_seconds} otherwise.
    */
   'auth.mfa.recovery.generate': {
     payload: null
@@ -2974,11 +2959,6 @@ export interface WsContract {
       recovery: { active: boolean; remaining: number; acknowledged: boolean; pending: boolean }
       cooldown_until: number | null
       recovery_restricted: boolean
-      step_up: {
-        family: 'keys' | 'device.trust' | 'account.credentials' | 'identity.admin' | 'secrets' | 'settings' | 'data.destroy'
-        target: string | null
-        expires_at: number
-      }[]
     }
   }
   /**
@@ -3081,6 +3061,50 @@ export interface WsContract {
     }
   }
   /**
+   * Finish a passkey sign-in with the assertion over an auth.passkey.options challenge of this connection.
+   * The assertion must carry userHandle, equal to the account's own WebAuthn handle for that credential, and
+   * user verification. Success signs the connection in: one session row at aal 2 with amr ["hwk"] (a
+   * device-bound passkey or security key) or ["swk"] (a synced passkey), the access token in the envelope.
+   * Every failure (an unknown, suspended or foreign passkey, another server's, no user verification, a spent
+   * or expired challenge, an account that can't sign in) is the same error; the challenge is spent either
+   * way. already_signed_in on a signed-in connection.
+   */
+  'auth.passkey.login': {
+    payload: {
+      credential: {
+        id: string
+        rawId: string
+        type: 'public-key'
+        response: { clientDataJSON: string; authenticatorData: string; signature: string; userHandle?: string | null }
+        authenticatorAttachment?: string | null
+        clientExtensionResults?: { credProps?: { rk?: boolean } }
+      }
+    }
+    response: { user: WsModels['SessionUser']; aal: number }
+  }
+  /**
+   * Start signing in with a passkey alone, no username or password first: a challenge for
+   * navigator.credentials.get() on this connection, with an empty allowCredentials (the browser or passkey
+   * manager offers the passkeys it holds for this server) and user verification required. It names no
+   * account, so the answer is the same for every caller but for its challenge. Anonymous web connections
+   * only: already_signed_in on a signed-in one; a paired device and a pending sign-in can't run it. invalid
+   * when passkeys are not configured (auth.webauthn.rp_id). Rate limited to 30 a minute per client address;
+   * rate_limited when 10,000 sign-in challenges are open.
+   */
+  'auth.passkey.options': {
+    payload: null
+    response: {
+      publicKey: {
+        challenge: string
+        rpId: string
+        timeout: number
+        userVerification: 'required'
+        allowCredentials: { type: 'public-key'; id: string; transports: string[] }[]
+      }
+      expires_at: number
+    }
+  }
+  /**
    * Issue a new access token from the envelope token or the refresh cookie.
    */
   'auth.refresh': {
@@ -3120,68 +3144,6 @@ export interface WsContract {
   'auth.sessions.revoke': {
     payload: { id?: string; all_others?: boolean }
     response: { revoked: number }
-  }
-  /**
-   * Start confirming a sensitive change that answered step_up_required: name its family and, for keys,
-   * device.trust and data.destroy, the target the refusal named. Answers the methods the account can use
-   * (webauthn: pass webauthn.publicKey to navigator.credentials.get(); password_totp: the password and an
-   * authenticator code together; password: only for an account that need not have MFA and has no factor,
-   * never for keys, device.trust or data.destroy) and a ceremony id valid for 120 s. A new begin replaces the
-   * open ceremony. step_up_unavailable: the account has nothing that can confirm this family (add a passkey
-   * or an authenticator app). Web sessions only: a paired device is denied.
-   */
-  'auth.stepup.begin': {
-    payload: {
-      family: 'keys' | 'device.trust' | 'account.credentials' | 'identity.admin' | 'secrets' | 'settings' | 'data.destroy'
-      target?: string | null
-    }
-    response: {
-      stepup_id: string
-      family: 'keys' | 'device.trust' | 'account.credentials' | 'identity.admin' | 'secrets' | 'settings' | 'data.destroy'
-      target: string | null
-      methods: string[]
-      webauthn?: {
-        publicKey: {
-          challenge: string
-          rpId: string
-          timeout: number
-          userVerification: 'required'
-          allowCredentials: { type: 'public-key'; id: string; transports: string[] }[]
-        }
-      }
-      expires_at: number
-      max_age_seconds: number
-    }
-  }
-  /**
-   * Answer the ceremony: {method: webauthn, credential} (a UV assertion over its challenge), {method:
-   * password_totp, password, code} or {method: password, password}. On success this session holds a grant for
-   * the family (and target): family grants last max_age_seconds, target-bound ones are spent by one use. Then
-   * resend the refused request. step_up_failed {attempts_remaining}: the answer didn't hold; the fifth
-   * failure within 15 minutes signs this session out. not_found: the ceremony expired or was used (begin
-   * again). Recovery codes, refresh tokens and Desktop mTLS never satisfy a step-up.
-   */
-  'auth.stepup.finish': {
-    payload: {
-      stepup_id: string
-      method: 'webauthn' | 'password_totp' | 'password'
-      credential?: {
-        id: string
-        rawId: string
-        type: 'public-key'
-        response: { clientDataJSON: string; authenticatorData: string; signature: string; userHandle?: string | null }
-        authenticatorAttachment?: string | null
-        clientExtensionResults?: { credProps?: { rk?: boolean } }
-      }
-      password?: string
-      code?: string
-    }
-    response: {
-      family: 'keys' | 'device.trust' | 'account.credentials' | 'identity.admin' | 'secrets' | 'settings' | 'data.destroy'
-      target: string | null
-      expires_at: number
-      uses: number | null
-    }
   }
   /**
    * Change (own, with old_password) or reset (another user's) a password.
@@ -5935,7 +5897,6 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'auth.login',
   'auth.logout',
   'auth.mfa.cancel',
-  'auth.mfa.factor.remove',
   'auth.mfa.factor.rename',
   'auth.mfa.recovery.acknowledge',
   'auth.mfa.recovery.generate',
@@ -5945,13 +5906,13 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'auth.mfa.verify',
   'auth.mfa.webauthn.register.finish',
   'auth.mfa.webauthn.register.options',
+  'auth.passkey.login',
+  'auth.passkey.options',
   'auth.refresh',
   'auth.register',
   'auth.security.status',
   'auth.sessions.list',
   'auth.sessions.revoke',
-  'auth.stepup.begin',
-  'auth.stepup.finish',
   'auth.user.change_password',
   'auth.user.delete',
   'auth.user.get',
@@ -6218,61 +6179,6 @@ export const WS_CONTRACT_CONFIRMATIONS: Readonly<
   ],
 }
 
-// The step-up family a command's operation may ask for (#359): it can answer step_up_required until this
-// session holds a grant (auth.stepup.begin / auth.stepup.finish).
-export const WS_CONTRACT_STEP_UP: Readonly<Partial<Record<WsContractCommand, string>>> = {
-  'auth.mfa.factor.remove': 'account.credentials',
-  'auth.mfa.recovery.generate': 'account.credentials',
-  'auth.mfa.totp.enroll.confirm': 'account.credentials',
-  'auth.mfa.totp.enroll.start': 'account.credentials',
-  'auth.mfa.webauthn.register.finish': 'account.credentials',
-  'auth.mfa.webauthn.register.options': 'account.credentials',
-  'auth.register': 'identity.admin',
-  'auth.user.change_password': 'account.credentials',
-  'auth.user.delete': 'identity.admin',
-  'auth.user.update': 'identity.admin',
-  'device.pairing.approve': 'device.trust',
-  'device.remote.enable': 'device.trust',
-  'email.provider.secret.set': 'secrets',
-  'group.member.add': 'identity.admin',
-  'group.member.remove': 'identity.admin',
-  'group.remove': 'identity.admin',
-  'recovery.point.delete': 'data.destroy',
-  'role.admin.add': 'identity.admin',
-  'role.admin.delete': 'identity.admin',
-  'role.admin.update': 'identity.admin',
-  'role.vault.add': 'identity.admin',
-  'role.vault.assign': 'identity.admin',
-  'role.vault.delete': 'identity.admin',
-  'role.vault.overrides.add': 'identity.admin',
-  'role.vault.overrides.remove': 'identity.admin',
-  'role.vault.overrides.update': 'identity.admin',
-  'role.vault.unassign': 'identity.admin',
-  'role.vault.update': 'identity.admin',
-  's3.gateway.credentials.create': 'secrets',
-  's3.gateway.credentials.defaultRole.clear': 'secrets',
-  's3.gateway.credentials.defaultRole.overrides.add': 'secrets',
-  's3.gateway.credentials.defaultRole.overrides.remove': 'secrets',
-  's3.gateway.credentials.defaultRole.set': 'secrets',
-  's3.gateway.credentials.roles.assign': 'secrets',
-  's3.gateway.credentials.roles.overrides.add': 'secrets',
-  's3.gateway.credentials.roles.overrides.remove': 'secrets',
-  's3.gateway.credentials.roles.revoke': 'secrets',
-  's3.gateway.credentials.scope.update': 'secrets',
-  'settings.update': 'settings',
-  'storage.apiKey.add': 'secrets',
-  'storage.apiKey.remove': 'secrets',
-  'storage.apiKey.update': 'secrets',
-  'storage.vault.remove': 'data.destroy',
-  'upstream.admin.enable': 'secrets',
-  'upstream.bucket.cleanup': 'data.destroy',
-  'upstream.bucket.lifecycle.set': 'data.destroy',
-  'upstream.bucket.unprotect': 'data.destroy',
-  'vault.keys.export': 'keys',
-  'vault.keys.import': 'keys',
-  'vault.recovery.suspend': 'data.destroy',
-}
-
 // Client timeouts the server declares per command (a timeout means "no answer yet", never "failed").
 export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> = {
   'audit.export': 120000,
@@ -6283,7 +6189,6 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'auth.login': 20000,
   'auth.logout': 15000,
   'auth.mfa.cancel': 15000,
-  'auth.mfa.factor.remove': 15000,
   'auth.mfa.factor.rename': 15000,
   'auth.mfa.recovery.acknowledge': 15000,
   'auth.mfa.recovery.generate': 15000,
@@ -6293,13 +6198,13 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'auth.mfa.verify': 20000,
   'auth.mfa.webauthn.register.finish': 20000,
   'auth.mfa.webauthn.register.options': 15000,
+  'auth.passkey.login': 20000,
+  'auth.passkey.options': 15000,
   'auth.refresh': 15000,
   'auth.register': 15000,
   'auth.security.status': 15000,
   'auth.sessions.list': 15000,
   'auth.sessions.revoke': 15000,
-  'auth.stepup.begin': 15000,
-  'auth.stepup.finish': 20000,
   'auth.user.change_password': 15000,
   'auth.user.delete': 15000,
   'auth.user.get': 15000,

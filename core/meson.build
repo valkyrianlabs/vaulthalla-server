@@ -316,6 +316,8 @@ if get_option('build_unit_tests')
         '-DVH_TEST_CAD_HELPER="' + cad_helper_path + '"',
         '-DVH_TEST_ASSETS_DIR="' + join_paths(core_root, 'test-assets') + '"',
         '-DVH_TEST_PASSWORD_LISTS_DIR="' + join_paths(repo_root, 'deploy', 'password-lists') + '"',
+        # The #329 golden vectors (test_vhf1.cpp reads vectors.json at test time).
+        '-DVH_TEST_VECTORS_DIR="' + join_paths(repo_root, 'design', 'encryption', 'vectors') + '"',
     ]
 
     unit_test_objects = static_library(

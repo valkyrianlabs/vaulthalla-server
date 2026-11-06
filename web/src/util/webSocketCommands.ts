@@ -248,6 +248,9 @@ export interface WebSocketCommandMap {
   'auth.mfa.factor.remove': WsContract['auth.mfa.factor.remove']
   'auth.mfa.recovery.generate': WsContract['auth.mfa.recovery.generate']
   'auth.mfa.recovery.acknowledge': WsContract['auth.mfa.recovery.acknowledge']
+  // Discoverable passkey sign-in (#358): an anonymous connection, a passkey alone (features/auth/passkeySignIn.ts).
+  'auth.passkey.options': WsContract['auth.passkey.options']
+  'auth.passkey.login': WsContract['auth.passkey.login']
   // Step-up (#359): a command that answered step_up_required is confirmed here, then resent (lib/stepUp.ts).
   'auth.stepup.begin': WsContract['auth.stepup.begin']
   'auth.stepup.finish': WsContract['auth.stepup.finish']

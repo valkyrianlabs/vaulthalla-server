@@ -341,11 +341,12 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
     // pairing's, the vault key commands' D4 channel refusals (a session that isn't a paired device's), meta.hello's
     // protocol_unsupported (no protocol version in common) and auth.login's already_signed_in (#354).
     static const std::map<std::string, std::set<std::string>> kRefusedCodes{
-        {"no_pairing_window", {}}, {"rate_limited", {"auth.mfa.verify"}}, {"device_unknown", {}},
+        {"no_pairing_window", {}}, {"rate_limited", {"auth.mfa.verify", "auth.passkey.options"}},
+        {"device_unknown", {}},
         {"export_requires_device", {"vault.keys.export", "vault.keys.export.confirm"}},
         {"import_requires_device", {"vault.keys.import"}},
         {"protocol_unsupported", {"meta.hello"}},
-        {"already_signed_in", {"auth.login"}},
+        {"already_signed_in", {"auth.login", "auth.passkey.options", "auth.passkey.login"}},
         // #357: the pending-MFA sign-in and the enrollment commands.
         {"mfa_required", {"auth.login", "auth.mfa.verify"}},
         {"mfa_enrollment_required", {"auth.login"}},
@@ -365,7 +366,7 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
         if (code == "rate_limited" && command == "auth.stepup.begin") return true;  // the passkey challenge store
         const auto it = kRefusedCodes.find(code);
         if (it == kRefusedCodes.end()) return false;
-        // rate_limited is device pairing's and auth.mfa.verify's.
+        // rate_limited is device pairing's, auth.mfa.verify's and auth.passkey.options'.
         if (code == "rate_limited") return command.starts_with("device.") || it->second.contains(command);
         return it->second.empty() ? command.starts_with("device.") : it->second.contains(command);
     };

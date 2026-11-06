@@ -104,5 +104,5 @@ option(
     'fuzz',
     type: 'boolean',
     value: false,
-    description: 'Build only the libFuzzer targets of the WebAuthn verifier (core/src/auth/webauthn/fuzz; clang, usually with -Db_sanitize=address,undefined). Nothing else is configured or built. See tools/dev/fuzz-webauthn.sh'
+    description: 'Build only the libFuzzer targets: the WebAuthn verifier (core/src/auth/webauthn/fuzz, see tools/dev/fuzz-webauthn.sh) and the VHF1 codec (vh_fuzz_vhf1, core/tests/fuzz). Needs clang, usually with -Db_sanitize=address,undefined. Nothing else is configured or built'
 )

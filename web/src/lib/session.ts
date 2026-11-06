@@ -20,7 +20,7 @@ interface SessionState {
 export const useSession = create<SessionState>(() => ({ status: 'unknown', user: null, token: null }))
 
 // Session-lifecycle commands work without (or with an expired) access token. Mirrors core's
-// isSessionLifecycleCommand (protocols/ws/Router.cpp), plus the pending-MFA allowlist (core
+// isSessionLifecycleCommand (protocols/ws/Router.cpp, discoverable passkey sign-in included), plus the pending-MFA allowlist (core
 // auth/mfa/Pending.hpp kPendingCommands + kPendingEnrollmentCommands; tools/contracts/test_mfa_pending_contract.py
 // keeps them equal): a pending sign-in has no token, and an unauthorized answer there means it ended, never that a
 // refresh would help.
@@ -29,6 +29,9 @@ const LIFECYCLE: ReadonlySet<Command> = new Set<Command>([
   'auth.logout',
   'auth.refresh',
   'auth.isAuthenticated',
+  // discoverable passkey sign-in (#358): an anonymous connection, no token yet
+  'auth.passkey.options',
+  'auth.passkey.login',
   // pending-MFA
   'auth.mfa.verify',
   'auth.mfa.cancel',
