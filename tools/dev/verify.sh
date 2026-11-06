@@ -108,6 +108,8 @@ run_packaging() {
   run_suite "tools/contracts" 200 discover -s tools/contracts -t .
   log "lab tooling tests (tools/lab/tests)"
   run_suite "tools/lab/tests" 34 discover -s tools/lab/tests -t .
+  log "macOS smoke client tests (tools/macos/tests: admin sign-in and step-up, offline)"
+  run_suite "tools/macos/tests" 13 discover -s tools/macos/tests -t .
   log "project board tooling tests (tools/project/tests)"
   python3 -c 'import yaml' 2>/dev/null || die "tools/project needs PyYAML: apt install python3-yaml"
   run_suite "tools/project/tests" 22 discover -s tools/project/tests -t .

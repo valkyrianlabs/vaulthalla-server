@@ -42,6 +42,11 @@ Options:
   --fresh-user     Generate a new E2E username, ignoring configured E2E credentials.
   --print-exports  Print shell exports for wrapper eval.
   -h, --help       Show this help.
+
+The account is an admin, so it also gets its second factor here (MFA is mandatory for admins): an authenticator app
+enrolled over the daemon's ws by tools/e2e/enroll_totp.py, its seed kept in $RESULT_DIR/totp-<user>.json (0600) and
+exported as VAULTHALLA_E2E_TOTP_FILE. VAULTHALLA_E2E_PYTHON: a python3 with `websockets`; VAULTHALLA_E2E_WS_URL: the
+daemon's ws endpoint (default: from NEXT_PUBLIC_VAULTHALLA_WS_ORIGIN / VAULTHALLA_E2E_BASE_URL).
 USAGE
 }
 
@@ -92,6 +97,27 @@ shell_export() {
 emit_exports() {
   shell_export VAULTHALLA_E2E_USER "$VAULTHALLA_E2E_USER"
   shell_export VAULTHALLA_E2E_PASSWORD "$VAULTHALLA_E2E_PASSWORD"
+  shell_export VAULTHALLA_E2E_TOTP_FILE "${VAULTHALLA_E2E_TOTP_FILE:-}"
+}
+
+# The account's second factor (#357: MFA is mandatory for admins; #405). tools/e2e/enroll_totp.py signs the account in
+# over the daemon's ws with the real flow and, the first time, enrolls an authenticator app whose seed it keeps in
+# $RESULT_DIR/totp-<user>.json (0600, run state only, never printed); the specs compute their codes from that file.
+# An account that needs no second factor gets no file. VAULTHALLA_E2E_PYTHON picks an interpreter with `websockets`;
+# VAULTHALLA_E2E_WS_URL names the daemon's ws endpoint when the default (from the console's settings) is wrong.
+ensure_totp_factor() {
+  local py="${VAULTHALLA_E2E_PYTHON:-python3}" file
+  file="$RESULT_DIR/totp-$(printf '%s' "$VAULTHALLA_E2E_USER" | tr -c 'A-Za-z0-9_-' '_').json"
+  if ! printf '%s\n' "$VAULTHALLA_E2E_PASSWORD" |
+      "$py" "$REPO_ROOT/tools/e2e/enroll_totp.py" --user "$VAULTHALLA_E2E_USER" --totp-file "$file" >&2; then
+    echo "Could not give E2E user '$VAULTHALLA_E2E_USER' its second factor (see above)." >&2
+    exit 1
+  fi
+  if [[ -f "$file" ]]; then
+    export VAULTHALLA_E2E_TOTP_FILE="$file"
+  else
+    export VAULTHALLA_E2E_TOTP_FILE=""
+  fi
 }
 
 write_private_env() {
@@ -120,6 +146,7 @@ load_private_env_if_present() {
 }
 
 finish_with_existing_credentials() {
+  ensure_totp_factor
   echo "E2E credentials loaded for user '${VAULTHALLA_E2E_USER}' with password redacted." >&2
   if [[ "$PRINT_EXPORTS" == "1" ]]; then
     emit_exports

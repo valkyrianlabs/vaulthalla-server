@@ -5,6 +5,11 @@ Talks to an installed daemon over its real surfaces (ws + HTTP on 127.0.0.1) as 
 root and never reads the service's state directory. The admin password arrives on stdin (the root script opens the
 daemon's super_admin_initial_password and hands it over), and is never printed or written anywhere.
 
+The admin signs in with a second factor (#357, #405): the first seed enrolls an authenticator app and keeps it in
+--totp-file (default: admin-totp.json next to --state; private 0600 run state, never printed), and every later run
+answers the TOTP step from it. A step-up refusal (#359) is answered with the password and a fresh code. Each sign-in
+spends one 30 s TOTP step, so back-to-back runs may wait for the next one.
+
   seed    create (or reuse) the 'install_acceptance' vault; HTTP upload of a 1 MiB file, a nested upload and a
           share-link upload; download and compare each; a second, unprivileged account is refused (403/404) on the
           admin's vault. Writes what it stored (paths, sizes, sha256; no secrets) to --state.
@@ -25,7 +30,9 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
+from tools.lab import mfa  # noqa: E402
 from tools.lab.pentest.client import Target, Ws, http_request, ok, upload_files  # noqa: E402
+from tools.macos.session import AdminFactor, must, sign_in  # noqa: E402
 
 VAULT = "install_acceptance"
 OTHER = "acceptance_other"
@@ -40,13 +47,9 @@ def sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-async def login(target: Target, password: str, name: str = "admin") -> Ws:
-    ws = await Ws(target).__aenter__()
-    res = await ws.login(name, password)
-    if not ok(res):
-        await ws.__aexit__(None, None, None)
-        raise RuntimeError(f"{name} login failed: {res.get('status')}")
-    return ws
+async def login(target: Target, password: str, factor: AdminFactor | None = None, name: str = "admin") -> Ws:
+    """The admin (with `factor`: password, then TOTP or a first enrollment), or another account with its password."""
+    return await sign_in(target, name, password, factor, label="vh install acceptance")
 
 
 def download(target: Target, cookie: str, vault_id: int, path: str) -> bytes | None:
@@ -54,24 +57,25 @@ def download(target: Target, cookie: str, vault_id: int, path: str) -> bytes | N
     return r.body if r.status == 200 else None
 
 
-async def seed(target: Target, password: str, state: Path, expect_mount_state: str | None) -> bool:
+async def seed(target: Target, password: str, state: Path, expect_mount_state: str | None,
+               factor: AdminFactor) -> bool:
     good = True
-    ws = await login(target, password)
+    ws = await login(target, password, factor)
     cookie = ws.cookie_header()
-    good &= step("ws login as admin", True)
-    deps = (await ws.must("stats.system.health")).get("stats", {}).get("deps", {})
+    good &= step("ws sign-in as admin (password + TOTP)", True)
+    deps = (await must(ws, "stats.system.health")).get("stats", {}).get("deps", {})
     good &= step("health reports the mount honestly",
                  expect_mount_state is None or deps.get("mount_state") == expect_mount_state,
                  f"mode={deps.get('fuse_mount')} state={deps.get('mount_state')} "
                  f"secrets_backend={deps.get('secrets_backend')}")
 
-    vaults = (await ws.must("storage.vault.list")).get("vaults", [])
+    vaults = (await must(ws, "storage.vault.list")).get("vaults", [])
     existing = [v for v in vaults if v.get("name") == VAULT]
     if existing:
         vault_id = int(existing[0]["id"])
         step("reuse encrypted local vault", True, f"id={vault_id}")
     else:
-        vault_id = int((await ws.must("storage.vault.add", {"name": VAULT, "type": "local"}))["vault"]["id"])
+        vault_id = int((await must(ws, "storage.vault.add", {"name": VAULT, "type": "local"}))["vault"]["id"])
         good &= step("create encrypted local vault", vault_id > 0, f"id={vault_id}")
 
     run = os.urandom(4).hex()  # reruns add new files instead of overwriting
@@ -84,9 +88,9 @@ async def seed(target: Target, password: str, state: Path, expect_mount_state: s
 
     # Share upload: an upload-only public link into /inbox, used from a share session.
     if not ok(await ws.send("fs.metadata", {"vault_id": vault_id, "path": "/inbox"})):
-        await ws.must("fs.dir.create", {"vault_id": vault_id, "path": "/inbox"})
-    inbox = (await ws.must("fs.metadata", {"vault_id": vault_id, "path": "/inbox"}))["entry"]
-    link = await ws.must("share.link.create", {
+        await must(ws, "fs.dir.create", {"vault_id": vault_id, "path": "/inbox"})
+    inbox = (await must(ws, "fs.metadata", {"vault_id": vault_id, "path": "/inbox"}))["entry"]
+    link = await must(ws, "share.link.create", {
         "vault_id": vault_id, "root_entry_id": inbox["id"], "root_path": "/inbox", "target_type": "directory",
         "link_type": "upload", "access_mode": "public", "allowed_ops": ["metadata", "upload"],
         "public_role_assignment": {"vault_role_name": "share_upload_dropbox"}, "name": f"acceptance-{run}"})
@@ -113,9 +117,9 @@ async def seed(target: Target, password: str, state: Path, expect_mount_state: s
 
     # RBAC over the web surface: a second, unprivileged account can't read or write the admin's vault.
     other_pw, other_name = os.urandom(12).hex(), f"{OTHER}_{run}"
-    await ws.must("auth.register", {"name": other_name, "password": other_pw, "role": "unprivileged"})
+    await must(ws, "auth.register", {"name": other_name, "password": other_pw, "role": "unprivileged"})
     await ws.__aexit__(None, None, None)
-    other = await login(target, other_pw, name=other_name)
+    other = await login(target, other_pw, name=other_name)  # unprivileged: the password alone
     other_cookie = other.cookie_header()
     first = next(iter(files))
     denied = http_request(target, "GET", "/download/content", query={"vault_id": vault_id, "path": first},
@@ -133,13 +137,13 @@ async def seed(target: Target, password: str, state: Path, expect_mount_state: s
     return good
 
 
-async def verify(target: Target, password: str, state: Path) -> bool:
+async def verify(target: Target, password: str, state: Path, factor: AdminFactor) -> bool:
     record = json.loads(state.read_text())
     vault_id = int(record["vault_id"])
-    ws = await login(target, password)
+    ws = await login(target, password, factor)
     cookie = ws.cookie_header()
-    good = step("ws login as admin", True)
-    vaults = (await ws.must("storage.vault.list")).get("vaults", [])
+    good = step("ws sign-in as admin (password + TOTP)", True)
+    vaults = (await must(ws, "storage.vault.list")).get("vaults", [])
     good &= step("vault is still there", any(int(v["id"]) == vault_id for v in vaults), f"id={vault_id}")
     for path, meta in record["files"].items():
         got = download(target, cookie, vault_id, path)
@@ -155,16 +159,20 @@ def main() -> int:
     p.add_argument("--ws-port", type=int, default=36969)
     p.add_argument("--http-port", type=int, default=36970)
     p.add_argument("--expect-mount-state", help="health must report this mount_state (e.g. disabled)")
+    p.add_argument("--totp-file", type=Path,
+                   help="the admin's authenticator (0600 JSON, or a bare base32 secret); default: admin-totp.json "
+                        "next to --state, created by the first seed")
     args = p.parse_args()
     password = sys.stdin.readline().strip()
     if not password:
         sys.exit("the admin password is expected on stdin")
     target = Target(hostname="127.0.0.1", connect_ip="127.0.0.1", ws_port=args.ws_port, http_port=args.http_port)
+    factor = AdminFactor(mfa.TotpStore(args.totp_file or args.state.with_name("admin-totp.json")))
     try:
         if args.phase == "seed":
-            good = asyncio.run(seed(target, password, args.state, args.expect_mount_state))
+            good = asyncio.run(seed(target, password, args.state, args.expect_mount_state, factor))
         else:
-            good = asyncio.run(verify(target, password, args.state))
+            good = asyncio.run(verify(target, password, args.state, factor))
     except Exception as e:  # report and fail; secrets never reach the message
         good = step("unexpected error", False, f"{type(e).__name__}: {e}")
     print(f"install acceptance {args.phase}:", "PASSED" if good else "FAILED")
