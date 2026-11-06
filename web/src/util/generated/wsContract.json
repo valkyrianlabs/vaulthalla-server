@@ -1054,6 +1054,14 @@
           "types": [
             "integer"
           ]
+        },
+        {
+          "model": "WebAuthnConfig",
+          "name": "webauthn",
+          "required": false,
+          "types": [
+            "object"
+          ]
         }
       ],
       "name": "AuthConfig"
@@ -17841,6 +17849,37 @@
       "name": "VaultsS3Config"
     },
     {
+      "description": "auth.webauthn.* (Config.cpp to_json(WebAuthnConfig), #355): the passkey relying party, explicit configuration only (never derived from request headers). An empty rp_id means passkeys are unavailable.",
+      "fields": [
+        {
+          "description": "A lowercase host name, never an IP address; empty: passkeys unavailable. Changing it makes passkeys registered for the old one unusable.",
+          "name": "rp_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Shown by authenticators; 1..64 characters.",
+          "name": "rp_name",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Exact console origins (https://host[:port], or http://localhost:<port>) under rp_id; required when rp_id is set, at most 16.",
+          "items": "string",
+          "name": "origins",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        }
+      ],
+      "name": "WebAuthnConfig"
+    },
+    {
       "description": "websocket_server.* (Config.cpp to_json(WebsocketConfig)).",
       "fields": [
         {
@@ -17901,7 +17940,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "0e7099c80fe633cb2599a7f526951d1943790d94893cf33616d40fa40339913e",
+  "models_hash": "d986920634205c0a7f5781c63c7e7eb8c3d2e1268a64eda128028dd8474cd312",
   "protocol": {
     "min": 1,
     "version": 1

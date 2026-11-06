@@ -80,6 +80,7 @@ class PackageLayoutContractTests(unittest.TestCase):
             "libfmt-dev",
             "libtss2-dev",
             "libssl-dev",
+            "libcbor-dev",
             "libturbojpeg0-dev",
             "libgtest-dev",
         ):

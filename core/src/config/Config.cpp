@@ -1,6 +1,7 @@
 #include "config/Config.hpp"
 #include "config/config_yaml.hpp"
 #include "config/util.hpp"
+#include "auth/webauthn/RelyingParty.hpp"
 #include "platform/Mount.hpp"
 
 #include <cstdlib>
@@ -133,7 +134,14 @@ Config& Config::operator=(Config&&) noexcept = default;
         if (auto node = root["caching"]) YAML::convert<CachingConfig>::decode(node, cfg.caching);
         if (auto node = root["preview"]) YAML::convert<PreviewConfig>::decode(node, cfg.preview);
         if (auto node = root["database"]) YAML::convert<DatabaseConfig>::decode(node, cfg.database);
-        if (auto node = root["auth"]) YAML::convert<AuthConfig>::decode(node, cfg.auth);
+        if (auto node = root["auth"]) {
+            YAML::convert<AuthConfig>::decode(node, cfg.auth);
+            try {
+                validateWebAuthn(cfg.auth.webauthn);
+            } catch (const std::invalid_argument& e) {
+                throw std::invalid_argument(std::string("config.yaml: ") + e.what());
+            }
+        }
         if (auto node = root["sync"]) YAML::convert<SyncConfig>::decode(node, cfg.sync);
         if (auto node = root["pricing"]) YAML::convert<PricingConfig>::decode(node, cfg.pricing);
         if (auto node = root["services"]) YAML::convert<ServicesConfig>::decode(node, cfg.services);
@@ -739,7 +747,8 @@ Config& Config::operator=(Config&&) noexcept = default;
     void to_json(nlohmann::json &j, const AuthConfig &c) {
         j = {
             {"access_token_expiry_minutes", c.access_token_expiry_minutes},
-            {"refresh_token_expiry_days", c.refresh_token_expiry_days}
+            {"refresh_token_expiry_days", c.refresh_token_expiry_days},
+            {"webauthn", c.webauthn}
             // Do not serialize jwt_secret
         };
     }
@@ -747,6 +756,29 @@ Config& Config::operator=(Config&&) noexcept = default;
     void from_json(const nlohmann::json &j, AuthConfig &c) {
         c.access_token_expiry_minutes = j.value("access_token_expiry_minutes", 60);
         c.refresh_token_expiry_days = j.value("refresh_token_expiry_days", 7);
+        c.webauthn = WebAuthnConfig{};
+        if (j.contains("webauthn")) j.at("webauthn").get_to(c.webauthn);
+    }
+
+    void to_json(nlohmann::json &j, const WebAuthnConfig &c) {
+        j = {
+            {"rp_id", c.rp_id},
+            {"rp_name", c.rp_name},
+            {"origins", c.origins}
+        };
+    }
+
+    // A key left out keeps its default; the result is validated as config.yaml is (settings.update answers invalid).
+    void from_json(const nlohmann::json &j, WebAuthnConfig &c) {
+        const WebAuthnConfig d;
+        c.rp_id = j.value("rp_id", d.rp_id);
+        c.rp_name = j.value("rp_name", d.rp_name);
+        c.origins = j.value("origins", d.origins);
+        validateWebAuthn(c);
+    }
+
+    void validateWebAuthn(const WebAuthnConfig &c) {
+        vh::auth::webauthn::validateRelyingParty(c.rp_id, c.origins, c.rp_name);
     }
 
     void to_json(nlohmann::json &j, const SyncConfig &c) {

@@ -11,6 +11,7 @@ Build-Depends:
  pandoc,
  libfuse3-dev,
  libsodium-dev,
+ libcbor-dev (>= 0.10),
  libcurl4-openssl-dev,
  libboost-filesystem-dev,
  libboost-system-dev,

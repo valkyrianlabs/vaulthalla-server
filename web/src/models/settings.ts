@@ -32,9 +32,17 @@ export interface DatabaseSettings extends SettingsSection {
   pool_size: number
 }
 
+// auth.webauthn.* (core WebAuthnConfig, #355): the passkey relying party. Empty rp_id: passkeys are unavailable.
+export interface WebAuthnSettings extends SettingsSection {
+  rp_id: string
+  rp_name: string
+  origins: string[]
+}
+
 export interface AuthSettings extends SettingsSection {
   access_token_expiry_minutes: number
   refresh_token_expiry_days: number
+  webauthn: WebAuthnSettings
 }
 
 // sharing.* (core share::policy): `enabled` gates every link; the others gate one kind each. enable_anonymous is
