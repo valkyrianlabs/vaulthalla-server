@@ -1,0 +1,1 @@
+- `/preview/batch` returns `entry=<id>` preview URLs (vault and `share=1`) instead of `path=` URLs (#417); they resolve through the #327 Access rules and the share scope check. `HttpAccessDbTest.PreviewBatchAnswersFromTheIndexAndDecodesOncePerSource` pins that no batch URL carries `path=` or a file name. The console already uses the returned URLs as is, so no web change.

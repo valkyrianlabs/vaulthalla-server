@@ -351,6 +351,13 @@ TEST_F(HttpAccessDbTest, PreviewBatchAnswersFromTheIndexAndDecodesOncePerSource)
     const auto before = stats->snapshot();
     auto items = batchOf({"/shared.jpg"});
     EXPECT_EQ(items.at(0).at("status"), "ready") << "the open already produced the grid thumbnail";
+    // #417: the URL it hands out addresses the file by id (never a path or name) and serves through the same rules.
+    const std::string readyUrl = items.at(0).at("url");
+    EXPECT_EQ(readyUrl, "/preview?vault_id=" + std::to_string(vaultA->vault->id) + "&entry=" + std::to_string(pic->id) +
+                            "&size=128");
+    EXPECT_EQ(readyUrl.find("path="), std::string::npos);
+    EXPECT_EQ(readyUrl.find("shared"), std::string::npos);
+    EXPECT_EQ(readyUrl.find("jpg"), std::string::npos);
     const auto after = stats->snapshot();
     EXPECT_EQ(after.hits, before.hits) << "a readiness check is not a served cache hit";
     EXPECT_EQ(after.misses, before.misses);
