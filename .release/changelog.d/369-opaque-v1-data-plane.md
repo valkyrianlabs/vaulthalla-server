@@ -39,4 +39,6 @@
   `OpaqueReadsRequireTheFilesObjectUid`, `OpaqueForeignObjectsAndOrphans`,
   `OpaqueManifestNamesTheObjectsItsFilesAreStoredIn`, `OpaqueCreationIsRefusedOutsideTestMode`) and
   `LiveR2.OpaqueObjectsCarryNoMetadataAndCostWhatSpec01Says`. The versioned fake bucket records every request
-  (`VersionedBucket::requests()`) and runs the request policy like the network paths.
+  (`VersionedBucket::requests()`) and runs the request policy like the network paths; the audit enrolls a recovery
+  recipient, so its KEV1 envelopes (`.vaulthalla/key/<kid>`, #370) go through the same rules, whose controller
+  `vault::envelopes` now sets to the vault's layout too.

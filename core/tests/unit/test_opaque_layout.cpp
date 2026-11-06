@@ -10,6 +10,9 @@
 
 #include "../helpers/versioned_bucket.hpp"
 
+#include "crypto/recovery/Kev1.hpp"
+#include "crypto/recovery/Seed.hpp"
+#include "crypto/util/encrypt.hpp"
 #include "crypto/vhf1/Format.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/fs/File.hpp"
@@ -24,6 +27,7 @@
 #include "fs/model/file/Trashed.hpp"
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
+#include "ops/RecoveryRecipients.hpp"
 #include "ops/Vaults.hpp"
 #include "recovery/local/Backlog.hpp"
 #include "recovery/local/Versions.hpp"
@@ -38,6 +42,7 @@
 #include "storage/s3/Controller.hpp"
 #include "sync/Cloud.hpp"
 #include "sync/Planner.hpp"
+#include "sync/manifest/Store.hpp"
 #include "sync/model/Action.hpp"
 #include "sync/model/Event.hpp"
 #include "sync/model/RemotePolicy.hpp"
@@ -48,6 +53,7 @@
 #include "vault/APIKeyManager.hpp"
 #include "vault/Content.hpp"
 #include "vault/EncryptionManager.hpp"
+#include "vault/RecoveryEnvelopes.hpp"
 #include "vault/model/APIKey.hpp"
 #include "vault/model/S3Vault.hpp"
 
@@ -126,6 +132,8 @@ TEST(OpaqueObjectKeys, KeysAreBuiltParsedAndClassifiedInOnePlace) {
         EXPECT_EQ(keys::classify(k), keys::KeyClass::Metadata) << k;
     EXPECT_EQ(keys::classify(".vaulthalla/seg/" + crypto::id::toBase32(uid)), keys::KeyClass::Metadata);
     EXPECT_EQ(keys::classify(".vaulthalla/key/" + crypto::id::toBase32(uid)), keys::KeyClass::Metadata);
+    const auto envelopeKey = crypto::kev1::objectKey(crypto::kev1::kid(bytes("any envelope bytes")));
+    EXPECT_EQ(keys::classify(envelopeKey), keys::KeyClass::Metadata) << "KEV1 envelopes (#370) are allowlisted";
     for (const auto* k : {"Reports/Q3 board pack.pdf", ".vaulthalla/index-v1.json", ".vaulthalla/seg/nope", "o/",
                           "o/x/y", "/o/abc"})
         EXPECT_EQ(keys::classify(k), keys::KeyClass::Foreign) << k;
@@ -530,6 +538,19 @@ protected:
 // key matches the allowlist, and no stored byte holds a name or the plaintext.
 TEST_F(OpaqueLayoutTest, OpaqueRequestAudit) {
     const auto v = opaqueVault(/*localVersioning=*/true);
+    // A recovery recipient (#370): its KEV1 envelopes go to the same bucket (.vaulthalla/key/<kid>), under the same
+    // request rules, at enrollment and at every rotation.
+    vault::envelopes::setStoreFactoryForTesting([bucket = v.bucket](uint32_t) -> std::shared_ptr<sync::manifest::ObjectStore> {
+        return std::make_shared<sync::manifest::S3Store>(bucket);
+    });
+    struct ResetEnvelopeStore {
+        ~ResetEnvelopeStore() { vault::envelopes::setStoreFactoryForTesting({}); }
+    } resetEnvelopeStore;
+    const auto seed = crypto::recovery::RecoverySeed::generate();
+    (void)ops::recovery_recipients::add(superUser, {.vault_id = v.id(),
+                                                    .public_key = crypto::util::b64_encode(seed.x25519PublicKey()),
+                                                    .label = std::string("Recovery kit")},
+                                        ops::vault_keys::Channel::Cli);
     const std::string folder = "/Quarterly Secret Reports";
     const std::string pack = folder + "/Board Pack Quarterly.pdf";
     mkdir(v, folder);
@@ -631,6 +652,10 @@ TEST_F(OpaqueLayoutTest, OpaqueRequestAudit) {
         }
     }
     EXPECT_FALSE(v.bucket->current(".vaulthalla/index-v1.json"));
+    const auto envelopes = std::ranges::count_if(v.bucket->keys(), [](const auto& k) {
+        return k.starts_with(crypto::kev1::kObjectPrefix);
+    });
+    EXPECT_GE(envelopes, 2) << "the enrolled recipient's envelopes, for the first key and the rotated one";
 
     // And it all reads back: the restored generation, the copy, the rotation.
     EXPECT_EQ(readLocal(v, "/Archive Quarterly/Copy Quarterly.pdf"), "quarterly board pack v4");

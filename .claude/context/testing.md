@@ -347,8 +347,9 @@ Dev mode requires both `VH_BUILD_MODE=dev` and the gitignored `enable_dev_mode` 
   storage_layout` + the engine's in-memory layout, then `setS3ControllerForTesting`, which applies the request
   policy) and runs real passes over the versioned fake bucket, whose `requests()` records every request as sent
   (key or prefix, copy destination / version id / part, metadata, headers) after running `enforceRequestPolicy`
-  like the network paths. `OpaqueRequestAudit` walks create, overwrite, backlog replay, rename, move, copy,
-  rotation, provider restore and delete and checks every request and every stored byte for names; `OpaqueObjectCount`,
+  like the network paths. `OpaqueRequestAudit` (with an enrolled recovery recipient: its envelopes go to the same
+  bucket through `vault::envelopes::setStoreFactoryForTesting`) walks create, overwrite, backlog replay, rename, move,
+  copy, rotation, provider restore and delete and checks every request and every stored byte for names; `OpaqueObjectCount`,
   `OpaqueRenameCostsNothing` (1,000-file folder) and `OpaqueRequestCountsMatchSpec01Section5` count requests per
   operation. Live: `LiveR2.OpaqueObjectsCarryNoMetadataAndCostWhatSpec01Says` (o/ objects at the run bucket's
   root, deleted by the test and again by the bucket's deletion).
