@@ -29,7 +29,7 @@
 // catalog records with the content (files.encryption_iv, recovery_blob.encryption_iv, upload_session_file, the
 // upstream x-amz-meta-vh-iv and the remote index), which is the GCM IV (12 bytes) for Gcm0 and the VHF1 salt
 // (32 bytes, = the header's salt) for Vhf1, base64 either way. files.content_format and recovery_blob.content_format
-// (migration 125) are generated from that column for queries.
+// (migration 126) are generated from that column for queries.
 namespace vh::vault::content {
 
 enum class Format : uint8_t { Plain, Gcm0, Vhf1 };

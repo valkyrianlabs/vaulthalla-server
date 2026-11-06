@@ -15,7 +15,7 @@
 - Size math is format-aware everywhere it was `plaintext + 16` (repairAtRest's size correction, hydrate/ranged
   expectations, provider version sizes and own-write detection, rotation's re-seal check, conflict preview caps,
   restore and snapshot estimates). `crypto::util::b64_decode` decodes any length (it was capped at 12 bytes).
-- Migration 125: generated `files.content_format` and `recovery_blob.content_format` (`plain`/`gcm0`/`vhf1`) with
+- Migration 126: generated `files.content_format` and `recovery_blob.content_format` (`plain`/`gcm0`/`vhf1`) with
   partial indexes on legacy rows, for the conversion (#372) and the retirement gate (#376).
 - `crypto::vhf1::Expectation::objectUid` is optional (the generation then binds the object), `IntegrityRegistry::peek`.
 - Tests: `Vhf1AtRestTest.*` (writes, streaming, local range reader, IntegrityContract, sidecars), `Vhf1ResumableTest.*`,

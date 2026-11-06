@@ -23,6 +23,8 @@
 #include "config/Registry.hpp"
 #include "sync/model/RemotePolicy.hpp"
 #include "sync/model/RemoteManifest.hpp"
+#include "sync/manifest/Service.hpp"
+#include "sync/manifest/Store.hpp"
 #include "sync/model/Event.hpp"
 #include "storage/s3/provider/Registry.hpp"
 #include "identities/Manager.hpp"
@@ -409,7 +411,49 @@ CloudEngine::getGroupedFilesFromS3(const fs::path& prefix) const {
     return groupEntriesByPath(filesFromS3XML(s3Provider_->listObjects(prefix)));
 }
 
+bool CloudEngine::usesManifestV2() const {
+    const auto s3 = s3Vault();
+    return s3 && s3->storage_layout == vault::model::StorageLayout::OpaqueV1;
+}
+
+std::shared_ptr<vh::sync::manifest::Service> CloudEngine::manifestV2() const {
+    std::scoped_lock lock(manifestV2Mutex_);
+    if (!manifestV2_) {
+        if (!vault->uid) throw std::runtime_error("an opaque_v1 vault without a uid can't publish its manifest");
+        manifestV2_ = std::make_shared<vh::sync::manifest::Service>(
+            vault->id, *vault->uid, std::make_shared<vh::sync::manifest::S3Store>(s3Provider_), encryptionManager);
+    }
+    return manifestV2_;
+}
+
+void CloudEngine::publishManifestV2() const {
+    try {
+        (void)manifestV2()->publish();
+        remoteIndexPublishPending_ = false;
+    } catch (const vh::sync::manifest::ChainRejected& e) {
+        throw SyncStalled(std::string("the bucket's manifest root was refused: ") + e.what());
+    } catch (const vh::sync::manifest::PublishConflict& e) {
+        throw SyncStalled(e.what());
+    }
+    try {
+        (void)manifestV2()->collectGarbageIfDue();
+    } catch (const std::exception& e) {
+        log::Registry::cloud()->warn("[CloudStorageEngine] Manifest segment collection failed for vault {}: {}",
+                                     vault->id, e.what());
+    }
+}
+
 bool CloudEngine::refreshRemoteIndexFromManifestIfChanged() const {
+    if (usesManifestV2()) {
+        // The v2 manifest is verified (chain rules, operator alert on rollback or fork), never loaded into the
+        // path-keyed remote index: the pass lists or uses its index as before.
+        try {
+            (void)manifestV2()->verifyRemote();
+        } catch (const vh::sync::manifest::ChainRejected& e) {
+            throw SyncStalled(std::string("the bucket's manifest root was refused: ") + e.what());
+        }
+        return false;
+    }
     const std::string manifestKey = remote_manifest::INDEX_V1_KEY;
     const auto head = s3Provider_->getHeadObject(manifestKey);
     if (!head) {
@@ -444,6 +488,10 @@ bool CloudEngine::refreshRemoteIndexFromManifestIfChanged() const {
 }
 
 void CloudEngine::publishRemoteIndexManifest(const std::optional<std::string>& expectedETag) const {
+    if (usesManifestV2()) {
+        publishManifestV2();
+        return;
+    }
     const auto files = db::query::sync::RemoteObjectIndex::listFilesForVault(vault->id);
     const auto manifest = remote_manifest::buildIndexV1(vault->id, files);
     const auto metadata = remote_manifest::inspectIndexV1Metadata(manifest, vault->id);
@@ -477,6 +525,10 @@ void CloudEngine::publishRemoteIndexManifest(const std::optional<std::string>& e
 }
 
 void CloudEngine::publishRemoteIndexManifestWithRetry() const {
+    if (usesManifestV2()) {
+        publishManifestV2();  // bounded retries and merges of its own (sync::manifest::publish)
+        return;
+    }
     std::string lastConflict;
     auto expectedETag = db::query::sync::RemoteObjectIndex::getManifestETag(
         vault->id,
@@ -561,6 +613,12 @@ void CloudEngine::applyRemoteIndexMutation(const std::vector<Action>& plan) cons
 
         return mutated;
     };
+
+    if (usesManifestV2()) {
+        // Published once per pass that changed anything, after the objects it names (spec 03 §3.4).
+        if (replayMutation() || remoteIndexPublishPending_) publishManifestV2();
+        return;
+    }
 
     // This pass rebuilt the index from a full LIST (#248): it is the bucket's truth, so it takes the plan's changes
     // and is published once, overwriting whatever manifest is there like the post-LIST publish used to (a conflict

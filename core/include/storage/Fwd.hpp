@@ -8,3 +8,7 @@ namespace vh::storage {
     class Manager;
     class PlaintextReader;
 }
+
+namespace vh::storage::s3 {
+    class Controller;
+}

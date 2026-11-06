@@ -688,7 +688,7 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   (`vault::content::PrefixSealer`), hydrate-and-seal of plaintext objects, provider restores and key salvage.
   `vault/Content.hpp` is the one place that tells the formats apart: by the generation id's length (12-byte IV =
   legacy `gcm0`, 32-byte salt = `vhf1`, empty = `plain`; `files.content_format` / `recovery_blob.content_format`,
-  migration 125, are generated from it), with sealed-size math, dispatching readers (`openBuffer`, `openFileTo`,
+  migration 126, are generated from it), with sealed-size math, dispatching readers (`openBuffer`, `openFileTo`,
   `verifyFd`, `StreamOpener`) and the VHF1 sealer. Readers bind a VHF1 object to the vault uid, the recorded salt and
   key version (the object uid when the caller holds it: path_v0 rows can be indexed from a listing before their
   object is read, and the 256-bit salt binds the object to the row on its own). Empty files stay zero bytes with no
@@ -697,13 +697,32 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   A contract test (`Vhf1AtRestTest.IntegrityContract*`, counter `crypto::util::gcmCtrDecryptAtCallsForTesting`)
   proves no VHF1 read reaches `gcmCtrDecryptAt`.
 - **VHF1 codec** (`crypto::vhf1`, `core/include/crypto/vhf1/{Format,Writer,Reader}.hpp`; #365, spec
-  `design/encryption/02-authenticated-file-format.md`). The library under VHF1 at rest: the 120-byte header (HMAC-SHA-256 tag), per-sealing HKDF-SHA-256 keys from vault key + salt,
+  `design/encryption/02-authenticated-file-format.md`). The library under VHF1 at rest (above) and the manifest v2
+  objects below: the 120-byte header (HMAC-SHA-256 tag), per-sealing HKDF-SHA-256 keys from vault key + salt,
   64 KiB AES-256-GCM chunks with AAD = header hash ‖ index ‖ final flag, a streaming `Writer` (final-chunk hold-back),
   `open()` / `ChunkWalker` (whole and streamed reads, only authenticated chunks reach the sink) and `RangeReader`
   (authenticated object size required, sticky failure). Errors are `vhf1::Error` with the spec's codes in the §3.6
   check order. Primitives are OpenSSL (HKDF, HMAC, SHA-256, AES-GCM via `crypto::util::Gcm`) and libsodium.
   Proven byte for byte by `Vhf1Vectors` against `design/encryption/vectors/vectors.json`; fuzz target `vh_fuzz_vhf1`
   (`-Dfuzz=true`, clang; see testing.md).
+- **Encrypted manifest v2** (`sync::manifest`, `core/include/sync/manifest/`; #368, spec
+  `design/encryption/03-metadata-recovery.md` §3-§4; migration 125). Replaces `.vaulthalla/index-v1.json` for
+  `opaque_v1` vaults only (test mode until #371). `Document` (root, segment, snapshot schemas; readers ignore unknown
+  members; `recovery_policy` v1 of revocable grants, only class `customer` usable, other versions "not understood"),
+  `Objects` (VHF1 kind 3 root with object uid = vault uid, kind 2 segments with object uid = sid), `Chain` (rollback,
+  fork, gap walked through retained root versions), `Partition` (by first uid byte; split > 8,192 entries or 4 MiB,
+  merge < 1,024), `Publisher` (segments `If-None-Match: *`, root `If-Match`, 412 → load, verify, `mergePending`,
+  bounded retry; prior names carried; GC keeps the last three roots' segments and anything < 24 h), `Reader`
+  (fallbacks: root provider versions; segment provider version → older root → blind range; `blindRebuild` reads
+  120-byte headers of `o/` only; `loadForRestore` says "freshness unverified: no checkpoint supplied"), `Store`
+  (`S3Store` over `s3::Controller`, no `x-amz-meta-*`). `db::query::sync::Manifest` collects the DB into `Content`
+  (assigns `directories.uid` / `symlinks.uid` lazily; trash via `files_trashed.object_uid`; versions and tombstones from
+  `o/<uid>` rows of `upstream_object_version`) and keeps `remote_manifest_state` (manifest_key `.vaulthalla/root`:
+  epoch, root hash, ETag, refused root, gc_at) and `remote_manifest_root` (last three roots' sids). `Service` is the
+  per-vault glue `CloudEngine` uses for opaque_v1 (`publishManifestV2`, `refreshRemoteIndexFromManifestIfChanged`
+  verifies only and returns false); a refused root stalls the pass (`SyncStalled`) and raises one
+  `manifest_rollback` / `manifest_fork` operator notification per root. Recovery recipients (KEV1 envelopes, grants)
+  are #370; `vh vault recover` and the scratch-schema restore are #371.
 - **Derived cache** (`preview::cache::Store`, `cache_index` rows `type='derived'`, migration 103). One encrypted,
   disposable cache for thumbnails (`thumbnail`/`<size>`), sheet and PDF page renders (`render`/`p<page>-s<size>`),
   posters, probes, GLB, transcodes. File: `<cacheRoot>/derived/<file_id>/<kind>.<variant>.vhd` = 64-byte header

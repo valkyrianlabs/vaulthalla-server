@@ -495,7 +495,11 @@ def manifest_accept_root(root: dict, root_object: bytes, known: dict | None, seg
             raise ManifestError("segment_missing")
         if sha256(blob).hex() != seg["object_sha256"] or len(blob) != seg["size"]:
             raise ManifestError("segment_mismatch")
-    return {"epoch": epoch, "root_sha256": digest}
+    result = {"epoch": epoch, "root_sha256": digest}
+    if known is not None and epoch > known["epoch"] + 1:
+        # The chain back to known can't be walked here (no retained roots): accepted with a gap warning (§4.1).
+        result["warning"] = "gap"
+    return result
 
 
 # --------------------------------------------------------------------------------------------------------------------
@@ -783,6 +787,9 @@ def build() -> dict:
     r2_plain = root_doc(2, sha256(r1_obj).hex())
     r2_obj, r2_inter = vhf1_seal(canonical_json(r2_plain), VAULT_KEYS[2],
                                  Vhf1Params(2, VAULT_UID, root_uid, salt_for("root-2"), KIND_ROOT, 16))
+    r3_plain = root_doc(3, sha256(r2_obj).hex())
+    r3_obj, _ = vhf1_seal(canonical_json(r3_plain), VAULT_KEYS[2],
+                          Vhf1Params(2, VAULT_UID, root_uid, salt_for("root-3"), KIND_ROOT, 16))
     r2_fork_plain = dict(r2_plain, published_at="2026-11-05T12:09:00Z")
     r2_fork_obj, _ = vhf1_seal(canonical_json(r2_fork_plain), VAULT_KEYS[2],
                                Vhf1Params(2, VAULT_UID, root_uid, salt_for("root-2-fork"), KIND_ROOT, 16))
@@ -797,6 +804,9 @@ def build() -> dict:
             {"name": "root_epoch_2", "object_key": ".vaulthalla/root", "kind": KIND_ROOT, "key_version": 2,
              "object_uid_hex": root_uid.hex(), "plaintext_utf8": canonical_json(r2_plain).decode(),
              "object_hex": r2_obj.hex(), "object_sha256": sha256(r2_obj).hex()},
+            {"name": "root_epoch_3", "object_key": ".vaulthalla/root", "kind": KIND_ROOT, "key_version": 2,
+             "object_uid_hex": root_uid.hex(), "plaintext_utf8": canonical_json(r3_plain).decode(),
+             "object_hex": r3_obj.hex(), "object_sha256": sha256(r3_obj).hex()},
         ],
         "chain": [
             {"name": "fresh_restore_accepts_epoch_2", "root": "root_epoch_2", "known": None,
@@ -813,6 +823,11 @@ def build() -> dict:
              "segments_override": {seg_ref["sid"]: flip(seg_obj, 200).hex()}, "expect": {"error": "segment_mismatch"}},
             {"name": "segment_missing", "root": "root_epoch_2", "known": None, "segments_override": {},
              "expect": {"error": "segment_missing"}},
+            {"name": "gap_1_to_3", "root": "root_epoch_3",
+             "known": {"epoch": 1, "root_sha256": sha256(r1_obj).hex()},
+             "expect": {"epoch": 3, "root_sha256": sha256(r3_obj).hex(), "warning": "gap"}},
+            {"name": "rollback_3_to_2", "root": "root_epoch_2",
+             "known": {"epoch": 3, "root_sha256": sha256(r3_obj).hex()}, "expect": {"error": "rollback"}},
         ],
         "negative": [
             {"name": "segment_as_root", "description": "a segment object read where the root is expected",

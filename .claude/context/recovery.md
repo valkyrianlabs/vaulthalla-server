@@ -28,7 +28,7 @@ bucket: choosing `off`/`local_snapshots` does not suspend a bucket that is versi
   two chars). Outside `backingVaultRoot`, so the rotation sidecar walk (`*.vh-rotate`), `repairAtRest` and size walks
   never see it. A blob is the file's sealed bytes exactly as they were (VHF1 for every generation written since #367, legacy
   AES-256-GCM body‖tag before); the generation id (VHF1 salt or GCM IV) + key version live in `recovery_blob`
-  (`content_format`, migration 125, is generated from the id). Never plaintext.
+  (`content_format`, migration 126, is generated from the id). Never plaintext.
 - Capturing a generation is zero-copy where possible: every content write in Vaulthalla is sidecar → fsync → row →
   `rename` over the backing path (FUSE seal, `createFile` overwrite, rotation, copy), so the old inode is never written
   again. Retaining = `link(backing, blob)` *before* the rename (fsync blob dir). Deletes link the backing file in too

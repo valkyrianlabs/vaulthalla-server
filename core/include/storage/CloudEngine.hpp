@@ -271,6 +271,15 @@ namespace vh::storage {
         mutable std::unordered_map<std::string, HydrateFailure> hydrateFailures_;
         // markRemoteIndexRebuilt: the index holds a full LIST the manifest doesn't have yet.
         mutable std::atomic<bool> remoteIndexPublishPending_{false};
+        // opaque_v1 vaults: the encrypted manifest v2 (#368, spec 03) replaces index-v1.json. Created on first use.
+        mutable std::mutex manifestV2Mutex_;
+        mutable std::shared_ptr<sync::manifest::Service> manifestV2_;
+        [[nodiscard]] bool usesManifestV2() const;
+        [[nodiscard]] std::shared_ptr<sync::manifest::Service> manifestV2() const;
+        // Publishes the vault's manifest v2 (and collects superseded segments once a day). A refused root (rollback,
+        // fork) or repeated conflicts stall the pass (SyncStalled): nothing is written over a root the chain rules
+        // refuse.
+        void publishManifestV2() const;
 
         std::shared_ptr<vault::model::S3Vault> s3Vault() const;
         void resolveS3ProviderConfiguration();

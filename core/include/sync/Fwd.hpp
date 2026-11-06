@@ -11,6 +11,10 @@ namespace vh::sync::events {
     class Service;
 }
 
+namespace vh::sync::manifest {
+    class Service;
+}
+
 namespace vh::sync::model {
     struct Policy;
     struct RemotePolicy;
