@@ -11,7 +11,7 @@ tags:
 
 # Vaulthalla Documentation
 
-Vaulthalla is **the final cloud**: sovereign, encrypted storage on hardware you own. A native C++ daemon encrypts every file before it reaches a disk or a bucket, enforces one set of permissions across the web console, the `vh` CLI, the S3-compatible gateway and (on Linux) a real filesystem mount, and syncs vaults to S3-compatible providers under cost limits you set. It runs on Linux and on Apple Silicon Macs.
+Vaulthalla is **the final cloud**: sovereign, encrypted storage on hardware you own. A native C++ daemon encrypts file contents before they reach a disk or, with upstream encryption (the default), a bucket. File and folder names are visible to your storage provider. The daemon enforces one set of permissions across the web console, the `vh` CLI, the S3-compatible gateway and (on Linux) a real filesystem mount, and syncs vaults to S3-compatible providers under cost limits you set. It runs on Linux and on Apple Silicon Macs.
 
 These pages are for the people who install and run it, and the people who use it. Contributor documentation is under [Contributors](/contributors/README).
 
