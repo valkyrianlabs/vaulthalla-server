@@ -15,6 +15,11 @@ namespace vh::protocols::s3 {
 
 class Server;
 
+// Every daemon start, whether or not the gateway is enabled, after the storage engines are up and before any service
+// runs (#345): request bodies a crash left behind are deleted (the plaintext spool of older versions included), and
+// multipart parts stored as plaintext by older versions are sealed under their vault's key. Never throws.
+void sweepStagingAtStartup() noexcept;
+
 class GatewayService final : public concurrency::AsyncService {
 public:
     struct RuntimeStatus {

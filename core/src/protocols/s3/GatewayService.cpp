@@ -3,6 +3,8 @@
 #include "config/Config.hpp"
 #include "config/Registry.hpp"
 #include "log/Registry.hpp"
+#include "protocols/s3/MultipartStore.hpp"
+#include "protocols/s3/RequestBody.hpp"
 #include "protocols/s3/Server.hpp"
 #include "protocols/s3/Session.hpp"
 #include "protocols/SessionLifetimes.hpp"
@@ -32,6 +34,15 @@ asio::ip::address bindAddressForHost(const std::string& host) {
 
     throw std::runtime_error("S3 gateway host must be an IP address, localhost, or '*': " + host);
 }
+}
+
+void sweepStagingAtStartup() noexcept {
+    (void)sweepRequestBodiesAtStartup();
+    try {
+        (void)MultipartStore{}.sweepAtStartup();
+    } catch (const std::exception& e) {
+        log::Registry::runtime()->error("[S3Gateway] Multipart part store sweep failed (nothing removed): {}", e.what());
+    }
 }
 
 GatewayService::GatewayService() : AsyncService("S3GatewayService") {}

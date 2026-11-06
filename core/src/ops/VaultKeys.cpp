@@ -25,6 +25,7 @@
 #include "vault/EncryptionManager.hpp"
 #include "vault/KeyAttestation.hpp"
 #include "vault/KeyCheck.hpp"
+#include "vault/Master.hpp"
 #include "vault/model/APIKey.hpp"
 #include "vault/model/Deletion.hpp"
 #include "vault/model/Key.hpp"
@@ -123,12 +124,8 @@ class Unsealer {
 public:
     // Throws when the row does not authenticate under this host's vault master.
     crypto::SecretKeyPtr unseal(const vault::model::Key& rec) {
-        if (!provider_) {
-            provider_.emplace(paths::testMode ? "test_vault_master" : "vault_master");
-            provider_->initGuarded(crypto::secrets::dependents::vaultMaster());
-        }
-        const crypto::WipedKeyCopy raw(
-            crypto::util::decrypt_aes256_gcm(rec.encrypted_key, provider_->getMasterKey(), rec.iv));
+        // Under the master version that wraps the row (vault/Master.hpp).
+        const crypto::WipedKeyCopy raw(vault::master::unwrap(rec.encrypted_key, rec.iv, rec.master_version));
         if (raw.bytes.size() != crypto::util::AES_KEY_SIZE)
             throw std::runtime_error("the sealed key is not a 32-byte AES key");
         auto key = std::make_shared<const crypto::SecretKey>(raw.bytes);
@@ -136,18 +133,14 @@ public:
         return key;
     }
 
-    // Seals key bytes under this host's vault master with a fresh IV: {encrypted_key, iv}.
-    std::pair<std::vector<uint8_t>, std::vector<uint8_t>> seal(const crypto::SecretKey& key) {
-        if (!provider_) {
-            provider_.emplace(paths::testMode ? "test_vault_master" : "vault_master");
-            // Not guarded: importing per-vault key backups under a new installation master is how vault contents
-            // are recovered after the old master is lost (#326). Rows still wrapped by the lost master stay
-            // unreadable until their own backups are imported; nothing that was readable becomes unreadable.
-            provider_->init();
-        }
-        std::vector<uint8_t> iv;
-        auto sealed = crypto::util::encrypt_aes256_gcm(key.bytes(), provider_->getMasterKey(), iv);
-        return {std::move(sealed), std::move(iv)};
+    // Seals key bytes under this host's current vault master with a fresh IV. The write declares the version; if a
+    // master switch commits before it, the database refuses the stale row (migration 121) and nothing is written.
+    vault::master::Wrapped seal(const crypto::SecretKey& key) {
+        // allowCreate: importing per-vault key backups under a new installation master is how vault contents are
+        // recovered after the old master is lost (#326). Rows still wrapped by the lost master stay unreadable until
+        // their own backups are imported; nothing that was readable becomes unreadable.
+        const vault::master::Writer writer(true);
+        return writer.wrap(key.bytes());
     }
 
     std::optional<std::string> check(const unsigned int vaultId, const vault::model::Key& rec) {
@@ -170,9 +163,6 @@ public:
         cache.checks[id] = value;
         return value.empty() ? std::nullopt : std::make_optional(value);
     }
-
-private:
-    std::optional<crypto::secrets::KeyProvider> provider_;
 };
 
 // Where one vault's key versions come from: its engine (memory, retired versions unsealed on demand), or its sealed
@@ -1301,9 +1291,10 @@ ImportResult importKeys(const Actor& actor, const ImportRequest& request, const 
         const bool pendingRotation = c.version + 1 == current && KeyQ::filesSealedUnder(target.vault_id, c.version) &&
                                      KeyQ::rotationPendingKeyVersions(target.vault_id).empty();
         for (const auto* slot : toWrite) {
-            auto [sealed, iv] = unsealer.seal(*c.key);
-            KeyQ::SealedWrite w{.table = slot->table, .version = c.version, .encrypted_key = std::move(sealed),
-                                .iv = std::move(iv), .provenance = provenance};
+            auto wrapped = unsealer.seal(*c.key);
+            KeyQ::SealedWrite w{.table = slot->table, .version = c.version,
+                                .encrypted_key = std::move(wrapped.encrypted_key), .iv = std::move(wrapped.iv),
+                                .master_version = wrapped.master_version, .provenance = provenance};
             if (slot->row) w.expected = std::make_pair(slot->row->encrypted_key, slot->row->iv);
             else w.rotation_pending = slot->table == KeyQ::SealedTable::Retired && pendingRotation;
             writes.push_back(std::move(w));

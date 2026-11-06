@@ -19,6 +19,7 @@
 #include "storage/s3/Controller.hpp"
 #include "vault/APIKeyManager.hpp"
 #include "vault/model/Deletion.hpp"
+#include "vault/Master.hpp"
 #include "vault/model/Key.hpp"
 #include "vault/model/S3Vault.hpp"
 #include "vault/model/Vault.hpp"
@@ -298,10 +299,8 @@ void setControllerFactoryForTesting(ControllerFactory factory) {
 RetainedKey retainedKey(const unsigned int vaultId) {
     const auto keys = DeletionQuery::retainedKeys(vaultId);
     if (keys.empty()) throw std::runtime_error("no key is retained for deleted vault " + std::to_string(vaultId));
-    crypto::secrets::KeyProvider tpm(paths::testMode ? "test_vault_master" : "vault_master");
-    tpm.initGuarded(crypto::secrets::dependents::vaultMaster());
     const crypto::WipedKeyCopy raw(
-        crypto::util::decrypt_aes256_gcm(keys.front()->encrypted_key, tpm.getMasterKey(), keys.front()->iv));
+        vh::vault::master::unwrap(keys.front()->encrypted_key, keys.front()->iv, keys.front()->master_version));
     if (raw.bytes.size() != crypto::util::AES_KEY_SIZE)
         throw std::runtime_error("retained key of deleted vault " + std::to_string(vaultId) + " is not a 32-byte AES key");
     return {.key = std::make_shared<const crypto::SecretKey>(raw.bytes), .record = keys.front()};

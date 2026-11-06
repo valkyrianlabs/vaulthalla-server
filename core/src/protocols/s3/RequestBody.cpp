@@ -2,14 +2,16 @@
 
 #include "protocols/s3/Auth.hpp"
 #include "protocols/s3/Error.hpp"
+#include "crypto/ScratchFile.hpp"
+#include "log/Registry.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cctype>
 #include <charconv>
-#include <fstream>
 #include <iomanip>
 #include <openssl/evp.h>
+#include <paths.h>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
@@ -19,8 +21,6 @@
 namespace vh::protocols::s3 {
 
 namespace {
-
-constexpr std::size_t kBodyReadBytes = 64u * 1024u;
 
 std::string bodyDigestHex(const std::vector<unsigned char>& digest) {
     std::ostringstream out;
@@ -80,12 +80,11 @@ void BodyHash::update(const char* data, const std::size_t size) {
     crc_ = crc32(crc_, reinterpret_cast<const Bytef*>(data), static_cast<uInt>(size));
 }
 
-Router::BodyPayload BodyHash::finish(const std::filesystem::path& path, const uint64_t size,
-                                     std::map<std::string, std::string> trailers) {
+Router::BodyPayload BodyHash::finish(const uint64_t size, std::map<std::string, std::string> trailers) {
     const auto sha = sha_.finish();
     const auto md5 = md5_.finish();
     return {
-        .temp_file = path,
+        .file = nullptr,
         .size = size,
         .trailer_headers = std::move(trailers),
         .sha256_hex = bodyDigestHex(sha),
@@ -119,7 +118,7 @@ bool hasSignedChunks(const Router::Request& request) {
     return mode == vl::sigv4::PayloadMode::StreamingSigned || mode == vl::sigv4::PayloadMode::StreamingSignedTrailer;
 }
 
-Router::BodyPayload decodeAwsChunkedBody(std::istream& in, const std::filesystem::path& decodedPath,
+Router::BodyPayload decodeAwsChunkedBody(const fs::PlaintextSource& in, const std::filesystem::path& decodedPath,
                                          const Router::Request& request,
                                          std::optional<vl::sigv4::ChunkVerifier> chain) {
     vl::sigv4::ChunkedDecoderOptions options;
@@ -129,35 +128,58 @@ Router::BodyPayload decodeAwsChunkedBody(std::istream& in, const std::filesystem
     auto decoder = chain ? vl::sigv4::AwsChunkedDecoder(std::move(*chain), std::move(options))
                          : vl::sigv4::AwsChunkedDecoder(std::move(options));
 
-    std::ofstream out(decodedPath, std::ios::binary | std::ios::trunc);
-    if (!out) throw std::runtime_error("Unable to open decoded aws-chunked request body");
-
-    // Decoded data reaches the file before its chunk's signature is checked; nothing reads the file unless
-    // finish() succeeds.
+    // Decoded data reaches the scratch file (ciphertext) before its chunk's signature is checked; nothing reads it
+    // unless finish() succeeds, and an exception takes the file with it.
+    auto out = std::make_shared<crypto::ScratchFile>(decodedPath);
     BodyHash hash;
     const vl::sigv4::AwsChunkedDecoder::Sink sink = [&](const std::string_view data) {
-        out.write(data.data(), static_cast<std::streamsize>(data.size()));
-        if (!out) throw std::runtime_error("Failed writing decoded aws-chunked body");
+        out->append({reinterpret_cast<const uint8_t*>(data.data()), data.size()});
         hash.update(data.data(), data.size());
     };
 
-    std::array<char, kBodyReadBytes> buffer{};
-    while (in) {
-        in.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
-        const auto n = static_cast<std::size_t>(in.gcount());
-        if (n == 0) break;
-        if (const auto fed = decoder.feed(std::string_view(buffer.data(), n), sink); !fed)
+    fs::forEachChunk(in, [&](const std::span<const uint8_t> chunk) {
+        if (const auto fed = decoder.feed(std::string_view(reinterpret_cast<const char*>(chunk.data()), chunk.size()),
+                                          sink);
+            !fed)
             throw chunkedBodyError(fed.error(), request);
-    }
-    if (in.bad()) throw std::runtime_error("Unable to read aws-chunked request body");
+    });
     if (const auto finished = decoder.finish(); !finished) throw chunkedBodyError(finished.error(), request);
-
-    out.close();
-    if (!out) throw std::runtime_error("Failed writing decoded aws-chunked body");
+    out->flush();
 
     std::map<std::string, std::string> trailers;
     for (const auto& [name, value] : decoder.trailers()) trailers[name] = value;
-    return hash.finish(decodedPath, decoder.decodedLength(), std::move(trailers));
+    auto payload = hash.finish(decoder.decodedLength(), std::move(trailers));
+    payload.file = std::move(out);
+    return payload;
+}
+
+std::filesystem::path requestBodyRoot() {
+    return paths::getBackingPath() / ".s3-request-body";
+}
+
+void ensureRequestBodyRoot() {
+    const auto root = requestBodyRoot();
+    std::filesystem::create_directories(root);
+    std::filesystem::permissions(root, std::filesystem::perms::owner_all, std::filesystem::perm_options::replace);
+}
+
+std::size_t sweepRequestBodiesAtStartup() noexcept {
+    std::size_t removed = 0;
+    // The plaintext spool of versions before #345, then the previous run's ciphertext (its key died with it).
+    for (const auto& dir : {paths::getBackingPath() / "s3-request-body", requestBodyRoot()}) {
+        std::error_code ec;
+        const auto n = std::filesystem::remove_all(dir, ec);
+        if (ec) {
+            log::Registry::runtime()->warn("[S3Gateway] Could not clear request body staging {}: {}", dir.string(),
+                                           ec.message());
+            continue;
+        }
+        if (n > 1)  // the directory itself counts once
+            log::Registry::runtime()->info("[S3Gateway] Removed {} unfinished request bodies left in {}", n - 1,
+                                           dir.string());
+        if (n > 0) removed += n - 1;
+    }
+    return removed;
 }
 
 }

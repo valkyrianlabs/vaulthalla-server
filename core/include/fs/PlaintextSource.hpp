@@ -23,7 +23,8 @@ struct PlaintextSource {
 [[nodiscard]] PlaintextSource sourceOf(const crypto::ScratchFile& file);
 
 // A file on disk, opened now (read-only); the descriptor lives as long as the source. For content that is not ours to
-// keep encrypted at rest: S3 gateway request bodies (still plaintext, #345) and files read through the FUSE mount.
+// keep encrypted at rest: files read through the FUSE mount, and the plaintext multipart parts of versions before #345
+// (read once, to seal them).
 [[nodiscard]] PlaintextSource sourceOf(const std::filesystem::path& path);
 
 // Feeds the whole source to `sink` in order, in chunks of at most 64 KiB (wiped afterwards). Throws if the source
