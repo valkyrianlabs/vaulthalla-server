@@ -39,6 +39,9 @@ namespace vh::protocols::ws::core {
                                              {"target", e.target ? nlohmann::json(*e.target) : nlohmann::json(nullptr)},
                                              {"methods", e.methods},
                                              {"max_age_seconds", e.max_age_seconds}}};
+        } catch (const ops::RecoveryCooldown &e) {
+            return {e.what(), nlohmann::json{{"code", e.code}, {"family", e.family},
+                                             {"cooldown_until", e.cooldown_until}}};
         } catch (const DetailedRefusal &e) {
             nlohmann::json data = e.details.is_object() ? e.details : nlohmann::json::object();
             data["code"] = e.code;

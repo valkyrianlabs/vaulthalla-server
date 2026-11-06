@@ -1,6 +1,10 @@
 #include "recovery/provider/Versions.hpp"
 
+#include "db/query/fs/File.hpp"
 #include "db/query/recovery/ObjectVersion.hpp"
+#include "db/query/sync/ObjectIdentity.hpp"
+#include "fs/model/File.hpp"
+#include "storage/ObjectKeys.hpp"
 #include "log/Registry.hpp"
 #include "storage/CloudEngine.hpp"
 #include "storage/PlaintextReader.hpp"
@@ -48,6 +52,38 @@ std::string directoryPrefixOf(const std::filesystem::path& vaultPath) {
 
 std::filesystem::path vaultPathOf(const std::string& objectKey) {
     return std::filesystem::path("/" + stripSlashes(objectKey));
+}
+
+std::string objectKeyOf(const storage::CloudEngine& engine, const std::filesystem::path& vaultPath) {
+    if (!engine.opaqueLayout()) return objectKeyOf(vaultPath);
+    const auto uid = db::query::sync::ObjectIdentity::uidAtPath(engine.vault->id, vaultPath.lexically_normal());
+    return uid ? storage::object_keys::contentKey(*uid) : std::string{};
+}
+
+std::string liveObjectKeyOf(const storage::CloudEngine& engine, const std::filesystem::path& vaultPath) {
+    if (!engine.opaqueLayout()) return objectKeyOf(vaultPath);
+    const auto file = db::query::fs::File::getFileByPath(engine.vault->id, vaultPath.lexically_normal());
+    return file && file->object_uid ? storage::object_keys::contentKey(*file->object_uid) : std::string{};
+}
+
+std::string directoryPrefixOf(const storage::CloudEngine& engine, const std::filesystem::path& vaultPath) {
+    if (!engine.opaqueLayout()) return directoryPrefixOf(vaultPath);
+    return std::string(storage::object_keys::kContentPrefix);
+}
+
+std::filesystem::path vaultPathOf(const storage::CloudEngine& engine, const std::string& objectKey) {
+    if (!engine.opaqueLayout()) return vaultPathOf(objectKey);
+    const auto uid = storage::object_keys::uidOfContentKey(objectKey);
+    if (!uid) return vaultPathOf(objectKey);
+    if (auto path = db::query::sync::ObjectIdentity::pathOfUid(engine.vault->id, *uid)) return *path;
+    return std::filesystem::path("/Recovered") / crypto::id::toBase32(*uid);
+}
+
+bool keyUnder(const storage::CloudEngine& engine, const std::string& objectKey, const std::filesystem::path& directory) {
+    const auto dir = directory.lexically_normal().generic_string();
+    if (dir.empty() || dir == "/") return true;
+    const auto path = vaultPathOf(engine, objectKey).generic_string();
+    return path.starts_with(dir.back() == '/' ? dir : dir + "/");
 }
 
 bool isInternalKey(const std::string& objectKey) {

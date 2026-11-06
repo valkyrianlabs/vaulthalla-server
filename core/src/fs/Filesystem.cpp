@@ -33,6 +33,7 @@
 #include "fuse/WorkingCopies.hpp"
 #include "recovery/local/Versions.hpp"
 #include "vault/Content.hpp"
+#include "vault/model/S3Vault.hpp"
 
 #include <ranges>
 #include <set>
@@ -464,6 +465,7 @@ struct CopyItem {
     std::string alias;
     std::filesystem::path backing;  // destination backing path (alias layout, under its destination parent)
     std::shared_ptr<File> content;  // files: the source row the copied bytes belong to (taken with them)
+    bool resealed = false;          // opaque_v1: content is the copy's own sealing (new uid and generation)
 };
 
 constexpr std::string_view kHttpUploadTempPrefix = ".upload-http-";
@@ -664,6 +666,27 @@ int Filesystem::copy(const CopyContext& ctx) {
             }
             std::filesystem::create_directories(item.backing.parent_path());
             std::error_code ec;
+            const auto s3 = std::dynamic_pointer_cast<vault::model::S3Vault>(engine->vault);
+            if (s3 && s3->storage_layout == vault::model::StorageLayout::OpaqueV1 && !current->encryption_iv.empty() &&
+                std::filesystem::is_regular_file(current->backing_path, ec)) {
+                // opaque_v1 (spec 01 §4.4): a copy is a new file, so its bytes are re-sealed under its own uid and a
+                // new generation: no two objects carry the same ciphertext, and its header names the copy.
+                const auto& em = engine->encryptionManager;
+                auto copy = std::make_shared<File>(*current);
+                copy->object_uid = crypto::id::newObjectUid();
+                const auto key = em->currentKey();
+                copy->encryption_iv = vault::content::resealFile(
+                    current->backing_path,
+                    {.vaultUid = em->vaultUid(), .generation = current->encryption_iv,
+                     .keyVersion = current->encrypted_with_key_version, .objectUid = current->object_uid},
+                    *em->historicalKeySnapshot(current->encrypted_with_key_version), item.backing, *key.key,
+                    key.version, *copy->object_uid);
+                copy->encrypted_with_key_version = key.version;
+                copy->content_hash = crypto::hash::blake2b(item.backing);
+                item.content = copy;
+                item.resealed = true;
+                continue;
+            }
             if (std::filesystem::is_regular_file(current->backing_path, ec)) copyBackingBytes(current->backing_path, item.backing);
             else if (current->size_bytes == 0) writeFileAtomic(item.backing, {});
             else {
@@ -750,7 +773,7 @@ int Filesystem::copy(const CopyContext& ctx) {
                 // The row the bytes were copied with: same IV, key version, plaintext size and content hash.
                 auto file = std::make_shared<File>(*item.content);
                 stamp(*file);
-                file->object_uid.reset();   // a copy is a new file: upsertFile draws its own object uid
+                if (!item.resealed) file->object_uid.reset();   // a copy is a new file: upsertFile draws its own uid
                 file->inode = cache->getOrAssignInode(item.to);
                 file->id = db::query::fs::File::upsertFile(file);
                 created = file;

@@ -55,6 +55,8 @@ std::shared_ptr<sync::manifest::ObjectStore> storeFor(const uint32_t vaultId) {
     if (!key) throw std::runtime_error("the API key of vault " + std::to_string(vaultId) + " no longer exists");
     auto controller = std::make_shared<storage::s3::Controller>(key, s3->bucket);
     controller->setUsageVault(vaultId);
+    // opaque_v1: the request rules hold for envelopes too (spec 01 §4.3; s3::Controller::enforceRequestPolicy).
+    controller->setOpaqueLayout(s3->storage_layout == model::StorageLayout::OpaqueV1);
     return std::make_shared<sync::manifest::S3Store>(std::move(controller));
 }
 

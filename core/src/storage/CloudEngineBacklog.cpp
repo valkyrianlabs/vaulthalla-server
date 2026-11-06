@@ -8,13 +8,17 @@
 #include "fs/model/File.hpp"
 #include "fs/ops/file.hpp"
 #include "storage/PlaintextReader.hpp"
+#include "storage/ObjectKeys.hpp"
 #include "storage/s3/Controller.hpp"
+#include "crypto/vhf1/Format.hpp"
 #include "vault/EncryptionManager.hpp"
 #include "vault/model/S3Vault.hpp"
 
 #include <sodium.h>
 
+#include <algorithm>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <vector>
@@ -51,9 +55,16 @@ std::optional<std::string> CloudEngine::uploadGeneration(const std::filesystem::
     file->encryption_iv = *generation.encryption_iv;
     file->encrypted_with_key_version = *generation.key_version;
     file->updated_at = generation.source_updated_at.value_or(generation.created_at);
+    // opaque_v1: the generation goes up as its file's object, o/<uid>, and carries no metadata (its header names the
+    // generation and key version).
+    const bool opaque = opaqueLayout();
+    if (opaque) {
+        file->object_uid = object_keys::uidOfContentKey(key.string());
+        if (!file->object_uid) throw ContentUnavailable("the retained generation has no object key: " + generation.path);
+    }
 
     auto options = requestOptionsFor(s3::provider::RequestOperation::PutObject);
-    options.metadata = getMetaMapFromFile(file);
+    if (!opaque) options.metadata = getMetaMapFromFile(file);
 
     if (!s3Vault()->encrypt_upstream) {
         if (!encryptionManager) throw ContentUnavailable("no encryption manager for vault " + std::to_string(vault->id));
@@ -82,20 +93,32 @@ std::optional<std::string> CloudEngine::uploadGeneration(const std::filesystem::
         else {
             auto multipartOptions = requestOptionsFor(s3::provider::RequestOperation::CreateMultipartUpload);
             multipartOptions.metadata = options.metadata;
-            s3Provider_->uploadLargeObject(key, plaintext, s3::Controller::MIN_PART_SIZE, multipartOptions);
+            s3Provider_->uploadLargeObject(key, plaintext, object_keys::partSizeFor(plaintext.size()), multipartOptions);
         }
         own.done();
         return s3::Controller::lastPutOutcome().version_id;
     }
 
     const auto size = std::filesystem::file_size(blob);
+    if (opaque) {
+        // What goes up as o/<uid> must open as o/<uid>.
+        std::vector<uint8_t> header(std::min<uint64_t>(size, crypto::vhf1::kHeaderSize));
+        if (std::ifstream in(blob, std::ios::binary);
+            !in.read(reinterpret_cast<char*>(header.data()), static_cast<std::streamsize>(header.size())))
+            throw ContentUnavailable("the retained generation's blob is unreadable: " + blob.string());
+        try {
+            requireOpaqueHeader(header, *file);
+        } catch (const IntegrityError& e) {
+            throw IntegrityError(std::string("the retained generation does not name its file's object: ") + e.what());
+        }
+    }
     auto own = noteOwnWrite(key, false, size, file);
     if (size < s3::Controller::MIN_PART_SIZE)
         s3Provider_->uploadObjectWithMetadata(key, blob, options);
     else {
         auto multipartOptions = requestOptionsFor(s3::provider::RequestOperation::CreateMultipartUpload);
         multipartOptions.metadata = options.metadata;
-        s3Provider_->uploadLargeObject(key, blob, s3::Controller::MIN_PART_SIZE, multipartOptions);
+        s3Provider_->uploadLargeObject(key, blob, object_keys::partSizeFor(size), multipartOptions);
     }
     own.done();
     return s3::Controller::lastPutOutcome().version_id;

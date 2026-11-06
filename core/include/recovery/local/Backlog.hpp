@@ -43,13 +43,16 @@ struct ReplayReport {
 // file that were retained under another key (renamed since) are skipped.
 ReplayReport replayBeforeUpload(const storage::CloudEngine& engine, const fs::model::File& file);
 
-// Before Vaulthalla deletes the object at `vaultPath` upstream.
+// Before Vaulthalla deletes the object at `vaultPath` upstream (opaque_v1: the object of the file there, live or
+// trashed), or the object `key` of the file that was at `vaultPath`.
 ReplayReport replayBeforeRemoteDelete(const storage::CloudEngine& engine, const std::filesystem::path& vaultPath);
+ReplayReport replayBeforeRemoteDelete(const storage::CloudEngine& engine, const std::filesystem::path& vaultPath,
+                                      const std::string& key);
 
 // Price preflight / request planning: the replay PUTs and bytes the plan's uploads and remote deletes will send first
 // (only while the bucket keeps history). Never throws (logged: the estimate then leaves the replays out).
 void addPlannedReplays(uint32_t vaultId, const std::vector<sync::model::Action>& plan,
-                       sync::model::S3CostEstimate& estimate) noexcept;
+                       sync::model::S3CostEstimate& estimate, bool opaque = false) noexcept;
 
 [[nodiscard]] Backlog summary(uint32_t vaultId);
 

@@ -74,6 +74,13 @@ by hand is never reused or torn down. `make itest` (and `run_proof*.sh`) refuses
 macOS with a pointer to `make test`: Tier A needs a kernel FUSE mount, /proc and sudo. The test scripts stay bash 3.2
 compatible (`/bin/bash -n`); `itest_abspath` in `bin/tests/lib/itest.sh` replaces GNU `realpath -m`.
 
+MFA (#354-#360): `--gtest_filter='MfaSignInDb*:StepUpDb*:MfaPolicyDb*'` (DB-backed; TOTP/recovery tests inject test MFA
+keys with `auth::mfa::keys::setForTesting` where sealing can't round-trip); DB-free `Mfa*:StepUp*:MfaBackoff*`. Tier B
+reset parity (ws vs `vh`, private daemon, root): `VHH_WS_LIVE_BUILD=<build> python -m unittest
+tools.harness.tests.test_mfa_reset_live` with `VH_TEST_DB_*` from the harness db.env, run from a checkout the
+`vhh-actor-NN` accounts can traverse (the CLI connector runs the venv's python as them; a checkout under a 0750 home
+fails with EACCES). Browser: `web/tests/e2e/mfa.spec.ts` (needs `VAULTHALLA_E2E_MFA_VH`, see its header).
+
 CLI ↔ ws parity for families migrated to `core/ops/`:
 `--gtest_filter='*Parity*:OpsGroups*:AuthPasswordChange*'` (groups, roles, API keys, vaults and the accessible-vaults list, users, S3 gateway,
 pricing/config, sync conflicts). The whole binary takes ~7 minutes against a local DB; meson's test timeout is 30 minutes (#123). A parity case
@@ -160,6 +167,13 @@ Web: `web/tests/e2e/recovery.spec.ts` (scripted ws answers; see `web-client.md`)
 libFuzzer: `tools/dev/fuzz-webauthn.sh [--seconds N] [--merge]` (clang `CXX`, `build-fuzz`, `-Dfuzz=true` builds only
 the verifier, ASan/UBSan). PR CI runs it for 60 s per target (`.github/actions/fuzz`). A crash's reproducer goes into
 the target's corpus with the fix; `--merge` folds new coverage into the committed corpus.
+
+## Device approval suites (#361)
+
+| Suite (file) | Covers | Needs |
+|---|---|---|
+| `DeviceApprovalVectors`, `DeviceApprovalKeys`, `DeviceApprovalRouting`, `DeviceApprovalGrants`, `DeviceApprovalContract` (`test_device_approvals.cpp`) | the payload vector shared with vaulthalla-desktop (`core/test-assets/device/approval-vectors.json`; regenerate or check with `tools/dev/device_approval_vectors.py --write|--check`, which needs Python `cryptography`), the one SPKI encoding, router placement, which grant methods count on a device | nothing |
+| `DeviceApprovalsDb` (`test_device_approvals_db.cpp`, db-only) | pairing from a paired device / the console / the CLI, every signature mismatch, console approvals (passkey only), rate limits, key registration, and `ADeviceSessionNeverPromptsForARoutineCommand`: every device-allowed unannotated contract command routed through the daemon's router on a device session must not answer `step_up_required` (a skip list names the few that need a running engine or end the session) | DB |
 
 On macOS, run DB suites on a private cluster when another checkout may be testing: `VH_TEST_PG_DIR=$TMPDIR/<name>
 VH_TEST_PG_PORT=<port> tools/macos/test-db.sh up` (two runs on one cluster drop each other's schema; agents sharing a
@@ -361,6 +375,18 @@ Dev mode requires both `VH_BUILD_MODE=dev` and the gitignored `enable_dev_mode` 
   that every chain error/warning is one `sync::manifest` knows). `ManifestDbTest.*` (`test_manifest_db.cpp`,
   db-only) compares DB → collect → publish → load → a scratch schema with an independent SQL projection of the live
   tables, and covers `remote_manifest_state`, the refused-root alert and the opaque_v1 `CloudEngine` path.
+- opaque_v1 data plane (#369, `test_opaque_layout.cpp`): `OpaqueObjectKeys.*`, `OpaqueRequestPolicy.*` and
+  `OpaqueMultipart.*` are DB-free (the 60 GiB object is a sparse file behind a part-counting controller: ~20 s);
+  `OpaqueLayoutTest.*` (db) makes a vault opaque_v1 before it holds anything (test mode; `UPDATE s3 SET
+  storage_layout` + the engine's in-memory layout, then `setS3ControllerForTesting`, which applies the request
+  policy) and runs real passes over the versioned fake bucket, whose `requests()` records every request as sent
+  (key or prefix, copy destination / version id / part, metadata, headers) after running `enforceRequestPolicy`
+  like the network paths. `OpaqueRequestAudit` (with an enrolled recovery recipient: its envelopes go to the same
+  bucket through `vault::envelopes::setStoreFactoryForTesting`) walks create, overwrite, backlog replay, rename, move,
+  copy, rotation, provider restore and delete and checks every request and every stored byte for names; `OpaqueObjectCount`,
+  `OpaqueRenameCostsNothing` (1,000-file folder) and `OpaqueRequestCountsMatchSpec01Section5` count requests per
+  operation. Live: `LiveR2.OpaqueObjectsCarryNoMetadataAndCostWhatSpec01Says` (o/ objects at the run bucket's
+  root, deleted by the test and again by the bucket's deletion).
 - Recovery recipients (#370): `Kev1Vectors`, `Kev1ReservedFields`, `RecoverySeedVectors`, `RecoveryKit`
   (`test_kev1.cpp`, DB-free, CI: every `kev1` / `recovery_seed` vector, P-256 included). `RecoveryRecipient.*`,
   `RecoveryRequirement.*`, `RecoveryNoSilentCustody.*`, `KeysImportFromKit.*`, `VaultKeyExportProvenance.*`

@@ -92,6 +92,9 @@ json Devices::pairRequest(const json& payload, const std::shared_ptr<Session>& s
         .app_version = payload.is_object() && payload.contains("app_version") && payload.at("app_version").is_string()
                            ? payload.at("app_version").get<std::string>() : std::string{},
         .commitment = requiredString(payload, "commitment"),
+        .approval_key = payload.is_object() && payload.contains("approval_key") && !payload.at("approval_key").is_null()
+                            ? std::optional(requiredString(payload, "approval_key"))
+                            : std::nullopt,
     });
     return {{"request_id", receipt.request_id},
             {"nonce_server", vh::device::crypto::toHex(receipt.nonce_server)},
@@ -167,6 +170,7 @@ json Devices::pairingPending(const std::shared_ptr<Session>& session) {
                             {"source_ip", r.source_ip},
                             {"device_id", r.device_id},
                             {"code_choices", r.code_choices},
+                            {"approval_key_present", r.approval_key_present},
                             {"created_at", static_cast<int64_t>(r.created_at)},
                             {"expires_at", static_cast<int64_t>(r.expires_at)}});
     return {{"window", list.window ? windowJson(*list.window) : json(nullptr)}, {"requests", std::move(requests)},

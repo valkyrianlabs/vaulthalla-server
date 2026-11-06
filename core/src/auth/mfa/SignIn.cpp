@@ -9,6 +9,7 @@
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
+#include "notifications/AccountSecurity.hpp"
 #include "ops/Error.hpp"
 #include "protocols/ws/Session.hpp"
 #include "runtime/Deps.hpp"
@@ -16,7 +17,6 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
-#include <deque>
 #include <mutex>
 #include <unordered_map>
 #include <utility>
@@ -25,20 +25,14 @@ namespace vh::auth::mfa::signin {
 
 namespace {
 
-using SteadyClock = std::chrono::steady_clock;
-
 struct SignInFailures {
     std::mutex mutex;
-    std::unordered_map<uint32_t, std::deque<SteadyClock::time_point>> byAccount;
+    std::unordered_map<uint32_t, AccountBackoff> byAccount;
 };
 
 SignInFailures& signInFailures() {
     static SignInFailures failures;
     return failures;
-}
-
-void signInPrune(std::deque<SteadyClock::time_point>& times, const SteadyClock::time_point now) {
-    while (!times.empty() && now - times.front() >= kAccountFailureWindow) times.pop_front();
 }
 
 // Audit details hold scalars: lists are written joined ("pwd+otp", "webauthn,totp").
@@ -53,12 +47,11 @@ std::string signInJoin(const std::vector<std::string>& items, const std::string_
 
 }
 
-std::vector<std::string> methods(const uint32_t userId) {
+std::vector<std::string> methods(const identities::User& user) {
     std::vector<std::string> out;
-    if (!passkeys::usableCredentials(userId).empty()) out.emplace_back("webauthn");
-    if (std::ranges::any_of(factors(userId), [](const Factor& f) { return f.kind == FactorKind::Totp; }))
-        out.emplace_back("totp");
-    if (const auto recovery = recoveryStatus(userId); recovery.active_batch && recovery.remaining > 0)
+    if (!policy::allowedPasskeys(user).empty()) out.emplace_back("webauthn");
+    if (policy::hasAllowedTotp(user)) out.emplace_back("totp");
+    if (const auto recovery = recoveryStatus(user.id); recovery.active_batch && recovery.remaining > 0)
         out.emplace_back("recovery_code");
     return out;
 }
@@ -66,12 +59,12 @@ std::vector<std::string> methods(const uint32_t userId) {
 bool beginIfDue(const std::shared_ptr<protocols::ws::Session>& session, const std::shared_ptr<identities::User>& user) {
     if (!session || !user) throw std::invalid_argument("A sign-in needs a session and an account");
     const auto requirement = policy::requirement(*user);
-    const bool enrolled = hasUsableFactor(user->id);
+    const bool enrolled = policy::hasAllowedFactor(*user);
     if (!enrolled && !requirement.required) return false;
 
     Pending pending{.user_id = user->id, .kind = enrolled ? PendingKind::Mfa : PendingKind::Enrollment};
     if (enrolled) {
-        pending.methods = methods(user->id);
+        pending.methods = methods(*user);
         if (pending.methods.empty()) {
             log::Registry::auth()->warn("[auth::mfa] {} has factors but none usable here (passkeys need "
                                         "auth.webauthn.rp_id and origins)", user->name());
@@ -85,7 +78,7 @@ bool beginIfDue(const std::shared_ptr<protocols::ws::Session>& session, const st
         }
     } else {
         if (passkeys::available()) pending.methods.emplace_back("webauthn");
-        pending.methods.emplace_back("totp");
+        if (policy::factorRule(*user).totp) pending.methods.emplace_back("totp");
     }
     pending.expires_at = std::chrono::system_clock::now() +
                          (pending.kind == PendingKind::Enrollment ? std::chrono::minutes(kPendingEnrollmentTtl)
@@ -142,26 +135,73 @@ void end(const std::shared_ptr<protocols::ws::Session>& session, const std::stri
         log::Registry::auth()->info("[auth::mfa] pending sign-in of user {} ended: {}", pending->user_id, reason);
 }
 
-std::chrono::seconds accountRetryAfter(const uint32_t userId) {
+std::chrono::seconds AccountBackoff::delayFor(const int failures) noexcept {
+    if (failures < kAccountFailureLimit) return std::chrono::seconds(0);
+    const int doublings = std::min(failures - kAccountFailureLimit, 8);
+    const auto delay = std::chrono::duration_cast<std::chrono::seconds>(kAccountFirstDelay) * (1 << doublings);
+    return std::min(delay, std::chrono::duration_cast<std::chrono::seconds>(kAccountMaxDelay));
+}
+
+bool AccountBackoff::expired(const Clock::time_point now) const {
+    return failures_ > 0 && now - std::max(last_, lockedUntil_) >= kAccountFailureWindow;
+}
+
+AccountBackoff::Failure AccountBackoff::fail(const Clock::time_point now) {
+    if (expired(now)) *this = AccountBackoff{};
+    ++failures_;
+    last_ = now;
+    Failure out{.failures = failures_, .delay = delayFor(failures_)};
+    if (out.delay.count() > 0) lockedUntil_ = now + out.delay;
+    if (failures_ >= kAccountNotifyAt && !notified_) {
+        notified_ = true;
+        out.notify = true;
+    }
+    return out;
+}
+
+std::chrono::seconds AccountBackoff::retryAfter(const Clock::time_point now) const {
+    if (now >= lockedUntil_) return std::chrono::seconds(0);
+    return std::max(std::chrono::seconds(1), std::chrono::ceil<std::chrono::seconds>(lockedUntil_ - now));
+}
+
+std::chrono::seconds accountRetryAfter(const uint32_t userId, const AccountBackoff::Clock::time_point now) {
     auto& f = signInFailures();
-    const auto now = SteadyClock::now();
     std::lock_guard lock(f.mutex);
     const auto it = f.byAccount.find(userId);
     if (it == f.byAccount.end()) return std::chrono::seconds(0);
-    signInPrune(it->second, now);
-    if (std::cmp_less(it->second.size(), kAccountFailureLimit)) return std::chrono::seconds(0);
-    const auto wait = kAccountFailureWindow - (now - it->second.front());
-    return std::max(std::chrono::seconds(1), std::chrono::ceil<std::chrono::seconds>(wait));
+    if (it->second.expired(now)) {
+        f.byAccount.erase(it);
+        return std::chrono::seconds(0);
+    }
+    return it->second.retryAfter(now);
 }
 
-void recordAccountFailure(const uint32_t userId) {
-    auto& f = signInFailures();
-    const auto now = SteadyClock::now();
-    std::lock_guard lock(f.mutex);
-    auto& times = f.byAccount[userId];
-    signInPrune(times, now);
-    times.push_back(now);
-    while (times.size() > static_cast<std::size_t>(kAccountFailureLimit)) times.pop_front();
+AccountBackoff::Failure recordAccountFailure(const uint32_t userId, const AccountBackoff::Clock::time_point now) {
+    AccountBackoff::Failure out;
+    {
+        auto& f = signInFailures();
+        std::lock_guard lock(f.mutex);
+        out = f.byAccount[userId].fail(now);
+    }
+    if (out.delay.count() > 0)
+        audit::record({.action = "auth.mfa.lockout", .outcome = audit::Outcome::Denied, .actor_id = userId,
+                       .details = {{"failures", out.failures}, {"retry_after", static_cast<int64_t>(out.delay.count())},
+                                   {"notified", out.notify}}},
+                      "[auth] second factors of user " + std::to_string(userId) + " are delayed " +
+                          std::to_string(out.delay.count()) + "s after " + std::to_string(out.failures) +
+                          " failures",
+                      spdlog::level::warn);
+    if (out.notify)
+        notifications::account::send({
+            .event = "mfa.failures",
+            .title = "Repeated failed sign-in codes",
+            .summary = "Someone entered this account's password and then failed its second factor " +
+                       std::to_string(out.failures) + " times. Each new attempt now waits up to 15 minutes.",
+            .user_id = userId,
+            .facts = {{"Failed attempts", std::to_string(out.failures)}},
+            .advice = "If this wasn't you, the password is known to someone else: change it now.",
+        });
+    return out;
 }
 
 void clearAccountFailures(const uint32_t userId) {

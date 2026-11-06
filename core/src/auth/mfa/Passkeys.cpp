@@ -184,6 +184,12 @@ std::optional<WebAuthnCredential> registerCredential(const std::string& sessionU
         passkeyRefusal("registration", userId, outcome.failure);
         return std::nullopt;
     }
+    const auto stored = fromVerified(*outcome.value, details);
+    if (details.device_bound_only && stored.backup_eligible) {
+        log::Registry::auth()->warn("[auth::mfa] user {} tried to register a synced passkey; the policy allows only "
+                                    "device-bound ones (auth.mfa.admin_device_bound_only)", userId);
+        return std::nullopt;
+    }
     auto withHints = details;
     withHints.transports = response->transports;
     withHints.discoverable = response->residentKey;
@@ -230,6 +236,30 @@ std::optional<VerifiedFactor> verifyStepUp(const std::string& sessionUuid, const
                                            const std::string_view credentialJson, const std::string& scope) {
     const auto ok = passkeyAssert(passkeyChallenges(),
                                   {.session = sessionUuid, .purpose = webauthn::Purpose::StepUp,
+                                   .user = static_cast<int64_t>(userId), .scope = scope},
+                                  credentialJson);
+    if (!ok) return std::nullopt;
+    return ok->factor;
+}
+
+nlohmann::json approvalOptions(const std::string& sessionUuid, const uint32_t userId,
+                               const std::vector<WebAuthnCredential>& credentials, const std::string& scope) {
+    const auto rp = relyingParty();
+    if (!rp.configured()) throw ops::Invalid("Passkeys are not configured on this server");
+    nlohmann::json allow = nlohmann::json::array();
+    for (const auto& c : credentials) allow.push_back(passkeyDescriptor(c));
+    return {{"challenge", passkeyChallenge({.session = sessionUuid, .purpose = webauthn::Purpose::Approval,
+                                            .user = static_cast<int64_t>(userId), .scope = scope})},
+            {"rpId", rp.id},
+            {"timeout", std::chrono::milliseconds(kChallengeTtl).count()},
+            {"userVerification", "required"},
+            {"allowCredentials", std::move(allow)}};
+}
+
+std::optional<VerifiedFactor> verifyApproval(const std::string& sessionUuid, const uint32_t userId,
+                                             const std::string_view credentialJson, const std::string& scope) {
+    const auto ok = passkeyAssert(passkeyChallenges(),
+                                  {.session = sessionUuid, .purpose = webauthn::Purpose::Approval,
                                    .user = static_cast<int64_t>(userId), .scope = scope},
                                   credentialJson);
     if (!ok) return std::nullopt;

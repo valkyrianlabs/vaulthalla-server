@@ -248,12 +248,21 @@ export interface WebSocketCommandMap {
   'auth.mfa.factor.remove': WsContract['auth.mfa.factor.remove']
   'auth.mfa.recovery.generate': WsContract['auth.mfa.recovery.generate']
   'auth.mfa.recovery.acknowledge': WsContract['auth.mfa.recovery.acknowledge']
+  // #360: another account's MFA (users-manage; a super admin's only by a super admin).
+  'auth.mfa.admin.status': WsContract['auth.mfa.admin.status']
+  'auth.mfa.admin.require': WsContract['auth.mfa.admin.require']
+  'auth.mfa.admin.reset': WsContract['auth.mfa.admin.reset']
   // Discoverable passkey sign-in (#358): an anonymous connection, a passkey alone (features/auth/passkeySignIn.ts).
   'auth.passkey.options': WsContract['auth.passkey.options']
   'auth.passkey.login': WsContract['auth.passkey.login']
   // Step-up (#359): a command that answered step_up_required is confirmed here, then resent (lib/stepUp.ts).
   'auth.stepup.begin': WsContract['auth.stepup.begin']
   'auth.stepup.finish': WsContract['auth.stepup.finish']
+  // Device approvals (#361): a paired device's request for a person's approval (pushed as auth.approval.pending),
+  // answered with a passkey only (approve without credential first returns the WebAuthn request options).
+  'auth.approval.list': WsContract['auth.approval.list']
+  'auth.approval.approve': WsContract['auth.approval.approve']
+  'auth.approval.deny': WsContract['auth.approval.deny']
 
   // Vault commands
 
@@ -1004,6 +1013,12 @@ export interface WebSocketCommandMap {
   'device.remote.status': WsContract['device.remote.status']
   'device.remote.enable': WsContract['device.remote.enable']
   'device.remote.disable': WsContract['device.remote.disable']
+  // Device approvals (#361): the device's side, on its own session only (its approval key, or a console approval).
+  'device.approval.challenge': WsContract['device.approval.challenge']
+  'device.approval.submit': WsContract['device.approval.submit']
+  'device.approval.request': WsContract['device.approval.request']
+  'device.approval.status': WsContract['device.approval.status']
+  'device.approval.key.register': WsContract['device.approval.key.register']
 
   // Vault key backup (Vaulthalla Desktop). Status is key_checks only, never key bytes. Export, its confirmation and
   // import answer only a paired device's session (data.code export_requires_device / import_requires_device anywhere

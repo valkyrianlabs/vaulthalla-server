@@ -115,6 +115,16 @@ const std::vector<std::string> kStepUpFamilies{"keys",           "device.trust",
                                                "identity.admin", "secrets",      "settings",
                                                "data.destroy"};
 
+// A device's approval request (auth::approval::toJson), as the console and the device see it (#361).
+std::vector<WsField> authApprovalFields() {
+    return {str("approval_id"), str("state").oneOf({"pending", "approved", "denied", "expired"}),
+            str("family").oneOf(kStepUpFamilies), str("target").nullable(),
+            str("summary").desc("What the device says it is asking for (its own words: show it with family and "
+                                "target, which the server checks)."),
+            object("device", "", {uinteger("id").desc("The device row."), str("device_id"), str("name")}),
+            integer("created_at").desc("Unix seconds."), integer("expires_at").desc("Unix seconds.")};
+}
+
 const std::vector<std::string> kMfaEnrollmentRefusals{"denied", "invalid", "not_found", "conflict", "unauthorized",
                                                       "error", "mfa_expired"};
 
@@ -303,9 +313,11 @@ std::vector<WsCommandUsage> authCommands() {
                        "Success signs the connection in: one session row at aal 2 with amr [\"pwd\", \"hwk\" | "
                        "\"swk\" | \"otp\" | \"rec\"], the access token in the envelope. A recovery code signs "
                        "every other web session of the account out (paired devices are not touched), starts the "
-                       "recovery cooldown and answers `recovery`. Refusals: mfa_invalid {attempts_remaining, pending?} "
-                       "(the 5th ends the sign-in), mfa_expired (start again with the password), rate_limited "
-                       "{retry_after} (5 failed factors on the account in 15 minutes), mfa_required {pending} for "
+                       "recovery cooldown, revokes the key-backup grants of the account's paired devices (they stay "
+                       "paired and are listed for the person to revoke) and answers `recovery`. Refusals: mfa_invalid "
+                       "{attempts_remaining, pending?} (the 5th ends the sign-in), mfa_expired (start again with the "
+                       "password), rate_limited {retry_after} (the account's 5th failed factor in a streak waits 1 "
+                       "minute, each further one doubles it up to 15; never a lock), mfa_required {pending} for "
                        "{method: \"webauthn\"} without a credential: a fresh passkey challenge, not an attempt. ") +
                        kMfaPendingShape,
         .auth = "pending",
@@ -318,7 +330,14 @@ std::vector<WsCommandUsage> authCommands() {
                      object("recovery", "",
                             {uinteger("codes_remaining"),
                              integer("cooldown_until").desc("Unix seconds: sensitive actions wait until then."),
-                             uinteger("sessions_revoked").desc("Other web sessions signed out.")})
+                             uinteger("sessions_revoked").desc("Other web sessions signed out."),
+                             uinteger("grants_revoked").opt().desc("Paired devices whose key-backup grant was revoked."),
+                             objectArray("devices", "",
+                                         {uinteger("id"), str("name"), str("platform"),
+                                          integer("last_seen_at").nullable().desc("Unix seconds."),
+                                          boolean("key_backup_revoked")})
+                                 .opt()
+                                 .desc("The account's paired devices: none was revoked; offer device.revoke for each.")})
                          .opt()
                          .desc("Present after a recovery-code sign-in.")},
         .refusal_codes = {"invalid", "denied", "unauthorized", "error", "mfa_invalid", "mfa_expired", "mfa_required",
@@ -350,15 +369,19 @@ std::vector<WsCommandUsage> authCommands() {
                              boolean("required"),
                              str("reason").oneOf({"none", "policy_admins", "policy_all", "user_required"}),
                              boolean("webauthn_available").desc("auth.webauthn.rp_id and origins are configured."),
-                             boolean("admin_webauthn_only"),
-                             boolean("admin_device_bound_only")}),
+                             boolean("admin_webauthn_only").desc("auth.mfa.admin_webauthn_only (or device_bound_only)."),
+                             boolean("admin_device_bound_only"),
+                             boolean("totp_allowed").opt().desc("This account may use an authenticator app."),
+                             boolean("synced_passkeys_allowed").opt().desc("This account may use a synced passkey.")}),
                      objectArray("factors", "MfaFactor"),
                      object("recovery", "",
                             {boolean("active").desc("An acknowledged batch is in force."),
                              uinteger("remaining").desc("Its unused codes."),
                              boolean("acknowledged"),
                              boolean("pending").desc("A generated batch waits for its acknowledgement.")}),
-                     integer("cooldown_until").nullable().desc("Unix seconds: the recovery cooldown, if one ran."),
+                     integer("cooldown_until").nullable().desc(
+                         "Unix seconds: the recovery cooldown while it runs (keys, device.trust, identity.admin, "
+                         "secrets and settings answer recovery_cooldown until then), else null."),
                      boolean("recovery_restricted").desc("This session signed in with a recovery code."),
                      objectArray("step_up", "",
                                  {str("family").oneOf(kStepUpFamilies),
@@ -494,6 +517,50 @@ std::vector<WsCommandUsage> authCommands() {
         .client_timeout = 20s,
     });
 
+    // ---- #361: approving a paired device's request (auth/approval/Approvals.hpp, MFA design note 6.3)
+
+    out.push_back({
+        .command = "auth.approval.list",
+        .description = "The signed-in account's open requests from its paired devices (device.approval.request), "
+                       "oldest first: what each asks for (family, target), the device's own summary, and when it "
+                       "expires. A new request also arrives as an unsolicited frame {\"command\": "
+                       "\"auth.approval.pending\", \"data\": {approval_id, device: {id, name}, family, target, summary, "
+                       "expires_at}} on every console session of the account. Web sessions only: a device is "
+                       "refused.",
+        .input = "none",
+        .response = {objectArray("approvals", "", authApprovalFields())},
+        .refusal_codes = {"denied", "unauthorized"},
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "auth.approval.approve",
+        .description = "Approve a device's request with a passkey, nothing else: a TOTP code or a password is "
+                       "refused (invalid), and an account without a usable passkey gets passkey_required (do the "
+                       "action in the console instead). Without credential: answers webauthn.publicKey (a challenge "
+                       "bound to this session and this request, 120 s) for navigator.credentials.get(); with "
+                       "credential (a UV assertion over it): approves, and the device's next device.approval.status "
+                       "makes its grant. approval_failed {attempts_remaining}: the assertion didn't hold; the fifth "
+                       "failure within 15 minutes signs this session out. not_found: expired or already answered.",
+        .payload = {str("approval_id").gen(gen::pattern("{*}{*}{*}{*}{*}{*}{*}{*}")),
+                    mfaCredential(false).opt().nullable().desc("AuthenticationResponseJSON; leave out to get the "
+                                                               "request options first.")},
+        .response = {object("approval", "", authApprovalFields()),
+                     object("webauthn", "", {mfaRequestOptions()}).opt().desc("Without credential: what to sign.")},
+        .refusal_codes = {"denied", "invalid", "not_found", "unauthorized", "rate_limited", "passkey_required",
+                          "approval_failed", "recovery_cooldown"},
+        .client_timeout = 20s,
+    });
+
+    out.push_back({
+        .command = "auth.approval.deny",
+        .description = "Decline a device's request; its device.approval.status answers denied.",
+        .payload = {str("approval_id").gen(gen::pattern("{*}{*}{*}{*}{*}{*}{*}{*}"))},
+        .response = {object("approval", "", authApprovalFields())},
+        .refusal_codes = {"denied", "invalid", "not_found", "unauthorized"},
+        .client_timeout = kDefaultTimeout,
+    });
+
     out.push_back({
         .command = "auth.mfa.recovery.generate",
         .description = "Make ten new recovery codes, shown once. They replace the current ones only when "
@@ -516,6 +583,62 @@ std::vector<WsCommandUsage> authCommands() {
                      mfaSessionUser().opt().desc("Present when this completed a pending enrollment."),
                      uinteger("aal").min(2).max(2).opt()},
         .refusal_codes = kMfaEnrollmentRefusals,
+        .client_timeout = kDefaultTimeout,
+    });
+
+    // ---- another account's MFA (#360; docs/dev/mfa-design.md sections 7.1 and 7.4; ops/Mfa.hpp)
+
+    const auto adminWho =
+        std::string(" Who: whoever may reset the account's password (admin.identities.users or .admins "
+                    "reset-password, within their own permissions); a super admin's MFA only another super admin; "
+                    "never your own account here (Account > Security, or `vh user mfa` on the server).");
+
+    out.push_back({
+        .command = "auth.mfa.admin.status",
+        .description = "Another account's MFA: whether it must have MFA and why, its factors (no secrets), recovery "
+                       "codes left, the recovery cooldown and the last reset." + adminWho,
+        .payload = {authUserId("user_id")},
+        .response = {uinteger("user_id"),
+                     boolean("required"),
+                     str("reason").oneOf({"none", "policy_admins", "policy_all", "user_required"}),
+                     boolean("required_flag").desc("Set for this account (auth.mfa.admin.require)."),
+                     objectArray("factors", "MfaFactor"),
+                     object("recovery", "", {boolean("active"), uinteger("remaining")}),
+                     integer("cooldown_until").nullable().desc("Unix seconds, while the recovery cooldown runs."),
+                     integer("reset_at").nullable().desc("Unix seconds: the last MFA reset.")},
+        .refusal_codes = opsRefusals(),
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "auth.mfa.admin.require",
+        .description = "Require MFA for one account whatever the policy level (or stop requiring it; the policy "
+                       "may still). Applies at the account's next request: a session signed in without a second "
+                       "factor is signed out. Answers its status. identity.admin step-up." + adminWho,
+        .payload = {authUserId("user_id"), boolean("required").gen(gen::boolean())},
+        .response = {uinteger("user_id"), boolean("required"),
+                     str("reason").oneOf({"none", "policy_admins", "policy_all", "user_required"}),
+                     boolean("required_flag"), objectArray("factors", "MfaFactor"),
+                     object("recovery", "", {boolean("active"), uinteger("remaining")}),
+                     integer("cooldown_until").nullable(), integer("reset_at").nullable()},
+        .refusal_codes = opsRefusals(),
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "auth.mfa.admin.reset",
+        .description = "Reset an account that lost every factor: its passkeys and authenticator apps are disabled "
+                       "(kept for the audit trail), its recovery codes voided, every session signed out, the "
+                       "key-backup grants of its paired devices revoked (the devices stay paired), and it must set up "
+                       "a new factor at its next sign-in, inside the recovery cooldown. The account and the security "
+                       "recipients are notified; audited as auth.mfa.admin.reset. account.credentials step-up." +
+                       adminWho,
+        .payload = {authUserId("user_id"),
+                    str("reason").gen(gen::freshName("reason_")).desc("1..200 characters, kept in the audit trail.")},
+        .response = {uinteger("factors_disabled"), uinteger("recovery_batches_voided"), uinteger("sessions_revoked"),
+                     uinteger("grants_revoked"),
+                     integer("cooldown_until").desc("Unix seconds: the account's recovery cooldown ends then.")},
+        .refusal_codes = opsRefusals(),
         .client_timeout = kDefaultTimeout,
     });
 

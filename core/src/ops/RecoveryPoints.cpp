@@ -271,10 +271,10 @@ std::vector<RecoveryPoint> list(const Actor& actor, const uint32_t vaultId, cons
             out.push_back(std::move(p));
     }
     if (cloud) {
-        const bool asDirectory = existing ? directory : prov::versions::objectKeyOf(target).empty();
+        const bool asDirectory = existing ? directory : prov::versions::objectKeyOf(*cloud, target).empty();
         if (query.refresh_provider) {
-            const auto prefix = asDirectory || target == "/" ? prov::versions::directoryPrefixOf(target)
-                                                            : prov::versions::objectKeyOf(target);
+            const auto prefix = asDirectory || target == "/" ? prov::versions::directoryPrefixOf(*cloud, target)
+                                                            : prov::versions::objectKeyOf(*cloud, target);
             const auto r = prov::versions::refresh(cloud, prefix);
             if (!r.complete && r.stopped_reason)
                 log::Registry::cloud()->info("[recovery] vault {}: version listing of '{}' stopped: {}", vaultId,
@@ -442,8 +442,8 @@ Plan plan(const Actor& actor, const PlanRequest& req) {
             throw Invalid("point-in-time restore uses provider versions; in a local vault restore a snapshot or a "
                           "local version");
         if (req.refresh_provider) {
-            const auto prefix = (!existing || rpIsDirectory(*engine, path)) ? prov::versions::directoryPrefixOf(path)
-                                                                             : prov::versions::objectKeyOf(path);
+            const auto prefix = (!existing || rpIsDirectory(*engine, path)) ? prov::versions::directoryPrefixOf(*cloud, path)
+                                                                             : prov::versions::objectKeyOf(*cloud, path);
             const auto r = prov::versions::refresh(cloud, prefix);
             if (!r.complete)
                 out.warnings.push_back("the provider's version listing was incomplete (" +

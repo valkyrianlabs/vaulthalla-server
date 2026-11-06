@@ -65,6 +65,14 @@ std::vector<WsField> endpointFields() {
             uinteger("generated_at").desc("Unix seconds: the list is computed on every call."), candidates()};
 }
 
+// A console approval request as the device sees it (auth::approval::toJson).
+std::vector<WsField> deviceApprovalFields() {
+    return {str("approval_id"), str("state").oneOf({"pending", "approved", "denied", "expired"}),
+            str("family"), str("target").nullable(), str("summary"),
+            object("device", "", {uinteger("id"), hex64("device_id"), str("name")}),
+            integer("created_at").desc("Unix seconds."), integer("expires_at").desc("Unix seconds.")};
+}
+
 // The device's side answers ops::Refused codes of its own besides the generic kinds: no_pairing_window and
 // rate_limited (pairing), device_unknown (the command reached a session without a device identity, or the key is not
 // a live device). The router refuses device.pair.* and the device-only commands on console sessions (unauthorized).
@@ -86,7 +94,12 @@ std::vector<WsCommandUsage> deviceCommands() {
         .payload = {str("name").gen(gen::pattern("Mac {a}{a}{a}")).desc("1-64 characters."),
                     str("platform").gen(gen::constant("macOS")).desc("\"macOS\"."),
                     str("app_version").opt().gen(gen::pattern("1.{9}.{9}")),
-                    hex64("commitment").gen(gen::ref("device.pairing_request", {"commitment"}))},
+                    hex64("commitment").gen(gen::ref("device.pairing_request", {"commitment"})),
+                    str("approval_key").opt().nullable().desc(
+                        "#361: the device's approval key (a second P-256 key, never the connection's): its "
+                        "SubjectPublicKeyInfo, 91 bytes of DER (uncompressed point), in standard base64. Shown with "
+                        "the request (approval_key_present) and registered with the device when it is approved. "
+                        "invalid for any other key; conflict for a key this node knows.")},
         .response = {str("request_id"), hex64("nonce_server"), uinteger("expires_at")},
         .refusal_codes = {"invalid", "conflict", "no_pairing_window", "rate_limited", "device_unknown", "unauthorized"},
         .client_timeout = kDefaultTimeout,
@@ -201,12 +214,15 @@ std::vector<WsCommandUsage> deviceCommands() {
         .command = "device.pairing.pending",
         .description = "The caller's open window and its confirmed requests. Each offers three code_choices (random "
                        "order): one is the code the device shows, two are decoys fixed for the request. The real code "
-                       "is never returned on its own.",
+                       "is never returned on its own. Also answered on a paired device's session (an already-paired "
+                       "Desktop approving a new one, design 8.4); approval_key_present says the request carries an "
+                       "approval key.",
         .input = "none",
         .response = {windowObject().nullable(),
                      objectArray("requests", "",
                                  {str("request_id"), str("name"), str("platform"), str("app_version"),
                                   str("source_ip"), hex64("device_id"), strArray("code_choices"),
+                                  boolean("approval_key_present"),
                                   uinteger("created_at"), uinteger("expires_at")}),
                      uinteger("server_time").desc("The node's clock (Unix seconds), to count down by.")},
         .refusal_codes = opsRefusals(),
@@ -216,7 +232,11 @@ std::vector<WsCommandUsage> deviceCommands() {
     out.push_back({
         .command = "device.pairing.approve",
         .description = "Approve a request with the code the device shows (number matching). Any other code denies "
-                       "the request (invalid). Creates the device for the caller's account.",
+                       "the request (invalid). Creates the device for the caller's account, with the approval key the "
+                       "request carried. A device.trust step-up bound to the request, its key and the chosen code: in "
+                       "the console a passkey or password + TOTP; on an already-paired device its approval key "
+                       "(device.approval.challenge/submit) or a console approval; `vh device pair` on the node needs "
+                       "none.",
         .payload = {requestIdField(),
                     str("code").gen(gen::ref("device.pairing_request", {"code"})).desc("Six digits (spaces allowed).")},
         .response = {deviceObject()},
@@ -230,6 +250,93 @@ std::vector<WsCommandUsage> deviceCommands() {
         .payload = {requestIdField()},
         .response = {boolean("denied")},
         .refusal_codes = opsRefusals(),
+        .client_timeout = kDefaultTimeout,
+    });
+
+    // ---- #361: device approvals (auth/approval/Approvals.hpp; docs/reference/device-approvals.md)
+
+    out.push_back({
+        .command = "device.approval.challenge",
+        .description = "Start approving a step-up with this device's approval key: name the family and the target "
+                       "the step_up_required refusal named. Only keys and device.trust (console_approval_required "
+                       "otherwise: use device.approval.request); approval_key_unavailable without a live approval "
+                       "key. Answers a challenge (single use, 120 s, bound to this session, the family and the target) "
+                       "and payload_b64, the exact bytes to sign: \"vh-device-approval-v1\" 0x00 node_id 0x00 "
+                       "server_spki_sha256[32] approving_device_spki_sha256[32] challenge[32] family 0x00 target 0x00 "
+                       "UInt64BE(expires_at). The device checks them against what it knows before asking for Touch ID. "
+                       "At most 4 open per session (a new one replaces the oldest).",
+        .auth = "device",
+        .payload = {str("family").oneOf({"keys", "device.trust"}),
+                    str("target").gen(gen::pattern("vault.keys.import:{9}"))
+                        .desc("The refusal's target (at most 256 printable ASCII characters).")},
+        .response = {str("challenge_id"), hex64("challenge"), str("payload_b64").desc("Standard base64."),
+                     str("family").oneOf({"keys", "device.trust"}), str("target"),
+                     uinteger("expires_at").desc("Unix seconds (also in the payload).")},
+        .refusal_codes = {"invalid", "unauthorized", "device_unknown", "rate_limited", "console_approval_required",
+                          "approval_key_unavailable", "recovery_cooldown"},
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "device.approval.submit",
+        .description = "Answer a challenge with the approval key's ECDSA P-256/SHA-256 signature (DER, standard base64) "
+                       "over its payload. The challenge is spent whatever the answer. On success this session holds a "
+                       "grant for the family and target (spent by one use, until expires_at); then resend the refused "
+                       "request. invalid: the signature doesn't verify (the payload as the server computes it now: a "
+                       "changed node or server key never verifies); not_found: expired, used or another session's; "
+                       "approval_key_unavailable: the key was revoked.",
+        .auth = "device",
+        .payload = {str("challenge_id").gen(gen::pattern("{*}{*}{*}{*}{*}{*}{*}{*}")),
+                    str("signature_b64").gen(gen::pattern("{A}{a}{9}{a}")).desc("DER Ecdsa-Sig-Value, standard base64.")},
+        .response = {str("family").oneOf({"keys", "device.trust"}), str("target"),
+                     integer("expires_at").desc("Unix seconds: the grant's end.")},
+        .refusal_codes = {"invalid", "not_found", "unauthorized", "device_unknown", "approval_key_unavailable",
+                          "recovery_cooldown"},
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "device.approval.request",
+        .description = "Ask a person to approve a step-up in the web console (any family; the one way for families "
+                       "the approval key can't approve, and for a device without one). summary (1-160 characters) "
+                       "is shown with the family and target. The account's console sessions get auth.approval.pending; "
+                       "a person approves with a passkey (auth.approval.approve). Lives 5 minutes; at most 3 open and "
+                       "10 per hour per device (rate_limited). Poll device.approval.status on this same session.",
+        .auth = "device",
+        .payload = {str("family").oneOf({"keys", "device.trust", "account.credentials", "identity.admin", "secrets",
+                                         "settings", "data.destroy"}),
+                    str("target").opt().nullable().desc("The refusal's target (keys, device.trust, data.destroy)."),
+                    str("summary").gen(gen::pattern("Export key {a}{a}{a}"))},
+        .response = deviceApprovalFields(),
+        .refusal_codes = {"invalid", "unauthorized", "device_unknown", "rate_limited", "recovery_cooldown"},
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "device.approval.status",
+        .description = "How a console approval stands (pending, approved, denied, expired). Answered at once: ask again "
+                       "in 2 s while pending. Once approved, the first answer leaves the grant on this session (the "
+                       "same binding as a web session's: target-bound grants are spent by one use); then resend the "
+                       "refused request. Only the session that asked: another is not_found.",
+        .auth = "device",
+        .payload = {str("approval_id").gen(gen::pattern("{*}{*}{*}{*}{*}{*}{*}{*}"))},
+        .response = deviceApprovalFields(),
+        .refusal_codes = {"invalid", "not_found", "unauthorized", "device_unknown"},
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "device.approval.key.register",
+        .description = "Register this already-paired device's approval key (once per device): a P-256 "
+                       "SubjectPublicKeyInfo, 91 bytes of DER, standard base64, not the connection's key. A person "
+                       "approves it in the web console: it answers step_up_required (device.trust, target "
+                       "device.approval.key.register:<device row>:<key SPKI SHA-256>) until a console approval "
+                       "(device.approval.request) for exactly that target. conflict: the device has (or had) a key, "
+                       "or the key is known here.",
+        .auth = "device",
+        .payload = {str("public_key_spki_b64").gen(gen::pattern("{A}{a}{9}{a}"))},
+        .response = {boolean("registered")},
+        .refusal_codes = {"invalid", "conflict", "unauthorized", "device_unknown"},
         .client_timeout = kDefaultTimeout,
     });
 

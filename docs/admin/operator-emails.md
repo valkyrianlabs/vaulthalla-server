@@ -64,6 +64,12 @@ Weekly digests use `operator_emails.recipients.weekly` and are deduped by week s
 
 Security alerts use `operator_emails.recipients.security`. Admin role create, update, and delete events are emitted from both the shell command path and websocket handler path after the database mutation succeeds.
 
+Account security notices (multi-factor sign-in) also go to `operator_emails.recipients.security`, and a copy to the
+account's own email address when it has one: a recovery-code sign-in, an MFA reset, ten failed second factors in a
+row, a passkey suspended as a possible clone, and the MFA policy weakened (security recipients only). The account
+alone is told when one of its factors is added, renamed or removed, or new recovery codes are saved. They need
+`security_alerts.enabled`; the [audit trail](/admin/audit-trail) records every one of these events either way.
+
 Security alert controls:
 
 ```yaml

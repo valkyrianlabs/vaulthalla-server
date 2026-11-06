@@ -19,6 +19,7 @@ std::string Controller::initiateMultipartUpload(
 std::string Controller::initiateMultipartUpload(
     const std::filesystem::path& key,
     const RequestOptions& options) const {
+    enforceRequestPolicy(RequestOp::Put, key.string(), &options);
     {
         const vh::recovery::usage::ScopedRequestTag tag(vh::recovery::usage::RequestTag::MultipartInitiate);
         recordRequest(RequestKind::Put);
@@ -33,6 +34,8 @@ std::string Controller::initiateMultipartUpload(
 
     auto hdrMap = buildHeaderMap(payloadHash);
     applyRequestOptions(hdrMap, options);
+    // The object's Content-Type comes from the initiate request: opaque_v1 objects are octet-stream (spec 01 §4.3).
+    if (opaqueLayout()) hdrMap["content-type"] = "application/octet-stream";
 
     const std::string authHeader = buildAuthorizationHeader(apiKey_, "POST", canonicalPath, hdrMap, payloadHash);
 
@@ -71,6 +74,7 @@ std::string Controller::initiateMultipartUpload(
 
 void Controller::uploadPart(const std::filesystem::path& key, const std::string& uploadId,
                              const int partNumber, const std::string& partData, std::string& etagOut) const {
+    enforceRequestPolicy(RequestOp::Put, key.string());
     {
         const vh::recovery::usage::ScopedRequestTag tag(vh::recovery::usage::RequestTag::MultipartPart);
         recordRequest(RequestKind::Put);
@@ -116,6 +120,7 @@ void Controller::uploadPart(const std::filesystem::path& key, const std::string&
 
 void Controller::completeMultipartUpload(const std::filesystem::path& key, const std::string& uploadId,
                                          const std::vector<std::string>& etags) const {
+    enforceRequestPolicy(RequestOp::Put, key.string());
     resetLastPutOutcome();
     if (etags.empty()) throw std::runtime_error("No ETags provided to completeMultipartUpload");
     recordRequest(RequestKind::Put);
@@ -179,6 +184,7 @@ void Controller::completeMultipartUpload(const std::filesystem::path& key, const
 }
 
 void Controller::abortMultipartUpload(const std::filesystem::path& key, const std::string& uploadId) const {
+    enforceRequestPolicy(RequestOp::Delete, key.string());
     recordRequest(RequestKind::Delete);
 
     CURL* curl = curl_easy_init();

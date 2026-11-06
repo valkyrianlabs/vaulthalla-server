@@ -32,7 +32,9 @@
 // Host never prompts: RBAC, typed confirmations and the audit trail still apply, and `vh` stays the documented host
 // recovery path. Agent can never produce a step-up, so an annotated operation refuses under it. A Device session never
 // sees step_up_required for routine sync (a contract test enumerates them); for an annotated command it is refused
-// until a device approval (#361) or the key-backup grant (#362) covers it. No Scope at all means no request: the
+// (methods device_approval and/or console_approval) until a grant on that device session covers it: one made by the
+// device's approval key (keys and device.trust only, D6) or by a person's passkey in the web console (#361,
+// auth/approval/Approvals.hpp), or the key-backup grant (#362). No Scope at all means no request: the
 // daemon's own callers and tests, which call ops:: directly and are trusted like the host (ops/Actor.hpp).
 //
 // How it is satisfied (web sessions only): a grant, made by auth.stepup.finish after
@@ -68,6 +70,16 @@ inline constexpr std::array<Family, 7> kFamilies{Family::Keys,          Family::
 // D6 (#361's extension point): a registered Secure Enclave approval key may satisfy only keys and device.trust (the
 // key-backup grant commands are device.trust).
 [[nodiscard]] bool deviceApprovalMaySatisfy(Family family) noexcept;
+
+// The recovery cooldown's families (#360; design 7.4, D4): keys, device.trust, identity.admin, secrets, settings. While
+// the account's cooldown runs (a recovery-code sign-in or an MFA reset, auth/mfa/Recovery.hpp) require() refuses them
+// on web and device sessions with ops::RecoveryCooldown, before any grant is looked at, and no ceremony for them
+// begins. Factors enrolled meanwhile are marked created_during_recovery and are not offered for these families until
+// the cooldown ends. account.credentials (enrolling the replacement factor, removing the lost one) and data.destroy are
+// not held back.
+[[nodiscard]] bool cooldownFamily(Family family) noexcept;
+// Throws ops::RecoveryCooldown when `family` is a cooldown family and `userId`'s cooldown runs.
+void requireNoCooldown(uint32_t userId, Family family);
 
 // The grant window: auth.mfa.step_up_ttl_seconds, clamped to 60..900.
 [[nodiscard]] std::chrono::seconds ttl();
@@ -143,12 +155,16 @@ void require(Family family, const std::optional<std::string>& target = std::null
 // vault.keys.export on a paired device (#362's extension point): an export inside the device's key-backup grant needs
 // no step-up (design 6.4: Desktop's background 1Password backup never prompts). Until #362 adds the grant table, every
 // paired device holds what D1 migrates to an `origin = migrated` grant: its user's existing export authority, which
-// RBAC (encryption-key Export) has already checked. So this is true on any Device channel, and nowhere else.
+// RBAC (encryption-key Export) has already checked. So this is true on a Device channel whose device's grant was not
+// revoked (#360: a recovery-code sign-in or an MFA reset of its user revokes it, devices.key_backup_revoked_at), and
+// nowhere else.
 [[nodiscard]] bool keyBackupGrantCovers(uint32_t vaultId);
 
 // What `user` can answer a step-up of `family` with on a web session: "webauthn" (a usable passkey and passkeys
 // configured), "password_totp" (a confirmed authenticator app), "password" (D3). Empty when nothing can (an account
-// with no factor asked for keys, device.trust or data.destroy).
+// with no factor asked for keys, device.trust or data.destroy). Factors the account's policy rule refuses
+// (auth.mfa.admin_webauthn_only / admin_device_bound_only) are never offered, nor, for a cooldown family while the
+// cooldown runs, factors enrolled during recovery.
 [[nodiscard]] std::vector<std::string> methods(const identities::User& user, Family family);
 
 // The refusal for `family`/`target` as the caller in scope sees it (methods for its channel). Not audited.
@@ -159,12 +175,17 @@ void require(Family family, const std::optional<std::string>& target = std::null
 
 struct Grant {
     uint32_t user_id{};
-    std::string refresh_jti{};
+    std::string refresh_jti{};            // empty on a device session (it has no refresh token)
     Family family{Family::Settings};
     std::optional<std::string> target{};  // target-bound families only
-    std::string method{};                 // webauthn, password_totp, password
+    std::string method{};                 // webauthn, password_totp, password; on a device: the two below
     std::chrono::system_clock::time_point expires_at{};
 };
+
+// How a device session's grant was made (#361, auth/approval/Approvals.hpp): a signature by the device's approval
+// key (D6: keys and device.trust only), or a person's passkey in the web console (design 6.3: any family).
+inline constexpr std::string_view kDeviceApprovalMethod{"device_approval"};
+inline constexpr std::string_view kConsoleApprovalMethod{"console_approval"};
 
 // A begun ceremony: auth.stepup.begin to auth.stepup.finish, one per session (a new one replaces it).
 struct Ceremony {

@@ -48,6 +48,9 @@ struct PairRequest {
     std::string platform{};
     std::string app_version{};
     std::string commitment{};  // 64 hex
+    // #361: the device's approval key, a P-256 SubjectPublicKeyInfo (standard base64 of its 91-byte DER). Optional;
+    // shown with the request (approval_key_present) and registered with the device when it is approved.
+    std::optional<std::string> approval_key{};
 };
 [[nodiscard]] vh::device::PairRequestReceipt pairRequest(const vh::device::Peer& peer, const PairRequest& req);
 [[nodiscard]] std::time_t pairConfirm(const vh::device::Peer& peer, const std::string& requestId,
@@ -80,6 +83,12 @@ Device revoke(const Actor& actor, const Ref& device, const vh::device::Peer* sel
 [[nodiscard]] std::string rotateIdentity(const Actor& actor, const vh::device::Peer& peer,
                                          const std::vector<uint8_t>& certificate, int64_t timestamp,
                                          const std::vector<uint8_t>& signature);
+
+// device.approval.key.register (#361, MFA design note 6.2): an already-paired device registers its approval key once,
+// on its own session, approved by a person in the web console (device.approval.request: a device.trust grant for the
+// target "device.approval.key.register:<device row>:<key SPKI SHA-256 hex>"; nothing else can satisfy it, since the
+// device has no approval key yet). ops::Conflict when the device has (or had) one or the key is known here.
+void registerApprovalKey(const Actor& actor, const vh::device::Peer& peer, const std::vector<uint8_t>& spkiDer);
 
 struct ServerIdentityInfo {
     std::string spki_sha256{};

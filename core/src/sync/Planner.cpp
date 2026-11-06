@@ -13,6 +13,19 @@ using namespace vh::sync;
 using namespace vh::sync::model;
 using namespace vh::fs::model;
 
+namespace {
+
+// Both sides are the same sealing: the remote row names the local generation (salt and key version), or both are
+// empty (an empty file is stored as nothing locally and as one 136-byte object upstream).
+bool sameOpaqueGeneration(const File& local, const File& remote) {
+    if (local.size_bytes == 0 && remote.size_bytes == 0) return true;
+    return !local.encryption_iv.empty() && local.encryption_iv == remote.encryption_iv &&
+           local.encrypted_with_key_version == remote.encrypted_with_key_version &&
+           local.size_bytes == remote.size_bytes;
+}
+
+}
+
 std::vector<Action> Planner::build(
     const std::shared_ptr<Cloud>& ctx,
     const std::shared_ptr<RemotePolicy>& policy,
@@ -20,7 +33,8 @@ std::vector<Action> Planner::build(
 {
     std::vector<Action> plan;
 
-    if (policy->wantsEnsureDirectories()) {
+    // opaque_v1: the tree is the database's (and the manifest's); object keys name no folders.
+    if (policy->wantsEnsureDirectories() && !ctx->opaque) {
         plan.push_back({ ActionType::EnsureDirectories, {.rel = u8""}, nullptr, nullptr });
     }
 
@@ -98,6 +112,13 @@ std::vector<Action> Planner::build(
                     plan.push_back({ ActionType::Upload, k, L, R });
                     continue;
                 }
+
+            // opaque_v1: the object holds exactly the file's current generation (the row Vaulthalla's upload wrote):
+            // in sync, whatever else changed. A rename or move changes the path and mtime, never the object.
+            if (ctx->opaque && sameOpaqueGeneration(*L, *R)) {
+                ctx->noteInSync(*L, *R);
+                continue;
+            }
 
             // Fast-path skip if equal content (let ctx decide via hashes, remoteHashMap, etc.)
             if (*L == *R) {
@@ -194,7 +215,7 @@ std::vector<Action> Planner::build(
     return plan;
 }
 
-S3CostEstimate Planner::estimateS3Cost(const std::vector<Action>& plan) {
+S3CostEstimate Planner::estimateS3Cost(const std::vector<Action>& plan, const bool opaque) {
     S3CostEstimate estimate;
     bool mutatesRemoteIndex = false;
 
@@ -207,7 +228,7 @@ S3CostEstimate Planner::estimateS3Cost(const std::vector<Action>& plan) {
             break;
         case ActionType::Download:
             ++estimate.get_requests;
-            estimate.head_requests += 2;
+            if (!opaque) estimate.head_requests += 2;   // opaque_v1: the header is in the object (spec 01 §5)
             if (action.remote) estimate.planned_body_download_bytes += action.remote->size_bytes;
             else if (action.local) estimate.planned_body_download_bytes += action.local->size_bytes;
             break;
@@ -225,8 +246,13 @@ S3CostEstimate Planner::estimateS3Cost(const std::vector<Action>& plan) {
     }
 
     if (mutatesRemoteIndex) {
-        ++estimate.put_requests;
-        estimate.head_requests += 2;
+        if (opaque) {
+            estimate.put_requests += 2;   // manifest v2: one changed segment + the root (spec 03 §3.5)
+            ++estimate.head_requests;
+        } else {
+            ++estimate.put_requests;
+            estimate.head_requests += 2;
+        }
     }
 
     // Local versioning's backlog: the uploads and remote deletes above replay their keys' pending versions first.
@@ -234,7 +260,7 @@ S3CostEstimate Planner::estimateS3Cost(const std::vector<Action>& plan) {
         const auto& file = action.local ? action.local : action.remote;
         if ((action.type != ActionType::Upload && action.type != ActionType::DeleteRemote) || !file || !file->vault_id)
             continue;
-        vh::recovery::local::backlog::addPlannedReplays(static_cast<uint32_t>(*file->vault_id), plan, estimate);
+        vh::recovery::local::backlog::addPlannedReplays(static_cast<uint32_t>(*file->vault_id), plan, estimate, opaque);
         break;
     }
 

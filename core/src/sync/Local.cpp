@@ -419,8 +419,9 @@ void Local::removeTrashedFiles() {
             try {
                 if (!file) throw std::runtime_error("null trashed file");
                 scoped->start(file->size_bytes);
+                const auto key = cloud->objectKeyOf(*file);   // o/<uid> under opaque_v1, else the path
                 cloud->purge(file);
-                db::query::sync::RemoteObjectIndex::deleteKey(file->vault_id, file->path);
+                db::query::sync::RemoteObjectIndex::deleteKey(file->vault_id, key);
                 purged.push_back({file, scoped});
                 remoteIndexMutated = true;
                 purgeSucceeded = true;

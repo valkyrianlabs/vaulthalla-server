@@ -22,6 +22,8 @@ std::vector<WsStepUp> stepUpTable() {
         // device.trust: target-bound (request id + new key + chosen code), single use
         {"device.pairing.approve", "device.trust", kTarget, ""},
         {"device.remote.enable", "device.trust", kTarget, "when remote device connections are off"},
+        {"device.approval.key.register", "device.trust", kTarget,
+         "always: a person approves it in the web console (device.approval.request)"},
         // account.credentials: family-wide, the grant window
         {"auth.user.change_password", "account.credentials", false, ""},
         {"auth.mfa.factor.remove", "account.credentials", false, ""},
@@ -35,6 +37,8 @@ std::vector<WsStepUp> stepUpTable() {
          "when the account already has a usable factor (not during pending enrollment or a recovery-code session)"},
         {"auth.mfa.recovery.generate", "account.credentials", false,
          "when recovery codes are in force (not on the recovery-code session spending them)"},
+        {"auth.mfa.admin.reset", "account.credentials", false, ""},
+        {"auth.mfa.admin.require", "identity.admin", false, ""},
         // identity.admin: family-wide
         {"auth.register", "identity.admin", false, ""},
         {"auth.user.update", "identity.admin", false, "a role or activation change, or any change to another account"},
@@ -71,6 +75,7 @@ std::vector<WsStepUp> stepUpTable() {
         {"upstream.admin.enable", "secrets", false, ""},
         // settings: family-wide, any section (auth.webauthn and auth.mfa, sharing, websocket_server, ...)
         {"settings.update", "settings", false, ""},
+        {"email.config.update", "settings", false, "the email sections of settings.update"},
         // data.destroy: target-bound, single use
         {"storage.vault.remove", "data.destroy", kTarget, ""},
         {"recovery.point.delete", "data.destroy", kTarget, ""},

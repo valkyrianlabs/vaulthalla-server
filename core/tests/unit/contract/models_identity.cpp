@@ -136,6 +136,12 @@ void checkIdentityModels(Checker& c) {
             "MfaFactor", "device-bound passkey without an AAGUID");
     c.check(json(auth::mfa::Factor{.id = 1, .kind = auth::mfa::FactorKind::Totp, .label = "Phone", .created_at = kT0}),
             "MfaFactor", "authenticator app");
+    // auth.mfa.status / auth.mfa.admin.status add whether the policy allows it (#360).
+    {
+        json f = auth::mfa::Factor{.id = 2, .kind = auth::mfa::FactorKind::Totp, .label = "Old phone", .created_at = kT0};
+        f["allowed"] = false;
+        c.check(f, "MfaFactor", "an authenticator app an admin held to passkeys can't use");
+    }
 
     // Group with a member (gid and updated_at set), a bare group, and a member whose account no longer resolves.
     identities::GroupState gs;

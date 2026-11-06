@@ -1,6 +1,7 @@
 #include "storage/Engine.hpp"
 #include "config/Registry.hpp"
 #include "vault/model/Vault.hpp"
+#include "vault/model/S3Vault.hpp"
 #include "sync/model/Operation.hpp"
 #include "fs/model/Path.hpp"
 #include "fs/metadata/Magic.hpp"
@@ -126,6 +127,12 @@ namespace vh::storage {
             params.integrityDomain = "file:" + std::to_string(params.generation.vault_id) + ":" + std::to_string(f->id);
             params.binding = {.vaultUid = encryptionManager->vaultUid(), .generation = f->encryption_iv,
                               .keyVersion = f->encrypted_with_key_version};
+            // opaque_v1 (spec 01 §4.1): the header must name the file's uid, the identity of its object in the bucket.
+            if (const auto s3 = std::dynamic_pointer_cast<vault::model::S3Vault>(vault);
+                s3 && s3->storage_layout == vault::model::StorageLayout::OpaqueV1) {
+                if (!f->object_uid) throw IntegrityError("File has no object uid: " + f->path.string());
+                params.binding.objectUid = f->object_uid;
+            }
             params.key = encryptionManager->keySnapshot(f->encrypted_with_key_version);
             return std::make_unique<Vhf1FileReader>(std::move(params));
         }

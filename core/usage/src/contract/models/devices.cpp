@@ -35,7 +35,10 @@ std::vector<WsModel> deviceModels() {
          deviceTime("last_seen_at").nullable(),
          str("last_ip").nullable().desc("The address of the device's last connection."),
          deviceTime("revoked_at").nullable(),
-         boolean("revoked").desc("Revoked devices stay listed; their key never pairs again.")}));
+         boolean("revoked").desc("Revoked devices stay listed; their key never pairs again."),
+         deviceTime("key_backup_revoked_at").nullable().opt().desc(
+             "When the device's key-backup grant was revoked (a recovery-code sign-in or an MFA reset of its user): "
+             "it stays paired and syncs, but its key exports need a person's approval again.")}));
 
     return out;
 }

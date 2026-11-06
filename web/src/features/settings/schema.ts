@@ -197,12 +197,59 @@ export const SECTIONS: SectionDef[] = [
   {
     key: 'auth',
     label: 'Security',
-    description: 'Sign-in session lifetimes and the passkey (WebAuthn) relying party.',
+    description: 'Sign-in session lifetimes, multi-factor sign-in (MFA) and the passkey (WebAuthn) relying party.',
     fields: [
       { key: 'access_token_expiry_minutes', label: 'Access token lifetime', type: int('minutes', 1) },
       { key: 'refresh_token_expiry_days', label: 'Refresh token lifetime', type: int('days', 1) },
     ],
     groups: [
+      {
+        // auth.mfa.* (core MfaConfig, #359/#360). Changing the policy is audited; weakening it is mailed to the
+        // security recipients. The daemon validates it (and refuses the admin flags without passkeys configured).
+        key: 'mfa',
+        label: 'Multi-factor sign-in',
+        fields: [
+          {
+            key: 'policy',
+            label: 'Who must use a second factor',
+            hint: 'Raising it signs affected password-only sessions out at their next request; they set up a factor at their next sign-in.',
+            type: {
+              kind: 'enum',
+              options: [
+                { value: 'admins', label: 'Administrators (recommended)' },
+                { value: 'all', label: 'Everyone' },
+                { value: 'optional', label: 'Nobody (accounts you require stay required)' },
+              ],
+            },
+            changeWarning:
+              'Lowering who must use a second factor is recorded in the audit trail and emailed to the security recipients.',
+          },
+          {
+            key: 'admin_webauthn_only',
+            label: 'Administrators: passkeys only',
+            hint: 'No authenticator apps for accounts that may manage users, roles, settings or keys. Needs passkeys configured below.',
+            type: bool,
+          },
+          {
+            key: 'admin_device_bound_only',
+            label: 'Administrators: device-bound passkeys only',
+            hint: 'Security keys and passkeys that never leave their device, not synced ones (1Password, iCloud Keychain).',
+            type: bool,
+          },
+          {
+            key: 'recovery_cooldown_hours',
+            label: 'Cooldown after a recovery',
+            hint: 'After a recovery-code sign-in or an MFA reset, key export, device approval, account and role changes, secrets and settings wait this long.',
+            type: int('hours', 1, 168),
+          },
+          {
+            key: 'step_up_ttl_seconds',
+            label: 'Confirmation lasts',
+            hint: 'How long confirming a sensitive change (step-up) covers similar changes in that tab.',
+            type: int('seconds', 60, 900),
+          },
+        ],
+      },
       {
         // auth.webauthn.* (core WebAuthnConfig, #355). The daemon validates it; nothing is read from request headers.
         key: 'webauthn',

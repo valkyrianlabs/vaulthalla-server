@@ -359,12 +359,26 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
         // #359: step-up (step_up_required: exactly the step-up table's commands, below).
         {"step_up_unavailable", {"auth.stepup.begin"}},
         {"step_up_failed", {"auth.stepup.finish"}},
-        {"mfa_last_factor", {"auth.mfa.factor.remove"}}};
+        {"mfa_last_factor", {"auth.mfa.factor.remove"}},
+        // #361: device approvals (the device's side: device.*) and the console's answer.
+        {"console_approval_required", {}}, {"approval_key_unavailable", {}},
+        {"passkey_required", {"auth.approval.approve"}}, {"approval_failed", {"auth.approval.approve"}}};
     const auto stepUp = contract::stepUpTable();
     const auto refusedCodeAllowed = [&](const std::string& code, const std::string& command) {
         if (code == "step_up_required")
             return std::ranges::any_of(stepUp, [&](const contract::WsStepUp& r) { return r.command == command; });
-        if (code == "rate_limited" && command == "auth.stepup.begin") return true;  // the passkey challenge store
+        if (code == "rate_limited" && (command == "auth.stepup.begin" || command == "auth.approval.approve"))
+            return true;  // the passkey challenge store
+        // #360: the recovery cooldown's families (keys, device.trust, identity.admin, secrets, settings), and the
+        // device and console approvals that could otherwise make a grant for them.
+        if (code == "recovery_cooldown")
+            return command == "device.approval.challenge" || command == "device.approval.submit" ||
+                   command == "device.approval.request" || command == "auth.approval.approve" ||
+                   std::ranges::any_of(stepUp, [&](const contract::WsStepUp& r) {
+                       return r.command == command && (r.family == "keys" || r.family == "device.trust" ||
+                                                       r.family == "identity.admin" || r.family == "secrets" ||
+                                                       r.family == "settings");
+                   });
         const auto it = kRefusedCodes.find(code);
         if (it == kRefusedCodes.end()) return false;
         // rate_limited is device pairing's, auth.mfa.verify's and auth.passkey.options'.

@@ -30,9 +30,9 @@ const newAccount = (role: string) => {
   return name
 }
 
-const newAdmin = () => {
+const newAdmin = (role = 'admin') => {
   const name = `e2e_mfa_${Date.now().toString(36)}_${++counter}`
-  const out = execFileSync(VH as string, ['user', 'create', name, '--role', 'admin'], { encoding: 'utf8' })
+  const out = execFileSync(VH as string, ['user', 'create', name, '--role', role], { encoding: 'utf8' })
   const password = /^Password: (.+)$/m.exec(out)?.[1]
   if (!password) throw new Error('vh user create printed no password')
   return { name, password }
@@ -365,4 +365,74 @@ test('step-up dialog on a role change; a second change within the window does no
     await expect(page.getByText(new RegExp(`${target} is now unprivileged`, 'i'))).toBeVisible()
     await expect(page.getByTestId('stepup-dialog')).toHaveCount(0)
   })
+})
+
+// ── MFA reset and recovery cooldown (#360) ────────────────────────────────────────────────────────────────────────
+
+test('an MFA reset (vh, then the Users page) leads to guided enrollment inside the recovery cooldown', async ({ browser }) => {
+  test.setTimeout(150_000)
+  // A plain account the boss (an admin) may manage, held to MFA for itself (`vh user mfa require`).
+  const target = newAdmin('unprivileged')
+  execFileSync(VH as string, ['user', 'mfa', 'require', target.name], { encoding: 'utf8' })
+  const boss = newAdmin()
+
+  const targetContext = await browser.newContext()
+  const tp = await targetContext.newPage()
+  await withoutAutofill(tp)
+  await authenticator(tp)
+
+  await test.step('the target enrolls a passkey', async () => {
+    await enrollPasskey(tp, target)
+    await signOut(tp)
+  })
+
+  await test.step('`vh user mfa reset` as the super admin, on the host', async () => {
+    const out = execFileSync(VH as string, ['user', 'mfa', 'reset', target.name, '--reason', 'e2e-lost-device', '--yes'], {
+      encoding: 'utf8',
+    })
+    expect(out).toMatch(/1 factor\(s\) disabled/)
+    const status = JSON.parse(execFileSync(VH as string, ['user', 'mfa', 'status', target.name, '--json'], { encoding: 'utf8' }))
+    expect(status.factors).toHaveLength(0)
+    expect(status.required_flag).toBe(true)
+    expect(status.cooldown_until).toBeGreaterThan(Date.now() / 1000)
+  })
+
+  await test.step('the next sign-in is the guided enrollment; the new passkey is flagged and the cooldown shown', async () => {
+    await password(tp, target.name, target.password)
+    await expect(tp.getByText('Set up a second factor')).toBeVisible()
+    await tp.getByTestId('mfa-choose-passkey').click()
+    await tp.getByTestId('mfa-passkey-create').click()
+    await saveRecoveryCodes(tp)
+    await tp.getByTestId('mfa-enrollment-continue').click()
+    await signedIn(tp)
+    await tp.goto('/account')
+    await expect(tp.getByText('Recovery cooldown')).toBeVisible()
+    await expect(tp.getByTestId('mfa-factor')).toHaveCount(1)
+    await expect(tp.getByTestId('mfa-factor')).toContainText('Added during recovery')
+  })
+
+  await test.step('an administrator resets it again from the Users page', async () => {
+    const bossContext = await browser.newContext()
+    const bp = await bossContext.newPage()
+    await withoutAutofill(bp)
+    await authenticator(bp)
+    await enrollPasskey(bp, boss)
+    await bp.goto(`/users/${encodeURIComponent(target.name)}`)
+    await expect(bp.getByTestId('mfa-admin-factors')).toContainText('1 factor')
+    await bp.getByTestId('mfa-admin-reset').click()
+    await expect(bp.getByTestId('mfa-admin-reset-confirm')).toBeDisabled()
+    await bp.getByTestId('mfa-admin-reset-reason').fill('e2e second reset')
+    await bp.getByTestId('mfa-admin-reset-confirm').click()
+    // A fresh passkey sign-in stands in for the account.credentials step-up; otherwise the dialog asks.
+    if (await bp.getByTestId('stepup-dialog').isVisible()) await bp.getByTestId('stepup-use-passkey').click()
+    await expect(bp.getByText(new RegExp(`MFA reset for ${target.name}`))).toBeVisible()
+    await expect(bp.getByTestId('mfa-admin-factors')).toContainText('No sign-in factors')
+    await bossContext.close()
+  })
+
+  await test.step('the target was signed out', async () => {
+    await tp.goto('/account')
+    await expect(tp).toHaveURL(/\/login/)
+  })
+  await targetContext.close()
 })

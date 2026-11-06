@@ -28,6 +28,9 @@ public:
     // Collects, publishes, records. Rethrows ChainRejected (after recording and alerting), PublishConflict and the
     // store's errors.
     PublishReport publish();
+    // publish() unless the database holds exactly what this service's last publish produced and the bucket's root is
+    // still that publish (a sync pass that changed nothing writes nothing, spec 01 §5): nullopt then.
+    std::optional<PublishReport> publishIfChanged();
 
     // Checks the bucket's current root against remote_manifest_state without loading segments: one GET of the root
     // when its ETag moved. An accepted newer root (another writer) becomes the known state; nullopt when there is no
@@ -42,6 +45,7 @@ public:
 
 private:
     void refused(const ChainRejected& e, uint64_t epoch, const std::string& rootSha256);
+    PublishReport publishLocked(const Content& produced);
     [[nodiscard]] std::optional<Known> known() const;
 
     uint32_t vaultId_;

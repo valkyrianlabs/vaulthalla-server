@@ -1,19 +1,24 @@
 #include "auth/stepup/StepUp.hpp"
 
 #include "audit/Trail.hpp"
+#include "auth/approval/Approvals.hpp"
 #include "auth/mfa/Factors.hpp"
 #include "auth/mfa/Passkeys.hpp"
 #include "auth/mfa/Policy.hpp"
+#include "auth/mfa/Recovery.hpp"
 #include "auth/model/RefreshToken.hpp"
 #include "auth/model/TokenPair.hpp"
 #include "auth/session/Assurance.hpp"
 #include "config/Registry.hpp"
+#include "db/query/device/Device.hpp"
+#include "device/Peer.hpp"
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
 #include "ops/Error.hpp"
 #include "protocols/ws/Session.hpp"
 
 #include <algorithm>
+#include <ctime>
 
 namespace vh::auth::stepup {
 
@@ -37,6 +42,33 @@ bool stepUpFreshSignIn(const model::RefreshToken& row) {
 
 nlohmann::json stepUpTargetJson(const std::optional<std::string>& target) {
     return target ? nlohmann::json(*target) : nlohmann::json(nullptr);
+}
+
+// The recovery cooldown, before any grant: audited as auth.stepup.required (denied, reason recovery_cooldown).
+void stepUpCooldownGate(const uint32_t userId, const std::string& name, const Family family,
+                        const std::optional<std::string>& target, const char* channel) {
+    try {
+        requireNoCooldown(userId, family);
+    } catch (const ops::RecoveryCooldown& e) {
+        audit::record({.action = "auth.stepup.required", .outcome = audit::Outcome::Denied, .actor_id = userId,
+                       .actor = name,
+                       .details = {{"family", std::string(to_string(family))}, {"target", stepUpTargetJson(target)},
+                                   {"channel", channel}, {"reason", "recovery_cooldown"},
+                                   {"cooldown_until", e.cooldown_until}}},
+                      "[auth::stepup] " + name + " was refused a " + std::string(to_string(family)) +
+                          " operation: the recovery cooldown runs",
+                      spdlog::level::warn);
+        throw;
+    }
+}
+
+// What a paired device can answer a refusal with (#361): device_approval (its approval key: D6 families, while it has
+// a live one) and console_approval (device.approval.request, any family).
+std::vector<std::string> stepUpDeviceMethods(const std::shared_ptr<protocols::ws::Session>& session, const Family family) {
+    std::vector<std::string> out;
+    if (deviceApprovalMaySatisfy(family) && approval::hasLiveApprovalKey(session)) out.emplace_back(kDeviceApprovalMethod);
+    out.emplace_back(kConsoleApprovalMethod);
+    return out;
 }
 
 }
@@ -68,6 +100,26 @@ bool passwordMaySatisfy(const Family family) noexcept { return !targetBound(fami
 
 bool deviceApprovalMaySatisfy(const Family family) noexcept {
     return family == Family::Keys || family == Family::DeviceTrust;
+}
+
+bool cooldownFamily(const Family family) noexcept {
+    return family == Family::Keys || family == Family::DeviceTrust || family == Family::IdentityAdmin ||
+           family == Family::Secrets || family == Family::Settings;
+}
+
+void requireNoCooldown(const uint32_t userId, const Family family) {
+    if (!cooldownFamily(family)) return;
+    const auto until = mfa::recovery::cooldownUntil(userId);
+    if (!until) return;
+    const auto t = static_cast<std::time_t>(*until);
+    std::tm tm{};
+    gmtime_r(&t, &tm);
+    char when[32]{};
+    std::strftime(when, sizeof(when), "%Y-%m-%d %H:%M UTC", &tm);
+    throw ops::RecoveryCooldown(std::string(to_string(family)), *until,
+                                std::string("This account recently signed in with a recovery code or had its MFA "
+                                            "reset: this kind of change waits until the recovery cooldown ends (") +
+                                    when + ")");
 }
 
 std::chrono::seconds ttl() {
@@ -118,12 +170,12 @@ Covered::~Covered() {
 
 std::vector<std::string> methods(const identities::User& user, const Family family) {
     std::vector<std::string> out;
-    if (mfa::passkeys::available() && !mfa::passkeys::usableCredentials(user.id).empty()) out.emplace_back("webauthn");
-    for (const auto& f : mfa::factors(user.id))
-        if (f.kind == mfa::FactorKind::Totp && !f.suspended) {
-            out.emplace_back("password_totp");
-            break;
-        }
+    // A cooldown family while the cooldown runs is refused anyway (requireNoCooldown); never offer a factor enrolled
+    // during the recovery for one.
+    const bool excludeRecovery = cooldownFamily(family) && mfa::recovery::cooldownUntil(user.id).has_value();
+    if (mfa::passkeys::available() && !mfa::policy::allowedPasskeys(user, excludeRecovery).empty())
+        out.emplace_back("webauthn");
+    if (mfa::policy::hasAllowedTotp(user, excludeRecovery)) out.emplace_back("password_totp");
     // D3: an account that need not have MFA and has no usable factor re-enters its password, for the lower-risk
     // families only. Decided here, on the server, every time (begin and finish both ask).
     if (passwordMaySatisfy(family) && !mfa::hasUsableFactor(user.id) && !mfa::policy::requirement(user).required)
@@ -140,7 +192,13 @@ void refuse(const Family family, const std::optional<std::string>& target, std::
 bool keyBackupGrantCovers(const uint32_t vaultId) {
     (void)vaultId;  // #362: the device's grant lists its vaults explicitly
     const auto* scope = Scope::current();
-    return scope && scope->channel() == Channel::Device;
+    if (!scope || scope->channel() != Channel::Device) return false;
+    // #360 (D4): a recovery-code sign-in or an MFA reset of the device's user revoked its grant.
+    const auto& session = scope->session();
+    const auto& peer = session ? session->devicePeer() : nullptr;
+    if (!peer || !peer->deviceRowId) return false;
+    const auto device = db::query::device::Devices::byId(*peer->deviceRowId);
+    return device && !device->revoked() && !device->key_backup_revoked_at;
 }
 
 void require(const Family family, const std::optional<std::string>& target) {
@@ -168,19 +226,27 @@ void require(const Family family, const std::optional<std::string>& target) {
         case Channel::Device: {
             const auto& session = scope->session();
             const auto userId = session && session->user ? std::optional<uint32_t>(session->user->id) : std::nullopt;
-            // #361 adds grants made on a device session by its approval key (keys and device.trust only, D6) or by a
-            // console approval; they are found here like a web session's.
-            if (userId && deviceApprovalMaySatisfy(family) && session->stepUp().use(*userId, {}, family, bound)) {
-                scope->markSatisfied(family, bound);
-                return;
-            }
+            // #360: the recovery cooldown holds its families back before any grant, device or console approvals
+            // included.
+            if (userId) stepUpCooldownGate(*userId, session->user->name(), family, bound, "device");
+            // #361: a grant on this device session, made by its approval key (keys and device.trust only, D6) or by
+            // a person's passkey in the web console (any family, design 6.3). Never by the connection itself.
+            if (userId)
+                if (const auto grant = session->stepUp().use(*userId, {}, family, bound);
+                    grant && (grant->method == kConsoleApprovalMethod ||
+                              (grant->method == kDeviceApprovalMethod && deviceApprovalMaySatisfy(family)))) {
+                    scope->markSatisfied(family, bound);
+                    return;
+                }
             audit::record({.action = "auth.stepup.required", .outcome = audit::Outcome::Denied, .actor_id = userId,
                            .actor = session && session->user ? session->user->name() : std::string{},
                            .details = {{"family", familyName}, {"target", stepUpTargetJson(bound)},
                                        {"channel", "device"}}},
-                          "[auth::stepup] a paired device was refused a " + familyName + " operation: it needs a "
-                          "person's approval", spdlog::level::warn);
-            refuse(family, bound, {}, "A paired device can't approve this by itself: do it in the web console");
+                          "[auth::stepup] a paired device was asked for a person's approval of a " + familyName +
+                              " operation",
+                          spdlog::level::warn);
+            refuse(family, bound, stepUpDeviceMethods(session, family),
+                   "This needs a person's approval: approve it on this device or in the web console");
         }
 
         case Channel::Web: {
@@ -189,6 +255,7 @@ void require(const Family family, const std::optional<std::string>& target) {
                 throw ops::Denied("not signed in");
             const auto& user = session->user;
             const auto& row = *session->tokens->refreshToken;
+            stepUpCooldownGate(user->id, user->name(), family, bound, "web");
             if (const auto grant = session->stepUp().use(user->id, row.jti, family, bound)) {
                 scope->markSatisfied(family, bound);
                 log::Registry::auth()->debug("[auth::stepup] {} used a {} grant ({})", user->name(), familyName,
