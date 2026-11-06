@@ -13,6 +13,7 @@ import { VaultSecurity } from '@/models/stats/vaultSecurity'
 import { VaultShareStats } from '@/models/stats/vaultShareStats'
 import { VaultSyncHealth } from '@/models/stats/vaultSyncHealth'
 import { APIKey } from '@/models/apiKey'
+import type { AuthSession } from '@/models/authSession'
 import type {
   AdminStatus,
   AdmissionReport,
@@ -227,6 +228,12 @@ export interface WebSocketCommandMap {
   // Security posture for the signed-in account: the super admin's initial password file while its generated
   // password is still in use and the file is still on disk, else null. A warning, never a gate.
   'auth.security.status': { payload: null; response: { initial_password_file: string | null } }
+
+  // The caller's own signed-in web sessions (#354): ids are opaque handles, never the refresh token's id.
+  'auth.sessions.list': { payload: null; response: { sessions: AuthSession[] } }
+
+  // Exactly one of id / all_others. Revoked sessions end at once (sockets closed, cookies refused).
+  'auth.sessions.revoke': WsContract['auth.sessions.revoke']
 
   // Vault commands
 
