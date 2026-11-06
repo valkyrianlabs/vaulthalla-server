@@ -201,6 +201,15 @@ root plus each changed segment instead of one JSON file (spec 03 §3.5 gives the
 
 ## 6. Migration of existing `path_v0` buckets
 
+**As built (#373, consolidated scope of 2026-11-06).** The soak-with-rollback state machine and `encrypt_upstream`
+toggling were dropped: a vault that fails verification stays `path_v0` with nothing deleted (that is the safety net),
+and after the cutover the legacy objects stay untouched for a fixed waiting period (default 7 days) before an operator
+may clean them up. States: `copying → verifying → cut_over → cleanup → cleanup_blocked | complete`, plus `failed`
+(still `path_v0`, resumable). The canary-first cleanup step was dropped; the dry run, typed confirmation, explicit
+version ids, protection locks, Object Lock and the audit trail stay. Verification gates the cutover (§6.3 steps 1, 3
+and 4); the bucket-only reconstruction (step 2) runs right after the cutover against the published manifest and gates
+the cleanup instead. Operator docs: `docs/vaults/encryption.md`, "Migrating A Vault To Opaque Storage".
+
 One engine converts layout and format together, because both rewrite every object: `path_v0` + legacy GCM →
 `opaque_v1` + VHF1. Converting twice would double the cost. Local-only format conversion (local vaults,
 `transparent` vaults' backing files, recovery blobs) is spec 02 §6 and can ship first.

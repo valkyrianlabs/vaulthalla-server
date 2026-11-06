@@ -17,6 +17,7 @@
 #include "storage/ObjectKeys.hpp"
 #include "vault/Content.hpp"
 #include "vault/EncryptionManager.hpp"
+#include "vault/LayoutMigration.hpp"
 #include "vault/model/S3Vault.hpp"
 
 #include <sodium.h>
@@ -580,6 +581,115 @@ TEST_F(LiveR2, OpaqueObjectsCarryNoMetadataAndCostWhatSpec01Says) {
         data->deleteObject(k);
         EXPECT_FALSE(data->getHeadObject(k)) << k;
     }
+    std::filesystem::remove_all(dir);
+}
+
+// The bucket layout migration's provider assumptions on real R2 (#373): a strict ListObjectsV2 page names each
+// object's ETag and size; a re-sealed object PUT without metadata gets the ETag the migration predicts (the MD5 of a
+// single PUT, the multipart MD5 of its parts), so no read-back is needed on R2; and once the vault is opaque_v1 its
+// controller refuses every legacy key except the cleanup's HEAD and DELETE inside ScopedLegacyLayoutCleanup, never a
+// PUT. Everything written is deleted again (and the run bucket with it).
+TEST_F(LiveR2, LayoutMigrationPrimitives) {
+    ASSERT_GE(sodium_init(), 0);
+    constexpr unsigned kVault = 990'373;
+    std::vector<uint8_t> vaultKey(32);
+    randombytes_buf(vaultKey.data(), vaultKey.size());
+    const auto em = std::make_shared<vault::EncryptionManager>(vault::EncryptionManager::ForTesting{}, kVault, vaultKey, 1u);
+    auto s3 = std::make_shared<vault::model::S3Vault>();
+    s3->id = kVault;
+    s3->encrypt_upstream = true;
+    s3->storage_layout = vault::model::StorageLayout::PathV0;
+    const auto cloud = std::make_shared<storage::CloudEngine>();
+    cloud->vault = s3;
+    cloud->encryptionManager = em;
+    const auto data = sharedController();
+    cloud->setS3ControllerForTesting(data);
+    ASSERT_FALSE(data->opaqueLayout()) << "path_v0 until the cutover";
+
+    const auto dir = std::filesystem::temp_directory_path() / ("vh_live_layout_" + std::to_string(::getpid()));
+    std::filesystem::create_directories(dir);
+    const std::string legacyKey = "lm-legacy/report 2026.txt";
+    std::vector<std::string> written;
+    try {
+        // A path_v0 object: the path as its key, the encryption metadata on it.
+        const std::vector<uint8_t> legacyBody(4321, 0x5a);
+        data->uploadBufferWithMetadata(legacyKey, legacyBody,
+                                       storage::s3::RequestOptions{.system_headers = {},
+                                                                   .metadata = {{"vh-encrypted", "true"},
+                                                                                {"vh-iv", "AAAAAAAAAAAAAAAA"},
+                                                                                {"vh-key-version", "1"}}});
+        written.push_back(legacyKey);
+        bool listed = false;
+        std::string token;
+        do {
+            const auto page = data->listObjectKeysPage(token, 1000);
+            ASSERT_EQ(page.keys.size(), page.objects.size());
+            for (const auto& o : page.objects)
+                if (o.key == legacyKey) {
+                    listed = true;
+                    EXPECT_EQ(o.size, legacyBody.size());
+                    EXPECT_FALSE(o.etag.empty());
+                    EXPECT_TRUE(o.last_modified);
+                }
+            token = page.next_continuation_token;
+        } while (!token.empty());
+        EXPECT_TRUE(listed) << "the strict listing carries the inventory's fields";
+
+        // Re-sealed objects (single PUT and multipart): no metadata, and the ETag the migration predicts.
+        std::mt19937 rng(373);
+        for (const std::size_t size : {std::size_t{300 * 1024}, std::size_t{11 * 1024 * 1024}}) {
+            std::vector<uint8_t> plain(size);
+            for (auto& b : plain) b = static_cast<uint8_t>(rng());
+            const auto uid = crypto::id::newObjectUid();
+            const auto sealed = vault::content::sealBuffer(plain, *em->keySnapshot(1), 1, em->vaultUid(), uid);
+            const auto path = dir / ("o-" + std::to_string(size));
+            {
+                std::ofstream out(path, std::ios::binary | std::ios::trunc);
+                out.write(reinterpret_cast<const char*>(sealed.bytes.data()), static_cast<std::streamsize>(sealed.bytes.size()));
+            }
+            auto generation = std::make_shared<fs::model::File>();
+            generation->object_uid = uid;
+            generation->encryption_iv = sealed.generation;
+            generation->encrypted_with_key_version = 1;
+            generation->size_bytes = size;
+            const auto key = storage::object_keys::contentKey(uid);
+            const auto put = cloud->putMigratedObject(key, path, sealed.bytes.size(), generation);
+            written.push_back(key);
+            std::string etag = put.etag;
+            if (etag.size() >= 2 && etag.front() == '"') etag = etag.substr(1, etag.size() - 2);
+            EXPECT_EQ(etag, vault::layout::s3EtagOf(path, sealed.bytes.size()))
+                << "R2's ETag is the predicted MD5: the migration needs no read-back here (" << size << " bytes)";
+            const auto head = data->getHeadObject(key);
+            ASSERT_TRUE(head);
+            for (const auto& [name, value] : *head) {
+                std::string lower = name;
+                std::ranges::transform(lower, lower.begin(), [](const unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+                EXPECT_FALSE(lower.starts_with("x-amz-meta-")) << key << ": " << name;
+            }
+        }
+
+        // The cutover: the controller holds the opaque_v1 rules; the cleanup reaches legacy keys inside its scope only.
+        data->setOpaqueLayout(true);
+        EXPECT_THROW((void)data->getHeadObject(legacyKey), storage::s3::OpaqueRequestRefused);
+        EXPECT_THROW(data->deleteObject(legacyKey), storage::s3::OpaqueRequestRefused);
+        {
+            const storage::s3::ScopedLegacyLayoutCleanup scope;
+            EXPECT_TRUE(data->getHeadObject(legacyKey));
+            EXPECT_THROW(data->uploadBufferWithMetadata(legacyKey, legacyBody, storage::s3::RequestOptions{}),
+                         storage::s3::OpaqueRequestRefused)
+                << "never a write to a legacy key";
+            data->deleteObject(legacyKey);
+            EXPECT_FALSE(data->getHeadObject(legacyKey)) << "deleted by its key (R2 keeps no versions)";
+        }
+        written.erase(written.begin());
+        data->setOpaqueLayout(false);
+    } catch (...) {
+        data->setOpaqueLayout(false);
+        for (const auto& k : written) data->deleteObject(k);
+        std::filesystem::remove_all(dir);
+        throw;
+    }
+    for (const auto& k : written) data->deleteObject(k);
     std::filesystem::remove_all(dir);
 }
 

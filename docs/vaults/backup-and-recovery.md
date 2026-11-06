@@ -110,7 +110,7 @@ What else you need depends on the vault's layout (`vh vault info`):
 | Vault | A bucket plus | Restore |
 | --- | --- | --- |
 | Opaque storage (`opaque_v1`, every new encrypting S3/R2 vault) | Your recovery kit (or a current key export). The bucket holds the encrypted manifest, so names, folders, trash, provider versions and snapshot records come back with it. | If the server, its database and its TPM are gone: `vh vault recover` on a new server ([Restore A Vault From Its Bucket](/vaults/secrets-and-key-export#restore-a-vault-from-its-bucket)). Users, shares, roles and other settings are not in the bucket: they come from the database backup. |
-| Earlier layout (`path_v0`) | PostgreSQL metadata, vault key exports, internal secrets and configuration. | Restore the database first, then import the keys ([Restore Vault Keys](/vaults/secrets-and-key-export#restore-vault-keys)). A bucket and a kit are not enough. |
+| Earlier layout (`path_v0`) | PostgreSQL metadata, vault key exports, internal secrets and configuration. | Restore the database first, then import the keys ([Restore Vault Keys](/vaults/secrets-and-key-export#restore-vault-keys)). A bucket and a kit are not enough until the vault is migrated to opaque storage (`vh vault migrate-layout`). |
 
 Enroll a recovery recipient on every opaque vault, pin it in your kit and keep the kit offline. A vault without a
 recipient or a current export is reported as degraded. Refresh the kit after a restore, and after anything you can't
@@ -118,6 +118,13 @@ afford to lose to a rollback of the bucket. Keep the database backup, internal s
 bucket restores the vault's files and names, not the installation around it.
 
 ## Hardware TPM Recovery
+
+During a layout migration ([Migrating A Vault To Opaque Storage](/vaults/encryption#migrating-a-vault-to-opaque-storage))
+every byte stays recoverable: until the cutover the vault is still `path_v0` and its database and key exports restore
+it as before, and after it the old path-named objects stay in the bucket for the waiting period while the opaque
+copies are already in place. Take a database backup and a key export (or enroll a recovery recipient) before you
+start; the migration refuses to start without recovery material that doesn't depend on this server. Delete nothing in
+the bucket by hand: the cleanup deletes exactly the versions the migration copied and verified.
 
 Hardware TPM-sealed material is tied to the original TPM context. For host replacement, exported vault keys and internal secrets are the portable recovery material: after restoring the database on the new host, deal with the internal secrets only the old host master opened ([A Lost Host Master](/vaults/secrets-and-key-export#a-lost-host-master)): put the MFA keys back from their exports with `vh secret set mfa-seal` and `vh secret set mfa-pepper` (no one enrolls TOTP again), or give them up; the share-link pepper is always given up. Then `vh vault keys import` re-seals each vault's keys under the new host's TPM (see [Restore Vault Keys](/vaults/secrets-and-key-export#restore-vault-keys)). The exports' attestations stay valid there: they are checked against public keys kept in the restored database, so take exports from a current Vaulthalla (older exports carry none and can only be salvaged). Plan migration and restore testing before a hardware failure.
 

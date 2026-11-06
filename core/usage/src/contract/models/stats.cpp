@@ -401,6 +401,19 @@ std::vector<WsModel> statsSystemModels() {
              .desc("Self-hosted vaults that encrypt upstream without recovery material independent of this host (spec "
                    "03 §5.5, D2): no recovery recipient whose envelopes cover every needed key version and no export "
                    "of the current key version. Any entry makes the node at least degraded."),
+         object("legacy_content", "",
+                {boolean("remaining").desc("Any legacy-format content left on this host: the next release's install "
+                                           "floor refuses an upgrade while true."),
+                 intArray("path_v0_vaults").desc("Encrypting S3 vaults still on path_v0 (vh vault migrate-layout)."),
+                 intArray("layout_migrations_unfinished")
+                     .desc("Vaults cut over to opaque_v1 whose path-named objects are not all gone yet."),
+                 statsUint("legacy_files").desc("Live files still in the legacy (gcm0) format."),
+                 statsUint("legacy_blobs").desc("Recovery blobs still in the legacy format."),
+                 statsUint("legacy_upload_files").desc("Unfinished resumable uploads begun in the legacy format.")})
+             .opt()
+             .nullable()
+             .desc("Legacy-format content (#373/#376). null when the database could not be asked. Never degrades "
+                   "health by itself."),
          object("summary", "",
                 {statsUint("services_ready"), statsUint("services_total"), statsUint("deps_ready"),
                  statsUint("deps_total"), statsUint("protocols_ready"), statsUint("protocols_total"),

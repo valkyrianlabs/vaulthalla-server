@@ -79,8 +79,9 @@ buckets it created. Other providers: plain storage, but protection locks still a
 - `s3` bindings are upserted per vault (`ON CONFLICT (vault_id)`); a key+bucket pair of another vault is refused.
 - `s3.storage_layout` (migration 122, #366; design/encryption/01 §4.6) is internal: `transparent` ⇔
   `encrypt_upstream=false`, `path_v0`/`opaque_v1` ⇔ `true` (`s3_storage_layout_check`). `Vault::upsertVault` resolves
-  it (`resolveStorageLayout`), never a request; `opaque_v1` only in test mode until the restore drill (#371), and an
-  `opaque_v1` vault's encryption can't be toggled until the layout migration exists. `vault.uid` and
+  it (`resolveStorageLayout`), never a request; `opaque_v1` for every new encrypting vault since #371; an `opaque_v1`
+  vault's encryption can't be turned off, and `encrypt_upstream` can't change while a layout migration copies.
+  Existing path_v0 vaults move with `vh vault migrate-layout` (#373, architecture.md). `vault.uid` and
   `files.object_uid` are 16 libsodium bytes (`crypto::id::ObjectUid`), assigned once (immutable by trigger): new rows
   in `upsertVault`/`File::upsertFile` (a rewritten inode keeps its uid; copies clear it first), existing rows by the
   deployer data step for 122 (`SqlDeployer` `kMigrationDataSteps`). Nothing in the data plane reads them yet (#369).

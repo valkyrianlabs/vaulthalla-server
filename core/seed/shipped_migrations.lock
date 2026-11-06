@@ -84,3 +84,4 @@ current    6ccd823ef86d85f18c10d605bc86d81d9e908b1140654aafc7b6054cabccff5f  129
 current    deeeaa0d99c8ad7a9eaafced7d8d9d30e4578ce0e658cbfb697dc4277b051569  130_key_backup_grants.sql  unreleased
 current    ee437d225eae46d7eca18058b216acebf58696ef77d73c99df694320868c163f  131_vault_key_origin.sql  unreleased
 current    61acbd9dbd547a399e29e9915d54005ad550230f64cd639f56428e2f1e7f9b8b  132_secret_exports.sql  unreleased
+current    75fbfd2ea2ea4d9d17f237151d42c752b32f1216950ff75fdc22f8d6f9691c1b  133_layout_migration.sql  unreleased

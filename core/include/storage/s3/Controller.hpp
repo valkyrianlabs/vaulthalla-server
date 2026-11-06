@@ -110,12 +110,6 @@ namespace vh::storage::s3 {
     // Receives the body in order; throwing aborts the transfer (the exception propagates from streamObject).
     using BodySink = std::function<void(std::span<const uint8_t>)>;
 
-    // One ListObjectsV2 page (Controller::listObjectKeysPage).
-    struct ObjectKeyPage {
-        std::vector<std::string> keys;
-        std::string next_continuation_token;   // empty on the last page
-    };
-
     // ---- provider object versions (file recovery, .claude/context/recovery.md) ------------------------------------
 
     // One entry of ListObjectVersions: an object version or a delete marker. Values are as the provider reports
@@ -138,6 +132,15 @@ namespace vh::storage::s3 {
         bool truncated{};
     };
 
+    // One ListObjectsV2 page (Controller::listObjectKeysPage).
+    struct ObjectKeyPage {
+        std::vector<std::string> keys;
+        // The same entries with what the listing says about them (key, etag as sent, size, last_modified,
+        // storage_class); version_id is empty and is_latest true (an unversioned listing names no versions).
+        std::vector<ObjectVersionInfo> objects;
+        std::string next_continuation_token;   // empty on the last page
+    };
+
     // HEAD ?versionId= of one version (metadata only, no body).
     struct ObjectVersionHead {
         std::string version_id, etag;               // etag as sent (quoted)
@@ -148,6 +151,27 @@ namespace vh::storage::s3 {
         // x-amz-meta-* user metadata: names lower-cased with the prefix stripped (vh-iv, vh-key-version,
         // vh-encrypted, content-hash, ...).
         std::unordered_map<std::string, std::string> metadata;
+        // Object Lock (sent only when the caller may read them: s3:GetObjectRetention / s3:GetObjectLegalHold).
+        // object_lock_mode GOVERNANCE | COMPLIANCE with retain_until; legal_hold ON. A version under either can't
+        // be deleted before the date (or while the hold is on); Vaulthalla never bypasses governance retention.
+        std::optional<std::string> object_lock_mode;
+        std::optional<std::time_t> retain_until;
+        bool legal_hold{false};
+    };
+
+    // A DELETE the provider refused for this object or version (HTTP 403/409/400 with an S3 error code, e.g.
+    // AccessDenied for a version under Object Lock retention or a legal hold, or a permission the key lacks). Nothing
+    // was deleted. Transport failures and 5xx are std::runtime_error (retryable) instead.
+    class DeleteRefused final : public std::runtime_error {
+    public:
+        DeleteRefused(const std::string& message, std::string code, const long status)
+            : std::runtime_error(message), code_(std::move(code)), status_(status) {}
+        [[nodiscard]] const std::string& code() const noexcept { return code_; }
+        [[nodiscard]] long status() const noexcept { return status_; }
+
+    private:
+        std::string code_;
+        long status_{};
     };
 
     // What a CopyObject produced: the new object's ETag (quoted, from the CopyObjectResult body) and, on a versioned
@@ -175,7 +199,7 @@ namespace vh::storage::s3 {
         explicit OpaqueRequestRefused(const std::string& message) : std::logic_error(message) {}
     };
 
-    enum class RequestOp { Put, Get, Head, Delete, List, ListVersions, HeadVersion, Copy, MetadataRewrite };
+    enum class RequestOp { Put, Get, Head, Delete, List, ListVersions, HeadVersion, Copy, MetadataRewrite, DeleteVersion };
 
     // Lets the calling thread GET/HEAD keys outside the opaque_v1 allowlist while it lives: only the explicit import
     // of a foreign object (foreign_objects = import, spec 01 §4.4) reads one. Writes stay refused.
@@ -185,6 +209,23 @@ namespace vh::storage::s3 {
         ~ScopedForeignObjectRead();
         ScopedForeignObjectRead(const ScopedForeignObjectRead&) = delete;
         ScopedForeignObjectRead& operator=(const ScopedForeignObjectRead&) = delete;
+        [[nodiscard]] static bool active() noexcept;
+
+    private:
+        bool previous_;
+    };
+
+    // The bucket layout migration (#373, vault/LayoutMigration.hpp) on the calling thread while it lives: once a vault
+    // is opaque_v1 its controller refuses every legacy (path) key, but the migration's cleanup still has to read the
+    // Object Lock state of exactly the legacy versions it inventoried (HEAD ?versionId=) and delete them by version id
+    // (or, on an unversioned bucket, HEAD and DELETE the key). Only those four operations are let through, with no
+    // metadata; writes (PUT, COPY, rewrites) of a legacy key stay refused.
+    class ScopedLegacyLayoutCleanup {
+    public:
+        ScopedLegacyLayoutCleanup() noexcept;
+        ~ScopedLegacyLayoutCleanup();
+        ScopedLegacyLayoutCleanup(const ScopedLegacyLayoutCleanup&) = delete;
+        ScopedLegacyLayoutCleanup& operator=(const ScopedLegacyLayoutCleanup&) = delete;
         [[nodiscard]] static bool active() noexcept;
 
     private:
@@ -369,6 +410,12 @@ namespace vh::storage::s3 {
         // never mistaken for absence. Sets lastHeadOutcome like getHeadObject.
         [[nodiscard]] virtual std::optional<ObjectVersionHead> headObjectVersion(const std::string &key,
                                                                                  const std::string &versionId) const;
+
+        // One metered DELETE ?versionId= (permanently removes that version or delete marker; never adds a marker).
+        // A 204 for a version that is already gone counts as done (S3 answers it that way). Throws DeleteRefused for
+        // a refusal (Object Lock retention, legal hold, a missing permission: nothing deleted, never retried as if
+        // it might pass), std::runtime_error for transport failures and 5xx. Governance bypass is never sent.
+        virtual void deleteObjectVersion(const std::string &key, const std::string &versionId) const;
 
         // One metered CopyObject of sourceKey@sourceVersionId onto destKey in this bucket, with directive COPY: the
         // source's user metadata (vh-iv, vh-key-version, vh-encrypted, content-hash) carries over unchanged; only

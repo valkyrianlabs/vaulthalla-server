@@ -128,14 +128,14 @@ bucket: choosing `off`/`local_snapshots` does not suspend a bucket that is versi
   and by `evictIdleHistoricalKeys(now)` for every engine from `VaultRetentionService`'s 30 s loop, so an idle key
   leaves memory without a later access; outstanding snapshots stay valid until released) throws `vault::KeyVersionUnavailable` for a version the vault
   doesn't hold (incl. 0). `retainedKeyVersions()`, `hasKeyVersion(v)`, `referencedHistoricalKeys()` (export).
-  `resealFileToCurrent(src, iv, v, dst, f)` / `resealToCurrent(buf, …)` over `crypto::util::resealFile` /
-  `resealBuffer` (`crypto/util/reseal.hpp`, 64 KiB chunks, `GcmStreamDecryptor` → `GcmStreamEncryptor`): a source
-  that fails authentication throws `storage::IntegrityError` and dst is removed (whatever it held). The plaintext
-  buffer (unauthenticated until the tag verifies) is wiped on every path, success or failure (`WipeOnExit`; tests
-  observe it through `setPlaintextWipeObserverForTesting`). An empty
-  generation (empty IV, version 0, zero bytes) re-seals to an empty dst with empty IV/version 0 (how every empty file
-  is stored); a non-empty source with an empty IV is plaintext and refused (`std::invalid_argument`). Same-version
-  re-seal still draws a fresh IV (reuse the bytes instead if that is wanted).
+  `resealFileToCurrent(src, iv, v, dst, f)` / `resealToCurrent(buf, …)` over `vault::content::resealFile` (any
+  format in, a new VHF1 generation out, streaming): a source that fails authentication throws
+  `storage::IntegrityError` and dst is removed (whatever it held). An empty generation (empty IV, version 0, zero
+  bytes) re-seals to an empty dst with empty IV/version 0 (how every empty file is stored); a non-empty source with an
+  empty IV is plaintext and refused (`std::invalid_argument`). The legacy GCM-to-GCM re-sealer
+  (`crypto/util/reseal.hpp`) and the legacy file verifier (`crypto/util/verify.hpp`) had no callers left and were
+  removed with the layout migration (#373/#376); legacy content is only read now (`GcmFileReader`,
+  `content::openFileTo`, `crypto::util::gcmVerifyFd`).
 - Key export (`vh vault keys export`, ws `vault.keys.export`; `ops::vault_keys`, `key-backup.md`) adds, per vault,
   `historical_keys: [{key_version, key (base64), key_check, reason, created_at, retired_at}]` for every other needed
   version: the retired versions `recovery_blob` / live `upstream_object_version` rows reference (`recovery`) and an

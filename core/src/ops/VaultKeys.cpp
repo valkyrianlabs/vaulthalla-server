@@ -10,7 +10,6 @@
 #include "crypto/secrets/Dependents.hpp"
 #include "crypto/util/Gcm.hpp"
 #include "crypto/util/encrypt.hpp"
-#include "crypto/util/verify.hpp"
 #include "fs/model/File.hpp"
 #include "db/encoding/timestamp.hpp"
 #include "db/query/vault/Deletion.hpp"

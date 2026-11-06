@@ -258,6 +258,7 @@ sudo tools/harness/vhh.sh regress --build build                    # every tools
 sudo tools/harness/vhh.sh scenario hang|crash --build build        # daemon stopped/killed with a FUSE op in flight
 sudo tools/harness/vhh.sh drill recover --build build [--files 2000] # spec 03 §7 restore drill (#371), fake S3
 sudo tools/harness/drill_recover_r2.sh --build build --files 300    # the same drill on live R2 (vh-test-recover-drill)
+sudo tools/harness/vhh.sh drill migrate --build build --files 300    # layout migration path_v0 -> opaque_v1 (#373)
 tools/harness/vhh.sh world oracle-check                            # RBAC model vs the fixture's 59 expectations
 bash tools/dev/verify.sh harness                                   # unit + self tests (CI tooling job)
 ```
@@ -298,6 +299,14 @@ bash tools/dev/verify.sh harness                                   # unit + self
   logs every request (`content_downloads` = GETs of `o/` beyond 120 bytes) and has a `/__vhh/` side channel
   (snapshot/restore, delete, purge, raw put/get, versioning) for the negative drills. API keys reach the daemons as
   socket frames (`Node.frame`), never argv. Report JSON per run; kits and exports are deleted unless `--keep`.
+- Layout migration drill (#373): `vhh/drill_migrate.py` (`vhh drill migrate`, fake S3 with versioning only). One
+  private instance with `VH_TEST_NEW_ENCRYPTING_LAYOUT=path_v0` (test mode only: new encrypting vaults on the legacy
+  layout) writes a tree, overwrites and deletes (history, a delete marker), then `vh vault migrate-layout` starts while
+  a sync pass runs and a writer keeps writing through FUSE; checks the cutover, the bucket-only manifest check, that
+  nothing legacy was deleted, the tree (before + the writer's files), the cleanup refused before the waiting period,
+  then (cleanup_after moved in the instance's database) complete with no path-named key left. DB-backed unit suite
+  `LayoutMigration*` (`test_layout_migration.cpp`: the VersionedBucket fake with `md5Etags`, `lockVersion`,
+  `setLegalHold`, `refuseDeletes`, `tamper`, injected faults; crash resume via `RunDeps::afterStep`).
 - Lessons: the engine never touches the mount itself (a `Path.resolve()` blocked it in D state under a stopped
   daemon); `Instance.watchdog()` aborts the run's own FUSE connection past a hard deadline.
 - Never point mutating commands at vh-storage: targets are validated (a live `VH_TEST_MODE=1` daemon serving a
@@ -479,7 +488,9 @@ Two hard rules, enforced by `tests/helpers/live_bucket.hpp` (the only way a test
   is a non-destructive 409, versioning refused without a request), `DataPlaneRoundTrip` (put with metadata and a
   unicode key, get, ranged get, head, paged list, delete, multipart complete and abort),
   `CleanupRemovesObjectsAndOpenUploads`, `EventNotificationsOnTheRunBucket` (queue named like the bucket, rule on the
-  test's prefix; rule and queue removed even on failure). Everything else stays with the fakes: bucket admin and
+  test's prefix; rule and queue removed even on failure), `LayoutMigrationPrimitives` (#373: the strict listing's
+  fields, a re-sealed object's ETag equals `vault::layout::s3EtagOf` for single and multipart PUTs so R2 needs no
+  read-back, and an opaque_v1 controller reaches a legacy key only for the cleanup's HEAD/DELETE). Everything else stays with the fakes: bucket admin and
   events through the real adapters over the `curl::http` transport seam (`UpstreamProviderTest`), the admin and event
   fakes (`UpstreamOps*`, `UpstreamEvent*`, `UpstreamParity*`, `RecoveryPolicyTest`), recovery (`RecoverySmartCacheTest`,
   `RecoveryProviderTest`), listing edge cases (`S3ListObjects*`, `S3VersionedOps*`).

@@ -88,8 +88,14 @@ namespace {
         const auto layout = vh::vault::model::storageLayoutFromString(row["storage_layout"].as<std::string>());
         if (row["encrypt_upstream"].as<bool>() == s3.encrypt_upstream) return layout;
         if (layout == StorageLayout::OpaqueV1)
-            throw std::invalid_argument("upstream encryption of an opaque_v1 vault can't be turned off before the layout "
-                                        "migration supports it");
+            throw std::invalid_argument("an opaque_v1 vault always encrypts upstream: its objects are opaque o/<uid> "
+                                        "keys sealed under the vault key");
+        // The bucket layout migration (#373) re-seals this vault's objects under its key: the setting it runs for
+        // can't change underneath it.
+        if (!txn.exec("SELECT 1 FROM vault_layout_migration WHERE vault_id = $1 AND state IN ('copying', 'verifying')",
+                      pqxx::params{vaultId}).empty())
+            throw std::invalid_argument("the vault's bucket layout migration is running; upstream encryption can't "
+                                        "change until it has finished");
         return vh::vault::model::layoutFor(s3.encrypt_upstream);
     }
 }

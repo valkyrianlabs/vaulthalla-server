@@ -14,7 +14,7 @@
 - **New encrypting S3/R2 vaults use opaque storage.** Your storage provider only ever sees encrypted, opaquely named
   objects. It can't see your file names, folders or contents. It can see how many objects you store, their sizes and
   when they change. Vaults created before this release keep their current layout (names visible to the provider) until
-  a later release migrates them; nothing changes for them now.
+  you migrate them with `vh vault migrate-layout` (below); nothing changes for them on upgrade.
 - Pin each vault in your kit (`vh vault keys status <vault> --json`, then `vh-recovery kit add-vault`) and refresh it
   after a restore: the restored server signs the key versions it creates with its own key.
 

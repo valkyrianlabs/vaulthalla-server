@@ -159,6 +159,46 @@ std::vector<WsCommandUsage> vaultKeyCommands() {
     });
 
     out.push_back({
+        .command = "vault.layout.status",
+        .description = "The vault's bucket layout and its migration path_v0 -> opaque_v1 (#373): state, the cost "
+                       "estimate and usage, inventory counts, and every legacy version that stays in the bucket with "
+                       "its reason. The encryption-key View permission.",
+        .payload = {vaultId()},
+        .response = modelFields("VaultLayoutStatus"),
+        .refusal_codes = opsRefusals(),
+        .response_model = "VaultLayoutStatus",
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "vault.layout.migrate",
+        .description = "Start (or resume after a failure) the vault's bucket layout migration path_v0 -> opaque_v1: it "
+                       "runs in the background (vault.layout.status follows it). Refused (conflict) when the vault "
+                       "can't migrate now (not an encrypting S3 vault on path_v0, a rotation or salvage, a key version "
+                       "not held, no recovery material, a protected bucket) or already migrates. With a keys step-up "
+                       "bound to the vault (#359); the encryption-key Rotate permission.",
+        .payload = {vaultId(), boolean("accept_unpriced").opt().desc("Start even when the cost can't be priced.")},
+        .response = modelFields("VaultLayoutStatus"),
+        .refusal_codes = opsRefusals(),
+        .response_model = "VaultLayoutStatus",
+        .client_timeout = std::chrono::milliseconds(60'000),
+    });
+
+    out.push_back({
+        .command = "vault.layout.cleanup",
+        .description = "After the cutover and its waiting period: the legacy (path-named) objects a cleanup would "
+                       "delete by version id, and those that stay (a dry run without confirm). With confirm set to the "
+                       "vault's name the cleanup is confirmed and runs in the background (a data.destroy step-up bound "
+                       "to the vault, #359). Never on a protected bucket, never a version under Object Lock retention "
+                       "or a legal hold. The encryption-key Rotate permission.",
+        .payload = {vaultId(), str("confirm").opt().nullable().desc("The vault's name: delete what the dry run lists.")},
+        .response = modelFields("VaultLayoutCleanup"),
+        .refusal_codes = opsRefusals(),
+        .response_model = "VaultLayoutCleanup",
+        .client_timeout = std::chrono::milliseconds(300'000),
+    });
+
+    out.push_back({
         .command = "vault.keys.recipients.list",
         .description = "The vault's recovery recipients (spec 03 §5; #370): customer-held X25519 public keys every key "
                        "version is wrapped to (KEV1 envelopes in the vault's own bucket), revoked ones included, with "

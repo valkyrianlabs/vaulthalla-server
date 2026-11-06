@@ -11,6 +11,7 @@
 #include "runtime/Deps.hpp"
 #include "runtime/Manager.hpp"
 #include "storage/Manager.hpp"
+#include "db/query/vault/LayoutMigration.hpp"
 #include "db/query/vault/Vault.hpp"
 #include "log/Registry.hpp"
 #include "vault/RecoveryEnvelopes.hpp"
@@ -244,6 +245,17 @@ SystemHealth SystemHealth::snapshot() {
         } catch (const std::exception& e) {
             log::Registry::vaulthalla()->warn("[SystemHealth] recovery material check failed: {}", e.what());
         }
+        try {
+            const auto legacy = db::query::vault::LayoutMigration::legacySummary();
+            out.legacyContent = LegacyContentHealth{.remaining = legacy.remaining(),
+                                                    .pathV0Vaults = legacy.path_v0_vaults,
+                                                    .layoutMigrationsUnfinished = legacy.migrations_unfinished,
+                                                    .legacyFiles = legacy.legacy_files,
+                                                    .legacyBlobs = legacy.legacy_blobs,
+                                                    .legacyUploadFiles = legacy.legacy_upload_files};
+        } catch (const std::exception& e) {
+            log::Registry::vaulthalla()->warn("[SystemHealth] legacy content check failed: {}", e.what());
+        }
     }
 
     const auto [protocolsReady, protocolsTotal] = protocolReadySummary(out.protocols, out.s3Gateway);
@@ -403,6 +415,17 @@ void to_json(nlohmann::json& j, const VaultRecoveryMaterialHealth& health) {
     };
 }
 
+void to_json(nlohmann::json& j, const LegacyContentHealth& health) {
+    j = nlohmann::json{
+        {"remaining", health.remaining},
+        {"path_v0_vaults", health.pathV0Vaults},
+        {"layout_migrations_unfinished", health.layoutMigrationsUnfinished},
+        {"legacy_files", health.legacyFiles},
+        {"legacy_blobs", health.legacyBlobs},
+        {"legacy_upload_files", health.legacyUploadFiles},
+    };
+}
+
 void to_json(nlohmann::json& j, const SystemHealth& health) {
     j = nlohmann::json{
         {"overall_status", to_string(health.overallStatus)},
@@ -414,6 +437,7 @@ void to_json(nlohmann::json& j, const SystemHealth& health) {
         {"database", health.database ? nlohmann::json(*health.database) : nlohmann::json(nullptr)},
         {"vaults_unavailable", health.vaultsUnavailable},
         {"vaults_recovery_material_missing", health.vaultsRecoveryMaterialMissing},
+        {"legacy_content", health.legacyContent ? nlohmann::json(*health.legacyContent) : nlohmann::json(nullptr)},
         {"summary", health.summary},
     };
 }

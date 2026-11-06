@@ -2,7 +2,6 @@
 #include "fs/Filesystem.hpp"
 
 #include "crypto/util/encrypt.hpp"
-#include "crypto/util/verify.hpp"
 #include "db/query/fs/File.hpp"
 #include "db/query/sync/RemoteObjectIndex.hpp"
 #include "fs/cache/Registry.hpp"

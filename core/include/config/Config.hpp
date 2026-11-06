@@ -292,6 +292,12 @@ struct VaultsFormatConversionConfig {
     std::chrono::seconds pass_interval = std::chrono::minutes(10);      // between passes over the vaults
 };
 
+// vaults.layout_migration.*: the bucket layout migration path_v0 -> opaque_v1 (#373, vault/LayoutMigration.hpp). Read
+// from config.yaml, not the settings API. A migration records the waiting period it started with.
+struct VaultsLayoutMigrationConfig {
+    uint32_t cleanup_wait_days = 7;   // 1..365: legacy objects stay untouched this long after the cutover
+};
+
 // vaults.* retention (#162). Durations are config duration strings ("30s", "5m", "12h", "90d", "2w"; util.hpp). A
 // window applies to vaults deleted after it changes: each deletion records its own purge and key-retention deadlines.
 struct VaultsConfig {
@@ -301,6 +307,7 @@ struct VaultsConfig {
     std::chrono::seconds tpm_retention_window = std::chrono::days(90);
     VaultsS3Config s3;
     VaultsFormatConversionConfig format_conversion;
+    VaultsLayoutMigrationConfig layout_migration;
 };
 
 enum class EmailProviderKind {

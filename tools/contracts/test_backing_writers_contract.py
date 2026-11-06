@@ -62,8 +62,6 @@ ALLOWED: dict[tuple[str, str], tuple[int, str]] = {
     ("core/src/config/Config.cpp", "ofstream"): (1, "writes the YAML config file"),
     ("core/src/crypto/ScratchFile.cpp", "pwrite"): (1, "writes encrypted blocks of a scratch file (FUSE working copy, upload staging) it created exclusively under the state directory, never a backing path"),
     ("core/src/crypto/ScratchFile.cpp", "truncate"): (1, "shrinks its own scratch file, never a backing path"),
-    ("core/src/crypto/util/reseal.cpp", "o_trunc"): (1, "resealFile dst: callers pass a content sidecar or a fresh temp, renamed over the backing file"),
-    ("core/src/crypto/util/reseal.cpp", "write_open"): (1, "same open as above"),
     ("core/src/fs/file/ops.cpp", "o_trunc"): (1, "writeFileAtomic writes its own private O_EXCL temp before the rename"),
     ("core/src/fs/file/ops.cpp", "write_open"): (2, "the writeFileAtomic open above, and fsyncOpened (fsyncFile / fsyncDirectory pass O_RDONLY [| O_DIRECTORY])"),
     ("core/src/fs/Filesystem.cpp", "copy_overwrite"): (1, "copyBackingBytes copies into replaceFileAtomic's own private temp, renamed over the destination"),
