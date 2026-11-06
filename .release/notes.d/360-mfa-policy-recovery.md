@@ -15,9 +15,9 @@
   server, `vh user mfa reset <user>` does the same, run as the Linux user bound to your own account or to one allowed
   to reset the target's password, never with `sudo`: it is the way back in for a sole super admin who lost every factor.
   A reset disables the account's passkeys and authenticator apps, voids its recovery codes, signs every session out
-  and pauses its paired devices' automatic key backup (the devices stay paired and keep syncing). The account sets up a
+  and revokes its paired devices' key-backup grants (the devices stay paired and keep syncing). The account sets up a
   new factor at its next sign-in. A password reset never touches factors.
-- **Signing in with a recovery code** now also pauses the automatic key backup of your paired devices, and lists them
+- **Signing in with a recovery code** now also revokes the key-backup grants of your paired devices, and lists them
   in **Account › Security** so you can revoke any you lost (nothing is revoked for you). Every other browser is still
   signed out.
 - **Recovery cooldown:** for 24 hours after a recovery-code sign-in or an MFA reset (`auth.mfa.recovery_cooldown_hours`,

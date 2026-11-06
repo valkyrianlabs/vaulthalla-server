@@ -7,7 +7,34 @@ Format: the first line is "# <release title>" WITHOUT a version number (vlr adds
 Everything after the title is the Markdown release body. Describe the resulting behavior
 for users and operators; keep it representative of what actually ships.
 -->
-# Large uploads to S3 and R2 no longer fail silently
+# MFA for administrators, step-up confirmation, opaque S3 storage and customer-held recovery
+
+## Before you upgrade
+
+- **Administrators must use a second factor.** Under the default `admins` policy, the super admin and every account
+  whose role can change accounts, roles, settings or encryption keys must sign in with a passkey or an authenticator
+  app. Their password-only sessions end at the first request after the upgrade, and the next sign-in walks them
+  through setting one up. Passkeys need the console on a host name, not an IP address; an authenticator app works
+  anywhere. Keep the recovery codes it shows you.
+- **Sensitive actions ask you to confirm again.** Key export and import, account and role changes, secrets,
+  settings and destructive actions need a fresh passkey or password-and-code confirmation in the console. `vh` on the
+  server itself is unaffected.
+- **Vaulthalla Desktop:** already-paired Macs keep syncing and backing up keys without prompts. Key import and vault
+  removal started from Desktop are refused until Desktop supports device approvals; do them in the console or with
+  `vh`.
+- **Health may show `recovery_material_missing`.** An encrypted S3/R2 vault without a recovery recipient or a
+  current key export now marks the node degraded until you add one (`vh vault keys recipient add`) or export its
+  keys (`vh vault keys export`).
+- **New encrypting S3/R2 vaults use the opaque layout** (no file names, paths or metadata visible to the provider).
+  Existing vaults keep their layout until the migration in a later release.
+- **Local content converts in the background** to the authenticated VHF1 format after the upgrade, rate-limited;
+  `vh vault format status all` shows progress.
+- **Back up before upgrading,** as always: this release adds database migrations 117 to 131. To restore onto a new
+  host later, keep the state directory or the exports from `vh secret export` (including `mfa-seal` and
+  `mfa-pepper`).
+
+## Also in this release
+
 
 - Uploading a file of 5 MiB or more to an S3 or R2 vault could fail partway (a timeout, a SlowDown, a dropped
   connection) and still be treated as uploaded. Vaulthalla cancelled the incomplete upload at the provider but then
