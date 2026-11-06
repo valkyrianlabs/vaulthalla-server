@@ -5,6 +5,7 @@
 
 #include "../helpers/recovery_provider_harness.hpp"
 #include "sync/model/RemoteManifest.hpp"
+#include "vault/Content.hpp"
 
 #include <gtest/gtest.h>
 
@@ -134,7 +135,7 @@ TEST_F(RecoverySmartCacheTest, HistoryStaysUpstreamAndARestoreIsOneCopyWithNoSec
     const auto summary = db::query::recovery::ObjectVersion::noncurrentSummary(f.vault->id);
     EXPECT_EQ(summary.versions, contents.size());
     const uint64_t expectedBytes = std::accumulate(contents.begin(), contents.end(), uint64_t{0},
-                                                   [](const uint64_t acc, const std::string& c) { return acc + c.size() + 16; });
+                                                   [](const uint64_t acc, const std::string& c) { return acc + vh::vault::content::newSealedSize(c.size()); });
     EXPECT_EQ(summary.bytes, expectedBytes);
     EXPECT_EQ(summary.unknown_size, 0u);
     EXPECT_EQ(summary.delete_markers, 0u);

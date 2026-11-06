@@ -80,6 +80,13 @@ void spit(const stdfs::path& path, const Bytes& bytes) {
 
 Bytes bytesOf(const crypto::SecretKeyPtr& key) { return {key->bytes().begin(), key->bytes().end()}; }
 
+// What a recovery read of an EncryptionManager-sealed (VHF1) generation does with a historical key.
+Bytes openWith(const EncryptionManager& em, const Bytes& sealed, const std::string& generation,
+               const unsigned int version, const crypto::SecretKeyPtr& key) {
+    return vault::content::openBuffer(sealed, {.vaultUid = em.vaultUid(), .generation = generation, .keyVersion = version},
+                                      *key);
+}
+
 // Seals plaintext under key the way every vault write does; returns the sealed bytes and the IV (base64).
 std::pair<Bytes, std::string> seal(const Bytes& plaintext, const Bytes& key) {
     Bytes iv;
@@ -462,10 +469,8 @@ TEST_F(RecoveryKeysDbTest, FinishedRotationsKeepEveryRetainedVersionDecryptable)
 
     // Live reads refuse retired versions; recovery reads find them.
     EXPECT_THROW((void)v.em->decrypt(sealed1, f1->encryption_iv, first), std::runtime_error);
-    EXPECT_EQ(cu::decrypt_aes256_gcm(sealed1, bytesOf(v.em->historicalKeySnapshot(first)),
-                                     cu::b64_decode(f1->encryption_iv)), plain1);
-    EXPECT_EQ(cu::decrypt_aes256_gcm(sealed2, bytesOf(v.em->historicalKeySnapshot(first + 1)),
-                                     cu::b64_decode(f2->encryption_iv)), plain2);
+    EXPECT_EQ(openWith(*v.em, sealed1, f1->encryption_iv, first, v.em->historicalKeySnapshot(first)), plain1);
+    EXPECT_EQ(openWith(*v.em, sealed2, f2->encryption_iv, first + 1, v.em->historicalKeySnapshot(first + 1)), plain2);
     // Cached: the same unsealed key object comes back while it is in use.
     EXPECT_EQ(v.em->historicalKeySnapshot(first), v.em->historicalKeySnapshot(first));
 
@@ -516,8 +521,7 @@ TEST_F(RecoveryKeysDbTest, AnInterruptedRotationServesBothVersionsAndSurvivesARe
 
     v.em->finish_key_rotation();
     EXPECT_THROW((void)v.em->keySnapshot(first), std::runtime_error);
-    EXPECT_EQ(cu::decrypt_aes256_gcm(sealed, bytesOf(v.em->historicalKeySnapshot(first)),
-                                     cu::b64_decode(f->encryption_iv)), plain);
+    EXPECT_EQ(openWith(*v.em, sealed, f->encryption_iv, first, v.em->historicalKeySnapshot(first)), plain);
 }
 
 TEST_F(RecoveryKeysDbTest, HistoricalSnapshotsStayValidWhileRotationFinishes) {
@@ -536,7 +540,7 @@ TEST_F(RecoveryKeysDbTest, HistoricalSnapshotsStayValidWhileRotationFinishes) {
             while (!stop.load()) {
                 try {
                     const auto key = v.em->historicalKeySnapshot(first);
-                    if (cu::decrypt_aes256_gcm(sealed, bytesOf(key), cu::b64_decode(f->encryption_iv)) != plain)
+                    if (openWith(*v.em, sealed, f->encryption_iv, first, key) != plain)
                         failures.fetch_add(1);
                 } catch (const std::exception&) {
                     failures.fetch_add(1);

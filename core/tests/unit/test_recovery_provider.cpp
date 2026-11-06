@@ -15,6 +15,7 @@
 #include "sync/events/Event.hpp"
 #include "sync/events/Ingest.hpp"
 #include "sync/events/Subscriptions.hpp"
+#include "vault/Content.hpp"
 
 #include <gtest/gtest.h>
 
@@ -24,7 +25,6 @@ using namespace test_support::recovery_provider;
 namespace rp = recovery::provider;
 using recovery::ItemAction;
 
-constexpr uint64_t kTag = 16;
 
 class RecoveryProviderTest : public ProviderHarness {
 protected:
@@ -71,7 +71,7 @@ TEST_F(RecoveryProviderTest, OwnWritesIndexEachVersionWithItsIvAndKey) {
     EXPECT_FALSE(older.is_latest);
     EXPECT_TRUE(older.became_noncurrent_at.has_value());
     EXPECT_EQ(older.plaintext_bytes, 5u);
-    EXPECT_EQ(older.size_bytes, 5u + kTag);
+    EXPECT_EQ(older.size_bytes, vh::vault::content::newSealedSize(5));
     EXPECT_EQ(older.encrypted, true);
     EXPECT_EQ(older.key_version, keyVersion);
     ASSERT_TRUE(older.encryption_iv.has_value());
