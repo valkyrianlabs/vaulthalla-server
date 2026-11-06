@@ -2,6 +2,7 @@
 
 #include "db/Rows.hpp"
 #include "db/Transactions.hpp"
+#include "db/encoding/bytea.hpp"
 #include "ops/Error.hpp"
 
 #include <pqxx/pqxx>
@@ -114,6 +115,16 @@ Device Devices::insert(const NewDevice& d) {
                 "VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, '')) RETURNING id",
                 pqxx::params{d.user_id, d.approved_by, d.name, d.platform, d.app_version, d.spki_sha256, d.last_ip});
             const auto id = res.one_field_ref().as<uint32_t>();
+            if (d.approval_key_spki) {
+                // A key no device has as its own (an approval key is a second key, never the mTLS one).
+                if (!txn.exec("SELECT 1 FROM devices WHERE spki_sha256 = $1 OR previous_spki_sha256 = $1",
+                              pqxx::params{d.approval_key_sha256})
+                         .empty())
+                    throw ops::Conflict("the approval key is already known to this node");
+                txn.exec("INSERT INTO device_approval_keys (device_id, public_key_spki, spki_sha256, registered_via) "
+                         "VALUES ($1, $2, $3, 'pairing')",
+                         pqxx::params{id, db::encoding::to_hex_bytea(*d.approval_key_spki), d.approval_key_sha256});
+            }
             const auto row = txn.exec(select("WHERE d.id = $1"), pqxx::params{id});
             return fromRow(row.one_row_ref());
         });
@@ -136,6 +147,8 @@ std::optional<Device> Devices::revoke(const uint32_t id) {
         // Both keys stay recorded: a revoked key can never be approved again (spec §6).
         txn.exec("UPDATE devices SET revoked_at = CURRENT_TIMESTAMP WHERE id = $1 AND revoked_at IS NULL",
                  pqxx::params{id});
+        txn.exec("UPDATE device_approval_keys SET revoked_at = NOW() WHERE device_id = $1 AND revoked_at IS NULL",
+                 pqxx::params{id});
         const auto res = txn.exec(select("WHERE d.id = $1"), pqxx::params{id});
         return one(res);
     });
@@ -143,6 +156,7 @@ std::optional<Device> Devices::revoke(const uint32_t id) {
 
 std::size_t Devices::revokeAll() {
     return Transactions::exec("Devices::revokeAll", [](pqxx::work& txn) {
+        txn.exec("UPDATE device_approval_keys SET revoked_at = NOW() WHERE revoked_at IS NULL");
         return static_cast<std::size_t>(
             txn.exec("UPDATE devices SET revoked_at = CURRENT_TIMESTAMP WHERE revoked_at IS NULL").affected_rows());
     });

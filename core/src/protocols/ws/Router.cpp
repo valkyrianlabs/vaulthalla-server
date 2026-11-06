@@ -241,7 +241,13 @@ bool Router::isDeviceOnlyCommand(const std::string_view command) {
     constexpr std::array commands{
         std::string_view{"device.identity.rotate"},
         std::string_view{"device.server.identity"},
-        std::string_view{"device.endpoints"}
+        std::string_view{"device.endpoints"},
+        // #361: a device asks for and answers approvals on its own session only.
+        std::string_view{"device.approval.challenge"},
+        std::string_view{"device.approval.submit"},
+        std::string_view{"device.approval.request"},
+        std::string_view{"device.approval.status"},
+        std::string_view{"device.approval.key.register"}
     };
     return containsCommand(commands, command);
 }
@@ -266,6 +272,9 @@ Router::CommandAuthDecision Router::classifyCommand(const std::string_view comma
         // unpaired (device.revoke).
         if (isSessionLifecycleCommand(command) && command != "auth.isAuthenticated") return CommandAuthDecision::Deny;
         if (command == "auth.register") return CommandAuthDecision::Deny;
+        // #361: a device never answers an approval request (its own or another device's): a person does, in the web
+        // console. (The handlers refuse it too.)
+        if (command.starts_with("auth.approval.")) return CommandAuthDecision::Deny;
         if (isPublicShareCommand(command) || isShareFilesystemCommand(command) || isShareDownloadCommand(command) ||
             isSharePreviewCommand(command) || isShareUploadCommand(command))
             return CommandAuthDecision::Deny;

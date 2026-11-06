@@ -340,7 +340,9 @@ TEST_F(StepUpDb, EveryAnnotatedCommandRefusesWithoutAGrantAndRunsWithOne) {
         {"vault.keys.recipients.revoke", "console: recipient_requires_device first; same gate as .add (an S3 vault and "
                                          "its bucket: test_recovery_recipients)"},
         {"device.remote.enable", "writes the daemon's config file: refusal in AStolenBrowserSessionCantApprove..."},
+        {"device.approval.key.register", "a paired device's own session: test_device_approvals_db.cpp"},
         {"settings.update", "writes the daemon's config file: refusal in AStolenBrowserSessionCantApprove..."},
+        {"email.config.update", "settings.update's email sections (ops::config::saveSettings): writes the config file"},
         {"auth.mfa.factor.remove", "covered by APasskeyStepUpIsBoundToItsSessionFamilyAndTarget"},
         {"auth.mfa.webauthn.register.options", "covered by APasskeyStepUpIsBoundToItsSessionFamilyAndTarget"},
         {"auth.mfa.webauthn.register.finish", "same handler gate as .options"},
@@ -622,7 +624,8 @@ TEST_F(StepUpDb, RecoveryCodesRefreshTokensAndDevicesNeverSatisfyIt) {
         EXPECT_THROW(require(Family::Settings), ops::StepUpRequired);
     }
 
-    // A paired device: refused with nothing to answer, can't begin one, and its key export is inside the backup grant.
+    // A paired device: refused (its connection is never a person's approval; it can ask for one in the console, #361),
+    // can't begin a web step-up, and its key export is inside the backup grant.
     auto peer = std::make_shared<vh::device::Peer>();
     peer->spki.fill(0x42);
     peer->spkiHex = vh::device::crypto::toHex(peer->spki);
@@ -640,7 +643,7 @@ TEST_F(StepUpDb, RecoveryCodesRefreshTokensAndDevicesNeverSatisfyIt) {
             require(Family::IdentityAdmin);
             ADD_FAILURE() << "a device stepped up";
         } catch (const ops::StepUpRequired& e) {
-            EXPECT_TRUE(e.methods.empty());
+            EXPECT_EQ(e.methods, std::vector<std::string>{"console_approval"});
         }
         EXPECT_TRUE(keyBackupGrantCovers(7)) << "Desktop's background backup never prompts (D1 until #362)";
     }

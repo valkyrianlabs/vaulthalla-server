@@ -2586,15 +2586,6 @@
           "types": [
             "boolean"
           ]
-        },
-        {
-          "description": "When the device's key-backup grant was revoked (a recovery-code sign-in or an MFA reset of its user): it stays paired and syncs, but its key exports need a person's approval again.",
-          "name": "key_backup_revoked_at",
-          "required": false,
-          "types": [
-            "integer",
-            "null"
-          ]
         }
       ],
       "name": "Device"
@@ -3894,47 +3885,8 @@
       "name": "LoggingConfig"
     },
     {
-      "description": "auth.mfa.* (Config.cpp to_json(MfaConfig), #359, #360): multi-factor authentication settings. Changing policy, the admin flags or auth.webauthn.rp_id is audited (auth.mfa.policy.change); weakening them is mailed to operator_emails.recipients.security.",
+      "description": "auth.mfa.* (Config.cpp to_json(MfaConfig), #359): multi-factor authentication settings.",
       "fields": [
-        {
-          "description": "Who must sign in with a second factor: nobody (per-account requirements still apply), the super admin and privileged admins (the default), or every account. Applied at each session's next use.",
-          "enum": [
-            "optional",
-            "admins",
-            "all"
-          ],
-          "name": "policy",
-          "required": false,
-          "types": [
-            "string"
-          ]
-        },
-        {
-          "description": "Privileged admins may use passkeys only (no authenticator apps). Needs auth.webauthn.rp_id.",
-          "name": "admin_webauthn_only",
-          "required": false,
-          "types": [
-            "boolean"
-          ]
-        },
-        {
-          "description": "Privileged admins may use device-bound passkeys only (no synced ones); implies admin_webauthn_only. Needs auth.webauthn.rp_id.",
-          "name": "admin_device_bound_only",
-          "required": false,
-          "types": [
-            "boolean"
-          ]
-        },
-        {
-          "description": "After a recovery-code sign-in or an MFA reset, keys, device.trust, identity.admin, secrets and settings are refused (recovery_cooldown) for this long.",
-          "maximum": 168,
-          "minimum": 1,
-          "name": "recovery_cooldown_hours",
-          "required": false,
-          "types": [
-            "integer"
-          ]
-        },
         {
           "description": "How long a step-up grant lasts, and how recent an aal 2 sign-in must be to stand in for a family-wide one.",
           "maximum": 900,
@@ -4044,14 +3996,6 @@
           "types": [
             "string",
             "null"
-          ]
-        },
-        {
-          "description": "auth.mfa.status and auth.mfa.admin.status: the MFA policy lets this account use it (false: an admin held to passkeys, or to device-bound passkeys, by auth.mfa.admin_webauthn_only / admin_device_bound_only).",
-          "name": "allowed",
-          "required": false,
-          "types": [
-            "boolean"
           ]
         }
       ],
@@ -18735,7 +18679,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "c9d08760af47b94daddf016ec824a1a3a966c12a9f0283dd0dd350f9184c9913",
+  "models_hash": "455b23eafefb4b72a1cfb1503ebe2c43a378d38313d320a1d0176c2f9bfcebf8",
   "protocol": {
     "min": 1,
     "version": 1
@@ -18973,6 +18917,649 @@
       "variants": []
     },
     {
+      "auth": "human",
+      "client_timeout_ms": 20000,
+      "command": "auth.approval.approve",
+      "confirmations": [],
+      "description": "Approve a device's request with a passkey, nothing else: a TOTP code or a password is refused (invalid), and an account without a usable passkey gets passkey_required (do the action in the console instead). Without credential: answers webauthn.publicKey (a challenge bound to this session and this request, 120 s) for navigator.credentials.get(); with credential (a UV assertion over it): approves, and the device's next device.approval.status makes its grant. approval_failed {attempts_remaining}: the assertion didn't hold; the fifth failure within 15 minutes signs this session out. not_found: expired or already answered.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "kind": "pattern",
+            "pattern": "{*}{*}{*}{*}{*}{*}{*}{*}"
+          },
+          "name": "approval_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "AuthenticationResponseJSON; leave out to get the request options first.",
+          "fields": [
+            {
+              "name": "id",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "base64url; equals id.",
+              "name": "rawId",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "public-key"
+              ],
+              "name": "type",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "description": "base64url.",
+                  "name": "clientDataJSON",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "base64url.",
+                  "name": "authenticatorData",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "base64url.",
+                  "name": "signature",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "base64url.",
+                  "name": "userHandle",
+                  "required": false,
+                  "types": [
+                    "string",
+                    "null"
+                  ]
+                }
+              ],
+              "name": "response",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "name": "authenticatorAttachment",
+              "required": false,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "fields": [
+                    {
+                      "name": "rk",
+                      "required": false,
+                      "types": [
+                        "boolean"
+                      ]
+                    }
+                  ],
+                  "name": "credProps",
+                  "required": false,
+                  "types": [
+                    "object"
+                  ]
+                }
+              ],
+              "name": "clientExtensionResults",
+              "required": false,
+              "types": [
+                "object"
+              ]
+            }
+          ],
+          "generator": {
+            "kind": "const",
+            "values": [
+              "{}"
+            ]
+          },
+          "name": "credential",
+          "required": false,
+          "types": [
+            "object",
+            "null"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "unauthorized",
+        "rate_limited",
+        "passkey_required",
+        "approval_failed"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "unauthorized",
+        "rate_limited",
+        "passkey_required",
+        "approval_failed"
+      ],
+      "response": [
+        {
+          "fields": [
+            {
+              "name": "approval_id",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "pending",
+                "approved",
+                "denied",
+                "expired"
+              ],
+              "name": "state",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "keys",
+                "device.trust",
+                "account.credentials",
+                "identity.admin",
+                "secrets",
+                "settings",
+                "data.destroy"
+              ],
+              "name": "family",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "target",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "What the device says it is asking for (its own words: show it with family and target, which the server checks).",
+              "name": "summary",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "description": "The device row.",
+                  "minimum": 0,
+                  "name": "id",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "device_id",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "name",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "name": "device",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "description": "Unix seconds.",
+              "name": "created_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Unix seconds.",
+              "name": "expires_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "approval",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "Without credential: what to sign.",
+          "fields": [
+            {
+              "description": "PublicKeyCredentialRequestOptionsJSON for navigator.credentials.get().",
+              "fields": [
+                {
+                  "description": "base64url, 32 bytes, single use, 120 s, bound to this connection, the purpose and (step-up) the family and target.",
+                  "name": "challenge",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "rpId",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "Milliseconds.",
+                  "minimum": 0,
+                  "name": "timeout",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "enum": [
+                    "required"
+                  ],
+                  "name": "userVerification",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "The account's usable passkeys.",
+                  "fields": [
+                    {
+                      "enum": [
+                        "public-key"
+                      ],
+                      "name": "type",
+                      "required": true,
+                      "types": [
+                        "string"
+                      ]
+                    },
+                    {
+                      "description": "base64url credential id.",
+                      "name": "id",
+                      "required": true,
+                      "types": [
+                        "string"
+                      ]
+                    },
+                    {
+                      "items": "string",
+                      "name": "transports",
+                      "required": true,
+                      "types": [
+                        "array"
+                      ]
+                    }
+                  ],
+                  "items": "object",
+                  "name": "allowCredentials",
+                  "required": true,
+                  "types": [
+                    "array"
+                  ]
+                }
+              ],
+              "name": "publicKey",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            }
+          ],
+          "name": "webauthn",
+          "required": false,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "auth.approval.deny",
+      "confirmations": [],
+      "description": "Decline a device's request; its device.approval.status answers denied.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "kind": "pattern",
+            "pattern": "{*}{*}{*}{*}{*}{*}{*}{*}"
+          },
+          "name": "approval_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "fields": [
+            {
+              "name": "approval_id",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "pending",
+                "approved",
+                "denied",
+                "expired"
+              ],
+              "name": "state",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "keys",
+                "device.trust",
+                "account.credentials",
+                "identity.admin",
+                "secrets",
+                "settings",
+                "data.destroy"
+              ],
+              "name": "family",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "target",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "What the device says it is asking for (its own words: show it with family and target, which the server checks).",
+              "name": "summary",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "description": "The device row.",
+                  "minimum": 0,
+                  "name": "id",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "device_id",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "name",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "name": "device",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "description": "Unix seconds.",
+              "name": "created_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Unix seconds.",
+              "name": "expires_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "approval",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "auth.approval.list",
+      "confirmations": [],
+      "description": "The signed-in account's open requests from its paired devices (device.approval.request), oldest first: what each asks for (family, target), the device's own summary, and when it expires. A new request also arrives as an unsolicited frame {\"command\": \"auth.approval.pending\", \"data\": {approval_id, device: {id, name}, family, target, summary, expires_at}} on every console session of the account. Web sessions only: a device is refused.",
+      "input": "none",
+      "operation": null,
+      "payload": [],
+      "refusal_codes": [
+        "denied",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "fields": [
+            {
+              "name": "approval_id",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "pending",
+                "approved",
+                "denied",
+                "expired"
+              ],
+              "name": "state",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "keys",
+                "device.trust",
+                "account.credentials",
+                "identity.admin",
+                "secrets",
+                "settings",
+                "data.destroy"
+              ],
+              "name": "family",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "target",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "What the device says it is asking for (its own words: show it with family and target, which the server checks).",
+              "name": "summary",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "description": "The device row.",
+                  "minimum": 0,
+                  "name": "id",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "device_id",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "name",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "name": "device",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "description": "Unix seconds.",
+              "name": "created_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Unix seconds.",
+              "name": "expires_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "items": "object",
+          "name": "approvals",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
       "auth": "session",
       "client_timeout_ms": 15000,
       "command": "auth.isAuthenticated",
@@ -19078,386 +19665,6 @@
       "refusal_codes": [],
       "refusal_kinds": [],
       "response": [],
-      "response_model": null,
-      "untyped_refusals": [],
-      "variants": []
-    },
-    {
-      "auth": "human",
-      "client_timeout_ms": 15000,
-      "command": "auth.mfa.admin.require",
-      "confirmations": [],
-      "description": "Require MFA for one account whatever the policy level (or stop requiring it; the policy may still). Applies at the account's next request: a session signed in without a second factor is signed out. Answers its status. identity.admin step-up. Who: whoever may reset the account's password (admin.identities.users or .admins reset-password, within their own permissions); a super admin's MFA only another super admin; never your own account here (Account > Security, or `vh user mfa` on the server).",
-      "input": "payload",
-      "operation": null,
-      "payload": [
-        {
-          "generator": {
-            "attrs": [
-              "id"
-            ],
-            "entity": "user",
-            "kind": "ref",
-            "scope": "any"
-          },
-          "minimum": 0,
-          "name": "user_id",
-          "required": true,
-          "types": [
-            "integer"
-          ]
-        },
-        {
-          "generator": {
-            "kind": "bool"
-          },
-          "name": "required",
-          "required": true,
-          "types": [
-            "boolean"
-          ]
-        }
-      ],
-      "refusal_codes": [
-        "denied",
-        "invalid",
-        "not_found",
-        "conflict",
-        "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
-      ],
-      "refusal_kinds": [
-        "denied",
-        "invalid",
-        "not_found",
-        "conflict",
-        "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
-      ],
-      "response": [
-        {
-          "minimum": 0,
-          "name": "user_id",
-          "required": true,
-          "types": [
-            "integer"
-          ]
-        },
-        {
-          "name": "required",
-          "required": true,
-          "types": [
-            "boolean"
-          ]
-        },
-        {
-          "enum": [
-            "none",
-            "policy_admins",
-            "policy_all",
-            "user_required"
-          ],
-          "name": "reason",
-          "required": true,
-          "types": [
-            "string"
-          ]
-        },
-        {
-          "name": "required_flag",
-          "required": true,
-          "types": [
-            "boolean"
-          ]
-        },
-        {
-          "items": "object",
-          "model": "MfaFactor",
-          "name": "factors",
-          "required": true,
-          "types": [
-            "array"
-          ]
-        },
-        {
-          "fields": [
-            {
-              "name": "active",
-              "required": true,
-              "types": [
-                "boolean"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "remaining",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            }
-          ],
-          "name": "recovery",
-          "required": true,
-          "types": [
-            "object"
-          ]
-        },
-        {
-          "name": "cooldown_until",
-          "required": true,
-          "types": [
-            "integer",
-            "null"
-          ]
-        },
-        {
-          "name": "reset_at",
-          "required": true,
-          "types": [
-            "integer",
-            "null"
-          ]
-        }
-      ],
-      "response_model": null,
-      "step_up": "identity.admin",
-      "untyped_refusals": [],
-      "variants": []
-    },
-    {
-      "auth": "human",
-      "client_timeout_ms": 15000,
-      "command": "auth.mfa.admin.reset",
-      "confirmations": [],
-      "description": "Reset an account that lost every factor: its passkeys and authenticator apps are disabled (kept for the audit trail), its recovery codes voided, every session signed out, the key-backup grants of its paired devices revoked (the devices stay paired), and it must set up a new factor at its next sign-in, inside the recovery cooldown. The account and the security recipients are notified; audited as auth.mfa.admin.reset. account.credentials step-up. Who: whoever may reset the account's password (admin.identities.users or .admins reset-password, within their own permissions); a super admin's MFA only another super admin; never your own account here (Account > Security, or `vh user mfa` on the server).",
-      "input": "payload",
-      "operation": null,
-      "payload": [
-        {
-          "generator": {
-            "attrs": [
-              "id"
-            ],
-            "entity": "user",
-            "kind": "ref",
-            "scope": "any"
-          },
-          "minimum": 0,
-          "name": "user_id",
-          "required": true,
-          "types": [
-            "integer"
-          ]
-        },
-        {
-          "description": "1..200 characters, kept in the audit trail.",
-          "generator": {
-            "fresh": true,
-            "kind": "pattern",
-            "pattern": "reason_{a}{a}{a}{9}{9}{a}{9}"
-          },
-          "name": "reason",
-          "required": true,
-          "types": [
-            "string"
-          ]
-        }
-      ],
-      "refusal_codes": [
-        "denied",
-        "invalid",
-        "not_found",
-        "conflict",
-        "unauthorized",
-        "step_up_required"
-      ],
-      "refusal_kinds": [
-        "denied",
-        "invalid",
-        "not_found",
-        "conflict",
-        "unauthorized",
-        "step_up_required"
-      ],
-      "response": [
-        {
-          "minimum": 0,
-          "name": "factors_disabled",
-          "required": true,
-          "types": [
-            "integer"
-          ]
-        },
-        {
-          "minimum": 0,
-          "name": "recovery_batches_voided",
-          "required": true,
-          "types": [
-            "integer"
-          ]
-        },
-        {
-          "minimum": 0,
-          "name": "sessions_revoked",
-          "required": true,
-          "types": [
-            "integer"
-          ]
-        },
-        {
-          "minimum": 0,
-          "name": "grants_revoked",
-          "required": true,
-          "types": [
-            "integer"
-          ]
-        },
-        {
-          "description": "Unix seconds: the account's recovery cooldown ends then.",
-          "name": "cooldown_until",
-          "required": true,
-          "types": [
-            "integer"
-          ]
-        }
-      ],
-      "response_model": null,
-      "step_up": "account.credentials",
-      "untyped_refusals": [],
-      "variants": []
-    },
-    {
-      "auth": "human",
-      "client_timeout_ms": 15000,
-      "command": "auth.mfa.admin.status",
-      "confirmations": [],
-      "description": "Another account's MFA: whether it must have MFA and why, its factors (no secrets), recovery codes left, the recovery cooldown and the last reset. Who: whoever may reset the account's password (admin.identities.users or .admins reset-password, within their own permissions); a super admin's MFA only another super admin; never your own account here (Account > Security, or `vh user mfa` on the server).",
-      "input": "payload",
-      "operation": null,
-      "payload": [
-        {
-          "generator": {
-            "attrs": [
-              "id"
-            ],
-            "entity": "user",
-            "kind": "ref",
-            "scope": "any"
-          },
-          "minimum": 0,
-          "name": "user_id",
-          "required": true,
-          "types": [
-            "integer"
-          ]
-        }
-      ],
-      "refusal_codes": [
-        "denied",
-        "invalid",
-        "not_found",
-        "conflict",
-        "unauthorized"
-      ],
-      "refusal_kinds": [
-        "denied",
-        "invalid",
-        "not_found",
-        "conflict",
-        "unauthorized"
-      ],
-      "response": [
-        {
-          "minimum": 0,
-          "name": "user_id",
-          "required": true,
-          "types": [
-            "integer"
-          ]
-        },
-        {
-          "name": "required",
-          "required": true,
-          "types": [
-            "boolean"
-          ]
-        },
-        {
-          "enum": [
-            "none",
-            "policy_admins",
-            "policy_all",
-            "user_required"
-          ],
-          "name": "reason",
-          "required": true,
-          "types": [
-            "string"
-          ]
-        },
-        {
-          "description": "Set for this account (auth.mfa.admin.require).",
-          "name": "required_flag",
-          "required": true,
-          "types": [
-            "boolean"
-          ]
-        },
-        {
-          "items": "object",
-          "model": "MfaFactor",
-          "name": "factors",
-          "required": true,
-          "types": [
-            "array"
-          ]
-        },
-        {
-          "fields": [
-            {
-              "name": "active",
-              "required": true,
-              "types": [
-                "boolean"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "remaining",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            }
-          ],
-          "name": "recovery",
-          "required": true,
-          "types": [
-            "object"
-          ]
-        },
-        {
-          "description": "Unix seconds, while the recovery cooldown runs.",
-          "name": "cooldown_until",
-          "required": true,
-          "types": [
-            "integer",
-            "null"
-          ]
-        },
-        {
-          "description": "Unix seconds: the last MFA reset.",
-          "name": "reset_at",
-          "required": true,
-          "types": [
-            "integer",
-            "null"
-          ]
-        }
-      ],
       "response_model": null,
       "untyped_refusals": [],
       "variants": []
@@ -19808,7 +20015,6 @@
               ]
             },
             {
-              "description": "auth.mfa.admin_webauthn_only (or device_bound_only).",
               "name": "admin_webauthn_only",
               "required": true,
               "types": [
@@ -19818,22 +20024,6 @@
             {
               "name": "admin_device_bound_only",
               "required": true,
-              "types": [
-                "boolean"
-              ]
-            },
-            {
-              "description": "This account may use an authenticator app.",
-              "name": "totp_allowed",
-              "required": false,
-              "types": [
-                "boolean"
-              ]
-            },
-            {
-              "description": "This account may use a synced passkey.",
-              "name": "synced_passkeys_allowed",
-              "required": false,
               "types": [
                 "boolean"
               ]
@@ -19896,7 +20086,7 @@
           ]
         },
         {
-          "description": "Unix seconds: the recovery cooldown while it runs (keys, device.trust, identity.admin, secrets and settings answer recovery_cooldown until then), else null.",
+          "description": "Unix seconds: the recovery cooldown, if one ran.",
           "name": "cooldown_until",
           "required": true,
           "types": [
@@ -20141,7 +20331,7 @@
       "client_timeout_ms": 20000,
       "command": "auth.mfa.verify",
       "confirmations": [],
-      "description": "Finish a pending sign-in with a second factor: {method: \"webauthn\", credential} (a UV assertion over the pending challenge), or {method: \"totp\" | \"recovery_code\", code}. Success signs the connection in: one session row at aal 2 with amr [\"pwd\", \"hwk\" | \"swk\" | \"otp\" | \"rec\"], the access token in the envelope. A recovery code signs every other web session of the account out (paired devices are not touched), starts the recovery cooldown, revokes the key-backup grants of the account's paired devices (they stay paired and are listed for the person to revoke) and answers `recovery`. Refusals: mfa_invalid {attempts_remaining, pending?} (the 5th ends the sign-in), mfa_expired (start again with the password), rate_limited {retry_after} (the account's 5th failed factor in a streak waits 1 minute, each further one doubles it up to 15; never a lock), mfa_required {pending} for {method: \"webauthn\"} without a credential: a fresh passkey challenge, not an attempt. data.pending is {kind: \"mfa\" | \"enrollment\", expires_at (Unix seconds), methods: [\"webauthn\" | \"totp\" | \"recovery_code\"], attempts_remaining, webauthn?: {publicKey: PublicKeyCredentialRequestOptionsJSON}}.",
+      "description": "Finish a pending sign-in with a second factor: {method: \"webauthn\", credential} (a UV assertion over the pending challenge), or {method: \"totp\" | \"recovery_code\", code}. Success signs the connection in: one session row at aal 2 with amr [\"pwd\", \"hwk\" | \"swk\" | \"otp\" | \"rec\"], the access token in the envelope. A recovery code signs every other web session of the account out (paired devices are not touched), starts the recovery cooldown and answers `recovery`. Refusals: mfa_invalid {attempts_remaining, pending?} (the 5th ends the sign-in), mfa_expired (start again with the password), rate_limited {retry_after} (5 failed factors on the account in 15 minutes), mfa_required {pending} for {method: \"webauthn\"} without a credential: a fresh passkey challenge, not an attempt. data.pending is {kind: \"mfa\" | \"enrollment\", expires_at (Unix seconds), methods: [\"webauthn\" | \"totp\" | \"recovery_code\"], attempts_remaining, webauthn?: {publicKey: PublicKeyCredentialRequestOptionsJSON}}.",
       "input": "payload",
       "operation": null,
       "payload": [
@@ -20351,64 +20541,6 @@
               "required": true,
               "types": [
                 "integer"
-              ]
-            },
-            {
-              "description": "Paired devices whose key-backup grant was revoked.",
-              "minimum": 0,
-              "name": "grants_revoked",
-              "required": false,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "description": "The account's paired devices: none was revoked; offer device.revoke for each.",
-              "fields": [
-                {
-                  "minimum": 0,
-                  "name": "id",
-                  "required": true,
-                  "types": [
-                    "integer"
-                  ]
-                },
-                {
-                  "name": "name",
-                  "required": true,
-                  "types": [
-                    "string"
-                  ]
-                },
-                {
-                  "name": "platform",
-                  "required": true,
-                  "types": [
-                    "string"
-                  ]
-                },
-                {
-                  "description": "Unix seconds.",
-                  "name": "last_seen_at",
-                  "required": true,
-                  "types": [
-                    "integer",
-                    "null"
-                  ]
-                },
-                {
-                  "name": "key_backup_revoked",
-                  "required": true,
-                  "types": [
-                    "boolean"
-                  ]
-                }
-              ],
-              "items": "object",
-              "name": "devices",
-              "required": false,
-              "types": [
-                "array"
               ]
             }
           ],
@@ -21296,8 +21428,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -21305,8 +21436,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "response": [
         {
@@ -22030,7 +22160,6 @@
         "conflict",
         "unauthorized",
         "step_up_required",
-        "recovery_cooldown",
         "user_delete"
       ],
       "refusal_kinds": [
@@ -22039,8 +22168,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "response": [
         {
@@ -22245,8 +22373,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -22254,8 +22381,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "response": [
         {
@@ -22499,6 +22625,522 @@
           "required": true,
           "types": [
             "object"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "device",
+      "client_timeout_ms": 15000,
+      "command": "device.approval.challenge",
+      "confirmations": [],
+      "description": "Start approving a step-up with this device's approval key: name the family and the target the step_up_required refusal named. Only keys and device.trust (console_approval_required otherwise: use device.approval.request); approval_key_unavailable without a live approval key. Answers a challenge (single use, 120 s, bound to this session, the family and the target) and payload_b64, the exact bytes to sign: \"vh-device-approval-v1\" 0x00 node_id 0x00 server_spki_sha256[32] approving_device_spki_sha256[32] challenge[32] family 0x00 target 0x00 UInt64BE(expires_at). The device checks them against what it knows before asking for Touch ID. At most 4 open per session (a new one replaces the oldest).",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "enum": [
+            "keys",
+            "device.trust"
+          ],
+          "name": "family",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The refusal's target (at most 256 printable ASCII characters).",
+          "generator": {
+            "kind": "pattern",
+            "pattern": "vault.keys.import:{9}"
+          },
+          "name": "target",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "invalid",
+        "unauthorized",
+        "device_unknown",
+        "rate_limited",
+        "console_approval_required",
+        "approval_key_unavailable"
+      ],
+      "refusal_kinds": [
+        "invalid",
+        "unauthorized",
+        "device_unknown",
+        "rate_limited",
+        "console_approval_required",
+        "approval_key_unavailable"
+      ],
+      "response": [
+        {
+          "name": "challenge_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "64 lowercase hex digits (a SHA-256 value).",
+          "name": "challenge",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Standard base64.",
+          "name": "payload_b64",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "enum": [
+            "keys",
+            "device.trust"
+          ],
+          "name": "family",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "target",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Unix seconds (also in the payload).",
+          "minimum": 0,
+          "name": "expires_at",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "device",
+      "client_timeout_ms": 15000,
+      "command": "device.approval.key.register",
+      "confirmations": [],
+      "description": "Register this already-paired device's approval key (once per device): a P-256 SubjectPublicKeyInfo, 91 bytes of DER, standard base64, not the connection's key. A person approves it in the web console: it answers step_up_required (device.trust, target device.approval.key.register:<device row>:<key SPKI SHA-256>) until a console approval (device.approval.request) for exactly that target. conflict: the device has (or had) a key, or the key is known here.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "kind": "pattern",
+            "pattern": "{A}{a}{9}{a}"
+          },
+          "name": "public_key_spki_b64",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "invalid",
+        "conflict",
+        "unauthorized",
+        "device_unknown",
+        "step_up_required"
+      ],
+      "refusal_kinds": [
+        "invalid",
+        "conflict",
+        "unauthorized",
+        "device_unknown",
+        "step_up_required"
+      ],
+      "response": [
+        {
+          "name": "registered",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "response_model": null,
+      "step_up": "device.trust",
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "device",
+      "client_timeout_ms": 15000,
+      "command": "device.approval.request",
+      "confirmations": [],
+      "description": "Ask a person to approve a step-up in the web console (any family; the one way for families the approval key can't approve, and for a device without one). summary (1-160 characters) is shown with the family and target. The account's console sessions get auth.approval.pending; a person approves with a passkey (auth.approval.approve). Lives 5 minutes; at most 3 open and 10 per hour per device (rate_limited). Poll device.approval.status on this same session.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "enum": [
+            "keys",
+            "device.trust",
+            "account.credentials",
+            "identity.admin",
+            "secrets",
+            "settings",
+            "data.destroy"
+          ],
+          "name": "family",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The refusal's target (keys, device.trust, data.destroy).",
+          "name": "target",
+          "required": false,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "generator": {
+            "kind": "pattern",
+            "pattern": "Export key {a}{a}{a}"
+          },
+          "name": "summary",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "invalid",
+        "unauthorized",
+        "device_unknown",
+        "rate_limited"
+      ],
+      "refusal_kinds": [
+        "invalid",
+        "unauthorized",
+        "device_unknown",
+        "rate_limited"
+      ],
+      "response": [
+        {
+          "name": "approval_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "enum": [
+            "pending",
+            "approved",
+            "denied",
+            "expired"
+          ],
+          "name": "state",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "family",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "target",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "name": "summary",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "64 lowercase hex digits (a SHA-256 value).",
+              "name": "device_id",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "name": "device",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "name": "created_at",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "name": "expires_at",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "device",
+      "client_timeout_ms": 15000,
+      "command": "device.approval.status",
+      "confirmations": [],
+      "description": "How a console approval stands (pending, approved, denied, expired). Answered at once: ask again in 2 s while pending. Once approved, the first answer leaves the grant on this session (the same binding as a web session's: target-bound grants are spent by one use); then resend the refused request. Only the session that asked: another is not_found.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "kind": "pattern",
+            "pattern": "{*}{*}{*}{*}{*}{*}{*}{*}"
+          },
+          "name": "approval_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "invalid",
+        "not_found",
+        "unauthorized",
+        "device_unknown"
+      ],
+      "refusal_kinds": [
+        "invalid",
+        "not_found",
+        "unauthorized",
+        "device_unknown"
+      ],
+      "response": [
+        {
+          "name": "approval_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "enum": [
+            "pending",
+            "approved",
+            "denied",
+            "expired"
+          ],
+          "name": "state",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "family",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "target",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "name": "summary",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "64 lowercase hex digits (a SHA-256 value).",
+              "name": "device_id",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "name": "device",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "name": "created_at",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "name": "expires_at",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "device",
+      "client_timeout_ms": 15000,
+      "command": "device.approval.submit",
+      "confirmations": [],
+      "description": "Answer a challenge with the approval key's ECDSA P-256/SHA-256 signature (DER, standard base64) over its payload. The challenge is spent whatever the answer. On success this session holds a grant for the family and target (spent by one use, until expires_at); then resend the refused request. invalid: the signature doesn't verify (the payload as the server computes it now: a changed node or server key never verifies); not_found: expired, used or another session's; approval_key_unavailable: the key was revoked.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "kind": "pattern",
+            "pattern": "{*}{*}{*}{*}{*}{*}{*}{*}"
+          },
+          "name": "challenge_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "DER Ecdsa-Sig-Value, standard base64.",
+          "generator": {
+            "kind": "pattern",
+            "pattern": "{A}{a}{9}{a}"
+          },
+          "name": "signature_b64",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "invalid",
+        "not_found",
+        "unauthorized",
+        "device_unknown",
+        "approval_key_unavailable"
+      ],
+      "refusal_kinds": [
+        "invalid",
+        "not_found",
+        "unauthorized",
+        "device_unknown",
+        "approval_key_unavailable"
+      ],
+      "response": [
+        {
+          "enum": [
+            "keys",
+            "device.trust"
+          ],
+          "name": "family",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "target",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Unix seconds: the grant's end.",
+          "name": "expires_at",
+          "required": true,
+          "types": [
+            "integer"
           ]
         }
       ],
@@ -22907,6 +23549,15 @@
           "types": [
             "string"
           ]
+        },
+        {
+          "description": "#361: the device's approval key (a second P-256 key, never the connection's): its SubjectPublicKeyInfo, 91 bytes of DER (uncompressed point), in standard base64. Shown with the request (approval_key_present) and registered with the device when it is approved. invalid for any other key; conflict for a key this node knows.",
+          "name": "approval_key",
+          "required": false,
+          "types": [
+            "string",
+            "null"
+          ]
         }
       ],
       "refusal_codes": [
@@ -23038,7 +23689,7 @@
       "client_timeout_ms": 15000,
       "command": "device.pairing.approve",
       "confirmations": [],
-      "description": "Approve a request with the code the device shows (number matching). Any other code denies the request (invalid). Creates the device for the caller's account.",
+      "description": "Approve a request with the code the device shows (number matching). Any other code denies the request (invalid). Creates the device for the caller's account, with the approval key the request carried. A device.trust step-up bound to the request, its key and the chosen code: in the console a passkey or password + TOTP; on an already-paired device its approval key (device.approval.challenge/submit) or a console approval; `vh device pair` on the node needs none.",
       "input": "payload",
       "operation": null,
       "payload": [
@@ -23081,8 +23732,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -23090,8 +23740,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "response": [
         {
@@ -23428,7 +24077,7 @@
       "client_timeout_ms": 15000,
       "command": "device.pairing.pending",
       "confirmations": [],
-      "description": "The caller's open window and its confirmed requests. Each offers three code_choices (random order): one is the code the device shows, two are decoys fixed for the request. The real code is never returned on its own.",
+      "description": "The caller's open window and its confirmed requests. Each offers three code_choices (random order): one is the code the device shows, two are decoys fixed for the request. The real code is never returned on its own. Also answered on a paired device's session (an already-paired Desktop approving a new one, design 8.4); approval_key_present says the request carries an approval key.",
       "input": "none",
       "operation": null,
       "payload": [],
@@ -23533,6 +24182,13 @@
               "required": true,
               "types": [
                 "array"
+              ]
+            },
+            {
+              "name": "approval_key_present",
+              "required": true,
+              "types": [
+                "boolean"
               ]
             },
             {
@@ -23694,8 +24350,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -23703,8 +24358,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "response": [
         {
@@ -24308,12 +24962,14 @@
       "refusal_codes": [
         "denied",
         "invalid",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -24372,6 +25028,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "settings",
       "untyped_refusals": [],
       "variants": []
     },
@@ -24466,15 +25123,13 @@
         "denied",
         "invalid",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "response": [
         {
@@ -26547,8 +27202,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -26556,8 +27210,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "response": [
         {
@@ -26641,8 +27294,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -26650,8 +27302,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "response": [
         {
@@ -26717,8 +27368,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -26726,8 +27376,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "response": [
         {
@@ -29125,8 +29774,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -29134,8 +29782,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "response": [
         {
@@ -29184,8 +29831,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -29193,8 +29839,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "response": [
         {
@@ -29398,8 +30043,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -29407,8 +30051,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "response": [
         {
@@ -29490,8 +30133,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -29499,8 +30141,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "response": [
         {
@@ -29595,8 +30236,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -29604,8 +30244,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "response": [
         {
@@ -29654,8 +30293,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -29663,8 +30301,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "response": [
         {
@@ -29897,8 +30534,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -29906,8 +30542,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "response": [
         {
@@ -30088,8 +30723,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -30097,8 +30731,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "response": [
         {
@@ -30220,8 +30853,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -30229,8 +30861,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "response": [
         {
@@ -30308,8 +30939,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -30317,8 +30947,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "response": [
         {
@@ -30413,8 +31042,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -30422,8 +31050,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "response": [
         {
@@ -31894,8 +32521,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -31903,8 +32529,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "response": [
         {
@@ -32002,8 +32627,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -32011,8 +32635,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "response": [
         {
@@ -32288,8 +32911,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -32297,8 +32919,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "response": [
         {
@@ -32518,8 +33139,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -32527,8 +33147,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "response": [
         {
@@ -32683,8 +33302,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -32692,8 +33310,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "response": [
         {
@@ -32999,8 +33616,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -33008,8 +33624,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "response": [
         {
@@ -33347,8 +33962,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -33356,8 +33970,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "response": [
         {
@@ -33680,8 +34293,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -33689,8 +34301,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "response": [
         {
@@ -33848,8 +34459,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -33857,8 +34467,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "response": [
         {
@@ -34282,8 +34891,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -34291,8 +34899,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "response": [
         {
@@ -35385,15 +35992,13 @@
         "denied",
         "invalid",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "response": [
         {
@@ -39352,8 +39957,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -39361,8 +39965,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "response": [
         {
@@ -39507,8 +40110,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -39516,8 +40118,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "response": [],
       "response_model": null,
@@ -39617,8 +40218,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -39626,8 +40226,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "response": [
         {
@@ -41282,8 +41881,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -41291,8 +41889,7 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "response": [
         {
@@ -42480,8 +43077,7 @@
         "conflict",
         "unauthorized",
         "export_requires_device",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -42490,8 +43086,7 @@
         "conflict",
         "unauthorized",
         "export_requires_device",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "response": [
         {
@@ -42992,7 +43587,6 @@
         "unauthorized",
         "import_requires_device",
         "step_up_required",
-        "recovery_cooldown",
         "vault_key_import",
         "vault_key_salvage"
       ],
@@ -43003,8 +43597,7 @@
         "conflict",
         "unauthorized",
         "import_requires_device",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "response": [
         {
@@ -43252,8 +43845,7 @@
         "conflict",
         "unauthorized",
         "recipient_requires_device",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -43262,8 +43854,7 @@
         "conflict",
         "unauthorized",
         "recipient_requires_device",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "response": [
         {
@@ -43460,8 +44051,7 @@
         "conflict",
         "unauthorized",
         "recipient_requires_device",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -43470,8 +44060,7 @@
         "conflict",
         "unauthorized",
         "recipient_requires_device",
-        "step_up_required",
-        "recovery_cooldown"
+        "step_up_required"
       ],
       "response": [
         {
@@ -44039,5 +44628,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "b66f8ffc53eb88e855d3cfacc6a2d393811f354bb1b1bda45663a2863087292d"
+  "ws_hash": "767c44c3cc8033e32ad8e67fa29c61210a5139b57f9758b3cd1cdb848d19ff2b"
 }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <ctime>
 #include <optional>
@@ -26,7 +27,7 @@ struct Device {
     std::optional<std::string> last_ip;
     std::optional<std::time_t> revoked_at;
     // The device's key-backup grant was revoked (a recovery-code sign-in or an MFA reset of its user, #360; migration
-    // 128): its key exports need a person's approval again. The device itself stays paired and keeps syncing.
+    // 129): its key exports need a person's approval again. The device itself stays paired and keeps syncing.
     std::optional<std::time_t> key_backup_revoked_at;
 
     [[nodiscard]] bool revoked() const noexcept { return revoked_at.has_value(); }
@@ -39,5 +40,7 @@ void to_json(nlohmann::json& j, const Device& d);
 // Device names (pairing requests, renames): 1-64 characters (UTF-8 code points), no control characters, trimmed.
 // Returns the trimmed name or nullopt.
 [[nodiscard]] std::optional<std::string> normalizeDeviceName(const std::string& name);
+// The same rules for any short text a device shows a person (a console approval's summary): 1..maxCodePoints.
+[[nodiscard]] std::optional<std::string> normalizeDisplayText(const std::string& text, std::size_t maxCodePoints);
 
 }

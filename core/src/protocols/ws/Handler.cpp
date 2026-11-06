@@ -3,6 +3,7 @@
 #include "protocols/ws/handler/Auth.hpp"
 #include "protocols/ws/handler/Mfa.hpp"
 #include "protocols/ws/handler/StepUp.hpp"
+#include "protocols/ws/handler/Approvals.hpp"
 #include "protocols/ws/handler/Devices.hpp"
 #include "protocols/ws/handler/fs/Changes.hpp"
 #include "protocols/ws/handler/fs/Storage.hpp"
@@ -102,6 +103,10 @@ void Handler::registerAuthHandlers(const std::shared_ptr<Router>& r) {
     // #359: step-up
     r->registerPayload("auth.stepup.begin", &handler::StepUp::begin);
     r->registerPayload("auth.stepup.finish", &handler::StepUp::finish);
+    // #361: a person approving a paired device's request in the console (web sessions only).
+    r->registerSessionOnlyHandler("auth.approval.list", &handler::Approvals::list);
+    r->registerPayload("auth.approval.approve", &handler::Approvals::approve);
+    r->registerPayload("auth.approval.deny", &handler::Approvals::deny);
 }
 
 // Paired devices (ops::devices). Which sessions reach which is the router's decision (classifyCommand).
@@ -123,6 +128,12 @@ void Handler::registerDeviceHandlers(const std::shared_ptr<Router>& r) {
     r->registerSessionOnlyHandler("device.remote.status", &handler::Devices::remoteStatus);
     r->registerSessionOnlyHandler("device.remote.enable", &handler::Devices::remoteEnable);
     r->registerSessionOnlyHandler("device.remote.disable", &handler::Devices::remoteDisable);
+    // #361: device approvals (a paired device's own session).
+    r->registerPayload("device.approval.challenge", &handler::Approvals::challenge);
+    r->registerPayload("device.approval.submit", &handler::Approvals::submit);
+    r->registerPayload("device.approval.request", &handler::Approvals::request);
+    r->registerPayload("device.approval.status", &handler::Approvals::status);
+    r->registerPayload("device.approval.key.register", &handler::Approvals::keyRegister);
 }
 
 // Vault key backup (ops::vault_keys). Export, confirm and import answer only a paired device's session; the ops

@@ -21,6 +21,7 @@
 //   - the 10th failed factor of a streak notifies the user and the security recipients.
 #include "../helpers/identities.hpp"
 #include "audit/Trail.hpp"
+#include "auth/approval/Approvals.hpp"
 #include "auth/Manager.hpp"
 #include "auth/mfa/Factors.hpp"
 #include "auth/mfa/Keys.hpp"
@@ -41,6 +42,7 @@
 #include "db/query/auth/RefreshToken.hpp"
 #include "db/query/device/Device.hpp"
 #include "db/query/rbac/role/Admin.hpp"
+#include "device/Peer.hpp"
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "notifications/AccountSecurity.hpp"
@@ -585,6 +587,34 @@ TEST_F(MfaPolicyDb, ARecoveryCodeSignInRevokesSessionsAndGrantsStartsTheCooldown
     }
     EXPECT_EQ(call([&] { return stepup::begin(rec, stepup::Family::IdentityAdmin, std::nullopt); }).code,
               "recovery_cooldown");
+
+    // The paired device (still paired, D4) can't get around it: neither its approval key nor a console approval makes
+    // a grant for a cooldown family, and one it already holds doesn't count (#361's methods).
+    {
+        auto peer = std::make_shared<vh::device::Peer>();
+        peer->spkiHex = mac.spki_sha256;
+        peer->deviceRowId = mac.id;
+        const auto device = protocols::ws::Session::devicePrincipal(peer, admin, [] {});
+        device->stepUp().addGrant({.user_id = admin->id, .family = stepup::Family::Secrets,
+                                   .method = std::string(stepup::kConsoleApprovalMethod),
+                                   .expires_at = std::chrono::system_clock::now() + std::chrono::minutes(5)});
+        {
+            const stepup::Scope scope(device);
+            EXPECT_THROW(stepup::require(stepup::Family::Secrets), ops::RecoveryCooldown);
+            EXPECT_FALSE(stepup::keyBackupGrantCovers(1)) << "its key-backup grant was revoked";
+        }
+        EXPECT_EQ(call([&] {
+                      (void)auth::approval::request(device, stepup::Family::Settings, std::nullopt, "change settings");
+                      return json::object();
+                  }).code,
+                  "recovery_cooldown");
+        EXPECT_EQ(call([&] {
+                      (void)auth::approval::challenge(device, stepup::Family::Keys, "vault.keys.export:1");
+                      return json::object();
+                  }).code,
+                  "recovery_cooldown");
+        device->close();
+    }
 
     // Required next: a replacement factor, without a step-up, flagged as enrolled during recovery; then new codes.
     const auto started = Mfa::totpStart(json{{"label", "New phone"}}, rec);

@@ -909,7 +909,7 @@ CREATE TABLE IF NOT EXISTS key_backup_grant_vaults (
 
 Until the grant tables land (#362), a paired device's implicit grant is revoked by setting
 `devices.key_backup_revoked_at` / `key_backup_revoked_reason` (`recovery_code`, `admin_reset`, `cli_reset`; migration
-128, #360). #362's migration must not create a `migrated` grant for such a device.
+129, #360). #362's migration must not create a `migrated` grant for such a device.
 
 ## 10. ws Contract Additions
 

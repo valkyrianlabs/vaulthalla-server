@@ -30,7 +30,9 @@ void to_json(nlohmann::json& j, const Device& d) {
     };
 }
 
-std::optional<std::string> normalizeDeviceName(const std::string& name) {
+std::optional<std::string> normalizeDeviceName(const std::string& name) { return normalizeDisplayText(name, 64); }
+
+std::optional<std::string> normalizeDisplayText(const std::string& name, const std::size_t maxCodePoints) {
     std::size_t begin = 0, end = name.size();
     while (begin < end && (name[begin] == ' ' || name[begin] == '\t')) ++begin;
     while (end > begin && (name[end - 1] == ' ' || name[end - 1] == '\t')) --end;
@@ -57,7 +59,7 @@ std::optional<std::string> normalizeDeviceName(const std::string& name) {
         i += len;
         ++codePoints;
     }
-    if (codePoints > 64) return std::nullopt;
+    if (codePoints > maxCodePoints) return std::nullopt;
     return trimmed;
 }
 

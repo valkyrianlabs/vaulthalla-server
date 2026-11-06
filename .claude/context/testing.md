@@ -168,6 +168,13 @@ libFuzzer: `tools/dev/fuzz-webauthn.sh [--seconds N] [--merge]` (clang `CXX`, `b
 the verifier, ASan/UBSan). PR CI runs it for 60 s per target (`.github/actions/fuzz`). A crash's reproducer goes into
 the target's corpus with the fix; `--merge` folds new coverage into the committed corpus.
 
+## Device approval suites (#361)
+
+| Suite (file) | Covers | Needs |
+|---|---|---|
+| `DeviceApprovalVectors`, `DeviceApprovalKeys`, `DeviceApprovalRouting`, `DeviceApprovalGrants`, `DeviceApprovalContract` (`test_device_approvals.cpp`) | the payload vector shared with vaulthalla-desktop (`core/test-assets/device/approval-vectors.json`; regenerate or check with `tools/dev/device_approval_vectors.py --write|--check`, which needs Python `cryptography`), the one SPKI encoding, router placement, which grant methods count on a device | nothing |
+| `DeviceApprovalsDb` (`test_device_approvals_db.cpp`, db-only) | pairing from a paired device / the console / the CLI, every signature mismatch, console approvals (passkey only), rate limits, key registration, and `ADeviceSessionNeverPromptsForARoutineCommand`: every device-allowed unannotated contract command routed through the daemon's router on a device session must not answer `step_up_required` (a skip list names the few that need a running engine or end the session) | DB |
+
 On macOS, run DB suites on a private cluster when another checkout may be testing: `VH_TEST_PG_DIR=$TMPDIR/<name>
 VH_TEST_PG_PORT=<port> tools/macos/test-db.sh up` (two runs on one cluster drop each other's schema; agents sharing a
 scratchpad must keep the printed exports in a file only they write, or one agent's runs land on the other's cluster). Device tests

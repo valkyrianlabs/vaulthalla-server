@@ -1,6 +1,7 @@
 #include "auth/stepup/StepUp.hpp"
 
 #include "audit/Trail.hpp"
+#include "auth/approval/Approvals.hpp"
 #include "auth/mfa/Factors.hpp"
 #include "auth/mfa/Passkeys.hpp"
 #include "auth/mfa/Policy.hpp"
@@ -59,6 +60,15 @@ void stepUpCooldownGate(const uint32_t userId, const std::string& name, const Fa
                       spdlog::level::warn);
         throw;
     }
+}
+
+// What a paired device can answer a refusal with (#361): device_approval (its approval key: D6 families, while it has
+// a live one) and console_approval (device.approval.request, any family).
+std::vector<std::string> stepUpDeviceMethods(const std::shared_ptr<protocols::ws::Session>& session, const Family family) {
+    std::vector<std::string> out;
+    if (deviceApprovalMaySatisfy(family) && approval::hasLiveApprovalKey(session)) out.emplace_back(kDeviceApprovalMethod);
+    out.emplace_back(kConsoleApprovalMethod);
+    return out;
 }
 
 }
@@ -216,20 +226,27 @@ void require(const Family family, const std::optional<std::string>& target) {
         case Channel::Device: {
             const auto& session = scope->session();
             const auto userId = session && session->user ? std::optional<uint32_t>(session->user->id) : std::nullopt;
+            // #360: the recovery cooldown holds its families back before any grant, device or console approvals
+            // included.
             if (userId) stepUpCooldownGate(*userId, session->user->name(), family, bound, "device");
-            // #361 adds grants made on a device session by its approval key (keys and device.trust only, D6) or by a
-            // console approval; they are found here like a web session's.
-            if (userId && deviceApprovalMaySatisfy(family) && session->stepUp().use(*userId, {}, family, bound)) {
-                scope->markSatisfied(family, bound);
-                return;
-            }
+            // #361: a grant on this device session, made by its approval key (keys and device.trust only, D6) or by
+            // a person's passkey in the web console (any family, design 6.3). Never by the connection itself.
+            if (userId)
+                if (const auto grant = session->stepUp().use(*userId, {}, family, bound);
+                    grant && (grant->method == kConsoleApprovalMethod ||
+                              (grant->method == kDeviceApprovalMethod && deviceApprovalMaySatisfy(family)))) {
+                    scope->markSatisfied(family, bound);
+                    return;
+                }
             audit::record({.action = "auth.stepup.required", .outcome = audit::Outcome::Denied, .actor_id = userId,
                            .actor = session && session->user ? session->user->name() : std::string{},
                            .details = {{"family", familyName}, {"target", stepUpTargetJson(bound)},
                                        {"channel", "device"}}},
-                          "[auth::stepup] a paired device was refused a " + familyName + " operation: it needs a "
-                          "person's approval", spdlog::level::warn);
-            refuse(family, bound, {}, "A paired device can't approve this by itself: do it in the web console");
+                          "[auth::stepup] a paired device was asked for a person's approval of a " + familyName +
+                              " operation",
+                          spdlog::level::warn);
+            refuse(family, bound, stepUpDeviceMethods(session, family),
+                   "This needs a person's approval: approve it on this device or in the web console");
         }
 
         case Channel::Web: {

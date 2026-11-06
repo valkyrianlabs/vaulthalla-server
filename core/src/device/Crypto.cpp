@@ -19,6 +19,7 @@ namespace {
 constexpr std::string_view kCommitDomain{"vh-pair-commit-v1"};
 constexpr std::string_view kSasDomain{"vh-pair-v1"};
 constexpr std::string_view kRotateDomain{"vh-device-rotate-v1"};
+constexpr std::string_view kApprovalDomain{"vh-device-approval-v1"};
 constexpr std::string_view kP256GroupName{"prime256v1"};
 
 struct PkeyFree { void operator()(EVP_PKEY* p) const noexcept { EVP_PKEY_free(p); } };
@@ -206,6 +207,29 @@ std::vector<uint8_t> rotationMessage(const Hash& newSpki, const Hash& serverSpki
     return msg;
 }
 
+std::optional<std::vector<uint8_t>> approvalMessage(const std::string_view nodeId, const Hash& serverSpki,
+                                                    const Hash& deviceSpki, const Hash& challenge,
+                                                    const std::string_view family, const std::string_view target,
+                                                    const uint64_t expiresAt) {
+    const auto hasNul = [](const std::string_view s) { return s.find('\0') != std::string_view::npos; };
+    if (nodeId.empty() || family.empty() || hasNul(nodeId) || hasNul(family) || hasNul(target)) return std::nullopt;
+    std::vector<uint8_t> msg;
+    msg.reserve(kApprovalDomain.size() + nodeId.size() + family.size() + target.size() + 4 + 96 + 8);
+    append(msg, kApprovalDomain);
+    msg.push_back(0x00);
+    append(msg, nodeId);
+    msg.push_back(0x00);
+    append(msg, serverSpki);
+    append(msg, deviceSpki);
+    append(msg, challenge);
+    append(msg, family);
+    msg.push_back(0x00);
+    append(msg, target);
+    msg.push_back(0x00);
+    for (int shift = 56; shift >= 0; shift -= 8) msg.push_back(static_cast<uint8_t>(expiresAt >> shift));
+    return msg;
+}
+
 bool verifyEcdsaP256Sha256(const std::span<const uint8_t> spkiDer, const std::span<const uint8_t> message,
                            const std::span<const uint8_t> signature) {
     const unsigned char* p = spkiDer.data();
@@ -240,6 +264,20 @@ std::optional<PublicKey> p256KeyOfCertificate(const std::span<const uint8_t> der
     const std::unique_ptr<X509, X509Free> cert(d2i_X509(nullptr, &p, static_cast<long>(der.size())));
     if (!cert || p != der.data() + der.size()) return std::nullopt;
     return p256KeyOf(cert.get());
+}
+
+std::optional<PublicKey> p256KeyFromSpki(const std::span<const uint8_t> der) noexcept {
+    // The one encoding the protocol uses (spec §1): the 26-byte id-ecPublicKey/prime256v1 prefix and an uncompressed
+    // point, 91 bytes. Anything else (a compressed point, explicit parameters, trailing bytes) is not an approval key.
+    constexpr std::size_t kSpkiBytes = 91, kPrefixBytes = 26;
+    if (der.size() != kSpkiBytes) return std::nullopt;
+    try {
+        auto key = p256KeyFromPoint(der.subspan(kPrefixBytes));
+        if (!key || !std::ranges::equal(key->spkiDer, der)) return std::nullopt;
+        return key;
+    } catch (...) {
+        return std::nullopt;
+    }
 }
 
 std::optional<PublicKey> p256KeyFromPoint(const std::span<const uint8_t> point) {

@@ -180,7 +180,7 @@ AddResult add(const Actor& actor, const AddRequest& request, const vault_keys::C
     g.label = request.label;
     g.authorized_by = fmt::format("user:{} via {}", actor->id, channelName(channel));
     // Step-up (#359): a recipient is a decryption path for the vault. The host CLI is exempt by design; a paired
-    // device is refused until device approvals (#361) can answer it.
+    // device needs a person's approval on its session (#361: its approval key or a console passkey approval).
     auth::stepup::require(auth::stepup::Family::Keys, "vault.keys.recipients.add:" + std::to_string(vault->id));
     if (!Grants::add(g))
         throw Conflict("this public key is already an active recovery recipient of vault '" + vault->name + "'");

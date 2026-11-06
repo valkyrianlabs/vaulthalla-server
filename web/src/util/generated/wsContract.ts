@@ -6,10 +6,10 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = 'b66f8ffc53eb88e855d3cfacc6a2d393811f354bb1b1bda45663a2863087292d'
+export const WS_CONTRACT_HASH = '767c44c3cc8033e32ad8e67fa29c61210a5139b57f9758b3cd1cdb848d19ff2b'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = 'c9d08760af47b94daddf016ec824a1a3a966c12a9f0283dd0dd350f9184c9913'
+export const WS_MODELS_HASH = '455b23eafefb4b72a1cfb1503ebe2c43a378d38313d320a1d0176c2f9bfcebf8'
 
 // The ws protocol range this book is (core/usage WsProtocol.hpp): send it in meta.hello.
 export const WS_PROTOCOL_VERSION = 1
@@ -404,7 +404,6 @@ export interface WsModels {
     last_ip: string | null
     revoked_at: number | null
     revoked: boolean
-    key_backup_revoked_at?: number | null
   }
   /**
    * device_server.advertise.* (Config.cpp to_json(DeviceAdvertiseConfig); docs/reference/transfer-protocol.md
@@ -617,17 +616,9 @@ export interface WsModels {
    */
   'LoggingConfig': { levels: WsModels['LogLevelsConfig']; file_paths?: 'ids' | 'full' }
   /**
-   * auth.mfa.* (Config.cpp to_json(MfaConfig), #359, #360): multi-factor authentication settings. Changing
-   * policy, the admin flags or auth.webauthn.rp_id is audited (auth.mfa.policy.change); weakening them is
-   * mailed to operator_emails.recipients.security.
+   * auth.mfa.* (Config.cpp to_json(MfaConfig), #359): multi-factor authentication settings.
    */
-  'MfaConfig': {
-    policy?: 'optional' | 'admins' | 'all'
-    admin_webauthn_only?: boolean
-    admin_device_bound_only?: boolean
-    recovery_cooldown_hours?: number
-    step_up_ttl_seconds: number
-  }
+  'MfaConfig': { step_up_ttl_seconds: number }
   /**
    * One of the account's sign-in factors (#356/#357): auth::mfa::to_json(Factor),
    * core/src/auth/mfa/Factors.cpp. Carries no secret and no credential id. id is unique per kind only: name a
@@ -645,7 +636,6 @@ export interface WsModels {
     backup_state?: boolean
     transports?: string[]
     aaguid?: string | null
-    allowed?: boolean
   }
   /**
    * Filesystem operation queue and share upload figures, one vault or the system
@@ -2968,6 +2958,88 @@ export interface WsContract {
     response: Record<string, never>
   }
   /**
+   * Approve a device's request with a passkey, nothing else: a TOTP code or a password is refused (invalid),
+   * and an account without a usable passkey gets passkey_required (do the action in the console instead).
+   * Without credential: answers webauthn.publicKey (a challenge bound to this session and this request, 120
+   * s) for navigator.credentials.get(); with credential (a UV assertion over it): approves, and the device's
+   * next device.approval.status makes its grant. approval_failed {attempts_remaining}: the assertion didn't
+   * hold; the fifth failure within 15 minutes signs this session out. not_found: expired or already answered.
+   */
+  'auth.approval.approve': {
+    payload: {
+      approval_id: string
+      credential?: {
+        id: string
+        rawId: string
+        type: 'public-key'
+        response: { clientDataJSON: string; authenticatorData: string; signature: string; userHandle?: string | null }
+        authenticatorAttachment?: string | null
+        clientExtensionResults?: { credProps?: { rk?: boolean } }
+      } | null
+    }
+    response: {
+      approval: {
+        approval_id: string
+        state: 'pending' | 'approved' | 'denied' | 'expired'
+        family: 'keys' | 'device.trust' | 'account.credentials' | 'identity.admin' | 'secrets' | 'settings' | 'data.destroy'
+        target: string | null
+        summary: string
+        device: { id: number; device_id: string; name: string }
+        created_at: number
+        expires_at: number
+      }
+      webauthn?: {
+        publicKey: {
+          challenge: string
+          rpId: string
+          timeout: number
+          userVerification: 'required'
+          allowCredentials: { type: 'public-key'; id: string; transports: string[] }[]
+        }
+      }
+    }
+  }
+  /**
+   * Decline a device's request; its device.approval.status answers denied.
+   */
+  'auth.approval.deny': {
+    payload: { approval_id: string }
+    response: {
+      approval: {
+        approval_id: string
+        state: 'pending' | 'approved' | 'denied' | 'expired'
+        family: 'keys' | 'device.trust' | 'account.credentials' | 'identity.admin' | 'secrets' | 'settings' | 'data.destroy'
+        target: string | null
+        summary: string
+        device: { id: number; device_id: string; name: string }
+        created_at: number
+        expires_at: number
+      }
+    }
+  }
+  /**
+   * The signed-in account's open requests from its paired devices (device.approval.request), oldest first:
+   * what each asks for (family, target), the device's own summary, and when it expires. A new request also
+   * arrives as an unsolicited frame {"command": "auth.approval.pending", "data": {approval_id, device: {id,
+   * name}, family, target, summary, expires_at}} on every console session of the account. Web sessions only:
+   * a device is refused.
+   */
+  'auth.approval.list': {
+    payload: null
+    response: {
+      approvals: {
+        approval_id: string
+        state: 'pending' | 'approved' | 'denied' | 'expired'
+        family: 'keys' | 'device.trust' | 'account.credentials' | 'identity.admin' | 'secrets' | 'settings' | 'data.destroy'
+        target: string | null
+        summary: string
+        device: { id: number; device_id: string; name: string }
+        created_at: number
+        expires_at: number
+      }[]
+    }
+  }
+  /**
    * Whether the envelope token is a valid session for this socket.
    */
   'auth.isAuthenticated': {
@@ -2999,66 +3071,6 @@ export interface WsContract {
   'auth.logout': {
     payload: null
     response: Record<string, never>
-  }
-  /**
-   * Require MFA for one account whatever the policy level (or stop requiring it; the policy may still).
-   * Applies at the account's next request: a session signed in without a second factor is signed out. Answers
-   * its status. identity.admin step-up. Who: whoever may reset the account's password (admin.identities.users
-   * or .admins reset-password, within their own permissions); a super admin's MFA only another super admin;
-   * never your own account here (Account > Security, or `vh user mfa` on the server).
-   */
-  'auth.mfa.admin.require': {
-    payload: { user_id: number; required: boolean }
-    response: {
-      user_id: number
-      required: boolean
-      reason: 'none' | 'policy_admins' | 'policy_all' | 'user_required'
-      required_flag: boolean
-      factors: WsModels['MfaFactor'][]
-      recovery: { active: boolean; remaining: number }
-      cooldown_until: number | null
-      reset_at: number | null
-    }
-  }
-  /**
-   * Reset an account that lost every factor: its passkeys and authenticator apps are disabled (kept for the
-   * audit trail), its recovery codes voided, every session signed out, the key-backup grants of its paired
-   * devices revoked (the devices stay paired), and it must set up a new factor at its next sign-in, inside
-   * the recovery cooldown. The account and the security recipients are notified; audited as
-   * auth.mfa.admin.reset. account.credentials step-up. Who: whoever may reset the account's password
-   * (admin.identities.users or .admins reset-password, within their own permissions); a super admin's MFA
-   * only another super admin; never your own account here (Account > Security, or `vh user mfa` on the
-   * server).
-   */
-  'auth.mfa.admin.reset': {
-    payload: { user_id: number; reason: string }
-    response: {
-      factors_disabled: number
-      recovery_batches_voided: number
-      sessions_revoked: number
-      grants_revoked: number
-      cooldown_until: number
-    }
-  }
-  /**
-   * Another account's MFA: whether it must have MFA and why, its factors (no secrets), recovery codes left,
-   * the recovery cooldown and the last reset. Who: whoever may reset the account's password
-   * (admin.identities.users or .admins reset-password, within their own permissions); a super admin's MFA
-   * only another super admin; never your own account here (Account > Security, or `vh user mfa` on the
-   * server).
-   */
-  'auth.mfa.admin.status': {
-    payload: { user_id: number }
-    response: {
-      user_id: number
-      required: boolean
-      reason: 'none' | 'policy_admins' | 'policy_all' | 'user_required'
-      required_flag: boolean
-      factors: WsModels['MfaFactor'][]
-      recovery: { active: boolean; remaining: number }
-      cooldown_until: number | null
-      reset_at: number | null
-    }
   }
   /**
    * End a pending sign-in now; the connection is anonymous again (sign in again with the password).
@@ -3119,8 +3131,6 @@ export interface WsContract {
         webauthn_available: boolean
         admin_webauthn_only: boolean
         admin_device_bound_only: boolean
-        totp_allowed?: boolean
-        synced_passkeys_allowed?: boolean
       }
       factors: WsModels['MfaFactor'][]
       recovery: { active: boolean; remaining: number; acknowledged: boolean; pending: boolean }
@@ -3156,14 +3166,12 @@ export interface WsContract {
    * pending challenge), or {method: "totp" | "recovery_code", code}. Success signs the connection in: one
    * session row at aal 2 with amr ["pwd", "hwk" | "swk" | "otp" | "rec"], the access token in the envelope. A
    * recovery code signs every other web session of the account out (paired devices are not touched), starts
-   * the recovery cooldown, revokes the key-backup grants of the account's paired devices (they stay paired
-   * and are listed for the person to revoke) and answers `recovery`. Refusals: mfa_invalid
-   * {attempts_remaining, pending?} (the 5th ends the sign-in), mfa_expired (start again with the password),
-   * rate_limited {retry_after} (the account's 5th failed factor in a streak waits 1 minute, each further one
-   * doubles it up to 15; never a lock), mfa_required {pending} for {method: "webauthn"} without a credential:
-   * a fresh passkey challenge, not an attempt. data.pending is {kind: "mfa" | "enrollment", expires_at (Unix
-   * seconds), methods: ["webauthn" | "totp" | "recovery_code"], attempts_remaining, webauthn?: {publicKey:
-   * PublicKeyCredentialRequestOptionsJSON}}.
+   * the recovery cooldown and answers `recovery`. Refusals: mfa_invalid {attempts_remaining, pending?} (the
+   * 5th ends the sign-in), mfa_expired (start again with the password), rate_limited {retry_after} (5 failed
+   * factors on the account in 15 minutes), mfa_required {pending} for {method: "webauthn"} without a
+   * credential: a fresh passkey challenge, not an attempt. data.pending is {kind: "mfa" | "enrollment",
+   * expires_at (Unix seconds), methods: ["webauthn" | "totp" | "recovery_code"], attempts_remaining,
+   * webauthn?: {publicKey: PublicKeyCredentialRequestOptionsJSON}}.
    */
   'auth.mfa.verify': {
     payload: {
@@ -3181,19 +3189,7 @@ export interface WsContract {
     response: {
       user: WsModels['SessionUser']
       aal: number
-      recovery?: {
-        codes_remaining: number
-        cooldown_until: number
-        sessions_revoked: number
-        grants_revoked?: number
-        devices?: {
-          id: number
-          name: string
-          platform: string
-          last_seen_at: number | null
-          key_backup_revoked: boolean
-        }[]
-      }
+      recovery?: { codes_remaining: number; cooldown_until: number; sessions_revoked: number }
     }
   }
   /**
@@ -3479,6 +3475,91 @@ export interface WsContract {
     response: { preferences: WsModels['DashboardPreference'] }
   }
   /**
+   * Start approving a step-up with this device's approval key: name the family and the target the
+   * step_up_required refusal named. Only keys and device.trust (console_approval_required otherwise: use
+   * device.approval.request); approval_key_unavailable without a live approval key. Answers a challenge
+   * (single use, 120 s, bound to this session, the family and the target) and payload_b64, the exact bytes to
+   * sign: "vh-device-approval-v1" 0x00 node_id 0x00 server_spki_sha256[32] approving_device_spki_sha256[32]
+   * challenge[32] family 0x00 target 0x00 UInt64BE(expires_at). The device checks them against what it knows
+   * before asking for Touch ID. At most 4 open per session (a new one replaces the oldest).
+   */
+  'device.approval.challenge': {
+    payload: { family: 'keys' | 'device.trust'; target: string }
+    response: {
+      challenge_id: string
+      challenge: string
+      payload_b64: string
+      family: 'keys' | 'device.trust'
+      target: string
+      expires_at: number
+    }
+  }
+  /**
+   * Register this already-paired device's approval key (once per device): a P-256 SubjectPublicKeyInfo, 91
+   * bytes of DER, standard base64, not the connection's key. A person approves it in the web console: it
+   * answers step_up_required (device.trust, target device.approval.key.register:<device row>:<key SPKI
+   * SHA-256>) until a console approval (device.approval.request) for exactly that target. conflict: the
+   * device has (or had) a key, or the key is known here.
+   */
+  'device.approval.key.register': {
+    payload: { public_key_spki_b64: string }
+    response: { registered: boolean }
+  }
+  /**
+   * Ask a person to approve a step-up in the web console (any family; the one way for families the approval
+   * key can't approve, and for a device without one). summary (1-160 characters) is shown with the family and
+   * target. The account's console sessions get auth.approval.pending; a person approves with a passkey
+   * (auth.approval.approve). Lives 5 minutes; at most 3 open and 10 per hour per device (rate_limited). Poll
+   * device.approval.status on this same session.
+   */
+  'device.approval.request': {
+    payload: {
+      family: 'keys' | 'device.trust' | 'account.credentials' | 'identity.admin' | 'secrets' | 'settings' | 'data.destroy'
+      target?: string | null
+      summary: string
+    }
+    response: {
+      approval_id: string
+      state: 'pending' | 'approved' | 'denied' | 'expired'
+      family: string
+      target: string | null
+      summary: string
+      device: { id: number; device_id: string; name: string }
+      created_at: number
+      expires_at: number
+    }
+  }
+  /**
+   * How a console approval stands (pending, approved, denied, expired). Answered at once: ask again in 2 s
+   * while pending. Once approved, the first answer leaves the grant on this session (the same binding as a
+   * web session's: target-bound grants are spent by one use); then resend the refused request. Only the
+   * session that asked: another is not_found.
+   */
+  'device.approval.status': {
+    payload: { approval_id: string }
+    response: {
+      approval_id: string
+      state: 'pending' | 'approved' | 'denied' | 'expired'
+      family: string
+      target: string | null
+      summary: string
+      device: { id: number; device_id: string; name: string }
+      created_at: number
+      expires_at: number
+    }
+  }
+  /**
+   * Answer a challenge with the approval key's ECDSA P-256/SHA-256 signature (DER, standard base64) over its
+   * payload. The challenge is spent whatever the answer. On success this session holds a grant for the family
+   * and target (spent by one use, until expires_at); then resend the refused request. invalid: the signature
+   * doesn't verify (the payload as the server computes it now: a changed node or server key never verifies);
+   * not_found: expired, used or another session's; approval_key_unavailable: the key was revoked.
+   */
+  'device.approval.submit': {
+    payload: { challenge_id: string; signature_b64: string }
+    response: { family: 'keys' | 'device.trust'; target: string; expires_at: number }
+  }
+  /**
    * Where this node's device listener can be reached (docs/reference/transfer-protocol.md §1.1): interface
    * addresses classified by range, <hostname>.local where an mDNS responder runs, and
    * device_server.advertise's configured names. Computed per call; never answered before a device is paired.
@@ -3533,7 +3614,7 @@ export interface WsContract {
    * knows. One live request per key: a new one replaces it.
    */
   'device.pair.request': {
-    payload: { name: string; platform: string; app_version?: string; commitment: string }
+    payload: { name: string; platform: string; app_version?: string; commitment: string; approval_key?: string | null }
     response: { request_id: string; nonce_server: string; expires_at: number }
   }
   /**
@@ -3552,7 +3633,10 @@ export interface WsContract {
   }
   /**
    * Approve a request with the code the device shows (number matching). Any other code denies the request
-   * (invalid). Creates the device for the caller's account.
+   * (invalid). Creates the device for the caller's account, with the approval key the request carried. A
+   * device.trust step-up bound to the request, its key and the chosen code: in the console a passkey or
+   * password + TOTP; on an already-paired device its approval key (device.approval.challenge/submit) or a
+   * console approval; `vh device pair` on the node needs none.
    */
   'device.pairing.approve': {
     payload: { request_id: string; code: string }
@@ -3606,7 +3690,8 @@ export interface WsContract {
   /**
    * The caller's open window and its confirmed requests. Each offers three code_choices (random order): one
    * is the code the device shows, two are decoys fixed for the request. The real code is never returned on
-   * its own.
+   * its own. Also answered on a paired device's session (an already-paired Desktop approving a new one,
+   * design 8.4); approval_key_present says the request carries an approval key.
    */
   'device.pairing.pending': {
     payload: null
@@ -3620,6 +3705,7 @@ export interface WsContract {
         source_ip: string
         device_id: string
         code_choices: string[]
+        approval_key_present: boolean
         created_at: number
         expires_at: number
       }[]
@@ -6192,12 +6278,12 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'audit.list',
   'audit.verify',
   'auth.activity',
+  'auth.approval.approve',
+  'auth.approval.deny',
+  'auth.approval.list',
   'auth.isAuthenticated',
   'auth.login',
   'auth.logout',
-  'auth.mfa.admin.require',
-  'auth.mfa.admin.reset',
-  'auth.mfa.admin.status',
   'auth.mfa.cancel',
   'auth.mfa.factor.remove',
   'auth.mfa.factor.rename',
@@ -6227,6 +6313,11 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'dashboard.preferences.get',
   'dashboard.preferences.reset',
   'dashboard.preferences.update',
+  'device.approval.challenge',
+  'device.approval.key.register',
+  'device.approval.request',
+  'device.approval.status',
+  'device.approval.submit',
   'device.endpoints',
   'device.identity.rotate',
   'device.list',
@@ -6490,8 +6581,6 @@ export const WS_CONTRACT_CONFIRMATIONS: Readonly<
 // The step-up family a command's operation may ask for (#359): it can answer step_up_required until this
 // session holds a grant (auth.stepup.begin / auth.stepup.finish).
 export const WS_CONTRACT_STEP_UP: Readonly<Partial<Record<WsContractCommand, string>>> = {
-  'auth.mfa.admin.require': 'identity.admin',
-  'auth.mfa.admin.reset': 'account.credentials',
   'auth.mfa.factor.remove': 'account.credentials',
   'auth.mfa.recovery.generate': 'account.credentials',
   'auth.mfa.totp.enroll.confirm': 'account.credentials',
@@ -6502,8 +6591,10 @@ export const WS_CONTRACT_STEP_UP: Readonly<Partial<Record<WsContractCommand, str
   'auth.user.change_password': 'account.credentials',
   'auth.user.delete': 'identity.admin',
   'auth.user.update': 'identity.admin',
+  'device.approval.key.register': 'device.trust',
   'device.pairing.approve': 'device.trust',
   'device.remote.enable': 'device.trust',
+  'email.config.update': 'settings',
   'email.provider.secret.set': 'secrets',
   'group.member.add': 'identity.admin',
   'group.member.remove': 'identity.admin',
@@ -6552,12 +6643,12 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'audit.list': 15000,
   'audit.verify': 120000,
   'auth.activity': 15000,
+  'auth.approval.approve': 20000,
+  'auth.approval.deny': 15000,
+  'auth.approval.list': 15000,
   'auth.isAuthenticated': 15000,
   'auth.login': 20000,
   'auth.logout': 15000,
-  'auth.mfa.admin.require': 15000,
-  'auth.mfa.admin.reset': 15000,
-  'auth.mfa.admin.status': 15000,
   'auth.mfa.cancel': 15000,
   'auth.mfa.factor.remove': 15000,
   'auth.mfa.factor.rename': 15000,
@@ -6587,6 +6678,11 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'dashboard.preferences.get': 15000,
   'dashboard.preferences.reset': 15000,
   'dashboard.preferences.update': 15000,
+  'device.approval.challenge': 15000,
+  'device.approval.key.register': 15000,
+  'device.approval.request': 15000,
+  'device.approval.status': 15000,
+  'device.approval.submit': 15000,
   'device.endpoints': 15000,
   'device.identity.rotate': 15000,
   'device.list': 15000,

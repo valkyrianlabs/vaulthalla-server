@@ -94,4 +94,13 @@ struct SignedInPasskey {
 [[nodiscard]] std::optional<VerifiedFactor> verifyStepUp(const std::string& sessionUuid, uint32_t userId,
                                                          std::string_view credentialJson, const std::string& scope);
 
+// Console approvals of a paired device's request (#361, purpose approval; auth/approval/Approvals.hpp): the same request
+// options and assertion check, with the challenge bound to `scope` (the approval id, family and target), so an
+// assertion made for one approval never answers another, a step-up, a sign-in, or another session's.
+[[nodiscard]] nlohmann::json approvalOptions(const std::string& sessionUuid, uint32_t userId,
+                                             const std::vector<WebAuthnCredential>& credentials,
+                                             const std::string& scope);
+[[nodiscard]] std::optional<VerifiedFactor> verifyApproval(const std::string& sessionUuid, uint32_t userId,
+                                                           std::string_view credentialJson, const std::string& scope);
+
 }
