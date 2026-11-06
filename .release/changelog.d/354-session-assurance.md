@@ -1,0 +1,5 @@
+- Refresh token rows record session assurance: aal, amr, auth_time (migration 119; existing rows read as aal 1, {pwd}, auth_time = issued_at). Rows are written once per jti; promotion never adopts an existing row (#354).
+- A websocket rehydrates only from its cookie's stored row, never from another live socket's token; auth.login on a signed-in socket answers data.code already_signed_in.
+- MFA policy hook (auth::session::assurance) checked against the row on rehydration, validate, auth.refresh and the HTTP lanes; refused rows are revoked. Policy and factor changes bump rbac::policyEpoch().
+- New ws commands auth.sessions.list (opaque ids) and auth.sessions.revoke {id} | {all_others}; audit event auth.session.revoke; console Sessions panel under Account › Security.
+- Console sign-in reconnects its websocket first, so the signing-in socket owns the browser's current refresh cookie; already_signed_in falls back to auth.refresh.

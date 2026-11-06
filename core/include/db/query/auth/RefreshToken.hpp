@@ -10,7 +10,9 @@
 namespace vh::db::query::auth {
 
 struct RefreshToken {
-    static void set(const std::shared_ptr<vh::auth::model::RefreshToken>& token);
+    // Inserts the row with the token's aal and amr (auth_time = NOW()). Write-once: false, and nothing written, when
+    // the jti already has a row.
+    [[nodiscard]] static bool insertOnce(const std::shared_ptr<vh::auth::model::RefreshToken>& token);
     static void remove(const std::string& jti);
 
     static std::shared_ptr<vh::auth::model::RefreshToken> get(const std::string& jti);
@@ -25,6 +27,8 @@ struct RefreshToken {
     static void touchActivity(const std::string& jti);
     static void refresh(const std::string& jti);
     static void revokeAll(unsigned int userId);
+    // Revokes one live row, only when it belongs to userId; whether a row changed.
+    [[nodiscard]] static bool revokeOfUser(const std::string& jti, unsigned int userId);
 
     static void purgeExpired(unsigned int userId);
     static void purgeOldRevoked();

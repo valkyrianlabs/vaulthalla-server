@@ -187,7 +187,7 @@ protected:
         Issuer::refreshToken(session);
         auto token = session->tokens->refreshToken;
         if (storedHash) token->hashedToken = storedHash(token->rawToken);
-        vh::db::query::auth::RefreshToken::set(token);
+        if (!vh::db::query::auth::RefreshToken::insertOnce(token)) throw std::runtime_error("refresh token row exists");
         return token;
     }
 
@@ -306,7 +306,7 @@ TEST_F(RefreshTokenDigestDb, AccountStateDecidesRehydrationFromTheCanonicalUser)
     session->user = account;
     Issuer::refreshToken(session);
     const auto token = session->tokens->refreshToken;
-    vh::db::query::auth::RefreshToken::set(token);
+    ASSERT_TRUE(vh::db::query::auth::RefreshToken::insertOnce(token));
 
     ASSERT_NO_THROW((void)validateRaw(token->rawToken));
 
