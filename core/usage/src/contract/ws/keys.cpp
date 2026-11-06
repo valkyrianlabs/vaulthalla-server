@@ -136,7 +136,9 @@ std::vector<WsCommandUsage> vaultKeyCommands() {
                        "otherwise), with a keys step-up bound to the vault (#359); the encryption-key Export "
                        "permission.",
         .payload = {vaultId(),
-                    str("public_key").desc("The recipient's X25519 public key: base64 (32 bytes) or 64 hex digits."),
+                    str("public_key")
+                        .gen(gen::constant("9jB0b7LvRAo3+fTz//m8OhJQkp39Kcd1PjiFpjtmrTs="))
+                        .desc("The recipient's X25519 public key: base64 (32 bytes) or 64 hex digits."),
                     str("label").opt().nullable().desc("A name the customer recognizes (at most 200 characters).")},
         .response = modelFields("VaultRecoveryRecipientAdd"),
         .refusal_codes = {"denied", "invalid", "not_found", "conflict", "unauthorized", "recipient_requires_device"},
@@ -151,7 +153,9 @@ std::vector<WsCommandUsage> vaultKeyCommands() {
                        "says when a key rotation is needed to cut it off from new data. Paired devices only "
                        "(recipient_requires_device otherwise), with a keys step-up bound to the vault (#359); the "
                        "encryption-key Export permission.",
-        .payload = {vaultId(), str("grant_id").desc("The recipient's grant_id (vault.keys.recipients.list).")},
+        .payload = {vaultId(), str("grant_id")
+                                   .gen(gen::ref("vault.recipient", {"grant_id"}))
+                                   .desc("The recipient's grant_id (vault.keys.recipients.list).")},
         .response = modelFields("VaultRecoveryRecipientRevoke"),
         .refusal_codes = {"denied", "invalid", "not_found", "conflict", "unauthorized", "recipient_requires_device"},
         .response_model = "VaultRecoveryRecipientRevoke",

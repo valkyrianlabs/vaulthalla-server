@@ -622,7 +622,8 @@ static std::shared_ptr<CommandUsage> key_import(const std::weak_ptr<CommandUsage
 }
 
 static const Positional grantPos = Positional::Same("grant_id", "The recovery recipient's grant id (vh vault keys "
-                                                                "recipient list)");
+                                                                "recipient list)",
+                                                    contract::gen::ref("vault.recipient", {"grant_id"}));
 
 static std::shared_ptr<CommandUsage> key_recipient_list(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
@@ -650,7 +651,8 @@ static std::shared_ptr<CommandUsage> key_recipient_add(const std::weak_ptr<Comma
                        "is sent anywhere but the bucket.";
     cmd->positionals = {vaultPos};
     cmd->required = {Option::Multi("public_key", "The recipient's X25519 public key (base64 or 64 hex digits)",
-                                   {"public-key", "key"}, {"key"})};
+                                   {"public-key", "key"}, {"key"})
+                         .withGen("key", contract::gen::constant("9jB0b7LvRAo3+fTz//m8OhJQkp39Kcd1PjiFpjtmrTs="))};
     cmd->optional = {owner, Optional::ManyToOne("label", "A name you recognize the kit by", {"label"}, "label")};
     cmd->optional_flags = {jsonFlag};
     cmd->examples = {{"vh vault keys recipient add 42 --public-key 9jB0b7LvRAo3+fTz//m8OhJQkp39Kcd1PjiFpjtmrTs= "
