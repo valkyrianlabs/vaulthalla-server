@@ -328,8 +328,12 @@ Dev mode requires both `VH_BUILD_MODE=dev` and the gitignored `enable_dev_mode` 
   `VAULTHALLA_E2E_TOTP_FILE`; `VAULTHALLA_E2E_PYTHON` names an interpreter with `websockets`, `VAULTHALLA_E2E_WS_URL`
   the daemon's ws when the default from the console settings is wrong). `helpers/totp.ts` `withTotpCode` spends one
   step at a time under a lock beside that file (the daemon refuses a step at or below the last it accepted, so codes
-  must reach it in order across workers). `armStepUp(page)` (each spec's `beforeEach`, and `deleteVault`) answers the
-  Step-up dialog (#359) with the password and a code. No daemon bypass.
+  must reach it in order across workers; one shared factor gives about three sign-ins at once, then one per 30 s, so
+  queued callers extend their timeout). `armStepUp(page)` (each spec's `beforeEach`; a locator handler, so only before
+  actions and assertions) and `settleStepUp(page, wait)` (a step that ends in a wait, e.g. `deleteVault`: every vault
+  deletion is its own `data.destroy` step-up) answer the Step-up dialog (#359) with the password and a code. No
+  daemon bypass. Run it the documented way (production build behind the reverse proxy): under `next dev` there is no
+  `/upload` route and the ws budget doubles.
 - `tools/macos/{install_acceptance,storage_smoke}.py` sign the admin in through `tools/macos/session.py` (password, TOTP,
   first enrollment, step-up with one resend). install_acceptance keeps the authenticator in `admin-totp.json` next to
   `--state` (`--totp-file`), storage_smoke in memory. Offline tests: `tools/macos/tests` (a scripted daemon behind the
