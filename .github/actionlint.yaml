@@ -7,3 +7,4 @@ self-hosted-runner:
     - vps-ci
     # GitHub-hosted macOS 27 (public preview image; actionlint predates the label).
     - xcode-27
+    - vl-macos
