@@ -78,6 +78,19 @@ the same lock-and-wipe behavior (`crypto/SecretBytes.hpp`, which also holds `Wip
 
 ## 6. Part 4: versioned master-key rewrap (`vault_master` first)
 
+Status: part 4a implemented (#352): migration 120, `vault/Master.hpp` (the master by version), `vault/MasterRewrap.hpp`
+(the engine), `ops::vault_master` and `vh secret master status|rotate|finalize|rollback`. As built:
+- The state is the singleton `vault_master_state` (`version`, `staging_version`, `previous_version`, `window_until`,
+  `highest_version` so numbers are never reused, `discard_versions` for slot deletions a crash interrupted). Every key
+  row carries `master_version`; unwraps use the row's version, wraps happen inside a `vault::master::Writer` (the
+  switch waits for every Writer), and trigger `vh_vault_master_guard` refuses a row that declares another master.
+- A write that changes a row's wrapped bytes (a key rotation, an import) drops its staged and retained wraps; the
+  switch stages such rows inside its own locked transaction, and a rollback rewraps them under the previous master.
+- Rotation refuses a row that doesn't unwrap under the current master (import its keys first) and a second rotation
+  while a window is open. Rollback while staging abandons the staging.
+- Accepted consequence: a database backup from before a rotation needs the previous master; once the window ends,
+  it restores only through the vault key exports (documented, and named in the rotate confirmation).
+
 Goal: replace `vault_master` without re-encrypting any file body.
 
 1. **Stage.** Generate the new master and seal it as `vault_master.v<N+1>` beside the current one. For every dependent row (`vault_keys`, `vault_keys_trashed`, `vault_deletion_key`), write the new wrap into staging columns (`encrypted_key_next`, `iv_next`, `master_version_next`) in batched transactions, which can resume after a crash.
@@ -109,6 +122,6 @@ Recommendation: (A) now. (B) as an opt-in later if a customer needs software-onl
 
 1. Part 2: `SecretKey` for master secrets (#350, done).
 2. Part 3: PCR 7 opt-in with reseal, health warning and drill docs.
-3. Part 4a: versioned rewrap engine with staging columns and the `vault_master` rotation command.
+3. Part 4a: versioned rewrap engine with staging columns and the `vault_master` rotation command (#352, done).
 4. Part 4b: `ak_master` and `s3gw_master` rewrap, and JWT and device-identity rotation commands.
 5. swtpm state key, if option (B) is chosen.

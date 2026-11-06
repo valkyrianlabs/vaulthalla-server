@@ -15,6 +15,11 @@
 #include "CommandUsage.hpp"
 #include "rbac/role/Admin.hpp"
 #include "rbac/role/Vault.hpp"
+#include "ops/VaultMaster.hpp"
+#include "vault/Master.hpp"
+#include "protocols/shell/types.hpp"
+
+#include <fmt/format.h>
 
 #include <fstream>
 #include <paths.h>
@@ -153,11 +158,139 @@ static CommandResult handle_secrets_export(const CommandCall& call) {
     return handle_secret_encrypt_and_response(call, out, usage);
 }
 
+// ---- vh secret master (#352) ----------------------------------------------------------------------------------
+
+static bool isMasterMatch(const std::string& cmd, const std::string_view input) {
+    return isCommandMatch({"secrets", "master", cmd}, input);
+}
+
+static std::string iso(const std::optional<std::time_t>& t) {
+    if (!t) return "-";
+    std::tm tm{};
+    gmtime_r(&*t, &tm);
+    char buf[32];
+    std::strftime(buf, sizeof buf, "%Y-%m-%d %H:%M:%S UTC", &tm);
+    return buf;
+}
+
+static std::string master_status_text(const vault::master::rewrap::Status& s) {
+    std::string out = fmt::format("Vault master: version {} ('{}'), {} sealing ({}){}\n", s.state.version,
+                                  vault::master::slotName(s.state.version),
+                                  crypto::secrets::KeyProvider::posture(), crypto::secrets::KeyProvider::backend(),
+                                  s.current_sealed ? "" : " [NOT SEALED ON THIS HOST]");
+    out += fmt::format("  key rows:     {}", s.rows);
+    for (const auto& [v, n] : s.by_master) out += fmt::format("  (version {}: {})", v, n);
+    out += "\n";
+    if (s.state.staging_version)
+        out += fmt::format("  staging:      version {} since {}: {} of {} row(s) staged{}\n", *s.state.staging_version,
+                           iso(s.state.staging_started_at), s.staged, s.rows,
+                           s.staging_sealed ? "" : " (its master is not sealed yet)");
+    if (s.state.previous_version)
+        out += fmt::format("  recovery:     version {} kept until {} ({} row(s) with a retained wrap{}); "
+                           "rollback or finalize\n",
+                           *s.state.previous_version, iso(s.state.window_until), s.retained,
+                           s.previous_sealed ? "" : "; ITS MASTER IS NO LONGER ON THIS HOST");
+    if (!s.state.staging_version && !s.state.previous_version) out += "  rotation:     none in progress\n";
+    if (!s.state.discard_versions.empty())
+        out += fmt::format("  pending:      {} retired master slot(s) still to delete\n", s.state.discard_versions.size());
+    return out;
+}
+
+// Runs a confirmable vault master operation: asks in a terminal, else needs --yes.
+template <class Fn>
+static CommandResult runConfirmable(const CommandCall& call, const std::string& err, Fn&& fn) {
+    const bool yes = hasFlag(call, "yes");
+    try {
+        try {
+            return fn(yes);
+        } catch (const ops::NeedsConfirmation& e) {
+            if (!call.io) {
+                noteConfirmationNeeded(e.code, {"--yes"});
+                return invalid(err + ": " + e.what() + "\nRe-run in a terminal, or with --yes.");
+            }
+            if (!call.io->confirm(std::string(e.what()) + " [no]", true)) return invalid(err + ": cancelled; nothing was changed");
+            return fn(true);
+        }
+    } catch (const ops::Error& e) {
+        return invalid(err + ": " + e.what());
+    } catch (const std::exception& e) {
+        return {1, "", err + ": " + e.what()};
+    }
+}
+
+static CommandResult handle_secrets_master(const CommandCall& call) {
+    // Changing which master wraps the vault keys is never an agent's decision (also excluded from MCP).
+    if (call.positionals.empty() || hasKey(call, "help") || hasKey(call, "h")) return usage(call.constructFullArgs());
+    const auto [sub, subcall] = descend(call);
+    const bool json = hasFlag(subcall, "json") || hasFlag(subcall, "j");
+
+    if (isMasterMatch("status", sub)) {
+        try {
+            const auto s = ops::vault_master::status(subcall.user);
+            return ok(json ? ops::vault_master::toJson(s).dump(4) : master_status_text(s));
+        } catch (const ops::Error& e) {
+            return invalid(std::string("secret master status: ") + e.what());
+        }
+    }
+    const bool mutating = isMasterMatch("rotate", sub) || isMasterMatch("finalize", sub) || isMasterMatch("rollback", sub);
+    if (mutating && AgentCallScope::active())
+        return invalid("secret master: the vault master is rotated by a human at the terminal, never by an agent");
+
+    if (isMasterMatch("rotate", sub)) {
+        ops::vault_master::RotateRequest req;
+        try {
+            if (const auto h = optVal(subcall, "window-hours")) req.window = std::chrono::hours(std::stoul(*h));
+            else if (const auto w = optVal(subcall, "window")) req.window = std::chrono::hours(std::stoul(*w));
+            if (const auto b = optVal(subcall, "batch")) req.batch = static_cast<unsigned int>(std::stoul(*b));
+        } catch (const std::exception&) {
+            return invalid("secret master rotate: --window-hours and --batch take whole numbers");
+        }
+        return runConfirmable(subcall, "secret master rotate", [&](const bool yes) {
+            req.confirmed = yes;
+            const auto r = ops::vault_master::rotate(subcall.user, req);
+            if (json) return ok(ops::vault_master::toJson(r).dump(4));
+            return ok(fmt::format("Vault master rotated from version {} to {}: {} key row(s) rewrapped and verified "
+                                  "({} staged now in {} batch(es){}, {} caught up at the switch). No file was "
+                                  "re-encrypted.\nThe previous master is kept until {}: `vh secret master rollback` "
+                                  "returns to it, `vh secret master finalize` deletes it sooner.",
+                                  r.from, r.to, r.rows, r.staged_now, r.batches,
+                                  r.resumed ? ", resuming an interrupted rotation" : "", r.caught_up,
+                                  iso(r.window_until)));
+        });
+    }
+    if (isMasterMatch("finalize", sub))
+        return runConfirmable(subcall, "secret master finalize", [&](const bool yes) {
+            const auto r = ops::vault_master::finalize(subcall.user, yes);
+            if (json) return ok(ops::vault_master::toJson(r).dump(4));
+            if (!r.finalized)
+                return ok(r.deleted.empty() ? std::string("No recovery window is open; nothing to finalize.")
+                                            : fmt::format("No recovery window is open; deleted {} leftover retired "
+                                                          "master slot(s).", r.deleted.size()));
+            return ok(fmt::format("Finalized: {} key row(s) verified under the current vault master; version {} "
+                                  "deleted.", r.rows, *r.previous));
+        });
+    if (isMasterMatch("rollback", sub))
+        return runConfirmable(subcall, "secret master rollback", [&](const bool yes) {
+            const auto r = ops::vault_master::rollback(subcall.user, yes);
+            if (json) return ok(ops::vault_master::toJson(r).dump(4));
+            if (r.kind == vault::master::rewrap::RollbackResult::Kind::AbandonedStaging)
+                return ok(fmt::format("Abandoned the staged vault master version {}; version {} stays.", r.from, r.to));
+            return ok(fmt::format("Rolled back to vault master version {}: {} key row(s) restored from their retained "
+                                  "wrap, {} rewrapped; version {} deleted.", r.to, r.rows, r.rewrapped, r.from));
+        });
+    return invalid("secret master: unknown subcommand '" + std::string(sub) + "'. Use: status | rotate | finalize | rollback");
+}
+
 static bool isSecretsMatch(const std::string& cmd, const std::string_view input) {
     return isCommandMatch({"secrets", cmd}, input);
 }
 
 static CommandResult handle_secrets(const CommandCall& call) {
+    // The vault master has its own gate (super admins only, ops::vault_master), checked there.
+    if (!call.positionals.empty() && isSecretsMatch("master", call.positionals[0])) {
+        const auto [_, subcall] = descend(call);
+        return handle_secrets_master(subcall);
+    }
     if (!call.user->encryptionKeysPerms().canExport())
         return invalid("secrets export: insufficient permissions to export secrets. Requires encryption keys export permission.");
 

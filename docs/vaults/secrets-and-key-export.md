@@ -184,6 +184,42 @@ On macOS, Vaulthalla refuses to start its sealing when the Secure Enclave can't 
 If the sealed master that protects vault keys, provider API keys or S3 gateway credentials is missing while those records still exist, Vaulthalla refuses to create a new one, because a new one could never decrypt them. The affected vaults don't start, and the log says why. Restore the state directory (with the same TPM or Secure Enclave), or import the vault key backups ([Restore Vault Keys](#restore-vault-keys)) and the internal secrets ([Seed Internal Secrets](#seed-internal-secrets)).
 :::
 
+## Rotate The Vault Master
+
+The vault master is the installation secret that wraps every vault key. Rotating it replaces that secret without re-encrypting a single file: only the wraps of the vault keys change, and the vault keys themselves stay the same. Rotation is for super admins, from a terminal; agents and the web console can't do it.
+
+```bash
+vh secret master status               # version, sealing, any rotation in progress or recovery window
+sudo vh secret master rotate          # asks to confirm; --yes without a terminal
+vh secret master rollback             # inside the recovery window: return to the previous master
+vh secret master finalize             # end the recovery window now
+```
+
+What `rotate` does:
+
+1. **Stage.** It seals a new master (`vault_master.v2`, `.v3`, ...) beside the current one, then writes the new wrap of every key row (live vaults, retired key versions, and the retained keys of deleted vaults) in batches. If it is interrupted (a crash, a restart, a power cut), run it again: it continues where it stopped. Nothing switches while staging, and every vault keeps working on the current master.
+2. **Verify.** It unwraps every staged row under the new master and checks that it is the same key as under the current one, and that it matches the key's recorded [key check](#key-checks). Any mismatch stops the rotation before anything switches.
+3. **Switch.** One step moves every row to the new master. Rows written while the rotation ran (a new vault, a key rotation) are rewrapped and verified in the same step.
+4. **Recovery window.** The previous master and every row's previous wrap are kept for 7 days (`--window-hours` sets 1 hour to 90 days). Inside the window, `rollback` returns every key to the previous master. When the window ends, by itself or with `finalize`, every row is verified under the new master again, and only then is the previous master deleted.
+
+A rotation refuses to start while a recovery window is still open, and when a key row doesn't unwrap under the current master (import that vault's keys first). Every step is recorded in the audit trail (`secrets.master.rotate`, `secrets.master.rollback`, `secrets.master.finalize`), refusals included.
+
+:::callout[Database backups from before a rotation]{variant="warning"}
+A database backup taken before a rotation holds key rows wrapped by the previous master. Once the window has ended and that master is deleted, such a backup restores only through the vault key exports ([Restore Vault Keys](#restore-vault-keys)). Export the vault keys (or let Vaulthalla Desktop back them up) before rotating, and take a fresh database backup after the window closes.
+:::
+
+### Recovery Window Drill
+
+Practice this on a test host before you rely on it in production:
+
+1. `vh vault keys status all`: every vault's needed versions have a confirmed backup.
+2. `sudo vh secret master rotate`, then `vh secret master status` shows `recovery_window` and the date it ends.
+3. Check that the vaults still read: open a few files, and run `vh status`.
+4. Roll back: `vh secret master rollback`. Status shows the previous version again, and the files still read.
+5. Rotate again and let the window run out, or `vh secret master finalize`. Status shows no rotation in progress.
+
+If the new master is lost inside the window (a TPM reset, a damaged state directory), the vaults don't start and the log names `vh secret master rollback`: the rollback needs only the previous master and puts every key row back. If both masters are lost (a new host, or the whole TPM state), restore the vault keys from their exports onto the new host's master ([Restore Vault Keys](#restore-vault-keys)). The exports and the server's attestation records in the database are enough; the old host and its TPM are not needed.
+
 ## Storage Rules
 
 Use these rules for recovery material:

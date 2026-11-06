@@ -12,7 +12,12 @@ exported_version, exported_at)` holds the current version; a rotation moves it t
 `rotation_completed_at` NULL until the sync pass has re-encrypted every file); trigger
 `recovery_guard_retired_vault_key` keeps retired versions recovery data references. A deleted vault's versions are
 copied (still sealed) into `vault_deletion_key` until `key_retain_until`. All three tables carry the version's
-recorded provenance (`key_check`, `attestation_key_id`, `attestation`; migration 113, below).
+recorded provenance (`key_check`, `attestation_key_id`, `attestation`; migration 113, below). Since migration 120
+(#352) every row also names the vault master version that wraps it (`master_version`; `vault/Master.hpp`: unwrap with
+`vault::master::unwrap(row.encrypted_key, row.iv, row.master_version)`, wrap inside a `vault::master::Writer`), and
+`vh secret master rotate|rollback|finalize` rewraps all three tables (`vault/MasterRewrap.hpp`, staged `*_next` and
+retained `*_prev` columns; design/sealing/master-secrets.md §6). Import seals under the current version
+(`Writer(true)`: it may create it on a new host).
 
 ## Key check (`vault/KeyCheck.hpp`)
 

@@ -53,16 +53,16 @@ void crashPoint(const std::string_view point) {
 }
 
 struct Wrap {
-    std::vector<uint8_t> key, iv;
+    std::vector<uint8_t> key{}, iv{};
     unsigned int master{};
 };
 
 struct Row {
-    std::string table;
+    std::string table{};
     unsigned int vault_id{}, version{};
-    Wrap cur;
-    std::optional<std::string> key_check;
-    std::optional<Wrap> next, prev;
+    Wrap cur{};
+    std::optional<std::string> key_check{};
+    std::optional<Wrap> next{}, prev{};
 
     [[nodiscard]] std::string name() const { return fmt::format("{} vault {} version {}", table, vault_id, version); }
 };
@@ -219,6 +219,12 @@ std::vector<unsigned int> discardPending() {
 // The staged master `target`: unsealed when it is sealed and usable, else (absent, or it no longer unseals) generated
 // afresh. Replacing it is safe: nothing is switched to it while it is staging; its staged wraps are dropped first.
 Provider sealTarget(const unsigned int target) {
+    {
+        const auto st = db::Transactions::exec("rewrap::sealTarget.state", [](pqxx::work& txn) { return readState(txn, false); });
+        if (target == st.version || st.previous_version == target || st.staging_version != target)
+            throw std::logic_error("refusing to replace vault master version " + std::to_string(target) +
+                                   ": it is not the version being staged");
+    }
     forget(target);
     if (slotSealed(target)) {
         try {
@@ -387,7 +393,7 @@ RotateResult rotate(const Options& options) {
             if (!row.next || row.next->master != target) continue;  // changed since staging: the switch stages it
             const auto oldRaw = unwrapWith(current, row.cur);
             const auto newRaw = unwrapWith(next, *row.next);
-            if (!oldRaw || !newRaw || !std::ranges::equal(oldRaw->bytes(), newRaw->bytes) ||
+            if (!oldRaw || !newRaw || !std::ranges::equal(oldRaw->bytes(), newRaw->bytes()) ||
                 !matchesRecord(row, newRaw->bytes())) {
                 bad.push_back(row.name());
                 drop.push_back(&row);
