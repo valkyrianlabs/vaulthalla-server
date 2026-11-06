@@ -1,4 +1,6 @@
 #include "vault/model/S3Vault.hpp"
+
+#include <paths.h>
 #include "db/encoding/has.hpp"
 
 #include <nlohmann/json.hpp>
@@ -37,6 +39,24 @@ std::string_view describe(const StorageLayout layout) {
 
 StorageLayout layoutFor(const bool encryptUpstream) {
     return encryptUpstream ? StorageLayout::PathV0 : StorageLayout::Transparent;
+}
+
+namespace {
+std::optional<StorageLayout>& newEncryptingLayoutOverride() {
+    static std::optional<StorageLayout> layout;
+    return layout;
+}
+}
+
+StorageLayout layoutForNewVault(const bool encryptUpstream) {
+    if (!encryptUpstream) return StorageLayout::Transparent;
+    if (paths::isTestMode() && newEncryptingLayoutOverride()) return *newEncryptingLayoutOverride();
+    return StorageLayout::OpaqueV1;
+}
+
+void setNewEncryptingLayoutForTesting(const std::optional<StorageLayout> layout) {
+    if (layout == StorageLayout::Transparent) throw std::invalid_argument("an encrypting vault is never transparent");
+    newEncryptingLayoutOverride() = layout;
 }
 
 S3Vault::S3Vault(const std::string& name, const unsigned int apiKeyID, std::string bucketName)

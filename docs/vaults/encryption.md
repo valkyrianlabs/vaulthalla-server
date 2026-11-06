@@ -122,14 +122,17 @@ format, as items and bytes on disk.
 
 For S3/R2 vaults, upstream encryption controls whether object bodies uploaded to the bucket are encrypted by Vaulthalla before upload.
 
-With upstream encryption enabled (the default for new S3/R2 vaults):
+With upstream encryption enabled (the default for new S3/R2 vaults), new vaults use **opaque storage**:
 
-File contents are encrypted before upload. File and folder names are visible to your storage provider.
+Your storage provider only ever sees encrypted, opaquely named objects. It can't see your file names, folders or contents. It can see how many objects you store, their sizes and when they change.
 
-- Object payloads are encrypted before upload.
-- Remote object metadata records Vaulthalla encryption status, IV, key version, and content hash.
-- Each object is named after the file's path in the vault, so the bucket's provider, and anyone with read access to the bucket, sees file and folder names, the folder tree, object sizes and counts, when objects change, and the provider metadata.
-- Decrypting the objects needs this vault's keys, which stay on your server (or in your [key exports](#export-vault-keys)). A vault can't be restored from its bucket alone: restoring needs its database as well (see [Restore Vault Keys](/vaults/secrets-and-key-export#restore-vault-keys)).
+- Each file is one encrypted object named by a random id (`o/<id>`), with no metadata; names, folders and the vault's history live in an encrypted manifest in the same bucket (`.vaulthalla/`).
+- Decrypting the objects needs this vault's keys, which stay on your server, in your [key exports](#export-vault-keys), and wrapped to your [recovery kit](/vaults/secrets-and-key-export#recovery-recipients). With the kit, the vault can be rebuilt on another server from its bucket (see [Restore A Vault From Its Bucket](/vaults/secrets-and-key-export#restore-a-vault-from-its-bucket)); that needs your recovery material, never the bucket by itself.
+
+Encrypting S3/R2 vaults created before this release keep the earlier layout until a later release migrates them: file contents are encrypted before upload. File and folder names are visible to your storage provider.
+
+- Each object is named after the file's path in the vault, so the bucket's provider, and anyone with read access to the bucket, sees file and folder names, the folder tree, object sizes and counts, when objects change, and the provider metadata (encryption status, IV, key version, content hash).
+- Restoring such a vault needs its database as well (see [Restore Vault Keys](/vaults/secrets-and-key-export#restore-vault-keys)).
 
 With upstream encryption disabled:
 
@@ -143,7 +146,7 @@ These statements are for the deployment Vaulthalla supports today: you run the d
 
 | Who | Local vault | S3/R2, upstream encryption on | S3/R2, upstream encryption off |
 | --- | --- | --- | --- |
-| The storage provider, or anyone with bucket access | Not involved | Encrypted file contents; file and folder names, sizes, counts and change times are visible | Everything: contents and names |
+| The storage provider, or anyone with bucket access | Not involved | Opaque storage: encrypted, opaquely named objects; sizes, counts and change times are visible. Vaults from before this release: file and folder names are visible too | Everything: contents and names |
 | Whoever administers the server running the daemon | Everything: the daemon holds the vault keys while it runs | Everything | Everything |
 
 The server holds every vault key while it runs, so protecting that host, its administrators and its updates is part of protecting the data. A vault's contents are only as private as the server that runs it.

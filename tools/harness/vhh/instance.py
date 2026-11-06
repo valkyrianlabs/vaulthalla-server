@@ -136,7 +136,8 @@ class Instance:
     """One private daemon. Use as a context manager, or call start()/stop()."""
 
     def __init__(self, build_dir: Path, run_id: str | None = None, artifacts: Path | None = None,
-                 redactor=None, extra_env: dict[str, str] | None = None, start_timeout: float = 90):
+                 redactor=None, extra_env: dict[str, str] | None = None, start_timeout: float = 90,
+                 own_tpm: bool = False, config_extra: str = ""):
         if os.geteuid() != 0:
             raise InstanceError("the engine launches the daemon as root (FUSE allow_other, TPM, actor uids): use sudo")
         self.build_dir = Path(build_dir).resolve()
@@ -153,6 +154,11 @@ class Instance:
         self.redactor = redactor
         self.extra_env = extra_env or {}
         self.start_timeout = start_timeout
+        # own_tpm: a private swtpm (state under the run directory, its own loopback ports) instead of the host's TPM,
+        # so a drill's second instance shares nothing with the first but what it is given (spec 03 §7).
+        self.own_tpm = own_tpm
+        self.config_extra = config_extra
+        self.tpm_proc: subprocess.Popen | None = None
         self.proc: subprocess.Popen | None = None
         self.target: Target | None = None
         self._db_created = False
@@ -194,7 +200,7 @@ class Instance:
             "device_server: {enabled: false}\n"
             "email: {enabled: false}\n"
             "operator_emails: {enabled: false}\n"
-            "dev: {enabled: false}\n" % (ws_port, http_port, _free_port()))
+            "dev: {enabled: false}\n" % (ws_port, http_port, _free_port()) + self.config_extra)
 
         db = _read_env_file(DB_ENV_FILE)
         if self.redactor is not None:
@@ -226,9 +232,15 @@ class Instance:
         cmd = [str(self.server)]
         if self.extra_env.get("VHH_SETARCH") == "1":   # TSan on this kernel needs ASLR off
             cmd = ["setarch", "-R"] + cmd
-        self.proc = subprocess.Popen(cmd, env=env, stdin=subprocess.DEVNULL, stdout=self._log,
-                                     stderr=subprocess.STDOUT, start_new_session=True, cwd=str(self.run_dir))
-        self._wait_ready(ws_port, http_port)
+        try:
+            if self.own_tpm:
+                env["VH_TPM_TCTI"] = self._start_tpm()
+            self.proc = subprocess.Popen(cmd, env=env, stdin=subprocess.DEVNULL, stdout=self._log,
+                                         stderr=subprocess.STDOUT, start_new_session=True, cwd=str(self.run_dir))
+            self._wait_ready(ws_port, http_port)
+        except BaseException:
+            self.stop()  # the daemon (by pid), its swtpm, the mount and the run database: nothing is left behind
+            raise
 
         self.target = Target(kind=TARGET_KIND, run_id=self.run_id, nonce=secrets.token_hex(8), pid=self.proc.pid,
                              server=str(self.server), db_name=self.db_name, run_dir=str(self.run_dir),
@@ -242,6 +254,44 @@ class Instance:
             self.stop()
             raise InstanceError(f"launched instance failed validation: {why}")
         return self.target
+
+    def _start_tpm(self) -> str:
+        """A swtpm of this run's own (TPM 2.0, state in <run>/tpm), on two free loopback ports; returns the TCTI."""
+        state = self.run_dir / "tpm"
+        state.mkdir(mode=0o700)
+        # The swtpm TCTI talks to the control channel on port + 1.
+        for _ in range(50):
+            port = _free_port()
+            ctrl = port + 1
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+                    probe.bind(("127.0.0.1", ctrl))
+                break
+            except OSError:
+                continue
+        else:
+            raise InstanceError("no two adjacent free loopback ports for the private swtpm")
+        self.tpm_proc = subprocess.Popen(
+            ["swtpm", "socket", "--tpm2", "--tpmstate", f"dir={state}",
+             "--server", f"type=tcp,port={port},bindaddr=127.0.0.1", "--ctrl", f"type=tcp,port={ctrl},bindaddr=127.0.0.1",
+             "--flags", "not-need-init,startup-clear"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        deadline = time.monotonic() + 15
+        while not _port_open(port):
+            if self.tpm_proc.poll() is not None or time.monotonic() > deadline:
+                raise InstanceError("the private swtpm did not start")
+            time.sleep(0.1)
+        return f"swtpm:host=127.0.0.1,port={port}"
+
+    def _stop_tpm(self) -> None:
+        if self.tpm_proc is not None and self.tpm_proc.poll() is None:
+            self.tpm_proc.terminate()  # by its own pid
+            try:
+                self.tpm_proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                self.tpm_proc.kill()
+                self.tpm_proc.wait(timeout=10)
+        self.tpm_proc = None
 
     def _wait_ready(self, ws_port: int, http_port: int) -> None:
         deadline = time.monotonic() + self.start_timeout
@@ -415,12 +465,13 @@ class Instance:
             cp = run(["runuser", "-u", "postgres", "--", "dropdb", "--force", "--if-exists", self.db_name], timeout=60)
             report["db_dropped"] = cp.returncode == 0
             self._db_created = cp.returncode != 0
+        self._stop_tpm()
         if self._log:
             self._log.close()
             self._log = None
         # The run dir holds sealed test keys and backing data; artifacts are kept, the rest goes.
         if not mount_entry(self.mount):
-            for name in ("backing", "mnt", "run", "cli.sock"):
+            for name in ("backing", "mnt", "run", "cli.sock", "tpm"):
                 p = self.run_dir / name
                 if p.is_dir():
                     shutil.rmtree(p, ignore_errors=True)

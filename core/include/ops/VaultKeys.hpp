@@ -164,6 +164,10 @@ struct VaultExport {
     ExportedKey current{};
     std::vector<ExportedKey> historical{};  // every other needed version, ascending
     std::vector<unsigned int> missing{};    // needed versions the vault no longer holds
+    // Where the attestations were made (#371): this node's id and the vault's uid (base32; null for a deleted vault),
+    // so `vh vault recover --export` can verify them on another node.
+    std::string node_id{};
+    std::optional<std::string> vault_uid{};
 };
 
 // One vault's needed keys (live, or deleted within key retention). Refused on Console/Agent channels.

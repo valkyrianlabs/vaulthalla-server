@@ -218,6 +218,15 @@ def cmd_scenario(a) -> int:
     return PASS if ok else FAIL
 
 
+def cmd_drill(a) -> int:
+    from vhh import drill
+    argv = [a.kind, "--build", a.build, "--files", str(a.files), "--s3", a.s3]
+    argv += ["--no-negative"] if a.no_negative else []
+    argv += ["--keep"] if a.keep else []
+    argv += ["--out", a.out] if a.out else []
+    return {0: PASS, 2: REFUSED}.get(drill.main(argv), FAIL)
+
+
 def cmd_run(a) -> int:
     if a.target == "launch":
         return _run_launched(a)
@@ -568,6 +577,17 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--sessions", type=int, default=8)
     p.add_argument("--rounds", type=int, default=20)
     p.set_defaults(fn=cmd_scenario)
+
+    p = sub.add_parser("drill", help="the catastrophic restore drill (spec 03 §7; root): write on node A, destroy it, "
+                                     "restore on independent nodes B and C")
+    p.add_argument("kind", choices=("recover",))
+    p.add_argument("--build", required=True)
+    p.add_argument("--files", type=int, default=2000)
+    p.add_argument("--s3", choices=("fake", "r2"), default="fake")
+    p.add_argument("--no-negative", action="store_true")
+    p.add_argument("--keep", action="store_true")
+    p.add_argument("--out")
+    p.set_defaults(fn=cmd_drill)
 
     p = sub.add_parser("verify", help="verify a finished trace offline")
     p.add_argument("--trace", required=True)

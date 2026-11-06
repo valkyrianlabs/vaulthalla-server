@@ -116,10 +116,11 @@ ordinary multipart transport and no per-chunk objects.
 
 ## Quality gates
 
-- **Recoverability before exposure.** `opaque_v1` creation is staged internally (test mode and the harness only)
+- **Recoverability before exposure.** `opaque_v1` creation was staged internally (test mode and the harness only)
   until the encrypted manifest (WS3-a), recovery recipients and exports (WS3-b) and the catastrophic restore drill
-  (WS3-c) pass. New encrypting vaults stay `path_v0` until then, and no claim says a vault is recoverable from the
-  bucket (spec 05). The release that enables `opaque_v1` creation records the drill result.
+  (WS3-c) passed. **Lifted by #371**: the drill passes (`vhh drill recover`, spec 03 §7, result in
+  `.release/notes.d/371-vault-recover.md`), and every new encrypting vault is `opaque_v1`; existing `path_v0` vaults
+  wait for WS1-c. A recovery claim still needs the vault's recovery material in place (spec 05 §1).
 - **No unverified plaintext, no auxiliary leaks.** VHF1 readers emit only authenticated chunks (02 §3.6-3.7); the
   request audit test fails on any name, path or plaintext-derived value in any request (01 §8).
 - **Verified everywhere it matters:** negative vectors, local and remote format conversion, provider versioning and

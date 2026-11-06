@@ -413,7 +413,7 @@ sent to Valkyrian Labs until such a service is designed, approved and explicitly
   `vh vault keys status --json` (which now reports `vault_uid`, `node_id`, `attestation_public_keys`, `checkpoint`).
 - **Tests.** `RecoveryRecipient.*`, `RecoveryRequirement.*`, `RecoveryNoSilentCustody.*`, `KeysImportFromKit.*`,
   `VaultKeyExportProvenance.*` (`test_recovery_recipients.cpp`, DB), `SqlDeployerHistoryDb.RecoveryRecipients*`,
-  `recovery_tool` (meson). Left for #371: `vh vault recover` on a fresh node with the kit's pinned keys as the anchor.
+  `recovery_tool` (meson). `vh vault recover` on a fresh node with the kit's pinned keys as the anchor: §6.4 (#371).
 
 ## 6. Restore into a new instance
 
@@ -460,6 +460,48 @@ command (key material never travels through browser sessions, D4).
 
 `--dry-run` does steps 1-6 into a scratch schema and reports without creating anything; the migration's
 verification (spec 01 §6.3) is the same code.
+
+### 6.4 As implemented (#371)
+
+- **Plan** (`vault::recover`, `core/{include,src}/vault/Recover.*`; no database writes): the vault uid (the caller's,
+  else the kit's, else the bucket's hint; a hint the kit doesn't list is `kit_vault_mismatch`), every KEV1 envelope
+  (`kid` → recipient id and version; the kit's seed unwraps those addressed to it, `recovery_material_mismatch` when
+  none is), the export's versions (`parseExport`; exports now carry `node_id` and `vault_uid`), `loadForRestore` with
+  the kit's checkpoint (`rollback` refused unless `accept_rollback`, `fork` always), else a blind rebuild. Per version
+  one key: the root's key check picks among candidates (planted keys lose), the export's first without a root.
+  Reconciliation: one LIST of `o/`; objects no entry names are read by their 120-byte header and placed under
+  `/Recovered/<uid>` (empty plaintext needs no key); an object whose ETag or size moved since the manifest is read by
+  its header (generation and key version); entries without an object are restored and reported `missing_objects`;
+  entries whose folder is gone (a lost segment) or that form a cycle go under `/Recovered`. `MeteredStore` counts
+  manifest, envelope, header and content bytes (`downloads.content_bytes` stays 0).
+- **D1** (`prove`): evidence per version from the root (its producer's node and vault id), the root's recorded
+  `keys[].origin` (a version an earlier restore recovered) and the export; pins from the kit entry (keys, origin node
+  and vault) and export public keys. Verdicts `verified`, `no_anchor`, `empty_anchor`, `unattested`, `unverified`,
+  `wrong_node`, `wrong_vault`, `self_attested` (a pinned key that is any of the restoring node's own attestation keys)
+  and `key_check_mismatch` (refused, not salvaged). `blocking()` = versions live files (or the current version) need
+  that aren't canonical; any blocking version makes the restore `salvage_required`.
+- **Write** (`db::query::vault::Recover::apply`, one transaction; migration 129 `vault_key_origin`): the vault (a
+  reserved id, the bucket's uid, `opaque_v1`, cache strategy), the tree with the manifest's uids and inodes from the FS
+  cache, trash, `remote_object_index` (source `manifest`), `upstream_object_version` (origin `observed`), snapshot
+  records (members `upstream_state = sent` where the bucket holds their generation, else `none`), the canonical key
+  versions (re-sealed, re-attested by this node, the verified evidence as their origin), grants of class customer with
+  a public key (the root's `grants[].public_key`, added by #371, or the kit's own) and their envelope rows, the file
+  recovery preference, and `remote_manifest_state`/`remote_manifest_root` at the loaded root. Salvage: a fresh key at
+  `max(every version the bucket names) + 1` as current, canonical versions retired, a `vault_key_salvage` row naming
+  the salvageable versions, then `ops::vault_keys::salvageRecoveredVault` runs the import's salvage pass; files under
+  versions nothing holds are left out and reported. The supplied keys are never stored.
+- **Surfaces** (`ops::vault_recover`): `vh vault recover --api-key --bucket [--kit] [--export] [--into] [--vault-uid]
+  [--accept-rollback] [--dry-run] [--salvage --confirm-name]` (the kit and export are read by `vh` and sent as one
+  bundle) and ws `vault.recover` (paired devices; `recover_requires_device` elsewhere; keys step-up bound to the
+  bucket; excluded from MCP). Audit `vault.recover`. After the write the vault is reinstated and publishes epoch + 1.
+  `--dry-run` plans in memory (no scratch schema): the same code without the write.
+- **Also fixed here:** key rotation and salvage record the object they PUT in the remote index
+  (`CloudEngine::recordOwnUpload`), so an `opaque_v1` manifest names the object the bucket holds after a rotation;
+  `vh vault keys status` reports each recovered version's `origin`.
+- **Tests:** `VaultRecoverTrustAnchor.*` (every row of the step 4 table), `VaultRecoverDb.*` (fresh node from the kit,
+  second restore through the recorded origin, dry run, salvage, export-only after a rotation, rollback, wrong
+  material, deleted root versioned and unversioned, corrupt segment). The drill (§7): `vhh drill recover` (fake S3
+  with versioning, three private instances with their own databases and swtpm) and `tools/harness/drill_recover_r2.sh`.
 
 ### 6.3 Sealed vaults
 

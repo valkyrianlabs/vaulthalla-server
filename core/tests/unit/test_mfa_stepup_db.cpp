@@ -367,6 +367,8 @@ TEST_F(StepUpDb, EveryAnnotatedCommandRefusesWithoutAGrantAndRunsWithOne) {
         {"storage.vault.remove", "covered by ATargetBoundGrantBindsTheExactAction"},
         {"recovery.point.delete", "needs a recovery point"},
         {"vault.recovery.suspend", "needs a versioned provider bucket"},
+        {"vault.recover", "needs a bucket and the customer's recovery material (VaultRecoverDb; the console is refused "
+                          "recover_requires_device first)"},
     };
 
     std::set<std::string> annotated;

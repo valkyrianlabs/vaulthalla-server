@@ -1,9 +1,10 @@
 """Encryption-claims lint: product text may only make the claims spec 05 §6 allows (#364, WS5-a).
 
 Binding spec: `design/encryption/05-claims-and-custody.md` §1, §3.1, §6 and §8. Every encryption claim names its
-deployment model, vault type and recovery tier, and only says what is true today: `encrypt_upstream=true` vaults are
-`path_v0` (file contents encrypted before upload, file and folder names visible to the storage provider), no vault is
-provider-blind, nothing restores a vault from the bucket alone, sealed vaults don't exist yet, and Vaulthalla Cloud
+deployment model, vault type and recovery tier, and only says what is true today: new `encrypt_upstream=true` vaults are
+`opaque_v1` ("opaquely named" objects, #371) while older ones stay `path_v0` (file and folder names visible to the
+storage provider) until WS1-c, no text calls a vault provider-blind, nothing restores a vault from the bucket alone
+(a restore needs the customer's recovery kit or export), sealed vaults don't exist yet, and Vaulthalla Cloud
 Assisted and Custodial Recovery (Tiers B and C) are planned and not implemented.
 
 The lint scans `docs/` (pages and `stack.toml`), `README.md` and the console sources (`web/src`). A rule matches a

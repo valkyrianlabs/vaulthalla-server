@@ -267,7 +267,12 @@ protected:
         runtime::Deps::init();
         fs::Filesystem::init(runtime::Deps::get().storageManager);
         superUser = vh::identities::manager().userByName("admin");
+        // FakeBucket is keyed by vault path: these suites exercise the path_v0 data plane, which existing vaults keep
+        // until the layout migration (WS1-c). New encrypting vaults are opaque_v1 otherwise (#371).
+        vault::model::setNewEncryptingLayoutForTesting(vault::model::StorageLayout::PathV0);
     }
+
+    static void TearDownTestSuite() { vault::model::setNewEncryptingLayoutForTesting(std::nullopt); }
 
     void SetUp() override {
         if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";

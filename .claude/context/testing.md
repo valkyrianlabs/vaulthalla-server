@@ -244,6 +244,8 @@ sudo tools/harness/vhh.sh replay --target launch --build build --trace runs/<run
 sudo tools/harness/vhh.sh shrink --target launch --build <fault build> --trace ... --predicate oracle --out x.jsonl
 sudo tools/harness/vhh.sh regress --build build                    # every tools/harness/regressions/*.jsonl must not reproduce
 sudo tools/harness/vhh.sh scenario hang|crash --build build        # daemon stopped/killed with a FUSE op in flight
+sudo tools/harness/vhh.sh drill recover --build build [--files 2000] # spec 03 §7 restore drill (#371), fake S3
+sudo tools/harness/drill_recover_r2.sh --build build --files 300    # the same drill on live R2 (vh-test-recover-drill)
 tools/harness/vhh.sh world oracle-check                            # RBAC model vs the fixture's 59 expectations
 bash tools/dev/verify.sh harness                                   # unit + self tests (CI tooling job)
 ```
@@ -277,6 +279,13 @@ bash tools/dev/verify.sh harness                                   # unit + self
   0/10 fixed; `RACE_ACCEPTANCE.md`), stale revocation (`scenario revoke`: the next request after an unassign is still
   allowed; the documented contract is that CLI/console changes apply to the very next request), ws list without
   RBAC (oracle; shrinks to one op). `vhh regress` keeps all of them (`regressions/*.jsonl`, `*.scenario.json`).
+- Restore drill (#371): `vhh/drill.py` + `vhh/fake_s3.py` (stdlib only; runs with system python3 too:
+  `sudo PYTHONPATH=tools/harness python3 -m vhh.drill recover --build build`). Three private instances, each with its
+  own database, state directory and swtpm (`Instance(own_tpm=True)`: a swtpm on two adjacent loopback ports,
+  `VH_TPM_TCTI`), driven as the sudo user (the instance's super admin; root is a system-only principal). The fake S3
+  logs every request (`content_downloads` = GETs of `o/` beyond 120 bytes) and has a `/__vhh/` side channel
+  (snapshot/restore, delete, purge, raw put/get, versioning) for the negative drills. API keys reach the daemons as
+  socket frames (`Node.frame`), never argv. Report JSON per run; kits and exports are deleted unless `--keep`.
 - Lessons: the engine never touches the mount itself (a `Path.resolve()` blocked it in D state under a stopped
   daemon); `Instance.watchdog()` aborts the run's own FUSE connection past a hard deadline.
 - Never point mutating commands at vh-storage: targets are validated (a live `VH_TEST_MODE=1` daemon serving a

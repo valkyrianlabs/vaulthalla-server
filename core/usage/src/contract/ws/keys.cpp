@@ -128,8 +128,15 @@ std::vector<WsCommandUsage> vaultKeyCommands() {
         .payload = {uinteger("api_key_id").gen(gen::ref("api_key", {"id"})).desc("The API key that reaches the bucket."),
                     str("bucket").gen(gen::pattern("vh-test-{a}{a}{a}{9}{9}")).desc("The bucket holding the vault."),
                     object("kit").opt().nullable().desc("The recovery kit (vh.recovery-kit v1)."),
-                    anyOf("export", {"object", "array"}).opt().nullable()
-                        .desc("A key export: one vault object or an `all` array."),
+                    anyOf("export", {"object", "array"})
+                        .alternatives({WsField{.types = {"object"}, .model = "VaultKeyImportDocument"}
+                                           .desc("One vault's entry of an export."),
+                                       WsField{.types = {"array"}, .items = "object", .model = "VaultKeyImportDocument"}
+                                           .desc("The CLI's `vh vault keys export all` array; the entry whose "
+                                                 "vault_uid matches the bucket's vault is used.")})
+                        .opt()
+                        .nullable()
+                        .desc("A key export (its keys, and the attestation public keys it carries as anchors)."),
                     str("into").opt().nullable().desc("The restored vault's name (default: the manifest's)."),
                     str("vault_uid").opt().nullable().desc("Which vault of the bucket (default: the kit's)."),
                     uinteger("owner_id").opt().nullable().desc("The owner (default: the caller)."),

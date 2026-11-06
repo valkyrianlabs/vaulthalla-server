@@ -119,7 +119,7 @@ Exports taken before attestations existed have none. Export your vault keys agai
 
 ## Recovery Recipients
 
-An export is a snapshot: after a key rotation, the new key exists only on the host until you export again. A **recovery recipient** closes that gap. It is a public key from a recovery kit you generate on your own computer; Vaulthalla wraps every key version of the vault to it, now and at every future rotation, and stores those wrapped keys (KEV1 envelopes) in the vault's own bucket under `.vaulthalla/key/`. With the kit, the vault's keys stay recoverable without this host's TPM: `vh vault keys import --recovery-kit` restores them when the host's vault master is lost (below). Rebuilding a vault after its database is lost is not supported yet; until then keep database backups as well.
+An export is a snapshot: after a key rotation, the new key exists only on the host until you export again. A **recovery recipient** closes that gap. It is a public key from a recovery kit you generate on your own computer; Vaulthalla wraps every key version of the vault to it, now and at every future rotation, and stores those wrapped keys (KEV1 envelopes) in the vault's own bucket under `.vaulthalla/key/`. With the kit, the vault's keys stay recoverable without this host's TPM: `vh vault keys import --recovery-kit` restores them when the host's vault master is lost (below), and `vh vault recover` rebuilds a vault on another server from its bucket and your kit when the original server, its database and its TPM are gone ([Restore A Vault From Its Bucket](#restore-a-vault-from-its-bucket)).
 
 Recovery stays under your control. The server only ever receives the public key; the kit's seed never leaves your device. Envelopes go to the vault's bucket and nowhere else, and Valkyrian Labs receives no recovery keys or decryption authority. No account, payment, storage subscription or upgrade enrolls a recipient: only you do, with the commands below.
 
@@ -345,6 +345,38 @@ Use these rules for recovery material:
 - Do not store key exports in the same bucket they protect unless additional independent encryption is applied.
 - Document which export belongs to which Vaulthalla version and database backup.
 
+## Restore A Vault From Its Bucket
+
+An S3 vault created with opaque storage keeps an encrypted manifest in its bucket (file and folder names, the tree, the trash, provider versions, snapshot records and the vault's key history) next to its encrypted files and its recovery envelopes. `vh vault recover` rebuilds the vault from your bucket and your recovery kit into a server you run, even if the original one is gone. No account or payment is needed, and nothing is sent anywhere but your own server and bucket.
+
+:::steps
+1. **On the new server**, add an API key that reaches the bucket (`vh api-key create`).
+
+2. **See what a restore would do**, without writing anything:
+
+   ```bash
+   vh vault recover --api-key r2-main --bucket finance-vault --kit vaulthalla-recovery-kit.json --dry-run
+   ```
+
+   The report lists the files, folders, trash, provider versions and snapshots the manifest holds, and how each key version is proven.
+
+3. **Restore it:**
+
+   ```bash
+   vh vault recover --api-key r2-main --bucket finance-vault --kit vaulthalla-recovery-kit.json
+   ```
+
+   The vault comes back with its name (`--into` picks another), in the cache strategy: nothing is downloaded until a file is read.
+:::
+
+**Only keys your material proves are restored.** The kit's seed unwraps the vault's envelopes, but anyone who can write to the bucket could plant an envelope, so an envelope proves nothing about where a key came from. A key version is restored only when the original server's [attestation](#key-attestations) of it verifies against an attestation key your kit pins (step 3 of [Recovery Recipients](#recovery-recipients)), or that a key export carries (`--export <file>`, alone or with the kit). The new server's own signing keys never count. Every version that can't be proven stops the restore with `salvage_required`; the dry run says why for each. `--salvage` then re-encrypts every file the supplied keys decrypt under a fresh key the new server creates, and never stores the supplied keys (it asks you to type the vault's name).
+
+**Freshness.** The bucket can present an older, but authentic, state of the vault. The checkpoint `vh-recovery kit add-vault` pins bounds that: a manifest older than it is refused unless you pass `--accept-rollback`. Without a checkpoint the report says "freshness unverified: no checkpoint supplied". Refresh the kit (`kit add-vault` again) after you add files you can't afford to lose to a rollback.
+
+**When the manifest is damaged.** A missing or unreadable manifest root falls back to an older one the provider kept (versioned buckets); with none, the restore rebuilds blind: every object that authenticates comes back under `/Recovered/<id>` without its name. A damaged part of the manifest is reported, and its files land under `/Recovered` the same way. Objects the manifest doesn't name (an interrupted upload) are recovered there too; files whose object is gone are restored with their names and reported as missing.
+
+After a restore, refresh your kit from the new server (`vh vault keys status <vault> --json` and `vh-recovery kit add-vault`): versions it creates from now on are attested by its key. The restored server publishes a new manifest, so the old server, should it come back, refuses to sync over it. `vh vault recover` needs the same permission as a key export and runs from the local `vh` CLI or a paired device (with a step-up), never the web console or an AI agent.
+
 ## Restore Vault Keys
 
 `vh vault keys import` is a **recovery mechanism**: it puts back key versions a vault already had, when this host can no longer use them. It cannot be used to set your own key or to add a key version: it restores only versions the server's own records show the vault had, proven by the server's [attestation](#key-attestations) in the export. Use it when:
@@ -353,7 +385,7 @@ Use these rules for recovery material:
 - the database was restored from a backup older than a key rotation, so a key version the vault's files still need is missing;
 - a deleted vault that can still be restored (pending deletion).
 
-The vault itself (its database records and its encrypted files on this host) must still exist. Restoring a vault from its encrypted files alone, after the database is lost, is not possible: file names, folders and the per-file encryption details live only in the database. Restore the database first, then import the keys.
+The vault itself (its database records and its encrypted files on this host) must still exist. When the database is gone too, rebuild the vault from its bucket instead ([Restore A Vault From Its Bucket](#restore-a-vault-from-its-bucket)); that needs an S3 vault created with opaque storage (every new encrypting S3 vault since this release). A vault whose objects are still named after their paths, or a local vault, needs its database: restore the database first, then import the keys.
 
 ```bash
 vh vault keys import archive --file archive-keys.json

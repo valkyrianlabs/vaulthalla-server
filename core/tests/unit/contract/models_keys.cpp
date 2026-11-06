@@ -8,6 +8,7 @@
 #include "ops/Error.hpp"
 #include "ops/RecoveryRecipients.hpp"
 #include "ops/VaultKeys.hpp"
+#include "ops/VaultRecover.hpp"
 #include "vault/KeyAttestation.hpp"
 
 #include <gtest/gtest.h>
@@ -90,7 +91,10 @@ keys::KeyStatus freshStatus() {
             .vault_name = "photos",
             .version = 1,
             .key_check = std::string(32, 'c'),
-            .needed_versions = {{.version = 1, .key_check = std::string(32, 'c')}},
+            .needed_versions = {{.version = 1, .key_check = std::string(32, 'c'),
+                                 .origin = keys::KeyOriginInfo{.node_id = "00000000-0000-4000-8000-00000000000a",
+                                                               .vault_id = 42, .key_id = 3, .anchor = "kit",
+                                                               .recovered_at = 1770000000}}},
             .missing_versions = {},
             .vault_uid = "as4f38nkrkaydxr834n3pk2xdr",
             .recovery = {.required = true, .state = "recipient", .recipients = 1}};
@@ -121,6 +125,7 @@ keys::VaultExport fullExport() {
     e.historical = {{.version = 2, .key = keyOf(2), .key_check = std::string(32, 'd'), .attestation = attestationOf(1),
                      .reason = keys::NeedReason::Rotation, .created_at = 1755000000, .retired_at = 1760000000}};
     e.missing = {1};
+    e.node_id = "00000000-0000-4000-8000-000000000001";
     return e;
 }
 
@@ -130,6 +135,8 @@ keys::VaultExport currentOnlyExport() {
     e.vault_id = 1;
     e.vault_name = "photos";
     e.current = {.version = 1, .key = keyOf(9), .key_check = std::string(32, 'c'), .created_at = 1760000000};
+    e.node_id = "00000000-0000-4000-8000-000000000001";
+    e.vault_uid = "as4f38nkrkaydxr834n3pk2xdr";
     return e;
 }
 
@@ -188,6 +195,63 @@ keys::ImportResult salvageImport() {
             .salvage = salvageReport()};
 }
 
+// vault.recover: a canonical restore that was written, and a salvage dry run.
+nlohmann::json recoverResult(const bool written) {
+    ops::vault_recover::Result r;
+    r.dry_run = !written;
+    r.written = written;
+    r.vault_name = "finance";
+    r.mode = written ? "canonical" : "salvage";
+    r.key_available = written;
+    r.report = {
+        {"vault_uid", "as4f38nkrkaydxr834n3pk2xdr"},
+        {"origin", {{"node_id", "00000000-0000-4000-8000-00000000000a"}, {"vault_id", 42}}},
+        {"vault_name", written ? nlohmann::json("finance") : nlohmann::json(nullptr)},
+        {"blind", !written},
+        {"epoch", written ? nlohmann::json(812) : nlohmann::json(nullptr)},
+        {"root_sha256", written ? nlohmann::json(std::string(64, 'a')) : nlohmann::json(nullptr)},
+        {"freshness", written ? "verified" : "unverified"},
+        {"freshness_report", "freshness unverified: no checkpoint supplied"},
+        {"issues", nlohmann::json::array({"segment x: segment_missing (blind)"})},
+        {"counts", {{"files", 3}, {"folders", 2}, {"symlinks", 0}, {"trashed", 1}, {"tombstones", 1},
+                    {"provider_versions", 7}, {"bytes", 1000}, {"snapshots", 1}, {"snapshot_members", 2},
+                    {"snapshot_members_restorable", 1}}},
+        {"key_versions",
+         nlohmann::json::array(
+             {{{"version", 1}, {"verdict", "verified"}, {"detail", "attested by node A"}, {"held", true},
+               {"key_source", "envelope"}, {"current", true}, {"needed", true}, {"state", "canonical"},
+               {"anchor", {{"key_id", 3}, {"source", "kit"}}},
+               {"origin", {{"node_id", "00000000-0000-4000-8000-00000000000a"}, {"vault_id", 42}, {"source", "root"}}}},
+              {{"version", 2}, {"verdict", "unattested"}, {"detail", "no material holds it"}, {"held", false},
+               {"current", false}, {"needed", true}, {"state", "missing"}}})},
+        {"current_version", 1},
+        {"highest_version_seen", 2},
+        {"canonical_versions", {1}},
+        {"blocking_versions", written ? nlohmann::json::array() : nlohmann::json({2})},
+        {"salvageable_versions", nlohmann::json::array()},
+        {"orphans", nlohmann::json::array({"as4f38nkrkaydxr834n3pk2xdr"})},
+        {"missing_objects", nlohmann::json::array()},
+        {"rejected_objects", nlohmann::json::array()},
+        {"envelopes", {{"listed", 3}, {"unwrapped", 2}, {"skipped", 1}, {"rejected", 0}}},
+        {"anchors", {{"supplied", true}, {"keys", 1}}},
+        {"downloads", {{"manifest_bytes", 4096}, {"envelope_bytes", 450}, {"header_bytes", 360}, {"content_bytes", 0},
+                       {"other_bytes", 0}, {"gets", 5}, {"ranged_gets", 3}, {"lists", 2}, {"version_lists", 0}}},
+        {"mode", r.mode},
+        {"unrecoverable_files", written ? 0 : 1}};
+    if (written) {
+        r.vault_id = 7;
+        r.published_epoch = 813;
+        r.report["restored"] = {{"vault_id", 7}, {"files", 3}, {"folders", 2}, {"symlinks", 0}, {"trashed", 1},
+                                {"index_rows", 4}, {"provider_versions", 7}, {"snapshots", 1},
+                                {"snapshot_members", 2}, {"left_out", 0}, {"notes", nlohmann::json::array()},
+                                {"fresh_version", 3}};
+    } else {
+        r.salvage = salvageReport();
+        r.note = "a restore would need salvage";
+    }
+    return ops::vault_recover::toJson(r);
+}
+
 }
 
 namespace vh::test::contract_models {
@@ -207,6 +271,8 @@ void checkVaultKeyModels(Checker& c) {
     c.check(keys::toJson(t::partialDeletedImport()), "VaultKeyImportResult", "vault.keys.import (deleted, skipped)");
     c.check(keys::toJson(t::salvageImport()), "VaultKeyImportResult", "vault.keys.import (salvage)");
     c.check(keys::toJson(t::kitImport()), "VaultKeyImportResult", "vh vault keys import --recovery-kit --json");
+    c.check(t::recoverResult(true), "VaultRecoverResult", "vault.recover (canonical, written)");
+    c.check(t::recoverResult(false), "VaultRecoverResult", "vh vault recover --dry-run --json (salvage needed)");
 
     namespace rr = ops::recovery_recipients;
     c.check(rr::toJson(rr::RecipientList{.vault_id = 12, .vault_name = "archive",

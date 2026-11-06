@@ -933,21 +933,37 @@ TEST_F(OpaqueLayoutTest, OpaqueManifestNamesTheObjectsItsFilesAreStoredIn) {
     EXPECT_EQ(entry->versions[0].version_id, object->version_id);
 }
 
-// opaque_v1 creation stays internal: refused outside test mode (also ObjectUidDbTest).
-TEST_F(OpaqueLayoutTest, OpaqueCreationIsRefusedOutsideTestMode) {
+// Since the restore drill passed (#371), every new encrypting vault is opaque_v1, outside test mode too; a vault
+// that doesn't encrypt can't be opaque_v1, and an existing one keeps its layout when encryption is turned on.
+TEST_F(OpaqueLayoutTest, NewEncryptingVaultsAreOpaqueV1) {
     auto apiKey = std::make_shared<vault::model::APIKey>(superUser->id, "ol_gate_" + tag(), vault::model::S3Provider::AWS,
                                                          "AKIATESTACCESSKEY000", "secret-value-0000000000000000000000000",
                                                          "us-east-1", "https://s3.example.com");
     const auto keyId = runtime::Deps::get().apiKeyManager->addAPIKey(apiKey);
-    auto s3 = std::make_shared<vault::model::S3Vault>("ol_gate_" + tag(), keyId, "ol-gate-" + tag());
-    s3->owner_id = superUser->id;
-    s3->mount_point = "ol_gate_" + tag();
-    s3->encrypt_upstream = true;
-    s3->storage_layout = vault::model::StorageLayout::OpaqueV1;
+    const auto make = [&](const bool encrypt) {
+        auto s3 = std::make_shared<vault::model::S3Vault>("ol_gate_" + tag(), keyId, "ol-gate-" + tag());
+        s3->owner_id = superUser->id;
+        s3->mount_point = "ol_gate_" + tag();
+        s3->encrypt_upstream = encrypt;
+        return s3;
+    };
+    vault::model::setNewEncryptingLayoutForTesting(std::nullopt);
     paths::testMode = false;
-    EXPECT_THROW((void)db::query::vault::Vault::upsertVault(s3, std::make_shared<sync::model::RemotePolicy>()),
+    auto created = make(true);
+    EXPECT_NO_THROW((void)db::query::vault::Vault::upsertVault(created, std::make_shared<sync::model::RemotePolicy>()));
+    EXPECT_EQ(created->storage_layout, vault::model::StorageLayout::OpaqueV1);
+    auto plain = make(false);
+    EXPECT_NO_THROW(plain->id = db::query::vault::Vault::upsertVault(plain, std::make_shared<sync::model::RemotePolicy>()));
+    EXPECT_EQ(plain->storage_layout, vault::model::StorageLayout::Transparent);
+    auto refused = make(false);
+    refused->storage_layout = vault::model::StorageLayout::OpaqueV1;
+    EXPECT_THROW((void)db::query::vault::Vault::upsertVault(refused, std::make_shared<sync::model::RemotePolicy>()),
                  std::invalid_argument);
     paths::testMode = true;
+    // An existing transparent vault that starts encrypting moves to path_v0 (into opaque_v1 only by WS1-c).
+    plain->encrypt_upstream = true;
+    EXPECT_NO_THROW((void)db::query::vault::Vault::upsertVault(plain));
+    EXPECT_EQ(plain->storage_layout, vault::model::StorageLayout::PathV0);
 }
 
 }

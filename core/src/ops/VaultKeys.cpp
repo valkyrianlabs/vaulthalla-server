@@ -423,6 +423,9 @@ std::time_t retiredAtOf(const Source& s, const unsigned int version) {
 VaultExport exportFrom(const Source& s) {
     Unsealer unsealer;
     VaultExport out{.vault_id = s.vault_id, .vault_name = s.vault_name, .deleted = s.deleted};
+    out.node_id = db::query::device::Devices::nodeId();
+    if (const auto live = db::query::vault::Vault::getVault(s.vault_id); live && live->uid)
+        out.vault_uid = crypto::id::toBase32(*live->uid);
     for (const auto& [version, reason] : neededVersions(s)) {
         std::string why;
         auto key = keyOf(s, version, unsealer, why);
@@ -627,11 +630,8 @@ nlohmann::json toJson(const VaultExport& exported, const std::string& exportedBy
     out["key_info"]["attestation"] = attestationJson(exported.current.attestation);
     // Where the attestations were made (#371): `vh vault recover --export` verifies them on another node over this
     // node's id and this vault id, against the attestation public keys the export carries.
-    out["node_id"] = db::query::device::Devices::nodeId();
-    if (const auto live = db::query::vault::Vault::getVault(exported.vault_id); live && live->uid)
-        out["vault_uid"] = crypto::id::toBase32(*live->uid);
-    else
-        out["vault_uid"] = nullptr;
+    out["node_id"] = exported.node_id;
+    out["vault_uid"] = exported.vault_uid ? nlohmann::json(*exported.vault_uid) : nlohmann::json(nullptr);
 
     if (!exported.historical.empty()) {
         auto historical = nlohmann::json::array();
