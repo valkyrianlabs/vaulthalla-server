@@ -183,8 +183,28 @@ With this setting, Vaulthalla refuses to seal or unseal anything unless a hardwa
 On macOS, Vaulthalla refuses to start its sealing when the Secure Enclave can't be used (an Intel Mac without a T2 chip, or a daemon not running under launchd). Earlier versions silently fell back to plain files instead. A development machine may opt in to the file backend with `secrets.allow_development_file_backend: true`.
 
 :::callout[A lost master secret is never replaced silently]{variant="warning"}
-If the sealed master that protects vault keys, provider API keys or S3 gateway credentials is missing while those records still exist, Vaulthalla refuses to create a new one, because a new one could never decrypt them. Inside a rotation's recovery window, the log names the rollback command that restores the rows from the previous master. The affected vaults don't start, and the log says why. Restore the state directory (with the same TPM or Secure Enclave), or import the vault key backups ([Restore Vault Keys](#restore-vault-keys)) and the internal secrets ([Seed Internal Secrets](#seed-internal-secrets)).
+If the sealed master that protects vault keys, provider API keys, S3 gateway credentials or the internal secrets ([A Lost Host Master](#a-lost-host-master)) is missing while those records still exist, Vaulthalla refuses to create a new one, because a new one could never decrypt them. Inside a rotation's recovery window, the log names the rollback command that restores the rows from the previous master. The affected vaults don't start, and the log says why. Restore the state directory (with the same TPM or Secure Enclave), or import the vault key backups ([Restore Vault Keys](#restore-vault-keys)) and the internal secrets ([Seed Internal Secrets](#seed-internal-secrets)).
 :::
+
+### A Lost Host Master
+
+The host master (`master`, `.sealed_master.blob` in the state directory) wraps the internal secrets: the JWT secret, the MFA keys that seal TOTP seeds and hash recovery codes, the share-link pepper and email provider credentials. When its sealed blob is missing while any of those (other than the JWT secret) are in the database, Vaulthalla refuses to start and names them in the log. That happens when the state directory is lost, or when a database is restored onto a new host.
+
+First, restore the state directory with the blob, on the same TPM or Secure Enclave. Everything then opens again as it was.
+
+If the old host master is gone for good, those secrets are gone with it. Give them up explicitly, with the daemon stopped:
+
+```bash
+sudo -u postgres psql vaulthalla <<'SQL'
+BEGIN;
+DELETE FROM internal_secrets WHERE key NOT IN ('jwt_secret', 'share.token.pepper.v1');
+DELETE FROM totp_factors;    -- every TOTP factor is enrolled again
+DELETE FROM recovery_codes;  -- every recovery code batch is issued again
+COMMIT;
+SQL
+```
+
+Then start Vaulthalla. It creates a new host master, and with it a new JWT secret (everyone signs in again), new MFA keys and a new share-link pepper. Users enroll TOTP and print recovery codes again, existing share links stop resolving (create or rotate the ones you still need), and email provider credentials have to be entered again. Vault keys are not affected: they have their own master and their own exports ([Restore Vault Keys](#restore-vault-keys)).
 
 ## Rotate The Vault Master
 
