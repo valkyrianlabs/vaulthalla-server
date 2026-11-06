@@ -205,6 +205,13 @@ Set the JWT secret from a file:
 vh secret set jwt-secret /root/vaulthalla-jwt-secret
 ```
 
+Import the MFA keys on a host restored from a database backup, from the files `vh secret export` wrote ([A Lost Host Master](#a-lost-host-master)):
+
+```bash
+vh secret set mfa-seal /root/mfa-seal.json
+vh secret set mfa-pepper /root/mfa-pepper.json --code <one of your recovery codes>
+```
+
 The CLI reads and trims the file contents. Protect the source file and remove temporary copies after use.
 
 ## Permissions
@@ -242,9 +249,30 @@ If the sealed master that protects vault keys, provider API keys, S3 gateway cre
 
 The host master (`master`, `.sealed_master.blob` in the state directory) wraps the internal secrets: the JWT secret, the MFA keys that seal TOTP seeds and hash recovery codes, the share-link pepper and email provider credentials. When its sealed blob is missing while any of those (other than the JWT secret) are in the database, Vaulthalla refuses to start and names them in the log. That happens when the state directory is lost, or when a database is restored onto a new host.
 
-First, restore the state directory with the blob, on the same TPM or Secure Enclave. Everything then opens again as it was.
+There are three ways back in, best first.
 
-If the old host master is gone for good, those secrets are gone with it. Give them up explicitly, with the daemon stopped:
+**1. Restore the state directory** with the blob, on the same TPM or Secure Enclave. Everything then opens again as it was.
+
+**2. Import the MFA keys from their exports.** If you exported `mfa-seal` and `mfa-pepper` (`vh secret export mfa-seal --output <file>`, see [Export Internal Secrets](#export-internal-secrets)), nobody has to enroll TOTP or print recovery codes again. With the daemon stopped, remove only the internal secrets that the lost master sealed, and leave the TOTP and recovery code tables alone:
+
+```bash
+sudo -u postgres psql vaulthalla <<'SQL'
+DELETE FROM internal_secrets WHERE key NOT IN ('jwt_secret', 'share.token.pepper.v1');
+SQL
+```
+
+Start Vaulthalla. It creates a new host master and a new JWT secret (everyone signs in again). TOTP and recovery codes refuse to work for now, because their keys are missing and Vaulthalla never mints new ones over stored seeds and hashes; passkeys are unaffected. Then, as a super admin at the terminal:
+
+```bash
+vh secret set mfa-seal /root/mfa-seal.json
+vh secret set mfa-pepper /root/mfa-pepper.json --code ABCDE-FGHJK
+```
+
+Each command reads the file `vh secret export` wrote (not a GPG-encrypted copy: decrypt it first), checks the key against what is stored, asks you to confirm, and seals it under the new host master. `mfa-seal` is checked by opening the stored TOTP seeds; `mfa-pepper` is checked against one of your own recovery codes (`--code`, used or unused; it is not spent), which has to reproduce its stored hash. A key that does not match is refused and nothing changes, and so is a host that already has a working key: a readable key is never replaced. Neither key is ever printed, and every attempt, refusals included, is recorded in the audit trail as `secrets.mfa_key.import` without the key or the code. Agents can't run it.
+
+The share-link pepper and email provider credentials were sealed by the same lost master and can't be imported: share links are reissued and email credentials entered again, as in the third way.
+
+**3. Give those secrets up.** If the old host master and the exports are gone, those secrets are gone with them. Give them up explicitly, with the daemon stopped:
 
 ```bash
 sudo -u postgres psql vaulthalla <<'SQL'

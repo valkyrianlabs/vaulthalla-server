@@ -1,0 +1,3 @@
+## Security
+
+- **Restoring a database onto a new host no longer means enrolling everyone in two-factor sign-in again.** `vh secret set mfa-seal <file>` and `vh secret set mfa-pepper <file>` import the keys that `vh secret export` wrote, after checking them against what the database stores: the TOTP key must open a stored authenticator seed, and the recovery code key must reproduce the stored hash of one of your own recovery codes (`--code`). Only super admins can import, after a confirmation, and every attempt is recorded in the audit trail. A key that does not match is refused and changes nothing, a working key on the host is never replaced, and no key is ever printed. See [A Lost Host Master](/vaults/secrets-and-key-export#a-lost-host-master).

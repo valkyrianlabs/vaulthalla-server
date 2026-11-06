@@ -20,6 +20,7 @@
 #include "rbac/role/Admin.hpp"
 #include "rbac/role/Vault.hpp"
 #include "ops/MasterSecrets.hpp"
+#include "ops/MfaKeys.hpp"
 #include "crypto/secrets/Versioned.hpp"
 #include "protocols/shell/types.hpp"
 
@@ -42,6 +43,9 @@ static std::vector<uint8_t> trimSecret(const std::vector<uint8_t>& secret) {
     while (end != start && std::isspace(*(end - 1))) --end; // empty/all-whitespace input yields {} (no UB)
     return {start, end};
 }
+
+static CommandResult handle_mfa_key_import(const CommandCall& call, const std::string& secretArg,
+                                           const std::vector<uint8_t>& fileBytes);
 
 static CommandResult handle_secrets_set(const CommandCall& call) {
     const auto usage = resolveUsage({"secrets", "set"});
@@ -80,7 +84,10 @@ static CommandResult handle_secrets_set(const CommandCall& call) {
         return ok("Successfully updated JWT secret");
     }
 
-    return invalid("secrets set: unknown secret '" + std::string(secretArg) + "'. Valid secrets are: db-password, jwt-secret");
+    if (secretArg == "mfa-seal" || secretArg == "mfa-pepper") return handle_mfa_key_import(call, secretArg, secret);
+
+    return invalid("secrets set: unknown secret '" + std::string(secretArg) +
+                   "'. Valid secrets are: db-password, jwt-secret, mfa-seal, mfa-pepper");
 }
 
 static CommandResult handle_secret_encrypt_and_response(const CommandCall& call,
@@ -256,6 +263,50 @@ static CommandResult runConfirmable(const CommandCall& call, const std::string& 
     } catch (const std::exception& e) {
         return {1, "", err + ": " + e.what()};
     }
+}
+
+// ---- vh secret set mfa-seal|mfa-pepper (#398) -------------------------------------------------------------------
+
+// The file is what `vh secret export` wrote: an array of {name, encoding: "base64", secret} (or one such object).
+// The key never leaves this function except to the operation, and is wiped on every path.
+static CommandResult handle_mfa_key_import(const CommandCall& call, const std::string& secretArg,
+                                           const std::vector<uint8_t>& fileBytes) {
+    const std::string err = "secret set " + secretArg;
+    if (AgentCallScope::active())
+        return invalid(err + ": the MFA keys are imported by a human at the terminal, never by an agent");
+    const auto which = secretArg == "mfa-seal" ? vh::ops::mfa_keys::Key::Seal : vh::ops::mfa_keys::Key::Pepper;
+
+    std::vector<uint8_t> key;
+    try {
+        const auto doc = nlohmann::json::parse(fileBytes.begin(), fileBytes.end());
+        const nlohmann::json* entry = nullptr;
+        if (doc.is_object() && doc.value("name", "") == secretArg) entry = &doc;
+        else if (doc.is_array())
+            for (const auto& e : doc)
+                if (e.is_object() && e.value("name", "") == secretArg) entry = &e;
+        if (!entry) return invalid(err + ": the file holds no '" + secretArg + "' entry (use the file `vh secret export " +
+                                   secretArg + " --output <file>` wrote, not a GPG-encrypted copy)");
+        if (entry->value("encoding", "") != "base64" || !entry->contains("secret") || !(*entry)["secret"].is_string())
+            return invalid(err + ": the entry is not a base64 export");
+        auto encoded = (*entry)["secret"].get<std::string>();
+        key = vh::crypto::util::b64_decode(encoded);
+        vh::crypto::wipeSecret(encoded);
+    } catch (const std::exception&) {
+        vh::crypto::wipeSecret(key);
+        return invalid(err + ": the file is not a `vh secret export` file (JSON with a base64 secret)");
+    }
+
+    const auto code = optVal(call, "code").value_or("");
+    auto result = runConfirmable(call, err, [&](const bool yes) {
+        const auto r = vh::ops::mfa_keys::import(call.user, which, key, code, yes);
+        const bool seal = which == vh::ops::mfa_keys::Key::Seal;
+        return ok(fmt::format("Imported {}: {}. {} work again with no re-enrollment.", secretArg,
+                              seal ? fmt::format("{} of {} stored TOTP seed(s) open with it", r.verified, r.rows)
+                                   : std::string("it reproduced a stored recovery code hash"),
+                              seal ? "TOTP factors" : "Recovery codes"));
+    });
+    vh::crypto::wipeSecret(key);
+    return result;
 }
 
 // --slot vault|api-keys|s3-gateway (default vault); `all` only where allowAll (status).
