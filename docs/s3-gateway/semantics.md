@@ -67,6 +67,8 @@ S3 ETags are client-visible gateway metadata. They are not the same thing as Vau
 
 Multipart upload parts live under Vaulthalla-owned hidden backing paths with opaque per-upload directories. They are not stored under the bucket or object-key path while an upload is in progress.
 
+Each part is encrypted at rest under the vault's key, bound to its vault, upload and part number, so an upload can be resumed after the daemon restarts. Part ETags and sizes are those of the bytes the client sent. Completion streams the parts into the object without writing a plaintext copy. If a stored part fails its integrity check, completion answers `InvalidPart` and leaves the upload open, so the client can upload that part again. Streamed request bodies are staged encrypted under a key that exists only in the daemon's memory, and are deleted once the request is answered.
+
 Parts are removed when the upload completes, aborts, or expires according to `s3_gateway.multipart.abort_after_days`.
 
 ## Backfill

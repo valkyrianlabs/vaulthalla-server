@@ -1,6 +1,7 @@
 #include "protocols/s3/Session.hpp"
 
 #include "config/Registry.hpp"
+#include "crypto/ScratchFile.hpp"
 #include "log/Registry.hpp"
 #include "protocols/s3/RequestBody.hpp"
 #include "protocols/s3/Xml.hpp"
@@ -13,10 +14,8 @@
 #include <cctype>
 #include <chrono>
 #include <filesystem>
-#include <fstream>
 #include <mutex>
 #include <optional>
-#include <paths.h>
 #include <stdexcept>
 #include <sys/socket.h>
 #include <sys/time.h>
@@ -106,10 +105,6 @@ bool shouldStreamBody(const http::request_header<>& header) {
     if (!headerValue(header, "x-amz-copy-source").empty()) return false;
     const auto transferEncoding = lower(headerValue(header, "transfer-encoding"));
     return header.find(http::field::content_length) != header.end() || transferEncoding.contains("chunked");
-}
-
-std::filesystem::path requestBodyTempRoot() {
-    return paths::getBackingPath() / "s3-request-body";
 }
 
 } // namespace
@@ -257,68 +252,53 @@ bool Session::handleBufferedRequest(http::request_parser<http::buffer_body>& par
 }
 
 bool Session::handleStreamedRequest(http::request_parser<http::buffer_body>& parser) {
-    std::filesystem::create_directories(requestBodyTempRoot());
-    const auto tempPath = requestBodyTempRoot() / (boost::uuids::to_string(boost::uuids::random_generator()()) + ".body");
-
-    std::ofstream out(tempPath, std::ios::binary | std::ios::trunc);
-    if (!out) throw std::runtime_error("Unable to open S3 request body temp file");
+    // The body is staged as ciphertext under the process key (#345) and gone with its last reference: on every
+    // return, and with any exception.
+    ensureRequestBodyRoot();
+    const auto tempPath = requestBodyRoot() / (boost::uuids::to_string(boost::uuids::random_generator()()) + ".body");
+    auto file = std::make_shared<crypto::ScratchFile>(tempPath);
 
     BodyHash rawHash;
     uint64_t bytes = 0;
 
     std::array<char, kReadBufferBytes> storage{};
     beast::error_code ec;
-    std::optional<std::filesystem::path> decodedPath;
 
-    try {
-        while (!parser.is_done() && !stopRequested_.load(std::memory_order_acquire)) {
-            parser.get().body().data = storage.data();
-            parser.get().body().size = storage.size();
-            http::read(socket_, buffer_, parser, ec);
+    while (!parser.is_done() && !stopRequested_.load(std::memory_order_acquire)) {
+        parser.get().body().data = storage.data();
+        parser.get().body().size = storage.size();
+        http::read(socket_, buffer_, parser, ec);
 
-            const auto used = storage.size() - parser.get().body().size;
-            if (used > 0) {
-                out.write(storage.data(), static_cast<std::streamsize>(used));
-                rawHash.update(storage.data(), used);
-                bytes += static_cast<uint64_t>(used);
-            }
-
-            if (ec == http::error::need_buffer) {
-                ec = {};
-                continue;
-            }
-            if (ec) throw boost::system::system_error(ec);
+        const auto used = storage.size() - parser.get().body().size;
+        if (used > 0) {
+            file->append({reinterpret_cast<const uint8_t*>(storage.data()), used});
+            rawHash.update(storage.data(), used);
+            bytes += static_cast<uint64_t>(used);
         }
 
-        if (stopRequested_.load(std::memory_order_acquire)) {
-            out.close();
-            std::filesystem::remove(tempPath);
-            return false;
+        if (ec == http::error::need_buffer) {
+            ec = {};
+            continue;
         }
-
-        out.close();
-
-        auto request = makeRequestFromParser(parser);
-        const auto keepAlive = request.keep_alive();
-        auto payload = rawHash.finish(tempPath, bytes);
-        if (isAwsChunked(request)) {
-            // Router::route decodes it (signed chunks only after authenticating) into this file.
-            decodedPath = tempPath;
-            decodedPath->concat(".decoded");
-            payload.aws_chunked_decode_to = *decodedPath;
-        }
-
-        g_totalRequests.fetch_add(1, std::memory_order_relaxed);
-        const auto wrote = writeResponse(router_.route(std::move(request), std::move(payload)));
-        std::filesystem::remove(tempPath);
-        if (decodedPath) std::filesystem::remove(*decodedPath);
-        return wrote && keepAlive;
-    } catch (...) {
-        out.close();
-        std::filesystem::remove(tempPath);
-        if (decodedPath) std::filesystem::remove(*decodedPath);
-        throw;
+        if (ec) throw boost::system::system_error(ec);
     }
+
+    if (stopRequested_.load(std::memory_order_acquire)) return false;
+    file->flush();
+
+    auto request = makeRequestFromParser(parser);
+    const auto keepAlive = request.keep_alive();
+    auto payload = rawHash.finish(bytes);
+    payload.file = std::move(file);
+    if (isAwsChunked(request)) {
+        // Router::route decodes it (signed chunks only after authenticating) into a scratch file here.
+        auto decodedPath = tempPath;
+        decodedPath.concat(".decoded");
+        payload.aws_chunked_decode_to = std::move(decodedPath);
+    }
+
+    g_totalRequests.fetch_add(1, std::memory_order_relaxed);
+    return writeResponse(router_.route(std::move(request), std::move(payload))) && keepAlive;
 }
 
 bool Session::writeResponse(Router::Response&& response) {
