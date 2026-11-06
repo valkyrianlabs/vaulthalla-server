@@ -11,6 +11,12 @@ namespace vh::contract {
 
 std::vector<Capability> capabilities() {
     std::vector<Capability> out{
+        {.name = "auth.step_up",
+         .since = "1.22.0",
+         .description = "Sensitive commands (their contract entries carry step_up: <family>) may answer ERROR "
+                        "step_up_required {family, target, methods, max_age_seconds}; a web session confirms with "
+                        "auth.stepup.begin and auth.stepup.finish and resends the request. Paired devices and agents "
+                        "can't step up; routine device commands never ask (#359)."},
         {.name = "device.endpoints",
          .since = "1.20.0",
          .description = "ws device.endpoints answers a paired device with where the listener can be reached; "

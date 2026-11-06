@@ -21,6 +21,7 @@ Vaulthalla separates vault encryption keys from internal runtime secrets. Export
 | Material | Command family | Why it matters |
 | --- | --- | --- |
 | Vault keys | `vh vault keys export` | Required to recover encrypted vault content outside the original TPM context. |
+| Recovery kit | `vh-recovery kit create` + `vh vault keys recipient add` | Keeps every current and future key version of an S3 vault recoverable from its bucket, without re-exporting after each rotation. |
 | Database password | `vh secret export db-password` | Required to reconnect services to an existing PostgreSQL database. |
 | JWT secret | `vh secret export jwt-secret` | Required to preserve token/session behavior across recovery where applicable. |
 | MFA seal | `vh secret export mfa-seal` | The key that seals TOTP authenticator seeds (base64). Exists once someone has enrolled a TOTP factor. Without it, TOTP factors stop working and must be reset; passkeys are unaffected. |
@@ -112,9 +113,60 @@ attestation = Ed25519(server signing key,
                       "vh-key-attest-v1" ‖ node_id ‖ UInt64BE(vault_id) ‖ UInt32BE(version) ‖ key_check (16 bytes))
 ```
 
-In the export it appears as `"attestation": {"key_id": 1, "signature": "<base64>"}` next to each `key_check`. `node_id` is this installation's id (the one paired devices record); `key_id` names which of the server's signing keys signed. The signing key is created on first use, sealed by the host (TPM2 or `swtpm` on Linux, the Secure Enclave on macOS), and never leaves it. If it can no longer be unsealed (for example after the TPM state was reset), the server creates a new one and keeps the public half of every old one, so attestations in older exports still verify. Test vector: signing seed `00 01 02 … 1f`, node id `00000000-0000-4000-8000-000000000001`, vault 42, version 3 and the key check above give the public key `03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8` and the signature `fbda258fa125ef4237a54b7cde732c073ba598fa4a1a782226aa82514ee5c36a3ad452e6d36593337dc1619e61391c6ae20685155b11cc2b6deaf637e893840c`.
+In the export it appears as `"attestation": {"key_id": 1, "signature": "<base64>", "public_key": "<base64>"}` next to each `key_check`; `public_key` is the signing key's public half, which lets a restore on another server check the signature against the key you kept (exports from before it was added still import on their own server). `node_id` is this installation's id (the one paired devices record); `key_id` names which of the server's signing keys signed. The signing key is created on first use, sealed by the host (TPM2 or `swtpm` on Linux, the Secure Enclave on macOS), and never leaves it. If it can no longer be unsealed (for example after the TPM state was reset), the server creates a new one and keeps the public half of every old one, so attestations in older exports still verify. Test vector: signing seed `00 01 02 … 1f`, node id `00000000-0000-4000-8000-000000000001`, vault 42, version 3 and the key check above give the public key `03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8` and the signature `fbda258fa125ef4237a54b7cde732c073ba598fa4a1a782226aa82514ee5c36a3ad452e6d36593337dc1619e61391c6ae20685155b11cc2b6deaf637e893840c`.
 
 Exports taken before attestations existed have none. Export your vault keys again after upgrading so every backup can be restored.
+
+## Recovery Recipients
+
+An export is a snapshot: after a key rotation, the new key exists only on the host until you export again. A **recovery recipient** closes that gap. It is a public key from a recovery kit you generate on your own computer; Vaulthalla wraps every key version of the vault to it, now and at every future rotation, and stores those wrapped keys (KEV1 envelopes) in the vault's own bucket under `.vaulthalla/key/`. With the kit, the vault's keys stay recoverable without this host's TPM: `vh vault keys import --recovery-kit` restores them when the host's vault master is lost (below). Rebuilding a vault after its database is lost is not supported yet; until then keep database backups as well.
+
+Recovery stays under your control. The server only ever receives the public key; the kit's seed never leaves your device. Envelopes go to the vault's bucket and nowhere else, and Valkyrian Labs receives no recovery keys or decryption authority. No account, payment, storage subscription or upgrade enrolls a recipient: only you do, with the commands below.
+
+:::steps
+1. **Create a kit on your own computer, not on the server.** `vh-recovery` ships with the package and runs offline:
+
+   ```bash
+   vh-recovery kit create --output vaulthalla-recovery-kit.json
+   ```
+
+   It writes the kit (mode `0600`, never over an existing file) and prints its public key. Keep the kit offline or in your password manager: anyone holding it can decrypt the vaults it serves. One kit can serve many vaults.
+
+2. **Enroll the public key on each S3 vault:**
+
+   ```bash
+   vh vault keys recipient add photos --public-key 9jB0b7LvRAo3+fTz//m8OhJQkp39Kcd1PjiFpjtmrTs= --label "Kit 2026-11"
+   ```
+
+   Every key version the vault holds is wrapped right away. A later rotation writes the new version's envelope before the new key encrypts anything; if the bucket can't be reached, the rotation doesn't start.
+
+3. **Pin the vault in the kit**, so a restore on another server can verify the keys were this server's:
+
+   ```bash
+   vh vault keys status photos --json > photos-status.json
+   vh-recovery kit add-vault vaulthalla-recovery-kit.json --status photos-status.json
+   ```
+
+   This records the vault's uid, this server's id, its attestation public keys and the manifest checkpoint. It is public information; the status never contains key material.
+:::
+
+`vh vault keys recipient list <vault>` shows the recipients, the key versions wrapped to each and the vault's recovery state. `vh vault keys recipient revoke <vault> <grant_id>` stops new envelopes for a recipient. It can't take back envelopes it already has: those keep unwrapping the key versions they cover, so the command (and `vh vault keys status`) tells you when to rotate the key (`vh vault keys rotate <vault>`) to cut it off from new data.
+
+Enrolling and revoking need the same permission as export and work from the local `vh` CLI or a paired device, never the web console or an AI agent. A paired device also needs a step-up, which arrives with device approvals.
+
+### Recovery Material Status
+
+A self-hosted S3 vault that encrypts its bucket needs recovery material that doesn't depend on this host: a recovery recipient whose envelopes cover every key version the vault still needs, or an export of its current key version. Without either, `vh vault keys status` reports `recovery: recovery_material_missing`, and `vh status` and the console's health turn **degraded** and name the vault. A key rotation makes an earlier export stale. Local vaults keep the export guidance above.
+
+### Recover Keys With A Recovery Kit
+
+If this host can no longer unseal a vault's keys (its vault master was lost) but the database is intact, the kit restores them from the bucket:
+
+```bash
+vh vault keys import photos --recovery-kit vaulthalla-recovery-kit.json
+```
+
+`vh` reads the kit on your side; the server derives the recipient key in memory, reads the vault's envelopes from its bucket and restores the versions the normal import rules accept: a version is restored only when the server's own records show the vault had it and its attestation by this server verifies. Envelopes anyone else could have placed in the bucket never introduce or replace a key, envelopes for other recipients or kinds the server doesn't know are skipped, and the vault's current key version never moves. If the vault's API key secret was lost along with the master, enter it again first so the server can read the bucket. The database must still be intact: rebuilding a vault in a new installation is not supported yet.
 
 ## Back Up Keys With Vaulthalla Desktop
 

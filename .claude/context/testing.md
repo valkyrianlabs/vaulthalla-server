@@ -245,6 +245,15 @@ bash tools/dev/verify.sh harness                                   # unit + self
 - Surfaces: `ws` (the console: ws for metadata, HTTP lanes for bytes), `fuse` (vh_fs_actor per actor account),
   `cli_sock` / `cli_bin` (real peer uid via the `vhh-actor-NN` accounts). Admin-side provisioning reuses the pentest
   `Seeder` against the private socket.
+- MFA (#395): admins must sign in with a second factor (#357), and the clients do the real flow, with no daemon bypass.
+  The Seeder signs every active fixture user in once and enrolls a TOTP authenticator for each account the daemon
+  asks to (`u-admin`). The seed and recovery codes stay in the run's memory (Seeder state, then `IdentityBroker.
+  register_totp`), registered with the Redactor. `WsDriver.open` answers `mfa_required` with a computed code, and a
+  `step_up_required` refusal (#359) with `auth.stepup.begin`/`.finish` (password plus code), then resends once. One
+  `tools/lab/mfa.Totp` per principal hands out each RFC 6238 step once: the daemon's replay guard accepts about three
+  sign-ins immediately, then one per 30 s. The live proofs (`VHH_WS_LIVE_BUILD`, `VHH_INTEGRATION_LIVE_BUILD`) enroll
+  the same way; `test_ws_driver_live` also runs `tools/lab/vhws.py --totp-file` and a `data.destroy` step-up against
+  its private daemon.
 - Judges: oracle (RBAC model, revocation grace window), parity (same probe across surfaces), canary, integrity
   (deterministic content), liveness/wedge, unexplained errors, harness faults. Any harness fault, unexplained error,
   daemon death, unclean stop, sanitizer report or zero executed ops fails the run.
@@ -342,6 +351,13 @@ Dev mode requires both `VH_BUILD_MODE=dev` and the gitignored `enable_dev_mode` 
   `OpaqueRenameCostsNothing` (1,000-file folder) and `OpaqueRequestCountsMatchSpec01Section5` count requests per
   operation. Live: `LiveR2Test.OpaqueObjectsCarryNoMetadataAndCostWhatSpec01Says` (o/ objects at the run bucket's
   root, deleted by the test and again by the bucket's deletion).
+- Recovery recipients (#370): `Kev1Vectors`, `Kev1ReservedFields`, `RecoverySeedVectors`, `RecoveryKit`
+  (`test_kev1.cpp`, DB-free, CI: every `kev1` / `recovery_seed` vector, P-256 included). `RecoveryRecipient.*`,
+  `RecoveryRequirement.*`, `RecoveryNoSilentCustody.*`, `KeysImportFromKit.*`, `VaultKeyExportProvenance.*`
+  (`test_recovery_recipients.cpp`, db-only) run on S3 vaults whose bucket is an in-memory `ObjectStore`
+  (`vault::envelopes::setStoreFactoryForTesting`, which also records which vault asked for a bucket);
+  `SqlDeployerHistoryDb.RecoveryRecipientsMigrationIsAdditiveIdempotentAndCustomerOnly` (migration 127).
+  `recovery_tool` (meson, `core/tests/cli/test_recovery_tool.py`) runs the real `vh-recovery` in a temp dir.
 
 ## Known test gaps
 

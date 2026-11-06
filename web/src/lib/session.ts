@@ -4,6 +4,7 @@ import { create } from 'zustand'
 import { WsClient, type Command } from '@/lib/ws/client'
 import { WsError, isWsError } from '@/lib/ws/errors'
 import { checkServerContract } from '@/lib/ws/contract'
+import { requestStepUp, resetStepUp } from '@/lib/stepUp'
 import type { IUser } from '@/models/user'
 import { readPending, type MfaPending, type MfaPendingCode } from '@/models/mfa'
 
@@ -50,6 +51,8 @@ export const api = new WsClient({
   token: () => useSession.getState().token ?? '',
   onToken: token => useSession.setState({ token }),
   onUnauthorized: () => refreshSession(),
+  // #359: a sensitive command refused with step_up_required: the Step-up dialog, then one resend.
+  onStepUp: (_command, error) => requestStepUp(error),
   // The contract hash needs a session (no build fingerprinting before login): checked once signed in, and again on
   // every reconnect of a signed-in page.
   onOpen: () => {
@@ -126,6 +129,7 @@ export const onSessionReset = (handler: () => void) => {
 }
 
 const resetEverything = () => {
+  resetStepUp()
   for (const handler of resetHandlers) handler()
   useSession.setState({ status: 'unauthenticated', user: null, token: null })
   try {

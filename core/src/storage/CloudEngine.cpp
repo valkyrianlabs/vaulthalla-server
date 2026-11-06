@@ -25,6 +25,7 @@
 #include "sync/model/RemoteManifest.hpp"
 #include "sync/manifest/Service.hpp"
 #include "sync/manifest/Store.hpp"
+#include "vault/RecoveryEnvelopes.hpp"
 #include "sync/model/Event.hpp"
 #include "storage/s3/provider/Registry.hpp"
 #include "storage/ObjectKeys.hpp"
@@ -615,6 +616,26 @@ void CloudEngine::publishRemoteIndexManifestWithRetry() const {
 void CloudEngine::markRemoteIndexRebuilt() const { remoteIndexPublishPending_ = true; }
 
 bool CloudEngine::remoteIndexPublishPending() const { return remoteIndexPublishPending_; }
+
+void CloudEngine::requestManifestPublish() const {
+    if (usesManifestV2()) remoteIndexPublishPending_ = true;
+}
+
+unsigned CloudEngine::ensureRecoveryEnvelopes() const {
+    if (!vault || !encryptionManager) return 0;
+    const auto& keys = *encryptionManager;
+    std::vector<uint32_t> versions;
+    for (const auto v : keys.retainedKeyVersions()) versions.push_back(v);
+    const auto written = vh::vault::envelopes::ensure(vault->id, versions, [&](const uint32_t v) -> crypto::SecretKeyPtr {
+        try {
+            return keys.historicalKeySnapshot(v);
+        } catch (const std::exception&) {
+            return nullptr;  // not held here: nothing to wrap
+        }
+    });
+    if (written > 0) requestManifestPublish();
+    return written;
+}
 
 void CloudEngine::publishPendingRemoteIndexManifest() const noexcept {
     if (!remoteIndexPublishPending_) return;

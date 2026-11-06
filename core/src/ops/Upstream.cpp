@@ -1,4 +1,5 @@
 #include "ops/Upstream.hpp"
+#include "auth/stepup/StepUp.hpp"
 #include "storage/upstream/Names.hpp"
 #include "sync/events/Subscriptions.hpp"
 #include "ops/UpstreamJson.hpp"
@@ -30,6 +31,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <functional>
 #include <map>
 #include <set>
 #include <unordered_map>
@@ -305,8 +307,11 @@ bool ownedLifecycleRuleId(const std::string& id) {
 
 // Applies our lifecycle rule (GET-merge-PUT); returns whether anything was written. `dropEveryOwnedRule` (detach)
 // also removes the other vaulthalla-* rules (the manifest-versions rule file recovery writes), not only ours.
+// `beforeDestructiveWrite` runs once a destructive rule is accepted, right before it is written (setLifecycle: the
+// data.destroy step-up, #359).
 bool applyLifecycle(padmin::AdminClient& admin, const vault::model::APIKey& key, const std::string& bucket,
-                    const LifecyclePatch& patch, const bool dropEveryOwnedRule = false) {
+                    const LifecyclePatch& patch, const bool dropEveryOwnedRule = false,
+                    const std::function<void()>& beforeDestructiveWrite = {}) {
     const auto config = admin.inspect(bucket);
     if (!config.lifecycle_readable)
         throw Invalid("the lifecycle configuration of bucket '" + bucket + "' can't be read with this credential");
@@ -314,6 +319,7 @@ bool applyLifecycle(padmin::AdminClient& admin, const vault::model::APIKey& key,
                                             key.provider == vault::model::S3Provider::AWS);
     if (merged.destructive && !patch.accept_destructive)
         throw NeedsConfirmation(DESTRUCTIVE_LIFECYCLE, destructiveText(bucket, std::nullopt));
+    if (merged.destructive && beforeDestructiveWrite) beforeDestructiveWrite();
     if (dropEveryOwnedRule) {
         const auto before = merged.rules.size();
         std::erase_if(merged.rules, [](const padmin::LifecycleRule& r) { return ownedLifecycleRuleId(r.id); });
@@ -452,6 +458,7 @@ AdminStatus enableAdmin(const Actor& actor, const KeyRef& ref, const AdminEnable
         throw Invalid("a provider token is only used by Cloudflare R2 keys (Queues and event notifications)");
     if (newToken && req.clear_provider_token) throw Invalid("give a provider token or clear it, not both");
 
+    auth::stepup::require(auth::stepup::Family::Secrets);
     if (newToken) manager->setProviderToken(key->id, *req.provider_token);
     else if (req.clear_provider_token) manager->setProviderToken(key->id, std::nullopt);
 
@@ -580,6 +587,7 @@ BucketRow unprotect(const Actor& actor, const KeyRef& ref, const std::string& bu
             "asked) delete it again. It was protected" +
             (current->protected_by_name ? " by " + *current->protected_by_name : std::string{}) +
             (current->protection_reason ? ": " + *current->protection_reason : std::string{}) + ".");
+    auth::stepup::require(auth::stepup::Family::DataDestroy, "upstream.bucket.unprotect:" + std::to_string(current->id));
     (void)BucketQuery::unprotect(id);
     storage::upstream::guard::reload();
     sync::events::subscriptions::onBucketUnprotected(id);
@@ -618,6 +626,7 @@ Inspection setLifecycle(const Actor& actor, const KeyRef& ref, const std::string
     const auto recorded = BucketQuery::getVersioning(row->id);
     const bool recoveryRetention = recorded && recorded->retention_mode != "unset";
     std::optional<vh::recovery::ProviderRetention> retentionTarget;
+    bool shortensRetention = false;
     if (recoveryRetention && (patch.clear || patch.expire_noncurrent_days)) {
         retentionTarget = patch.clear || *patch.expire_noncurrent_days == 0
             ? vh::recovery::ProviderRetention{.indefinite = true, .days = 0}
@@ -625,6 +634,7 @@ Inspection setLifecycle(const Actor& actor, const KeyRef& ref, const std::string
         const bool fromIndefinite = recorded->retention_mode == "indefinite" || !recorded->retention_days;
         const bool shortens = !retentionTarget->indefinite &&
                               (fromIndefinite || retentionTarget->days < *recorded->retention_days);
+        shortensRetention = shortens;
         if (shortens && !patch.accept_destructive)
             throw NeedsConfirmation(DESTRUCTIVE_LIFECYCLE,
                 "Bucket '" + bucket + "' keeps the vault's recovery history (noncurrent versions) for " +
@@ -637,8 +647,15 @@ Inspection setLifecycle(const Actor& actor, const KeyRef& ref, const std::string
                       "narrowing its prefix would leave part of the vault without it. Change the retention with "
                       "vh vault recovery set instead");
 
+    // #359: a rule that makes the provider delete data (or shortens recovery history) is data.destroy, bound to this
+    // bucket, after its acceptance and right before it is written.
+    const auto stepUpTarget = "upstream.bucket.lifecycle.set:" + std::to_string(row->id);
+    if (shortensRetention) auth::stepup::require(auth::stepup::Family::DataDestroy, stepUpTarget);
     auto client = adminClient(key, id);
-    const bool written = mapped([&] { return applyLifecycle(*client, *key, bucket, patch); });
+    const bool written = mapped([&] {
+        return applyLifecycle(*client, *key, bucket, patch, false,
+                              [&] { auth::stepup::require(auth::stepup::Family::DataDestroy, stepUpTarget); });
+    });
     if (retentionTarget)
         BucketQuery::recordRetention(row->id, retentionTarget->indefinite ? "indefinite" : "days",
                                      retentionTarget->indefinite ? std::nullopt : std::make_optional(retentionTarget->days),
@@ -1018,6 +1035,13 @@ CleanupResult cleanup(const Actor& actor, const KeyRef& ref, const std::string& 
     auto key = authorize(actor, ref, UpPerm::Destroy, KeyPerm::Consume);
     const auto id = identityOf(key, bucket);
     requireUnprotected(actor, id, "cleanup", key->id);
+    // #359: data.destroy, bound to this bucket and whether the bucket goes too. Asked before the preflight's
+    // confirmation token is spent, so the resend after the step-up still carries a live one.
+    if (!confirmToken.empty())
+        if (const auto bound = BucketQuery::getByIdentity(id.provider, *id.account_ref, id.bucket))
+            auth::stepup::require(auth::stepup::Family::DataDestroy,
+                                  "upstream.bucket.cleanup:" + std::to_string(bound->id) +
+                                      (deleteBucket ? ":delete_bucket" : ""));
     const auto seen = cleanupx::consumeToken(confirmToken, id, actor->id);
     if (!seen)
         throw NeedsConfirmation(CLEANUP_CONFIRM, "Run the cleanup preflight for bucket '" + bucket + "' and confirm what it "

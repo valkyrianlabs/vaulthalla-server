@@ -201,8 +201,31 @@ vh::sync::manifest::Content Manifest::collect(const uint32_t vaultId) {
             info.recovery_policy = mf::FileRecovery{vrow[0]["recovery_mode"].as<std::string>(),
                                                     optNum<uint32_t>(vrow[0]["version_max_age_days"])};
         c.vault = std::move(info);
-        // Recovery recipients are not enrolled yet (#370): a v1 policy with no grants.
-        c.recovery_policy = mf::RecoveryPolicy{};
+        // Recovery recipients (#370, spec 03 §5.7): every grant, revoked ones too (with revoked_at), oldest first.
+        mf::RecoveryPolicy policy;
+        for (const auto row : txn.exec(
+                 fmt::format("SELECT grant_id, recipient_id, class, suite, label, {}, authorized_by, {} "
+                             "FROM vault_recovery_grant WHERE vault_id = $1 ORDER BY added_at, grant_id",
+                             iso("added_at") + " AS added_at", iso("revoked_at") + " AS revoked_at"),
+                 pqxx::params{vaultId})) {
+            mf::Grant g;
+            g.grant_id = row["grant_id"].as<std::string>();
+            g.recipient_id = row["recipient_id"].as<std::string>();
+            g.recipient_class = row["class"].as<std::string>();
+            g.suite = row["suite"].as<uint32_t>();
+            g.label = optText(row["label"]);
+            g.added_at = optText(row["added_at"]);
+            g.authorized_by = optText(row["authorized_by"]);
+            g.revoked_at = optText(row["revoked_at"]);
+            policy.grants.push_back(std::move(g));
+        }
+        c.recovery_policy = std::move(policy);
+        // KEV1 envelopes by key version (keys[].envelopes): every kid written, a revoked grant's too.
+        std::map<uint32_t, std::vector<std::string>> envelopesByVersion;
+        for (const auto row : txn.exec("SELECT key_version, kid FROM vault_key_envelope WHERE vault_id = $1 "
+                                       "ORDER BY key_version, kid",
+                                       pqxx::params{vaultId}))
+            envelopesByVersion[row[0].as<uint32_t>()].push_back(row[1].as<std::string>());
 
         // ---- key history: the current version and every retired one still held
         const auto keyRows = txn.exec(
@@ -231,6 +254,8 @@ vh::sync::manifest::Content Manifest::collect(const uint32_t vaultId) {
             k.created_at = optText(row["created_at"]);
             k.retired_at = optText(row["retired_at"]);
             if (!c.keys.empty() && c.keys.back().version == k.version) continue;  // a retired copy of the current row
+            if (const auto it = envelopesByVersion.find(k.version); it != envelopesByVersion.end())
+                k.envelopes = it->second;
             c.keys.push_back(std::move(k));
         }
 

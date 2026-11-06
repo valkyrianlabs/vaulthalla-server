@@ -6,10 +6,10 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = '03e5d43516b1128c3420b4f00607f0d059ce2be6a1ad34cc2ccf3cfa937cec55'
+export const WS_CONTRACT_HASH = 'fccb00365d1ebe8e04da2666296e78e5023a3c541848f4207583c9fcf7c0c520'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = 'adece020e347877b41fa73042a73e55267d7acc9d2ad7ae3bf1208f0c66e1136'
+export const WS_MODELS_HASH = '455b23eafefb4b72a1cfb1503ebe2c43a378d38313d320a1d0176c2f9bfcebf8'
 
 // The ws protocol range this book is (core/usage WsProtocol.hpp): send it in meta.hello.
 export const WS_PROTOCOL_VERSION = 1
@@ -17,6 +17,7 @@ export const WS_PROTOCOL_MIN = 1
 
 // The capabilities a daemon built from this book answers in meta.hello.
 export const WS_CAPABILITIES: readonly string[] = [
+  'auth.step_up',
   'device.endpoints',
   'device.lanes.download',
   'device.lanes.preview',
@@ -174,6 +175,7 @@ export interface WsModels {
     access_token_expiry_minutes: number
     refresh_token_expiry_days: number
     webauthn?: WsModels['WebAuthnConfig']
+    mfa?: WsModels['MfaConfig']
   }
   /**
    * One of the caller's signed-in web sessions (a refresh token row, every tab of one browser shares it;
@@ -613,6 +615,10 @@ export interface WsModels {
    * logging.* (Config.cpp to_json(LoggingConfig)).
    */
   'LoggingConfig': { levels: WsModels['LogLevelsConfig']; file_paths?: 'ids' | 'full' }
+  /**
+   * auth.mfa.* (Config.cpp to_json(MfaConfig), #359): multi-factor authentication settings.
+   */
+  'MfaConfig': { step_up_ttl_seconds: number }
   /**
    * One of the account's sign-in factors (#356/#357): auth::mfa::to_json(Factor),
    * core/src/auth/mfa/Factors.cpp. Carries no secret and no credential id. id is unique per kind only: name a
@@ -2023,6 +2029,7 @@ export interface WsModels {
       reason: 'key_missing' | 'key_unsealable' | 'version_missing' | 'engine_failed'
       detail: string
     }[]
+    vaults_recovery_material_missing?: { vault_id: number; vault_name: string; reason: 'recovery_material_missing'; detail: string }[]
     summary: {
       services_ready: number
       services_total: number
@@ -2457,7 +2464,17 @@ export interface WsModels {
    * node_id ‖ UInt64BE(vault_id) ‖ UInt32BE(version) ‖ key_check (16 bytes). `vh vault keys import` restores
    * a version as canonical only when it verifies under one of this node's attestation keys.
    */
-  'VaultKeyAttestation': { key_id: number; signature: string }
+  'VaultKeyAttestation': { key_id: number; signature: string; public_key?: string | null }
+  /**
+   * One of this node's attestation signing keys (key_attestation_keys): what a recovery kit pins as
+   * attestation_public_keys (spec 03 §5.3). Public.
+   */
+  'VaultKeyAttestationKey': { key_id: number; public_key: string; retired_at: number | null }
+  /**
+   * The vault's manifest v2 chain position (opaque_v1 vaults): a recovery kit's checkpoint bounds rollback
+   * (spec 03 §4.5).
+   */
+  'VaultKeyCheckpoint': { epoch: number; root_sha256: string }
   /**
    * One vault's export document: ops::vault_keys::toJson(VaultExport) (core/src/ops/VaultKeys.cpp), the CLI's
    * `vh vault keys export` shape (vault::model::generate_json_key_object) plus key_check and every needed
@@ -2538,6 +2555,14 @@ export interface WsModels {
       detail: string
     }[]
     salvage: WsModels['VaultKeySalvageReport'] | null
+    recovery_kit?: {
+      envelopes: number
+      unwrapped: number
+      skipped: number
+      rejected: number
+      ignored: number
+      root_consulted: boolean
+    }
   }
   /**
    * A key version still needed to decrypt the vault's data, identified by its key check (never key bytes):
@@ -2598,7 +2623,68 @@ export interface WsModels {
     missing_versions: number[]
     attestation: WsModels['VaultKeyAttestation'] | null
     last_salvage: WsModels['VaultKeySalvageReport'] | null
+    vault_uid?: string | null
+    node_id?: string
+    attestation_public_keys?: WsModels['VaultKeyAttestationKey'][]
+    checkpoint?: WsModels['VaultKeyCheckpoint'] | null
+    recovery?: WsModels['VaultRecoveryMaterial']
   }
+  /**
+   * D2 (spec 03 §5.5): whether the vault has recovery material independent of this host.
+   * ops::vault_keys::toJson(RecoveryMaterial) (core/src/ops/VaultKeys.cpp).
+   */
+  'VaultRecoveryMaterial': {
+    required: boolean
+    state: 'not_required' | 'recipient' | 'export' | 'recovery_material_missing'
+    recipients: number
+    uncovered_versions: number[]
+    export_current: boolean
+    rotation_needed: boolean
+    detail: string | null
+  }
+  /**
+   * A recovery recipient: an independently revocable grant of the vault's key versions to a customer-held
+   * X25519 public key (spec 03 §5.7). ops::recovery_recipients::toJson(Recipient)
+   * (core/src/ops/RecoveryRecipients.cpp). Public: never a seed or key.
+   */
+  'VaultRecoveryRecipient': {
+    grant_id: string
+    recipient_id: string
+    public_key: string
+    suite: number
+    class: 'customer'
+    label: string | null
+    added_at: number
+    authorized_by: string
+    revoked_at: number | null
+    revoked_by: string | null
+    envelope_versions: number[]
+  }
+  /**
+   * An enrollment: ops::recovery_recipients::toJson(AddResult).
+   */
+  'VaultRecoveryRecipientAdd': {
+    recipient: WsModels['VaultRecoveryRecipient']
+    envelopes_written: number
+    versions: number[]
+    note: string | null
+    recovery: WsModels['VaultRecoveryMaterial']
+  }
+  /**
+   * A vault's recovery recipients: ops::recovery_recipients::toJson(RecipientList).
+   */
+  'VaultRecoveryRecipientList': {
+    vault_id: number
+    vault_name: string
+    vault_uid: string
+    recipients: WsModels['VaultRecoveryRecipient'][]
+    recovery: WsModels['VaultRecoveryMaterial']
+  }
+  /**
+   * A revocation: ops::recovery_recipients::toJson(RevokeResult). recovery.rotation_needed says whether a key
+   * rotation is needed to cut the recipient off from new data.
+   */
+  'VaultRecoveryRecipientRevoke': { recipient: WsModels['VaultRecoveryRecipient']; recovery: WsModels['VaultRecoveryMaterial'] }
   /**
    * A vault's backup/recovery posture (core/src/stats/model/VaultRecovery.cpp to_json; C++
    * stats::model::VaultRecovery).
@@ -2912,6 +2998,16 @@ export interface WsContract {
     response: Record<string, never>
   }
   /**
+   * Remove one of the caller's factors (named by kind and id): it is disabled, kept for the audit trail and
+   * never usable again, and the account's other web sessions are signed out (one of them may hold it).
+   * mfa_last_factor: it is the last usable factor of an account that must have MFA (add another first).
+   * account.credentials step-up.
+   */
+  'auth.mfa.factor.remove': {
+    payload: { kind: 'webauthn' | 'totp'; id: number }
+    response: { sessions_revoked: number }
+  }
+  /**
    * Rename one of the caller's factors (named by kind and id).
    */
   'auth.mfa.factor.rename': {
@@ -2929,9 +3025,8 @@ export interface WsContract {
   }
   /**
    * Make ten new recovery codes, shown once. They replace the current ones only when acknowledged. The
-   * account needs a factor (invalid otherwise). Replacing codes that are in force needs a second factor
-   * proven on this session within the last 5 minutes (or a recovery-code sign-in): step_up_required {family,
-   * max_age_seconds} otherwise.
+   * account needs a factor (invalid otherwise). Replacing codes that are in force is account.credentials
+   * step-up (except on the recovery-code session spending them).
    */
   'auth.mfa.recovery.generate': {
     payload: null
@@ -2959,6 +3054,11 @@ export interface WsContract {
       recovery: { active: boolean; remaining: number; acknowledged: boolean; pending: boolean }
       cooldown_until: number | null
       recovery_restricted: boolean
+      step_up: {
+        family: 'keys' | 'device.trust' | 'account.credentials' | 'identity.admin' | 'secrets' | 'settings' | 'data.destroy'
+        target: string | null
+        expires_at: number
+      }[]
     }
   }
   /**
@@ -3144,6 +3244,68 @@ export interface WsContract {
   'auth.sessions.revoke': {
     payload: { id?: string; all_others?: boolean }
     response: { revoked: number }
+  }
+  /**
+   * Start confirming a sensitive change that answered step_up_required: name its family and, for keys,
+   * device.trust and data.destroy, the target the refusal named. Answers the methods the account can use
+   * (webauthn: pass webauthn.publicKey to navigator.credentials.get(); password_totp: the password and an
+   * authenticator code together; password: only for an account that need not have MFA and has no factor,
+   * never for keys, device.trust or data.destroy) and a ceremony id valid for 120 s. A new begin replaces the
+   * open ceremony. step_up_unavailable: the account has nothing that can confirm this family (add a passkey
+   * or an authenticator app). Web sessions only: a paired device is denied.
+   */
+  'auth.stepup.begin': {
+    payload: {
+      family: 'keys' | 'device.trust' | 'account.credentials' | 'identity.admin' | 'secrets' | 'settings' | 'data.destroy'
+      target?: string | null
+    }
+    response: {
+      stepup_id: string
+      family: 'keys' | 'device.trust' | 'account.credentials' | 'identity.admin' | 'secrets' | 'settings' | 'data.destroy'
+      target: string | null
+      methods: string[]
+      webauthn?: {
+        publicKey: {
+          challenge: string
+          rpId: string
+          timeout: number
+          userVerification: 'required'
+          allowCredentials: { type: 'public-key'; id: string; transports: string[] }[]
+        }
+      }
+      expires_at: number
+      max_age_seconds: number
+    }
+  }
+  /**
+   * Answer the ceremony: {method: webauthn, credential} (a UV assertion over its challenge), {method:
+   * password_totp, password, code} or {method: password, password}. On success this session holds a grant for
+   * the family (and target): family grants last max_age_seconds, target-bound ones are spent by one use. Then
+   * resend the refused request. step_up_failed {attempts_remaining}: the answer didn't hold; the fifth
+   * failure within 15 minutes signs this session out. not_found: the ceremony expired or was used (begin
+   * again). Recovery codes, refresh tokens and Desktop mTLS never satisfy a step-up.
+   */
+  'auth.stepup.finish': {
+    payload: {
+      stepup_id: string
+      method: 'webauthn' | 'password_totp' | 'password'
+      credential?: {
+        id: string
+        rawId: string
+        type: 'public-key'
+        response: { clientDataJSON: string; authenticatorData: string; signature: string; userHandle?: string | null }
+        authenticatorAttachment?: string | null
+        clientExtensionResults?: { credProps?: { rk?: boolean } }
+      }
+      password?: string
+      code?: string
+    }
+    response: {
+      family: 'keys' | 'device.trust' | 'account.credentials' | 'identity.admin' | 'secrets' | 'settings' | 'data.destroy'
+      target: string | null
+      expires_at: number
+      uses: number | null
+    }
   }
   /**
    * Change (own, with old_password) or reset (another user's) a password.
@@ -5820,7 +5982,58 @@ export interface WsContract {
         detail: string
       }[]
       salvage: WsModels['VaultKeySalvageReport'] | null
+      recovery_kit?: {
+        envelopes: number
+        unwrapped: number
+        skipped: number
+        rejected: number
+        ignored: number
+        root_consulted: boolean
+      }
     }
+  }
+  /**
+   * Enroll a recovery recipient: an X25519 public key generated on the customer's own device (Vaulthalla
+   * Desktop, or the offline `vh-recovery kit create`); the server never receives the seed. Every key version
+   * the vault holds is wrapped to it now and every future version at rotation, into the vault's bucket only.
+   * Customer-controlled (class customer) is the only kind. S3 vaults only (conflict otherwise). Paired
+   * devices only (recipient_requires_device otherwise), with a keys step-up bound to the vault (#359); the
+   * encryption-key Export permission.
+   */
+  'vault.keys.recipients.add': {
+    payload: { vault_id: number; public_key: string; label?: string | null }
+    response: {
+      recipient: WsModels['VaultRecoveryRecipient']
+      envelopes_written: number
+      versions: number[]
+      note: string | null
+      recovery: WsModels['VaultRecoveryMaterial']
+    }
+  }
+  /**
+   * The vault's recovery recipients (spec 03 §5; #370): customer-held X25519 public keys every key version is
+   * wrapped to (KEV1 envelopes in the vault's own bucket), revoked ones included, with the vault's D2
+   * recovery state. Public data only; the encryption-key View permission.
+   */
+  'vault.keys.recipients.list': {
+    payload: { vault_id: number }
+    response: {
+      vault_id: number
+      vault_name: string
+      vault_uid: string
+      recipients: WsModels['VaultRecoveryRecipient'][]
+      recovery: WsModels['VaultRecoveryMaterial']
+    }
+  }
+  /**
+   * Revoke a recovery recipient: no new envelopes are written for it. Access it already has is not revoked
+   * (an envelope keeps unwrapping the versions it covers): recovery.rotation_needed says when a key rotation
+   * is needed to cut it off from new data. Paired devices only (recipient_requires_device otherwise), with a
+   * keys step-up bound to the vault (#359); the encryption-key Export permission.
+   */
+  'vault.keys.recipients.revoke': {
+    payload: { vault_id: number; grant_id: string }
+    response: { recipient: WsModels['VaultRecoveryRecipient']; recovery: WsModels['VaultRecoveryMaterial'] }
   }
   /**
    * Key backup state of every vault the caller may inspect (the encryption-key View permission; deleted
@@ -5897,6 +6110,7 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'auth.login',
   'auth.logout',
   'auth.mfa.cancel',
+  'auth.mfa.factor.remove',
   'auth.mfa.factor.rename',
   'auth.mfa.recovery.acknowledge',
   'auth.mfa.recovery.generate',
@@ -5913,6 +6127,8 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'auth.security.status',
   'auth.sessions.list',
   'auth.sessions.revoke',
+  'auth.stepup.begin',
+  'auth.stepup.finish',
   'auth.user.change_password',
   'auth.user.delete',
   'auth.user.get',
@@ -6130,6 +6346,9 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'vault.keys.export',
   'vault.keys.export.confirm',
   'vault.keys.import',
+  'vault.keys.recipients.add',
+  'vault.keys.recipients.list',
+  'vault.keys.recipients.revoke',
   'vault.keys.status',
   'vault.recovery.disclosure',
   'vault.recovery.status',
@@ -6179,6 +6398,63 @@ export const WS_CONTRACT_CONFIRMATIONS: Readonly<
   ],
 }
 
+// The step-up family a command's operation may ask for (#359): it can answer step_up_required until this
+// session holds a grant (auth.stepup.begin / auth.stepup.finish).
+export const WS_CONTRACT_STEP_UP: Readonly<Partial<Record<WsContractCommand, string>>> = {
+  'auth.mfa.factor.remove': 'account.credentials',
+  'auth.mfa.recovery.generate': 'account.credentials',
+  'auth.mfa.totp.enroll.confirm': 'account.credentials',
+  'auth.mfa.totp.enroll.start': 'account.credentials',
+  'auth.mfa.webauthn.register.finish': 'account.credentials',
+  'auth.mfa.webauthn.register.options': 'account.credentials',
+  'auth.register': 'identity.admin',
+  'auth.user.change_password': 'account.credentials',
+  'auth.user.delete': 'identity.admin',
+  'auth.user.update': 'identity.admin',
+  'device.pairing.approve': 'device.trust',
+  'device.remote.enable': 'device.trust',
+  'email.provider.secret.set': 'secrets',
+  'group.member.add': 'identity.admin',
+  'group.member.remove': 'identity.admin',
+  'group.remove': 'identity.admin',
+  'recovery.point.delete': 'data.destroy',
+  'role.admin.add': 'identity.admin',
+  'role.admin.delete': 'identity.admin',
+  'role.admin.update': 'identity.admin',
+  'role.vault.add': 'identity.admin',
+  'role.vault.assign': 'identity.admin',
+  'role.vault.delete': 'identity.admin',
+  'role.vault.overrides.add': 'identity.admin',
+  'role.vault.overrides.remove': 'identity.admin',
+  'role.vault.overrides.update': 'identity.admin',
+  'role.vault.unassign': 'identity.admin',
+  'role.vault.update': 'identity.admin',
+  's3.gateway.credentials.create': 'secrets',
+  's3.gateway.credentials.defaultRole.clear': 'secrets',
+  's3.gateway.credentials.defaultRole.overrides.add': 'secrets',
+  's3.gateway.credentials.defaultRole.overrides.remove': 'secrets',
+  's3.gateway.credentials.defaultRole.set': 'secrets',
+  's3.gateway.credentials.roles.assign': 'secrets',
+  's3.gateway.credentials.roles.overrides.add': 'secrets',
+  's3.gateway.credentials.roles.overrides.remove': 'secrets',
+  's3.gateway.credentials.roles.revoke': 'secrets',
+  's3.gateway.credentials.scope.update': 'secrets',
+  'settings.update': 'settings',
+  'storage.apiKey.add': 'secrets',
+  'storage.apiKey.remove': 'secrets',
+  'storage.apiKey.update': 'secrets',
+  'storage.vault.remove': 'data.destroy',
+  'upstream.admin.enable': 'secrets',
+  'upstream.bucket.cleanup': 'data.destroy',
+  'upstream.bucket.lifecycle.set': 'data.destroy',
+  'upstream.bucket.unprotect': 'data.destroy',
+  'vault.keys.export': 'keys',
+  'vault.keys.import': 'keys',
+  'vault.keys.recipients.add': 'keys',
+  'vault.keys.recipients.revoke': 'keys',
+  'vault.recovery.suspend': 'data.destroy',
+}
+
 // Client timeouts the server declares per command (a timeout means "no answer yet", never "failed").
 export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> = {
   'audit.export': 120000,
@@ -6189,6 +6465,7 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'auth.login': 20000,
   'auth.logout': 15000,
   'auth.mfa.cancel': 15000,
+  'auth.mfa.factor.remove': 15000,
   'auth.mfa.factor.rename': 15000,
   'auth.mfa.recovery.acknowledge': 15000,
   'auth.mfa.recovery.generate': 15000,
@@ -6205,6 +6482,8 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'auth.security.status': 15000,
   'auth.sessions.list': 15000,
   'auth.sessions.revoke': 15000,
+  'auth.stepup.begin': 15000,
+  'auth.stepup.finish': 20000,
   'auth.user.change_password': 15000,
   'auth.user.delete': 15000,
   'auth.user.get': 15000,
@@ -6422,6 +6701,9 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'vault.keys.export': 15000,
   'vault.keys.export.confirm': 15000,
   'vault.keys.import': 600000,
+  'vault.keys.recipients.add': 120000,
+  'vault.keys.recipients.list': 15000,
+  'vault.keys.recipients.revoke': 15000,
   'vault.keys.status': 15000,
   'vault.recovery.disclosure': 60000,
   'vault.recovery.status': 60000,

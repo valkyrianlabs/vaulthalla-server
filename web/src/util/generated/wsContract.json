@@ -1,6 +1,11 @@
 {
   "capabilities": [
     {
+      "description": "Sensitive commands (their contract entries carry step_up: <family>) may answer ERROR step_up_required {family, target, methods, max_age_seconds}; a web session confirms with auth.stepup.begin and auth.stepup.finish and resends the request. Paired devices and agents can't step up; routine device commands never ask (#359).",
+      "name": "auth.step_up",
+      "since": "1.22.0"
+    },
+    {
       "description": "ws device.endpoints answers a paired device with where the listener can be reached; device.pairing.open carries node_id, server_spki_sha256 and endpoints; device.remote.status carries diagnostics (docs/reference/transfer-protocol.md §1).",
       "name": "device.endpoints",
       "since": "1.20.0"
@@ -1058,6 +1063,14 @@
         {
           "model": "WebAuthnConfig",
           "name": "webauthn",
+          "required": false,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "model": "MfaConfig",
+          "name": "mfa",
           "required": false,
           "types": [
             "object"
@@ -3870,6 +3883,22 @@
         }
       ],
       "name": "LoggingConfig"
+    },
+    {
+      "description": "auth.mfa.* (Config.cpp to_json(MfaConfig), #359): multi-factor authentication settings.",
+      "fields": [
+        {
+          "description": "How long a step-up grant lasts, and how recent an aal 2 sign-in must be to stand in for a family-wide one.",
+          "maximum": 900,
+          "minimum": 60,
+          "name": "step_up_ttl_seconds",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "name": "MfaConfig"
     },
     {
       "description": "One of the account's sign-in factors (#356/#357): auth::mfa::to_json(Factor), core/src/auth/mfa/Factors.cpp. Carries no secret and no credential id. id is unique per kind only: name a factor by {kind, id}.",
@@ -12958,6 +12987,50 @@
           ]
         },
         {
+          "description": "Self-hosted vaults that encrypt upstream without recovery material independent of this host (spec 03 §5.5, D2): no recovery recipient whose envelopes cover every needed key version and no export of the current key version. Any entry makes the node at least degraded.",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "vault_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "vault_name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "recovery_material_missing"
+              ],
+              "name": "reason",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "What is missing and the commands that fix it.",
+              "name": "detail",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "items": "object",
+          "name": "vaults_recovery_material_missing",
+          "required": false,
+          "types": [
+            "array"
+          ]
+        },
+        {
           "fields": [
             {
               "minimum": 0,
@@ -15719,9 +15792,73 @@
           "types": [
             "string"
           ]
+        },
+        {
+          "description": "base64 (32 bytes): the signing key's public key (key_attestation_keys), so the backup can anchor provenance on another node (spec 03 §5.4). An import on this node requires it to be this node's key of key_id; absent in exports from before #370, which still import here.",
+          "name": "public_key",
+          "required": false,
+          "types": [
+            "string",
+            "null"
+          ]
         }
       ],
       "name": "VaultKeyAttestation"
+    },
+    {
+      "description": "One of this node's attestation signing keys (key_attestation_keys): what a recovery kit pins as attestation_public_keys (spec 03 §5.3). Public.",
+      "fields": [
+        {
+          "maximum": 2147483647,
+          "minimum": 1,
+          "name": "key_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "base64 (32 bytes, Ed25519).",
+          "name": "public_key",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "When a newer signing key replaced it (its signatures stay valid).",
+          "minimum": 0,
+          "name": "retired_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        }
+      ],
+      "name": "VaultKeyAttestationKey"
+    },
+    {
+      "description": "The vault's manifest v2 chain position (opaque_v1 vaults): a recovery kit's checkpoint bounds rollback (spec 03 §4.5).",
+      "fields": [
+        {
+          "minimum": 1,
+          "name": "epoch",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "64 lowercase hex digits: SHA-256 of the root object.",
+          "name": "root_sha256",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "name": "VaultKeyCheckpoint"
     },
     {
       "description": "One vault's export document: ops::vault_keys::toJson(VaultExport) (core/src/ops/VaultKeys.cpp), the CLI's `vh vault keys export` shape (vault::model::generate_json_key_object) plus key_check and every needed version. vault.keys.import (and `vh vault keys import`) takes it back, alone or in an `all` array.",
@@ -16259,6 +16396,69 @@
             "object",
             "null"
           ]
+        },
+        {
+          "description": "`vh vault keys import --recovery-kit` only: what the envelopes in the bucket held.",
+          "fields": [
+            {
+              "description": "Objects under .vaulthalla/key/ in the vault's bucket.",
+              "minimum": 0,
+              "name": "envelopes",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Addressed to the kit's recipient and authentic.",
+              "minimum": 0,
+              "name": "unwrapped",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Another recipient's, or a reserved purpose or recipient class.",
+              "minimum": 0,
+              "name": "skipped",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Damaged, for another vault, or not KEV1.",
+              "minimum": 0,
+              "name": "rejected",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Unwrapped, but not the key the vault's records name for that version.",
+              "minimum": 0,
+              "name": "ignored",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "The manifest root's key history supplied attestations.",
+              "name": "root_consulted",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            }
+          ],
+          "name": "recovery_kit",
+          "required": false,
+          "types": [
+            "object"
+          ]
         }
       ],
       "name": "VaultKeyImportResult"
@@ -16627,9 +16827,355 @@
             "object",
             "null"
           ]
+        },
+        {
+          "description": "26 base32 symbols (null for a deleted vault): how a recovery kit names the vault.",
+          "name": "vault_uid",
+          "required": false,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "This node's id (device_node.node_id): the origin a recovery kit records.",
+          "name": "node_id",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Every attestation signing key this node has had: what a recovery kit pins.",
+          "items": "object",
+          "model": "VaultKeyAttestationKey",
+          "name": "attestation_public_keys",
+          "required": false,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "The last manifest root this node recorded (opaque_v1 vaults), else null.",
+          "model": "VaultKeyCheckpoint",
+          "name": "checkpoint",
+          "required": false,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "description": "D2: the vault's recovery material.",
+          "model": "VaultRecoveryMaterial",
+          "name": "recovery",
+          "required": false,
+          "types": [
+            "object"
+          ]
         }
       ],
       "name": "VaultKeyStatus"
+    },
+    {
+      "description": "D2 (spec 03 §5.5): whether the vault has recovery material independent of this host. ops::vault_keys::toJson(RecoveryMaterial) (core/src/ops/VaultKeys.cpp).",
+      "fields": [
+        {
+          "description": "A self-hosted S3 vault that encrypts upstream: it needs a recovery recipient or a current export.",
+          "name": "required",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "recipient: a recovery recipient's envelopes cover every needed key version; export: the current version was exported (a rotation makes an export stale); recovery_material_missing: neither (health is degraded); not_required: a local or transparent vault (the export guidance applies).",
+          "enum": [
+            "not_required",
+            "recipient",
+            "export",
+            "recovery_material_missing"
+          ],
+          "name": "state",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Usable (customer, not revoked) recovery recipients.",
+          "minimum": 0,
+          "name": "recipients",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Needed key versions without an envelope for a usable recipient (only with recipients).",
+          "items": "integer",
+          "name": "uncovered_versions",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "The recorded export is of the current key version.",
+          "name": "export_current",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "A revoked recipient still holds envelopes of key versions the vault uses: only a key rotation cuts it off from new data.",
+          "name": "rotation_needed",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "What is missing and what to do.",
+          "name": "detail",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        }
+      ],
+      "name": "VaultRecoveryMaterial"
+    },
+    {
+      "description": "A recovery recipient: an independently revocable grant of the vault's key versions to a customer-held X25519 public key (spec 03 §5.7). ops::recovery_recipients::toJson(Recipient) (core/src/ops/RecoveryRecipients.cpp). Public: never a seed or key.",
+      "fields": [
+        {
+          "description": "26 base32 symbols.",
+          "name": "grant_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "64 lowercase hex digits: SHA-256 of the public key (KEV1 recipient_id).",
+          "name": "recipient_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "base64 (32 bytes, X25519).",
+          "name": "public_key",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "KEV1 suite: 1 (X25519 + HKDF-SHA-256 + AES-256-GCM).",
+          "minimum": 0,
+          "name": "suite",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Customer-controlled: the only class implemented.",
+          "enum": [
+            "customer"
+          ],
+          "name": "class",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "label",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "minimum": 0,
+          "name": "added_at",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Who enrolled it: user:<id> via cli|device.",
+          "name": "authorized_by",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "minimum": 0,
+          "name": "revoked_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "name": "revoked_by",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "Key versions wrapped to it (KEV1 envelopes in the vault's bucket).",
+          "items": "integer",
+          "name": "envelope_versions",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        }
+      ],
+      "name": "VaultRecoveryRecipient"
+    },
+    {
+      "description": "An enrollment: ops::recovery_recipients::toJson(AddResult).",
+      "fields": [
+        {
+          "model": "VaultRecoveryRecipient",
+          "name": "recipient",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "KEV1 envelopes written to the vault's bucket now.",
+          "minimum": 0,
+          "name": "envelopes_written",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The key versions wrapped to the recipient.",
+          "items": "integer",
+          "name": "versions",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "Set when not every envelope could be written yet (the sync pass retries).",
+          "name": "note",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "model": "VaultRecoveryMaterial",
+          "name": "recovery",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "name": "VaultRecoveryRecipientAdd"
+    },
+    {
+      "description": "A vault's recovery recipients: ops::recovery_recipients::toJson(RecipientList).",
+      "fields": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "vault_name",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "26 base32 symbols: how a recovery kit names the vault.",
+          "name": "vault_uid",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Oldest first, revoked ones included.",
+          "items": "object",
+          "model": "VaultRecoveryRecipient",
+          "name": "recipients",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "model": "VaultRecoveryMaterial",
+          "name": "recovery",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "name": "VaultRecoveryRecipientList"
+    },
+    {
+      "description": "A revocation: ops::recovery_recipients::toJson(RevokeResult). recovery.rotation_needed says whether a key rotation is needed to cut the recipient off from new data.",
+      "fields": [
+        {
+          "model": "VaultRecoveryRecipient",
+          "name": "recipient",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "model": "VaultRecoveryMaterial",
+          "name": "recovery",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "name": "VaultRecoveryRecipientRevoke"
     },
     {
       "description": "A vault's backup/recovery posture (core/src/stats/model/VaultRecovery.cpp to_json; C++ stats::model::VaultRecovery).",
@@ -18133,7 +18679,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "adece020e347877b41fa73042a73e55267d7acc9d2ad7ae3bf1208f0c66e1136",
+  "models_hash": "455b23eafefb4b72a1cfb1503ebe2c43a378d38313d320a1d0176c2f9bfcebf8",
   "protocol": {
     "min": 1,
     "version": 1
@@ -18505,6 +19051,71 @@
     {
       "auth": "human",
       "client_timeout_ms": 15000,
+      "command": "auth.mfa.factor.remove",
+      "confirmations": [],
+      "description": "Remove one of the caller's factors (named by kind and id): it is disabled, kept for the audit trail and never usable again, and the account's other web sessions are signed out (one of them may hold it). mfa_last_factor: it is the last usable factor of an account that must have MFA (add another first). account.credentials step-up.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "enum": [
+            "webauthn",
+            "totp"
+          ],
+          "name": "kind",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "kind": "int_range",
+            "max": 1000,
+            "min": 1
+          },
+          "minimum": 0,
+          "name": "id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "not_found",
+        "invalid",
+        "unauthorized",
+        "mfa_last_factor",
+        "step_up_required"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "not_found",
+        "invalid",
+        "unauthorized",
+        "mfa_last_factor",
+        "step_up_required"
+      ],
+      "response": [
+        {
+          "minimum": 0,
+          "name": "sessions_revoked",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "response_model": null,
+      "step_up": "account.credentials",
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
       "command": "auth.mfa.factor.rename",
       "confirmations": [],
       "description": "Rename one of the caller's factors (named by kind and id).",
@@ -18653,7 +19264,7 @@
       "client_timeout_ms": 15000,
       "command": "auth.mfa.recovery.generate",
       "confirmations": [],
-      "description": "Make ten new recovery codes, shown once. They replace the current ones only when acknowledged. The account needs a factor (invalid otherwise). Replacing codes that are in force needs a second factor proven on this session within the last 5 minutes (or a recovery-code sign-in): step_up_required {family, max_age_seconds} otherwise.",
+      "description": "Make ten new recovery codes, shown once. They replace the current ones only when acknowledged. The account needs a factor (invalid otherwise). Replacing codes that are in force is account.credentials step-up (except on the recovery-code session spending them).",
       "input": "none",
       "operation": null,
       "payload": [],
@@ -18690,6 +19301,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "account.credentials",
       "untyped_refusals": [],
       "variants": []
     },
@@ -18846,6 +19458,50 @@
           "types": [
             "boolean"
           ]
+        },
+        {
+          "description": "This session's live step-up grants (#359); never another session's.",
+          "fields": [
+            {
+              "enum": [
+                "keys",
+                "device.trust",
+                "account.credentials",
+                "identity.admin",
+                "secrets",
+                "settings",
+                "data.destroy"
+              ],
+              "name": "family",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "Target-bound families: what the grant is for.",
+              "name": "target",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "Unix seconds.",
+              "name": "expires_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "items": "object",
+          "name": "step_up",
+          "required": true,
+          "types": [
+            "array"
+          ]
         }
       ],
       "response_model": null,
@@ -18893,7 +19549,8 @@
         "conflict",
         "unauthorized",
         "error",
-        "mfa_expired"
+        "mfa_expired",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -18902,7 +19559,8 @@
         "conflict",
         "unauthorized",
         "error",
-        "mfa_expired"
+        "mfa_expired",
+        "step_up_required"
       ],
       "response": [
         {
@@ -18941,6 +19599,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "account.credentials",
       "untyped_refusals": [],
       "variants": []
     },
@@ -18974,7 +19633,8 @@
         "conflict",
         "unauthorized",
         "error",
-        "mfa_expired"
+        "mfa_expired",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -18983,7 +19643,8 @@
         "conflict",
         "unauthorized",
         "error",
-        "mfa_expired"
+        "mfa_expired",
+        "step_up_required"
       ],
       "response": [
         {
@@ -19018,6 +19679,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "account.credentials",
       "untyped_refusals": [],
       "variants": []
     },
@@ -19422,7 +20084,8 @@
         "conflict",
         "unauthorized",
         "error",
-        "mfa_expired"
+        "mfa_expired",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -19431,7 +20094,8 @@
         "conflict",
         "unauthorized",
         "error",
-        "mfa_expired"
+        "mfa_expired",
+        "step_up_required"
       ],
       "response": [
         {
@@ -19470,6 +20134,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "account.credentials",
       "untyped_refusals": [],
       "variants": []
     },
@@ -19503,7 +20168,8 @@
         "conflict",
         "unauthorized",
         "error",
-        "mfa_expired"
+        "mfa_expired",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -19512,7 +20178,8 @@
         "conflict",
         "unauthorized",
         "error",
-        "mfa_expired"
+        "mfa_expired",
+        "step_up_required"
       ],
       "response": [
         {
@@ -19732,6 +20399,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "account.credentials",
       "untyped_refusals": [],
       "variants": []
     },
@@ -20116,14 +20784,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -20136,6 +20806,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "identity.admin",
       "untyped_refusals": [],
       "variants": []
     },
@@ -20274,6 +20945,442 @@
     {
       "auth": "human",
       "client_timeout_ms": 15000,
+      "command": "auth.stepup.begin",
+      "confirmations": [],
+      "description": "Start confirming a sensitive change that answered step_up_required: name its family and, for keys, device.trust and data.destroy, the target the refusal named. Answers the methods the account can use (webauthn: pass webauthn.publicKey to navigator.credentials.get(); password_totp: the password and an authenticator code together; password: only for an account that need not have MFA and has no factor, never for keys, device.trust or data.destroy) and a ceremony id valid for 120 s. A new begin replaces the open ceremony. step_up_unavailable: the account has nothing that can confirm this family (add a passkey or an authenticator app). Web sessions only: a paired device is denied.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "enum": [
+            "keys",
+            "device.trust",
+            "account.credentials",
+            "identity.admin",
+            "secrets",
+            "settings",
+            "data.destroy"
+          ],
+          "name": "family",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The refusal's target (keys, device.trust, data.destroy); ignored for the others.",
+          "name": "target",
+          "required": false,
+          "types": [
+            "string",
+            "null"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "unauthorized",
+        "rate_limited",
+        "step_up_unavailable"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "unauthorized",
+        "rate_limited",
+        "step_up_unavailable"
+      ],
+      "response": [
+        {
+          "name": "stepup_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "enum": [
+            "keys",
+            "device.trust",
+            "account.credentials",
+            "identity.admin",
+            "secrets",
+            "settings",
+            "data.destroy"
+          ],
+          "name": "family",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "target",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "webauthn, password_totp, password: in this order of preference.",
+          "items": "string",
+          "name": "methods",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "Present when webauthn is offered.",
+          "fields": [
+            {
+              "description": "PublicKeyCredentialRequestOptionsJSON for navigator.credentials.get().",
+              "fields": [
+                {
+                  "description": "base64url, 32 bytes, single use, 120 s, bound to this connection, the purpose and (step-up) the family and target.",
+                  "name": "challenge",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "rpId",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "Milliseconds.",
+                  "minimum": 0,
+                  "name": "timeout",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "enum": [
+                    "required"
+                  ],
+                  "name": "userVerification",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "The account's usable passkeys.",
+                  "fields": [
+                    {
+                      "enum": [
+                        "public-key"
+                      ],
+                      "name": "type",
+                      "required": true,
+                      "types": [
+                        "string"
+                      ]
+                    },
+                    {
+                      "description": "base64url credential id.",
+                      "name": "id",
+                      "required": true,
+                      "types": [
+                        "string"
+                      ]
+                    },
+                    {
+                      "items": "string",
+                      "name": "transports",
+                      "required": true,
+                      "types": [
+                        "array"
+                      ]
+                    }
+                  ],
+                  "items": "object",
+                  "name": "allowCredentials",
+                  "required": true,
+                  "types": [
+                    "array"
+                  ]
+                }
+              ],
+              "name": "publicKey",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            }
+          ],
+          "name": "webauthn",
+          "required": false,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "Unix seconds: finish before this.",
+          "name": "expires_at",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "How long the grant will last (auth.mfa.step_up_ttl_seconds).",
+          "minimum": 0,
+          "name": "max_age_seconds",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 20000,
+      "command": "auth.stepup.finish",
+      "confirmations": [],
+      "description": "Answer the ceremony: {method: webauthn, credential} (a UV assertion over its challenge), {method: password_totp, password, code} or {method: password, password}. On success this session holds a grant for the family (and target): family grants last max_age_seconds, target-bound ones are spent by one use. Then resend the refused request. step_up_failed {attempts_remaining}: the answer didn't hold; the fifth failure within 15 minutes signs this session out. not_found: the ceremony expired or was used (begin again). Recovery codes, refresh tokens and Desktop mTLS never satisfy a step-up.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "kind": "pattern",
+            "pattern": "{*}{*}{*}{*}{*}{*}{*}{*}"
+          },
+          "name": "stepup_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "enum": [
+            "webauthn",
+            "password_totp",
+            "password"
+          ],
+          "name": "method",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "method webauthn: AuthenticationResponseJSON.",
+          "fields": [
+            {
+              "name": "id",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "base64url; equals id.",
+              "name": "rawId",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "public-key"
+              ],
+              "name": "type",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "description": "base64url.",
+                  "name": "clientDataJSON",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "base64url.",
+                  "name": "authenticatorData",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "base64url.",
+                  "name": "signature",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "base64url.",
+                  "name": "userHandle",
+                  "required": false,
+                  "types": [
+                    "string",
+                    "null"
+                  ]
+                }
+              ],
+              "name": "response",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "name": "authenticatorAttachment",
+              "required": false,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "fields": [
+                    {
+                      "name": "rk",
+                      "required": false,
+                      "types": [
+                        "boolean"
+                      ]
+                    }
+                  ],
+                  "name": "credProps",
+                  "required": false,
+                  "types": [
+                    "object"
+                  ]
+                }
+              ],
+              "name": "clientExtensionResults",
+              "required": false,
+              "types": [
+                "object"
+              ]
+            }
+          ],
+          "generator": {
+            "kind": "const",
+            "values": [
+              "{}"
+            ]
+          },
+          "name": "credential",
+          "required": false,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "method password_totp or password.",
+          "name": "password",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "method password_totp: the authenticator code.",
+          "generator": {
+            "kind": "pattern",
+            "pattern": "{9}{9}{9}{9}{9}{9}"
+          },
+          "name": "code",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "unauthorized",
+        "error",
+        "step_up_failed"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "unauthorized",
+        "error",
+        "step_up_failed"
+      ],
+      "response": [
+        {
+          "enum": [
+            "keys",
+            "device.trust",
+            "account.credentials",
+            "identity.admin",
+            "secrets",
+            "settings",
+            "data.destroy"
+          ],
+          "name": "family",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "target",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "name": "expires_at",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "1 for a target-bound grant; null: any number until it expires.",
+          "minimum": 0,
+          "name": "uses",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
       "command": "auth.user.change_password",
       "confirmations": [],
       "description": "Change (own, with old_password) or reset (another user's) a password.",
@@ -20321,14 +21428,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -20341,6 +21450,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "account.credentials",
       "untyped_refusals": [],
       "variants": []
     },
@@ -20406,6 +21516,7 @@
         "not_found",
         "conflict",
         "unauthorized",
+        "step_up_required",
         "user_delete"
       ],
       "refusal_kinds": [
@@ -20413,7 +21524,8 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -20426,6 +21538,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "identity.admin",
       "untyped_refusals": [],
       "variants": []
     },
@@ -20616,14 +21729,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -20636,6 +21751,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "identity.admin",
       "untyped_refusals": [],
       "variants": []
     },
@@ -21447,14 +22563,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -21467,6 +22585,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "device.trust",
       "untyped_refusals": [],
       "variants": []
     },
@@ -22055,14 +23174,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -22144,6 +23265,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "device.trust",
       "untyped_refusals": [],
       "variants": []
     },
@@ -22822,12 +23944,14 @@
       "refusal_codes": [
         "denied",
         "invalid",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -22870,6 +23994,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "secrets",
       "untyped_refusals": [],
       "variants": []
     },
@@ -24898,14 +26023,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -24935,6 +26062,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "identity.admin",
       "untyped_refusals": [],
       "variants": []
     },
@@ -24987,14 +26115,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -25024,6 +26154,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "identity.admin",
       "untyped_refusals": [],
       "variants": []
     },
@@ -25058,14 +26189,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -25078,6 +26211,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "identity.admin",
       "untyped_refusals": [],
       "variants": []
     },
@@ -27210,6 +28344,7 @@
         "not_found",
         "conflict",
         "unauthorized",
+        "step_up_required",
         "recovery_point_delete"
       ],
       "refusal_kinds": [
@@ -27217,7 +28352,8 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -27229,6 +28365,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "data.destroy",
       "untyped_refusals": [],
       "variants": []
     },
@@ -27458,14 +28595,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -27478,6 +28617,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "identity.admin",
       "untyped_refusals": [],
       "variants": []
     },
@@ -27512,14 +28652,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -27533,6 +28675,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "identity.admin",
       "untyped_refusals": [],
       "variants": []
     },
@@ -27721,14 +28864,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -27741,6 +28886,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "identity.admin",
       "untyped_refusals": [],
       "variants": []
     },
@@ -27808,14 +28954,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -27828,6 +28976,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "identity.admin",
       "untyped_refusals": [],
       "variants": []
     },
@@ -27908,14 +29057,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -27928,6 +29079,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "identity.admin",
       "untyped_refusals": [],
       "variants": []
     },
@@ -27962,14 +29114,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -27982,6 +29136,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "identity.admin",
       "untyped_refusals": [],
       "variants": []
     },
@@ -28200,14 +29355,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -28222,6 +29379,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "identity.admin",
       "untyped_refusals": [],
       "variants": []
     },
@@ -28386,14 +29544,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -28405,6 +29565,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "identity.admin",
       "untyped_refusals": [],
       "variants": []
     },
@@ -28513,14 +29674,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -28533,6 +29696,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "identity.admin",
       "untyped_refusals": [],
       "variants": []
     },
@@ -28596,14 +29760,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -28615,6 +29781,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "identity.admin",
       "untyped_refusals": [],
       "variants": []
     },
@@ -28696,14 +29863,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -28716,6 +29885,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "identity.admin",
       "untyped_refusals": [],
       "variants": []
     },
@@ -30172,14 +31342,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -30200,6 +31372,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "secrets",
       "untyped_refusals": [],
       "variants": []
     },
@@ -30275,14 +31448,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -30303,6 +31478,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "secrets",
       "untyped_refusals": [],
       "variants": []
     },
@@ -30556,14 +31732,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -30576,6 +31754,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "secrets",
       "untyped_refusals": [],
       "variants": []
     },
@@ -30781,14 +31960,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -30808,6 +31989,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "secrets",
       "untyped_refusals": [],
       "variants": []
     },
@@ -30941,14 +32123,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -30969,6 +32153,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "secrets",
       "untyped_refusals": [],
       "variants": []
     },
@@ -31252,14 +32437,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -31281,6 +32468,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "secrets",
       "untyped_refusals": [],
       "variants": []
     },
@@ -31595,14 +32783,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -31615,6 +32805,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "secrets",
       "untyped_refusals": [],
       "variants": []
     },
@@ -31923,14 +33114,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -31960,6 +33153,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "secrets",
       "untyped_refusals": [],
       "variants": []
     },
@@ -32086,14 +33280,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -32123,6 +33319,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "secrets",
       "untyped_refusals": [],
       "variants": []
     },
@@ -32515,14 +33712,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -32535,6 +33734,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "secrets",
       "untyped_refusals": [],
       "variants": []
     },
@@ -33613,12 +34813,14 @@
       "refusal_codes": [
         "denied",
         "invalid",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -33631,6 +34833,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "settings",
       "untyped_refusals": [],
       "variants": []
     },
@@ -37575,14 +38778,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -37596,6 +38801,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "secrets",
       "untyped_refusals": [],
       "variants": []
     },
@@ -37725,17 +38931,20 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [],
       "response_model": null,
+      "step_up": "secrets",
       "untyped_refusals": [],
       "variants": []
     },
@@ -37830,14 +39039,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -37851,6 +39062,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "secrets",
       "untyped_refusals": [],
       "variants": []
     },
@@ -38572,6 +39784,7 @@
         "not_found",
         "conflict",
         "unauthorized",
+        "step_up_required",
         "vault_upstream_key_loss",
         "vault_delete_now"
       ],
@@ -38580,7 +39793,8 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -38594,6 +39808,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "data.destroy",
       "untyped_refusals": [],
       "variants": []
     },
@@ -39487,14 +40702,16 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -39507,6 +40724,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "secrets",
       "untyped_refusals": [],
       "variants": []
     },
@@ -39785,6 +41003,7 @@
         "not_found",
         "conflict",
         "unauthorized",
+        "step_up_required",
         "upstream_cleanup"
       ],
       "refusal_kinds": [
@@ -39792,7 +41011,8 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -39805,6 +41025,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "data.destroy",
       "untyped_refusals": [],
       "variants": []
     },
@@ -40115,6 +41336,7 @@
         "not_found",
         "conflict",
         "unauthorized",
+        "step_up_required",
         "upstream_destructive_lifecycle"
       ],
       "refusal_kinds": [
@@ -40122,7 +41344,8 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -40135,6 +41358,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "data.destroy",
       "untyped_refusals": [],
       "variants": []
     },
@@ -40372,6 +41596,7 @@
         "not_found",
         "conflict",
         "unauthorized",
+        "step_up_required",
         "upstream_unprotect"
       ],
       "refusal_kinds": [
@@ -40379,7 +41604,8 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -40392,6 +41618,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "data.destroy",
       "untyped_refusals": [],
       "variants": []
     },
@@ -40671,7 +41898,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "export_requires_device"
+        "export_requires_device",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -40679,7 +41907,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "export_requires_device"
+        "export_requires_device",
+        "step_up_required"
       ],
       "response": [
         {
@@ -40957,6 +42186,7 @@
         }
       ],
       "response_model": "VaultKeyExport",
+      "step_up": "keys",
       "untyped_refusals": [],
       "variants": []
     },
@@ -41178,6 +42408,7 @@
         "conflict",
         "unauthorized",
         "import_requires_device",
+        "step_up_required",
         "vault_key_import",
         "vault_key_salvage"
       ],
@@ -41187,7 +42418,8 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "import_requires_device"
+        "import_requires_device",
+        "step_up_required"
       ],
       "response": [
         {
@@ -41308,9 +42540,370 @@
             "object",
             "null"
           ]
+        },
+        {
+          "description": "`vh vault keys import --recovery-kit` only: what the envelopes in the bucket held.",
+          "fields": [
+            {
+              "description": "Objects under .vaulthalla/key/ in the vault's bucket.",
+              "minimum": 0,
+              "name": "envelopes",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Addressed to the kit's recipient and authentic.",
+              "minimum": 0,
+              "name": "unwrapped",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Another recipient's, or a reserved purpose or recipient class.",
+              "minimum": 0,
+              "name": "skipped",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Damaged, for another vault, or not KEV1.",
+              "minimum": 0,
+              "name": "rejected",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Unwrapped, but not the key the vault's records name for that version.",
+              "minimum": 0,
+              "name": "ignored",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "The manifest root's key history supplied attestations.",
+              "name": "root_consulted",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            }
+          ],
+          "name": "recovery_kit",
+          "required": false,
+          "types": [
+            "object"
+          ]
         }
       ],
       "response_model": "VaultKeyImportResult",
+      "step_up": "keys",
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 120000,
+      "command": "vault.keys.recipients.add",
+      "confirmations": [],
+      "description": "Enroll a recovery recipient: an X25519 public key generated on the customer's own device (Vaulthalla Desktop, or the offline `vh-recovery kit create`); the server never receives the seed. Every key version the vault holds is wrapped to it now and every future version at rotation, into the vault's bucket only. Customer-controlled (class customer) is the only kind. S3 vaults only (conflict otherwise). Paired devices only (recipient_requires_device otherwise), with a keys step-up bound to the vault (#359); the encryption-key Export permission.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The recipient's X25519 public key: base64 (32 bytes) or 64 hex digits.",
+          "generator": {
+            "kind": "const",
+            "values": [
+              "9jB0b7LvRAo3+fTz//m8OhJQkp39Kcd1PjiFpjtmrTs="
+            ]
+          },
+          "name": "public_key",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "A name the customer recognizes (at most 200 characters).",
+          "name": "label",
+          "required": false,
+          "types": [
+            "string",
+            "null"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "recipient_requires_device",
+        "step_up_required"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "recipient_requires_device",
+        "step_up_required"
+      ],
+      "response": [
+        {
+          "model": "VaultRecoveryRecipient",
+          "name": "recipient",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "KEV1 envelopes written to the vault's bucket now.",
+          "minimum": 0,
+          "name": "envelopes_written",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The key versions wrapped to the recipient.",
+          "items": "integer",
+          "name": "versions",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "Set when not every envelope could be written yet (the sync pass retries).",
+          "name": "note",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "model": "VaultRecoveryMaterial",
+          "name": "recovery",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": "VaultRecoveryRecipientAdd",
+      "step_up": "keys",
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "vault.keys.recipients.list",
+      "confirmations": [],
+      "description": "The vault's recovery recipients (spec 03 §5; #370): customer-held X25519 public keys every key version is wrapped to (KEV1 envelopes in the vault's own bucket), revoked ones included, with the vault's D2 recovery state. Public data only; the encryption-key View permission.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "vault_name",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "26 base32 symbols: how a recovery kit names the vault.",
+          "name": "vault_uid",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Oldest first, revoked ones included.",
+          "items": "object",
+          "model": "VaultRecoveryRecipient",
+          "name": "recipients",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "model": "VaultRecoveryMaterial",
+          "name": "recovery",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": "VaultRecoveryRecipientList",
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "vault.keys.recipients.revoke",
+      "confirmations": [],
+      "description": "Revoke a recovery recipient: no new envelopes are written for it. Access it already has is not revoked (an envelope keeps unwrapping the versions it covers): recovery.rotation_needed says when a key rotation is needed to cut it off from new data. Paired devices only (recipient_requires_device otherwise), with a keys step-up bound to the vault (#359); the encryption-key Export permission.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The recipient's grant_id (vault.keys.recipients.list).",
+          "generator": {
+            "attrs": [
+              "grant_id"
+            ],
+            "entity": "vault.recipient",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "grant_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "recipient_requires_device",
+        "step_up_required"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "recipient_requires_device",
+        "step_up_required"
+      ],
+      "response": [
+        {
+          "model": "VaultRecoveryRecipient",
+          "name": "recipient",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "model": "VaultRecoveryMaterial",
+          "name": "recovery",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": "VaultRecoveryRecipientRevoke",
+      "step_up": "keys",
       "untyped_refusals": [],
       "variants": []
     },
@@ -41591,6 +43184,7 @@
         "not_found",
         "conflict",
         "unauthorized",
+        "step_up_required",
         "recovery_versioning_suspend"
       ],
       "refusal_kinds": [
@@ -41598,7 +43192,8 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -41611,6 +43206,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "data.destroy",
       "untyped_refusals": [],
       "variants": []
     },
@@ -41854,5 +43450,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "03e5d43516b1128c3420b4f00607f0d059ce2be6a1ad34cc2ccf3cfa937cec55"
+  "ws_hash": "fccb00365d1ebe8e04da2666296e78e5023a3c541848f4207583c9fcf7c0c520"
 }

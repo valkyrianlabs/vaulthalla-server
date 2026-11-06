@@ -1134,4 +1134,50 @@ TEST_F(SqlDeployerHistoryDb, ManifestV2MigrationIsAdditiveAndIdempotent) {
     });
 }
 
+TEST_F(SqlDeployerHistoryDb, RecoveryRecipientsMigrationIsAdditiveIdempotentAndCustomerOnly) {
+    inRolledBackTxn([](pqxx::work& txn) {
+        txn.exec("DROP TABLE IF EXISTS vault_key_envelope");
+        txn.exec("DROP TABLE IF EXISTS vault_recovery_grant");
+        txn.exec("DELETE FROM schema_migrations WHERE filename = '127_recovery_recipients.sql'");
+
+        const auto owner = txn.exec("INSERT INTO users (name, password_hash) VALUES ('claude_test_127_owner', 'x') "
+                                    "RETURNING id").one_field_ref().as<int>();
+        const auto vault = txn.exec("INSERT INTO vault (name, owner_id, type, mount_point, uid) VALUES "
+                                    "('claude_test_127', $1, 's3', 'claude_test_127', gen_random_uuid()) RETURNING id",
+                                    pqxx::params{owner}).one_field_ref().as<int>();
+
+        migseed::SqlDeployReport report;
+        ASSERT_NO_THROW(report = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(applied(report, "127_recovery_recipients.sql"));
+        EXPECT_EQ(recordedHash(txn, "127_recovery_recipients.sql"), currentHash("127_recovery_recipients.sql"));
+        EXPECT_EQ(txn.exec("SELECT COUNT(*) FROM vault_recovery_grant").one_field_ref().as<int>(), 0)
+            << "an upgrade enrolls no recipient";
+
+        const auto insert = [&](const std::string& cls, const int suite, const int keyBytes, const std::string& grant) {
+            pqxx::subtransaction sub(txn, "grant");
+            try {
+                sub.exec("INSERT INTO vault_recovery_grant (vault_id, grant_id, recipient_id, public_key, suite, class, "
+                         "authorized_by) VALUES ($1, $2, repeat('a', 64), decode(repeat('01', $4), 'hex'), $3, $5, 'test')",
+                         pqxx::params{vault, grant, suite, keyBytes, cls});
+                sub.commit();
+                return true;
+            } catch (const pqxx::sql_error&) {
+                return false;
+            }
+        };
+        EXPECT_FALSE(insert("custodian", 1, 32, "00000000000000000000000000")) << "only customer grants exist";
+        EXPECT_FALSE(insert("customer", 2, 65, "00000000000000000000000000")) << "recovery recipients are X25519";
+        EXPECT_FALSE(insert("customer", 1, 32, "not-a-grant-id")) << "grant ids are base32 uids";
+        EXPECT_TRUE(insert("customer", 1, 32, "00000000000000000000000000"));
+        EXPECT_FALSE(insert("customer", 1, 32, "00000000000000000000000004")) << "one active grant per recipient";
+
+        migseed::SqlDeployReport again;
+        ASSERT_NO_THROW(again = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(again.applied.empty());
+        ASSERT_NO_THROW(txn.exec(migseed::readFileToString(repoPsqlDir() / "127_recovery_recipients.sql")));
+        EXPECT_EQ(txn.exec("SELECT COUNT(*) FROM vault_recovery_grant").one_field_ref().as<int>(), 1)
+            << "re-running keeps existing grants";
+    });
+}
+
 } // namespace vh_sql_deployer_history_test

@@ -212,4 +212,28 @@ std::optional<SignedInPasskey> verifyLogin(const std::string& sessionUuid, const
                          credentialJson);
 }
 
+nlohmann::json stepUpOptions(const std::string& sessionUuid, const uint32_t userId,
+                             const std::vector<WebAuthnCredential>& credentials, const std::string& scope) {
+    const auto rp = relyingParty();
+    if (!rp.configured()) throw ops::Invalid("Passkeys are not configured on this server");
+    nlohmann::json allow = nlohmann::json::array();
+    for (const auto& c : credentials) allow.push_back(passkeyDescriptor(c));
+    return {{"challenge", passkeyChallenge({.session = sessionUuid, .purpose = webauthn::Purpose::StepUp,
+                                            .user = static_cast<int64_t>(userId), .scope = scope})},
+            {"rpId", rp.id},
+            {"timeout", std::chrono::milliseconds(kChallengeTtl).count()},
+            {"userVerification", "required"},
+            {"allowCredentials", std::move(allow)}};
+}
+
+std::optional<VerifiedFactor> verifyStepUp(const std::string& sessionUuid, const uint32_t userId,
+                                           const std::string_view credentialJson, const std::string& scope) {
+    const auto ok = passkeyAssert(passkeyChallenges(),
+                                  {.session = sessionUuid, .purpose = webauthn::Purpose::StepUp,
+                                   .user = static_cast<int64_t>(userId), .scope = scope},
+                                  credentialJson);
+    if (!ok) return std::nullopt;
+    return ok->factor;
+}
+
 }

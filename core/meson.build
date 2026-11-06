@@ -393,6 +393,17 @@ vh_cli = executable('vaulthalla-cli',
            install: true
 )
 
+# The offline recovery-kit tool (design/encryption/03-metadata-recovery.md §5.3, #370): only the recovery codecs and
+# their crypto, no daemon code and no network. Customers run it on their own device, never on the server.
+vh_recovery = executable('vh-recovery',
+           files(join_paths(core_root, 'main/recovery.cpp'), src / 'crypto/recovery/Kev1.cpp',
+                 src / 'crypto/recovery/Kit.cpp', src / 'crypto/recovery/Seed.cpp', src / 'crypto/id/ObjectUid.cpp',
+                 src / 'crypto/SecretBytes.cpp', src / 'crypto/SecretKey.cpp'),
+           include_directories: include_directories('vendor', 'include'),
+           dependencies: [dependency('libsodium', required: true), dependency('openssl', version: '>=3.0', required: true)],
+           install: true
+)
+
 vh_usage = executable('vh_usage', main_usage,
                       include_directories: usage_inc,
                       link_with: lib_usage_native,
@@ -471,6 +482,10 @@ if python3.found()
     # `vh mcp` (stdio JSON-RPC against a scripted daemon) and `vh skill install` (temporary HOME, no agent CLI).
     test('cli_mcp_client', python3, args: [join_paths(core_root, 'tests/cli/test_mcp_client.py'), vh_cli],
          timeout: 120)
+    # `vh-recovery kit create|public-key|add-vault|show` (offline, no daemon): mode 0600, never overwritten, the seed
+    # never printed.
+    test('recovery_tool', python3, args: [join_paths(core_root, 'tests/cli/test_recovery_tool.py'), vh_recovery],
+         timeout: 60)
     test('ws_contract_drift', python3,
          args: [join_paths(repo_root, 'tools/contracts/ws_contract.py'), '--check', '--usage-json', usage_json],
          depends: usage_json, timeout: 60)

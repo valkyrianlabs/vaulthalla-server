@@ -103,7 +103,8 @@ struct WsCommandUsage {
     // the command refuses that way by design, e.g. a failed login); and the ops::Refused codes (ERROR with that
     // data.code) a client acts on where no generic kind says enough: "no_pairing_window", "rate_limited",
     // "device_unknown" (device pairing), "export_requires_device", "import_requires_device" (vault.keys.export,
-    // .export.confirm and .import on a session that isn't a paired device's: D4). Exported as `refusal_kinds`; the
+    // .export.confirm and .import on a session that isn't a paired device's: D4), "recipient_requires_device"
+    // (vault.keys.recipients.add and .revoke, likewise). Exported as `refusal_kinds`; the
     // exported `refusal_codes` is these plus the confirmation codes (the pre-version-2 shape).
     std::vector<std::string> refusal_codes{};
     std::vector<WsConfirmation> confirmations{};
@@ -114,7 +115,23 @@ struct WsCommandUsage {
     // model's fields.
     std::optional<std::string> response_model{};
     std::chrono::milliseconds client_timeout{15'000};
+    // #359: the step-up family the command's operation asks for (auth/stepup/StepUp.hpp; MFA design note 5.4): it
+    // may answer ERROR step_up_required {family, target, methods, max_age_seconds} until the session holds a grant.
+    // Set from stepUpTable() by commands(), never by hand. Exported as `step_up` on annotated commands only.
+    std::optional<std::string> step_up{};
 };
+
+// One row of the step-up family table (#359): which command asks for which family, and when (empty: always).
+struct WsStepUp {
+    std::string command{};
+    std::string family{};
+    bool target_bound{false};
+    std::string when{};
+};
+
+// The step-up family table, sorted by command. The daemon checks it in its operations (auth::stepup::require); this is
+// the published description, held to the daemon by the WsStepUp tests (core/tests/unit/test_mfa_stepup.cpp).
+std::vector<WsStepUp> stepUpTable();
 
 // A data.code an ERROR answer can carry whatever the command: the generic refusal kinds and the router's own
 // codes. A command's own codes are its `refusal_codes` and `confirmations`.

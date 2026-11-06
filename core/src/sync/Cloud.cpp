@@ -371,6 +371,12 @@ void Cloud::initBins() {
     // Adoption with events (#96): one full listing after the subscription exists, whatever the index holds.
     const bool baseline = hooks.baselineNeeded && hooks.baselineNeeded(vaultId);
     const bool manifestRefreshed = !baseline && cloud->refreshRemoteIndexFromManifestIfChanged();
+    // Recovery recipients (#370): envelopes an enrollment or a rotation couldn't write (the bucket was unreachable).
+    try {
+        (void)cloud->ensureRecoveryEnvelopes();
+    } catch (const std::exception& e) {
+        log::Registry::sync()->warn("[CloudSync] Vault {}: recovery envelopes not written this pass: {}", vaultId, e.what());
+    }
     const auto indexSummary = db::query::sync::RemoteObjectIndex::summaryForVault(vaultId);
     const auto keptFresh = [&] {
         return hooks.indexFresh && policy->max_remote_index_age && hooks.indexFresh(vaultId, *policy->max_remote_index_age);

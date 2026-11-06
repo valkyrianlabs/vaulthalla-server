@@ -80,6 +80,17 @@ WsField passkeyRequestOptions() {
               "\"conditional\" (autofill).");
 }
 
+// PublicKeyCredentialRequestOptionsJSON as passkeys::requestOptions / stepUpOptions build it.
+WsField mfaRequestOptions() {
+    return object("publicKey", "",
+                  {str("challenge").desc("base64url, 32 bytes, single use, 120 s, bound to this connection, the "
+                                         "purpose and (step-up) the family and target."),
+                   str("rpId"), uinteger("timeout").desc("Milliseconds."),
+                   str("userVerification").oneOf({"required"}),
+                   mfaDescriptors("allowCredentials").desc("The account's usable passkeys.")})
+        .desc("PublicKeyCredentialRequestOptionsJSON for navigator.credentials.get().");
+}
+
 WsField mfaRecoveryCodes() {
     return object("recovery_codes", "",
                   {str("batch_id"),
@@ -98,6 +109,11 @@ WsField mfaSessionUser() {
 constexpr const char* kMfaPendingShape =
     "data.pending is {kind: \"mfa\" | \"enrollment\", expires_at (Unix seconds), methods: [\"webauthn\" | \"totp\" | "
     "\"recovery_code\"], attempts_remaining, webauthn?: {publicKey: PublicKeyCredentialRequestOptionsJSON}}.";
+
+// #359: the step-up families (auth/stepup/StepUp.hpp).
+const std::vector<std::string> kStepUpFamilies{"keys",           "device.trust", "account.credentials",
+                                               "identity.admin", "secrets",      "settings",
+                                               "data.destroy"};
 
 const std::vector<std::string> kMfaEnrollmentRefusals{"denied", "invalid", "not_found", "conflict", "unauthorized",
                                                       "error", "mfa_expired"};
@@ -343,7 +359,12 @@ std::vector<WsCommandUsage> authCommands() {
                              boolean("acknowledged"),
                              boolean("pending").desc("A generated batch waits for its acknowledgement.")}),
                      integer("cooldown_until").nullable().desc("Unix seconds: the recovery cooldown, if one ran."),
-                     boolean("recovery_restricted").desc("This session signed in with a recovery code.")},
+                     boolean("recovery_restricted").desc("This session signed in with a recovery code."),
+                     objectArray("step_up", "",
+                                 {str("family").oneOf(kStepUpFamilies),
+                                  str("target").nullable().desc("Target-bound families: what the grant is for."),
+                                  integer("expires_at").desc("Unix seconds.")})
+                         .desc("This session's live step-up grants (#359); never another session's.")},
         .refusal_codes = opsRefusals(),
         .client_timeout = kDefaultTimeout,
     });
@@ -417,14 +438,70 @@ std::vector<WsCommandUsage> authCommands() {
     });
 
     out.push_back({
+        .command = "auth.mfa.factor.remove",
+        .description = "Remove one of the caller's factors (named by kind and id): it is disabled, kept for the audit "
+                       "trail and never usable again, and the account's other web sessions are signed out (one of "
+                       "them may hold it). mfa_last_factor: it is the last usable factor of an account that must "
+                       "have MFA (add another first). account.credentials step-up.",
+        .payload = {str("kind").oneOf({"webauthn", "totp"}), uinteger("id").gen(gen::intRange(1, 1000))},
+        .response = {uinteger("sessions_revoked")},
+        .refusal_codes = {"denied", "not_found", "invalid", "unauthorized", "mfa_last_factor"},
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "auth.stepup.begin",
+        .description = "Start confirming a sensitive change that answered step_up_required: name its family and, "
+                       "for keys, device.trust and data.destroy, the target the refusal named. Answers the methods "
+                       "the account can use (webauthn: pass webauthn.publicKey to navigator.credentials.get(); "
+                       "password_totp: the password and an authenticator code together; password: only for an "
+                       "account that need not have MFA and has no factor, never for keys, device.trust or "
+                       "data.destroy) and a ceremony id valid for 120 s. A new begin replaces the open ceremony. "
+                       "step_up_unavailable: the account has nothing that can confirm this family (add a passkey or "
+                       "an authenticator app). Web sessions only: a paired device is denied.",
+        .payload = {str("family").oneOf(kStepUpFamilies),
+                    str("target").opt().nullable().desc(
+                        "The refusal's target (keys, device.trust, data.destroy); ignored for the others.")},
+        .response = {str("stepup_id"), str("family").oneOf(kStepUpFamilies), str("target").nullable(),
+                     strArray("methods").desc("webauthn, password_totp, password: in this order of preference."),
+                     object("webauthn", "", {mfaRequestOptions()}).opt().desc("Present when webauthn is offered."),
+                     integer("expires_at").desc("Unix seconds: finish before this."),
+                     uinteger("max_age_seconds").desc("How long the grant will last (auth.mfa.step_up_ttl_seconds).")},
+        .refusal_codes = {"denied", "invalid", "unauthorized", "rate_limited", "step_up_unavailable"},
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "auth.stepup.finish",
+        .description = "Answer the ceremony: {method: webauthn, credential} (a UV assertion over its challenge), "
+                       "{method: password_totp, password, code} or {method: password, password}. On success this "
+                       "session holds a grant for the family (and target): family grants last max_age_seconds, "
+                       "target-bound ones are spent by one use. Then resend the refused request. step_up_failed "
+                       "{attempts_remaining}: the answer didn't hold; the fifth failure within 15 minutes signs this "
+                       "session out. not_found: the ceremony expired or was used (begin again). Recovery codes, "
+                       "refresh tokens and Desktop mTLS never satisfy a step-up.",
+        .payload = {str("stepup_id").gen(gen::pattern("{*}{*}{*}{*}{*}{*}{*}{*}")),
+                    str("method").oneOf({"webauthn", "password_totp", "password"}),
+                    mfaCredential(false).opt().desc("method webauthn: AuthenticationResponseJSON."),
+                    str("password").opt().desc("method password_totp or password."),
+                    str("code").opt().gen(gen::pattern("{9}{9}{9}{9}{9}{9}")).desc("method password_totp: the "
+                                                                                   "authenticator code.")},
+        .response = {str("family").oneOf(kStepUpFamilies), str("target").nullable(),
+                     integer("expires_at").desc("Unix seconds."),
+                     uinteger("uses").nullable().desc("1 for a target-bound grant; null: any number until it "
+                                                      "expires.")},
+        .refusal_codes = {"denied", "invalid", "not_found", "unauthorized", "error", "step_up_failed"},
+        .client_timeout = 20s,
+    });
+
+    out.push_back({
         .command = "auth.mfa.recovery.generate",
         .description = "Make ten new recovery codes, shown once. They replace the current ones only when "
                        "acknowledged. The account needs a factor (invalid otherwise). Replacing codes that are in "
-                       "force needs a second factor proven on this session within the last 5 minutes (or a "
-                       "recovery-code sign-in): step_up_required {family, max_age_seconds} otherwise.",
+                       "force is account.credentials step-up (except on the recovery-code session spending them).",
         .input = "none",
         .response = {str("batch_id"), strArray("codes").desc("XXXXX-XXXXX.")},
-        .refusal_codes = {"denied", "invalid", "unauthorized", "error", "step_up_required"},
+        .refusal_codes = {"denied", "invalid", "unauthorized", "error"},
         .client_timeout = kDefaultTimeout,
     });
 

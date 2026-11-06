@@ -120,6 +120,11 @@ auth:
     rp_id: ""
     rp_name: Vaulthalla
     origins: []
+  # Multi-factor authentication. A step-up (fresh proof with a passkey, or password + authenticator code) is asked for
+  # before sensitive changes in the web console (roles, keys, secrets, settings, device approval, destructive data
+  # operations); it lasts this long (60..900 seconds). The local vh CLI never asks.
+  mfa:
+    step_up_ttl_seconds: 300
 
 
 # === 🔃 SYNC SETTINGS ===

@@ -5,6 +5,7 @@
 #include "auth/Manager.hpp"
 #include "auth/mfa/Passkeys.hpp"
 #include "auth/mfa/Pending.hpp"
+#include "auth/stepup/StepUp.hpp"
 #include "auth/model/RefreshToken.hpp"
 #include "auth/model/TokenPair.hpp"
 #include "log/Registry.hpp"
@@ -75,7 +76,8 @@ struct Session::Stream {
 
 Session::Session(const std::shared_ptr<Router>& router)
     : tokens(std::make_shared<auth::model::TokenPair>()), router_(router),
-      mfa_(std::make_unique<auth::mfa::SessionState>()) {
+      mfa_(std::make_unique<auth::mfa::SessionState>()),
+      stepUp_(std::make_unique<auth::stepup::SessionState>()) {
     buffer_.max_size(kWebSocketReadBufferMaxBytes);
 }
 
@@ -424,6 +426,7 @@ void Session::close() {
     }
     // A pending-MFA sign-in ends with its socket (#357), and so do its open WebAuthn challenges.
     mfa_->clear();
+    stepUp_->clear();  // #359: step-up grants die with the socket
     auth::mfa::passkeys::forgetSession(uuid);
 
     if (uploadHandler_)

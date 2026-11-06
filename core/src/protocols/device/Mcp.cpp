@@ -1,6 +1,7 @@
 #include "protocols/device/Mcp.hpp"
 
 #include "Mcp.hpp"
+#include "auth/stepup/StepUp.hpp"
 #include "device/Peer.hpp"
 #include "identities/User.hpp"
 #include "log/AuditOrigin.hpp"
@@ -95,6 +96,7 @@ vh::mcp::CommandOutput execute(const vh::mcp::Invocation& call, const std::share
         try {
             const log::AuditOrigin scope(origin);
             const protocols::shell::AgentCallScope agent;
+            const vh::auth::stepup::Scope stepUp(vh::auth::stepup::Channel::Agent);  // #359: agents never step up
             const auto result = shellRouter()->executeLine(line, user, nullptr);
             out.exit_code = result.exit_code;
             out.out = result.stdout_text;
