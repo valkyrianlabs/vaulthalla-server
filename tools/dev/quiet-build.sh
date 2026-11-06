@@ -16,7 +16,11 @@ log="$(mktemp "${TMPDIR:-/tmp}/quiet-build.XXXXXX")"
 trap 'rm -f "$log"' EXIT
 
 status=0
-ninja -C "$dir" 2>&1 | tee "$log" || status=$?
+# VH_BUILD_JOBS (set by ci/run-ci from the container's memory cap) bounds ninja's parallelism; unset, ninja picks.
+jobs_flag=""
+if [ -n "${VH_BUILD_JOBS:-}" ]; then jobs_flag="-j${VH_BUILD_JOBS}"; fi
+# shellcheck disable=SC2086 # empty or one word on purpose
+ninja $jobs_flag -C "$dir" 2>&1 | tee "$log" || status=$?
 [ "$status" = 0 ] || exit "$status"
 
 noise="$(grep -vE '^\[[0-9]+/[0-9]+\] |^ninja: (Entering directory|no work to do)' "$log" || true)"
