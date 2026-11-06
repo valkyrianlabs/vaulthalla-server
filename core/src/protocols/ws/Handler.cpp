@@ -90,6 +90,9 @@ void Handler::registerAuthHandlers(const std::shared_ptr<Router>& r) {
     r->registerPayload("auth.mfa.factor.rename", &handler::Mfa::renameFactor);
     r->registerSessionOnlyHandler("auth.mfa.recovery.generate", &handler::Mfa::generateRecovery);
     r->registerPayload("auth.mfa.recovery.acknowledge", &handler::Mfa::acknowledgeRecovery);
+    // #358: discoverable sign-in with a passkey alone.
+    r->registerSessionOnlyHandler("auth.passkey.options", &handler::Mfa::passkeyOptions);
+    r->registerPayload("auth.passkey.login", &handler::Mfa::passkeyLogin);
 }
 
 // Paired devices (ops::devices). Which sessions reach which is the router's decision (classifyCommand).

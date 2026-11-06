@@ -1,4 +1,5 @@
 #include "crypto/secrets/Manager.hpp"
+#include "crypto/secrets/Dependents.hpp"
 #include "db/query/crypto/Secret.hpp"
 #include "crypto/model/Secret.hpp"
 #include "crypto/SecretBytes.hpp"
@@ -23,7 +24,24 @@ namespace vh::crypto::secrets {
 
 Manager::Manager()
 : tpmKeyProvider_(std::make_unique<KeyProvider>(paths::testMode ? "test_master" : "master")) {
-    tpmKeyProvider_->init();
+    // Generated only on a fresh install. With internal secrets on record that only this master opens, a missing
+    // sealed blob is never replaced: the MFA keys and the share pepper would be lost for good (#393).
+    const auto guard = dependents::internalSecrets();
+    try {
+        tpmKeyProvider_->initGuarded(guard);
+    } catch (const MasterSecretLost&) {
+        const auto name = paths::testMode ? std::string("test_master") : std::string("master");
+        const auto blob = paths::getBackingPath() / (".sealed_" + name + ".blob");
+        const auto what = guard().value_or("internal secrets");
+        throw MasterSecretLost(
+            "The sealed host master '" + name + "' is missing (" + blob.string() + "), but " + what +
+            " in the database are encrypted with it: the MFA keys that seal TOTP seeds and hash recovery codes, the "
+            "share-link pepper, email provider credentials. Refusing to create a new one, which could never open "
+            "them, and refusing to start. Restore the state directory from backup with that blob, on the same TPM or "
+            "Secure Enclave. If it is gone for good, give those secrets up explicitly as described in docs: "
+            "vaults/secrets-and-key-export#a-lost-host-master (TOTP factors and recovery codes are enrolled again, "
+            "share links reissued, email credentials entered again).");
+    }
 }
 
 Manager::Manager(std::unordered_map<std::string, std::string> testSecrets)

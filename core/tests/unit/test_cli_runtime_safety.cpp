@@ -612,8 +612,9 @@ TEST(NoPasswordGate, AValidSessionRunsCommandsWhateverItsPassword) {
 // account handlers that dereference session->user (a remote daemon segfault), and logged-in sessions reached
 // them without access-token validation.
 
-constexpr std::array<std::string_view, 4> kSessionLifecycleCommands{
-    "auth.login", "auth.logout", "auth.refresh", "auth.isAuthenticated"};
+constexpr std::array<std::string_view, 6> kSessionLifecycleCommands{
+    "auth.login", "auth.logout", "auth.refresh", "auth.isAuthenticated", "auth.passkey.options",
+    "auth.passkey.login"};
 constexpr std::array<std::string_view, 11> kAccountCommands{
     "auth.register", "auth.user.delete", "auth.user.update", "auth.user.change_password",
     "auth.user.get", "auth.user.get.byName", "auth.users.list", "auth.security.status",
