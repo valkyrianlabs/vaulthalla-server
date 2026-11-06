@@ -13,6 +13,7 @@
 #include "ops/Devices.hpp"
 #include "ops/VaultKeys.hpp"
 #include "protocols/ws/Session.hpp"
+#include "rbac/permission/admin/keys/Encryption.hpp"
 
 #include <nlohmann/json.hpp>
 
