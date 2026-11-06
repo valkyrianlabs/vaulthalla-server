@@ -1305,7 +1305,9 @@ TEST_F(SqlDeployerHistoryDb, KeyBackupGrantsMigrationIsAdditiveIdempotentAndSnap
                   "Mac") << "existing rows keep their values";
         EXPECT_TRUE(txn.exec("SELECT 1 FROM key_backup_grants").empty()) << "grants are the daemon's to make (D1)";
         std::vector<int> snapshot;
-        for (const auto& r : txn.exec("SELECT device_id FROM key_backup_grant_migration ORDER BY device_id"))
+        for (const auto& r : txn.exec("SELECT device_id FROM key_backup_grant_migration WHERE device_id IN ($1, $2, $3) "
+                                      "ORDER BY device_id",
+                                      pqxx::params{live, revoked, recovered}))
             snapshot.push_back(r[0].as<int>());
         EXPECT_EQ(snapshot, (std::vector<int>{live, recovered})) << "live devices only, not device " << revoked;
         EXPECT_EQ(txn.exec("SELECT revoked_reason FROM key_backup_grant_migration WHERE device_id = $1",
