@@ -33,7 +33,7 @@ std::optional<unsigned int> previousVersion() {
     });
 }
 
-std::shared_ptr<const crypto::secrets::KeyProvider> open(const unsigned int version, const bool allowCreate) {
+std::shared_ptr<const crypto::secrets::KeyProvider> openSlot(const unsigned int version, const bool allowCreate) {
     if (version == 0) throw std::invalid_argument("vault master versions start at 1");
     const auto key = cacheKey(version);
     {
@@ -85,7 +85,7 @@ unsigned int currentVersion() {
     });
 }
 
-std::shared_ptr<const crypto::secrets::KeyProvider> provider(const unsigned int version) { return open(version, false); }
+std::shared_ptr<const crypto::secrets::KeyProvider> provider(const unsigned int version) { return openSlot(version, false); }
 
 std::vector<uint8_t> unwrap(const std::vector<uint8_t>& encryptedKey, const std::vector<uint8_t>& iv,
                             const unsigned int masterVersion) {
@@ -100,7 +100,7 @@ std::shared_mutex& gate() {
 
 Writer::Writer(const bool allowCreate) : lock_(gate()) {
     version_ = currentVersion();
-    provider_ = open(version_, allowCreate);
+    provider_ = openSlot(version_, allowCreate);
 }
 
 Wrapped Writer::wrap(const std::span<const uint8_t> key) const {
