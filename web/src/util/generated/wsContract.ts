@@ -6,7 +6,7 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = 'a0833cc2acdf26a6666f0c4a7c3ba141a2626cf2cc93e40dbf773a7268c74521'
+export const WS_CONTRACT_HASH = '03e5d43516b1128c3420b4f00607f0d059ce2be6a1ad34cc2ccf3cfa937cec55'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
 export const WS_MODELS_HASH = 'adece020e347877b41fa73042a73e55267d7acc9d2ad7ae3bf1208f0c66e1136'
@@ -3061,6 +3061,50 @@ export interface WsContract {
     }
   }
   /**
+   * Finish a passkey sign-in with the assertion over an auth.passkey.options challenge of this connection.
+   * The assertion must carry userHandle, equal to the account's own WebAuthn handle for that credential, and
+   * user verification. Success signs the connection in: one session row at aal 2 with amr ["hwk"] (a
+   * device-bound passkey or security key) or ["swk"] (a synced passkey), the access token in the envelope.
+   * Every failure (an unknown, suspended or foreign passkey, another server's, no user verification, a spent
+   * or expired challenge, an account that can't sign in) is the same error; the challenge is spent either
+   * way. already_signed_in on a signed-in connection.
+   */
+  'auth.passkey.login': {
+    payload: {
+      credential: {
+        id: string
+        rawId: string
+        type: 'public-key'
+        response: { clientDataJSON: string; authenticatorData: string; signature: string; userHandle?: string | null }
+        authenticatorAttachment?: string | null
+        clientExtensionResults?: { credProps?: { rk?: boolean } }
+      }
+    }
+    response: { user: WsModels['SessionUser']; aal: number }
+  }
+  /**
+   * Start signing in with a passkey alone, no username or password first: a challenge for
+   * navigator.credentials.get() on this connection, with an empty allowCredentials (the browser or passkey
+   * manager offers the passkeys it holds for this server) and user verification required. It names no
+   * account, so the answer is the same for every caller but for its challenge. Anonymous web connections
+   * only: already_signed_in on a signed-in one; a paired device and a pending sign-in can't run it. invalid
+   * when passkeys are not configured (auth.webauthn.rp_id). Rate limited to 30 a minute per client address;
+   * rate_limited when 10,000 sign-in challenges are open.
+   */
+  'auth.passkey.options': {
+    payload: null
+    response: {
+      publicKey: {
+        challenge: string
+        rpId: string
+        timeout: number
+        userVerification: 'required'
+        allowCredentials: { type: 'public-key'; id: string; transports: string[] }[]
+      }
+      expires_at: number
+    }
+  }
+  /**
    * Issue a new access token from the envelope token or the refresh cookie.
    */
   'auth.refresh': {
@@ -5862,6 +5906,8 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'auth.mfa.verify',
   'auth.mfa.webauthn.register.finish',
   'auth.mfa.webauthn.register.options',
+  'auth.passkey.login',
+  'auth.passkey.options',
   'auth.refresh',
   'auth.register',
   'auth.security.status',
@@ -6152,6 +6198,8 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'auth.mfa.verify': 20000,
   'auth.mfa.webauthn.register.finish': 20000,
   'auth.mfa.webauthn.register.options': 15000,
+  'auth.passkey.login': 20000,
+  'auth.passkey.options': 15000,
   'auth.refresh': 15000,
   'auth.register': 15000,
   'auth.security.status': 15000,

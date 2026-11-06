@@ -11,7 +11,7 @@ depend on preserving the original host or its TPM.
 | `vault_master` | every vault key version | `vault_keys`, `vault_keys_trashed`, `vault_deletion_key` | every wrapped vault key is undecryptable; recover by importing per-vault key backups (Desktop/1Password, `vh vault keys export`) under a new master | **never** while dependents exist (`MasterSecretLost`) |
 | `ak_master` | provider API key secrets | `api_keys.encrypted_secret_access_key` | upstream credentials unreadable; re-enter them | **never** while dependents exist |
 | `s3gw_master` | S3 gateway credential secrets | `s3_gateway_credentials.encrypted_secret_access_key` | gateway credentials unusable; reissue them | **never** while dependents exist |
-| `master` | `internal_secrets`: the JWT signing secret, `mfa_seal`, `mfa_pepper`, the share-token pepper, email provider credentials | `internal_secrets` rows | the JWT secret regenerates (sessions sign in again); the MFA keys and the share pepper fail closed (#356, #322) | the slot itself: no (it wraps irreplaceable rows); the JWT secret inside it: yes, `vh secret jwt rotate` (#353) |
+| `master` | `internal_secrets`: the JWT signing secret, `mfa_seal`, `mfa_pepper`, the share-token pepper, email provider credentials | `internal_secrets` rows other than `jwt_secret` (and the plaintext pre-#322 pepper) | the daemon refuses to start (`MasterSecretLost`, #393): restore the state directory, or give the listed secrets up explicitly (docs: A Lost Host Master); the JWT secret alone regenerates | **never** while dependents exist (`initGuarded`, #393); the JWT secret inside it: yes, `vh secret jwt rotate` (#353) |
 | `key_attest` | the Ed25519 attestation seed | public keys stay in `key_attestation_keys` | new key; old attestations and signed audit heads still verify | yes (by design) |
 | `device_tls` | the device-listener identity (versioned since #353: `device_tls.vN`) | pairings pin its SPKI | paired devices see a new identity and must re-pair | yes (devices fail closed); `vh secret device-identity rotate` also revokes every paired device (#353) |
 | `psql` | the PostgreSQL password | none | set again from the installer / `vh secret set db-password` | from the installer only |
@@ -25,7 +25,7 @@ Backups are separate on purpose:
 
 ## 2. Part 1 (this change)
 
-1. **Never silently regenerate.** `KeyProvider::initGuarded(dependents)` is used for `vault_master`, `ak_master` and `s3gw_master`.
+1. **Never silently regenerate.** `KeyProvider::initGuarded(dependents)` is used for `vault_master`, `ak_master` and `s3gw_master`, and since #393 for `master` too (`dependents::internalSecrets()`: every `internal_secrets` row but `jwt_secret` and the plaintext pre-#322 pepper).
    - With no sealed blob to unseal and dependent rows present, it throws `MasterSecretLost`. The message names the slot, the count, and the three ways back: restore the state directory with its TPM, import the vault key backups, or use `vh secret`.
    - Before this change, `init()` generated a fresh secret and every existing key became undecryptable without a word.
    - The import path (`ops::vault_keys` seal) deliberately stays unguarded. Importing backups under a new master is the approved recovery route, and it makes nothing readable become unreadable.

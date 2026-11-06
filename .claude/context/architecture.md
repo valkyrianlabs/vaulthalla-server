@@ -243,7 +243,8 @@ The web client builds `ws(s)://<host>/ws` in `web/src/util/getUrl.ts` (overridab
 `web/src/stores/useWebSocket.ts` handles reconnect, the pending-request map keyed by `requestId`, and token injection.
 Router allowlists are **exact and per session mode**: unauthenticated, pending-MFA (#357), human, pending-share,
 ready-share, and on the device listener device and device-pairing (see "Device listener and pairing" below).
-Only the session-lifecycle commands (`auth.login`, `auth.logout`, `auth.refresh`, `auth.isAuthenticated`) skip
+Only the session-lifecycle commands (`auth.login`, `auth.logout`, `auth.refresh`, `auth.isAuthenticated`, and since
+#358 `auth.passkey.options|login`) skip
 access-token validation (`isSessionLifecycleCommand`, mirrored by the web's
 `SESSION_LIFECYCLE_COMMANDS`). Every other `auth.*` command (register, user update/delete/get/list, password change)
 is account management and goes through `RequireHumanAuth` (so are `auth.sessions.list|revoke`, #354). A `starts_with("auth")` rule used to let unauthenticated
@@ -485,6 +486,25 @@ recovery batch needs a second factor proven on the session within 5 min (or a re
 `pending` / `enrollment`; model `MfaFactor`. Tests: `test_mfa_signin.cpp` (`WsAuthRouting.APending*`,
 `MfaSignInDb.*`: no session during pending, one aal 2 row, drift/replay, recovery replay and revocation, expiry,
 5 failures, account throttle, D2 aal 1 refusal, passkey enroll/sign-in/UV refused with a software authenticator).
+
+**Discoverable passkey sign-in (#358; MFA design note §4.1, §7.3, §8.6).** A passkey alone, no username or password:
+`auth.passkey.options` (no payload) answers `{publicKey: {challenge, rpId, timeout, userVerification: required,
+allowCredentials: []}, expires_at}`, the same for every caller but its challenge (no account named or read: no
+enumeration); `auth.passkey.login {credential}` verifies an assertion over it (`passkeys::verifyLogin`, purpose `login`,
+no expected user: the verifier requires `userHandle` and compares it with the credential owner's
+`user_mfa.webauthn_user_handle`; UV required; the backup-aware counter table and suspension as for `mfa`) and signs in
+through `signin::complete` at **aal 2, amr `[hwk]` or `[swk]`** (no `pwd`), method `passkey`. Every failure (unknown,
+suspended, foreign-rp or other account's credential, no UV, spent/expired/other socket's challenge, an account that
+can't sign in) is one plain error, `"That passkey couldn't sign you in..."`; audited `auth.passkey.login` success
+`{factor_id, amr, ip}` / failure. Login challenges live in their **own** `ChallengeStore` (capacity
+`kMaxLoginChallenges` = 10,000, `rate_limited` when full), so anonymous callers can't fill the store of the mfa,
+register and step-up ceremonies, and a challenge of one purpose never answers the other (store and purpose both
+differ; `MfaSignInDb.LoginAndMfaChallengesNeverAnswerForEachOther`). Both commands are in `isSessionLifecycleCommand`
+(anonymous sockets reach them; the device listener and the pending mode never do); their handlers refuse a signed-in
+socket (`already_signed_in`) and a pending one (`denied`). `ShareRateLimit`: 30/min per client address for each.
+Tests: `WsAuthRouting.PasskeySignInIsForAnonymousWebSocketsOnly`, `PasskeyRateLimit.*`,
+`MfaSignInDb.PasskeySignIn*|APasskeyAlone*|ASyncedPasskey*` (0/0 synced counter, device-bound regression suspended),
+`tools/contracts/test_mfa_pending_contract.py` (the lifecycle is read from the router and mirrored in `LIFECYCLE`).
 
 **Identities (`identities::Manager`, `core/{include,src}/identities/`).** One canonical `User`/`Group` object per id,
 handed out as the same `shared_ptr` everywhere (sessions, engines, FUSE, HTTP, S3). Each holds an immutable
