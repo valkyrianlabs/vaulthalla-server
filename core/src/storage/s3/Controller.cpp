@@ -7,6 +7,8 @@
 #include "log/Registry.hpp"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <ctime>
 #include <curl/curl.h>
 #include <fmt/format.h>
@@ -278,8 +280,30 @@ namespace vh::storage::s3 {
         if (!result) throw std::runtime_error("ListObjectsV2 response has no ListBucketResult");
 
         ObjectKeyPage page;
-        for (const auto contents : result.children("Contents"))
-            if (const auto key = std::string(contents.child_value("Key")); !key.empty()) page.keys.push_back(key);
+        for (const auto contents : result.children("Contents")) {
+            const auto key = std::string(contents.child_value("Key"));
+            if (key.empty()) continue;
+            page.keys.push_back(key);
+            ObjectVersionInfo info;
+            info.key = key;
+            info.etag = contents.child_value("ETag");
+            info.size = std::strtoull(contents.child_value("Size"), nullptr, 10);
+            info.is_latest = true;
+            if (const std::string storageClass = contents.child_value("StorageClass"); !storageClass.empty())
+                info.storage_class = storageClass;
+            int y = 0, mo = 0, d = 0, h = 0, mi = 0, sec = 0;
+            if (std::sscanf(contents.child_value("LastModified"), "%d-%d-%dT%d:%d:%d", &y, &mo, &d, &h, &mi, &sec) == 6) {
+                std::tm tm{};
+                tm.tm_year = y - 1900;
+                tm.tm_mon = mo - 1;
+                tm.tm_mday = d;
+                tm.tm_hour = h;
+                tm.tm_min = mi;
+                tm.tm_sec = sec;
+                info.last_modified = timegm(&tm);
+            }
+            page.objects.push_back(std::move(info));
+        }
         if (std::string(result.child_value("IsTruncated")) == "true")
             page.next_continuation_token = result.child_value("NextContinuationToken");
         return page;

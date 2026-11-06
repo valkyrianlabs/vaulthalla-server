@@ -264,14 +264,6 @@ void decrypt_aes256_gcm_file(
     sodium_memzero(output.data(), output.size());
 }
 
-std::vector<uint8_t> read_file(const std::filesystem::path& path) {
-    std::ifstream in(path, std::ios::binary);
-    if (!in) throw std::runtime_error("Failed to open vault key file: " + path.string());
-
-    std::vector<uint8_t> buf(std::istreambuf_iterator<char>(in), {});
-    return buf;
-}
-
 std::string b64_encode(const std::vector<uint8_t>& data) {
     const size_t encoded_len = sodium_base64_ENCODED_LEN(data.size(), sodium_base64_VARIANT_ORIGINAL);
     std::string result(encoded_len, '\0');

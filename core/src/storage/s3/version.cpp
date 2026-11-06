@@ -297,7 +297,34 @@ std::optional<ObjectVersionHead> Controller::headObjectVersion(const std::string
         auto lower = version_detail::lowerAscii(name);
         if (lower.starts_with(kMetaPrefix)) head.metadata[lower.substr(kMetaPrefix.size())] = value;
     }
+    // Object Lock: present only when the bucket has it and the key may read it.
+    if (const auto mode = response.header("x-amz-object-lock-mode"); mode && !mode->empty())
+        head.object_lock_mode = *mode;
+    if (const auto until = response.header("x-amz-object-lock-retain-until-date"))
+        head.retain_until = version_detail::parseIsoTime(*until);
+    head.legal_hold = version_detail::lowerAscii(response.header("x-amz-object-lock-legal-hold").value_or("")) == "on";
     return head;
+}
+
+// ---- DELETE ?versionId= --------------------------------------------------------------------------------------------
+
+void Controller::deleteObjectVersion(const std::string& key, const std::string& versionId) const {
+    enforceRequestPolicy(RequestOp::DeleteVersion, key);
+    version_detail::requireVersionId(versionId, key);
+    if (key.empty()) throw std::invalid_argument("S3 delete needs a key");
+    recordRequest(RequestKind::Delete);
+
+    const auto response = version_detail::send(
+        signObjectRequest("DELETE", key, {{"versionId", versionId}}, {}, vl::sigv4::sha256Hex("")),
+        version_detail::kMetadataTimeout);
+    if (!response.transport_ok)
+        throw std::runtime_error(fmt::format("S3 DELETE {}@{} failed: {}", key, versionId, response.transport_error));
+    if (response.ok() || response.status == 404) return;   // gone either way (S3 answers 204 for a missing version)
+    const auto error = version_detail::parseErrorBody(response.body);
+    if (response.status >= 400 && response.status < 500)
+        throw DeleteRefused(fmt::format("S3 refused DELETE {}@{} ({})", key, versionId, version_detail::describe(response)),
+                            error.code.empty() ? std::to_string(response.status) : error.code, response.status);
+    throw std::runtime_error(fmt::format("S3 DELETE {}@{} failed ({})", key, versionId, version_detail::describe(response)));
 }
 
 // ---- CopyObject ?versionId= ----------------------------------------------------------------------------------------

@@ -201,6 +201,16 @@ Applier::Outcome Applier::applyVault(const uint32_t vaultId) {
                 continue;
             }
 
+            // path_v0: an o/<uid> object was written by the bucket layout migration (#373) before the vault cut over;
+            // it is not a vault path and never becomes one.
+            if (!engine->opaqueLayout() &&
+                storage::object_keys::classify(objectKey) == storage::object_keys::KeyClass::Content) {
+                db::query::upstream::Inbox::markSkipped(groupIds, "a layout migration object (path_v0 vault)",
+                                                        amodel::InboxOrigin::Self);
+                out.skipped += group.size();
+                continue;
+            }
+
             // opaque_v1 (spec 01 §4.4): a key outside o/ and .vaulthalla/ is foreign. Never HEADed or indexed: it is
             // ignored (the default), or a scoped pass imports it once as /Imported/<key> (foreign_objects = import).
             const bool opaque = engine->opaqueLayout();

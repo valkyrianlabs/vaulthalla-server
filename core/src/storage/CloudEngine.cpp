@@ -461,7 +461,13 @@ std::unordered_map<std::u8string, std::shared_ptr<File>>
 CloudEngine::getGroupedFilesFromS3(const fs::path& prefix) const {
     // opaque_v1: the content objects (keyed /o/<uid>) of one whole-bucket listing; foreign objects are not files.
     if (opaqueLayout()) return groupEntriesByPath(listOpaqueBucket().objects);
-    return groupEntriesByPath(filesFromS3XML(s3Provider_->listObjects(prefix)));
+    auto files = filesFromS3XML(s3Provider_->listObjects(prefix));
+    // path_v0: an o/<uid> object is the bucket layout migration's (#373, vault/LayoutMigration.hpp), written before the
+    // vault cuts over to opaque_v1, never a vault path: it is not a file of the path-keyed tree.
+    std::erase_if(files, [](const std::shared_ptr<File>& f) {
+        return object_keys::classify(stripLeadingSlash(f->path).string()) == object_keys::KeyClass::Content;
+    });
+    return groupEntriesByPath(std::move(files));
 }
 
 bool CloudEngine::usesManifestV2() const { return opaqueLayout(); }

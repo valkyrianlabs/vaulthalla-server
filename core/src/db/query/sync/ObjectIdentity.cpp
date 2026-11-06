@@ -48,6 +48,12 @@ std::optional<std::filesystem::path> ObjectIdentity::pathOfUid(const uint32_t va
             res = txn.exec("SELECT path FROM files_trashed WHERE vault_id = $1 AND object_uid = $2::uuid "
                            "AND deleted_at IS NULL ORDER BY trashed_at DESC, id DESC LIMIT 1",
                            pqxx::params{vaultId, uuid});
+        // History the bucket layout migration (#373) re-sealed for a path no file row names any more: its old key.
+        if (res.empty())
+            res = txn.exec("SELECT '/' || legacy_key FROM vault_layout_migration_item WHERE vault_id = $1 "
+                           "AND object_uid = $2::uuid AND kind IN ('version', 'marker') "
+                           "ORDER BY legacy_last_modified DESC NULLS LAST, id DESC LIMIT 1",
+                           pqxx::params{vaultId, uuid});
         if (res.empty()) return std::optional<std::filesystem::path>{};
         return std::make_optional(std::filesystem::path(res[0][0].as<std::string>()));
     });

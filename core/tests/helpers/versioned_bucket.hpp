@@ -34,6 +34,13 @@
 //   setRequestBudget / ScopedS3RequestUsageCapture / upstream::guard::setForTesting
 //                                  the real budget, capture and protection paths (refusal before any fake effect).
 //   failHeads / blockHeads / failPuts   the sync_conflict_harness FakeBucket knobs, same behaviour.
+//   md5Etags                       ETags are real S3 MD5s (single PUT: MD5 of the body; multipart: MD5 of the parts'
+//                                  binary MD5s + "-<parts>"), as AWS without SSE-KMS and R2 send them. Off: FNV ETags
+//                                  that are not MD5s (like SSE-KMS), so a reader must not take them for proof.
+//   lockVersion / setLegalHold     Object Lock on one version: HEAD ?versionId= reports it, DELETE ?versionId= (and an
+//                                  unversioned DELETE of the key) is refused with 403 AccessDenied until the retain-until
+//                                  date (bucket clock) passes or the hold is released. Governance bypass doesn't exist.
+//   refuseDeletes                  every DELETE is refused (403 AccessDenied), as a key without s3:DeleteObjectVersion.
 //   setNow(t) / advance(s)         the clock writes stamp LastModified with; every mutation then ticks it by 1 s
 //                                  (autoTick) so versions have strictly increasing timestamps.
 // Seeding and inspection never meter: seed(), seedDeleteMarker(), purgeVersion(), history(), current(), version().
@@ -47,8 +54,10 @@
 #include "vault/model/APIKey.hpp"
 
 #include <fmt/format.h>
+#include <openssl/evp.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cctype>
 #include <chrono>
@@ -94,6 +103,9 @@ public:
         std::time_t last_modified{};
         bool delete_marker{};
         std::optional<uint64_t> reported_size;                 // pretend size (e.g. > 5 GiB) without holding bytes
+        std::optional<std::string> lock_mode;                  // GOVERNANCE | COMPLIANCE (Object Lock)
+        std::optional<std::time_t> retain_until;
+        bool legal_hold{};
 
         [[nodiscard]] uint64_t size() const { return reported_size.value_or(body.size()); }
     };
@@ -161,6 +173,33 @@ public:
     std::atomic<bool> blockHeads{false};   // getHeadObject blocks until released or the thread's HTTP cancellation
     mutable std::atomic<bool> headEntered{false};
     std::atomic<bool> failPuts{false};     // uploads throw before metering
+    std::atomic<bool> md5Etags{false};     // S3 MD5 ETags (see the header comment)
+    std::atomic<bool> refuseDeletes{false};  // every DELETE answers 403 AccessDenied
+
+    // Object Lock retention of one version (mode GOVERNANCE or COMPLIANCE) until `until` (bucket clock).
+    void lockVersion(const std::string& key, const std::string& versionId, const std::string& mode,
+                     const std::time_t until) {
+        std::scoped_lock lock(mutex_);
+        auto* v = findMutableLocked(key, versionId);
+        if (!v) throw std::invalid_argument("no such version: " + key + "@" + versionId);
+        v->lock_mode = mode;
+        v->retain_until = until;
+    }
+
+    // Flips one byte of a stored version in place (a provider-side corruption; never metered).
+    void tamper(const std::string& key, const std::string& versionId, const std::size_t at = 0) {
+        std::scoped_lock lock(mutex_);
+        auto* v = findMutableLocked(key, versionId);
+        if (!v || at >= v->body.size()) throw std::invalid_argument("nothing to tamper with: " + key);
+        v->body[at] ^= 0xff;
+    }
+
+    void setLegalHold(const std::string& key, const std::string& versionId, const bool on) {
+        std::scoped_lock lock(mutex_);
+        auto* v = findMutableLocked(key, versionId);
+        if (!v) throw std::invalid_argument("no such version: " + key + "@" + versionId);
+        v->legal_hold = on;
+    }
     // The next n PUTs / multipart completes take effect, then fail as if the response was lost on the way back
     // (the object exists; the caller sees an error).
     mutable std::atomic<unsigned> loseResponses{0};
@@ -181,7 +220,7 @@ public:
         std::scoped_lock lock(mutex_);
         Version v;
         v.body = std::move(body);
-        v.etag = etagFor(v.body);
+        v.etag = etagOf(v.body);
         v.meta = meta;
         v.storage_class = std::move(storageClass);
         v.reported_size = reportedSize;
@@ -326,7 +365,7 @@ public:
         if (it == uploads_.end() || it->second.key != key.string())
             throw std::runtime_error("NoSuchUpload " + uploadId);
         it->second.parts[partNumber] = std::vector<uint8_t>(partData.begin(), partData.end());
-        etagOut = etagFor(it->second.parts[partNumber]);
+        etagOut = etagOf(it->second.parts[partNumber]);
     }
 
     void completeMultipartUpload(const std::filesystem::path& key, const std::string& uploadId,
@@ -343,7 +382,7 @@ public:
             throw std::runtime_error("NoSuchUpload " + uploadId);
         Version v;
         for (const auto& [n, part] : it->second.parts) v.body.insert(v.body.end(), part.begin(), part.end());
-        v.etag = etagFor(v.body, it->second.parts.size());
+        v.etag = multipartEtagOf(it->second.parts);
         v.meta = it->second.options.metadata;
         v.storage_class = storageClassOf(it->second.options);
         uploads_.erase(it);
@@ -456,7 +495,27 @@ public:
         head.content_length = v->size();
         head.storage_class = v->storage_class;
         head.metadata = v->meta;
+        head.object_lock_mode = v->lock_mode;
+        head.retain_until = v->retain_until;
+        head.legal_hold = v->legal_hold;
         return head;
+    }
+
+    void deleteObjectVersion(const std::string& key, const std::string& versionId) const override {
+        audit(Op::Delete, storage::s3::RequestOp::DeleteVersion, key, nullptr, versionId);
+        if (versionId.empty()) throw std::invalid_argument("S3 version id is empty for " + key);
+        recordRequest(RequestKind::Delete);
+        std::scoped_lock lock(mutex_);
+        failIfInjectedLocked(Op::Delete);
+        ++counters_.del;
+        const auto it = objects_.find(key);
+        if (it == objects_.end()) return;   // 204 for a version that is gone
+        auto& stack = it->second;
+        const auto v = std::ranges::find_if(stack, [&](const Version& x) { return x.version_id == versionId; });
+        if (v == stack.end()) return;
+        refuseIfLockedLocked(*v, key);
+        stack.erase(v);
+        if (stack.empty()) objects_.erase(it);
     }
 
     // ---- listings --------------------------------------------------------------------------------------------------
@@ -505,6 +564,10 @@ public:
                 break;
             }
             page.keys.push_back(it->first);
+            const auto& v = it->second.back();
+            page.objects.push_back({.key = it->first, .version_id = {}, .etag = v.etag, .size = v.size(),
+                                    .last_modified = v.last_modified, .storage_class = v.storage_class,
+                                    .is_latest = true, .delete_marker = false});
         }
         return page;
     }
@@ -631,6 +694,9 @@ public:
         std::scoped_lock lock(mutex_);
         failIfInjectedLocked(Op::Delete);
         ++counters_.del;
+        if (mode_ == Versioning::Unversioned)
+            if (const auto* latest = latestLocked(key.string())) refuseIfLockedLocked(*latest, key.string());
+        if (refuseDeletes.load()) throw std::runtime_error("S3 deleteObject failed (HTTP 403 AccessDenied)");
         deleteLocked(key.string());
     }
 
@@ -732,6 +798,53 @@ private:
             response.transport_error = "aborted";
         }
         return response;
+    }
+
+    static std::array<uint8_t, 16> md5Of(const std::vector<uint8_t>& bytes) {
+        std::array<uint8_t, 16> out{};
+        unsigned int n = 0;
+        if (EVP_Digest(bytes.data(), bytes.size(), out.data(), &n, EVP_md5(), nullptr) != 1 || n != out.size())
+            throw std::runtime_error("MD5 failed (test)");
+        return out;
+    }
+
+    static std::string hexOf(const std::array<uint8_t, 16>& digest) {
+        std::string out;
+        for (const auto b : digest) out += fmt::format("{:02x}", b);
+        return out;
+    }
+
+    std::string etagOf(const std::vector<uint8_t>& body) const {
+        return md5Etags.load() ? "\"" + hexOf(md5Of(body)) + "\"" : etagFor(body);
+    }
+
+    std::string multipartEtagOf(const std::map<int, std::vector<uint8_t>>& parts) const {
+        if (!md5Etags.load()) {
+            std::vector<uint8_t> all;
+            for (const auto& [n, part] : parts) all.insert(all.end(), part.begin(), part.end());
+            return etagFor(all, parts.size());
+        }
+        std::vector<uint8_t> digests;
+        for (const auto& [n, part] : parts) {
+            const auto d = md5Of(part);
+            digests.insert(digests.end(), d.begin(), d.end());
+        }
+        return "\"" + hexOf(md5Of(digests)) + "-" + std::to_string(parts.size()) + "\"";
+    }
+
+    void refuseIfLockedLocked(const Version& v, const std::string& key) const {
+        const bool retained = v.retain_until && *v.retain_until > now_;
+        if (retained || v.legal_hold || refuseDeletes.load())
+            throw storage::s3::DeleteRefused(
+                fmt::format("S3 refused DELETE {}@{} (HTTP 403 AccessDenied)", key, v.version_id), "AccessDenied", 403);
+    }
+
+    Version* findMutableLocked(const std::string& key, const std::string& versionId) const {
+        const auto it = objects_.find(key);
+        if (it == objects_.end()) return nullptr;
+        for (auto& v : it->second)
+            if (v.version_id == versionId) return &v;
+        return nullptr;
     }
 
     static std::string etagFor(const std::vector<uint8_t>& body, const std::size_t parts = 0) {
@@ -880,7 +993,7 @@ private:
             throw storage::s3::ConditionalRequestFailed("Conditional S3 PUT failed (HTTP 412)");
         Version v;
         v.body = std::move(body);
-        v.etag = etagFor(v.body);
+        v.etag = etagOf(v.body);
         v.meta = options.metadata;
         v.storage_class = storageClassOf(options);
         const auto& written = writeLocked(key, std::move(v));

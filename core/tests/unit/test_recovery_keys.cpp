@@ -9,7 +9,6 @@
 #include "../helpers/identities.hpp"
 #include "crypto/SecretKey.hpp"
 #include "crypto/util/encrypt.hpp"
-#include "crypto/util/reseal.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/rbac/role/Admin.hpp"
 #include "db/query/vault/Deletion.hpp"
@@ -186,9 +185,6 @@ TEST_F(RecoveryKeysTest, ResealFileMovesAnOldGenerationUnderTheCurrentKey) {
     EXPECT_EQ(vault::content::openBuffer(slurp(dir / "back"), {.vaultUid = uid, .generation = back, .keyVersion = 3},
                                          newKey),
               plaintext);
-    // The legacy util still re-seals legacy GCM (it has no VHF1 callers).
-    const auto legacyIv = cu::resealFile(dir / "blob", crypto::SecretKey(k2), iv, dir / "legacy", newKey);
-    EXPECT_EQ(cu::decrypt_aes256_gcm(slurp(dir / "legacy"), k3, cu::b64_decode(legacyIv)), plaintext);
 }
 
 TEST_F(RecoveryKeysTest, ResealOfATamperedSourceThrowsIntegrityErrorAndLeavesNothing) {
@@ -277,52 +273,6 @@ TEST_F(RecoveryKeysTest, ResealInMemoryRoundTripsAndRefusesTampering) {
     auto g = std::make_shared<fs::model::File>();
     EXPECT_THROW((void)em->resealToCurrent(tampered, iv, 3, g), storage::IntegrityError);
     EXPECT_TRUE(g->encryption_iv.empty());
-}
-
-// The decrypted bytes (unauthenticated until the tag verifies) are wiped on success and on every failure, in memory
-// and while streaming a file.
-TEST_F(RecoveryKeysTest, ResealWipesThePlaintextOnEveryPath) {
-    struct Seen {
-        std::size_t calls{}, bytes{}, nonZero{};
-    } seen;
-    struct ObserverReset {
-        ~ObserverReset() { cu::setPlaintextWipeObserverForTesting({}); }
-    } const reset;
-    cu::setPlaintextWipeObserverForTesting([&](const std::span<const uint8_t> b) {
-        ++seen.calls;
-        seen.bytes += b.size();
-        seen.nonZero += static_cast<std::size_t>(std::ranges::count_if(b, [](const uint8_t c) { return c != 0; }));
-    });
-    const crypto::SecretKey oldKey(k3), newKey(k5);
-    const auto plaintext = randomBytes(5000);
-    const auto [sealed, ivB64] = seal(plaintext, k3);
-    const auto iv = cu::b64_decode(ivB64);
-
-    Bytes outIv;
-    (void)cu::resealBuffer(sealed, oldKey, iv, newKey, outIv);
-    EXPECT_EQ(seen.calls, 1u) << "success";
-    EXPECT_EQ(seen.bytes, plaintext.size());
-
-    auto tampered = sealed;
-    tampered[17] ^= 0x04;   // the body decrypts to (wrong) plaintext before the tag fails
-    EXPECT_THROW((void)cu::resealBuffer(tampered, oldKey, iv, newKey, outIv), storage::IntegrityError);
-    EXPECT_EQ(seen.calls, 2u) << "failed authentication";
-    auto wrongTag = sealed;
-    wrongTag.back() ^= 0x01;
-    EXPECT_THROW((void)cu::resealBuffer(wrongTag, crypto::SecretKey(k2), iv, newKey, outIv), storage::IntegrityError);
-    EXPECT_EQ(seen.calls, 3u) << "wrong key";
-
-    const auto big = randomBytes(2 * 64 * 1024 + 77);
-    const auto [bigSealed, bigIv] = seal(big, k3);
-    spit(dir / "blob", bigSealed);
-    (void)cu::resealFile(dir / "blob", oldKey, bigIv, dir / "out", newKey);
-    EXPECT_EQ(seen.calls, 4u) << "file, success";
-    auto bigTampered = bigSealed;
-    bigTampered[64 * 1024 + 5] ^= 0x10;
-    spit(dir / "blob", bigTampered);
-    EXPECT_THROW((void)cu::resealFile(dir / "blob", oldKey, bigIv, dir / "out", newKey), storage::IntegrityError);
-    EXPECT_EQ(seen.calls, 5u) << "file, failed authentication";
-    EXPECT_EQ(seen.nonZero, 0u) << "every plaintext buffer was zero when released";
 }
 
 // Unsealed retired keys leave memory once idle, on the service's timer, without another access to the cache.

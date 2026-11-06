@@ -3,6 +3,7 @@
 #include "ops/Error.hpp"
 #include "ops/RecoveryRecipients.hpp"
 #include "ops/VaultKeys.hpp"
+#include "ops/VaultLayout.hpp"
 #include "ops/VaultRecover.hpp"
 #include "identities/User.hpp"
 #include "protocols/ws/Session.hpp"
@@ -155,6 +156,30 @@ json VaultKeys::recover(const json& payload, const std::shared_ptr<Session>& ses
     req.salvage = flag("salvage");
     req.confirm_name = str("confirm_name");
     return ops::vault_recover::toJson(ops::vault_recover::recover(actorOf(session), req, channel));
+}
+
+json VaultKeys::layoutStatus(const json& payload, const std::shared_ptr<Session>& session) {
+    return ops::vault_layout::toJson(ops::vault_layout::status(actorOf(session), requiredVaultId(payload)).front());
+}
+
+json VaultKeys::layoutMigrate(const json& payload, const std::shared_ptr<Session>& session) {
+    bool acceptUnpriced = false;
+    if (payload.contains("accept_unpriced") && !payload.at("accept_unpriced").is_null()) {
+        if (!payload.at("accept_unpriced").is_boolean()) throw ops::Invalid("accept_unpriced must be a boolean");
+        acceptUnpriced = payload.at("accept_unpriced").get<bool>();
+    }
+    return ops::vault_layout::toJson(ops::vault_layout::start(
+        actorOf(session), {.vault_id = requiredVaultId(payload), .accept_unpriced = acceptUnpriced}));
+}
+
+json VaultKeys::layoutCleanup(const json& payload, const std::shared_ptr<Session>& session) {
+    std::optional<std::string> confirm;
+    if (payload.contains("confirm") && !payload.at("confirm").is_null()) {
+        if (!payload.at("confirm").is_string()) throw ops::Invalid("confirm must be the vault's name");
+        confirm = payload.at("confirm").get<std::string>();
+    }
+    return ops::vault_layout::toJson(
+        ops::vault_layout::cleanup(actorOf(session), {.vault_id = requiredVaultId(payload), .confirm = confirm}));
 }
 
 }

@@ -155,6 +155,10 @@ void Handler::registerVaultKeyHandlers(const std::shared_ptr<Router>& r) {
     r->registerPayload("vault.keys.recipients.revoke", &handler::VaultKeys::revokeRecipient);
     // #371: a vault rebuilt from its bucket; a paired device only (recover_requires_device), keys step-up.
     r->registerPayload("vault.recover", &handler::VaultKeys::recover);
+    // #373: the bucket layout migration path_v0 -> opaque_v1.
+    r->registerPayload("vault.layout.status", &handler::VaultKeys::layoutStatus);
+    r->registerPayload("vault.layout.migrate", &handler::VaultKeys::layoutMigrate);
+    r->registerPayload("vault.layout.cleanup", &handler::VaultKeys::layoutCleanup);
 }
 
 void Handler::registerMetaHandlers(const std::shared_ptr<Router>& r) {

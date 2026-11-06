@@ -114,6 +114,75 @@ std::vector<WsModel> vaultKeyModels() {
         "rotation is needed to cut the recipient off from new data.",
         {object("recipient", "VaultRecoveryRecipient"), object("recovery", "VaultRecoveryMaterial")}));
 
+    // ---- bucket layout migration (#373; ops::vault_layout, core/src/ops/VaultLayout.cpp) -------------------------
+    out.push_back(model("VaultLayoutEntry",
+        "One legacy (path-named) object version or delete marker of the bucket: vault::layout::toJson(CleanupEntry). "
+        "The key is the old object key, the file's vault path without its leading slash.",
+        {str("key"), str("version_id").nullable().desc("The provider's version id (null on an unversioned bucket)."),
+         boolean("delete_marker"), uinteger("size").desc("Bytes the provider stores."),
+         vaultKeyTime("last_modified").nullable(),
+         str("reason").desc("Why it stays: archived, key_unavailable, unattributed, not_inventoried, legal_hold, "
+                            "object_lock_retention, refused: <code>, failed: <error>, ...; \"\" when it can be "
+                            "deleted."),
+         vaultKeyTime("retain_until").nullable().desc("Object Lock retention: when it becomes deletable.")}));
+
+    out.push_back(model("VaultLayoutItemCounts", "Inventory items by state.",
+        {uinteger("pending"), uinteger("verified"), uinteger("superseded"), uinteger("skipped"), uinteger("failed")}));
+
+    out.push_back(model("VaultLayoutEstimate",
+        "LayoutMigrationCost: what the migration sends (vault::layout::toJson(Estimate)), computed after the inventory "
+        "and its HEADs, before any write.",
+        {uinteger("list_requests"), uinteger("head_requests"), uinteger("get_requests"), uinteger("put_requests"),
+         uinteger("delete_requests"), uinteger("download_bytes"), uinteger("upload_bytes"),
+         uinteger("readback_worst_case_gets").desc("If the provider's ETags are not MD5s every PUT is read back."),
+         uinteger("readback_worst_case_bytes"),
+         uinteger("metadata_puts").desc("The encrypted manifest after the cutover (approximate)."),
+         uinteger("objects"), uinteger("versions"), uinteger("delete_markers"), uinteger("backlog"),
+         uinteger("current_files"), uinteger("sample").desc("Objects always read back and authenticated."),
+         boolean("priced"), str("estimated_cost").nullable().desc("The price budget's estimate, when priced.")}));
+
+    out.push_back(model("VaultLayoutUsage", "Requests and bytes the migration's run sent (a capture of the run).",
+        {uinteger("list_requests"), uinteger("head_requests"), uinteger("get_requests"), uinteger("put_requests"),
+         uinteger("delete_requests"), uinteger("downloaded_bytes"), uinteger("uploaded_bytes")}));
+
+    out.push_back(model("VaultLayoutMigration",
+        "A vault's bucket layout migration (vault_layout_migration).",
+        {str("state").oneOf({"copying", "verifying", "failed", "cut_over", "cleanup", "cleanup_blocked", "complete"})
+             .desc("copying/verifying/failed: still path_v0, nothing deleted (failed: start it again to resume); "
+                   "cut_over: opaque_v1, legacy objects kept until cleanup_after; cleanup: a confirmed cleanup runs; "
+                   "cleanup_blocked: legacy versions remain (see blocked); complete: a complete listing shows none."),
+         vaultKeyTime("started_at"), uinteger("started_by").nullable(), uinteger("attempts"),
+         boolean("versioned").nullable().desc("The inventory came from ListObjectVersions (version ids)."),
+         uinteger("wait_days"), boolean("accept_unpriced"), vaultKeyTime("verified_at").nullable(),
+         vaultKeyTime("cutover_at").nullable(), vaultKeyTime("cleanup_after").nullable(),
+         vaultKeyTime("manifest_verified_at").nullable()
+             .desc("The encrypted manifest was loaded back from the bucket alone and matched the database."),
+         vaultKeyTime("cleanup_confirmed_at").nullable(), vaultKeyTime("cleanup_run_at").nullable(),
+         vaultKeyTime("completed_at").nullable(), object("estimate", "VaultLayoutEstimate").nullable(),
+         object("usage", "VaultLayoutUsage").nullable(), str("last_error").nullable()}));
+
+    out.push_back(model("VaultLayoutStatus",
+        "ops::vault_layout::toJson(Status): the vault's layout and its migration.",
+        {vaultId(), str("vault_name"), str("layout").oneOf({"local", "transparent", "path_v0", "opaque_v1"}),
+         object("migration", "VaultLayoutMigration").nullable().desc("null until an operator starts one."),
+         object("items", "", {object("versions", "VaultLayoutItemCounts"),
+                              object("delete_markers", "VaultLayoutItemCounts"),
+                              object("backlog", "VaultLayoutItemCounts"), object("current", "VaultLayoutItemCounts")}),
+         uinteger("legacy_remaining").desc("Legacy versions and markers with path names not deleted yet."),
+         uinteger("legacy_deleted"),
+         objectArray("blocked", "VaultLayoutEntry").desc("What stays, each with its reason (the first 200)."),
+         uinteger("blocked_total")}));
+
+    out.push_back(model("VaultLayoutCleanup",
+        "ops::vault_layout::toJson(CleanupAnswer): the cleanup's dry run, or its confirmation.",
+        {boolean("dry_run"), boolean("started").desc("The confirmed cleanup runs in the background."),
+         vaultKeyTime("cleanup_after").nullable(),
+         object("plan", "", {boolean("complete_listing"), uinteger("deletable"), uinteger("deletable_bytes"),
+                             uinteger("deletable_markers"), vaultKeyTime("oldest").nullable(),
+                             vaultKeyTime("newest").nullable(), uinteger("already_gone"),
+                             objectArray("kept", "VaultLayoutEntry"),
+                             objectArray("deletable_entries", "VaultLayoutEntry")})}));
+
     out.push_back(model("VaultKeySalvageFailure",
         "One file a key salvage could not re-encrypt.",
         {str("path").desc("Vault path."), uinteger("version").desc("The key version it is sealed under."),

@@ -761,6 +761,23 @@ struct convert<VaultsFormatConversionConfig> {
 };
 
 template<>
+struct convert<VaultsLayoutMigrationConfig> {
+    static Node encode(const VaultsLayoutMigrationConfig& rhs) {
+        Node node;
+        node["cleanup_wait_days"] = rhs.cleanup_wait_days;
+        return node;
+    }
+
+    static bool decode(const Node& node, VaultsLayoutMigrationConfig& rhs) {
+        if (!node.IsMap()) return false;
+        rhs.cleanup_wait_days = node["cleanup_wait_days"].as<uint32_t>(rhs.cleanup_wait_days);
+        if (rhs.cleanup_wait_days < 1 || rhs.cleanup_wait_days > 365)
+            throw std::invalid_argument("vaults.layout_migration.cleanup_wait_days must be 1..365");
+        return true;
+    }
+};
+
+template<>
 struct convert<VaultsConfig> {
     static Node encode(const VaultsConfig& rhs) {
         Node node;
@@ -768,6 +785,7 @@ struct convert<VaultsConfig> {
         node["tpm_retention_window"] = durationToString(rhs.tpm_retention_window);
         node["s3"] = rhs.s3;
         node["format_conversion"] = rhs.format_conversion;
+        node["layout_migration"] = rhs.layout_migration;
         return node;
     }
 
@@ -778,6 +796,8 @@ struct convert<VaultsConfig> {
         if (node["s3"]) YAML::convert<VaultsS3Config>::decode(node["s3"], rhs.s3);
         if (node["format_conversion"])
             YAML::convert<VaultsFormatConversionConfig>::decode(node["format_conversion"], rhs.format_conversion);
+        if (node["layout_migration"])
+            YAML::convert<VaultsLayoutMigrationConfig>::decode(node["layout_migration"], rhs.layout_migration);
         return true;
     }
 };

@@ -5,12 +5,14 @@
 // their own IV/version metadata. No TPM, database or S3.
 
 #include "crypto/util/encrypt.hpp"
-#include "crypto/util/verify.hpp"
+#include "crypto/util/Gcm.hpp"
 #include "fs/model/File.hpp"
 #include "fs/ops/file.hpp"
 #include "sync/rotation/Rotation.hpp"
 
 #include <gtest/gtest.h>
+#include <system_error>
+#include <fcntl.h>
 #include <sodium.h>
 
 #include <sys/stat.h>
@@ -30,6 +32,20 @@ namespace vh::test_key_rotation_safety {
 namespace stdfs = std::filesystem;
 namespace cu = crypto::util;
 namespace rotation = sync::rotation;
+// Whether a legacy sealed file (AES-256-GCM body ‖ tag, no AAD) authenticates: the legacy reader's own check
+// (crypto::util::gcmVerifyFd). Throws when the file can't be read.
+bool gcmFileAuthenticates(const stdfs::path& path, const std::vector<uint8_t>& key, const std::vector<uint8_t>& iv) {
+    if (key.size() != cu::AES_KEY_SIZE || iv.size() != cu::AES_IV_SIZE) throw std::invalid_argument("key/IV size");
+    const auto size = stdfs::file_size(path);   // throws for a missing file
+    if (size < cu::AES_TAG_SIZE) return false;
+    const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd < 0) throw std::system_error(errno, std::generic_category(), "open " + path.string());
+    const bool ok = cu::gcmVerifyFd(fd, 0, size - cu::AES_TAG_SIZE, cu::GcmKey(key.data(), cu::AES_KEY_SIZE),
+                                    cu::GcmIv(iv.data(), cu::AES_IV_SIZE));
+    ::close(fd);
+    return ok;
+}
+
 using rotation::EncryptionState;
 using rotation::FileSP;
 using rotation::Outcome;
@@ -104,7 +120,7 @@ struct FakeVaultKeys {
         if (!state.encrypted()) return false;
         try {
             const auto& key = keyFor(state.key_version);
-            return cu::aes256_gcm_file_authenticates(path, key, cu::b64_decode(state.iv_b64));
+            return gcmFileAuthenticates(path, key, cu::b64_decode(state.iv_b64));
         } catch (const std::runtime_error& e) {
             if (std::string(e.what()) == "Key version mismatch") return false;
             throw;
@@ -740,17 +756,17 @@ TEST_F(KeyRotationSafetyTest, StreamingVerificationMatchesTheTag) {
     const auto ciphertext = cu::encrypt_aes256_gcm(randomBytes(200000), key, iv);
     const auto path = dir / "vault" / "ct";
     spitBytes(path, ciphertext);
-    EXPECT_TRUE(cu::aes256_gcm_file_authenticates(path, key, iv));
+    EXPECT_TRUE(gcmFileAuthenticates(path, key, iv));
 
-    EXPECT_FALSE(cu::aes256_gcm_file_authenticates(path, randomBytes(cu::AES_KEY_SIZE), iv));
+    EXPECT_FALSE(gcmFileAuthenticates(path, randomBytes(cu::AES_KEY_SIZE), iv));
     auto tampered = ciphertext;
     tampered[150000] ^= 1;
     spitBytes(path, tampered);
-    EXPECT_FALSE(cu::aes256_gcm_file_authenticates(path, key, iv));
+    EXPECT_FALSE(gcmFileAuthenticates(path, key, iv));
 
     spitBytes(path, Bytes(5, 0));
-    EXPECT_FALSE(cu::aes256_gcm_file_authenticates(path, key, iv)) << "shorter than a tag";
-    EXPECT_THROW((void)cu::aes256_gcm_file_authenticates(dir / "missing", key, iv), std::exception);
+    EXPECT_FALSE(gcmFileAuthenticates(path, key, iv)) << "shorter than a tag";
+    EXPECT_THROW((void)gcmFileAuthenticates(dir / "missing", key, iv), std::exception);
 }
 
 }

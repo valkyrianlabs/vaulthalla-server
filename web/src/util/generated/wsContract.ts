@@ -6,10 +6,10 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = '823f296278f5b2dcb63769625b5793547aa7dad36f6b9a675ada8df5c8e05a6c'
+export const WS_CONTRACT_HASH = '871cc02a52740f5112fff169444a8af57b04bbdeb647b5fcb7823b223a0a7969'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = 'd80bf7be73109849c82ac954c063e30efdcb6b59168998ee7e6004062d876e69'
+export const WS_MODELS_HASH = '58915edfce0d8642da38ec3c3d7205807ce82fe7c500fc55ee95099a7fbc7ee4'
 
 // The ws protocol range this book is (core/usage WsProtocol.hpp): send it in meta.hello.
 export const WS_PROTOCOL_VERSION = 1
@@ -2058,6 +2058,14 @@ export interface WsModels {
       detail: string
     }[]
     vaults_recovery_material_missing?: { vault_id: number; vault_name: string; reason: 'recovery_material_missing'; detail: string }[]
+    legacy_content?: {
+      remaining: boolean
+      path_v0_vaults: number[]
+      layout_migrations_unfinished: number[]
+      legacy_files: number
+      legacy_blobs: number
+      legacy_upload_files: number
+    } | null
     summary: {
       services_ready: number
       services_total: number
@@ -2659,6 +2667,120 @@ export interface WsModels {
     attestation_public_keys?: WsModels['VaultKeyAttestationKey'][]
     checkpoint?: WsModels['VaultKeyCheckpoint'] | null
     recovery?: WsModels['VaultRecoveryMaterial']
+  }
+  /**
+   * ops::vault_layout::toJson(CleanupAnswer): the cleanup's dry run, or its confirmation.
+   */
+  'VaultLayoutCleanup': {
+    dry_run: boolean
+    started: boolean
+    cleanup_after: number | null
+    plan: {
+      complete_listing: boolean
+      deletable: number
+      deletable_bytes: number
+      deletable_markers: number
+      oldest: number | null
+      newest: number | null
+      already_gone: number
+      kept: WsModels['VaultLayoutEntry'][]
+      deletable_entries: WsModels['VaultLayoutEntry'][]
+    }
+  }
+  /**
+   * One legacy (path-named) object version or delete marker of the bucket:
+   * vault::layout::toJson(CleanupEntry). The key is the old object key, the file's vault path without its
+   * leading slash.
+   */
+  'VaultLayoutEntry': {
+    key: string
+    version_id: string | null
+    delete_marker: boolean
+    size: number
+    last_modified: number | null
+    reason: string
+    retain_until: number | null
+  }
+  /**
+   * LayoutMigrationCost: what the migration sends (vault::layout::toJson(Estimate)), computed after the
+   * inventory and its HEADs, before any write.
+   */
+  'VaultLayoutEstimate': {
+    list_requests: number
+    head_requests: number
+    get_requests: number
+    put_requests: number
+    delete_requests: number
+    download_bytes: number
+    upload_bytes: number
+    readback_worst_case_gets: number
+    readback_worst_case_bytes: number
+    metadata_puts: number
+    objects: number
+    versions: number
+    delete_markers: number
+    backlog: number
+    current_files: number
+    sample: number
+    priced: boolean
+    estimated_cost: string | null
+  }
+  /**
+   * Inventory items by state.
+   */
+  'VaultLayoutItemCounts': { pending: number; verified: number; superseded: number; skipped: number; failed: number }
+  /**
+   * A vault's bucket layout migration (vault_layout_migration).
+   */
+  'VaultLayoutMigration': {
+    state: 'copying' | 'verifying' | 'failed' | 'cut_over' | 'cleanup' | 'cleanup_blocked' | 'complete'
+    started_at: number
+    started_by: number | null
+    attempts: number
+    versioned: boolean | null
+    wait_days: number
+    accept_unpriced: boolean
+    verified_at: number | null
+    cutover_at: number | null
+    cleanup_after: number | null
+    manifest_verified_at: number | null
+    cleanup_confirmed_at: number | null
+    cleanup_run_at: number | null
+    completed_at: number | null
+    estimate: WsModels['VaultLayoutEstimate'] | null
+    usage: WsModels['VaultLayoutUsage'] | null
+    last_error: string | null
+  }
+  /**
+   * ops::vault_layout::toJson(Status): the vault's layout and its migration.
+   */
+  'VaultLayoutStatus': {
+    vault_id: number
+    vault_name: string
+    layout: 'local' | 'transparent' | 'path_v0' | 'opaque_v1'
+    migration: WsModels['VaultLayoutMigration'] | null
+    items: {
+      versions: WsModels['VaultLayoutItemCounts']
+      delete_markers: WsModels['VaultLayoutItemCounts']
+      backlog: WsModels['VaultLayoutItemCounts']
+      current: WsModels['VaultLayoutItemCounts']
+    }
+    legacy_remaining: number
+    legacy_deleted: number
+    blocked: WsModels['VaultLayoutEntry'][]
+    blocked_total: number
+  }
+  /**
+   * Requests and bytes the migration's run sent (a capture of the run).
+   */
+  'VaultLayoutUsage': {
+    list_requests: number
+    head_requests: number
+    get_requests: number
+    put_requests: number
+    delete_requests: number
+    downloaded_bytes: number
+    uploaded_bytes: number
   }
   /**
    * What `vh vault recover` / vault.recover read and did (#371, spec 03 §6): ops::vault_recover::toJson
@@ -6459,6 +6581,82 @@ export interface WsContract {
     response: { vaults: WsModels['VaultKeyStatus'][] }
   }
   /**
+   * After the cutover and its waiting period: the legacy (path-named) objects a cleanup would delete by
+   * version id, and those that stay (a dry run without confirm). With confirm set to the vault's name the
+   * cleanup is confirmed and runs in the background (a data.destroy step-up bound to the vault, #359). Never
+   * on a protected bucket, never a version under Object Lock retention or a legal hold. The encryption-key
+   * Rotate permission.
+   */
+  'vault.layout.cleanup': {
+    payload: { vault_id: number; confirm?: string | null }
+    response: {
+      dry_run: boolean
+      started: boolean
+      cleanup_after: number | null
+      plan: {
+        complete_listing: boolean
+        deletable: number
+        deletable_bytes: number
+        deletable_markers: number
+        oldest: number | null
+        newest: number | null
+        already_gone: number
+        kept: WsModels['VaultLayoutEntry'][]
+        deletable_entries: WsModels['VaultLayoutEntry'][]
+      }
+    }
+  }
+  /**
+   * Start (or resume after a failure) the vault's bucket layout migration path_v0 -> opaque_v1: it runs in
+   * the background (vault.layout.status follows it). Refused (conflict) when the vault can't migrate now (not
+   * an encrypting S3 vault on path_v0, a rotation or salvage, a key version not held, no recovery material, a
+   * protected bucket) or already migrates. With a keys step-up bound to the vault (#359); the encryption-key
+   * Rotate permission.
+   */
+  'vault.layout.migrate': {
+    payload: { vault_id: number; accept_unpriced?: boolean }
+    response: {
+      vault_id: number
+      vault_name: string
+      layout: 'local' | 'transparent' | 'path_v0' | 'opaque_v1'
+      migration: WsModels['VaultLayoutMigration'] | null
+      items: {
+        versions: WsModels['VaultLayoutItemCounts']
+        delete_markers: WsModels['VaultLayoutItemCounts']
+        backlog: WsModels['VaultLayoutItemCounts']
+        current: WsModels['VaultLayoutItemCounts']
+      }
+      legacy_remaining: number
+      legacy_deleted: number
+      blocked: WsModels['VaultLayoutEntry'][]
+      blocked_total: number
+    }
+  }
+  /**
+   * The vault's bucket layout and its migration path_v0 -> opaque_v1 (#373): state, the cost estimate and
+   * usage, inventory counts, and every legacy version that stays in the bucket with its reason. The
+   * encryption-key View permission.
+   */
+  'vault.layout.status': {
+    payload: { vault_id: number }
+    response: {
+      vault_id: number
+      vault_name: string
+      layout: 'local' | 'transparent' | 'path_v0' | 'opaque_v1'
+      migration: WsModels['VaultLayoutMigration'] | null
+      items: {
+        versions: WsModels['VaultLayoutItemCounts']
+        delete_markers: WsModels['VaultLayoutItemCounts']
+        backlog: WsModels['VaultLayoutItemCounts']
+        current: WsModels['VaultLayoutItemCounts']
+      }
+      legacy_remaining: number
+      legacy_deleted: number
+      blocked: WsModels['VaultLayoutEntry'][]
+      blocked_total: number
+    }
+  }
+  /**
    * Rebuild a vault on this instance from its bucket and the customer's recovery material (#371, spec 03 §6):
    * a recovery kit (its seed unwraps the vault's KEV1 envelopes) and/or a key export. A key version is
    * restored only when its original node's attestation verifies against an attestation key the material pins
@@ -6886,6 +7084,9 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'vault.keys.recipients.list',
   'vault.keys.recipients.revoke',
   'vault.keys.status',
+  'vault.layout.cleanup',
+  'vault.layout.migrate',
+  'vault.layout.status',
   'vault.recover',
   'vault.recovery.disclosure',
   'vault.recovery.status',
@@ -6997,6 +7198,8 @@ export const WS_CONTRACT_STEP_UP: Readonly<Partial<Record<WsContractCommand, str
   'vault.keys.import': 'keys',
   'vault.keys.recipients.add': 'keys',
   'vault.keys.recipients.revoke': 'keys',
+  'vault.layout.cleanup': 'data.destroy',
+  'vault.layout.migrate': 'keys',
   'vault.recover': 'keys',
   'vault.recovery.suspend': 'data.destroy',
 }
@@ -7267,6 +7470,9 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'vault.keys.recipients.list': 15000,
   'vault.keys.recipients.revoke': 15000,
   'vault.keys.status': 15000,
+  'vault.layout.cleanup': 300000,
+  'vault.layout.migrate': 60000,
+  'vault.layout.status': 15000,
   'vault.recover': 600000,
   'vault.recovery.disclosure': 60000,
   'vault.recovery.status': 60000,

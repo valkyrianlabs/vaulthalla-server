@@ -230,6 +230,11 @@ vaults:
     max_mib_per_second: 32                     # Sealed bytes read per second (0 = unlimited)
     max_cpu_percent: 25                        # Share of one CPU core, 1 to 100
     pass_interval: 10m                         # How often a pass looks for work
+  # Bucket layout migration of encrypting S3/R2 vaults to opaque object names (`vh vault migrate-layout`). It only
+  # runs when an operator starts it. Afterwards the old path-named objects stay untouched in the bucket for this many
+  # days before `vh vault migrate-layout <vault> --cleanup` may delete them.
+  layout_migration:
+    cleanup_wait_days: 7                       # 1 to 365
 
 
 # === ⚡ Caching & Previews ===

@@ -119,6 +119,19 @@ struct VaultRecoveryMaterialHealth {
     std::string detail;
 };
 
+// Whether legacy-format content remains on this host (#373/#376): encrypting S3 vaults still on path_v0, cut-over
+// layout migrations whose path-named objects are not all gone yet, and legacy (gcm0) live files, recovery blobs and
+// unfinished resumable uploads. The gcm0 readers have no other callers once `remaining` is false; the next release's
+// install-time floor refuses an upgrade while it is true. Informational: it never degrades health by itself.
+struct LegacyContentHealth {
+    bool remaining = false;
+    std::vector<unsigned int> pathV0Vaults;
+    std::vector<unsigned int> layoutMigrationsUnfinished;
+    uint64_t legacyFiles = 0;
+    uint64_t legacyBlobs = 0;
+    uint64_t legacyUploadFiles = 0;
+};
+
 struct HealthSummary {
     std::size_t servicesReady = 0;
     std::size_t servicesTotal = 0;
@@ -139,6 +152,7 @@ struct SystemHealth {
     std::optional<DatabaseHealth> database; // nullopt until the pool exists (critical)
     std::vector<VaultUnavailableHealth> vaultsUnavailable;
     std::vector<VaultRecoveryMaterialHealth> vaultsRecoveryMaterialMissing;
+    std::optional<LegacyContentHealth> legacyContent;   // nullopt when the database could not be asked
     HealthSummary summary;
 
     [[nodiscard]] bool healthy() const noexcept;
@@ -159,6 +173,7 @@ void to_json(nlohmann::json& j, const DatabaseHealth& health);
 void to_json(nlohmann::json& j, const HealthSummary& health);
 void to_json(nlohmann::json& j, const VaultUnavailableHealth& health);
 void to_json(nlohmann::json& j, const VaultRecoveryMaterialHealth& health);
+void to_json(nlohmann::json& j, const LegacyContentHealth& health);
 void to_json(nlohmann::json& j, const SystemHealth& health);
 
 }

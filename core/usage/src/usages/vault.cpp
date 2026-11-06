@@ -801,7 +801,7 @@ static std::shared_ptr<CommandUsage> format_status(const std::weak_ptr<CommandUs
                        "converting, blocked by a key rotation or salvage, disabled) and what its last pass did. The "
                        "conversion runs in the background (vaults.format_conversion in config.yaml), never rotates a "
                        "key and verifies every item before the legacy form is removed. A cloud vault that encrypts "
-                       "upstream converts its live files with the bucket's layout migration instead.";
+                       "upstream converts its live files with the bucket's layout migration instead (vh vault migrate-layout).";
     cmd->positionals = {vaultOrAll};
     cmd->optional = {owner};
     cmd->optional_flags = {jsonFlag};
@@ -818,6 +818,43 @@ static std::shared_ptr<CommandUsage> vault_format(const std::weak_ptr<CommandUsa
     cmd->description = "Inspect the at-rest format of vault content (legacy GCM or VHF1).";
     cmd->examples = {{"vh vault format status all", "Conversion progress of every vault."}};
     cmd->subcommands = {format_status(cmd->weak_from_this())};
+    return cmd;
+}
+
+static std::shared_ptr<CommandUsage> migrate_layout(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = buildBaseUsage(parent);
+    cmd->aliases = {"migrate-layout"};
+    cmd->effect = CommandEffect::Destructive;
+    cmd->description =
+        "Move an encrypting S3 or R2 vault from path-named objects (path_v0) to opaque objects (opaque_v1), whose keys, "
+        "requests and metadata name no file. Only an operator starts it; nothing migrates on upgrade. It inventories "
+        "the bucket (every object, provider version and delete marker), shows the cost and checks the price budget "
+        "(--accept-unpriced when it can't be priced), then re-seals every version, the pending upstream backlog and "
+        "each file's current content as VHF1 under the same key version, verifies each one by decryption and proves "
+        "the provider holds it, and cuts the vault over. The vault's sync waits meanwhile; files stay readable and "
+        "writable. If anything fails before the cutover the vault stays path_v0 and nothing is deleted; run it again to "
+        "resume. The old path-named objects stay untouched for vaults.layout_migration.cleanup_wait_days (default 7): "
+        "--cleanup lists what would be deleted, and --cleanup --confirm <vault name> deletes exactly those versions by "
+        "version id afterwards (never a version under Object Lock retention or a legal hold, never on a protected "
+        "bucket). --status shows the state, the estimate and every version that stays, with its reason.";
+    cmd->positionals = {vaultPos};
+    cmd->optional = {owner,
+                     Optional::ManyToOne("confirm", "With --cleanup: the vault's name, confirming the deletion of the "
+                                                    "legacy objects the dry run lists",
+                                         {"confirm"}, "name")};
+    cmd->optional_flags = {jsonFlag,
+                           Flag::Alias("status", "Show the migration's state; change nothing", "status"),
+                           Flag::Alias("cleanup",
+                                       "After the waiting period: list the legacy objects that would be deleted (with "
+                                       "--confirm: delete them)",
+                                       "cleanup"),
+                           Flag::Alias("accept_unpriced", "Start even when the cost can't be priced", "accept-unpriced")};
+    cmd->examples = {
+        {"vh vault migrate-layout finance --status", "Where the migration of vault 'finance' stands."},
+        {"vh vault migrate-layout finance", "Start it (or resume it after a failure)."},
+        {"vh vault migrate-layout finance --cleanup", "After the waiting period: what the cleanup would delete."},
+        {"vh vault migrate-layout finance --cleanup --confirm finance", "Delete those legacy versions."}
+    };
     return cmd;
 }
 
@@ -985,6 +1022,7 @@ static std::shared_ptr<CommandUsage> base(const std::weak_ptr<CommandUsage>& par
     const auto vroleCmd = vrole(cmd->weak_from_this());
     const auto keyCmd = key(cmd->weak_from_this());
     const auto formatCmd = vault_format(cmd->weak_from_this());
+    const auto migrateLayoutCmd = migrate_layout(cmd->weak_from_this());
     const auto syncCmd = sync(cmd->weak_from_this()); // executable (manual sync) + has subcommands
     const auto recoveryCmd = recovery_book::vaultRecovery(cmd->weak_from_this());
 
@@ -1136,6 +1174,7 @@ static std::shared_ptr<CommandUsage> base(const std::weak_ptr<CommandUsage>& par
         vroleCmd,
         keyCmd,
         formatCmd,
+        migrateLayoutCmd,
         syncCmd,
         recoveryCmd
     };

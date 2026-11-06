@@ -5,7 +5,6 @@
 #include "vault/model/Vault.hpp"
 #include "crypto/util/encrypt.hpp"
 #include "crypto/util/Gcm.hpp"
-#include "crypto/util/reseal.hpp"
 #include "log/Registry.hpp"
 #include "db/query/vault/Key.hpp"
 #include "vault/model/Key.hpp"

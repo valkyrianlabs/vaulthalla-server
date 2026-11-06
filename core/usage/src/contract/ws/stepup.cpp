@@ -20,6 +20,7 @@ std::vector<WsStepUp> stepUpTable() {
         {"vault.keys.recipients.add", "keys", kTarget, "(the console is refused recipient_requires_device first)"},
         {"vault.keys.recipients.revoke", "keys", kTarget, "(the console is refused recipient_requires_device first)"},
         {"vault.recover", "keys", kTarget, "bound to the bucket (the console is refused recover_requires_device first)"},
+        {"vault.layout.migrate", "keys", kTarget, ""},
         // device.trust: target-bound (request id + new key + chosen code), single use
         {"device.pairing.approve", "device.trust", kTarget, ""},
         {"device.remote.enable", "device.trust", kTarget, "when remote device connections are off"},
@@ -86,6 +87,7 @@ std::vector<WsStepUp> stepUpTable() {
         {"recovery.point.delete", "data.destroy", kTarget, ""},
         {"vault.recovery.suspend", "data.destroy", kTarget, ""},
         {"upstream.bucket.cleanup", "data.destroy", kTarget, ""},
+        {"vault.layout.cleanup", "data.destroy", kTarget, "with confirm (the dry run never asks)"},
         {"upstream.bucket.unprotect", "data.destroy", kTarget, "when the bucket is protected"},
         {"upstream.bucket.lifecycle.set", "data.destroy", kTarget,
          "when the rule makes the provider delete data or shortens the recovery history (the accepted "

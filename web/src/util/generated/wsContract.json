@@ -13215,6 +13215,70 @@
           ]
         },
         {
+          "description": "Legacy-format content (#373/#376). null when the database could not be asked. Never degrades health by itself.",
+          "fields": [
+            {
+              "description": "Any legacy-format content left on this host: the next release's install floor refuses an upgrade while true.",
+              "name": "remaining",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "Encrypting S3 vaults still on path_v0 (vh vault migrate-layout).",
+              "items": "integer",
+              "name": "path_v0_vaults",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            },
+            {
+              "description": "Vaults cut over to opaque_v1 whose path-named objects are not all gone yet.",
+              "items": "integer",
+              "name": "layout_migrations_unfinished",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            },
+            {
+              "description": "Live files still in the legacy (gcm0) format.",
+              "minimum": 0,
+              "name": "legacy_files",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Recovery blobs still in the legacy format.",
+              "minimum": 0,
+              "name": "legacy_blobs",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Unfinished resumable uploads begun in the legacy format.",
+              "minimum": 0,
+              "name": "legacy_upload_files",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "legacy_content",
+          "required": false,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
           "fields": [
             {
               "minimum": 0,
@@ -17137,6 +17201,748 @@
       "name": "VaultKeyStatus"
     },
     {
+      "description": "ops::vault_layout::toJson(CleanupAnswer): the cleanup's dry run, or its confirmation.",
+      "fields": [
+        {
+          "name": "dry_run",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "The confirmed cleanup runs in the background.",
+          "name": "started",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "minimum": 0,
+          "name": "cleanup_after",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "name": "complete_listing",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "deletable",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "deletable_bytes",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "deletable_markers",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Unix seconds.",
+              "minimum": 0,
+              "name": "oldest",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "description": "Unix seconds.",
+              "minimum": 0,
+              "name": "newest",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "already_gone",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "items": "object",
+              "model": "VaultLayoutEntry",
+              "name": "kept",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            },
+            {
+              "items": "object",
+              "model": "VaultLayoutEntry",
+              "name": "deletable_entries",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            }
+          ],
+          "name": "plan",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "name": "VaultLayoutCleanup"
+    },
+    {
+      "description": "One legacy (path-named) object version or delete marker of the bucket: vault::layout::toJson(CleanupEntry). The key is the old object key, the file's vault path without its leading slash.",
+      "fields": [
+        {
+          "name": "key",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The provider's version id (null on an unversioned bucket).",
+          "name": "version_id",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "name": "delete_marker",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "Bytes the provider stores.",
+          "minimum": 0,
+          "name": "size",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "minimum": 0,
+          "name": "last_modified",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "Why it stays: archived, key_unavailable, unattributed, not_inventoried, legal_hold, object_lock_retention, refused: <code>, failed: <error>, ...; \"\" when it can be deleted.",
+          "name": "reason",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Object Lock retention: when it becomes deletable.",
+          "minimum": 0,
+          "name": "retain_until",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        }
+      ],
+      "name": "VaultLayoutEntry"
+    },
+    {
+      "description": "LayoutMigrationCost: what the migration sends (vault::layout::toJson(Estimate)), computed after the inventory and its HEADs, before any write.",
+      "fields": [
+        {
+          "minimum": 0,
+          "name": "list_requests",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "head_requests",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "get_requests",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "put_requests",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "delete_requests",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "download_bytes",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "upload_bytes",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "If the provider's ETags are not MD5s every PUT is read back.",
+          "minimum": 0,
+          "name": "readback_worst_case_gets",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "readback_worst_case_bytes",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The encrypted manifest after the cutover (approximate).",
+          "minimum": 0,
+          "name": "metadata_puts",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "objects",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "versions",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "delete_markers",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "backlog",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "current_files",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Objects always read back and authenticated.",
+          "minimum": 0,
+          "name": "sample",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "priced",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "The price budget's estimate, when priced.",
+          "name": "estimated_cost",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        }
+      ],
+      "name": "VaultLayoutEstimate"
+    },
+    {
+      "description": "Inventory items by state.",
+      "fields": [
+        {
+          "minimum": 0,
+          "name": "pending",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "verified",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "superseded",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "skipped",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "failed",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "name": "VaultLayoutItemCounts"
+    },
+    {
+      "description": "A vault's bucket layout migration (vault_layout_migration).",
+      "fields": [
+        {
+          "description": "copying/verifying/failed: still path_v0, nothing deleted (failed: start it again to resume); cut_over: opaque_v1, legacy objects kept until cleanup_after; cleanup: a confirmed cleanup runs; cleanup_blocked: legacy versions remain (see blocked); complete: a complete listing shows none.",
+          "enum": [
+            "copying",
+            "verifying",
+            "failed",
+            "cut_over",
+            "cleanup",
+            "cleanup_blocked",
+            "complete"
+          ],
+          "name": "state",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "minimum": 0,
+          "name": "started_at",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "started_by",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "attempts",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The inventory came from ListObjectVersions (version ids).",
+          "name": "versioned",
+          "required": true,
+          "types": [
+            "boolean",
+            "null"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "wait_days",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "accept_unpriced",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "minimum": 0,
+          "name": "verified_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "minimum": 0,
+          "name": "cutover_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "minimum": 0,
+          "name": "cleanup_after",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "The encrypted manifest was loaded back from the bucket alone and matched the database.",
+          "minimum": 0,
+          "name": "manifest_verified_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "minimum": 0,
+          "name": "cleanup_confirmed_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "minimum": 0,
+          "name": "cleanup_run_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "minimum": 0,
+          "name": "completed_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "model": "VaultLayoutEstimate",
+          "name": "estimate",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "model": "VaultLayoutUsage",
+          "name": "usage",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "name": "last_error",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        }
+      ],
+      "name": "VaultLayoutMigration"
+    },
+    {
+      "description": "ops::vault_layout::toJson(Status): the vault's layout and its migration.",
+      "fields": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "vault_name",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "enum": [
+            "local",
+            "transparent",
+            "path_v0",
+            "opaque_v1"
+          ],
+          "name": "layout",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "null until an operator starts one.",
+          "model": "VaultLayoutMigration",
+          "name": "migration",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "model": "VaultLayoutItemCounts",
+              "name": "versions",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "model": "VaultLayoutItemCounts",
+              "name": "delete_markers",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "model": "VaultLayoutItemCounts",
+              "name": "backlog",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "model": "VaultLayoutItemCounts",
+              "name": "current",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            }
+          ],
+          "name": "items",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "Legacy versions and markers with path names not deleted yet.",
+          "minimum": 0,
+          "name": "legacy_remaining",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "legacy_deleted",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "What stays, each with its reason (the first 200).",
+          "items": "object",
+          "model": "VaultLayoutEntry",
+          "name": "blocked",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "blocked_total",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "name": "VaultLayoutStatus"
+    },
+    {
+      "description": "Requests and bytes the migration's run sent (a capture of the run).",
+      "fields": [
+        {
+          "minimum": 0,
+          "name": "list_requests",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "head_requests",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "get_requests",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "put_requests",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "delete_requests",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "downloaded_bytes",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "uploaded_bytes",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "name": "VaultLayoutUsage"
+    },
+    {
       "description": "What `vh vault recover` / vault.recover read and did (#371, spec 03 §6): ops::vault_recover::toJson (core/src/ops/VaultRecover.cpp) over vault::recover::toJson(Plan). Public data only: key checks, attestation verdicts and counts, never key material.",
       "fields": [
         {
@@ -19685,7 +20491,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "d80bf7be73109849c82ac954c063e30efdcb6b59168998ee7e6004062d876e69",
+  "models_hash": "58915edfce0d8642da38ec3c3d7205807ce82fe7c500fc55ee95099a7fbc7ee4",
   "protocol": {
     "min": 1,
     "version": 1
@@ -46005,6 +46811,529 @@
     },
     {
       "auth": "human",
+      "client_timeout_ms": 300000,
+      "command": "vault.layout.cleanup",
+      "confirmations": [],
+      "description": "After the cutover and its waiting period: the legacy (path-named) objects a cleanup would delete by version id, and those that stay (a dry run without confirm). With confirm set to the vault's name the cleanup is confirmed and runs in the background (a data.destroy step-up bound to the vault, #359). Never on a protected bucket, never a version under Object Lock retention or a legal hold. The encryption-key Rotate permission.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The vault's name: delete what the dry run lists.",
+          "name": "confirm",
+          "required": false,
+          "types": [
+            "string",
+            "null"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "step_up_required"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "step_up_required"
+      ],
+      "response": [
+        {
+          "name": "dry_run",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "The confirmed cleanup runs in the background.",
+          "name": "started",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "minimum": 0,
+          "name": "cleanup_after",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "name": "complete_listing",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "deletable",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "deletable_bytes",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "deletable_markers",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Unix seconds.",
+              "minimum": 0,
+              "name": "oldest",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "description": "Unix seconds.",
+              "minimum": 0,
+              "name": "newest",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "already_gone",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "items": "object",
+              "model": "VaultLayoutEntry",
+              "name": "kept",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            },
+            {
+              "items": "object",
+              "model": "VaultLayoutEntry",
+              "name": "deletable_entries",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            }
+          ],
+          "name": "plan",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": "VaultLayoutCleanup",
+      "step_up": "data.destroy",
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 60000,
+      "command": "vault.layout.migrate",
+      "confirmations": [],
+      "description": "Start (or resume after a failure) the vault's bucket layout migration path_v0 -> opaque_v1: it runs in the background (vault.layout.status follows it). Refused (conflict) when the vault can't migrate now (not an encrypting S3 vault on path_v0, a rotation or salvage, a key version not held, no recovery material, a protected bucket) or already migrates. With a keys step-up bound to the vault (#359); the encryption-key Rotate permission.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Start even when the cost can't be priced.",
+          "name": "accept_unpriced",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "step_up_required",
+        "recovery_cooldown"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "step_up_required",
+        "recovery_cooldown"
+      ],
+      "response": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "vault_name",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "enum": [
+            "local",
+            "transparent",
+            "path_v0",
+            "opaque_v1"
+          ],
+          "name": "layout",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "null until an operator starts one.",
+          "model": "VaultLayoutMigration",
+          "name": "migration",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "model": "VaultLayoutItemCounts",
+              "name": "versions",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "model": "VaultLayoutItemCounts",
+              "name": "delete_markers",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "model": "VaultLayoutItemCounts",
+              "name": "backlog",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "model": "VaultLayoutItemCounts",
+              "name": "current",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            }
+          ],
+          "name": "items",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "Legacy versions and markers with path names not deleted yet.",
+          "minimum": 0,
+          "name": "legacy_remaining",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "legacy_deleted",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "What stays, each with its reason (the first 200).",
+          "items": "object",
+          "model": "VaultLayoutEntry",
+          "name": "blocked",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "blocked_total",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "response_model": "VaultLayoutStatus",
+      "step_up": "keys",
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "vault.layout.status",
+      "confirmations": [],
+      "description": "The vault's bucket layout and its migration path_v0 -> opaque_v1 (#373): state, the cost estimate and usage, inventory counts, and every legacy version that stays in the bucket with its reason. The encryption-key View permission.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "vault_name",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "enum": [
+            "local",
+            "transparent",
+            "path_v0",
+            "opaque_v1"
+          ],
+          "name": "layout",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "null until an operator starts one.",
+          "model": "VaultLayoutMigration",
+          "name": "migration",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "model": "VaultLayoutItemCounts",
+              "name": "versions",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "model": "VaultLayoutItemCounts",
+              "name": "delete_markers",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "model": "VaultLayoutItemCounts",
+              "name": "backlog",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "model": "VaultLayoutItemCounts",
+              "name": "current",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            }
+          ],
+          "name": "items",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "Legacy versions and markers with path names not deleted yet.",
+          "minimum": 0,
+          "name": "legacy_remaining",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "legacy_deleted",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "What stays, each with its reason (the first 200).",
+          "items": "object",
+          "model": "VaultLayoutEntry",
+          "name": "blocked",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "blocked_total",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "response_model": "VaultLayoutStatus",
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
       "client_timeout_ms": 600000,
       "command": "vault.recover",
       "confirmations": [
@@ -47422,5 +48751,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "823f296278f5b2dcb63769625b5793547aa7dad36f6b9a675ada8df5c8e05a6c"
+  "ws_hash": "871cc02a52740f5112fff169444a8af57b04bbdeb647b5fcb7823b223a0a7969"
 }
