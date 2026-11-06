@@ -1,4 +1,6 @@
+#include "../helpers/db_suite.hpp"
 #include "../helpers/identities.hpp"
+#include "../helpers/web_session.hpp"
 #include "auth/Manager.hpp"
 #include "crypto/util/hash.hpp"
 #include "db/Transactions.hpp"
@@ -23,7 +25,6 @@
 #include <nlohmann/json.hpp>
 #include <paths.h>
 
-#include <cstdlib>
 #include <filesystem>
 #include <optional>
 #include <iostream>
@@ -34,19 +35,6 @@
 
 namespace vh::auth::test_password_change {
 using json = nlohmann::json;
-
-struct ScopedRuntimeAuthManager {
-    std::shared_ptr<vh::auth::Manager> previous;
-
-    explicit ScopedRuntimeAuthManager(std::shared_ptr<vh::auth::Manager> manager)
-        : previous(vh::runtime::Deps::get().authManager) {
-        vh::runtime::Deps::get().authManager = std::move(manager);
-    }
-
-    ~ScopedRuntimeAuthManager() {
-        vh::runtime::Deps::get().authManager = std::move(previous);
-    }
-};
 
 std::shared_ptr<vh::protocols::ws::Session> sessionFor(const std::shared_ptr<vh::identities::User>& user) {
     auto session = std::make_shared<vh::protocols::ws::Session>(std::make_shared<vh::protocols::ws::Router>());
@@ -61,17 +49,11 @@ bool authenticate(const std::string& name, const std::string& password) {
 class AuthPasswordChangeTest : public ::testing::Test {
 protected:
     inline static bool skipTests = false;
-
-    static bool hasDbEnv() {
-        return std::getenv("VH_TEST_DB_USER") &&
-               std::getenv("VH_TEST_DB_PASS") &&
-               std::getenv("VH_TEST_DB_HOST") &&
-               std::getenv("VH_TEST_DB_PORT") &&
-               std::getenv("VH_TEST_DB_NAME");
-    }
+    vh::test::web::ScopedDep<vh::auth::Manager> authManager{vh::runtime::Deps::get().authManager,
+                                                            std::make_shared<vh::auth::Manager>()};
 
     static void SetUpTestSuite() {
-        if (!hasDbEnv()) {
+        if (!vh::test::db::available()) {
             skipTests = true;
             std::cout << "[test_auth_password_change] Skipping db tests due to missing environment variables." << std::endl;
             return;
@@ -174,27 +156,7 @@ TEST(AuthPasswordPermissionTest, ResetPasswordBitIsAdditiveAndSeededOnlyForOrgAn
     EXPECT_FALSE(securityAdmin.identities.admins.canResetPassword());
 }
 
-TEST_F(AuthPasswordChangeTest, SelfPasswordChangePersistsToDatabase) {
-    auto manager = std::make_shared<vh::auth::Manager>();
-    ScopedRuntimeAuthManager scoped(manager);
-
-    const auto user = createUser("self_password_change", "old-password");
-    const auto session = sessionFor(user);
-
-    const auto response = vh::protocols::ws::handler::Auth::changePassword(
-        json{{"id", user->id}, {"old_password", "old-password"}, {"new_password", "new-password"}},
-        session
-    );
-
-    EXPECT_EQ(response.at("user").at("id").get<unsigned int>(), user->id);
-    EXPECT_FALSE(authenticate(user->name(), "old-password"));
-    EXPECT_TRUE(authenticate(user->name(), "new-password"));
-}
-
 TEST_F(AuthPasswordChangeTest, SelfPasswordChangeRequiresOldPassword) {
-    auto manager = std::make_shared<vh::auth::Manager>();
-    ScopedRuntimeAuthManager scoped(manager);
-
     const auto user = createUser("self_password_missing_old", "old-password");
     const auto session = sessionFor(user);
 
@@ -210,28 +172,7 @@ TEST_F(AuthPasswordChangeTest, SelfPasswordChangeRequiresOldPassword) {
     EXPECT_FALSE(authenticate(user->name(), "new-password"));
 }
 
-TEST_F(AuthPasswordChangeTest, AdminResetPersistsWithoutOldPasswordWhenPermissionIsGranted) {
-    auto manager = std::make_shared<vh::auth::Manager>();
-    ScopedRuntimeAuthManager scoped(manager);
-
-    const auto actor = createUser("password_reset_actor", "actor-password", "admin");
-    const auto target = createUser("password_reset_target", "old-password");
-    const auto session = sessionFor(actor);
-
-    const auto response = vh::protocols::ws::handler::Auth::changePassword(
-        json{{"id", target->id}, {"new_password", "new-password"}},
-        session
-    );
-
-    EXPECT_EQ(response.at("user").at("id").get<unsigned int>(), target->id);
-    EXPECT_FALSE(authenticate(target->name(), "old-password"));
-    EXPECT_TRUE(authenticate(target->name(), "new-password"));
-}
-
 TEST_F(AuthPasswordChangeTest, AdminResetIsDeniedWithoutResetPermission) {
-    auto manager = std::make_shared<vh::auth::Manager>();
-    ScopedRuntimeAuthManager scoped(manager);
-
     const auto actor = createUser("password_reset_denied_actor", "actor-password", "identity_admin");
     const auto target = createUser("password_reset_denied_target", "old-password");
     const auto session = sessionFor(actor);
@@ -249,9 +190,6 @@ TEST_F(AuthPasswordChangeTest, AdminResetIsDeniedWithoutResetPermission) {
 }
 
 TEST_F(AuthPasswordChangeTest, AdminResetUsesAdminScopeForAdminTargets) {
-    auto manager = std::make_shared<vh::auth::Manager>();
-    ScopedRuntimeAuthManager scoped(manager);
-
     // The target is an admin-class account the actor outranks. (This test used to reset a super_admin's password
     // from the admin role: the escalation SuperAdminPasswordCannotBeResetByOthers now refuses.)
     const auto actor = createUser("admin_password_reset_actor", "actor-password", "admin");
@@ -278,9 +216,6 @@ TEST_F(AuthPasswordChangeTest, AdminResetUsesAdminScopeForAdminTargets) {
 }
 
 TEST_F(AuthPasswordChangeTest, SuperAdminPasswordCannotBeResetByOthers) {
-    auto manager = std::make_shared<vh::auth::Manager>();
-    ScopedRuntimeAuthManager scoped(manager);
-
     const auto actor = createUser("super_reset_actor", "actor-password", "admin");
     const auto target = createUser("super_reset_target", "old-password", "super_admin");
 
@@ -290,9 +225,6 @@ TEST_F(AuthPasswordChangeTest, SuperAdminPasswordCannotBeResetByOthers) {
 }
 
 TEST_F(AuthPasswordChangeTest, PasswordResetRejectsSystemOnlyTarget) {
-    auto manager = std::make_shared<vh::auth::Manager>();
-    ScopedRuntimeAuthManager scoped(manager);
-
     const auto actor = createUser("system_only_reset_actor", "actor-password", "admin");
     const auto target = createSystemOnlyUser("system_only_reset_target", "old-password");
     const auto session = sessionFor(actor);
@@ -307,9 +239,6 @@ TEST_F(AuthPasswordChangeTest, PasswordResetRejectsSystemOnlyTarget) {
 }
 
 TEST_F(AuthPasswordChangeTest, ChangePasswordRejectsMissingSessionUser) {
-    auto manager = std::make_shared<vh::auth::Manager>();
-    ScopedRuntimeAuthManager scoped(manager);
-
     const auto target = createUser("missing_session_target", "old-password");
     const auto session = std::make_shared<vh::protocols::ws::Session>(std::make_shared<vh::protocols::ws::Router>());
 
@@ -327,8 +256,6 @@ TEST_F(AuthPasswordChangeTest, ChangePasswordRejectsMissingSessionUser) {
 // Regression (#126): the web "Edit User" form sends auth.user.update with the target's id; the handler used to
 // ignore it and apply the edit (name/email/is_active) to the calling admin instead.
 TEST_F(AuthPasswordChangeTest, UpdateUserTargetsPayloadIdNotCaller) {
-    auto manager = std::make_shared<vh::auth::Manager>();
-    ScopedRuntimeAuthManager scoped(manager);
     const auto admin = createUser("upd_admin_target", "admin-password", "admin");
     const auto target = createUser("upd_plain_target", "plain-password");
 
@@ -347,8 +274,6 @@ TEST_F(AuthPasswordChangeTest, UpdateUserTargetsPayloadIdNotCaller) {
 }
 
 TEST_F(AuthPasswordChangeTest, UpdateUserRefusesSelfPrivilegeAndIdentityChanges) {
-    auto manager = std::make_shared<vh::auth::Manager>();
-    ScopedRuntimeAuthManager scoped(manager);
     const auto admin = createUser("upd_admin_self", "admin-password", "admin");
     const auto session = sessionFor(admin);
     using vh::protocols::ws::handler::Auth;
@@ -366,8 +291,6 @@ TEST_F(AuthPasswordChangeTest, UpdateUserRefusesSelfPrivilegeAndIdentityChanges)
 }
 
 TEST_F(AuthPasswordChangeTest, UpdateUserRequiresEditPermissionForOthers) {
-    auto manager = std::make_shared<vh::auth::Manager>();
-    ScopedRuntimeAuthManager scoped(manager);
     const auto plain = createUser("upd_plain_actor", "plain-password");
     const auto other = createUser("upd_plain_victim", "victim-password");
 
@@ -383,9 +306,6 @@ TEST_F(AuthPasswordChangeTest, NewAccountsRecordWhenTheirPasswordWasSet) {
 }
 
 TEST_F(AuthPasswordChangeTest, SelfChangeAndAdminResetPersistPasswordChangedAt) {
-    auto manager = std::make_shared<vh::auth::Manager>();
-    ScopedRuntimeAuthManager scoped(manager);
-
     const auto user = createUser("pwd_changed_self", "old-password");
     backdatePasswordChange(user->id);
     ASSERT_FALSE(justNow(passwordChangedSecondsAgo(user->id)));
@@ -393,6 +313,9 @@ TEST_F(AuthPasswordChangeTest, SelfChangeAndAdminResetPersistPasswordChangedAt) 
     const auto response = vh::protocols::ws::handler::Auth::changePassword(
         json{{"id", user->id}, {"old_password", "old-password"}, {"new_password", "new-password"}},
         sessionFor(user));
+    EXPECT_EQ(response.at("user").at("id").get<unsigned int>(), user->id);
+    EXPECT_FALSE(authenticate(user->name(), "old-password"));
+    EXPECT_TRUE(authenticate(user->name(), "new-password"));
     EXPECT_TRUE(justNow(passwordChangedSecondsAgo(user->id)));
     EXPECT_FALSE(response.at("user").at("password_changed_at").is_null());
     const auto reloaded = vh::identities::manager().user(user->id);
@@ -401,8 +324,11 @@ TEST_F(AuthPasswordChangeTest, SelfChangeAndAdminResetPersistPasswordChangedAt) 
     const auto actor = createUser("pwd_changed_actor", "actor-password", "admin");
     const auto target = createUser("pwd_changed_target", "old-password");
     backdatePasswordChange(target->id);
-    (void)vh::protocols::ws::handler::Auth::changePassword(json{{"id", target->id}, {"new_password", "new-password"}},
-                                                           sessionFor(actor));
+    const auto reset = vh::protocols::ws::handler::Auth::changePassword(
+        json{{"id", target->id}, {"new_password", "new-password"}}, sessionFor(actor));
+    EXPECT_EQ(reset.at("user").at("id").get<unsigned int>(), target->id);
+    EXPECT_FALSE(authenticate(target->name(), "old-password"));
+    EXPECT_TRUE(authenticate(target->name(), "new-password"));
     EXPECT_TRUE(justNow(passwordChangedSecondsAgo(target->id)));
 }
 

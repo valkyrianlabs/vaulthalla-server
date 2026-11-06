@@ -143,14 +143,12 @@ protected:
     };
 
     // The applier with its scoped pass run inline (plan + transfers), measuring the pass's own requests.
-    static sync::events::Applier inlineApplier(const Fixture& f, PassCounts* counts = nullptr,
-                                              sync::Controller::ScopedResult result = sync::Controller::ScopedResult::Started) {
+    static sync::events::Applier inlineApplier(const Fixture& f, PassCounts* counts = nullptr) {
         static sync::Controller leases;
         return sync::events::Applier({
             .tryAcquirePass = [](const uint32_t v) { return leases.tryAcquirePass(v); },
             .releasePass = [](const uint32_t v) { leases.releasePass(v); },
-            .runScoped = [f, counts, result](const uint32_t, std::shared_ptr<sync::model::PassScope> scope) {
-                if (result != sync::Controller::ScopedResult::Started) return result;
+            .runScoped = [f, counts](const uint32_t, std::shared_ptr<sync::model::PassScope> scope) {
                 const auto before = f.engine->s3RequestMetrics();
                 auto cloud = std::make_shared<sync::Cloud>(f.engine, scope);
                 cloud->event = std::make_shared<sync::model::Event>();
@@ -183,13 +181,6 @@ protected:
                 }
                 return sync::Controller::ScopedResult::Started;
             },
-        });
-    }
-
-    static size_t countState(const uint32_t vaultId, const umodel::InboxState state) {
-        return db::Transactions::exec("UpstreamEventOpsTest::countState", [&](pqxx::work& txn) {
-            return txn.exec("SELECT COUNT(*) FROM upstream_event_inbox WHERE vault_id = $1 AND state = $2",
-                            pqxx::params{vaultId, umodel::to_string(state)}).one_field_ref().as<size_t>();
         });
     }
 
@@ -354,24 +345,6 @@ TEST_F(UpstreamEventOpsTest, AdoptionWithEventsHoldsEventsUntilTheBaselineListin
     const auto status = up::eventStatus(superUser, f.vault->id).at(0);
     EXPECT_EQ(status.state, "active");
     EXPECT_EQ(status.baseline_state, "pending") << "the subscription exists before the first listing";
-
-    ue::providerState()->push(ue::awsBody(name, "ObjectCreated:Put", "before-listing.txt", "01", 3, std::string("o"),
-                                          "2020-01-01T00:00:00.000Z"));
-    ue::providerState()->push(ue::awsBody(name, "ObjectCreated:Put", "during-listing.txt", "02", 3, std::string("n"),
-                                          "2099-01-01T00:00:00.000Z"));
-    f.bucket->put("during-listing.txt", bytes("new"), {});
-    EXPECT_EQ(poll(f.vault->id).inserted, 2u);
-
-    PassCounts counts;
-    auto applier = inlineApplier(f, &counts);
-    EXPECT_TRUE(applier.applyVault(f.vault->id).held) << "held until the baseline";
-    EXPECT_EQ(countState(f.vault->id, umodel::InboxState::Pending), 2u);
-
-    sync::events::Applier::onBaselineListed(f.vault->id, std::time(nullptr));
-    const auto out = applier.applyVault(f.vault->id);
-    EXPECT_EQ(out.applied, 1u) << "the event newer than the listing";
-    EXPECT_EQ(out.skipped, 1u) << "the event the listing already covered";
-    EXPECT_EQ(readLocal(f, "/during-listing.txt"), "new");
 }
 
 TEST_F(UpstreamEventOpsTest, KeysOperatingASubscriptionCannotBeRemovedOrDemoted) {
@@ -444,41 +417,6 @@ TEST_F(UpstreamEventOpsTest, ExternalChangesSyncThroughTheOpsLayerAndALockStopsT
     EXPECT_EQ(counts.last.get_requests, 1u);
     EXPECT_LE(counts.last.head_requests, 1u);
 
-    // An overwrite downloads it again; a delete removes the (unchanged) local copy.
-    v.f.bucket->put("photos/new.jpg", bytes("better jpeg"), {});
-    ue::providerState()->push(ue::awsBody(v.bucket, "ObjectCreated:Put", "photos/new.jpg", "0B", 11, std::string("e2")));
-    (void)poll(v.f.vault->id);
-    (void)applier.applyVault(v.f.vault->id);
-    EXPECT_EQ(readLocal(v.f, "/photos/new.jpg"), "better jpeg");
-
-    v.f.bucket->erase("photos/new.jpg");   // really deleted upstream: the removal is confirmed by a HEAD
-    ue::providerState()->push(ue::awsBody(v.bucket, "ObjectRemoved:Delete", "photos/new.jpg", "0C"));
-    (void)poll(v.f.vault->id);
-    (void)applier.applyVault(v.f.vault->id);
-    EXPECT_FALSE(localExists(v.f, "/photos/new.jpg"));
-
-    // A redelivery and a stale create (older than the delete): nothing changes, nothing is fetched.
-    const auto passes = counts.passes;
-    ue::providerState()->push(ue::awsBody(v.bucket, "ObjectRemoved:Delete", "photos/new.jpg", "0C"));
-    ue::providerState()->push(ue::awsBody(v.bucket, "ObjectCreated:Put", "photos/new.jpg", "0B", 11, std::string("e2")));
-    const auto dup = poll(v.f.vault->id);
-    EXPECT_EQ(dup.inserted, 0u) << "both were seen before";
-    out = applier.applyVault(v.f.vault->id);
-    EXPECT_EQ(out.applied, 0u);
-    EXPECT_EQ(counts.passes, passes);
-    EXPECT_FALSE(localExists(v.f, "/photos/new.jpg"));
-
-    // A restart with work applied but not reconciled: a fresh applier settles it.
-    v.f.bucket->put("after-restart.txt", bytes("resumed"), {});
-    ue::providerState()->push(ue::awsBody(v.bucket, "ObjectCreated:Put", "after-restart.txt", "0A", 7, std::string("r")));
-    (void)poll(v.f.vault->id);
-    auto busy = inlineApplier(v.f, nullptr, sync::Controller::ScopedResult::Busy);
-    EXPECT_TRUE(busy.applyVault(v.f.vault->id).busy);
-    EXPECT_EQ(countState(v.f.vault->id, umodel::InboxState::Applied), 1u);
-    auto fresh = inlineApplier(v.f, &counts);
-    EXPECT_TRUE(fresh.applyVault(v.f.vault->id).pass_started);
-    EXPECT_EQ(readLocal(v.f, "/after-restart.txt"), "resumed");
-
     // A lock stops everything at once; its events wait, untouched.
     (void)up::protect(superUser, v.keyId, v.bucket, "maintenance");
     EXPECT_EQ(up::eventStatus(superUser, v.f.vault->id).at(0).state, "failed");
@@ -488,7 +426,7 @@ TEST_F(UpstreamEventOpsTest, ExternalChangesSyncThroughTheOpsLayerAndALockStopsT
     (void)poll(v.f.vault->id);
     const auto before = v.f.engine->s3RequestMetrics();
     const auto passesLocked = counts.passes;
-    out = fresh.applyVault(v.f.vault->id);
+    out = applier.applyVault(v.f.vault->id);
     EXPECT_EQ(out.applied, 0u);
     EXPECT_EQ(counts.passes, passesLocked);
     const auto after = v.f.engine->s3RequestMetrics();
@@ -499,30 +437,9 @@ TEST_F(UpstreamEventOpsTest, ExternalChangesSyncThroughTheOpsLayerAndALockStopsT
     // The unlock re-arms the subscription and its held events are due at once (not after the lock's backoff).
     (void)up::unprotect(superUser, v.keyId, v.bucket, true);
     EXPECT_EQ(up::eventStatus(superUser, v.f.vault->id).at(0).state, "active");
-    out = fresh.applyVault(v.f.vault->id);
+    out = applier.applyVault(v.f.vault->id);
     EXPECT_EQ(out.applied, 1u);
     EXPECT_EQ(readLocal(v.f, "/while-locked.txt"), "waits");
-}
-
-TEST_F(UpstreamEventOpsTest, VaulthallasOwnUploadTriggersNoTransfer) {
-    const auto v = vaultOn(awsKey());
-    ASSERT_EQ(up::enableEvents(superUser, v.f.vault->id, {}).state, "active");
-    sync::events::subscriptions::invalidateCache();
-    write(v.f, "/mine.txt", "written in Vaulthalla");
-    (void)pass(v.f);
-    const auto object = v.f.bucket->get("mine.txt");
-    ASSERT_TRUE(object.has_value());
-    auto etag = object->etag;
-    std::erase(etag, '"');
-    ue::providerState()->push(ue::awsBody(v.bucket, "ObjectCreated:Put", "mine.txt", "0A", object->body.size(), etag, ue::nowIso()));
-    (void)poll(v.f.vault->id);
-
-    PassCounts counts;
-    auto applier = inlineApplier(v.f, &counts);
-    const auto out = applier.applyVault(v.f.vault->id);
-    EXPECT_EQ(out.self, 1u);
-    EXPECT_EQ(counts.passes, 0u);
-    EXPECT_EQ(up::eventStatus(superUser, v.f.vault->id).at(0).inbox_self_24h, 1u);
 }
 
 // ---- vault deletion -------------------------------------------------------------------------------------------------

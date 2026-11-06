@@ -1,5 +1,7 @@
 // vh-test-tier: db-only
 // Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
+#include "../helpers/db_suite.hpp"
+#include "../helpers/s3_gateway.hpp"
 #include "../helpers/temp_dir.hpp"
 #include "db/Transactions.hpp"
 #include "config/Registry.hpp"
@@ -13,9 +15,7 @@
 #include "fs/model/File.hpp"
 #include "fs/model/Path.hpp"
 #include "protocols/s3/ObjectStore.hpp"
-#include "rbac/role/Admin.hpp"
 #include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
 #include "storage/Engine.hpp"
 #include "vault/model/Vault.hpp"
 #include "identities/Manager.hpp"
@@ -24,7 +24,6 @@
 #include <paths.h>
 
 #include <algorithm>
-#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -45,55 +44,6 @@ std::string aliasFor(const char c) {
     return std::string(33, c);
 }
 
-uint32_t ensureFsCacheUnprivilegedAdminRole(pqxx::work& txn) {
-    const auto role = vh::rbac::role::Admin::None();
-    return txn.exec(
-        R"SQL(
-            INSERT INTO admin_role (
-                name,
-                description,
-                identity_permissions,
-                audit_permissions,
-                settings_permissions,
-                roles_permissions,
-                vaults_permissions,
-                keys_permissions
-            )
-            VALUES ($1, $2, $3::bit(32), $4::bit(8), $5::bit(64), $6::bit(16), $7::bit(32), $8::bit(32))
-            ON CONFLICT (name) DO UPDATE SET
-                description = EXCLUDED.description,
-                identity_permissions = EXCLUDED.identity_permissions,
-                audit_permissions = EXCLUDED.audit_permissions,
-                settings_permissions = EXCLUDED.settings_permissions,
-                roles_permissions = EXCLUDED.roles_permissions,
-                vaults_permissions = EXCLUDED.vaults_permissions,
-                keys_permissions = EXCLUDED.keys_permissions
-            RETURNING id
-        )SQL",
-        pqxx::params{
-            role.name,
-            role.description,
-            role.identities.toBitString(),
-            role.audits.toBitString(),
-            role.settings.toBitString(),
-            role.roles.toBitString(),
-            role.vaults.toBitString(),
-            role.keys.toBitString()
-        }).one_field_ref().as<uint32_t>();
-}
-
-uint32_t insertFsCacheHydratableTestUser(pqxx::work& txn, const std::string& name, const std::string& email) {
-    const auto userId = txn.exec(
-        "INSERT INTO users (name, email, password_hash) VALUES ($1, $2, $3) RETURNING id",
-        pqxx::params{name, email, "hash"}
-    ).one_field_ref().as<uint32_t>();
-    const auto roleId = ensureFsCacheUnprivilegedAdminRole(txn);
-    txn.exec(
-        "INSERT INTO admin_role_assignments (user_id, role_id) VALUES ($1, $2)",
-        pqxx::params{userId, roleId});
-    return userId;
-}
-
 class FsCacheDeleteTest : public ::testing::Test {
 protected:
     inline static bool skipTests = false;
@@ -105,29 +55,19 @@ protected:
     std::filesystem::path testRoot;
     bool installedCache{false};
 
-    static bool hasDbEnv() {
-        return std::getenv("VH_TEST_DB_USER") &&
-               std::getenv("VH_TEST_DB_PASS") &&
-               std::getenv("VH_TEST_DB_HOST") &&
-               std::getenv("VH_TEST_DB_PORT") &&
-               std::getenv("VH_TEST_DB_NAME");
-    }
-
     static void SetUpTestSuite() {
-        if (!hasDbEnv()) {
+        if (!vh::test::db::available()) {
             skipTests = true;
             std::cout << "[test_fs_cache_delete] Skipping db tests due to missing environment variables." << std::endl;
             return;
         }
 
         vh::paths::enableTestMode();
-        vh::db::Transactions::init();
-        vh::db::seed::nuke_and_recreate_schema_public();
-        vh::db::Transactions::dbPool_->initPreparedStatements();
+        vh::test::db::freshSchema(false);
 
         ids = vh::db::Transactions::exec("FsCacheDeleteTest::seed", [](pqxx::work& txn) {
             SeedIds seeded;
-            seeded.userId = insertFsCacheHydratableTestUser(
+            seeded.userId = vh::test::s3gw::insertUser(
                 txn,
                 "fs_cache_delete_user",
                 "fs-cache-delete@vaulthalla.test");

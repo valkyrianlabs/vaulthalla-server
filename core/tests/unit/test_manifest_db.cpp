@@ -9,21 +9,11 @@
 //   ManifestUids     directories and symlinks get their uid once, from the collector, and keep it; a trashed file
 //                    keeps its object uid.
 
+#include "../helpers/db_suite.hpp"
 #include "crypto/id/ObjectUid.hpp"
-#include "db/Transactions.hpp"
 #include "db/query/sync/Manifest.hpp"
-#include "fs/Filesystem.hpp"
-#include "fs/cache/Registry.hpp"
-#include "identities/Manager.hpp"
-#include "identities/User.hpp"
 #include "notifications/OperatorNotificationBus.hpp"
-#include "ops/Vaults.hpp"
-#include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
-#include "storage/CloudEngine.hpp"
 #include "storage/Engine.hpp"
-#include "storage/Manager.hpp"
 #include "sync/Controller.hpp"
 #include "sync/manifest/Objects.hpp"
 #include "sync/manifest/Publisher.hpp"
@@ -31,29 +21,12 @@
 #include "sync/manifest/Service.hpp"
 #include "sync/manifest/Store.hpp"
 #include "db/query/vault/Vault.hpp"
-#include "sync/model/Event.hpp"
-#include "sync/model/RemotePolicy.hpp"
-#include "vault/APIKeyManager.hpp"
 #include "vault/EncryptionManager.hpp"
-#include "vault/model/APIKey.hpp"
-#include "vault/model/S3Vault.hpp"
 #include "vault/model/Vault.hpp"
 #include "../helpers/versioned_bucket.hpp"
 
-#include <gtest/gtest.h>
-#include <paths.h>
-
-#include <atomic>
-#include <chrono>
-#include <cstdlib>
-#include <filesystem>
-#include <iostream>
-#include <map>
-#include <memory>
 #include <set>
-#include <string>
 #include <tuple>
-#include <vector>
 
 namespace vh::test_manifest_db {
 
@@ -63,11 +36,7 @@ using test_support::versioned::VersionedBucket;
 
 namespace {
 
-std::string tag() {
-    static std::atomic<unsigned> n{0};
-    static const auto run = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count() % 100000);
-    return run + "m" + std::to_string(n.fetch_add(1));
-}
+std::string tag() { return test::uniqueTag('m'); }
 
 // A recovery_blob storage name: 32 lower-case hex digits, unique.
 std::string storageName() {
@@ -224,40 +193,16 @@ void projectLive(pqxx::work& txn, const std::string& s, const uint32_t vaultId) 
 
 }
 
-class ManifestDbTest : public ::testing::Test {
+class ManifestDbTest : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
-    inline static std::shared_ptr<identities::User> superUser;
     inline static std::shared_ptr<sync::Controller> previousController;
-    inline static std::filesystem::path root;
 
     std::shared_ptr<storage::Engine> engine;
     uint32_t vaultId{};
     mf::Uid vaultUid{};
 
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            std::cout << "[test_manifest_db] Skipping db tests due to missing environment variables." << std::endl;
-            return;
-        }
-        paths::enableTestMode();
-        root = std::filesystem::temp_directory_path() / ("vh_manifest_" + tag());
-        paths::backingPath = root / "backing";
-        paths::mountPath = root / "mount";
-        std::filesystem::create_directories(paths::backingPath);
-        std::filesystem::create_directories(paths::mountPath);
-
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        runtime::Deps::init();
-        fs::Filesystem::init(runtime::Deps::get().storageManager);
-        runtime::Deps::get().fsCache = std::make_shared<fs::cache::Registry>();
-        runtime::Deps::get().storageManager->initStorageEngines();
-        superUser = identities::manager().userByName("admin");
+        if (!setUpDbSuite("test_manifest_db")) return;
         previousController = runtime::Deps::get().syncController;
         runtime::Deps::setSyncController(std::make_shared<sync::Controller>());
     }
@@ -265,12 +210,12 @@ protected:
     static void TearDownTestSuite() {
         if (skipTests) return;
         runtime::Deps::setSyncController(previousController);
-        std::error_code ec;
-        std::filesystem::remove_all(root, ec);
+        tearDownDbSuite();
     }
 
     void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
+        Suite::SetUp();
+        if (IsSkipped()) return;
         const auto vault = ops::vaults::create(superUser, {.name = "manifest_" + tag(), .type = vault::model::VaultType::Local});
         vaultId = vault->id;
         ASSERT_TRUE(vault->uid);

@@ -3,7 +3,6 @@
 // DB-backed HTTP lane tests over real vaults, users, RBAC and encrypted files: the human preview authorization
 // matrix (audit D1), original-bytes vs preview semantics (D9), Range/HEAD/conditional serving, large files,
 // text editing with optimistic concurrency, PDF paging, hostile parameters and plaintext temp-file hygiene.
-#include "db/Transactions.hpp"
 #include "db/query/identities/User.hpp"
 #include "fs/Filesystem.hpp"
 #include "fs/cache/Registry.hpp"
@@ -23,18 +22,16 @@
 #include "protocols/ws/Router.hpp"
 #include "protocols/ws/Session.hpp"
 #include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
 #include "storage/Engine.hpp"
 #include "storage/Manager.hpp"
 #include "storage/PlaintextReader.hpp"
 #include "vault/model/Vault.hpp"
 
+#include "../helpers/db_suite.hpp"
 #include "../helpers/zip_check.hpp"
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
-#include <paths.h>
 #include <turbojpeg.h>
 
 #include <atomic>
@@ -151,15 +148,12 @@ std::size_t plaintextTempFiles() {
 
 }
 
-class HttpAccessDbTest : public ::testing::Test {
+class HttpAccessDbTest : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
-    inline static std::filesystem::path root;
     inline static std::optional<vh::preview::render::PdfiumLibrary> pdfium;
 
     static void TearDownTestSuite() {
-        std::error_code ec;
-        if (!root.empty()) std::filesystem::remove_all(root, ec);  // test vault backing (encrypted files up to 300 MiB)
+        tearDownDbSuite();  // test vault backing (encrypted files up to 300 MiB)
         pdfium.reset();
     }
     inline static UserPtr admin, reader, plain;
@@ -168,26 +162,9 @@ protected:
     inline static uint32_t noteId = 0, otherId = 0;
 
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            return;
-        }
-        paths::enableTestMode();
-        root = std::filesystem::temp_directory_path() / ("vh_http_access_" + tag());
-        paths::backingPath = root / "backing";
-        paths::mountPath = root / "mount";
-        std::filesystem::create_directories(paths::backingPath);
-        std::filesystem::create_directories(paths::mountPath);
+        if (!setUpDbSuite("test_http_access", {.freshEngines = false})) return;
         pdfium.emplace();
-
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        runtime::Deps::init();
-        fs::Filesystem::init(runtime::Deps::get().storageManager);
-        admin = vh::identities::manager().userByName("admin");
+        admin = superUser;
 
         const auto a = ops::vaults::create(admin, {.name = "ha_" + tag(), .type = vault::model::VaultType::Local});
         const auto b = ops::vaults::create(admin, {.name = "hb_" + tag(), .type = vault::model::VaultType::Local});
@@ -226,7 +203,8 @@ protected:
     }
 
     void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
+        Suite::SetUp();
+        if (IsSkipped()) return;
         access::clearCachesForTesting();
     }
 

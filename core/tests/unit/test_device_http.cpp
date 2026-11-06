@@ -6,9 +6,9 @@
 // MCP-Protocol-Version checks, the exclusions (D4: key export unreachable), the destructive gate and the per-call
 // deadline.
 
+#include "../helpers/db_suite.hpp"
 #include "../helpers/device_client.hpp"
 #include "../helpers/identities.hpp"
-#include "db/Transactions.hpp"
 #include "db/query/device/Device.hpp"
 #include "db/query/rbac/role/Admin.hpp"
 #include "device/Pairing.hpp"
@@ -35,8 +35,6 @@
 #include "protocols/ws/Session.hpp"
 #include "protocols/ws/handler/vault/Keys.hpp"
 #include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
 #include "storage/Engine.hpp"
 #include "storage/Manager.hpp"
 #include "vault/EncryptionManager.hpp"
@@ -45,14 +43,12 @@
 
 #include <boost/asio/io_context.hpp>
 #include <gtest/gtest.h>
-#include <paths.h>
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
-#include <iostream>
 #include <random>
 #include <thread>
 
@@ -72,9 +68,8 @@ std::string tag() {
     return run + "x" + std::to_string(n.fetch_add(1));
 }
 
-class DeviceHttpTest : public ::testing::Test {
+class DeviceHttpTest : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
     inline static std::shared_ptr<boost::asio::io_context> ioc;
     inline static std::vector<std::thread> threads;
     inline static std::shared_ptr<protocols::device::Listener> listener;
@@ -84,26 +79,8 @@ protected:
     inline static std::vector<uint8_t> blob;
 
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            std::cout << "[test_device_http] Skipping db tests due to missing environment variables." << std::endl;
-            return;
-        }
-        paths::enableTestMode();
-        const auto root = std::filesystem::temp_directory_path() / ("vh_device_http_" + tag());
-        paths::backingPath = root / "backing";
-        paths::mountPath = root / "mount";
-        std::filesystem::create_directories(paths::backingPath);
-        std::filesystem::create_directories(paths::mountPath);
-
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        runtime::Deps::init();
-        fs::Filesystem::init(runtime::Deps::get().storageManager);
-        admin = identities::manager().userByName("admin");
+        if (!setUpDbSuite("test_device_http", {.freshEngines = false})) return;
+        admin = superUser;
 
         owner = seedUser("dh_owner");
         stranger = seedUser("dh_stranger");
@@ -149,10 +126,12 @@ protected:
         listener.reset();
         (void)runtime::Deps::releaseSessions();  // their sockets close while the io_context still exists
         if (drained) ioc.reset();                 // its queued handlers (and the sessions they hold) go now
+        tearDownDbSuite();
     }
 
     void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
+        Suite::SetUp();
+        if (IsSkipped()) return;
         protocols::http::access::clearCachesForTesting();
         protocols::device::mcp::setCallDeadlineForTesting(protocols::device::mcp::kCallDeadline);
     }

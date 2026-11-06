@@ -5,43 +5,17 @@
 // target; recovery codes, a reconnect with the cookie and a paired device never satisfying it; five failures revoking
 // the session; logout and invalidation dropping grants; and the regression list (privilege elevation, a stolen browser
 // session approving a device or making a grant). DB-free half: test_mfa_stepup.cpp.
-#include "../helpers/identities.hpp"
+#include "../helpers/db_suite.hpp"
+#include "../helpers/web_session.hpp"
 #include "Contract.hpp"
-#include "auth/Manager.hpp"
-#include "auth/mfa/Factors.hpp"
-#include "auth/mfa/Policy.hpp"
-#include "auth/mfa/SignIn.hpp"
-#include "auth/model/RefreshToken.hpp"
-#include "auth/model/TokenPair.hpp"
-#include "auth/session/Assurance.hpp"
-#include "auth/session/Issuer.hpp"
-#include "auth/session/Manager.hpp"
-#include "auth/stepup/StepUp.hpp"
-#include "auth/webauthn/Base64Url.hpp"
-#include "config/Registry.hpp"
-#include "crypto/util/hash.hpp"
-#include "db/Transactions.hpp"
-#include "db/query/auth/RefreshToken.hpp"
-#include "db/query/device/Device.hpp"
-#include "db/query/rbac/role/Admin.hpp"
 #include "db/query/rbac/role/Vault.hpp"
 #include "db/query/vault/Vault.hpp"
-#include "device/Crypto.hpp"
 #include "device/Pairing.hpp"
-#include "device/Peer.hpp"
-#include "fs/Filesystem.hpp"
 #include "identities/Group.hpp"
-#include "identities/Manager.hpp"
-#include "identities/User.hpp"
 #include "ops/BackupGrants.hpp"
 #include "ops/Error.hpp"
-#include "protocols/ws/Router.hpp"
-#include "protocols/ws/Session.hpp"
-#include "protocols/ws/core/Refusal.hpp"
-#include "protocols/ws/handler/Auth.hpp"
 #include "protocols/ws/handler/Devices.hpp"
 #include "protocols/ws/handler/Groups.hpp"
-#include "protocols/ws/handler/Mfa.hpp"
 #include "protocols/ws/handler/Settings.hpp"
 #include "protocols/ws/handler/StepUp.hpp"
 #include "protocols/ws/handler/rbac/roles/Admin.hpp"
@@ -49,192 +23,35 @@
 #include "protocols/ws/handler/vault/Vaults.hpp"
 #include "rbac/role/Admin.hpp"
 #include "rbac/role/Vault.hpp"
-#include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
-#include "storage/Manager.hpp"
-#include "webauthn/Fixtures.hpp"
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
-#include <paths.h>
 #include <chrono>
-#include <cstdlib>
 #include <functional>
-#include <iostream>
 #include <map>
 #include <memory>
 #include <set>
 #include <string>
-#include <unistd.h>
 
 namespace vh::auth::stepup::test_stepup_db {
 
-using json = nlohmann::json;
-using SessionPtr = std::shared_ptr<protocols::ws::Session>;
+using namespace vh::test::web;
 using SysClock = std::chrono::system_clock;
-namespace wa = vh::auth::webauthn;
 namespace tw = vh::test_webauthn;
 
-struct Answer {
-    bool ok{false};
-    json data{};
-    std::string code{};
-    std::string message{};
-};
-
-Answer call(const std::function<json()>& fn) {
-    try {
-        return {.ok = true, .data = fn()};
-    } catch (...) {
-        auto reply = protocols::ws::core::describeCurrentError();
-        const auto code = reply.data.is_object() ? reply.data.value("code", std::string{}) : std::string{};
-        return {.ok = false, .data = reply.data, .code = code, .message = reply.message};
-    }
-}
-
-// A signed-in web socket without a database: a detached user and a refresh row in memory.
-SessionPtr detachedWebSession(const uint32_t userId, const uint8_t aal = 1,
-                              std::vector<std::string> amr = {"pwd"},
-                              const SysClock::time_point authTime = SysClock::now() - std::chrono::hours(1)) {
-    auto s = std::make_shared<protocols::ws::Session>(std::make_shared<protocols::ws::Router>());
-    identities::UserState state;
-    state.name = "stepup-" + std::to_string(userId);
-    s->user = identities::User::detached(userId, std::move(state));
-    s->tokens->refreshToken = std::make_shared<model::RefreshToken>();
-    s->tokens->refreshToken->jti = "jti-" + std::to_string(userId);
-    s->tokens->refreshToken->aal = aal;
-    s->tokens->refreshToken->amr = std::move(amr);
-    s->tokens->refreshToken->authTime = authTime;
-    return s;
-}
-
-Grant grantFor(const SessionPtr& s, const Family family, std::optional<std::string> target = std::nullopt,
-               const std::chrono::seconds ttl = std::chrono::seconds(300)) {
-    return {.user_id = s->user->id, .refresh_jti = s->tokens->refreshToken->jti, .family = family,
-            .target = targetBound(family) ? std::move(target) : std::nullopt, .method = "test",
-            .expires_at = SysClock::now() + ttl};
-}
-
-// ── DB-backed ─────────────────────────────────────────────────────────────────────────────────────────────────────────
-
-constexpr auto kPassword = "StepUp-Pass-1-xyz";
-
-class StepUpDb : public ::testing::Test {
+class StepUpDb : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
-    inline static int counter = 0;
-    std::shared_ptr<session::Manager> previousSessions;
-    std::shared_ptr<auth::Manager> previousAuth;
-    std::optional<config::Config> previousConfig;
+    // An account that need not have MFA signs in with its password (aal 1): the table runs as a super admin.
+    AuthRuntime auth_{{.level = mfa::policy::Level::Optional}};
 
-    static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            std::cout << "[test_mfa_stepup] Skipping db tests due to missing environment variables." << std::endl;
-            return;
-        }
-        paths::enableTestMode();
-        const auto root = std::filesystem::temp_directory_path() / ("vh_mfa_stepup_" + std::to_string(::getpid()));
-        paths::backingPath = root / "backing";
-        std::filesystem::create_directories(paths::backingPath);
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        runtime::Deps::init();
-        fs::Filesystem::init(runtime::Deps::get().storageManager);
-    }
+    static void SetUpTestSuite() { (void)setUpDbSuite("mfa_stepup", {.freshEngines = false}); }
+    static void TearDownTestSuite() { tearDownDbSuite(); }
 
-    void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
-        session::Issuer::setJwtSecretForTesting("mfa-stepup-test-secret");
-        previousSessions = runtime::Deps::get().sessionManager;
-        previousAuth = runtime::Deps::get().authManager;
-        runtime::Deps::get().sessionManager = std::make_shared<session::Manager>();
-        runtime::Deps::get().authManager = std::make_shared<auth::Manager>();
-        previousConfig = config::Registry::get();
-        auto cfg = *previousConfig;
-        cfg.auth.webauthn.rp_id = std::string(tw::kRpId);
-        cfg.auth.webauthn.origins = {std::string(tw::kOrigin)};
-        config::Registry::set(cfg);
-        // An account that need not have MFA signs in with its password (aal 1): the table runs as a super admin.
-        mfa::policy::setLevel(mfa::policy::Level::Optional);
-        session::assurance::setPolicy(nullptr);
-        mfa::signin::resetAccountFailuresForTesting();
-    }
-
-    void TearDown() override {
-        if (skipTests) return;
-        mfa::policy::setLevel(mfa::policy::Level::Admins);
-        if (previousConfig) config::Registry::set(*previousConfig);
-        runtime::Deps::get().sessionManager = previousSessions;
-        runtime::Deps::get().authManager = previousAuth;
-        session::Issuer::clearJwtSecretForTesting();
-    }
-
-    static std::string tag() { return std::to_string(::getpid()) + "_" + std::to_string(++counter); }
-
-    static std::shared_ptr<identities::User> newUser(const std::string& role) {
-        const auto r = db::query::rbac::role::Admin::get(role);
-        if (!r) throw std::runtime_error("Missing role " + role);
-        return vh::identities::manager().user(
-            test::identities::createUser("su_" + role + "_" + tag(), r, std::nullopt,
-                                         crypto::hash::password(kPassword))->id);
-    }
-
-    static session::Manager& sessions() { return *runtime::Deps::get().sessionManager; }
-
-    static SessionPtr connect(const std::string& cookie = {}) {
-        auto session = std::make_shared<protocols::ws::Session>(std::make_shared<protocols::ws::Router>());
-        session->ipAddress = "127.0.0.1";
-        session->userAgent = "stepup-browser";
-        model::RefreshToken::addToSession(session, cookie);
-        sessions().tryRehydrate(session);
-        return session;
-    }
-
-    static SessionPtr signedIn(const std::shared_ptr<identities::User>& user) {
+    static SessionPtr signedIn(const UserPtr& user) {
         const auto s = connect();
-        const auto answer = call([&] {
-            return protocols::ws::handler::Auth::login(json{{"name", user->name()}, {"password", kPassword}}, s);
-        });
+        const auto answer = login(user, s);
         EXPECT_TRUE(answer.ok) << answer.code << " " << answer.message;
         EXPECT_TRUE(s->user);
         return s;
-    }
-
-    // A command as the router runs it: under the request's step-up scope.
-    static Answer run(const SessionPtr& s, const std::function<json()>& fn) {
-        const Scope scope(s);
-        return call(fn);
-    }
-
-    // ---- a software authenticator (real WebAuthn: ES256)
-
-    struct Authenticator {
-        tw::TestKey key{wa::Algorithm::ES256};
-        wa::Bytes credentialId = tw::randomBytes(32);
-        uint32_t signCount = 0;
-    };
-
-    static void enrollPasskey(const std::shared_ptr<identities::User>& user, Authenticator& a) {
-        (void)mfa::ensureUser(user->id);
-        (void)mfa::addWebAuthnCredential(user->id, {.credential_id = a.credentialId, .public_key_cose = a.key.cose(),
-                                                    .cose_alg = -7, .rp_id = std::string(tw::kRpId),
-                                                    .attestation_fmt = "none", .label = "Laptop"});
-    }
-
-    static json assertion(Authenticator& a, const json& publicKey, const uint8_t flags = tw::flags::UP | tw::flags::UV) {
-        const auto challenge = *wa::base64urlDecode(publicKey.at("challenge").get<std::string>());
-        const auto cd = tw::bytesOf(tw::clientDataJSON("webauthn.get", challenge));
-        const auto ad = tw::authenticatorData(flags, ++a.signCount);
-        const auto sig = a.key.sign(tw::concat({ad, tw::sha256(cd)}));
-        const auto id = wa::base64urlEncode(a.credentialId);
-        return {{"id", id}, {"rawId", id}, {"type", "public-key"},
-                {"response", {{"clientDataJSON", wa::base64urlEncode(cd)},
-                              {"authenticatorData", wa::base64urlEncode(ad)},
-                              {"signature", wa::base64urlEncode(sig)}}}};
     }
 
     // A confirmed pairing request owned by `owner`: the code the person would choose.
@@ -505,7 +322,7 @@ TEST_F(StepUpDb, PasswordAloneOnlyForLowerRiskFamiliesOfAnAccountWithoutMfa) {
 TEST_F(StepUpDb, APasskeyStepUpIsBoundToItsSessionFamilyAndTarget) {
     namespace h = protocols::ws::handler;
     const auto user = newUser("unprivileged");
-    Authenticator key;
+    tw::Authenticator key;
     enrollPasskey(user, key);
     // An account with a factor signs in with it; here the sessions are made at aal 1 with an old auth_time, so the
     // sign-in never stands in for a step-up.
@@ -528,14 +345,14 @@ TEST_F(StepUpDb, APasskeyStepUpIsBoundToItsSessionFamilyAndTarget) {
     // Without UV: refused (and the challenge burned).
     const auto noUv = run(a, [&] {
         return h::StepUp::finish(json{{"stepup_id", begun.data.at("stepup_id")}, {"method", "webauthn"},
-                                      {"credential", assertion(key, pk, tw::flags::UP)}}, a);
+                                      {"credential", tw::assertionJson(key, pk, tw::flags::UP)}}, a);
     });
     EXPECT_EQ(noUv.code, "step_up_failed");
 
     const auto second = run(a, [&] {
         return h::StepUp::begin(json{{"family", "data.destroy"}, {"target", "storage.vault.remove:999"}}, a);
     });
-    const auto signedAssertion = assertion(key, second.data.at("webauthn").at("publicKey"));
+    const auto signedAssertion = tw::assertionJson(key, second.data.at("webauthn").at("publicKey"));
     // The assertion answers its own ceremony only: presented on another session's, it fails, and the attempt burns
     // its challenge, so it can't be used afterwards either.
     const auto onB = run(b, [&] {
@@ -556,7 +373,7 @@ TEST_F(StepUpDb, APasskeyStepUpIsBoundToItsSessionFamilyAndTarget) {
     });
     const auto granted = run(a, [&] {
         return h::StepUp::finish(json{{"stepup_id", third.data.at("stepup_id")}, {"method", "webauthn"},
-                                      {"credential", assertion(key, third.data.at("webauthn").at("publicKey"))}}, a);
+                                      {"credential", tw::assertionJson(key, third.data.at("webauthn").at("publicKey"))}}, a);
     });
     ASSERT_TRUE(granted.ok) << granted.code << " " << granted.message;
     EXPECT_EQ(granted.data.at("uses"), 1);
@@ -649,12 +466,7 @@ TEST_F(StepUpDb, RecoveryCodesRefreshTokensAndDevicesNeverSatisfyIt) {
     {
         const Scope scope(device);
         EXPECT_EQ(scope.channel(), Channel::Device);
-        try {
-            require(Family::IdentityAdmin);
-            ADD_FAILURE() << "a device stepped up";
-        } catch (const ops::StepUpRequired& e) {
-            EXPECT_EQ(e.methods, std::vector<std::string>{"console_approval"});
-        }
+        EXPECT_THROW(require(Family::IdentityAdmin), ops::StepUpRequired) << "a device stepped up";
         EXPECT_FALSE(ops::backup_grants::covering({7}))
             << "a device without a key-backup grant (#362): its key export needs the keys step-up";
     }

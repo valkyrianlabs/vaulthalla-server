@@ -1,8 +1,7 @@
 // Web-console wire contract pieces that live in core: typed refusal codes on ws ERROR responses, the admin gates
 // that produce them, and the cheap dashboard severity read.
 
-#include "../helpers/temp_dir.hpp"
-#include "db/Transactions.hpp"
+#include "../helpers/db_suite.hpp"
 #include "identities/User.hpp"
 #include "ops/Error.hpp"
 #include "protocols/ws/Router.hpp"
@@ -14,15 +13,11 @@
 #include "protocols/ws/handler/Stats.hpp"
 #include "rbac/role/Admin.hpp"
 #include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
 #include "stats/model/DashboardOverview.hpp"
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
-#include <paths.h>
 
-#include <cstdlib>
 #include <filesystem>
 #include <memory>
 #include <stdexcept>
@@ -190,40 +185,13 @@ TEST(WsS3GatewayPayloads, BareIdIsRefusedAsInvalidNamingTheExplicitField) {
     EXPECT_TRUE(names(messageFor([&] { return S3Gateway::credentialsRevoke(json{{"id", 7}}, s); }), "access_key"));
 }
 
-class DashboardSeverityTest : public ::testing::Test {
+class DashboardSeverityTest : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
-    inline static std::filesystem::path root;
-
-    static void TearDownTestSuite() {
-        if (root.empty()) return;
-        std::error_code ec;
-        std::filesystem::remove_all(root, ec);
-    }
-
+    // runtime::Deps only: no fs::Filesystem.
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            return;
-        }
-        paths::enableTestMode();
-        root = vh::test::uniqueTempRoot("vh_console_contract_severity");
-        paths::backingPath = root / "backing";
-        paths::mountPath = root / "mount";
-        std::filesystem::create_directories(paths::backingPath);
-        std::filesystem::create_directories(paths::mountPath);
-
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        runtime::Deps::init();
+        if (setUpDbSuite("test_ws_console_contract", {.runtime = false})) vh::runtime::Deps::init();
     }
-
-    void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
-    }
+    static void TearDownTestSuite() { tearDownDbSuite(); }
 };
 
 // #146: the nav badge needs the overview's severity, not its 85 KB of cards.

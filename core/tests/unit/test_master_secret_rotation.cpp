@@ -13,58 +13,31 @@
 // (never silently trusting the new identity). Both are tested through the CLI, the device identity also at its two
 // crash points.
 
-#include "audit/Trail.hpp"
+#include "../helpers/rewrap_fixture.hpp"
+
 #include "auth/session/Issuer.hpp"
 #include "auth/session/Manager.hpp"
 #include "crypto/SecretBytes.hpp"
-#include "crypto/secrets/KeyProvider.hpp"
 #include "crypto/secrets/Manager.hpp"
-#include "crypto/secrets/Rewrap.hpp"
-#include "crypto/secrets/Versioned.hpp"
 #include "crypto/util/encrypt.hpp"
-#include "db/Transactions.hpp"
 #include "db/encoding/bytea.hpp"
 #include "db/query/device/Device.hpp"
 #include "device/Pairing.hpp"
 #include "device/Peer.hpp"
 #include "device/ServerIdentity.hpp"
-#include "fs/Filesystem.hpp"
-#include "fs/cache/Registry.hpp"
-#include "identities/Manager.hpp"
-#include "identities/User.hpp"
 #include "ops/Error.hpp"
 #include "ops/MasterSecrets.hpp"
-#include "ops/Users.hpp"
 #include "protocols/s3/CredentialManager.hpp"
-#include "protocols/shell/Router.hpp"
-#include "protocols/shell/commands/all.hpp"
-#include "protocols/shell/types.hpp"
 #include "protocols/ws/Session.hpp"
-#include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
-#include "storage/Manager.hpp"
-#include "UsageManager.hpp"
 #include "vault/APIKeyManager.hpp"
 #include "vault/model/APIKey.hpp"
 
-#include <gtest/gtest.h>
 #include <jwt-cpp/jwt.h>
 #include <jwt-cpp/traits/nlohmann-json/traits.h>
 #include <nlohmann/json.hpp>
-#include <paths.h>
 #include <sodium.h>
 
-#include <algorithm>
-#include <atomic>
-#include <chrono>
-#include <cstdlib>
-#include <filesystem>
-#include <iostream>
 #include <map>
-#include <optional>
-#include <string>
-#include <vector>
 
 namespace vh::test_master_secret_rotation {
 
@@ -74,15 +47,11 @@ namespace rw = crypto::secrets::rewrap;
 namespace vs = crypto::secrets::versioned;
 using Slot = vs::Slot;
 
-struct SimulatedCrash : std::runtime_error {
-    SimulatedCrash() : std::runtime_error("simulated crash") {}
-};
+using test::rewrap::crashAt;
+using test::rewrap::SimulatedCrash;
+using test::rewrap::slotOnHost;
 
-std::string tag() {
-    static std::atomic<unsigned> n{0};
-    static const auto run = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count() % 100000);
-    return run + "r" + std::to_string(n.fetch_add(1));
-}
+std::string tag() { return test::uniqueTag('r'); }
 
 std::string randomHex(const std::size_t bytes) {
     std::vector<uint8_t> raw(bytes);
@@ -107,122 +76,13 @@ struct StoredRow {
 
 const char* tableOf(const Slot slot) { return slot == Slot::ApiKeyMaster ? "api_keys" : "s3_gateway_credentials"; }
 
-class MasterSecretRotationBase : public ::testing::Test {
+class MasterSecretRotationBase : public test::rewrap::Fixture {
 protected:
-    inline static bool skipTests = false;
-    inline static std::string skipWhy;
-    inline static UserPtr superUser;
-    inline static std::shared_ptr<protocols::shell::Router> router;
-    inline static std::filesystem::path root;
-
-    static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            skipWhy = "Skipping db tests due to missing environment variables.";
-            std::cout << "[test_master_secret_rotation] " << skipWhy << std::endl;
-            return;
-        }
-        paths::enableTestMode();
-        root = std::filesystem::temp_directory_path() / ("vh_secret_rotation_" + tag());
-        paths::backingPath = root / "backing";
-        paths::mountPath = root / "mount";
-        std::filesystem::create_directories(paths::backingPath);
-        std::filesystem::create_directories(paths::mountPath);
-
-        // Real sealing is the point of these tests; a backend that can't unseal what it seals (CI's container TPM)
-        // skips them.
-        try {
-            std::vector<uint8_t> first;
-            {
-                crypto::secrets::KeyProvider probe("test_rotation_probe");
-                probe.init();
-                first.assign(probe.getMasterKey().begin(), probe.getMasterKey().end());
-            }
-            crypto::secrets::KeyProvider again("test_rotation_probe");
-            again.init();
-            if (!std::ranges::equal(again.getMasterKey(), first)) throw std::runtime_error("a different secret");
-        } catch (const std::exception& e) {
-            skipTests = true;
-            skipWhy = std::string("sealing doesn't round-trip on this host: ") + e.what();
-            return;
-        }
-
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        vs::resetForTesting();
-        runtime::Deps::init();
-        fs::Filesystem::init(runtime::Deps::get().storageManager);
-        runtime::Deps::get().fsCache = std::make_shared<fs::cache::Registry>();
-        superUser = identities::manager().userByName("admin");
-
-        if (!runtime::Deps::get().shellUsageManager)
-            runtime::Deps::get().shellUsageManager = std::make_shared<protocols::shell::UsageManager>();
-        router = std::make_shared<protocols::shell::Router>();
-        protocols::shell::commands::registerSecretsCommands(router);
-    }
+    static void SetUpTestSuite() { (void)setUpRewrapSuite("secret_rotation", false, true); }
 
     static void TearDownTestSuite() {
-        if (skipTests) return;
-        rw::setCrashHookForTesting(nullptr);
-        vh::device::setIdentityRotationHookForTesting(nullptr);
-        vs::resetForTesting();
-        std::error_code ec;
-        std::filesystem::remove_all(root, ec);
-    }
-
-    void SetUp() override {
-        if (skipTests) GTEST_SKIP() << skipWhy;
-        rw::setCrashHookForTesting(nullptr);
-        // Every test starts with no rotation in progress on any slot.
-        for (const auto slot : vs::kSlots) {
-            const auto st = rw::state(slot);
-            if (st.previous_version) (void)rw::finalize(slot);
-            else if (st.staging_version) (void)rw::rollback(slot);
-        }
-    }
-
-    void TearDown() override { rw::setCrashHookForTesting(nullptr); }
-
-    static UserPtr createUser(const std::string& prefix, const std::string& role) {
-        const auto created = ops::users::create(superUser, {.name = prefix + "_" + tag(), .role = role,
-                                                            .password = std::string("Secret-Rotation-Pass-123")});
-        return identities::manager().user(created.user->id);
-    }
-
-    static protocols::shell::CommandResult cli(const std::string& line, const UserPtr& user) {
-        return router->executeLine(line, user, nullptr);
-    }
-
-    static long long auditCount(const std::string& action, const std::string& outcome,
-                                const std::optional<std::string>& slot = std::nullopt) {
-        (void)audit::Trail::instance()->flushNow();
-        return db::Transactions::exec("rotationTest::audit", [&](pqxx::work& txn) {
-            if (slot)
-                return txn.exec("SELECT COUNT(*) FROM audit_event WHERE action = $1 AND outcome = $2 AND "
-                                "details::jsonb->>'slot' = $3",
-                                pqxx::params{action, outcome, *slot})
-                    .one_field_ref()
-                    .as<long long>();
-            return txn.exec("SELECT COUNT(*) FROM audit_event WHERE action = $1 AND outcome = $2",
-                            pqxx::params{action, outcome})
-                .one_field_ref()
-                .as<long long>();
-        });
-    }
-
-    // A crash hook that throws at the n-th time `point` is reached (1-based).
-    static rw::CrashHook crashAt(const std::string& point, const int n = 1) {
-        auto seen = std::make_shared<int>(0);
-        return [point, n, seen](const std::string_view p) {
-            if (p == point && ++*seen == n) throw SimulatedCrash();
-        };
-    }
-
-    static bool slotOnHost(const Slot slot, const unsigned int version) {
-        return crypto::secrets::KeyProvider(vs::slotName(slot, version)).sealedExists();
+        if (!skipTests) vh::device::setIdentityRotationHookForTesting(nullptr);
+        tearDownRewrapSuite();
     }
 };
 

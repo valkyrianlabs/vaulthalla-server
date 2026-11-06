@@ -294,18 +294,25 @@ TEST(HttpArchiveZip, Zip64CoversMembersOver4GiBLaterOffsetsAndTheirDescriptors) 
     const auto path = dir.path / "zip64.zip";
     ASSERT_EQ(drainTo(*zip, path), archive::archiveSize(members));
 
-    const auto listing = vh::test::zip::pythonCheck(path);
+    // big.bin's 4 GiB aren't read back (two independent readers took ~22 s): its recorded CRC and descriptor are
+    // checked against the CRC of its zeros, computed with crc32_combine. unzip -t covers ZIP64 in the 65535+ case.
+    const auto listing = vh::test::zip::pythonCheck(path, "big.bin");
     if (!listing) GTEST_SKIP() << "python3 unavailable";
     EXPECT_EQ(listing->badMember, "");
     const auto items = byName(*listing);
     ASSERT_EQ(items.size(), 3u);
     EXPECT_EQ(items.at("big.bin").size, big);
-    // testzip() above already proved the recorded CRC matches the 4 GiB of streamed bytes.
     EXPECT_EQ(items.at("after.txt").crc, expectedCrc(members[1]));
-    const auto unzip = vh::test::zip::unzipTest(path);
-    if (unzip >= 0) {
-        EXPECT_EQ(unzip, 0);
-    }
+    const std::vector<uint8_t> mib(1 << 20, 0);
+    const auto mibCrc = crc32_z(0L, mib.data(), mib.size());
+    uLong zerosCrc = crc32_z(0L, mib.data(), big % mib.size());
+    for (uint64_t i = 0; i < big / mib.size(); ++i) zerosCrc = crc32_combine(zerosCrc, mibCrc, 1 << 20);
+    EXPECT_EQ(items.at("big.bin").crc, static_cast<uint32_t>(zerosCrc));
+    ASSERT_TRUE(listing->unreadDescriptor);
+    EXPECT_EQ(listing->unreadDescriptor->signature, 0x08074b50u);
+    EXPECT_EQ(listing->unreadDescriptor->crc, static_cast<uint32_t>(zerosCrc));
+    EXPECT_EQ(listing->unreadDescriptor->compressedSize, big);
+    EXPECT_EQ(listing->unreadDescriptor->size, big);
 }
 
 TEST(HttpArchiveZip, Zip64EndRecordsCoverMoreThan65535Entries) {

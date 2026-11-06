@@ -6,6 +6,7 @@
 // caller sees and whether a resolution is allowed, the verdict must match the role's bits (resolve_conflicts +
 // Overwrite), and the resulting DB state must be the same.
 
+#include "../helpers/parity.hpp"
 #include "../helpers/sync_conflict_harness.hpp"
 
 #include "db/query/rbac/role/Admin.hpp"
@@ -16,7 +17,6 @@
 #include "protocols/ws/handler/SyncConflicts.hpp"
 #include "rbac/role/Admin.hpp"
 #include "rbac/role/vault/Global.hpp"
-#include "UsageManager.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -34,26 +34,15 @@ protected:
     static void SetUpTestSuite() {
         Harness::SetUpTestSuite();
         if (skipTests) return;
-        if (!runtime::Deps::get().shellUsageManager)
-            runtime::Deps::get().shellUsageManager = std::make_shared<protocols::shell::UsageManager>();
-        router = std::make_shared<protocols::shell::Router>();
+        router = vh::test::parity::shellRouter();
         protocols::shell::commands::registerSyncCommands(router);
     }
 
     static std::pair<int, std::string> cli(const std::string& line, const UserPtr& user) {
-        try {
-            const auto res = router->executeLine(line, user, nullptr);
-            return {res.exit_code, res.stdout_text + res.stderr_text};
-        } catch (const std::exception& e) {
-            return {1, e.what()};
-        }
+        return vh::test::parity::cli(*router, line, user);
     }
 
-    static std::shared_ptr<protocols::ws::Session> ws(const UserPtr& user) {
-        auto s = std::make_shared<protocols::ws::Session>(std::make_shared<protocols::ws::Router>());
-        s->user = user;
-        return s;
-    }
+    static std::shared_ptr<protocols::ws::Session> ws(const UserPtr& user) { return vh::test::parity::ws(user); }
 
     static std::set<uint32_t> ids(const json& conflicts) {
         std::set<uint32_t> out;

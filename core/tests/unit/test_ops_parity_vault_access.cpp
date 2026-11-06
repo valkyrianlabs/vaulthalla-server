@@ -7,12 +7,11 @@
 // fs.dir.list {path: "/"} allows, manage what storage.vault.get allows. Both surfaces must return the same rows for
 // every seeded admin role, and the rows must match the role's bits.
 
+#include "../helpers/db_suite.hpp"
 #include "../helpers/identities.hpp"
-#include "db/Transactions.hpp"
+#include "../helpers/parity.hpp"
 #include "db/query/rbac/role/Admin.hpp"
 #include "db/query/vault/Vault.hpp"
-#include "fs/Filesystem.hpp"
-#include "fs/cache/Registry.hpp"
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "ops/Error.hpp"
@@ -31,26 +30,19 @@
 #include "rbac/role/Admin.hpp"
 #include "rbac/role/vault/Global.hpp"
 #include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
 #include "storage/Manager.hpp"
-#include "UsageManager.hpp"
 #include "vault/model/Vault.hpp"
 
 #include "log/Registry.hpp"
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
-#include <paths.h>
 #include <spdlog/logger.h>
 #include <spdlog/sinks/ringbuffer_sink.h>
 
-#include <atomic>
-#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <functional>
-#include <iostream>
 #include <memory>
 #include <optional>
 #include <algorithm>
@@ -64,11 +56,7 @@ namespace vh::test_ops_parity_vault_access {
 using json = nlohmann::json;
 using UserPtr = std::shared_ptr<identities::User>;
 
-std::string tag() {
-    static std::atomic<unsigned> n{0};
-    static const auto run = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count() % 100000);
-    return run + "x" + std::to_string(n.fetch_add(1));
-}
+using vh::test::parity::tag;
 
 // The auth logger's warnings for the life of the scope.
 struct AuthWarnings {
@@ -101,41 +89,13 @@ const std::set<std::string> kSeededRoles = {"unprivileged", "auditor", "support"
                                             "platform_operator", "vault_admin", "admin", "super_admin",
                                             "key_custodian"};
 
-class VaultAccessParityTest : public ::testing::Test {
+class VaultAccessParityTest : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
     inline static std::shared_ptr<protocols::shell::Router> router;
-    inline static UserPtr superUser;
 
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            std::cout << "[test_ops_parity_vault_access] Skipping db tests due to missing environment variables."
-                      << std::endl;
-            return;
-        }
-        paths::enableTestMode();
-        const auto root = std::filesystem::temp_directory_path() / ("vh_vault_access_" + tag());
-        paths::backingPath = root / "backing";
-        paths::mountPath = root / "mount";
-        std::filesystem::create_directories(paths::backingPath);
-        std::filesystem::create_directories(paths::mountPath);
-
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        runtime::Deps::init();
-        fs::Filesystem::init(runtime::Deps::get().storageManager);
-        // Earlier suites in this binary used their own schema: their cached entries and engines (ids reused after the
-        // reset) would answer for ours.
-        runtime::Deps::get().fsCache = std::make_shared<fs::cache::Registry>();
-        runtime::Deps::get().storageManager->initStorageEngines();
-
-        if (!runtime::Deps::get().shellUsageManager)
-            runtime::Deps::get().shellUsageManager = std::make_shared<protocols::shell::UsageManager>();
-        router = std::make_shared<protocols::shell::Router>();
+        if (!setUpDbSuite("test_ops_parity_vault_access")) return;
+        router = test::parity::shellRouter();
         protocols::shell::commands::vault::registerCommands(router);
 
         // super_admin can't be assigned through ops::users (nobody holds more); a seeded-style account holds it.
@@ -144,10 +104,7 @@ protected:
                                                           std::nullopt, "x", std::nullopt);
         superUser = identities::manager().user(created->id);
     }
-
-    void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
-    }
+    static void TearDownTestSuite() { tearDownDbSuite(); }
 
     // Through ops::users, as every product path does: the role's global vault policy is seeded from its preset.
     static UserPtr createUser(const std::string& prefix, const std::string& role) {
@@ -162,28 +119,10 @@ protected:
     }
 
     static std::pair<int, std::string> cli(const std::string& line, const UserPtr& user) {
-        try {
-            const auto res = router->executeLine(line, user, nullptr);
-            return {res.exit_code, res.stdout_text + res.stderr_text};
-        } catch (const std::exception& e) {
-            return {1, e.what()};
-        }
+        return test::parity::cli(*router, line, user);
     }
-
-    static std::shared_ptr<protocols::ws::Session> ws(const UserPtr& user) {
-        auto s = std::make_shared<protocols::ws::Session>(std::make_shared<protocols::ws::Router>());
-        s->user = user;
-        return s;
-    }
-
-    static bool succeeds(const std::function<void()>& fn) {
-        try {
-            fn();
-            return true;
-        } catch (const std::exception&) {
-            return false;
-        }
-    }
+    static std::shared_ptr<protocols::ws::Session> ws(const UserPtr& user) { return test::parity::ws(user); }
+    static bool succeeds(const std::function<void()>& fn) { return test::parity::succeeds(fn); }
 
     // The rows on both surfaces; they must be identical.
     static json bothSurfaces(const UserPtr& user) {

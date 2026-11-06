@@ -9,58 +9,34 @@
 // schema reset in one test process reuses ids) in its path index, so getEngines() scans (ops::vault_keys) could
 // answer with the old vault's engine and key, depending on unordered_map iteration order.
 
+#include "../helpers/db_suite.hpp"
 #include "../helpers/identities.hpp"
-#include "db/Transactions.hpp"
 #include "db/query/fs/Entry.hpp"
 #include "db/query/identities/User.hpp"
 #include "db/query/rbac/role/Admin.hpp"
 #include "db/query/vault/Vault.hpp"
-#include "fs/Filesystem.hpp"
-#include "fs/cache/Registry.hpp"
 #include "fs/model/Entry.hpp"
-#include "identities/Manager.hpp"
-#include "identities/User.hpp"
 #include "protocols/shell/Router.hpp"
 #include "protocols/shell/commands/rbac.hpp"
 #include "protocols/shell/commands/vault.hpp"
 #include "rbac/Actor.hpp"
-#include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
 #include "share/Manager.hpp"
 #include "storage/Engine.hpp"
-#include "storage/Manager.hpp"
 #include "sync/model/LocalPolicy.hpp"
 #include "UsageManager.hpp"
 #include "vault/model/Vault.hpp"
 
-#include <gtest/gtest.h>
-#include <paths.h>
-
 #include <algorithm>
-#include <atomic>
-#include <chrono>
-#include <cstdlib>
-#include <filesystem>
-#include <iostream>
-#include <memory>
-#include <string>
 
 namespace vh::test_vault_lifecycle_regressions {
 
 using UserPtr = std::shared_ptr<identities::User>;
 
-std::string tag() {
-    static std::atomic<unsigned> n{0};
-    static const auto run = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count() % 100000);
-    return run + "x" + std::to_string(n.fetch_add(1));
-}
+std::string tag() { return test::uniqueTag('x'); }
 
-class VaultLifecycleRegressionTest : public ::testing::Test {
+class VaultLifecycleRegressionTest : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
     inline static std::shared_ptr<protocols::shell::Router> router;
-    inline static UserPtr superUser;
 
     static UserPtr createUser(const std::string& name, const std::string& roleName) {
         auto user = vh::test::identities::createUser(name, db::query::rbac::role::Admin::get(roleName), name + "@vaulthalla.test", "x", std::nullopt);
@@ -68,27 +44,7 @@ protected:
     }
 
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            std::cout << "[test_vault_lifecycle_regressions] Skipping db tests due to missing environment variables."
-                      << std::endl;
-            return;
-        }
-        paths::enableTestMode();
-        const auto root = std::filesystem::temp_directory_path() / ("vh_vault_lifecycle_" + tag());
-        paths::backingPath = root / "backing";
-        paths::mountPath = root / "mount";
-        std::filesystem::create_directories(paths::backingPath);
-        std::filesystem::create_directories(paths::mountPath);
-
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        runtime::Deps::init();
-        fs::Filesystem::init(runtime::Deps::get().storageManager);
-
+        if (!setUpDbSuite("test_vault_lifecycle_regressions", {.freshEngines = false})) return;
         if (!runtime::Deps::get().shellUsageManager)
             runtime::Deps::get().shellUsageManager = std::make_shared<protocols::shell::UsageManager>();
         router = std::make_shared<protocols::shell::Router>();
@@ -98,9 +54,7 @@ protected:
         superUser = createUser("vl_super_" + tag(), "super_admin");
     }
 
-    void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
-    }
+    static void TearDownTestSuite() { tearDownDbSuite(); }
 
     static void assignVaultRole(const unsigned int vaultId, const std::string& role, const UserPtr& user) {
         std::string out;

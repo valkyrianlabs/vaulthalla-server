@@ -5,6 +5,7 @@
 // Verdicts are compared between the surfaces (and pinned for the super admin and an unprivileged account), outcomes
 // by the state ops::recovery reports and the vault's files, never by text. See .claude/context/recovery.md.
 
+#include "../helpers/parity.hpp"
 #include "../helpers/sync_conflict_harness.hpp"
 
 #include "db/query/fs/File.hpp"
@@ -24,7 +25,6 @@
 #include "storage/Engine.hpp"
 #include "storage/Manager.hpp"
 #include "storage/PlaintextReader.hpp"
-#include "UsageManager.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -48,28 +48,16 @@ protected:
     static void SetUpTestSuite() {
         Harness::SetUpTestSuite();
         if (skipTests) return;
-        if (!runtime::Deps::get().shellUsageManager)
-            runtime::Deps::get().shellUsageManager = std::make_shared<protocols::shell::UsageManager>();
-        router = std::make_shared<protocols::shell::Router>();
+        router = vh::test::parity::shellRouter();
         protocols::shell::commands::registerRecoveryCommands(router);
         protocols::shell::commands::registerSnapshotCommands(router);
         protocols::shell::commands::vault::registerCommands(router);
     }
 
     // Non-interactive (no terminal): what a script sees.
-    static int cli(const std::string& line, const UserPtr& user) {
-        try {
-            return router->executeLine(line, user, nullptr).exit_code;
-        } catch (const std::exception&) {
-            return 1;
-        }
-    }
+    static int cli(const std::string& line, const UserPtr& user) { return vh::test::parity::cli(*router, line, user).first; }
 
-    static std::shared_ptr<protocols::ws::Session> ws(const UserPtr& user) {
-        auto s = std::make_shared<protocols::ws::Session>(std::make_shared<protocols::ws::Router>());
-        s->user = user;
-        return s;
-    }
+    static std::shared_ptr<protocols::ws::Session> ws(const UserPtr& user) { return vh::test::parity::ws(user); }
 
     // ws verdict: true = the op ran; false = refused (any ops::Error, NeedsConfirmation included).
     template <class Fn>

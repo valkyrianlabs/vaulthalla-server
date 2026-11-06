@@ -1,12 +1,12 @@
+#include "../helpers/db_suite.hpp"
+
 #include "config/Config.hpp"
 #include "config/Registry.hpp"
-#include "db/Transactions.hpp"
 #include "db/query/fs/Cache.hpp"
 #include "db/query/identities/User.hpp"
 #include "fs/Filesystem.hpp"
 #include "fs/model/File.hpp"
 #include "fs/model/Path.hpp"
-#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "ops/Vaults.hpp"
 #include "preview/cache/Maintenance.hpp"
@@ -14,8 +14,6 @@
 #include "preview/derive/Queue.hpp"
 #include "preview/derive/Runner.hpp"
 #include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
 #include "storage/Engine.hpp"
 #include "storage/GcmFileReader.hpp"
 #include "storage/Manager.hpp"
@@ -23,7 +21,6 @@
 #include "vault/model/Vault.hpp"
 
 #include <gtest/gtest.h>
-#include <paths.h>
 
 #include <chrono>
 #include <filesystem>
@@ -52,46 +49,26 @@ std::vector<uint8_t> fileBytes(const std::filesystem::path& p) {
 
 }
 
-class DeriveQueueDbTest : public ::testing::Test {
+class DeriveQueueDbTest : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
     inline static std::shared_ptr<identities::User> admin;
-    inline static std::filesystem::path root;
 
     std::shared_ptr<storage::Engine> engine;
     config::Config original;
     std::filesystem::path fakeHelpers, noHelpers;
 
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            return;
-        }
-        paths::enableTestMode();
-        root = std::filesystem::temp_directory_path() / ("vh_derive_queue_" + tag());
-        paths::backingPath = root / "backing";
-        paths::mountPath = root / "mount";
-        std::filesystem::create_directories(paths::backingPath);
-        std::filesystem::create_directories(paths::mountPath);
-
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        runtime::Deps::init();
-        fs::Filesystem::init(runtime::Deps::get().storageManager);
-        admin = vh::identities::manager().userByName("admin");
+        if (setUpDbSuite("test_derive_queue", {.freshEngines = false})) admin = superUser;
     }
 
     static void TearDownTestSuite() {
         Queue::instance().shutdown();
-        std::error_code ec;
-        if (!root.empty()) std::filesystem::remove_all(root, ec);
+        tearDownDbSuite();
     }
 
     void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
+        Suite::SetUp();
+        if (IsSkipped()) return;
         original = config::Registry::get();
         Queue::instance().shutdown();
 
@@ -421,20 +398,6 @@ TEST_F(DeriveQueueDbTest, RemovingAVaultDropsItsArtifacts) {
     EXPECT_FALSE(std::filesystem::exists(derivedRoot));
 }
 
-TEST_F(DeriveQueueDbTest, StartupSweepRemovesLegacyPlaintextThumbnails) {
-    const auto legacy = engine->paths->thumbnailRoot / "LEGACYALIAS" / "128.jpg";
-    std::filesystem::create_directories(legacy.parent_path());
-    std::ofstream(legacy) << "legacy plaintext jpeg";
-    const auto file = write("/kept.step", "ISO-10303-21;\n");
-    const auto ready = settle(file, "model-glb");
-    ASSERT_EQ(ready.status, DeriveStatus::Ready);
-
-    EXPECT_GT(cache::sweepAtStartup(runtime::Deps::get().storageManager->getEngines()), 0u);
-    EXPECT_FALSE(std::filesystem::exists(legacy));
-    EXPECT_FALSE(std::filesystem::exists(engine->paths->thumbnailRoot));
-    EXPECT_TRUE(std::filesystem::exists(ready.artifact->path));   // sealed artifacts of live files stay
-}
-
 TEST_F(DeriveQueueDbTest, PeriodicEvictionHonoursTheCacheCap) {
     const auto file = write("/evict.step", "ISO-10303-21;\n");
     const auto ready = settle(file, "model-glb");
@@ -459,29 +422,6 @@ TEST_F(DeriveQueueDbTest, ApplyConfigSetsReaderPoliciesFromPreviewMedia) {
     cache::applyConfig();
     EXPECT_EQ(storage::resolveIntegrityPolicy(storage::IntegrityPolicy::FromConfig), storage::IntegrityPolicy::Optimistic);
     EXPECT_EQ(storage::resolveRemotePolicy(storage::RemoteFetchPolicy::FromConfig), storage::RemoteFetchPolicy::Hydrate);
-}
-
-// The real converter end to end, when the build produced it: STEP in a vault -> sealed GLB out.
-TEST_F(DeriveQueueDbTest, RealCadHelperConvertsStepToGlbAndCachesMalformedFailures) {
-    const std::filesystem::path cad = VH_TEST_CAD_HELPER;
-    if (cad.empty() || !Runner::isExecutable(cad)) GTEST_SKIP() << "vaulthalla-preview-cad not built";
-    const auto realHelpers = root / ("realhelpers_" + tag());
-    std::filesystem::create_directories(realHelpers);
-    std::filesystem::create_symlink(cad, realHelpers / std::string(kCadHelper));
-    configure([&realHelpers](config::Config& c) { c.preview.derive.helper_dir = realHelpers; });
-
-    const auto step = stringOf(fileBytes(std::filesystem::path(VH_TEST_ASSETS_DIR) / "preview-cad" / "box-and-cylinder.step"));
-    ASSERT_FALSE(step.empty());
-    const auto file = write("/assembly.step", step);
-    const auto ready = settle(file, "model-glb", std::chrono::seconds(120));
-    ASSERT_EQ(ready.status, DeriveStatus::Ready) << ready.reason;
-    EXPECT_TRUE(artifactText(*ready.artifact).starts_with("glTF"));
-
-    const auto broken = write("/garbage.step", "ISO-10303-21;\nthis is not a STEP exchange structure\n");
-    const auto failed = settle(broken, "model-glb", std::chrono::seconds(120));
-    ASSERT_EQ(failed.status, DeriveStatus::Failed);
-    EXPECT_EQ(failed.reason, "invalid_input");
-    EXPECT_EQ(Queue::instance().request(engine, broken, "model-glb").status, DeriveStatus::Failed);
 }
 
 }

@@ -5,9 +5,10 @@
 // devices; only super admins see every user's devices and switch remote connections. The device's side of pairing is
 // driven with a connection identity (Peer) directly; test_device_listener.cpp runs it over real TLS.
 
+#include "../helpers/db_suite.hpp"
 #include "../helpers/identities.hpp"
+#include "../helpers/parity.hpp"
 #include "config/Registry.hpp"
-#include "db/Transactions.hpp"
 #include "db/query/device/Device.hpp"
 #include "db/query/rbac/role/Admin.hpp"
 #include "device/Crypto.hpp"
@@ -24,9 +25,6 @@
 #include "protocols/ws/handler/Devices.hpp"
 #include "rbac/role/Admin.hpp"
 #include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
-#include "UsageManager.hpp"
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
@@ -34,12 +32,8 @@
 
 #include <algorithm>
 #include <ctime>
-#include <atomic>
-#include <chrono>
-#include <cstdlib>
 #include <filesystem>
 #include <functional>
-#include <iostream>
 
 namespace vh::test_ops_parity_devices {
 
@@ -48,43 +42,23 @@ using UserPtr = std::shared_ptr<identities::User>;
 namespace crypto = vh::device::crypto;
 namespace handler = protocols::ws::handler;
 
-std::string tag() {
-    static std::atomic<unsigned> n{0};
-    static const auto run = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count() % 100000);
-    return run + "x" + std::to_string(n.fetch_add(1));
-}
+using vh::test::parity::tag;
 
-class DeviceParityTest : public ::testing::Test {
+class DeviceParityTest : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
     inline static std::shared_ptr<protocols::shell::Router> router;
-    inline static UserPtr superUser;
     inline static std::filesystem::path configCopy;
     inline static std::filesystem::path previousConfig;
 
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            std::cout << "[test_ops_parity_devices] Skipping db tests due to missing environment variables." << std::endl;
-            return;
-        }
-        paths::enableTestMode();
-        const auto root = std::filesystem::temp_directory_path() / ("vh_device_parity_" + tag());
-        paths::backingPath = root / "backing";
-        paths::mountPath = root / "mount";
-        std::filesystem::create_directories(paths::backingPath);
-        std::filesystem::create_directories(paths::mountPath);
+        // No fs::Filesystem here: runtime::Deps only.
+        if (!setUpDbSuite("test_ops_parity_devices", {.runtime = false})) return;
         // Settings writes (device.remote.*) go to a private copy, never the tree's config.yaml.
         previousConfig = paths::configPath;
         configCopy = root / "config.yaml";
         std::filesystem::copy_file(previousConfig, configCopy);
         paths::configPath = configCopy;
 
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
         runtime::Deps::init();
         vh::device::setCurrentServerIdentity(vh::device::ServerIdentity::generate());
 
@@ -96,10 +70,12 @@ protected:
     static void TearDownTestSuite() {
         if (skipTests) return;
         paths::configPath = previousConfig;
+        tearDownDbSuite();
     }
 
     void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
+        Suite::SetUp();
+        if (IsSkipped()) return;
         vh::device::Pairing::instance().resetForTesting();
     }
 
@@ -109,28 +85,10 @@ protected:
     }
 
     static std::pair<int, std::string> cli(const std::string& line, const UserPtr& user) {
-        try {
-            const auto res = router->executeLine(line, user, nullptr);
-            return {res.exit_code, res.stdout_text + res.stderr_text};
-        } catch (const std::exception& e) {
-            return {1, e.what()};
-        }
+        return test::parity::cli(*router, line, user);
     }
-
-    static std::shared_ptr<protocols::ws::Session> ws(const UserPtr& user) {
-        auto s = std::make_shared<protocols::ws::Session>(std::make_shared<protocols::ws::Router>());
-        s->user = user;
-        return s;
-    }
-
-    static bool wsOk(const std::function<void()>& fn) {
-        try {
-            fn();
-            return true;
-        } catch (const std::exception&) {
-            return false;
-        }
-    }
+    static std::shared_ptr<protocols::ws::Session> ws(const UserPtr& user) { return test::parity::ws(user); }
+    static bool wsOk(const std::function<void()>& fn) { return test::parity::succeeds(fn); }
 
     static vh::device::Peer devicePeer() {
         const auto spki = crypto::randomNonce();

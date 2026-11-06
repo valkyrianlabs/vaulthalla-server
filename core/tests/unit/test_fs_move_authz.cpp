@@ -6,6 +6,8 @@
 // fs.entry.copy), for the entry and everything a folder carries. A rename within its own folder is unchanged. The
 // FUSE side is proven in Tier A ("Move Into Unwritable Folder").
 
+#include "../helpers/db_suite.hpp"
+
 #include "fs/Filesystem.hpp"
 #include "fs/cache/Registry.hpp"
 #include "identities/Manager.hpp"
@@ -18,24 +20,18 @@
 #include "protocols/ws/Session.hpp"
 #include "protocols/ws/handler/fs/Storage.hpp"
 #include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
 #include "storage/Engine.hpp"
 #include "storage/Manager.hpp"
 #include "sync/Controller.hpp"
 #include "vault/model/Vault.hpp"
-#include "db/Transactions.hpp"
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
-#include <paths.h>
 
 #include <atomic>
 #include <chrono>
-#include <cstdlib>
 #include <filesystem>
 #include <functional>
-#include <iostream>
 #include <memory>
 #include <string>
 #include <utility>
@@ -62,41 +58,14 @@ const std::vector<std::pair<std::string, Handler>>& handlers() {
     return all;
 }
 
-class FsMoveAuthzDbTest : public ::testing::Test {
+class FsMoveAuthzDbTest : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
-    inline static UserPtr superUser;
     inline static std::shared_ptr<sync::Controller> previousController;
-    inline static std::filesystem::path root;
 
     EnginePtr engine;
 
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            std::cout << "[test_fs_move_authz] Skipping db tests due to missing environment variables." << std::endl;
-            return;
-        }
-        paths::enableTestMode();
-        root = std::filesystem::temp_directory_path() / ("vh_fs_move_authz_" + maTag());
-        paths::backingPath = root / "backing";
-        paths::mountPath = root / "mount";
-        std::filesystem::create_directories(paths::backingPath);
-        std::filesystem::create_directories(paths::mountPath);
-
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        runtime::Deps::init();
-        fs::Filesystem::init(runtime::Deps::get().storageManager);
-        // Earlier suites in this binary used their own schema: their cached entries and engines (ids reused after the
-        // reset) would answer for ours.
-        runtime::Deps::get().fsCache = std::make_shared<fs::cache::Registry>();
-        runtime::Deps::get().storageManager->initStorageEngines();
-        superUser = vh::identities::manager().userByName("admin");
-
+        if (!setUpDbSuite("test_fs_move_authz")) return;
         // The ws handlers ask the sync controller for an early pass; an unstarted one just queues it.
         previousController = runtime::Deps::get().syncController;
         runtime::Deps::setSyncController(std::make_shared<sync::Controller>());
@@ -105,12 +74,12 @@ protected:
     static void TearDownTestSuite() {
         if (skipTests) return;
         runtime::Deps::setSyncController(previousController);
-        std::error_code ec;
-        std::filesystem::remove_all(root, ec);
+        tearDownDbSuite();
     }
 
     void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
+        Suite::SetUp();
+        if (IsSkipped()) return;
         const auto vault = ops::vaults::create(superUser, {.name = "ma_" + maTag(),
                                                            .type = vault::model::VaultType::Local});
         engine = runtime::Deps::get().storageManager->getEngine(vault->id);

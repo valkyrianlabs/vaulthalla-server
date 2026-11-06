@@ -6,76 +6,38 @@
 // carries exactly the referenced retired versions. The first suite needs no TPM or database; the second drives the
 // real EncryptionManager (test vault master) against the test DB.
 
+#include "../helpers/bytes.hpp"
+#include "../helpers/db_suite.hpp"
 #include "../helpers/identities.hpp"
 #include "crypto/SecretKey.hpp"
 #include "crypto/util/encrypt.hpp"
-#include "db/Transactions.hpp"
 #include "db/query/rbac/role/Admin.hpp"
 #include "db/query/vault/Deletion.hpp"
 #include "db/query/vault/Key.hpp"
-#include "fs/Filesystem.hpp"
 #include "fs/model/File.hpp"
-#include "identities/Manager.hpp"
-#include "identities/User.hpp"
 #include "ops/Vaults.hpp"
 #include "preview/cache/Store.hpp"
-#include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
 #include "storage/Engine.hpp"
-#include "storage/Manager.hpp"
 #include "storage/PlaintextReader.hpp"
 #include "vault/Content.hpp"
 #include "vault/EncryptionManager.hpp"
 #include "vault/model/Vault.hpp"
 
-#include <gtest/gtest.h>
-#include <paths.h>
-#include <sodium.h>
-
 #include <algorithm>
-#include <atomic>
-#include <chrono>
-#include <cstdlib>
-#include <filesystem>
-#include <fstream>
-#include <iostream>
-#include <iterator>
-#include <memory>
-#include <span>
-#include <string>
 #include <thread>
-#include <vector>
 
 namespace vh::test_recovery_keys {
 
 namespace stdfs = std::filesystem;
 namespace cu = crypto::util;
 using Bytes = std::vector<uint8_t>;
+using vh::test::bin::randomBytes;
+using vh::test::bin::slurp;
+using vh::test::bin::spit;
 using vault::EncryptionManager;
 using vault::KeyVersionUnavailable;
 
-std::string rkTag() {
-    static std::atomic<unsigned> n{0};
-    static const auto run = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count() % 100000);
-    return run + "k" + std::to_string(n.fetch_add(1));
-}
-
-Bytes randomBytes(const std::size_t n) {
-    Bytes out(n);
-    randombytes_buf(out.data(), out.size());
-    return out;
-}
-
-Bytes slurp(const stdfs::path& path) {
-    std::ifstream in(path, std::ios::binary);
-    return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
-}
-
-void spit(const stdfs::path& path, const Bytes& bytes) {
-    std::ofstream out(path, std::ios::binary | std::ios::trunc);
-    out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-}
+std::string rkTag() { return test::uniqueTag('k'); }
 
 Bytes bytesOf(const crypto::SecretKeyPtr& key) { return {key->bytes().begin(), key->bytes().end()}; }
 
@@ -194,7 +156,7 @@ TEST_F(RecoveryKeysTest, ResealOfATamperedSourceThrowsIntegrityErrorAndLeavesNot
 
     const auto attempt = [&](const Bytes& source) {
         spit(dir / "blob", source);
-        spit(dir / "sidecar", {'s', 't', 'a', 'l', 'e'});  // a leftover sidecar is removed too
+        spit(dir / "sidecar", Bytes{'s', 't', 'a', 'l', 'e'});  // a leftover sidecar is removed too
         auto f = std::make_shared<fs::model::File>();
         f->encryption_iv = "unchanged";
         f->encrypted_with_key_version = 42;
@@ -230,7 +192,7 @@ TEST_F(RecoveryKeysTest, EmptyGenerationsKeepTheirRepresentation) {
     const auto em = manager();
 
     // Every empty file is stored unencrypted: no IV, version 0, zero bytes. It stays that way.
-    spit(dir / "empty", {});
+    spit(dir / "empty", Bytes{});
     auto f = std::make_shared<fs::model::File>();
     f->encryption_iv = "x";
     f->encrypted_with_key_version = 3;
@@ -242,7 +204,7 @@ TEST_F(RecoveryKeysTest, EmptyGenerationsKeepTheirRepresentation) {
     EXPECT_TRUE(em->resealToCurrent({}, "", 0, f).empty());
 
     // Unencrypted non-empty bytes are plaintext: a re-seal refuses them rather than sealing them silently.
-    spit(dir / "plain", {'h', 'i'});
+    spit(dir / "plain", Bytes{'h', 'i'});
     EXPECT_THROW(em->resealFileToCurrent(dir / "plain", "", 0, dir / "plain.out", f), std::invalid_argument);
     EXPECT_FALSE(stdfs::exists(dir / "plain.out"));
     EXPECT_THROW((void)em->resealToCurrent({'h', 'i'}, "", 0, f), std::invalid_argument);
@@ -295,41 +257,17 @@ TEST_F(RecoveryKeysTest, IdleHistoricalKeysAreEvictedWithoutAnotherAccess) {
 
 // ---- against the test database, with the real (test vault master) EncryptionManager -------------------------------
 
-class RecoveryKeysDbTest : public ::testing::Test {
+class RecoveryKeysDbTest : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
-    inline static std::shared_ptr<identities::User> superUser;
-
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            std::cout << "[test_recovery_keys] Skipping db tests due to missing environment variables." << std::endl;
-            return;
-        }
-        paths::enableTestMode();
-        const auto root = stdfs::temp_directory_path() / ("vh_recovery_keys_db_" + rkTag());
-        paths::backingPath = root / "backing";
-        paths::mountPath = root / "mount";
-        stdfs::create_directories(paths::backingPath);
-        stdfs::create_directories(paths::mountPath);
-
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        runtime::Deps::init();
-        fs::Filesystem::init(runtime::Deps::get().storageManager);
-
+        if (!setUpDbSuite("test_recovery_keys", {.freshEngines = false})) return;
         const auto user = vh::test::identities::createUser("rk_super_" + rkTag(),
                                                            db::query::rbac::role::Admin::get("super_admin"),
                                                            "rk@vaulthalla.test", "x", std::nullopt);
         superUser = vh::identities::manager().user(user->id);
     }
 
-    void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
-    }
+    static void TearDownTestSuite() { tearDownDbSuite(); }
 
     struct TestVault {
         unsigned int id{};
@@ -466,6 +404,7 @@ TEST_F(RecoveryKeysDbTest, AnInterruptedRotationServesBothVersionsAndSurvivesARe
     // A restart mid-rotation loads the old key from vault_keys_trashed (it used to fail on a missing updated_at).
     const EncryptionManager fresh(v.id);
     EXPECT_TRUE(fresh.rotation_in_progress());
+    EXPECT_EQ(fresh.get_key_version(), first + 1);
     EXPECT_EQ(fresh.decrypt(sealed, f->encryption_iv, first), plain);
     EXPECT_EQ(bytesOf(fresh.historicalKeySnapshot(first)), bytesOf(v.em->keySnapshot(first)));
 

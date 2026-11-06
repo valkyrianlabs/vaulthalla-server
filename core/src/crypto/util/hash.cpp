@@ -1,6 +1,9 @@
 #include "crypto/util/hash.hpp"
 
 #include <sodium.h>
+#include <paths.h>
+
+#include <atomic>
 #include <fstream>
 #include <sstream>
 #include <iomanip>
@@ -11,6 +14,17 @@ constexpr std::size_t OPSLIMIT = crypto_pwhash_OPSLIMIT_MODERATE;
 constexpr std::size_t MEMLIMIT = crypto_pwhash_MEMLIMIT_MODERATE;
 
 namespace vh::crypto::hash {
+
+namespace {
+// The unit-test binary's switch (setMinimalPasswordCostForTesting); the daemon never sets it, test instances included.
+std::atomic<bool> minimalCostForTesting{false};
+}
+
+void setMinimalPasswordCostForTesting() {
+    if (!paths::isTestMode()) throw std::logic_error("setMinimalPasswordCostForTesting: refused outside test mode");
+    minimalCostForTesting = true;
+}
+
 std::string blake2b(const std::filesystem::path& filepath) {
     constexpr size_t hash_len = crypto_generichash_BYTES;
     unsigned char hash[hash_len];
@@ -39,7 +53,9 @@ std::string blake2b(const std::filesystem::path& filepath) {
 std::string password(const std::string& password) {
     char hashed[crypto_pwhash_STRBYTES];
 
-    if (crypto_pwhash_str(hashed, password.c_str(), password.size(), OPSLIMIT, MEMLIMIT) != 0)
+    const bool minimal = minimalCostForTesting.load();
+    if (crypto_pwhash_str(hashed, password.c_str(), password.size(), minimal ? crypto_pwhash_OPSLIMIT_MIN : OPSLIMIT,
+                          minimal ? crypto_pwhash_MEMLIMIT_MIN : MEMLIMIT) != 0)
         throw std::runtime_error("Password hashing failed (out of memory?)");
 
     return {hashed};

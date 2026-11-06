@@ -4,6 +4,10 @@
 // a private schema, real engines and keys, local vaults in mode local_snapshots, and small helpers to write, read,
 // snapshot, plan and restore. DB-backed; every test is skipped without the VH_TEST_DB_* environment.
 
+#include "../helpers/db_suite.hpp"
+#include "../helpers/temp_dir.hpp"
+
+#include "crypto/util/encrypt.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/fs/File.hpp"
 #include "db/query/fs/Symlink.hpp"
@@ -12,10 +16,10 @@
 #include "db/query/recovery/Policy.hpp"
 #include "db/query/recovery/Snapshot.hpp"
 #include "fs/Filesystem.hpp"
-#include "fs/cache/Registry.hpp"
 #include "fs/model/Directory.hpp"
 #include "fs/model/File.hpp"
 #include "fs/model/Symlink.hpp"
+#include "fs/ops/file.hpp"
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "ops/Recovery.hpp"
@@ -28,22 +32,16 @@
 #include "recovery/local/Restore.hpp"
 #include "recovery/local/Snapshots.hpp"
 #include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
 #include "storage/Engine.hpp"
 #include "storage/Manager.hpp"
 #include "storage/PlaintextReader.hpp"
+#include "vault/Content.hpp"
 #include "vault/EncryptionManager.hpp"
 #include "vault/model/Vault.hpp"
 
 #include <gtest/gtest.h>
-#include <paths.h>
 
-#include <atomic>
-#include <chrono>
-#include <cstdlib>
 #include <filesystem>
-#include <iostream>
 #include <memory>
 #include <optional>
 #include <string>
@@ -58,11 +56,7 @@ using EnginePtr = std::shared_ptr<storage::Engine>;
 using vh::recovery::ItemAction;
 using vh::recovery::RecoveryId;
 
-inline std::string tag() {
-    static std::atomic<unsigned> n{0};
-    static const auto run = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count() % 100000);
-    return run + "r" + std::to_string(n.fetch_add(1));
-}
+inline std::string tag() { return vh::test::uniqueTag('r'); }
 
 inline RecoveryId snapId(const int64_t id) {
     return {.type = RecoveryId::Type::Snapshot, .id = static_cast<uint64_t>(id)};
@@ -72,48 +66,41 @@ inline RecoveryId lvId(const int64_t id) {
     return {.type = RecoveryId::Type::LocalGeneration, .id = static_cast<uint64_t>(id)};
 }
 
-class LocalRecoveryFixture : public ::testing::Test {
-protected:
-    inline static bool skipTests = false;
-    inline static UserPtr superUser;
-    inline static std::filesystem::path root;
+// Rewrites the file at `path` (whose plaintext is `text`) in the legacy format: one AES-256-GCM message under the
+// vault's current key, as builds before #367 stored every file; its row and cached entry point at the legacy IV.
+inline void makeLegacyGcm(const std::shared_ptr<storage::Engine>& engine, const std::string& path,
+                          const std::string& text) {
+    const auto f = db::query::fs::File::getFileByPath(engine->vault->id, path);
+    ASSERT_TRUE(f);
+    const auto [key, version] = engine->encryptionManager->currentKey();
+    std::vector<uint8_t> iv;
+    const auto sealed =
+        crypto::util::encrypt_aes256_gcm(std::vector<uint8_t>(text.begin(), text.end()), key->bytes(), iv);
+    fs::ops::writeFileAtomic(f->backing_path, sealed);
+    auto next = *f;
+    next.encryption_iv = crypto::util::b64_encode(iv);
+    next.encrypted_with_key_version = version;
+    ASSERT_TRUE(db::query::fs::File::compareAndSetEncryptionIVAndVersion(next, f->encryption_iv,
+                                                                        f->encrypted_with_key_version));
+    if (const auto cached = std::dynamic_pointer_cast<fs::model::File>(
+            runtime::Deps::get().fsCache->getEntry(engine->vaultPathToFusePath(path)))) {
+        cached->encryption_iv = next.encryption_iv;
+        cached->encrypted_with_key_version = version;
+    }
+    ASSERT_EQ(vault::content::formatOf(db::query::fs::File::getFileByPath(engine->vault->id, path)->encryption_iv),
+              vault::content::Format::Gcm0);
+}
 
+class LocalRecoveryFixture : public vh::test::db::Suite {
+protected:
     EnginePtr engine;
 
-    static void setUpSuite(const std::string& name) {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            std::cout << "[" << name << "] Skipping db tests due to missing environment variables." << std::endl;
-            return;
-        }
-        paths::enableTestMode();
-        root = std::filesystem::temp_directory_path() / ("vh_" + name + "_" + tag());
-        paths::backingPath = root / "backing";
-        paths::mountPath = root / "mount";
-        std::filesystem::create_directories(paths::backingPath);
-        std::filesystem::create_directories(paths::mountPath);
-
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        runtime::Deps::init();
-        fs::Filesystem::init(runtime::Deps::get().storageManager);
-        // Earlier suites in this binary used their own schema: their cached entries and engines would answer for ours.
-        runtime::Deps::get().fsCache = std::make_shared<fs::cache::Registry>();
-        runtime::Deps::get().storageManager->initStorageEngines();
-        superUser = vh::identities::manager().userByName("admin");
-    }
-
-    static void tearDownSuite() {
-        if (skipTests) return;
-        std::error_code ec;
-        std::filesystem::remove_all(root, ec);
-    }
+    static void setUpSuite(const std::string& name) { (void)setUpDbSuite(name); }
+    static void tearDownSuite() { tearDownDbSuite(); }
 
     void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
+        Suite::SetUp();
+        if (IsSkipped()) return;
         engine = newVault();
     }
 

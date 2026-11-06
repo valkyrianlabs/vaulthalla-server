@@ -1,24 +1,19 @@
 // ops::groups invariants that hold independently of either frontend: a missing actor is a refusal (never a
 // dereference), groups resolve the same by id or by name, and every refusal is a typed ops::Error.
 
+#include "../helpers/db_suite.hpp"
 #include "../helpers/identities.hpp"
-#include "db/Transactions.hpp"
 #include "db/query/identities/User.hpp"
 #include "db/query/rbac/role/Admin.hpp"
 #include "identities/Group.hpp"
-#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "ops/Groups.hpp"
 #include "rbac/role/Admin.hpp"
-#include "seed/include/init_db_tables.hpp"
 #include "seed/include/seed_db.hpp"
 
 #include <gtest/gtest.h>
-#include <paths.h>
 
 #include <chrono>
-#include <cstdlib>
-#include <iostream>
 #include <memory>
 #include <string>
 
@@ -49,23 +44,12 @@ TEST(OpsGroups, PermissionlessActorIsDeniedBeforeAnyLookup) {
     EXPECT_THROW((void)groups::listForUser(actor, 1), ops::Denied);
 }
 
-class OpsGroupsDbTest : public ::testing::Test {
+class OpsGroupsDbTest : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
     inline static std::shared_ptr<identities::User> superAdmin;
 
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            std::cout << "[test_ops_groups] Skipping db tests due to missing environment variables." << std::endl;
-            return;
-        }
-        paths::enableTestMode();
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::seed::init_tables_if_not_exists();
-        db::Transactions::dbPool_->initPreparedStatements();
+        if (!setUpDbSuite("test_ops_groups", {.seed = false, .runtime = false})) return;
         seed::initPermissions();
         seed::initRoles();
 
@@ -73,10 +57,7 @@ protected:
         superAdmin = test::identities::createUser(name, db::query::rbac::role::Admin::get("super_admin"),
                                                   name + "@vaulthalla.test");
     }
-
-    void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
-    }
+    static void TearDownTestSuite() { tearDownDbSuite(); }
 
     static std::string unique(const std::string& label) {
         return label + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count() % 1000000000);

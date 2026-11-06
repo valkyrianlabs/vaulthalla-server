@@ -55,9 +55,24 @@
 ## DB-backed unit tests
 
 ```bash
-make test                                              # whole vh_unit_tests binary against a per-run DB (~7 min)
+make test                                              # whole vh_unit_tests binary, 4 jobs over per-run DBs (~2 min)
 make test ARGS="--gtest_filter='RoleParity*'"           # or: bash bin/tests/run_unit.sh -- --gtest_filter=...
 ```
+
+`run_unit.sh -j N` (default `VH_UNIT_JOBS` or 4) runs 3N shards of whole suites (`VH_UNIT_SHARD=<i>/<n>`, split in
+`tests/unit/gtest_main.cpp`), N at a time, each on a database of its own; logs in `<build>/unit-logs/shard-<i>.log`
+(printed at the end), `--gtest_output=json:F` writes `F.shard<i>`. `-j 1` is one process on one DB, streamed (macOS
+always). `meson test` (CI) runs 6 shards in parallel (`core/meson.build`, `--suite vh_unit_tests`); they refuse a
+caller's `VH_TEST_DB_*` (one DB can't serve parallel shards). Every test process gets a private `TMPDIR`
+(`/tmp/vh-unit-XXXXXX`, removed at exit), so the test-mode default paths and fixed scratch names never meet another
+process's. Test-only speedups, all refused outside test mode and never set by the daemon: Argon2id at libsodium's
+minimum cost (`hash::setMinimalPasswordCostForTesting`, set in `gtest_main.cpp`), a TOTP clock tests advance instead
+of sleeping for the next 30 s step (`totp::advanceClockForTesting`, reset in TearDown), a shorter shell-server request
+timeout per test (`shell::Server::setTimingForTesting`). Shared fixtures: `tests/helpers/db_suite.hpp`
+(`vh::test::db::Suite`: env check, fresh schema, seed, runtime, scratch root), `web_session.hpp` (ws sign-in, TOTP,
+passkey, device approval helpers, `AuthRuntime`), `share_fakes.hpp`, `s3_gateway.hpp`, `bytes.hpp`,
+`rewrap_fixture.hpp`, `http_upload.hpp`, `parity.hpp`. 2026-11-06 on the dev box: the DB run went from 1,072 s (one
+process) to ~2 min, CI's DB-free run from ~121 s to ~16 s.
 
 Manual validation only, never CI: no CI job starts a test database, so the DB-backed suites skip there. Files whose
 every test is DB-backed start with `// vh-test-tier: db-only`; CI builds with `-Ddb_tests=false`, which doesn't compile
@@ -87,7 +102,7 @@ fails with EACCES). Browser: `web/tests/e2e/mfa.spec.ts` (needs `VAULTHALLA_E2E_
 
 CLI ↔ ws parity for families migrated to `core/ops/`:
 `--gtest_filter='*Parity*:OpsGroups*:AuthPasswordChange*'` (groups, roles, API keys, vaults and the accessible-vaults list, users, S3 gateway,
-pricing/config, sync conflicts). The whole binary takes ~7 minutes against a local DB; meson's test timeout is 30 minutes (#123). A parity case
+pricing/config, sync conflicts). The whole binary takes ~2 minutes against local DBs (`run_unit.sh`, 4 jobs). A parity case
 runs one logical operation through `shell::Router::executeLine` and through the ws handler, for every seeded admin
 role, and compares allow/deny (against an oracle from the role's permission bits) and resulting DB state, never text.
 New families add a `test_ops_parity_<family>.cpp` on the same pattern.
@@ -196,8 +211,8 @@ never bind 36972 (port 0).
 - **ThreadSanitizer** for the identity publication code: `meson setup build-tsan -Db_sanitize=thread
   -Dbuild_unit_tests=true -Db_lundef=false && ninja -C build-tsan core/vh_unit_tests`, then run with ASLR off (TSan
   aborts with "unexpected memory mapping" on this kernel otherwise): `setarch -R ./build-tsan/core/vh_unit_tests
-  --gtest_filter='Identities*'`. Don't run two DB-backed test processes at once: each suite drops and recreates the
-  test schema.
+  --gtest_filter='Identities*'`. Never point two DB-backed test processes at one database: each suite drops and
+  recreates the test schema (`run_unit.sh -j` gives every shard its own).
 - Tests that write identity or role rows with raw SQL must call `identities::manager().reconcile()` afterwards (the
   revision watcher does it in the daemon) or the canonical objects they read keep the old state.
 - Helpers that run under `RLIMIT_AS` can't be sanitized: ASan reserves far more address space than the limit allows,

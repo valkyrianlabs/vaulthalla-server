@@ -5,29 +5,21 @@
 // tombstone and its expiry, the S3 key-loss gate, the bounded and resumable upstream purge (fake S3 controller), the
 // shared-bucket guard, and the path guard that keeps a purge inside the backing root.
 
+#include "../helpers/db_suite.hpp"
 #include "../helpers/identities.hpp"
 #include "crypto/SecretKey.hpp"
-#include "db/Transactions.hpp"
 #include "db/query/fs/Entry.hpp"
 #include "db/query/identities/User.hpp"
 #include "db/query/rbac/role/Admin.hpp"
 #include "db/query/vault/Deletion.hpp"
 #include "db/query/vault/Key.hpp"
 #include "db/query/vault/Vault.hpp"
-#include "fs/Filesystem.hpp"
-#include "fs/cache/Registry.hpp"
 #include "fs/model/Entry.hpp"
-#include "identities/Manager.hpp"
-#include "identities/User.hpp"
 #include "ops/Error.hpp"
 #include "ops/Roles.hpp"
 #include "ops/Vaults.hpp"
 #include "rbac/role/Vault.hpp"
-#include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
 #include "storage/Engine.hpp"
-#include "storage/Manager.hpp"
 #include "storage/s3/Controller.hpp"
 #include "vault/APIKeyManager.hpp"
 #include "vault/EncryptionManager.hpp"
@@ -38,21 +30,10 @@
 #include "vault/model/S3Vault.hpp"
 #include "vault/model/Vault.hpp"
 
-#include <gtest/gtest.h>
-#include <paths.h>
-
 #include <algorithm>
-#include <atomic>
-#include <chrono>
-#include <cstdlib>
-#include <filesystem>
 #include <fstream>
-#include <iostream>
-#include <memory>
 #include <mutex>
 #include <set>
-#include <string>
-#include <vector>
 
 namespace vh::test_vault_retention {
 
@@ -61,11 +42,7 @@ using Clock = std::chrono::system_clock;
 using vault::model::DeletionState;
 using DeletionQuery = db::query::vault::Deletion;
 
-std::string tag() {
-    static std::atomic<unsigned> n{0};
-    static const auto run = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count() % 100000);
-    return run + "x" + std::to_string(n.fetch_add(1));
-}
+std::string tag() { return test::uniqueTag('x'); }
 
 std::shared_ptr<vault::model::APIKey> fakeKey() {
     return std::make_shared<vault::model::APIKey>(1, "fake", vault::model::S3Provider::AWS, "AKIATESTACCESSKEY000",
@@ -105,10 +82,9 @@ public:
     }
 };
 
-class VaultRetentionTest : public ::testing::Test {
+class VaultRetentionTest : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
-    inline static UserPtr superUser, bob;
+    inline static UserPtr bob;
 
     static UserPtr createUser(const std::string& name, const std::string& roleName) {
         auto user = vh::test::identities::createUser(name, db::query::rbac::role::Admin::get(roleName), name + "@vaulthalla.test", "x", std::nullopt);
@@ -116,33 +92,12 @@ protected:
     }
 
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            std::cout << "[test_vault_retention] Skipping db tests due to missing environment variables." << std::endl;
-            return;
-        }
-        paths::enableTestMode();
-        const auto root = std::filesystem::temp_directory_path() / ("vh_vault_retention_" + tag());
-        paths::backingPath = root / "backing";
-        paths::mountPath = root / "mount";
-        std::filesystem::create_directories(paths::backingPath);
-        std::filesystem::create_directories(paths::mountPath);
-
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        runtime::Deps::init();
-        fs::Filesystem::init(runtime::Deps::get().storageManager);
-
+        if (!setUpDbSuite("test_vault_retention", {.freshEngines = false})) return;
         superUser = createUser("vr_super_" + tag(), "super_admin");
         bob = createUser("vr_bob_" + tag(), "unprivileged");
     }
 
-    void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
-    }
+    static void TearDownTestSuite() { tearDownDbSuite(); }
 
     void TearDown() override { vault::retention::setControllerFactoryForTesting({}); }
 

@@ -3,6 +3,7 @@
 // file's deletion reset it; `vh setup set-super-admin-password` (the configured super-admin UID only) rotates it.
 // The web console only warns, for the super admin, while the generated password and its file both remain.
 
+#include "../helpers/db_suite.hpp"
 #include "auth/mfa/Pending.hpp"
 #include "db/query/identities/Loader.hpp"
 #include "auth/Bootstrap.hpp"
@@ -87,8 +88,7 @@ protected:
     inline static bool skipTests = false;
 
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
+        if (!vh::test::db::available()) {
             skipTests = true;
             std::cout << "[test_auth_bootstrap] Skipping db tests due to missing environment variables." << std::endl;
             return;

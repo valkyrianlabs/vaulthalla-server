@@ -4,6 +4,8 @@
 // imports keeps TOTP and recovery codes working with no re-enrollment; a mismatched key is refused and changes nothing;
 // only a super admin may import, and every attempt is audited without the key or the code. The host here is simulated
 // by a secrets manager with no rows (Manager::createForTesting), so no real sealing is involved.
+#include "../helpers/db_suite.hpp"
+#include "../helpers/web_session.hpp"
 #include "audit/Trail.hpp"
 #include "auth/mfa/Factors.hpp"
 #include "auth/mfa/Keys.hpp"
@@ -11,7 +13,6 @@
 #include "crypto/secrets/Manager.hpp"
 #include "crypto/util/encrypt.hpp"
 #include "db/Transactions.hpp"
-#include "fs/Filesystem.hpp"
 #include "fs/cache/Registry.hpp"
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
@@ -21,22 +22,16 @@
 #include "protocols/shell/Router.hpp"
 #include "protocols/shell/commands/all.hpp"
 #include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
-#include "storage/Manager.hpp"
 #include "UsageManager.hpp"
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
-#include <paths.h>
 #include <sodium.h>
 
 #include <atomic>
 #include <chrono>
-#include <cstdlib>
 #include <filesystem>
 #include <fstream>
-#include <iostream>
 #include <string>
 #include <unistd.h>
 #include <vector>
@@ -47,21 +42,7 @@ using Clock = std::chrono::system_clock;
 using UserPtr = std::shared_ptr<identities::User>;
 using json = nlohmann::json;
 
-std::vector<uint8_t> fromBase32(const std::string& text) {
-    static constexpr std::string_view kAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
-    std::vector<uint8_t> out;
-    uint32_t buffer = 0;
-    int bits = 0;
-    for (const char c : text) {
-        buffer = (buffer << 5) | static_cast<uint32_t>(kAlphabet.find(c));
-        bits += 5;
-        if (bits >= 8) {
-            bits -= 8;
-            out.push_back(static_cast<uint8_t>((buffer >> bits) & 0xff));
-        }
-    }
-    return out;
-}
+using vh::test::web::fromBase32;
 
 std::vector<uint8_t> randomKey() {
     std::vector<uint8_t> k(32);
@@ -69,36 +50,17 @@ std::vector<uint8_t> randomKey() {
     return k;
 }
 
-class MfaKeyImportDb : public ::testing::Test {
+class MfaKeyImportDb : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
-    inline static UserPtr superUser;
     inline static std::shared_ptr<protocols::shell::Router> router;
-    inline static std::filesystem::path root;
     inline static std::atomic<int> counter{0};
     inline static std::shared_ptr<crypto::secrets::Manager> originalSecrets;  // Deps outlive this suite
 
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            std::cout << "[test_mfa_key_import] Skipping db tests due to missing environment variables." << std::endl;
-            return;
-        }
-        paths::enableTestMode();
-        root = std::filesystem::temp_directory_path() / ("vh_mfa_key_import_" + std::to_string(::getpid()));
-        paths::backingPath = root / "backing";
-        std::filesystem::create_directories(paths::backingPath);
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        runtime::Deps::init();
+        if (!setUpDbSuite("mfa_key_import", {.freshEngines = false})) return;
         originalSecrets = runtime::Deps::get().secretsManager;
-        fs::Filesystem::init(runtime::Deps::get().storageManager);
         runtime::Deps::get().fsCache = std::make_shared<fs::cache::Registry>();
         audit::Trail::instance()->resetForTesting();
-        superUser = identities::manager().userByName("admin");
         if (!runtime::Deps::get().shellUsageManager)
             runtime::Deps::get().shellUsageManager = std::make_shared<protocols::shell::UsageManager>();
         router = std::make_shared<protocols::shell::Router>();
@@ -109,12 +71,7 @@ protected:
         if (skipTests) return;
         runtime::Deps::get().secretsManager = originalSecrets;
         keys::resetForTesting();
-        std::error_code ec;
-        std::filesystem::remove_all(root, ec);
-    }
-
-    void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
+        tearDownDbSuite();
     }
 
     // A host that has these keys (rows in its secrets manager), or none (a fresh state directory).

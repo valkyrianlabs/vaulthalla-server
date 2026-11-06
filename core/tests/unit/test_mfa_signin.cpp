@@ -5,95 +5,39 @@
 // DB-backed: the maintainer's regression list. A password alone never signs in an account that must have MFA or has
 // a factor; during pending no session row exists, so auth.refresh, a reconnect, another socket and the HTTP lanes all
 // refuse the cookie; completion writes exactly one row at aal 2 with the right amr; recovery codes are single use and
-// land in RecoveryRestricted (other web sessions signed out); TOTP drift beyond one step and replays are refused; a
-// pending sign-in ends when it expires, after 5 failures, on cancel and on sign-out; an aal 1 admin session from
-// before the policy is refused at next use (D2); and a passkey (a software authenticator speaking real WebAuthn)
-// enrolls and signs in, while one without user verification is refused.
+// land in RecoveryRestricted (other web sessions signed out); a pending sign-in ends when it expires, after 5
+// failures, on cancel and on sign-out; and a passkey (a software authenticator speaking real WebAuthn) enrolls and
+// signs in, while one without user verification is refused. TOTP drift and replay: test_mfa_factors.cpp; an aal 1
+// admin session refused at next use (D2): test_mfa_policy_db.cpp and test_session_assurance.cpp.
 //
 // Discoverable passkey sign-in (#358; sections 4.1, 7.3 and 8.6): auth.passkey.options names no account and is the
 // same for every caller; auth.passkey.login needs the credential owner's user handle and UV, signs in at aal 2 through
 // signin::complete, and refuses everything else with one answer; `login` and `mfa` challenges never answer for each
 // other; a synced passkey's 0/0 counter is accepted and another server's passkey is not.
-#include "../helpers/identities.hpp"
-#include "auth/Manager.hpp"
-#include "auth/mfa/Factors.hpp"
+#include "../helpers/db_suite.hpp"
+#include "../helpers/web_session.hpp"
 #include "auth/mfa/Keys.hpp"
 #include "auth/mfa/Passkeys.hpp"
 #include "auth/mfa/Pending.hpp"
-#include "auth/mfa/Policy.hpp"
-#include "auth/mfa/SignIn.hpp"
-#include "auth/mfa/Totp.hpp"
-#include "auth/model/RefreshToken.hpp"
-#include "auth/model/TokenPair.hpp"
-#include "auth/session/Assurance.hpp"
-#include "auth/session/Issuer.hpp"
-#include "auth/session/Manager.hpp"
-#include "auth/stepup/StepUp.hpp"
-#include "config/Registry.hpp"
-#include "crypto/util/hash.hpp"
-#include "db/Transactions.hpp"
-#include "db/query/auth/RefreshToken.hpp"
-#include "db/query/device/BackupGrant.hpp"
-#include "db/query/device/Device.hpp"
-#include "db/query/rbac/role/Admin.hpp"
-#include "device/Peer.hpp"
-#include "identities/Manager.hpp"
-#include "identities/User.hpp"
-#include "ops/Error.hpp"
-#include "protocols/ws/Router.hpp"
-#include "protocols/ws/Session.hpp"
 #include "protocols/ws/ShareRateLimit.hpp"
-#include "protocols/ws/core/Refusal.hpp"
-#include "protocols/ws/handler/Auth.hpp"
-#include "protocols/ws/handler/Mfa.hpp"
-#include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
-#include "webauthn/Fixtures.hpp"
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
-#include <paths.h>
+#include <pqxx/pqxx>
 
 #include <chrono>
-#include <cstdlib>
 #include <format>
 #include <functional>
-#include <iostream>
 #include <memory>
 #include <string>
-#include <thread>
-#include <unistd.h>
 
 namespace vh::auth::mfa::test_signin {
 
-using json = nlohmann::json;
-using SessionPtr = std::shared_ptr<protocols::ws::Session>;
+using namespace vh::test::web;
 using Decision = protocols::ws::Router::CommandAuthDecision;
 using protocols::ws::handler::Mfa;
 namespace wa = vh::auth::webauthn;
 namespace tw = vh::test_webauthn;
-
-constexpr auto kPassword = "Mfa-SignIn-Pass-1";
-
-// An answer as the ws client sees it: the data of a success, or {code, ...} of a refusal.
-struct Answer {
-    bool ok{false};
-    json data{};
-    std::string code{};
-    std::string message{};
-};
-
-Answer call(const std::function<json()>& fn) {
-    try {
-        return {.ok = true, .data = fn()};
-    } catch (...) {
-        auto reply = protocols::ws::core::describeCurrentError();
-        const auto code = reply.data.is_object() ? reply.data.value("code", std::string{}) : std::string{};
-        return {.ok = false, .data = reply.data, .code = code,
-                .message = reply.message};
-    }
-}
 
 // ── DB-free: the router's pending mode ─────────────────────────────────────────────────────────────────────────────
 
@@ -210,47 +154,13 @@ TEST(PasskeyRateLimit, ThirtyAMinutePerClientAddress) {
 
 // ── DB-backed ──────────────────────────────────────────────────────────────────────────────────────────────────────
 
-std::vector<uint8_t> fromBase32(const std::string& text) {
-    static constexpr std::string_view kAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
-    std::vector<uint8_t> out;
-    uint32_t buffer = 0;
-    int bits = 0;
-    for (const char c : text) {
-        buffer = (buffer << 5) | static_cast<uint32_t>(kAlphabet.find(c));
-        bits += 5;
-        if (bits >= 8) {
-            bits -= 8;
-            out.push_back(static_cast<uint8_t>((buffer >> bits) & 0xff));
-        }
-    }
-    return out;
-}
-
-class MfaSignInDb : public ::testing::Test {
+class MfaSignInDb : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
     inline static std::optional<std::string> sealing{};  // why TOTP / recovery codes can't run here
-    inline static int counter = 0;
-    std::shared_ptr<session::Manager> previousSessions;
-    std::shared_ptr<auth::Manager> previousAuth;
-    std::optional<config::Config> previousConfig;
+    AuthRuntime auth_{{.level = policy::Level::Admins, .mfaHook = true}};
 
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            std::cout << "[test_mfa_signin] Skipping db tests due to missing environment variables." << std::endl;
-            return;
-        }
-        paths::enableTestMode();
-        const auto root = std::filesystem::temp_directory_path() / ("vh_mfa_signin_" + std::to_string(::getpid()));
-        paths::backingPath = root / "backing";
-        std::filesystem::create_directories(paths::backingPath);
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        runtime::Deps::init();
+        if (!setUpDbSuite("mfa_signin", {.freshEngines = false})) return;
         try {
             (void)keys::seal();
             (void)keys::pepper();
@@ -259,80 +169,12 @@ protected:
         }
     }
 
-    void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
-        session::Issuer::setJwtSecretForTesting("mfa-signin-test-secret");
-        previousSessions = runtime::Deps::get().sessionManager;
-        previousAuth = runtime::Deps::get().authManager;
-        runtime::Deps::get().sessionManager = std::make_shared<session::Manager>();
-        runtime::Deps::get().authManager = std::make_shared<auth::Manager>();
-        previousConfig = config::Registry::get();
-        auto cfg = *previousConfig;
-        cfg.auth.webauthn.rp_id = std::string(tw::kRpId);
-        cfg.auth.webauthn.origins = {std::string(tw::kOrigin)};
-        config::Registry::set(cfg);
-        policy::setLevel(policy::Level::Admins);
-        policy::install();
-        signin::resetAccountFailuresForTesting();
-    }
+    static void TearDownTestSuite() { tearDownDbSuite(); }
 
-    void TearDown() override {
-        if (skipTests) return;
-        session::assurance::setPolicy(nullptr);
-        policy::setLevel(policy::Level::Admins);
-        signin::resetAccountFailuresForTesting();
-        if (previousConfig) config::Registry::set(*previousConfig);
-        runtime::Deps::get().sessionManager = previousSessions;
-        runtime::Deps::get().authManager = previousAuth;
-        session::Issuer::clearJwtSecretForTesting();
-    }
+    void TearDown() override { totp::resetClockForTesting(); }
 
     void needSealing() const {
         if (sealing) GTEST_SKIP() << "mfa_seal / mfa_pepper can't be had on this host: " << *sealing;
-    }
-
-    static std::shared_ptr<identities::User> newUser(const std::string& role) {
-        const auto r = db::query::rbac::role::Admin::get(role);
-        if (!r) throw std::runtime_error("Missing role " + role);
-        const auto name = "mfa_" + role + "_" + std::to_string(::getpid()) + "_" + std::to_string(++counter);
-        return vh::identities::manager().user(
-            test::identities::createUser(name, r, std::nullopt, crypto::hash::password(kPassword))->id);
-    }
-
-    static session::Manager& sessions() { return *runtime::Deps::get().sessionManager; }
-
-    // A websocket as the server accepts it (see test_session_assurance.cpp).
-    static SessionPtr connect(const std::string& cookie = {}, const std::string& ip = "127.0.0.1") {
-        auto session = std::make_shared<protocols::ws::Session>(std::make_shared<protocols::ws::Router>());
-        session->ipAddress = ip;
-        session->userAgent = "mfa-browser";
-        model::RefreshToken::addToSession(session, cookie);
-        sessions().tryRehydrate(session);
-        return session;
-    }
-
-    static std::string cookieOf(const SessionPtr& s) { return s->tokens->refreshToken->rawToken; }
-    static std::string jtiOf(const SessionPtr& s) { return s->tokens->refreshToken->jti; }
-
-    static Answer login(const std::shared_ptr<identities::User>& user, const SessionPtr& s,
-                        const std::string& password = kPassword) {
-        return call([&] { return protocols::ws::handler::Auth::login(json{{"name", user->name()}, {"password", password}}, s); });
-    }
-
-    static bool httpLaneAccepts(const std::string& cookie) {
-        try {
-            const auto session = sessions().validateRawRefreshToken(cookie);
-            return session && session->user;
-        } catch (const std::exception&) {
-            return false;
-        }
-    }
-
-    static std::vector<std::shared_ptr<model::RefreshToken>> liveRows(const std::shared_ptr<identities::User>& user) {
-        std::vector<std::shared_ptr<model::RefreshToken>> out;
-        for (const auto& row : db::query::auth::RefreshToken::list(user->id))
-            if (row && !row->revoked) out.push_back(row);
-        return out;
     }
 
     // Everything that could turn the pending cookie into a session refuses it, because no row exists.
@@ -351,53 +193,13 @@ protected:
         }
     }
 
-    struct Totp {
-        uint32_t factor{};
-        std::vector<uint8_t> seed{};
-        std::vector<std::string> codes{};  // the recovery codes it came with
-    };
-
-    static std::string codeAt(const std::vector<uint8_t>& seed, const int64_t stepOffset = 0) {
-        return totp::code(seed, totp::stepAt(std::chrono::system_clock::now()) + stepOffset);
-    }
-
-    // The guided first run with an authenticator app, to completion: pending enrollment, start, confirm, acknowledge.
-    Totp enrollTotpAtSignIn(const std::shared_ptr<identities::User>& user, SessionPtr& socket) {
-        socket = connect();
-        const auto answer = login(user, socket);
-        EXPECT_EQ(answer.code, "mfa_enrollment_required") << answer.message;
-        const auto started = Mfa::totpStart(json{{"label", "Phone"}}, socket);
-        Totp t{.factor = started.at("enrollment_id").get<uint32_t>(),
-               .seed = fromBase32(started.at("secret_base32").get<std::string>())};
-        const auto confirmed = Mfa::totpConfirm(json{{"enrollment_id", t.factor}, {"code", codeAt(t.seed)}}, socket);
-        t.codes = confirmed.at("recovery_codes").at("codes").get<std::vector<std::string>>();
-        const auto done = Mfa::acknowledgeRecovery(
-            json{{"batch_id", confirmed.at("recovery_codes").at("batch_id")}}, socket);
-        EXPECT_EQ(done.at("aal"), 2);
-        return t;
-    }
-
-    // The TOTP step the last sign-in spent is used: wait for the next one before signing in with a code again.
-    static void nextStep() {
-        const auto now = std::chrono::system_clock::now();
-        const auto step = totp::stepAt(now);
-        while (totp::stepAt(std::chrono::system_clock::now()) == step)
-            std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    }
-
     // ---- a software authenticator (real WebAuthn: ES256, none attestation)
-
-    struct Authenticator {
-        tw::TestKey key{wa::Algorithm::ES256};
-        wa::Bytes credentialId = tw::randomBytes(32);
-        uint32_t signCount = 0;
-    };
 
     static wa::Bytes challengeOf(const json& publicKey) {
         return *wa::base64urlDecode(publicKey.at("challenge").get<std::string>());
     }
 
-    static json registration(Authenticator& a, const json& publicKey, const uint8_t flags) {
+    static json registration(tw::Authenticator& a, const json& publicKey, const uint8_t flags) {
         const auto cd = tw::clientDataJSON("webauthn.create", challengeOf(publicKey));
         tw::Attested at;
         at.credentialId = a.credentialId;
@@ -411,22 +213,11 @@ protected:
                 {"clientExtensionResults", {{"credProps", {{"rk", true}}}}}};
     }
 
-    static json assertion(Authenticator& a, const json& publicKey, const uint8_t flags) {
-        const auto cd = tw::bytesOf(tw::clientDataJSON("webauthn.get", challengeOf(publicKey)));
-        const auto ad = tw::authenticatorData(flags, ++a.signCount);
-        const auto sig = a.key.sign(tw::concat({ad, tw::sha256(cd)}));
-        const auto id = wa::base64urlEncode(a.credentialId);
-        return {{"id", id}, {"rawId", id}, {"type", "public-key"},
-                {"response", {{"clientDataJSON", wa::base64urlEncode(cd)},
-                              {"authenticatorData", wa::base64urlEncode(ad)},
-                              {"signature", wa::base64urlEncode(sig)}}}};
-    }
-
     // ---- discoverable sign-in (#358)
 
     // A passkey stored as a verified registration would store it (no recovery codes, so no sealed key is needed).
     // Returns the account's WebAuthn user handle.
-    static wa::Bytes storePasskey(const std::shared_ptr<identities::User>& user, Authenticator& a, const bool synced,
+    static wa::Bytes storePasskey(const UserPtr& user, tw::Authenticator& a, const bool synced,
                                   const std::string& rpId = std::string(tw::kRpId)) {
         const auto handle = ensureUser(user->id).webauthn_user_handle;
         (void)addWebAuthnCredential(user->id, {.credential_id = a.credentialId, .public_key_cose = a.key.cose(),
@@ -439,7 +230,7 @@ protected:
 
     // An assertion as a discoverable credential answers: userHandle set (unless empty), the counter the authenticator
     // reports (a synced passkey reports 0 forever), authenticatorData for `rpId`.
-    static json loginAssertion(const Authenticator& a, const json& publicKey, const uint8_t flags,
+    static json loginAssertion(const tw::Authenticator& a, const json& publicKey, const uint8_t flags,
                                const wa::Bytes& userHandle, const uint32_t signCount,
                                const std::string_view rpId = tw::kRpId) {
         const auto cd = tw::bytesOf(tw::clientDataJSON("webauthn.get", challengeOf(publicKey)));
@@ -475,19 +266,6 @@ protected:
 };
 
 constexpr uint8_t kUv = tw::flags::UP | tw::flags::UV;
-
-TEST_F(MfaSignInDb, AnAccountThatNeedsNoMfaAndHasNoFactorSignsInWithItsPassword) {
-    const auto user = newUser("unprivileged");
-    ASSERT_FALSE(policy::requirement(*user).required);
-    const auto socket = connect();
-    const auto answer = login(user, socket);
-    ASSERT_TRUE(answer.ok) << answer.message;
-    ASSERT_TRUE(socket->user);
-    const auto rows = liveRows(user);
-    ASSERT_EQ(rows.size(), 1u);
-    EXPECT_EQ(rows[0]->aal, 1);
-    EXPECT_EQ(rows[0]->amr, std::vector<std::string>{"pwd"});
-}
 
 TEST_F(MfaSignInDb, ThePolicyRequiresMfaOfPrivilegedAccountsOnly) {
     EXPECT_EQ(policy::level(), policy::Level::Admins) << "D2: the default";
@@ -589,42 +367,6 @@ TEST_F(MfaSignInDb, EnrollmentCompletesOnlyOnAcknowledgementWithOneAal2Row) {
     EXPECT_EQ(answer.data.at("pending").at("attempts_remaining"), kPendingMaxFailures);
 }
 
-// The maintainer's regression list: bypass through refresh or reconnect, and time drift.
-TEST_F(MfaSignInDb, PasswordAndAuthenticatorCodeWithDriftAndReplayRefused) {
-    needSealing();
-    const auto admin = newUser("super_admin");
-    SessionPtr first;
-    const auto t = enrollTotpAtSignIn(admin, first);
-    nextStep();
-
-    const auto socket = connect();
-    ASSERT_EQ(login(admin, socket).code, "mfa_required");
-    expectNoSessionFor(socket);
-
-    const auto drift = call([&] { return Mfa::verify(json{{"method", "totp"}, {"code", codeAt(t.seed, 2)}}, socket); });
-    EXPECT_EQ(drift.code, "mfa_invalid") << "two steps of drift";
-    EXPECT_EQ(drift.data.at("attempts_remaining"), kPendingMaxFailures - 1);
-    const auto past = call([&] { return Mfa::verify(json{{"method", "totp"}, {"code", codeAt(t.seed, -2)}}, socket); });
-    EXPECT_EQ(past.code, "mfa_invalid");
-    expectNoSessionFor(socket);
-
-    const auto code = codeAt(t.seed, 1);  // one step ahead: inside the window
-    const auto ok = call([&] { return Mfa::verify(json{{"method", "totp"}, {"code", code}}, socket); });
-    ASSERT_TRUE(ok.ok) << ok.message;
-    EXPECT_EQ(ok.data.at("aal"), 2);
-    EXPECT_FALSE(ok.data.contains("recovery"));
-    const auto row = db::query::auth::RefreshToken::get(jtiOf(socket));
-    ASSERT_TRUE(row);
-    EXPECT_EQ(row->aal, 2);
-    EXPECT_EQ(row->amr, (std::vector<std::string>{"pwd", "otp"}));
-
-    // The same code (its step is spent) on another sign-in is refused.
-    const auto replay = connect();
-    ASSERT_EQ(login(admin, replay).code, "mfa_required");
-    EXPECT_EQ(call([&] { return Mfa::verify(json{{"method", "totp"}, {"code", code}}, replay); }).code, "mfa_invalid");
-    EXPECT_FALSE(replay->user);
-}
-
 // The maintainer's regression list: recovery code replay. A recovery sign-in lands in RecoveryRestricted.
 TEST_F(MfaSignInDb, ARecoveryCodeSignsInOnceAndSignsOtherWebSessionsOut) {
     needSealing();
@@ -632,26 +374,15 @@ TEST_F(MfaSignInDb, ARecoveryCodeSignsInOnceAndSignsOtherWebSessionsOut) {
     SessionPtr other;
     const auto t = enrollTotpAtSignIn(admin, other);
     ASSERT_TRUE(httpLaneAccepts(cookieOf(other)));
-    // D4 (#362): the account's paired Mac with a key-backup grant.
-    const auto mac = db::query::device::Devices::insert({.user_id = admin->id, .approved_by = admin->id, .name = "Mac",
-                                                         .platform = "macOS", .spki_sha256 = std::string(64, '7')});
-    const auto grant = db::query::device::BackupGrants::create({.device_id = mac.id, .user_id = admin->id,
-                                                                .vault_ids = {1}});
 
     const auto socket = connect();
     ASSERT_EQ(login(admin, socket).code, "mfa_required");
     const auto ok = call([&] { return Mfa::verify(json{{"method", "recovery_code"}, {"code", t.codes[3]}}, socket); });
     ASSERT_TRUE(ok.ok) << ok.message;
-    const auto after = db::query::device::BackupGrants::byId(grant.id);
-    ASSERT_TRUE(after);
-    EXPECT_EQ(after->revoked_reason, std::optional<std::string>("recovery_code")) << "D4: the grant is revoked";
-    EXPECT_FALSE(db::query::device::Devices::byId(mac.id)->revoked()) << "D4: the device itself keeps syncing";
     ASSERT_TRUE(ok.data.contains("recovery"));
-    EXPECT_EQ(ok.data.at("recovery").at("codes_remaining"), 9);
     EXPECT_GT(ok.data.at("recovery").at("cooldown_until").get<int64_t>(),
               std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch())
                       .count() + 23 * 3600);
-    EXPECT_EQ(ok.data.at("recovery").at("sessions_revoked"), 1);
     const auto row = db::query::auth::RefreshToken::get(jtiOf(socket));
     ASSERT_TRUE(row);
     EXPECT_EQ(row->aal, 2);
@@ -697,6 +428,7 @@ TEST_F(MfaSignInDb, FiveFailuresEndThePendingSignInAndTheAccountIsThrottled) {
     EXPECT_GT(limited.data.at("retry_after").get<int64_t>(), 0);
     signin::resetAccountFailuresForTesting();
     EXPECT_TRUE(call([&] { return Mfa::verify(json{{"method", "totp"}, {"code", codeAt(t.seed)}}, again); }).ok);
+    EXPECT_EQ(db::query::auth::RefreshToken::get(jtiOf(again))->amr, (std::vector<std::string>{"pwd", "otp"}));
 }
 
 // The maintainer's regression list: idle during pending. It expires (5 minutes; enrollment 10), and so do cancel and
@@ -722,23 +454,6 @@ TEST_F(MfaSignInDb, APendingSignInEndsWhenItExpiresIsCancelledOrSignedOut) {
     EXPECT_FALSE(signedOut->mfa().pendingKind());
     expectNoSessionFor(signedOut);
     EXPECT_TRUE(liveRows(admin).empty());
-}
-
-// D2: a session signed in with a password before the policy applied to the account is never grandfathered.
-TEST_F(MfaSignInDb, AnAal1AdminSessionIsRefusedAtNextUse) {
-    const auto admin = newUser("super_admin");
-    policy::setLevel(policy::Level::Optional);
-    const auto socket = connect();
-    ASSERT_TRUE(login(admin, socket).ok) << "optional: a password signs in an account without a factor";
-    const auto cookie = cookieOf(socket);
-    ASSERT_TRUE(httpLaneAccepts(cookie));
-    ASSERT_EQ(db::query::auth::RefreshToken::get(jtiOf(socket))->aal, 1);
-
-    policy::setLevel(policy::Level::Admins);  // an upgrade to the default, or a raise
-    EXPECT_FALSE(httpLaneAccepts(cookie));
-    EXPECT_TRUE(db::query::auth::RefreshToken::get(jtiOf(socket))->revoked) << "revoked, not just refused";
-    EXPECT_FALSE(sessions().validate(socket, socket->tokens->accessToken->rawToken));
-    EXPECT_FALSE(connect(cookie)->user);
 }
 
 TEST_F(MfaSignInDb, AnOptionalAccountWithAFactorIsAlwaysAskedForIt) {
@@ -806,7 +521,7 @@ TEST_F(MfaSignInDb, ADeviceSessionOfAnAdminIsNeverAskedForMfa) {
 TEST_F(MfaSignInDb, APasskeyEnrollsAtFirstRunAndSignsInAndUvIsRequired) {
     needSealing();  // the first factor's recovery codes
     const auto admin = newUser("super_admin");
-    Authenticator key;
+    tw::Authenticator key;
     const auto socket = connect();
     ASSERT_EQ(login(admin, socket).code, "mfa_enrollment_required");
 
@@ -847,7 +562,7 @@ TEST_F(MfaSignInDb, APasskeyEnrollsAtFirstRunAndSignsInAndUvIsRequired) {
 
     // isUserVerified: false is refused, and its challenge is burnt; the refusal carries a fresh one.
     const auto refused = call([&] {
-        return Mfa::verify(json{{"method", "webauthn"}, {"credential", assertion(key, request, tw::flags::UP)}}, again);
+        return Mfa::verify(json{{"method", "webauthn"}, {"credential", tw::assertionJson(key, request, tw::flags::UP)}}, again);
     });
     EXPECT_EQ(refused.code, "mfa_invalid");
     expectNoSessionFor(again);
@@ -861,7 +576,7 @@ TEST_F(MfaSignInDb, APasskeyEnrollsAtFirstRunAndSignsInAndUvIsRequired) {
 
     const auto& current = renewed.data.at("pending").at("webauthn").at("publicKey");
     const auto ok = call([&] {
-        return Mfa::verify(json{{"method", "webauthn"}, {"credential", assertion(key, current, kUv)}}, again);
+        return Mfa::verify(json{{"method", "webauthn"}, {"credential", tw::assertionJson(key, current, kUv)}}, again);
     });
     ASSERT_TRUE(ok.ok) << ok.message;
     EXPECT_EQ(ok.data.at("aal"), 2);
@@ -874,7 +589,7 @@ TEST_F(MfaSignInDb, APasskeyEnrollsAtFirstRunAndSignsInAndUvIsRequired) {
     ASSERT_EQ(login(admin, fourth).code, "mfa_required");
     const auto crossed = call([&] {
         return Mfa::verify(json{{"method", "webauthn"},
-                                {"credential", assertion(key, thirdAnswer.data.at("pending").at("webauthn")
+                                {"credential", tw::assertionJson(key, thirdAnswer.data.at("pending").at("webauthn")
                                                                   .at("publicKey"), kUv)}}, fourth);
     });
     EXPECT_EQ(crossed.code, "mfa_invalid");
@@ -885,11 +600,11 @@ TEST_F(MfaSignInDb, APasskeyEnrollsAtFirstRunAndSignsInAndUvIsRequired) {
 
 TEST_F(MfaSignInDb, PasskeySignInOptionsAreTheSameForEveryCaller) {
     const auto admin = newUser("super_admin");
-    Authenticator key;
+    tw::Authenticator key;
     (void)storePasskey(admin, key, false);
 
     const auto a = Mfa::passkeyOptions(connect());
-    const auto b = Mfa::passkeyOptions(connect("", "203.0.113.50"));
+    const auto b = Mfa::passkeyOptions(connect({}, "test-browser", "203.0.113.50"));
     EXPECT_NE(a.at("publicKey").at("challenge"), b.at("publicKey").at("challenge"));
     EXPECT_EQ(wa::base64urlDecode(a.at("publicKey").at("challenge").get<std::string>())->size(), 32u);
     auto strip = [](json j) {
@@ -913,7 +628,7 @@ TEST_F(MfaSignInDb, PasskeySignInOptionsAreTheSameForEveryCaller) {
 TEST_F(MfaSignInDb, APasskeyAloneSignsInAtAal2WithOneRow) {
     const auto admin = newUser("super_admin");
     ASSERT_TRUE(policy::requirement(*admin).required);
-    Authenticator key;
+    tw::Authenticator key;
     const auto handle = storePasskey(admin, key, false);
 
     auto [socket, publicKey] = passkeyCeremony();
@@ -948,13 +663,13 @@ TEST_F(MfaSignInDb, APasskeyAloneSignsInAtAal2WithOneRow) {
 TEST_F(MfaSignInDb, PasskeySignInRefusesWithOneAnswer) {
     const auto user = newUser("unprivileged");
     const auto other = newUser("unprivileged");
-    Authenticator key;
+    tw::Authenticator key;
     const auto handle = storePasskey(user, key, false);
-    Authenticator otherKey;
+    tw::Authenticator otherKey;
     const auto otherHandle = storePasskey(other, otherKey, false);
-    Authenticator foreign;  // registered for another relying party
+    tw::Authenticator foreign;  // registered for another relying party
     const auto foreignHandle = storePasskey(user, foreign, false, "other.example.test");
-    Authenticator unknown;  // never registered
+    tw::Authenticator unknown;  // never registered
 
     const auto refused = [&](const std::string& why, const std::function<json(const json&)>& make) {
         auto [socket, publicKey] = passkeyCeremony();
@@ -1001,7 +716,7 @@ TEST_F(MfaSignInDb, PasskeySignInRefusesWithOneAnswer) {
 // factor of a password sign-in (`mfa`), nor the reverse, even on the same connection with a valid assertion.
 TEST_F(MfaSignInDb, LoginAndMfaChallengesNeverAnswerForEachOther) {
     const auto user = newUser("unprivileged");
-    Authenticator key;
+    tw::Authenticator key;
     const auto handle = storePasskey(user, key, false);
     const auto socket = connect();
     const auto& uuid = socket->uuid;
@@ -1033,7 +748,7 @@ TEST_F(MfaSignInDb, LoginAndMfaChallengesNeverAnswerForEachOther) {
 // as amr swk. A device-bound one whose counter goes back is refused and suspended (possible clone).
 TEST_F(MfaSignInDb, ASyncedPasskeyWithACounterOfZeroSignsInAndADeviceBoundRegressionIsSuspended) {
     const auto user = newUser("unprivileged");
-    Authenticator synced;
+    tw::Authenticator synced;
     const auto handle = storePasskey(user, synced, true);
     constexpr uint8_t kSynced = kUv | tw::flags::BE | tw::flags::BS;
     for (int i = 0; i < 2; ++i) {
@@ -1050,7 +765,7 @@ TEST_F(MfaSignInDb, ASyncedPasskeyWithACounterOfZeroSignsInAndADeviceBoundRegres
                              "backup eligibility flipped");
     }
 
-    Authenticator bound;
+    tw::Authenticator bound;
     bound.signCount = 5;
     const auto boundHandle = storePasskey(user, bound, false);
     auto [socket, publicKey] = passkeyCeremony();

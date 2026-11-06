@@ -230,7 +230,7 @@ void Server::handleClient(const int cfd) {
     try {
         // Bounded reads/writes from the first byte: a client that connects and goes quiet, or stops reading,
         // costs one thread slot for a bounded time and never blocks anyone else.
-        setCliSocketTimeout(cfd, SO_RCVTIMEO, kRequestTimeout);
+        setCliSocketTimeout(cfd, SO_RCVTIMEO, requestTimeout_);
         setCliSocketTimeout(cfd, SO_SNDTIMEO, kSendTimeout);
 
         const auto p = vh::platform::peerCredentials(cfd);
@@ -372,7 +372,7 @@ void Server::runLoop() {
         reapFinishedClients(false);
 
         pollfd pfd{.fd = listenFd, .events = POLLIN, .revents = 0};
-        const int rc = ::poll(&pfd, 1, static_cast<int>(kListenerCheckInterval.count()));
+        const int rc = ::poll(&pfd, 1, static_cast<int>(listenerCheckInterval_.count()));
         if (shouldStop()) break;
 
         if (rc == 0) {

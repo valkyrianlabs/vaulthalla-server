@@ -6,6 +6,8 @@
 // client sees it, without touching the shared server) and assert that the pool heals, never loses a slot,
 // and never blocks without bound.
 
+#include "../helpers/db_suite.hpp"
+
 #include "db/DBPool.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/identities/User.hpp"
@@ -27,11 +29,6 @@ namespace {
 
 constexpr std::size_t kPoolSize = 4;
 
-bool hasDbEnv() {
-    return std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-           std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME");
-}
-
 std::string testConnectionString() {
     return std::string("user=") + std::getenv("VH_TEST_DB_USER") + " password=" + std::getenv("VH_TEST_DB_PASS") +
            " host=" + std::getenv("VH_TEST_DB_HOST") + " port=" + std::getenv("VH_TEST_DB_PORT") +
@@ -49,7 +46,7 @@ protected:
     std::unique_ptr<pqxx::connection> admin;
 
     static void SetUpTestSuite() {
-        if (!hasDbEnv()) {
+        if (!vh::test::db::available()) {
             skipTests = true;
             std::cout << "[test_db_pool_reconnect] Skipping db tests due to missing environment variables." << std::endl;
             return;

@@ -53,19 +53,6 @@ std::shared_ptr<identities::User> testUser() {
     return user;
 }
 
-struct ScopedRuntimeSessionManager {
-    std::shared_ptr<Manager> previous;
-
-    explicit ScopedRuntimeSessionManager(std::shared_ptr<Manager> manager)
-        : previous(vh::runtime::Deps::get().sessionManager) {
-        vh::runtime::Deps::get().sessionManager = std::move(manager);
-    }
-
-    ~ScopedRuntimeSessionManager() {
-        vh::runtime::Deps::get().sessionManager = std::move(previous);
-    }
-};
-
 class SessionManagerRefreshTest : public ::testing::Test {
 protected:
     void SetUp() override {

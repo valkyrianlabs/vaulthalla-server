@@ -275,6 +275,7 @@ TEST_F(UpstreamEventsTest, VaulthallasOwnWritesAreNotSyncedBack) {
     const auto out = applier.applyVault(v.f.vault->id);
     EXPECT_EQ(out.self, 1u);
     EXPECT_EQ(passes, 0u) << "no pass for our own write";
+    EXPECT_EQ(ops::upstream::eventStatus(superUser, v.f.vault->id).at(0).inbox_self_24h, 1u);
     const auto after = db::query::sync::RemoteObjectIndex::getFile(v.f.vault->id, "mine.txt");
     ASSERT_NE(after, nullptr);
     EXPECT_EQ(after->encryption_iv, indexed->encryption_iv) << "the row keeps Vaulthalla's encryption metadata";

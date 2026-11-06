@@ -2,27 +2,13 @@
 // with aal / amr / auth_time; a socket signs in once; a planted cookie never becomes the victim's session; the MFA
 // policy hook is checked against the row on every use; and a user can list and revoke their own sessions, with
 // revocation immediate on the socket and the HTTP lanes.
-#include "../helpers/identities.hpp"
-#include "auth/Manager.hpp"
-#include "auth/model/RefreshToken.hpp"
-#include "auth/model/TokenPair.hpp"
-#include "auth/session/Assurance.hpp"
-#include "auth/session/Issuer.hpp"
-#include "auth/session/Manager.hpp"
+#include "../helpers/db_suite.hpp"
+#include "../helpers/web_session.hpp"
 #include "auth/session/Validator.hpp"
-#include "crypto/util/hash.hpp"
 #include "db/Transactions.hpp"
-#include "db/query/auth/RefreshToken.hpp"
-#include "db/query/rbac/role/Admin.hpp"
-#include "identities/Manager.hpp"
-#include "identities/User.hpp"
 #include "ops/Error.hpp"
 #include "ops/Sessions.hpp"
-#include "protocols/ws/Router.hpp"
-#include "protocols/ws/Session.hpp"
-#include "protocols/ws/handler/Auth.hpp"
 #include "rbac/PolicyEpoch.hpp"
-#include "runtime/Deps.hpp"
 #include "seed/include/init_db_tables.hpp"
 #include "seed/include/seed_db.hpp"
 
@@ -31,7 +17,6 @@
 #include <paths.h>
 
 #include <chrono>
-#include <cstdlib>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -39,10 +24,7 @@
 
 namespace vh::auth::session::test_assurance {
 
-using json = nlohmann::json;
-using SessionPtr = std::shared_ptr<protocols::ws::Session>;
-
-constexpr auto kPassword = "Session-Assurance-Pass-1";
+using namespace vh::test::web;
 
 // ── DB-free ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -95,12 +77,10 @@ class SessionAssuranceDb : public ::testing::Test {
 protected:
     inline static bool skipTests = false;
     inline static std::shared_ptr<identities::User> alice, mallory;
-    std::shared_ptr<Manager> previousSessions;
-    std::shared_ptr<auth::Manager> previousAuth;
+    AuthRuntime auth_{{.webauthn = false}};
 
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
+        if (!vh::test::db::available()) {
             skipTests = true;
             std::cout << "[test_session_assurance] Skipping db tests due to missing environment variables." << std::endl;
             return;
@@ -123,53 +103,13 @@ protected:
 
     void SetUp() override {
         if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
-        Issuer::setJwtSecretForTesting("session-assurance-test-secret");
-        previousSessions = runtime::Deps::get().sessionManager;
-        previousAuth = runtime::Deps::get().authManager;
-        runtime::Deps::get().sessionManager = std::make_shared<Manager>();
-        runtime::Deps::get().authManager = std::make_shared<auth::Manager>();
         // Every test starts with no signed-in sessions.
         db::query::auth::RefreshToken::revokeAll(alice->id);
         db::query::auth::RefreshToken::revokeAll(mallory->id);
     }
 
-    void TearDown() override {
-        if (skipTests) return;
-        assurance::setPolicy(nullptr);
-        runtime::Deps::get().sessionManager = previousSessions;
-        runtime::Deps::get().authManager = previousAuth;
-        Issuer::clearJwtSecretForTesting();
-    }
-
-    static Manager& sessions() { return *runtime::Deps::get().sessionManager; }
-
-    // A websocket as the server accepts it: the handshake hands the session its refresh cookie (none: empty), and
-    // tryRehydrate either signs it in from the cookie's row or gives it a fresh refresh token (Session::hydrateFromRequest).
-    static SessionPtr connect(const std::string& cookie = {}, const std::string& agent = "assurance-browser",
-                              const std::string& ip = "127.0.0.1") {
-        auto session = std::make_shared<protocols::ws::Session>(std::make_shared<protocols::ws::Router>());
-        session->ipAddress = ip;
-        session->userAgent = agent;
-        model::RefreshToken::addToSession(session, cookie);
-        sessions().tryRehydrate(session);
-        return session;
-    }
-
-    static std::string cookieOf(const SessionPtr& s) { return s->tokens->refreshToken->rawToken; }
-    static std::string jtiOf(const SessionPtr& s) { return s->tokens->refreshToken->jti; }
-
     static void login(const std::shared_ptr<identities::User>& user, const SessionPtr& s) {
         runtime::Deps::get().authManager->loginUser(user->name(), kPassword, s);
-    }
-
-    // An HTTP lane (preview/download/upload): the cookie alone.
-    static bool httpLaneAccepts(const std::string& cookie) {
-        try {
-            const auto session = sessions().validateRawRefreshToken(cookie);
-            return session && session->user;
-        } catch (const std::exception&) {
-            return false;
-        }
     }
 
     static int rowsFor(const std::shared_ptr<identities::User>& user) {

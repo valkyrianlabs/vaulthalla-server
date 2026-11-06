@@ -7,74 +7,43 @@
 // fake (outage, order, per-generation IV/key metadata, unversioned buckets, smart-cache release, price estimate).
 // DB-backed; skipped without the VH_TEST_DB_* environment.
 
+#include "../helpers/bytes.hpp"
+#include "../helpers/db_suite.hpp"
 #include "../helpers/versioned_bucket.hpp"
 
 #include "crypto/util/encrypt.hpp"
 #include "crypto/util/hash.hpp"
-#include "db/Transactions.hpp"
 #include "db/query/fs/File.hpp"
 #include "db/query/recovery/Blob.hpp"
 #include "db/query/recovery/Generation.hpp"
 #include "db/query/recovery/Policy.hpp"
 #include "db/query/recovery/Snapshot.hpp"
 #include "db/query/sync/Conflict.hpp"
-#include "db/query/sync/Event.hpp"
 #include "db/query/sync/RemoteObjectIndex.hpp"
-#include "fs/Filesystem.hpp"
-#include "fs/cache/Registry.hpp"
 #include "fs/model/File.hpp"
 #include "fs/model/file/Trashed.hpp"
 #include "fs/ops/file.hpp"
 #include "fuse/WorkingCopies.hpp"
-#include "identities/Manager.hpp"
-#include "identities/User.hpp"
-#include "ops/Vaults.hpp"
 #include "recovery/Store.hpp"
 #include "recovery/local/Backlog.hpp"
 #include "recovery/local/Versions.hpp"
 #include "recovery/provider/State.hpp"
-#include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
-#include "storage/CloudEngine.hpp"
-#include "storage/Manager.hpp"
 #include "storage/PlaintextReader.hpp"
-#include "sync/Cloud.hpp"
 #include "sync/ConflictResolver.hpp"
 #include "sync/Planner.hpp"
-#include "sync/model/Action.hpp"
-#include "sync/model/Event.hpp"
 #include "sync/model/RemoteManifest.hpp"
-#include "sync/model/RemotePolicy.hpp"
 #include "sync/model/ScopedOp.hpp"
-#include "sync/model/Throughput.hpp"
 #include "sync/rotation/Runtime.hpp"
-#include "sync/tasks/Download.hpp"
-#include "sync/tasks/Upload.hpp"
-#include "vault/APIKeyManager.hpp"
 #include "vault/EncryptionManager.hpp"
-#include "vault/model/APIKey.hpp"
-#include "vault/model/S3Vault.hpp"
 #include "vault/model/Vault.hpp"
 #include "vault/Content.hpp"
 
-#include <gtest/gtest.h>
-#include <paths.h>
 #include <pqxx/pqxx>
 
 #include <fcntl.h>
 
-#include <algorithm>
-#include <atomic>
-#include <chrono>
-#include <cstdlib>
-#include <filesystem>
 #include <functional>
-#include <iostream>
 #include <set>
-#include <string>
-#include <thread>
-#include <vector>
 
 namespace vh::test_recovery_versions {
 
@@ -87,50 +56,23 @@ using recovery::local::Reason;
 using test_support::versioned::VersionedBucket;
 using test_support::versioned::Versioning;
 
-std::string tag() {
-    static std::atomic<unsigned> n{0};
-    static const auto run = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count() % 100000);
-    return run + "v" + std::to_string(n.fetch_add(1));
-}
+std::string tag() { return test::uniqueTag('v'); }
 
-std::vector<uint8_t> bytes(const std::string& s) { return {s.begin(), s.end()}; }
-std::string str(const std::vector<uint8_t>& b) { return {b.begin(), b.end()}; }
+using vh::test::bin::bytes;
+using vh::test::bin::str;
 
-class RecoveryVersionsTest : public ::testing::Test {
+class RecoveryVersionsTest : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
-    inline static std::shared_ptr<identities::User> superUser;
     inline static sfs::path scratch;
 
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            std::cout << "[test_recovery_versions] Skipping db tests due to missing environment variables." << std::endl;
-            return;
-        }
-        paths::enableTestMode();
-        const auto root = sfs::temp_directory_path() / ("vh_recovery_versions_" + tag());
-        paths::backingPath = root / "backing";
-        paths::mountPath = root / "mount";
+        if (!setUpDbSuite("test_recovery_versions", {.freshEngines = false})) return;
         scratch = root / "scratch";
-        sfs::create_directories(paths::backingPath);
-        sfs::create_directories(paths::mountPath);
         sfs::create_directories(scratch);
-
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        runtime::Deps::init();
-        fs::Filesystem::init(runtime::Deps::get().storageManager);
-        superUser = vh::identities::manager().userByName("admin");
         recovery::local::invalidateAllPolicies();
     }
 
-    void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
-    }
+    static void TearDownTestSuite() { tearDownDbSuite(); }
 
     // ---- vaults ------------------------------------------------------------------------------------------------------
 
@@ -251,31 +193,7 @@ protected:
     // One regular sync pass, inline: the real planner and tasks; the index mutation (and manifest) only when every
     // transfer succeeded, as sync::Cloud does.
     static std::vector<sync::model::Action> runPass(const Cloud& c) {
-        auto cloud = std::make_shared<sync::Cloud>(c.engine);
-        cloud->event = std::make_shared<sync::model::Event>();
-        cloud->event->vault_id = c.engine->vault->id;
-        cloud->event->timestamp_begin = std::time(nullptr);
-        db::query::sync::Event::create(cloud->event);
-        cloud->initBins();
-        const auto plan = cloud->planPass();
-        bool ok = true;
-        for (const auto& a : plan) {
-            using AT = sync::model::ActionType;
-            if (a.type == AT::Upload) {
-                sync::tasks::Upload task(c.engine, a.local, cloud->op(sync::model::Throughput::Metric::UPLOAD));
-                auto done = task.promise.get_future();
-                task();
-                ok = std::get<bool>(done.get()) && ok;
-            } else if (a.type == AT::Download) {
-                sync::tasks::Download task(c.engine, a.remote, cloud->op(sync::model::Throughput::Metric::DOWNLOAD), false);
-                auto done = task.promise.get_future();
-                task();
-                ok = std::get<bool>(done.get()) && ok;
-            }
-        }
-        if (ok) c.engine->applyRemoteIndexMutation(plan);
-        cloud->clearBins();
-        return plan;
+        return test_support::versioned::runSyncPass(c.engine, {.requireOk = true}).plan;
     }
 
     static unsigned planned(const std::vector<sync::model::Action>& plan, const sync::model::ActionType type) {

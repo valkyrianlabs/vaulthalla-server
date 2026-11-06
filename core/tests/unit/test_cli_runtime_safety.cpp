@@ -145,8 +145,15 @@ protected:
         ensureUsageManager();
         dir = uniqueTempDir("vh_cli_server");
         socketPath = dir / "cli.sock";
+        startServer(protocols::shell::Server::kRequestTimeout);
+    }
+
+    // The daemon's request timeout unless a test needs a short one; the listener check runs every 100 ms (1 s).
+    void startServer(const std::chrono::milliseconds requestTimeout) {
+        if (server) server->stop();
         server = std::make_shared<protocols::shell::Server>();
         server->setSocketPath(socketPath.string());
+        server->setTimingForTesting(requestTimeout, 100ms);
         server->start();
 
         const auto deadline = std::chrono::steady_clock::now() + 5s;
@@ -189,13 +196,14 @@ TEST_F(ShellServerTest, IdleClientDoesNotBlockOtherClients) {
 }
 
 TEST_F(ShellServerTest, IdleClientIsDroppedAfterRequestTimeout) {
+    startServer(500ms);
     const int idle = connectTo(socketPath);
     ASSERT_GE(idle, 0);
 
     // hello (or group denial) arrives immediately; then silence from us must end in a closed connection,
     // not a thread parked forever.
     ASSERT_TRUE(readFrame(idle, 3s).has_value());
-    const auto deadline = protocols::shell::Server::kRequestTimeout + 5s;
+    const auto deadline = server->requestTimeout() + 5s;
     pollfd pfd{.fd = idle, .events = POLLIN, .revents = 0};
     ASSERT_GT(::poll(&pfd, 1, static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(deadline).count())), 0);
 

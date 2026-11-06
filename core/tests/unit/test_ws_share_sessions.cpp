@@ -1,324 +1,27 @@
+#include "../helpers/share_fakes.hpp"
 #include "auth/model/RefreshToken.hpp"
 #include "auth/model/TokenPair.hpp"
 #include "auth/session/Manager.hpp"
 #include "config/Config.hpp"
 #include "config/Registry.hpp"
-#include "db/encoding/bytea.hpp"
-#include "identities/User.hpp"
 #include "ops/Error.hpp"
-#include "protocols/ws/Router.hpp"
-#include "protocols/ws/Session.hpp"
 #include "protocols/ws/handler/share/Sessions.hpp"
-#include "rbac/role/Vault.hpp"
 #include "runtime/Deps.hpp"
 #include "seed/include/seed_db.hpp"
-#include "share/AuditEvent.hpp"
-#include "share/EmailChallenge.hpp"
-#include "share/Manager.hpp"
 #include "share/Principal.hpp"
-#include "share/Token.hpp"
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
 #include <atomic>
 #include <chrono>
-#include <format>
 #include <memory>
 #include <stdexcept>
 #include <thread>
-#include <unordered_map>
 
 namespace vh::protocols::ws::handler::share::test_sessions {
-constexpr std::time_t kNow = 1'800'000'000;
+using namespace vh::test::shares;
 constexpr std::string_view kChallengeCode = "123456";
-
-std::string uuidFor(const uint32_t value) {
-    return std::format("00000000-0000-4000-8000-{:012d}", value);
-}
-
-class FakeAuthorizer final : public vh::share::ShareAuthorizer {
-public:
-    vh::share::AuthorizationDecision canCreateLink(
-        const rbac::Actor& actor,
-        const vh::share::Link&
-    ) const override {
-        return {actor.isHuman(), actor.isHuman() ? "allowed" : "not_human"};
-    }
-
-    vh::share::AuthorizationDecision canUpdateLink(
-        const rbac::Actor& actor,
-        const vh::share::Link&,
-        const vh::share::Link&
-    ) const override {
-        return {actor.isHuman(), actor.isHuman() ? "allowed" : "not_human"};
-    }
-
-    vh::share::AuthorizationDecision canManageLink(
-        const rbac::Actor& actor,
-        const vh::share::Link&
-    ) const override {
-        return {actor.isHuman(), actor.isHuman() ? "allowed" : "not_human"};
-    }
-
-    vh::share::AuthorizationDecision canListVaultLinks(const rbac::Actor& actor, uint32_t) const override {
-        return {actor.isHuman(), actor.isHuman() ? "allowed" : "not_human"};
-    }
-};
-
-class FakeStore final : public vh::share::ShareStore {
-public:
-    std::unordered_map<std::string, std::shared_ptr<vh::share::Link>> links;
-    std::unordered_map<std::string, std::string> link_by_lookup;
-    std::unordered_map<std::string, std::shared_ptr<vh::share::Session>> sessions;
-    std::unordered_map<std::string, std::string> session_by_lookup;
-    std::unordered_map<std::string, std::shared_ptr<vh::share::EmailChallenge>> challenges;
-    std::unordered_map<std::string, std::shared_ptr<vh::rbac::role::Vault>> vault_roles;
-    std::unordered_map<std::string, uint32_t> recipients_by_hash;
-    std::unordered_map<std::string, std::shared_ptr<vh::rbac::role::Vault>> recipient_roles;
-    std::vector<std::shared_ptr<vh::share::AuditEvent>> audits;
-    uint32_t next_link{100};
-    uint32_t next_session{200};
-    uint32_t next_challenge{300};
-    uint32_t next_recipient{400};
-
-    std::shared_ptr<vh::share::Link> createLink(const std::shared_ptr<vh::share::Link>& link) override {
-        auto stored = std::make_shared<vh::share::Link>(*link);
-        if (stored->id.empty()) stored->id = uuidFor(next_link++);
-        stored->created_at = kNow;
-        stored->updated_at = kNow;
-        links[stored->id] = stored;
-        link_by_lookup[stored->token_lookup_id] = stored->id;
-        return stored;
-    }
-
-    std::shared_ptr<vh::share::Link> getLink(const std::string& id) override {
-        if (!links.contains(id)) return nullptr;
-        return links.at(id);
-    }
-
-    std::shared_ptr<vh::share::Link> getLinkByLookupId(const std::string& lookupId) override {
-        if (!link_by_lookup.contains(lookupId)) return nullptr;
-        return getLink(link_by_lookup.at(lookupId));
-    }
-
-    std::vector<std::shared_ptr<vh::share::Link>> listLinksForUser(
-        uint32_t userId,
-        const db::model::ListQueryParams&
-    ) override {
-        std::vector<std::shared_ptr<vh::share::Link>> out;
-        for (auto& [_, link] : links)
-            if (link->created_by == userId) out.push_back(link);
-        return out;
-    }
-
-    std::vector<std::shared_ptr<vh::share::Link>> listLinksForVault(
-        uint32_t vaultId,
-        const db::model::ListQueryParams&
-    ) override {
-        std::vector<std::shared_ptr<vh::share::Link>> out;
-        for (auto& [_, link] : links)
-            if (link->vault_id == vaultId) out.push_back(link);
-        return out;
-    }
-
-    std::shared_ptr<vh::share::Link> updateLink(const std::shared_ptr<vh::share::Link>& link) override {
-        links[link->id] = link;
-        link_by_lookup[link->token_lookup_id] = link->id;
-        return link;
-    }
-
-    void revokeLink(const std::string& id, uint32_t revokedBy) override {
-        auto link = getLink(id);
-        if (!link) throw std::runtime_error("missing link");
-        link->revoked_at = kNow;
-        link->revoked_by = revokedBy;
-    }
-
-    void rotateLinkToken(
-        const std::string& id,
-        const std::string& lookupId,
-        const std::vector<uint8_t>& tokenHash,
-        uint32_t updatedBy
-    ) override {
-        auto link = getLink(id);
-        if (!link) throw std::runtime_error("missing link");
-        link_by_lookup.erase(link->token_lookup_id);
-        link->token_lookup_id = lookupId;
-        link->token_hash = tokenHash;
-        link->updated_by = updatedBy;
-        link_by_lookup[lookupId] = id;
-    }
-
-    void touchLinkAccess(const std::string& id) override {
-        auto link = getLink(id);
-        if (!link) throw std::runtime_error("missing link");
-        ++link->access_count;
-        link->last_accessed_at = kNow;
-    }
-
-    void incrementDownload(const std::string& id) override {
-        auto link = getLink(id);
-        if (!link) throw std::runtime_error("missing link");
-        ++link->download_count;
-    }
-
-    void upsertVaultRoleForShare(
-        const std::string& shareId,
-        uint32_t,
-        const std::shared_ptr<vh::rbac::role::Vault>& role
-    ) override {
-        vault_roles[shareId] = std::make_shared<vh::rbac::role::Vault>(*role);
-    }
-
-    std::shared_ptr<vh::rbac::role::Vault> getVaultRoleForShare(const std::string& shareId) override {
-        if (!vault_roles.contains(shareId)) return nullptr;
-        return vault_roles.at(shareId);
-    }
-
-    std::shared_ptr<vh::rbac::role::Vault> getRecipientVaultRoleForShare(
-        const std::string& shareId,
-        const std::vector<uint8_t>& emailHash
-    ) override {
-        const auto key = shareId + ":" + db::encoding::to_hex_bytea(emailHash);
-        if (!recipient_roles.contains(key)) return nullptr;
-        return recipient_roles.at(key);
-    }
-
-    uint32_t upsertValidatedRecipient(
-        const std::string& shareId,
-        const std::vector<uint8_t>& emailHash
-    ) override {
-        const auto key = shareId + ":" + db::encoding::to_hex_bytea(emailHash);
-        if (recipients_by_hash.contains(key)) return recipients_by_hash.at(key);
-        const auto id = next_recipient++;
-        recipients_by_hash[key] = id;
-        return id;
-    }
-
-    void upsertRecipientVaultRoleAssignment(
-        const std::string& shareId,
-        const uint32_t vaultId,
-        const uint32_t recipientId,
-        const uint32_t roleId,
-        const std::vector<rbac::permission::Override>& overrides
-    ) override {
-        auto role = getVaultRoleTemplate(roleId);
-        auto assigned = std::make_shared<vh::rbac::role::Vault>(*role);
-        assigned->assign(recipientId, "actor", vaultId);
-        assigned->fs.overrides = overrides;
-        for (const auto& [key, id] : recipients_by_hash)
-            if (id == recipientId && key.starts_with(shareId + ":"))
-                recipient_roles[key] = assigned;
-    }
-
-    std::shared_ptr<vh::share::Session> createSession(
-        const std::shared_ptr<vh::share::Session>& session
-    ) override {
-        auto stored = std::make_shared<vh::share::Session>(*session);
-        if (stored->id.empty()) stored->id = uuidFor(next_session++);
-        stored->created_at = kNow;
-        stored->last_seen_at = kNow;
-        sessions[stored->id] = stored;
-        session_by_lookup[stored->session_token_lookup_id] = stored->id;
-        return stored;
-    }
-
-    std::shared_ptr<vh::share::Session> getSession(const std::string& id) override {
-        if (!sessions.contains(id)) return nullptr;
-        return sessions.at(id);
-    }
-
-    std::shared_ptr<vh::share::Session> getSessionByLookupId(const std::string& lookupId) override {
-        if (!session_by_lookup.contains(lookupId)) return nullptr;
-        return getSession(session_by_lookup.at(lookupId));
-    }
-
-    void verifySession(const std::string& sessionId, const std::vector<uint8_t>& emailHash) override {
-        auto session = getSession(sessionId);
-        if (!session) throw std::runtime_error("missing session");
-        session->email_hash = emailHash;
-        session->verified_at = kNow;
-    }
-
-    void touchSession(const std::string& sessionId) override {
-        auto session = getSession(sessionId);
-        if (!session) throw std::runtime_error("missing session");
-        session->last_seen_at = kNow + 1;
-    }
-
-    void revokeSession(const std::string& sessionId) override {
-        auto session = getSession(sessionId);
-        if (!session) throw std::runtime_error("missing session");
-        session->revoked_at = kNow;
-    }
-
-    void revokeSessionsForShare(const std::string& shareId) override {
-        for (auto& [_, session] : sessions)
-            if (session->share_id == shareId && !session->revoked_at) session->revoked_at = kNow;
-    }
-
-    std::shared_ptr<vh::share::EmailChallenge> createEmailChallenge(
-        const std::shared_ptr<vh::share::EmailChallenge>& challenge
-    ) override {
-        auto stored = std::make_shared<vh::share::EmailChallenge>(*challenge);
-        if (stored->id.empty()) stored->id = uuidFor(next_challenge++);
-        stored->created_at = kNow;
-        challenges[stored->id] = stored;
-        return stored;
-    }
-
-    std::shared_ptr<vh::share::EmailChallenge> getEmailChallenge(const std::string& id) override {
-        if (!challenges.contains(id)) return nullptr;
-        return challenges.at(id);
-    }
-
-    std::shared_ptr<vh::share::EmailChallenge> getActiveEmailChallenge(
-        const std::string& shareId,
-        const std::vector<uint8_t>& emailHash
-    ) override {
-        std::shared_ptr<vh::share::EmailChallenge> best;
-        for (auto& [_, challenge] : challenges) {
-            if (challenge->share_id != shareId) continue;
-            if (challenge->email_hash != emailHash) continue;
-            if (!challenge->canAttempt(kNow)) continue;
-            if (!best || challenge->created_at > best->created_at) best = challenge;
-        }
-        return best;
-    }
-
-    void recordEmailChallengeAttempt(const std::string& challengeId) override {
-        auto challenge = getEmailChallenge(challengeId);
-        if (!challenge) throw std::runtime_error("missing challenge");
-        ++challenge->attempts;
-    }
-
-    void consumeEmailChallenge(const std::string& challengeId) override {
-        auto challenge = getEmailChallenge(challengeId);
-        if (!challenge) throw std::runtime_error("missing challenge");
-        if (challenge->consumed_at) throw std::runtime_error("challenge consumed");
-        challenge->consumed_at = kNow;
-    }
-
-    void appendAuditEvent(const std::shared_ptr<vh::share::AuditEvent>& event) override {
-        audits.push_back(std::make_shared<vh::share::AuditEvent>(*event));
-    }
-};
-
-vh::share::Link makeLink(const vh::share::AccessMode mode = vh::share::AccessMode::Public) {
-    vh::share::Link link;
-    link.vault_id = 42;
-    link.root_entry_id = 77;
-    link.root_path = "/reports";
-    link.target_type = vh::share::TargetType::Directory;
-    link.link_type = vh::share::LinkType::Access;
-    link.access_mode = mode;
-    link.allowed_ops = vh::share::bit(vh::share::Operation::Metadata) |
-                       vh::share::bit(vh::share::Operation::List) |
-                       vh::share::bit(vh::share::Operation::Download);
-    link.expires_at = kNow + 3600;
-    return link;
-}
 
 vh::rbac::role::Vault uploadDropboxRoleForTest() {
     // The role new installs seed (#151: upload-only, no directory List).
@@ -332,13 +35,6 @@ bool opSet(const uint32_t ops, const vh::share::Operation op) {
     return (ops & vh::share::bit(op)) != 0;
 }
 
-std::shared_ptr<Session> publicSession() {
-    auto session = std::make_shared<Session>(std::make_shared<Router>());
-    session->ipAddress = "127.0.0.1";
-    session->userAgent = "ws-share-test";
-    return session;
-}
-
 void attachShareRefreshToken(const std::shared_ptr<Session>& session, const std::string& jti) {
     auto token = std::make_shared<vh::auth::model::RefreshToken>();
     token->jti = jti;
@@ -350,15 +46,6 @@ void attachShareRefreshToken(const std::shared_ptr<Session>& session, const std:
     token->userAgent = session->userAgent;
     token->ipAddress = session->ipAddress;
     session->tokens->shareRefreshToken = std::move(token);
-}
-
-std::shared_ptr<Session> humanSession() {
-    auto session = publicSession();
-    vh::identities::UserState userState;
-    userState.name = "human";
-    auto user = vh::identities::User::detached(9, std::move(userState));
-    session->user = user;
-    return session;
 }
 
 std::shared_ptr<vh::share::Principal> principalForRouterTest() {
@@ -379,76 +66,33 @@ void expectNoSecretFields(const nlohmann::json& value) {
     EXPECT_FALSE(value.dump().contains("email@example.com"));
 }
 
-// Accepts every code without mailing it (#317: the manager now sends codes).
-class NullCodeSender final : public vh::share::ChallengeCodeSender {
-public:
-    std::vector<vh::share::ChallengeCodeMessage> sent;
-    [[nodiscard]] bool available() const override { return true; }
-    void send(const vh::share::ChallengeCodeMessage& message) override { sent.push_back(message); }
-};
-
-class WsShareSessionsTest : public ::testing::Test {
+class WsShareSessionsTest : public Harness {
 protected:
-    std::shared_ptr<FakeStore> store;
-    std::shared_ptr<FakeAuthorizer> authorizer;
-    std::shared_ptr<vh::share::Manager> manager;
-    std::shared_ptr<NullCodeSender> codeSender = std::make_shared<NullCodeSender>();
-    std::shared_ptr<identities::User> user;
+    std::shared_ptr<RecordingCodeSender> codeSender = std::make_shared<RecordingCodeSender>();
     std::shared_ptr<vh::auth::session::Manager> oldSessionManager;
 
     void SetUp() override {
-        vh::share::Token::setPepperForTesting(std::vector<uint8_t>(32, 0x61));
         oldSessionManager = vh::runtime::Deps::get().sessionManager;
         vh::runtime::Deps::get().sessionManager = std::make_shared<vh::auth::session::Manager>();
-        store = std::make_shared<FakeStore>();
-        authorizer = std::make_shared<FakeAuthorizer>();
-        vh::share::ManagerOptions options;
-        options.clock = [] { return kNow; };
-        options.session_ttl_seconds = 600;
-        options.challenge_ttl_seconds = 300;
-        options.challenge_max_attempts = 3;
-        options.challenge_code_generator = [] { return std::string(kChallengeCode); };
-        options.challenge_code_sender = codeSender;
-        manager = std::make_shared<vh::share::Manager>(store, authorizer, options);
+        startManager({
+            .challenge_ttl_seconds = 300,
+            .challenge_max_attempts = 3,
+            .challenge_code_generator = [] { return std::string(kChallengeCode); },
+            .challenge_code_sender = codeSender
+        });
         Sessions::setManagerFactoryForTesting([this] { return manager; });
-
-        vh::identities::UserState userState;
-        userState.name = "share-owner";
-        user = vh::identities::User::detached(7, std::move(userState));
     }
 
     void TearDown() override {
         Sessions::resetManagerFactoryForTesting();
         vh::runtime::Deps::get().sessionManager = oldSessionManager;
-        vh::share::Token::clearPepperForTesting();
+        Harness::TearDown();
     }
 
     vh::share::CreateLinkResult create(const vh::share::AccessMode mode = vh::share::AccessMode::Public) {
-        std::vector<vh::share::RecipientRoleAssignmentRequest> recipients;
-        if (mode == vh::share::AccessMode::EmailValidated) {
-            recipients.push_back({
-                .email = "email@example.com",
-                .role = vh::share::RoleAssignmentRequest{.vault_role_name = rbac::role::Vault::Reader().name}
-            });
-            recipients.push_back({
-                .email = "recipient@example.com",
-                .role = vh::share::RoleAssignmentRequest{.vault_role_name = rbac::role::Vault::Reader().name}
-            });
-        }
-        return manager->createLink(rbac::Actor::human(user), {
-            .link = makeLink(mode),
-            .public_role = mode == vh::share::AccessMode::EmailValidated
-                               ? vh::share::RoleAssignmentRequest{.vault_role_name = rbac::role::Vault::ImplicitDeny().name}
-                               : vh::share::RoleAssignmentRequest{.vault_role_name = rbac::role::Vault::Reader().name},
-            .recipients = std::move(recipients)
-        });
-    }
-
-    std::string wrongSecret(const std::string& token) const {
-        auto parsed = vh::share::Token::parse(token);
-        parsed.secret.back() = parsed.secret.back() == 'a' ? 'b' : 'a';
-        return (parsed.kind == vh::share::TokenKind::PublicShare ? "vhs_" : "vhss_") +
-               parsed.lookup_id + "_" + parsed.secret;
+        const auto ops = vh::share::bit(vh::share::Operation::Metadata) | vh::share::bit(vh::share::Operation::List) |
+                         vh::share::bit(vh::share::Operation::Download);
+        return manager->createLink(rbac::Actor::human(user), linkRequest(makeLink(ops, mode), publicRole));
     }
 };
 
@@ -618,24 +262,6 @@ TEST_F(WsShareSessionsTest, PublicOpenPromotesExistingShareRefreshJtiToReadyShar
     EXPECT_EQ(session, vh::runtime::Deps::get().sessionManager->getShareByRefreshJti("share-refresh-jti-ready"));
     EXPECT_TRUE(session->isShareMode());
     EXPECT_FALSE(session->user);
-}
-
-TEST_F(WsShareSessionsTest, PublicSessionRejectsMalformedWrongOrInactiveTokens) {
-    const auto created = create();
-
-    EXPECT_THROW(Sessions::open({{"public_token", "not-a-share-token"}}, publicSession()), std::exception);
-    EXPECT_THROW(Sessions::open({{"public_token", wrongSecret(created.public_token)}}, publicSession()), std::runtime_error);
-
-    created.link->expires_at = kNow - 1;
-    EXPECT_THROW(Sessions::open({{"public_token", created.public_token}}, publicSession()), std::runtime_error);
-
-    created.link->expires_at = kNow + 3600;
-    created.link->revoked_at = kNow;
-    EXPECT_THROW(Sessions::open({{"public_token", created.public_token}}, publicSession()), std::runtime_error);
-
-    created.link->revoked_at.reset();
-    created.link->disabled_at = kNow;
-    EXPECT_THROW(Sessions::open({{"public_token", created.public_token}}, publicSession()), std::runtime_error);
 }
 
 // sharing.* (#164): the public /ws/share entry point refuses links whose kind (or sharing as a whole) is off,

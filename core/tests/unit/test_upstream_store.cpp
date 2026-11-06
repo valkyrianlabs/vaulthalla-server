@@ -2,6 +2,7 @@
 // keyed to (provider, account, bucket), the audit log, event channels/subscriptions, the durable inbox and write
 // intents, and the admin columns on API keys. DB-backed; skipped without the VH_TEST_DB_* environment.
 
+#include "../helpers/db_suite.hpp"
 #include "../helpers/identities.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/rbac/role/Admin.hpp"
@@ -12,14 +13,11 @@
 #include "db/query/upstream/Subscription.hpp"
 #include "db/query/upstream/WriteIntent.hpp"
 #include "db/query/vault/APIKey.hpp"
-#include "fs/Filesystem.hpp"
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "ops/Vaults.hpp"
 #include "rbac/role/Admin.hpp"
 #include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
 #include "storage/Manager.hpp"
 #include "storage/upstream/Guard.hpp"
 #include "vault/APIKeyManager.hpp"
@@ -28,14 +26,10 @@
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
-#include <paths.h>
 
 #include <atomic>
 #include <chrono>
-#include <cstdlib>
-#include <filesystem>
 #include <future>
-#include <iostream>
 #include <memory>
 #include <string>
 
@@ -56,31 +50,12 @@ std::string tag() {
 constexpr const char* kR2Account = "0123456789abcdef0123456789abcdef";
 const std::string kR2Endpoint = std::string("https://") + kR2Account + ".r2.cloudflarestorage.com";
 
-class UpstreamStoreTest : public ::testing::Test {
+class UpstreamStoreTest : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
     inline static UserPtr superUser;
 
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            std::cout << "[test_upstream_store] Skipping db tests due to missing environment variables." << std::endl;
-            return;
-        }
-        paths::enableTestMode();
-        const auto root = std::filesystem::temp_directory_path() / ("vh_upstream_store_" + tag());
-        paths::backingPath = root / "backing";
-        paths::mountPath = root / "mount";
-        std::filesystem::create_directories(paths::backingPath);
-        std::filesystem::create_directories(paths::mountPath);
-
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        runtime::Deps::init();
-        fs::Filesystem::init(runtime::Deps::get().storageManager);
+        if (!setUpDbSuite("test_upstream_store", {.freshEngines = false})) return;
 
         auto user = vh::test::identities::createUser("us_super_" + tag(), db::query::rbac::role::Admin::get("super_admin"),
                                                      "us_super@vaulthalla.test", "x", std::nullopt);
@@ -88,10 +63,14 @@ protected:
     }
 
     // The protection set is process-wide: leave it unloaded for the suites that run after this one.
-    static void TearDownTestSuite() { storage::upstream::guard::clearForTesting(); }
+    static void TearDownTestSuite() {
+        storage::upstream::guard::clearForTesting();
+        tearDownDbSuite();
+    }
 
     void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
+        Suite::SetUp();
+        if (IsSkipped()) return;
         storage::upstream::guard::clearForTesting();
     }
 

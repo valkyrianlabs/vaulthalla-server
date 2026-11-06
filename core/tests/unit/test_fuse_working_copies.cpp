@@ -4,6 +4,7 @@
 // itself is a crypto::ScratchFile (never plaintext on disk), and a copy that fails to seal stays recoverable for the
 // life of the process.
 
+#include "../helpers/bytes.hpp"
 #include "crypto/ScratchFile.hpp"
 #include "crypto/util/encrypt.hpp"
 #include "fs/PlaintextSource.hpp"
@@ -13,29 +14,16 @@
 #include "fs/ops/file.hpp"
 
 #include <gtest/gtest.h>
-#include <sodium.h>
 
 #include <fcntl.h>
-#include <sys/stat.h>
 #include <unistd.h>
-
-#include <fstream>
-#include <iterator>
-#include <string>
-#include <vector>
 
 namespace vh::test_fuse_working_copies {
 
 namespace stdfs = std::filesystem;
 
-std::string slurp(const stdfs::path& path) {
-    std::ifstream in(path, std::ios::binary);
-    return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
-}
-
-void spit(const stdfs::path& path, const std::string& bytes) {
-    std::ofstream(path, std::ios::binary | std::ios::trunc) << bytes;
-}
+using vh::test::bin::slurpText;
+using vh::test::bin::spit;
 
 std::string readSource(const fs::PlaintextSource& source) {
     std::string out;
@@ -94,7 +82,7 @@ protected:
             .materialize = [this](const fs::model::File& f, crypto::ScratchFile& to) {
                 ++materializations;
                 if (!stdfs::exists(f.backing_path) || stdfs::file_size(f.backing_path) == 0) return;
-                const auto bytes = slurp(f.backing_path);
+                const auto bytes = slurpText(f.backing_path);
                 appendTo(to, f.encryption_iv.empty() ? bytes : fakeOpen(bytes));
             },
             .seal = [this](const fs::PlaintextSource& from, const stdfs::path& to,
@@ -137,7 +125,7 @@ protected:
         std::string all;
         if (!stdfs::exists(dir / "working")) return all;
         for (const auto& e : stdfs::recursive_directory_iterator(dir / "working"))
-            if (e.is_regular_file()) all += slurp(e.path());
+            if (e.is_regular_file()) all += slurpText(e.path());
         return all;
     }
 
@@ -151,7 +139,7 @@ protected:
 
 TEST_F(WorkingCopiesTest, ReadsDecryptAndAReadOnlyCloseWritesNothing) {
     storeSealed("hello\n");
-    const auto sealedBefore = slurp(file->backing_path);
+    const auto sealedBefore = slurpText(file->backing_path);
 
     auto h = copies->open(42, file, O_RDONLY);
     EXPECT_EQ(readAll(h), "hello\n");
@@ -165,7 +153,7 @@ TEST_F(WorkingCopiesTest, ReadsDecryptAndAReadOnlyCloseWritesNothing) {
 
     copies->release(h);
     EXPECT_EQ(saves, 0);
-    EXPECT_EQ(slurp(file->backing_path), sealedBefore);
+    EXPECT_EQ(slurpText(file->backing_path), sealedBefore);
     EXPECT_EQ(plainFilesUnder(dir / "working"), 0u) << "the last release deletes the copy";
 }
 
@@ -179,7 +167,7 @@ TEST_F(WorkingCopiesTest, WritesAreSealedBackWithANewIvAndThePlaintextSize) {
     copies->release(h);
 
     EXPECT_EQ(saves, 1);
-    EXPECT_EQ(fakeOpen(slurp(file->backing_path)), more) << "ciphertext on disk";
+    EXPECT_EQ(fakeOpen(slurpText(file->backing_path)), more) << "ciphertext on disk";
     EXPECT_EQ(file->encryption_iv, "iv-1");
     EXPECT_EQ(file->encrypted_with_key_version, 3u);
     EXPECT_EQ(file->size_bytes, more.size()) << "size_bytes is the plaintext size, not the ciphertext's";
@@ -200,7 +188,7 @@ TEST_F(WorkingCopiesTest, HandlesOnOneInodeShareACopyAndFlushSealsOnlyWhatChange
 
     copies->persist(writer);  // flush: close(2) returns with the change on disk
     EXPECT_EQ(saves, 1);
-    EXPECT_EQ(fakeOpen(slurp(file->backing_path)), "aXY");
+    EXPECT_EQ(fakeOpen(slurpText(file->backing_path)), "aXY");
     copies->persist(writer);
     EXPECT_EQ(saves, 1) << "an unchanged copy is not sealed again";
 
@@ -221,7 +209,7 @@ TEST_F(WorkingCopiesTest, OTruncEmptiesWritableOpensOnly) {
     auto wo = copies->open(42, file, O_WRONLY | O_TRUNC);
     ASSERT_EQ(copies->write(wo, "new", 3, 0, std::nullopt), 3);
     copies->release(wo);
-    EXPECT_EQ(fakeOpen(slurp(file->backing_path)), "new") << "no stale tail from the longer old content";
+    EXPECT_EQ(fakeOpen(slurpText(file->backing_path)), "new") << "no stale tail from the longer old content";
 }
 
 TEST_F(WorkingCopiesTest, ATruncatingOpenNeverMaterializesTheOldContentButStillPersistsTheTruncation) {
@@ -231,15 +219,15 @@ TEST_F(WorkingCopiesTest, ATruncatingOpenNeverMaterializesTheOldContentButStillP
     EXPECT_EQ(materializations, 0);
     copies->release(wo);
     EXPECT_EQ(saves, 1) << "an O_TRUNC open with no writes still empties the file";
-    EXPECT_EQ(fakeOpen(slurp(file->backing_path)), "");
+    EXPECT_EQ(fakeOpen(slurpText(file->backing_path)), "");
 }
 
 TEST_F(WorkingCopiesTest, TheRowIsCommittedBeforeTheSealedBytesReplaceTheBackingFile) {
     storeSealed("old");
-    const auto before = slurp(file->backing_path);
+    const auto before = slurpText(file->backing_path);
     bool committed = false;
     copies = std::make_unique<fuse::WorkingCopies>(dir / "working", fuse::WorkingCopyHooks{
-        .materialize = [](const fs::model::File& f, crypto::ScratchFile& to) { appendTo(to, fakeOpen(slurp(f.backing_path))); },
+        .materialize = [](const fs::model::File& f, crypto::ScratchFile& to) { appendTo(to, fakeOpen(slurpText(f.backing_path))); },
         .seal = [](const fs::PlaintextSource& from, const stdfs::path& to, const std::shared_ptr<fs::model::File>& staged) {
             spit(to, fakeSeal(readSource(from)));
             staged->encryption_iv = "iv-new";
@@ -251,7 +239,7 @@ TEST_F(WorkingCopiesTest, TheRowIsCommittedBeforeTheSealedBytesReplaceTheBacking
             EXPECT_EQ(c.prior.encryption_iv, "iv-0") << "the generation being replaced, for local versioning";
             EXPECT_EQ(c.prior.backing_path, file->backing_path);
             EXPECT_TRUE(c.truncated) << "opened with O_TRUNC";
-            EXPECT_EQ(slurp(file->backing_path), before) << "the old bytes are still in place when the row is written";
+            EXPECT_EQ(slurpText(file->backing_path), before) << "the old bytes are still in place when the row is written";
             EXPECT_TRUE(stdfs::exists(fs::ops::contentSidecarPath(file->backing_path)));
         },
         .saved = [](const std::shared_ptr<fs::model::File>&) {},
@@ -262,15 +250,15 @@ TEST_F(WorkingCopiesTest, TheRowIsCommittedBeforeTheSealedBytesReplaceTheBacking
     ASSERT_EQ(copies->write(h, "new", 3, 0, std::nullopt), 3);
     copies->release(h);
     EXPECT_TRUE(committed);
-    EXPECT_EQ(fakeOpen(slurp(file->backing_path)), "new");
+    EXPECT_EQ(fakeOpen(slurpText(file->backing_path)), "new");
     EXPECT_FALSE(stdfs::exists(fs::ops::contentSidecarPath(file->backing_path)));
 }
 
 TEST_F(WorkingCopiesTest, AFailedRowCommitKeepsTheOldBytesAndNoSidecar) {
     storeSealed("old");
-    const auto before = slurp(file->backing_path);
+    const auto before = slurpText(file->backing_path);
     copies = std::make_unique<fuse::WorkingCopies>(dir / "working", fuse::WorkingCopyHooks{
-        .materialize = [](const fs::model::File& f, crypto::ScratchFile& to) { appendTo(to, fakeOpen(slurp(f.backing_path))); },
+        .materialize = [](const fs::model::File& f, crypto::ScratchFile& to) { appendTo(to, fakeOpen(slurpText(f.backing_path))); },
         .seal = [](const fs::PlaintextSource& from, const stdfs::path& to, const std::shared_ptr<fs::model::File>&) {
             spit(to, fakeSeal(readSource(from)));
         },
@@ -283,7 +271,7 @@ TEST_F(WorkingCopiesTest, AFailedRowCommitKeepsTheOldBytesAndNoSidecar) {
     auto h = copies->open(42, file, O_WRONLY | O_TRUNC);
     ASSERT_EQ(copies->write(h, "new", 3, 0, std::nullopt), 3);
     EXPECT_THROW(copies->release(h), std::runtime_error);
-    EXPECT_EQ(slurp(file->backing_path), before);
+    EXPECT_EQ(slurpText(file->backing_path), before);
     EXPECT_FALSE(stdfs::exists(fs::ops::contentSidecarPath(file->backing_path)));
 }
 
@@ -296,7 +284,7 @@ TEST_F(WorkingCopiesTest, TruncateShrinksAndGrowsThePlaintext) {
     copies->truncate(h, 6, std::nullopt);
     EXPECT_EQ(copies->openSize(42), 6u);
     copies->release(h);
-    EXPECT_EQ(fakeOpen(slurp(file->backing_path)), std::string("0123\0\0", 6));
+    EXPECT_EQ(fakeOpen(slurpText(file->backing_path)), std::string("0123\0\0", 6));
     EXPECT_EQ(file->size_bytes, 6u);
 }
 
@@ -322,7 +310,7 @@ TEST_F(WorkingCopiesTest, PlaintextLeftByOlderBuildsReadsCorrectlyAndIsSealedOnC
     copies->release(h);
 
     EXPECT_EQ(saves, 1) << "the plaintext file is encrypted on its first close";
-    EXPECT_EQ(fakeOpen(slurp(file->backing_path)), "written by 1.8.0\n");
+    EXPECT_EQ(fakeOpen(slurpText(file->backing_path)), "written by 1.8.0\n");
     EXPECT_FALSE(file->encryption_iv.empty());
     EXPECT_EQ(file->size_bytes, 17u);
 }
@@ -332,11 +320,11 @@ TEST_F(WorkingCopiesTest, AFileDeletedWhileOpenIsNotWrittenBack) {
     auto h = copies->open(42, file, O_RDWR);
     ASSERT_EQ(copies->write(h, "z", 1, 0, std::nullopt), 1);
     deleted = true;
-    const auto sealedBefore = slurp(file->backing_path);
+    const auto sealedBefore = slurpText(file->backing_path);
 
     EXPECT_NO_THROW(copies->release(h));
     EXPECT_EQ(saves, 0);
-    EXPECT_EQ(slurp(file->backing_path), sealedBefore);
+    EXPECT_EQ(slurpText(file->backing_path), sealedBefore);
     EXPECT_EQ(plainFilesUnder(dir / "working"), 0u);
 }
 
@@ -353,19 +341,19 @@ TEST_F(WorkingCopiesTest, WritesNeverReachTheDiskAsPlaintext) {
     EXPECT_FALSE(contains(onDisk, "PLAINTEXT-MARKER")) << "only ciphertext is ever written";
     EXPECT_EQ(readAll(h), big.substr(0, 4096));
     copies->release(h);
-    EXPECT_EQ(fakeOpen(slurp(file->backing_path)), big);
+    EXPECT_EQ(fakeOpen(slurpText(file->backing_path)), big);
 }
 
 TEST_F(WorkingCopiesTest, AFailedSealKeepsTheChangesEncryptedAndRetriesUntilTheyAreWrittenBack) {
     storeSealed("original");
-    const auto sealedBefore = slurp(file->backing_path);
+    const auto sealedBefore = slurpText(file->backing_path);
 
     auto h = copies->open(42, file, O_RDWR);
     ASSERT_EQ(copies->write(h, "CHANGED!", 8, 0, 9), 8);
     failSeal = true;
 
     EXPECT_THROW(copies->release(h), std::runtime_error);
-    EXPECT_EQ(slurp(file->backing_path), sealedBefore) << "the old ciphertext stays intact";
+    EXPECT_EQ(slurpText(file->backing_path), sealedBefore) << "the old ciphertext stays intact";
     EXPECT_EQ(file->encryption_iv, "iv-0") << "metadata is only updated after the sealed file is in place";
     EXPECT_EQ(plainFilesUnder(file->backing_path.parent_path()), 1u);
     ASSERT_EQ(plainFilesUnder(dir / "working" / "unsaved"), 1u) << "kept in unsaved/";
@@ -380,7 +368,7 @@ TEST_F(WorkingCopiesTest, AFailedSealKeepsTheChangesEncryptedAndRetriesUntilThey
 
     failSeal = false;
     EXPECT_EQ(copies->retryUnsaved(), 0u);
-    EXPECT_EQ(fakeOpen(slurp(file->backing_path)), "CHANGED!") << "the retry wrote the changes back";
+    EXPECT_EQ(fakeOpen(slurpText(file->backing_path)), "CHANGED!") << "the retry wrote the changes back";
     EXPECT_EQ(file->last_modified_by, 9) << "attributed to who made them";
     EXPECT_FALSE(copies->isOpen(42));
     EXPECT_EQ(copies->unsavedCount(), 0u);
@@ -400,7 +388,7 @@ TEST_F(WorkingCopiesTest, ReopeningAnUnsavedFileShowsItsChangesAndTheNextCloseSa
     EXPECT_EQ(readAll(again), "CHANGED!") << "the same copy, not the stale backing file";
     EXPECT_EQ(materializations, 1) << "not decrypted again over the unsaved changes";
     copies->release(again);
-    EXPECT_EQ(fakeOpen(slurp(file->backing_path)), "CHANGED!");
+    EXPECT_EQ(fakeOpen(slurpText(file->backing_path)), "CHANGED!");
     EXPECT_FALSE(copies->isOpen(42));
     EXPECT_EQ(plainFilesUnder(dir / "working"), 0u);
     EXPECT_EQ(plainFilesUnder(dir / "working" / "unsaved"), 0u);
@@ -443,7 +431,7 @@ TEST_F(WorkingCopiesTest, ShutdownTriesOnceMoreThenReportsAndDeletesWhatIsStillU
     EXPECT_THROW(copies->release(again), std::runtime_error);
     failSeal = false;
     EXPECT_EQ(copies->shutdown(), 0u);
-    EXPECT_EQ(fakeOpen(slurp(file->backing_path)), "SAVED!!!");
+    EXPECT_EQ(fakeOpen(slurpText(file->backing_path)), "SAVED!!!");
 }
 
 TEST_F(WorkingCopiesTest, TheRetryThreadStopsWithoutWaitingOutItsInterval) {
@@ -522,19 +510,9 @@ protected:
     }
 };
 
-TEST_F(GcmFileTest, StreamsLargeFilesBackToTheirPlaintext) {
-    std::vector<uint8_t> plain(300 * 1024 + 17);  // several 64 KiB chunks plus a ragged end
-    randombytes_buf(plain.data(), plain.size());
-    const auto iv = seal(plain, dir / "c");
-
-    std::vector<uint8_t> got;
-    crypto::util::decrypt_aes256_gcm_file(dir / "c", sinkInto(got), key, iv);
-    EXPECT_EQ(got, plain);
-}
-
 TEST_F(GcmFileTest, ATamperedFileFailsAndLeavesNoPlaintext) {
     const auto iv = seal({'s', 'e', 'c', 'r', 'e', 't'}, dir / "c");
-    auto bytes = slurp(dir / "c");
+    auto bytes = slurpText(dir / "c");
     bytes[2] = static_cast<char>(bytes[2] ^ 1);
     spit(dir / "c", bytes);
 

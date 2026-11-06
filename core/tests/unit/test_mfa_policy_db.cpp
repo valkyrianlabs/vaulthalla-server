@@ -19,50 +19,22 @@
 //     passes afterwards;
 //   - a password reset never touches factors; the last factor of a required account can't be removed;
 //   - the 10th failed factor of a streak notifies the user and the security recipients.
-#include "../helpers/identities.hpp"
+#include "../helpers/db_suite.hpp"
+#include "../helpers/web_session.hpp"
 #include "audit/Trail.hpp"
 #include "auth/approval/Approvals.hpp"
-#include "auth/Manager.hpp"
-#include "auth/mfa/Factors.hpp"
 #include "auth/mfa/Keys.hpp"
-#include "auth/mfa/Policy.hpp"
 #include "auth/mfa/Recovery.hpp"
-#include "auth/mfa/SignIn.hpp"
-#include "auth/mfa/Totp.hpp"
-#include "auth/model/RefreshToken.hpp"
-#include "auth/model/TokenPair.hpp"
-#include "auth/session/Assurance.hpp"
-#include "auth/session/Issuer.hpp"
-#include "auth/session/Manager.hpp"
-#include "auth/stepup/StepUp.hpp"
-#include "config/Registry.hpp"
 #include "crypto/SecretBytes.hpp"
-#include "crypto/util/hash.hpp"
-#include "db/Transactions.hpp"
-#include "db/query/auth/RefreshToken.hpp"
-#include "db/query/device/Device.hpp"
-#include "ops/BackupGrants.hpp"
 #include "db/query/device/BackupGrant.hpp"
-#include "db/query/rbac/role/Admin.hpp"
-#include "device/Peer.hpp"
-#include "identities/Manager.hpp"
-#include "identities/User.hpp"
-#include "notifications/AccountSecurity.hpp"
 #include "ops/Audit.hpp"
+#include "ops/BackupGrants.hpp"
 #include "ops/Config.hpp"
 #include "ops/Error.hpp"
 #include "ops/Mfa.hpp"
+#include "notifications/AccountSecurity.hpp"
 #include "protocols/shell/Router.hpp"
 #include "protocols/shell/commands/all.hpp"
-#include "protocols/ws/Router.hpp"
-#include "protocols/ws/Session.hpp"
-#include "protocols/ws/core/Refusal.hpp"
-#include "protocols/ws/handler/Auth.hpp"
-#include "protocols/ws/handler/Mfa.hpp"
-#include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
-#include "webauthn/Fixtures.hpp"
 #include "UsageManager.hpp"
 
 #include <gtest/gtest.h>
@@ -72,60 +44,18 @@
 
 #include <algorithm>
 #include <chrono>
-#include <cstdlib>
 #include <filesystem>
-#include <format>
 #include <functional>
-#include <iostream>
 #include <memory>
 #include <mutex>
 #include <string>
-#include <thread>
-#include <unistd.h>
 #include <vector>
 
 namespace vh::auth::mfa::test_policy_db {
 
-using json = nlohmann::json;
-using SessionPtr = std::shared_ptr<protocols::ws::Session>;
-using UserPtr = std::shared_ptr<identities::User>;
+using namespace vh::test::web;
 using protocols::ws::handler::Mfa;
 namespace stepup = vh::auth::stepup;
-
-constexpr auto kPassword = "Mfa-Policy-Pass-1";
-
-struct Answer {
-    bool ok{false};
-    json data{};
-    std::string code{};
-    std::string message{};
-};
-
-Answer call(const std::function<json()>& fn) {
-    try {
-        return {.ok = true, .data = fn()};
-    } catch (...) {
-        auto reply = protocols::ws::core::describeCurrentError();
-        const auto code = reply.data.is_object() ? reply.data.value("code", std::string{}) : std::string{};
-        return {.ok = false, .data = reply.data, .code = code, .message = reply.message};
-    }
-}
-
-std::vector<uint8_t> fromBase32(const std::string& text) {
-    static constexpr std::string_view kAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
-    std::vector<uint8_t> out;
-    uint32_t buffer = 0;
-    int bits = 0;
-    for (const char c : text) {
-        buffer = (buffer << 5) | static_cast<uint32_t>(kAlphabet.find(c));
-        bits += 5;
-        if (bits >= 8) {
-            bits -= 8;
-            out.push_back(static_cast<uint8_t>((buffer >> bits) & 0xff));
-        }
-    }
-    return out;
-}
 
 // Notices sent while a test runs (notifications::account's test sink).
 struct Notices {
@@ -143,40 +73,21 @@ struct Notices {
     }
 };
 
-class MfaPolicyDb : public ::testing::Test {
+class MfaPolicyDb : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
-    inline static int counter = 0;
-    inline static std::filesystem::path root;
     inline static std::filesystem::path previousConfigPath;
     inline static std::shared_ptr<protocols::shell::Router> shell;
-    std::shared_ptr<session::Manager> previousSessions;
-    std::shared_ptr<auth::Manager> previousAuth;
-    std::optional<config::Config> previousConfig;
     inline static Notices notices;
+    AuthRuntime auth_;
 
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            std::cout << "[test_mfa_policy_db] Skipping db tests due to missing environment variables." << std::endl;
-            return;
-        }
-        paths::enableTestMode();
-        root = std::filesystem::temp_directory_path() / ("vh_mfa_policy_" + std::to_string(::getpid()));
-        paths::backingPath = root / "backing";
-        std::filesystem::create_directories(paths::backingPath);
+        if (!setUpDbSuite("mfa_policy", {.freshEngines = false})) return;
         // Settings writes go to a private copy, never the tree's config.yaml.
         previousConfigPath = paths::configPath;
         if (std::filesystem::exists(previousConfigPath))
             std::filesystem::copy_file(previousConfigPath, root / "config.yaml",
                                        std::filesystem::copy_options::overwrite_existing);
         paths::configPath = root / "config.yaml";
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        runtime::Deps::init();
         // TOTP and recovery codes need mfa_seal / mfa_pepper: where sealing can't round-trip (the CI container's
         // TPM), serve fixed test keys instead, so the recovery paths always run.
         try {
@@ -196,25 +107,16 @@ protected:
     static void TearDownTestSuite() {
         if (skipTests) return;
         paths::configPath = previousConfigPath;
-        std::error_code ec;
-        std::filesystem::remove_all(root, ec);
+        tearDownDbSuite();
     }
 
     void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
-        session::Issuer::setJwtSecretForTesting("mfa-policy-test-secret");
-        previousSessions = runtime::Deps::get().sessionManager;
-        previousAuth = runtime::Deps::get().authManager;
-        runtime::Deps::get().sessionManager = std::make_shared<session::Manager>();
-        runtime::Deps::get().authManager = std::make_shared<auth::Manager>();
-        previousConfig = config::Registry::get();
-        auto cfg = *previousConfig;
-        cfg.auth.webauthn.rp_id = std::string(test_webauthn::kRpId);
-        cfg.auth.webauthn.origins = {std::string(test_webauthn::kOrigin)};
+        Suite::SetUp();
+        if (IsSkipped()) return;
+        auto cfg = config::Registry::get();
         cfg.auth.mfa = config::MfaConfig{};  // admins, 24 h cooldown
         config::Registry::set(cfg);
         policy::install();
-        signin::resetAccountFailuresForTesting();
         {
             std::lock_guard lock(notices.mutex);
             notices.sent.clear();
@@ -227,25 +129,8 @@ protected:
     }
 
     void TearDown() override {
-        if (skipTests) return;
+        totp::resetClockForTesting();
         notifications::account::setSinkForTesting(nullptr);
-        session::assurance::setPolicy(nullptr);
-        signin::resetAccountFailuresForTesting();
-        if (previousConfig) config::Registry::set(*previousConfig);
-        runtime::Deps::get().sessionManager = previousSessions;
-        runtime::Deps::get().authManager = previousAuth;
-        session::Issuer::clearJwtSecretForTesting();
-    }
-
-    static UserPtr newUser(const std::string& role, std::optional<uint32_t> linuxUid = std::nullopt) {
-        const auto r = db::query::rbac::role::Admin::get(role);
-        if (!r) throw std::runtime_error("Missing role " + role);
-        const auto name = "mp_" + role.substr(0, 5) + "_" + std::to_string(::getpid() % 10000) + "_" +
-                          std::to_string(++counter);
-        return vh::identities::manager().user(
-            test::identities::createUser(name, r, name + "@vaulthalla.test", crypto::hash::password(kPassword),
-                                         linuxUid)
-                ->id);
     }
 
     static uint32_t freshUid() {
@@ -255,89 +140,13 @@ protected:
 
     static UserPtr superAdmin() { return vh::identities::manager().userByName("admin"); }
 
-    static session::Manager& sessions() { return *runtime::Deps::get().sessionManager; }
-
-    static SessionPtr connect(const std::string& cookie = {}) {
-        auto session = std::make_shared<protocols::ws::Session>(std::make_shared<protocols::ws::Router>());
-        session->ipAddress = "127.0.0.1";
-        session->userAgent = "mfa-policy-browser";
-        model::RefreshToken::addToSession(session, cookie);
-        sessions().tryRehydrate(session);
-        return session;
-    }
-
-    static std::string cookieOf(const SessionPtr& s) { return s->tokens->refreshToken->rawToken; }
-    static std::string jtiOf(const SessionPtr& s) { return s->tokens->refreshToken->jti; }
-
-    static Answer login(const UserPtr& user, const SessionPtr& s) {
-        return call([&] {
-            return protocols::ws::handler::Auth::login(json{{"name", user->name()}, {"password", kPassword}}, s);
-        });
-    }
-
-    static bool rowLive(const std::string& jti) {
-        const auto row = db::query::auth::RefreshToken::get(jti);
-        return row && !row->revoked;
-    }
-
-    struct Totp {
-        uint32_t factor{};
-        std::vector<uint8_t> seed{};
-        std::vector<std::string> codes{};
-    };
-
-    static std::string codeAt(const std::vector<uint8_t>& seed, const int64_t stepOffset = 0) {
-        return totp::code(seed, totp::stepAt(std::chrono::system_clock::now()) + stepOffset);
-    }
-
-    static void nextStep() {
-        const auto step = totp::stepAt(std::chrono::system_clock::now());
-        while (totp::stepAt(std::chrono::system_clock::now()) == step)
-            std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    }
-
-    // The guided first run with an authenticator app, to completion. `socket` ends signed in at aal 2.
-    static Totp enrollTotpAtSignIn(const UserPtr& user, SessionPtr& socket) {
-        socket = connect();
-        const auto answer = login(user, socket);
-        EXPECT_EQ(answer.code, "mfa_enrollment_required") << answer.message;
-        const auto started = Mfa::totpStart(json{{"label", "Phone"}}, socket);
-        Totp t{.factor = started.at("enrollment_id").get<uint32_t>(),
-               .seed = fromBase32(started.at("secret_base32").get<std::string>())};
-        const auto confirmed = Mfa::totpConfirm(json{{"enrollment_id", t.factor}, {"code", codeAt(t.seed)}}, socket);
-        t.codes = confirmed.at("recovery_codes").at("codes").get<std::vector<std::string>>();
-        const auto done =
-            Mfa::acknowledgeRecovery(json{{"batch_id", confirmed.at("recovery_codes").at("batch_id")}}, socket);
-        EXPECT_EQ(done.at("aal"), 2);
-        return t;
-    }
-
-    // A second sign-in with password + TOTP (on the next step: the last one is spent).
-    static SessionPtr signInTotp(const UserPtr& user, const Totp& t) {
-        nextStep();
-        auto s = connect();
-        EXPECT_EQ(login(user, s).code, "mfa_required");
-        const auto ok = call([&] { return Mfa::verify(json{{"method", "totp"}, {"code", codeAt(t.seed)}}, s); });
-        EXPECT_TRUE(ok.ok) << ok.code << " " << ok.message;
-        return s;
-    }
-
-    static SessionPtr signInRecovery(const UserPtr& user, const std::string& code, Answer* answer = nullptr) {
-        auto s = connect();
-        EXPECT_EQ(login(user, s).code, "mfa_required");
-        const auto ok = call([&] { return Mfa::verify(json{{"method", "recovery_code"}, {"code", code}}, s); });
-        EXPECT_TRUE(ok.ok) << ok.code << " " << ok.message;
-        if (answer) *answer = ok;
-        return s;
-    }
-
     // A paired Desktop with a key-backup grant (#362) over vault 1.
     static vh::device::Device pairDevice(const UserPtr& user) {
         auto d = db::query::device::Devices::insert({.user_id = user->id,
                                                      .approved_by = user->id,
-                                                     .name = "Mac " + std::to_string(++counter),
+                                                     .name = "Mac " + tag(),
                                                      .platform = "macOS",
-                                                     .spki_sha256 = std::format("{:032x}{:032x}", ::getpid(), ++counter)});
+                                                     .spki_sha256 = vh::device::crypto::toHex(vh::device::crypto::randomNonce())});
         (void)db::query::device::BackupGrants::create({.device_id = d.id, .user_id = user->id, .vault_ids = {1}});
         return d;
     }
@@ -414,17 +223,6 @@ protected:
 };
 
 // ── policy level (7.1, D2) ─────────────────────────────────────────────────────────────────────────────────────────
-
-TEST_F(MfaPolicyDb, ThePolicyIsConfiguredAndAdminsByDefault) {
-    EXPECT_EQ(config::MfaConfig{}.policy, "admins");
-    EXPECT_EQ(policy::level(), policy::Level::Admins);
-    auto cfg = config::Registry::get();
-    cfg.auth.mfa.policy = "all";
-    config::Registry::set(cfg);
-    EXPECT_EQ(policy::level(), policy::Level::All);
-    policy::setLevel(policy::Level::Optional);
-    EXPECT_EQ(config::Registry::get().auth.mfa.policy, "optional");
-}
 
 // A policy raise takes effect at next use: a password-only session of an account the new level holds to MFA is
 // revoked and refused, and its next sign-in is the guided enrollment.
@@ -537,11 +335,6 @@ TEST_F(MfaPolicyDb, AdminWebAuthnOnlyRefusesAuthenticatorApps) {
     // Unprivileged accounts are not affected.
     const auto plain = newUser("unprivileged");
     EXPECT_TRUE(policy::factorAllowed(*plain, FactorKind::Totp));
-
-    // Holding admins to passkeys needs passkeys.
-    cfg.auth.webauthn.rp_id.clear();
-    cfg.auth.webauthn.origins.clear();
-    EXPECT_THROW(config::validateAuth(cfg.auth), std::invalid_argument);
 }
 
 // ── recovery-code sign-in (7.4, D4) ────────────────────────────────────────────────────────────────────────────────

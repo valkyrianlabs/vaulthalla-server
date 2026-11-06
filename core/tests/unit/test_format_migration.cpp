@@ -7,6 +7,8 @@
 //                          (idempotent), hard-linked blobs converted once with their file, no plaintext on disk, refusals
 //                          (tampering, a drifted size, rotation/salvage running, open files, changed rows), pacing.
 
+#include "../helpers/temp_dir.hpp"
+#include "../helpers/bytes.hpp"
 #include "crypto/util/encrypt.hpp"
 #include "fs/model/File.hpp"
 #include "recovery/Store.hpp"
@@ -20,22 +22,12 @@
 #include "vault/model/Vault.hpp"
 
 #include <gtest/gtest.h>
-#include <sodium.h>
-
-#include <sys/stat.h>
-#include <unistd.h>
 
 #include <algorithm>
-#include <atomic>
-#include <filesystem>
-#include <fstream>
 #include <map>
 #include <mutex>
 #include <optional>
-#include <random>
 #include <set>
-#include <string>
-#include <vector>
 
 namespace vh::test_format_migration {
 
@@ -45,58 +37,22 @@ namespace conv = vault::conversion;
 namespace rotation = sync::rotation;
 using Bytes = std::vector<uint8_t>;
 using FileSP = std::shared_ptr<fs::model::File>;
+using vh::test::bin::inodeOf;
+using vh::test::bin::randomBytes;
+using vh::test::bin::slurp;
+using vh::test::bin::spit;
+using test::TempDir;
 
 constexpr unsigned int kVault = 37;
 constexpr unsigned int kRetired = 2;
 constexpr unsigned int kCurrent = 3;
 constexpr uint64_t kChunk = 64 * 1024;
 
-Bytes randomBytes(const std::size_t n, const unsigned seed) {
-    std::mt19937 rng(seed);
-    Bytes out(n);
-    for (auto& b : out) b = static_cast<uint8_t>(rng());
-    return out;
-}
-
-Bytes slurp(const stdfs::path& p) {
-    std::ifstream in(p, std::ios::binary);
-    return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
-}
-
-void spit(const stdfs::path& p, const Bytes& bytes) {
-    stdfs::create_directories(p.parent_path());
-    std::ofstream out(p, std::ios::binary | std::ios::trunc);
-    out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-}
-
-ino_t inodeOf(const stdfs::path& p) {
-    struct stat st{};
-    return ::stat(p.c_str(), &st) == 0 ? st.st_ino : 0;
-}
-
 conv::Digest blake2b(const Bytes& bytes) {
     conv::Digest d{};
     crypto_generichash(d.data(), d.size(), bytes.data(), bytes.size(), nullptr, 0);
     return d;
 }
-
-class TempDir {
-public:
-    TempDir() : path_(stdfs::temp_directory_path() / ("vh_format_migration_" + std::to_string(::getpid()) + "_" +
-                                                       std::to_string(counter_++))) {
-        stdfs::remove_all(path_);
-        stdfs::create_directories(path_);
-    }
-    ~TempDir() {
-        std::error_code ec;
-        stdfs::remove_all(path_, ec);
-    }
-    [[nodiscard]] const stdfs::path& path() const { return path_; }
-
-private:
-    stdfs::path path_;
-    static inline std::atomic<int> counter_{0};
-};
 
 class FormatMigrationTest : public ::testing::Test {
 protected:
@@ -362,7 +318,7 @@ protected:
         }
     }
 
-    TempDir dir_;
+    TempDir dir_{"vh_format_migration"};
     Bytes key_, retiredKey_;
     std::shared_ptr<vault::EncryptionManager> em_;
     std::shared_ptr<storage::Engine> engine_;

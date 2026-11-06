@@ -5,12 +5,13 @@
 // the key owner's id and skipped it, and CloudEngine passed the vault owner's id, so an S3 vault using a key its
 // owner may consume but does not own could not build its engine. Authorization now lives once in ops::api_keys.
 
+#include "../helpers/db_suite.hpp"
 #include "../helpers/identities.hpp"
+#include "../helpers/parity.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/identities/User.hpp"
 #include "db/query/rbac/role/Admin.hpp"
 #include "db/query/vault/APIKey.hpp"
-#include "fs/Filesystem.hpp"
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "ops/APIKeys.hpp"
@@ -23,24 +24,16 @@
 #include "protocols/ws/Session.hpp"
 #include "protocols/ws/handler/vault/APIKeys.hpp"
 #include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
 #include "storage/Manager.hpp"
-#include "UsageManager.hpp"
 #include "vault/APIKeyManager.hpp"
 #include "vault/model/APIKey.hpp"
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
-#include <paths.h>
 #include <pqxx/pqxx>
 
 #include <algorithm>
-#include <atomic>
-#include <chrono>
-#include <cstdlib>
 #include <filesystem>
-#include <iostream>
 #include <memory>
 #include <string>
 
@@ -49,17 +42,12 @@ namespace vh::test_ops_parity_api_keys {
 using json = nlohmann::json;
 using UserPtr = std::shared_ptr<identities::User>;
 
-std::string keysTag() {
-    static std::atomic<unsigned> n{0};
-    static const auto run = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count() % 100000);
-    return run + "x" + std::to_string(n.fetch_add(1));
-}
+using vh::test::parity::tag;
 
-class APIKeyParityTest : public ::testing::Test {
+class APIKeyParityTest : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
     inline static std::shared_ptr<protocols::shell::Router> router;
-    inline static UserPtr superUser, alice, bob;
+    inline static UserPtr alice, bob;
 
     static UserPtr createUser(const std::string& name, const std::string& roleName) {
         auto user = vh::test::identities::createUser(name, db::query::rbac::role::Admin::get(roleName), name + "@vaulthalla.test", "x", std::nullopt);
@@ -67,61 +55,27 @@ protected:
     }
 
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            std::cout << "[test_ops_parity_api_keys] Skipping db tests due to missing environment variables." << std::endl;
-            return;
-        }
-        paths::enableTestMode();
-        const auto root = std::filesystem::temp_directory_path() / ("vh_api_key_parity_" + keysTag());
-        paths::backingPath = root / "backing";
-        paths::mountPath = root / "mount";
-        std::filesystem::create_directories(paths::backingPath);
-        std::filesystem::create_directories(paths::mountPath);
-
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        runtime::Deps::init();
-        fs::Filesystem::init(runtime::Deps::get().storageManager);
-
-        if (!runtime::Deps::get().shellUsageManager)
-            runtime::Deps::get().shellUsageManager = std::make_shared<protocols::shell::UsageManager>();
-        router = std::make_shared<protocols::shell::Router>();
+        if (!setUpDbSuite("test_ops_parity_api_keys", {.freshEngines = false})) return;
+        router = test::parity::shellRouter();
         protocols::shell::commands::registerAPIKeyCommands(router);
 
-        superUser = createUser("ak_super_" + keysTag(), "super_admin");
+        superUser = createUser("ak_super_" + tag(), "super_admin");
         // Users who may manage only their own keys (no built-in role is that narrow).
-        const auto selfOnly = "ak_self_only_" + keysTag();
+        const auto selfOnly = "ak_self_only_" + tag();
         (void)ops::roles::createAdminRole(superUser, {.name = selfOnly, .permissions = {.changes = {
             {"admin.keys.api.self.view", true}, {"admin.keys.api.self.create", true},
             {"admin.keys.api.self.remove", true}, {"admin.keys.api.self.consume", true}}}}, "test");
-        alice = createUser("ak_alice_" + keysTag(), selfOnly);
-        bob = createUser("ak_bob_" + keysTag(), selfOnly);
+        alice = createUser("ak_alice_" + tag(), selfOnly);
+        bob = createUser("ak_bob_" + tag(), selfOnly);
     }
 
-    void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
-    }
+    static void TearDownTestSuite() { tearDownDbSuite(); }
 
-    static int cli(const std::string& line, const UserPtr& user) {
-        try {
-            return router->executeLine(line, user, nullptr).exit_code;
-        } catch (const std::exception&) {
-            return 1;
-        }
-    }
-
-    static std::shared_ptr<protocols::ws::Session> ws(const UserPtr& user) {
-        auto s = std::make_shared<protocols::ws::Session>(std::make_shared<protocols::ws::Router>());
-        s->user = user;
-        return s;
-    }
+    static int cli(const std::string& line, const UserPtr& user) { return test::parity::cli(*router, line, user).first; }
+    static std::shared_ptr<protocols::ws::Session> ws(const UserPtr& user) { return test::parity::ws(user); }
 
     static unsigned int seedKey(const UserPtr& owner) {
-        auto key = std::make_shared<vault::model::APIKey>(owner->id, "ak_key_" + keysTag(), vault::model::S3Provider::AWS,
+        auto key = std::make_shared<vault::model::APIKey>(owner->id, "ak_key_" + tag(), vault::model::S3Provider::AWS,
                                                           "AKIATESTACCESSKEY000", "secret-value-0000000000000000000000000",
                                                           "us-east-1", "https://s3.example.com");
         return runtime::Deps::get().apiKeyManager->addAPIKey(key);
@@ -129,7 +83,7 @@ protected:
 
     static unsigned int bindS3Vault(const UserPtr& owner, const unsigned int keyId, const std::string& bucket,
                                     std::string name = {}) {
-        if (name.empty()) name = "ak_vault_" + keysTag();
+        if (name.empty()) name = "ak_vault_" + tag();
         return db::Transactions::exec("APIKeyParityTest::bindS3Vault", [&](pqxx::work& txn) {
             const auto id = txn.exec(
                 "INSERT INTO vault (type, name, owner_id, mount_point, description, uid) VALUES ('s3', $1, $2, $3, '', gen_random_uuid()) RETURNING id",
@@ -152,7 +106,7 @@ protected:
 };
 
 TEST_F(APIKeyParityTest, CliAndWsCreateTheSameKeyForTheCaller) {
-    const auto cliName = "ak_cli_" + keysTag(), wsName = "ak_ws_" + keysTag();
+    const auto cliName = "ak_cli_" + tag(), wsName = "ak_ws_" + tag();
     ASSERT_EQ(cli("api-key create " + cliName + " --access AKIACLI --secret s3cr3t --provider aws --endpoint https://s3.example.com",
                   alice), 0);
     (void)protocols::ws::handler::APIKeys::add(json{{"name", wsName}, {"provider", "AWS"}, {"access_key", "AKIAWS"},
@@ -216,7 +170,7 @@ TEST_F(APIKeyParityTest, UpdateEditsInPlaceKeepingTheIdAndEveryVaultBinding) {
     EXPECT_THROW((void)protocols::ws::handler::APIKeys::update(json{{"id", keyId}, {"name", "nope"}}, ws(alice)),
                  ops::Denied);
 
-    const auto renamed = "ak_renamed_" + keysTag();
+    const auto renamed = "ak_renamed_" + tag();
     const auto updated = protocols::ws::handler::APIKeys::update(json{
         {"id", keyId}, {"name", renamed}, {"provider", "Cloudflare R2"}, {"region", "auto"},
         {"endpoint", "https://r2.example.com"}, {"access_key", "AKIAROTATED"}, {"secret_access_key", ""}}, ws(superUser));
@@ -247,7 +201,7 @@ TEST_F(APIKeyParityTest, UpdateEditsInPlaceKeepingTheIdAndEveryVaultBinding) {
 
 TEST_F(APIKeyParityTest, RemoveRefusesWhileAVaultUsesTheKeyOnBothSurfaces) {
     const auto keyId = seedKey(superUser);
-    const auto vaultName = "ak_bound_" + keysTag();
+    const auto vaultName = "ak_bound_" + tag();
     const auto vaultId = bindS3Vault(alice, keyId, "ak-remove-bucket", vaultName);
 
     EXPECT_NE(cli("api-key delete " + std::to_string(keyId), superUser), 0);
@@ -267,7 +221,7 @@ TEST_F(APIKeyParityTest, RemoveRefusesWhileAVaultUsesTheKeyOnBothSurfaces) {
     EXPECT_EQ(boundKey(vaultId), keyId);
 
     // Deleting the account that owns a key a surviving vault uses is refused up front, before anything changes.
-    const auto owner = createUser("ak_owner_" + keysTag(), "unprivileged");
+    const auto owner = createUser("ak_owner_" + tag(), "unprivileged");
     const auto ownersKey = seedKey(owner);
     const auto othersVault = bindS3Vault(alice, ownersKey, "ak-owner-bucket");
     EXPECT_THROW((void)ops::users::remove(superUser, {.id = owner->id, .transfer_to = std::nullopt, .confirmed = true}), ops::Invalid);
@@ -285,7 +239,7 @@ TEST_F(APIKeyParityTest, RemoveRefusesWhileAVaultUsesTheKeyOnBothSurfaces) {
 TEST_F(APIKeyParityTest, VaultUsingAConsumableKeyOfAnotherOwnerBuildsItsEngine) {
     const auto adminKey = seedKey(superUser);
     const auto vaultId = db::Transactions::exec("APIKeyParityTest::s3Vault", [&](pqxx::work& txn) {
-        const auto name = "ak_vault_" + keysTag();
+        const auto name = "ak_vault_" + tag();
         const auto id = txn.exec(
             "INSERT INTO vault (type, name, owner_id, mount_point, description, uid) VALUES ('s3', $1, $2, $3, '', gen_random_uuid()) RETURNING id",
             pqxx::params{name, alice->id, name.substr(0, 30)}).one_field_ref().as<unsigned int>();

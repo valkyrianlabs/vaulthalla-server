@@ -3,17 +3,17 @@
 // omitted fields on update; key changes needed Consume only on the CLI; owner changes needed only Edit; and sync
 // settings were gated by two different permissions. Everything now goes through ops::vaults.
 
+#include "../helpers/db_suite.hpp"
 #include "../helpers/identities.hpp"
+#include "../helpers/parity.hpp"
 #include "config/Config.hpp"
 #include "config/Registry.hpp"
-#include "db/Transactions.hpp"
 #include "db/query/identities/User.hpp"
 #include "db/query/rbac/role/Admin.hpp"
 #include "db/query/sync/Policy.hpp"
 #include "db/query/vault/APIKey.hpp"
 #include "db/query/vault/Deletion.hpp"
 #include "db/query/vault/Vault.hpp"
-#include "fs/Filesystem.hpp"
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "ops/Error.hpp"
@@ -25,14 +25,11 @@
 #include "protocols/ws/Session.hpp"
 #include "protocols/ws/handler/vault/Vaults.hpp"
 #include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
 #include "storage/Engine.hpp"
 #include "storage/Manager.hpp"
 #include "sync/model/LocalPolicy.hpp"
 #include "sync/model/Policy.hpp"
 #include "sync/model/RemotePolicy.hpp"
-#include "UsageManager.hpp"
 #include "vault/APIKeyManager.hpp"
 #include "vault/Retention.hpp"
 #include "vault/model/Deletion.hpp"
@@ -42,14 +39,10 @@
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
-#include <paths.h>
 
-#include <atomic>
 #include <chrono>
-#include <cstdlib>
 #include <filesystem>
 #include <functional>
-#include <iostream>
 #include <memory>
 #include <set>
 #include <shared_mutex>
@@ -60,17 +53,12 @@ namespace vh::test_ops_parity_vaults {
 using json = nlohmann::json;
 using UserPtr = std::shared_ptr<identities::User>;
 
-std::string vaultTag() {
-    static std::atomic<unsigned> n{0};
-    static const auto run = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count() % 100000);
-    return run + "x" + std::to_string(n.fetch_add(1));
-}
+using vh::test::parity::tag;
 
-class VaultParityTest : public ::testing::Test {
+class VaultParityTest : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
     inline static std::shared_ptr<protocols::shell::Router> router;
-    inline static UserPtr superUser, alice, bob;
+    inline static UserPtr alice, bob;
 
     static UserPtr createUser(const std::string& name, const std::string& roleName) {
         auto user = vh::test::identities::createUser(name, db::query::rbac::role::Admin::get(roleName), name + "@vaulthalla.test", "x", std::nullopt);
@@ -78,63 +66,21 @@ protected:
     }
 
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            std::cout << "[test_ops_parity_vaults] Skipping db tests due to missing environment variables." << std::endl;
-            return;
-        }
-        paths::enableTestMode();
-        const auto root = std::filesystem::temp_directory_path() / ("vh_vault_parity_" + vaultTag());
-        paths::backingPath = root / "backing";
-        paths::mountPath = root / "mount";
-        std::filesystem::create_directories(paths::backingPath);
-        std::filesystem::create_directories(paths::mountPath);
-
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        runtime::Deps::init();
-        fs::Filesystem::init(runtime::Deps::get().storageManager);
-
-        if (!runtime::Deps::get().shellUsageManager)
-            runtime::Deps::get().shellUsageManager = std::make_shared<protocols::shell::UsageManager>();
-        router = std::make_shared<protocols::shell::Router>();
+        if (!setUpDbSuite("test_ops_parity_vaults", {.freshEngines = false})) return;
+        router = test::parity::shellRouter();
         protocols::shell::commands::vault::registerCommands(router);
 
-        superUser = createUser("vp_super_" + vaultTag(), "super_admin");
-        alice = createUser("vp_alice_" + vaultTag(), "unprivileged");
-        bob = createUser("vp_bob_" + vaultTag(), "unprivileged");
+        superUser = createUser("vp_super_" + tag(), "super_admin");
+        alice = createUser("vp_alice_" + tag(), "unprivileged");
+        bob = createUser("vp_bob_" + tag(), "unprivileged");
     }
-
-    void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
-    }
+    static void TearDownTestSuite() { tearDownDbSuite(); }
 
     static std::pair<int, std::string> cli(const std::string& line, const UserPtr& user) {
-        try {
-            const auto res = router->executeLine(line, user, nullptr);
-            return {res.exit_code, res.stdout_text + res.stderr_text};
-        } catch (const std::exception& e) {
-            return {1, e.what()};
-        }
+        return test::parity::cli(*router, line, user);
     }
-
-    static std::shared_ptr<protocols::ws::Session> ws(const UserPtr& user) {
-        auto s = std::make_shared<protocols::ws::Session>(std::make_shared<protocols::ws::Router>());
-        s->user = user;
-        return s;
-    }
-
-    static bool wsOk(const std::function<void()>& fn) {
-        try {
-            fn();
-            return true;
-        } catch (const std::exception&) {
-            return false;
-        }
-    }
+    static std::shared_ptr<protocols::ws::Session> ws(const UserPtr& user) { return test::parity::ws(user); }
+    static bool wsOk(const std::function<void()>& fn) { return test::parity::succeeds(fn); }
 
     static json vaultFacts(const unsigned int id) {
         const auto v = db::query::vault::Vault::getVault(id);
@@ -143,7 +89,7 @@ protected:
     }
 
     static unsigned int seedKey(const UserPtr& owner) {
-        auto key = std::make_shared<vault::model::APIKey>(owner->id, "vp_key_" + vaultTag(), vault::model::S3Provider::AWS,
+        auto key = std::make_shared<vault::model::APIKey>(owner->id, "vp_key_" + tag(), vault::model::S3Provider::AWS,
                                                           "AKIATESTACCESSKEY000", "secret-value-00000000000000000000000",
                                                           "us-east-1", "https://s3.example.com");
         return runtime::Deps::get().apiKeyManager->addAPIKey(key);
@@ -151,7 +97,7 @@ protected:
 };
 
 TEST_F(VaultParityTest, CreateKeepsTheSameFieldsOnBothSurfaces) {
-    const auto cliName = "vp_cli_" + vaultTag(), wsName = "vp_ws_" + vaultTag();
+    const auto cliName = "vp_cli_" + tag(), wsName = "vp_ws_" + tag();
     const auto [code, out] = cli("vault create " + cliName + " --local --desc notes --quota 1G", superUser);
     ASSERT_EQ(code, 0) << out;
     const auto added = protocols::ws::handler::Vaults::add(
@@ -165,7 +111,7 @@ TEST_F(VaultParityTest, CreateKeepsTheSameFieldsOnBothSurfaces) {
 }
 
 TEST_F(VaultParityTest, UpdatesGoThroughTheEngineAndArePatches) {
-    const auto name = "vp_upd_" + vaultTag();
+    const auto name = "vp_upd_" + tag();
     ASSERT_EQ(cli("vault create " + name + " --local --desc before", superUser).first, 0);
     const auto id = db::query::vault::Vault::getVault(name, superUser->id)->id;
 
@@ -190,12 +136,12 @@ TEST_F(VaultParityTest, UpdatesGoThroughTheEngineAndArePatches) {
 
 TEST_F(VaultParityTest, OwnerReassignmentNeedsCreateForTheNewOwner) {
     // A vault editor who may not create vaults for bob cannot hand him one, on either surface.
-    const auto editorRole = "vp_editor_" + vaultTag();
+    const auto editorRole = "vp_editor_" + tag();
     (void)ops::roles::createAdminRole(superUser, {.name = editorRole, .permissions = {.changes = {
         {"admin.vaults.user.view", true}, {"admin.vaults.user.edit", true}}}}, "test");
-    const auto editor = createUser("vp_editor_user_" + vaultTag(), editorRole);
+    const auto editor = createUser("vp_editor_user_" + tag(), editorRole);
 
-    const auto name = "vp_owner_" + vaultTag();
+    const auto name = "vp_owner_" + tag();
     const auto vault = ops::vaults::create(superUser, {.name = name, .type = vault::model::VaultType::Local, .owner_id = alice->id});
 
     EXPECT_NE(cli("vault update " + std::to_string(vault->id) + " --owner " + bob->name(), editor).first, 0);
@@ -215,13 +161,13 @@ TEST_F(VaultParityTest, OwnerReassignmentNeedsCreateForTheNewOwner) {
 TEST_F(VaultParityTest, ChangingTheApiKeyNeedsConsumeOnBothSurfaces) {
     const auto keyA = seedKey(superUser), keyB = seedKey(superUser);
     const auto vault = ops::vaults::create(superUser, {
-        .name = "vp_s3_" + vaultTag(), .type = vault::model::VaultType::S3, .owner_id = superUser->id,
+        .name = "vp_s3_" + tag(), .type = vault::model::VaultType::S3, .owner_id = superUser->id,
         .s3 = ops::vaults::S3Spec{.api_key_id = keyA, .bucket = "vp-bucket"}});
 
-    const auto editorRole = "vp_s3editor_" + vaultTag();
+    const auto editorRole = "vp_s3editor_" + tag();
     (void)ops::roles::createAdminRole(superUser, {.name = editorRole, .permissions = {.changes = {
         {"admin.vaults.admin.view", true}, {"admin.vaults.admin.edit", true}}}}, "test");
-    const auto editor = createUser("vp_s3editor_user_" + vaultTag(), editorRole);
+    const auto editor = createUser("vp_s3editor_user_" + tag(), editorRole);
 
     EXPECT_NE(cli("vault update " + std::to_string(vault->id) + " --api-key " + std::to_string(keyB), editor).first, 0);
     EXPECT_FALSE(wsOk([&] {
@@ -249,7 +195,7 @@ TEST_F(VaultParityTest, NewS3VaultsTakeTheConfiguredRemoteDefaults) {
     config::Registry::set(cfg);
 
     const auto key = seedKey(superUser);
-    const auto cliName = "vp_def_cli_" + vaultTag(), wsName = "vp_def_ws_" + vaultTag();
+    const auto cliName = "vp_def_cli_" + tag(), wsName = "vp_def_ws_" + tag();
     const auto [code, out] = cli("vault create " + cliName + " --s3 --api-key " + std::to_string(key) + " --bucket vp-def",
                                  superUser);
     ASSERT_EQ(code, 0) << out;
@@ -265,7 +211,7 @@ TEST_F(VaultParityTest, NewS3VaultsTakeTheConfiguredRemoteDefaults) {
     }
 
     // Explicit settings win over the defaults.
-    const auto explicitName = "vp_def_explicit_" + vaultTag();
+    const auto explicitName = "vp_def_explicit_" + tag();
     ASSERT_EQ(cli("vault create " + explicitName + " --s3 --api-key " + std::to_string(key) +
                   " --bucket vp-def-explicit --sync-strategy sync --on-sync-conflict keep_remote", superUser).first, 0);
     const auto explicitPolicy = std::dynamic_pointer_cast<sync::model::RemotePolicy>(
@@ -276,7 +222,7 @@ TEST_F(VaultParityTest, NewS3VaultsTakeTheConfiguredRemoteDefaults) {
 }
 
 TEST_F(VaultParityTest, SyncSettingsUseOnePermissionOnBothSurfaces) {
-    const auto vault = ops::vaults::create(superUser, {.name = "vp_sync_" + vaultTag(), .type = vault::model::VaultType::Local,
+    const auto vault = ops::vaults::create(superUser, {.name = "vp_sync_" + tag(), .type = vault::model::VaultType::Local,
                                                        .owner_id = alice->id});
     const auto cliOk = cli("vault sync update " + std::to_string(vault->id) + " --interval 20m", alice).first == 0;
     const auto wsOkay = wsOk([&] {
@@ -289,8 +235,8 @@ TEST_F(VaultParityTest, SyncSettingsUseOnePermissionOnBothSurfaces) {
 }
 
 TEST_F(VaultParityTest, DeleteAndListAgree) {
-    const auto a = ops::vaults::create(superUser, {.name = "vp_del_a_" + vaultTag(), .type = vault::model::VaultType::Local});
-    const auto b = ops::vaults::create(superUser, {.name = "vp_del_b_" + vaultTag(), .type = vault::model::VaultType::Local});
+    const auto a = ops::vaults::create(superUser, {.name = "vp_del_a_" + tag(), .type = vault::model::VaultType::Local});
+    const auto b = ops::vaults::create(superUser, {.name = "vp_del_b_" + tag(), .type = vault::model::VaultType::Local});
     EXPECT_NE(cli("vault delete " + std::to_string(a->id), bob).first, 0);
     EXPECT_FALSE(wsOk([&] { (void)protocols::ws::handler::Vaults::remove(json{{"id", b->id}}, ws(bob)); }));
 
@@ -307,8 +253,8 @@ TEST_F(VaultParityTest, DeleteAndListAgree) {
 // Safe deletion (#162): delete, delete now, the deleted list and restore agree on both surfaces, and need vault
 // Remove (the owner the deletion recorded decides the scope).
 TEST_F(VaultParityTest, DeletionLifecycleAgreesOnBothSurfaces) {
-    const auto viaCli = ops::vaults::create(superUser, {.name = "vp_rm_cli_" + vaultTag(), .type = vault::model::VaultType::Local});
-    const auto viaWs = ops::vaults::create(superUser, {.name = "vp_rm_ws_" + vaultTag(), .type = vault::model::VaultType::Local});
+    const auto viaCli = ops::vaults::create(superUser, {.name = "vp_rm_cli_" + tag(), .type = vault::model::VaultType::Local});
+    const auto viaWs = ops::vaults::create(superUser, {.name = "vp_rm_ws_" + tag(), .type = vault::model::VaultType::Local});
     const auto cliId = std::to_string(viaCli->id);
 
     // Without a terminal a delete is the safe default: scheduled, restorable; it says how to undo it.
@@ -365,7 +311,7 @@ TEST_F(VaultParityTest, DeletionLifecycleAgreesOnBothSurfaces) {
     }
 
     // The removal plan the web dialog reads: Remove permission, same windows as the op uses.
-    const auto planned = ops::vaults::create(superUser, {.name = "vp_rm_plan_" + vaultTag(), .type = vault::model::VaultType::Local});
+    const auto planned = ops::vaults::create(superUser, {.name = "vp_rm_plan_" + tag(), .type = vault::model::VaultType::Local});
     const auto plan = protocols::ws::handler::Vaults::removalPlan(json{{"id", planned->id}}, ws(superUser)).at("plan");
     EXPECT_EQ(plan.at("retention_window_seconds").get<int64_t>(),
               vault::retention::windowsFor(vault::model::VaultType::Local).retention_window.count());

@@ -1,6 +1,7 @@
 // KEV1 key envelopes, the recovery seed and the recovery kit (crypto::kev1, crypto::recovery; spec
 // design/encryption/03-metadata-recovery.md §5) against the golden vectors in design/encryption/vectors/vectors.json:
 // every `kev1` and `recovery_seed` vector is exercised (positives byte for byte, negatives by their first failing check).
+#include "../helpers/bytes.hpp"
 #include "crypto/SecretKey.hpp"
 #include "crypto/id/ObjectUid.hpp"
 #include "crypto/recovery/Kev1.hpp"
@@ -8,15 +9,9 @@
 #include "crypto/recovery/Seed.hpp"
 
 #include <gtest/gtest.h>
-#include <nlohmann/json.hpp>
-#include <sodium.h>
 
 #include <cctype>
-#include <filesystem>
-#include <fstream>
 #include <set>
-#include <string>
-#include <vector>
 
 namespace vh::crypto::test_kev1 {
 
@@ -25,32 +20,10 @@ namespace {
 using Json = nlohmann::json;
 using Bytes = std::vector<uint8_t>;
 
-const Json& vectors() {
-    static const Json doc = [] {
-        const auto path = std::filesystem::path(VH_TEST_VECTORS_DIR) / "vectors.json";
-        std::ifstream in(path);
-        if (!in) throw std::runtime_error("missing golden vectors: " + path.string());
-        return Json::parse(in);
-    }();
-    return doc;
-}
+const Json& vectors() { return vh::test::bin::goldenVectors(); }
 
-Bytes hex(const std::string& text) {
-    Bytes out(text.size() / 2);
-    for (std::size_t i = 0; i < out.size(); ++i)
-        out[i] = static_cast<uint8_t>(std::stoul(text.substr(2 * i, 2), nullptr, 16));
-    return out;
-}
-
-std::string toHex(const std::span<const uint8_t> bytes) {
-    static constexpr char kDigits[] = "0123456789abcdef";
-    std::string out;
-    for (const auto b : bytes) {
-        out.push_back(kDigits[b >> 4]);
-        out.push_back(kDigits[b & 15]);
-    }
-    return out;
-}
+Bytes hex(const std::string& text) { return vh::test::bin::fromHex(text); }
+using vh::test::bin::toHex;
 
 kev1::VaultUid uidOf(const std::string& text) {
     const auto b = hex(text);

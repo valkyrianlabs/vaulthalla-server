@@ -3,13 +3,13 @@
 // by survive rename and move. Through the real ws handlers (fs.metadata, fs.dir.list, fs.entry.rename, fs.entry.move),
 // the FUSE rename call and the HTTP download lane.
 
-#include "db/Transactions.hpp"
+#include "../helpers/db_suite.hpp"
+
 #include "fs/Filesystem.hpp"
 #include "fs/cache/Registry.hpp"
 #include "fs/model/Directory.hpp"
 #include "fs/model/Entry.hpp"
 #include "fs/model/File.hpp"
-#include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "ops/Vaults.hpp"
 #include "protocols/http/Access.hpp"
@@ -18,8 +18,6 @@
 #include "protocols/ws/Session.hpp"
 #include "protocols/ws/handler/fs/Storage.hpp"
 #include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
 #include "storage/Engine.hpp"
 #include "storage/Manager.hpp"
 #include "storage/PlaintextReader.hpp"
@@ -28,13 +26,10 @@
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
-#include <paths.h>
 
 #include <atomic>
 #include <chrono>
-#include <cstdlib>
 #include <filesystem>
-#include <iostream>
 #include <memory>
 #include <string>
 #include <vector>
@@ -76,40 +71,16 @@ std::string encodePath(const std::string& path) {
 
 }
 
-class FsEntryVersionsDbTest : public ::testing::Test {
+class FsEntryVersionsDbTest : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
     inline static UserPtr admin;
     inline static std::shared_ptr<sync::Controller> previousController;
-    inline static std::filesystem::path root;
 
     std::shared_ptr<storage::Engine> engine;
 
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            std::cout << "[test_fs_entry_versions] Skipping db tests due to missing environment variables." << std::endl;
-            return;
-        }
-        paths::enableTestMode();
-        root = std::filesystem::temp_directory_path() / ("vh_entry_versions_" + evTag());
-        paths::backingPath = root / "backing";
-        paths::mountPath = root / "mount";
-        std::filesystem::create_directories(paths::backingPath);
-        std::filesystem::create_directories(paths::mountPath);
-
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        runtime::Deps::init();
-        fs::Filesystem::init(runtime::Deps::get().storageManager);
-        // Earlier suites in this binary used their own schema: start from a fresh cache and fresh engines.
-        runtime::Deps::get().fsCache = std::make_shared<fs::cache::Registry>();
-        runtime::Deps::get().storageManager->initStorageEngines();
-        admin = vh::identities::manager().userByName("admin");
-
+        if (!setUpDbSuite("test_fs_entry_versions")) return;
+        admin = superUser;
         previousController = runtime::Deps::get().syncController;
         runtime::Deps::setSyncController(std::make_shared<sync::Controller>());
     }
@@ -117,12 +88,12 @@ protected:
     static void TearDownTestSuite() {
         if (skipTests) return;
         runtime::Deps::setSyncController(previousController);
-        std::error_code ec;
-        std::filesystem::remove_all(root, ec);
+        tearDownDbSuite();
     }
 
     void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
+        Suite::SetUp();
+        if (IsSkipped()) return;
         access::clearCachesForTesting();
         const auto vault = ops::vaults::create(admin, {.name = "ev_" + evTag(), .type = vault::model::VaultType::Local});
         engine = runtime::Deps::get().storageManager->getEngine(vault->id);

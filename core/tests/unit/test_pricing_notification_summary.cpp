@@ -3,11 +3,11 @@
 // minute and compute its badge from them, so it couldn't shrink the page without a short page hiding an older,
 // worse alert. These tests hold the summary to the list's scoping and keep it independent of `limit`.
 
+#include "../helpers/db_suite.hpp"
 #include "../helpers/identities.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/identities/User.hpp"
 #include "db/query/rbac/role/Admin.hpp"
-#include "fs/Filesystem.hpp"
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "ops/Error.hpp"
@@ -16,21 +16,15 @@
 #include "protocols/ws/Session.hpp"
 #include "protocols/ws/handler/Pricing.hpp"
 #include "rbac/role/Admin.hpp"
-#include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
 #include "storage/s3/pricing/PriceBudget.hpp"
 #include "vault/model/Vault.hpp"
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
-#include <paths.h>
 
 #include <atomic>
 #include <chrono>
-#include <cstdlib>
 #include <filesystem>
-#include <iostream>
 #include <memory>
 #include <optional>
 #include <string>
@@ -67,10 +61,8 @@ TEST(PricingNotificationSummaryRank, RanksTheSeveritiesTheTableAccepts) {
     EXPECT_EQ(json(budget::PriceBudgetNotificationSummary{}), (json{{"open_count", 0}, {"worst_severity", nullptr}}));
 }
 
-class PricingNotificationSummaryTest : public ::testing::Test {
+class PricingNotificationSummaryTest : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
-    inline static UserPtr superUser;
 
     static UserPtr seedUser(const std::string& prefix, const std::string& roleName = "unprivileged") {
         const auto name = prefix + "_" + pnTag();
@@ -84,31 +76,15 @@ protected:
     }
 
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            std::cout << "[test_pricing_notification_summary] Skipping db tests due to missing environment variables." << std::endl;
-            return;
-        }
-        paths::enableTestMode();
-        const auto root = std::filesystem::temp_directory_path() / ("vh_pn_summary_" + pnTag());
-        paths::backingPath = root / "backing";
-        paths::mountPath = root / "mount";
-        std::filesystem::create_directories(paths::backingPath);
-        std::filesystem::create_directories(paths::mountPath);
-
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        runtime::Deps::init();
-        fs::Filesystem::init(runtime::Deps::get().storageManager);
-
+        if (!setUpDbSuite("test_pricing_notification_summary", {.freshEngines = false})) return;
         superUser = seedUser("pn_super", "super_admin");
     }
 
+    static void TearDownTestSuite() { tearDownDbSuite(); }
+
     void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
+        Suite::SetUp();
+        if (IsSkipped()) return;
         db::Transactions::exec("test_pricing_notification_summary::reset", [](pqxx::work& txn) {
             txn.exec("DELETE FROM operator_notification");
         });

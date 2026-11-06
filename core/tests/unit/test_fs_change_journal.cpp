@@ -6,6 +6,8 @@
 // Desktop does. tools/contracts/test_fs_change_journal_contract.py keeps every SQL writer of the entry tables
 // classified, so a new path can't bypass these triggers unnoticed.
 
+#include "../helpers/db_suite.hpp"
+
 #include "db/Transactions.hpp"
 #include "db/query/fs/ChangeLog.hpp"
 #include "db/query/fs/File.hpp"
@@ -27,8 +29,6 @@
 #include "protocols/ws/handler/fs/Changes.hpp"
 #include "protocols/ws/handler/fs/Storage.hpp"
 #include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
 #include "storage/Engine.hpp"
 #include "storage/Manager.hpp"
 #include "sync/Controller.hpp"
@@ -36,14 +36,11 @@
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
-#include <paths.h>
 
 #include <atomic>
 #include <chrono>
 #include <cstdint>
-#include <cstdlib>
 #include <filesystem>
-#include <iostream>
 #include <memory>
 #include <string>
 #include <vector>
@@ -62,40 +59,15 @@ std::string cjTag() {
     return run + "j" + std::to_string(n.fetch_add(1));
 }
 
-class FsChangeJournalDbTest : public ::testing::Test {
+class FsChangeJournalDbTest : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
-    inline static UserPtr superUser;
     inline static std::shared_ptr<sync::Controller> previousController;
-    inline static std::filesystem::path root;
 
     EnginePtr engine;
     uint32_t vaultId{};
 
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            std::cout << "[test_fs_change_journal] Skipping db tests due to missing environment variables." << std::endl;
-            return;
-        }
-        paths::enableTestMode();
-        root = std::filesystem::temp_directory_path() / ("vh_fs_change_journal_" + cjTag());
-        paths::backingPath = root / "backing";
-        paths::mountPath = root / "mount";
-        std::filesystem::create_directories(paths::backingPath);
-        std::filesystem::create_directories(paths::mountPath);
-
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        runtime::Deps::init();
-        fs::Filesystem::init(runtime::Deps::get().storageManager);
-        runtime::Deps::get().fsCache = std::make_shared<fs::cache::Registry>();
-        runtime::Deps::get().storageManager->initStorageEngines();
-        superUser = vh::identities::manager().userByName("admin");
-
+        if (!setUpDbSuite("test_fs_change_journal")) return;
         previousController = runtime::Deps::get().syncController;
         runtime::Deps::setSyncController(std::make_shared<sync::Controller>());
         protocols::http::access::clearCachesForTesting();
@@ -104,12 +76,12 @@ protected:
     static void TearDownTestSuite() {
         if (skipTests) return;
         runtime::Deps::setSyncController(previousController);
-        std::error_code ec;
-        std::filesystem::remove_all(root, ec);
+        tearDownDbSuite();
     }
 
     void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
+        Suite::SetUp();
+        if (IsSkipped()) return;
         const auto vault = ops::vaults::create(superUser, {.name = "cj_" + cjTag(), .type = vault::model::VaultType::Local});
         vaultId = vault->id;
         engine = runtime::Deps::get().storageManager->getEngine(vaultId);

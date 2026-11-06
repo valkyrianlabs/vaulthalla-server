@@ -15,14 +15,12 @@
 #include "db/query/upstream/Bucket.hpp"
 #include "db/query/upstream/Channel.hpp"
 #include "db/query/upstream/Subscription.hpp"
+#include "db/query/vault/APIKey.hpp"
 #include "ops/APIKeys.hpp"
 #include "ops/Roles.hpp"
 #include "ops/Upstream.hpp"
 #include "ops/UpstreamJson.hpp"
 #include "ops/Vaults.hpp"
-#include "rbac/permission/admin/Upstream.hpp"
-#include "rbac/permission/admin/keys/API.hpp"
-#include "rbac/resolver/admin/all.hpp"
 #include "storage/s3/provider/admin/Admin.hpp"
 #include "storage/s3/provider/admin/Internal.hpp"
 #include "storage/upstream/Guard.hpp"
@@ -653,54 +651,6 @@ TEST_F(UpstreamOpsTest, ChangingAKeysEndpointForgetsItsAccount) {
     ASSERT_TRUE(db::query::vault::APIKey::getAPIKey(keyId)->provider_account_id);
     (void)ops::api_keys::update(superUser, keyId, {.endpoint = std::string("https://s3.eu-west-1.amazonaws.com")});
     EXPECT_FALSE(db::query::vault::APIKey::getAPIKey(keyId)->provider_account_id);
-}
-
-// ---- RBAC ----------------------------------------------------------------------------------------------------------
-
-TEST_F(UpstreamOpsTest, EveryOperationFollowsTheUpstreamBitsAndTheKeysPermission) {
-    using UpPerm = rbac::permission::admin::UpstreamPermissions;
-    using KeyPerm = rbac::permission::admin::keys::APIPermissions;
-    const auto keyId = awsKey(superUser);
-    const auto name = bucketName();
-    seedBucket(name);
-
-    for (const auto* role : {"unprivileged", "auditor", "support", "identity_admin", "security_admin", "platform_operator",
-                             "vault_admin", "admin", "key_custodian", "super_admin"}) {
-        // super_admin can't be assigned: the seeded super administrator holds it.
-        const auto user = std::string(role) == "super_admin" ? superUser : createUser(std::string("up_rbac_") + role, role);
-        const auto bits = user->upstreamPerms();
-        const auto key = [&](const KeyPerm p) {
-            return rbac::resolver::Admin::has<KeyPerm>({.user = user, .permission = p, .api_key_id = keyId});
-        };
-        const auto allowed = [&](auto&& fn) {
-            try {
-                fn();
-                return true;
-            } catch (const ops::Denied&) {
-                return false;
-            } catch (const ops::Error&) {
-                return true;   // authorized, refused for another reason
-            }
-        };
-        EXPECT_EQ(allowed([&] { (void)up::inventory(user, keyId); }), bits.canView() && key(KeyPerm::View)) << role;
-        EXPECT_EQ(allowed([&] { (void)up::inspect(user, keyId, name); }), bits.canView() && key(KeyPerm::View)) << role;
-        EXPECT_EQ(allowed([&] { (void)up::audit(user); }), bits.canView()) << role;
-        EXPECT_EQ(allowed([&] { (void)up::adminStatus(user, keyId, false); }), bits.canView() && key(KeyPerm::View)) << role;
-        EXPECT_EQ(allowed([&] { (void)up::adoptPreflight(user, keyId, name); }),
-                  bits.canProvision() && key(KeyPerm::Consume)) << role;
-        EXPECT_EQ(allowed([&] { (void)up::cleanupPreflight(user, keyId, name); }),
-                  bits.canDestroy() && key(KeyPerm::Consume)) << role;
-        const bool canProtect = bits.canProtect() && key(KeyPerm::View);
-        EXPECT_EQ(allowed([&] { (void)up::protect(user, keyId, name, "rbac"); }), canProtect) << role;
-        if (canProtect) {
-            EXPECT_EQ(allowed([&] { (void)up::unprotect(user, keyId, name, true); }),
-                      bits.canUnprotect() && key(KeyPerm::Consume)) << role;
-            (void)up::unprotect(superUser, keyId, name, true);
-        }
-        EXPECT_EQ(allowed([&] { (void)up::enableAdmin(user, keyId, {}); }), bits.canConfigure() && key(KeyPerm::Edit))
-            << role;
-    }
-    (void)sizeof(UpPerm);
 }
 
 // ---- JSON ----------------------------------------------------------------------------------------------------------

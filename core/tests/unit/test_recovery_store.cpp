@@ -3,40 +3,20 @@
 // in Engine::freeSpace, and removal with the vault (purge and hard removal) behind the path guard. DB-backed; skipped
 // without the VH_TEST_DB_* environment.
 
+#include "../helpers/bytes.hpp"
+#include "../helpers/db_suite.hpp"
 #include "../helpers/identities.hpp"
-#include "db/Transactions.hpp"
 #include "db/query/rbac/role/Admin.hpp"
 #include "db/query/recovery/Blob.hpp"
 #include "db/query/recovery/Generation.hpp"
-#include "fs/Filesystem.hpp"
 #include "fs/ops/file.hpp"
-#include "identities/Manager.hpp"
-#include "identities/User.hpp"
 #include "ops/Vaults.hpp"
 #include "recovery/Store.hpp"
-#include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
 #include "storage/Engine.hpp"
-#include "storage/Manager.hpp"
 #include "vault/Retention.hpp"
 #include "vault/model/Vault.hpp"
 
-#include <gtest/gtest.h>
-#include <paths.h>
 #include <pqxx/pqxx>
-
-#include <atomic>
-#include <chrono>
-#include <cstdlib>
-#include <filesystem>
-#include <fstream>
-#include <iostream>
-#include <iterator>
-#include <span>
-#include <string>
-#include <sys/stat.h>
-#include <unistd.h>
 
 namespace vh::test_recovery_store {
 
@@ -44,22 +24,10 @@ namespace store = vh::recovery::store;
 namespace rq = db::query::recovery;
 namespace sfs = std::filesystem;
 
-std::string recoveryStoreTag() {
-    static std::atomic<unsigned> n{0};
-    static const auto run = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count() % 100000);
-    return run + "s" + std::to_string(n.fetch_add(1));
-}
+std::string recoveryStoreTag() { return test::uniqueTag('s'); }
 
-std::string slurp(const sfs::path& p) {
-    std::ifstream in(p, std::ios::binary);
-    return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
-}
-
-void spit(const sfs::path& p, const std::string& bytes) {
-    sfs::create_directories(p.parent_path());
-    std::ofstream out(p, std::ios::binary | std::ios::trunc);
-    out << bytes;
-}
+using vh::test::bin::slurpText;
+using vh::test::bin::spit;
 
 uint64_t filesUnder(const sfs::path& dir) {
     uint64_t n = 0;
@@ -69,44 +37,21 @@ uint64_t filesUnder(const sfs::path& dir) {
     return n;
 }
 
-class RecoveryStoreTest : public ::testing::Test {
+class RecoveryStoreTest : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
-    inline static std::shared_ptr<identities::User> superUser;
     inline static sfs::path scratch;
 
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            std::cout << "[test_recovery_store] Skipping db tests due to missing environment variables." << std::endl;
-            return;
-        }
-        paths::enableTestMode();
-        const auto root = sfs::temp_directory_path() / ("vh_recovery_store_" + recoveryStoreTag());
-        paths::backingPath = root / "backing";
-        paths::mountPath = root / "mount";
+        if (!setUpDbSuite("test_recovery_store", {.freshEngines = false})) return;
         scratch = root / "scratch";
-        sfs::create_directories(paths::backingPath);
-        sfs::create_directories(paths::mountPath);
         sfs::create_directories(scratch);
-
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        runtime::Deps::init();
-        fs::Filesystem::init(runtime::Deps::get().storageManager);
-
         const auto user = vh::test::identities::createUser("rst_super_" + recoveryStoreTag(),
                                                            db::query::rbac::role::Admin::get("super_admin"),
                                                            "rst_super@vaulthalla.test", "x", std::nullopt);
         superUser = vh::identities::manager().user(user->id);
     }
 
-    void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
-    }
+    static void TearDownTestSuite() { tearDownDbSuite(); }
 
     static std::shared_ptr<vault::model::Vault> addVault() {
         return ops::vaults::create(superUser, {.name = "rst_vault_" + recoveryStoreTag(),
@@ -169,11 +114,11 @@ TEST_F(RecoveryStoreTest, LinkCaptureKeepsTheBytesAfterTheOriginalIsReplaced) {
     // Every content write replaces the backing file by rename: the retained inode is never written again.
     const std::string replacement = "sealed-generation-2!";
     fs::ops::writeFileAtomic(src, std::span(reinterpret_cast<const uint8_t*>(replacement.data()), replacement.size()));
-    EXPECT_EQ(slurp(src), replacement);
+    EXPECT_EQ(slurpText(src), replacement);
     const auto h = store::open(ref, id);
     ASSERT_TRUE(h);
     EXPECT_TRUE(h->present);
-    EXPECT_EQ(slurp(h->path), "sealed-generation-1");
+    EXPECT_EQ(slurpText(h->path), "sealed-generation-1");
     EXPECT_EQ(h->row.encryption_iv, "ivLink1");
     EXPECT_EQ(h->row.cipher_bytes, 19u);
     EXPECT_EQ(h->row.plaintext_bytes, 3u);
@@ -195,7 +140,7 @@ TEST_F(RecoveryStoreTest, CopiesAndStreamsAreDurableAndPrivate) {
     ASSERT_EQ(::stat(copied.path().c_str(), &st), 0);
     EXPECT_EQ(st.st_mode & 0777, 0600u);
     static_cast<void>(commitWithVersion(copied, ref, "/c.txt"));
-    EXPECT_EQ(slurp(copied.path()), "copy-bytes");
+    EXPECT_EQ(slurpText(copied.path()), "copy-bytes");
 
     auto streamed = store::captureStream(ref, meta("ivStream"), [](const int fd) {
         const std::string body = "streamed";
@@ -205,7 +150,7 @@ TEST_F(RecoveryStoreTest, CopiesAndStreamsAreDurableAndPrivate) {
     ASSERT_EQ(::stat(streamed.path().c_str(), &st), 0);
     EXPECT_EQ(st.st_mode & 0777, 0600u);
     static_cast<void>(commitWithVersion(streamed, ref, "/s.txt"));
-    EXPECT_EQ(slurp(streamed.path()), "streamed");
+    EXPECT_EQ(slurpText(streamed.path()), "streamed");
 
     // A producer that throws leaves nothing behind.
     EXPECT_THROW(static_cast<void>(store::captureStream(ref, meta("ivThrow"), [](int) {
@@ -248,7 +193,7 @@ TEST_F(RecoveryStoreTest, DeletePathUnlinksTheOriginOnlyAfterCommit) {
     auto cap = store::captureMove(ref, src, meta("ivMove"));
     const auto id = commitWithVersion(cap, ref, "/deleted.txt");
     EXPECT_FALSE(sfs::exists(src)) << "committed: the backing file is gone";
-    EXPECT_EQ(slurp(store::open(ref, id)->path), "deleted-file-bytes");
+    EXPECT_EQ(slurpText(store::open(ref, id)->path), "deleted-file-bytes");
 }
 
 TEST_F(RecoveryStoreTest, OneGenerationIsStoredOnceEvenWhenCapturedConcurrently) {

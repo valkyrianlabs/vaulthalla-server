@@ -32,7 +32,11 @@ namespace vh::test_usage_contract {
 using json = nlohmann::json;
 using protocols::shell::CommandUsage;
 
-json document() { return json::parse(contract::document()); }
+// Built once (~0.25 s each at -O0); DocumentIsDeterministicAndCarriesItsOwnHashes builds it again itself.
+const json& document() {
+    static const json doc = json::parse(contract::document());
+    return doc;
+}
 
 std::shared_ptr<CommandUsage> resolveCli(const protocols::shell::UsageManager& mgr, const std::vector<std::string>& path) {
     return mgr.resolve(path);
@@ -434,7 +438,7 @@ TEST(UsageContract, EnvelopeDescribesTheFramesTheDaemonSends) {
                          protocols::ws::model::Status::UNAUTHORIZED})
         produced.insert(protocols::ws::model::to_string(s));
     EXPECT_EQ(std::set<std::string>(status->enum_values.begin(), status->enum_values.end()), produced);
-    EXPECT_TRUE(json::parse(contract::document()).contains("envelope"));
+    EXPECT_TRUE(document().contains("envelope"));
 
     // The codes any answer may carry: the generic kinds the handler templates produce and the router's own.
     std::vector<std::string> codes;
@@ -445,7 +449,7 @@ TEST(UsageContract, EnvelopeDescribesTheFramesTheDaemonSends) {
     EXPECT_TRUE(std::ranges::is_sorted(codes));
     EXPECT_EQ(codes, (std::vector<std::string>{"conflict", "denied", "device_unknown", "invalid", "not_found",
                                                "unknown_command"}));
-    EXPECT_EQ(json::parse(contract::document()).at("envelope").at("error_codes").size(), codes.size());
+    EXPECT_EQ(document().at("envelope").at("error_codes").size(), codes.size());
 }
 
 // ---- operation catalog ----------------------------------------------------------------------------------------
@@ -560,7 +564,7 @@ TEST(UsageContract, GeneratorsAreExecutableUnlessTheyNameWorldState) {
 }
 
 TEST(UsageContract, ExportedTestUsageGraphHasNoDanglingSteps) {
-    const auto doc = document();
+    const auto& doc = document();
     std::set<std::string> paths;
     for (const auto& c : doc.at("cli")) {
         std::string p;
@@ -587,7 +591,7 @@ TEST(UsageContract, ExportedTestUsageGraphHasNoDanglingSteps) {
 // ---- ws protocol: range and capabilities ----------------------------------------------------------------------
 
 TEST(UsageContract, TheDocumentPublishesTheProtocolRangeAndCapabilities) {
-    const auto doc = document();
+    const auto& doc = document();
     EXPECT_EQ(contract::kVersion, 3) << "the document gained protocol, capabilities and envelope.error_codes";
     EXPECT_EQ(doc.at("protocol"), (json{{"version", contract::kProtocolVersion}, {"min", contract::kProtocolMin}}));
     EXPECT_EQ(doc.at("protocol").at("version"), 1);

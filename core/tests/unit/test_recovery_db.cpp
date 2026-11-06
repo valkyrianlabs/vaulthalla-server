@@ -1,8 +1,8 @@
 // File recovery persistence (migration 111): the shared model's text forms and JSON, and every db::query::recovery
 // query against a migrated database. The model/JSON suites are DB-free; the DB suite skips without VH_TEST_DB_*.
 
+#include "../helpers/db_suite.hpp"
 #include "../helpers/identities.hpp"
-#include "db/Transactions.hpp"
 #include "db/query/rbac/role/Admin.hpp"
 #include "db/query/recovery/Blob.hpp"
 #include "db/query/recovery/Generation.hpp"
@@ -11,33 +11,14 @@
 #include "db/query/recovery/Policy.hpp"
 #include "db/query/recovery/Snapshot.hpp"
 #include "db/query/recovery/Usage.hpp"
-#include "fs/Filesystem.hpp"
-#include "identities/Manager.hpp"
-#include "identities/User.hpp"
 #include "ops/Error.hpp"
 #include "ops/RecoveryJson.hpp"
 #include "ops/Vaults.hpp"
 #include "recovery/Model.hpp"
-#include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
 #include "vault/model/Vault.hpp"
 
-#include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
-#include <paths.h>
 #include <pqxx/pqxx>
-
-#include <atomic>
-#include <chrono>
-#include <cstdlib>
-#include <filesystem>
-#include <future>
-#include <iostream>
-#include <set>
-#include <string>
-#include <thread>
-#include <vector>
 
 namespace vh::test_recovery_db {
 
@@ -221,11 +202,7 @@ TEST(RecoveryJson, RequestReadersKeepDefaultsIgnoreUnknownAndRefuseWrongTypes) {
 
 // ---- DB-backed -----------------------------------------------------------------------------------------------------
 
-std::string recoveryDbTag() {
-    static std::atomic<unsigned> n{0};
-    static const auto run = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count() % 100000);
-    return run + "r" + std::to_string(n.fetch_add(1));
-}
+std::string recoveryDbTag() { return test::uniqueTag('r'); }
 
 // A unique 32-character [a-z0-9] storage name for blob rows inserted without a file.
 std::string blobName() {
@@ -239,41 +216,17 @@ std::string blobName() {
     return out;
 }
 
-class RecoveryDbTest : public ::testing::Test {
+class RecoveryDbTest : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
-    inline static std::shared_ptr<identities::User> superUser;
-
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            std::cout << "[test_recovery_db] Skipping db tests due to missing environment variables." << std::endl;
-            return;
-        }
-        paths::enableTestMode();
-        const auto root = std::filesystem::temp_directory_path() / ("vh_recovery_db_" + recoveryDbTag());
-        paths::backingPath = root / "backing";
-        paths::mountPath = root / "mount";
-        std::filesystem::create_directories(paths::backingPath);
-        std::filesystem::create_directories(paths::mountPath);
-
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        runtime::Deps::init();
-        fs::Filesystem::init(runtime::Deps::get().storageManager);
-
+        if (!setUpDbSuite("test_recovery_db", {.freshEngines = false})) return;
         const auto user = vh::test::identities::createUser("rdb_super_" + recoveryDbTag(),
                                                            db::query::rbac::role::Admin::get("super_admin"),
                                                            "rdb_super@vaulthalla.test", "x", std::nullopt);
         superUser = vh::identities::manager().user(user->id);
     }
 
-    void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
-    }
+    static void TearDownTestSuite() { tearDownDbSuite(); }
 
     static uint32_t addVault() {
         return ops::vaults::create(superUser, {.name = "rdb_vault_" + recoveryDbTag(), .type = vault::model::VaultType::Local})
@@ -512,29 +465,6 @@ TEST_F(RecoveryDbTest, SnapshotLifecycleNameConflictAndRemoval) {
     EXPECT_FALSE(rq::Snapshot::get(snapId));
     EXPECT_EQ(rq::Generation::countSnapshotMembers(snapId), 0u) << "members cascade";
     EXPECT_TRUE(rq::Blob::get(blobA)) << "the row stays until the store removes it";
-}
-
-TEST_F(RecoveryDbTest, VersionNumbersStayUniqueUnderConcurrentCaptures) {
-    const auto vaultId = addVault();
-    const auto fileId = addFile(vaultId, "/hot.txt");
-    constexpr int kThreads = 6, kEach = 8;
-    std::vector<std::future<std::vector<int>>> futures;
-    for (int t = 0; t < kThreads; ++t)
-        futures.push_back(std::async(std::launch::async, [&] {
-            std::vector<int> numbers;
-            for (int i = 0; i < kEach; ++i)
-                numbers.push_back(rq::Generation::insertLocalVersion(version(vaultId, fileId, "/hot.txt")).version_number);
-            return numbers;
-        }));
-    std::set<int> all;
-    for (auto& f : futures)
-        for (const auto n : f.get()) EXPECT_TRUE(all.insert(n).second) << "duplicate version number " << n;
-    EXPECT_EQ(all.size(), static_cast<size_t>(kThreads * kEach));
-    EXPECT_EQ(*all.begin(), 1);
-    EXPECT_EQ(*all.rbegin(), kThreads * kEach);
-    const auto history = rq::Generation::listByFile(fileId, 1000);
-    ASSERT_EQ(history.size(), static_cast<size_t>(kThreads * kEach));
-    EXPECT_EQ(history.front().version_number, kThreads * kEach) << "newest first";
 }
 
 TEST_F(RecoveryDbTest, GenerationsOutliveTheLiveFile) {

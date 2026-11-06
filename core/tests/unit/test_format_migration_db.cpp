@@ -6,11 +6,11 @@
 // is left, and nothing runs during a key rotation. The protocol itself (crash at every step, digests, no plaintext on
 // disk) is FormatMigrationTest (test_format_migration.cpp, DB-free).
 
+#include "../helpers/bytes.hpp"
 #include "../helpers/recovery_local.hpp"
 
 #include "crypto/util/encrypt.hpp"
 #include "db/query/vault/FormatConversion.hpp"
-#include "fs/cache/Registry.hpp"
 #include "fs/ops/file.hpp"
 #include "ops/VaultFormat.hpp"
 #include "protocols/shell/Router.hpp"
@@ -18,10 +18,6 @@
 #include "recovery/local/Versions.hpp"
 #include "vault/Content.hpp"
 #include "vault/FormatConversionService.hpp"
-
-#include <nlohmann/json.hpp>
-
-#include <sys/stat.h>
 
 namespace vh::test_format_migration_db {
 
@@ -35,37 +31,10 @@ protected:
     static void SetUpTestSuite() { setUpSuite("format_migration_db"); }
     static void TearDownTestSuite() { tearDownSuite(); }
 
-    // Rewrites a file's backing bytes as the legacy format (one AES-256-GCM message under the current key), as builds
-    // before #367 stored every file, and points its row (and the cached entry) at the legacy IV.
-    void makeLegacy(const std::string& path) const {
-        const auto f = file(path);
-        ASSERT_TRUE(f);
-        const auto text = plaintext(path);
-        const std::vector<uint8_t> plain(text.begin(), text.end());
-        const auto [key, version] = engine->encryptionManager->currentKey();
-        std::vector<uint8_t> iv;
-        const auto sealed = crypto::util::encrypt_aes256_gcm(plain, key->bytes(), iv);
-        fs::ops::writeFileAtomic(f->backing_path, sealed);
-        auto next = *f;
-        next.encryption_iv = crypto::util::b64_encode(iv);
-        next.encrypted_with_key_version = version;
-        ASSERT_TRUE(db::query::fs::File::compareAndSetEncryptionIVAndVersion(next, f->encryption_iv,
-                                                                            f->encrypted_with_key_version));
-        if (const auto cached = std::dynamic_pointer_cast<fs::model::File>(
-                runtime::Deps::get().fsCache->getEntry(engine->vaultPathToFusePath(path)))) {
-            cached->encryption_iv = next.encryption_iv;
-            cached->encrypted_with_key_version = version;
-        }
-        ASSERT_EQ(content::formatOf(file(path)->encryption_iv), content::Format::Gcm0);
-    }
+    void makeLegacy(const std::string& path) const { makeLegacyGcm(engine, path, plaintext(path)); }
 
     [[nodiscard]] conv::PassResult convert() const {
         return conv::convertVault(engine, {.maxBytesPerSecond = 0, .maxCpuPercent = 100}, nullptr, nullptr);
-    }
-
-    [[nodiscard]] static ino_t inodeOf(const std::filesystem::path& p) {
-        struct stat st{};
-        return ::stat(p.c_str(), &st) == 0 ? st.st_ino : 0;
     }
 
     [[nodiscard]] std::filesystem::path blobFile(const int64_t blobId) const {
@@ -91,7 +60,7 @@ TEST_F(FormatMigrationDbTest, ALiveFileAndItsSnapshotConvertOnceAndThePointResto
     ASSERT_TRUE(m.blob_id);
     const auto legacyBlob = *rq::Blob::get(*m.blob_id);
     EXPECT_EQ(legacyBlob.encryption_iv, file("/a.bin")->encryption_iv) << "the snapshot links the live generation";
-    EXPECT_EQ(inodeOf(blobFile(*m.blob_id)), inodeOf(file("/a.bin")->backing_path));
+    EXPECT_EQ(vh::test::bin::inodeOf(blobFile(*m.blob_id)), vh::test::bin::inodeOf(file("/a.bin")->backing_path));
 
     const auto before = status();
     EXPECT_EQ(before.state, "pending");
@@ -113,7 +82,7 @@ TEST_F(FormatMigrationDbTest, ALiveFileAndItsSnapshotConvertOnceAndThePointResto
     EXPECT_EQ(blob.encryption_iv, a->encryption_iv) << "converted once, with the file";
     EXPECT_EQ(blob.key_version, keyVersion);
     EXPECT_NE(blob.storage_name, legacyBlob.storage_name);
-    EXPECT_EQ(inodeOf(blobFile(*m.blob_id)), inodeOf(a->backing_path)) << "still a hard link of the live file";
+    EXPECT_EQ(vh::test::bin::inodeOf(blobFile(*m.blob_id)), vh::test::bin::inodeOf(a->backing_path)) << "still a hard link of the live file";
     EXPECT_FALSE(std::filesystem::exists(store::blobPath(store::vaultRef(*engine->vault), legacyBlob.storage_name)));
     EXPECT_FALSE(std::filesystem::exists(fs::ops::contentSidecarPath(a->backing_path)));
     EXPECT_EQ(plaintext("/a.bin"), body);

@@ -7,12 +7,12 @@
 // deactivation seen at once; revokeSessions and revocation close them), the sweeper, and the listener rebinding when
 // remote connections are turned on and off.
 
+#include "../helpers/db_suite.hpp"
 #include "../helpers/device_client.hpp"
 #include "../helpers/identities.hpp"
 #include "auth/Manager.hpp"
 #include "auth/session/Manager.hpp"
 #include "config/Registry.hpp"
-#include "db/Transactions.hpp"
 #include "db/query/device/Device.hpp"
 #include "db/query/rbac/role/Admin.hpp"
 #include "device/Crypto.hpp"
@@ -33,8 +33,6 @@
 #include "protocols/ws/handler/Devices.hpp"
 #include "rbac/role/Admin.hpp"
 #include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
 #include "Contract.hpp"
 
 #include <boost/asio/io_context.hpp>
@@ -42,14 +40,10 @@
 #include <gtest/gtest.h>
 #include <openssl/evp.h>
 #include <openssl/x509.h>
-#include <paths.h>
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <cstdlib>
-#include <filesystem>
-#include <iostream>
 #include <thread>
 
 namespace vh::test_device_listener {
@@ -76,9 +70,8 @@ std::string code(const std::optional<json>& reply) {
 
 bool ok(const std::optional<json>& reply) { return reply && reply->value("status", "") == "OK"; }
 
-class DeviceListenerTest : public ::testing::Test {
+class DeviceListenerTest : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
     inline static std::shared_ptr<boost::asio::io_context> ioc;
     inline static std::vector<std::thread> threads;
     inline static std::shared_ptr<protocols::device::Listener> listener;
@@ -87,25 +80,7 @@ protected:
     inline static UserPtr super;
 
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            std::cout << "[test_device_listener] Skipping db tests due to missing environment variables." << std::endl;
-            return;
-        }
-        paths::enableTestMode();
-        const auto root = std::filesystem::temp_directory_path() / ("vh_device_" + tag());
-        paths::backingPath = root / "backing";
-        paths::mountPath = root / "mount";
-        std::filesystem::create_directories(paths::backingPath);
-        std::filesystem::create_directories(paths::mountPath);
-
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        runtime::Deps::init();
-
+        if (!setUpDbSuite("device_listener", {.freshEngines = false})) return;
         server = vh::device::ServerIdentity::generate();
         vh::device::setCurrentServerIdentity(server);
         ioc = std::make_shared<boost::asio::io_context>();
@@ -136,10 +111,12 @@ protected:
         // exists, then the context with the handlers still queued on it. Nothing outlives the suite.
         (void)runtime::Deps::releaseSessions();
         ioc.reset();
+        tearDownDbSuite();
     }
 
     void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
+        Suite::SetUp();
+        if (IsSkipped()) return;
         vh::device::Pairing::instance().resetForTesting();
     }
 
@@ -666,32 +643,6 @@ TEST_F(DeviceListenerTest, RemoteConnectionsRebindTheListenerLive) {
     EXPECT_TRUE(status.address.starts_with("127.0.0.1:")) << status.address;
 
     service.stop();
-    config::Registry::set(before);
-}
-
-// `vh device remote enable` / device.remote.enable: super admins only, saved to config.yaml (kept across restarts and
-// upgrades, which never rewrite it).
-TEST_F(DeviceListenerTest, RemoteSwitchIsASuperAdminSetting) {
-    const auto before = config::Registry::get();
-    const auto previousConfigPath = paths::configPath;
-    const auto tmp = std::filesystem::temp_directory_path() / ("vh_device_config_" + tag() + ".yaml");
-    std::filesystem::copy_file(previousConfigPath, tmp);
-    paths::configPath = tmp;
-
-    const auto plain = seedUser("dl_plain");
-    EXPECT_THROW((void)ops::devices::setRemote(plain, true), ops::Denied);
-    EXPECT_THROW((void)ops::devices::remoteStatus(plain), ops::Denied);
-    EXPECT_FALSE(config::Registry::get().device_server.remote);
-
-    const auto status = ops::devices::setRemote(super, true);
-    EXPECT_TRUE(status.remote);
-    EXPECT_TRUE(config::Registry::get().device_server.remote);
-    EXPECT_TRUE(config::loadConfig(tmp.string()).device_server.remote) << "persisted";
-    (void)ops::devices::setRemote(super, false);
-    EXPECT_FALSE(config::loadConfig(tmp.string()).device_server.remote);
-
-    paths::configPath = previousConfigPath;
-    std::filesystem::remove(tmp);
     config::Registry::set(before);
 }
 

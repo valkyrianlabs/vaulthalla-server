@@ -305,7 +305,7 @@ TEST_F(ScratchFileTest, ConcurrentReadersNeverSeeATornBlock) {
                 }
             }
         });
-    for (int i = 0; i < 400; ++i) {
+    for (int i = 0; i < 126; ++i) {  // three cycles of the (i % 2, i % 3, i % 7) pattern
         f.write((i % 2) * ScratchFile::kBlockSize, bytesOf(i % 3 ? a : b));
         if (i % 7 == 0) f.flush();
     }

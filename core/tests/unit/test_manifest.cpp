@@ -14,6 +14,7 @@
 // ManifestReplay*   an older complete state authenticates; without a checkpoint the report says "freshness
 //                   unverified"; with one, older states are refused (spec 03 §4.5).
 
+#include "../helpers/bytes.hpp"
 #include "crypto/SecretKey.hpp"
 #include "crypto/vhf1/Format.hpp"
 #include "crypto/vhf1/Writer.hpp"
@@ -27,19 +28,8 @@
 #include "sync/manifest/Store.hpp"
 #include "../helpers/versioned_bucket.hpp"
 
-#include <gtest/gtest.h>
-#include <nlohmann/json.hpp>
-
-#include <algorithm>
-#include <filesystem>
-#include <fstream>
 #include <functional>
-#include <map>
-#include <memory>
-#include <optional>
 #include <set>
-#include <string>
-#include <vector>
 
 namespace vh::sync::manifest::test_manifest_suite {
 
@@ -53,21 +43,9 @@ using crypto::SecretKeyPtr;
 
 // ---- vectors -------------------------------------------------------------------------------------------------------
 
-const Json& vectors() {
-    static const Json doc = [] {
-        const auto path = std::filesystem::path(VH_TEST_VECTORS_DIR) / "vectors.json";
-        std::ifstream in(path);
-        if (!in) throw std::runtime_error("missing golden vectors: " + path.string());
-        return Json::parse(in);
-    }();
-    return doc;
-}
+const Json& vectors() { return vh::test::bin::goldenVectors(); }
 
-Bytes fromHex(const std::string& hex) {
-    Bytes out(hex.size() / 2);
-    for (std::size_t i = 0; i < out.size(); ++i) out[i] = static_cast<uint8_t>(std::stoul(hex.substr(2 * i, 2), nullptr, 16));
-    return out;
-}
+using vh::test::bin::fromHex;
 
 Uid uidFromHex(const std::string& hex) {
     const auto raw = fromHex(hex);

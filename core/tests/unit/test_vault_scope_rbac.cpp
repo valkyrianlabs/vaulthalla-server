@@ -12,12 +12,12 @@
 // then the same verdicts through the ws fs handlers, `vh fs ls`, the HTTP/CLI access layer and the accessible-vaults
 // list. The admin vault permissions (admin.vaults.<scope>, storage.vault.get) pick the scope by the same function.
 
+#include "../helpers/db_suite.hpp"
 #include "../helpers/identities.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/identities/helpers.hpp"
 #include "db/query/rbac/role/Admin.hpp"
 #include "fs/Filesystem.hpp"
-#include "fs/cache/Registry.hpp"
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "ops/Roles.hpp"
@@ -40,8 +40,6 @@
 #include "rbac/role/Admin.hpp"
 #include "rbac/role/vault/Global.hpp"
 #include "runtime/Deps.hpp"
-#include "seed/include/init_db_tables.hpp"
-#include "seed/include/seed_db.hpp"
 #include "storage/Engine.hpp"
 #include "storage/Manager.hpp"
 #include "sync/Controller.hpp"
@@ -50,16 +48,13 @@
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
-#include <paths.h>
 #include <pqxx/pqxx>
 
 #include <array>
 #include <atomic>
 #include <chrono>
-#include <cstdlib>
 #include <filesystem>
 #include <functional>
-#include <iostream>
 #include <memory>
 #include <optional>
 #include <string>
@@ -95,39 +90,15 @@ const char* name(const VaultScope s) {
     return "?";
 }
 
-class VaultScopeRbacTest : public ::testing::Test {
+class VaultScopeRbacTest : public vh::test::db::Suite {
 protected:
-    inline static bool skipTests = false;
     inline static std::shared_ptr<protocols::shell::Router> router;
-    inline static UserPtr superUser, plainOwner, adminOwner;
+    inline static UserPtr plainOwner, adminOwner;
     inline static unsigned int plainVault = 0, adminVault = 0;
     inline static std::shared_ptr<sync::Controller> previousController;
 
     static void SetUpTestSuite() {
-        if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
-              std::getenv("VH_TEST_DB_PORT") && std::getenv("VH_TEST_DB_NAME"))) {
-            skipTests = true;
-            std::cout << "[test_vault_scope_rbac] Skipping db tests due to missing environment variables." << std::endl;
-            return;
-        }
-        paths::enableTestMode();
-        const auto root = std::filesystem::temp_directory_path() / ("vh_vault_scope_" + tag());
-        paths::backingPath = root / "backing";
-        paths::mountPath = root / "mount";
-        std::filesystem::create_directories(paths::backingPath);
-        std::filesystem::create_directories(paths::mountPath);
-
-        db::Transactions::init();
-        db::seed::nuke_and_recreate_schema_public();
-        db::Transactions::dbPool_->initPreparedStatements();
-        seed::seed_database();
-        runtime::Deps::init();
-        fs::Filesystem::init(runtime::Deps::get().storageManager);
-        // Earlier suites in this binary used their own schema: their cached entries and engines (ids reused after the
-        // reset) would answer for ours.
-        runtime::Deps::get().fsCache = std::make_shared<fs::cache::Registry>();
-        runtime::Deps::get().storageManager->initStorageEngines();
-
+        if (!setUpDbSuite("test_vault_scope_rbac")) return;
         if (!runtime::Deps::get().shellUsageManager)
             runtime::Deps::get().shellUsageManager = std::make_shared<protocols::shell::UsageManager>();
         router = std::make_shared<protocols::shell::Router>();
@@ -149,10 +120,7 @@ protected:
     static void TearDownTestSuite() {
         if (skipTests) return;
         runtime::Deps::setSyncController(previousController);
-    }
-
-    void SetUp() override {
-        if (skipTests) GTEST_SKIP() << "Skipping db tests due to missing environment variables.";
+        tearDownDbSuite();
     }
 
     static UserPtr seededSuperAdmin(const std::string& prefix) {

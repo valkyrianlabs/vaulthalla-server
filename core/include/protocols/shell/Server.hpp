@@ -38,6 +38,13 @@ public:
     [[nodiscard]] std::shared_ptr<Router> get_router() const { return router_; }
 
     void setSocketPath(const std::string& path) { socketPath_ = path; }
+    // Tests: a shorter request timeout and listener check interval than the daemon's, set before start().
+    void setTimingForTesting(const std::chrono::milliseconds requestTimeout,
+                             const std::chrono::milliseconds listenerCheckInterval) {
+        requestTimeout_ = requestTimeout;
+        listenerCheckInterval_ = listenerCheckInterval;
+    }
+    [[nodiscard]] std::chrono::milliseconds requestTimeout() const noexcept { return requestTimeout_; }
     [[nodiscard]] const std::string& socketPath() const noexcept { return socketPath_; }
 
     [[nodiscard]] bool adminUIDSet() const noexcept { return adminUIDSet_.load(); }
@@ -61,6 +68,8 @@ private:
     std::shared_ptr<Router> router_;
     std::string socketPath_;
     unsigned adminGid_;
+    std::chrono::milliseconds requestTimeout_{kRequestTimeout};
+    std::chrono::milliseconds listenerCheckInterval_{kListenerCheckInterval};
 
     mutable std::mutex fdMutex_;
     int listenFd_ = -1;
